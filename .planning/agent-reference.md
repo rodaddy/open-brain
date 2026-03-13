@@ -71,6 +71,25 @@ mcp2cli open-brain session_save --params '{"project":"my-project","context":"Imp
 mcp2cli open-brain session_load --params '{"project":"my-project"}'
 ```
 
+## Consumer Integrations
+
+### Claude Code Hooks
+
+| Hook | Event | Script |
+|------|-------|--------|
+| Session Save | PreCompact (auto\|manual) | `/Volumes/ThunderBolt/Development/open-brain/hooks/open-brain-session-save.ts` |
+| Session Load | SessionStart (startup\|resume\|compact) | `/Volumes/ThunderBolt/Development/open-brain/hooks/open-brain-session-load.ts` |
+
+Env var required: `OPEN_BRAIN_AGENT_TOKEN` (from vaultwarden "Open Brain - Auth Tokens" AUTH_TOKEN_AGENT)
+
+### n8n Workflows
+
+| Workflow | ID | Trigger | Status |
+|----------|----|---------|--------|
+| Open Brain - Discord Thought Capture | n3BDmv0iqbG470wy | Webhook POST `/open-brain-thought` | active |
+
+Webhook URL: `https://n8n.rodaddy.live/webhook/open-brain-thought`
+
 ## Infrastructure
 
 | Field | Value |
