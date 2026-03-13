@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: completed
-stopped_at: Completed 02-02-PLAN.md
-last_updated: "2026-03-13T20:52:52.992Z"
-last_activity: 2026-03-13 -- Completed 02-02 search_brain cross-table semantic search
+status: executing
+stopped_at: Completed 03-01-PLAN.md
+last_updated: "2026-03-13T21:12:29.064Z"
+last_activity: 2026-03-13 -- Completed 03-01 find_person dual-mode search
 progress:
   total_phases: 5
   completed_phases: 1
-  total_plans: 5
-  completed_plans: 3
-  percent: 60
+  total_plans: 7
+  completed_plans: 4
+  percent: 57
 ---
 
 # Project State
@@ -21,23 +21,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-13)
 
 **Core value:** Cross-domain semantic search across all context types -- a single query surfaces relevant thoughts, decisions, people, projects, and session history regardless of where or when they were captured
-**Current focus:** Phase 2: Core Tools
+**Current focus:** Phase 3: Secondary Tools
 
 ## Current Position
 
-Phase: 2 of 5 (Core Tools) -- COMPLETE
-Plan: 2 of 2 in current phase
-Status: Phase 2 Complete
-Last activity: 2026-03-13 -- Completed 02-02 search_brain cross-table semantic search
+Phase: 3 of 5 (Secondary Tools)
+Plan: 1 of 2 in current phase
+Status: In Progress
+Last activity: 2026-03-13 -- Completed 03-01 find_person dual-mode search
 
-Progress: [██████░░░░] 60%
+Progress: [██████░░░░] 57%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 5
+- Total plans completed: 6
 - Average duration: ~3 min
-- Total execution time: ~16 min
+- Total execution time: ~18 min
 
 **By Phase:**
 
@@ -45,9 +45,10 @@ Progress: [██████░░░░] 60%
 |-------|-------|-------|----------|
 | 1 Foundation | 3/3 | ~10 min | ~3 min |
 | 2 Core Tools | 2/2 | ~6 min | ~3 min |
+| 3 Secondary Tools | 1/2 | ~2 min | ~2 min |
 
 **Recent Trend:**
-- Last 3 plans: 01-03, 02-01, 02-02
+- Last 3 plans: 02-01, 02-02, 03-01
 - Trend: Stable
 
 ## Accumulated Context
@@ -73,6 +74,9 @@ Recent decisions affecting current work:
 - [Phase 02]: Dynamic SQL construction over parameterized table filter -- permissions enforced at query build time
 - [Phase 02]: Per-CTE ORDER BY + LIMIT for HNSW index efficiency before UNION ALL merge
 - [Phase 02]: readOnlyHint/idempotentHint annotations for search tool (unlike write tools)
+- [Phase 03]: Separate handler functions (handleNameSearch, handleSemanticSearch) for clarity over inline branching
+- [Phase 03]: ILIKE escape before wrapping: escape % and _ in user input, then wrap with %...% for partial match
+- [Phase 03]: No-results is informational (not isError) -- consistent with search_brain pattern
 
 ### Pending Todos
 
@@ -85,6 +89,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-13
-Stopped at: Completed 02-02-PLAN.md
+Last session: 2026-03-13T21:12:29.063Z
+Stopped at: Completed 03-01-PLAN.md
 Resume file: None
