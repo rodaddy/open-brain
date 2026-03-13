@@ -1,48 +1,52 @@
 import type { Role, Table, Permission } from "./types.ts";
 
-// Stub: TDD RED phase -- will be properly implemented after tests confirm failure
+const RW: Set<Permission> = new Set(["read", "write"]);
+const RO: Set<Permission> = new Set(["read"]);
+const WO: Set<Permission> = new Set(["write"]);
+const NONE: Set<Permission> = new Set();
+
 export const PERMISSIONS: Record<Role, Record<Table, Set<Permission>>> = {
   admin: {
-    thoughts: new Set(),
-    decisions: new Set(),
-    relationships: new Set(),
-    projects: new Set(),
-    sessions: new Set(),
+    thoughts: RW,
+    decisions: RW,
+    relationships: RW,
+    projects: RW,
+    sessions: RW,
   },
   agent: {
-    thoughts: new Set(),
-    decisions: new Set(),
-    relationships: new Set(),
-    projects: new Set(),
-    sessions: new Set(),
+    thoughts: RW,
+    decisions: RW,
+    relationships: RO,
+    projects: RO,
+    sessions: RW,
   },
   discord: {
-    thoughts: new Set(),
-    decisions: new Set(),
-    relationships: new Set(),
-    projects: new Set(),
-    sessions: new Set(),
+    thoughts: WO,
+    decisions: NONE,
+    relationships: NONE,
+    projects: NONE,
+    sessions: NONE,
   },
   n8n: {
-    thoughts: new Set(),
-    decisions: new Set(),
-    relationships: new Set(),
-    projects: new Set(),
-    sessions: new Set(),
+    thoughts: RW,
+    decisions: RW,
+    relationships: RW,
+    projects: RW,
+    sessions: RW,
   },
   readonly: {
-    thoughts: new Set(),
-    decisions: new Set(),
-    relationships: new Set(),
-    projects: new Set(),
-    sessions: new Set(),
+    thoughts: RO,
+    decisions: RO,
+    relationships: RO,
+    projects: RO,
+    sessions: RO,
   },
 };
 
-export function canRead(_role: Role, _table: Table): boolean {
-  return false;
+export function canRead(role: Role, table: Table): boolean {
+  return PERMISSIONS[role][table].has("read");
 }
 
-export function canWrite(_role: Role, _table: Table): boolean {
-  return false;
+export function canWrite(role: Role, table: Table): boolean {
+  return PERMISSIONS[role][table].has("write");
 }
