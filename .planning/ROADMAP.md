@@ -12,7 +12,7 @@ Open Brain delivers a unified semantic brain for PAI -- a single MCP server back
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Foundation** - Database schema, MCP server skeleton, auth middleware, embedding service
+- [x] **Phase 1: Foundation** - Database schema, MCP server skeleton, auth middleware, embedding service
 - [ ] **Phase 2: Core Tools** - log_thought, log_decision, search_brain -- the primary read/write/search loop
 - [ ] **Phase 3: Secondary Tools** - find_person, session_save, session_load -- complete the tool suite
 - [ ] **Phase 4: Operational Hardening** - Embedding backfill, monitoring, structured logging, CI pipeline, deployment
@@ -104,8 +104,8 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation | 0/3 | Planning complete | - |
-| 2. Core Tools | 0/2 | Not started | - |
+| 1. Foundation | 3/3 | Complete | 2026-03-13 |
+| 2. Core Tools | 0/2 | Ready to plan | - |
 | 3. Secondary Tools | 0/2 | Not started | - |
 | 4. Operational Hardening | 0/2 | Not started | - |
 | 5. Consumer Integration | 0/2 | Not started | - |
