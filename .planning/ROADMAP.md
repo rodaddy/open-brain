@@ -33,9 +33,9 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans**: 3 plans
 
 Plans:
-- [ ] 01-01-PLAN.md -- Project scaffold, shared types, database schema, pool, and migration runner
-- [ ] 01-02-PLAN.md -- Auth middleware, permission system, and embedding service with tests
-- [ ] 01-03-PLAN.md -- MCP server, transport dispatch, Express app, and health endpoint with tests
+- [x] 01-01-PLAN.md -- Project scaffold, shared types, database schema, pool, and migration runner
+- [x] 01-02-PLAN.md -- Auth middleware, permission system, and embedding service with tests
+- [x] 01-03-PLAN.md -- MCP server, transport dispatch, Express app, and health endpoint with tests
 
 ### Phase 2: Core Tools
 **Goal**: Users can log thoughts and decisions with automatic embedding, and semantically search across all brain tables to find relevant context
@@ -46,11 +46,11 @@ Plans:
   2. `log_decision` accepts title, rationale, optional alternatives and tags, generates an embedding, inserts to the decisions table, and returns the created record -- enforcing permission checks per role
   3. `search_brain` accepts a natural language query and optional table filter, generates a query embedding, runs CTE UNION ALL cross-table search with cosine distance, and returns ranked results with source type, content, distance, and metadata
   4. All three tools have unit tests (mocked deps) and protocol tests (InMemoryTransport) covering happy path, validation errors, and `isError` failure cases
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 02-01: TBD
-- [ ] 02-02: TBD
+- [ ] 02-01-PLAN.md -- Write tools (log_thought, log_decision) with tool orchestrator, unit + protocol tests
+- [ ] 02-02-PLAN.md -- Search tool (search_brain) with cross-table CTE semantic search, unit + protocol tests
 
 ### Phase 3: Secondary Tools
 **Goal**: Users can look up people with warmth scores, save full session summaries with structured fields, and load the latest session context for any project
@@ -84,13 +84,14 @@ Plans:
 - [ ] 04-02: TBD
 
 ### Phase 5: Consumer Integration
-**Goal**: All PAI consumers can access Open Brain through their native interfaces -- mcp2cli from the terminal, Claude Code via MCP config, Discord via n8n webhook pipeline
+**Goal**: All PAI consumers can access Open Brain through their native interfaces -- mcp2cli from the terminal, Claude Code via MCP config, Discord via n8n webhook pipeline -- with automatic session continuity across context compactions
 **Depends on**: Phase 4
 **Requirements**: INT-01, INT-02
 **Success Criteria** (what must be TRUE):
   1. mcp2cli is configured for Open Brain with skill file generated -- `mcp2cli open-brain search_brain --params '{"query":"test"}'` returns results from the command line
   2. Discord thought capture works end-to-end: a message in a designated Discord channel triggers an n8n workflow that calls the Open Brain MCP server's `log_thought` tool with the message content, and the thought is searchable via `search_brain`
   3. Per-consumer Bearer tokens are generated and stored in vaultwarden, with each consumer (Claude Code, mcp2cli, Discord/n8n) using its own scoped token
+  4. Claude Code PreCompact hook auto-calls `session_save` with current working state (active files, tasks, decisions, errors) before context compaction -- and a SessionStart hook calls `session_load` to restore continuity. Zero manual `/checkpoint` intervention required. (Inspired by context-mode's priority-tiered snapshot pattern)
 **Plans**: TBD
 
 Plans:
@@ -105,7 +106,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Foundation | 3/3 | Complete | 2026-03-13 |
-| 2. Core Tools | 0/2 | Ready to plan | - |
+| 2. Core Tools | 0/2 | Planned | - |
 | 3. Secondary Tools | 0/2 | Not started | - |
 | 4. Operational Hardening | 0/2 | Not started | - |
 | 5. Consumer Integration | 0/2 | Not started | - |
