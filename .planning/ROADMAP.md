@@ -77,11 +77,12 @@ Plans:
   2. CI pipeline (GitHub Actions) runs typecheck, unit tests, and integration tests against a pgvector service container on every push to wip/feat/fix branches and PRs to main
   3. Structured JSON logging captures request method, consumer ID, response status, latency, and embedding success/failure for every MCP tool call -- never logging request bodies or tokens
   4. Server runs as a deployed service (systemd unit or LXC) with automatic restart, environment variable configuration, and a .env.example documenting all required variables
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 04-01: TBD
-- [ ] 04-02: TBD
+- [ ] 04-01-PLAN.md -- Structured request logging middleware and tool-level embedding outcome logging
+- [ ] 04-02-PLAN.md -- Embedding backfill script with per-table text construction matching tool handlers
+- [ ] 04-03-PLAN.md -- CI pipeline (GitHub Actions + pgvector), .env.example, and systemd deployment template
 
 ### Phase 5: Consumer Integration
 **Goal**: All PAI consumers can access Open Brain through their native interfaces -- mcp2cli from the terminal, Claude Code via MCP config, Discord via n8n webhook pipeline -- with automatic session continuity across context compactions
@@ -108,5 +109,5 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | 1. Foundation | 3/3 | Complete | 2026-03-13 |
 | 2. Core Tools | 2/2 | Complete | 2026-03-13 |
 | 3. Secondary Tools | 2/2 | Complete   | 2026-03-13 |
-| 4. Operational Hardening | 0/2 | Not started | - |
+| 4. Operational Hardening | 0/3 | Not started | - |
 | 5. Consumer Integration | 0/2 | Not started | - |
