@@ -15,7 +15,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 1: Foundation** - Database schema, MCP server skeleton, auth middleware, embedding service
 - [x] **Phase 2: Core Tools** - log_thought, log_decision, search_brain -- the primary read/write/search loop
 - [x] **Phase 3: Secondary Tools** - find_person, session_save, session_load -- complete the tool suite (completed 2026-03-13)
-- [ ] **Phase 4: Operational Hardening** - Embedding backfill, monitoring, structured logging, CI pipeline, deployment
+- [x] **Phase 4: Operational Hardening** - Embedding backfill, monitoring, structured logging, CI pipeline, deployment (completed 2026-03-13)
 - [ ] **Phase 5: Consumer Integration** - mcp2cli registration, Discord thought capture, per-consumer token setup
 
 ## Phase Details
@@ -80,9 +80,9 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 04-01-PLAN.md -- Structured request logging middleware and tool-level embedding outcome logging
-- [ ] 04-02-PLAN.md -- Embedding backfill script with per-table text construction matching tool handlers
-- [ ] 04-03-PLAN.md -- CI pipeline (GitHub Actions + pgvector), .env.example, and systemd deployment template
+- [x] 04-01-PLAN.md -- Structured request logging middleware and tool-level embedding outcome logging
+- [x] 04-02-PLAN.md -- Embedding backfill script with per-table text construction matching tool handlers
+- [x] 04-03-PLAN.md -- CI pipeline (GitHub Actions + pgvector), .env.example, and systemd deployment template
 
 ### Phase 5: Consumer Integration
 **Goal**: All PAI consumers can access Open Brain through their native interfaces -- mcp2cli from the terminal, Claude Code via MCP config, Discord via n8n webhook pipeline -- with automatic session continuity across context compactions
@@ -96,7 +96,7 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 05-01-PLAN.md -- Token generation, vaultwarden storage, mcp2cli registration and skill generation
+- [x] 05-01-PLAN.md -- Token verification, vaultwarden storage, mcp2cli registration and agent-reference.md
 - [ ] 05-02-PLAN.md -- Claude Code session hooks (PreCompact + SessionStart) and n8n Discord thought capture workflow
 
 ## Progress
@@ -109,5 +109,5 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | 1. Foundation | 3/3 | Complete | 2026-03-13 |
 | 2. Core Tools | 2/2 | Complete | 2026-03-13 |
 | 3. Secondary Tools | 2/2 | Complete   | 2026-03-13 |
-| 4. Operational Hardening | 0/3 | Not started | - |
-| 5. Consumer Integration | 0/2 | Not started | - |
+| 4. Operational Hardening | 3/3 | Complete | 2026-03-13 |
+| 5. Consumer Integration | 1/2 | In Progress | - |

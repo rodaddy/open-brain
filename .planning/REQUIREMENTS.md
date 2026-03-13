@@ -59,7 +59,7 @@
 | DATA-01 | Phase 3 | Complete |
 | DATA-02 | Phase 1 | Pending |
 | DATA-03 | Phase 3 | Complete |
-| INT-01 | Phase 5 | Pending |
+| INT-01 | Phase 5 | Complete |
 | INT-02 | Phase 5 | Pending |
 
 ---

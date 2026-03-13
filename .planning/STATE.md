@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 04-02-PLAN.md
-last_updated: "2026-03-13T21:58:06.212Z"
-last_activity: 2026-03-13 -- Completed 04-03 CI pipeline, env docs, deployment template
+stopped_at: Completed 05-01-PLAN.md
+last_updated: "2026-03-13T22:30:30Z"
+last_activity: 2026-03-13 -- Completed 05-01 mcp2cli registration, vaultwarden tokens, agent-reference.md
 progress:
   total_phases: 5
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 10
-  completed_plans: 8
-  percent: 80
+  completed_plans: 9
+  percent: 90
 ---
 
 # Project State
@@ -21,23 +21,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-13)
 
 **Core value:** Cross-domain semantic search across all context types -- a single query surfaces relevant thoughts, decisions, people, projects, and session history regardless of where or when they were captured
-**Current focus:** Phase 4: Operational Hardening
+**Current focus:** Phase 5: Consumer Integration
 
 ## Current Position
 
-Phase: 4 of 5 (Operational Hardening)
-Plan: 3 of 3 in current phase
+Phase: 5 of 5 (Consumer Integration)
+Plan: 1 of 2 in current phase
 Status: In Progress
-Last activity: 2026-03-13 -- Completed 04-03 CI pipeline, env docs, deployment template
+Last activity: 2026-03-13 -- Completed 05-01 mcp2cli registration, vaultwarden tokens, agent-reference.md
 
-Progress: [████████░░] 80%
+Progress: [█████████░] 90%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 8
+- Total plans completed: 9
 - Average duration: ~3 min
-- Total execution time: ~23 min
+- Total execution time: ~27 min
 
 **By Phase:**
 
@@ -47,9 +47,10 @@ Progress: [████████░░] 80%
 | 2 Core Tools | 2/2 | ~6 min | ~3 min |
 | 3 Secondary Tools | 2/2 | ~4 min | ~2 min |
 | 4 Operational Hardening | 3/3 | ~9 min | ~3 min |
+| 5 Consumer Integration | 1/2 | ~4 min | ~4 min |
 
 **Recent Trend:**
-- Last 3 plans: 04-01, 04-02, 04-03
+- Last 3 plans: 04-02, 04-03, 05-01
 - Trend: Stable
 
 ## Accumulated Context
@@ -90,6 +91,9 @@ Recent decisions affecting current work:
 - [Phase 04]: Dependency-injected backfill(pool, embedFn) for testability over module-level execution
 - [Phase 04]: TABLE_CONFIGS array-driven iteration with per-table textFn matching tool handlers
 - [Phase 04]: 150ms delay between rows to avoid LiteLLM overload during backfill
+- [Phase 05]: Used existing vaultwarden tokens instead of generating new ones per user directive
+- [Phase 05]: mcp2cli uses AUTH_TOKEN_AGENT role for CLI access -- appropriate scope (not admin, not readonly)
+- [Phase 05]: Token script provides --verify and --rotate modes rather than one-shot generation
 
 ### Pending Todos
 
@@ -102,6 +106,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-13T21:54:02.992Z
-Stopped at: Completed 04-02-PLAN.md
+Last session: 2026-03-13T22:30:30Z
+Stopped at: Completed 05-01-PLAN.md
 Resume file: None
