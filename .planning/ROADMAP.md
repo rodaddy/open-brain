@@ -106,7 +106,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Foundation | 3/3 | Complete | 2026-03-13 |
-| 2. Core Tools | 0/2 | Planned | - |
+| 2. Core Tools | 1/2 | In Progress|  |
 | 3. Secondary Tools | 0/2 | Not started | - |
 | 4. Operational Hardening | 0/2 | Not started | - |
 | 5. Consumer Integration | 0/2 | Not started | - |

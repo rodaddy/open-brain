@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 1 complete, ready to plan Phase 2
-last_updated: "2026-03-13T20:20:00.000Z"
-last_activity: 2026-03-13 -- Phase 1 complete + review swarm fixes
+stopped_at: Completed 02-01-PLAN.md
+last_updated: "2026-03-13T20:43:08.690Z"
+last_activity: 2026-03-13 -- Completed 02-01 write tools (log_thought, log_decision)
 progress:
   total_phases: 5
   completed_phases: 1
-  total_plans: 3
-  completed_plans: 3
-  percent: 100
+  total_plans: 5
+  completed_plans: 4
+  percent: 40
 ---
 
 # Project State
@@ -26,27 +26,28 @@ See: .planning/PROJECT.md (updated 2026-03-13)
 ## Current Position
 
 Phase: 2 of 5 (Core Tools)
-Plan: 0 of 2 in current phase
-Status: Ready to plan
-Last activity: 2026-03-13 -- Phase 1 complete + review swarm (16 findings fixed)
+Plan: 1 of 2 in current phase
+Status: Executing
+Last activity: 2026-03-13 -- Completed 02-01 write tools (log_thought, log_decision)
 
-Progress: [██░░░░░░░░] 20%
+Progress: [████░░░░░░] 40%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 3
+- Total plans completed: 4
 - Average duration: ~3 min
-- Total execution time: ~10 min
+- Total execution time: ~13 min
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 1 Foundation | 3/3 | ~10 min | ~3 min |
+| 2 Core Tools | 1/2 | 3 min | 3 min |
 
 **Recent Trend:**
-- Last 3 plans: 01-01, 01-02, 01-03
+- Last 3 plans: 01-02, 01-03, 02-01
 - Trend: Stable
 
 ## Accumulated Context
@@ -65,6 +66,10 @@ Recent decisions affecting current work:
 - [Phase 01]: Pool-level statement_timeout (30s) instead of ALTER DATABASE
 - [Phase 01]: CORS restricted to ALLOWED_ORIGINS env var
 - [Phase 01]: Fail-fast on missing DB_HOST, DB_USER, zero auth tokens
+- [Phase 02]: registerTool() over deprecated .tool() for SDK v1.27+ with title/annotations
+- [Phase 02]: Embed title+newline+rationale for decisions (better semantic search quality)
+- [Phase 02]: toSql() from pgvector/pg for halfvec serialization
+- [Phase 02]: ToolDeps { pool, embedFn } dependency injection pattern for all tools
 
 ### Pending Todos
 
@@ -78,5 +83,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-03-13
-Stopped at: Phase 1 complete, ready for Phase 2
+Stopped at: Completed 02-01-PLAN.md
 Resume file: None
