@@ -48,7 +48,7 @@
 |-------------|-------|--------|
 | DB-01 | Phase 1 | Pending |
 | DB-02 | Phase 1 | Pending |
-| SRV-01 | Phase 1 | Pending |
+| SRV-01 | Phase 1 | Complete |
 | AUTH-01 | Phase 1 | Pending |
 | TOOL-01 | Phase 2 | Pending |
 | TOOL-02 | Phase 2 | Pending |
