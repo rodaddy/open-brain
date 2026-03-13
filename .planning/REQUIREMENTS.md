@@ -50,7 +50,7 @@
 | DB-02 | Phase 1 | Pending |
 | SRV-01 | Phase 1 | Complete |
 | AUTH-01 | Phase 1 | Pending |
-| TOOL-01 | Phase 2 | Pending |
+| TOOL-01 | Phase 2 | Complete |
 | TOOL-02 | Phase 2 | Complete |
 | TOOL-03 | Phase 2 | Complete |
 | TOOL-04 | Phase 3 | Pending |

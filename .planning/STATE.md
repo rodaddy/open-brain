@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 02-01-PLAN.md
-last_updated: "2026-03-13T20:43:08.690Z"
-last_activity: 2026-03-13 -- Completed 02-01 write tools (log_thought, log_decision)
+stopped_at: Completed 02-02-PLAN.md
+last_updated: "2026-03-13T20:48:53.365Z"
+last_activity: 2026-03-13 -- Completed 02-02 search_brain cross-table semantic search
 progress:
   total_phases: 5
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 5
-  completed_plans: 4
-  percent: 40
+  completed_plans: 5
+  percent: 60
 ---
 
 # Project State
@@ -25,29 +25,29 @@ See: .planning/PROJECT.md (updated 2026-03-13)
 
 ## Current Position
 
-Phase: 2 of 5 (Core Tools)
-Plan: 1 of 2 in current phase
-Status: Executing
-Last activity: 2026-03-13 -- Completed 02-01 write tools (log_thought, log_decision)
+Phase: 2 of 5 (Core Tools) -- COMPLETE
+Plan: 2 of 2 in current phase
+Status: Phase 2 Complete
+Last activity: 2026-03-13 -- Completed 02-02 search_brain cross-table semantic search
 
-Progress: [████░░░░░░] 40%
+Progress: [██████░░░░] 60%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 4
+- Total plans completed: 5
 - Average duration: ~3 min
-- Total execution time: ~13 min
+- Total execution time: ~16 min
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 1 Foundation | 3/3 | ~10 min | ~3 min |
-| 2 Core Tools | 1/2 | 3 min | 3 min |
+| 2 Core Tools | 2/2 | ~6 min | ~3 min |
 
 **Recent Trend:**
-- Last 3 plans: 01-02, 01-03, 02-01
+- Last 3 plans: 01-03, 02-01, 02-02
 - Trend: Stable
 
 ## Accumulated Context
@@ -70,6 +70,9 @@ Recent decisions affecting current work:
 - [Phase 02]: Embed title+newline+rationale for decisions (better semantic search quality)
 - [Phase 02]: toSql() from pgvector/pg for halfvec serialization
 - [Phase 02]: ToolDeps { pool, embedFn } dependency injection pattern for all tools
+- [Phase 02]: Dynamic SQL construction over parameterized table filter -- permissions enforced at query build time
+- [Phase 02]: Per-CTE ORDER BY + LIMIT for HNSW index efficiency before UNION ALL merge
+- [Phase 02]: readOnlyHint/idempotentHint annotations for search tool (unlike write tools)
 
 ### Pending Todos
 
@@ -83,5 +86,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-03-13
-Stopped at: Completed 02-01-PLAN.md
+Stopped at: Completed 02-02-PLAN.md
 Resume file: None
