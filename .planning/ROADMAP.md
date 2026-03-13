@@ -93,11 +93,11 @@ Plans:
   2. Discord thought capture works end-to-end: a message in a designated Discord channel triggers an n8n workflow that calls the Open Brain MCP server's `log_thought` tool with the message content, and the thought is searchable via `search_brain`
   3. Per-consumer Bearer tokens are generated and stored in vaultwarden, with each consumer (Claude Code, mcp2cli, Discord/n8n) using its own scoped token
   4. Claude Code PreCompact hook auto-calls `session_save` with current working state (active files, tasks, decisions, errors) before context compaction -- and a SessionStart hook calls `session_load` to restore continuity. Zero manual `/checkpoint` intervention required. (Inspired by context-mode's priority-tiered snapshot pattern)
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 05-01: TBD
-- [ ] 05-02: TBD
+- [ ] 05-01-PLAN.md -- Token generation, vaultwarden storage, mcp2cli registration and skill generation
+- [ ] 05-02-PLAN.md -- Claude Code session hooks (PreCompact + SessionStart) and n8n Discord thought capture workflow
 
 ## Progress
 
