@@ -39,7 +39,8 @@ const TABLE_CONFIGS: TableConfig[] = [
   },
 ];
 
-const EMBEDDING_MODEL = "embeddings";
+const EMBEDDING_MODEL = "gemini-embedding-001";
+const DELAY_MS = 150;
 
 interface BackfillResult {
   processed: number;
@@ -58,7 +59,7 @@ export async function backfill(
       `SELECT * FROM ${table} WHERE embedding IS NULL`,
     );
 
-    logger.info(`Processing ${table}`, { nullCount: rows.length });
+    logger.info(`Backfill: ${table}`, { nullCount: rows.length });
 
     for (const row of rows) {
       const text = textFn(row);
@@ -78,6 +79,8 @@ export async function backfill(
       );
 
       totalProcessed++;
+
+      await new Promise((resolve) => setTimeout(resolve, DELAY_MS));
     }
   }
 
@@ -86,4 +89,21 @@ export async function backfill(
   await pool.end();
 
   return { processed: totalProcessed, failed: totalFailed };
+}
+
+if (import.meta.main) {
+  try {
+    const pool = createPool();
+    const result = await backfill(pool, generateEmbedding);
+    logger.info("Backfill finished", {
+      processed: result.processed,
+      failed: result.failed,
+    });
+    process.exit(0);
+  } catch (err) {
+    logger.error("Backfill fatal error", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    process.exit(1);
+  }
 }

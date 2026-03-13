@@ -8,7 +8,8 @@
     "start": "bun run src/index.ts",
     "migrate": "bun run scripts/migrate.ts",
     "test": "bun test",
-    "typecheck": "bunx tsc --noEmit"
+    "typecheck": "bunx tsc --noEmit",
+    "backfill": "bun run scripts/backfill.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",
