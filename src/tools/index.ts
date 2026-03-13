@@ -5,6 +5,8 @@ import { registerLogThought } from "./log-thought.ts";
 import { registerLogDecision } from "./log-decision.ts";
 import { registerSearchBrain } from "./search-brain.ts";
 import { registerFindPerson } from "./find-person.ts";
+import { registerSessionSave } from "./session-save.ts";
+import { registerSessionLoad } from "./session-load.ts";
 
 export interface ToolDeps {
   pool: pg.Pool;
@@ -16,4 +18,6 @@ export function registerAllTools(server: McpServer, deps: ToolDeps): void {
   registerLogDecision(server, deps);
   registerSearchBrain(server, deps);
   registerFindPerson(server, deps);
+  registerSessionSave(server, deps);
+  registerSessionLoad(server, deps);
 }

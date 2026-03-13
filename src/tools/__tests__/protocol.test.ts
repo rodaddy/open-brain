@@ -214,6 +214,110 @@ describe("Protocol tests: write tools via InMemoryTransport", () => {
     });
   });
 
+  describe("session_save via protocol", () => {
+    it("returns valid JSON with id using admin auth", async () => {
+      const auth: AuthInfo = { role: "admin", clientId: "proto-admin" };
+      const { client, cleanup } = await createProtocolClient(auth);
+
+      try {
+        const result = await client.callTool({
+          name: "session_save",
+          arguments: {
+            summary: "Protocol test session",
+            project: "test-project",
+            tags: ["protocol"],
+            blockers: [],
+            next_steps: ["verify"],
+            key_decisions: ["use MCP"],
+          },
+        });
+
+        expect(result.isError).toBeFalsy();
+        const text = (result.content as any)[0].text;
+        const parsed = JSON.parse(text);
+        expect(parsed.id).toBe("proto-uuid");
+        expect(typeof parsed.embedded).toBe("boolean");
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("returns isError with readonly role", async () => {
+      const auth: AuthInfo = { role: "readonly", clientId: "proto-readonly" };
+      const { client, cleanup } = await createProtocolClient(auth);
+
+      try {
+        const result = await client.callTool({
+          name: "session_save",
+          arguments: { summary: "Readonly should fail" },
+        });
+
+        expect(result.isError).toBe(true);
+        const text = (result.content as any)[0].text;
+        expect(text).toContain("Permission denied");
+      } finally {
+        await cleanup();
+      }
+    });
+  });
+
+  describe("session_load via protocol", () => {
+    it("returns valid session JSON with admin auth", async () => {
+      const sessionRow = {
+        id: "session-uuid",
+        project: "test-project",
+        summary: "Test summary",
+        tags: ["tag1"],
+        blockers: [],
+        next_steps: ["step1"],
+        key_decisions: ["decision1"],
+        created_by: "proto-admin",
+        created_at: "2026-01-01T00:00:00Z",
+      };
+      const auth: AuthInfo = { role: "admin", clientId: "proto-admin" };
+      const { client, cleanup } = await createProtocolClient(auth, [
+        sessionRow,
+      ]);
+
+      try {
+        const result = await client.callTool({
+          name: "session_load",
+          arguments: { project: "test-project" },
+        });
+
+        expect(result.isError).toBeFalsy();
+        const text = (result.content as any)[0].text;
+        const parsed = JSON.parse(text);
+        expect(parsed.id).toBe("session-uuid");
+        expect(parsed.project).toBe("test-project");
+        expect(parsed.summary).toBe("Test summary");
+        expect(Array.isArray(parsed.tags)).toBe(true);
+        expect(Array.isArray(parsed.next_steps)).toBe(true);
+        expect(Array.isArray(parsed.key_decisions)).toBe(true);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("returns isError with discord role", async () => {
+      const auth: AuthInfo = { role: "discord", clientId: "proto-discord" };
+      const { client, cleanup } = await createProtocolClient(auth);
+
+      try {
+        const result = await client.callTool({
+          name: "session_load",
+          arguments: {},
+        });
+
+        expect(result.isError).toBe(true);
+        const text = (result.content as any)[0].text;
+        expect(text).toContain("Permission denied");
+      } finally {
+        await cleanup();
+      }
+    });
+  });
+
   describe("log_decision via protocol", () => {
     it("returns valid JSON with id using admin auth", async () => {
       const auth: AuthInfo = { role: "admin", clientId: "proto-admin" };
