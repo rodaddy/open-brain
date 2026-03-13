@@ -4,6 +4,7 @@ import { toSql } from "pgvector/pg";
 import { canWrite } from "../permissions.ts";
 import { contentHash } from "../embedding.ts";
 import type { AuthInfo } from "../types.ts";
+import { logger } from "../logger.ts";
 import type { ToolDeps } from "./index.ts";
 
 export function registerSessionSave(server: McpServer, deps: ToolDeps): void {
@@ -52,6 +53,10 @@ export function registerSessionSave(server: McpServer, deps: ToolDeps): void {
 
       const hash = contentHash(args.summary);
       const embedding = await deps.embedFn(args.summary);
+      logger.info("tool_embedding", {
+        tool: "session_save",
+        embedded: !!embedding,
+      });
 
       const { rows } = await deps.pool.query(
         `INSERT INTO sessions (project, summary, tags, blockers, next_steps, key_decisions, created_by, embedding, content_hash, embedded_at, embedding_model)

@@ -4,6 +4,7 @@ import { toSql } from "pgvector/pg";
 import { canWrite } from "../permissions.ts";
 import { contentHash } from "../embedding.ts";
 import type { AuthInfo } from "../types.ts";
+import { logger } from "../logger.ts";
 import type { ToolDeps } from "./index.ts";
 
 export function registerLogDecision(server: McpServer, deps: ToolDeps): void {
@@ -46,6 +47,10 @@ export function registerLogDecision(server: McpServer, deps: ToolDeps): void {
       const textToEmbed = `${args.title}\n${args.rationale}`;
       const hash = contentHash(textToEmbed);
       const embedding = await deps.embedFn(textToEmbed);
+      logger.info("tool_embedding", {
+        tool: "log_decision",
+        embedded: !!embedding,
+      });
 
       const { rows } = await deps.pool.query(
         `INSERT INTO decisions (title, rationale, alternatives, tags, context, created_by, embedding, content_hash, embedded_at, embedding_model)

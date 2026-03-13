@@ -4,6 +4,7 @@ import { toSql } from "pgvector/pg";
 import { canWrite } from "../permissions.ts";
 import { contentHash } from "../embedding.ts";
 import type { AuthInfo } from "../types.ts";
+import { logger } from "../logger.ts";
 import type { ToolDeps } from "./index.ts";
 
 export function registerLogThought(server: McpServer, deps: ToolDeps): void {
@@ -38,6 +39,10 @@ export function registerLogThought(server: McpServer, deps: ToolDeps): void {
 
       const hash = contentHash(args.content);
       const embedding = await deps.embedFn(args.content);
+      logger.info("tool_embedding", {
+        tool: "log_thought",
+        embedded: !!embedding,
+      });
 
       const { rows } = await deps.pool.query(
         `INSERT INTO thoughts (content, tags, source, created_by, embedding, content_hash, embedded_at, embedding_model)

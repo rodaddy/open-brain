@@ -10,6 +10,7 @@ import { registerAllTools } from "./tools/index.ts";
 import { generateEmbedding } from "./embedding.ts";
 import { runMigrations } from "./db/migrate.ts";
 import { logger } from "./logger.ts";
+import { requestLogger } from "./middleware/request-logger.ts";
 import type { AuthInfo, HealthStatus } from "./types.ts";
 
 const LITELLM_URL = process.env.LITELLM_URL;
@@ -27,6 +28,7 @@ export function createApp(
     }),
   );
   app.use(express.json({ limit: "1mb" }));
+  app.use(requestLogger);
 
   // Health endpoint -- no auth required
   app.get("/health", async (_req: Request, res: Response) => {
