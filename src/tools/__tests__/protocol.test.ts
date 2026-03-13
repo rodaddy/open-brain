@@ -93,6 +93,74 @@ describe("Protocol tests: write tools via InMemoryTransport", () => {
     });
   });
 
+  describe("search_brain via protocol", () => {
+    it("returns results array with admin auth", async () => {
+      const searchRows = [
+        {
+          source_type: "thought",
+          id: "search-uuid",
+          content_preview: "A relevant thought",
+          distance: 0.05,
+          tags: ["test"],
+          created_at: "2026-01-01T00:00:00Z",
+        },
+      ];
+      const auth: AuthInfo = { role: "admin", clientId: "proto-admin" };
+      const { client, cleanup } = await createProtocolClient(auth, searchRows);
+
+      try {
+        const result = await client.callTool({
+          name: "search_brain",
+          arguments: { query: "protocol search test" },
+        });
+
+        expect(result.isError).toBeFalsy();
+        const text = (result.content as any)[0].text;
+        const parsed = JSON.parse(text);
+        expect(Array.isArray(parsed)).toBe(true);
+        expect(parsed.length).toBe(1);
+        expect(parsed[0].source_type).toBe("thought");
+        expect(parsed[0].id).toBe("search-uuid");
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("returns validation error for empty query (Zod min(1))", async () => {
+      const auth: AuthInfo = { role: "admin", clientId: "proto-admin" };
+      const { client, cleanup } = await createProtocolClient(auth);
+
+      try {
+        const result = await client.callTool({
+          name: "search_brain",
+          arguments: { query: "" },
+        });
+
+        expect(result.isError).toBe(true);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("returns isError with discord role (no read permissions)", async () => {
+      const auth: AuthInfo = { role: "discord", clientId: "proto-discord" };
+      const { client, cleanup } = await createProtocolClient(auth);
+
+      try {
+        const result = await client.callTool({
+          name: "search_brain",
+          arguments: { query: "discord should fail" },
+        });
+
+        expect(result.isError).toBe(true);
+        const text = (result.content as any)[0].text;
+        expect(text).toContain("Permission denied");
+      } finally {
+        await cleanup();
+      }
+    });
+  });
+
   describe("log_decision via protocol", () => {
     it("returns valid JSON with id using admin auth", async () => {
       const auth: AuthInfo = { role: "admin", clientId: "proto-admin" };

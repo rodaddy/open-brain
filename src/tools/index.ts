@@ -3,6 +3,7 @@ import type pg from "pg";
 import type { generateEmbedding } from "../embedding.ts";
 import { registerLogThought } from "./log-thought.ts";
 import { registerLogDecision } from "./log-decision.ts";
+import { registerSearchBrain } from "./search-brain.ts";
 
 export interface ToolDeps {
   pool: pg.Pool;
@@ -12,4 +13,5 @@ export interface ToolDeps {
 export function registerAllTools(server: McpServer, deps: ToolDeps): void {
   registerLogThought(server, deps);
   registerLogDecision(server, deps);
+  registerSearchBrain(server, deps);
 }
