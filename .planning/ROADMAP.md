@@ -16,7 +16,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 2: Core Tools** - log_thought, log_decision, search_brain -- the primary read/write/search loop
 - [x] **Phase 3: Secondary Tools** - find_person, session_save, session_load -- complete the tool suite (completed 2026-03-13)
 - [x] **Phase 4: Operational Hardening** - Embedding backfill, monitoring, structured logging, CI pipeline, deployment (completed 2026-03-13)
-- [ ] **Phase 5: Consumer Integration** - mcp2cli registration, Discord thought capture, per-consumer token setup
+- [x] **Phase 5: Consumer Integration** - mcp2cli registration, Discord thought capture, per-consumer token setup (completed 2026-03-13)
 
 ## Phase Details
 
@@ -110,4 +110,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | 2. Core Tools | 2/2 | Complete | 2026-03-13 |
 | 3. Secondary Tools | 2/2 | Complete   | 2026-03-13 |
 | 4. Operational Hardening | 3/3 | Complete | 2026-03-13 |
-| 5. Consumer Integration | 1/2 | In Progress | - |
+| 5. Consumer Integration | 2/2 | Complete   | 2026-03-13 |

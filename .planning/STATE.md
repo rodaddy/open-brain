@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 05-01-PLAN.md
-last_updated: "2026-03-13T22:30:30Z"
-last_activity: 2026-03-13 -- Completed 05-01 mcp2cli registration, vaultwarden tokens, agent-reference.md
+stopped_at: Completed 05-02-PLAN.md
+last_updated: "2026-03-13T23:09:10Z"
+last_activity: 2026-03-13 -- Completed 05-02 session hooks and Discord thought capture
 progress:
   total_phases: 5
-  completed_phases: 4
-  total_plans: 10
-  completed_plans: 9
-  percent: 90
+  completed_phases: 5
+  total_plans: 12
+  completed_plans: 12
+  percent: 100
 ---
 
 # Project State
@@ -21,23 +21,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-13)
 
 **Core value:** Cross-domain semantic search across all context types -- a single query surfaces relevant thoughts, decisions, people, projects, and session history regardless of where or when they were captured
-**Current focus:** Phase 5: Consumer Integration
+**Current focus:** v1.0 Complete -- All phases executed
 
 ## Current Position
 
 Phase: 5 of 5 (Consumer Integration)
-Plan: 1 of 2 in current phase
-Status: In Progress
-Last activity: 2026-03-13 -- Completed 05-01 mcp2cli registration, vaultwarden tokens, agent-reference.md
+Plan: 2 of 2 in current phase
+Status: Complete
+Last activity: 2026-03-13 -- Completed 05-02 session hooks and Discord thought capture
 
-Progress: [█████████░] 90%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 9
+- Total plans completed: 10
 - Average duration: ~3 min
-- Total execution time: ~27 min
+- Total execution time: ~33 min
 
 **By Phase:**
 
@@ -47,10 +47,10 @@ Progress: [█████████░] 90%
 | 2 Core Tools | 2/2 | ~6 min | ~3 min |
 | 3 Secondary Tools | 2/2 | ~4 min | ~2 min |
 | 4 Operational Hardening | 3/3 | ~9 min | ~3 min |
-| 5 Consumer Integration | 1/2 | ~4 min | ~4 min |
+| 5 Consumer Integration | 2/2 | ~10 min | ~5 min |
 
 **Recent Trend:**
-- Last 3 plans: 04-02, 04-03, 05-01
+- Last 3 plans: 04-03, 05-01, 05-02
 - Trend: Stable
 
 ## Accumulated Context
@@ -94,6 +94,9 @@ Recent decisions affecting current work:
 - [Phase 05]: Used existing vaultwarden tokens instead of generating new ones per user directive
 - [Phase 05]: mcp2cli uses AUTH_TOKEN_AGENT role for CLI access -- appropriate scope (not admin, not readonly)
 - [Phase 05]: Token script provides --verify and --rotate modes rather than one-shot generation
+- [Phase 05]: Command hooks (not HTTP) for both PreCompact and SessionStart -- PreCompact only supports command type
+- [Phase 05]: Silent exit 0 on all errors in hooks -- never block compaction or session start
+- [Phase 05]: Two-step MCP handshake in n8n rather than adding REST endpoint -- keeps server code unchanged
 
 ### Pending Todos
 
@@ -106,6 +109,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-13T22:30:30Z
-Stopped at: Completed 05-01-PLAN.md
+Last session: 2026-03-13T23:09:10Z
+Stopped at: Completed 05-02-PLAN.md -- All plans complete (v1.0 milestone)
 Resume file: None

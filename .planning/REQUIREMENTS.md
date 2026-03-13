@@ -60,7 +60,7 @@
 | DATA-02 | Phase 1 | Pending |
 | DATA-03 | Phase 3 | Complete |
 | INT-01 | Phase 5 | Complete |
-| INT-02 | Phase 5 | Pending |
+| INT-02 | Phase 5 | Complete |
 
 ---
 *15 v1 requirements, 15/15 mapped*
