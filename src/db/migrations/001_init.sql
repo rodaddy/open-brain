@@ -126,8 +126,8 @@ CREATE INDEX idx_sessions_embedding ON sessions
 CREATE UNIQUE INDEX idx_sessions_content_hash ON sessions (content_hash)
   WHERE content_hash IS NOT NULL;
 
--- Migrations tracking table
-CREATE TABLE _migrations (
+-- Migrations tracking table (IF NOT EXISTS -- runner creates this before migrations run)
+CREATE TABLE IF NOT EXISTS _migrations (
   id            SERIAL PRIMARY KEY,
   filename      TEXT NOT NULL UNIQUE,
   applied_at    TIMESTAMPTZ DEFAULT NOW()
