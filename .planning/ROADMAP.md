@@ -14,7 +14,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Foundation** - Database schema, MCP server skeleton, auth middleware, embedding service
 - [x] **Phase 2: Core Tools** - log_thought, log_decision, search_brain -- the primary read/write/search loop
-- [ ] **Phase 3: Secondary Tools** - find_person, session_save, session_load -- complete the tool suite
+- [x] **Phase 3: Secondary Tools** - find_person, session_save, session_load -- complete the tool suite (completed 2026-03-13)
 - [ ] **Phase 4: Operational Hardening** - Embedding backfill, monitoring, structured logging, CI pipeline, deployment
 - [ ] **Phase 5: Consumer Integration** - mcp2cli registration, Discord thought capture, per-consumer token setup
 
@@ -107,6 +107,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 |-------|----------------|--------|-----------|
 | 1. Foundation | 3/3 | Complete | 2026-03-13 |
 | 2. Core Tools | 2/2 | Complete | 2026-03-13 |
-| 3. Secondary Tools | 1/2 | In Progress|  |
+| 3. Secondary Tools | 2/2 | Complete   | 2026-03-13 |
 | 4. Operational Hardening | 0/2 | Not started | - |
 | 5. Consumer Integration | 0/2 | Not started | - |

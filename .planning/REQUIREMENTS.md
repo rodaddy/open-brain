@@ -54,11 +54,11 @@
 | TOOL-02 | Phase 2 | Complete |
 | TOOL-03 | Phase 2 | Complete |
 | TOOL-04 | Phase 3 | Complete |
-| TOOL-05 | Phase 3 | Pending |
-| TOOL-06 | Phase 3 | Pending |
+| TOOL-05 | Phase 3 | Complete |
+| TOOL-06 | Phase 3 | Complete |
 | DATA-01 | Phase 3 | Complete |
 | DATA-02 | Phase 1 | Pending |
-| DATA-03 | Phase 3 | Pending |
+| DATA-03 | Phase 3 | Complete |
 | INT-01 | Phase 5 | Pending |
 | INT-02 | Phase 5 | Pending |
 
