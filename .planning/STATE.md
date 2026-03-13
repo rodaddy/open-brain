@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 04-03-PLAN.md
-last_updated: "2026-03-13T21:52:53.432Z"
+stopped_at: Completed 04-02-PLAN.md
+last_updated: "2026-03-13T21:54:02.993Z"
 last_activity: 2026-03-13 -- Completed 04-03 CI pipeline, env docs, deployment template
 progress:
   total_phases: 5
   completed_phases: 3
   total_plans: 10
   completed_plans: 8
-  percent: 70
+  percent: 80
 ---
 
 # Project State
@@ -87,6 +87,9 @@ Recent decisions affecting current work:
 - [Phase 04]: pgvector/pgvector:pg16 CI image matches production Postgres 16
 - [Phase 04]: Bun pinned to 1.3.9 in CI matching local dev environment
 - [Phase 04]: Safe placeholder values in .env.example -- no real IPs or tokens committed
+- [Phase 04]: Dependency-injected backfill(pool, embedFn) for testability over module-level execution
+- [Phase 04]: TABLE_CONFIGS array-driven iteration with per-table textFn matching tool handlers
+- [Phase 04]: 150ms delay between rows to avoid LiteLLM overload during backfill
 
 ### Pending Todos
 
@@ -99,6 +102,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-13T21:52:00Z
-Stopped at: Completed 04-03-PLAN.md
+Last session: 2026-03-13T21:54:02.992Z
+Stopped at: Completed 04-02-PLAN.md
 Resume file: None
