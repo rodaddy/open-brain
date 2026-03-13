@@ -6,6 +6,8 @@ import { createPool, checkPoolHealth } from "./db/pool.ts";
 import { buildTokenMap, authMiddleware } from "./auth.ts";
 import { createBrainServer } from "./server.ts";
 import { createTransportHandlers } from "./transport.ts";
+import { registerAllTools } from "./tools/index.ts";
+import { generateEmbedding } from "./embedding.ts";
 import { runMigrations } from "./db/migrate.ts";
 import { logger } from "./logger.ts";
 import type { AuthInfo, HealthStatus } from "./types.ts";
@@ -57,6 +59,7 @@ export function createApp(
 
   // MCP server and transport
   const mcpServer = createBrainServer();
+  registerAllTools(mcpServer, { pool, embedFn: generateEmbedding });
   const handlers = createTransportHandlers(mcpServer);
 
   app.post("/mcp", auth, (req: Request, res: Response, _next: NextFunction) => {
