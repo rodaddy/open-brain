@@ -161,6 +161,59 @@ describe("Protocol tests: write tools via InMemoryTransport", () => {
     });
   });
 
+  describe("find_person via protocol", () => {
+    it("name mode returns valid JSON array with admin auth", async () => {
+      const personRows = [
+        {
+          id: "person-uuid",
+          person_name: "Alice Johnson",
+          context: "Engineer at Google",
+          warmth: 4,
+          last_contact: "2026-01-15",
+          notes: "Met at conference",
+          tags: ["engineering"],
+          created_at: "2026-01-01T00:00:00Z",
+        },
+      ];
+      const auth: AuthInfo = { role: "admin", clientId: "proto-admin" };
+      const { client, cleanup } = await createProtocolClient(auth, personRows);
+
+      try {
+        const result = await client.callTool({
+          name: "find_person",
+          arguments: { query: "Alice", mode: "name" },
+        });
+
+        expect(result.isError).toBeFalsy();
+        const text = (result.content as any)[0].text;
+        const parsed = JSON.parse(text);
+        expect(Array.isArray(parsed)).toBe(true);
+        expect(parsed.length).toBe(1);
+        expect(parsed[0].person_name).toBe("Alice Johnson");
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("returns isError with discord role", async () => {
+      const auth: AuthInfo = { role: "discord", clientId: "proto-discord" };
+      const { client, cleanup } = await createProtocolClient(auth);
+
+      try {
+        const result = await client.callTool({
+          name: "find_person",
+          arguments: { query: "Alice" },
+        });
+
+        expect(result.isError).toBe(true);
+        const text = (result.content as any)[0].text;
+        expect(text).toContain("Permission denied");
+      } finally {
+        await cleanup();
+      }
+    });
+  });
+
   describe("log_decision via protocol", () => {
     it("returns valid JSON with id using admin auth", async () => {
       const auth: AuthInfo = { role: "admin", clientId: "proto-admin" };
