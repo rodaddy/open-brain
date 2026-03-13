@@ -38,6 +38,14 @@ function mockRes() {
   } as unknown as Response & { _emit: (event: string) => void };
 }
 
+type LogCall = [string, Record<string, unknown>];
+
+function lastInfoCall(): LogCall {
+  const call = mockLoggerInfo.mock.calls[0];
+  if (!call) throw new Error("No logger.info calls recorded");
+  return call as unknown as LogCall;
+}
+
 describe("requestLogger middleware", () => {
   beforeEach(() => {
     mockLoggerInfo.mockClear();
@@ -62,10 +70,7 @@ describe("requestLogger middleware", () => {
     (res as any)._emit("finish");
 
     expect(mockLoggerInfo).toHaveBeenCalledTimes(1);
-    const [message, data] = mockLoggerInfo.mock.calls[0] as unknown as [
-      string,
-      Record<string, unknown>,
-    ];
+    const [message, data] = lastInfoCall();
     expect(message).toBe("request");
     expect(data).toHaveProperty("method", "POST");
     expect(data).toHaveProperty("path", "/mcp");
@@ -82,10 +87,7 @@ describe("requestLogger middleware", () => {
     requestLogger(req, res, next as NextFunction);
     (res as any)._emit("finish");
 
-    const [, data] = mockLoggerInfo.mock.calls[0] as unknown as [
-      string,
-      Record<string, unknown>,
-    ];
+    const [, data] = lastInfoCall();
     expect(data).toHaveProperty("consumerId", "admin");
   });
 
@@ -97,10 +99,7 @@ describe("requestLogger middleware", () => {
     requestLogger(req, res, next as NextFunction);
     (res as any)._emit("finish");
 
-    const [, data] = mockLoggerInfo.mock.calls[0] as unknown as [
-      string,
-      Record<string, unknown>,
-    ];
+    const [, data] = lastInfoCall();
     expect(data).toHaveProperty("consumerId", "anonymous");
   });
 
@@ -112,10 +111,7 @@ describe("requestLogger middleware", () => {
     requestLogger(req, res, next as NextFunction);
     (res as any)._emit("finish");
 
-    const [, data] = mockLoggerInfo.mock.calls[0] as unknown as [
-      string,
-      Record<string, unknown>,
-    ];
+    const [, data] = lastInfoCall();
     const serialized = JSON.stringify(data);
     expect(serialized).not.toContain("should-not-appear");
     expect(data).not.toHaveProperty("body");
@@ -131,10 +127,7 @@ describe("requestLogger middleware", () => {
     requestLogger(req, res, next as NextFunction);
     (res as any)._emit("finish");
 
-    const [, data] = mockLoggerInfo.mock.calls[0] as unknown as [
-      string,
-      Record<string, unknown>,
-    ];
+    const [, data] = lastInfoCall();
     const serialized = JSON.stringify(data);
     expect(serialized).not.toContain("super-secret-token");
     expect(data).not.toHaveProperty("authorization");
@@ -149,10 +142,7 @@ describe("requestLogger middleware", () => {
     requestLogger(req, res, next as NextFunction);
     (res as any)._emit("finish");
 
-    const [, data] = mockLoggerInfo.mock.calls[0] as unknown as [
-      string,
-      Record<string, unknown>,
-    ];
+    const [, data] = lastInfoCall();
     const duration = data.durationMs as number;
     expect(typeof duration).toBe("number");
     expect(Number.isInteger(duration)).toBe(true);
