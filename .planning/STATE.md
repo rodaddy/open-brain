@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: completed
-stopped_at: Completed 03-02-PLAN.md
-last_updated: "2026-03-13T21:20:52.680Z"
-last_activity: 2026-03-13 -- Completed 03-02 session_save and session_load tools
+status: executing
+stopped_at: Completed 04-03-PLAN.md
+last_updated: "2026-03-13T21:52:53.432Z"
+last_activity: 2026-03-13 -- Completed 04-03 CI pipeline, env docs, deployment template
 progress:
   total_phases: 5
-  completed_phases: 2
-  total_plans: 7
-  completed_plans: 5
-  percent: 71
+  completed_phases: 3
+  total_plans: 10
+  completed_plans: 8
+  percent: 70
 ---
 
 # Project State
@@ -21,23 +21,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-13)
 
 **Core value:** Cross-domain semantic search across all context types -- a single query surfaces relevant thoughts, decisions, people, projects, and session history regardless of where or when they were captured
-**Current focus:** Phase 4: Integration
+**Current focus:** Phase 4: Operational Hardening
 
 ## Current Position
 
-Phase: 3 of 5 (Secondary Tools) -- COMPLETE
-Plan: 2 of 2 in current phase (phase complete)
-Status: Phase 3 Complete
-Last activity: 2026-03-13 -- Completed 03-02 session_save and session_load tools
+Phase: 4 of 5 (Operational Hardening)
+Plan: 3 of 3 in current phase
+Status: In Progress
+Last activity: 2026-03-13 -- Completed 04-03 CI pipeline, env docs, deployment template
 
-Progress: [███████░░░] 71%
+Progress: [████████░░] 80%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 7
+- Total plans completed: 8
 - Average duration: ~3 min
-- Total execution time: ~20 min
+- Total execution time: ~23 min
 
 **By Phase:**
 
@@ -46,9 +46,10 @@ Progress: [███████░░░] 71%
 | 1 Foundation | 3/3 | ~10 min | ~3 min |
 | 2 Core Tools | 2/2 | ~6 min | ~3 min |
 | 3 Secondary Tools | 2/2 | ~4 min | ~2 min |
+| 4 Operational Hardening | 3/3 | ~9 min | ~3 min |
 
 **Recent Trend:**
-- Last 3 plans: 02-02, 03-01, 03-02
+- Last 3 plans: 04-01, 04-02, 04-03
 - Trend: Stable
 
 ## Accumulated Context
@@ -80,6 +81,12 @@ Recent decisions affecting current work:
 - [Phase 03]: Two separate SQL queries in session_load (project vs global) instead of conditional WHERE
 - [Phase 03]: JS arrays passed directly to pg for TEXT[] columns -- NOT JSON.stringify
 - [Phase 03]: Separate handler functions (handleProjectLoad, handleGlobalLoad) following find_person pattern
+- [Phase 04]: Log only 5 fields (method, path, status, durationMs, consumerId) -- security-first, no body/headers
+- [Phase 04]: process.hrtime.bigint() with Math.round for clean integer millisecond durations
+- [Phase 04]: requestLogger placed after express.json() but before all routes for universal coverage
+- [Phase 04]: pgvector/pgvector:pg16 CI image matches production Postgres 16
+- [Phase 04]: Bun pinned to 1.3.9 in CI matching local dev environment
+- [Phase 04]: Safe placeholder values in .env.example -- no real IPs or tokens committed
 
 ### Pending Todos
 
@@ -92,6 +99,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-13T21:16:00Z
-Stopped at: Completed 03-02-PLAN.md
+Last session: 2026-03-13T21:52:00Z
+Stopped at: Completed 04-03-PLAN.md
 Resume file: None
