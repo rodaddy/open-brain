@@ -62,11 +62,11 @@ Plans:
   3. `session_load` retrieves the most recent session for a given project (or globally if no project specified), returning the full summary and structured fields
   4. Relationships table enforces the data model: person name, context, warmth score (1-5), last contact date, notes, tags -- with upsert on person name for concurrent safety
   5. All secondary tools have unit and protocol tests matching the patterns established in Phase 2
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 03-01: TBD
-- [ ] 03-02: TBD
+- [ ] 03-01-PLAN.md -- find_person tool with dual-mode search (ILIKE name + semantic embedding)
+- [ ] 03-02-PLAN.md -- session_save and session_load tools with structured TEXT[] fields and embedding
 
 ### Phase 4: Operational Hardening
 **Goal**: The server runs reliably in production with monitoring that catches silent failures, automated embedding backfill, structured logging, and a CI pipeline that validates every change
