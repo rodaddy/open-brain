@@ -1,6 +1,6 @@
 import express from "express";
 import cors from "cors";
-import type { Request, Response } from "express";
+import type { Request, Response, NextFunction } from "express";
 import type pg from "pg";
 import { createPool, checkPoolHealth } from "./db/pool.ts";
 import { buildTokenMap, authMiddleware } from "./auth.ts";
@@ -10,7 +10,7 @@ import { runMigrations } from "./db/migrate.ts";
 import { logger } from "./logger.ts";
 import type { AuthInfo, HealthStatus } from "./types.ts";
 
-const LITELLM_URL = process.env.LITELLM_URL || "http://10.71.20.49:4000";
+const LITELLM_URL = process.env.LITELLM_URL;
 
 export function createApp(
   pool: pg.Pool,
@@ -18,21 +18,28 @@ export function createApp(
 ): express.Express {
   const app = express();
 
-  app.use(cors());
-  app.use(express.json());
+  app.use(
+    cors({
+      origin: process.env.ALLOWED_ORIGINS?.split(",") ?? [],
+      credentials: false,
+    }),
+  );
+  app.use(express.json({ limit: "1mb" }));
 
   // Health endpoint -- no auth required
   app.get("/health", async (_req: Request, res: Response) => {
     const dbHealth = await checkPoolHealth(pool);
 
     let litellmConnected = false;
-    try {
-      const resp = await fetch(`${LITELLM_URL}/health`, {
-        signal: AbortSignal.timeout(3000),
-      });
-      litellmConnected = resp.ok;
-    } catch {
-      litellmConnected = false;
+    if (LITELLM_URL) {
+      try {
+        const resp = await fetch(`${LITELLM_URL}/health`, {
+          signal: AbortSignal.timeout(3000),
+        });
+        litellmConnected = resp.ok;
+      } catch {
+        litellmConnected = false;
+      }
     }
 
     const status: HealthStatus = {
@@ -52,15 +59,34 @@ export function createApp(
   const mcpServer = createBrainServer();
   const handlers = createTransportHandlers(mcpServer);
 
-  app.post("/mcp", auth, (req: Request, res: Response) => {
-    handlers.handlePost(req, res);
+  app.post("/mcp", auth, (req: Request, res: Response, _next: NextFunction) => {
+    handlers.handlePost(req, res).catch((err) => {
+      logger.error("MCP POST error", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      if (!res.headersSent) res.status(500).json({ error: "Internal error" });
+    });
   });
-  app.get("/mcp", auth, (req: Request, res: Response) => {
-    handlers.handleGet(req, res);
+  app.get("/mcp", auth, (req: Request, res: Response, _next: NextFunction) => {
+    handlers.handleGet(req, res).catch((err) => {
+      logger.error("MCP GET error", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      if (!res.headersSent) res.status(500).json({ error: "Internal error" });
+    });
   });
-  app.delete("/mcp", auth, (req: Request, res: Response) => {
-    handlers.handleDelete(req, res);
-  });
+  app.delete(
+    "/mcp",
+    auth,
+    (req: Request, res: Response, _next: NextFunction) => {
+      handlers.handleDelete(req, res).catch((err) => {
+        logger.error("MCP DELETE error", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        if (!res.headersSent) res.status(500).json({ error: "Internal error" });
+      });
+    },
+  );
 
   return app;
 }
@@ -80,10 +106,25 @@ if (import.meta.main) {
   const tokenMap = buildTokenMap(
     process.env as Record<string, string | undefined>,
   );
+
+  if (tokenMap.size === 0) {
+    logger.error("No auth tokens configured -- cannot start");
+    process.exit(1);
+  }
+
   const app = createApp(pool, tokenMap);
   const port = parseInt(process.env.PORT || "3100", 10);
 
-  app.listen(port, () => {
+  const server = app.listen(port, () => {
     logger.info("open-brain server started", { port });
   });
+
+  const shutdown = async () => {
+    logger.info("Shutting down...");
+    server.close();
+    await pool.end();
+    process.exit(0);
+  };
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
 }

@@ -2,7 +2,6 @@
 -- CRITICAL: Use halfvec_cosine_ops for ALL HNSW indexes, NOT vector_cosine_ops
 
 CREATE EXTENSION IF NOT EXISTS vector;
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- Thoughts table
 CREATE TABLE thoughts (
@@ -133,5 +132,16 @@ CREATE TABLE IF NOT EXISTS _migrations (
   applied_at    TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Database-level safety for shared instance
-ALTER DATABASE open_brain SET statement_timeout = '30s';
+-- Auto-update updated_at on row modification
+CREATE OR REPLACE FUNCTION update_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_thoughts_updated_at BEFORE UPDATE ON thoughts FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+CREATE TRIGGER trg_decisions_updated_at BEFORE UPDATE ON decisions FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+CREATE TRIGGER trg_relationships_updated_at BEFORE UPDATE ON relationships FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+CREATE TRIGGER trg_projects_updated_at BEFORE UPDATE ON projects FOR EACH ROW EXECUTE FUNCTION update_updated_at();

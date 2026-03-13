@@ -1,9 +1,9 @@
 import type { Role, Table, Permission } from "./types.ts";
 
-const RW: Set<Permission> = new Set(["read", "write"]);
-const RO: Set<Permission> = new Set(["read"]);
-const WO: Set<Permission> = new Set(["write"]);
-const NONE: Set<Permission> = new Set();
+const RW = Object.freeze(new Set<Permission>(["read", "write"]));
+const RO = Object.freeze(new Set<Permission>(["read"]));
+const WO = Object.freeze(new Set<Permission>(["write"]));
+const NONE = Object.freeze(new Set<Permission>());
 
 export const PERMISSIONS: Record<Role, Record<Table, Set<Permission>>> = {
   admin: {
