@@ -17,6 +17,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 3: Secondary Tools** - find_person, session_save, session_load -- complete the tool suite (completed 2026-03-13)
 - [x] **Phase 4: Operational Hardening** - Embedding backfill, monitoring, structured logging, CI pipeline, deployment (completed 2026-03-13)
 - [x] **Phase 5: Consumer Integration** - mcp2cli registration, Discord thought capture, per-consumer token setup (completed 2026-03-13)
+- [ ] **Phase 6: PAI Integration** - Replace fragmented knowledge stores with Open Brain, rewire hooks and skills, enhance session capture/restore
 
 ## Phase Details
 
@@ -99,6 +100,25 @@ Plans:
 - [x] 05-01-PLAN.md -- Token verification, vaultwarden storage, mcp2cli registration and agent-reference.md
 - [ ] 05-02-PLAN.md -- Claude Code session hooks (PreCompact + SessionStart) and n8n Discord thought capture workflow
 
+### Phase 6: PAI Integration
+**Goal**: Open Brain becomes the unified knowledge backend for PAI -- replacing fragmented JSON KB, markdown exports, and old PostgreSQL knowledge table with semantic search. Hooks and skills rewired to use Open Brain. Session continuity captures rich context and restores it seamlessly.
+**Depends on**: Phase 5
+**Requirements**: (operational -- derived from 4 pain points: context loss, cold starts, stale knowledge, system fragmentation)
+**Pre-requisite**: Install skippy-agentspace (`bash tools/install.sh --all`) to establish skill source-of-truth before modifying skills
+**Success Criteria** (what must be TRUE):
+  1. SessionStart injects relevant past knowledge from Open Brain (not stale markdown grep) -- verified by starting a session in a known project and seeing project-relevant decisions/learnings in context
+  2. PreCompact hook captures rich session state (files modified, key decisions, blockers, active tasks) -- not just "auto-saved before compaction"
+  3. `/brain` skill queries Open Brain via mcp2cli and returns semantically relevant results -- JSON KB files and markdown exports are archived/deprecated
+  4. `/capture-session` sends directly to Open Brain (not Mattermost -> n8n -> PostgreSQL pipeline)
+  5. `inject-brain-context.ts` and `query-knowledge.ts` hooks are replaced by Open Brain equivalents
+  6. `load-core-context.ts` (PAI LAWs) remains untouched and fires before Open Brain hooks
+**Context**: Full investigation documented in `.planning/phases/06-pai-integration/06-CONTEXT.md`
+**Plans**: TBD
+
+Plans:
+- [ ] 06-01: TBD
+- [ ] 06-02: TBD
+
 ## Progress
 
 **Execution Order:**
@@ -111,3 +131,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | 3. Secondary Tools | 2/2 | Complete   | 2026-03-13 |
 | 4. Operational Hardening | 3/3 | Complete | 2026-03-13 |
 | 5. Consumer Integration | 2/2 | Complete   | 2026-03-13 |
+| 6. PAI Integration | 0/2 | Not started | - |
