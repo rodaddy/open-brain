@@ -24,9 +24,15 @@ export async function generateEmbedding(
   const timeoutId = setTimeout(() => controller.abort(), EMBEDDING_TIMEOUT_MS);
 
   try {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    const apiKey = process.env.LITELLM_API_KEY;
+    if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
+
     const response = await fetch(`${baseUrl}/embeddings`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify({
         model: "embeddings",
         input: text,
