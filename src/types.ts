@@ -5,7 +5,7 @@ export type Table =
   | "relationships"
   | "projects"
   | "sessions";
-export type Permission = "read" | "write";
+export type Permission = "read" | "write" | "delete";
 
 export interface AuthInfo {
   role: Role;

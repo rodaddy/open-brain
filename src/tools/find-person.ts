@@ -72,7 +72,7 @@ async function handleNameSearch(deps: ToolDeps, query: string, limit: number) {
 
   const sql = `SELECT ${SELECT_COLUMNS}
 FROM relationships
-WHERE person_name ILIKE $1
+WHERE person_name ILIKE $1 AND archived_at IS NULL
 ORDER BY warmth DESC NULLS LAST, last_contact DESC NULLS LAST
 LIMIT $2`;
 
@@ -120,7 +120,7 @@ async function handleSemanticSearch(
   const sql = `SELECT ${SELECT_COLUMNS},
   embedding <=> $1::halfvec(768) AS distance
 FROM relationships
-WHERE embedding IS NOT NULL
+WHERE embedding IS NOT NULL AND archived_at IS NULL
 ORDER BY distance ASC
 LIMIT $2`;
 
