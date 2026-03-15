@@ -37,7 +37,11 @@ export function createApp(
     let litellmConnected = false;
     if (LITELLM_URL) {
       try {
+        const headers: Record<string, string> = {};
+        const apiKey = process.env.LITELLM_API_KEY;
+        if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
         const resp = await fetch(`${LITELLM_URL}/health`, {
+          headers,
           signal: AbortSignal.timeout(3000),
         });
         litellmConnected = resp.ok;
