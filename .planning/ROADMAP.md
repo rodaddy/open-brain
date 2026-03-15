@@ -128,11 +128,12 @@ Plans:
   1. All 5 tables have `archived_at`, `access_count`, `last_accessed_at`, and `usefulness_score` columns with partial indexes for active-only queries
   2. `archive_entry` soft-deletes rows via `archived_at = NOW()`, enforces delete permission (admin + n8n only), and is idempotent
   3. `list_recent` returns chronological entries with configurable date range, table filter, and include_archived toggle
-  4. `update_entry` updates mutable fields with per-table re-embedding and content hash collision detection
-  5. `rate_entry` sets usefulness_score (0.0-1.0) with write permission enforcement
+  4. `update_entry` updates mutable fields with per-table re-embedding, content hash collision detection, and archived entry guard
+  5. `rate_entry` sets usefulness_score (0.0-1.0) with write permission enforcement and archived entry guard
   6. `search_brain` filters archived rows, tracks usage (access_count + last_accessed_at), and orders results by composite score (distance + usefulness)
   7. Curation script (`bun run curate`) detects duplicates, stale entries, and vague content via LLM-as-judge, with --dry-run mode for safe previewing
 **Plans**: 3 plans
+**Post-phase**: Run `mcp2cli generate-skills open-brain` to register new tools for CLI access.
 
 Plans:
 - [ ] 07-01-PLAN.md -- Schema migration (002_curation.sql), permission system update (delete), archived-row filtering in read paths

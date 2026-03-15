@@ -35,12 +35,28 @@
 - **INT-01**: mcp2cli registration for CLI access
 - **INT-02**: Discord thought capture -- Discord bot sends messages to n8n workflow which INSERTs to thoughts table
 
+## v1.1 Requirements
+
+### Curation (CUR)
+
+- **CUR-01**: Schema migration adds `archived_at`, `access_count`, `usefulness_score`, `last_accessed_at` to all 5 tables with partial indexes on `archived_at IS NULL`
+- **CUR-02**: `archive_entry` tool soft-deletes entries by setting `archived_at = NOW()`, enforces delete permission (admin + n8n only)
+- **CUR-03**: `list_recent` tool provides chronological review with configurable date range and optional table filtering
+- **CUR-04**: `update_entry` tool modifies mutable fields per table with automatic re-embedding when content fields change
+- **CUR-05**: `rate_entry` tool sets `usefulness_score` (0.0-1.0) with write permission enforcement
+- **CUR-06**: `search_brain` tracks usage (`access_count`, `last_accessed_at`) on returned results and weights result ordering by `usefulness_score`
+- **CUR-07**: Curation script detects duplicates (vector distance), stale entries (old + unused), and vague content via LLM-as-judge
+
 ## Out of Scope (v1)
 
 - Frontend/UI -- CLI and MCP access are sufficient
 - Replacing qmd for code/file vectors -- qmd stays for codebase indexing
 - Full .planning/ replacement -- v1 is gradual migration (DB as secondary store)
 - Real-time sync between .planning/ files and DB
+
+## Out of Scope (v1.1)
+
+- `brain_stats` tool -- not in v1.1 requirements, can be added in a future version
 
 ## Traceability
 
@@ -61,6 +77,13 @@
 | DATA-03 | Phase 3 | Complete |
 | INT-01 | Phase 5 | Complete |
 | INT-02 | Phase 5 | Complete |
+| CUR-01 | Phase 7 | Pending |
+| CUR-02 | Phase 7 | Pending |
+| CUR-03 | Phase 7 | Pending |
+| CUR-04 | Phase 7 | Pending |
+| CUR-05 | Phase 7 | Pending |
+| CUR-06 | Phase 7 | Pending |
+| CUR-07 | Phase 7 | Pending |
 
 ---
-*15 v1 requirements, 15/15 mapped*
+*22 requirements (15 v1 + 7 v1.1), 22/22 mapped*
