@@ -58,7 +58,7 @@ function buildTableCTE(table: Table): string {
     ${alias}.created_at,
     ${alias}.embedding <=> (SELECT emb FROM query_embedding) AS distance
   FROM ${table} ${alias}
-  WHERE ${alias}.embedding IS NOT NULL
+  WHERE ${alias}.embedding IS NOT NULL AND ${alias}.archived_at IS NULL
   ORDER BY distance
   LIMIT $2
 )`;

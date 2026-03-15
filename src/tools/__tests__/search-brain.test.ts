@@ -461,6 +461,39 @@ describe("search_brain", () => {
     });
   });
 
+  describe("archived filtering", () => {
+    it("SQL contains archived_at IS NULL to exclude archived rows", async () => {
+      const queryCalls: any[] = [];
+      const mockPool = {
+        query: async (...args: any[]) => {
+          queryCalls.push(args);
+          return { rows: makeMockRows(1) };
+        },
+      };
+      const auth: AuthInfo = { role: "admin", clientId: "admin" };
+
+      const { client, cleanup } = await setupSearchClient(
+        mockPool,
+        createMockEmbed(),
+        auth,
+      );
+
+      try {
+        const result = await client.callTool({
+          name: "search_brain",
+          arguments: { query: "archived filter test" },
+        });
+
+        expect(result.isError).toBeFalsy();
+        expect(queryCalls.length).toBe(1);
+        const [sql] = queryCalls[0];
+        expect(sql).toContain("archived_at IS NULL");
+      } finally {
+        await cleanup();
+      }
+    });
+  });
+
   describe("no auth", () => {
     it("returns isError when auth is missing", async () => {
       const server = new McpServer({ name: "test", version: "1.0.0" });
