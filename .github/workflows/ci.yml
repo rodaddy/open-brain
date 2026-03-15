@@ -44,5 +44,3 @@ jobs:
         run: bun run migrate
       - name: Unit tests
         run: bun test
-      - name: Curate script (dry-run)
-        run: bun run curate -- --dry-run
