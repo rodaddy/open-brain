@@ -95,7 +95,9 @@ describe("search_brain", () => {
         expect(sql).toContain("projects");
         expect(sql).toContain("sessions");
         expect(sql).toContain("UNION ALL");
-        expect(sql).toContain("ORDER BY distance");
+        // Composite ranking: 80% distance + 20% usefulness
+        expect(sql).toContain("distance");
+        expect(sql).toContain("usefulness");
 
         // Verify result format
         const text = (result.content as any)[0].text;
@@ -523,6 +525,179 @@ describe("search_brain", () => {
       } finally {
         await client.close();
         await server.close();
+      }
+    });
+  });
+
+  describe("usage tracking", () => {
+    it("fires UPDATE for access_count and last_accessed_at after successful search", async () => {
+      const queryCalls: any[] = [];
+      const mockPool = {
+        query: async (...args: any[]) => {
+          queryCalls.push(args);
+          return { rows: makeMockRows(3) };
+        },
+      };
+      const auth: AuthInfo = { role: "admin", clientId: "admin" };
+
+      const { client, cleanup } = await setupSearchClient(
+        mockPool,
+        createMockEmbed(),
+        auth,
+      );
+
+      try {
+        await client.callTool({
+          name: "search_brain",
+          arguments: { query: "track this" },
+        });
+
+        // Wait for fire-and-forget promises to settle
+        await new Promise((r) => setTimeout(r, 50));
+
+        // First call is the search SELECT, subsequent calls are tracking UPDATEs
+        expect(queryCalls.length).toBeGreaterThan(1);
+
+        // Find the tracking UPDATE calls (after the first search query)
+        const trackingCalls = queryCalls.slice(1);
+        expect(trackingCalls.length).toBeGreaterThan(0);
+
+        // Each tracking UPDATE should contain access_count and last_accessed_at
+        for (const call of trackingCalls) {
+          const sql = call[0];
+          expect(sql).toContain("access_count");
+          expect(sql).toContain("last_accessed_at");
+        }
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("does NOT fire tracking UPDATE when search returns empty results", async () => {
+      const queryCalls: any[] = [];
+      const mockPool = {
+        query: async (...args: any[]) => {
+          queryCalls.push(args);
+          return { rows: [] };
+        },
+      };
+      const auth: AuthInfo = { role: "admin", clientId: "admin" };
+
+      const { client, cleanup } = await setupSearchClient(
+        mockPool,
+        createMockEmbed(),
+        auth,
+      );
+
+      try {
+        await client.callTool({
+          name: "search_brain",
+          arguments: { query: "empty results" },
+        });
+
+        // Wait for any fire-and-forget promises
+        await new Promise((r) => setTimeout(r, 50));
+
+        // Only 1 call: the search SELECT. No tracking UPDATEs.
+        expect(queryCalls.length).toBe(1);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("does NOT fire tracking UPDATE when embedding fails", async () => {
+      const queryCalls: any[] = [];
+      const mockPool = {
+        query: async (...args: any[]) => {
+          queryCalls.push(args);
+          return { rows: [] };
+        },
+      };
+      const auth: AuthInfo = { role: "admin", clientId: "admin" };
+
+      const { client, cleanup } = await setupSearchClient(
+        mockPool,
+        createMockEmbed(null),
+        auth,
+      );
+
+      try {
+        await client.callTool({
+          name: "search_brain",
+          arguments: { query: "embed fail" },
+        });
+
+        await new Promise((r) => setTimeout(r, 50));
+
+        // No pool.query calls at all when embedding fails
+        expect(queryCalls.length).toBe(0);
+      } finally {
+        await cleanup();
+      }
+    });
+  });
+
+  describe("usefulness-weighted ranking", () => {
+    it("search SQL contains composite ORDER BY with distance and usefulness", async () => {
+      const queryCalls: any[] = [];
+      const mockPool = {
+        query: async (...args: any[]) => {
+          queryCalls.push(args);
+          return { rows: makeMockRows(2) };
+        },
+      };
+      const auth: AuthInfo = { role: "admin", clientId: "admin" };
+
+      const { client, cleanup } = await setupSearchClient(
+        mockPool,
+        createMockEmbed(),
+        auth,
+      );
+
+      try {
+        await client.callTool({
+          name: "search_brain",
+          arguments: { query: "ranked search" },
+        });
+
+        const [sql] = queryCalls[0];
+        // Final ORDER BY uses composite score with distance and usefulness
+        expect(sql).toContain("distance");
+        expect(sql).toContain("usefulness");
+        // Check for the weighting formula components
+        expect(sql).toContain("0.8");
+        expect(sql).toContain("0.2");
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("CTE SELECT includes usefulness_score column", async () => {
+      const queryCalls: any[] = [];
+      const mockPool = {
+        query: async (...args: any[]) => {
+          queryCalls.push(args);
+          return { rows: makeMockRows(1) };
+        },
+      };
+      const auth: AuthInfo = { role: "admin", clientId: "admin" };
+
+      const { client, cleanup } = await setupSearchClient(
+        mockPool,
+        createMockEmbed(),
+        auth,
+      );
+
+      try {
+        await client.callTool({
+          name: "search_brain",
+          arguments: { query: "usefulness check" },
+        });
+
+        const [sql] = queryCalls[0];
+        expect(sql).toContain("usefulness_score");
+      } finally {
+        await cleanup();
       }
     });
   });
