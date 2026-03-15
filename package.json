@@ -9,7 +9,8 @@
     "migrate": "bun run scripts/migrate.ts",
     "test": "bun test",
     "typecheck": "bunx tsc --noEmit",
-    "backfill": "bun run scripts/backfill.ts"
+    "backfill": "bun run scripts/backfill.ts",
+    "import-kb": "bun run scripts/import-legacy-kb.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",
