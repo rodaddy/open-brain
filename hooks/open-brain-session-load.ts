@@ -16,7 +16,7 @@ try {
   const { cwd } = input;
   const project = cwd.split("/").pop() || "unknown";
 
-  const OPEN_BRAIN_URL = "http://10.71.20.49:3100/mcp";
+  const OPEN_BRAIN_URL = "http://10.71.20.15:3100/mcp";
   const TOKEN = Bun.env.OPEN_BRAIN_AGENT_TOKEN;
   if (!TOKEN) process.exit(0);
 
@@ -63,6 +63,7 @@ try {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
       Authorization: `Bearer ${TOKEN}`,
     },
     body: JSON.stringify({
@@ -90,6 +91,7 @@ try {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
         Authorization: `Bearer ${TOKEN}`,
         "mcp-session-id": mcpSessionId,
       },

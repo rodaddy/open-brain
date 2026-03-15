@@ -59,10 +59,15 @@ export function createApp(
   // Auth middleware for MCP routes only
   const auth = authMiddleware(tokenMap);
 
-  // MCP server and transport
-  const mcpServer = createBrainServer();
-  registerAllTools(mcpServer, { pool, embedFn: generateEmbedding });
-  const handlers = createTransportHandlers(mcpServer);
+  // MCP server factory -- creates a fresh server per session to avoid
+  // "Already connected to a transport" errors with concurrent clients
+  const toolDeps = { pool, embedFn: generateEmbedding };
+  const serverFactory = () => {
+    const s = createBrainServer();
+    registerAllTools(s, toolDeps);
+    return s;
+  };
+  const handlers = createTransportHandlers(serverFactory);
 
   app.post("/mcp", auth, (req: Request, res: Response, _next: NextFunction) => {
     handlers.handlePost(req, res).catch((err) => {

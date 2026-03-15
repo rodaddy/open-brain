@@ -50,7 +50,9 @@ export interface TransportHandlers {
   handleDelete(req: Request, res: Response): Promise<void>;
 }
 
-export function createTransportHandlers(server: McpServer): TransportHandlers {
+export function createTransportHandlers(
+  serverFactory: () => McpServer,
+): TransportHandlers {
   return {
     async handlePost(req: Request, res: Response): Promise<void> {
       const sessionId = req.headers["mcp-session-id"] as string | undefined;
@@ -108,6 +110,7 @@ export function createTransportHandlers(server: McpServer): TransportHandlers {
           }
         };
 
+        const server = serverFactory();
         await server.connect(transport);
         await transport.handleRequest(req, res, req.body);
         return;
