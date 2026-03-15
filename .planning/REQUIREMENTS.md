@@ -78,10 +78,10 @@
 | INT-01 | Phase 5 | Complete |
 | INT-02 | Phase 5 | Complete |
 | CUR-01 | Phase 7 | Complete |
-| CUR-02 | Phase 7 | Pending |
+| CUR-02 | Phase 7 | Complete |
 | CUR-03 | Phase 7 | Pending |
-| CUR-04 | Phase 7 | Pending |
-| CUR-05 | Phase 7 | Pending |
+| CUR-04 | Phase 7 | Complete |
+| CUR-05 | Phase 7 | Complete |
 | CUR-06 | Phase 7 | Pending |
 | CUR-07 | Phase 7 | Pending |
 
