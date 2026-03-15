@@ -136,7 +136,7 @@ Plans:
 **Post-phase**: Run `mcp2cli generate-skills open-brain` to register new tools for CLI access.
 
 Plans:
-- [ ] 07-01-PLAN.md -- Schema migration (002_curation.sql), permission system update (delete), archived-row filtering in read paths
+- [x] 07-01-PLAN.md -- Schema migration (002_curation.sql), permission system update (delete), archived-row filtering in read paths
 - [ ] 07-02-PLAN.md -- Four curation tools (archive_entry, list_recent, update_entry, rate_entry) with tests
 - [ ] 07-03-PLAN.md -- Usage-weighted search modifications and curation script (scripts/curate.ts)
 
@@ -153,4 +153,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7
 | 4. Operational Hardening | 3/3 | Complete | 2026-03-13 |
 | 5. Consumer Integration | 2/2 | Complete   | 2026-03-13 |
 | 6. PAI Integration | 0/2 | Not started | - |
-| 7. Data Curation | 0/3 | Not started | - |
+| 7. Data Curation | 1/3 | In Progress | - |

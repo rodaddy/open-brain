@@ -77,7 +77,7 @@
 | DATA-03 | Phase 3 | Complete |
 | INT-01 | Phase 5 | Complete |
 | INT-02 | Phase 5 | Complete |
-| CUR-01 | Phase 7 | Pending |
+| CUR-01 | Phase 7 | Complete |
 | CUR-02 | Phase 7 | Pending |
 | CUR-03 | Phase 7 | Pending |
 | CUR-04 | Phase 7 | Pending |

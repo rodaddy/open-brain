@@ -2,17 +2,17 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Data Curation
-status: planned
-stopped_at: "Phase 7 plans created and reviewed. Ready for execution."
+status: executing
+stopped_at: "Completed 07-01-PLAN.md (curation foundation). Wave 2 ready."
 last_updated: "2026-03-15"
-last_activity: "2026-03-15 -- Phase 7 Data Curation planned (3 plans, 2 waves). Adversarial review passed after 1 revision."
+last_activity: "2026-03-15 -- Executed 07-01: curation migration, delete permission, archived filtering in all read paths"
 progress:
   total_phases: 1
   completed_phases: 0
   total_plans: 3
-  completed_plans: 0
-  percent: 0
-next_action: "Execute Phase 7 -- /gsd:execute-phase 07-data-curation"
+  completed_plans: 1
+  percent: 33
+next_action: "Execute Wave 2 plans (07-02, 07-03) in parallel"
 ---
 
 # Project State
@@ -22,22 +22,22 @@ next_action: "Execute Phase 7 -- /gsd:execute-phase 07-data-curation"
 See: .planning/PROJECT.md (updated 2026-03-13)
 
 **Core value:** Cross-domain semantic search across all context types -- a single query surfaces relevant thoughts, decisions, people, projects, and session history regardless of where or when they were captured
-**Current focus:** v1.1 Data Curation -- PLANNED, ready for execution
+**Current focus:** v1.1 Data Curation -- EXECUTING, 1/3 plans complete
 
 ## Current Position
 
 Phase: 7 of 7 (Data Curation)
-Plan: 0 of 3 in current phase
-Status: Planned
-Last activity: 2026-03-15 -- Phase 7 plans created and adversarially reviewed
+Plan: 1 of 3 in current phase
+Status: Executing
+Last activity: 2026-03-15 -- Executed 07-01 (curation foundation)
 
-Progress: [----------] 0%
+Progress: [###-------] 33%
 
 ## v1.1 Phase Plan
 
 | Plan | Wave | Description | Status |
 |------|------|-------------|--------|
-| 07-01 | 1 | Schema migration + permissions + archived filtering | Not started |
+| 07-01 | 1 | Schema migration + permissions + archived filtering | Complete |
 | 07-02 | 2 | 4 new tools (archive, list, update, rate) | Not started |
 | 07-03 | 2 | Usage-weighted search + curation script | Not started |
 
@@ -50,7 +50,7 @@ Wave 2 plans (07-02, 07-03) run in parallel after 07-01 completes.
 - Average duration: ~3 min
 - Total execution time: ~33 min
 
-**By Phase (v1.0):**
+**By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
@@ -59,6 +59,7 @@ Wave 2 plans (07-02, 07-03) run in parallel after 07-01 completes.
 | 3 Secondary Tools | 2/2 | ~4 min | ~2 min |
 | 4 Operational Hardening | 3/3 | ~9 min | ~3 min |
 | 5 Consumer Integration | 2/2 | ~10 min | ~5 min |
+| 7 Data Curation | 1/3 | ~2 min | ~2 min |
 
 ## Accumulated Context
 
@@ -85,5 +86,5 @@ None at milestone start.
 ## Session Continuity
 
 Last session: 2026-03-15
-Stopped at: Phase 7 planning complete, ready for execution
+Stopped at: Completed 07-01-PLAN.md (curation foundation). Wave 2 plans (07-02, 07-03) ready for parallel execution.
 Resume file: None
