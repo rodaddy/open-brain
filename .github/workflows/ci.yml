@@ -23,6 +23,12 @@ jobs:
           --health-retries 5
         ports:
           - 5432:5432
+    env:
+      DB_HOST: localhost
+      DB_PORT: 5432
+      DB_USER: test
+      DB_PASSWORD: test
+      DB_NAME: open_brain_test
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -31,5 +37,9 @@ jobs:
       - run: bun install
       - name: Typecheck
         run: bunx tsc --noEmit
+      - name: Run migrations
+        run: bun run migrate
       - name: Unit tests
         run: bun test
+      - name: Curate script (dry-run)
+        run: bun run curate -- --dry-run
