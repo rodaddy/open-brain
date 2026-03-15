@@ -1,0 +1,17 @@
+[Unit]
+Description=Open Brain MCP Server
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/open-brain
+EnvironmentFile=/opt/open-brain/.env
+ExecStart=/usr/local/bin/bun run src/index.ts
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

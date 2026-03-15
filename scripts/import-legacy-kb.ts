@@ -1,0 +1,175 @@
+#!/usr/bin/env bun
+/**
+ * Import legacy KB JSON files into Open Brain.
+ * Reads decisions-v2.json, learnings-v2.json, patterns-v2.json
+ * from ~/.config/pai-private/knowledge/
+ * Inserts into decisions and thoughts tables (without embeddings).
+ * Run `bun run backfill` afterward to generate embeddings.
+ */
+import type pg from "pg";
+import { createPool } from "../src/db/pool.ts";
+import { contentHash } from "../src/embedding.ts";
+import { logger } from "../src/logger.ts";
+
+interface LegacyEntry {
+  date: string;
+  lastSeen: string;
+  occurrences: number;
+  weight: number;
+  title: string;
+  summary: string;
+  tags: string[];
+  context?: string;
+  outcome?: string;
+  rootCause?: string;
+  impact?: string;
+}
+
+const KB_DIR = `${process.env.HOME}/.config/pai-private/knowledge`;
+
+function safeDate(dateStr: string): Date {
+  const d = new Date(dateStr);
+  return isNaN(d.getTime()) ? new Date() : d;
+}
+
+function isNoise(entry: LegacyEntry): boolean {
+  const t = entry.title.trim();
+  if (!t || t.startsWith("# ")) return true;
+  if (t.toLowerCase().includes("no reusable patterns identified")) return true;
+  if (t.toLowerCase().startsWith("i need to ")) return true;
+  if (entry.weight < 20) return true;
+  return false;
+}
+
+function buildThoughtContent(entry: LegacyEntry): string {
+  const parts = [entry.title];
+  if (entry.summary && entry.summary !== entry.title) parts.push(entry.summary);
+  if (entry.context) parts.push(`Context: ${entry.context}`);
+  if (entry.outcome) parts.push(`Outcome: ${entry.outcome}`);
+  if (entry.rootCause && !entry.rootCause.trim().startsWith("N/A"))
+    parts.push(`Root Cause: ${entry.rootCause}`);
+  return parts.join("\n\n");
+}
+
+async function importDecisions(
+  pool: pg.Pool,
+): Promise<{ imported: number; skipped: number }> {
+  const raw = await Bun.file(`${KB_DIR}/decisions-v2.json`).text();
+  const entries: LegacyEntry[] = JSON.parse(raw);
+  let imported = 0;
+  let skipped = 0;
+
+  for (const entry of entries) {
+    if (isNoise(entry)) {
+      skipped++;
+      continue;
+    }
+    const rationale =
+      entry.summary && entry.summary !== entry.title
+        ? entry.summary
+        : entry.title;
+    if (!rationale) {
+      skipped++;
+      continue;
+    }
+    const text = `${entry.title}\n${rationale}`;
+    const hash = contentHash(text);
+
+    const { rowCount } = await pool.query(
+      `INSERT INTO decisions (title, rationale, tags, context, created_by, created_at, content_hash)
+       SELECT $1, $2, $3, $4, $5, $6, $7
+       WHERE NOT EXISTS (SELECT 1 FROM decisions WHERE content_hash = $7)`,
+      [
+        entry.title,
+        rationale,
+        entry.tags || [],
+        `Legacy import. Weight: ${entry.weight}, Occurrences: ${entry.occurrences}`,
+        "legacy-import",
+        safeDate(entry.date),
+        hash,
+      ],
+    );
+    if (rowCount && rowCount > 0) imported++;
+    else skipped++;
+  }
+
+  return { imported, skipped };
+}
+
+async function importThoughts(
+  pool: pg.Pool,
+  filePath: string,
+  source: string,
+): Promise<{ imported: number; skipped: number }> {
+  const raw = await Bun.file(filePath).text();
+  const entries: LegacyEntry[] = JSON.parse(raw);
+  let imported = 0;
+  let skipped = 0;
+
+  for (const entry of entries) {
+    if (isNoise(entry)) {
+      skipped++;
+      continue;
+    }
+    const content = buildThoughtContent(entry);
+    const hash = contentHash(content);
+
+    const { rowCount } = await pool.query(
+      `INSERT INTO thoughts (content, tags, source, created_by, created_at, content_hash)
+       SELECT $1, $2, $3, $4, $5, $6
+       WHERE NOT EXISTS (SELECT 1 FROM thoughts WHERE content_hash = $6)`,
+      [
+        content,
+        entry.tags || [],
+        source,
+        "legacy-import",
+        safeDate(entry.date),
+        hash,
+      ],
+    );
+    if (rowCount && rowCount > 0) imported++;
+    else skipped++;
+  }
+
+  return { imported, skipped };
+}
+
+if (import.meta.main) {
+  const pool = createPool();
+  try {
+    logger.info("Starting legacy KB import");
+
+    const decisions = await importDecisions(pool);
+    logger.info("Decisions imported", decisions);
+
+    const learnings = await importThoughts(
+      pool,
+      `${KB_DIR}/learnings-v2.json`,
+      "legacy-learning",
+    );
+    logger.info("Learnings imported", learnings);
+
+    const patterns = await importThoughts(
+      pool,
+      `${KB_DIR}/patterns-v2.json`,
+      "legacy-pattern",
+    );
+    logger.info("Patterns imported", patterns);
+
+    const total = {
+      imported: decisions.imported + learnings.imported + patterns.imported,
+      skipped: decisions.skipped + learnings.skipped + patterns.skipped,
+    };
+    logger.info(
+      "Import complete -- run 'bun run backfill' for embeddings",
+      total,
+    );
+  } catch (err) {
+    logger.error("Import failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    process.exit(1);
+  } finally {
+    await pool.end();
+  }
+}

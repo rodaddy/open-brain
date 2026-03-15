@@ -17,7 +17,7 @@ Cross-domain semantic search across all context types -- a single query surfaces
 ### Active
 
 - [ ] PostgreSQL + pgvector database with 5 tables (thoughts, decisions, relationships, projects, sessions)
-- [ ] 768-dim vector embeddings via Google text-embedding-004 through LiteLLM
+- [ ] 768-dim vector embeddings via Google gemini-embedding-001 through LiteLLM (outputDimensionality: 768)
 - [ ] MCP server with HTTP transport (StreamableHTTPServerTransport) + Bearer token auth
 - [ ] `search_brain` tool -- semantic search across all tables
 - [ ] `log_thought` tool -- capture free-form notes, ideas, observations
@@ -54,7 +54,7 @@ Inspiration: nate.b.jones "Open Brain" concept -- same idea, zero dependency on 
 ## Constraints
 
 - **Database**: PostgreSQL on 10.71.20.49 (shared with n8n) -- new `open_brain` database, must not interfere with n8n's DB
-- **Embedding model**: Google text-embedding-004 via LiteLLM (`embeddings` alias), 768 dimensions
+- **Embedding model**: Google gemini-embedding-001 via LiteLLM, 768 dimensions (outputDimensionality: 768)
 - **Runtime**: Bun (PAI standard) + Express.js for HTTP server
 - **Transport**: HTTP with StreamableHTTPServerTransport (matches n8n-mcp pattern for mcp2cli compatibility)
 - **Auth**: Bearer token, role-based (different tokens for different consumers)
@@ -66,7 +66,7 @@ Inspiration: nate.b.jones "Open Brain" concept -- same idea, zero dependency on 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
 | PostgreSQL on 10.71.20.49 (n8n host) | Already has pgvector, avoids new container | -- Pending |
-| Google text-embedding-004 (768 dims) | Already configured in LiteLLM, no OpenAI dependency | -- Pending |
+| Google gemini-embedding-001 (768 dims) | Latest Gemini embedder, Matryoshka-trained, longest support runway. Verified working on Vertex AI. | -- Pending |
 | HTTP transport (not stdio) | Enables mcp2cli, multi-consumer access, matches n8n-mcp pattern | -- Pending |
 | Role-based auth | Discord bot shouldn't write decisions, agents shouldn't modify relationships without confirmation | -- Pending |
 | Gradual .planning/ migration | De-risks rollout -- DB as secondary store first, prove value before cutting over | -- Pending |
