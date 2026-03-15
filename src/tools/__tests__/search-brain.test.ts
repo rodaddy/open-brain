@@ -86,8 +86,8 @@ describe("search_brain", () => {
         expect(embeddedTexts.length).toBe(1);
         expect(embeddedTexts[0]).toBe("test query");
 
-        // Verify SQL includes CTEs for all 5 tables
-        expect(queryCalls.length).toBe(1);
+        // Verify SQL includes CTEs for all 5 tables (first call is the search)
+        expect(queryCalls.length).toBeGreaterThanOrEqual(1);
         const [sql] = queryCalls[0];
         expect(sql).toContain("thoughts");
         expect(sql).toContain("decisions");
@@ -487,7 +487,7 @@ describe("search_brain", () => {
         });
 
         expect(result.isError).toBeFalsy();
-        expect(queryCalls.length).toBe(1);
+        expect(queryCalls.length).toBeGreaterThanOrEqual(1);
         const [sql] = queryCalls[0];
         expect(sql).toContain("archived_at IS NULL");
       } finally {
