@@ -18,6 +18,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 4: Operational Hardening** - Embedding backfill, monitoring, structured logging, CI pipeline, deployment (completed 2026-03-13)
 - [x] **Phase 5: Consumer Integration** - mcp2cli registration, Discord thought capture, per-consumer token setup (completed 2026-03-13)
 - [ ] **Phase 6: PAI Integration** - Replace fragmented knowledge stores with Open Brain, rewire hooks and skills, enhance session capture/restore
+- [ ] **Phase 7: Data Curation** - Archive/soft-delete, usage tracking, entry updates with re-embedding, usefulness scoring, automated LLM-driven curation
 
 ## Phase Details
 
@@ -119,10 +120,29 @@ Plans:
 - [ ] 06-01: TBD
 - [ ] 06-02: TBD
 
+### Phase 7: Data Curation
+**Goal**: The brain can forget, learn what's valuable, and self-clean -- with soft-delete archiving, usage-weighted search, entry updates with re-embedding, usefulness scoring, and automated LLM-driven curation
+**Depends on**: Phase 6
+**Requirements**: CUR-01, CUR-02, CUR-03, CUR-04, CUR-05, CUR-06, CUR-07
+**Success Criteria** (what must be TRUE):
+  1. All 5 tables have `archived_at`, `access_count`, `last_accessed_at`, and `usefulness_score` columns with partial indexes for active-only queries
+  2. `archive_entry` soft-deletes rows via `archived_at = NOW()`, enforces delete permission (admin + n8n only), and is idempotent
+  3. `list_recent` returns chronological entries with configurable date range, table filter, and include_archived toggle
+  4. `update_entry` updates mutable fields with per-table re-embedding and content hash collision detection
+  5. `rate_entry` sets usefulness_score (0.0-1.0) with write permission enforcement
+  6. `search_brain` filters archived rows, tracks usage (access_count + last_accessed_at), and orders results by composite score (distance + usefulness)
+  7. Curation script (`bun run curate`) detects duplicates, stale entries, and vague content via LLM-as-judge, with --dry-run mode for safe previewing
+**Plans**: 3 plans
+
+Plans:
+- [ ] 07-01-PLAN.md -- Schema migration (002_curation.sql), permission system update (delete), archived-row filtering in read paths
+- [ ] 07-02-PLAN.md -- Four curation tools (archive_entry, list_recent, update_entry, rate_entry) with tests
+- [ ] 07-03-PLAN.md -- Usage-weighted search modifications and curation script (scripts/curate.ts)
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
+Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -132,3 +152,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | 4. Operational Hardening | 3/3 | Complete | 2026-03-13 |
 | 5. Consumer Integration | 2/2 | Complete   | 2026-03-13 |
 | 6. PAI Integration | 0/2 | Not started | - |
+| 7. Data Curation | 0/3 | Not started | - |
