@@ -79,11 +79,11 @@
 | INT-02 | Phase 5 | Complete |
 | CUR-01 | Phase 7 | Complete |
 | CUR-02 | Phase 7 | Complete |
-| CUR-03 | Phase 7 | Pending |
+| CUR-03 | Phase 7 | Complete |
 | CUR-04 | Phase 7 | Complete |
 | CUR-05 | Phase 7 | Complete |
-| CUR-06 | Phase 7 | Pending |
-| CUR-07 | Phase 7 | Pending |
+| CUR-06 | Phase 7 | Complete |
+| CUR-07 | Phase 7 | Complete |
 
 ---
 *22 requirements (15 v1 + 7 v1.1), 22/22 mapped*
