@@ -81,6 +81,25 @@ try {
   const mcpSessionId = initResp.headers.get("mcp-session-id");
   if (!mcpSessionId) process.exit(0);
 
+  // Parse SSE or JSON response from MCP server
+  const parseMcpResponse = async (
+    resp: Response,
+  ): Promise<McpResponse | null> => {
+    const text = await resp.text();
+    // SSE format: "event: message\ndata: {...}\n\n"
+    for (const line of text.split("\n")) {
+      if (line.startsWith("data: ")) {
+        return JSON.parse(line.slice(6));
+      }
+    }
+    // Fallback: try plain JSON
+    try {
+      return JSON.parse(text);
+    } catch {
+      return null;
+    }
+  };
+
   // Helper to call an MCP tool
   const callTool = async (
     id: number,
@@ -102,7 +121,7 @@ try {
         params: { name, arguments: args },
       }),
     });
-    const result: McpResponse = await resp.json();
+    const result = await parseMcpResponse(resp);
     return result?.result?.content?.[0]?.text ?? null;
   };
 
