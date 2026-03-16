@@ -69,8 +69,6 @@ function buildTableCTE(table: Table): string {
     COALESCE(${alias}.usefulness_score, 0.5) AS usefulness
   FROM ${table} ${alias}
   WHERE ${alias}.embedding IS NOT NULL AND ${alias}.archived_at IS NULL
-  ORDER BY distance
-  LIMIT $2
 )`;
 }
 
@@ -183,7 +181,9 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
   SELECT $1::halfvec(768) AS emb
 ),
 ${ctes.join(",\n")}
+SELECT * FROM (
 ${unionAll}
+) AS combined
 ORDER BY (distance * 0.8 + (1.0 - COALESCE(usefulness, 0.5)) * 0.2) ASC
 LIMIT $2`;
 
