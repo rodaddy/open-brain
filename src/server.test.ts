@@ -91,10 +91,20 @@ function mockFetchOk() {
 
 // -- Tests --------------------------------------------------------------------
 describe("GET /health", () => {
-  it("returns degraded status when LITELLM_URL is not set", async () => {
-    // LITELLM_URL is not set in test env, so litellm.connected will be false
+  it("returns degraded status when LiteLLM is unreachable", async () => {
+    // Mock fetch to simulate LiteLLM being unreachable
+    (globalThis as Record<string, unknown>).fetch = (
+      input: string | URL | globalThis.Request,
+      init?: RequestInit,
+    ) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/health") && !url.includes("127.0.0.1")) {
+        return Promise.reject(new Error("connection refused"));
+      }
+      return originalFetch(input, init);
+    };
+
     const res = await fetch(`${baseUrl}/health`);
-    // With no LITELLM_URL, litellm shows disconnected -> degraded
     const body = (await res.json()) as HealthStatus;
     expect(body.litellm.connected).toBe(false);
     expect(body.database.connected).toBe(true);
