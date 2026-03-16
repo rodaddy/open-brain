@@ -114,9 +114,10 @@ describe("session_load", () => {
         const parsed = JSON.parse((result.content as any)[0].text);
         expect(parsed.id).toBe("session-uuid");
 
-        // Verify SQL has no WHERE clause
+        // Verify SQL filters archived rows but has no project filter
         const [sql] = queryCalls[0];
-        expect(sql).not.toContain("WHERE");
+        expect(sql).toContain("WHERE archived_at IS NULL");
+        expect(sql).not.toContain("project = $1");
         expect(sql).toContain("ORDER BY created_at DESC");
         expect(sql).toContain("LIMIT 1");
       } finally {

@@ -54,7 +54,7 @@ export function registerSessionLoad(server: McpServer, deps: ToolDeps): void {
 async function handleProjectLoad(deps: ToolDeps, project: string) {
   const sql = `SELECT ${SELECT_COLUMNS}
 FROM sessions
-WHERE project = $1
+WHERE project = $1 AND archived_at IS NULL
 ORDER BY created_at DESC
 LIMIT 1`;
 
@@ -84,6 +84,7 @@ LIMIT 1`;
 async function handleGlobalLoad(deps: ToolDeps) {
   const sql = `SELECT ${SELECT_COLUMNS}
 FROM sessions
+WHERE archived_at IS NULL
 ORDER BY created_at DESC
 LIMIT 1`;
 

@@ -1,18 +1,18 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: milestone
+milestone: v1.1
+milestone_name: Data Curation
 status: complete
-stopped_at: "Phase 6 complete. Open Brain is now the unified knowledge backend for PAI."
-last_updated: "2026-03-14"
-last_activity: "2026-03-14 -- Phase 6 PAI Integration complete. All hooks, skills, and KB data migrated to Open Brain."
+stopped_at: "Completed 07-03-PLAN.md (usage-weighted search + curation script). All plans complete."
+last_updated: "2026-03-15"
+last_activity: "2026-03-15 -- Executed 07-03: usage-weighted search, fire-and-forget tracking, LLM-as-judge curation script"
 progress:
-  total_phases: 6
-  completed_phases: 6
-  total_plans: 12
-  completed_plans: 12
+  total_phases: 1
+  completed_phases: 1
+  total_plans: 3
+  completed_plans: 3
   percent: 100
-next_action: "PR to main"
+next_action: "Run mcp2cli generate-skills open-brain to register new tools for CLI access"
 ---
 
 # Project State
@@ -22,20 +22,30 @@ next_action: "PR to main"
 See: .planning/PROJECT.md (updated 2026-03-13)
 
 **Core value:** Cross-domain semantic search across all context types -- a single query surfaces relevant thoughts, decisions, people, projects, and session history regardless of where or when they were captured
-**Current focus:** v1.0 Complete -- All phases executed
+**Current focus:** v1.1 Data Curation -- COMPLETE, 3/3 plans done
 
 ## Current Position
 
-Phase: 5 of 5 (Consumer Integration)
-Plan: 2 of 2 in current phase
+Phase: 7 of 7 (Data Curation)
+Plan: 3 of 3 in current phase
 Status: Complete
-Last activity: 2026-03-13 -- Completed 05-02 session hooks and Discord thought capture
+Last activity: 2026-03-15 -- Executed 07-03 (usage-weighted search + curation script)
 
-Progress: [██████████] 100%
+Progress: [##########] 100%
+
+## v1.1 Phase Plan
+
+| Plan | Wave | Description | Status |
+|------|------|-------------|--------|
+| 07-01 | 1 | Schema migration + permissions + archived filtering | Complete |
+| 07-02 | 2 | 4 new tools (archive, list, update, rate) | Complete |
+| 07-03 | 2 | Usage-weighted search + curation script | Complete |
+
+All plans complete. Post-phase: run `mcp2cli generate-skills open-brain`.
 
 ## Performance Metrics
 
-**Velocity:**
+**Velocity (v1.0):**
 - Total plans completed: 10
 - Average duration: ~3 min
 - Total execution time: ~33 min
@@ -49,10 +59,7 @@ Progress: [██████████] 100%
 | 3 Secondary Tools | 2/2 | ~4 min | ~2 min |
 | 4 Operational Hardening | 3/3 | ~9 min | ~3 min |
 | 5 Consumer Integration | 2/2 | ~10 min | ~5 min |
-
-**Recent Trend:**
-- Last 3 plans: 04-03, 05-01, 05-02
-- Trend: Stable
+| 7 Data Curation | 3/3 | ~13 min | ~4 min |
 
 ## Accumulated Context
 
@@ -61,43 +68,15 @@ Progress: [██████████] 100%
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
-- [Pre-project]: Embedding model switched from text-embedding-004 (dead) to gemini-embedding-001 via LiteLLM
-- [Pre-project]: LiteLLM proxy already updated -- `embeddings` alias repointed, `text-embedding-004` kept as named fallback
-- [Pre-project]: Tech stack confirmed: Bun + Express.js, MCP SDK ^1.27.0, pg + pgvector-node, StreamableHTTPServerTransport, Bearer token auth
-- [Phase 01]: createApp takes pool and tokenMap as injected dependencies for testability
-- [Phase 01]: Transport map keyed by session ID with onsessioninitialized/onclose lifecycle hooks
-- [Phase 01]: Session TTL 30min, max 100 sessions, auth identity bound per session
-- [Phase 01]: Pool-level statement_timeout (30s) instead of ALTER DATABASE
-- [Phase 01]: CORS restricted to ALLOWED_ORIGINS env var
-- [Phase 01]: Fail-fast on missing DB_HOST, DB_USER, zero auth tokens
-- [Phase 02]: registerTool() over deprecated .tool() for SDK v1.27+ with title/annotations
-- [Phase 02]: Embed title+newline+rationale for decisions (better semantic search quality)
-- [Phase 02]: toSql() from pgvector/pg for halfvec serialization
-- [Phase 02]: ToolDeps { pool, embedFn } dependency injection pattern for all tools
-- [Phase 02]: Dynamic SQL construction over parameterized table filter -- permissions enforced at query build time
-- [Phase 02]: Per-CTE ORDER BY + LIMIT for HNSW index efficiency before UNION ALL merge
-- [Phase 02]: readOnlyHint/idempotentHint annotations for search tool (unlike write tools)
-- [Phase 03]: Separate handler functions (handleNameSearch, handleSemanticSearch) for clarity over inline branching
-- [Phase 03]: ILIKE escape before wrapping: escape % and _ in user input, then wrap with %...% for partial match
-- [Phase 03]: No-results is informational (not isError) -- consistent with search_brain pattern
-- [Phase 03]: Two separate SQL queries in session_load (project vs global) instead of conditional WHERE
-- [Phase 03]: JS arrays passed directly to pg for TEXT[] columns -- NOT JSON.stringify
-- [Phase 03]: Separate handler functions (handleProjectLoad, handleGlobalLoad) following find_person pattern
-- [Phase 04]: Log only 5 fields (method, path, status, durationMs, consumerId) -- security-first, no body/headers
-- [Phase 04]: process.hrtime.bigint() with Math.round for clean integer millisecond durations
-- [Phase 04]: requestLogger placed after express.json() but before all routes for universal coverage
-- [Phase 04]: pgvector/pgvector:pg16 CI image matches production Postgres 16
-- [Phase 04]: Bun pinned to 1.3.9 in CI matching local dev environment
-- [Phase 04]: Safe placeholder values in .env.example -- no real IPs or tokens committed
-- [Phase 04]: Dependency-injected backfill(pool, embedFn) for testability over module-level execution
-- [Phase 04]: TABLE_CONFIGS array-driven iteration with per-table textFn matching tool handlers
-- [Phase 04]: 150ms delay between rows to avoid LiteLLM overload during backfill
-- [Phase 05]: Used existing vaultwarden tokens instead of generating new ones per user directive
-- [Phase 05]: mcp2cli uses AUTH_TOKEN_AGENT role for CLI access -- appropriate scope (not admin, not readonly)
-- [Phase 05]: Token script provides --verify and --rotate modes rather than one-shot generation
-- [Phase 05]: Command hooks (not HTTP) for both PreCompact and SessionStart -- PreCompact only supports command type
-- [Phase 05]: Silent exit 0 on all errors in hooks -- never block compaction or session start
-- [Phase 05]: Two-step MCP handshake in n8n rather than adding REST endpoint -- keeps server code unchanged
+- [v1.1 planning]: B+C approach for data quality -- save everything with curation tools (B), defer confidence scoring (C) until enough data exists to validate heuristics
+- [v1.1 planning]: Usage-based weighting (retrieval_count + usefulness_score) over session-quality heuristics -- measures actual utility, not proxy metrics
+- [v1.1 planning]: LLM-as-judge curation script using HNSW nearest-neighbor for duplicate detection (O(n log n)) over cross-join (O(n^2))
+- [v1.1 planning]: brain_stats tool descoped -- not in v1.1 requirements, can be added later
+- [v1.1 planning]: Phase 6 (PAI Integration) moved to skippy-agentspace -- consumer wiring is PAI's responsibility, not the server's
+- [v1.1 planning]: archived_at guards on rate_entry and update_entry -- prevent modifying soft-deleted entries
+- [07-03]: Composite ranking formula: 80% vector distance + 20% usefulness score (inverted for ASC ordering)
+- [07-03]: COALESCE(usefulness_score, 0.5) as neutral default -- new entries neither boosted nor penalized
+- [07-03]: HNSW nearest-neighbor for duplicate detection (O(n log n)) instead of cross-join (O(n^2))
 
 ### Pending Todos
 
@@ -105,11 +84,10 @@ None yet.
 
 ### Blockers/Concerns
 
-- ~~[Phase 1]: Verify pgvector version on 10.71.20.49~~ RESOLVED: pgvector 0.8.1 confirmed
-- ~~[Phase 1]: Check max_connections on shared PostgreSQL instance~~ Pool max=10, acceptable
+None at milestone start.
 
 ## Session Continuity
 
-Last session: 2026-03-13T23:09:10Z
-Stopped at: Completed 05-02-PLAN.md -- All plans complete (v1.0 milestone)
+Last session: 2026-03-15
+Stopped at: Completed 07-03-PLAN.md. All v1.1 Data Curation plans complete. Post-phase: run mcp2cli generate-skills open-brain.
 Resume file: None

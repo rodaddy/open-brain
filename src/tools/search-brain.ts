@@ -4,6 +4,7 @@ import { toSql } from "pgvector/pg";
 import { canRead } from "../permissions.ts";
 import type { AuthInfo, Table } from "../types.ts";
 import type { ToolDeps } from "./index.ts";
+import { logger } from "../logger.ts";
 
 const ALL_TABLES: Table[] = [
   "thoughts",
@@ -21,6 +22,14 @@ const SOURCE_LABELS: Record<Table, string> = {
   projects: "project",
   sessions: "session",
 };
+
+/** Reverse map: singular label -> table name for tracking UPDATEs */
+const LABEL_TO_TABLE: Record<string, Table> = Object.fromEntries(
+  Object.entries(SOURCE_LABELS).map(([table, label]) => [
+    label,
+    table as Table,
+  ]),
+) as Record<string, Table>;
 
 /**
  * Content preview SQL expression per table.
@@ -56,11 +65,10 @@ function buildTableCTE(table: Table): string {
     ${preview} AS content_preview,
     ${alias}.tags,
     ${alias}.created_at,
-    ${alias}.embedding <=> (SELECT emb FROM query_embedding) AS distance
+    ${alias}.embedding <=> (SELECT emb FROM query_embedding) AS distance,
+    COALESCE(${alias}.usefulness_score, 0.5) AS usefulness
   FROM ${table} ${alias}
-  WHERE ${alias}.embedding IS NOT NULL
-  ORDER BY distance
-  LIMIT $2
+  WHERE ${alias}.embedding IS NOT NULL AND ${alias}.archived_at IS NULL
 )`;
 }
 
@@ -173,11 +181,44 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
   SELECT $1::halfvec(768) AS emb
 ),
 ${ctes.join(",\n")}
+SELECT * FROM (
 ${unionAll}
-ORDER BY distance ASC
+) AS combined
+ORDER BY (distance * 0.8 + (1.0 - COALESCE(usefulness, 0.5)) * 0.2) ASC
 LIMIT $2`;
 
       const { rows } = await deps.pool.query(sql, [toSql(embedding), limit]);
+
+      // Fire-and-forget usage tracking: increment access_count for returned rows
+      if (rows.length > 0) {
+        const byTable = new Map<Table, string[]>();
+        for (const row of rows) {
+          const table = LABEL_TO_TABLE[row.source_type as string];
+          if (!table) continue;
+          const ids = byTable.get(table) ?? [];
+          ids.push(row.id as string);
+          byTable.set(table, ids);
+        }
+
+        const trackingPromises: Promise<unknown>[] = [];
+        for (const [table, ids] of byTable) {
+          trackingPromises.push(
+            deps.pool
+              .query(
+                `UPDATE ${table} SET access_count = access_count + 1, last_accessed_at = NOW() WHERE id = ANY($1)`,
+                [ids],
+              )
+              .catch((err: unknown) => {
+                logger.warn("search_tracking_error", {
+                  table,
+                  error: err instanceof Error ? err.message : String(err),
+                });
+              }),
+          );
+        }
+
+        void Promise.allSettled(trackingPromises).catch(() => {});
+      }
 
       return {
         content: [

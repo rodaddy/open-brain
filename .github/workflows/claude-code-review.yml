@@ -1,0 +1,54 @@
+name: Claude Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  claude-review:
+    if: |
+      (github.event_name == 'pull_request') ||
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude'))
+    runs-on: [self-hosted, king-ng]
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    env:
+      ANTHROPIC_BASE_URL: http://10.71.1.33:4000
+      ANTHROPIC_API_KEY: ${{ secrets.LITELLM_API_KEY }}
+      ANTHROPIC_MODEL: opus
+      ANTHROPIC_DEFAULT_SONNET_MODEL: sonnet
+      ANTHROPIC_DEFAULT_OPUS_MODEL: opus
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: haiku
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Run Claude Code Review
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.LITELLM_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          prompt: |
+            Review this PR. Focus on:
+            1. Bugs and logic errors
+            2. Security issues (OWASP top 10, SQL injection via dynamic table names)
+            3. Performance concerns (N+1 queries, missing indexes, O(n^2) patterns)
+            4. Missing error handling at system boundaries
+            5. Embedding quality (correct text construction per table type)
+            6. If you find a recurring mistake pattern, suggest a CLAUDE.md correction at the end of your review.
+          path_to_bun_executable: /usr/local/bin/bun
+          path_to_claude_code_executable: /home/runner/.local/bin/claude
+          show_full_output: true
