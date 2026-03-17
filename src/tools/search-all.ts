@@ -35,33 +35,29 @@ async function searchQmd(
   limit: number,
 ): Promise<UnifiedResult[]> {
   try {
-    const params = JSON.stringify({ query, limit });
-    // Use BM25 search (0.07s) not vsearch (3-6s). OB handles semantic; qmd adds keyword coverage.
-    const proc = Bun.spawn(["mcp2cli", "qmd", "search", "--params", params], {
-      stdout: "pipe",
-      stderr: "pipe",
-    });
+    // Call qmd CLI directly (installed at /opt/qmd on server)
+    const proc = Bun.spawn(
+      [
+        "bun",
+        "/opt/qmd/src/qmd.ts",
+        "search",
+        query,
+        "--json",
+        "-n",
+        String(limit),
+      ],
+      { stdout: "pipe", stderr: "pipe" },
+    );
 
     const stdout = await new Response(proc.stdout).text();
     const exitCode = await proc.exited;
 
     if (exitCode !== 0) {
-      logger.warn("qmd vsearch failed", { exitCode });
+      logger.warn("qmd search failed", { exitCode });
       return [];
     }
 
-    // mcp2cli wraps results: {"success": true, "result": {"content": [{"type":"text","text":"..."}]}}
-    const wrapper = JSON.parse(stdout) as {
-      success?: boolean;
-      result?: {
-        content?: Array<{ text?: string }>;
-      };
-    };
-
-    const textContent = wrapper.result?.content?.[0]?.text;
-    if (!textContent) return [];
-
-    const docs: QmdDocument[] = JSON.parse(textContent);
+    const docs: QmdDocument[] = JSON.parse(stdout);
     if (!Array.isArray(docs)) return [];
 
     return docs.map((doc) => ({

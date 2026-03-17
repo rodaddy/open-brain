@@ -122,14 +122,9 @@ function restoreBunSpawn() {
   (Bun as any).spawn = originalSpawn;
 }
 
-/** Build a valid mcp2cli qmd response wrapper. */
+/** Build qmd CLI JSON output (direct array, no mcp2cli wrapper). */
 function qmdWrapper(docs: any[]) {
-  return JSON.stringify({
-    success: true,
-    result: {
-      content: [{ type: "text", text: JSON.stringify(docs) }],
-    },
-  });
+  return JSON.stringify(docs);
 }
 
 // ---------------------------------------------------------------------------
