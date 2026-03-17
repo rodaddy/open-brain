@@ -51,7 +51,8 @@ export function registerSessionSave(server: McpServer, deps: ToolDeps): void {
         };
       }
 
-      const hash = contentHash(args.summary);
+      // Include ISO timestamp in hash so identical summaries on different saves don't collide
+      const hash = contentHash(args.summary + "|" + new Date().toISOString());
       const embedding = await deps.embedFn(args.summary);
       logger.info("tool_embedding", {
         tool: "session_save",

@@ -6,7 +6,7 @@ import type { AuthInfo, Table } from "../types.ts";
 import type { ToolDeps } from "./index.ts";
 import { logger } from "../logger.ts";
 
-const ALL_TABLES: Table[] = [
+export const ALL_TABLES: Table[] = [
   "thoughts",
   "decisions",
   "relationships",
@@ -52,7 +52,7 @@ const TABLE_ALIAS: Record<Table, string> = {
   sessions: "s",
 };
 
-function buildTableCTE(table: Table): string {
+export function buildTableCTE(table: Table): string {
   const alias = TABLE_ALIAS[table];
   const label = SOURCE_LABELS[table];
   const preview = CONTENT_PREVIEW[table];

@@ -90,13 +90,14 @@ describe("log_thought", () => {
         expect(sql).toContain("INSERT INTO thoughts");
         expect(sql).toContain("ON CONFLICT (content_hash)");
         expect(params[0]).toBe("A test thought"); // content
-        expect(params[1]).toEqual(["test", "unit"]); // tags
+        expect(params[1]).toEqual(["test", "unit"]); // tags (original, not enriched -- extraction is fire-and-forget)
         expect(params[2]).toBe("test-client"); // created_by
         // params[3] = embedding (toSql result)
         expect(params[3]).toBeTruthy(); // embedding should be non-null
         // params[4] = content_hash
         expect(typeof params[4]).toBe("string");
         expect(params[4].length).toBeGreaterThan(0);
+        expect(params.length).toBe(7);
       } finally {
         await cleanup();
       }

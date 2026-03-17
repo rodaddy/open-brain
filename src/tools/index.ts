@@ -11,6 +11,7 @@ import { registerArchiveEntry } from "./archive-entry.ts";
 import { registerListRecent } from "./list-recent.ts";
 import { registerUpdateEntry } from "./update-entry.ts";
 import { registerRateEntry } from "./rate-entry.ts";
+import { registerSearchAll } from "./search-all.ts";
 
 export interface ToolDeps {
   pool: pg.Pool;
@@ -28,4 +29,5 @@ export function registerAllTools(server: McpServer, deps: ToolDeps): void {
   registerListRecent(server, deps);
   registerUpdateEntry(server, deps);
   registerRateEntry(server, deps);
+  registerSearchAll(server, deps);
 }

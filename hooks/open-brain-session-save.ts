@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 // PreCompact hook: saves session state to Open Brain before context compaction
-// Enhanced: extracts git context for key_decisions and branch info
+// Uses mcp2cli for transport/auth -- no raw HTTP
 // Fires on: manual | auto compaction
 // Silent on all errors -- never blocks compaction
 
@@ -10,10 +10,6 @@ try {
   const input = await Bun.stdin.json();
   const { cwd, trigger, custom_instructions } = input;
   const project = cwd.split("/").pop() || "unknown";
-
-  const OPEN_BRAIN_URL = "http://10.71.20.15:3100/mcp";
-  const TOKEN = Bun.env.OPEN_BRAIN_AGENT_TOKEN;
-  if (!TOKEN) process.exit(0);
 
   // Extract recent git commits as key decisions
   const key_decisions: string[] = [];
@@ -63,55 +59,26 @@ try {
       tags.push(branchType);
   }
 
-  // Init MCP session
-  const initResp = await fetch(OPEN_BRAIN_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json, text/event-stream",
-      Authorization: `Bearer ${TOKEN}`,
-    },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: {
-        protocolVersion: "2025-03-26",
-        capabilities: {},
-        clientInfo: { name: "claude-code-hook", version: "2.0.0" },
-      },
-    }),
+  // Save via mcp2cli
+  const params = JSON.stringify({
+    summary,
+    project,
+    tags,
+    next_steps: [],
+    key_decisions,
   });
 
-  const mcpSessionId = initResp.headers.get("mcp-session-id");
-  if (!mcpSessionId) process.exit(0);
+  const result = Bun.spawnSync(
+    ["mcp2cli", "open-brain", "session_save", "--params", params],
+    { timeout: 12000 },
+  );
 
-  // Call session_save
-  await fetch(OPEN_BRAIN_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json, text/event-stream",
-      Authorization: `Bearer ${TOKEN}`,
-      "mcp-session-id": mcpSessionId,
-    },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 2,
-      method: "tools/call",
-      params: {
-        name: "session_save",
-        arguments: {
-          summary,
-          project,
-          tags,
-          next_steps: [],
-          key_decisions,
-        },
-      },
-    }),
-  });
-} catch {
-  // Silent failure -- never block compaction
+  if (result.exitCode !== 0) {
+    const stderr = result.stderr.toString().trim();
+    console.error(`open-brain session_save failed: ${stderr}`);
+  }
+} catch (err) {
+  // Log but never block compaction
+  console.error(`open-brain pre-compact hook error: ${err}`);
   process.exit(0);
 }

@@ -3,6 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { toSql } from "pgvector/pg";
 import { canWrite } from "../permissions.ts";
 import { contentHash } from "../embedding.ts";
+import { extractMetadata, mergeTags } from "../extraction.ts";
 import type { AuthInfo } from "../types.ts";
 import { logger } from "../logger.ts";
 import type { ToolDeps } from "./index.ts";
@@ -71,12 +72,33 @@ export function registerLogThought(server: McpServer, deps: ToolDeps): void {
         };
       }
 
+      const insertedId = rows[0].id as string;
+
+      // Fire-and-forget: extract metadata and enrich in background
+      extractMetadata(args.content)
+        .then((extracted) => {
+          if (!extracted) return;
+          const enrichedTags = mergeTags(args.tags ?? [], extracted);
+          deps.pool
+            .query(
+              `UPDATE thoughts SET tags = $1, extracted_metadata = $2 WHERE id = $3`,
+              [enrichedTags, JSON.stringify(extracted), insertedId],
+            )
+            .catch((err: unknown) => {
+              logger.warn("extraction_update_error", {
+                id: insertedId,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            });
+        })
+        .catch(() => {});
+
       return {
         content: [
           {
             type: "text" as const,
             text: JSON.stringify({
-              id: rows[0].id,
+              id: insertedId,
               embedded: !!embedding,
             }),
           },

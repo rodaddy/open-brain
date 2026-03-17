@@ -86,9 +86,10 @@ describe("log_decision", () => {
         const alts = params[2];
         expect(typeof alts).toBe("string");
         expect(JSON.parse(alts)).toEqual(["Node.js", "Deno"]);
-        expect(params[3]).toEqual(["runtime"]); // tags
+        expect(params[3]).toEqual(["runtime"]); // tags (original -- extraction is fire-and-forget)
         expect(params[4]).toBe("Server runtime selection"); // context
         expect(params[5]).toBe("admin-client"); // created_by
+        expect(params.length).toBe(10);
       } finally {
         await cleanup();
       }
