@@ -127,10 +127,16 @@ try {
     }
   }
 
-  // Merge and sort by score descending
-  const results = [...brainResults, ...qmdResults]
-    .sort((a, b) => Number(b.score) - Number(a.score))
-    .slice(0, 10);
+  // Reciprocal Rank Fusion: position-based merge so both sources get fair representation
+  const RRF_K = 60;
+  const withRrf: Array<Record<string, unknown> & { rrf: number }> = [];
+  for (let i = 0; i < brainResults.length; i++) {
+    withRrf.push({ ...brainResults[i]!, rrf: 1 / (RRF_K + i + 1) });
+  }
+  for (let i = 0; i < qmdResults.length; i++) {
+    withRrf.push({ ...qmdResults[i]!, rrf: 1 / (RRF_K + i + 1) });
+  }
+  const results = withRrf.sort((a, b) => b.rrf - a.rrf).slice(0, 10);
 
   const lines: string[] = [];
 

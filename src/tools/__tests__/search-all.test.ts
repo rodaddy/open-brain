@@ -122,14 +122,9 @@ function restoreBunSpawn() {
   (Bun as any).spawn = originalSpawn;
 }
 
-/** Build a valid mcp2cli qmd response wrapper. */
+/** Build qmd CLI JSON output (direct array, no mcp2cli wrapper). */
 function qmdWrapper(docs: any[]) {
-  return JSON.stringify({
-    success: true,
-    result: {
-      content: [{ type: "text", text: JSON.stringify(docs) }],
-    },
-  });
+  return JSON.stringify(docs);
 }
 
 // ---------------------------------------------------------------------------
@@ -356,13 +351,14 @@ describe("search_all", () => {
         expect(parsed.brain_hits).toBe(2);
         expect(parsed.qmd_hits).toBe(1);
 
-        // Scores: qmd=0.95, brain1=0.9 (1-0.1), brain2=0.7 (1-0.3)
-        expect(parsed.results[0].source).toBe("qmd");
-        expect(parsed.results[0].score).toBe(0.95);
-        expect(parsed.results[1].source).toBe("brain");
-        expect(parsed.results[1].score).toBeCloseTo(0.9);
-        expect(parsed.results[2].source).toBe("brain");
-        expect(parsed.results[2].score).toBeCloseTo(0.7);
+        // RRF interleaves by rank: brain[0] and qmd[0] tie at 1/61,
+        // brain[1] gets 1/62. Both sources represented.
+        expect(parsed.results[0].score).toBeCloseTo(1 / 61, 4);
+        expect(parsed.results[1].score).toBeCloseTo(1 / 61, 4);
+        expect(parsed.results[2].score).toBeCloseTo(1 / 62, 4);
+        const sources = new Set(parsed.results.map((r: any) => r.source));
+        expect(sources.has("brain")).toBe(true);
+        expect(sources.has("qmd")).toBe(true);
       } finally {
         await cleanup();
       }
@@ -407,8 +403,9 @@ describe("search_all", () => {
           arguments: { query: "distance check", sources: "brain" },
         });
         const parsed = parseResult(result);
-        expect(parsed.results[0].score).toBeCloseTo(0.95); // 1 - 0.05
-        expect(parsed.results[1].score).toBeCloseTo(0.15); // 1 - 0.85
+        // RRF scores based on rank position, not raw distance
+        expect(parsed.results[0].score).toBeCloseTo(1 / 61, 4); // rank 1
+        expect(parsed.results[1].score).toBeCloseTo(1 / 62, 4); // rank 2
       } finally {
         await cleanup();
       }
@@ -1020,7 +1017,7 @@ describe("search_all", () => {
       }
     });
 
-    it("qmd doc uses 'similarity' field when 'score' is absent", async () => {
+    it("qmd doc with 'similarity' field is accepted and ranked via RRF", async () => {
       const qmdDocs = [{ path: "/s.md", content: "sim", similarity: 0.77 }];
       mockBunSpawn(0, qmdWrapper(qmdDocs));
       const mockPool = { query: async () => ({ rows: [] }) };
@@ -1037,13 +1034,14 @@ describe("search_all", () => {
           arguments: { query: "similarity field", sources: "qmd" },
         });
         const parsed = parseResult(result);
-        expect(parsed.results[0].score).toBe(0.77);
+        // RRF score for rank 1
+        expect(parsed.results[0].score).toBeCloseTo(1 / 61, 4);
       } finally {
         await cleanup();
       }
     });
 
-    it("qmd doc defaults score to 0.5 when neither score nor similarity is present", async () => {
+    it("qmd doc without score fields still gets valid RRF score", async () => {
       const qmdDocs = [{ path: "/d.md", content: "no score" }];
       mockBunSpawn(0, qmdWrapper(qmdDocs));
       const mockPool = { query: async () => ({ rows: [] }) };
@@ -1060,7 +1058,7 @@ describe("search_all", () => {
           arguments: { query: "default score", sources: "qmd" },
         });
         const parsed = parseResult(result);
-        expect(parsed.results[0].score).toBe(0.5);
+        expect(parsed.results[0].score).toBeCloseTo(1 / 61, 4);
       } finally {
         await cleanup();
       }

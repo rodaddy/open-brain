@@ -35,33 +35,29 @@ async function searchQmd(
   limit: number,
 ): Promise<UnifiedResult[]> {
   try {
-    const params = JSON.stringify({ query, limit });
-    // Use BM25 search (0.07s) not vsearch (3-6s). OB handles semantic; qmd adds keyword coverage.
-    const proc = Bun.spawn(["mcp2cli", "qmd", "search", "--params", params], {
-      stdout: "pipe",
-      stderr: "pipe",
-    });
+    // Call qmd CLI directly (installed at /opt/qmd on server)
+    const proc = Bun.spawn(
+      [
+        "bun",
+        "/opt/qmd/src/qmd.ts",
+        "search",
+        query,
+        "--json",
+        "-n",
+        String(limit),
+      ],
+      { stdout: "pipe", stderr: "pipe" },
+    );
 
     const stdout = await new Response(proc.stdout).text();
     const exitCode = await proc.exited;
 
     if (exitCode !== 0) {
-      logger.warn("qmd vsearch failed", { exitCode });
+      logger.warn("qmd search failed", { exitCode });
       return [];
     }
 
-    // mcp2cli wraps results: {"success": true, "result": {"content": [{"type":"text","text":"..."}]}}
-    const wrapper = JSON.parse(stdout) as {
-      success?: boolean;
-      result?: {
-        content?: Array<{ text?: string }>;
-      };
-    };
-
-    const textContent = wrapper.result?.content?.[0]?.text;
-    if (!textContent) return [];
-
-    const docs: QmdDocument[] = JSON.parse(textContent);
+    const docs: QmdDocument[] = JSON.parse(stdout);
     if (!Array.isArray(docs)) return [];
 
     return docs.map((doc) => ({
@@ -137,10 +133,21 @@ export function registerSearchAll(server: McpServer, deps: ToolDeps): void {
         searchQmdSource ? searchQmd(args.query, limit) : Promise.resolve([]),
       ]);
 
-      // Merge and sort by normalized score (descending)
-      const merged = [...brainResults, ...qmdResults]
-        .sort((a, b) => b.score - a.score)
-        .slice(0, limit);
+      // Reciprocal Rank Fusion: merge results from different scoring systems
+      // using position-based scoring: rrf = 1/(k + rank). k=60 is standard.
+      // This ensures both sources get fair representation regardless of raw score scales.
+      const RRF_K = 60;
+      const withRrf: Array<UnifiedResult & { rrf: number }> = [];
+      for (let i = 0; i < brainResults.length; i++) {
+        withRrf.push({ ...brainResults[i]!, rrf: 1 / (RRF_K + i + 1) });
+      }
+      for (let i = 0; i < qmdResults.length; i++) {
+        withRrf.push({ ...qmdResults[i]!, rrf: 1 / (RRF_K + i + 1) });
+      }
+      const merged = withRrf
+        .sort((a, b) => b.rrf - a.rrf)
+        .slice(0, limit)
+        .map(({ rrf, ...rest }) => ({ ...rest, score: rrf }));
 
       return {
         content: [
