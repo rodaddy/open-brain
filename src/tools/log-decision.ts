@@ -3,6 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { toSql } from "pgvector/pg";
 import { canWrite } from "../permissions.ts";
 import { contentHash } from "../embedding.ts";
+import { extractMetadata, mergeTags } from "../extraction.ts";
 import type { AuthInfo } from "../types.ts";
 import { logger } from "../logger.ts";
 import type { ToolDeps } from "./index.ts";
@@ -46,28 +47,35 @@ export function registerLogDecision(server: McpServer, deps: ToolDeps): void {
 
       const textToEmbed = `${args.title}\n${args.rationale}`;
       const hash = contentHash(textToEmbed);
-      const embedding = await deps.embedFn(textToEmbed);
+      const [embedding, extracted] = await Promise.all([
+        deps.embedFn(textToEmbed),
+        extractMetadata(textToEmbed),
+      ]);
       logger.info("tool_embedding", {
         tool: "log_decision",
         embedded: !!embedding,
+        extracted: !!extracted,
       });
 
+      const enrichedTags = mergeTags(args.tags ?? [], extracted);
+
       const { rows } = await deps.pool.query(
-        `INSERT INTO decisions (title, rationale, alternatives, tags, context, created_by, embedding, content_hash, embedded_at, embedding_model)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        `INSERT INTO decisions (title, rationale, alternatives, tags, context, created_by, embedding, content_hash, embedded_at, embedding_model, extracted_metadata)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
          ON CONFLICT (content_hash) WHERE content_hash IS NOT NULL DO NOTHING
          RETURNING id`,
         [
           args.title,
           args.rationale,
           JSON.stringify(args.alternatives ?? []),
-          args.tags ?? [],
+          enrichedTags,
           args.context ?? null,
           auth.clientId,
           embedding ? toSql(embedding) : null,
           hash,
           embedding ? new Date().toISOString() : null,
           embedding ? "gemini-embedding-001" : null,
+          extracted ? JSON.stringify(extracted) : null,
         ],
       );
 

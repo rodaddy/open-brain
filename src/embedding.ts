@@ -74,6 +74,6 @@ export async function generateEmbedding(
 }
 
 export function contentHash(text: string): string {
-  const normalized = text.trim().replace(/\s+/g, " ");
+  const normalized = text.toLowerCase().trim().replace(/\s+/g, " ");
   return createHash("sha256").update(normalized).digest("hex");
 }

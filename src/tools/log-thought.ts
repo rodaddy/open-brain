@@ -3,6 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { toSql } from "pgvector/pg";
 import { canWrite } from "../permissions.ts";
 import { contentHash } from "../embedding.ts";
+import { extractMetadata, mergeTags } from "../extraction.ts";
 import type { AuthInfo } from "../types.ts";
 import { logger } from "../logger.ts";
 import type { ToolDeps } from "./index.ts";
@@ -38,25 +39,32 @@ export function registerLogThought(server: McpServer, deps: ToolDeps): void {
       }
 
       const hash = contentHash(args.content);
-      const embedding = await deps.embedFn(args.content);
+      const [embedding, extracted] = await Promise.all([
+        deps.embedFn(args.content),
+        extractMetadata(args.content),
+      ]);
       logger.info("tool_embedding", {
         tool: "log_thought",
         embedded: !!embedding,
+        extracted: !!extracted,
       });
 
+      const enrichedTags = mergeTags(args.tags ?? [], extracted);
+
       const { rows } = await deps.pool.query(
-        `INSERT INTO thoughts (content, tags, source, created_by, embedding, content_hash, embedded_at, embedding_model)
-         VALUES ($1, $2, 'mcp', $3, $4, $5, $6, $7)
+        `INSERT INTO thoughts (content, tags, source, created_by, embedding, content_hash, embedded_at, embedding_model, extracted_metadata)
+         VALUES ($1, $2, 'mcp', $3, $4, $5, $6, $7, $8)
          ON CONFLICT (content_hash) WHERE content_hash IS NOT NULL DO NOTHING
          RETURNING id`,
         [
           args.content,
-          args.tags ?? [],
+          enrichedTags,
           auth.clientId,
           embedding ? toSql(embedding) : null,
           hash,
           embedding ? new Date().toISOString() : null,
           embedding ? "gemini-embedding-001" : null,
+          extracted ? JSON.stringify(extracted) : null,
         ],
       );
 

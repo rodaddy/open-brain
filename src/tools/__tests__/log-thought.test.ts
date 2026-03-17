@@ -89,14 +89,18 @@ describe("log_thought", () => {
         const [sql, params] = queryCalls[0];
         expect(sql).toContain("INSERT INTO thoughts");
         expect(sql).toContain("ON CONFLICT (content_hash)");
+        expect(sql).toContain("extracted_metadata");
         expect(params[0]).toBe("A test thought"); // content
-        expect(params[1]).toEqual(["test", "unit"]); // tags
+        // Tags may be enriched by extraction -- verify originals are included
+        expect(params[1]).toEqual(expect.arrayContaining(["test", "unit"]));
         expect(params[2]).toBe("test-client"); // created_by
         // params[3] = embedding (toSql result)
         expect(params[3]).toBeTruthy(); // embedding should be non-null
         // params[4] = content_hash
         expect(typeof params[4]).toBe("string");
         expect(params[4].length).toBeGreaterThan(0);
+        // params[7] = extracted_metadata (JSON string or null)
+        expect(params.length).toBe(8);
       } finally {
         await cleanup();
       }

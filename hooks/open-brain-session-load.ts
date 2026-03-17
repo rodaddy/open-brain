@@ -1,24 +1,16 @@
 #!/usr/bin/env bun
 // SessionStart hook: loads knowledge + session context from Open Brain
-// Replaces: inject-brain-context.ts + query-knowledge.ts + original session-load
+// Uses mcp2cli for transport/auth -- no raw HTTP
 // Fires on: * (all session starts)
 // Silent on all errors -- never blocks session start
 
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
-interface McpResponse {
-  result?: { content?: Array<{ text?: string }> };
-}
-
 try {
   const input = await Bun.stdin.json();
   const { cwd } = input;
   const project = cwd.split("/").pop() || "unknown";
-
-  const OPEN_BRAIN_URL = "http://10.71.20.15:3100/mcp";
-  const TOKEN = Bun.env.OPEN_BRAIN_AGENT_TOKEN;
-  if (!TOKEN) process.exit(0);
 
   // Detect project tags from package.json dependencies
   const tags: string[] = [];
@@ -48,8 +40,6 @@ try {
       };
       for (const dep of Object.keys(deps)) {
         if (knownTags[dep]) tags.push(knownTags[dep]);
-        // Also add @types/* packages as tags
-        else if (dep.startsWith("@types/")) tags.push(`types-${dep.slice(7)}`);
       }
     } catch {
       /* ignore parse errors */
@@ -58,159 +48,174 @@ try {
 
   const searchQuery = [project, ...tags.slice(0, 5)].join(" ");
 
-  // Init MCP session
-  const initResp = await fetch(OPEN_BRAIN_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json, text/event-stream",
-      Authorization: `Bearer ${TOKEN}`,
-    },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: {
-        protocolVersion: "2025-03-26",
-        capabilities: {},
-        clientInfo: { name: "claude-code-hook", version: "2.0.0" },
-      },
-    }),
-  });
-
-  const mcpSessionId = initResp.headers.get("mcp-session-id");
-  if (!mcpSessionId) process.exit(0);
-
-  // Parse SSE or JSON response from MCP server
-  const parseMcpResponse = async (
-    resp: Response,
-  ): Promise<McpResponse | null> => {
-    const text = await resp.text();
-    // SSE format: "event: message\ndata: {...}\n\n"
-    for (const line of text.split("\n")) {
-      if (line.startsWith("data: ")) {
-        return JSON.parse(line.slice(6));
-      }
-    }
-    // Fallback: try plain JSON
+  // Helper to call mcp2cli and parse JSON result
+  const callMcp = (
+    service: string,
+    tool: string,
+    params: Record<string, unknown>,
+  ): unknown | null => {
+    const result = Bun.spawnSync(
+      ["mcp2cli", service, tool, "--params", JSON.stringify(params)],
+      { timeout: 8000 },
+    );
+    if (result.exitCode !== 0) return null;
     try {
-      return JSON.parse(text);
+      const output = JSON.parse(result.stdout.toString().trim());
+      if (output?.result !== undefined) {
+        const inner = output.result;
+        if (typeof inner === "string") {
+          try {
+            return JSON.parse(inner);
+          } catch {
+            return inner;
+          }
+        }
+        return inner;
+      }
+      return output;
     } catch {
       return null;
     }
   };
 
-  // Helper to call an MCP tool
-  const callTool = async (
-    id: number,
-    name: string,
-    args: Record<string, unknown>,
-  ): Promise<string | null> => {
-    const resp = await fetch(OPEN_BRAIN_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json, text/event-stream",
-        Authorization: `Bearer ${TOKEN}`,
-        "mcp-session-id": mcpSessionId,
-      },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id,
-        method: "tools/call",
-        params: { name, arguments: args },
-      }),
-    });
-    const result = await parseMcpResponse(resp);
-    return result?.result?.content?.[0]?.text ?? null;
-  };
+  // Client-side federation: OB search_brain + qmd BM25 search + session_load in parallel
+  // All three are sync calls but run sequentially (Bun.spawnSync)
+  const obResult = callMcp("open-brain", "search_brain", {
+    query: searchQuery,
+    limit: 7,
+  });
+  const qmdResult = callMcp("qmd", "search", { query: searchQuery, limit: 5 });
+  const sessionResult = callMcp("open-brain", "session_load", { project });
 
-  // Call search_brain + session_load in parallel
-  const [searchText, sessionText] = await Promise.all([
-    callTool(2, "search_brain", { query: searchQuery, limit: 7 }),
-    callTool(3, "session_load", { project }),
-  ]);
+  // Normalize OB results (distance 0-1 lower=better -> score 0-1 higher=better)
+  const brainResults: Array<Record<string, unknown>> = [];
+  if (Array.isArray(obResult)) {
+    for (const r of obResult as Array<Record<string, unknown>>) {
+      brainResults.push({
+        source: "brain",
+        type: r.source_type,
+        content: r.content_preview,
+        score: 1 - (Number(r.distance) || 0.5),
+        tags: r.tags,
+      });
+    }
+  }
+
+  // Normalize qmd results (score 0-1 higher=better, nested in .results)
+  const qmdResults: Array<Record<string, unknown>> = [];
+  const qmdInner =
+    qmdResult && typeof qmdResult === "object" && !Array.isArray(qmdResult)
+      ? ((qmdResult as Record<string, unknown>).results as
+          | Array<Record<string, unknown>>
+          | undefined)
+      : null;
+  if (Array.isArray(qmdInner)) {
+    for (const r of qmdInner) {
+      qmdResults.push({
+        source: "qmd",
+        type: "file",
+        content: String(r.snippet ?? r.content ?? "").slice(0, 300),
+        score: Number(r.score) || 0.5,
+        path: r.file || r.path,
+        collection: r.collection,
+      });
+    }
+  }
+
+  // Merge and sort by score descending
+  const results = [...brainResults, ...qmdResults]
+    .sort((a, b) => Number(b.score) - Number(a.score))
+    .slice(0, 10);
 
   const lines: string[] = [];
 
-  // Knowledge context section
-  if (searchText) {
-    try {
-      const results = JSON.parse(searchText);
-      if (Array.isArray(results) && results.length > 0) {
-        lines.push(`<!-- PAI Brain Context for ${project} -->`);
+  if (results.length > 0) {
+    lines.push(`<!-- PAI Brain Context for ${project} -->`);
+    lines.push(`<!-- Detected tags: ${tags.map((t) => "#" + t).join(" ")} -->`);
+    lines.push("");
+    lines.push("## Relevant Past Learnings");
+    lines.push("");
+    for (const r of results as Array<Record<string, unknown>>) {
+      const isBrain = r.source === "brain";
+      const typeLabel = isBrain
+        ? r.type === "decision"
+          ? "DECISION"
+          : r.type === "thought"
+            ? "TECHNIQUE"
+            : String(r.type ?? "ENTRY").toUpperCase()
+        : "FILE";
+      const firstLine = isBrain
+        ? String(r.content ?? "").split("\n")[0] || "Untitled"
+        : r.path
+          ? `${r.path}`
+          : String(r.content ?? "").split("\n")[0] || "Untitled";
+      lines.push(`## [${typeLabel}] ${firstLine}`);
+      if (Array.isArray(r.tags) && r.tags.length) {
         lines.push(
-          `<!-- Detected tags: ${tags.map((t) => "#" + t).join(" ")} -->`,
+          `**Tags:** ${(r.tags as string[]).map((t: string) => "#" + t).join(" ")}`,
         );
-        lines.push("");
-        lines.push("## Relevant Past Learnings");
-        lines.push("");
-        for (const r of results) {
-          const typeLabel =
-            r.source_type === "decision"
-              ? "DECISION"
-              : r.source_type === "thought"
-                ? "TECHNIQUE"
-                : r.source_type?.toUpperCase() || "ENTRY";
-          const firstLine = r.content_preview?.split("\n")[0] || "Untitled";
-          lines.push(`## [${typeLabel}] ${firstLine}`);
-          if (r.tags?.length) {
-            lines.push(
-              `**Tags:** ${r.tags.map((t: string) => "#" + t).join(" ")}`,
-            );
-          }
-          if (r.content_preview) {
-            const preview =
-              r.content_preview.length > 500
-                ? r.content_preview.slice(0, 500) + "..."
-                : r.content_preview;
-            lines.push(preview);
-          }
-          lines.push("");
-          lines.push("---");
-          lines.push("");
-        }
       }
-    } catch {
-      /* not JSON or empty */
+      if (r.collection) lines.push(`**Collection:** ${r.collection}`);
+      const content = String(r.content ?? "");
+      if (content) {
+        lines.push(
+          content.length > 500 ? content.slice(0, 500) + "..." : content,
+        );
+      }
+      lines.push("");
+      lines.push("---");
+      lines.push("");
     }
   }
 
   // Session context section
-  if (sessionText && !sessionText.startsWith("No sessions")) {
-    try {
-      const session = JSON.parse(sessionText);
-      if (!lines.length) {
-        lines.push(`<!-- PAI Brain Context for ${project} -->`);
-      }
-      lines.push("## Previous Session");
-      lines.push(
-        `**Project:** ${session.project || "global"} | **Saved:** ${session.created_at}`,
-      );
-      if (session.summary) lines.push(`\n${session.summary}`);
-      if (session.key_decisions?.length) {
-        lines.push("\n### Key Decisions");
-        for (const d of session.key_decisions) lines.push(`- ${d}`);
-      }
-      if (session.blockers?.length) {
-        lines.push("\n### Blockers");
-        for (const b of session.blockers) lines.push(`- ${b}`);
-      }
-      if (session.next_steps?.length) {
-        lines.push("\n### Next Steps");
-        for (const s of session.next_steps) lines.push(`- ${s}`);
-      }
-      lines.push("");
-    } catch {
-      /* not JSON */
+  if (
+    sessionResult &&
+    typeof sessionResult === "object" &&
+    !(
+      "text" in (sessionResult as Record<string, unknown>) &&
+      String((sessionResult as Record<string, unknown>).text).startsWith(
+        "No sessions",
+      )
+    )
+  ) {
+    const session = sessionResult as Record<string, unknown>;
+    if (!lines.length) {
+      lines.push(`<!-- PAI Brain Context for ${project} -->`);
     }
+    lines.push("## Previous Session");
+    lines.push(
+      `**Project:** ${session.project || "global"} | **Saved:** ${session.created_at}`,
+    );
+    if (session.summary) lines.push(`\n${session.summary}`);
+    if (Array.isArray(session.key_decisions) && session.key_decisions.length) {
+      lines.push("\n### Key Decisions");
+      for (const d of session.key_decisions) lines.push(`- ${d}`);
+    }
+    if (Array.isArray(session.blockers) && session.blockers.length) {
+      lines.push("\n### Blockers");
+      for (const b of session.blockers) lines.push(`- ${b}`);
+    }
+    if (Array.isArray(session.next_steps) && session.next_steps.length) {
+      lines.push("\n### Next Steps");
+      for (const s of session.next_steps) lines.push(`- ${s}`);
+    }
+    lines.push("");
   }
 
   if (lines.length > 0) {
     lines.push("<!-- End PAI Brain Context -->");
-    console.log(lines.join("\n"));
+    let output = lines.join("\n");
+    if (output.length > 3000) {
+      const omitted = output.length - 3000;
+      output =
+        output.slice(0, 3000) +
+        `\n<!-- Truncated: ${omitted} chars omitted -->`;
+    }
+    console.log(output);
   }
-} catch {
-  // Silent failure -- don't block session start
+} catch (err) {
+  // Log but never block session start
+  console.error(`open-brain session-load hook error: ${err}`);
   process.exit(0);
 }
