@@ -47,35 +47,28 @@ export function registerLogDecision(server: McpServer, deps: ToolDeps): void {
 
       const textToEmbed = `${args.title}\n${args.rationale}`;
       const hash = contentHash(textToEmbed);
-      const [embedding, extracted] = await Promise.all([
-        deps.embedFn(textToEmbed),
-        extractMetadata(textToEmbed),
-      ]);
+      const embedding = await deps.embedFn(textToEmbed);
       logger.info("tool_embedding", {
         tool: "log_decision",
         embedded: !!embedding,
-        extracted: !!extracted,
       });
 
-      const enrichedTags = mergeTags(args.tags ?? [], extracted);
-
       const { rows } = await deps.pool.query(
-        `INSERT INTO decisions (title, rationale, alternatives, tags, context, created_by, embedding, content_hash, embedded_at, embedding_model, extracted_metadata)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        `INSERT INTO decisions (title, rationale, alternatives, tags, context, created_by, embedding, content_hash, embedded_at, embedding_model)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          ON CONFLICT (content_hash) WHERE content_hash IS NOT NULL DO NOTHING
          RETURNING id`,
         [
           args.title,
           args.rationale,
           JSON.stringify(args.alternatives ?? []),
-          enrichedTags,
+          args.tags ?? [],
           args.context ?? null,
           auth.clientId,
           embedding ? toSql(embedding) : null,
           hash,
           embedding ? new Date().toISOString() : null,
           embedding ? "gemini-embedding-001" : null,
-          extracted ? JSON.stringify(extracted) : null,
         ],
       );
 
@@ -90,12 +83,33 @@ export function registerLogDecision(server: McpServer, deps: ToolDeps): void {
         };
       }
 
+      const insertedId = rows[0].id as string;
+
+      // Fire-and-forget: extract metadata and enrich in background
+      extractMetadata(textToEmbed)
+        .then((extracted) => {
+          if (!extracted) return;
+          const enrichedTags = mergeTags(args.tags ?? [], extracted);
+          deps.pool
+            .query(
+              `UPDATE decisions SET tags = $1, extracted_metadata = $2 WHERE id = $3`,
+              [enrichedTags, JSON.stringify(extracted), insertedId],
+            )
+            .catch((err: unknown) => {
+              logger.warn("extraction_update_error", {
+                id: insertedId,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            });
+        })
+        .catch(() => {});
+
       return {
         content: [
           {
             type: "text" as const,
             text: JSON.stringify({
-              id: rows[0].id,
+              id: insertedId,
               embedded: !!embedding,
             }),
           },

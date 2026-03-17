@@ -80,19 +80,16 @@ describe("log_decision", () => {
         expect(queryCalls.length).toBe(1);
         const [sql, params] = queryCalls[0];
         expect(sql).toContain("INSERT INTO decisions");
-        expect(sql).toContain("extracted_metadata");
         expect(params[0]).toBe("Use Bun"); // title
         expect(params[1]).toBe("Faster than Node.js for our use case"); // rationale
         // alternatives should be JSON-serialized
         const alts = params[2];
         expect(typeof alts).toBe("string");
         expect(JSON.parse(alts)).toEqual(["Node.js", "Deno"]);
-        // Tags may be enriched by extraction -- verify originals are included
-        expect(params[3]).toEqual(expect.arrayContaining(["runtime"]));
+        expect(params[3]).toEqual(["runtime"]); // tags (original -- extraction is fire-and-forget)
         expect(params[4]).toBe("Server runtime selection"); // context
         expect(params[5]).toBe("admin-client"); // created_by
-        // params[10] = extracted_metadata (JSON string or null)
-        expect(params.length).toBe(11);
+        expect(params.length).toBe(10);
       } finally {
         await cleanup();
       }

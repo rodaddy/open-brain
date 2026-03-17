@@ -48,19 +48,26 @@ try {
 
   const searchQuery = [project, ...tags.slice(0, 5)].join(" ");
 
-  // Helper to call mcp2cli and parse JSON result
-  const callMcp = (
+  // Async helper: call mcp2cli and parse JSON result
+  const callMcp = async (
     service: string,
     tool: string,
     params: Record<string, unknown>,
-  ): unknown | null => {
-    const result = Bun.spawnSync(
-      ["mcp2cli", service, tool, "--params", JSON.stringify(params)],
-      { timeout: 8000 },
-    );
-    if (result.exitCode !== 0) return null;
+  ): Promise<unknown | null> => {
     try {
-      const output = JSON.parse(result.stdout.toString().trim());
+      const proc = Bun.spawn(
+        ["mcp2cli", service, tool, "--params", JSON.stringify(params)],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      const stdout = await Promise.race([
+        new Response(proc.stdout).text(),
+        new Promise<string>((_, reject) =>
+          setTimeout(() => reject(new Error("timeout")), 8000),
+        ),
+      ]);
+      const exitCode = await proc.exited;
+      if (exitCode !== 0) return null;
+      const output = JSON.parse(stdout.trim());
       if (output?.result !== undefined) {
         const inner = output.result;
         if (typeof inner === "string") {
@@ -78,14 +85,12 @@ try {
     }
   };
 
-  // Client-side federation: OB search_brain + qmd BM25 search + session_load in parallel
-  // All three are sync calls but run sequentially (Bun.spawnSync)
-  const obResult = callMcp("open-brain", "search_brain", {
-    query: searchQuery,
-    limit: 7,
-  });
-  const qmdResult = callMcp("qmd", "search", { query: searchQuery, limit: 5 });
-  const sessionResult = callMcp("open-brain", "session_load", { project });
+  // Client-side federation: all three calls in parallel
+  const [obResult, qmdResult, sessionResult] = await Promise.all([
+    callMcp("open-brain", "search_brain", { query: searchQuery, limit: 7 }),
+    callMcp("qmd", "search", { query: searchQuery, limit: 5 }),
+    callMcp("open-brain", "session_load", { project }),
+  ]);
 
   // Normalize OB results (distance 0-1 lower=better -> score 0-1 higher=better)
   const brainResults: Array<Record<string, unknown>> = [];

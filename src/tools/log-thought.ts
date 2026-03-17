@@ -39,32 +39,25 @@ export function registerLogThought(server: McpServer, deps: ToolDeps): void {
       }
 
       const hash = contentHash(args.content);
-      const [embedding, extracted] = await Promise.all([
-        deps.embedFn(args.content),
-        extractMetadata(args.content),
-      ]);
+      const embedding = await deps.embedFn(args.content);
       logger.info("tool_embedding", {
         tool: "log_thought",
         embedded: !!embedding,
-        extracted: !!extracted,
       });
 
-      const enrichedTags = mergeTags(args.tags ?? [], extracted);
-
       const { rows } = await deps.pool.query(
-        `INSERT INTO thoughts (content, tags, source, created_by, embedding, content_hash, embedded_at, embedding_model, extracted_metadata)
-         VALUES ($1, $2, 'mcp', $3, $4, $5, $6, $7, $8)
+        `INSERT INTO thoughts (content, tags, source, created_by, embedding, content_hash, embedded_at, embedding_model)
+         VALUES ($1, $2, 'mcp', $3, $4, $5, $6, $7)
          ON CONFLICT (content_hash) WHERE content_hash IS NOT NULL DO NOTHING
          RETURNING id`,
         [
           args.content,
-          enrichedTags,
+          args.tags ?? [],
           auth.clientId,
           embedding ? toSql(embedding) : null,
           hash,
           embedding ? new Date().toISOString() : null,
           embedding ? "gemini-embedding-001" : null,
-          extracted ? JSON.stringify(extracted) : null,
         ],
       );
 
@@ -79,12 +72,33 @@ export function registerLogThought(server: McpServer, deps: ToolDeps): void {
         };
       }
 
+      const insertedId = rows[0].id as string;
+
+      // Fire-and-forget: extract metadata and enrich in background
+      extractMetadata(args.content)
+        .then((extracted) => {
+          if (!extracted) return;
+          const enrichedTags = mergeTags(args.tags ?? [], extracted);
+          deps.pool
+            .query(
+              `UPDATE thoughts SET tags = $1, extracted_metadata = $2 WHERE id = $3`,
+              [enrichedTags, JSON.stringify(extracted), insertedId],
+            )
+            .catch((err: unknown) => {
+              logger.warn("extraction_update_error", {
+                id: insertedId,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            });
+        })
+        .catch(() => {});
+
       return {
         content: [
           {
             type: "text" as const,
             text: JSON.stringify({
-              id: rows[0].id,
+              id: insertedId,
               embedded: !!embedding,
             }),
           },
