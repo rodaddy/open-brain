@@ -133,10 +133,21 @@ export function registerSearchAll(server: McpServer, deps: ToolDeps): void {
         searchQmdSource ? searchQmd(args.query, limit) : Promise.resolve([]),
       ]);
 
-      // Merge and sort by normalized score (descending)
-      const merged = [...brainResults, ...qmdResults]
-        .sort((a, b) => b.score - a.score)
-        .slice(0, limit);
+      // Reciprocal Rank Fusion: merge results from different scoring systems
+      // using position-based scoring: rrf = 1/(k + rank). k=60 is standard.
+      // This ensures both sources get fair representation regardless of raw score scales.
+      const RRF_K = 60;
+      const withRrf: Array<UnifiedResult & { rrf: number }> = [];
+      for (let i = 0; i < brainResults.length; i++) {
+        withRrf.push({ ...brainResults[i]!, rrf: 1 / (RRF_K + i + 1) });
+      }
+      for (let i = 0; i < qmdResults.length; i++) {
+        withRrf.push({ ...qmdResults[i]!, rrf: 1 / (RRF_K + i + 1) });
+      }
+      const merged = withRrf
+        .sort((a, b) => b.rrf - a.rrf)
+        .slice(0, limit)
+        .map(({ rrf, ...rest }) => ({ ...rest, score: rrf }));
 
       return {
         content: [
