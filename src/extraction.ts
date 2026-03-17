@@ -1,6 +1,7 @@
 import { logger } from "./logger.ts";
 
 const EXTRACTION_TIMEOUT_MS = 8000;
+const RETRY_DELAYS_MS = [0, 2000, 5000]; // immediate, 2s, 5s
 
 export interface ExtractedMetadata {
   topics: string[];

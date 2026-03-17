@@ -25,22 +25,22 @@ import { logger } from "../src/logger.ts";
 const DELAY_MS = 200;
 const EMBEDDING_MODEL = "gemini-embedding-001";
 
-type ImportTable = "thoughts" | "decisions" | "sessions";
+export type ImportTable = "thoughts" | "decisions" | "sessions";
 
-interface ParsedFile {
+export interface ParsedFile {
   filePath: string;
   frontmatter: Record<string, unknown>;
   body: string;
 }
 
-interface ImportStats {
+export interface ImportStats {
   imported: number;
   skipped: number;
   duplicates: number;
   errors: number;
 }
 
-function parseFrontmatter(raw: string): {
+export function parseFrontmatter(raw: string): {
   frontmatter: Record<string, unknown>;
   body: string;
 } {
@@ -71,7 +71,7 @@ function parseFrontmatter(raw: string): {
   return { frontmatter: fm, body: match[2]!.trim() };
 }
 
-async function readFiles(
+export async function readFiles(
   sourceDir: string,
   pattern: string,
 ): Promise<ParsedFile[]> {
@@ -88,7 +88,7 @@ async function readFiles(
   return files;
 }
 
-async function importThought(
+export async function importThought(
   pool: pg.Pool,
   file: ParsedFile,
   opts: {
@@ -149,7 +149,7 @@ async function importThought(
   }
 }
 
-async function importDecision(
+export async function importDecision(
   pool: pg.Pool,
   file: ParsedFile,
   opts: {
@@ -216,7 +216,7 @@ async function importDecision(
   }
 }
 
-async function importSession(
+export async function importSession(
   pool: pg.Pool,
   file: ParsedFile,
   opts: {
@@ -266,7 +266,7 @@ async function importSession(
   }
 }
 
-function parseArgs(argv: string[]): {
+export function parseArgs(argv: string[]): {
   sourceDir: string;
   table: ImportTable;
   extraTags: string[];
