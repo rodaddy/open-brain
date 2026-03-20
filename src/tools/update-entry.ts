@@ -11,7 +11,18 @@ import type { ToolDeps } from "./index.ts";
 const VALID_FIELDS: Record<Table, string[]> = {
   thoughts: ["content", "tags"],
   decisions: ["title", "rationale", "context", "tags"],
-  relationships: ["person_name", "context", "tags"],
+  relationships: [
+    "person_name",
+    "context",
+    "relationship_type",
+    "warmth",
+    "last_contact",
+    "email",
+    "phone",
+    "notes",
+    "tags",
+    "metadata",
+  ],
   projects: ["name", "description", "tags"],
   sessions: ["summary", "tags"],
 };
@@ -20,7 +31,7 @@ const VALID_FIELDS: Record<Table, string[]> = {
 const CONTENT_FIELDS: Record<Table, string[]> = {
   thoughts: ["content"],
   decisions: ["title", "rationale"],
-  relationships: ["person_name", "context"],
+  relationships: ["person_name", "context", "notes"],
   projects: ["name", "description"],
   sessions: ["summary"],
 };
@@ -36,7 +47,9 @@ function buildEmbeddableText(
     case "decisions":
       return `${merged.title}\n${merged.rationale}`;
     case "relationships":
-      return `${merged.person_name}: ${merged.context ?? ""}`;
+      return [merged.person_name, merged.context ?? "", merged.notes ?? ""]
+        .filter(Boolean)
+        .join("\n");
     case "projects":
       return `${merged.name}: ${merged.description ?? ""}`;
     case "sessions":
@@ -79,6 +92,28 @@ export function registerUpdateEntry(server: McpServer, deps: ToolDeps): void {
           .optional()
           .describe("New description (projects)"),
         tags: z.array(z.string()).optional().describe("New tags (any table)"),
+        relationship_type: z
+          .string()
+          .optional()
+          .describe("Relationship category (relationships)"),
+        warmth: z
+          .number()
+          .int()
+          .min(1)
+          .max(5)
+          .optional()
+          .describe("Closeness 1-5 (relationships)"),
+        last_contact: z
+          .string()
+          .optional()
+          .describe("Last contact date (relationships)"),
+        email: z.string().optional().describe("Email (relationships)"),
+        phone: z.string().optional().describe("Phone (relationships)"),
+        notes: z.string().optional().describe("Notes (relationships)"),
+        metadata: z
+          .record(z.string(), z.unknown())
+          .optional()
+          .describe("Additional data (relationships)"),
       },
       annotations: {
         title: "Update Entry",
