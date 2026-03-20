@@ -96,7 +96,7 @@ export function registerUpsertPerson(server: McpServer, deps: ToolDeps): void {
           created_by, embedding, content_hash, embedded_at, embedding_model
         ) VALUES (
           $1, $2, $3, $4, $5::date,
-          $6, $7, $8, $9, $10,
+          $6, $7, $8, COALESCE($9::text[], '{}'), COALESCE($10::jsonb, '{}'),
           $11, $12, $13, $14, $15
         )
         ON CONFLICT (person_name) DO UPDATE SET
@@ -107,8 +107,8 @@ export function registerUpsertPerson(server: McpServer, deps: ToolDeps): void {
           email = COALESCE(EXCLUDED.email, relationships.email),
           phone = COALESCE(EXCLUDED.phone, relationships.phone),
           notes = COALESCE(EXCLUDED.notes, relationships.notes),
-          tags = COALESCE(EXCLUDED.tags, relationships.tags),
-          metadata = COALESCE(EXCLUDED.metadata, relationships.metadata),
+          tags = CASE WHEN $9 IS NOT NULL THEN EXCLUDED.tags ELSE relationships.tags END,
+          metadata = CASE WHEN $10 IS NOT NULL THEN EXCLUDED.metadata ELSE relationships.metadata END,
           embedding = EXCLUDED.embedding,
           content_hash = EXCLUDED.content_hash,
           embedded_at = EXCLUDED.embedded_at,
@@ -123,8 +123,8 @@ export function registerUpsertPerson(server: McpServer, deps: ToolDeps): void {
           args.email ?? null,
           args.phone ?? null,
           args.notes ?? null,
-          args.tags ?? [],
-          args.metadata ? JSON.stringify(args.metadata) : "{}",
+          args.tags ?? null,
+          args.metadata ? JSON.stringify(args.metadata) : null,
           auth.clientId,
           embedding ? toSql(embedding) : null,
           hash,

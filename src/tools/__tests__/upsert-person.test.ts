@@ -157,6 +157,8 @@ describe("upsert_person", () => {
       expect(params[5]).toBeNull(); // email
       expect(params[6]).toBeNull(); // phone
       expect(params[7]).toBeNull(); // notes
+      expect(params[8]).toBeNull(); // tags (null so COALESCE defaults on INSERT, preserves on UPDATE)
+      expect(params[9]).toBeNull(); // metadata (same)
     } finally {
       await cleanup();
     }
