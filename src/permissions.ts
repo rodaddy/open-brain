@@ -17,7 +17,7 @@ export const PERMISSIONS: Record<Role, Record<Table, Set<Permission>>> = {
   agent: {
     thoughts: RW,
     decisions: RW,
-    relationships: RO,
+    relationships: RW,
     projects: RO,
     sessions: RW,
   },

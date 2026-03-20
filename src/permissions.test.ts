@@ -30,8 +30,13 @@ describe("admin role", () => {
 });
 
 describe("agent role", () => {
-  const rwTables: Table[] = ["thoughts", "decisions", "sessions"];
-  const roTables: Table[] = ["relationships", "projects"];
+  const rwTables: Table[] = [
+    "thoughts",
+    "decisions",
+    "relationships",
+    "sessions",
+  ];
+  const roTables: Table[] = ["projects"];
 
   test.each(rwTables)("canRead(agent, %s) returns true", (table) => {
     expect(canRead("agent", table)).toBe(true);

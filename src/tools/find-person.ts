@@ -6,7 +6,7 @@ import type { AuthInfo } from "../types.ts";
 import type { ToolDeps } from "./index.ts";
 
 const SELECT_COLUMNS =
-  "id, person_name, context, warmth, last_contact, notes, tags, created_at";
+  "id, person_name, context, relationship_type, warmth, last_contact, email, phone, notes, tags, metadata, created_at";
 
 export function registerFindPerson(server: McpServer, deps: ToolDeps): void {
   server.registerTool(
