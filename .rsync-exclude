@@ -1,0 +1,7 @@
+node_modules
+.git
+*.test.ts
+__tests__
+.env
+.env.*
+.DS_Store

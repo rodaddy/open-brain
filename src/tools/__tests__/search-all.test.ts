@@ -549,7 +549,7 @@ describe("search_all", () => {
       try {
         const result = await client.callTool({
           name: "search_all",
-          arguments: { query: "max limit", limit: 50 },
+          arguments: { query: "max limit", limit: 50, search_mode: "vector" },
         });
         expect(result.isError).toBeFalsy();
         // Verify limit passed to SQL
@@ -691,15 +691,15 @@ describe("search_all", () => {
       try {
         const r1 = await client.callTool({
           name: "search_all",
-          arguments: { query: "rapid 1" },
+          arguments: { query: "rapid 1", search_mode: "vector" },
         });
         const r2 = await client.callTool({
           name: "search_all",
-          arguments: { query: "rapid 2" },
+          arguments: { query: "rapid 2", search_mode: "vector" },
         });
         const r3 = await client.callTool({
           name: "search_all",
-          arguments: { query: "rapid 3" },
+          arguments: { query: "rapid 3", search_mode: "vector" },
         });
 
         const p1 = parseResult(r1);
@@ -749,7 +749,7 @@ describe("search_all", () => {
       try {
         const result = await client.callTool({
           name: "search_all",
-          arguments: { query: "embed fail" },
+          arguments: { query: "embed fail", search_mode: "vector" },
         });
         expect(result.isError).toBeFalsy();
         const parsed = parseResult(result);
@@ -1129,7 +1129,11 @@ describe("search_all", () => {
       try {
         await client.callTool({
           name: "search_all",
-          arguments: { query: "tracking test", sources: "brain" },
+          arguments: {
+            query: "tracking test",
+            sources: "brain",
+            search_mode: "vector",
+          },
         });
 
         // Wait for fire-and-forget tracking
@@ -1166,7 +1170,7 @@ describe("search_all", () => {
       try {
         await client.callTool({
           name: "search_all",
-          arguments: { query: "default limit" },
+          arguments: { query: "default limit", search_mode: "vector" },
         });
         const [, params] = queryCalls[0];
         expect(params).toContain(10);
