@@ -303,7 +303,7 @@ describe("search_brain", () => {
       try {
         const result = await client.callTool({
           name: "search_brain",
-          arguments: { query: "embed failure" },
+          arguments: { query: "embed failure", search_mode: "vector" },
         });
 
         expect(result.isError).toBe(true);
@@ -364,7 +364,7 @@ describe("search_brain", () => {
       try {
         await client.callTool({
           name: "search_brain",
-          arguments: { query: "default limit" },
+          arguments: { query: "default limit", search_mode: "vector" },
         });
 
         // The limit parameter ($2) should be 10
@@ -394,7 +394,11 @@ describe("search_brain", () => {
       try {
         await client.callTool({
           name: "search_brain",
-          arguments: { query: "custom limit", limit: 25 },
+          arguments: {
+            query: "custom limit",
+            limit: 25,
+            search_mode: "vector",
+          },
         });
 
         const [, params] = queryCalls[0];
@@ -549,7 +553,7 @@ describe("search_brain", () => {
       try {
         await client.callTool({
           name: "search_brain",
-          arguments: { query: "track this" },
+          arguments: { query: "track this", search_mode: "vector" },
         });
 
         // Wait for fire-and-forget promises to settle
@@ -592,7 +596,7 @@ describe("search_brain", () => {
       try {
         await client.callTool({
           name: "search_brain",
-          arguments: { query: "empty results" },
+          arguments: { query: "empty results", search_mode: "vector" },
         });
 
         // Wait for any fire-and-forget promises
@@ -624,7 +628,7 @@ describe("search_brain", () => {
       try {
         await client.callTool({
           name: "search_brain",
-          arguments: { query: "embed fail" },
+          arguments: { query: "embed fail", search_mode: "vector" },
         });
 
         await new Promise((r) => setTimeout(r, 50));

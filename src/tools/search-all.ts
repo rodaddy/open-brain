@@ -1,11 +1,16 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { toSql } from "pgvector/pg";
 import { canRead } from "../permissions.ts";
-import type { AuthInfo, Table } from "../types.ts";
+import type { AuthInfo } from "../types.ts";
 import { logger } from "../logger.ts";
 import type { ToolDeps } from "./index.ts";
-import { ALL_TABLES, buildTableCTE } from "./search-brain.ts";
+import {
+  ALL_TABLES,
+  executeSearch,
+  trackUsage,
+  type SearchMode,
+  type SearchRow,
+} from "./search-brain.ts";
 
 interface UnifiedResult {
   source: "brain" | "qmd";
@@ -95,6 +100,12 @@ export function registerSearchAll(server: McpServer, deps: ToolDeps): void {
           .enum(["all", "brain", "qmd"])
           .optional()
           .describe("Which sources to search (default: all)"),
+        search_mode: z
+          .enum(["hybrid", "vector", "keyword"])
+          .optional()
+          .describe(
+            "Brain search mode: hybrid (default) = vector + keyword with RRF, vector = semantic only, keyword = full-text only",
+          ),
       },
       annotations: {
         title: "Search All",
@@ -119,16 +130,14 @@ export function registerSearchAll(server: McpServer, deps: ToolDeps): void {
 
       const limit = args.limit ?? 10;
       const sources = (args.sources as "all" | "brain" | "qmd") ?? "all";
+      const mode = (args.search_mode as SearchMode) ?? "hybrid";
       const searchBrain = sources === "all" || sources === "brain";
       const searchQmdSource = sources === "all" || sources === "qmd";
 
-      // Generate embedding for OB search (needed even if qmd-only, but skip if not)
-      const embedding = searchBrain ? await deps.embedFn(args.query) : null;
-
       // Launch both searches in parallel
       const [brainResults, qmdResults] = await Promise.all([
-        searchBrain && embedding
-          ? searchOB(deps, auth, embedding, limit)
+        searchBrain
+          ? searchOB(deps, auth, args.query, limit, mode)
           : Promise.resolve([]),
         searchQmdSource ? searchQmd(args.query, limit) : Promise.resolve([]),
       ]);
@@ -169,68 +178,31 @@ export function registerSearchAll(server: McpServer, deps: ToolDeps): void {
 async function searchOB(
   deps: ToolDeps,
   auth: AuthInfo,
-  embedding: number[],
+  query: string,
   limit: number,
+  mode: SearchMode = "hybrid",
 ): Promise<UnifiedResult[]> {
   const accessibleTables = ALL_TABLES.filter((t) => canRead(auth.role, t));
   if (accessibleTables.length === 0) return [];
 
-  const ctes = accessibleTables.map(buildTableCTE);
-  const cteNames = accessibleTables.map((t) => `${t}_results`);
-  const unionAll = cteNames
-    .map((name) => `SELECT * FROM ${name}`)
-    .join("\nUNION ALL\n");
-
-  const sql = `WITH query_embedding AS (
-  SELECT $1::halfvec(768) AS emb
-),
-${ctes.join(",\n")}
-SELECT * FROM (
-${unionAll}
-) AS combined
-ORDER BY (distance * 0.8 + (1.0 - COALESCE(usefulness, 0.5)) * 0.2) ASC
-LIMIT $2`;
-
-  const { rows } = await deps.pool.query(sql, [toSql(embedding), limit]);
-
-  // Fire-and-forget usage tracking
-  if (rows.length > 0) {
-    const byTable = new Map<Table, string[]>();
-    for (const row of rows) {
-      const table = tableFromLabel(row.source_type as string);
-      if (!table) continue;
-      const ids = byTable.get(table) ?? [];
-      ids.push(row.id as string);
-      byTable.set(table, ids);
-    }
-    for (const [table, ids] of byTable) {
-      deps.pool
-        .query(
-          `UPDATE ${table} SET access_count = access_count + 1, last_accessed_at = NOW() WHERE id = ANY($1)`,
-          [ids],
-        )
-        .catch(() => {});
-    }
+  let rows: SearchRow[];
+  try {
+    rows = await executeSearch(deps, accessibleTables, query, limit, mode);
+  } catch (err) {
+    logger.warn("searchOB_failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return [];
   }
+
+  trackUsage(deps, rows);
 
   return rows.map((row) => ({
     source: "brain" as const,
-    type: row.source_type as string,
-    content: (row.content_preview as string).slice(0, 300),
-    score: 1 - (row.distance as number), // invert distance to score (higher = better)
-    id: row.id as string,
-    tags: row.tags as string[],
+    type: row.source_type,
+    content: row.content_preview.slice(0, 300),
+    score: row.distance != null ? 1 - row.distance : (row.fts_rank ?? 0.5),
+    id: row.id,
+    tags: row.tags ?? undefined,
   }));
-}
-
-const LABEL_TO_TABLE: Record<string, Table> = {
-  thought: "thoughts",
-  decision: "decisions",
-  relationship: "relationships",
-  project: "projects",
-  session: "sessions",
-};
-
-function tableFromLabel(label: string): Table | undefined {
-  return LABEL_TO_TABLE[label];
 }
