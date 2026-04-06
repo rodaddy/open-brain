@@ -62,8 +62,8 @@ CREATE INDEX IF NOT EXISTS idx_discarded_expires ON discarded_entries(expires_at
 CREATE INDEX IF NOT EXISTS idx_discarded_original ON discarded_entries(original_id);
 
 -- 6. Record this migration
-INSERT INTO _migrations (name, applied_at) 
-VALUES ('006_cognitive_tiering', now())
+INSERT INTO _migrations (filename, applied_at) 
+VALUES ('006_cognitive_tiering.sql', now())
 ON CONFLICT DO NOTHING;
 
 COMMIT;
