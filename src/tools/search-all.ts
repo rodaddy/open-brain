@@ -12,6 +12,9 @@ import {
   type SearchRow,
 } from "./search-brain.ts";
 
+/** Tier-based RRF score adjustments for cognitive tiering */
+const TIER_BOOST: Record<string, number> = { hot: 0.3, cold: -0.2 };
+
 interface UnifiedResult {
   source: "brain" | "qmd";
   type: string;
@@ -21,6 +24,7 @@ interface UnifiedResult {
   path?: string;
   tags?: string[];
   collection?: string;
+  tier?: string;
 }
 
 interface QmdDocument {
@@ -145,10 +149,13 @@ export function registerSearchAll(server: McpServer, deps: ToolDeps): void {
       // Reciprocal Rank Fusion: merge results from different scoring systems
       // using position-based scoring: rrf = 1/(k + rank). k=60 is standard.
       // This ensures both sources get fair representation regardless of raw score scales.
+      // Brain entries also receive a tier boost: hot=+0.3, cold=-0.2, warm=0.
       const RRF_K = 60;
       const withRrf: Array<UnifiedResult & { rrf: number }> = [];
       for (let i = 0; i < brainResults.length; i++) {
-        withRrf.push({ ...brainResults[i]!, rrf: 1 / (RRF_K + i + 1) });
+        const result = brainResults[i]!;
+        const boost = TIER_BOOST[result.tier ?? ""] ?? 0;
+        withRrf.push({ ...result, rrf: 1 / (RRF_K + i + 1) + boost });
       }
       for (let i = 0; i < qmdResults.length; i++) {
         withRrf.push({ ...qmdResults[i]!, rrf: 1 / (RRF_K + i + 1) });
@@ -195,7 +202,7 @@ async function searchOB(
     return [];
   }
 
-  trackUsage(deps, rows);
+  trackUsage(deps, rows, query);
 
   return rows.map((row) => ({
     source: "brain" as const,
@@ -204,5 +211,6 @@ async function searchOB(
     score: row.distance != null ? 1 - row.distance : (row.fts_rank ?? 0.5),
     id: row.id,
     tags: row.tags ?? undefined,
+    tier: row.tier,
   }));
 }

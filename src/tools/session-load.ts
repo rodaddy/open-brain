@@ -3,6 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { canRead } from "../permissions.ts";
 import type { AuthInfo } from "../types.ts";
 import type { ToolDeps } from "./index.ts";
+import { logger } from "../logger.ts";
 
 const SELECT_COLUMNS =
   "id, project, summary, tags, blockers, next_steps, key_decisions, created_by, created_at";
@@ -51,6 +52,20 @@ export function registerSessionLoad(server: McpServer, deps: ToolDeps): void {
   );
 }
 
+function logSessionAccess(deps: ToolDeps, sessionId: string): void {
+  void deps.pool
+    .query(
+      `INSERT INTO entry_access_log (entry_id, source_table, accessed_at, query_text, context)
+       VALUES ($1::uuid, 'sessions', NOW(), NULL, 'session_load')`,
+      [sessionId],
+    )
+    .catch((err: unknown) => {
+      logger.warn("session_load_access_log_error", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+}
+
 async function handleProjectLoad(deps: ToolDeps, project: string) {
   const sql = `SELECT ${SELECT_COLUMNS}
 FROM sessions
@@ -70,6 +85,8 @@ LIMIT 1`;
       ],
     };
   }
+
+  logSessionAccess(deps, rows[0].id);
 
   return {
     content: [
@@ -100,6 +117,8 @@ LIMIT 1`;
       ],
     };
   }
+
+  logSessionAccess(deps, rows[0].id);
 
   return {
     content: [
