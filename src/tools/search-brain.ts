@@ -60,6 +60,9 @@ const RRF_K = 60;
 /** Over-fetch multiplier for hybrid mode (fetch N*3 from each path, merge to N) */
 const HYBRID_FETCH_MULTIPLIER = 3;
 
+/** Tier-based RRF score adjustments for cognitive tiering */
+const TIER_BOOST: Record<string, number> = { hot: 0.3, cold: -0.2 };
+
 export interface SearchRow {
   source_type: string;
   id: string;
@@ -67,6 +70,7 @@ export interface SearchRow {
   tags: string[] | null;
   created_at: string;
   usefulness: number;
+  tier?: string;
   distance?: number;
   fts_rank?: number;
 }
@@ -84,6 +88,7 @@ export function buildTableCTE(table: Table): string {
     ${preview} AS content_preview,
     ${alias}.tags,
     ${alias}.created_at,
+    ${alias}.tier,
     ${alias}.embedding <=> (SELECT emb FROM query_embedding) AS distance,
     COALESCE(${alias}.usefulness_score, 0.5) AS usefulness
   FROM ${table} ${alias}
@@ -104,6 +109,7 @@ function buildFtsCTE(table: Table): string {
     ${preview} AS content_preview,
     ${alias}.tags,
     ${alias}.created_at,
+    ${alias}.tier,
     ts_rank_cd(${alias}.search_vector, plainto_tsquery('english', (SELECT q FROM fts_query))) AS fts_rank,
     COALESCE(${alias}.usefulness_score, 0.5) AS usefulness
   FROM ${table} ${alias}
@@ -168,6 +174,7 @@ LIMIT $2`;
  * Reciprocal Rank Fusion: merge ranked lists from different scoring systems.
  * Items appearing in both lists get summed RRF scores (boosted).
  * Items in only one list get a single RRF score.
+ * Hot entries get +0.3 boost, cold entries get -0.2, warm is unchanged.
  */
 function rrfMerge(
   vectorRows: SearchRow[],
@@ -194,12 +201,21 @@ function rrfMerge(
   }
 
   return Array.from(scoreMap.values())
+    .map(({ row, rrf }) => ({
+      row,
+      rrf: rrf + (TIER_BOOST[row.tier ?? ""] ?? 0),
+    }))
     .sort((a, b) => b.rrf - a.rrf)
     .slice(0, limit)
     .map(({ row }) => row);
 }
 
-export function trackUsage(deps: ToolDeps, rows: SearchRow[]): void {
+export function trackUsage(
+  deps: ToolDeps,
+  rows: SearchRow[],
+  queryText: string,
+  context = "search",
+): void {
   if (rows.length === 0) return;
 
   const byTable = new Map<Table, string[]>();
@@ -222,6 +238,26 @@ export function trackUsage(deps: ToolDeps, rows: SearchRow[]): void {
         .catch((err: unknown) => {
           logger.warn("search_tracking_error", {
             table,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }),
+    );
+  }
+
+  // Bulk-insert into entry_access_log for all returned entries
+  const logRows = rows.filter((r) => LABEL_TO_TABLE[r.source_type]);
+  if (logRows.length > 0) {
+    const entryIds = logRows.map((r) => r.id);
+    const sourceTables = logRows.map((r) => LABEL_TO_TABLE[r.source_type]);
+    trackingPromises.push(
+      deps.pool
+        .query(
+          `INSERT INTO entry_access_log (entry_id, source_table, accessed_at, query_text, context)
+           SELECT unnest($1::uuid[]), unnest($2::text[]), NOW(), $3, $4`,
+          [entryIds, sourceTables, queryText, context],
+        )
+        .catch((err: unknown) => {
+          logger.warn("access_log_error", {
             error: err instanceof Error ? err.message : String(err),
           });
         }),
@@ -375,7 +411,7 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
         };
       }
 
-      trackUsage(deps, rows);
+      trackUsage(deps, rows, args.query);
 
       return {
         content: [
