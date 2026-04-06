@@ -1142,10 +1142,8 @@ describe("search_all", () => {
         // First call is the search SELECT, rest are tracking UPDATEs
         expect(queryCalls.length).toBeGreaterThan(1);
         const trackingCalls = queryCalls.slice(1);
-        for (const call of trackingCalls) {
-          expect(call[0]).toContain("access_count");
-          expect(call[0]).toContain("last_accessed_at");
-        }
+        const allSql = trackingCalls.map((c: any) => c[0]).join(" ");
+        expect(allSql).toContain("entry_access_log");
       } finally {
         await cleanup();
       }

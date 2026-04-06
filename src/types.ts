@@ -5,6 +5,7 @@ export type Table =
   | "relationships"
   | "projects"
   | "sessions";
+export type Tier = "hot" | "warm" | "cold";
 export type Permission = "read" | "write" | "delete";
 
 export interface AuthInfo {

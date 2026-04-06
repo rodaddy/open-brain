@@ -265,6 +265,85 @@ describe("list_recent", () => {
     });
   });
 
+  describe("tier in SELECT columns", () => {
+    it("SQL SELECT includes tier column", async () => {
+      const queryCalls: any[] = [];
+      const mockPool = {
+        query: async (...args: any[]) => {
+          queryCalls.push(args);
+          return { rows: makeMockRows(1) };
+        },
+      };
+      const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
+
+      const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+      try {
+        await client.callTool({
+          name: "list_recent",
+          arguments: {},
+        });
+
+        const [sql] = queryCalls[0];
+        expect(sql).toContain(".tier");
+      } finally {
+        await cleanup();
+      }
+    });
+  });
+
+  describe("tier filter", () => {
+    it("SQL contains tier filter when tier param is provided", async () => {
+      const queryCalls: any[] = [];
+      const mockPool = {
+        query: async (...args: any[]) => {
+          queryCalls.push(args);
+          return { rows: makeMockRows(1) };
+        },
+      };
+      const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
+
+      const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+      try {
+        await client.callTool({
+          name: "list_recent",
+          arguments: { tier: "hot" },
+        });
+
+        const [sql] = queryCalls[0];
+        expect(sql).toContain("tier = 'hot'");
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("SQL does NOT contain tier filter when tier is omitted", async () => {
+      const queryCalls: any[] = [];
+      const mockPool = {
+        query: async (...args: any[]) => {
+          queryCalls.push(args);
+          return { rows: makeMockRows(1) };
+        },
+      };
+      const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
+
+      const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+      try {
+        await client.callTool({
+          name: "list_recent",
+          arguments: {},
+        });
+
+        const [sql] = queryCalls[0];
+        expect(sql).not.toContain("tier = '");
+      } finally {
+        await cleanup();
+      }
+    });
+  });
+
   describe("empty results", () => {
     it("returns empty array, no isError", async () => {
       const mockPool = {

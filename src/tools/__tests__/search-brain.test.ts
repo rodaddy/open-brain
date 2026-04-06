@@ -566,12 +566,9 @@ describe("search_brain", () => {
         const trackingCalls = queryCalls.slice(1);
         expect(trackingCalls.length).toBeGreaterThan(0);
 
-        // Each tracking UPDATE should contain access_count and last_accessed_at
-        for (const call of trackingCalls) {
-          const sql = call[0];
-          expect(sql).toContain("access_count");
-          expect(sql).toContain("last_accessed_at");
-        }
+        // Tracking calls should include entry_access_log INSERTs
+        const allSql = trackingCalls.map((c: any) => c[0]).join(" ");
+        expect(allSql).toContain("entry_access_log");
       } finally {
         await cleanup();
       }
@@ -635,6 +632,100 @@ describe("search_brain", () => {
 
         // No pool.query calls at all when embedding fails
         expect(queryCalls.length).toBe(0);
+      } finally {
+        await cleanup();
+      }
+    });
+  });
+
+  describe("tier filtering", () => {
+    it("SQL contains tier filter when tier param is provided", async () => {
+      const queryCalls: any[] = [];
+      const mockPool = {
+        query: async (...args: any[]) => {
+          queryCalls.push(args);
+          return { rows: makeMockRows(1) };
+        },
+      };
+      const auth: AuthInfo = { role: "admin", clientId: "admin" };
+
+      const { client, cleanup } = await setupSearchClient(
+        mockPool,
+        createMockEmbed(),
+        auth,
+      );
+
+      try {
+        await client.callTool({
+          name: "search_brain",
+          arguments: { query: "tier filter test", tier: "hot" },
+        });
+
+        const [sql] = queryCalls[0];
+        expect(sql).toContain("tier = 'hot'");
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("SQL does NOT contain tier filter when tier is omitted", async () => {
+      const queryCalls: any[] = [];
+      const mockPool = {
+        query: async (...args: any[]) => {
+          queryCalls.push(args);
+          return { rows: makeMockRows(1) };
+        },
+      };
+      const auth: AuthInfo = { role: "admin", clientId: "admin" };
+
+      const { client, cleanup } = await setupSearchClient(
+        mockPool,
+        createMockEmbed(),
+        auth,
+      );
+
+      try {
+        await client.callTool({
+          name: "search_brain",
+          arguments: { query: "no tier filter" },
+        });
+
+        const [sql] = queryCalls[0];
+        expect(sql).not.toContain("tier = '");
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("tier filter flows into FTS CTE in keyword mode", async () => {
+      const queryCalls: any[] = [];
+      const mockPool = {
+        query: async (...args: any[]) => {
+          queryCalls.push(args);
+          return { rows: makeMockRows(1) };
+        },
+      };
+      const auth: AuthInfo = { role: "admin", clientId: "admin" };
+
+      const { client, cleanup } = await setupSearchClient(
+        mockPool,
+        createMockEmbed(),
+        auth,
+      );
+
+      try {
+        await client.callTool({
+          name: "search_brain",
+          arguments: {
+            query: "keyword tier test",
+            search_mode: "keyword",
+            tier: "cold",
+          },
+        });
+
+        const [sql] = queryCalls[0];
+        expect(sql).toContain("tier = 'cold'");
+        expect(sql).toContain("search_vector");
       } finally {
         await cleanup();
       }

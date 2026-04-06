@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { canRead } from "../permissions.ts";
-import type { AuthInfo, Table } from "../types.ts";
+import type { AuthInfo, Table, Tier } from "../types.ts";
 import { logger } from "../logger.ts";
 import type { ToolDeps } from "./index.ts";
 
@@ -40,7 +40,11 @@ const TABLE_ALIAS: Record<Table, string> = {
   sessions: "s",
 };
 
-function buildTableSelect(table: Table, includeArchived: boolean): string {
+function buildTableSelect(
+  table: Table,
+  includeArchived: boolean,
+  tier?: Tier,
+): string {
   const alias = TABLE_ALIAS[table];
   const label = SOURCE_LABELS[table];
   const preview = CONTENT_PREVIEW[table];
@@ -48,15 +52,17 @@ function buildTableSelect(table: Table, includeArchived: boolean): string {
   const archiveFilter = includeArchived
     ? ""
     : ` AND ${alias}.archived_at IS NULL`;
+  const tierFilter = tier ? ` AND ${alias}.tier = '${tier}'` : "";
 
   return `SELECT
     '${label}' AS source_type,
     ${alias}.id,
     ${preview} AS content_preview,
     ${alias}.tags,
+    ${alias}.tier,
     ${alias}.created_at
   FROM ${table} ${alias}
-  WHERE ${alias}.created_at >= NOW() - INTERVAL '1 day' * $1${archiveFilter}`;
+  WHERE ${alias}.created_at >= NOW() - INTERVAL '1 day' * $1${archiveFilter}${tierFilter}`;
 }
 
 export function registerListRecent(server: McpServer, deps: ToolDeps): void {
@@ -94,6 +100,10 @@ export function registerListRecent(server: McpServer, deps: ToolDeps): void {
           .boolean()
           .optional()
           .describe("Include archived entries (default false)"),
+        tier: z
+          .enum(["hot", "warm", "cold"])
+          .optional()
+          .describe("Optional: filter to a specific cognitive tier"),
       },
       annotations: {
         title: "List Recent",
@@ -152,10 +162,11 @@ export function registerListRecent(server: McpServer, deps: ToolDeps): void {
       const days = args.days ?? 7;
       const limit = args.limit ?? 20;
       const includeArchived = args.include_archived ?? false;
+      const tier = args.tier as Tier | undefined;
 
       // Build UNION ALL of table SELECTs
       const selects = accessibleTables.map((t) =>
-        buildTableSelect(t, includeArchived),
+        buildTableSelect(t, includeArchived, tier),
       );
 
       const unionSql = selects.join("\nUNION ALL\n");

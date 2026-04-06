@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { toSql } from "pgvector/pg";
 import { canRead } from "../permissions.ts";
-import type { AuthInfo, Table } from "../types.ts";
+import type { AuthInfo, Table, Tier } from "../types.ts";
 import type { ToolDeps } from "./index.ts";
 import { logger } from "../logger.ts";
 
@@ -61,7 +61,11 @@ const RRF_K = 60;
 const HYBRID_FETCH_MULTIPLIER = 3;
 
 /** Tier-based RRF score adjustments for cognitive tiering */
-export const TIER_BOOST: Record<string, number> = { hot: 0.3, cold: -0.2 };
+export const TIER_BOOST: Record<Tier, number> = {
+  hot: 0.3,
+  warm: 0,
+  cold: -0.2,
+};
 
 export interface SearchRow {
   source_type: string;
@@ -75,11 +79,12 @@ export interface SearchRow {
   fts_rank?: number;
 }
 
-export function buildTableCTE(table: Table): string {
+export function buildTableCTE(table: Table, tier?: Tier): string {
   const alias = TABLE_ALIAS[table];
   const label = SOURCE_LABELS[table];
   const preview = CONTENT_PREVIEW[table];
   const cteName = `${table}_results`;
+  const tierFilter = tier ? ` AND ${alias}.tier = '${tier}'` : "";
 
   return `${cteName} AS (
   SELECT
@@ -92,15 +97,16 @@ export function buildTableCTE(table: Table): string {
     ${alias}.embedding <=> (SELECT emb FROM query_embedding) AS distance,
     COALESCE(${alias}.usefulness_score, 0.5) AS usefulness
   FROM ${table} ${alias}
-  WHERE ${alias}.embedding IS NOT NULL AND ${alias}.archived_at IS NULL
+  WHERE ${alias}.embedding IS NOT NULL AND ${alias}.archived_at IS NULL${tierFilter}
 )`;
 }
 
-function buildFtsCTE(table: Table): string {
+function buildFtsCTE(table: Table, tier?: Tier): string {
   const alias = TABLE_ALIAS[table];
   const label = SOURCE_LABELS[table];
   const preview = CONTENT_PREVIEW[table];
   const cteName = `${table}_fts`;
+  const tierFilter = tier ? ` AND ${alias}.tier = '${tier}'` : "";
 
   return `${cteName} AS (
   SELECT
@@ -114,7 +120,7 @@ function buildFtsCTE(table: Table): string {
     COALESCE(${alias}.usefulness_score, 0.5) AS usefulness
   FROM ${table} ${alias}
   WHERE ${alias}.search_vector @@ plainto_tsquery('english', (SELECT q FROM fts_query))
-    AND ${alias}.archived_at IS NULL
+    AND ${alias}.archived_at IS NULL${tierFilter}
 )`;
 }
 
@@ -123,8 +129,9 @@ async function vectorSearch(
   accessibleTables: Table[],
   embedding: number[],
   fetchLimit: number,
+  tier?: Tier,
 ): Promise<SearchRow[]> {
-  const ctes = accessibleTables.map(buildTableCTE);
+  const ctes = accessibleTables.map((t) => buildTableCTE(t, tier));
   const cteNames = accessibleTables.map((t) => `${t}_results`);
   const unionAll = cteNames
     .map((name) => `SELECT * FROM ${name}`)
@@ -149,8 +156,9 @@ async function ftsSearch(
   accessibleTables: Table[],
   query: string,
   fetchLimit: number,
+  tier?: Tier,
 ): Promise<SearchRow[]> {
-  const ctes = accessibleTables.map(buildFtsCTE);
+  const ctes = accessibleTables.map((t) => buildFtsCTE(t, tier));
   const cteNames = accessibleTables.map((t) => `${t}_fts`);
   const unionAll = cteNames
     .map((name) => `SELECT * FROM ${name}`)
@@ -203,7 +211,7 @@ function rrfMerge(
   return Array.from(scoreMap.values())
     .map(({ row, rrf }) => ({
       row,
-      rrf: rrf + (TIER_BOOST[row.tier ?? ""] ?? 0),
+      rrf: rrf + TIER_BOOST[(row.tier ?? "warm") as Tier],
     }))
     .sort((a, b) => b.rrf - a.rrf)
     .slice(0, limit)
@@ -273,9 +281,10 @@ export async function executeSearch(
   query: string,
   limit: number,
   mode: SearchMode = "hybrid",
+  tier?: Tier,
 ): Promise<SearchRow[]> {
   if (mode === "keyword") {
-    return ftsSearch(deps, accessibleTables, query, limit);
+    return ftsSearch(deps, accessibleTables, query, limit, tier);
   }
 
   // Vector and hybrid both need an embedding
@@ -286,21 +295,21 @@ export async function executeSearch(
       logger.warn("embedding_failed_fallback_fts", {
         query: query.slice(0, 50),
       });
-      return ftsSearch(deps, accessibleTables, query, limit);
+      return ftsSearch(deps, accessibleTables, query, limit, tier);
     }
     // In vector mode, null embedding is a hard failure -- signal via thrown error
     throw new Error("Failed to generate query embedding");
   }
 
   if (mode === "vector") {
-    return vectorSearch(deps, accessibleTables, embedding, limit);
+    return vectorSearch(deps, accessibleTables, embedding, limit, tier);
   }
 
   // Hybrid: run both in parallel, merge with RRF
   const fetchLimit = limit * HYBRID_FETCH_MULTIPLIER;
   const [vectorRows, ftsRows] = await Promise.all([
-    vectorSearch(deps, accessibleTables, embedding, fetchLimit),
-    ftsSearch(deps, accessibleTables, query, fetchLimit),
+    vectorSearch(deps, accessibleTables, embedding, fetchLimit, tier),
+    ftsSearch(deps, accessibleTables, query, fetchLimit, tier),
   ]);
 
   return rrfMerge(vectorRows, ftsRows, limit);
@@ -337,6 +346,10 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
           .describe(
             "Search mode: hybrid (default) = vector + keyword with RRF fusion, vector = semantic only, keyword = full-text only",
           ),
+        tier: z
+          .enum(["hot", "warm", "cold"])
+          .optional()
+          .describe("Optional: filter results to a specific cognitive tier"),
       },
       annotations: {
         title: "Search Brain",
@@ -393,6 +406,7 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
 
       const limit = args.limit ?? 10;
       const mode = (args.search_mode as SearchMode) ?? "hybrid";
+      const tier = args.tier as Tier | undefined;
 
       let rows;
       try {
@@ -402,6 +416,7 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
           args.query,
           limit,
           mode,
+          tier,
         );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -429,8 +444,13 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
  * Inlines namespace values as a SQL array literal (safe for known internal values).
  * If namespaces is null (admin/no filter), returns empty string.
  */
-export function buildNsClause(alias: string, namespaces: string[] | null): string {
+export function buildNsClause(
+  alias: string,
+  namespaces: string[] | null,
+): string {
   if (!namespaces || namespaces.length === 0) return "";
-  const escaped = namespaces.map(ns => "'" + ns.replace(/'/g, "''") + "'").join(",");
+  const escaped = namespaces
+    .map((ns) => "'" + ns.replace(/'/g, "''") + "'")
+    .join(",");
   return ` AND ${alias}.namespace IN (${escaped})`;
 }
