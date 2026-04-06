@@ -424,3 +424,25 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
     },
   );
 }
+
+/**
+ * Build a namespace filter SQL clause.
+ * Inlines namespace values as a SQL array literal (safe for known internal values).
+ * If namespaces is null (admin/no filter), returns empty string.
+ */
+export function buildNsClause(alias: string, namespaces: string[] | null): string {
+  if (!namespaces || namespaces.length === 0) return "";
+  const escaped = namespaces.map(ns => "'"' + ns.replace(/'/g, "''") + "'"').join(",");
+  return ` AND ${alias}.namespace IN (${escaped})`;
+}
+
+/**
+ * Build a namespace filter SQL clause.
+ * Inlines namespace values as a SQL array literal (safe for known internal values).
+ * If namespaces is null (admin/no filter), returns empty string.
+ */
+export function buildNsClause(alias: string, namespaces: string[] | null): string {
+  if (!namespaces || namespaces.length === 0) return "";
+  const escaped = namespaces.map(ns => "'" + ns.replace(/'/g, "''") + "'").join(",");
+  return ` AND ${alias}.namespace IN (${escaped})`;
+}
