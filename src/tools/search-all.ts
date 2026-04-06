@@ -8,12 +8,12 @@ import {
   ALL_TABLES,
   executeSearch,
   trackUsage,
+  TIER_BOOST,
   type SearchMode,
   type SearchRow,
 } from "./search-brain.ts";
 
-/** Tier-based RRF score adjustments for cognitive tiering */
-const TIER_BOOST: Record<string, number> = { hot: 0.3, cold: -0.2 };
+
 
 interface UnifiedResult {
   source: "brain" | "qmd";
