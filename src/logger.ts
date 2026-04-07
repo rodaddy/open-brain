@@ -33,4 +33,6 @@ export const logger = {
     log("warn", message, extra),
   error: (message: string, extra?: Record<string, unknown>) =>
     log("error", message, extra),
+  debug: (message: string, extra?: Record<string, unknown>) =>
+    log("debug", message, extra),
 };

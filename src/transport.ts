@@ -57,7 +57,8 @@ function removeSession(sessionId: string): void {
 }
 
 // Safety-net sweeper: force-clean sessions that survived past 2x TTL
-setInterval(() => {
+// unref() so the timer doesn't prevent clean process exit
+const sweepTimer = setInterval(() => {
   const now = Date.now();
   let swept = 0;
   for (const [id, entry] of sessions) {
@@ -71,6 +72,7 @@ setInterval(() => {
     swept,
   });
 }, SWEEP_INTERVAL_MS);
+sweepTimer.unref();
 
 export function getSessionAuth(sessionId: string): AuthInfo | undefined {
   return sessions.get(sessionId)?.auth;
@@ -200,8 +202,7 @@ export function createTransportHandlers(
           return;
         }
 
-        await entry.transport.close();
-        removeSession(sessionId);
+        await expireSession(sessionId, "client-delete");
         res.status(200).json({ status: "session closed" });
         return;
       }
