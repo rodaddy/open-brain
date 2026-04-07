@@ -133,7 +133,8 @@ export function createTransportHandlers(
             // Re-check cap atomically at registration time
             if (sessions.size >= MAX_SESSIONS) {
               logger.warn("Session cap exceeded at registration", { id });
-              return; // timer never set — sweeper will not find it either
+              void transport.close().catch(() => {}); // clean up untracked transport
+              return;
             }
 
             const timer = setTimeout(() => {
