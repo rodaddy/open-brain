@@ -7,24 +7,44 @@ import type { AuthInfo } from "./types.ts";
 import { logger } from "./logger.ts";
 
 const SESSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const SWEEP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const MAX_SESSIONS = 100;
 
 interface SessionEntry {
   transport: StreamableHTTPServerTransport;
   auth: AuthInfo;
   timer: ReturnType<typeof setTimeout>;
+  lastActivity: number;
 }
 
 const sessions: Map<string, SessionEntry> = new Map();
+
+async function expireSession(
+  sessionId: string,
+  reason: string,
+): Promise<void> {
+  const entry = sessions.get(sessionId);
+  if (!entry) return;
+  clearTimeout(entry.timer);
+  sessions.delete(sessionId); // delete BEFORE close — can't leak
+  try {
+    await entry.transport.close();
+  } catch (err) {
+    logger.warn("Error closing transport during session expiry", {
+      sessionId,
+      reason,
+      error: String(err),
+    });
+  }
+}
 
 function resetTimer(sessionId: string): void {
   const entry = sessions.get(sessionId);
   if (!entry) return;
   clearTimeout(entry.timer);
+  entry.lastActivity = Date.now();
   entry.timer = setTimeout(() => {
-    logger.info("Session expired due to inactivity", { sessionId });
-    entry.transport.close();
-    sessions.delete(sessionId);
+    expireSession(sessionId, "inactivity");
   }, SESSION_TTL_MS);
 }
 
@@ -35,6 +55,22 @@ function removeSession(sessionId: string): void {
     sessions.delete(sessionId);
   }
 }
+
+// Safety-net sweeper: force-clean sessions that survived past 2x TTL
+setInterval(() => {
+  const now = Date.now();
+  let swept = 0;
+  for (const [id, entry] of sessions) {
+    if (now - entry.lastActivity > SESSION_TTL_MS * 2) {
+      expireSession(id, "sweeper");
+      swept++;
+    }
+  }
+  logger.debug("Session sweeper tick", {
+    active: sessions.size,
+    swept,
+  });
+}, SWEEP_INTERVAL_MS);
 
 export function getSessionAuth(sessionId: string): AuthInfo | undefined {
   return sessions.get(sessionId)?.auth;
@@ -92,14 +128,15 @@ export function createTransportHandlers(
           sessionIdGenerator: () => randomUUID(),
           onsessioninitialized: (id: string) => {
             const timer = setTimeout(() => {
-              logger.info("Session expired due to inactivity", {
-                sessionId: id,
-              });
-              transport.close();
-              sessions.delete(id);
+              expireSession(id, "inactivity");
             }, SESSION_TTL_MS);
 
-            sessions.set(id, { transport, auth: reqAuth, timer });
+            sessions.set(id, {
+              transport,
+              auth: reqAuth,
+              timer,
+              lastActivity: Date.now(),
+            });
           },
         });
 
