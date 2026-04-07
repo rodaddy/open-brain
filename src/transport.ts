@@ -8,7 +8,9 @@ import { logger } from "./logger.ts";
 
 const SESSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const SWEEP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+const CLOSE_TIMEOUT_MS = 5_000; // 5 seconds max for transport.close()
 const MAX_SESSIONS = 100;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 interface SessionEntry {
   transport: StreamableHTTPServerTransport;
@@ -28,7 +30,12 @@ async function expireSession(
   clearTimeout(entry.timer);
   sessions.delete(sessionId); // delete BEFORE close — can't leak
   try {
-    await entry.transport.close();
+    await Promise.race([
+      entry.transport.close(),
+      new Promise<void>((_, reject) =>
+        setTimeout(() => reject(new Error("close timed out")), CLOSE_TIMEOUT_MS),
+      ),
+    ]);
   } catch (err) {
     logger.warn("Error closing transport during session expiry", {
       sessionId,
@@ -46,14 +53,6 @@ function resetTimer(sessionId: string): void {
   entry.timer = setTimeout(() => {
     expireSession(sessionId, "inactivity");
   }, SESSION_TTL_MS);
-}
-
-function removeSession(sessionId: string): void {
-  const entry = sessions.get(sessionId);
-  if (entry) {
-    clearTimeout(entry.timer);
-    sessions.delete(sessionId);
-  }
 }
 
 // Safety-net sweeper: force-clean sessions that survived past 2x TTL
@@ -93,7 +92,9 @@ export function createTransportHandlers(
 ): TransportHandlers {
   return {
     async handlePost(req: Request, res: Response): Promise<void> {
-      const sessionId = req.headers["mcp-session-id"] as string | undefined;
+      const rawId = req.headers["mcp-session-id"];
+      const sessionId =
+        typeof rawId === "string" && UUID_RE.test(rawId) ? rawId : undefined;
       const reqAuth = (req as any).auth as AuthInfo | undefined;
 
       if (sessionId && sessions.has(sessionId)) {
@@ -129,6 +130,12 @@ export function createTransportHandlers(
         const transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
           onsessioninitialized: (id: string) => {
+            // Re-check cap atomically at registration time
+            if (sessions.size >= MAX_SESSIONS) {
+              logger.warn("Session cap exceeded at registration", { id });
+              return; // timer never set — sweeper will not find it either
+            }
+
             const timer = setTimeout(() => {
               expireSession(id, "inactivity");
             }, SESSION_TTL_MS);
@@ -142,16 +149,28 @@ export function createTransportHandlers(
           },
         });
 
+        // Inline cleanup — transport is already closing, so do NOT call close() again
         transport.onclose = () => {
           const id = transport.sessionId;
           if (id) {
-            removeSession(id);
+            const e = sessions.get(id);
+            if (e) {
+              clearTimeout(e.timer);
+              sessions.delete(id);
+            }
           }
         };
 
         const server = serverFactory();
         await server.connect(transport);
-        await transport.handleRequest(req, res, req.body);
+        try {
+          await transport.handleRequest(req, res, req.body);
+        } catch (err) {
+          // If handleRequest fails after session was registered, clean up
+          const id = transport.sessionId;
+          if (id) expireSession(id, "init-error");
+          throw err;
+        }
         return;
       }
 
@@ -161,7 +180,9 @@ export function createTransportHandlers(
     },
 
     async handleGet(req: Request, res: Response): Promise<void> {
-      const sessionId = req.headers["mcp-session-id"] as string | undefined;
+      const rawId = req.headers["mcp-session-id"];
+      const sessionId =
+        typeof rawId === "string" && UUID_RE.test(rawId) ? rawId : undefined;
 
       if (sessionId && sessions.has(sessionId)) {
         const entry = sessions.get(sessionId)!;
@@ -186,7 +207,9 @@ export function createTransportHandlers(
     },
 
     async handleDelete(req: Request, res: Response): Promise<void> {
-      const sessionId = req.headers["mcp-session-id"] as string | undefined;
+      const rawId = req.headers["mcp-session-id"];
+      const sessionId =
+        typeof rawId === "string" && UUID_RE.test(rawId) ? rawId : undefined;
 
       if (sessionId && sessions.has(sessionId)) {
         const entry = sessions.get(sessionId)!;
