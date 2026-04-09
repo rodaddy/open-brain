@@ -29,9 +29,15 @@ export function registerFindPerson(server: McpServer, deps: ToolDeps): void {
           .number()
           .int()
           .min(1)
-          .max(20)
+          .max(250)
           .optional()
           .describe("Maximum results to return (default 5)"),
+        offset: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe("Number of results to skip for pagination (default 0)"),
       },
       annotations: {
         title: "Find Person",
@@ -56,17 +62,23 @@ export function registerFindPerson(server: McpServer, deps: ToolDeps): void {
 
       const mode = args.mode ?? "name";
       const limit = args.limit ?? 5;
+      const offset = args.offset ?? 0;
 
       if (mode === "semantic") {
-        return handleSemanticSearch(deps, args.query, limit);
+        return handleSemanticSearch(deps, args.query, limit, offset);
       }
 
-      return handleNameSearch(deps, args.query, limit);
+      return handleNameSearch(deps, args.query, limit, offset);
     },
   );
 }
 
-async function handleNameSearch(deps: ToolDeps, query: string, limit: number) {
+async function handleNameSearch(
+  deps: ToolDeps,
+  query: string,
+  limit: number,
+  offset: number,
+) {
   // Escape ILIKE special characters before wrapping with %
   const escaped = query.replace(/%/g, "\\%").replace(/_/g, "\\_");
 
@@ -74,9 +86,9 @@ async function handleNameSearch(deps: ToolDeps, query: string, limit: number) {
 FROM relationships
 WHERE person_name ILIKE $1 AND archived_at IS NULL
 ORDER BY warmth DESC NULLS LAST, last_contact DESC NULLS LAST
-LIMIT $2`;
+LIMIT $2 OFFSET $3`;
 
-  const { rows } = await deps.pool.query(sql, [`%${escaped}%`, limit]);
+  const { rows } = await deps.pool.query(sql, [`%${escaped}%`, limit, offset]);
 
   if (rows.length === 0) {
     return {
@@ -103,6 +115,7 @@ async function handleSemanticSearch(
   deps: ToolDeps,
   query: string,
   limit: number,
+  offset: number,
 ) {
   const embedding = await deps.embedFn(query);
   if (!embedding) {
@@ -122,9 +135,13 @@ async function handleSemanticSearch(
 FROM relationships
 WHERE embedding IS NOT NULL AND archived_at IS NULL
 ORDER BY distance ASC
-LIMIT $2`;
+LIMIT $2 OFFSET $3`;
 
-  const { rows } = await deps.pool.query(sql, [toSql(embedding), limit]);
+  const { rows } = await deps.pool.query(sql, [
+    toSql(embedding),
+    limit,
+    offset,
+  ]);
 
   if (rows.length === 0) {
     return {

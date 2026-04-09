@@ -95,9 +95,15 @@ export function registerSearchAll(server: McpServer, deps: ToolDeps): void {
           .number()
           .int()
           .min(1)
-          .max(50)
+          .max(250)
           .optional()
           .describe("Max results per source (default 10)"),
+        offset: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe("Number of results to skip for pagination (default 0)"),
         sources: z
           .enum(["all", "brain", "qmd"])
           .optional()
@@ -137,18 +143,24 @@ export function registerSearchAll(server: McpServer, deps: ToolDeps): void {
       }
 
       const limit = args.limit ?? 10;
+      const offset = args.offset ?? 0;
       const sources = (args.sources as "all" | "brain" | "qmd") ?? "all";
       const mode = (args.search_mode as SearchMode) ?? "hybrid";
       const tier = args.tier as Tier | undefined;
       const searchBrain = sources === "all" || sources === "brain";
       const searchQmdSource = sources === "all" || sources === "qmd";
 
+      // Over-fetch to cover offset + limit, then slice after merge
+      const totalNeeded = offset + limit;
+
       // Launch both searches in parallel
       const [brainResults, qmdResults] = await Promise.all([
         searchBrain
-          ? searchOB(deps, auth, args.query, limit, mode, tier)
+          ? searchOB(deps, auth, args.query, totalNeeded, mode, tier)
           : Promise.resolve([]),
-        searchQmdSource ? searchQmd(args.query, limit) : Promise.resolve([]),
+        searchQmdSource
+          ? searchQmd(args.query, totalNeeded)
+          : Promise.resolve([]),
       ]);
 
       // Reciprocal Rank Fusion: merge results from different scoring systems
@@ -167,7 +179,7 @@ export function registerSearchAll(server: McpServer, deps: ToolDeps): void {
       }
       const merged = withRrf
         .sort((a, b) => b.rrf - a.rrf)
-        .slice(0, limit)
+        .slice(offset, offset + limit)
         .map(({ rrf, ...rest }) => ({ ...rest, score: rrf }));
 
       return {

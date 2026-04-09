@@ -19,6 +19,24 @@ mcp2cli open-brain search_brain --params '{"query": "how we handle auth", "searc
 mcp2cli open-brain search_brain --params '{"query": "JWT token", "search_mode": "keyword"}'
 ```
 
+## Pagination
+
+All search/list tools support `offset` + `limit` (max 250 per page):
+
+```bash
+# Page through search results
+mcp2cli open-brain search_brain --params '{"query": "auth", "limit": 50}'
+mcp2cli open-brain search_brain --params '{"query": "auth", "limit": 50, "offset": 50}'
+
+# Page through list_recent (essential for bulk scans like dream cycle)
+mcp2cli open-brain list_recent --params '{"limit": 250, "days": 30}'
+mcp2cli open-brain list_recent --params '{"limit": 250, "offset": 250, "days": 30}'
+mcp2cli open-brain list_recent --params '{"limit": 250, "offset": 500, "days": 30}'
+
+# Federated search with pagination
+mcp2cli open-brain search_all --params '{"query": "deploy", "limit": 50, "offset": 50}'
+```
+
 ## Federated Search (search_all)
 
 `search_all` searches both Open Brain and qmd file index, merging results with RRF:
