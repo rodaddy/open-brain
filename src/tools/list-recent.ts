@@ -93,9 +93,15 @@ export function registerListRecent(server: McpServer, deps: ToolDeps): void {
           .number()
           .int()
           .min(1)
-          .max(100)
+          .max(250)
           .optional()
           .describe("Maximum entries to return (default 20)"),
+        offset: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe("Number of entries to skip for pagination (default 0)"),
         include_archived: z
           .boolean()
           .optional()
@@ -161,6 +167,7 @@ export function registerListRecent(server: McpServer, deps: ToolDeps): void {
 
       const days = args.days ?? 7;
       const limit = args.limit ?? 20;
+      const offset = args.offset ?? 0;
       const includeArchived = args.include_archived ?? false;
       const tier = args.tier as Tier | undefined;
 
@@ -170,16 +177,17 @@ export function registerListRecent(server: McpServer, deps: ToolDeps): void {
       );
 
       const unionSql = selects.join("\nUNION ALL\n");
-      const sql = `${unionSql}\nORDER BY created_at DESC\nLIMIT $2`;
+      const sql = `${unionSql}\nORDER BY created_at DESC\nLIMIT $2 OFFSET $3`;
 
       logger.info("list_recent_query", {
         tables: accessibleTables,
         days,
         limit,
+        offset,
         includeArchived,
       });
 
-      const { rows } = await deps.pool.query(sql, [days, limit]);
+      const { rows } = await deps.pool.query(sql, [days, limit, offset]);
 
       return {
         content: [

@@ -2,7 +2,7 @@
 name: brain
 description: Query, write, and manage your Open Brain knowledge base with automatic namespace resolution. USE WHEN logging thoughts, decisions, searching brain, session saves, or any OB interaction. All OB calls MUST go through this skill for proper namespace tagging.
 metadata:
-  version: 0.3.0
+  version: 0.4.0
   author: Rico
   source: https://github.com/rodaddy/open-brain
   category: utility
@@ -40,19 +40,36 @@ Before ANY write to OB, resolve the namespace. See [references/namespace-guide.m
 
 | Tool | Use For | Namespace Required |
 |------|---------|-------------------|
-| `search_brain` | Semantic search across all tables (supports `tier` filter) | Optional (filter) |
-| `search_all` | Federated OB + qmd search (supports `tier` filter) | Optional (filter) |
-| `find_person` | Lookup people by name or context | No |
+| `search_brain` | Semantic search across all tables (supports `tier`, `offset`) | Optional (filter) |
+| `search_all` | Federated OB + qmd search (supports `tier`, `offset`) | Optional (filter) |
+| `find_person` | Lookup people by name or context (supports `offset`) | No |
 | `log_thought` | Save a new thought/learning/note | **Yes** |
 | `log_decision` | Record a decision with rationale | **Yes** |
 | `session_save` | Save session summary | **Yes** |
 | `session_load` | Load previous session context | No |
-| `list_recent` | Browse recent entries (supports `tier` filter) | Optional (filter) |
+| `list_recent` | Browse recent entries (supports `tier`, `offset`) | Optional (filter) |
 | `update_entry` | Modify existing entry | No (inherits) |
 | `rate_entry` | Rate entry usefulness | No |
 | `archive_entry` | Soft-delete entry | No |
 | `set_tier` | Set entry cognitive tier (hot/warm/cold) | No |
 | `upsert_person` | Create/update contact | **Yes** |
+
+## Pagination
+
+All read tools support `offset` (skip N entries) and `limit` (max 250 per page, default varies by tool). Use these together to page through large result sets:
+
+```bash
+# Page 1: first 100 entries
+mcp2cli open-brain list_recent --params '{"limit": 100, "days": 30}'
+
+# Page 2: next 100
+mcp2cli open-brain list_recent --params '{"limit": 100, "offset": 100, "days": 30}'
+
+# Page 3: next 100
+mcp2cli open-brain list_recent --params '{"limit": 100, "offset": 200, "days": 30}'
+```
+
+This applies to `list_recent`, `search_brain`, `search_all`, and `find_person`.
 
 ## Graceful Degradation
 

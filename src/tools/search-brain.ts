@@ -130,6 +130,7 @@ async function vectorSearch(
   embedding: number[],
   fetchLimit: number,
   tier?: Tier,
+  offset = 0,
 ): Promise<SearchRow[]> {
   const ctes = accessibleTables.map((t) => buildTableCTE(t, tier));
   const cteNames = accessibleTables.map((t) => `${t}_results`);
@@ -145,9 +146,13 @@ SELECT * FROM (
 ${unionAll}
 ) AS combined
 ORDER BY (distance * 0.8 + (1.0 - COALESCE(usefulness, 0.5)) * 0.2) ASC
-LIMIT $2`;
+LIMIT $2 OFFSET $3`;
 
-  const { rows } = await deps.pool.query(sql, [toSql(embedding), fetchLimit]);
+  const { rows } = await deps.pool.query(sql, [
+    toSql(embedding),
+    fetchLimit,
+    offset,
+  ]);
   return rows as SearchRow[];
 }
 
@@ -157,6 +162,7 @@ async function ftsSearch(
   query: string,
   fetchLimit: number,
   tier?: Tier,
+  offset = 0,
 ): Promise<SearchRow[]> {
   const ctes = accessibleTables.map((t) => buildFtsCTE(t, tier));
   const cteNames = accessibleTables.map((t) => `${t}_fts`);
@@ -172,9 +178,9 @@ SELECT * FROM (
 ${unionAll}
 ) AS combined
 ORDER BY fts_rank DESC
-LIMIT $2`;
+LIMIT $2 OFFSET $3`;
 
-  const { rows } = await deps.pool.query(sql, [query, fetchLimit]);
+  const { rows } = await deps.pool.query(sql, [query, fetchLimit, offset]);
   return rows as SearchRow[];
 }
 
@@ -282,9 +288,10 @@ export async function executeSearch(
   limit: number,
   mode: SearchMode = "hybrid",
   tier?: Tier,
+  offset = 0,
 ): Promise<SearchRow[]> {
   if (mode === "keyword") {
-    return ftsSearch(deps, accessibleTables, query, limit, tier);
+    return ftsSearch(deps, accessibleTables, query, limit, tier, offset);
   }
 
   // Vector and hybrid both need an embedding
@@ -295,24 +302,27 @@ export async function executeSearch(
       logger.warn("embedding_failed_fallback_fts", {
         query: query.slice(0, 50),
       });
-      return ftsSearch(deps, accessibleTables, query, limit, tier);
+      return ftsSearch(deps, accessibleTables, query, limit, tier, offset);
     }
     // In vector mode, null embedding is a hard failure -- signal via thrown error
     throw new Error("Failed to generate query embedding");
   }
 
   if (mode === "vector") {
-    return vectorSearch(deps, accessibleTables, embedding, limit, tier);
+    return vectorSearch(deps, accessibleTables, embedding, limit, tier, offset);
   }
 
   // Hybrid: run both in parallel, merge with RRF
-  const fetchLimit = limit * HYBRID_FETCH_MULTIPLIER;
+  // Over-fetch to cover offset + limit, then slice after merge
+  const totalNeeded = offset + limit;
+  const fetchLimit = totalNeeded * HYBRID_FETCH_MULTIPLIER;
   const [vectorRows, ftsRows] = await Promise.all([
     vectorSearch(deps, accessibleTables, embedding, fetchLimit, tier),
     ftsSearch(deps, accessibleTables, query, fetchLimit, tier),
   ]);
 
-  return rrfMerge(vectorRows, ftsRows, limit);
+  const merged = rrfMerge(vectorRows, ftsRows, totalNeeded);
+  return merged.slice(offset);
 }
 
 export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
@@ -337,9 +347,15 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
           .number()
           .int()
           .min(1)
-          .max(50)
+          .max(250)
           .optional()
           .describe("Maximum results to return (default 10)"),
+        offset: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe("Number of results to skip for pagination (default 0)"),
         search_mode: z
           .enum(["hybrid", "vector", "keyword"])
           .optional()
@@ -405,6 +421,7 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
       }
 
       const limit = args.limit ?? 10;
+      const offset = args.offset ?? 0;
       const mode = (args.search_mode as SearchMode) ?? "hybrid";
       const tier = args.tier as Tier | undefined;
 
@@ -417,6 +434,7 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
           limit,
           mode,
           tier,
+          offset,
         );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

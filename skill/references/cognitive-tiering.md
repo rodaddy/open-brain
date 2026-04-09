@@ -76,6 +76,25 @@ The dream cycle is a periodic process that adjusts tiers based on access pattern
 5. **Prune** -- cold entries older than 60 days with no rescues -> `discarded_entries` table
 6. **Report** -- log what changed for review
 
+### Scanning All Entries
+
+Use `list_recent` with `offset` pagination to scan the full inventory (max 250 per page):
+
+```bash
+# Scan all entries from last 30 days, page by page
+mcp2cli open-brain list_recent --params '{"limit": 250, "days": 30}'
+mcp2cli open-brain list_recent --params '{"limit": 250, "offset": 250, "days": 30}'
+mcp2cli open-brain list_recent --params '{"limit": 250, "offset": 500, "days": 30}'
+# Continue until empty response
+```
+
+Filter by tier to focus on specific maintenance tasks:
+
+```bash
+# Find all cold entries for consolidation review
+mcp2cli open-brain list_recent --params '{"limit": 250, "tier": "cold", "days": 60}'
+```
+
 ### Schema Support
 
 The database already has the schema for full dream cycle support:
