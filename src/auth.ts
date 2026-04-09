@@ -16,6 +16,7 @@ export function buildTokenMap(
 ): Map<string, AuthInfo> {
   const map = new Map<string, AuthInfo>();
 
+  // Load role-based tokens (AUTH_TOKEN_ADMIN, AUTH_TOKEN_AGENT, etc.)
   for (const { envKey, role } of ROLE_ENV_KEYS) {
     const token = env[envKey];
     if (!token) {
@@ -23,6 +24,20 @@ export function buildTokenMap(
       continue;
     }
     map.set(token, { role, clientId: role });
+  }
+
+  // Load per-user tokens (AUTH_TOKEN_USER_<NAME>=<role>:<token>)
+  for (const [key, value] of Object.entries(env)) {
+    if (!key.startsWith("AUTH_TOKEN_USER_") || !value) continue;
+    const colonIdx = value.indexOf(":");
+    if (colonIdx === -1) {
+      logger.warn(`Invalid user token format (expected role:token)`, { key });
+      continue;
+    }
+    const role = value.slice(0, colonIdx) as Role;
+    const token = value.slice(colonIdx + 1);
+    const userName = key.replace("AUTH_TOKEN_USER_", "").toLowerCase();
+    map.set(token, { role, clientId: userName });
   }
 
   return map;
