@@ -4,8 +4,6 @@
 -- 3. Rebuild search_vector to include tags in FTS
 -- 4. GIN indexes on extracted_metadata for JSONB querying
 
-BEGIN;
-
 -- 1. External session_id for session-wrap integration
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS session_id TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_session_id
@@ -84,9 +82,4 @@ CREATE INDEX IF NOT EXISTS idx_decisions_extracted_meta
   ON decisions USING GIN(extracted_metadata jsonb_path_ops)
   WHERE extracted_metadata IS NOT NULL;
 
--- 5. Record migration
-INSERT INTO _migrations (filename, applied_at)
-VALUES ('007_search_improvements.sql', now())
-ON CONFLICT DO NOTHING;
-
-COMMIT;
+-- Migration recording handled by the migration runner
