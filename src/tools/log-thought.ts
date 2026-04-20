@@ -39,7 +39,10 @@ export function registerLogThought(server: McpServer, deps: ToolDeps): void {
       }
 
       const hash = contentHash(args.content);
-      const embedding = await deps.embedFn(args.content);
+      const textToEmbed = args.tags?.length
+        ? `${args.content}\n${args.tags.join(" ")}`
+        : args.content;
+      const embedding = await deps.embedFn(textToEmbed);
       logger.info("tool_embedding", {
         tool: "log_thought",
         embedded: !!embedding,

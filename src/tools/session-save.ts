@@ -58,7 +58,12 @@ export function registerSessionSave(server: McpServer, deps: ToolDeps): void {
       }
 
       const hash = contentHash(args.summary + "|" + new Date().toISOString());
-      const embedding = await deps.embedFn(args.summary);
+      const embedParts = [args.summary];
+      if (args.key_decisions?.length)
+        embedParts.push(args.key_decisions.join(". "));
+      if (args.next_steps?.length) embedParts.push(args.next_steps.join(". "));
+      if (args.blockers?.length) embedParts.push(args.blockers.join(". "));
+      const embedding = await deps.embedFn(embedParts.join("\n"));
       logger.info("tool_embedding", {
         tool: "session_save",
         embedded: !!embedding,

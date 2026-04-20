@@ -45,7 +45,11 @@ export function registerLogDecision(server: McpServer, deps: ToolDeps): void {
         };
       }
 
-      const textToEmbed = `${args.title}\n${args.rationale}`;
+      const parts = [args.title, args.rationale];
+      if (args.context) parts.push(args.context);
+      if (args.alternatives?.length) parts.push(args.alternatives.join(", "));
+      if (args.tags?.length) parts.push(args.tags.join(" "));
+      const textToEmbed = parts.join("\n");
       const hash = contentHash(textToEmbed);
       const embedding = await deps.embedFn(textToEmbed);
       logger.info("tool_embedding", {

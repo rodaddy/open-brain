@@ -72,6 +72,22 @@ export const TIER_BOOST: Record<Tier, number> = {
   cold: -0.2,
 };
 
+/** Per-table importance weights: primary content > summaries */
+const TABLE_WEIGHT: Record<string, number> = {
+  thought: 1.2,
+  decision: 1.2,
+  relationship: 1.0,
+  project: 0.9,
+  session: 0.8,
+};
+
+/** Gentle recency factor: today=1.0, 30d=0.97, 90d=0.92, 365d=0.73 */
+function recencyFactor(createdAt: string): number {
+  const ageDays =
+    (Date.now() - new Date(createdAt).getTime()) / (1000 * 60 * 60 * 24);
+  return 1 / (1 + Math.max(0, ageDays) * 0.001);
+}
+
 export interface SearchRow {
   source_type: string;
   id: string;
@@ -170,7 +186,7 @@ ${ctes.join(",\n")}
 SELECT * FROM (
 ${unionAll}
 ) AS combined
-ORDER BY (distance * 0.8 + (1.0 - COALESCE(usefulness, 0.5)) * 0.2) ASC
+ORDER BY (distance * 0.7 + (1.0 - COALESCE(usefulness, 0.5)) * 0.15 + EXTRACT(EPOCH FROM (NOW() - created_at)) / 86400.0 * 0.0001) ASC
 LIMIT $2 OFFSET $3`;
 
   const { rows } = await deps.pool.query(sql, [
@@ -240,10 +256,12 @@ function rrfMerge(
   }
 
   return Array.from(scoreMap.values())
-    .map(({ row, rrf }) => ({
-      row,
-      rrf: Math.max(0, rrf + TIER_BOOST[(row.tier ?? "warm") as Tier]),
-    }))
+    .map(({ row, rrf }) => {
+      const tier = TIER_BOOST[(row.tier ?? "warm") as Tier];
+      const weight = TABLE_WEIGHT[row.source_type] ?? 1.0;
+      const recency = recencyFactor(row.created_at);
+      return { row, rrf: Math.max(0, (rrf + tier) * weight * recency) };
+    })
     .sort((a, b) => b.rrf - a.rrf)
     .slice(0, limit)
     .map(({ row }) => row);
