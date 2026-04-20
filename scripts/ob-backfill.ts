@@ -474,10 +474,15 @@ async function processSession(
   dryRun: boolean,
 ): Promise<boolean> {
   const content = await readFile(jsonlPath, "utf-8");
-  const lines = content
-    .split("\n")
-    .filter((l) => l.trim())
-    .map((l) => JSON.parse(l) as JsonlEvent);
+  const lines: JsonlEvent[] = [];
+  for (const l of content.split("\n")) {
+    if (!l.trim()) continue;
+    try {
+      lines.push(JSON.parse(l) as JsonlEvent);
+    } catch {
+      // skip malformed JSONL lines
+    }
+  }
 
   const humanCount = lines.filter(
     (l) => l.type === "human" || l.type === "user",
