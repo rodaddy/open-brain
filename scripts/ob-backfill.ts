@@ -3,7 +3,7 @@
  * ob-backfill: Extract sessions from Claude Code JSONL transcripts and push to OB.
  *
  * Usage:
- *   bun scripts/ob-backfill.ts [--dir <path>] [--project <name>] [--dry-run] [--limit <n>]
+ *   bun scripts/ob-backfill.ts [--dir <path>] [--project <name>] [--dry-run] [--limit <n>] [--retry]
  *
  * Reads main conversation + subagent meta + file snapshots + history.jsonl dates.
  * Uses LLM to extract session summaries/decisions/learnings.
@@ -11,9 +11,10 @@
  */
 
 import { parseArgs } from "util";
-import { readdir, readFile, stat } from "fs/promises";
-import { join, basename } from "path";
+import { readdir, readFile, stat, writeFile, mkdir } from "fs/promises";
+import { join, basename, dirname } from "path";
 import { createHash } from "crypto";
+import { existsSync } from "fs";
 
 const CLAUDE_PROJECTS_DIR =
   process.env.CLAUDE_PROJECTS_DIR ??
@@ -23,6 +24,56 @@ const HISTORY_FILE = join(process.env.HOME ?? "", ".claude/history.jsonl");
 
 const LITELLM_URL = process.env.LITELLM_URL ?? "http://10.71.20.53:4000";
 const EXTRACTION_MODEL = process.env.EXTRACTION_MODEL ?? "sonnet";
+
+/** Failed sessions queue -- persisted locally for retry on next session-start/wrap */
+const FAILED_QUEUE_PATH =
+  process.env.BACKFILL_FAILED_QUEUE ??
+  join(process.env.HOME ?? "", ".openclaw/workspace/.ob-backfill-failed.json");
+
+interface FailedEntry {
+  path: string;
+  project: string;
+  reason: string;
+  timestamp: string;
+}
+
+async function loadFailedQueue(): Promise<FailedEntry[]> {
+  try {
+    const raw = await readFile(FAILED_QUEUE_PATH, "utf-8");
+    return JSON.parse(raw) as FailedEntry[];
+  } catch {
+    return [];
+  }
+}
+
+async function saveFailedQueue(queue: FailedEntry[]): Promise<void> {
+  await mkdir(dirname(FAILED_QUEUE_PATH), { recursive: true });
+  await writeFile(FAILED_QUEUE_PATH, JSON.stringify(queue, null, 2));
+}
+
+async function appendToFailedQueue(
+  filePath: string,
+  project: string,
+  reason: string,
+): Promise<void> {
+  const queue = await loadFailedQueue();
+  // Dedup by path
+  const existing = queue.findIndex((e) => e.path === filePath);
+  if (existing >= 0) queue.splice(existing, 1);
+  queue.push({
+    path: filePath,
+    project,
+    reason,
+    timestamp: new Date().toISOString(),
+  });
+  await saveFailedQueue(queue);
+}
+
+async function removeFromFailedQueue(filePath: string): Promise<void> {
+  const queue = await loadFailedQueue();
+  const filtered = queue.filter((e) => e.path !== filePath);
+  if (filtered.length !== queue.length) await saveFailedQueue(filtered);
+}
 
 interface SessionExtract {
   summary: string;
@@ -455,10 +506,18 @@ async function processSession(
   );
   if (!extract || !extract.summary) {
     console.log(`  Skipped: extraction returned empty`);
+    await appendToFailedQueue(jsonlPath, project, "extraction returned empty or LLM unavailable");
     return false;
   }
 
-  return pushToOB(extract, sessionId, dryRun);
+  const pushed = await pushToOB(extract, sessionId, dryRun);
+  if (pushed) {
+    // Successfully pushed -- remove from failed queue if it was there
+    await removeFromFailedQueue(jsonlPath);
+  } else {
+    await appendToFailedQueue(jsonlPath, project, "OB push failed");
+  }
+  return pushed;
 }
 
 // --- Main ---
@@ -470,6 +529,7 @@ async function main() {
       dir: { type: "string", default: CLAUDE_PROJECTS_DIR },
       project: { type: "string" },
       "dry-run": { type: "boolean", default: false },
+      retry: { type: "boolean", default: false },
       limit: { type: "string", default: "10" },
     },
   });
@@ -477,7 +537,48 @@ async function main() {
   const projectsDir = values.dir!;
   const filterProject = values.project;
   const dryRun = values["dry-run"]!;
+  const retryMode = values.retry!;
   const limit = parseInt(values.limit!, 10);
+
+  // Retry mode: re-process only previously failed sessions
+  if (retryMode) {
+    const queue = await loadFailedQueue();
+    if (queue.length === 0) {
+      console.log("ob-backfill: no failed sessions to retry.");
+      return;
+    }
+    console.log(`ob-backfill: retrying ${queue.length} failed session(s)...\n`);
+    const historyIndex = await loadHistoryIndex();
+    let retryPushed = 0;
+    for (const entry of queue) {
+      if (!existsSync(entry.path)) {
+        console.log(`  ${basename(entry.path)} -- file no longer exists, removing from queue`);
+        await removeFromFailedQueue(entry.path);
+        continue;
+      }
+      const sessionUuid = basename(entry.path, ".jsonl");
+      const parentDir = dirname(entry.path);
+      const sessionDir = existsSync(join(parentDir, sessionUuid))
+        ? join(parentDir, sessionUuid)
+        : null;
+      const historyInfo = historyIndex.get(sessionUuid);
+      console.log(`  Retrying: ${basename(entry.path)} (${entry.project})`);
+      const success = await processSession(
+        entry.path,
+        sessionDir,
+        entry.project,
+        historyInfo,
+        dryRun,
+      );
+      if (success) retryPushed++;
+    }
+    const remaining = await loadFailedQueue();
+    console.log(`\n--- Retry Summary ---`);
+    console.log(`Retried: ${queue.length}`);
+    console.log(`Pushed: ${retryPushed}`);
+    console.log(`Still failing: ${remaining.length}`);
+    return;
+  }
 
   console.log(`ob-backfill: scanning ${projectsDir}`);
   if (dryRun) console.log("  MODE: dry-run (no OB writes)");
@@ -535,10 +636,21 @@ async function main() {
     }
   }
 
+  // Report failed queue status
+  const failedQueue = await loadFailedQueue();
+
   console.log(`\n--- Summary ---`);
   console.log(`Processed: ${totalProcessed}`);
   console.log(`Pushed to OB: ${totalPushed}`);
   console.log(`Skipped (too short or extraction failed): ${totalSkipped}`);
+  if (failedQueue.length > 0) {
+    console.log(`\n⚠️  ${failedQueue.length} session(s) in failed queue (${FAILED_QUEUE_PATH})`);
+    console.log(`   Run with --retry to re-process them.`);
+    for (const entry of failedQueue.slice(0, 5)) {
+      console.log(`   - ${basename(entry.path)} (${entry.project}): ${entry.reason}`);
+    }
+    if (failedQueue.length > 5) console.log(`   ... and ${failedQueue.length - 5} more`);
+  }
   if (dryRun) console.log("(dry-run mode — nothing was written)");
 }
 
