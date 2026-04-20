@@ -143,9 +143,11 @@ describe("log_thought", () => {
   });
 
   describe("duplicate content (content_hash conflict)", () => {
-    it("returns Duplicate message without isError", async () => {
+    it("returns merged: true when upsert merges tags on conflict", async () => {
       const mockPool = {
-        query: async () => ({ rows: [] }), // Empty rows = ON CONFLICT DO NOTHING
+        query: async () => ({
+          rows: [{ id: "existing-uuid", is_new: false }],
+        }),
       };
       const mockEmbed = createMockEmbed();
       const auth: AuthInfo = { role: "admin", clientId: "test-client" };
@@ -164,7 +166,9 @@ describe("log_thought", () => {
 
         expect(result.isError).toBeFalsy();
         const text = (result.content as any)[0].text;
-        expect(text).toContain("Duplicate");
+        const parsed = JSON.parse(text);
+        expect(parsed.merged).toBe(true);
+        expect(parsed.id).toBe("existing-uuid");
       } finally {
         await cleanup();
       }

@@ -40,7 +40,12 @@ const CONTENT_PREVIEW: Record<Table, string> = {
   decisions: "d.title || ': ' || COALESCE(d.rationale, '')",
   relationships: "r.person_name || ': ' || COALESCE(r.context, '')",
   projects: "p.name || ': ' || COALESCE(p.description, '')",
-  sessions: "COALESCE(s.project || ': ', '') || LEFT(s.summary, 200)",
+  sessions:
+    "COALESCE(s.project || ': ', '') || LEFT(s.summary, 300)" +
+    " || CASE WHEN s.key_decisions IS NOT NULL AND array_length(s.key_decisions, 1) > 0" +
+    " THEN E'\\nDecisions: ' || immutable_array_to_string(s.key_decisions, '; ') ELSE '' END" +
+    " || CASE WHEN s.next_steps IS NOT NULL AND array_length(s.next_steps, 1) > 0" +
+    " THEN E'\\nNext: ' || immutable_array_to_string(s.next_steps, '; ') ELSE '' END",
 };
 
 /** Table alias used in CTE SELECTs */
@@ -77,6 +82,13 @@ export interface SearchRow {
   tier?: string;
   distance?: number;
   fts_rank?: number;
+  access_count?: number;
+  extracted_metadata?: {
+    topics?: string[];
+    people?: string[];
+    action_items?: string[];
+    dates?: string[];
+  };
 }
 
 export function buildTableCTE(table: Table, tier?: Tier): string {
@@ -95,7 +107,9 @@ export function buildTableCTE(table: Table, tier?: Tier): string {
     ${alias}.created_at,
     ${alias}.tier,
     ${alias}.embedding <=> (SELECT emb FROM query_embedding) AS distance,
-    COALESCE(${alias}.usefulness_score, 0.5) AS usefulness
+    COALESCE(${alias}.usefulness_score, 0.5) AS usefulness,
+    COALESCE(${alias}.access_count, 0) AS access_count,
+    ${alias}.extracted_metadata
   FROM ${table} ${alias}
   WHERE ${alias}.embedding IS NOT NULL AND ${alias}.archived_at IS NULL${tierFilter}
 )`;
@@ -117,7 +131,9 @@ function buildFtsCTE(table: Table, tier?: Tier): string {
     ${alias}.created_at,
     ${alias}.tier,
     ts_rank_cd(${alias}.search_vector, plainto_tsquery('english', (SELECT q FROM fts_query))) AS fts_rank,
-    COALESCE(${alias}.usefulness_score, 0.5) AS usefulness
+    COALESCE(${alias}.usefulness_score, 0.5) AS usefulness,
+    COALESCE(${alias}.access_count, 0) AS access_count,
+    ${alias}.extracted_metadata
   FROM ${table} ${alias}
   WHERE ${alias}.search_vector @@ plainto_tsquery('english', (SELECT q FROM fts_query))
     AND ${alias}.archived_at IS NULL${tierFilter}
@@ -217,7 +233,7 @@ function rrfMerge(
   return Array.from(scoreMap.values())
     .map(({ row, rrf }) => ({
       row,
-      rrf: rrf + TIER_BOOST[(row.tier ?? "warm") as Tier],
+      rrf: Math.max(0, rrf + TIER_BOOST[(row.tier ?? "warm") as Tier]),
     }))
     .sort((a, b) => b.rrf - a.rrf)
     .slice(0, limit)

@@ -48,8 +48,15 @@ export function registerLogThought(server: McpServer, deps: ToolDeps): void {
       const { rows } = await deps.pool.query(
         `INSERT INTO thoughts (content, tags, source, created_by, embedding, content_hash, embedded_at, embedding_model)
          VALUES ($1, $2, 'mcp', $3, $4, $5, $6, $7)
-         ON CONFLICT (content_hash) WHERE content_hash IS NOT NULL DO NOTHING
-         RETURNING id`,
+         ON CONFLICT (content_hash) WHERE content_hash IS NOT NULL
+         DO UPDATE SET
+           tags = (
+             SELECT COALESCE(array_agg(DISTINCT tag), '{}')
+             FROM unnest(thoughts.tags || EXCLUDED.tags) AS tag
+             WHERE tag IS NOT NULL
+           ),
+           updated_at = NOW()
+         RETURNING id, (xmax = 0) AS is_new`,
         [
           args.content,
           args.tags ?? [],
@@ -61,45 +68,37 @@ export function registerLogThought(server: McpServer, deps: ToolDeps): void {
         ],
       );
 
-      if (rows.length === 0) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: "Duplicate: thought with identical content already exists",
-            },
-          ],
-        };
-      }
+      const entryId = rows[0].id as string;
+      const isNew = rows[0].is_new as boolean;
 
-      const insertedId = rows[0].id as string;
-
-      // Fire-and-forget: extract metadata and enrich in background
-      extractMetadata(args.content)
-        .then((extracted) => {
-          if (!extracted) return;
-          const enrichedTags = mergeTags(args.tags ?? [], extracted);
-          deps.pool
-            .query(
-              `UPDATE thoughts SET tags = $1, extracted_metadata = $2 WHERE id = $3`,
-              [enrichedTags, JSON.stringify(extracted), insertedId],
-            )
-            .catch((err: unknown) => {
-              logger.warn("extraction_update_error", {
-                id: insertedId,
-                error: err instanceof Error ? err.message : String(err),
+      if (isNew) {
+        extractMetadata(args.content)
+          .then((extracted) => {
+            if (!extracted) return;
+            const enrichedTags = mergeTags(args.tags ?? [], extracted);
+            deps.pool
+              .query(
+                `UPDATE thoughts SET tags = $1, extracted_metadata = $2 WHERE id = $3`,
+                [enrichedTags, JSON.stringify(extracted), entryId],
+              )
+              .catch((err: unknown) => {
+                logger.warn("extraction_update_error", {
+                  id: entryId,
+                  error: err instanceof Error ? err.message : String(err),
+                });
               });
-            });
-        })
-        .catch(() => {});
+          })
+          .catch(() => {});
+      }
 
       return {
         content: [
           {
             type: "text" as const,
             text: JSON.stringify({
-              id: insertedId,
+              id: entryId,
               embedded: !!embedding,
+              merged: !isNew,
             }),
           },
         ],
