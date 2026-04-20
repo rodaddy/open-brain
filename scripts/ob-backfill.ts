@@ -142,13 +142,13 @@ function extractConversation(lines: JsonlEvent[]): {
     if (event.type === "human" || event.type === "user") {
       const content = event.message?.content;
       if (content) {
-        const text = extractTextContent(content).slice(0, 500);
+        const text = extractTextContent(content).slice(0, 2000);
         if (text) parts.push(`USER: ${text}`);
       }
     } else if (event.type === "assistant") {
       const content = event.message?.content;
       if (content) {
-        const text = extractTextContent(content).slice(0, 500);
+        const text = extractTextContent(content).slice(0, 2000);
         if (text) parts.push(`ASSISTANT: ${text}`);
       }
     } else if (event.type === "file-history-snapshot") {
