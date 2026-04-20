@@ -5,8 +5,9 @@
  * Usage:
  *   bun scripts/ob-backfill.ts [--dir <path>] [--project <name>] [--dry-run] [--limit <n>]
  *
- * Scans JSONL transcripts, uses LLM to extract session summaries/decisions/learnings,
- * pushes to OB with deterministic session_ids (idempotent — safe to re-run).
+ * Reads main conversation + subagent meta + file snapshots + history.jsonl dates.
+ * Uses LLM to extract session summaries/decisions/learnings.
+ * Pushes to OB with deterministic session_ids (idempotent — safe to re-run).
  */
 
 import { parseArgs } from "util";
@@ -18,8 +19,10 @@ const CLAUDE_PROJECTS_DIR =
   process.env.CLAUDE_PROJECTS_DIR ??
   join(process.env.HOME ?? "", ".claude/projects");
 
+const HISTORY_FILE = join(process.env.HOME ?? "", ".claude/history.jsonl");
+
 const LITELLM_URL = process.env.LITELLM_URL ?? "http://10.71.20.53:4000";
-const EXTRACTION_MODEL = process.env.EXTRACTION_MODEL ?? "flash";
+const EXTRACTION_MODEL = process.env.EXTRACTION_MODEL ?? "sonnet";
 
 interface SessionExtract {
   summary: string;
@@ -28,7 +31,6 @@ interface SessionExtract {
   next_steps: string[];
   blockers: string[];
   project: string;
-  branch?: string;
   date?: string;
 }
 
@@ -44,62 +46,197 @@ interface JsonlEvent {
   timestamp?: string;
 }
 
+interface HistoryEntry {
+  display: string;
+  project: string;
+  sessionId: string;
+  timestamp: number;
+}
+
+interface SubagentMeta {
+  agentType: string;
+  description: string;
+}
+
+// --- History index: sessionId → date + first prompt ---
+
+async function loadHistoryIndex(): Promise<
+  Map<string, { date: string; firstPrompt: string }>
+> {
+  const index = new Map<string, { date: string; firstPrompt: string }>();
+  try {
+    const content = await readFile(HISTORY_FILE, "utf-8");
+    for (const line of content.split("\n")) {
+      if (!line.trim()) continue;
+      const entry = JSON.parse(line) as HistoryEntry;
+      if (!entry.sessionId) continue;
+      if (!index.has(entry.sessionId)) {
+        const date = new Date(entry.timestamp).toISOString().split("T")[0]!;
+        index.set(entry.sessionId, { date, firstPrompt: entry.display });
+      }
+    }
+  } catch {
+    // history.jsonl may not exist
+  }
+  return index;
+}
+
+// --- Project name parsing ---
+
 function parseProjectName(dirName: string): string {
   const match = dirName.match(/-Volumes-ThunderBolt-Development-(.+)/);
   if (match) return match[1]!;
   return dirName.replace(/^-/, "");
 }
 
-function extractConversation(lines: JsonlEvent[]): string {
+// --- Subagent meta loading ---
+
+async function loadSubagentMetas(sessionDir: string): Promise<string[]> {
+  const subagentsDir = join(sessionDir, "subagents");
+  try {
+    const files = await readdir(subagentsDir);
+    const metas: string[] = [];
+    for (const f of files) {
+      if (!f.endsWith(".meta.json")) continue;
+      try {
+        const raw = await readFile(join(subagentsDir, f), "utf-8");
+        const meta = JSON.parse(raw) as SubagentMeta;
+        metas.push(`[${meta.agentType}] ${meta.description}`);
+      } catch {
+        // skip malformed
+      }
+    }
+    return metas;
+  } catch {
+    return [];
+  }
+}
+
+// --- Conversation extraction ---
+
+function extractTextContent(
+  content: string | Array<{ type: string; text?: string }>,
+): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter((c) => c.type === "text" && c.text)
+      .map((c) => c.text!)
+      .join("\n");
+  }
+  return "";
+}
+
+function extractConversation(lines: JsonlEvent[]): {
+  text: string;
+  filesChanged: string[];
+  branch?: string;
+} {
   const parts: string[] = [];
+  const filesChanged = new Set<string>();
   let branch: string | undefined;
-  let cwd: string | undefined;
 
   for (const event of lines) {
     if (event.gitBranch && !branch) branch = event.gitBranch;
-    if (event.cwd && !cwd) cwd = event.cwd;
 
     if (event.type === "human" || event.type === "user") {
       const content = event.message?.content;
-      if (typeof content === "string") {
-        parts.push(`USER: ${content.slice(0, 500)}`);
-      } else if (Array.isArray(content)) {
-        for (const c of content) {
-          if (c.type === "text" && c.text) {
-            parts.push(`USER: ${c.text.slice(0, 500)}`);
-          }
-        }
+      if (content) {
+        const text = extractTextContent(content).slice(0, 500);
+        if (text) parts.push(`USER: ${text}`);
       }
     } else if (event.type === "assistant") {
       const content = event.message?.content;
-      if (typeof content === "string") {
-        parts.push(`ASSISTANT: ${content.slice(0, 500)}`);
-      } else if (Array.isArray(content)) {
-        for (const c of content) {
-          if (c.type === "text" && c.text) {
-            parts.push(`ASSISTANT: ${c.text.slice(0, 500)}`);
-          }
+      if (content) {
+        const text = extractTextContent(content).slice(0, 500);
+        if (text) parts.push(`ASSISTANT: ${text}`);
+      }
+    } else if (event.type === "file-history-snapshot") {
+      // Extract file paths from snapshots
+      const msg = event.message;
+      if (msg && typeof msg === "object") {
+        const content = (msg as Record<string, unknown>).content;
+        if (typeof content === "string" && content.includes("/")) {
+          // File paths often appear in content
+          const pathMatch = content.match(
+            /(?:\/[\w.-]+)+(?:\.(?:ts|js|sql|md|json|py|sh|yml|yaml))/g,
+          );
+          if (pathMatch) pathMatch.forEach((p) => filesChanged.add(p));
         }
       }
     }
   }
 
-  return parts.join("\n\n").slice(0, 12000);
+  // Smart sampling: first 3 turns for context, last 30% for outcomes, sample middle
+  const total = parts.length;
+  if (total <= 30) {
+    // Short session — include everything
+    return {
+      text: parts.join("\n\n").slice(0, 12000),
+      filesChanged: Array.from(filesChanged).slice(0, 20),
+      branch,
+    };
+  }
+
+  const head = parts.slice(0, 6); // first 3 exchanges for context
+  const tailStart = Math.floor(total * 0.7);
+  const tail = parts.slice(tailStart); // last 30% for outcomes
+  const midStart = Math.floor(total * 0.3);
+  const midEnd = Math.floor(total * 0.5);
+  const mid = parts.slice(midStart, midEnd); // middle 20% for core work
+
+  const sampled = [
+    "--- SESSION START ---",
+    ...head,
+    `--- MIDDLE (turns ${midStart}-${midEnd} of ${total}) ---`,
+    ...mid,
+    `--- FINAL SECTION (turns ${tailStart}-${total} of ${total}) ---`,
+    ...tail,
+  ];
+
+  return {
+    text: sampled.join("\n\n").slice(0, 14000),
+    filesChanged: Array.from(filesChanged).slice(0, 20),
+    branch,
+  };
 }
+
+// --- LLM extraction ---
 
 async function extractSession(
   conversation: string,
   project: string,
+  subagents: string[],
+  filesChanged: string[],
+  date?: string,
 ): Promise<SessionExtract | null> {
+  const uniqueHash = createHash("sha256")
+    .update(conversation.slice(0, 200))
+    .digest("hex")
+    .slice(0, 8);
+
+  const contextParts = [
+    `Project: ${project} [ref:${uniqueHash}]`,
+    date ? `Date: ${date}` : "",
+    subagents.length > 0
+      ? `Subagent work delegated:\n${subagents.map((s) => `- ${s}`).join("\n")}`
+      : "",
+    filesChanged.length > 0
+      ? `Files modified:\n${filesChanged.map((f) => `- ${f}`).join("\n")}`
+      : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
   const prompt = `You are extracting a structured session summary from a Claude Code transcript.
 
-Project: ${project}
+${contextParts}
 
 Extract:
-1. summary: 2-3 paragraph narrative of what was accomplished and why it matters
-2. key_decisions: array of decisions WITH rationale ("Chose X over Y because Z")
-3. learnings: array of gotchas, patterns, or solutions discovered
-4. next_steps: array of specific actionable items
+1. summary: 2-3 paragraph narrative of what was accomplished, why it matters, and what state things ended in. Include specific file names, tool names, and technical details. A future AI agent should understand the session from this summary alone.
+2. key_decisions: array of decisions WITH rationale ("Chose X over Y because Z"). Every session has at least one decision — if you can't find explicit ones, infer from the implementation choices.
+3. learnings: array of gotchas, patterns, bugs found, or solutions discovered. Include enough context to be useful without the transcript.
+4. next_steps: array of specific actionable items mentioned or implied
 5. blockers: array of things that stalled progress (empty array if none)
 
 Return JSON only, no markdown fences.
@@ -122,12 +259,13 @@ ${conversation}`;
         messages: [{ role: "user", content: prompt }],
         response_format: { type: "json_object" },
         max_tokens: 2048,
-        temperature: 0,
+        temperature: 0.1,
+        caching: false,
       }),
     });
 
     if (!response.ok) {
-      console.error(`LLM extraction failed: ${response.status}`);
+      console.error(`  LLM extraction failed: ${response.status}`);
       return null;
     }
 
@@ -137,7 +275,11 @@ ${conversation}`;
     const raw = json.choices?.[0]?.message?.content;
     if (!raw) return null;
 
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const cleaned = raw
+      .replace(/^```(?:json)?\s*/i, "")
+      .replace(/\s*```\s*$/, "")
+      .trim();
+    const parsed = JSON.parse(cleaned) as Record<string, unknown>;
     return {
       summary: (parsed.summary as string) ?? "",
       key_decisions: Array.isArray(parsed.key_decisions)
@@ -153,20 +295,27 @@ ${conversation}`;
         ? (parsed.blockers as string[])
         : [],
       project,
+      date,
     };
   } catch (err) {
     console.error(
-      `Extraction error: ${err instanceof Error ? err.message : err}`,
+      `  Extraction error: ${err instanceof Error ? err.message : err}`,
     );
     return null;
   }
 }
 
+// --- Sanitization ---
+
 function sanitize(text: string): string {
-  // Strip all control chars except newline (\n) and tab (\t)
   // eslint-disable-next-line no-control-regex
-  return text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, "").trim();
+  return text
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, "")
+    .replace(/\n/g, " ")
+    .trim();
 }
+
+// --- OB push ---
 
 async function pushToOB(
   extract: SessionExtract,
@@ -174,27 +323,35 @@ async function pushToOB(
   dryRun: boolean,
 ): Promise<boolean> {
   if (dryRun) {
-    console.log(`  [DRY RUN] Would push session_save:`);
-    console.log(`    session_id: ${sessionId}`);
+    console.log(`  [DRY RUN] session_id: ${sessionId}`);
     console.log(`    project: ${extract.project}`);
-    console.log(`    summary: ${extract.summary.slice(0, 100)}...`);
-    console.log(`    decisions: ${extract.key_decisions.length}`);
-    console.log(`    learnings: ${extract.learnings.length}`);
+    if (extract.date) console.log(`    date: ${extract.date}`);
+    console.log(`    summary: ${extract.summary.slice(0, 150)}...`);
+    console.log(
+      `    decisions: ${extract.key_decisions.length}, learnings: ${extract.learnings.length}, next_steps: ${extract.next_steps.length}`,
+    );
+    if (extract.key_decisions.length > 0)
+      console.log(
+        `    decision[0]: ${extract.key_decisions[0]!.slice(0, 120)}`,
+      );
+    if (extract.learnings.length > 0)
+      console.log(`    learning[0]: ${extract.learnings[0]!.slice(0, 120)}`);
     return true;
   }
 
-  const paramsObj = {
+  const params = JSON.stringify({
     session_id: sessionId,
     project: extract.project,
-    summary: sanitize(extract.summary).replace(/\n/g, " "),
-    tags: ["backfill", extract.project],
-    key_decisions: extract.key_decisions.map((d) =>
-      sanitize(d).replace(/\n/g, " "),
-    ),
-    next_steps: extract.next_steps.map((s) => sanitize(s).replace(/\n/g, " ")),
-    blockers: extract.blockers.map((b) => sanitize(b).replace(/\n/g, " ")),
-  };
-  const params = JSON.stringify(paramsObj);
+    summary: sanitize(extract.summary),
+    tags: [
+      "backfill",
+      extract.project,
+      ...(extract.date ? [extract.date] : []),
+    ],
+    key_decisions: extract.key_decisions.map(sanitize),
+    next_steps: extract.next_steps.map(sanitize),
+    blockers: extract.blockers.map(sanitize),
+  });
 
   const proc = Bun.spawn(
     ["mcp2cli", "open-brain", "session_save", "--params", params],
@@ -204,18 +361,19 @@ async function pushToOB(
   const exitCode = await proc.exited;
 
   if (exitCode !== 0) {
-    console.error(`  session_save failed: ${stdout}`);
+    console.error(`  session_save failed: ${stdout.slice(0, 200)}`);
     return false;
   }
 
   const result = JSON.parse(stdout);
-  console.log(
-    `  session: ${result.success ? "saved" : "failed"} (id: ${result.result?.id ?? "?"}, merged: ${result.result?.merged ?? false})`,
-  );
+  const id = result.result?.id ?? "?";
+  const merged = result.result?.merged ?? false;
+  console.log(`  session: saved (id: ${id}, merged: ${merged})`);
 
+  // Log learnings
   for (const learning of extract.learnings) {
     const lParams = JSON.stringify({
-      content: learning,
+      content: sanitize(learning),
       tags: ["backfill", extract.project],
     });
     const lProc = Bun.spawn(
@@ -224,15 +382,13 @@ async function pushToOB(
     );
     await lProc.exited;
   }
-  if (extract.learnings.length > 0) {
-    console.log(`  learnings: ${extract.learnings.length} logged`);
-  }
 
+  // Log decisions
   for (const decision of extract.key_decisions) {
     const parts = decision.split(" because ");
     const dParams = JSON.stringify({
-      title: parts[0]!.slice(0, 200),
-      rationale: parts[1] ?? decision,
+      title: sanitize(parts[0]!).slice(0, 200),
+      rationale: sanitize(parts[1] ?? decision),
       tags: ["backfill", extract.project],
     });
     const dProc = Bun.spawn(
@@ -241,19 +397,32 @@ async function pushToOB(
     );
     await dProc.exited;
   }
-  if (extract.key_decisions.length > 0) {
-    console.log(`  decisions: ${extract.key_decisions.length} logged`);
-  }
+
+  const counts = [
+    extract.learnings.length > 0
+      ? `${extract.learnings.length} learnings`
+      : null,
+    extract.key_decisions.length > 0
+      ? `${extract.key_decisions.length} decisions`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(", ");
+  if (counts) console.log(`  also logged: ${counts}`);
 
   return true;
 }
 
-async function processJsonl(
-  filePath: string,
+// --- Process a single JSONL file ---
+
+async function processSession(
+  jsonlPath: string,
+  sessionDir: string | null,
   project: string,
+  historyInfo: { date: string; firstPrompt: string } | undefined,
   dryRun: boolean,
 ): Promise<boolean> {
-  const content = await readFile(filePath, "utf-8");
+  const content = await readFile(jsonlPath, "utf-8");
   const lines = content
     .split("\n")
     .filter((l) => l.trim())
@@ -262,22 +431,28 @@ async function processJsonl(
   const humanCount = lines.filter(
     (l) => l.type === "human" || l.type === "user",
   ).length;
-  if (humanCount < 3) {
-    return false;
-  }
+  if (humanCount < 3) return false;
 
-  const conversation = extractConversation(lines);
-  if (conversation.length < 200) {
-    return false;
-  }
+  const { text, filesChanged, branch } = extractConversation(lines);
+  if (text.length < 200) return false;
 
-  const sessionId = `backfill-${createHash("sha256").update(filePath).digest("hex").slice(0, 16)}`;
+  // Load subagent metas if session dir exists
+  const subagents = sessionDir ? await loadSubagentMetas(sessionDir) : [];
+
+  const sessionId = `backfill-${createHash("sha256").update(jsonlPath).digest("hex").slice(0, 16)}`;
+  const date = historyInfo?.date;
 
   console.log(
-    `\n  Processing: ${basename(filePath)} (${lines.length} events, ${humanCount} user turns)`,
+    `\n  ${basename(jsonlPath, ".jsonl")}${date ? ` (${date})` : ""} — ${humanCount} turns, ${subagents.length} subagents, ${filesChanged.length} files${branch ? `, branch: ${branch}` : ""}`,
   );
 
-  const extract = await extractSession(conversation, project);
+  const extract = await extractSession(
+    text,
+    project,
+    subagents,
+    filesChanged,
+    date,
+  );
   if (!extract || !extract.summary) {
     console.log(`  Skipped: extraction returned empty`);
     return false;
@@ -285,6 +460,8 @@ async function processJsonl(
 
   return pushToOB(extract, sessionId, dryRun);
 }
+
+// --- Main ---
 
 async function main() {
   const { values } = parseArgs({
@@ -304,13 +481,19 @@ async function main() {
 
   console.log(`ob-backfill: scanning ${projectsDir}`);
   if (dryRun) console.log("  MODE: dry-run (no OB writes)");
-  console.log(`  LIMIT: ${limit} sessions per project`);
+  console.log(`  LIMIT: ${limit} sessions per project\n`);
+
+  // Load history index for date resolution
+  console.log("Loading history index...");
+  const historyIndex = await loadHistoryIndex();
+  console.log(`  ${historyIndex.size} sessions indexed from history.jsonl\n`);
 
   const projectDirs = await readdir(projectsDir);
   let totalProcessed = 0;
   let totalPushed = 0;
+  let totalSkipped = 0;
 
-  for (const dirName of projectDirs) {
+  for (const dirName of projectDirs.sort()) {
     const project = parseProjectName(dirName);
     if (filterProject && project !== filterProject) continue;
 
@@ -318,25 +501,44 @@ async function main() {
     const dirStat = await stat(dirPath);
     if (!dirStat.isDirectory()) continue;
 
-    const files = (await readdir(dirPath))
+    const entries = await readdir(dirPath);
+    const jsonlFiles = entries
       .filter((f) => f.endsWith(".jsonl"))
       .slice(0, limit);
+    if (jsonlFiles.length === 0) continue;
 
-    if (files.length === 0) continue;
+    // Check for session directories (contain subagents/)
+    const sessionDirs = new Set(
+      entries.filter((f) => !f.endsWith(".jsonl") && !f.startsWith(".")),
+    );
 
-    console.log(`\n=== ${project} (${files.length} sessions) ===`);
+    console.log(`=== ${project} (${jsonlFiles.length} sessions) ===`);
 
-    for (const file of files) {
+    for (const file of jsonlFiles) {
       const filePath = join(dirPath, file);
+      const sessionUuid = basename(file, ".jsonl");
+      const sessionDir = sessionDirs.has(sessionUuid)
+        ? join(dirPath, sessionUuid)
+        : null;
+      const historyInfo = historyIndex.get(sessionUuid);
+
       totalProcessed++;
-      const success = await processJsonl(filePath, project, dryRun);
+      const success = await processSession(
+        filePath,
+        sessionDir,
+        project,
+        historyInfo,
+        dryRun,
+      );
       if (success) totalPushed++;
+      else totalSkipped++;
     }
   }
 
   console.log(`\n--- Summary ---`);
   console.log(`Processed: ${totalProcessed}`);
   console.log(`Pushed to OB: ${totalPushed}`);
+  console.log(`Skipped (too short or extraction failed): ${totalSkipped}`);
   if (dryRun) console.log("(dry-run mode — nothing was written)");
 }
 
