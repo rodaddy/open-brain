@@ -10,7 +10,8 @@ const SESSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const SWEEP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const CLOSE_TIMEOUT_MS = 5_000; // 5 seconds max for transport.close()
 const MAX_SESSIONS = 100;
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 interface SessionEntry {
   transport: StreamableHTTPServerTransport;
@@ -21,10 +22,7 @@ interface SessionEntry {
 
 const sessions: Map<string, SessionEntry> = new Map();
 
-async function expireSession(
-  sessionId: string,
-  reason: string,
-): Promise<void> {
+async function expireSession(sessionId: string, reason: string): Promise<void> {
   const entry = sessions.get(sessionId);
   if (!entry) return;
   clearTimeout(entry.timer);
@@ -33,7 +31,10 @@ async function expireSession(
     await Promise.race([
       entry.transport.close(),
       new Promise<void>((_, reject) =>
-        setTimeout(() => reject(new Error("close timed out")), CLOSE_TIMEOUT_MS),
+        setTimeout(
+          () => reject(new Error("close timed out")),
+          CLOSE_TIMEOUT_MS,
+        ),
       ),
     ]);
   } catch (err) {

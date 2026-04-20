@@ -246,9 +246,11 @@ describe("log_decision", () => {
   });
 
   describe("duplicate content", () => {
-    it("returns Duplicate message when rows empty from ON CONFLICT", async () => {
+    it("returns merged: true when upsert merges tags on conflict", async () => {
       const mockPool = {
-        query: async () => ({ rows: [] }),
+        query: async () => ({
+          rows: [{ id: "existing-uuid", is_new: false }],
+        }),
       };
       const auth: AuthInfo = { role: "admin", clientId: "admin" };
       const { client, cleanup } = await setupDecisionClient(
@@ -264,7 +266,9 @@ describe("log_decision", () => {
         });
         expect(result.isError).toBeFalsy();
         const text = (result.content as any)[0].text;
-        expect(text).toContain("Duplicate");
+        const parsed = JSON.parse(text);
+        expect(parsed.merged).toBe(true);
+        expect(parsed.id).toBe("existing-uuid");
       } finally {
         await cleanup();
       }

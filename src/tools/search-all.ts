@@ -172,7 +172,10 @@ export function registerSearchAll(server: McpServer, deps: ToolDeps): void {
       for (let i = 0; i < brainResults.length; i++) {
         const result = brainResults[i]!;
         const boost = TIER_BOOST[(result.tier ?? "warm") as Tier];
-        withRrf.push({ ...result, rrf: 1 / (RRF_K + i + 1) + boost });
+        withRrf.push({
+          ...result,
+          rrf: Math.max(0, 1 / (RRF_K + i + 1) + boost),
+        });
       }
       for (let i = 0; i < qmdResults.length; i++) {
         withRrf.push({ ...qmdResults[i]!, rrf: 1 / (RRF_K + i + 1) });

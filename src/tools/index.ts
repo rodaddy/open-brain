@@ -14,6 +14,7 @@ import { registerRateEntry } from "./rate-entry.ts";
 import { registerSearchAll } from "./search-all.ts";
 import { registerUpsertPerson } from "./upsert-person.ts";
 import { registerSetTier } from "./set-tier.ts";
+import { registerGetEntry } from "./get-entry.ts";
 
 export interface ToolDeps {
   pool: pg.Pool;
@@ -34,4 +35,5 @@ export function registerAllTools(server: McpServer, deps: ToolDeps): void {
   registerSearchAll(server, deps);
   registerUpsertPerson(server, deps);
   registerSetTier(server, deps);
+  registerGetEntry(server, deps);
 }

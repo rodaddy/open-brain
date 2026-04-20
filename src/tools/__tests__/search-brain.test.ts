@@ -756,12 +756,11 @@ describe("search_brain", () => {
         });
 
         const [sql] = queryCalls[0];
-        // Final ORDER BY uses composite score with distance and usefulness
+        // Final ORDER BY uses composite score with distance, usefulness, and recency
         expect(sql).toContain("distance");
         expect(sql).toContain("usefulness");
-        // Check for the weighting formula components
-        expect(sql).toContain("0.8");
-        expect(sql).toContain("0.2");
+        expect(sql).toContain("0.7");
+        expect(sql).toContain("created_at");
       } finally {
         await cleanup();
       }

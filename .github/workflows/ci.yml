@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: pgvector/pgvector:pg16
+        image: pgvector/pgvector:pg17
         env:
           POSTGRES_DB: open_brain_test
           POSTGRES_USER: test
@@ -40,6 +40,8 @@ jobs:
       - run: bun install
       - name: Typecheck
         run: bunx tsc --noEmit
+      - name: Create pgvector extension
+        run: PGPASSWORD=test psql -h localhost -U test -d open_brain_test -c "CREATE EXTENSION IF NOT EXISTS vector"
       - name: Run migrations
         run: bun run migrate
       - name: Unit tests

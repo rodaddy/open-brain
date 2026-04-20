@@ -2,8 +2,6 @@
 -- Adds tier system, consolidation tracking, access log, and discard staging
 -- Issue: https://github.com/rodaddy/open-brain/issues/12
 
-BEGIN;
-
 -- 1. Add tier column to all searchable tables
 ALTER TABLE thoughts ADD COLUMN IF NOT EXISTS tier TEXT DEFAULT 'warm' CHECK (tier IN ('hot','warm','cold'));
 ALTER TABLE decisions ADD COLUMN IF NOT EXISTS tier TEXT DEFAULT 'warm' CHECK (tier IN ('hot','warm','cold'));
@@ -61,9 +59,4 @@ CREATE TABLE IF NOT EXISTS discarded_entries (
 CREATE INDEX IF NOT EXISTS idx_discarded_expires ON discarded_entries(expires_at) WHERE expires_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_discarded_original ON discarded_entries(original_id);
 
--- 6. Record this migration
-INSERT INTO _migrations (filename, applied_at) 
-VALUES ('006_cognitive_tiering.sql', now())
-ON CONFLICT DO NOTHING;
-
-COMMIT;
+-- Migration recording handled by the migration runner

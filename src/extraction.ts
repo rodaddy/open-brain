@@ -21,7 +21,7 @@ export async function extractMetadata(
   if (!text || text.length < 10) return null;
 
   const baseUrl = litellmUrl ?? process.env.LITELLM_URL;
-  const model = process.env.EXTRACTION_MODEL ?? "flash";
+  const model = process.env.EXTRACTION_MODEL ?? "sonnet";
   if (!baseUrl) {
     logger.warn("No LiteLLM URL configured for extraction");
     return null;

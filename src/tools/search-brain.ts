@@ -40,7 +40,12 @@ const CONTENT_PREVIEW: Record<Table, string> = {
   decisions: "d.title || ': ' || COALESCE(d.rationale, '')",
   relationships: "r.person_name || ': ' || COALESCE(r.context, '')",
   projects: "p.name || ': ' || COALESCE(p.description, '')",
-  sessions: "COALESCE(s.project || ': ', '') || LEFT(s.summary, 200)",
+  sessions:
+    "COALESCE(s.project || ': ', '') || LEFT(s.summary, 300)" +
+    " || CASE WHEN s.key_decisions IS NOT NULL AND array_length(s.key_decisions, 1) > 0" +
+    " THEN E'\\nDecisions: ' || immutable_array_to_string(s.key_decisions, '; ') ELSE '' END" +
+    " || CASE WHEN s.next_steps IS NOT NULL AND array_length(s.next_steps, 1) > 0" +
+    " THEN E'\\nNext: ' || immutable_array_to_string(s.next_steps, '; ') ELSE '' END",
 };
 
 /** Table alias used in CTE SELECTs */
@@ -67,6 +72,22 @@ export const TIER_BOOST: Record<Tier, number> = {
   cold: -0.2,
 };
 
+/** Per-table importance weights: primary content > summaries */
+const TABLE_WEIGHT: Record<string, number> = {
+  thought: 1.2,
+  decision: 1.2,
+  relationship: 1.0,
+  project: 0.9,
+  session: 0.8,
+};
+
+/** Gentle recency factor: today=1.0, 30d=0.97, 90d=0.92, 365d=0.73 */
+function recencyFactor(createdAt: string): number {
+  const ageDays =
+    (Date.now() - new Date(createdAt).getTime()) / (1000 * 60 * 60 * 24);
+  return 1 / (1 + Math.max(0, ageDays) * 0.001);
+}
+
 export interface SearchRow {
   source_type: string;
   id: string;
@@ -77,7 +98,16 @@ export interface SearchRow {
   tier?: string;
   distance?: number;
   fts_rank?: number;
+  access_count?: number;
+  extracted_metadata?: {
+    topics?: string[];
+    people?: string[];
+    action_items?: string[];
+    dates?: string[];
+  };
 }
+
+const HAS_EXTRACTED_METADATA: Set<Table> = new Set(["thoughts", "decisions"]);
 
 export function buildTableCTE(table: Table, tier?: Tier): string {
   const alias = TABLE_ALIAS[table];
@@ -85,6 +115,9 @@ export function buildTableCTE(table: Table, tier?: Tier): string {
   const preview = CONTENT_PREVIEW[table];
   const cteName = `${table}_results`;
   const tierFilter = tier ? ` AND ${alias}.tier = '${tier}'` : "";
+  const metaCol = HAS_EXTRACTED_METADATA.has(table)
+    ? `${alias}.extracted_metadata`
+    : "NULL::jsonb AS extracted_metadata";
 
   return `${cteName} AS (
   SELECT
@@ -95,7 +128,9 @@ export function buildTableCTE(table: Table, tier?: Tier): string {
     ${alias}.created_at,
     ${alias}.tier,
     ${alias}.embedding <=> (SELECT emb FROM query_embedding) AS distance,
-    COALESCE(${alias}.usefulness_score, 0.5) AS usefulness
+    COALESCE(${alias}.usefulness_score, 0.5) AS usefulness,
+    COALESCE(${alias}.access_count, 0) AS access_count,
+    ${metaCol}
   FROM ${table} ${alias}
   WHERE ${alias}.embedding IS NOT NULL AND ${alias}.archived_at IS NULL${tierFilter}
 )`;
@@ -108,6 +143,10 @@ function buildFtsCTE(table: Table, tier?: Tier): string {
   const cteName = `${table}_fts`;
   const tierFilter = tier ? ` AND ${alias}.tier = '${tier}'` : "";
 
+  const metaCol = HAS_EXTRACTED_METADATA.has(table)
+    ? `${alias}.extracted_metadata`
+    : "NULL::jsonb AS extracted_metadata";
+
   return `${cteName} AS (
   SELECT
     '${label}' AS source_type,
@@ -117,7 +156,9 @@ function buildFtsCTE(table: Table, tier?: Tier): string {
     ${alias}.created_at,
     ${alias}.tier,
     ts_rank_cd(${alias}.search_vector, plainto_tsquery('english', (SELECT q FROM fts_query))) AS fts_rank,
-    COALESCE(${alias}.usefulness_score, 0.5) AS usefulness
+    COALESCE(${alias}.usefulness_score, 0.5) AS usefulness,
+    COALESCE(${alias}.access_count, 0) AS access_count,
+    ${metaCol}
   FROM ${table} ${alias}
   WHERE ${alias}.search_vector @@ plainto_tsquery('english', (SELECT q FROM fts_query))
     AND ${alias}.archived_at IS NULL${tierFilter}
@@ -145,7 +186,7 @@ ${ctes.join(",\n")}
 SELECT * FROM (
 ${unionAll}
 ) AS combined
-ORDER BY (distance * 0.8 + (1.0 - COALESCE(usefulness, 0.5)) * 0.2) ASC
+ORDER BY (distance * 0.7 + (1.0 - COALESCE(usefulness, 0.5)) * 0.15 + EXTRACT(EPOCH FROM (NOW() - created_at)) / 86400.0 * 0.0001) ASC
 LIMIT $2 OFFSET $3`;
 
   const { rows } = await deps.pool.query(sql, [
@@ -215,10 +256,12 @@ function rrfMerge(
   }
 
   return Array.from(scoreMap.values())
-    .map(({ row, rrf }) => ({
-      row,
-      rrf: rrf + TIER_BOOST[(row.tier ?? "warm") as Tier],
-    }))
+    .map(({ row, rrf }) => {
+      const tier = TIER_BOOST[(row.tier ?? "warm") as Tier];
+      const weight = TABLE_WEIGHT[row.source_type] ?? 1.0;
+      const recency = recencyFactor(row.created_at);
+      return { row, rrf: Math.max(0, (rrf + tier) * weight * recency) };
+    })
     .sort((a, b) => b.rrf - a.rrf)
     .slice(0, limit)
     .map(({ row }) => row);
