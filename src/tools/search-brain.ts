@@ -91,12 +91,17 @@ export interface SearchRow {
   };
 }
 
+const HAS_EXTRACTED_METADATA: Set<Table> = new Set(["thoughts", "decisions"]);
+
 export function buildTableCTE(table: Table, tier?: Tier): string {
   const alias = TABLE_ALIAS[table];
   const label = SOURCE_LABELS[table];
   const preview = CONTENT_PREVIEW[table];
   const cteName = `${table}_results`;
   const tierFilter = tier ? ` AND ${alias}.tier = '${tier}'` : "";
+  const metaCol = HAS_EXTRACTED_METADATA.has(table)
+    ? `${alias}.extracted_metadata`
+    : "NULL::jsonb AS extracted_metadata";
 
   return `${cteName} AS (
   SELECT
@@ -109,7 +114,7 @@ export function buildTableCTE(table: Table, tier?: Tier): string {
     ${alias}.embedding <=> (SELECT emb FROM query_embedding) AS distance,
     COALESCE(${alias}.usefulness_score, 0.5) AS usefulness,
     COALESCE(${alias}.access_count, 0) AS access_count,
-    ${alias}.extracted_metadata
+    ${metaCol}
   FROM ${table} ${alias}
   WHERE ${alias}.embedding IS NOT NULL AND ${alias}.archived_at IS NULL${tierFilter}
 )`;
@@ -122,6 +127,10 @@ function buildFtsCTE(table: Table, tier?: Tier): string {
   const cteName = `${table}_fts`;
   const tierFilter = tier ? ` AND ${alias}.tier = '${tier}'` : "";
 
+  const metaCol = HAS_EXTRACTED_METADATA.has(table)
+    ? `${alias}.extracted_metadata`
+    : "NULL::jsonb AS extracted_metadata";
+
   return `${cteName} AS (
   SELECT
     '${label}' AS source_type,
@@ -133,7 +142,7 @@ function buildFtsCTE(table: Table, tier?: Tier): string {
     ts_rank_cd(${alias}.search_vector, plainto_tsquery('english', (SELECT q FROM fts_query))) AS fts_rank,
     COALESCE(${alias}.usefulness_score, 0.5) AS usefulness,
     COALESCE(${alias}.access_count, 0) AS access_count,
-    ${alias}.extracted_metadata
+    ${metaCol}
   FROM ${table} ${alias}
   WHERE ${alias}.search_vector @@ plainto_tsquery('english', (SELECT q FROM fts_query))
     AND ${alias}.archived_at IS NULL${tierFilter}
