@@ -109,7 +109,11 @@ export interface SearchRow {
 
 const HAS_EXTRACTED_METADATA: Set<Table> = new Set(["thoughts", "decisions"]);
 
-export function buildTableCTE(table: Table, tier?: Tier): string {
+export function buildTableCTE(
+  table: Table,
+  perTableLimit: number,
+  tier?: Tier,
+): string {
   const alias = TABLE_ALIAS[table];
   const label = SOURCE_LABELS[table];
   const preview = CONTENT_PREVIEW[table];
@@ -133,10 +137,12 @@ export function buildTableCTE(table: Table, tier?: Tier): string {
     ${metaCol}
   FROM ${table} ${alias}
   WHERE ${alias}.embedding IS NOT NULL AND ${alias}.archived_at IS NULL${tierFilter}
+  ORDER BY ${alias}.embedding <=> (SELECT emb FROM query_embedding) ASC
+  LIMIT ${perTableLimit}
 )`;
 }
 
-function buildFtsCTE(table: Table, tier?: Tier): string {
+function buildFtsCTE(table: Table, perTableLimit: number, tier?: Tier): string {
   const alias = TABLE_ALIAS[table];
   const label = SOURCE_LABELS[table];
   const preview = CONTENT_PREVIEW[table];
@@ -162,6 +168,8 @@ function buildFtsCTE(table: Table, tier?: Tier): string {
   FROM ${table} ${alias}
   WHERE ${alias}.search_vector @@ plainto_tsquery('english', (SELECT q FROM fts_query))
     AND ${alias}.archived_at IS NULL${tierFilter}
+  ORDER BY fts_rank DESC
+  LIMIT ${perTableLimit}
 )`;
 }
 
@@ -173,7 +181,10 @@ async function vectorSearch(
   tier?: Tier,
   offset = 0,
 ): Promise<SearchRow[]> {
-  const ctes = accessibleTables.map((t) => buildTableCTE(t, tier));
+  const perTableLimit = fetchLimit;
+  const ctes = accessibleTables.map((t) =>
+    buildTableCTE(t, perTableLimit, tier),
+  );
   const cteNames = accessibleTables.map((t) => `${t}_results`);
   const unionAll = cteNames
     .map((name) => `SELECT * FROM ${name}`)
@@ -205,7 +216,8 @@ async function ftsSearch(
   tier?: Tier,
   offset = 0,
 ): Promise<SearchRow[]> {
-  const ctes = accessibleTables.map((t) => buildFtsCTE(t, tier));
+  const perTableLimit = fetchLimit;
+  const ctes = accessibleTables.map((t) => buildFtsCTE(t, perTableLimit, tier));
   const cteNames = accessibleTables.map((t) => `${t}_fts`);
   const unionAll = cteNames
     .map((name) => `SELECT * FROM ${name}`)
