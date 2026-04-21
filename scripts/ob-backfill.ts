@@ -511,7 +511,11 @@ async function processSession(
   );
   if (!extract || !extract.summary) {
     console.log(`  Skipped: extraction returned empty`);
-    await appendToFailedQueue(jsonlPath, project, "extraction returned empty or LLM unavailable");
+    await appendToFailedQueue(
+      jsonlPath,
+      project,
+      "extraction returned empty or LLM unavailable",
+    );
     return false;
   }
 
@@ -536,6 +540,7 @@ async function main() {
       "dry-run": { type: "boolean", default: false },
       retry: { type: "boolean", default: false },
       limit: { type: "string", default: "10" },
+      concurrency: { type: "string", default: "1" },
     },
   });
 
@@ -544,6 +549,7 @@ async function main() {
   const dryRun = values["dry-run"]!;
   const retryMode = values.retry!;
   const limit = parseInt(values.limit!, 10);
+  const concurrency = parseInt(values.concurrency!, 10);
 
   // Retry mode: re-process only previously failed sessions
   if (retryMode) {
@@ -557,7 +563,9 @@ async function main() {
     let retryPushed = 0;
     for (const entry of queue) {
       if (!existsSync(entry.path)) {
-        console.log(`  ${basename(entry.path)} -- file no longer exists, removing from queue`);
+        console.log(
+          `  ${basename(entry.path)} -- file no longer exists, removing from queue`,
+        );
         await removeFromFailedQueue(entry.path);
         continue;
       }
@@ -587,17 +595,24 @@ async function main() {
 
   console.log(`ob-backfill: scanning ${projectsDir}`);
   if (dryRun) console.log("  MODE: dry-run (no OB writes)");
-  console.log(`  LIMIT: ${limit} sessions per project\n`);
+  console.log(`  LIMIT: ${limit} sessions per project`);
+  console.log(`  CONCURRENCY: ${concurrency} parallel workers\n`);
 
   // Load history index for date resolution
   console.log("Loading history index...");
   const historyIndex = await loadHistoryIndex();
   console.log(`  ${historyIndex.size} sessions indexed from history.jsonl\n`);
 
+  // Collect all work items first
+  interface WorkItem {
+    filePath: string;
+    sessionDir: string | null;
+    project: string;
+    historyInfo: { date: string; firstPrompt: string } | undefined;
+  }
+
+  const workItems: WorkItem[] = [];
   const projectDirs = await readdir(projectsDir);
-  let totalProcessed = 0;
-  let totalPushed = 0;
-  let totalSkipped = 0;
 
   for (const dirName of projectDirs.sort()) {
     const project = parseProjectName(dirName);
@@ -613,12 +628,9 @@ async function main() {
       .slice(0, limit);
     if (jsonlFiles.length === 0) continue;
 
-    // Check for session directories (contain subagents/)
     const sessionDirs = new Set(
       entries.filter((f) => !f.endsWith(".jsonl") && !f.startsWith(".")),
     );
-
-    console.log(`=== ${project} (${jsonlFiles.length} sessions) ===`);
 
     for (const file of jsonlFiles) {
       const filePath = join(dirPath, file);
@@ -627,17 +639,51 @@ async function main() {
         ? join(dirPath, sessionUuid)
         : null;
       const historyInfo = historyIndex.get(sessionUuid);
+      workItems.push({ filePath, sessionDir, project, historyInfo });
+    }
+  }
 
+  console.log(`Total sessions to process: ${workItems.length}\n`);
+
+  let totalProcessed = 0;
+  let totalPushed = 0;
+  let totalSkipped = 0;
+  let currentProject = "";
+
+  // Process in batches of `concurrency`
+  for (let i = 0; i < workItems.length; i += concurrency) {
+    const batch = workItems.slice(i, i + concurrency);
+
+    // Print project headers for new projects in this batch
+    for (const item of batch) {
+      if (item.project !== currentProject) {
+        currentProject = item.project;
+        const count = workItems.filter(
+          (w) => w.project === item.project,
+        ).length;
+        console.log(`\n=== ${item.project} (${count} sessions) ===`);
+      }
+    }
+
+    const results = await Promise.allSettled(
+      batch.map((item) =>
+        processSession(
+          item.filePath,
+          item.sessionDir,
+          item.project,
+          item.historyInfo,
+          dryRun,
+        ),
+      ),
+    );
+
+    for (const result of results) {
       totalProcessed++;
-      const success = await processSession(
-        filePath,
-        sessionDir,
-        project,
-        historyInfo,
-        dryRun,
-      );
-      if (success) totalPushed++;
-      else totalSkipped++;
+      if (result.status === "fulfilled" && result.value) {
+        totalPushed++;
+      } else {
+        totalSkipped++;
+      }
     }
   }
 
@@ -649,12 +695,17 @@ async function main() {
   console.log(`Pushed to OB: ${totalPushed}`);
   console.log(`Skipped (too short or extraction failed): ${totalSkipped}`);
   if (failedQueue.length > 0) {
-    console.log(`\n⚠️  ${failedQueue.length} session(s) in failed queue (${FAILED_QUEUE_PATH})`);
+    console.log(
+      `\n⚠️  ${failedQueue.length} session(s) in failed queue (${FAILED_QUEUE_PATH})`,
+    );
     console.log(`   Run with --retry to re-process them.`);
     for (const entry of failedQueue.slice(0, 5)) {
-      console.log(`   - ${basename(entry.path)} (${entry.project}): ${entry.reason}`);
+      console.log(
+        `   - ${basename(entry.path)} (${entry.project}): ${entry.reason}`,
+      );
     }
-    if (failedQueue.length > 5) console.log(`   ... and ${failedQueue.length - 5} more`);
+    if (failedQueue.length > 5)
+      console.log(`   ... and ${failedQueue.length - 5} more`);
   }
   if (dryRun) console.log("(dry-run mode — nothing was written)");
 }
