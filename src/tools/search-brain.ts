@@ -5,23 +5,15 @@ import { canRead } from "../permissions.ts";
 import type { AuthInfo, Table, Tier } from "../types.ts";
 import type { ToolDeps } from "./index.ts";
 import { logger } from "../logger.ts";
+import {
+  ALL_TABLES,
+  SOURCE_LABELS,
+  CONTENT_PREVIEW,
+  TABLE_ALIAS,
+  VALID_TIERS,
+} from "./table-constants.ts";
 
-export const ALL_TABLES: Table[] = [
-  "thoughts",
-  "decisions",
-  "relationships",
-  "projects",
-  "sessions",
-];
-
-/** Singular labels for search results */
-const SOURCE_LABELS: Record<Table, string> = {
-  thoughts: "thought",
-  decisions: "decision",
-  relationships: "relationship",
-  projects: "project",
-  sessions: "session",
-};
+export { ALL_TABLES };
 
 /** Reverse map: singular label -> table name for tracking UPDATEs */
 const LABEL_TO_TABLE: Record<string, Table> = Object.fromEntries(
@@ -30,32 +22,6 @@ const LABEL_TO_TABLE: Record<string, Table> = Object.fromEntries(
     table as Table,
   ]),
 ) as Record<string, Table>;
-
-/**
- * Content preview SQL expression per table.
- * Each produces a single text column normalized for search results.
- */
-const CONTENT_PREVIEW: Record<Table, string> = {
-  thoughts: "t.content",
-  decisions: "d.title || ': ' || COALESCE(d.rationale, '')",
-  relationships: "r.person_name || ': ' || COALESCE(r.context, '')",
-  projects: "p.name || ': ' || COALESCE(p.description, '')",
-  sessions:
-    "COALESCE(s.project || ': ', '') || LEFT(s.summary, 300)" +
-    " || CASE WHEN s.key_decisions IS NOT NULL AND array_length(s.key_decisions, 1) > 0" +
-    " THEN E'\\nDecisions: ' || immutable_array_to_string(s.key_decisions, '; ') ELSE '' END" +
-    " || CASE WHEN s.next_steps IS NOT NULL AND array_length(s.next_steps, 1) > 0" +
-    " THEN E'\\nNext: ' || immutable_array_to_string(s.next_steps, '; ') ELSE '' END",
-};
-
-/** Table alias used in CTE SELECTs */
-const TABLE_ALIAS: Record<Table, string> = {
-  thoughts: "t",
-  decisions: "d",
-  relationships: "r",
-  projects: "p",
-  sessions: "s",
-};
 
 export type SearchMode = "hybrid" | "vector" | "keyword";
 
@@ -72,6 +38,11 @@ export const TIER_BOOST: Record<Tier, number> = {
   cold: -0.2,
 };
 
+/** Scoring weights for vector search ranking formula */
+const VECTOR_WEIGHT = 0.7;
+const USEFULNESS_WEIGHT = 0.15;
+const AGE_WEIGHT = 0.0001;
+
 /** Per-table importance weights: primary content > summaries */
 const TABLE_WEIGHT: Record<string, number> = {
   thought: 1.2,
@@ -83,8 +54,9 @@ const TABLE_WEIGHT: Record<string, number> = {
 
 /** Gentle recency factor: today=1.0, 30d=0.97, 90d=0.92, 365d=0.73 */
 function recencyFactor(createdAt: string): number {
-  const ageDays =
-    (Date.now() - new Date(createdAt).getTime()) / (1000 * 60 * 60 * 24);
+  const ms = new Date(createdAt).getTime();
+  if (isNaN(ms)) return 1.0;
+  const ageDays = (Date.now() - ms) / (1000 * 60 * 60 * 24);
   return 1 / (1 + Math.max(0, ageDays) * 0.001);
 }
 
@@ -114,6 +86,7 @@ export function buildTableCTE(
   perTableLimit: number,
   tier?: Tier,
 ): string {
+  if (tier && !VALID_TIERS.has(tier)) throw new Error(`Invalid tier: ${tier}`);
   const alias = TABLE_ALIAS[table];
   const label = SOURCE_LABELS[table];
   const preview = CONTENT_PREVIEW[table];
@@ -143,6 +116,7 @@ export function buildTableCTE(
 }
 
 function buildFtsCTE(table: Table, perTableLimit: number, tier?: Tier): string {
+  if (tier && !VALID_TIERS.has(tier)) throw new Error(`Invalid tier: ${tier}`);
   const alias = TABLE_ALIAS[table];
   const label = SOURCE_LABELS[table];
   const preview = CONTENT_PREVIEW[table];
@@ -197,7 +171,7 @@ ${ctes.join(",\n")}
 SELECT * FROM (
 ${unionAll}
 ) AS combined
-ORDER BY (distance * 0.7 + (1.0 - COALESCE(usefulness, 0.5)) * 0.15 + EXTRACT(EPOCH FROM (NOW() - created_at)) / 86400.0 * 0.0001) ASC
+ORDER BY (distance * ${VECTOR_WEIGHT} + (1.0 - COALESCE(usefulness, 0.5)) * ${USEFULNESS_WEIGHT} + EXTRACT(EPOCH FROM (NOW() - created_at)) / 86400.0 * ${AGE_WEIGHT}) ASC
 LIMIT $2 OFFSET $3`;
 
   const { rows } = await deps.pool.query(sql, [
@@ -279,6 +253,11 @@ function rrfMerge(
     .map(({ row }) => row);
 }
 
+/** Circuit breaker: stop tracking after consecutive failures to avoid log floods */
+const TRACKING_FAILURE_THRESHOLD = 5;
+let trackingConsecutiveFailures = 0;
+let trackingCircuitOpen = false;
+
 export function trackUsage(
   deps: ToolDeps,
   rows: SearchRow[],
@@ -286,6 +265,7 @@ export function trackUsage(
   context = "search",
 ): void {
   if (rows.length === 0) return;
+  if (trackingCircuitOpen) return;
 
   const byTable = new Map<Table, string[]>();
   for (const row of rows) {
@@ -299,17 +279,10 @@ export function trackUsage(
   const trackingPromises: Promise<unknown>[] = [];
   for (const [table, ids] of byTable) {
     trackingPromises.push(
-      deps.pool
-        .query(
-          `UPDATE ${table} SET access_count = access_count + 1, last_accessed_at = NOW() WHERE id = ANY($1)`,
-          [ids],
-        )
-        .catch((err: unknown) => {
-          logger.warn("search_tracking_error", {
-            table,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }),
+      deps.pool.query(
+        `UPDATE ${table} SET access_count = access_count + 1, last_accessed_at = NOW() WHERE id = ANY($1)`,
+        [ids],
+      ),
     );
   }
 
@@ -319,21 +292,38 @@ export function trackUsage(
     const entryIds = logRows.map((r) => r.id);
     const sourceTables = logRows.map((r) => LABEL_TO_TABLE[r.source_type]);
     trackingPromises.push(
-      deps.pool
-        .query(
-          `INSERT INTO entry_access_log (entry_id, source_table, accessed_at, query_text, context)
+      deps.pool.query(
+        `INSERT INTO entry_access_log (entry_id, source_table, accessed_at, query_text, context)
            SELECT unnest($1::uuid[]), unnest($2::text[]), NOW(), $3, $4`,
-          [entryIds, sourceTables, queryText, context],
-        )
-        .catch((err: unknown) => {
-          logger.warn("access_log_error", {
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }),
+        [entryIds, sourceTables, queryText, context],
+      ),
     );
   }
 
-  void Promise.allSettled(trackingPromises).catch(() => {});
+  void Promise.allSettled(trackingPromises).then((results) => {
+    const anyFailed = results.some((r) => r.status === "rejected");
+    if (anyFailed) {
+      trackingConsecutiveFailures++;
+      if (trackingConsecutiveFailures >= TRACKING_FAILURE_THRESHOLD) {
+        trackingCircuitOpen = true;
+        logger.warn("search_tracking_circuit_open", {
+          message: `Tracking disabled after ${TRACKING_FAILURE_THRESHOLD} consecutive failures`,
+        });
+      } else {
+        const firstError = results.find((r) => r.status === "rejected") as
+          | PromiseRejectedResult
+          | undefined;
+        logger.warn("search_tracking_error", {
+          error:
+            firstError?.reason instanceof Error
+              ? firstError.reason.message
+              : String(firstError?.reason),
+        });
+      }
+    } else {
+      trackingConsecutiveFailures = 0;
+    }
+  });
 }
 
 export async function executeSearch(
@@ -511,19 +501,4 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
       };
     },
   );
-}
-/**
- * Build a namespace filter SQL clause.
- * Inlines namespace values as a SQL array literal (safe for known internal values).
- * If namespaces is null (admin/no filter), returns empty string.
- */
-export function buildNsClause(
-  alias: string,
-  namespaces: string[] | null,
-): string {
-  if (!namespaces || namespaces.length === 0) return "";
-  const escaped = namespaces
-    .map((ns) => "'" + ns.replace(/'/g, "''") + "'")
-    .join(",");
-  return ` AND ${alias}.namespace IN (${escaped})`;
 }

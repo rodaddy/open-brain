@@ -27,9 +27,11 @@ export function createPool(overrides?: Partial<pg.PoolConfig>): pg.Pool {
     try {
       await pgvector.registerTypes(client);
     } catch (err) {
-      logger.error("Failed to register pgvector types", {
-        error: err instanceof Error ? err.message : String(err),
-      });
+      logger.error(
+        "pgvector registration failed — vector operations will not work. " +
+          "Ensure the pgvector extension is installed (CREATE EXTENSION vector)",
+        { error: err instanceof Error ? err.message : String(err) },
+      );
     }
   });
 

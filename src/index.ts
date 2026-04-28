@@ -40,6 +40,7 @@ export function createApp(
         const headers: Record<string, string> = {};
         const apiKey = process.env.LITELLM_API_KEY;
         if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
+        // LiteLLM uses "/health/liveliness" (not "liveness") — this is their actual endpoint spelling
         const resp = await fetch(`${LITELLM_URL}/health/liveliness`, {
           headers,
           signal: AbortSignal.timeout(3000),
@@ -112,9 +113,10 @@ if (import.meta.main) {
     await runMigrations(pool);
     logger.info("Migrations complete");
   } catch (err) {
-    logger.error("Migration error (continuing startup)", {
-      error: err instanceof Error ? err.message : String(err),
+    logger.error("migration_failed", {
+      error: String(err),
     });
+    process.exit(1);
   }
 
   const tokenMap = buildTokenMap(

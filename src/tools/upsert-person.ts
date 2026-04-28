@@ -12,7 +12,7 @@ export function registerUpsertPerson(server: McpServer, deps: ToolDeps): void {
     "upsert_person",
     {
       description:
-        "Create or update a person/contact in the brain. Matches on person_name (case-insensitive). If the person exists, updates provided fields; if not, creates a new record.",
+        "Create or update a person/contact in the brain. Matches on person_name (case-sensitive). If the person exists, updates provided fields; if not, creates a new record. A case-insensitive unique index is recommended.",
       inputSchema: {
         name: z
           .string()

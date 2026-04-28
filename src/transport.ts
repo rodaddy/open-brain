@@ -74,7 +74,7 @@ const sweepTimer = setInterval(() => {
 }, SWEEP_INTERVAL_MS);
 sweepTimer.unref();
 
-export function getSessionAuth(sessionId: string): AuthInfo | undefined {
+function getSessionAuth(sessionId: string): AuthInfo | undefined {
   return sessions.get(sessionId)?.auth;
 }
 
@@ -131,9 +131,18 @@ export function createTransportHandlers(
         const transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
           onsessioninitialized: (id: string) => {
-            // Re-check cap atomically at registration time
+            // Re-check cap at registration time. A narrow race exists between the
+            // initial cap check above and this callback: a concurrent request could
+            // slip through. This is acceptable given MAX_SESSIONS=100 provides
+            // headroom and the transport is closed immediately if exceeded.
             if (sessions.size >= MAX_SESSIONS) {
-              logger.warn("Session cap exceeded at registration", { id });
+              logger.warn("session_cap_race", {
+                id,
+                active: sessions.size,
+                max: MAX_SESSIONS,
+                message:
+                  "Concurrent request slipped past initial cap check; closing transport",
+              });
               void transport.close().catch(() => {}); // clean up untracked transport
               return;
             }
