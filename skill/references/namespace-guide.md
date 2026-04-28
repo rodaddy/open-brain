@@ -14,9 +14,9 @@
 |----------|-------|----------|
 | `Mini-M4-Pro.local` | Rico | Local Mac Mini |
 | `rodaddy-air-2.local` | Rico/Skippy | MacBook Air |
-| `cc-king` | King (collab) | LXC 10.71.20.120 |
-| `cc-kevin` | Kevin | LXC 10.71.20.121 |
-| `cc-geetesh` | Geetesh | LXC 10.71.20.122 |
+| `cc-king` | King (collab) | LXC container |
+| `cc-kevin` | Kevin | LXC container |
+| `cc-geetesh` | Geetesh | LXC container |
 
 ## Directory-Based Override (Personal Machines Only)
 
