@@ -7,7 +7,7 @@ export async function generateEmbedding(
   text: string,
   litellmUrl?: string,
 ): Promise<number[] | null> {
-  if (!text || text.length > 32000) {
+  if (!text || text.trim().length === 0 || text.length > 32000) {
     logger.warn("Embedding text empty or too long", {
       length: text?.length ?? 0,
     });

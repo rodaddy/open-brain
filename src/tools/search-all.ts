@@ -37,27 +37,22 @@ interface QmdDocument {
   collection?: string;
 }
 
+const QMD_PATH = process.env.QMD_PATH ?? "/opt/qmd/src/qmd.ts";
+
 async function searchQmd(
   query: string,
   limit: number,
 ): Promise<UnifiedResult[]> {
   try {
-    // Call qmd CLI directly (installed at /opt/qmd on server)
     const proc = Bun.spawn(
-      [
-        "bun",
-        "/opt/qmd/src/qmd.ts",
-        "search",
-        query,
-        "--json",
-        "-n",
-        String(limit),
-      ],
+      ["bun", QMD_PATH, "search", query, "--json", "-n", String(limit)],
       { stdout: "pipe", stderr: "pipe" },
     );
+    const killTimeout = setTimeout(() => proc.kill(), 10_000);
 
     const stdout = await new Response(proc.stdout).text();
     const exitCode = await proc.exited;
+    clearTimeout(killTimeout);
 
     if (exitCode !== 0) {
       logger.warn("qmd search failed", { exitCode });

@@ -160,146 +160,165 @@ export function registerUpdateEntry(server: McpServer, deps: ToolDeps): void {
         };
       }
 
-      // SELECT existing row
-      const { rows: existingRows } = await deps.pool.query(
-        `SELECT * FROM ${table} WHERE id = $1`,
-        [args.id],
-      );
+      // Use a transaction to prevent TOCTOU races between SELECT and UPDATE
+      const client = await deps.pool.connect();
+      try {
+        await client.query("BEGIN");
 
-      if (existingRows.length === 0) {
-        return {
-          content: [{ type: "text" as const, text: "Not found" }],
-          isError: true,
-        };
-      }
-
-      const existingRow = existingRows[0];
-
-      // Archived guard
-      if (existingRow.archived_at != null) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: "Entry is archived -- restore it first",
-            },
-          ],
-          isError: true,
-        };
-      }
-
-      // Determine if re-embedding is needed
-      const contentFieldNames = CONTENT_FIELDS[table];
-      const needsReembed = contentFieldNames.some(
-        (f) => providedFields[f] !== undefined,
-      );
-
-      let embedding: number[] | null = null;
-      let hash: string | null = null;
-
-      if (needsReembed) {
-        // Merge changed fields over existing row
-        const merged: Record<string, unknown> = {};
-        for (const f of contentFieldNames) {
-          merged[f] =
-            providedFields[f] !== undefined
-              ? providedFields[f]
-              : existingRow[f];
-        }
-
-        const embeddableText = buildEmbeddableText(table, merged);
-        hash = contentHash(embeddableText);
-
-        // Check content_hash collision
-        const { rows: collisionRows } = await deps.pool.query(
-          `SELECT id FROM ${table} WHERE content_hash = $1 AND id != $2`,
-          [hash, args.id],
+        // SELECT existing row with FOR UPDATE lock -- explicit columns to avoid fetching embeddings
+        const selectCols = [...VALID_FIELDS[table], "archived_at"].join(", ");
+        const { rows: existingRows } = await client.query(
+          `SELECT id, ${selectCols} FROM ${table} WHERE id = $1 FOR UPDATE`,
+          [args.id],
         );
 
-        if (collisionRows.length > 0) {
+        if (existingRows.length === 0) {
+          await client.query("ROLLBACK");
+          return {
+            content: [{ type: "text" as const, text: "Not found" }],
+            isError: true,
+          };
+        }
+
+        const existingRow = existingRows[0];
+
+        // Archived guard
+        if (existingRow.archived_at != null) {
+          await client.query("ROLLBACK");
           return {
             content: [
               {
                 type: "text" as const,
-                text: "Duplicate content exists in another entry",
+                text: "Entry is archived -- restore it first",
               },
             ],
             isError: true,
           };
         }
 
-        embedding = await deps.embedFn(embeddableText);
-        logger.info("update_entry_embedding", {
-          tool: "update_entry",
+        // Determine if re-embedding is needed
+        const contentFieldNames = CONTENT_FIELDS[table];
+        const needsReembed = contentFieldNames.some(
+          (f) => providedFields[f] !== undefined,
+        );
+
+        let embedding: number[] | null = null;
+        let hash: string | null = null;
+
+        if (needsReembed) {
+          // Merge changed fields over existing row
+          const merged: Record<string, unknown> = {};
+          for (const f of contentFieldNames) {
+            merged[f] =
+              providedFields[f] !== undefined
+                ? providedFields[f]
+                : existingRow[f];
+          }
+
+          const embeddableText = buildEmbeddableText(table, merged);
+          hash = contentHash(embeddableText);
+
+          // Check content_hash collision
+          const { rows: collisionRows } = await client.query(
+            `SELECT id FROM ${table} WHERE content_hash = $1 AND id != $2`,
+            [hash, args.id],
+          );
+
+          if (collisionRows.length > 0) {
+            await client.query("ROLLBACK");
+            return {
+              content: [
+                {
+                  type: "text" as const,
+                  text: "Duplicate content exists in another entry",
+                },
+              ],
+              isError: true,
+            };
+          }
+
+          embedding = await deps.embedFn(embeddableText);
+          logger.info("update_entry_embedding", {
+            tool: "update_entry",
+            table,
+            embedded: !!embedding,
+          });
+        }
+
+        // Build dynamic UPDATE
+        const setClauses: string[] = [];
+        const params: unknown[] = [];
+        let paramIndex = 1;
+
+        // Add provided fields
+        for (const [field, value] of Object.entries(providedFields)) {
+          setClauses.push(`${field} = $${paramIndex}`);
+          params.push(value);
+          paramIndex++;
+        }
+
+        // Add embedding fields if re-embedding
+        if (needsReembed) {
+          setClauses.push(`embedding = $${paramIndex}`);
+          params.push(embedding ? toSql(embedding) : null);
+          paramIndex++;
+
+          setClauses.push(`content_hash = $${paramIndex}`);
+          params.push(hash);
+          paramIndex++;
+
+          setClauses.push(`embedded_at = $${paramIndex}`);
+          params.push(embedding ? new Date().toISOString() : null);
+          paramIndex++;
+
+          setClauses.push(`embedding_model = $${paramIndex}`);
+          params.push(embedding ? "gemini-embedding-001" : null);
+          paramIndex++;
+        }
+
+        setClauses.push("updated_at = NOW()");
+
+        // Add WHERE id
+        params.push(args.id);
+        const updateSql = `UPDATE ${table} SET ${setClauses.join(", ")} WHERE id = $${paramIndex} RETURNING id`;
+
+        const { rows: updatedRows } = await client.query(updateSql, params);
+
+        await client.query("COMMIT");
+
+        if (updatedRows.length === 0) {
+          return {
+            content: [{ type: "text" as const, text: "Update failed" }],
+            isError: true,
+          };
+        }
+
+        logger.info("update_entry_success", {
           table,
-          embedded: !!embedding,
+          id: updatedRows[0].id,
+          fields: Object.keys(providedFields),
+          reembedded: needsReembed,
         });
-      }
 
-      // Build dynamic UPDATE
-      const setClauses: string[] = [];
-      const params: unknown[] = [];
-      let paramIndex = 1;
-
-      // Add provided fields
-      for (const [field, value] of Object.entries(providedFields)) {
-        setClauses.push(`${field} = $${paramIndex}`);
-        params.push(value);
-        paramIndex++;
-      }
-
-      // Add embedding fields if re-embedding
-      if (needsReembed) {
-        setClauses.push(`embedding = $${paramIndex}`);
-        params.push(embedding ? toSql(embedding) : null);
-        paramIndex++;
-
-        setClauses.push(`content_hash = $${paramIndex}`);
-        params.push(hash);
-        paramIndex++;
-
-        setClauses.push(`embedded_at = $${paramIndex}`);
-        params.push(embedding ? new Date().toISOString() : null);
-        paramIndex++;
-
-        setClauses.push(`embedding_model = $${paramIndex}`);
-        params.push(embedding ? "gemini-embedding-001" : null);
-        paramIndex++;
-      }
-
-      // Add WHERE id
-      params.push(args.id);
-      const updateSql = `UPDATE ${table} SET ${setClauses.join(", ")} WHERE id = $${paramIndex} RETURNING id`;
-
-      const { rows: updatedRows } = await deps.pool.query(updateSql, params);
-
-      if (updatedRows.length === 0) {
         return {
-          content: [{ type: "text" as const, text: "Update failed" }],
-          isError: true,
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({
+                id: updatedRows[0].id,
+                table,
+                updated: true,
+                embedded: needsReembed && !!embedding,
+              }),
+            },
+          ],
         };
+      } catch (err) {
+        await client.query("ROLLBACK").catch(() => {});
+        throw err;
+      } finally {
+        client.release();
       }
-
-      logger.info("update_entry_success", {
-        table,
-        id: updatedRows[0].id,
-        fields: Object.keys(providedFields),
-        reembedded: needsReembed,
-      });
-
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify({
-              id: updatedRows[0].id,
-              table,
-              updated: true,
-              embedded: needsReembed && !!embedding,
-            }),
-          },
-        ],
-      };
     },
   );
 }

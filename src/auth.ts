@@ -3,6 +3,14 @@ import type { AuthInfo, Role } from "./types.ts";
 import { logger } from "./logger.ts";
 import type { Request, Response, NextFunction } from "express";
 
+const VALID_ROLES: Set<string> = new Set<string>([
+  "admin",
+  "agent",
+  "discord",
+  "n8n",
+  "readonly",
+]);
+
 const ROLE_ENV_KEYS: Array<{ envKey: string; role: Role }> = [
   { envKey: "AUTH_TOKEN_ADMIN", role: "admin" },
   { envKey: "AUTH_TOKEN_AGENT", role: "agent" },
@@ -34,7 +42,15 @@ export function buildTokenMap(
       logger.warn(`Invalid user token format (expected role:token)`, { key });
       continue;
     }
-    const role = value.slice(0, colonIdx) as Role;
+    const rawRole = value.slice(0, colonIdx);
+    if (!VALID_ROLES.has(rawRole)) {
+      logger.warn(`Invalid role in user token (skipping)`, {
+        key,
+        role: rawRole,
+      });
+      continue;
+    }
+    const role = rawRole as Role;
     const token = value.slice(colonIdx + 1);
     const userName = key.replace("AUTH_TOKEN_USER_", "").toLowerCase();
     map.set(token, { role, clientId: userName });
@@ -69,12 +85,20 @@ export function authMiddleware(
 
     const provided = authHeader.slice("Bearer ".length);
 
+    // Always iterate ALL tokens to avoid timing side-channel leaking
+    // which token (or whether any token) matched early vs late.
+    let matched: AuthInfo | null = null;
     for (const [storedToken, authInfo] of tokenMap) {
       if (verifyToken(provided, storedToken)) {
-        (req as any).auth = authInfo;
-        next();
-        return;
+        matched = authInfo;
+        // Don't break — iterate all tokens for constant-time
       }
+    }
+
+    if (matched) {
+      (req as any).auth = matched;
+      next();
+      return;
     }
 
     res.status(401).json({ error: "Invalid token" });

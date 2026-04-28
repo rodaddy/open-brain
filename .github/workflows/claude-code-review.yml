@@ -24,7 +24,8 @@ jobs:
       pull-requests: write
       issues: write
     env:
-      ANTHROPIC_BASE_URL: http://10.71.1.33:4000
+      # Point to your OpenAI-compatible proxy (e.g., LiteLLM) or remove for direct Anthropic API
+      ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
       ANTHROPIC_API_KEY: ${{ secrets.LITELLM_API_KEY }}
       ANTHROPIC_MODEL: opus
       ANTHROPIC_DEFAULT_SONNET_MODEL: sonnet

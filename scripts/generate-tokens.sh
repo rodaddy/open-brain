@@ -33,7 +33,7 @@ show_tokens() {
   fi
 
   echo "# Open Brain Auth Tokens"
-  echo "# Copy these to the server .env on 10.71.20.49"
+  echo "# Copy these to your server's .env file"
   echo ""
   for role in "${ROLES[@]}"; do
     local key="AUTH_TOKEN_${role}"

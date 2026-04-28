@@ -15,8 +15,30 @@ function createMockEmbed(result: number[] | null = Array(768).fill(0.1)) {
   return { fn, calls };
 }
 
+/** Creates a mock pool that routes both pool.query and pool.connect().query through the same function */
+function createMockPool(queryFn: (...args: any[]) => Promise<{ rows: any[] }>) {
+  const txAwareQuery = async (...args: any[]) => {
+    // Passthrough BEGIN/COMMIT/ROLLBACK as no-ops
+    if (
+      typeof args[0] === "string" &&
+      ["BEGIN", "COMMIT", "ROLLBACK"].includes(args[0])
+    ) {
+      return { rows: [] };
+    }
+    return queryFn(...args);
+  };
+  const mockClient = {
+    query: txAwareQuery,
+    release: () => {},
+  };
+  return {
+    query: txAwareQuery,
+    connect: async () => mockClient,
+  };
+}
+
 async function setupToolClient(
-  mockPool: { query: (...args: any[]) => Promise<{ rows: any[] }> },
+  mockPool: ReturnType<typeof createMockPool>,
   mockEmbed: {
     fn: (text: string) => Promise<number[] | null>;
     calls: string[];
@@ -52,32 +74,30 @@ describe("update_entry", () => {
   describe("admin role -- update thoughts content", () => {
     it("re-embeds content, recalculates content_hash, returns updated+embedded", async () => {
       const queryCalls: any[] = [];
-      let callCount = 0;
-      const mockPool = {
-        query: async (...args: any[]) => {
-          queryCalls.push(args);
-          callCount++;
-          if (callCount === 1) {
-            // SELECT existing row
-            return {
-              rows: [
-                {
-                  id: "test-uuid",
-                  content: "old content",
-                  tags: ["old"],
-                  archived_at: null,
-                },
-              ],
-            };
-          }
-          if (callCount === 2) {
-            // Hash collision check -- no collision
-            return { rows: [] };
-          }
-          // UPDATE RETURNING
-          return { rows: [{ id: "test-uuid" }] };
-        },
-      };
+      let dataCallCount = 0;
+      const mockPool = createMockPool(async (...args: any[]) => {
+        queryCalls.push(args);
+        dataCallCount++;
+        if (dataCallCount === 1) {
+          // SELECT existing row
+          return {
+            rows: [
+              {
+                id: "test-uuid",
+                content: "old content",
+                tags: ["old"],
+                archived_at: null,
+              },
+            ],
+          };
+        }
+        if (dataCallCount === 2) {
+          // Hash collision check -- no collision
+          return { rows: [] };
+        }
+        // UPDATE RETURNING
+        return { rows: [{ id: "test-uuid" }] };
+      });
       const mockEmbed = createMockEmbed();
       const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
 
@@ -132,28 +152,26 @@ describe("update_entry", () => {
 
   describe("update decisions title+rationale", () => {
     it("embeds concatenation of title and rationale", async () => {
-      let callCount = 0;
-      const mockPool = {
-        query: async () => {
-          callCount++;
-          if (callCount === 1) {
-            return {
-              rows: [
-                {
-                  id: "dec-uuid",
-                  title: "old title",
-                  rationale: "old rationale",
-                  context: "ctx",
-                  tags: [],
-                  archived_at: null,
-                },
-              ],
-            };
-          }
-          if (callCount === 2) return { rows: [] }; // no hash collision
-          return { rows: [{ id: "dec-uuid" }] };
-        },
-      };
+      let dataCallCount = 0;
+      const mockPool = createMockPool(async () => {
+        dataCallCount++;
+        if (dataCallCount === 1) {
+          return {
+            rows: [
+              {
+                id: "dec-uuid",
+                title: "old title",
+                rationale: "old rationale",
+                context: "ctx",
+                tags: [],
+                archived_at: null,
+              },
+            ],
+          };
+        }
+        if (dataCallCount === 2) return { rows: [] }; // no hash collision
+        return { rows: [{ id: "dec-uuid" }] };
+      });
       const mockEmbed = createMockEmbed();
       const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
 
@@ -188,26 +206,24 @@ describe("update_entry", () => {
 
   describe("update tags only -- no content change", () => {
     it("does NOT re-embed, just updates tags", async () => {
-      let callCount = 0;
-      const mockPool = {
-        query: async () => {
-          callCount++;
-          if (callCount === 1) {
-            return {
-              rows: [
-                {
-                  id: "tag-uuid",
-                  content: "unchanged content",
-                  tags: ["old-tag"],
-                  archived_at: null,
-                },
-              ],
-            };
-          }
-          // UPDATE RETURNING (no hash collision check for tags-only)
-          return { rows: [{ id: "tag-uuid" }] };
-        },
-      };
+      let dataCallCount = 0;
+      const mockPool = createMockPool(async () => {
+        dataCallCount++;
+        if (dataCallCount === 1) {
+          return {
+            rows: [
+              {
+                id: "tag-uuid",
+                content: "unchanged content",
+                tags: ["old-tag"],
+                archived_at: null,
+              },
+            ],
+          };
+        }
+        // UPDATE RETURNING (no hash collision check for tags-only)
+        return { rows: [{ id: "tag-uuid" }] };
+      });
       const mockEmbed = createMockEmbed();
       const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
 
@@ -242,29 +258,27 @@ describe("update_entry", () => {
 
   describe("content hash collision", () => {
     it("returns duplicate content error when hash matches different row", async () => {
-      let callCount = 0;
-      const mockPool = {
-        query: async () => {
-          callCount++;
-          if (callCount === 1) {
-            return {
-              rows: [
-                {
-                  id: "orig-uuid",
-                  content: "old content",
-                  tags: [],
-                  archived_at: null,
-                },
-              ],
-            };
-          }
-          if (callCount === 2) {
-            // Hash collision -- different row has same hash
-            return { rows: [{ id: "other-uuid" }] };
-          }
-          return { rows: [] };
-        },
-      };
+      let dataCallCount = 0;
+      const mockPool = createMockPool(async () => {
+        dataCallCount++;
+        if (dataCallCount === 1) {
+          return {
+            rows: [
+              {
+                id: "orig-uuid",
+                content: "old content",
+                tags: [],
+                archived_at: null,
+              },
+            ],
+          };
+        }
+        if (dataCallCount === 2) {
+          // Hash collision -- different row has same hash
+          return { rows: [{ id: "other-uuid" }] };
+        }
+        return { rows: [] };
+      });
       const mockEmbed = createMockEmbed();
       const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
 
@@ -295,9 +309,7 @@ describe("update_entry", () => {
 
   describe("row not found", () => {
     it("returns 'Not found' when SELECT returns 0 rows", async () => {
-      const mockPool = {
-        query: async () => ({ rows: [] }),
-      };
+      const mockPool = createMockPool(async () => ({ rows: [] }));
       const mockEmbed = createMockEmbed();
       const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
 
@@ -328,18 +340,16 @@ describe("update_entry", () => {
 
   describe("archived entry guard", () => {
     it("returns error when entry has archived_at set", async () => {
-      const mockPool = {
-        query: async () => ({
-          rows: [
-            {
-              id: "archived-uuid",
-              content: "archived content",
-              tags: [],
-              archived_at: new Date("2026-01-01"),
-            },
-          ],
-        }),
-      };
+      const mockPool = createMockPool(async () => ({
+        rows: [
+          {
+            id: "archived-uuid",
+            content: "archived content",
+            tags: [],
+            archived_at: new Date("2026-01-01"),
+          },
+        ],
+      }));
       const mockEmbed = createMockEmbed();
       const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
 
@@ -370,26 +380,24 @@ describe("update_entry", () => {
 
   describe("agent role on thoughts -- has write", () => {
     it("succeeds because agent can write to thoughts", async () => {
-      let callCount = 0;
-      const mockPool = {
-        query: async () => {
-          callCount++;
-          if (callCount === 1) {
-            return {
-              rows: [
-                {
-                  id: "agent-uuid",
-                  content: "old",
-                  tags: [],
-                  archived_at: null,
-                },
-              ],
-            };
-          }
-          if (callCount === 2) return { rows: [] };
-          return { rows: [{ id: "agent-uuid" }] };
-        },
-      };
+      let dataCallCount = 0;
+      const mockPool = createMockPool(async () => {
+        dataCallCount++;
+        if (dataCallCount === 1) {
+          return {
+            rows: [
+              {
+                id: "agent-uuid",
+                content: "old",
+                tags: [],
+                archived_at: null,
+              },
+            ],
+          };
+        }
+        if (dataCallCount === 2) return { rows: [] };
+        return { rows: [{ id: "agent-uuid" }] };
+      });
       const mockEmbed = createMockEmbed();
       const auth: AuthInfo = { role: "agent", clientId: "agent-client" };
 
@@ -420,9 +428,7 @@ describe("update_entry", () => {
 
   describe("readonly role -- permission denied", () => {
     it("returns isError because readonly cannot write", async () => {
-      const mockPool = {
-        query: async () => ({ rows: [] }),
-      };
+      const mockPool = createMockPool(async () => ({ rows: [] }));
       const mockEmbed = createMockEmbed();
       const auth: AuthInfo = { role: "readonly", clientId: "ro-client" };
 
@@ -453,26 +459,24 @@ describe("update_entry", () => {
 
   describe("embedding failure -- graceful degradation", () => {
     it("still updates content but embedded=false", async () => {
-      let callCount = 0;
-      const mockPool = {
-        query: async () => {
-          callCount++;
-          if (callCount === 1) {
-            return {
-              rows: [
-                {
-                  id: "embed-fail-uuid",
-                  content: "old",
-                  tags: [],
-                  archived_at: null,
-                },
-              ],
-            };
-          }
-          if (callCount === 2) return { rows: [] }; // no hash collision
-          return { rows: [{ id: "embed-fail-uuid" }] };
-        },
-      };
+      let dataCallCount = 0;
+      const mockPool = createMockPool(async () => {
+        dataCallCount++;
+        if (dataCallCount === 1) {
+          return {
+            rows: [
+              {
+                id: "embed-fail-uuid",
+                content: "old",
+                tags: [],
+                archived_at: null,
+              },
+            ],
+          };
+        }
+        if (dataCallCount === 2) return { rows: [] }; // no hash collision
+        return { rows: [{ id: "embed-fail-uuid" }] };
+      });
       const mockEmbed = createMockEmbed(null); // embedding fails
       const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
 
@@ -504,9 +508,7 @@ describe("update_entry", () => {
 
   describe("no valid fields for table", () => {
     it("returns error when providing thoughts fields for sessions table", async () => {
-      const mockPool = {
-        query: async () => ({ rows: [] }),
-      };
+      const mockPool = createMockPool(async () => ({ rows: [] }));
       const mockEmbed = createMockEmbed();
       const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
 

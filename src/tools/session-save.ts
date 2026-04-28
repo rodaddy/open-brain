@@ -57,7 +57,7 @@ export function registerSessionSave(server: McpServer, deps: ToolDeps): void {
         };
       }
 
-      const hash = contentHash(args.summary + "|" + new Date().toISOString());
+      const hash = contentHash(args.summary + "|" + (args.project ?? ""));
       const embedParts = [args.summary];
       if (args.key_decisions?.length)
         embedParts.push(args.key_decisions.join(". "));

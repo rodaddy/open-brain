@@ -82,10 +82,10 @@ describe("log_decision", () => {
         expect(sql).toContain("INSERT INTO decisions");
         expect(params[0]).toBe("Use Bun"); // title
         expect(params[1]).toBe("Faster than Node.js for our use case"); // rationale
-        // alternatives should be JSON-serialized
+        // alternatives passed directly as array (pg driver handles JSONB serialization)
         const alts = params[2];
-        expect(typeof alts).toBe("string");
-        expect(JSON.parse(alts)).toEqual(["Node.js", "Deno"]);
+        expect(Array.isArray(alts)).toBe(true);
+        expect(alts).toEqual(["Node.js", "Deno"]);
         expect(params[3]).toEqual(["runtime"]); // tags (original -- extraction is fire-and-forget)
         expect(params[4]).toBe("Server runtime selection"); // context
         expect(params[5]).toBe("admin-client"); // created_by

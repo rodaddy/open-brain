@@ -1,7 +1,7 @@
+import type pg from "pg";
 import { logger } from "./logger.ts";
 
 const EXTRACTION_TIMEOUT_MS = 8000;
-const RETRY_DELAYS_MS = [0, 2000, 5000]; // immediate, 2s, 5s
 
 export interface ExtractedMetadata {
   topics: string[];
@@ -123,4 +123,41 @@ export function mergeTags(
   }
 
   return merged;
+}
+
+/**
+ * Fire-and-forget background extraction: fetch metadata, merge tags, update DB.
+ * Shared by log-thought and log-decision to avoid duplicated extraction blocks.
+ */
+export function backgroundExtract(
+  pool: pg.Pool,
+  table: string,
+  entryId: string,
+  text: string,
+  existingTags: string[],
+): void {
+  extractMetadata(text)
+    .then((extracted) => {
+      if (!extracted) return;
+      const enrichedTags = mergeTags(existingTags, extracted);
+      pool
+        .query(
+          `UPDATE ${table} SET tags = $1, extracted_metadata = $2 WHERE id = $3`,
+          [enrichedTags, JSON.stringify(extracted), entryId],
+        )
+        .catch((err: unknown) => {
+          logger.warn("extraction_update_error", {
+            table,
+            id: entryId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+    })
+    .catch((err) =>
+      logger.warn("extraction_background_error", {
+        table,
+        id: entryId,
+        error: String(err),
+      }),
+    );
 }

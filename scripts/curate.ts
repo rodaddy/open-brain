@@ -20,7 +20,8 @@ type TableName =
   | "projects"
   | "sessions";
 
-const LITELLM_URL = process.env.LITELLM_URL ?? "http://10.71.1.33:4000";
+// Falls back to a local LiteLLM instance — override via LITELLM_URL env var
+const LITELLM_URL = process.env.LITELLM_URL ?? "http://localhost:4000";
 const LLM_MODEL = process.env.CURATE_MODEL ?? "gpt-4o-mini";
 const DUPLICATE_THRESHOLD = 0.08;
 const STALE_DAYS = 90;

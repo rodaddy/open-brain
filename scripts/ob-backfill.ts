@@ -22,7 +22,8 @@ const CLAUDE_PROJECTS_DIR =
 
 const HISTORY_FILE = join(process.env.HOME ?? "", ".claude/history.jsonl");
 
-const LITELLM_URL = process.env.LITELLM_URL ?? "http://10.71.20.53:4000";
+// Falls back to a local LiteLLM instance — override via LITELLM_URL env var
+const LITELLM_URL = process.env.LITELLM_URL ?? "http://localhost:4000";
 const EXTRACTION_MODEL = process.env.EXTRACTION_MODEL ?? "sonnet";
 
 /** Failed sessions queue -- persisted locally for retry on next session-start/wrap */
