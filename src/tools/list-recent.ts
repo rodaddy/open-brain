@@ -65,12 +65,29 @@ function buildTableSelect(
   WHERE ${alias}.created_at >= NOW() - INTERVAL '1 day' * $1${archiveFilter}${tierFilter}`;
 }
 
+function buildTableCount(
+  table: Table,
+  includeArchived: boolean,
+  tier?: Tier,
+): string {
+  const alias = TABLE_ALIAS[table];
+
+  const archiveFilter = includeArchived
+    ? ""
+    : ` AND ${alias}.archived_at IS NULL`;
+  const tierFilter = tier ? ` AND ${alias}.tier = '${tier}'` : "";
+
+  return `SELECT COUNT(*) AS cnt
+  FROM ${table} ${alias}
+  WHERE ${alias}.created_at >= NOW() - INTERVAL '1 day' * $1${archiveFilter}${tierFilter}`;
+}
+
 export function registerListRecent(server: McpServer, deps: ToolDeps): void {
   server.registerTool(
     "list_recent",
     {
       description:
-        "List recent brain entries chronologically. Supports table filter, date range, and archived toggle.",
+        "List recent brain entries chronologically. Supports table filter, date range, archived toggle, and pagination via offset. Returns total_count for pagination awareness.",
       inputSchema: {
         table: z
           .enum([
@@ -93,9 +110,9 @@ export function registerListRecent(server: McpServer, deps: ToolDeps): void {
           .number()
           .int()
           .min(1)
-          .max(250)
+          .max(500)
           .optional()
-          .describe("Maximum entries to return (default 20)"),
+          .describe("Maximum entries to return (default 20, max 500)"),
         offset: z
           .number()
           .int()
@@ -177,7 +194,14 @@ export function registerListRecent(server: McpServer, deps: ToolDeps): void {
       );
 
       const unionSql = selects.join("\nUNION ALL\n");
-      const sql = `${unionSql}\nORDER BY created_at DESC\nLIMIT $2 OFFSET $3`;
+      const dataSql = `${unionSql}\nORDER BY created_at DESC\nLIMIT $2 OFFSET $3`;
+
+      // Build count query (same filters, no LIMIT/OFFSET)
+      const countSelects = accessibleTables.map((t) =>
+        buildTableCount(t, includeArchived, tier),
+      );
+      const countUnion = countSelects.join("\nUNION ALL\n");
+      const countSql = `SELECT SUM(cnt)::int AS total_count FROM (${countUnion}) _counts`;
 
       logger.info("list_recent_query", {
         tables: accessibleTables,
@@ -187,13 +211,25 @@ export function registerListRecent(server: McpServer, deps: ToolDeps): void {
         includeArchived,
       });
 
-      const { rows } = await deps.pool.query(sql, [days, limit, offset]);
+      // Run data + count queries in parallel
+      const [dataResult, countResult] = await Promise.all([
+        deps.pool.query(dataSql, [days, limit, offset]),
+        deps.pool.query(countSql, [days]),
+      ]);
+
+      const totalCount = countResult.rows[0]?.total_count ?? 0;
 
       return {
         content: [
           {
             type: "text" as const,
-            text: JSON.stringify(rows),
+            text: JSON.stringify({
+              entries: dataResult.rows,
+              total_count: totalCount,
+              limit,
+              offset,
+              has_more: offset + dataResult.rows.length < totalCount,
+            }),
           },
         ],
       };

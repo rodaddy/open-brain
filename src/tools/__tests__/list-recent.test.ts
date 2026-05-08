@@ -51,11 +51,16 @@ async function setupToolClient(
 
 describe("list_recent", () => {
   describe("admin role -- no params (defaults)", () => {
-    it("returns entries from last 7 days, limit 20, excludes archived", async () => {
+    it("returns entries from last 7 days, limit 20, excludes archived, includes total_count", async () => {
       const queryCalls: any[] = [];
       const mockPool = {
         query: async (...args: any[]) => {
           queryCalls.push(args);
+          const [sql] = args;
+          // Count query returns total
+          if (sql.includes("SUM(cnt)")) {
+            return { rows: [{ total_count: 42 }] };
+          }
           return { rows: makeMockRows(3) };
         },
       };
@@ -71,9 +76,15 @@ describe("list_recent", () => {
 
         expect(result.isError).toBeFalsy();
 
-        // Verify SQL shape
-        expect(queryCalls.length).toBe(1);
-        const [sql, params] = queryCalls[0];
+        // Should have made 2 queries (data + count) via Promise.all
+        expect(queryCalls.length).toBe(2);
+
+        // Find the data query (the one with LIMIT)
+        const dataCall = queryCalls.find(([sql]: [string]) =>
+          sql.includes("LIMIT"),
+        );
+        expect(dataCall).toBeTruthy();
+        const [sql, params] = dataCall;
 
         // Should query all 5 tables (admin has read on all)
         expect(sql).toContain("thoughts");
@@ -84,17 +95,22 @@ describe("list_recent", () => {
         expect(sql).toContain("UNION ALL");
         expect(sql).toContain("ORDER BY created_at DESC");
 
-        // Default days=7 and limit=20
+        // Default days=7, limit=20, offset=0
         expect(params[0]).toBe(7);
         expect(params[1]).toBe(20);
+        expect(params[2]).toBe(0);
 
         // Should filter archived by default
         expect(sql).toContain("archived_at IS NULL");
 
-        // Verify result format
+        // Verify response envelope
         const parsed = JSON.parse((result.content as any)[0].text);
-        expect(Array.isArray(parsed)).toBe(true);
-        expect(parsed.length).toBe(3);
+        expect(parsed.total_count).toBe(42);
+        expect(parsed.limit).toBe(20);
+        expect(parsed.offset).toBe(0);
+        expect(parsed.has_more).toBe(true);
+        expect(Array.isArray(parsed.entries)).toBe(true);
+        expect(parsed.entries.length).toBe(3);
       } finally {
         await cleanup();
       }
@@ -107,6 +123,10 @@ describe("list_recent", () => {
       const mockPool = {
         query: async (...args: any[]) => {
           queryCalls.push(args);
+          const [sql] = args;
+          if (sql.includes("SUM(cnt)")) {
+            return { rows: [{ total_count: 1 }] };
+          }
           return { rows: makeMockRows(1) };
         },
       };
@@ -121,7 +141,10 @@ describe("list_recent", () => {
         });
 
         expect(result.isError).toBeFalsy();
-        const [sql] = queryCalls[0];
+        const dataCall = queryCalls.find(([sql]: [string]) =>
+          sql.includes("LIMIT"),
+        );
+        const [sql] = dataCall;
 
         // Should only contain thoughts, not other tables in UNION
         expect(sql).toContain("FROM thoughts");
@@ -138,6 +161,10 @@ describe("list_recent", () => {
       const mockPool = {
         query: async (...args: any[]) => {
           queryCalls.push(args);
+          const [sql] = args;
+          if (sql.includes("SUM(cnt)")) {
+            return { rows: [{ total_count: 2 }] };
+          }
           return { rows: makeMockRows(2) };
         },
       };
@@ -152,7 +179,10 @@ describe("list_recent", () => {
         });
 
         expect(result.isError).toBeFalsy();
-        const [sql] = queryCalls[0];
+        const dataCall = queryCalls.find(([sql]: [string]) =>
+          sql.includes("LIMIT"),
+        );
+        const [sql] = dataCall;
         expect(sql).not.toContain("archived_at IS NULL");
       } finally {
         await cleanup();
@@ -166,6 +196,10 @@ describe("list_recent", () => {
       const mockPool = {
         query: async (...args: any[]) => {
           queryCalls.push(args);
+          const [sql] = args;
+          if (sql.includes("SUM(cnt)")) {
+            return { rows: [{ total_count: 0 }] };
+          }
           return { rows: [] };
         },
       };
@@ -179,7 +213,10 @@ describe("list_recent", () => {
           arguments: {},
         });
 
-        const [sql] = queryCalls[0];
+        const dataCall = queryCalls.find(([sql]: [string]) =>
+          sql.includes("LIMIT"),
+        );
+        const [sql] = dataCall;
         expect(sql).toContain("archived_at IS NULL");
       } finally {
         await cleanup();
@@ -193,6 +230,10 @@ describe("list_recent", () => {
       const mockPool = {
         query: async (...args: any[]) => {
           queryCalls.push(args);
+          const [sql] = args;
+          if (sql.includes("SUM(cnt)")) {
+            return { rows: [{ total_count: 100 }] };
+          }
           return { rows: makeMockRows(5) };
         },
       };
@@ -207,9 +248,114 @@ describe("list_recent", () => {
         });
 
         expect(result.isError).toBeFalsy();
-        const [, params] = queryCalls[0];
+        const dataCall = queryCalls.find(([sql]: [string]) =>
+          sql.includes("LIMIT"),
+        );
+        const [, params] = dataCall;
         expect(params[0]).toBe(30);
         expect(params[1]).toBe(5);
+      } finally {
+        await cleanup();
+      }
+    });
+  });
+
+  describe("offset pagination", () => {
+    it("passes offset to SQL and reflects it in response", async () => {
+      const queryCalls: any[] = [];
+      const mockPool = {
+        query: async (...args: any[]) => {
+          queryCalls.push(args);
+          const [sql] = args;
+          if (sql.includes("SUM(cnt)")) {
+            return { rows: [{ total_count: 300 }] };
+          }
+          return { rows: makeMockRows(50) };
+        },
+      };
+      const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
+
+      const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+      try {
+        const result = await client.callTool({
+          name: "list_recent",
+          arguments: { limit: 50, offset: 200 },
+        });
+
+        expect(result.isError).toBeFalsy();
+
+        // Verify offset passed to SQL
+        const dataCall = queryCalls.find(([sql]: [string]) =>
+          sql.includes("LIMIT"),
+        );
+        const [sql, params] = dataCall;
+        expect(sql).toContain("OFFSET $3");
+        expect(params[2]).toBe(200);
+
+        // Verify response envelope
+        const parsed = JSON.parse((result.content as any)[0].text);
+        expect(parsed.offset).toBe(200);
+        expect(parsed.total_count).toBe(300);
+        expect(parsed.has_more).toBe(true);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("has_more is false when all entries are returned", async () => {
+      const mockPool = {
+        query: async (...args: any[]) => {
+          const [sql] = args;
+          if (sql.includes("SUM(cnt)")) {
+            return { rows: [{ total_count: 5 }] };
+          }
+          return { rows: makeMockRows(5) };
+        },
+      };
+      const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
+
+      const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+      try {
+        const result = await client.callTool({
+          name: "list_recent",
+          arguments: { limit: 10 },
+        });
+
+        const parsed = JSON.parse((result.content as any)[0].text);
+        expect(parsed.has_more).toBe(false);
+        expect(parsed.total_count).toBe(5);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("has_more is false on last page", async () => {
+      const mockPool = {
+        query: async (...args: any[]) => {
+          const [sql] = args;
+          if (sql.includes("SUM(cnt)")) {
+            return { rows: [{ total_count: 25 }] };
+          }
+          // Last page: only 5 entries left
+          return { rows: makeMockRows(5) };
+        },
+      };
+      const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
+
+      const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+      try {
+        const result = await client.callTool({
+          name: "list_recent",
+          arguments: { limit: 20, offset: 20 },
+        });
+
+        const parsed = JSON.parse((result.content as any)[0].text);
+        expect(parsed.has_more).toBe(false);
+        expect(parsed.offset).toBe(20);
+        expect(parsed.total_count).toBe(25);
       } finally {
         await cleanup();
       }
@@ -219,7 +365,13 @@ describe("list_recent", () => {
   describe("readonly role -- has read permission", () => {
     it("succeeds because readonly can read all tables", async () => {
       const mockPool = {
-        query: async () => ({ rows: makeMockRows(1) }),
+        query: async (...args: any[]) => {
+          const [sql] = args;
+          if (sql.includes("SUM(cnt)")) {
+            return { rows: [{ total_count: 1 }] };
+          }
+          return { rows: makeMockRows(1) };
+        },
       };
       const auth: AuthInfo = { role: "readonly", clientId: "ro-client" };
 
@@ -233,7 +385,8 @@ describe("list_recent", () => {
 
         expect(result.isError).toBeFalsy();
         const parsed = JSON.parse((result.content as any)[0].text);
-        expect(Array.isArray(parsed)).toBe(true);
+        expect(Array.isArray(parsed.entries)).toBe(true);
+        expect(typeof parsed.total_count).toBe("number");
       } finally {
         await cleanup();
       }
@@ -271,6 +424,10 @@ describe("list_recent", () => {
       const mockPool = {
         query: async (...args: any[]) => {
           queryCalls.push(args);
+          const [sql] = args;
+          if (sql.includes("SUM(cnt)")) {
+            return { rows: [{ total_count: 1 }] };
+          }
           return { rows: makeMockRows(1) };
         },
       };
@@ -284,7 +441,10 @@ describe("list_recent", () => {
           arguments: {},
         });
 
-        const [sql] = queryCalls[0];
+        const dataCall = queryCalls.find(([sql]: [string]) =>
+          sql.includes("LIMIT"),
+        );
+        const [sql] = dataCall;
         expect(sql).toContain(".tier");
       } finally {
         await cleanup();
@@ -298,6 +458,10 @@ describe("list_recent", () => {
       const mockPool = {
         query: async (...args: any[]) => {
           queryCalls.push(args);
+          const [sql] = args;
+          if (sql.includes("SUM(cnt)")) {
+            return { rows: [{ total_count: 1 }] };
+          }
           return { rows: makeMockRows(1) };
         },
       };
@@ -311,7 +475,10 @@ describe("list_recent", () => {
           arguments: { tier: "hot" },
         });
 
-        const [sql] = queryCalls[0];
+        const dataCall = queryCalls.find(([sql]: [string]) =>
+          sql.includes("LIMIT"),
+        );
+        const [sql] = dataCall;
         expect(sql).toContain("tier = 'hot'");
       } finally {
         await cleanup();
@@ -323,6 +490,10 @@ describe("list_recent", () => {
       const mockPool = {
         query: async (...args: any[]) => {
           queryCalls.push(args);
+          const [sql] = args;
+          if (sql.includes("SUM(cnt)")) {
+            return { rows: [{ total_count: 1 }] };
+          }
           return { rows: makeMockRows(1) };
         },
       };
@@ -336,7 +507,10 @@ describe("list_recent", () => {
           arguments: {},
         });
 
-        const [sql] = queryCalls[0];
+        const dataCall = queryCalls.find(([sql]: [string]) =>
+          sql.includes("LIMIT"),
+        );
+        const [sql] = dataCall;
         expect(sql).not.toContain("tier = '");
       } finally {
         await cleanup();
@@ -345,9 +519,15 @@ describe("list_recent", () => {
   });
 
   describe("empty results", () => {
-    it("returns empty array, no isError", async () => {
+    it("returns empty entries array with total_count 0, no isError", async () => {
       const mockPool = {
-        query: async () => ({ rows: [] }),
+        query: async (...args: any[]) => {
+          const [sql] = args;
+          if (sql.includes("SUM(cnt)")) {
+            return { rows: [{ total_count: 0 }] };
+          }
+          return { rows: [] };
+        },
       };
       const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
 
@@ -361,8 +541,49 @@ describe("list_recent", () => {
 
         expect(result.isError).toBeFalsy();
         const parsed = JSON.parse((result.content as any)[0].text);
-        expect(Array.isArray(parsed)).toBe(true);
-        expect(parsed.length).toBe(0);
+        expect(Array.isArray(parsed.entries)).toBe(true);
+        expect(parsed.entries.length).toBe(0);
+        expect(parsed.total_count).toBe(0);
+        expect(parsed.has_more).toBe(false);
+      } finally {
+        await cleanup();
+      }
+    });
+  });
+
+  describe("count query uses same filters", () => {
+    it("count query includes archived filter and tier filter", async () => {
+      const queryCalls: any[] = [];
+      const mockPool = {
+        query: async (...args: any[]) => {
+          queryCalls.push(args);
+          const [sql] = args;
+          if (sql.includes("SUM(cnt)")) {
+            return { rows: [{ total_count: 10 }] };
+          }
+          return { rows: makeMockRows(3) };
+        },
+      };
+      const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
+
+      const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+      try {
+        await client.callTool({
+          name: "list_recent",
+          arguments: { tier: "warm", include_archived: false },
+        });
+
+        // Find the count query
+        const countCall = queryCalls.find(([sql]: [string]) =>
+          sql.includes("SUM(cnt)"),
+        );
+        expect(countCall).toBeTruthy();
+        const [countSql] = countCall;
+
+        // Count query should have same filters
+        expect(countSql).toContain("archived_at IS NULL");
+        expect(countSql).toContain("tier = 'warm'");
       } finally {
         await cleanup();
       }
