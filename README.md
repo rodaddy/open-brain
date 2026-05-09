@@ -1,5 +1,7 @@
 # Open Brain
 
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-ffdd00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/rodaddy)
+
 A semantic knowledge base and memory system built as an [MCP](https://modelcontextprotocol.io/) server. Store thoughts, decisions, contacts, sessions, and projects in PostgreSQL with pgvector — then search across all of them with hybrid vector + keyword retrieval.
 
 Built for AI agents that need persistent, searchable memory across conversations.
