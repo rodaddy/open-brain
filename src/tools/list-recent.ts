@@ -4,20 +4,47 @@ import { canRead } from "../permissions.ts";
 import type { AuthInfo, Table, Tier } from "../types.ts";
 import { logger } from "../logger.ts";
 import type { ToolDeps } from "./index.ts";
-import {
-  ALL_TABLES,
-  SOURCE_LABELS,
-  CONTENT_PREVIEW,
-  TABLE_ALIAS,
-  VALID_TIERS,
-} from "./table-constants.ts";
+
+const ALL_TABLES: Table[] = [
+  "thoughts",
+  "decisions",
+  "relationships",
+  "projects",
+  "sessions",
+];
+
+/** Singular labels for list results */
+const SOURCE_LABELS: Record<Table, string> = {
+  thoughts: "thought",
+  decisions: "decision",
+  relationships: "relationship",
+  projects: "project",
+  sessions: "session",
+};
+
+/** Content preview SQL expression per table */
+const CONTENT_PREVIEW: Record<Table, string> = {
+  thoughts: "t.content",
+  decisions: "d.title || ': ' || d.rationale",
+  relationships: "r.person_name || ': ' || COALESCE(r.context, '')",
+  projects: "p.name || ': ' || COALESCE(p.description, '')",
+  sessions: "COALESCE(s.project || ': ', '') || LEFT(s.summary, 200)",
+};
+
+/** Table alias used in SELECTs */
+const TABLE_ALIAS: Record<Table, string> = {
+  thoughts: "t",
+  decisions: "d",
+  relationships: "r",
+  projects: "p",
+  sessions: "s",
+};
 
 function buildTableSelect(
   table: Table,
   includeArchived: boolean,
   tier?: Tier,
 ): string {
-  if (tier && !VALID_TIERS.has(tier)) throw new Error(`Invalid tier: ${tier}`);
   const alias = TABLE_ALIAS[table];
   const label = SOURCE_LABELS[table];
   const preview = CONTENT_PREVIEW[table];
@@ -38,12 +65,29 @@ function buildTableSelect(
   WHERE ${alias}.created_at >= NOW() - INTERVAL '1 day' * $1${archiveFilter}${tierFilter}`;
 }
 
+function buildCountSelect(
+  table: Table,
+  includeArchived: boolean,
+  tier?: Tier,
+): string {
+  const alias = TABLE_ALIAS[table];
+
+  const archiveFilter = includeArchived
+    ? ""
+    : ` AND ${alias}.archived_at IS NULL`;
+  const tierFilter = tier ? ` AND ${alias}.tier = '${tier}'` : "";
+
+  return `SELECT COUNT(*) AS cnt
+  FROM ${table} ${alias}
+  WHERE ${alias}.created_at >= NOW() - INTERVAL '1 day' * $1${archiveFilter}${tierFilter}`;
+}
+
 export function registerListRecent(server: McpServer, deps: ToolDeps): void {
   server.registerTool(
     "list_recent",
     {
       description:
-        "List recent brain entries chronologically. Supports table filter, date range, and archived toggle.",
+        "List recent brain entries chronologically. Supports table filter, date range, tier filter, and pagination with total_count.",
       inputSchema: {
         table: z
           .enum([
@@ -66,9 +110,9 @@ export function registerListRecent(server: McpServer, deps: ToolDeps): void {
           .number()
           .int()
           .min(1)
-          .max(250)
+          .max(500)
           .optional()
-          .describe("Maximum entries to return (default 20)"),
+          .describe("Maximum entries to return (default 20, max 500)"),
         offset: z
           .number()
           .int()
@@ -152,6 +196,12 @@ export function registerListRecent(server: McpServer, deps: ToolDeps): void {
       const unionSql = selects.join("\nUNION ALL\n");
       const sql = `${unionSql}\nORDER BY created_at DESC\nLIMIT $2 OFFSET $3`;
 
+      // Build total count query
+      const countSelects = accessibleTables.map((t) =>
+        buildCountSelect(t, includeArchived, tier),
+      );
+      const countSql = `SELECT SUM(cnt)::int AS total_count FROM (${countSelects.join("\nUNION ALL\n")}) counts`;
+
       logger.info("list_recent_query", {
         tables: accessibleTables,
         days,
@@ -160,13 +210,25 @@ export function registerListRecent(server: McpServer, deps: ToolDeps): void {
         includeArchived,
       });
 
-      const { rows } = await deps.pool.query(sql, [days, limit, offset]);
+      const [dataResult, countResult] = await Promise.all([
+        deps.pool.query(sql, [days, limit, offset]),
+        deps.pool.query(countSql, [days]),
+      ]);
+
+      const totalCount = countResult.rows[0]?.total_count ?? 0;
+      const hasMore = offset + dataResult.rows.length < totalCount;
 
       return {
         content: [
           {
             type: "text" as const,
-            text: JSON.stringify(rows),
+            text: JSON.stringify({
+              entries: dataResult.rows,
+              total_count: totalCount,
+              offset,
+              limit,
+              has_more: hasMore,
+            }),
           },
         ],
       };

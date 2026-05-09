@@ -72,7 +72,7 @@ describe("list_recent", () => {
         expect(result.isError).toBeFalsy();
 
         // Verify SQL shape
-        expect(queryCalls.length).toBe(1);
+        expect(queryCalls.length).toBe(2); // data query + count query
         const [sql, params] = queryCalls[0];
 
         // Should query all 5 tables (admin has read on all)
@@ -93,8 +93,11 @@ describe("list_recent", () => {
 
         // Verify result format
         const parsed = JSON.parse((result.content as any)[0].text);
-        expect(Array.isArray(parsed)).toBe(true);
-        expect(parsed.length).toBe(3);
+        expect(parsed.entries).toBeDefined();
+        expect(Array.isArray(parsed.entries)).toBe(true);
+        expect(typeof parsed.total_count).toBe("number");
+        expect(typeof parsed.has_more).toBe("boolean");
+        expect(parsed.entries.length).toBe(3);
       } finally {
         await cleanup();
       }
@@ -233,7 +236,10 @@ describe("list_recent", () => {
 
         expect(result.isError).toBeFalsy();
         const parsed = JSON.parse((result.content as any)[0].text);
-        expect(Array.isArray(parsed)).toBe(true);
+        expect(parsed.entries).toBeDefined();
+        expect(Array.isArray(parsed.entries)).toBe(true);
+        expect(typeof parsed.total_count).toBe("number");
+        expect(typeof parsed.has_more).toBe("boolean");
       } finally {
         await cleanup();
       }
@@ -361,8 +367,11 @@ describe("list_recent", () => {
 
         expect(result.isError).toBeFalsy();
         const parsed = JSON.parse((result.content as any)[0].text);
-        expect(Array.isArray(parsed)).toBe(true);
-        expect(parsed.length).toBe(0);
+        expect(parsed.entries).toBeDefined();
+        expect(Array.isArray(parsed.entries)).toBe(true);
+        expect(typeof parsed.total_count).toBe("number");
+        expect(typeof parsed.has_more).toBe("boolean");
+        expect(parsed.entries.length).toBe(0);
       } finally {
         await cleanup();
       }
