@@ -86,6 +86,10 @@ export function registerSearchAll(server: McpServer, deps: ToolDeps): void {
         "Federated search across Open Brain knowledge AND qmd file index. Returns merged, ranked results from both sources.",
       inputSchema: {
         query: z.string().min(1).describe("Natural language search query"),
+        namespace: z
+          .string()
+          .optional()
+          .describe("Optional: filter brain results to a specific namespace (e.g. clientId or 'collab')"),
         limit: z
           .number()
           .int()
@@ -142,6 +146,7 @@ export function registerSearchAll(server: McpServer, deps: ToolDeps): void {
       const sources = (args.sources as "all" | "brain" | "qmd") ?? "all";
       const mode = (args.search_mode as SearchMode) ?? "hybrid";
       const tier = args.tier as Tier | undefined;
+      const namespace = args.namespace as string | undefined;
       const searchBrain = sources === "all" || sources === "brain";
       const searchQmdSource = sources === "all" || sources === "qmd";
 
@@ -151,7 +156,7 @@ export function registerSearchAll(server: McpServer, deps: ToolDeps): void {
       // Launch both searches in parallel
       const [brainResults, qmdResults] = await Promise.all([
         searchBrain
-          ? searchOB(deps, auth, args.query, totalNeeded, mode, tier)
+          ? searchOB(deps, auth, args.query, totalNeeded, mode, tier, namespace)
           : Promise.resolve([]),
         searchQmdSource
           ? searchQmd(args.query, totalNeeded)
@@ -204,6 +209,7 @@ async function searchOB(
   limit: number,
   mode: SearchMode = "hybrid",
   tier?: Tier,
+  namespace?: string,
 ): Promise<UnifiedResult[]> {
   const accessibleTables = ALL_TABLES.filter((t) => canRead(auth.role, t));
   if (accessibleTables.length === 0) return [];
@@ -217,6 +223,8 @@ async function searchOB(
       limit,
       mode,
       tier,
+      0,
+      namespace,
     );
   } catch (err) {
     logger.warn("searchOB_failed", {
@@ -225,7 +233,7 @@ async function searchOB(
     return [];
   }
 
-  trackUsage(deps, rows, query);
+  trackUsage(deps, rows, query, "search", auth.clientId);
 
   return rows.map((row) => ({
     source: "brain" as const,

@@ -85,6 +85,7 @@ export function buildTableCTE(
   table: Table,
   perTableLimit: number,
   tier?: Tier,
+  namespace?: string,
 ): string {
   if (tier && !VALID_TIERS.has(tier)) throw new Error(`Invalid tier: ${tier}`);
   const alias = TABLE_ALIAS[table];
@@ -92,6 +93,7 @@ export function buildTableCTE(
   const preview = CONTENT_PREVIEW[table];
   const cteName = `${table}_results`;
   const tierFilter = tier ? ` AND ${alias}.tier = '${tier}'` : "";
+  const nsFilter = namespace ? ` AND ${alias}.namespace = '${namespace}'` : "";
   const metaCol = HAS_EXTRACTED_METADATA.has(table)
     ? `${alias}.extracted_metadata`
     : "NULL::jsonb AS extracted_metadata";
@@ -109,19 +111,25 @@ export function buildTableCTE(
     COALESCE(${alias}.access_count, 0) AS access_count,
     ${metaCol}
   FROM ${table} ${alias}
-  WHERE ${alias}.embedding IS NOT NULL AND ${alias}.archived_at IS NULL${tierFilter}
+  WHERE ${alias}.embedding IS NOT NULL AND ${alias}.archived_at IS NULL${tierFilter}${nsFilter}
   ORDER BY ${alias}.embedding <=> (SELECT emb FROM query_embedding) ASC
   LIMIT ${perTableLimit}
 )`;
 }
 
-function buildFtsCTE(table: Table, perTableLimit: number, tier?: Tier): string {
+function buildFtsCTE(
+  table: Table,
+  perTableLimit: number,
+  tier?: Tier,
+  namespace?: string,
+): string {
   if (tier && !VALID_TIERS.has(tier)) throw new Error(`Invalid tier: ${tier}`);
   const alias = TABLE_ALIAS[table];
   const label = SOURCE_LABELS[table];
   const preview = CONTENT_PREVIEW[table];
   const cteName = `${table}_fts`;
   const tierFilter = tier ? ` AND ${alias}.tier = '${tier}'` : "";
+  const nsFilter = namespace ? ` AND ${alias}.namespace = '${namespace}'` : "";
 
   const metaCol = HAS_EXTRACTED_METADATA.has(table)
     ? `${alias}.extracted_metadata`
@@ -141,7 +149,7 @@ function buildFtsCTE(table: Table, perTableLimit: number, tier?: Tier): string {
     ${metaCol}
   FROM ${table} ${alias}
   WHERE ${alias}.search_vector @@ plainto_tsquery('english', (SELECT q FROM fts_query))
-    AND ${alias}.archived_at IS NULL${tierFilter}
+    AND ${alias}.archived_at IS NULL${tierFilter}${nsFilter}
   ORDER BY fts_rank DESC
   LIMIT ${perTableLimit}
 )`;
@@ -154,10 +162,11 @@ async function vectorSearch(
   fetchLimit: number,
   tier?: Tier,
   offset = 0,
+  namespace?: string,
 ): Promise<SearchRow[]> {
   const perTableLimit = fetchLimit;
   const ctes = accessibleTables.map((t) =>
-    buildTableCTE(t, perTableLimit, tier),
+    buildTableCTE(t, perTableLimit, tier, namespace),
   );
   const cteNames = accessibleTables.map((t) => `${t}_results`);
   const unionAll = cteNames
@@ -189,9 +198,12 @@ async function ftsSearch(
   fetchLimit: number,
   tier?: Tier,
   offset = 0,
+  namespace?: string,
 ): Promise<SearchRow[]> {
   const perTableLimit = fetchLimit;
-  const ctes = accessibleTables.map((t) => buildFtsCTE(t, perTableLimit, tier));
+  const ctes = accessibleTables.map((t) =>
+    buildFtsCTE(t, perTableLimit, tier, namespace),
+  );
   const cteNames = accessibleTables.map((t) => `${t}_fts`);
   const unionAll = cteNames
     .map((name) => `SELECT * FROM ${name}`)
@@ -263,6 +275,7 @@ export function trackUsage(
   rows: SearchRow[],
   queryText: string,
   context = "search",
+  accessedBy?: string,
 ): void {
   if (rows.length === 0) return;
   if (trackingCircuitOpen) return;
@@ -293,9 +306,9 @@ export function trackUsage(
     const sourceTables = logRows.map((r) => LABEL_TO_TABLE[r.source_type]);
     trackingPromises.push(
       deps.pool.query(
-        `INSERT INTO entry_access_log (entry_id, source_table, accessed_at, query_text, context)
-           SELECT unnest($1::uuid[]), unnest($2::text[]), NOW(), $3, $4`,
-        [entryIds, sourceTables, queryText, context],
+        `INSERT INTO entry_access_log (entry_id, source_table, accessed_at, query_text, context, accessed_by)
+           SELECT unnest($1::uuid[]), unnest($2::text[]), NOW(), $3, $4, $5`,
+        [entryIds, sourceTables, queryText, context, accessedBy ?? null],
       ),
     );
   }
@@ -334,9 +347,10 @@ export async function executeSearch(
   mode: SearchMode = "hybrid",
   tier?: Tier,
   offset = 0,
+  namespace?: string,
 ): Promise<SearchRow[]> {
   if (mode === "keyword") {
-    return ftsSearch(deps, accessibleTables, query, limit, tier, offset);
+    return ftsSearch(deps, accessibleTables, query, limit, tier, offset, namespace);
   }
 
   // Vector and hybrid both need an embedding
@@ -347,14 +361,14 @@ export async function executeSearch(
       logger.warn("embedding_failed_fallback_fts", {
         query: query.slice(0, 50),
       });
-      return ftsSearch(deps, accessibleTables, query, limit, tier, offset);
+      return ftsSearch(deps, accessibleTables, query, limit, tier, offset, namespace);
     }
     // In vector mode, null embedding is a hard failure -- signal via thrown error
     throw new Error("Failed to generate query embedding");
   }
 
   if (mode === "vector") {
-    return vectorSearch(deps, accessibleTables, embedding, limit, tier, offset);
+    return vectorSearch(deps, accessibleTables, embedding, limit, tier, offset, namespace);
   }
 
   // Hybrid: run both in parallel, merge with RRF
@@ -362,8 +376,8 @@ export async function executeSearch(
   const totalNeeded = offset + limit;
   const fetchLimit = totalNeeded * HYBRID_FETCH_MULTIPLIER;
   const [vectorRows, ftsRows] = await Promise.all([
-    vectorSearch(deps, accessibleTables, embedding, fetchLimit, tier),
-    ftsSearch(deps, accessibleTables, query, fetchLimit, tier),
+    vectorSearch(deps, accessibleTables, embedding, fetchLimit, tier, 0, namespace),
+    ftsSearch(deps, accessibleTables, query, fetchLimit, tier, 0, namespace),
   ]);
 
   const merged = rrfMerge(vectorRows, ftsRows, totalNeeded);
@@ -388,6 +402,10 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
           ])
           .optional()
           .describe("Optional: limit search to a specific table"),
+        namespace: z
+          .string()
+          .optional()
+          .describe("Optional: filter results to a specific namespace (e.g. clientId or 'collab')"),
         limit: z
           .number()
           .int()
@@ -469,6 +487,7 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
       const offset = args.offset ?? 0;
       const mode = (args.search_mode as SearchMode) ?? "hybrid";
       const tier = args.tier as Tier | undefined;
+      const namespace = args.namespace as string | undefined;
 
       let rows;
       try {
@@ -480,6 +499,7 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
           mode,
           tier,
           offset,
+          namespace,
         );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -489,7 +509,7 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
         };
       }
 
-      trackUsage(deps, rows, args.query);
+      trackUsage(deps, rows, args.query, "search", auth.clientId);
 
       return {
         content: [

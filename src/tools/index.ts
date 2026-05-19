@@ -15,6 +15,14 @@ import { registerSearchAll } from "./search-all.ts";
 import { registerUpsertPerson } from "./upsert-person.ts";
 import { registerSetTier } from "./set-tier.ts";
 import { registerGetEntry } from "./get-entry.ts";
+import { registerGetStats } from "./get-stats.ts";
+import { registerAccessReport } from "./access-report.ts";
+import { registerBulkSetTier } from "./bulk-set-tier.ts";
+import { registerFindDuplicates } from "./find-duplicates.ts";
+import { registerCurateEntries } from "./curate-entries.ts";
+import { registerBulkArchive } from "./bulk-archive.ts";
+import { registerListNamespaces } from "./list-namespaces.ts";
+import { registerTierRecommendations } from "./tier-recommendations.ts";
 
 export interface ToolDeps {
   pool: pg.Pool;
@@ -36,4 +44,12 @@ export function registerAllTools(server: McpServer, deps: ToolDeps): void {
   registerUpsertPerson(server, deps);
   registerSetTier(server, deps);
   registerGetEntry(server, deps);
+  registerGetStats(server, deps);
+  registerAccessReport(server, deps);
+  registerBulkSetTier(server, deps);
+  registerFindDuplicates(server, deps);
+  registerCurateEntries(server, deps);
+  registerBulkArchive(server, deps);
+  registerListNamespaces(server, deps);
+  registerTierRecommendations(server, deps);
 }

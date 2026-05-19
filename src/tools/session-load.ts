@@ -44,20 +44,20 @@ export function registerSessionLoad(server: McpServer, deps: ToolDeps): void {
       }
 
       if (args.project) {
-        return handleProjectLoad(deps, args.project);
+        return handleProjectLoad(deps, args.project, auth.clientId);
       }
 
-      return handleGlobalLoad(deps);
+      return handleGlobalLoad(deps, auth.clientId);
     },
   );
 }
 
-function logSessionAccess(deps: ToolDeps, sessionId: string): void {
+function logSessionAccess(deps: ToolDeps, sessionId: string, accessedBy?: string): void {
   void deps.pool
     .query(
-      `INSERT INTO entry_access_log (entry_id, source_table, accessed_at, query_text, context)
-       VALUES ($1::uuid, 'sessions', NOW(), NULL, 'session_load')`,
-      [sessionId],
+      `INSERT INTO entry_access_log (entry_id, source_table, accessed_at, query_text, context, accessed_by)
+       VALUES ($1::uuid, 'sessions', NOW(), NULL, 'session_load', $2)`,
+      [sessionId, accessedBy ?? null],
     )
     .catch((err: unknown) => {
       logger.warn("session_load_access_log_error", {
@@ -66,7 +66,7 @@ function logSessionAccess(deps: ToolDeps, sessionId: string): void {
     });
 }
 
-async function handleProjectLoad(deps: ToolDeps, project: string) {
+async function handleProjectLoad(deps: ToolDeps, project: string, accessedBy?: string) {
   const sql = `SELECT ${SELECT_COLUMNS}
 FROM sessions
 WHERE project = $1 AND archived_at IS NULL
@@ -86,7 +86,7 @@ LIMIT 1`;
     };
   }
 
-  logSessionAccess(deps, rows[0].id);
+  logSessionAccess(deps, rows[0].id, accessedBy);
 
   return {
     content: [
@@ -98,7 +98,7 @@ LIMIT 1`;
   };
 }
 
-async function handleGlobalLoad(deps: ToolDeps) {
+async function handleGlobalLoad(deps: ToolDeps, accessedBy?: string) {
   const sql = `SELECT ${SELECT_COLUMNS}
 FROM sessions
 WHERE archived_at IS NULL
@@ -118,7 +118,7 @@ LIMIT 1`;
     };
   }
 
-  logSessionAccess(deps, rows[0].id);
+  logSessionAccess(deps, rows[0].id, accessedBy);
 
   return {
     content: [
