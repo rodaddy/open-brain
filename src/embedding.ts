@@ -7,11 +7,19 @@ export async function generateEmbedding(
   text: string,
   litellmUrl?: string,
 ): Promise<number[] | null> {
-  if (!text || text.trim().length === 0 || text.length > 32000) {
-    logger.warn("Embedding text empty or too long", {
-      length: text?.length ?? 0,
-    });
+  if (!text || text.trim().length === 0) {
+    logger.warn("Embedding text empty", { length: text?.length ?? 0 });
     return null;
+  }
+
+  const MAX_EMBED_CHARS = 30000;
+  let inputText = text;
+  if (inputText.length > MAX_EMBED_CHARS) {
+    logger.warn("Embedding text truncated", {
+      original_length: inputText.length,
+      truncated_to: MAX_EMBED_CHARS,
+    });
+    inputText = inputText.slice(0, MAX_EMBED_CHARS);
   }
 
   const baseUrl = litellmUrl ?? process.env.LITELLM_URL;
@@ -35,7 +43,7 @@ export async function generateEmbedding(
       headers,
       body: JSON.stringify({
         model: "embeddings",
-        input: text,
+        input: inputText,
         dimensions: 768,
       }),
       signal: controller.signal,

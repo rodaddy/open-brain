@@ -11,6 +11,7 @@ import {
   CONTENT_PREVIEW,
   TABLE_ALIAS,
   VALID_TIERS,
+  sanitizeNamespace,
 } from "./table-constants.ts";
 
 export { ALL_TABLES };
@@ -71,6 +72,7 @@ export interface SearchRow {
   distance?: number;
   fts_rank?: number;
   access_count?: number;
+  parent_id?: string | null;
   extracted_metadata?: {
     topics?: string[];
     people?: string[];
@@ -93,10 +95,12 @@ export function buildTableCTE(
   const preview = CONTENT_PREVIEW[table];
   const cteName = `${table}_results`;
   const tierFilter = tier ? ` AND ${alias}.tier = '${tier}'` : "";
-  const nsFilter = namespace ? ` AND ${alias}.namespace = '${namespace}'` : "";
+  const validNs = namespace ? sanitizeNamespace(namespace) : undefined;
+  const nsFilter = validNs ? ` AND ${alias}.namespace = '${validNs}'` : "";
   const metaCol = HAS_EXTRACTED_METADATA.has(table)
     ? `${alias}.extracted_metadata`
     : "NULL::jsonb AS extracted_metadata";
+  const parentCol = table === "thoughts" ? `${alias}.parent_id` : "NULL::uuid AS parent_id";
 
   return `${cteName} AS (
   SELECT
@@ -109,7 +113,8 @@ export function buildTableCTE(
     ${alias}.embedding <=> (SELECT emb FROM query_embedding) AS distance,
     COALESCE(${alias}.usefulness_score, 0.5) AS usefulness,
     COALESCE(${alias}.access_count, 0) AS access_count,
-    ${metaCol}
+    ${metaCol},
+    ${parentCol}
   FROM ${table} ${alias}
   WHERE ${alias}.embedding IS NOT NULL AND ${alias}.archived_at IS NULL${tierFilter}${nsFilter}
   ORDER BY ${alias}.embedding <=> (SELECT emb FROM query_embedding) ASC
@@ -129,11 +134,13 @@ function buildFtsCTE(
   const preview = CONTENT_PREVIEW[table];
   const cteName = `${table}_fts`;
   const tierFilter = tier ? ` AND ${alias}.tier = '${tier}'` : "";
-  const nsFilter = namespace ? ` AND ${alias}.namespace = '${namespace}'` : "";
+  const validNs = namespace ? sanitizeNamespace(namespace) : undefined;
+  const nsFilter = validNs ? ` AND ${alias}.namespace = '${validNs}'` : "";
 
   const metaCol = HAS_EXTRACTED_METADATA.has(table)
     ? `${alias}.extracted_metadata`
     : "NULL::jsonb AS extracted_metadata";
+  const parentCol = table === "thoughts" ? `${alias}.parent_id` : "NULL::uuid AS parent_id";
 
   return `${cteName} AS (
   SELECT
@@ -146,7 +153,8 @@ function buildFtsCTE(
     ts_rank_cd(${alias}.search_vector, plainto_tsquery('english', (SELECT q FROM fts_query))) AS fts_rank,
     COALESCE(${alias}.usefulness_score, 0.5) AS usefulness,
     COALESCE(${alias}.access_count, 0) AS access_count,
-    ${metaCol}
+    ${metaCol},
+    ${parentCol}
   FROM ${table} ${alias}
   WHERE ${alias}.search_vector @@ plainto_tsquery('english', (SELECT q FROM fts_query))
     AND ${alias}.archived_at IS NULL${tierFilter}${nsFilter}
@@ -384,6 +392,64 @@ export async function executeSearch(
   return merged.slice(offset);
 }
 
+/**
+ * Collapse chunk results: when multiple chunks from the same parent appear,
+ * keep only the one with the best score. Replace chunk content_preview with
+ * the parent's full content.
+ */
+async function collapseChunkResults(
+  deps: ToolDeps,
+  rows: SearchRow[],
+): Promise<SearchRow[]> {
+  // Identify chunk rows (have parent_id)
+  const chunkRows = rows.filter((r) => r.parent_id);
+  if (chunkRows.length === 0) return rows;
+
+  // Collect unique parent IDs
+  const parentIds = [...new Set(chunkRows.map((r) => r.parent_id as string))];
+
+  // Fetch parent content in bulk
+  const { rows: parentRowsDb } = await deps.pool.query(
+    `SELECT id, content FROM thoughts WHERE id = ANY($1)`,
+    [parentIds],
+  );
+  const parentContent = new Map<string, string>();
+  for (const pr of parentRowsDb) {
+    parentContent.set(pr.id as string, pr.content as string);
+  }
+
+  // Build result: collapse chunks per parent, keep best score
+  // Track which parent_ids we've already emitted
+  const seenParents = new Set<string>();
+  const collapsed: SearchRow[] = [];
+
+  for (const row of rows) {
+    if (!row.parent_id) {
+      // Non-chunk row: pass through
+      collapsed.push(row);
+      continue;
+    }
+
+    if (seenParents.has(row.parent_id)) {
+      // Already emitted a result for this parent; skip (rows are pre-sorted by score)
+      continue;
+    }
+
+    seenParents.add(row.parent_id);
+
+    // Replace content_preview with parent's full content, use parent's id
+    const fullContent = parentContent.get(row.parent_id);
+    collapsed.push({
+      ...row,
+      id: row.parent_id,
+      parent_id: null,
+      content_preview: fullContent ?? row.content_preview,
+    });
+  }
+
+  return collapsed;
+}
+
 export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
   server.registerTool(
     "search_brain",
@@ -509,13 +575,16 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
         };
       }
 
-      trackUsage(deps, rows, args.query, "search", auth.clientId);
+      // Collapse chunk results: deduplicate chunks from same parent
+      const collapsed = await collapseChunkResults(deps, rows);
+
+      trackUsage(deps, collapsed, args.query, "search", auth.clientId);
 
       return {
         content: [
           {
             type: "text" as const,
-            text: JSON.stringify(rows),
+            text: JSON.stringify(collapsed),
           },
         ],
       };

@@ -121,6 +121,7 @@ export function registerFindDuplicates(server: McpServer, deps: ToolDeps): void 
             AND b.embedding IS NOT NULL
           WHERE a.archived_at IS NULL
             AND a.embedding IS NOT NULL
+            AND a.parent_id IS NULL AND b.parent_id IS NULL
             AND a.embedding <=> b.embedding < $1
           ORDER BY distance ASC
           LIMIT $2`,

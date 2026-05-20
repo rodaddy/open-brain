@@ -50,3 +50,22 @@ export const TABLE_ALIAS: Record<Table, string> = {
   projects: "p",
   sessions: "s",
 };
+
+/**
+ * Namespace validation regex: only allows alphanumeric, hyphens, underscores, dots.
+ * Prevents SQL injection when namespace is interpolated into CTE queries.
+ * Matches real values: "skippy", "collab", "rico", "geetesh"
+ */
+const VALID_NAMESPACE_RE = /^[a-zA-Z0-9_\-\.]+$/;
+
+/**
+ * Sanitize and validate a namespace value for safe SQL interpolation.
+ * Returns the namespace if valid, or throws on invalid input.
+ */
+export function sanitizeNamespace(namespace: string): string {
+  const trimmed = namespace.trim();
+  if (!trimmed || trimmed.length > 64 || !VALID_NAMESPACE_RE.test(trimmed)) {
+    throw new Error(`Invalid namespace: must be 1-64 alphanumeric/hyphen/underscore characters`);
+  }
+  return trimmed;
+}

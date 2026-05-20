@@ -4,6 +4,7 @@ import { canRead } from "../permissions.ts";
 import type { AuthInfo, Tier } from "../types.ts";
 import { logger } from "../logger.ts";
 import type { ToolDeps } from "./index.ts";
+import { sanitizeNamespace } from "./table-constants.ts";
 import {
   ALL_TABLES,
   executeSearch,
@@ -146,7 +147,8 @@ export function registerSearchAll(server: McpServer, deps: ToolDeps): void {
       const sources = (args.sources as "all" | "brain" | "qmd") ?? "all";
       const mode = (args.search_mode as SearchMode) ?? "hybrid";
       const tier = args.tier as Tier | undefined;
-      const namespace = args.namespace as string | undefined;
+      const rawNamespace = args.namespace as string | undefined;
+      const namespace = rawNamespace ? sanitizeNamespace(rawNamespace) : undefined;
       const searchBrain = sources === "all" || sources === "brain";
       const searchQmdSource = sources === "all" || sources === "qmd";
 

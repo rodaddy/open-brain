@@ -26,6 +26,7 @@ function buildTableSelect(
     ? ""
     : ` AND ${alias}.archived_at IS NULL`;
   const tierFilter = tier ? ` AND ${alias}.tier = '${tier}'` : "";
+  const chunkFilter = table === "thoughts" ? ` AND ${alias}.parent_id IS NULL` : "";
 
   return `SELECT
     '${label}' AS source_type,
@@ -35,7 +36,7 @@ function buildTableSelect(
     ${alias}.tier,
     ${alias}.created_at
   FROM ${table} ${alias}
-  WHERE ${alias}.created_at >= NOW() - INTERVAL '1 day' * $1${archiveFilter}${tierFilter}`;
+  WHERE ${alias}.created_at >= NOW() - INTERVAL '1 day' * $1${archiveFilter}${tierFilter}${chunkFilter}`;
 }
 
 export function registerListRecent(server: McpServer, deps: ToolDeps): void {
