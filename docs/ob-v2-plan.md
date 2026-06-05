@@ -377,8 +377,8 @@ Update `src/tools/table-constants.ts`: add `ALL_TABLES`, `SOURCE_LABELS`, `CONTE
 
 ## PR Workflow
 
-1. **Kevin's Law:** zero `bun test` failures, zero `bunx tsc --noEmit` errors before requesting review
-2. **Ping-pong:** one agent approves, the other merges
+1. **Zero findings:** zero `bun test` failures, zero `bunx tsc --noEmit` errors before requesting review
+2. **Alternating review:** one agent approves, the other merges — no self-merge, no `--admin`
 3. **Rico merges to main** — agents merge to `develop`, Rico promotes to `main`
 4. Branch naming: `feat/ob-v2-session-lanes`, `feat/ob-v2-entity-graph`, etc.
 
