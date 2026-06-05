@@ -67,6 +67,23 @@ CREATE TRIGGER trg_lanes_updated_at
 
 **Key constraint:** Only one active lane per `(namespace, session_key)` — enforced by the partial unique index.
 
+### Entity/Link Design Rules
+
+**Namespace consistency on links:**
+- `ob_links` has its own `namespace` column. Insert/update helpers MUST verify both `from_entity` and `to_entity` belong to that namespace unless the caller explicitly passes `cross_namespace=true`.
+- Plain FK on UUID alone won't prevent cross-namespace edges — enforce in the `link_entity` tool's insert logic and test it.
+
+**Alias collision / merge semantics:**
+- Unique `(namespace, kind, name)` applies to canonical names only. Aliases can collide with another entity's canonical name.
+- Lookup order: exact canonical match wins → alias match returns candidates (never auto-merge).
+- Merges: set old entity `status='merged'`, set `merged_into` to the replacement entity UUID. Old refs continue to resolve via redirect.
+- `adjacent_context` and `link_entity` follow `merged_into` chains (max depth 3) to resolve current entity.
+
+**Link directionality (documented, not schema-enforced):**
+- Symmetric: `related_to`, `contradicts` — queries return both directions.
+- Directional: `depends_on`, `supersedes`, `implements`, `owned_by`, `belongs_to`, `blocks`, `runs_on`, `produces`, `consumes`, `mentions`, `member_of` — queries respect `from_entity` → `to_entity` direction.
+- Tests must cover both patterns.
+
 ### #35 — `ob_session_events` (Skippy)
 
 Append-only event journal. Every fact, decision, blocker, or artifact gets logged as an event against a lane.
@@ -111,8 +128,14 @@ CREATE TABLE ob_entities (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   namespace     TEXT NOT NULL DEFAULT 'collab',
   kind          TEXT NOT NULL,           -- 'person', 'project', 'repo', 'host', 'concept', etc.
-  name          TEXT NOT NULL,
+  name          TEXT NOT NULL,           -- canonical name
+  aliases       TEXT[] DEFAULT '{}',     -- alternate names / abbreviations
+  slug          TEXT NOT NULL,           -- normalized key: lower(regexp_replace(name, '\W+', '-', 'g'))
   description   TEXT,
+  status        TEXT NOT NULL DEFAULT 'active'
+                CHECK (status IN ('active','archived','merged')),
+  merged_into   UUID REFERENCES ob_entities(id),  -- set when status='merged'
+  source_refs   JSONB DEFAULT '[]',      -- provenance: discord/session/PR/file refs
   metadata      JSONB DEFAULT '{}',
   created_by    TEXT NOT NULL,
   created_at    TIMESTAMPTZ DEFAULT NOW(),
@@ -123,17 +146,31 @@ CREATE TABLE ob_entities (
 );
 
 CREATE UNIQUE INDEX idx_entity_unique ON ob_entities (namespace, kind, name);
+CREATE UNIQUE INDEX idx_entity_slug ON ob_entities (namespace, kind, slug);
 CREATE INDEX idx_entity_kind ON ob_entities (kind);
+CREATE INDEX idx_entity_status ON ob_entities (namespace, status);
+CREATE INDEX idx_entity_aliases ON ob_entities USING GIN (aliases);
+CREATE INDEX idx_entity_metadata ON ob_entities USING GIN (metadata);
 CREATE INDEX idx_entity_embedding ON ob_entities
   USING hnsw (embedding halfvec_cosine_ops)
   WITH (m = 16, ef_construction = 200);
 
 CREATE TABLE ob_links (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  namespace     TEXT NOT NULL DEFAULT 'collab',
   from_entity   UUID NOT NULL REFERENCES ob_entities(id),
   to_entity     UUID NOT NULL REFERENCES ob_entities(id),
-  relation      TEXT NOT NULL,           -- 'owns', 'blocks', 'depends_on', 'member_of', etc.
+  relation      TEXT NOT NULL             -- 'owns', 'blocks', 'depends_on', 'member_of', etc.
+                CHECK (relation IN (
+                  'depends_on','supersedes','contradicts','mentions',
+                  'implements','belongs_to','owned_by','related_to',
+                  'blocks','member_of','runs_on','produces','consumes'
+                )),
   weight        FLOAT DEFAULT 1.0,
+  confidence    FLOAT DEFAULT 1.0 CHECK (confidence >= 0 AND confidence <= 1),
+  source_refs   JSONB DEFAULT '[]',      -- provenance for this edge
+  status        TEXT NOT NULL DEFAULT 'active'
+                CHECK (status IN ('active','archived')),
   metadata      JSONB DEFAULT '{}',
   created_by    TEXT NOT NULL,
   created_at    TIMESTAMPTZ DEFAULT NOW(),
@@ -142,7 +179,18 @@ CREATE TABLE ob_links (
 
 CREATE INDEX idx_link_from ON ob_links (from_entity, relation);
 CREATE INDEX idx_link_to ON ob_links (to_entity, relation);
+CREATE INDEX idx_link_ns ON ob_links (namespace, relation);
 CREATE UNIQUE INDEX idx_link_unique ON ob_links (from_entity, to_entity, relation);
+
+-- Join table: events ↔ entities
+CREATE TABLE ob_event_entities (
+  event_id      UUID NOT NULL REFERENCES ob_session_events(id),
+  entity_id     UUID NOT NULL REFERENCES ob_entities(id),
+  role          TEXT NOT NULL DEFAULT 'subject'
+                CHECK (role IN ('subject','object','context','owner')),
+  PRIMARY KEY (event_id, entity_id, role)
+);
+CREATE INDEX idx_event_entities_entity ON ob_event_entities (entity_id);
 
 CREATE TRIGGER trg_entities_updated_at
   BEFORE UPDATE ON ob_entities
