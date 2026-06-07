@@ -136,7 +136,8 @@ async function attachExplicitLinks(
            FROM unnest($1::text[], $2::uuid[]) AS result_refs(result_type, result_id)
          )
        )${namespaceFilter}
-       ORDER BY weight DESC, created_at DESC`,
+       ORDER BY weight DESC, created_at DESC
+       LIMIT 50`,
       params,
     );
 
@@ -153,7 +154,7 @@ async function attachExplicitLinks(
         linked_type: link.to_type,
         linked_id: link.to_id,
         metadata: link.metadata ?? {},
-        created_at: link.created_at,
+        created_at: new Date(link.created_at).toISOString(),
       });
       linksByResult.set(outgoingKey, outgoing);
 
@@ -166,7 +167,7 @@ async function attachExplicitLinks(
         linked_type: link.from_type,
         linked_id: link.from_id,
         metadata: link.metadata ?? {},
-        created_at: link.created_at,
+        created_at: new Date(link.created_at).toISOString(),
       });
       linksByResult.set(incomingKey, incoming);
     }

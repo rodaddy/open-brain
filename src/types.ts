@@ -6,6 +6,7 @@ export type Table =
   | "projects"
   | "sessions";
 export type EntityGraphTable = "ob_entities" | "ob_links";
+// Keep in sync with CHECK (relation IN (...)) in 010_entity_links.sql
 export type LinkRelation =
   | "artifact"
   | "depends_on"
