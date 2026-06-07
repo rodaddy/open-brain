@@ -3,6 +3,14 @@ import { logger } from "./logger.ts";
 
 const EMBEDDING_TIMEOUT_MS = 5000;
 
+/**
+ * Embedding model identifier. Used by embedding.ts to call LiteLLM and stored
+ * in embedding_model columns so we can track which model produced each vector.
+ * Override via EMBEDDING_MODEL env var (must match LiteLLM deployment name).
+ */
+export const EMBEDDING_MODEL =
+  process.env.EMBEDDING_MODEL ?? "embeddings";
+
 export async function generateEmbedding(
   text: string,
   litellmUrl?: string,
@@ -34,7 +42,7 @@ export async function generateEmbedding(
       method: "POST",
       headers,
       body: JSON.stringify({
-        model: "embeddings",
+        model: EMBEDDING_MODEL,
         input: text,
         dimensions: 768,
       }),

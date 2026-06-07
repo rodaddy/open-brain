@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { toSql } from "pgvector/pg";
 import { canWrite } from "../permissions.ts";
-import { contentHash } from "../embedding.ts";
+import { contentHash, EMBEDDING_MODEL } from "../embedding.ts";
 import type { AuthInfo } from "../types.ts";
 import { logger } from "../logger.ts";
 import type { ToolDeps } from "./index.ts";
@@ -52,14 +52,19 @@ export function registerLaneUpsert(server: McpServer, deps: ToolDeps): void {
           .describe("Human-readable topic description"),
         current_context_md: z
           .string()
+          .max(100_000)
           .optional()
           .describe(
             "Materialized markdown summary of current lane state — the portable context blob",
           ),
         metadata: z
-          .record(z.string(), z.unknown())
+          .record(z.string().max(100), z.unknown())
           .optional()
-          .describe("Arbitrary JSON metadata"),
+          .refine(
+            (v) => !v || Object.keys(v).length <= 50,
+            { message: "metadata must have at most 50 keys" },
+          )
+          .describe("Arbitrary JSON metadata — merged into existing via || on update; max 50 keys"),
       },
       annotations: {
         title: "Upsert Session Lane",
@@ -104,7 +109,7 @@ export function registerLaneUpsert(server: McpServer, deps: ToolDeps): void {
       });
 
       // Build embedding from context
-      const contextText = args.current_context_md ?? args.topic ?? "";
+      const contextText = args.current_context_md || args.topic || "";
       const hash = contextText
         ? contentHash(args.session_key + "|" + contextText)
         : null;
@@ -112,7 +117,9 @@ export function registerLaneUpsert(server: McpServer, deps: ToolDeps): void {
       let embedding: number[] | null = null;
       if (contextText) {
         const embedParts = [contextText];
-        if (args.topic) embedParts.push(args.topic);
+        // Only append topic separately when contextText came from current_context_md
+        // to avoid double-weighting topic when topic IS the contextText
+        if (args.topic && args.current_context_md) embedParts.push(args.topic);
         if (args.project) embedParts.push(args.project);
         try {
           embedding = await deps.embedFn(embedParts.join("\n"));
@@ -133,9 +140,16 @@ export function registerLaneUpsert(server: McpServer, deps: ToolDeps): void {
 
       const embeddingVal = embedding ? toSql(embedding) : null;
       const embeddedAt = embedding ? new Date().toISOString() : null;
-      const model = embedding ? "gemini-embedding-001" : null;
+      const model = embedding ? EMBEDDING_MODEL : null;
 
       try {
+        // Helper: convert explicit empty string to SQL NULL for intentional
+        // field clearing. COALESCE in the ON CONFLICT clause preserves existing
+        // values when the EXCLUDED value is NULL, so we use CASE WHEN flags
+        // to allow explicit clearing when the caller passes "".
+        const clearable = (v: string | undefined | null): string | null =>
+          v === "" ? null : (v ?? null);
+
         const { rows } = await deps.pool.query(
           `INSERT INTO ob_session_lanes
              (session_key, namespace, status, agent, source, channel_id, thread_id,
@@ -145,14 +159,16 @@ export function registerLaneUpsert(server: McpServer, deps: ToolDeps): void {
            ON CONFLICT (namespace, session_key)
            DO UPDATE SET
              status = COALESCE(EXCLUDED.status, ob_session_lanes.status),
-             agent = COALESCE(EXCLUDED.agent, ob_session_lanes.agent),
-             source = COALESCE(EXCLUDED.source, ob_session_lanes.source),
-             channel_id = COALESCE(EXCLUDED.channel_id, ob_session_lanes.channel_id),
-             thread_id = COALESCE(EXCLUDED.thread_id, ob_session_lanes.thread_id),
-             project = COALESCE(EXCLUDED.project, ob_session_lanes.project),
-             topic = COALESCE(EXCLUDED.topic, ob_session_lanes.topic),
-             current_context_md = COALESCE(EXCLUDED.current_context_md, ob_session_lanes.current_context_md),
-             metadata = ob_session_lanes.metadata || EXCLUDED.metadata,
+             agent = CASE WHEN $17 THEN EXCLUDED.agent ELSE COALESCE(EXCLUDED.agent, ob_session_lanes.agent) END,
+             source = CASE WHEN $18 THEN EXCLUDED.source ELSE COALESCE(EXCLUDED.source, ob_session_lanes.source) END,
+             channel_id = CASE WHEN $19 THEN EXCLUDED.channel_id ELSE COALESCE(EXCLUDED.channel_id, ob_session_lanes.channel_id) END,
+             thread_id = CASE WHEN $20 THEN EXCLUDED.thread_id ELSE COALESCE(EXCLUDED.thread_id, ob_session_lanes.thread_id) END,
+             project = CASE WHEN $21 THEN EXCLUDED.project ELSE COALESCE(EXCLUDED.project, ob_session_lanes.project) END,
+             topic = CASE WHEN $22 THEN EXCLUDED.topic ELSE COALESCE(EXCLUDED.topic, ob_session_lanes.topic) END,
+             current_context_md = CASE WHEN $23 THEN EXCLUDED.current_context_md ELSE COALESCE(EXCLUDED.current_context_md, ob_session_lanes.current_context_md) END,
+             metadata = CASE WHEN EXCLUDED.metadata = '{}'::jsonb
+                        THEN ob_session_lanes.metadata
+                        ELSE ob_session_lanes.metadata || EXCLUDED.metadata END,
              embedding = COALESCE(EXCLUDED.embedding, ob_session_lanes.embedding),
              content_hash = COALESCE(EXCLUDED.content_hash, ob_session_lanes.content_hash),
              embedded_at = COALESCE(EXCLUDED.embedded_at, ob_session_lanes.embedded_at),
@@ -165,19 +181,27 @@ export function registerLaneUpsert(server: McpServer, deps: ToolDeps): void {
             args.session_key,
             ns,
             status,
-            args.agent ?? null,
-            args.source ?? null,
-            args.channel_id ?? null,
-            args.thread_id ?? null,
-            args.project ?? null,
-            args.topic ?? null,
-            args.current_context_md ?? null,
+            clearable(args.agent),
+            clearable(args.source),
+            clearable(args.channel_id),
+            clearable(args.thread_id),
+            clearable(args.project),
+            clearable(args.topic),
+            clearable(args.current_context_md),
             JSON.stringify(args.metadata ?? {}),
             embeddingVal,
             hash,
             embeddedAt,
             model,
             auth.clientId,
+            // Explicit-clear flags ($17-$23): true when the caller passed ""
+            args.agent === "",
+            args.source === "",
+            args.channel_id === "",
+            args.thread_id === "",
+            args.project === "",
+            args.topic === "",
+            args.current_context_md === "",
           ],
         );
 

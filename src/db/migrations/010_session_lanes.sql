@@ -45,6 +45,10 @@ CREATE INDEX IF NOT EXISTS idx_session_lanes_project
 CREATE INDEX IF NOT EXISTS idx_session_lanes_channel
   ON ob_session_lanes (channel_id) WHERE channel_id IS NOT NULL;
 
+-- Pre-provisioned HNSW index for future lane-search-by-embedding queries.
+-- Creating the index at table creation avoids a costly ALTER TABLE + REINDEX
+-- once the table has significant data.  Not used by lane_load today (which does
+-- direct key/filter lookups), but will be used by a planned lane_search tool.
 CREATE INDEX IF NOT EXISTS idx_session_lanes_embedding
   ON ob_session_lanes USING hnsw (embedding halfvec_cosine_ops)
   WITH (m = 16, ef_construction = 200);
