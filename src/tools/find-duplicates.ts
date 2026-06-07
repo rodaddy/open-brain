@@ -107,6 +107,12 @@ export function registerFindDuplicates(server: McpServer, deps: ToolDeps): void 
         const previewA = contentPreviewForAlias(table, "a");
         const previewB = contentPreviewForAlias(table, "b");
 
+        // Only thoughts has parent_id (chunking) -- exclude child chunks there
+        const chunkFilter =
+          table === "thoughts"
+            ? "AND a.parent_id IS NULL AND b.parent_id IS NULL"
+            : "";
+
         // Table name is validated by Zod enum -- safe for interpolation
         const { rows } = await deps.pool.query(
           `SELECT
@@ -121,7 +127,7 @@ export function registerFindDuplicates(server: McpServer, deps: ToolDeps): void 
             AND b.embedding IS NOT NULL
           WHERE a.archived_at IS NULL
             AND a.embedding IS NOT NULL
-            AND a.parent_id IS NULL AND b.parent_id IS NULL
+            ${chunkFilter}
             AND a.embedding <=> b.embedding < $1
           ORDER BY distance ASC
           LIMIT $2`,
