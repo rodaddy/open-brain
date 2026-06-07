@@ -18,6 +18,8 @@ try {
 
   // Clean slate: drop all tables
   await pool.query(`
+    DROP TABLE IF EXISTS ob_links CASCADE;
+    DROP TABLE IF EXISTS ob_entities CASCADE;
     DROP TABLE IF EXISTS thoughts CASCADE;
     DROP TABLE IF EXISTS decisions CASCADE;
     DROP TABLE IF EXISTS relationships CASCADE;
@@ -35,6 +37,8 @@ try {
 afterAll(async () => {
   if (!canConnect || !pool) return;
   await pool.query(`
+    DROP TABLE IF EXISTS ob_links CASCADE;
+    DROP TABLE IF EXISTS ob_entities CASCADE;
     DROP TABLE IF EXISTS thoughts CASCADE;
     DROP TABLE IF EXISTS decisions CASCADE;
     DROP TABLE IF EXISTS relationships CASCADE;
@@ -160,6 +164,88 @@ describe.skipIf(!canConnect)("001_init migration", () => {
       `);
       expect(rows.length).toBeGreaterThanOrEqual(1);
       expect(rows.some((r) => r.indisunique === true)).toBe(true);
+    });
+  });
+
+  describe("entity graph schema", () => {
+    it("should create entity and link graph tables", async () => {
+      const { rows } = await pool.query(`
+        SELECT table_name FROM information_schema.tables
+        WHERE table_schema = 'public'
+          AND table_name IN ('ob_entities', 'ob_links')
+        ORDER BY table_name
+      `);
+      const tableNames = rows.map((r) => r.table_name as string);
+      expect(tableNames).toEqual(["ob_entities", "ob_links"]);
+    });
+
+    it("should enforce canonical entities by namespace, type, and case-insensitive name", async () => {
+      await pool.query(
+        `INSERT INTO ob_entities (namespace, entity_type, name, canonical_id, created_by)
+         VALUES ($1, $2, $3, $4, $5)`,
+        ["test", "host", "CT235", "host:ct235", "test"],
+      );
+
+      await expect(
+        pool.query(
+          `INSERT INTO ob_entities (namespace, entity_type, name, created_by)
+           VALUES ($1, $2, $3, $4)`,
+          ["test", "host", "ct235", "test"],
+        ),
+      ).rejects.toThrow();
+
+      await pool.query("DELETE FROM ob_entities WHERE namespace = $1", ["test"]);
+    });
+
+    it("should enforce allowed link relations and reject self-links", async () => {
+      const inserted = await pool.query(
+        `INSERT INTO ob_entities (namespace, entity_type, name, created_by)
+         VALUES ($1, $2, $3, $4), ($1, $2, $5, $4)
+         RETURNING id`,
+        ["test", "workflow", "Open Brain", "test", "Hermes overlay"],
+      );
+      const [fromId, toId] = inserted.rows.map((r) => r.id as string);
+
+      await pool.query(
+        `INSERT INTO ob_links (from_type, from_id, to_type, to_id, relation, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        ["entity", fromId, "entity", toId, "depends_on", "test"],
+      );
+
+      await expect(
+        pool.query(
+          `INSERT INTO ob_links (from_type, from_id, to_type, to_id, relation, created_by)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          ["entity", fromId, "entity", toId, "mystery_relation", "test"],
+        ),
+      ).rejects.toThrow();
+
+      await expect(
+        pool.query(
+          `INSERT INTO ob_links (from_type, from_id, to_type, to_id, relation, created_by)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          ["entity", fromId, "entity", fromId, "adjacent", "test"],
+        ),
+      ).rejects.toThrow();
+
+      await pool.query("DELETE FROM ob_links WHERE created_by = $1", ["test"]);
+      await pool.query("DELETE FROM ob_entities WHERE namespace = $1", ["test"]);
+    });
+
+    it("should have halfvec indexes for entities without changing legacy table indexes", async () => {
+      const { rows } = await pool.query(`
+        SELECT indexname, indexdef
+        FROM pg_indexes
+        WHERE schemaname = 'public'
+          AND indexdef ILIKE '%hnsw%'
+        ORDER BY indexname
+      `);
+      expect(rows.length).toBeGreaterThanOrEqual(6);
+      expect(rows.some((r) => r.indexname === "idx_ob_entities_embedding")).toBe(true);
+      for (const row of rows) {
+        expect(row.indexdef).toContain("halfvec_cosine_ops");
+        expect(row.indexdef).not.toContain("vector_cosine_ops");
+      }
     });
   });
 

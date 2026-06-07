@@ -5,6 +5,21 @@ export type Table =
   | "relationships"
   | "projects"
   | "sessions";
+export type EntityGraphTable = "ob_entities" | "ob_links";
+export type LinkRelation =
+  | "artifact"
+  | "depends_on"
+  | "supersedes"
+  | "caused_by"
+  | "same_lane"
+  | "adjacent"
+  | "mentions"
+  | "implemented_by"
+  | "blocked_by"
+  | "decided_by"
+  | "relates_to"
+  | "contradicts"
+  | "duplicates";
 export type Tier = "hot" | "warm" | "cold";
 export type Permission = "read" | "write" | "delete";
 

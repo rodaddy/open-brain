@@ -114,6 +114,77 @@ describe("search_brain", () => {
         await cleanup();
       }
     });
+    it("includes explicit links for search hits", async () => {
+      const thoughtId = "00000000-0000-4000-8000-000000000001";
+      const decisionId = "00000000-0000-4000-8000-000000000002";
+      const queryCalls: any[] = [];
+      const mockPool = {
+        query: async (...args: any[]) => {
+          queryCalls.push(args);
+          const [sql] = args;
+          if (String(sql).includes("FROM ob_links")) {
+            return {
+              rows: [
+                {
+                  id: "00000000-0000-4000-8000-000000000010",
+                  from_type: "thought",
+                  from_id: thoughtId,
+                  to_type: "decision",
+                  to_id: decisionId,
+                  relation: "artifact",
+                  weight: 0.8,
+                  metadata: { ob_source_id: "obsidian-note-1" },
+                  created_at: "2026-01-02T00:00:00Z",
+                },
+              ],
+            };
+          }
+          return {
+            rows: [
+              {
+                source_type: "thought",
+                id: thoughtId,
+                content_preview: "Linked thought",
+                distance: 0.1,
+                tags: ["tag-a"],
+                created_at: "2026-01-01T00:00:00Z",
+              },
+            ],
+          };
+        },
+      };
+      const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
+      const { client, cleanup } = await setupSearchClient(
+        mockPool,
+        createMockEmbed(),
+        auth,
+      );
+
+      try {
+        const result = await client.callTool({
+          name: "search_brain",
+          arguments: { query: "linked thought", search_mode: "vector" },
+        });
+
+        expect(result.isError).toBeFalsy();
+        const parsed = JSON.parse((result.content as any)[0].text);
+        expect(parsed[0].explicit_links).toEqual([
+          {
+            id: "00000000-0000-4000-8000-000000000010",
+            direction: "outgoing",
+            relation: "artifact",
+            weight: 0.8,
+            linked_type: "decision",
+            linked_id: decisionId,
+            metadata: { ob_source_id: "obsidian-note-1" },
+            created_at: "2026-01-02T00:00:00Z",
+          },
+        ]);
+        expect(String(queryCalls[1][0])).toContain("FROM ob_links");
+      } finally {
+        await cleanup();
+      }
+    });
   });
 
   describe("readonly role -- all tables accessible", () => {

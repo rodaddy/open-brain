@@ -645,7 +645,11 @@ describe("search_all", () => {
     it("three sequential calls each return their own results", async () => {
       let callIndex = 0;
       const mockPool = {
-        query: async () => {
+        query: async (...args: any[]) => {
+          const [sql] = args;
+          if (String(sql).includes("FROM ob_links")) {
+            return { rows: [] };
+          }
           callIndex++;
           return {
             rows: makeMockRows(callIndex, { source_type: `type-${callIndex}` }),

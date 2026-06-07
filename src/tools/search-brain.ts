@@ -60,6 +60,17 @@ function recencyFactor(createdAt: string): number {
   return 1 / (1 + Math.max(0, ageDays) * 0.001);
 }
 
+export interface ExplicitLink {
+  id: string;
+  direction: "outgoing" | "incoming";
+  relation: string;
+  weight: number;
+  linked_type: string;
+  linked_id: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
 export interface SearchRow {
   source_type: string;
   id: string;
@@ -71,6 +82,7 @@ export interface SearchRow {
   distance?: number;
   fts_rank?: number;
   access_count?: number;
+  explicit_links?: ExplicitLink[];
   extracted_metadata?: {
     topics?: string[];
     people?: string[];
@@ -80,6 +92,96 @@ export interface SearchRow {
 }
 
 const HAS_EXTRACTED_METADATA: Set<Table> = new Set(["thoughts", "decisions"]);
+
+type LinkRow = {
+  id: string;
+  from_type: string;
+  from_id: string;
+  to_type: string;
+  to_id: string;
+  relation: string;
+  weight: number;
+  metadata: Record<string, unknown>;
+  created_at: string;
+};
+
+function linkKey(type: string, id: string): string {
+  return `${type}:${id}`;
+}
+
+async function attachExplicitLinks(
+  deps: ToolDeps,
+  rows: SearchRow[],
+  namespace?: string,
+): Promise<SearchRow[]> {
+  if (rows.length === 0) return rows;
+
+  const resultTypes = rows.map((row) => row.source_type);
+  const resultIds = rows.map((row) => row.id);
+  const params: unknown[] = [resultTypes, resultIds];
+  const namespaceFilter = namespace ? " AND namespace = $3" : "";
+  if (namespace) params.push(namespace);
+
+  try {
+    const { rows: linkRows } = await deps.pool.query<LinkRow>(
+      `SELECT id, from_type, from_id, to_type, to_id, relation, weight, metadata, created_at
+       FROM ob_links
+       WHERE (
+         (from_type, from_id) IN (
+           SELECT result_type, result_id
+           FROM unnest($1::text[], $2::uuid[]) AS result_refs(result_type, result_id)
+         )
+         OR (to_type, to_id) IN (
+           SELECT result_type, result_id
+           FROM unnest($1::text[], $2::uuid[]) AS result_refs(result_type, result_id)
+         )
+       )${namespaceFilter}
+       ORDER BY weight DESC, created_at DESC`,
+      params,
+    );
+
+    const linksByResult = new Map<string, ExplicitLink[]>();
+    for (const link of linkRows) {
+      const outgoingKey = linkKey(link.from_type, link.from_id);
+      const incomingKey = linkKey(link.to_type, link.to_id);
+      const outgoing = linksByResult.get(outgoingKey) ?? [];
+      outgoing.push({
+        id: link.id,
+        direction: "outgoing",
+        relation: link.relation,
+        weight: link.weight,
+        linked_type: link.to_type,
+        linked_id: link.to_id,
+        metadata: link.metadata ?? {},
+        created_at: link.created_at,
+      });
+      linksByResult.set(outgoingKey, outgoing);
+
+      const incoming = linksByResult.get(incomingKey) ?? [];
+      incoming.push({
+        id: link.id,
+        direction: "incoming",
+        relation: link.relation,
+        weight: link.weight,
+        linked_type: link.from_type,
+        linked_id: link.from_id,
+        metadata: link.metadata ?? {},
+        created_at: link.created_at,
+      });
+      linksByResult.set(incomingKey, incoming);
+    }
+
+    return rows.map((row) => ({
+      ...row,
+      explicit_links: linksByResult.get(linkKey(row.source_type, row.id)) ?? [],
+    }));
+  } catch (err) {
+    logger.warn("explicit_links_lookup_failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return rows.map((row) => ({ ...row, explicit_links: [] }));
+  }
+}
 
 export function buildTableCTE(
   table: Table,
@@ -349,8 +451,10 @@ export async function executeSearch(
   offset = 0,
   namespace?: string,
 ): Promise<SearchRow[]> {
+  let rows: SearchRow[];
   if (mode === "keyword") {
-    return ftsSearch(deps, accessibleTables, query, limit, tier, offset, namespace);
+    rows = await ftsSearch(deps, accessibleTables, query, limit, tier, offset, namespace);
+    return attachExplicitLinks(deps, rows, namespace);
   }
 
   // Vector and hybrid both need an embedding
@@ -361,14 +465,16 @@ export async function executeSearch(
       logger.warn("embedding_failed_fallback_fts", {
         query: query.slice(0, 50),
       });
-      return ftsSearch(deps, accessibleTables, query, limit, tier, offset, namespace);
+      rows = await ftsSearch(deps, accessibleTables, query, limit, tier, offset, namespace);
+      return attachExplicitLinks(deps, rows, namespace);
     }
     // In vector mode, null embedding is a hard failure -- signal via thrown error
     throw new Error("Failed to generate query embedding");
   }
 
   if (mode === "vector") {
-    return vectorSearch(deps, accessibleTables, embedding, limit, tier, offset, namespace);
+    rows = await vectorSearch(deps, accessibleTables, embedding, limit, tier, offset, namespace);
+    return attachExplicitLinks(deps, rows, namespace);
   }
 
   // Hybrid: run both in parallel, merge with RRF
@@ -381,7 +487,8 @@ export async function executeSearch(
   ]);
 
   const merged = rrfMerge(vectorRows, ftsRows, totalNeeded);
-  return merged.slice(offset);
+  rows = merged.slice(offset);
+  return attachExplicitLinks(deps, rows, namespace);
 }
 
 export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
