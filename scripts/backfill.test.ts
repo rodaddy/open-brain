@@ -11,6 +11,7 @@ mock.module("../src/logger.ts", () => ({
     },
     warn: () => {},
     error: () => {},
+    debug: mock(() => {}),
   },
 }));
 

@@ -1,3 +1,12 @@
+const LOG_LEVELS = { debug: 0, info: 1, warn: 2, error: 3 } as const;
+type LogLevel = keyof typeof LOG_LEVELS;
+
+function getMinLevel(): LogLevel {
+  const env = (process.env.LOG_LEVEL ?? "info").toLowerCase();
+  if (env in LOG_LEVELS) return env as LogLevel;
+  return "info";
+}
+
 interface LogEntry {
   level: string;
   message: string;
@@ -6,10 +15,12 @@ interface LogEntry {
 }
 
 function log(
-  level: string,
+  level: LogLevel,
   message: string,
   extra?: Record<string, unknown>,
 ): void {
+  if (LOG_LEVELS[level] < LOG_LEVELS[getMinLevel()]) return;
+
   const entry: LogEntry = {
     level,
     message,
