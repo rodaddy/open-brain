@@ -7,6 +7,15 @@ export const VALID_TIERS: Set<string> = new Set<string>([
   "cold",
 ]);
 
+/**
+ * All five brain tables.
+ *
+ * Every table shares these columns added by migrations 001 and 002:
+ *   - access_count (integer, default 0)
+ *   - usefulness_score (float, nullable)
+ *   - tags (text[], nullable)
+ *   - last_accessed_at (timestamptz, nullable)
+ */
 export const ALL_TABLES: Table[] = [
   "thoughts",
   "decisions",

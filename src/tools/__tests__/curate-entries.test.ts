@@ -90,7 +90,7 @@ describe("curate_entries", () => {
 
       expect(result.isError).toBe(true);
       const text = (result.content as any)[0].text;
-      expect(text).toContain("admin permission required");
+      expect(text).toContain("delete permission required");
     } finally {
       await cleanup();
     }

@@ -107,15 +107,16 @@ export function registerCurateEntries(server: McpServer, deps: ToolDeps): void {
       const limit = args.limit ?? 20;
       const tableFilter = args.table as Table | undefined;
 
-      // For dry_run=false, require admin/delete permission
+      // For dry_run=false, require delete permission on at least one target table
       if (!dryRun) {
-        const hasAdmin = auth.role === "admin" || auth.role === "n8n";
-        if (!hasAdmin) {
+        const tablesToCheck = tableFilter ? [tableFilter] : ALL_TABLES;
+        const hasDeletePerm = tablesToCheck.some((t) => canDelete(auth.role, t));
+        if (!hasDeletePerm) {
           return {
             content: [
               {
                 type: "text" as const,
-                text: "Permission denied: admin permission required for dry_run=false",
+                text: "Permission denied: delete permission required for dry_run=false",
               },
             ],
             isError: true,

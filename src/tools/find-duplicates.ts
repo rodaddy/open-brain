@@ -104,31 +104,29 @@ export function registerFindDuplicates(server: McpServer, deps: ToolDeps): void 
         if (duplicates.length >= limit) break;
 
         const remaining = limit - duplicates.length;
-        const previewA = contentPreviewForAlias(table, "a");
-        const previewB = contentPreviewForAlias(table, "b");
-
-        // Only thoughts has parent_id (chunking) -- exclude child chunks there
-        const chunkFilter =
-          table === "thoughts"
-            ? "AND a.parent_id IS NULL AND b.parent_id IS NULL"
-            : "";
+        const previewExpr = contentPreviewForAlias(table, "a");
 
         // Table name is validated by Zod enum -- safe for interpolation
         const { rows } = await deps.pool.query(
-          `SELECT
+          `WITH capped AS (
+            SELECT id, embedding${table === "thoughts" ? ", parent_id" : ""},
+              ${previewExpr} AS preview_col
+            FROM ${table} a
+            WHERE a.archived_at IS NULL
+              AND a.embedding IS NOT NULL
+              ${table === "thoughts" ? "AND a.parent_id IS NULL" : ""}
+            ORDER BY a.created_at DESC
+            LIMIT 500
+          )
+          SELECT
             a.id AS id_a,
-            LEFT(${previewA}, 200) AS preview_a,
+            LEFT(a.preview_col, 200) AS preview_a,
             b.id AS id_b,
-            LEFT(${previewB}, 200) AS preview_b,
+            LEFT(b.preview_col, 200) AS preview_b,
             a.embedding <=> b.embedding AS distance
-          FROM ${table} a
-          JOIN ${table} b ON a.id < b.id
-            AND b.archived_at IS NULL
-            AND b.embedding IS NOT NULL
-          WHERE a.archived_at IS NULL
-            AND a.embedding IS NOT NULL
-            ${chunkFilter}
-            AND a.embedding <=> b.embedding < $1
+          FROM capped a
+          JOIN capped b ON a.id < b.id
+          WHERE a.embedding <=> b.embedding < $1
           ORDER BY distance ASC
           LIMIT $2`,
           [threshold, remaining],
