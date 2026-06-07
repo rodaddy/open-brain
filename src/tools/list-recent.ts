@@ -5,46 +5,20 @@ import type { AuthInfo, Table, Tier } from "../types.ts";
 import { logger } from "../logger.ts";
 import type { ToolDeps } from "./index.ts";
 
-const ALL_TABLES: Table[] = [
-  "thoughts",
-  "decisions",
-  "relationships",
-  "projects",
-  "sessions",
-];
-
-/** Singular labels for list results */
-const SOURCE_LABELS: Record<Table, string> = {
-  thoughts: "thought",
-  decisions: "decision",
-  relationships: "relationship",
-  projects: "project",
-  sessions: "session",
-};
-
-/** Content preview SQL expression per table */
-const CONTENT_PREVIEW: Record<Table, string> = {
-  thoughts: "t.content",
-  decisions: "d.title || ': ' || d.rationale",
-  relationships: "r.person_name || ': ' || COALESCE(r.context, '')",
-  projects: "p.name || ': ' || COALESCE(p.description, '')",
-  sessions: "COALESCE(s.project || ': ', '') || LEFT(s.summary, 200)",
-};
-
-/** Table alias used in SELECTs */
-const TABLE_ALIAS: Record<Table, string> = {
-  thoughts: "t",
-  decisions: "d",
-  relationships: "r",
-  projects: "p",
-  sessions: "s",
-};
+import {
+  ALL_TABLES,
+  SOURCE_LABELS,
+  CONTENT_PREVIEW,
+  TABLE_ALIAS,
+  VALID_TIERS,
+} from "./table-constants.ts";
 
 function buildTableSelect(
   table: Table,
   includeArchived: boolean,
   tier?: Tier,
 ): string {
+  if (tier && !VALID_TIERS.has(tier)) throw new Error(`Invalid tier: ${tier}`);
   const alias = TABLE_ALIAS[table];
   const label = SOURCE_LABELS[table];
   const preview = CONTENT_PREVIEW[table];
@@ -70,6 +44,7 @@ function buildCountSelect(
   includeArchived: boolean,
   tier?: Tier,
 ): string {
+  if (tier && !VALID_TIERS.has(tier)) throw new Error(`Invalid tier: ${tier}`);
   const alias = TABLE_ALIAS[table];
 
   const archiveFilter = includeArchived
