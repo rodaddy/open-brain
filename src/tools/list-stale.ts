@@ -97,6 +97,12 @@ export function registerListStale(server: McpServer, deps: ToolDeps): void {
           .describe(
             "Optional: filter to a specific tier (e.g. 'hot' to find hot entries that should decay to warm)",
           ),
+        response_format: z
+          .enum(["envelope", "array"])
+          .optional()
+          .describe(
+            "Response format: 'envelope' (default) returns {entries, total_count, has_more}; 'array' returns raw array for backwards compatibility",
+          ),
       },
       annotations: {
         title: "List Stale",
@@ -155,6 +161,7 @@ export function registerListStale(server: McpServer, deps: ToolDeps): void {
       const limit = args.limit ?? 50;
       const offset = args.offset ?? 0;
       const tier = args.tier as Tier | undefined;
+      const useArray = args.response_format === "array";
 
       const selects = accessibleTables.map((t) => buildStaleSelect(t, tier));
       const unionSql = selects.join("\nUNION ALL\n");
@@ -184,17 +191,21 @@ export function registerListStale(server: McpServer, deps: ToolDeps): void {
           ? offset + dataResult.rows.length < totalCount
           : false;
 
+      const responseBody = useArray
+        ? dataResult.rows
+        : {
+            entries: dataResult.rows,
+            total_count: totalCount,
+            offset,
+            limit,
+            has_more: hasMore,
+          };
+
       return {
         content: [
           {
             type: "text" as const,
-            text: JSON.stringify({
-              entries: dataResult.rows,
-              total_count: totalCount,
-              offset,
-              limit,
-              has_more: hasMore,
-            }),
+            text: JSON.stringify(responseBody),
           },
         ],
       };

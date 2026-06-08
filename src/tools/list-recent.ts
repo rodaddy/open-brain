@@ -106,6 +106,12 @@ export function registerListRecent(server: McpServer, deps: ToolDeps): void {
           .enum(["hot", "warm", "cold"])
           .optional()
           .describe("Optional: filter to a specific cognitive tier"),
+        response_format: z
+          .enum(["envelope", "array"])
+          .optional()
+          .describe(
+            "Response format: 'envelope' (default) returns {entries, total_count, has_more}; 'array' returns raw array for backwards compatibility",
+          ),
       },
       annotations: {
         title: "List Recent",
@@ -166,6 +172,7 @@ export function registerListRecent(server: McpServer, deps: ToolDeps): void {
       const offset = args.offset ?? 0;
       const includeArchived = args.include_archived ?? false;
       const tier = args.tier as Tier | undefined;
+      const useArray = args.response_format === "array";
 
       // Build UNION ALL of table SELECTs
       const selects = accessibleTables.map((t) =>
@@ -200,17 +207,21 @@ export function registerListRecent(server: McpServer, deps: ToolDeps): void {
           ? offset + dataResult.rows.length < totalCount
           : false;
 
+      const responseBody = useArray
+        ? dataResult.rows
+        : {
+            entries: dataResult.rows,
+            total_count: totalCount,
+            offset,
+            limit,
+            has_more: hasMore,
+          };
+
       return {
         content: [
           {
             type: "text" as const,
-            text: JSON.stringify({
-              entries: dataResult.rows,
-              total_count: totalCount,
-              offset,
-              limit,
-              has_more: hasMore,
-            }),
+            text: JSON.stringify(responseBody),
           },
         ],
       };
