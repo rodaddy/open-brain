@@ -28,6 +28,8 @@ import { registerLaneUpsert } from "./lane-upsert.ts";
 import { registerLaneLoad } from "./lane-load.ts";
 import { registerAppendSessionEvent } from "./append-session-event.ts";
 import { registerSessionContext } from "./session-context.ts";
+import { registerSessionStart } from "./session-start.ts";
+import { registerSessionWrap } from "./session-wrap.ts";
 
 export interface ToolDeps {
   pool: pg.Pool;
@@ -62,4 +64,6 @@ export function registerAllTools(server: McpServer, deps: ToolDeps): void {
   registerLaneLoad(server, deps);
   registerAppendSessionEvent(server, deps);
   registerSessionContext(server, deps);
+  registerSessionStart(server, deps);
+  registerSessionWrap(server, deps);
 }
