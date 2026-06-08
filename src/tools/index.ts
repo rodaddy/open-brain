@@ -26,6 +26,8 @@ import { registerListNamespaces } from "./list-namespaces.ts";
 import { registerTierRecommendations } from "./tier-recommendations.ts";
 import { registerLaneUpsert } from "./lane-upsert.ts";
 import { registerLaneLoad } from "./lane-load.ts";
+import { registerAppendSessionEvent } from "./append-session-event.ts";
+import { registerSessionContext } from "./session-context.ts";
 
 export interface ToolDeps {
   pool: pg.Pool;
@@ -58,4 +60,6 @@ export function registerAllTools(server: McpServer, deps: ToolDeps): void {
   registerTierRecommendations(server, deps);
   registerLaneUpsert(server, deps);
   registerLaneLoad(server, deps);
+  registerAppendSessionEvent(server, deps);
+  registerSessionContext(server, deps);
 }

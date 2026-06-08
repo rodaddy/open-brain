@@ -42,6 +42,22 @@ export const CONTENT_PREVIEW: Record<Table, string> = {
     " THEN E'\\nNext: ' || immutable_array_to_string(s.next_steps, '; ') ELSE '' END",
 };
 
+/** Valid session event types */
+export const EVENT_TYPES = [
+  "fact",
+  "decision",
+  "blocker",
+  "action",
+  "artifact",
+  "receipt",
+  "question",
+  "correction",
+  "handoff",
+] as const;
+
+/** Valid event importance levels */
+export const IMPORTANCE_LEVELS = ["hot", "warm", "cold"] as const;
+
 /** Table alias used in CTE/SELECT queries */
 export const TABLE_ALIAS: Record<Table, string> = {
   thoughts: "t",
