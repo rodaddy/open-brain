@@ -184,8 +184,9 @@ describe("session_start", () => {
       const parsed = JSON.parse((result.content as any)[0].text);
       expect(parsed.is_new).toBe(true);
       expect(parsed.reactivated).toBe(false);
+      expect(parsed.previous_status).toBeNull();
       expect(parsed.events).toEqual([]);
-      expect(parsed.event_count).toBe(0);
+      expect(parsed.events_returned).toBe(0);
       expect(parsed.lane.id).toBe("new-lane-uuid");
       expect(parsed.lane.status).toBe("active");
     } finally {
@@ -220,8 +221,9 @@ describe("session_start", () => {
       const parsed = JSON.parse((result.content as any)[0].text);
       expect(parsed.is_new).toBe(false);
       expect(parsed.reactivated).toBe(false);
+      expect(parsed.previous_status).toBe("active");
       expect(parsed.events).toHaveLength(2);
-      expect(parsed.event_count).toBe(2);
+      expect(parsed.events_returned).toBe(2);
       expect(parsed.lane.status).toBe("active");
     } finally {
       await cleanup();
@@ -268,6 +270,7 @@ describe("session_start", () => {
       const parsed = JSON.parse((result.content as any)[0].text);
       expect(parsed.is_new).toBe(false);
       expect(parsed.reactivated).toBe(true);
+      expect(parsed.previous_status).toBe("wrapped");
       expect(parsed.lane.status).toBe("active");
       expect(parsed.lane.ended_at).toBeNull();
       expect(parsed.events).toHaveLength(2);
@@ -316,6 +319,7 @@ describe("session_start", () => {
       const parsed = JSON.parse((result.content as any)[0].text);
       expect(parsed.is_new).toBe(false);
       expect(parsed.reactivated).toBe(true);
+      expect(parsed.previous_status).toBe("archived");
       expect(parsed.lane.status).toBe("active");
     } finally {
       await cleanup();
@@ -440,7 +444,7 @@ describe("session_start", () => {
       expect(parsed.events[1].artifact_path).toBe(
         "https://github.com/org/repo/pull/42",
       );
-      expect(parsed.event_count).toBe(2);
+      expect(parsed.events_returned).toBe(2);
     } finally {
       await cleanup();
     }

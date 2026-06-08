@@ -17,6 +17,7 @@ export function registerSessionWrap(server: McpServer, deps: ToolDeps): void {
       inputSchema: {
         session_key: z
           .string()
+          .min(1)
           .max(500)
           .describe("Session key identifying the lane to wrap"),
         namespace: z
@@ -156,11 +157,12 @@ WHERE namespace = $1 AND session_key = $2`,
         // Use lane's project as fallback when not explicitly provided
         const project = args.project ?? lane.project ?? null;
 
-        // Step 4: Insert session record
+        // Step 4: Insert session record (ON CONFLICT handles double-wrap)
         const { rows: sessionRows } = await deps.pool.query(
           `INSERT INTO sessions
   (summary, key_decisions, next_steps, project, namespace, embedding, content_hash, embedded_at, embedding_model, created_by)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+ON CONFLICT (content_hash) DO NOTHING
 RETURNING id, created_at`,
           [
             args.summary,
@@ -175,6 +177,38 @@ RETURNING id, created_at`,
             auth.clientId,
           ],
         );
+
+        // Duplicate content_hash — session already exists
+        if (sessionRows.length === 0) {
+          // Still mark wrapped if requested
+          if (!keepActive && lane.status !== "wrapped") {
+            await deps.pool.query(
+              `UPDATE ob_session_lanes SET status = 'wrapped', ended_at = COALESCE(ended_at, NOW()) WHERE id = $1`,
+              [lane.id],
+            );
+          }
+
+          logger.info("session_wrap_duplicate", {
+            session_key: args.session_key,
+            namespace: ns,
+            lane_id: lane.id,
+          });
+
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: JSON.stringify({
+                  duplicate: true,
+                  lane_id: lane.id,
+                  lane_status: keepActive ? lane.status : "wrapped",
+                  message:
+                    "Session with identical content already exists for this lane",
+                }),
+              },
+            ],
+          };
+        }
 
         const sessionId = sessionRows[0].id;
         const createdAt = sessionRows[0].created_at;

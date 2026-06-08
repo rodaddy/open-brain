@@ -594,6 +594,134 @@ describe("session_wrap", () => {
     }
   });
 
+  // ── DUPLICATE CONTENT_HASH ──
+
+  it("returns duplicate response when content_hash collides (already-wrapped lane)", async () => {
+    const wrappedLane = { ...MOCK_LANE, status: "wrapped" };
+    const mockPool = {
+      query: async (sql: string, _params?: any[]) => {
+        if (sql.includes("FROM ob_session_lanes")) {
+          return { rows: [wrappedLane] };
+        }
+        if (sql.includes("count(*)")) {
+          return { rows: [{ cnt: 5 }] };
+        }
+        if (sql.includes("INSERT INTO sessions")) {
+          // ON CONFLICT DO NOTHING returns zero rows
+          return { rows: [] };
+        }
+        return { rows: [] };
+      },
+    };
+    const auth: AuthInfo = { role: "admin", clientId: "skippy" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "session_wrap",
+        arguments: {
+          session_key: "ob-v2-dev",
+          summary: "Already wrapped this.",
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.duplicate).toBe(true);
+      expect(parsed.lane_id).toBe("lane-uuid-1");
+      expect(parsed.lane_status).toBe("wrapped");
+      expect(parsed.message).toContain("identical content");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("duplicate wrap still marks lane as wrapped when keep_active=false and lane not yet wrapped", async () => {
+    let laneUpdateCalled = false;
+    const activeLane = { ...MOCK_LANE, status: "active" };
+    const mockPool = {
+      query: async (sql: string, _params?: any[]) => {
+        if (sql.includes("FROM ob_session_lanes")) {
+          return { rows: [activeLane] };
+        }
+        if (sql.includes("count(*)")) {
+          return { rows: [{ cnt: 3 }] };
+        }
+        if (sql.includes("INSERT INTO sessions")) {
+          return { rows: [] }; // duplicate
+        }
+        if (sql.includes("UPDATE ob_session_lanes SET status")) {
+          laneUpdateCalled = true;
+          return { rows: [] };
+        }
+        return { rows: [] };
+      },
+    };
+    const auth: AuthInfo = { role: "admin", clientId: "skippy" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "session_wrap",
+        arguments: {
+          session_key: "ob-v2-dev",
+          summary: "Duplicate but should still wrap lane.",
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.duplicate).toBe(true);
+      expect(parsed.lane_status).toBe("wrapped");
+      expect(laneUpdateCalled).toBe(true);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("duplicate wrap with keep_active=true does NOT update lane status", async () => {
+    let laneUpdateCalled = false;
+    const mockPool = {
+      query: async (sql: string, _params?: any[]) => {
+        if (sql.includes("FROM ob_session_lanes")) {
+          return { rows: [MOCK_LANE] };
+        }
+        if (sql.includes("count(*)")) {
+          return { rows: [{ cnt: 2 }] };
+        }
+        if (sql.includes("INSERT INTO sessions")) {
+          return { rows: [] }; // duplicate
+        }
+        if (sql.includes("UPDATE ob_session_lanes SET status")) {
+          laneUpdateCalled = true;
+          return { rows: [] };
+        }
+        return { rows: [] };
+      },
+    };
+    const auth: AuthInfo = { role: "admin", clientId: "skippy" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "session_wrap",
+        arguments: {
+          session_key: "ob-v2-dev",
+          summary: "Duplicate with keep_active.",
+          keep_active: true,
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.duplicate).toBe(true);
+      expect(parsed.lane_status).toBe("active");
+      expect(laneUpdateCalled).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+
   // ── DATABASE ERROR ──
 
   it("returns isError=true with message when DB query throws", async () => {

@@ -21,6 +21,7 @@ export function registerSessionStart(server: McpServer, deps: ToolDeps): void {
       inputSchema: {
         session_key: z
           .string()
+          .min(1)
           .max(500)
           .describe("Stable identifier for this session lane"),
         namespace: z
@@ -132,7 +133,8 @@ LIMIT 50`,
           const result = {
             lane,
             events,
-            event_count: events.length,
+            events_returned: events.length,
+            previous_status: previousStatus,
             is_new: false,
             reactivated,
           };
@@ -143,7 +145,7 @@ LIMIT 50`,
             namespace: ns,
             reactivated,
             previous_status: previousStatus,
-            event_count: events.length,
+            events_returned: events.length,
           });
 
           return {
@@ -179,7 +181,8 @@ RETURNING ${LANE_COLUMNS}`,
         const result = {
           lane: newLane,
           events: [] as unknown[],
-          event_count: 0,
+          events_returned: 0,
+          previous_status: null,
           is_new: true,
           reactivated: false,
         };
