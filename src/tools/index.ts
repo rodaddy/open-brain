@@ -9,6 +9,7 @@ import { registerSessionSave } from "./session-save.ts";
 import { registerSessionLoad } from "./session-load.ts";
 import { registerArchiveEntry } from "./archive-entry.ts";
 import { registerListRecent } from "./list-recent.ts";
+import { registerListStale } from "./list-stale.ts";
 import { registerUpdateEntry } from "./update-entry.ts";
 import { registerRateEntry } from "./rate-entry.ts";
 import { registerSearchAll } from "./search-all.ts";
@@ -38,6 +39,7 @@ export function registerAllTools(server: McpServer, deps: ToolDeps): void {
   registerSessionLoad(server, deps);
   registerArchiveEntry(server, deps);
   registerListRecent(server, deps);
+  registerListStale(server, deps);
   registerUpdateEntry(server, deps);
   registerRateEntry(server, deps);
   registerSearchAll(server, deps);

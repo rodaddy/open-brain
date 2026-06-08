@@ -8,7 +8,7 @@ Built for AI agents that need persistent, searchable memory across conversations
 
 ## Features
 
-- **14 MCP tools** for reading, writing, and managing knowledge
+- **15 MCP tools** for reading, writing, and managing knowledge
 - **Hybrid search** — reciprocal rank fusion (RRF) over HNSW vector similarity + PostgreSQL full-text search
 - **Cognitive tiering** — hot/warm/cold memory lifecycle with usage-based scoring
 - **Per-consumer auth** — role-based access control with scoped tokens (admin, agent, readonly, etc.)
@@ -34,6 +34,7 @@ Built for AI agents that need persistent, searchable memory across conversations
 | `update_entry` | Update content, tags, or metadata on an existing entry. |
 | `archive_entry` | Soft-delete an entry with an optional reason. |
 | `rate_entry` | Score an entry's usefulness (0–1) for quality feedback. |
+| `list_stale` | Find entries not accessed recently — candidates for tier demotion (hot→warm→cold). Filterable by table, current tier, and staleness threshold. |
 | `set_tier` | Move an entry between cognitive tiers (hot/warm/cold). |
 
 ## Prerequisites
