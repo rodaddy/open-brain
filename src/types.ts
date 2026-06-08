@@ -5,6 +5,21 @@ export type Table =
   | "relationships"
   | "projects"
   | "sessions";
+// Keep in sync with CHECK (relation IN (...)) in 010_entity_links.sql
+export type LinkRelation =
+  | "artifact"
+  | "depends_on"
+  | "supersedes"
+  | "caused_by"
+  | "same_lane"
+  | "adjacent"
+  | "mentions"
+  | "implemented_by"
+  | "blocked_by"
+  | "decided_by"
+  | "relates_to"
+  | "contradicts"
+  | "duplicates";
 export type Tier = "hot" | "warm" | "cold";
 export type Permission = "read" | "write" | "delete";
 
