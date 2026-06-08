@@ -4,6 +4,7 @@ import { canRead } from "../permissions.ts";
 import type { AuthInfo, Table, Tier } from "../types.ts";
 import { logger } from "../logger.ts";
 import type { ToolDeps } from "./index.ts";
+
 import {
   ALL_TABLES,
   SOURCE_LABELS,
@@ -11,6 +12,18 @@ import {
   TABLE_ALIAS,
   VALID_TIERS,
 } from "./table-constants.ts";
+
+function buildWhereClause(
+  alias: string,
+  includeArchived: boolean,
+  tier?: Tier,
+): string {
+  const archiveFilter = includeArchived
+    ? ""
+    : ` AND ${alias}.archived_at IS NULL`;
+  const tierFilter = tier ? ` AND ${alias}.tier = '${tier}'` : "";
+  return `WHERE ${alias}.created_at >= NOW() - INTERVAL '1 day' * $1${archiveFilter}${tierFilter}`;
+}
 
 function buildTableSelect(
   table: Table,
@@ -21,11 +34,7 @@ function buildTableSelect(
   const alias = TABLE_ALIAS[table];
   const label = SOURCE_LABELS[table];
   const preview = CONTENT_PREVIEW[table];
-
-  const archiveFilter = includeArchived
-    ? ""
-    : ` AND ${alias}.archived_at IS NULL`;
-  const tierFilter = tier ? ` AND ${alias}.tier = '${tier}'` : "";
+  const where = buildWhereClause(alias, includeArchived, tier);
 
   return `SELECT
     '${label}' AS source_type,
@@ -35,7 +44,21 @@ function buildTableSelect(
     ${alias}.tier,
     ${alias}.created_at
   FROM ${table} ${alias}
-  WHERE ${alias}.created_at >= NOW() - INTERVAL '1 day' * $1${archiveFilter}${tierFilter}`;
+  ${where}`;
+}
+
+function buildCountSelect(
+  table: Table,
+  includeArchived: boolean,
+  tier?: Tier,
+): string {
+  if (tier && !VALID_TIERS.has(tier)) throw new Error(`Invalid tier: ${tier}`);
+  const alias = TABLE_ALIAS[table];
+  const where = buildWhereClause(alias, includeArchived, tier);
+
+  return `SELECT COUNT(*) AS cnt
+  FROM ${table} ${alias}
+  ${where}`;
 }
 
 export function registerListRecent(server: McpServer, deps: ToolDeps): void {
@@ -43,7 +66,7 @@ export function registerListRecent(server: McpServer, deps: ToolDeps): void {
     "list_recent",
     {
       description:
-        "List recent brain entries chronologically. Supports table filter, date range, and archived toggle.",
+        "List recent brain entries chronologically. Supports table filter, date range, tier filter, and pagination with total_count.",
       inputSchema: {
         table: z
           .enum([
@@ -66,9 +89,9 @@ export function registerListRecent(server: McpServer, deps: ToolDeps): void {
           .number()
           .int()
           .min(1)
-          .max(250)
+          .max(500)
           .optional()
-          .describe("Maximum entries to return (default 20)"),
+          .describe("Maximum entries to return (default 20, max 500)"),
         offset: z
           .number()
           .int()
@@ -152,6 +175,12 @@ export function registerListRecent(server: McpServer, deps: ToolDeps): void {
       const unionSql = selects.join("\nUNION ALL\n");
       const sql = `${unionSql}\nORDER BY created_at DESC\nLIMIT $2 OFFSET $3`;
 
+      // Build total count query
+      const countSelects = accessibleTables.map((t) =>
+        buildCountSelect(t, includeArchived, tier),
+      );
+      const countSql = `SELECT SUM(cnt)::int AS total_count FROM (${countSelects.join("\nUNION ALL\n")}) counts`;
+
       logger.info("list_recent_query", {
         tables: accessibleTables,
         days,
@@ -160,13 +189,28 @@ export function registerListRecent(server: McpServer, deps: ToolDeps): void {
         includeArchived,
       });
 
-      const { rows } = await deps.pool.query(sql, [days, limit, offset]);
+      const [dataResult, countResult] = await Promise.all([
+        deps.pool.query(sql, [days, limit, offset]),
+        deps.pool.query(countSql, [days]).catch(() => null),
+      ]);
+
+      const totalCount = countResult?.rows[0]?.total_count ?? null;
+      const hasMore =
+        totalCount !== null
+          ? offset + dataResult.rows.length < totalCount
+          : false;
 
       return {
         content: [
           {
             type: "text" as const,
-            text: JSON.stringify(rows),
+            text: JSON.stringify({
+              entries: dataResult.rows,
+              total_count: totalCount,
+              offset,
+              limit,
+              has_more: hasMore,
+            }),
           },
         ],
       };
