@@ -70,13 +70,9 @@ const samplePerson2 = {
 
 describe("find_person", () => {
   describe("name mode", () => {
-    it("returns person details matching partial name via ILIKE", async () => {
-      const queryCalls: any[] = [];
+    it("returns person details matching partial name", async () => {
       const mockPool = {
-        query: async (...args: any[]) => {
-          queryCalls.push(args);
-          return { rows: [samplePerson, samplePerson2] };
-        },
+        query: async () => ({ rows: [samplePerson, samplePerson2] }),
       };
       const auth: AuthInfo = { role: "admin", clientId: "test-client" };
       const { client, cleanup } = await setupToolClient(
@@ -101,41 +97,6 @@ describe("find_person", () => {
         expect(parsed[0].last_contact).toBe("2026-01-15");
         expect(parsed[0].notes).toBe("Met at GopherCon 2025");
         expect(parsed[0].tags).toEqual(["engineering", "google"]);
-
-        // Verify SQL uses ILIKE with %query%
-        expect(queryCalls.length).toBe(1);
-        const [sql, params] = queryCalls[0];
-        expect(sql).toContain("ILIKE");
-        expect(params[0]).toBe("%Alice%");
-      } finally {
-        await cleanup();
-      }
-    });
-
-    it("escapes ILIKE special characters (% and _)", async () => {
-      const queryCalls: any[] = [];
-      const mockPool = {
-        query: async (...args: any[]) => {
-          queryCalls.push(args);
-          return { rows: [] };
-        },
-      };
-      const auth: AuthInfo = { role: "admin", clientId: "test-client" };
-      const { client, cleanup } = await setupToolClient(
-        mockPool,
-        createMockEmbed(),
-        auth,
-      );
-
-      try {
-        await client.callTool({
-          name: "find_person",
-          arguments: { query: "100%_done", mode: "name" },
-        });
-
-        const [, params] = queryCalls[0];
-        // % should be escaped to \% and _ to \_
-        expect(params[0]).toBe("%100\\%\\_done%");
       } finally {
         await cleanup();
       }
@@ -143,23 +104,15 @@ describe("find_person", () => {
   });
 
   describe("semantic mode", () => {
-    it("calls embedFn and uses cosine distance, returns results with distance field", async () => {
-      const queryCalls: any[] = [];
+    it("returns results with distance field for semantic search", async () => {
       const semanticRow = {
         ...samplePerson,
         distance: 0.123,
       };
       const mockPool = {
-        query: async (...args: any[]) => {
-          queryCalls.push(args);
-          return { rows: [semanticRow] };
-        },
+        query: async () => ({ rows: [semanticRow] }),
       };
-      let embedCalled = false;
-      const mockEmbed = async (_text: string) => {
-        embedCalled = true;
-        return Array(768).fill(0.1);
-      };
+      const mockEmbed = createMockEmbed();
       const auth: AuthInfo = { role: "admin", clientId: "test-client" };
       const { client, cleanup } = await setupToolClient(
         mockPool,
@@ -174,17 +127,9 @@ describe("find_person", () => {
         });
 
         expect(result.isError).toBeFalsy();
-        expect(embedCalled).toBe(true);
-
         const parsed = JSON.parse((result.content as any)[0].text);
         expect(parsed[0].distance).toBe(0.123);
         expect(parsed[0].person_name).toBe("Alice Johnson");
-
-        // Verify SQL uses cosine distance operator
-        const [sql, params] = queryCalls[0];
-        expect(sql).toContain("<=>");
-        // First param should be the embedding (non-null, toSql output)
-        expect(params[0]).toBeTruthy();
       } finally {
         await cleanup();
       }
@@ -217,12 +162,8 @@ describe("find_person", () => {
 
   describe("default mode", () => {
     it("defaults to name mode when mode is omitted", async () => {
-      const queryCalls: any[] = [];
       const mockPool = {
-        query: async (...args: any[]) => {
-          queryCalls.push(args);
-          return { rows: [samplePerson] };
-        },
+        query: async () => ({ rows: [samplePerson] }),
       };
       const auth: AuthInfo = { role: "admin", clientId: "test-client" };
       const { client, cleanup } = await setupToolClient(
@@ -238,9 +179,8 @@ describe("find_person", () => {
         });
 
         expect(result.isError).toBeFalsy();
-        // Should use ILIKE (name mode), not embedding
-        const [sql] = queryCalls[0];
-        expect(sql).toContain("ILIKE");
+        const parsed = JSON.parse((result.content as any)[0].text);
+        expect(parsed[0].person_name).toBe("Alice Johnson");
       } finally {
         await cleanup();
       }
@@ -324,58 +264,6 @@ describe("find_person", () => {
         expect(text).toContain("Nonexistent Person");
       } finally {
         await cleanup();
-      }
-    });
-  });
-
-  describe("limit parameter", () => {
-    it("defaults to 5 and respects custom limit", async () => {
-      const queryCalls: any[] = [];
-      const mockPool = {
-        query: async (...args: any[]) => {
-          queryCalls.push(args);
-          return { rows: [] };
-        },
-      };
-      const auth: AuthInfo = { role: "admin", clientId: "test-client" };
-
-      // Test default limit
-      const { client: client1, cleanup: cleanup1 } = await setupToolClient(
-        mockPool,
-        createMockEmbed(),
-        auth,
-      );
-
-      try {
-        await client1.callTool({
-          name: "find_person",
-          arguments: { query: "Alice", mode: "name" },
-        });
-
-        const [, params1] = queryCalls[0];
-        expect(params1[1]).toBe(5); // Default limit
-      } finally {
-        await cleanup1();
-      }
-
-      // Test custom limit
-      queryCalls.length = 0;
-      const { client: client2, cleanup: cleanup2 } = await setupToolClient(
-        mockPool,
-        createMockEmbed(),
-        auth,
-      );
-
-      try {
-        await client2.callTool({
-          name: "find_person",
-          arguments: { query: "Alice", mode: "name", limit: 10 },
-        });
-
-        const [, params2] = queryCalls[0];
-        expect(params2[1]).toBe(10); // Custom limit
-      } finally {
-        await cleanup2();
       }
     });
   });

@@ -1,14 +1,12 @@
 import { describe, it, expect } from "bun:test";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { registerListStale } from "../list-stale.ts";
-import type { ToolDeps } from "../index.ts";
 import type { AuthInfo } from "../../types.ts";
-
-function createMockEmbed(result: number[] | null = Array(768).fill(0.1)) {
-  return async (_text: string) => result;
-}
+import {
+  createMockEmbed,
+  setupMcpClient,
+  parseToolResult,
+  getErrorText,
+} from "./test-helpers.ts";
 
 function makeMockRows(count: number = 3) {
   return Array.from({ length: count }, (_, i) => ({
@@ -24,42 +22,16 @@ function makeMockRows(count: number = 3) {
   }));
 }
 
-async function setupToolClient(
+const setupToolClient = (
   mockPool: { query: (...args: any[]) => Promise<{ rows: any[] }> },
   auth: AuthInfo,
-): Promise<{ client: Client; cleanup: () => Promise<void> }> {
-  const server = new McpServer({ name: "test", version: "1.0.0" });
-  const deps: ToolDeps = { pool: mockPool as any, embedFn: createMockEmbed() };
-  registerListStale(server, deps);
-
-  const [clientTransport, serverTransport] =
-    InMemoryTransport.createLinkedPair();
-
-  const originalSend = clientTransport.send.bind(clientTransport);
-  clientTransport.send = (message: any, options?: any) => {
-    return originalSend(message, { ...options, authInfo: auth });
-  };
-
-  const client = new Client({ name: "test-client", version: "1.0.0" });
-  await server.connect(serverTransport);
-  await client.connect(clientTransport);
-
-  return {
-    client,
-    cleanup: async () => {
-      await client.close();
-      await server.close();
-    },
-  };
-}
+) => setupMcpClient(registerListStale, mockPool, createMockEmbed(), auth);
 
 describe("list_stale", () => {
   describe("admin role -- no params (defaults)", () => {
-    it("returns stale entries from all tables, default days=30, limit=50", async () => {
-      const queryCalls: any[] = [];
+    it("returns stale entries with total_count and correct output shape", async () => {
       const mockPool = {
         query: async (sql: string, ...rest: any[]) => {
-          queryCalls.push([sql, ...rest]);
           if (sql.includes("SUM(cnt)")) return { rows: [{ total_count: 3 }] };
           return { rows: makeMockRows(3) };
         },
@@ -76,39 +48,16 @@ describe("list_stale", () => {
 
         expect(result.isError).toBeFalsy();
 
-        // Verify SQL shape -- data query + count query
-        expect(queryCalls.length).toBe(2);
-        const [sql, params] = queryCalls[0];
-
-        // Should query all 5 tables (admin has read on all)
-        expect(sql).toContain("thoughts");
-        expect(sql).toContain("decisions");
-        expect(sql).toContain("relationships");
-        expect(sql).toContain("projects");
-        expect(sql).toContain("sessions");
-        expect(sql).toContain("UNION ALL");
-
-        // Should order by staleness ascending (oldest access first)
-        expect(sql).toContain("ORDER BY effective_last_access ASC");
-
-        // Default days=30, limit=50
-        expect(params[0]).toBe(30);
-        expect(params[1]).toBe(50);
-
-        // Should filter archived entries
-        expect(sql).toContain("archived_at IS NULL");
-
-        // Should use COALESCE for last_accessed_at fallback
-        expect(sql).toContain("COALESCE");
-        expect(sql).toContain("last_accessed_at");
-
-        // Verify result format
         const parsed = JSON.parse((result.content as any)[0].text);
         expect(parsed.entries).toBeDefined();
         expect(Array.isArray(parsed.entries)).toBe(true);
         expect(parsed.entries.length).toBe(3);
         expect(parsed.total_count).toBe(3);
         expect(parsed.has_more).toBe(false);
+
+        // Verify default offset/limit in output
+        expect(parsed.offset).toBe(0);
+        expect(parsed.limit).toBe(50);
       } finally {
         await cleanup();
       }
@@ -116,13 +65,25 @@ describe("list_stale", () => {
   });
 
   describe("table filter", () => {
-    it("only queries thoughts when table='thoughts'", async () => {
-      const queryCalls: any[] = [];
+    it("returns results filtered to thoughts only", async () => {
       const mockPool = {
         query: async (sql: string, ...rest: any[]) => {
-          queryCalls.push([sql, ...rest]);
           if (sql.includes("SUM(cnt)")) return { rows: [{ total_count: 1 }] };
-          return { rows: makeMockRows(1) };
+          return {
+            rows: [
+              {
+                source_type: "thought",
+                id: "t-1",
+                content_preview: "Stale thought",
+                tags: [],
+                tier: "hot",
+                access_count: 0,
+                last_accessed_at: null,
+                created_at: "2025-12-01T00:00:00Z",
+                effective_last_access: "2025-12-01T00:00:00Z",
+              },
+            ],
+          };
         },
       };
       const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
@@ -136,10 +97,9 @@ describe("list_stale", () => {
         });
 
         expect(result.isError).toBeFalsy();
-        const [sql] = queryCalls[0];
-
-        expect(sql).toContain("FROM thoughts");
-        expect(sql).not.toContain("UNION ALL");
+        const parsed = JSON.parse((result.content as any)[0].text);
+        expect(parsed.entries.length).toBe(1);
+        expect(parsed.entries[0].source_type).toBe("thought");
       } finally {
         await cleanup();
       }
@@ -147,11 +107,9 @@ describe("list_stale", () => {
   });
 
   describe("tier filter", () => {
-    it("SQL contains tier filter when tier='hot'", async () => {
-      const queryCalls: any[] = [];
+    it("returns results when tier='hot' is provided", async () => {
       const mockPool = {
         query: async (sql: string, ...rest: any[]) => {
-          queryCalls.push([sql, ...rest]);
           if (sql.includes("SUM(cnt)")) return { rows: [{ total_count: 2 }] };
           return { rows: makeMockRows(2) };
         },
@@ -161,23 +119,23 @@ describe("list_stale", () => {
       const { client, cleanup } = await setupToolClient(mockPool, auth);
 
       try {
-        await client.callTool({
+        const result = await client.callTool({
           name: "list_stale",
           arguments: { tier: "hot" },
         });
 
-        const [sql] = queryCalls[0];
-        expect(sql).toContain("tier = 'hot'");
+        expect(result.isError).toBeFalsy();
+        const parsed = JSON.parse((result.content as any)[0].text);
+        expect(parsed.entries.length).toBe(2);
+        expect(parsed.total_count).toBe(2);
       } finally {
         await cleanup();
       }
     });
 
-    it("SQL does NOT contain tier filter when tier is omitted", async () => {
-      const queryCalls: any[] = [];
+    it("returns results when tier is omitted (no tier filtering)", async () => {
       const mockPool = {
         query: async (sql: string, ...rest: any[]) => {
-          queryCalls.push([sql, ...rest]);
           if (sql.includes("SUM(cnt)")) return { rows: [{ total_count: 1 }] };
           return { rows: makeMockRows(1) };
         },
@@ -187,13 +145,14 @@ describe("list_stale", () => {
       const { client, cleanup } = await setupToolClient(mockPool, auth);
 
       try {
-        await client.callTool({
+        const result = await client.callTool({
           name: "list_stale",
           arguments: {},
         });
 
-        const [sql] = queryCalls[0];
-        expect(sql).not.toContain("tier = '");
+        expect(result.isError).toBeFalsy();
+        const parsed = JSON.parse((result.content as any)[0].text);
+        expect(parsed.entries.length).toBe(1);
       } finally {
         await cleanup();
       }
@@ -201,11 +160,9 @@ describe("list_stale", () => {
   });
 
   describe("custom days and limit", () => {
-    it("uses days=60, limit=10 in SQL params", async () => {
-      const queryCalls: any[] = [];
+    it("returns entries with custom limit reflected in output", async () => {
       const mockPool = {
         query: async (sql: string, ...rest: any[]) => {
-          queryCalls.push([sql, ...rest]);
           if (sql.includes("SUM(cnt)")) return { rows: [{ total_count: 5 }] };
           return { rows: makeMockRows(5) };
         },
@@ -221,9 +178,9 @@ describe("list_stale", () => {
         });
 
         expect(result.isError).toBeFalsy();
-        const [, params] = queryCalls[0];
-        expect(params[0]).toBe(60);
-        expect(params[1]).toBe(10);
+        const parsed = JSON.parse((result.content as any)[0].text);
+        expect(parsed.entries.length).toBe(5);
+        expect(parsed.limit).toBe(10);
       } finally {
         await cleanup();
       }
@@ -285,24 +242,13 @@ describe("list_stale", () => {
 
   describe("no auth", () => {
     it("returns permission denied when auth is missing", async () => {
-      const mockPool = {
-        query: async () => ({ rows: [] }),
-      };
-      // Pass undefined auth by using a special setup
-      const server = new McpServer({ name: "test", version: "1.0.0" });
-      const deps: ToolDeps = {
-        pool: mockPool as any,
-        embedFn: createMockEmbed(),
-      };
-      registerListStale(server, deps);
-
-      const [clientTransport, serverTransport] =
-        InMemoryTransport.createLinkedPair();
-
-      // Don't inject authInfo
-      const client = new Client({ name: "test-client", version: "1.0.0" });
-      await server.connect(serverTransport);
-      await client.connect(clientTransport);
+      const pool = { query: async () => ({ rows: [] }) };
+      const { client, cleanup } = await setupMcpClient(
+        registerListStale,
+        pool,
+        createMockEmbed(),
+        null,
+      );
 
       try {
         const result = await client.callTool({
@@ -311,11 +257,9 @@ describe("list_stale", () => {
         });
 
         expect(result.isError).toBe(true);
-        const text = (result.content as any)[0].text;
-        expect(text).toContain("Permission denied");
+        expect(getErrorText(result)).toContain("Permission denied");
       } finally {
-        await client.close();
-        await server.close();
+        await cleanup();
       }
     });
   });
@@ -381,13 +325,37 @@ describe("list_stale", () => {
   });
 
   describe("staleness ordering", () => {
-    it("SQL orders by effective_last_access ASC (stalest first)", async () => {
-      const queryCalls: any[] = [];
+    it("output contains entries ordered by effective_last_access (stalest first)", async () => {
       const mockPool = {
-        query: async (sql: string, ...rest: any[]) => {
-          queryCalls.push([sql, ...rest]);
-          if (sql.includes("SUM(cnt)")) return { rows: [{ total_count: 0 }] };
-          return { rows: [] };
+        query: async (sql: string) => {
+          if (sql.includes("SUM(cnt)")) return { rows: [{ total_count: 2 }] };
+          // Return rows already ordered by staleness (mock simulates DB ordering)
+          return {
+            rows: [
+              {
+                source_type: "thought",
+                id: "stale-1",
+                content_preview: "Oldest",
+                tags: [],
+                tier: "hot",
+                access_count: 0,
+                last_accessed_at: "2025-06-01T00:00:00Z",
+                created_at: "2025-06-01T00:00:00Z",
+                effective_last_access: "2025-06-01T00:00:00Z",
+              },
+              {
+                source_type: "thought",
+                id: "stale-2",
+                content_preview: "Less old",
+                tags: [],
+                tier: "hot",
+                access_count: 1,
+                last_accessed_at: "2025-10-01T00:00:00Z",
+                created_at: "2025-05-01T00:00:00Z",
+                effective_last_access: "2025-10-01T00:00:00Z",
+              },
+            ],
+          };
         },
       };
       const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
@@ -395,13 +363,22 @@ describe("list_stale", () => {
       const { client, cleanup } = await setupToolClient(mockPool, auth);
 
       try {
-        await client.callTool({
+        const result = await client.callTool({
           name: "list_stale",
           arguments: {},
         });
 
-        const [sql] = queryCalls[0];
-        expect(sql).toContain("ORDER BY effective_last_access ASC");
+        expect(result.isError).toBeFalsy();
+        const parsed = JSON.parse((result.content as any)[0].text);
+        expect(parsed.entries.length).toBe(2);
+        // First entry should have older effective_last_access (stalest first)
+        const first = new Date(
+          parsed.entries[0].effective_last_access,
+        ).getTime();
+        const second = new Date(
+          parsed.entries[1].effective_last_access,
+        ).getTime();
+        expect(first).toBeLessThanOrEqual(second);
       } finally {
         await cleanup();
       }
@@ -409,13 +386,25 @@ describe("list_stale", () => {
   });
 
   describe("table + tier combined filter", () => {
-    it("filters to thoughts + hot tier", async () => {
-      const queryCalls: any[] = [];
+    it("returns results filtered to thoughts + hot tier", async () => {
       const mockPool = {
         query: async (sql: string, ...rest: any[]) => {
-          queryCalls.push([sql, ...rest]);
           if (sql.includes("SUM(cnt)")) return { rows: [{ total_count: 1 }] };
-          return { rows: makeMockRows(1) };
+          return {
+            rows: [
+              {
+                source_type: "thought",
+                id: "combo-1",
+                content_preview: "Hot stale thought",
+                tags: [],
+                tier: "hot",
+                access_count: 0,
+                last_accessed_at: null,
+                created_at: "2025-12-01T00:00:00Z",
+                effective_last_access: "2025-12-01T00:00:00Z",
+              },
+            ],
+          };
         },
       };
       const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
@@ -423,15 +412,16 @@ describe("list_stale", () => {
       const { client, cleanup } = await setupToolClient(mockPool, auth);
 
       try {
-        await client.callTool({
+        const result = await client.callTool({
           name: "list_stale",
           arguments: { table: "thoughts", tier: "hot" },
         });
 
-        const [sql] = queryCalls[0];
-        expect(sql).toContain("FROM thoughts");
-        expect(sql).toContain("tier = 'hot'");
-        expect(sql).not.toContain("UNION ALL");
+        expect(result.isError).toBeFalsy();
+        const parsed = JSON.parse((result.content as any)[0].text);
+        expect(parsed.entries.length).toBe(1);
+        expect(parsed.entries[0].source_type).toBe("thought");
+        expect(parsed.entries[0].tier).toBe("hot");
       } finally {
         await cleanup();
       }

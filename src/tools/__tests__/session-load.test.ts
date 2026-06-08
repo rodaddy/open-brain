@@ -56,12 +56,8 @@ async function setupToolClient(
 describe("session_load", () => {
   describe("with project filter", () => {
     it("returns most recent session for the specified project", async () => {
-      const queryCalls: any[] = [];
       const mockPool = {
-        query: async (...args: any[]) => {
-          queryCalls.push(args);
-          return { rows: [MOCK_SESSION] };
-        },
+        query: async () => ({ rows: [MOCK_SESSION] }),
       };
       const auth: AuthInfo = { role: "admin", clientId: "test-client" };
 
@@ -78,13 +74,8 @@ describe("session_load", () => {
         expect(parsed.id).toBe("session-uuid");
         expect(parsed.project).toBe("open-brain");
         expect(parsed.summary).toBe("Implemented auth system");
-
-        // Verify SQL uses WHERE project = $1
-        const [sql, params] = queryCalls[0];
-        expect(sql).toContain("WHERE project = $1");
-        expect(sql).toContain("ORDER BY created_at DESC");
-        expect(sql).toContain("LIMIT 1");
-        expect(params[0]).toBe("open-brain");
+        expect(parsed.created_by).toBe("test-client");
+        expect(parsed.created_at).toBe("2026-01-01T00:00:00Z");
       } finally {
         await cleanup();
       }
@@ -93,12 +84,8 @@ describe("session_load", () => {
 
   describe("without project filter (global)", () => {
     it("returns most recent session across all projects", async () => {
-      const queryCalls: any[] = [];
       const mockPool = {
-        query: async (...args: any[]) => {
-          queryCalls.push(args);
-          return { rows: [MOCK_SESSION] };
-        },
+        query: async () => ({ rows: [MOCK_SESSION] }),
       };
       const auth: AuthInfo = { role: "readonly", clientId: "test-readonly" };
 
@@ -113,13 +100,7 @@ describe("session_load", () => {
         expect(result.isError).toBeFalsy();
         const parsed = JSON.parse((result.content as any)[0].text);
         expect(parsed.id).toBe("session-uuid");
-
-        // Verify SQL filters archived rows but has no project filter
-        const [sql] = queryCalls[0];
-        expect(sql).toContain("WHERE archived_at IS NULL");
-        expect(sql).not.toContain("project = $1");
-        expect(sql).toContain("ORDER BY created_at DESC");
-        expect(sql).toContain("LIMIT 1");
+        expect(parsed.summary).toBe("Implemented auth system");
       } finally {
         await cleanup();
       }

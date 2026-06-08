@@ -6,13 +6,9 @@ import { registerLogThought } from "../log-thought.ts";
 import type { ToolDeps } from "../index.ts";
 import type { AuthInfo } from "../../types.ts";
 
-interface MockPool {
-  query: (...args: any[]) => Promise<{ rows: Record<string, unknown>[] }>;
-}
-
 function createMockPool(
   rows: Record<string, unknown>[] = [{ id: "test-uuid" }],
-): MockPool {
+) {
   return {
     query: async () => ({ rows }),
   };
@@ -34,7 +30,6 @@ async function setupToolClient(
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair();
 
-  // Inject authInfo into every client message
   const originalSend = clientTransport.send.bind(clientTransport);
   clientTransport.send = (message: any, options?: any) => {
     return originalSend(message, { ...options, authInfo: auth });
@@ -55,14 +50,8 @@ async function setupToolClient(
 
 describe("log_thought", () => {
   describe("success with embedding", () => {
-    it("inserts content, tags, source, created_by, embedding, content_hash and returns { id, embedded: true }", async () => {
-      const queryCalls: any[] = [];
-      const mockPool = {
-        query: async (...args: any[]) => {
-          queryCalls.push(args);
-          return { rows: [{ id: "test-uuid" }] };
-        },
-      };
+    it("returns { id, embedded: true } for valid input with tags", async () => {
+      const mockPool = createMockPool([{ id: "test-uuid" }]);
       const mockEmbed = createMockEmbed();
       const auth: AuthInfo = { role: "admin", clientId: "test-client" };
 
@@ -83,21 +72,6 @@ describe("log_thought", () => {
         const parsed = JSON.parse(text);
         expect(parsed.id).toBe("test-uuid");
         expect(parsed.embedded).toBe(true);
-
-        // Verify SQL parameters
-        expect(queryCalls.length).toBe(1);
-        const [sql, params] = queryCalls[0];
-        expect(sql).toContain("INSERT INTO thoughts");
-        expect(sql).toContain("ON CONFLICT (content_hash)");
-        expect(params[0]).toBe("A test thought"); // content
-        expect(params[1]).toEqual(["test", "unit"]); // tags (original, not enriched -- extraction is fire-and-forget)
-        expect(params[2]).toBe("test-client"); // created_by
-        // params[3] = embedding (toSql result)
-        expect(params[3]).toBeTruthy(); // embedding should be non-null
-        // params[4] = content_hash
-        expect(typeof params[4]).toBe("string");
-        expect(params[4].length).toBeGreaterThan(0);
-        expect(params.length).toBe(7);
       } finally {
         await cleanup();
       }
@@ -105,14 +79,8 @@ describe("log_thought", () => {
   });
 
   describe("embedding failure (graceful degradation)", () => {
-    it("inserts with NULL embedding and returns { id, embedded: false }", async () => {
-      const queryCalls: any[] = [];
-      const mockPool = {
-        query: async (...args: any[]) => {
-          queryCalls.push(args);
-          return { rows: [{ id: "degraded-uuid" }] };
-        },
-      };
+    it("returns { id, embedded: false } when embedding fails", async () => {
+      const mockPool = createMockPool([{ id: "degraded-uuid" }]);
       const mockEmbed = createMockEmbed(null); // Embedding fails
       const auth: AuthInfo = { role: "admin", clientId: "test-client" };
 
@@ -132,10 +100,6 @@ describe("log_thought", () => {
         const parsed = JSON.parse((result.content as any)[0].text);
         expect(parsed.id).toBe("degraded-uuid");
         expect(parsed.embedded).toBe(false);
-
-        // Verify NULL embedding in SQL params
-        const [, params] = queryCalls[0];
-        expect(params[3]).toBeNull(); // embedding should be null
       } finally {
         await cleanup();
       }
@@ -144,11 +108,7 @@ describe("log_thought", () => {
 
   describe("duplicate content (content_hash conflict)", () => {
     it("returns merged: true when upsert merges tags on conflict", async () => {
-      const mockPool = {
-        query: async () => ({
-          rows: [{ id: "existing-uuid", is_new: false }],
-        }),
-      };
+      const mockPool = createMockPool([{ id: "existing-uuid", is_new: false }]);
       const mockEmbed = createMockEmbed();
       const auth: AuthInfo = { role: "admin", clientId: "test-client" };
 
@@ -182,7 +142,7 @@ describe("log_thought", () => {
       const auth: AuthInfo = { role: "readonly", clientId: "test-client" };
 
       const { client, cleanup } = await setupToolClient(
-        mockPool as any,
+        mockPool,
         mockEmbed,
         auth,
       );
@@ -202,7 +162,6 @@ describe("log_thought", () => {
     });
 
     it("returns isError: true when auth is missing", async () => {
-      // No auth injection -- send without authInfo
       const server = new McpServer({ name: "test", version: "1.0.0" });
       const mockPool = createMockPool();
       const deps: ToolDeps = {

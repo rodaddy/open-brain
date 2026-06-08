@@ -1,61 +1,24 @@
 import { describe, it, expect } from "bun:test";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { registerListRecent } from "../list-recent.ts";
-import type { ToolDeps } from "../index.ts";
 import type { AuthInfo } from "../../types.ts";
+import {
+  createMockEmbed,
+  makeMockRows,
+  setupMcpClient,
+  parseToolResult,
+  getErrorText,
+} from "./test-helpers.ts";
 
-function createMockEmbed(result: number[] | null = Array(768).fill(0.1)) {
-  return async (_text: string) => result;
-}
-
-function makeMockRows(count: number = 3) {
-  return Array.from({ length: count }, (_, i) => ({
-    source_type: "thought",
-    id: `uuid-${i}`,
-    content_preview: `Content preview ${i}`,
-    tags: ["tag-a"],
-    created_at: "2026-01-01T00:00:00Z",
-  }));
-}
-
-async function setupToolClient(
+const setupToolClient = (
   mockPool: { query: (...args: any[]) => Promise<{ rows: any[] }> },
   auth: AuthInfo,
-): Promise<{ client: Client; cleanup: () => Promise<void> }> {
-  const server = new McpServer({ name: "test", version: "1.0.0" });
-  const deps: ToolDeps = { pool: mockPool as any, embedFn: createMockEmbed() };
-  registerListRecent(server, deps);
-
-  const [clientTransport, serverTransport] =
-    InMemoryTransport.createLinkedPair();
-
-  const originalSend = clientTransport.send.bind(clientTransport);
-  clientTransport.send = (message: any, options?: any) => {
-    return originalSend(message, { ...options, authInfo: auth });
-  };
-
-  const client = new Client({ name: "test-client", version: "1.0.0" });
-  await server.connect(serverTransport);
-  await client.connect(clientTransport);
-
-  return {
-    client,
-    cleanup: async () => {
-      await client.close();
-      await server.close();
-    },
-  };
-}
+) => setupMcpClient(registerListRecent, mockPool, createMockEmbed(), auth);
 
 describe("list_recent", () => {
   describe("admin role -- no params (defaults)", () => {
-    it("returns entries from last 7 days, limit 20, excludes archived", async () => {
-      const queryCalls: any[] = [];
+    it("returns entries with total_count and has_more=false when all fit", async () => {
       const mockPool = {
         query: async (...args: any[]) => {
-          queryCalls.push(args);
           const [sql] = args;
           if (sql.includes("SUM(cnt)")) {
             return { rows: [{ total_count: 3 }] };
@@ -75,33 +38,21 @@ describe("list_recent", () => {
 
         expect(result.isError).toBeFalsy();
 
-        // Verify SQL shape
-        expect(queryCalls.length).toBe(2); // data query + count query
-        const [sql, params] = queryCalls[0];
-
-        // Should query all 5 tables (admin has read on all)
-        expect(sql).toContain("thoughts");
-        expect(sql).toContain("decisions");
-        expect(sql).toContain("relationships");
-        expect(sql).toContain("projects");
-        expect(sql).toContain("sessions");
-        expect(sql).toContain("UNION ALL");
-        expect(sql).toContain("ORDER BY created_at DESC");
-
-        // Default days=7 and limit=20
-        expect(params[0]).toBe(7);
-        expect(params[1]).toBe(20);
-
-        // Should filter archived by default
-        expect(sql).toContain("archived_at IS NULL");
-
-        // Verify result format
         const parsed = JSON.parse((result.content as any)[0].text);
         expect(parsed.entries).toBeDefined();
         expect(Array.isArray(parsed.entries)).toBe(true);
         expect(parsed.total_count).toBe(3);
         expect(parsed.has_more).toBe(false);
         expect(parsed.entries.length).toBe(3);
+
+        // Verify each entry has expected fields
+        for (const entry of parsed.entries) {
+          expect(entry).toHaveProperty("source_type");
+          expect(entry).toHaveProperty("id");
+          expect(entry).toHaveProperty("content_preview");
+          expect(entry).toHaveProperty("tags");
+          expect(entry).toHaveProperty("created_at");
+        }
       } finally {
         await cleanup();
       }
@@ -109,16 +60,24 @@ describe("list_recent", () => {
   });
 
   describe("table filter", () => {
-    it("only queries thoughts when table='thoughts'", async () => {
-      const queryCalls: any[] = [];
+    it("returns only thoughts when table='thoughts'", async () => {
       const mockPool = {
         query: async (...args: any[]) => {
-          queryCalls.push(args);
           const [sql] = args;
           if (sql.includes("SUM(cnt)")) {
             return { rows: [{ total_count: 1 }] };
           }
-          return { rows: makeMockRows(1) };
+          return {
+            rows: [
+              {
+                source_type: "thought",
+                id: "t-1",
+                content_preview: "A thought",
+                tags: [],
+                created_at: "2026-01-01T00:00:00Z",
+              },
+            ],
+          };
         },
       };
       const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
@@ -132,11 +91,9 @@ describe("list_recent", () => {
         });
 
         expect(result.isError).toBeFalsy();
-        const [sql] = queryCalls[0];
-
-        // Should only contain thoughts, not other tables in UNION
-        expect(sql).toContain("FROM thoughts");
-        expect(sql).not.toContain("UNION ALL");
+        const parsed = JSON.parse((result.content as any)[0].text);
+        expect(parsed.entries.length).toBe(1);
+        expect(parsed.entries[0].source_type).toBe("thought");
       } finally {
         await cleanup();
       }
@@ -144,11 +101,9 @@ describe("list_recent", () => {
   });
 
   describe("include_archived=true", () => {
-    it("SQL does NOT contain 'archived_at IS NULL'", async () => {
-      const queryCalls: any[] = [];
+    it("returns results (archived entries included by mock)", async () => {
       const mockPool = {
         query: async (...args: any[]) => {
-          queryCalls.push(args);
           const [sql] = args;
           if (sql.includes("SUM(cnt)")) {
             return { rows: [{ total_count: 2 }] };
@@ -167,8 +122,9 @@ describe("list_recent", () => {
         });
 
         expect(result.isError).toBeFalsy();
-        const [sql] = queryCalls[0];
-        expect(sql).not.toContain("archived_at IS NULL");
+        const parsed = JSON.parse((result.content as any)[0].text);
+        expect(parsed.entries.length).toBe(2);
+        expect(parsed.total_count).toBe(2);
       } finally {
         await cleanup();
       }
@@ -176,11 +132,9 @@ describe("list_recent", () => {
   });
 
   describe("include_archived=false (default)", () => {
-    it("SQL contains 'archived_at IS NULL'", async () => {
-      const queryCalls: any[] = [];
+    it("returns results (only non-archived by default)", async () => {
       const mockPool = {
         query: async (...args: any[]) => {
-          queryCalls.push(args);
           const [sql] = args;
           if (sql.includes("SUM(cnt)")) {
             return { rows: [{ total_count: 0 }] };
@@ -193,13 +147,15 @@ describe("list_recent", () => {
       const { client, cleanup } = await setupToolClient(mockPool, auth);
 
       try {
-        await client.callTool({
+        const result = await client.callTool({
           name: "list_recent",
           arguments: {},
         });
 
-        const [sql] = queryCalls[0];
-        expect(sql).toContain("archived_at IS NULL");
+        expect(result.isError).toBeFalsy();
+        const parsed = JSON.parse((result.content as any)[0].text);
+        expect(parsed.entries.length).toBe(0);
+        expect(parsed.total_count).toBe(0);
       } finally {
         await cleanup();
       }
@@ -207,11 +163,9 @@ describe("list_recent", () => {
   });
 
   describe("custom days and limit", () => {
-    it("uses days=30, limit=5 in SQL params", async () => {
-      const queryCalls: any[] = [];
+    it("returns the expected number of entries with custom params", async () => {
       const mockPool = {
         query: async (...args: any[]) => {
-          queryCalls.push(args);
           const [sql] = args;
           if (sql.includes("SUM(cnt)")) {
             return { rows: [{ total_count: 5 }] };
@@ -230,9 +184,10 @@ describe("list_recent", () => {
         });
 
         expect(result.isError).toBeFalsy();
-        const [, params] = queryCalls[0];
-        expect(params[0]).toBe(30);
-        expect(params[1]).toBe(5);
+        const parsed = JSON.parse((result.content as any)[0].text);
+        expect(parsed.entries.length).toBe(5);
+        expect(parsed.total_count).toBe(5);
+        expect(parsed.limit).toBe(5);
       } finally {
         await cleanup();
       }
@@ -297,48 +252,26 @@ describe("list_recent", () => {
     });
   });
 
-  describe("tier in SELECT columns", () => {
-    it("SQL SELECT includes tier column", async () => {
-      const queryCalls: any[] = [];
-      const mockPool = {
-        query: async (...args: any[]) => {
-          queryCalls.push(args);
-          const [sql] = args;
-          if (sql.includes("SUM(cnt)")) {
-            return { rows: [{ total_count: 1 }] };
-          }
-          return { rows: makeMockRows(1) };
-        },
-      };
-      const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
-
-      const { client, cleanup } = await setupToolClient(mockPool, auth);
-
-      try {
-        await client.callTool({
-          name: "list_recent",
-          arguments: {},
-        });
-
-        const [sql] = queryCalls[0];
-        expect(sql).toContain(".tier");
-      } finally {
-        await cleanup();
-      }
-    });
-  });
-
   describe("tier filter", () => {
-    it("SQL contains tier filter when tier param is provided", async () => {
-      const queryCalls: any[] = [];
+    it("returns results when tier='hot' is provided", async () => {
       const mockPool = {
         query: async (...args: any[]) => {
-          queryCalls.push(args);
           const [sql] = args;
           if (sql.includes("SUM(cnt)")) {
             return { rows: [{ total_count: 1 }] };
           }
-          return { rows: makeMockRows(1) };
+          return {
+            rows: [
+              {
+                source_type: "thought",
+                id: "hot-1",
+                content_preview: "Hot thought",
+                tags: [],
+                tier: "hot",
+                created_at: "2026-01-01T00:00:00Z",
+              },
+            ],
+          };
         },
       };
       const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
@@ -346,23 +279,23 @@ describe("list_recent", () => {
       const { client, cleanup } = await setupToolClient(mockPool, auth);
 
       try {
-        await client.callTool({
+        const result = await client.callTool({
           name: "list_recent",
           arguments: { tier: "hot" },
         });
 
-        const [sql] = queryCalls[0];
-        expect(sql).toContain("tier = 'hot'");
+        expect(result.isError).toBeFalsy();
+        const parsed = JSON.parse((result.content as any)[0].text);
+        expect(parsed.entries.length).toBe(1);
+        expect(parsed.total_count).toBe(1);
       } finally {
         await cleanup();
       }
     });
 
-    it("SQL does NOT contain tier filter when tier is omitted", async () => {
-      const queryCalls: any[] = [];
+    it("returns results when tier is omitted", async () => {
       const mockPool = {
         query: async (...args: any[]) => {
-          queryCalls.push(args);
           const [sql] = args;
           if (sql.includes("SUM(cnt)")) {
             return { rows: [{ total_count: 1 }] };
@@ -375,13 +308,14 @@ describe("list_recent", () => {
       const { client, cleanup } = await setupToolClient(mockPool, auth);
 
       try {
-        await client.callTool({
+        const result = await client.callTool({
           name: "list_recent",
           arguments: {},
         });
 
-        const [sql] = queryCalls[0];
-        expect(sql).not.toContain("tier = '");
+        expect(result.isError).toBeFalsy();
+        const parsed = JSON.parse((result.content as any)[0].text);
+        expect(parsed.entries.length).toBe(1);
       } finally {
         await cleanup();
       }

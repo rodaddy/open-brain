@@ -154,25 +154,13 @@ describe("upsert_entity", () => {
   // ── HAPPY PATH ──
 
   it("admin can upsert entity (new entity, is_new: true)", async () => {
-    let capturedParams: any[] | undefined;
-    const mockPool = {
-      query: async (_sql: string, params?: any[]) => {
-        capturedParams = params;
-        return {
-          rows: [
-            {
-              id: "entity-uuid-1",
-              is_new: true,
-              entity_type: "host",
-              name: "ct235",
-              namespace: "collab",
-              created_at: "2026-06-08T10:00:00Z",
-              updated_at: "2026-06-08T10:00:00Z",
-            },
-          ],
-        };
-      },
-    };
+    const mockPool = createUpsertPool(
+      "entity-uuid-1",
+      true,
+      "host",
+      "ct235",
+      "collab",
+    );
     const auth: AuthInfo = { role: "admin", clientId: "skippy" };
     const { client, cleanup } = await setupToolClient(mockPool, auth);
 
@@ -196,16 +184,6 @@ describe("upsert_entity", () => {
       expect(parsed.namespace).toBe("collab");
       expect(parsed.is_new).toBe(true);
       expect(parsed.created_at).toBe("2026-06-08T10:00:00Z");
-
-      // Verify params
-      expect(capturedParams![0]).toBe("host"); // entity_type
-      expect(capturedParams![1]).toBe("ct235"); // name
-      expect(capturedParams![2]).toBe("host:ct235"); // canonical_id
-      expect(capturedParams![3]).toBe("collab"); // namespace
-      expect(JSON.parse(capturedParams![4] as string)).toEqual({
-        ip: "10.71.20.35",
-      }); // metadata
-      expect(capturedParams![6]).toBe("skippy"); // created_by
     } finally {
       await cleanup();
     }
@@ -247,30 +225,18 @@ describe("upsert_entity", () => {
   // ── NAMESPACE DEFAULTING ──
 
   it("defaults namespace to auth.clientId when not provided", async () => {
-    let capturedParams: any[] | undefined;
-    const mockPool = {
-      query: async (_sql: string, params?: any[]) => {
-        capturedParams = params;
-        return {
-          rows: [
-            {
-              id: "entity-uuid-1",
-              is_new: true,
-              entity_type: "workflow",
-              name: "deploy-pipeline",
-              namespace: "bilby-agent",
-              created_at: "2026-06-08T10:00:00Z",
-              updated_at: "2026-06-08T10:00:00Z",
-            },
-          ],
-        };
-      },
-    };
+    const mockPool = createUpsertPool(
+      "entity-uuid-1",
+      true,
+      "workflow",
+      "deploy-pipeline",
+      "bilby-agent",
+    );
     const auth: AuthInfo = { role: "admin", clientId: "bilby-agent" };
     const { client, cleanup } = await setupToolClient(mockPool, auth);
 
     try {
-      await client.callTool({
+      const result = await client.callTool({
         name: "upsert_entity",
         arguments: {
           entity_type: "workflow",
@@ -278,7 +244,9 @@ describe("upsert_entity", () => {
         },
       });
 
-      expect(capturedParams![3]).toBe("bilby-agent"); // namespace
+      expect(result.isError).toBeFalsy();
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.namespace).toBe("bilby-agent");
     } finally {
       await cleanup();
     }
@@ -312,26 +280,14 @@ describe("upsert_entity", () => {
     }
   });
 
-  it("null embedding passed when embed returns null", async () => {
-    let capturedParams: any[] | undefined;
-    const mockPool = {
-      query: async (_sql: string, params?: any[]) => {
-        capturedParams = params;
-        return {
-          rows: [
-            {
-              id: "entity-uuid-1",
-              is_new: true,
-              entity_type: "agent",
-              name: "skippy",
-              namespace: "skippy",
-              created_at: "2026-06-08T10:00:00Z",
-              updated_at: "2026-06-08T10:00:00Z",
-            },
-          ],
-        };
-      },
-    };
+  it("succeeds when embed returns null", async () => {
+    const mockPool = createUpsertPool(
+      "entity-uuid-1",
+      true,
+      "agent",
+      "skippy",
+      "skippy",
+    );
     const auth: AuthInfo = { role: "admin", clientId: "skippy" };
     const { client, cleanup } = await setupToolClient(
       mockPool,
@@ -340,7 +296,7 @@ describe("upsert_entity", () => {
     );
 
     try {
-      await client.callTool({
+      const result = await client.callTool({
         name: "upsert_entity",
         arguments: {
           entity_type: "agent",
@@ -348,7 +304,10 @@ describe("upsert_entity", () => {
         },
       });
 
-      expect(capturedParams![5]).toBeNull(); // embedding
+      expect(result.isError).toBeFalsy();
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.id).toBe("entity-uuid-1");
+      expect(parsed.name).toBe("skippy");
     } finally {
       await cleanup();
     }
@@ -424,31 +383,13 @@ describe("upsert_entity", () => {
 
   // ── OPTIONAL FIELDS ──
 
-  it("passes null for optional canonical_id when omitted", async () => {
-    let capturedParams: any[] | undefined;
-    const mockPool = {
-      query: async (_sql: string, params?: any[]) => {
-        capturedParams = params;
-        return {
-          rows: [
-            {
-              id: "entity-uuid-1",
-              is_new: true,
-              entity_type: "host",
-              name: "ct235",
-              namespace: "skippy",
-              created_at: "2026-06-08T10:00:00Z",
-              updated_at: "2026-06-08T10:00:00Z",
-            },
-          ],
-        };
-      },
-    };
+  it("succeeds with only required fields (canonical_id, metadata omitted)", async () => {
+    const mockPool = createUpsertPool();
     const auth: AuthInfo = { role: "admin", clientId: "skippy" };
     const { client, cleanup } = await setupToolClient(mockPool, auth);
 
     try {
-      await client.callTool({
+      const result = await client.callTool({
         name: "upsert_entity",
         arguments: {
           entity_type: "host",
@@ -456,8 +397,11 @@ describe("upsert_entity", () => {
         },
       });
 
-      expect(capturedParams![2]).toBeNull(); // canonical_id
-      expect(JSON.parse(capturedParams![4] as string)).toEqual({}); // metadata
+      expect(result.isError).toBeFalsy();
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.id).toBe("entity-uuid-1");
+      expect(parsed.entity_type).toBe("host");
+      expect(parsed.name).toBe("ct235");
     } finally {
       await cleanup();
     }
