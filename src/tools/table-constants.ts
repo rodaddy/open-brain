@@ -66,3 +66,24 @@ export const TABLE_ALIAS: Record<Table, string> = {
   projects: "p",
   sessions: "s",
 };
+
+/**
+ * All valid link relation types for the entity graph.
+ * Keep in sync with CHECK (relation IN (...)) in 010_entity_links.sql
+ * and LinkRelation type in ../types.ts.
+ */
+export const LINK_RELATIONS = [
+  "artifact",
+  "depends_on",
+  "supersedes",
+  "caused_by",
+  "same_lane",
+  "adjacent",
+  "mentions",
+  "implemented_by",
+  "blocked_by",
+  "decided_by",
+  "relates_to",
+  "contradicts",
+  "duplicates",
+] as const;

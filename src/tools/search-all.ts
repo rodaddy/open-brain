@@ -40,6 +40,8 @@ interface QmdDocument {
 
 const QMD_PATH = process.env.QMD_PATH ?? "/opt/qmd/src/qmd.ts";
 
+const QMD_TIMEOUT_MS = 10_000;
+
 async function searchQmd(
   query: string,
   limit: number,
@@ -49,18 +51,33 @@ async function searchQmd(
       ["bun", QMD_PATH, "search", query, "--json", "-n", String(limit)],
       { stdout: "pipe", stderr: "pipe" },
     );
-    const killTimeout = setTimeout(() => proc.kill(), 10_000);
 
-    const stdout = await new Response(proc.stdout).text();
-    const exitCode = await proc.exited;
-    clearTimeout(killTimeout);
+    const result = await Promise.race([
+      (async () => {
+        const stdout = await new Response(proc.stdout).text();
+        const exitCode = await proc.exited;
+        return { stdout, exitCode, timedOut: false };
+      })(),
+      new Promise<{ stdout: string; exitCode: number; timedOut: boolean }>(
+        (resolve) =>
+          setTimeout(() => {
+            proc.kill();
+            resolve({ stdout: "", exitCode: -1, timedOut: true });
+          }, QMD_TIMEOUT_MS),
+      ),
+    ]);
 
-    if (exitCode !== 0) {
-      logger.warn("qmd search failed", { exitCode });
+    if (result.timedOut) {
+      logger.warn("qmd search timed out", { timeoutMs: QMD_TIMEOUT_MS });
       return [];
     }
 
-    const docs: QmdDocument[] = JSON.parse(stdout);
+    if (result.exitCode !== 0) {
+      logger.warn("qmd search failed", { exitCode: result.exitCode });
+      return [];
+    }
+
+    const docs: QmdDocument[] = JSON.parse(result.stdout);
     if (!Array.isArray(docs)) return [];
 
     return docs.map((doc) => ({
