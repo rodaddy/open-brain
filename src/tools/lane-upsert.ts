@@ -18,6 +18,7 @@ export function registerLaneUpsert(server: McpServer, deps: ToolDeps): void {
         session_key: z
           .string()
           .min(1)
+          .max(500)
           .describe(
             "Stable human/agent-readable lane identifier (e.g. discord thread ID, task ID, project slug)",
           ),
@@ -29,25 +30,34 @@ export function registerLaneUpsert(server: McpServer, deps: ToolDeps): void {
           .enum(["active", "wrapped", "archived"])
           .optional()
           .describe("Lane status (default: active)"),
-        agent: z.string().optional().describe("Agent name/ID owning this lane"),
+        agent: z
+          .string()
+          .max(500)
+          .optional()
+          .describe("Agent name/ID owning this lane"),
         source: z
           .string()
+          .max(500)
           .optional()
           .describe("Source platform (discord, telegram, cli, etc.)"),
         channel_id: z
           .string()
+          .max(500)
           .optional()
           .describe("Discord/platform channel ID"),
         thread_id: z
           .string()
+          .max(500)
           .optional()
           .describe("Discord/platform thread ID"),
         project: z
           .string()
+          .max(500)
           .optional()
           .describe("Project name this lane relates to"),
         topic: z
           .string()
+          .max(500)
           .optional()
           .describe("Human-readable topic description"),
         current_context_md: z
@@ -61,10 +71,15 @@ export function registerLaneUpsert(server: McpServer, deps: ToolDeps): void {
           .record(z.string().max(100), z.unknown())
           .optional()
           .refine(
-            (v) => !v || Object.keys(v).length <= 50,
-            { message: "metadata must have at most 50 keys" },
+            (v) =>
+              !v ||
+              (Object.keys(v).length <= 50 &&
+                JSON.stringify(v).length <= 100_000),
+            { message: "metadata: max 50 keys, max 100KB total" },
           )
-          .describe("Arbitrary JSON metadata — merged into existing via || on update; max 50 keys"),
+          .describe(
+            "Arbitrary JSON metadata — merged into existing via || on update; max 50 keys",
+          ),
       },
       annotations: {
         title: "Upsert Session Lane",
@@ -95,7 +110,7 @@ export function registerLaneUpsert(server: McpServer, deps: ToolDeps): void {
       }
 
       const ns = args.namespace ?? auth.clientId;
-      const status = args.status ?? "active";
+      const status = args.status ?? null;
 
       logger.debug("lane_upsert_start", {
         session_key: args.session_key,
@@ -158,7 +173,7 @@ export function registerLaneUpsert(server: McpServer, deps: ToolDeps): void {
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
            ON CONFLICT (namespace, session_key)
            DO UPDATE SET
-             status = COALESCE(EXCLUDED.status, ob_session_lanes.status),
+             status = CASE WHEN $3 IS NULL THEN ob_session_lanes.status ELSE EXCLUDED.status END,
              agent = CASE WHEN $17 THEN EXCLUDED.agent ELSE COALESCE(EXCLUDED.agent, ob_session_lanes.agent) END,
              source = CASE WHEN $18 THEN EXCLUDED.source ELSE COALESCE(EXCLUDED.source, ob_session_lanes.source) END,
              channel_id = CASE WHEN $19 THEN EXCLUDED.channel_id ELSE COALESCE(EXCLUDED.channel_id, ob_session_lanes.channel_id) END,
@@ -175,7 +190,9 @@ export function registerLaneUpsert(server: McpServer, deps: ToolDeps): void {
              embedding_model = COALESCE(EXCLUDED.embedding_model, ob_session_lanes.embedding_model),
              ended_at = CASE WHEN EXCLUDED.status = 'wrapped' OR EXCLUDED.status = 'archived'
                         THEN COALESCE(ob_session_lanes.ended_at, NOW())
-                        ELSE NULL END
+                        WHEN EXCLUDED.status = 'active'
+                        THEN NULL
+                        ELSE ob_session_lanes.ended_at END
            RETURNING id, (xmax = 0) AS is_new, status, updated_at`,
           [
             args.session_key,

@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { toSql } from "pgvector/pg";
 import { canWrite } from "../permissions.ts";
-import { contentHash } from "../embedding.ts";
+import { contentHash, EMBEDDING_MODEL } from "../embedding.ts";
 import { backgroundExtract } from "../extraction.ts";
 import type { AuthInfo } from "../types.ts";
 import { logger } from "../logger.ts";
@@ -79,7 +79,7 @@ export function registerLogDecision(server: McpServer, deps: ToolDeps): void {
           embedding ? toSql(embedding) : null,
           hash,
           embedding ? new Date().toISOString() : null,
-          embedding ? "gemini-embedding-001" : null,
+          embedding ? EMBEDDING_MODEL : null,
         ],
       );
 

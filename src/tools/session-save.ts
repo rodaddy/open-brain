@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { toSql } from "pgvector/pg";
 import { canWrite } from "../permissions.ts";
-import { contentHash } from "../embedding.ts";
+import { contentHash, EMBEDDING_MODEL } from "../embedding.ts";
 import type { AuthInfo } from "../types.ts";
 import { logger } from "../logger.ts";
 import type { ToolDeps } from "./index.ts";
@@ -71,7 +71,7 @@ export function registerSessionSave(server: McpServer, deps: ToolDeps): void {
 
       const embeddingVal = embedding ? toSql(embedding) : null;
       const embeddedAt = embedding ? new Date().toISOString() : null;
-      const model = embedding ? "gemini-embedding-001" : null;
+      const model = embedding ? EMBEDDING_MODEL : null;
 
       // If session_id provided, upsert: re-push updates the existing entry
       if (args.session_id) {

@@ -55,7 +55,10 @@ describe("lane_upsert", () => {
   it("denies write when auth is missing entirely", async () => {
     const mockPool = { query: async () => ({ rows: [] }) };
     const server = new McpServer({ name: "test", version: "1.0.0" });
-    const deps: ToolDeps = { pool: mockPool as any, embedFn: createMockEmbed() };
+    const deps: ToolDeps = {
+      pool: mockPool as any,
+      embedFn: createMockEmbed(),
+    };
     registerLaneUpsert(server, deps);
 
     const [clientTransport, serverTransport] =
@@ -115,7 +118,14 @@ describe("lane_upsert", () => {
   it("allows admin role", async () => {
     const mockPool = {
       query: async () => ({
-        rows: [{ id: "uuid-1", is_new: true, status: "active", updated_at: "2026-06-07T15:30:00Z" }],
+        rows: [
+          {
+            id: "uuid-1",
+            is_new: true,
+            status: "active",
+            updated_at: "2026-06-07T15:30:00Z",
+          },
+        ],
       }),
     };
     const auth: AuthInfo = { role: "admin", clientId: "skippy" };
@@ -135,7 +145,14 @@ describe("lane_upsert", () => {
   it("allows agent role", async () => {
     const mockPool = {
       query: async () => ({
-        rows: [{ id: "uuid-2", is_new: true, status: "active", updated_at: "2026-06-07T15:30:00Z" }],
+        rows: [
+          {
+            id: "uuid-2",
+            is_new: true,
+            status: "active",
+            updated_at: "2026-06-07T15:30:00Z",
+          },
+        ],
       }),
     };
     const auth: AuthInfo = { role: "agent", clientId: "bilby" };
@@ -155,7 +172,14 @@ describe("lane_upsert", () => {
   it("allows n8n role", async () => {
     const mockPool = {
       query: async () => ({
-        rows: [{ id: "uuid-3", is_new: true, status: "active", updated_at: "2026-06-07T15:30:00Z" }],
+        rows: [
+          {
+            id: "uuid-3",
+            is_new: true,
+            status: "active",
+            updated_at: "2026-06-07T15:30:00Z",
+          },
+        ],
       }),
     };
     const auth: AuthInfo = { role: "n8n", clientId: "n8n-worker" };
@@ -180,7 +204,14 @@ describe("lane_upsert", () => {
       query: async (_sql: string, params?: any[]) => {
         capturedParams = params;
         return {
-          rows: [{ id: "uuid-new", is_new: true, status: "active", updated_at: "2026-06-07T15:30:00Z" }],
+          rows: [
+            {
+              id: "uuid-new",
+              is_new: true,
+              status: "active",
+              updated_at: "2026-06-07T15:30:00Z",
+            },
+          ],
         };
       },
     };
@@ -216,7 +247,7 @@ describe("lane_upsert", () => {
       // Verify all params made it to the query
       expect(capturedParams![0]).toBe("ob-v2-session-lanes"); // session_key
       expect(capturedParams![1]).toBe("collab"); // namespace
-      expect(capturedParams![2]).toBe("active"); // status
+      expect(capturedParams![2]).toBeNull(); // status (null = DB DEFAULT 'active')
       expect(capturedParams![3]).toBe("skippy"); // agent
       expect(capturedParams![4]).toBe("discord"); // source
       expect(capturedParams![5]).toBe("123456"); // channel_id
@@ -224,7 +255,10 @@ describe("lane_upsert", () => {
       expect(capturedParams![7]).toBe("open-brain"); // project
       expect(capturedParams![8]).toBe("Building session lane schema"); // topic
       expect(capturedParams![9]).toContain("Migration 010"); // current_context_md
-      expect(JSON.parse(capturedParams![10] as string)).toEqual({ pr: 42, branch: "feat/session-lanes" }); // metadata
+      expect(JSON.parse(capturedParams![10] as string)).toEqual({
+        pr: 42,
+        branch: "feat/session-lanes",
+      }); // metadata
     } finally {
       await cleanup();
     }
@@ -233,7 +267,14 @@ describe("lane_upsert", () => {
   it("updates an existing lane — is_new=false on conflict", async () => {
     const mockPool = {
       query: async () => ({
-        rows: [{ id: "uuid-existing", is_new: false, status: "active", updated_at: "2026-06-07T16:00:00Z" }],
+        rows: [
+          {
+            id: "uuid-existing",
+            is_new: false,
+            status: "active",
+            updated_at: "2026-06-07T16:00:00Z",
+          },
+        ],
       }),
     };
     const auth: AuthInfo = { role: "admin", clientId: "skippy" };
@@ -265,7 +306,14 @@ describe("lane_upsert", () => {
       query: async (_sql: string, params?: any[]) => {
         capturedParams = params;
         return {
-          rows: [{ id: "uuid-ns", is_new: true, status: "active", updated_at: "2026-06-07T15:30:00Z" }],
+          rows: [
+            {
+              id: "uuid-ns",
+              is_new: true,
+              status: "active",
+              updated_at: "2026-06-07T15:30:00Z",
+            },
+          ],
         };
       },
     };
@@ -292,7 +340,14 @@ describe("lane_upsert", () => {
       query: async (_sql: string, params?: any[]) => {
         capturedParams = params;
         return {
-          rows: [{ id: "uuid-ns2", is_new: true, status: "active", updated_at: "2026-06-07T15:30:00Z" }],
+          rows: [
+            {
+              id: "uuid-ns2",
+              is_new: true,
+              status: "active",
+              updated_at: "2026-06-07T15:30:00Z",
+            },
+          ],
         };
       },
     };
@@ -318,7 +373,14 @@ describe("lane_upsert", () => {
   it("wraps a lane — status=wrapped", async () => {
     const mockPool = {
       query: async () => ({
-        rows: [{ id: "uuid-wrap", is_new: false, status: "wrapped", updated_at: "2026-06-07T17:00:00Z" }],
+        rows: [
+          {
+            id: "uuid-wrap",
+            is_new: false,
+            status: "wrapped",
+            updated_at: "2026-06-07T17:00:00Z",
+          },
+        ],
       }),
     };
     const auth: AuthInfo = { role: "admin", clientId: "skippy" };
@@ -340,7 +402,14 @@ describe("lane_upsert", () => {
   it("archives a lane — status=archived", async () => {
     const mockPool = {
       query: async () => ({
-        rows: [{ id: "uuid-arch", is_new: false, status: "archived", updated_at: "2026-06-07T18:00:00Z" }],
+        rows: [
+          {
+            id: "uuid-arch",
+            is_new: false,
+            status: "archived",
+            updated_at: "2026-06-07T18:00:00Z",
+          },
+        ],
       }),
     };
     const auth: AuthInfo = { role: "admin", clientId: "skippy" };
@@ -364,7 +433,14 @@ describe("lane_upsert", () => {
   it("skips embedding when no context or topic provided", async () => {
     const mockPool = {
       query: async () => ({
-        rows: [{ id: "uuid-noembed", is_new: true, status: "active", updated_at: "2026-06-07T15:30:00Z" }],
+        rows: [
+          {
+            id: "uuid-noembed",
+            is_new: true,
+            status: "active",
+            updated_at: "2026-06-07T15:30:00Z",
+          },
+        ],
       }),
     };
     const auth: AuthInfo = { role: "admin", clientId: "skippy" };
@@ -392,7 +468,14 @@ describe("lane_upsert", () => {
     };
     const mockPool = {
       query: async () => ({
-        rows: [{ id: "uuid-topic", is_new: true, status: "active", updated_at: "2026-06-07T15:30:00Z" }],
+        rows: [
+          {
+            id: "uuid-topic",
+            is_new: true,
+            status: "active",
+            updated_at: "2026-06-07T15:30:00Z",
+          },
+        ],
       }),
     };
     const auth: AuthInfo = { role: "admin", clientId: "skippy" };
@@ -415,7 +498,14 @@ describe("lane_upsert", () => {
   it("returns null embedding when embedFn returns null (graceful degradation)", async () => {
     const mockPool = {
       query: async () => ({
-        rows: [{ id: "uuid-nullembed", is_new: true, status: "active", updated_at: "2026-06-07T15:30:00Z" }],
+        rows: [
+          {
+            id: "uuid-nullembed",
+            is_new: true,
+            status: "active",
+            updated_at: "2026-06-07T15:30:00Z",
+          },
+        ],
       }),
     };
     const auth: AuthInfo = { role: "admin", clientId: "skippy" };
@@ -445,7 +535,14 @@ describe("lane_upsert", () => {
   it("continues without embedding when embedFn throws (error resilience)", async () => {
     const mockPool = {
       query: async () => ({
-        rows: [{ id: "uuid-embedfail", is_new: true, status: "active", updated_at: "2026-06-07T15:30:00Z" }],
+        rows: [
+          {
+            id: "uuid-embedfail",
+            is_new: true,
+            status: "active",
+            updated_at: "2026-06-07T15:30:00Z",
+          },
+        ],
       }),
     };
     const auth: AuthInfo = { role: "admin", clientId: "skippy" };
@@ -506,7 +603,14 @@ describe("lane_upsert", () => {
       query: async (_sql: string, params?: any[]) => {
         capturedParams = params;
         return {
-          rows: [{ id: "uuid-nometa", is_new: true, status: "active", updated_at: "2026-06-07T15:30:00Z" }],
+          rows: [
+            {
+              id: "uuid-nometa",
+              is_new: true,
+              status: "active",
+              updated_at: "2026-06-07T15:30:00Z",
+            },
+          ],
         };
       },
     };
@@ -526,6 +630,78 @@ describe("lane_upsert", () => {
     }
   });
 
+  // ── EXPLICIT FIELD CLEARING ──
+
+  it("sends null for agent param and true for clear flag when agent is empty string", async () => {
+    let capturedParams: any[] | undefined;
+    const mockPool = {
+      query: async (_sql: string, params?: any[]) => {
+        capturedParams = params;
+        return {
+          rows: [
+            {
+              id: "uuid-clear",
+              is_new: false,
+              status: "active",
+              updated_at: "2026-06-07T15:30:00Z",
+            },
+          ],
+        };
+      },
+    };
+    const auth: AuthInfo = { role: "admin", clientId: "skippy" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      await client.callTool({
+        name: "lane_upsert",
+        arguments: { session_key: "clear-test", agent: "" },
+      });
+
+      // agent param ($4) should be null (clearable("") => null)
+      expect(capturedParams![3]).toBeNull();
+      // agent clear flag ($17) should be true
+      expect(capturedParams![16]).toBe(true);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  // ── STATUS PRESERVATION ──
+
+  it("passes null for status when status param is omitted (preserves existing)", async () => {
+    let capturedParams: any[] | undefined;
+    const mockPool = {
+      query: async (_sql: string, params?: any[]) => {
+        capturedParams = params;
+        return {
+          rows: [
+            {
+              id: "uuid-preserve",
+              is_new: false,
+              status: "wrapped",
+              updated_at: "2026-06-07T15:30:00Z",
+            },
+          ],
+        };
+      },
+    };
+    const auth: AuthInfo = { role: "admin", clientId: "skippy" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      await client.callTool({
+        name: "lane_upsert",
+        arguments: { session_key: "status-preserve", topic: "updated topic" },
+      });
+
+      // status param ($3) should be null so CASE WHEN preserves existing
+      expect(capturedParams![2]).toBeNull();
+    } finally {
+      await cleanup();
+    }
+  });
+
   // ── NULL OPTIONAL FIELDS ──
 
   it("passes null for all optional fields when omitted", async () => {
@@ -534,7 +710,14 @@ describe("lane_upsert", () => {
       query: async (_sql: string, params?: any[]) => {
         capturedParams = params;
         return {
-          rows: [{ id: "uuid-min", is_new: true, status: "active", updated_at: "2026-06-07T15:30:00Z" }],
+          rows: [
+            {
+              id: "uuid-min",
+              is_new: true,
+              status: "active",
+              updated_at: "2026-06-07T15:30:00Z",
+            },
+          ],
         };
       },
     };
