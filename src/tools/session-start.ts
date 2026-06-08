@@ -16,8 +16,9 @@ export function registerSessionStart(server: McpServer, deps: ToolDeps): void {
     "session_start",
     {
       description:
-        "Find or create a session lane and return full context with recent events. " +
-        "Idempotent entry point for agents resuming work.",
+        "Find or create a session lane and return current state with recent events. " +
+        "Lane persists across wraps — wrap is a checkpoint, not an ending. " +
+        "Returns the lane as-is; the agent decides what to do with its status.",
       inputSchema: {
         session_key: z
           .string()
@@ -103,24 +104,10 @@ WHERE namespace = $1 AND session_key = $2`,
         );
 
         if (laneRows.length > 0) {
-          // ── Existing lane ──
+          // ── Existing lane — return as-is, agent decides what to do ──
           const lane = laneRows[0];
-          const previousStatus = lane.status;
-          let reactivated = false;
 
-          // Reactivate if wrapped or archived
-          if (previousStatus === "wrapped" || previousStatus === "archived") {
-            const { rows: updated } = await deps.pool.query(
-              `UPDATE ob_session_lanes SET status = 'active', ended_at = NULL
-WHERE id = $1
-RETURNING ${LANE_COLUMNS}`,
-              [lane.id],
-            );
-            Object.assign(lane, updated[0]);
-            reactivated = true;
-          }
-
-          // Load recent events
+          // Load recent events regardless of lane status
           const { rows: events } = await deps.pool.query(
             `SELECT ${EVENT_COLUMNS}
 FROM ob_session_events
@@ -134,17 +121,14 @@ LIMIT 50`,
             lane,
             events,
             events_returned: events.length,
-            previous_status: previousStatus,
             is_new: false,
-            reactivated,
           };
 
           logger.info("session_start_resumed", {
             lane_id: lane.id,
             session_key: lane.session_key,
             namespace: ns,
-            reactivated,
-            previous_status: previousStatus,
+            status: lane.status,
             events_returned: events.length,
           });
 
@@ -182,9 +166,7 @@ RETURNING ${LANE_COLUMNS}`,
           lane: newLane,
           events: [] as unknown[],
           events_returned: 0,
-          previous_status: null,
           is_new: true,
-          reactivated: false,
         };
 
         logger.info("session_start_created", {

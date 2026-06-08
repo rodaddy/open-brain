@@ -159,8 +159,7 @@ describe("session_wrap", () => {
 
   // ── HAPPY PATH: WRAP ACTIVE LANE ──
 
-  it("admin wraps active lane — session saved, lane marked wrapped", async () => {
-    let laneUpdateCalled = false;
+  it("admin checkpoints active lane — session saved, lane stays active", async () => {
     let capturedSessionParams: any[] | undefined;
     const mockPool = {
       query: async (sql: string, params?: any[]) => {
@@ -177,10 +176,6 @@ describe("session_wrap", () => {
               { id: "session-uuid-1", created_at: "2026-06-08T12:00:00Z" },
             ],
           };
-        }
-        if (sql.includes("UPDATE ob_session_lanes SET status")) {
-          laneUpdateCalled = true;
-          return { rows: [] };
         }
         return { rows: [] };
       },
@@ -201,12 +196,9 @@ describe("session_wrap", () => {
       const parsed = JSON.parse((result.content as any)[0].text);
       expect(parsed.session_id).toBe("session-uuid-1");
       expect(parsed.lane_id).toBe("lane-uuid-1");
-      expect(parsed.lane_status).toBe("wrapped");
+      expect(parsed.lane_status).toBe("active");
       expect(parsed.event_count).toBe(5);
       expect(parsed.created_at).toBe("2026-06-08T12:00:00Z");
-
-      // Lane was updated to wrapped
-      expect(laneUpdateCalled).toBe(true);
 
       // Session insert: summary is param 0
       expect(capturedSessionParams![0]).toBe(
@@ -219,8 +211,7 @@ describe("session_wrap", () => {
 
   // ── KEEP_ACTIVE ──
 
-  it("keep_active=true persists session but keeps lane active", async () => {
-    let laneUpdateCalled = false;
+  it("checkpoint never changes lane status — lane stays active", async () => {
     const mockPool = {
       query: async (sql: string, _params?: any[]) => {
         if (sql.includes("FROM ob_session_lanes")) {
@@ -236,10 +227,6 @@ describe("session_wrap", () => {
             ],
           };
         }
-        if (sql.includes("UPDATE ob_session_lanes SET status")) {
-          laneUpdateCalled = true;
-          return { rows: [] };
-        }
         return { rows: [] };
       },
     };
@@ -252,15 +239,12 @@ describe("session_wrap", () => {
         arguments: {
           session_key: "ob-v2-dev",
           summary: "Intermediate checkpoint — work continues.",
-          keep_active: true,
         },
       });
 
       expect(result.isError).toBeFalsy();
       const parsed = JSON.parse((result.content as any)[0].text);
       expect(parsed.lane_status).toBe("active");
-      // Lane should NOT have been updated
-      expect(laneUpdateCalled).toBe(false);
     } finally {
       await cleanup();
     }
@@ -296,14 +280,24 @@ describe("session_wrap", () => {
     }
   });
 
-  // ── ARCHIVED LANE ──
+  // ── ARCHIVED LANE CAN STILL BE CHECKPOINTED ──
 
-  it("returns error when lane is archived", async () => {
+  it("allows checkpointing an archived lane (flexible, not strict)", async () => {
     const archivedLane = { ...MOCK_LANE, status: "archived" };
     const mockPool = {
       query: async (sql: string, _params?: any[]) => {
         if (sql.includes("FROM ob_session_lanes")) {
           return { rows: [archivedLane] };
+        }
+        if (sql.includes("count(*)")) {
+          return { rows: [{ cnt: 0 }] };
+        }
+        if (sql.includes("INSERT INTO sessions")) {
+          return {
+            rows: [
+              { id: "session-archived", created_at: "2026-06-08T12:00:00Z" },
+            ],
+          };
         }
         return { rows: [] };
       },
@@ -316,11 +310,13 @@ describe("session_wrap", () => {
         name: "session_wrap",
         arguments: {
           session_key: "old-lane",
-          summary: "Should not work",
+          summary: "Final checkpoint of archived work",
         },
       });
-      expect(result.isError).toBe(true);
-      expect((result.content as any)[0].text).toContain("archived");
+      expect(result.isError).toBeFalsy();
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.lane_status).toBe("archived");
+      expect(parsed.session_id).toBe("session-archived");
     } finally {
       await cleanup();
     }
@@ -636,8 +632,7 @@ describe("session_wrap", () => {
     }
   });
 
-  it("duplicate wrap still marks lane as wrapped when keep_active=false and lane not yet wrapped", async () => {
-    let laneUpdateCalled = false;
+  it("duplicate checkpoint is a no-op — lane status unchanged", async () => {
     const activeLane = { ...MOCK_LANE, status: "active" };
     const mockPool = {
       query: async (sql: string, _params?: any[]) => {
@@ -650,10 +645,6 @@ describe("session_wrap", () => {
         if (sql.includes("INSERT INTO sessions")) {
           return { rows: [] }; // duplicate
         }
-        if (sql.includes("UPDATE ob_session_lanes SET status")) {
-          laneUpdateCalled = true;
-          return { rows: [] };
-        }
         return { rows: [] };
       },
     };
@@ -665,50 +656,7 @@ describe("session_wrap", () => {
         name: "session_wrap",
         arguments: {
           session_key: "ob-v2-dev",
-          summary: "Duplicate but should still wrap lane.",
-        },
-      });
-
-      expect(result.isError).toBeFalsy();
-      const parsed = JSON.parse((result.content as any)[0].text);
-      expect(parsed.duplicate).toBe(true);
-      expect(parsed.lane_status).toBe("wrapped");
-      expect(laneUpdateCalled).toBe(true);
-    } finally {
-      await cleanup();
-    }
-  });
-
-  it("duplicate wrap with keep_active=true does NOT update lane status", async () => {
-    let laneUpdateCalled = false;
-    const mockPool = {
-      query: async (sql: string, _params?: any[]) => {
-        if (sql.includes("FROM ob_session_lanes")) {
-          return { rows: [MOCK_LANE] };
-        }
-        if (sql.includes("count(*)")) {
-          return { rows: [{ cnt: 2 }] };
-        }
-        if (sql.includes("INSERT INTO sessions")) {
-          return { rows: [] }; // duplicate
-        }
-        if (sql.includes("UPDATE ob_session_lanes SET status")) {
-          laneUpdateCalled = true;
-          return { rows: [] };
-        }
-        return { rows: [] };
-      },
-    };
-    const auth: AuthInfo = { role: "admin", clientId: "skippy" };
-    const { client, cleanup } = await setupToolClient(mockPool, auth);
-
-    try {
-      const result = await client.callTool({
-        name: "session_wrap",
-        arguments: {
-          session_key: "ob-v2-dev",
-          summary: "Duplicate with keep_active.",
-          keep_active: true,
+          summary: "Duplicate checkpoint.",
         },
       });
 
@@ -716,7 +664,6 @@ describe("session_wrap", () => {
       const parsed = JSON.parse((result.content as any)[0].text);
       expect(parsed.duplicate).toBe(true);
       expect(parsed.lane_status).toBe("active");
-      expect(laneUpdateCalled).toBe(false);
     } finally {
       await cleanup();
     }

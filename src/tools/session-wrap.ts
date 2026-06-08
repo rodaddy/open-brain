@@ -12,8 +12,9 @@ export function registerSessionWrap(server: McpServer, deps: ToolDeps): void {
     "session_wrap",
     {
       description:
-        "Persist a caller-provided session summary to OB and mark the lane as wrapped. " +
-        "Pure DB write — no LLM calls. The caller distills the summary from events before calling this.",
+        "Checkpoint a session lane by persisting a summary to durable OB storage. " +
+        "Lane stays active — wrap is a checkpoint, not an ending. " +
+        "The caller distills the summary from events before calling this.",
       inputSchema: {
         session_key: z
           .string()
@@ -44,12 +45,6 @@ export function registerSessionWrap(server: McpServer, deps: ToolDeps): void {
           .max(500)
           .optional()
           .describe("Project name for the session record"),
-        keep_active: z
-          .boolean()
-          .optional()
-          .describe(
-            "If true, persist summary but don't wrap the lane (default: false)",
-          ),
       },
       annotations: {
         title: "Session Wrap",
@@ -80,12 +75,10 @@ export function registerSessionWrap(server: McpServer, deps: ToolDeps): void {
       }
 
       const ns = args.namespace ?? auth.clientId;
-      const keepActive = args.keep_active ?? false;
 
       logger.debug("session_wrap_begin", {
         session_key: args.session_key,
         namespace: ns,
-        keep_active: keepActive,
         summary_length: args.summary.length,
         clientId: auth.clientId,
       });
@@ -116,18 +109,6 @@ WHERE namespace = $1 AND session_key = $2`,
         }
 
         const lane = laneRows[0];
-
-        if (lane.status === "archived") {
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: `Lane "${args.session_key}" is archived; cannot wrap an archived lane`,
-              },
-            ],
-            isError: true,
-          };
-        }
 
         // Step 2: Count events for metadata
         const { rows: countRows } = await deps.pool.query(
@@ -178,16 +159,8 @@ RETURNING id, created_at`,
           ],
         );
 
-        // Duplicate content_hash — session already exists
+        // Duplicate content_hash — session already exists, checkpoint is a no-op
         if (sessionRows.length === 0) {
-          // Still mark wrapped if requested
-          if (!keepActive && lane.status !== "wrapped") {
-            await deps.pool.query(
-              `UPDATE ob_session_lanes SET status = 'wrapped', ended_at = COALESCE(ended_at, NOW()) WHERE id = $1`,
-              [lane.id],
-            );
-          }
-
           logger.info("session_wrap_duplicate", {
             session_key: args.session_key,
             namespace: ns,
@@ -201,9 +174,9 @@ RETURNING id, created_at`,
                 text: JSON.stringify({
                   duplicate: true,
                   lane_id: lane.id,
-                  lane_status: keepActive ? lane.status : "wrapped",
+                  lane_status: lane.status,
                   message:
-                    "Session with identical content already exists for this lane",
+                    "Session with identical content already checkpointed",
                 }),
               },
             ],
@@ -213,21 +186,10 @@ RETURNING id, created_at`,
         const sessionId = sessionRows[0].id;
         const createdAt = sessionRows[0].created_at;
 
-        // Step 5: Optionally wrap the lane
-        let laneStatus = lane.status;
-        if (!keepActive) {
-          await deps.pool.query(
-            `UPDATE ob_session_lanes SET status = 'wrapped', ended_at = COALESCE(ended_at, NOW())
-WHERE id = $1`,
-            [lane.id],
-          );
-          laneStatus = "wrapped";
-        }
-
         const result = {
           session_id: sessionId,
           lane_id: lane.id,
-          lane_status: laneStatus,
+          lane_status: lane.status,
           event_count: eventCount,
           created_at: createdAt,
         };
@@ -235,9 +197,8 @@ WHERE id = $1`,
         logger.info("session_wrap_ok", {
           session_id: sessionId,
           lane_id: lane.id,
-          lane_status: laneStatus,
+          lane_status: lane.status,
           event_count: eventCount,
-          keep_active: keepActive,
         });
 
         return {

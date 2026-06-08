@@ -183,8 +183,6 @@ describe("session_start", () => {
       expect(result.isError).toBeFalsy();
       const parsed = JSON.parse((result.content as any)[0].text);
       expect(parsed.is_new).toBe(true);
-      expect(parsed.reactivated).toBe(false);
-      expect(parsed.previous_status).toBeNull();
       expect(parsed.events).toEqual([]);
       expect(parsed.events_returned).toBe(0);
       expect(parsed.lane.id).toBe("new-lane-uuid");
@@ -220,8 +218,6 @@ describe("session_start", () => {
       expect(result.isError).toBeFalsy();
       const parsed = JSON.parse((result.content as any)[0].text);
       expect(parsed.is_new).toBe(false);
-      expect(parsed.reactivated).toBe(false);
-      expect(parsed.previous_status).toBe("active");
       expect(parsed.events).toHaveLength(2);
       expect(parsed.events_returned).toBe(2);
       expect(parsed.lane.status).toBe("active");
@@ -230,26 +226,18 @@ describe("session_start", () => {
     }
   });
 
-  // ── REACTIVATE WRAPPED LANE ──
+  // ── WRAPPED LANE RETURNED AS-IS ──
 
-  it("reactivates a wrapped lane", async () => {
+  it("returns wrapped lane as-is with events (agent decides next step)", async () => {
     const wrappedLane = {
       ...MOCK_LANE,
       status: "wrapped",
       ended_at: "2026-06-08T12:00:00Z",
     };
-    const reactivatedLane = {
-      ...MOCK_LANE,
-      status: "active",
-      ended_at: null,
-    };
     const mockPool = {
       query: async (sql: string, _params?: any[]) => {
-        if (sql.includes("FROM ob_session_lanes") && !sql.includes("UPDATE")) {
+        if (sql.includes("FROM ob_session_lanes")) {
           return { rows: [wrappedLane] };
-        }
-        if (sql.includes("UPDATE ob_session_lanes SET status")) {
-          return { rows: [reactivatedLane] };
         }
         if (sql.includes("FROM ob_session_events")) {
           return { rows: MOCK_EVENTS };
@@ -269,36 +257,26 @@ describe("session_start", () => {
       expect(result.isError).toBeFalsy();
       const parsed = JSON.parse((result.content as any)[0].text);
       expect(parsed.is_new).toBe(false);
-      expect(parsed.reactivated).toBe(true);
-      expect(parsed.previous_status).toBe("wrapped");
-      expect(parsed.lane.status).toBe("active");
-      expect(parsed.lane.ended_at).toBeNull();
+      expect(parsed.lane.status).toBe("wrapped");
+      expect(parsed.lane.ended_at).toBe("2026-06-08T12:00:00Z");
       expect(parsed.events).toHaveLength(2);
     } finally {
       await cleanup();
     }
   });
 
-  // ── REACTIVATE ARCHIVED LANE ──
+  // ── ARCHIVED LANE RETURNED AS-IS ──
 
-  it("reactivates an archived lane", async () => {
+  it("returns archived lane as-is (agent decides whether to reactivate)", async () => {
     const archivedLane = {
       ...MOCK_LANE,
       status: "archived",
       ended_at: "2026-06-01T00:00:00Z",
     };
-    const reactivatedLane = {
-      ...MOCK_LANE,
-      status: "active",
-      ended_at: null,
-    };
     const mockPool = {
       query: async (sql: string, _params?: any[]) => {
-        if (sql.includes("FROM ob_session_lanes") && !sql.includes("UPDATE")) {
+        if (sql.includes("FROM ob_session_lanes")) {
           return { rows: [archivedLane] };
-        }
-        if (sql.includes("UPDATE ob_session_lanes SET status")) {
-          return { rows: [reactivatedLane] };
         }
         if (sql.includes("FROM ob_session_events")) {
           return { rows: [] };
@@ -318,9 +296,7 @@ describe("session_start", () => {
       expect(result.isError).toBeFalsy();
       const parsed = JSON.parse((result.content as any)[0].text);
       expect(parsed.is_new).toBe(false);
-      expect(parsed.reactivated).toBe(true);
-      expect(parsed.previous_status).toBe("archived");
-      expect(parsed.lane.status).toBe("active");
+      expect(parsed.lane.status).toBe("archived");
     } finally {
       await cleanup();
     }
