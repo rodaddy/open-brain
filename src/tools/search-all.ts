@@ -90,7 +90,9 @@ export function registerSearchAll(server: McpServer, deps: ToolDeps): void {
         namespace: z
           .string()
           .optional()
-          .describe("Optional: filter brain results to a specific namespace (e.g. clientId or 'collab')"),
+          .describe(
+            "Optional: filter brain results to a specific namespace (e.g. clientId or 'collab')",
+          ),
         limit: z
           .number()
           .int()
@@ -226,6 +228,7 @@ async function searchOB(
       tier,
       0,
       namespace,
+      false,
     );
   } catch (err) {
     logger.warn("searchOB_failed", {

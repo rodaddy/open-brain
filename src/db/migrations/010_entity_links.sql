@@ -86,3 +86,18 @@ CREATE TRIGGER trg_ob_entities_updated_at
 CREATE TRIGGER trg_ob_links_updated_at
   BEFORE UPDATE ON ob_links
   FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+-- Clean up links when an entity is deleted
+CREATE OR REPLACE FUNCTION cleanup_entity_links()
+RETURNS TRIGGER AS $$
+BEGIN
+  DELETE FROM ob_links
+  WHERE (from_type = 'entity' AND from_id = OLD.id)
+     OR (to_type = 'entity' AND to_id = OLD.id);
+  RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_ob_entities_cleanup_links
+  AFTER DELETE ON ob_entities
+  FOR EACH ROW EXECUTE FUNCTION cleanup_entity_links();

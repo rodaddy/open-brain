@@ -58,6 +58,8 @@ describe("search_brain", () => {
       const mockPool = {
         query: async (...args: any[]) => {
           queryCalls.push(args);
+          const [sql] = args;
+          if (String(sql).includes("FROM ob_links")) return { rows: [] };
           return { rows: makeMockRows(3) };
         },
       };
@@ -177,10 +179,114 @@ describe("search_brain", () => {
             linked_type: "decision",
             linked_id: decisionId,
             metadata: { ob_source_id: "obsidian-note-1" },
-            created_at: "2026-01-02T00:00:00Z",
+            created_at: "2026-01-02T00:00:00.000Z",
           },
         ]);
         expect(String(queryCalls[1][0])).toContain("FROM ob_links");
+      } finally {
+        await cleanup();
+      }
+    });
+    it("returns results with empty explicit_links when ob_links query throws", async () => {
+      const mockPool = {
+        query: async (...args: any[]) => {
+          const [sql] = args;
+          if (String(sql).includes("FROM ob_links")) {
+            throw new Error("relation ob_links does not exist");
+          }
+          return {
+            rows: [
+              {
+                source_type: "thought",
+                id: "00000000-0000-4000-8000-000000000001",
+                content_preview: "Fallback thought",
+                distance: 0.1,
+                tags: ["tag-a"],
+                created_at: "2026-01-01T00:00:00Z",
+              },
+            ],
+          };
+        },
+      };
+      const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
+      const { client, cleanup } = await setupSearchClient(
+        mockPool,
+        createMockEmbed(),
+        auth,
+      );
+
+      try {
+        const result = await client.callTool({
+          name: "search_brain",
+          arguments: { query: "error fallback", search_mode: "vector" },
+        });
+
+        expect(result.isError).toBeFalsy();
+        const parsed = JSON.parse((result.content as any)[0].text);
+        expect(parsed.length).toBe(1);
+        expect(parsed[0].explicit_links).toEqual([]);
+      } finally {
+        await cleanup();
+      }
+    });
+    it("populates incoming direction when to_id matches the search result", async () => {
+      const decisionId = "00000000-0000-4000-8000-000000000005";
+      const thoughtId = "00000000-0000-4000-8000-000000000006";
+      const mockPool = {
+        query: async (...args: any[]) => {
+          const [sql] = args;
+          if (String(sql).includes("FROM ob_links")) {
+            return {
+              rows: [
+                {
+                  id: "00000000-0000-4000-8000-000000000020",
+                  from_type: "thought",
+                  from_id: thoughtId,
+                  to_type: "decision",
+                  to_id: decisionId,
+                  relation: "caused_by",
+                  weight: 0.9,
+                  metadata: {},
+                  created_at: "2026-02-01T00:00:00Z",
+                },
+              ],
+            };
+          }
+          return {
+            rows: [
+              {
+                source_type: "decision",
+                id: decisionId,
+                content_preview: "Incoming link target",
+                distance: 0.1,
+                tags: [],
+                created_at: "2026-01-01T00:00:00Z",
+              },
+            ],
+          };
+        },
+      };
+      const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
+      const { client, cleanup } = await setupSearchClient(
+        mockPool,
+        createMockEmbed(),
+        auth,
+      );
+
+      try {
+        const result = await client.callTool({
+          name: "search_brain",
+          arguments: { query: "incoming link", search_mode: "vector" },
+        });
+
+        expect(result.isError).toBeFalsy();
+        const parsed = JSON.parse((result.content as any)[0].text);
+        expect(parsed[0].explicit_links.length).toBe(1);
+        const link = parsed[0].explicit_links[0];
+        expect(link.direction).toBe("incoming");
+        expect(link.linked_type).toBe("thought");
+        expect(link.linked_id).toBe(thoughtId);
+        expect(link.relation).toBe("caused_by");
       } finally {
         await cleanup();
       }
@@ -193,6 +299,8 @@ describe("search_brain", () => {
       const mockPool = {
         query: async (...args: any[]) => {
           queryCalls.push(args);
+          const [sql] = args;
+          if (String(sql).includes("FROM ob_links")) return { rows: [] };
           return { rows: makeMockRows(2) };
         },
       };
@@ -229,6 +337,8 @@ describe("search_brain", () => {
       const mockPool = {
         query: async (...args: any[]) => {
           queryCalls.push(args);
+          const [sql] = args;
+          if (String(sql).includes("FROM ob_links")) return { rows: [] };
           return { rows: makeMockRows(1) };
         },
       };
@@ -297,6 +407,8 @@ describe("search_brain", () => {
       const mockPool = {
         query: async (...args: any[]) => {
           queryCalls.push(args);
+          const [sql] = args;
+          if (String(sql).includes("FROM ob_links")) return { rows: [] };
           return { rows: makeMockRows(1) };
         },
       };
@@ -501,7 +613,11 @@ describe("search_brain", () => {
         },
       ];
       const mockPool = {
-        query: async () => ({ rows: mockRows }),
+        query: async (...args: any[]) => {
+          const [sql] = args;
+          if (String(sql).includes("FROM ob_links")) return { rows: [] };
+          return { rows: mockRows };
+        },
       };
       const auth: AuthInfo = { role: "admin", clientId: "admin" };
 
@@ -544,6 +660,8 @@ describe("search_brain", () => {
       const mockPool = {
         query: async (...args: any[]) => {
           queryCalls.push(args);
+          const [sql] = args;
+          if (String(sql).includes("FROM ob_links")) return { rows: [] };
           return { rows: makeMockRows(1) };
         },
       };
@@ -610,6 +728,8 @@ describe("search_brain", () => {
       const mockPool = {
         query: async (...args: any[]) => {
           queryCalls.push(args);
+          const [sql] = args;
+          if (String(sql).includes("FROM ob_links")) return { rows: [] };
           return { rows: makeMockRows(3) };
         },
       };
@@ -715,6 +835,8 @@ describe("search_brain", () => {
       const mockPool = {
         query: async (...args: any[]) => {
           queryCalls.push(args);
+          const [sql] = args;
+          if (String(sql).includes("FROM ob_links")) return { rows: [] };
           return { rows: makeMockRows(1) };
         },
       };
@@ -744,6 +866,8 @@ describe("search_brain", () => {
       const mockPool = {
         query: async (...args: any[]) => {
           queryCalls.push(args);
+          const [sql] = args;
+          if (String(sql).includes("FROM ob_links")) return { rows: [] };
           return { rows: makeMockRows(1) };
         },
       };
@@ -773,6 +897,8 @@ describe("search_brain", () => {
       const mockPool = {
         query: async (...args: any[]) => {
           queryCalls.push(args);
+          const [sql] = args;
+          if (String(sql).includes("FROM ob_links")) return { rows: [] };
           return { rows: makeMockRows(1) };
         },
       };
@@ -809,6 +935,8 @@ describe("search_brain", () => {
       const mockPool = {
         query: async (...args: any[]) => {
           queryCalls.push(args);
+          const [sql] = args;
+          if (String(sql).includes("FROM ob_links")) return { rows: [] };
           return { rows: makeMockRows(2) };
         },
       };
@@ -842,6 +970,8 @@ describe("search_brain", () => {
       const mockPool = {
         query: async (...args: any[]) => {
           queryCalls.push(args);
+          const [sql] = args;
+          if (String(sql).includes("FROM ob_links")) return { rows: [] };
           return { rows: makeMockRows(1) };
         },
       };

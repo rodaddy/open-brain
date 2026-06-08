@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { toSql } from "pgvector/pg";
 import { canRead } from "../permissions.ts";
-import type { AuthInfo, Table, Tier } from "../types.ts";
+import type { AuthInfo, LinkRelation, Table, Tier } from "../types.ts";
 import type { ToolDeps } from "./index.ts";
 import { logger } from "../logger.ts";
 import {
@@ -63,7 +63,7 @@ function recencyFactor(createdAt: string): number {
 export interface ExplicitLink {
   id: string;
   direction: "outgoing" | "incoming";
-  relation: string;
+  relation: LinkRelation;
   weight: number;
   linked_type: string;
   linked_id: string;
@@ -99,7 +99,7 @@ type LinkRow = {
   from_id: string;
   to_type: string;
   to_id: string;
-  relation: string;
+  relation: LinkRelation;
   weight: number;
   metadata: Record<string, unknown>;
   created_at: string;
@@ -137,9 +137,16 @@ async function attachExplicitLinks(
          )
        )${namespaceFilter}
        ORDER BY weight DESC, created_at DESC
-       LIMIT 50`,
+       LIMIT 200`,
       params,
     );
+
+    if (linkRows.length === 200) {
+      logger.warn("explicit_links_truncated", {
+        result_count: rows.length,
+        link_limit: 200,
+      });
+    }
 
     const linksByResult = new Map<string, ExplicitLink[]>();
     for (const link of linkRows) {
@@ -451,11 +458,23 @@ export async function executeSearch(
   tier?: Tier,
   offset = 0,
   namespace?: string,
+  includeLinks?: boolean,
 ): Promise<SearchRow[]> {
   let rows: SearchRow[];
   if (mode === "keyword") {
-    rows = await ftsSearch(deps, accessibleTables, query, limit, tier, offset, namespace);
-    return attachExplicitLinks(deps, rows, namespace);
+    rows = await ftsSearch(
+      deps,
+      accessibleTables,
+      query,
+      limit,
+      tier,
+      offset,
+      namespace,
+    );
+    if (includeLinks !== false) {
+      rows = await attachExplicitLinks(deps, rows, namespace);
+    }
+    return rows;
   }
 
   // Vector and hybrid both need an embedding
@@ -466,16 +485,38 @@ export async function executeSearch(
       logger.warn("embedding_failed_fallback_fts", {
         query: query.slice(0, 50),
       });
-      rows = await ftsSearch(deps, accessibleTables, query, limit, tier, offset, namespace);
-      return attachExplicitLinks(deps, rows, namespace);
+      rows = await ftsSearch(
+        deps,
+        accessibleTables,
+        query,
+        limit,
+        tier,
+        offset,
+        namespace,
+      );
+      if (includeLinks !== false) {
+        rows = await attachExplicitLinks(deps, rows, namespace);
+      }
+      return rows;
     }
     // In vector mode, null embedding is a hard failure -- signal via thrown error
     throw new Error("Failed to generate query embedding");
   }
 
   if (mode === "vector") {
-    rows = await vectorSearch(deps, accessibleTables, embedding, limit, tier, offset, namespace);
-    return attachExplicitLinks(deps, rows, namespace);
+    rows = await vectorSearch(
+      deps,
+      accessibleTables,
+      embedding,
+      limit,
+      tier,
+      offset,
+      namespace,
+    );
+    if (includeLinks !== false) {
+      rows = await attachExplicitLinks(deps, rows, namespace);
+    }
+    return rows;
   }
 
   // Hybrid: run both in parallel, merge with RRF
@@ -483,13 +524,24 @@ export async function executeSearch(
   const totalNeeded = offset + limit;
   const fetchLimit = totalNeeded * HYBRID_FETCH_MULTIPLIER;
   const [vectorRows, ftsRows] = await Promise.all([
-    vectorSearch(deps, accessibleTables, embedding, fetchLimit, tier, 0, namespace),
+    vectorSearch(
+      deps,
+      accessibleTables,
+      embedding,
+      fetchLimit,
+      tier,
+      0,
+      namespace,
+    ),
     ftsSearch(deps, accessibleTables, query, fetchLimit, tier, 0, namespace),
   ]);
 
   const merged = rrfMerge(vectorRows, ftsRows, totalNeeded);
   rows = merged.slice(offset);
-  return attachExplicitLinks(deps, rows, namespace);
+  if (includeLinks !== false) {
+    rows = await attachExplicitLinks(deps, rows, namespace);
+  }
+  return rows;
 }
 
 export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
@@ -513,7 +565,9 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
         namespace: z
           .string()
           .optional()
-          .describe("Optional: filter results to a specific namespace (e.g. clientId or 'collab')"),
+          .describe(
+            "Optional: filter results to a specific namespace (e.g. clientId or 'collab')",
+          ),
         limit: z
           .number()
           .int()
