@@ -58,8 +58,9 @@ describe("list_stale", () => {
     it("returns stale entries from all tables, default days=30, limit=50", async () => {
       const queryCalls: any[] = [];
       const mockPool = {
-        query: async (...args: any[]) => {
-          queryCalls.push(args);
+        query: async (sql: string, ...rest: any[]) => {
+          queryCalls.push([sql, ...rest]);
+          if (sql.includes("SUM(cnt)")) return { rows: [{ total_count: 3 }] };
           return { rows: makeMockRows(3) };
         },
       };
@@ -75,8 +76,8 @@ describe("list_stale", () => {
 
         expect(result.isError).toBeFalsy();
 
-        // Verify SQL shape
-        expect(queryCalls.length).toBe(1);
+        // Verify SQL shape -- data query + count query
+        expect(queryCalls.length).toBe(2);
         const [sql, params] = queryCalls[0];
 
         // Should query all 5 tables (admin has read on all)
@@ -103,8 +104,11 @@ describe("list_stale", () => {
 
         // Verify result format
         const parsed = JSON.parse((result.content as any)[0].text);
-        expect(Array.isArray(parsed)).toBe(true);
-        expect(parsed.length).toBe(3);
+        expect(parsed.entries).toBeDefined();
+        expect(Array.isArray(parsed.entries)).toBe(true);
+        expect(parsed.entries.length).toBe(3);
+        expect(parsed.total_count).toBe(3);
+        expect(parsed.has_more).toBe(false);
       } finally {
         await cleanup();
       }
@@ -115,8 +119,9 @@ describe("list_stale", () => {
     it("only queries thoughts when table='thoughts'", async () => {
       const queryCalls: any[] = [];
       const mockPool = {
-        query: async (...args: any[]) => {
-          queryCalls.push(args);
+        query: async (sql: string, ...rest: any[]) => {
+          queryCalls.push([sql, ...rest]);
+          if (sql.includes("SUM(cnt)")) return { rows: [{ total_count: 1 }] };
           return { rows: makeMockRows(1) };
         },
       };
@@ -145,8 +150,9 @@ describe("list_stale", () => {
     it("SQL contains tier filter when tier='hot'", async () => {
       const queryCalls: any[] = [];
       const mockPool = {
-        query: async (...args: any[]) => {
-          queryCalls.push(args);
+        query: async (sql: string, ...rest: any[]) => {
+          queryCalls.push([sql, ...rest]);
+          if (sql.includes("SUM(cnt)")) return { rows: [{ total_count: 2 }] };
           return { rows: makeMockRows(2) };
         },
       };
@@ -170,8 +176,9 @@ describe("list_stale", () => {
     it("SQL does NOT contain tier filter when tier is omitted", async () => {
       const queryCalls: any[] = [];
       const mockPool = {
-        query: async (...args: any[]) => {
-          queryCalls.push(args);
+        query: async (sql: string, ...rest: any[]) => {
+          queryCalls.push([sql, ...rest]);
+          if (sql.includes("SUM(cnt)")) return { rows: [{ total_count: 1 }] };
           return { rows: makeMockRows(1) };
         },
       };
@@ -197,8 +204,9 @@ describe("list_stale", () => {
     it("uses days=60, limit=10 in SQL params", async () => {
       const queryCalls: any[] = [];
       const mockPool = {
-        query: async (...args: any[]) => {
-          queryCalls.push(args);
+        query: async (sql: string, ...rest: any[]) => {
+          queryCalls.push([sql, ...rest]);
+          if (sql.includes("SUM(cnt)")) return { rows: [{ total_count: 5 }] };
           return { rows: makeMockRows(5) };
         },
       };
@@ -225,7 +233,10 @@ describe("list_stale", () => {
   describe("readonly role -- has read permission", () => {
     it("succeeds because readonly can read all tables", async () => {
       const mockPool = {
-        query: async () => ({ rows: makeMockRows(1) }),
+        query: async (sql: string) => {
+          if (sql.includes("SUM(cnt)")) return { rows: [{ total_count: 1 }] };
+          return { rows: makeMockRows(1) };
+        },
       };
       const auth: AuthInfo = { role: "readonly", clientId: "ro-client" };
 
@@ -239,7 +250,8 @@ describe("list_stale", () => {
 
         expect(result.isError).toBeFalsy();
         const parsed = JSON.parse((result.content as any)[0].text);
-        expect(Array.isArray(parsed)).toBe(true);
+        expect(parsed.entries).toBeDefined();
+        expect(Array.isArray(parsed.entries)).toBe(true);
       } finally {
         await cleanup();
       }
@@ -278,7 +290,10 @@ describe("list_stale", () => {
       };
       // Pass undefined auth by using a special setup
       const server = new McpServer({ name: "test", version: "1.0.0" });
-      const deps: ToolDeps = { pool: mockPool as any, embedFn: createMockEmbed() };
+      const deps: ToolDeps = {
+        pool: mockPool as any,
+        embedFn: createMockEmbed(),
+      };
       registerListStale(server, deps);
 
       const [clientTransport, serverTransport] =
@@ -306,9 +321,12 @@ describe("list_stale", () => {
   });
 
   describe("empty results", () => {
-    it("returns empty array, no isError", async () => {
+    it("returns empty entries array, no isError", async () => {
       const mockPool = {
-        query: async () => ({ rows: [] }),
+        query: async (sql: string) => {
+          if (sql.includes("SUM(cnt)")) return { rows: [{ total_count: 0 }] };
+          return { rows: [] };
+        },
       };
       const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
 
@@ -322,8 +340,11 @@ describe("list_stale", () => {
 
         expect(result.isError).toBeFalsy();
         const parsed = JSON.parse((result.content as any)[0].text);
-        expect(Array.isArray(parsed)).toBe(true);
-        expect(parsed.length).toBe(0);
+        expect(parsed.entries).toBeDefined();
+        expect(Array.isArray(parsed.entries)).toBe(true);
+        expect(parsed.entries.length).toBe(0);
+        expect(parsed.total_count).toBe(0);
+        expect(parsed.has_more).toBe(false);
       } finally {
         await cleanup();
       }
@@ -333,7 +354,10 @@ describe("list_stale", () => {
   describe("result includes access metadata", () => {
     it("rows contain access_count, last_accessed_at, and effective_last_access", async () => {
       const mockPool = {
-        query: async () => ({ rows: makeMockRows(1) }),
+        query: async (sql: string) => {
+          if (sql.includes("SUM(cnt)")) return { rows: [{ total_count: 1 }] };
+          return { rows: makeMockRows(1) };
+        },
       };
       const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
 
@@ -347,9 +371,9 @@ describe("list_stale", () => {
 
         expect(result.isError).toBeFalsy();
         const parsed = JSON.parse((result.content as any)[0].text);
-        expect(parsed[0]).toHaveProperty("access_count");
-        expect(parsed[0]).toHaveProperty("last_accessed_at");
-        expect(parsed[0]).toHaveProperty("effective_last_access");
+        expect(parsed.entries[0]).toHaveProperty("access_count");
+        expect(parsed.entries[0]).toHaveProperty("last_accessed_at");
+        expect(parsed.entries[0]).toHaveProperty("effective_last_access");
       } finally {
         await cleanup();
       }
@@ -360,8 +384,9 @@ describe("list_stale", () => {
     it("SQL orders by effective_last_access ASC (stalest first)", async () => {
       const queryCalls: any[] = [];
       const mockPool = {
-        query: async (...args: any[]) => {
-          queryCalls.push(args);
+        query: async (sql: string, ...rest: any[]) => {
+          queryCalls.push([sql, ...rest]);
+          if (sql.includes("SUM(cnt)")) return { rows: [{ total_count: 0 }] };
           return { rows: [] };
         },
       };
@@ -387,8 +412,9 @@ describe("list_stale", () => {
     it("filters to thoughts + hot tier", async () => {
       const queryCalls: any[] = [];
       const mockPool = {
-        query: async (...args: any[]) => {
-          queryCalls.push(args);
+        query: async (sql: string, ...rest: any[]) => {
+          queryCalls.push([sql, ...rest]);
+          if (sql.includes("SUM(cnt)")) return { rows: [{ total_count: 1 }] };
           return { rows: makeMockRows(1) };
         },
       };
@@ -406,6 +432,58 @@ describe("list_stale", () => {
         expect(sql).toContain("FROM thoughts");
         expect(sql).toContain("tier = 'hot'");
         expect(sql).not.toContain("UNION ALL");
+      } finally {
+        await cleanup();
+      }
+    });
+  });
+
+  describe("has_more pagination", () => {
+    it("returns has_more=true when total exceeds offset+entries", async () => {
+      const mockPool = {
+        query: async (sql: string) => {
+          if (sql.includes("SUM(cnt)")) return { rows: [{ total_count: 10 }] };
+          return { rows: makeMockRows(2) };
+        },
+      };
+      const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
+      const { client, cleanup } = await setupToolClient(mockPool, auth);
+      try {
+        const result = await client.callTool({
+          name: "list_stale",
+          arguments: { limit: 2 },
+        });
+        expect(result.isError).toBeFalsy();
+        const parsed = JSON.parse((result.content as any)[0].text);
+        expect(parsed.has_more).toBe(true);
+        expect(parsed.total_count).toBe(10);
+        expect(parsed.entries.length).toBe(2);
+      } finally {
+        await cleanup();
+      }
+    });
+  });
+
+  describe("count query failure", () => {
+    it("returns data with total_count=null when count query fails", async () => {
+      const mockPool = {
+        query: async (sql: string) => {
+          if (sql.includes("SUM(cnt)")) throw new Error("connection lost");
+          return { rows: makeMockRows(2) };
+        },
+      };
+      const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
+      const { client, cleanup } = await setupToolClient(mockPool, auth);
+      try {
+        const result = await client.callTool({
+          name: "list_stale",
+          arguments: {},
+        });
+        expect(result.isError).toBeFalsy();
+        const parsed = JSON.parse((result.content as any)[0].text);
+        expect(parsed.entries.length).toBe(2);
+        expect(parsed.total_count).toBeNull();
+        expect(parsed.has_more).toBe(false);
       } finally {
         await cleanup();
       }

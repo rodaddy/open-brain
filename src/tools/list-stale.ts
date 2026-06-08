@@ -5,53 +5,27 @@ import type { AuthInfo, Table, Tier } from "../types.ts";
 import { logger } from "../logger.ts";
 import type { ToolDeps } from "./index.ts";
 
-const ALL_TABLES: Table[] = [
-  "thoughts",
-  "decisions",
-  "relationships",
-  "projects",
-  "sessions",
-];
+import {
+  ALL_TABLES,
+  SOURCE_LABELS,
+  CONTENT_PREVIEW,
+  TABLE_ALIAS,
+  VALID_TIERS,
+} from "./table-constants.ts";
 
-/** Singular labels for list results */
-const SOURCE_LABELS: Record<Table, string> = {
-  thoughts: "thought",
-  decisions: "decision",
-  relationships: "relationship",
-  projects: "project",
-  sessions: "session",
-};
+function buildWhereClause(alias: string, tier?: Tier): string {
+  const tierFilter = tier ? ` AND ${alias}.tier = '${tier}'` : "";
+  return `WHERE ${alias}.archived_at IS NULL
+    AND COALESCE(${alias}.last_accessed_at, ${alias}.created_at) < NOW() - INTERVAL '1 day' * $1${tierFilter}`;
+}
 
-/** Content preview SQL expression per table */
-const CONTENT_PREVIEW: Record<Table, string> = {
-  thoughts: "t.content",
-  decisions: "d.title || ': ' || d.rationale",
-  relationships: "r.person_name || ': ' || COALESCE(r.context, '')",
-  projects: "p.name || ': ' || COALESCE(p.description, '')",
-  sessions: "COALESCE(s.project || ': ', '') || LEFT(s.summary, 200)",
-};
-
-/** Table alias used in SELECTs */
-const TABLE_ALIAS: Record<Table, string> = {
-  thoughts: "t",
-  decisions: "d",
-  relationships: "r",
-  projects: "p",
-  sessions: "s",
-};
-
-function buildStaleSelect(
-  table: Table,
-  tier?: Tier,
-): string {
+function buildStaleSelect(table: Table, tier?: Tier): string {
+  if (tier && !VALID_TIERS.has(tier)) throw new Error(`Invalid tier: ${tier}`);
   const alias = TABLE_ALIAS[table];
   const label = SOURCE_LABELS[table];
   const preview = CONTENT_PREVIEW[table];
+  const where = buildWhereClause(alias, tier);
 
-  const tierFilter = tier ? ` AND ${alias}.tier = '${tier}'` : "";
-
-  // Stale = not accessed recently. Use COALESCE to handle entries never accessed
-  // (last_accessed_at IS NULL), falling back to created_at.
   return `SELECT
     '${label}' AS source_type,
     ${alias}.id,
@@ -63,8 +37,17 @@ function buildStaleSelect(
     ${alias}.created_at,
     COALESCE(${alias}.last_accessed_at, ${alias}.created_at) AS effective_last_access
   FROM ${table} ${alias}
-  WHERE ${alias}.archived_at IS NULL
-    AND COALESCE(${alias}.last_accessed_at, ${alias}.created_at) < NOW() - INTERVAL '1 day' * $1${tierFilter}`;
+  ${where}`;
+}
+
+function buildCountSelect(table: Table, tier?: Tier): string {
+  if (tier && !VALID_TIERS.has(tier)) throw new Error(`Invalid tier: ${tier}`);
+  const alias = TABLE_ALIAS[table];
+  const where = buildWhereClause(alias, tier);
+
+  return `SELECT COUNT(*) AS cnt
+  FROM ${table} ${alias}
+  ${where}`;
 }
 
 export function registerListStale(server: McpServer, deps: ToolDeps): void {
@@ -74,7 +57,7 @@ export function registerListStale(server: McpServer, deps: ToolDeps): void {
       description:
         "Find brain entries not accessed recently -- candidates for tier demotion (hot->warm->cold). " +
         "Queries by last_accessed_at (falls back to created_at for never-accessed entries). " +
-        "Useful for dream cycle decay and knowledge base hygiene.",
+        "Returns paginated results with total_count and has_more for dream cycle automation.",
       inputSchema: {
         table: z
           .enum([
@@ -99,9 +82,15 @@ export function registerListStale(server: McpServer, deps: ToolDeps): void {
           .number()
           .int()
           .min(1)
-          .max(250)
+          .max(500)
           .optional()
-          .describe("Maximum entries to return (default 50)"),
+          .describe("Maximum entries to return (default 50, max 500)"),
+        offset: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe("Number of entries to skip for pagination (default 0)"),
         tier: z
           .enum(["hot", "warm", "cold"])
           .optional()
@@ -130,7 +119,6 @@ export function registerListStale(server: McpServer, deps: ToolDeps): void {
         };
       }
 
-      // Determine which tables the caller can read
       const tableFilter = args.table as Table | undefined;
       let accessibleTables: Table[];
 
@@ -165,31 +153,48 @@ export function registerListStale(server: McpServer, deps: ToolDeps): void {
 
       const days = args.days ?? 30;
       const limit = args.limit ?? 50;
+      const offset = args.offset ?? 0;
       const tier = args.tier as Tier | undefined;
 
-      // Build UNION ALL of table SELECTs
-      const selects = accessibleTables.map((t) =>
-        buildStaleSelect(t, tier),
-      );
-
+      const selects = accessibleTables.map((t) => buildStaleSelect(t, tier));
       const unionSql = selects.join("\nUNION ALL\n");
-      // Sort by staleness: oldest effective access first
-      const sql = `${unionSql}\nORDER BY effective_last_access ASC\nLIMIT $2`;
+      const sql = `${unionSql}\nORDER BY effective_last_access ASC\nLIMIT $2 OFFSET $3`;
+
+      const countSelects = accessibleTables.map((t) =>
+        buildCountSelect(t, tier),
+      );
+      const countSql = `SELECT SUM(cnt)::int AS total_count FROM (${countSelects.join("\nUNION ALL\n")}) counts`;
 
       logger.info("list_stale_query", {
         tables: accessibleTables,
         days,
         limit,
+        offset,
         tier: tier ?? null,
       });
 
-      const { rows } = await deps.pool.query(sql, [days, limit]);
+      const [dataResult, countResult] = await Promise.all([
+        deps.pool.query(sql, [days, limit, offset]),
+        deps.pool.query(countSql, [days]).catch(() => null),
+      ]);
+
+      const totalCount = countResult?.rows[0]?.total_count ?? null;
+      const hasMore =
+        totalCount !== null
+          ? offset + dataResult.rows.length < totalCount
+          : false;
 
       return {
         content: [
           {
             type: "text" as const,
-            text: JSON.stringify(rows),
+            text: JSON.stringify({
+              entries: dataResult.rows,
+              total_count: totalCount,
+              offset,
+              limit,
+              has_more: hasMore,
+            }),
           },
         ],
       };
