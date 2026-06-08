@@ -57,7 +57,8 @@ export function registerListStale(server: McpServer, deps: ToolDeps): void {
       description:
         "Find brain entries not accessed recently -- candidates for tier demotion (hot->warm->cold). " +
         "Queries by last_accessed_at (falls back to created_at for never-accessed entries). " +
-        "Returns paginated results with total_count and has_more for dream cycle automation.",
+        "Returns {entries, total_count, has_more} envelope by default, or raw array with response_format='array'. " +
+        "Resilient parsing: const entries = Array.isArray(result) ? result : result.entries ?? [];",
       inputSchema: {
         table: z
           .enum([

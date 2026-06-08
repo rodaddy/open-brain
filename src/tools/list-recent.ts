@@ -66,7 +66,9 @@ export function registerListRecent(server: McpServer, deps: ToolDeps): void {
     "list_recent",
     {
       description:
-        "List recent brain entries chronologically. Supports table filter, date range, tier filter, and pagination with total_count.",
+        "List recent brain entries chronologically. Returns {entries, total_count, has_more} envelope by default, " +
+        "or raw array with response_format='array'. " +
+        "Resilient parsing: const entries = Array.isArray(result) ? result : result.entries ?? [];",
       inputSchema: {
         table: z
           .enum([
