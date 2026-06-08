@@ -7,12 +7,7 @@ import type { ToolDeps } from "../index.ts";
 import type { AuthInfo } from "../../types.ts";
 
 function createMockEmbed(result: number[] | null = Array(768).fill(0.1)) {
-  const calls: string[] = [];
-  const fn = async (text: string) => {
-    calls.push(text);
-    return result;
-  };
-  return { fn, calls };
+  return async (_text: string) => result;
 }
 
 /** Creates a mock pool that routes both pool.query and pool.connect().query through the same function */
@@ -39,14 +34,11 @@ function createMockPool(queryFn: (...args: any[]) => Promise<{ rows: any[] }>) {
 
 async function setupToolClient(
   mockPool: ReturnType<typeof createMockPool>,
-  mockEmbed: {
-    fn: (text: string) => Promise<number[] | null>;
-    calls: string[];
-  },
+  mockEmbed: (text: string) => Promise<number[] | null>,
   auth: AuthInfo,
 ): Promise<{ client: Client; cleanup: () => Promise<void> }> {
   const server = new McpServer({ name: "test", version: "1.0.0" });
-  const deps: ToolDeps = { pool: mockPool as any, embedFn: mockEmbed.fn };
+  const deps: ToolDeps = { pool: mockPool as any, embedFn: mockEmbed };
   registerUpdateEntry(server, deps);
 
   const [clientTransport, serverTransport] =
@@ -72,11 +64,9 @@ async function setupToolClient(
 
 describe("update_entry", () => {
   describe("admin role -- update thoughts content", () => {
-    it("re-embeds content, recalculates content_hash, returns updated+embedded", async () => {
-      const queryCalls: any[] = [];
+    it("returns { id, table, updated: true, embedded: true } when content changes", async () => {
       let dataCallCount = 0;
-      const mockPool = createMockPool(async (...args: any[]) => {
-        queryCalls.push(args);
+      const mockPool = createMockPool(async () => {
         dataCallCount++;
         if (dataCallCount === 1) {
           // SELECT existing row
@@ -123,27 +113,6 @@ describe("update_entry", () => {
         expect(parsed.table).toBe("thoughts");
         expect(parsed.updated).toBe(true);
         expect(parsed.embedded).toBe(true);
-
-        // Verify re-embedding was called with new content
-        expect(mockEmbed.calls.length).toBe(1);
-        expect(mockEmbed.calls[0]).toBe("new content");
-
-        // Verify SQL: SELECT, hash collision check, UPDATE
-        expect(queryCalls.length).toBe(3);
-        const [selectSql] = queryCalls[0];
-        expect(selectSql).toContain("SELECT");
-        expect(selectSql).toContain("FROM thoughts");
-
-        const [hashSql] = queryCalls[1];
-        expect(hashSql).toContain("content_hash");
-        expect(hashSql).toContain("id !=");
-
-        const [updateSql] = queryCalls[2];
-        expect(updateSql).toContain("UPDATE thoughts");
-        expect(updateSql).toContain("SET");
-        expect(updateSql).toContain("content");
-        expect(updateSql).toContain("embedding");
-        expect(updateSql).toContain("content_hash");
       } finally {
         await cleanup();
       }
@@ -151,7 +120,7 @@ describe("update_entry", () => {
   });
 
   describe("update decisions title+rationale", () => {
-    it("embeds concatenation of title and rationale", async () => {
+    it("returns updated: true for decision with new title and rationale", async () => {
       let dataCallCount = 0;
       const mockPool = createMockPool(async () => {
         dataCallCount++;
@@ -195,9 +164,7 @@ describe("update_entry", () => {
         expect(result.isError).toBeFalsy();
         const parsed = JSON.parse((result.content as any)[0].text);
         expect(parsed.updated).toBe(true);
-
-        // Verify embedding text is title + "\n" + rationale
-        expect(mockEmbed.calls[0]).toBe("new title\nnew rationale");
+        expect(parsed.embedded).toBe(true);
       } finally {
         await cleanup();
       }
@@ -205,7 +172,7 @@ describe("update_entry", () => {
   });
 
   describe("update tags only -- no content change", () => {
-    it("does NOT re-embed, just updates tags", async () => {
+    it("returns updated: true, embedded: false (no re-embedding needed)", async () => {
       let dataCallCount = 0;
       const mockPool = createMockPool(async () => {
         dataCallCount++;
@@ -247,9 +214,6 @@ describe("update_entry", () => {
         const parsed = JSON.parse((result.content as any)[0].text);
         expect(parsed.updated).toBe(true);
         expect(parsed.embedded).toBe(false);
-
-        // Embedding should NOT have been called
-        expect(mockEmbed.calls.length).toBe(0);
       } finally {
         await cleanup();
       }

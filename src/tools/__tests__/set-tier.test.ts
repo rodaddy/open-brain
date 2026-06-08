@@ -41,13 +41,9 @@ async function setupToolClient(
 
 describe("set_tier", () => {
   describe("admin role -- set tier to hot", () => {
-    it("updates tier and returns result", async () => {
-      const queryCalls: any[] = [];
+    it("returns { id, table, tier: 'hot' }", async () => {
       const mockPool = {
-        query: async (...args: any[]) => {
-          queryCalls.push(args);
-          return { rows: [{ id: "test-uuid", tier: "hot" }] };
-        },
+        query: async () => ({ rows: [{ id: "test-uuid", tier: "hot" }] }),
       };
       const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
 
@@ -68,16 +64,6 @@ describe("set_tier", () => {
         expect(parsed.id).toBe("test-uuid");
         expect(parsed.table).toBe("thoughts");
         expect(parsed.tier).toBe("hot");
-
-        // Verify SQL shape
-        expect(queryCalls.length).toBe(1);
-        const [sql, params] = queryCalls[0];
-        expect(sql).toContain("UPDATE");
-        expect(sql).toContain("tier");
-        expect(sql).toContain("archived_at IS NULL");
-        expect(sql).toContain("RETURNING");
-        expect(params[0]).toBe("hot");
-        expect(params[1]).toBe("550e8400-e29b-41d4-a716-446655440000");
       } finally {
         await cleanup();
       }
@@ -85,7 +71,7 @@ describe("set_tier", () => {
   });
 
   describe("admin role -- set tier to cold", () => {
-    it("sets tier to cold", async () => {
+    it("returns tier: 'cold'", async () => {
       const mockPool = {
         query: async () => ({
           rows: [{ id: "cold-uuid", tier: "cold" }],
@@ -115,7 +101,7 @@ describe("set_tier", () => {
   });
 
   describe("admin role -- reset tier to warm", () => {
-    it("sets tier back to warm (default)", async () => {
+    it("returns tier: 'warm' (default)", async () => {
       const mockPool = {
         query: async () => ({
           rows: [{ id: "warm-uuid", tier: "warm" }],

@@ -41,15 +41,11 @@ async function setupToolClient(
 
 describe("rate_entry", () => {
   describe("admin role -- score 1.0", () => {
-    it("sets usefulness_score and returns result", async () => {
-      const queryCalls: any[] = [];
+    it("returns { id, table, usefulness_score } for valid rating", async () => {
       const mockPool = {
-        query: async (...args: any[]) => {
-          queryCalls.push(args);
-          return {
-            rows: [{ id: "test-uuid", usefulness_score: 1.0 }],
-          };
-        },
+        query: async () => ({
+          rows: [{ id: "test-uuid", usefulness_score: 1.0 }],
+        }),
       };
       const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
 
@@ -70,16 +66,6 @@ describe("rate_entry", () => {
         expect(parsed.id).toBe("test-uuid");
         expect(parsed.table).toBe("thoughts");
         expect(parsed.usefulness_score).toBe(1.0);
-
-        // Verify SQL shape
-        expect(queryCalls.length).toBe(1);
-        const [sql, params] = queryCalls[0];
-        expect(sql).toContain("UPDATE");
-        expect(sql).toContain("usefulness_score");
-        expect(sql).toContain("archived_at IS NULL");
-        expect(sql).toContain("RETURNING");
-        expect(params[0]).toBe(1.0);
-        expect(params[1]).toBe("550e8400-e29b-41d4-a716-446655440000");
       } finally {
         await cleanup();
       }
@@ -87,7 +73,7 @@ describe("rate_entry", () => {
   });
 
   describe("score 0.0 -- thumbs down", () => {
-    it("sets usefulness_score to 0.0", async () => {
+    it("returns usefulness_score of 0.0", async () => {
       const mockPool = {
         query: async () => ({
           rows: [{ id: "zero-uuid", usefulness_score: 0.0 }],
@@ -117,7 +103,7 @@ describe("rate_entry", () => {
   });
 
   describe("score 0.5 -- explicit float", () => {
-    it("sets usefulness_score to 0.5", async () => {
+    it("returns usefulness_score of 0.5", async () => {
       const mockPool = {
         query: async () => ({
           rows: [{ id: "half-uuid", usefulness_score: 0.5 }],

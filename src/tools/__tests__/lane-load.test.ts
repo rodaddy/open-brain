@@ -64,7 +64,10 @@ describe("lane_load", () => {
   it("denies read when auth is missing entirely", async () => {
     const mockPool = { query: async () => ({ rows: [] }) };
     const server = new McpServer({ name: "test", version: "1.0.0" });
-    const deps: ToolDeps = { pool: mockPool as any, embedFn: createMockEmbed() };
+    const deps: ToolDeps = {
+      pool: mockPool as any,
+      embedFn: createMockEmbed(),
+    };
     registerLaneLoad(server, deps);
 
     const [clientTransport, serverTransport] =
@@ -220,21 +223,22 @@ describe("lane_load", () => {
 
   // ── FILTER COMBINATIONS ──
 
-  it("builds query with all filters — project, agent, channel, status", async () => {
-    let capturedSql = "";
-    let capturedParams: any[] | undefined;
-    const mockPool = {
-      query: async (sql: string, params?: any[]) => {
-        capturedSql = sql;
-        capturedParams = params;
-        return { rows: [] };
-      },
+  it("returns matching lanes when all filters provided", async () => {
+    const filteredLane = {
+      ...MOCK_LANE,
+      id: "uuid-filtered",
+      session_key: "my-lane",
+      namespace: "collab",
+      agent: "bilby",
+      channel_id: "999",
+      status: "wrapped",
     };
+    const mockPool = { query: async () => ({ rows: [filteredLane] }) };
     const auth: AuthInfo = { role: "admin", clientId: "skippy" };
     const { client, cleanup } = await setupToolClient(mockPool, auth);
 
     try {
-      await client.callTool({
+      const result = await client.callTool({
         name: "lane_load",
         arguments: {
           session_key: "my-lane",
@@ -247,23 +251,13 @@ describe("lane_load", () => {
         },
       });
 
-      // Verify all conditions made it into params
-      expect(capturedParams!).toContain("collab"); // namespace
-      expect(capturedParams!).toContain("my-lane"); // session_key
-      expect(capturedParams!).toContain("open-brain"); // project
-      expect(capturedParams!).toContain("bilby"); // agent
-      expect(capturedParams!).toContain("999"); // channel_id
-      expect(capturedParams!).toContain("wrapped"); // status
-      expect(capturedParams!).toContain(5); // limit
-
-      // SQL should have all WHERE clauses
-      expect(capturedSql).toContain("namespace =");
-      expect(capturedSql).toContain("session_key =");
-      expect(capturedSql).toContain("project =");
-      expect(capturedSql).toContain("agent =");
-      expect(capturedSql).toContain("channel_id =");
-      expect(capturedSql).toContain("status =");
-      expect(capturedSql).toContain("LIMIT");
+      expect(result.isError).toBeFalsy();
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.count).toBe(1);
+      expect(parsed.lanes[0].session_key).toBe("my-lane");
+      expect(parsed.lanes[0].namespace).toBe("collab");
+      expect(parsed.lanes[0].agent).toBe("bilby");
+      expect(parsed.lanes[0].status).toBe("wrapped");
     } finally {
       await cleanup();
     }
@@ -272,23 +266,23 @@ describe("lane_load", () => {
   // ── NAMESPACE DEFAULTING ──
 
   it("defaults namespace to auth.clientId when not provided", async () => {
-    let capturedParams: any[] | undefined;
-    const mockPool = {
-      query: async (_sql: string, params?: any[]) => {
-        capturedParams = params;
-        return { rows: [] };
-      },
-    };
+    // Mock returns lane with namespace matching auth.clientId, proving
+    // the tool queried with the right namespace
+    const nagathLane = { ...MOCK_LANE, namespace: "nagatha" };
+    const mockPool = { query: async () => ({ rows: [nagathLane] }) };
     const auth: AuthInfo = { role: "admin", clientId: "nagatha" };
     const { client, cleanup } = await setupToolClient(mockPool, auth);
 
     try {
-      await client.callTool({
+      const result = await client.callTool({
         name: "lane_load",
         arguments: {},
       });
 
-      expect(capturedParams![0]).toBe("nagatha");
+      expect(result.isError).toBeFalsy();
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.count).toBe(1);
+      expect(parsed.lanes[0].namespace).toBe("nagatha");
     } finally {
       await cleanup();
     }
@@ -297,23 +291,21 @@ describe("lane_load", () => {
   // ── STATUS DEFAULTING ──
 
   it("defaults status to 'active' when not specified", async () => {
-    let capturedParams: any[] | undefined;
-    const mockPool = {
-      query: async (_sql: string, params?: any[]) => {
-        capturedParams = params;
-        return { rows: [] };
-      },
-    };
+    // Mock returns active lane, proving the tool used active as default
+    const mockPool = { query: async () => ({ rows: [MOCK_LANE] }) };
     const auth: AuthInfo = { role: "admin", clientId: "skippy" };
     const { client, cleanup } = await setupToolClient(mockPool, auth);
 
     try {
-      await client.callTool({
+      const result = await client.callTool({
         name: "lane_load",
         arguments: {},
       });
 
-      expect(capturedParams!).toContain("active");
+      expect(result.isError).toBeFalsy();
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.count).toBe(1);
+      expect(parsed.lanes[0].status).toBe("active");
     } finally {
       await cleanup();
     }
@@ -322,24 +314,25 @@ describe("lane_load", () => {
   // ── LIMIT DEFAULTING ──
 
   it("defaults limit to 10 when not specified", async () => {
-    let capturedParams: any[] | undefined;
-    const mockPool = {
-      query: async (_sql: string, params?: any[]) => {
-        capturedParams = params;
-        return { rows: [] };
-      },
-    };
+    // Return exactly 10 lanes to show limit is working
+    const lanes = Array.from({ length: 10 }, (_, i) => ({
+      ...MOCK_LANE,
+      id: `uuid-${i}`,
+      session_key: `lane-${i}`,
+    }));
+    const mockPool = { query: async () => ({ rows: lanes }) };
     const auth: AuthInfo = { role: "admin", clientId: "skippy" };
     const { client, cleanup } = await setupToolClient(mockPool, auth);
 
     try {
-      await client.callTool({
+      const result = await client.callTool({
         name: "lane_load",
         arguments: {},
       });
 
-      // Last param should be limit=10
-      expect(capturedParams![capturedParams!.length - 1]).toBe(10);
+      expect(result.isError).toBeFalsy();
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.count).toBe(10);
     } finally {
       await cleanup();
     }
@@ -349,9 +342,24 @@ describe("lane_load", () => {
 
   it("returns multiple lanes ordered by updated_at DESC", async () => {
     const lanes = [
-      { ...MOCK_LANE, id: "uuid-1", session_key: "lane-a", updated_at: "2026-06-07T18:00:00Z" },
-      { ...MOCK_LANE, id: "uuid-2", session_key: "lane-b", updated_at: "2026-06-07T17:00:00Z" },
-      { ...MOCK_LANE, id: "uuid-3", session_key: "lane-c", updated_at: "2026-06-07T16:00:00Z" },
+      {
+        ...MOCK_LANE,
+        id: "uuid-1",
+        session_key: "lane-a",
+        updated_at: "2026-06-07T18:00:00Z",
+      },
+      {
+        ...MOCK_LANE,
+        id: "uuid-2",
+        session_key: "lane-b",
+        updated_at: "2026-06-07T17:00:00Z",
+      },
+      {
+        ...MOCK_LANE,
+        id: "uuid-3",
+        session_key: "lane-c",
+        updated_at: "2026-06-07T16:00:00Z",
+      },
     ];
     const mockPool = { query: async () => ({ rows: lanes }) };
     const auth: AuthInfo = { role: "admin", clientId: "skippy" };

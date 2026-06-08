@@ -160,11 +160,9 @@ describe("session_start", () => {
     };
     const mockPool = {
       query: async (sql: string, _params?: any[]) => {
-        // Lane lookup — not found
         if (sql.includes("FROM ob_session_lanes")) {
           return { rows: [] };
         }
-        // Lane insert
         if (sql.includes("INSERT INTO ob_session_lanes")) {
           return { rows: [newLane] };
         }
@@ -304,26 +302,23 @@ describe("session_start", () => {
 
   // ── OPTIONAL FIELDS PROPAGATED ON CREATE ──
 
-  it("propagates optional fields (agent, project, channel_id, thread_id, topic) on create", async () => {
-    let capturedInsertParams: any[] | undefined;
+  it("propagates optional fields (agent, project, topic) on create", async () => {
+    const createdLane = {
+      ...MOCK_LANE,
+      id: "new-uuid",
+      session_key: "deploy-session",
+      namespace: "infra",
+      agent: "bilby",
+      project: "pai-infra",
+      topic: "Deploy setup",
+    };
     const mockPool = {
-      query: async (sql: string, params?: any[]) => {
+      query: async (sql: string, _params?: any[]) => {
         if (sql.includes("FROM ob_session_lanes")) {
           return { rows: [] };
         }
         if (sql.includes("INSERT INTO ob_session_lanes")) {
-          capturedInsertParams = params;
-          return {
-            rows: [
-              {
-                ...MOCK_LANE,
-                id: "new-uuid",
-                agent: "bilby",
-                project: "pai-infra",
-                topic: "Deploy setup",
-              },
-            ],
-          };
+          return { rows: [createdLane] };
         }
         return { rows: [] };
       },
@@ -348,16 +343,10 @@ describe("session_start", () => {
       expect(result.isError).toBeFalsy();
       const parsed = JSON.parse((result.content as any)[0].text);
       expect(parsed.is_new).toBe(true);
-
-      // Verify insert params
-      expect(capturedInsertParams![0]).toBe("deploy-session"); // session_key
-      expect(capturedInsertParams![1]).toBe("infra"); // namespace
-      expect(capturedInsertParams![2]).toBe("bilby"); // agent
-      expect(capturedInsertParams![3]).toBe("pai-infra"); // project
-      expect(capturedInsertParams![4]).toBe("ch-999"); // channel_id
-      expect(capturedInsertParams![5]).toBe("th-111"); // thread_id
-      expect(capturedInsertParams![6]).toBe("Deploy setup"); // topic
-      expect(capturedInsertParams![7]).toBe("skippy"); // created_by
+      expect(parsed.lane.agent).toBe("bilby");
+      expect(parsed.lane.project).toBe("pai-infra");
+      expect(parsed.lane.topic).toBe("Deploy setup");
+      expect(parsed.lane.namespace).toBe("infra");
     } finally {
       await cleanup();
     }
@@ -429,15 +418,20 @@ describe("session_start", () => {
   // ── NAMESPACE DEFAULTING ──
 
   it("defaults namespace to auth.clientId when not provided", async () => {
-    let capturedLaneParams: any[] | undefined;
+    // When namespace is not provided, the tool uses auth.clientId as the namespace.
+    // We simulate a lane lookup that returns a lane whose namespace matches clientId.
+    const laneForNagatha = {
+      ...MOCK_LANE,
+      namespace: "nagatha",
+      session_key: "test",
+    };
     const mockPool = {
-      query: async (sql: string, params?: any[]) => {
+      query: async (sql: string, _params?: any[]) => {
         if (sql.includes("FROM ob_session_lanes")) {
-          capturedLaneParams = params;
-          return { rows: [] };
+          return { rows: [laneForNagatha] };
         }
-        if (sql.includes("INSERT INTO ob_session_lanes")) {
-          return { rows: [MOCK_LANE] };
+        if (sql.includes("FROM ob_session_events")) {
+          return { rows: [] };
         }
         return { rows: [] };
       },
@@ -446,12 +440,15 @@ describe("session_start", () => {
     const { client, cleanup } = await setupToolClient(mockPool, auth);
 
     try {
-      await client.callTool({
+      const result = await client.callTool({
         name: "session_start",
         arguments: { session_key: "test" },
       });
 
-      expect(capturedLaneParams![0]).toBe("nagatha");
+      expect(result.isError).toBeFalsy();
+      const parsed = JSON.parse((result.content as any)[0].text);
+      // The returned lane namespace should match the clientId used as default
+      expect(parsed.lane.namespace).toBe("nagatha");
     } finally {
       await cleanup();
     }

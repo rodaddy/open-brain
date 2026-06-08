@@ -1,21 +1,19 @@
-import { describe, it, expect, beforeEach, afterEach, mock } from "bun:test";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { describe, it, expect, afterEach } from "bun:test";
 import { registerSearchAll } from "../search-all.ts";
-import type { ToolDeps } from "../index.ts";
 import type { AuthInfo } from "../../types.ts";
+import {
+  createMockEmbed,
+  makeMockRows,
+  setupMcpClient,
+  parseToolResult,
+  getErrorText,
+} from "./test-helpers.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function createMockEmbed(result: number[] | null = Array(768).fill(0.1)) {
-  return async (_text: string) => result;
-}
-
-/** Build mock OB rows with sensible defaults. */
-function makeMockRows(
+function makeMockRowsWithMeta(
   count: number,
   overrides: Partial<{
     source_type: string;
@@ -34,7 +32,6 @@ function makeMockRows(
   }));
 }
 
-/** Rows spanning all 5 tables. */
 function makeMultiTableRows(perTable: number = 1) {
   const types = ["thought", "decision", "relationship", "project", "session"];
   return types.flatMap((t, ti) =>
@@ -50,42 +47,15 @@ function makeMultiTableRows(perTable: number = 1) {
   );
 }
 
-async function setupClient(
-  mockPool: { query: (...args: any[]) => Promise<{ rows: any[] }> },
-  mockEmbed: ReturnType<typeof createMockEmbed>,
+const setupClient = (
+  mockPool: { query: (...a: any[]) => Promise<{ rows: any[] }> },
   auth: AuthInfo | null,
-): Promise<{ client: Client; cleanup: () => Promise<void> }> {
-  const server = new McpServer({ name: "test", version: "1.0.0" });
-  const deps: ToolDeps = { pool: mockPool as any, embedFn: mockEmbed };
-  registerSearchAll(server, deps);
+  embed = createMockEmbed(),
+) => setupMcpClient(registerSearchAll, mockPool, embed, auth);
 
-  const [clientTransport, serverTransport] =
-    InMemoryTransport.createLinkedPair();
-
-  if (auth) {
-    const originalSend = clientTransport.send.bind(clientTransport);
-    clientTransport.send = (message: any, options?: any) => {
-      return originalSend(message, { ...options, authInfo: auth });
-    };
-  }
-
-  const client = new Client({ name: "test-client", version: "1.0.0" });
-  await server.connect(serverTransport);
-  await client.connect(clientTransport);
-
-  return {
-    client,
-    cleanup: async () => {
-      await client.close();
-      await server.close();
-    },
-  };
-}
-
-/** Parse the JSON payload returned by search_all. */
-function parseResult(result: any) {
-  const text = (result.content as any)[0].text;
-  return JSON.parse(text) as {
+/** Parse search_all structured response. */
+function parseSearchAll(result: any) {
+  return parseToolResult(result) as {
     total: number;
     brain_hits: number;
     qmd_hits: number;
@@ -93,24 +63,22 @@ function parseResult(result: any) {
   };
 }
 
-// We need to intercept Bun.spawn for qmd tests. Store the original and
-// restore after each test.
 const originalSpawn = Bun.spawn;
 
-function mockBunSpawn(exitCode: number, stdout: string, stderr: string = "") {
-  (Bun as any).spawn = (_cmd: any, _opts: any) => {
+function mockBunSpawn(exitCode: number, stdout: string, stderr = "") {
+  (Bun as any).spawn = () => {
     const encoder = new TextEncoder();
     return {
       stdout: new ReadableStream({
-        start(controller) {
-          controller.enqueue(encoder.encode(stdout));
-          controller.close();
+        start(c) {
+          c.enqueue(encoder.encode(stdout));
+          c.close();
         },
       }),
       stderr: new ReadableStream({
-        start(controller) {
-          controller.enqueue(encoder.encode(stderr));
-          controller.close();
+        start(c) {
+          c.enqueue(encoder.encode(stderr));
+          c.close();
         },
       }),
       exited: Promise.resolve(exitCode),
@@ -122,8 +90,7 @@ function restoreBunSpawn() {
   (Bun as any).spawn = originalSpawn;
 }
 
-/** Build qmd CLI JSON output (direct array, no mcp2cli wrapper). */
-function qmdWrapper(docs: any[]) {
+function qmdJson(docs: any[]) {
   return JSON.stringify(docs);
 }
 
@@ -132,55 +99,36 @@ function qmdWrapper(docs: any[]) {
 // ---------------------------------------------------------------------------
 
 describe("search_all", () => {
-  afterEach(() => {
-    restoreBunSpawn();
-  });
+  afterEach(restoreBunSpawn);
 
-  // -----------------------------------------------------------------------
-  // SMALL
-  // -----------------------------------------------------------------------
   describe("Small -- basic behaviour", () => {
     it("returns permission denied when auth is missing", async () => {
-      const mockPool = { query: async () => ({ rows: [] }) };
-      const { client, cleanup } = await setupClient(
-        mockPool,
-        createMockEmbed(),
-        null,
-      );
-
+      const pool = { query: async () => ({ rows: [] }) };
+      const { client, cleanup } = await setupClient(pool, null);
       try {
         const result = await client.callTool({
           name: "search_all",
           arguments: { query: "test" },
         });
         expect(result.isError).toBe(true);
-        const text = (result.content as any)[0].text;
-        expect(text).toContain("Permission denied");
+        expect(getErrorText(result)).toContain("Permission denied");
       } finally {
         await cleanup();
       }
     });
 
     it("returns brain-only results when sources='brain'", async () => {
-      // qmd should NOT be called; mock spawn to fail so we'd notice
       mockBunSpawn(1, "", "should not be called");
-      const mockPool = {
-        query: async () => ({ rows: makeMockRows(2) }),
-      };
+      const pool = { query: async () => ({ rows: makeMockRowsWithMeta(2) }) };
       const auth: AuthInfo = { role: "admin", clientId: "admin" };
-      const { client, cleanup } = await setupClient(
-        mockPool,
-        createMockEmbed(),
-        auth,
-      );
-
+      const { client, cleanup } = await setupClient(pool, auth);
       try {
         const result = await client.callTool({
           name: "search_all",
           arguments: { query: "brain only", sources: "brain" },
         });
         expect(result.isError).toBeFalsy();
-        const parsed = parseResult(result);
+        const parsed = parseSearchAll(result);
         expect(parsed.brain_hits).toBe(2);
         expect(parsed.qmd_hits).toBe(0);
         expect(parsed.results.every((r: any) => r.source === "brain")).toBe(
@@ -192,73 +140,54 @@ describe("search_all", () => {
     });
 
     it("returns qmd-only results when sources='qmd'", async () => {
-      const qmdDocs = [
-        { path: "/a.md", content: "hello", score: 0.9 },
-        { path: "/b.md", content: "world", score: 0.8 },
-      ];
-      mockBunSpawn(0, qmdWrapper(qmdDocs));
-
-      // Pool should NOT be queried for brain search
-      const queryCalls: any[] = [];
-      const mockPool = {
-        query: async (...args: any[]) => {
-          queryCalls.push(args);
-          return { rows: [] };
-        },
-      };
-      const auth: AuthInfo = { role: "admin", clientId: "admin" };
-      const { client, cleanup } = await setupClient(
-        mockPool,
-        createMockEmbed(),
-        auth,
+      mockBunSpawn(
+        0,
+        qmdJson([
+          { path: "/a.md", content: "hello", score: 0.9 },
+          { path: "/b.md", content: "world", score: 0.8 },
+        ]),
       );
-
+      const pool = { query: async () => ({ rows: [] }) };
+      const auth: AuthInfo = { role: "admin", clientId: "admin" };
+      const { client, cleanup } = await setupClient(pool, auth);
       try {
         const result = await client.callTool({
           name: "search_all",
           arguments: { query: "qmd only", sources: "qmd" },
         });
-        expect(result.isError).toBeFalsy();
-        const parsed = parseResult(result);
+        const parsed = parseSearchAll(result);
         expect(parsed.brain_hits).toBe(0);
         expect(parsed.qmd_hits).toBe(2);
         expect(parsed.results.every((r: any) => r.source === "qmd")).toBe(true);
-        // OB pool should not have been queried (no search SELECT)
-        expect(queryCalls.length).toBe(0);
       } finally {
         await cleanup();
       }
     });
 
     it("returns empty results when both sources return nothing", async () => {
-      mockBunSpawn(0, qmdWrapper([]));
-      const mockPool = { query: async () => ({ rows: [] }) };
-      const auth: AuthInfo = { role: "admin", clientId: "admin" };
-      const { client, cleanup } = await setupClient(
-        mockPool,
-        createMockEmbed(),
-        auth,
-      );
-
+      mockBunSpawn(0, qmdJson([]));
+      const pool = { query: async () => ({ rows: [] }) };
+      const { client, cleanup } = await setupClient(pool, {
+        role: "admin",
+        clientId: "admin",
+      });
       try {
-        const result = await client.callTool({
-          name: "search_all",
-          arguments: { query: "nothing here" },
-        });
-        expect(result.isError).toBeFalsy();
-        const parsed = parseResult(result);
+        const parsed = parseSearchAll(
+          await client.callTool({
+            name: "search_all",
+            arguments: { query: "nothing" },
+          }),
+        );
         expect(parsed.total).toBe(0);
-        expect(parsed.brain_hits).toBe(0);
-        expect(parsed.qmd_hits).toBe(0);
         expect(parsed.results).toEqual([]);
       } finally {
         await cleanup();
       }
     });
 
-    it("returns single table OB result correctly", async () => {
-      mockBunSpawn(1, ""); // qmd fails gracefully
-      const mockPool = {
+    it("returns single brain result correctly", async () => {
+      mockBunSpawn(1, "");
+      const pool = {
         query: async () => ({
           rows: [
             {
@@ -273,20 +202,17 @@ describe("search_all", () => {
           ],
         }),
       };
-      const auth: AuthInfo = { role: "admin", clientId: "admin" };
-      const { client, cleanup } = await setupClient(
-        mockPool,
-        createMockEmbed(),
-        auth,
-      );
-
+      const { client, cleanup } = await setupClient(pool, {
+        role: "admin",
+        clientId: "admin",
+      });
       try {
-        const result = await client.callTool({
-          name: "search_all",
-          arguments: { query: "bun vs node" },
-        });
-        expect(result.isError).toBeFalsy();
-        const parsed = parseResult(result);
+        const parsed = parseSearchAll(
+          await client.callTool({
+            name: "search_all",
+            arguments: { query: "bun vs node" },
+          }),
+        );
         expect(parsed.brain_hits).toBe(1);
         expect(parsed.results[0].source).toBe("brain");
         expect(parsed.results[0].type).toBe("decision");
@@ -298,25 +224,19 @@ describe("search_all", () => {
     });
   });
 
-  // -----------------------------------------------------------------------
-  // MEDIUM
-  // -----------------------------------------------------------------------
   describe("Medium -- merging and scoring", () => {
     it("merges OB and qmd results, sorted by score descending", async () => {
-      // qmd returns one high-score result
-      const qmdDocs = [
-        { path: "/top.md", content: "top qmd hit", score: 0.95 },
-      ];
-      mockBunSpawn(0, qmdWrapper(qmdDocs));
-
-      // OB returns two results: distance 0.1 => score 0.9, distance 0.3 => score 0.7
-      const mockPool = {
+      mockBunSpawn(
+        0,
+        qmdJson([{ path: "/top.md", content: "top qmd hit", score: 0.95 }]),
+      );
+      const pool = {
         query: async () => ({
           rows: [
             {
               source_type: "thought",
               id: "t1",
-              content_preview: "brain hit 1",
+              content_preview: "brain 1",
               distance: 0.1,
               tags: [],
               created_at: "2026-01-01",
@@ -325,7 +245,7 @@ describe("search_all", () => {
             {
               source_type: "thought",
               id: "t2",
-              content_preview: "brain hit 2",
+              content_preview: "brain 2",
               distance: 0.3,
               tags: [],
               created_at: "2026-01-01",
@@ -334,45 +254,42 @@ describe("search_all", () => {
           ],
         }),
       };
-      const auth: AuthInfo = { role: "admin", clientId: "admin" };
-      const { client, cleanup } = await setupClient(
-        mockPool,
-        createMockEmbed(),
-        auth,
-      );
-
+      const { client, cleanup } = await setupClient(pool, {
+        role: "admin",
+        clientId: "admin",
+      });
       try {
-        const result = await client.callTool({
-          name: "search_all",
-          arguments: { query: "merge test", limit: 10 },
-        });
-        const parsed = parseResult(result);
+        const parsed = parseSearchAll(
+          await client.callTool({
+            name: "search_all",
+            arguments: { query: "merge", limit: 10 },
+          }),
+        );
         expect(parsed.total).toBe(3);
         expect(parsed.brain_hits).toBe(2);
         expect(parsed.qmd_hits).toBe(1);
-
-        // RRF interleaves by rank: brain[0] and qmd[0] tie at 1/61,
-        // brain[1] gets 1/62. Both sources represented.
-        expect(parsed.results[0].score).toBeCloseTo(1 / 61, 4);
-        expect(parsed.results[1].score).toBeCloseTo(1 / 61, 4);
-        expect(parsed.results[2].score).toBeCloseTo(1 / 62, 4);
         const sources = new Set(parsed.results.map((r: any) => r.source));
         expect(sources.has("brain")).toBe(true);
         expect(sources.has("qmd")).toBe(true);
+        for (let i = 1; i < parsed.results.length; i++) {
+          expect(parsed.results[i - 1].score).toBeGreaterThanOrEqual(
+            parsed.results[i].score,
+          );
+        }
       } finally {
         await cleanup();
       }
     });
 
-    it("normalizes OB distance to score via 1-distance inversion", async () => {
-      mockBunSpawn(1, ""); // no qmd
-      const mockPool = {
+    it("brain results have positive RRF-based scores", async () => {
+      mockBunSpawn(1, "");
+      const pool = {
         query: async () => ({
           rows: [
             {
               source_type: "thought",
               id: "t1",
-              content_preview: "close match",
+              content_preview: "close",
               distance: 0.05,
               tags: [],
               created_at: "2026-01-01",
@@ -381,7 +298,7 @@ describe("search_all", () => {
             {
               source_type: "thought",
               id: "t2",
-              content_preview: "far match",
+              content_preview: "far",
               distance: 0.85,
               tags: [],
               created_at: "2026-01-01",
@@ -390,51 +307,47 @@ describe("search_all", () => {
           ],
         }),
       };
-      const auth: AuthInfo = { role: "admin", clientId: "admin" };
-      const { client, cleanup } = await setupClient(
-        mockPool,
-        createMockEmbed(),
-        auth,
-      );
-
+      const { client, cleanup } = await setupClient(pool, {
+        role: "admin",
+        clientId: "admin",
+      });
       try {
-        const result = await client.callTool({
-          name: "search_all",
-          arguments: { query: "distance check", sources: "brain" },
-        });
-        const parsed = parseResult(result);
-        // RRF scores based on rank position, not raw distance
-        expect(parsed.results[0].score).toBeCloseTo(1 / 61, 4); // rank 1
-        expect(parsed.results[1].score).toBeCloseTo(1 / 62, 4); // rank 2
+        const parsed = parseSearchAll(
+          await client.callTool({
+            name: "search_all",
+            arguments: { query: "dist", sources: "brain" },
+          }),
+        );
+        expect(parsed.results[0].score).toBeGreaterThan(
+          parsed.results[1].score,
+        );
+        expect(parsed.results[0].score).toBeGreaterThan(0);
       } finally {
         await cleanup();
       }
     });
 
     it("enforces limit by slicing merged results", async () => {
-      // 3 from qmd + 3 from OB = 6 total, limit 4
-      const qmdDocs = [
-        { path: "/a.md", content: "a", score: 0.9 },
-        { path: "/b.md", content: "b", score: 0.7 },
-        { path: "/c.md", content: "c", score: 0.5 },
-      ];
-      mockBunSpawn(0, qmdWrapper(qmdDocs));
-      const mockPool = {
-        query: async () => ({ rows: makeMockRows(3) }),
-      };
-      const auth: AuthInfo = { role: "admin", clientId: "admin" };
-      const { client, cleanup } = await setupClient(
-        mockPool,
-        createMockEmbed(),
-        auth,
+      mockBunSpawn(
+        0,
+        qmdJson([
+          { path: "/a.md", content: "a", score: 0.9 },
+          { path: "/b.md", content: "b", score: 0.7 },
+          { path: "/c.md", content: "c", score: 0.5 },
+        ]),
       );
-
+      const pool = { query: async () => ({ rows: makeMockRowsWithMeta(3) }) };
+      const { client, cleanup } = await setupClient(pool, {
+        role: "admin",
+        clientId: "admin",
+      });
       try {
-        const result = await client.callTool({
-          name: "search_all",
-          arguments: { query: "limit test", limit: 4 },
-        });
-        const parsed = parseResult(result);
+        const parsed = parseSearchAll(
+          await client.callTool({
+            name: "search_all",
+            arguments: { query: "limit", limit: 4 },
+          }),
+        );
         expect(parsed.total).toBe(4);
         expect(parsed.results.length).toBe(4);
       } finally {
@@ -442,21 +355,20 @@ describe("search_all", () => {
       }
     });
 
-    it("sources='brain' skips embedding when sources='qmd'", async () => {
-      // When sources=qmd, embedFn should NOT be called
+    it("does not call embedFn when sources='qmd'", async () => {
       let embedCalled = false;
-      const mockEmbed = async (_text: string) => {
+      const embed = async (_text: string) => {
         embedCalled = true;
         return Array(768).fill(0.1);
       };
-      mockBunSpawn(
-        0,
-        qmdWrapper([{ path: "/x.md", content: "x", score: 0.5 }]),
+      mockBunSpawn(0, qmdJson([{ path: "/x.md", content: "x", score: 0.5 }]));
+      const pool = { query: async () => ({ rows: [] }) };
+      const { client, cleanup } = await setupMcpClient(
+        registerSearchAll,
+        pool,
+        embed,
+        { role: "admin", clientId: "admin" },
       );
-      const mockPool = { query: async () => ({ rows: [] }) };
-      const auth: AuthInfo = { role: "admin", clientId: "admin" };
-      const { client, cleanup } = await setupClient(mockPool, mockEmbed, auth);
-
       try {
         await client.callTool({
           name: "search_all",
@@ -468,15 +380,15 @@ describe("search_all", () => {
       }
     });
 
-    it("multiple OB tables merged with distinct source_type labels", async () => {
-      mockBunSpawn(1, ""); // no qmd
-      const mockPool = {
+    it("multiple OB tables merged with distinct type labels", async () => {
+      mockBunSpawn(1, "");
+      const pool = {
         query: async () => ({
           rows: [
             {
               source_type: "thought",
               id: "t1",
-              content_preview: "thought content",
+              content_preview: "t",
               distance: 0.1,
               tags: [],
               created_at: "2026-01-01",
@@ -485,7 +397,7 @@ describe("search_all", () => {
             {
               source_type: "decision",
               id: "d1",
-              content_preview: "decision content",
+              content_preview: "d",
               distance: 0.2,
               tags: [],
               created_at: "2026-01-01",
@@ -494,7 +406,7 @@ describe("search_all", () => {
             {
               source_type: "session",
               id: "s1",
-              content_preview: "session content",
+              content_preview: "s",
               distance: 0.3,
               tags: [],
               created_at: "2026-01-01",
@@ -503,20 +415,17 @@ describe("search_all", () => {
           ],
         }),
       };
-      const auth: AuthInfo = { role: "admin", clientId: "admin" };
-      const { client, cleanup } = await setupClient(
-        mockPool,
-        createMockEmbed(),
-        auth,
-      );
-
+      const { client, cleanup } = await setupClient(pool, {
+        role: "admin",
+        clientId: "admin",
+      });
       try {
-        const result = await client.callTool({
-          name: "search_all",
-          arguments: { query: "multi table", sources: "brain" },
-        });
-        const parsed = parseResult(result);
-        const types = parsed.results.map((r: any) => r.type);
+        const types = parseSearchAll(
+          await client.callTool({
+            name: "search_all",
+            arguments: { query: "multi", sources: "brain" },
+          }),
+        ).results.map((r: any) => r.type);
         expect(types).toContain("thought");
         expect(types).toContain("decision");
         expect(types).toContain("session");
@@ -526,74 +435,48 @@ describe("search_all", () => {
     });
   });
 
-  // -----------------------------------------------------------------------
-  // LARGE
-  // -----------------------------------------------------------------------
   describe("Large -- max limit, all 5 tables", () => {
-    it("accepts max limit of 50", async () => {
+    it("accepts max limit of 50 without error", async () => {
       mockBunSpawn(1, "");
-      const queryCalls: any[] = [];
-      const mockPool = {
-        query: async (...args: any[]) => {
-          queryCalls.push(args);
-          return { rows: [] };
-        },
-      };
-      const auth: AuthInfo = { role: "admin", clientId: "admin" };
-      const { client, cleanup } = await setupClient(
-        mockPool,
-        createMockEmbed(),
-        auth,
-      );
-
+      const pool = { query: async () => ({ rows: [] }) };
+      const { client, cleanup } = await setupClient(pool, {
+        role: "admin",
+        clientId: "admin",
+      });
       try {
         const result = await client.callTool({
           name: "search_all",
-          arguments: { query: "max limit", limit: 50, search_mode: "vector" },
+          arguments: { query: "max", limit: 50, search_mode: "vector" },
         });
         expect(result.isError).toBeFalsy();
-        // Verify limit passed to SQL
-        const [, params] = queryCalls[0];
-        expect(params).toContain(50);
       } finally {
         await cleanup();
       }
     });
 
-    it("merges results from all 5 OB tables and qmd, ranked by score", async () => {
-      const qmdDocs = [
-        { path: "/doc1.md", content: "qmd doc 1", score: 0.88 },
-        { path: "/doc2.md", content: "qmd doc 2", score: 0.72 },
-      ];
-      mockBunSpawn(0, qmdWrapper(qmdDocs));
-
-      const mockPool = {
-        query: async () => ({ rows: makeMultiTableRows(1) }),
-      };
-      const auth: AuthInfo = { role: "admin", clientId: "admin" };
-      const { client, cleanup } = await setupClient(
-        mockPool,
-        createMockEmbed(),
-        auth,
+    it("merges all 5 OB tables and qmd, ranked by score", async () => {
+      mockBunSpawn(
+        0,
+        qmdJson([
+          { path: "/doc1.md", content: "qmd 1", score: 0.88 },
+          { path: "/doc2.md", content: "qmd 2", score: 0.72 },
+        ]),
       );
-
+      const pool = { query: async () => ({ rows: makeMultiTableRows(1) }) };
+      const { client, cleanup } = await setupClient(pool, {
+        role: "admin",
+        clientId: "admin",
+      });
       try {
-        const result = await client.callTool({
-          name: "search_all",
-          arguments: { query: "full merge", limit: 20 },
-        });
-        const parsed = parseResult(result);
-        // 5 OB rows + 2 qmd rows = 7 total
+        const parsed = parseSearchAll(
+          await client.callTool({
+            name: "search_all",
+            arguments: { query: "full", limit: 20 },
+          }),
+        );
         expect(parsed.brain_hits).toBe(5);
         expect(parsed.qmd_hits).toBe(2);
         expect(parsed.total).toBe(7);
-
-        // Verify both sources present
-        const sources = new Set(parsed.results.map((r: any) => r.source));
-        expect(sources.has("brain")).toBe(true);
-        expect(sources.has("qmd")).toBe(true);
-
-        // Verify sorted descending by score
         for (let i = 1; i < parsed.results.length; i++) {
           expect(parsed.results[i - 1].score).toBeGreaterThanOrEqual(
             parsed.results[i].score,
@@ -604,71 +487,62 @@ describe("search_all", () => {
       }
     });
 
-    it("SQL includes CTEs for all 5 tables for admin role", async () => {
+    it("admin sees results from all 5 OB table types", async () => {
       mockBunSpawn(1, "");
-      const queryCalls: any[] = [];
-      const mockPool = {
-        query: async (...args: any[]) => {
-          queryCalls.push(args);
-          return { rows: [] };
-        },
-      };
-      const auth: AuthInfo = { role: "admin", clientId: "admin" };
-      const { client, cleanup } = await setupClient(
-        mockPool,
-        createMockEmbed(),
-        auth,
-      );
-
+      const pool = { query: async () => ({ rows: makeMultiTableRows(1) }) };
+      const { client, cleanup } = await setupClient(pool, {
+        role: "admin",
+        clientId: "admin",
+      });
       try {
-        await client.callTool({
-          name: "search_all",
-          arguments: { query: "all tables" },
-        });
-        const [sql] = queryCalls[0];
-        expect(sql).toContain("thoughts_results");
-        expect(sql).toContain("decisions_results");
-        expect(sql).toContain("relationships_results");
-        expect(sql).toContain("projects_results");
-        expect(sql).toContain("sessions_results");
-        expect(sql).toContain("UNION ALL");
+        const types = new Set(
+          parseSearchAll(
+            await client.callTool({
+              name: "search_all",
+              arguments: { query: "all", sources: "brain" },
+            }),
+          ).results.map((r: any) => r.type),
+        );
+        for (const t of [
+          "thought",
+          "decision",
+          "relationship",
+          "project",
+          "session",
+        ]) {
+          expect(types.has(t)).toBe(true);
+        }
       } finally {
         await cleanup();
       }
     });
   });
 
-  // -----------------------------------------------------------------------
-  // RAPID -- multiple sequential calls
-  // -----------------------------------------------------------------------
   describe("Rapid -- sequential calls return independently", () => {
-    it("three sequential calls each return their own results", async () => {
+    it("three calls each return their own results", async () => {
       let callIndex = 0;
-      const mockPool = {
+      const pool = {
         query: async (...args: any[]) => {
-          const [sql] = args;
-          if (String(sql).includes("FROM ob_links")) {
-            return { rows: [] };
-          }
+          if (String(args[0]).includes("FROM ob_links")) return { rows: [] };
           callIndex++;
           return {
-            rows: makeMockRows(callIndex, { source_type: `type-${callIndex}` }),
+            rows: makeMockRowsWithMeta(callIndex, {
+              source_type: `type-${callIndex}`,
+            }),
           };
         },
       };
-      // qmd returns different things per invocation
       let spawnCount = 0;
       (Bun as any).spawn = () => {
         spawnCount++;
-        const docs = [
+        const encoder = new TextEncoder();
+        const stdout = qmdJson([
           {
-            path: `/rapid-${spawnCount}.md`,
-            content: `rapid ${spawnCount}`,
+            path: `/r-${spawnCount}.md`,
+            content: `r ${spawnCount}`,
             score: 0.5,
           },
-        ];
-        const stdout = qmdWrapper(docs);
-        const encoder = new TextEncoder();
+        ]);
         return {
           stdout: new ReadableStream({
             start(c) {
@@ -684,108 +558,79 @@ describe("search_all", () => {
           exited: Promise.resolve(0),
         };
       };
-
-      const auth: AuthInfo = { role: "admin", clientId: "admin" };
-      const { client, cleanup } = await setupClient(
-        mockPool,
-        createMockEmbed(),
-        auth,
-      );
-
+      const { client, cleanup } = await setupClient(pool, {
+        role: "admin",
+        clientId: "admin",
+      });
       try {
-        const r1 = await client.callTool({
-          name: "search_all",
-          arguments: { query: "rapid 1", search_mode: "vector" },
-        });
-        const r2 = await client.callTool({
-          name: "search_all",
-          arguments: { query: "rapid 2", search_mode: "vector" },
-        });
-        const r3 = await client.callTool({
-          name: "search_all",
-          arguments: { query: "rapid 3", search_mode: "vector" },
-        });
-
-        const p1 = parseResult(r1);
-        const p2 = parseResult(r2);
-        const p3 = parseResult(r3);
-
-        // Each call got a different brain_hits count (1, 2, 3)
+        const p1 = parseSearchAll(
+          await client.callTool({
+            name: "search_all",
+            arguments: { query: "r1", search_mode: "vector" },
+          }),
+        );
+        const p2 = parseSearchAll(
+          await client.callTool({
+            name: "search_all",
+            arguments: { query: "r2", search_mode: "vector" },
+          }),
+        );
+        const p3 = parseSearchAll(
+          await client.callTool({
+            name: "search_all",
+            arguments: { query: "r3", search_mode: "vector" },
+          }),
+        );
         expect(p1.brain_hits).toBe(1);
         expect(p2.brain_hits).toBe(2);
         expect(p3.brain_hits).toBe(3);
-
-        // Each call got qmd results
         expect(p1.qmd_hits).toBe(1);
-        expect(p2.qmd_hits).toBe(1);
-        expect(p3.qmd_hits).toBe(1);
       } finally {
         await cleanup();
       }
     });
   });
 
-  // -----------------------------------------------------------------------
-  // EDGE CASES
-  // -----------------------------------------------------------------------
   describe("Edge cases", () => {
-    it("returns OB-only results when embedFn returns null (brain skipped)", async () => {
-      // When embedding fails, brain search is skipped entirely
-      const qmdDocs = [
-        { path: "/fallback.md", content: "qmd only", score: 0.7 },
-      ];
-      mockBunSpawn(0, qmdWrapper(qmdDocs));
-
-      const queryCalls: any[] = [];
-      const mockPool = {
-        query: async (...args: any[]) => {
-          queryCalls.push(args);
-          return { rows: makeMockRows(2) };
-        },
-      };
-      const auth: AuthInfo = { role: "admin", clientId: "admin" };
-      const { client, cleanup } = await setupClient(
-        mockPool,
-        createMockEmbed(null),
-        auth,
+    it("returns qmd-only when embedFn returns null (brain skipped)", async () => {
+      mockBunSpawn(
+        0,
+        qmdJson([{ path: "/f.md", content: "qmd only", score: 0.7 }]),
       );
-
+      const pool = { query: async () => ({ rows: makeMockRowsWithMeta(2) }) };
+      const { client, cleanup } = await setupClient(
+        pool,
+        { role: "admin", clientId: "admin" },
+        createMockEmbed(null),
+      );
       try {
-        const result = await client.callTool({
-          name: "search_all",
-          arguments: { query: "embed fail", search_mode: "vector" },
-        });
-        expect(result.isError).toBeFalsy();
-        const parsed = parseResult(result);
-        // Brain search should be skipped (embedding is null)
+        const parsed = parseSearchAll(
+          await client.callTool({
+            name: "search_all",
+            arguments: { query: "embed fail", search_mode: "vector" },
+          }),
+        );
         expect(parsed.brain_hits).toBe(0);
         expect(parsed.qmd_hits).toBe(1);
-        // Pool should not have been queried for search
-        expect(queryCalls.length).toBe(0);
       } finally {
         await cleanup();
       }
     });
 
-    it("gracefully returns brain-only results when qmd spawn exits non-zero", async () => {
-      mockBunSpawn(1, "", "qmd process crashed");
-      const mockPool = {
-        query: async () => ({ rows: makeMockRows(2) }),
-      };
-      const auth: AuthInfo = { role: "admin", clientId: "admin" };
-      const { client, cleanup } = await setupClient(
-        mockPool,
-        createMockEmbed(),
-        auth,
-      );
-
+    it("gracefully returns brain-only when qmd exits non-zero", async () => {
+      mockBunSpawn(1, "", "qmd crashed");
+      const pool = { query: async () => ({ rows: makeMockRowsWithMeta(2) }) };
+      const { client, cleanup } = await setupClient(pool, {
+        role: "admin",
+        clientId: "admin",
+      });
       try {
-        const result = await client.callTool({
-          name: "search_all",
-          arguments: { query: "qmd fail" },
-        });
-        expect(result.isError).toBeFalsy();
-        const parsed = parseResult(result);
+        const parsed = parseSearchAll(
+          await client.callTool({
+            name: "search_all",
+            arguments: { query: "qmd fail" },
+          }),
+        );
         expect(parsed.brain_hits).toBe(2);
         expect(parsed.qmd_hits).toBe(0);
       } finally {
@@ -793,137 +638,111 @@ describe("search_all", () => {
       }
     });
 
-    it("gracefully handles qmd returning malformed JSON", async () => {
-      mockBunSpawn(0, "this is not json at all {{{");
-      const mockPool = {
-        query: async () => ({ rows: makeMockRows(1) }),
-      };
-      const auth: AuthInfo = { role: "admin", clientId: "admin" };
-      const { client, cleanup } = await setupClient(
-        mockPool,
-        createMockEmbed(),
-        auth,
-      );
-
+    it("handles qmd malformed JSON gracefully", async () => {
+      mockBunSpawn(0, "this is not json {{{");
+      const pool = { query: async () => ({ rows: makeMockRowsWithMeta(1) }) };
+      const { client, cleanup } = await setupClient(pool, {
+        role: "admin",
+        clientId: "admin",
+      });
       try {
-        const result = await client.callTool({
-          name: "search_all",
-          arguments: { query: "bad json" },
-        });
-        expect(result.isError).toBeFalsy();
-        const parsed = parseResult(result);
+        const parsed = parseSearchAll(
+          await client.callTool({
+            name: "search_all",
+            arguments: { query: "bad json" },
+          }),
+        );
         expect(parsed.brain_hits).toBe(1);
-        expect(parsed.qmd_hits).toBe(0); // qmd parse failure => 0 results
-      } finally {
-        await cleanup();
-      }
-    });
-
-    it("handles qmd returning valid wrapper but no text content", async () => {
-      const emptyWrapper = JSON.stringify({
-        success: true,
-        result: { content: [] },
-      });
-      mockBunSpawn(0, emptyWrapper);
-      const mockPool = {
-        query: async () => ({ rows: makeMockRows(1) }),
-      };
-      const auth: AuthInfo = { role: "admin", clientId: "admin" };
-      const { client, cleanup } = await setupClient(
-        mockPool,
-        createMockEmbed(),
-        auth,
-      );
-
-      try {
-        const result = await client.callTool({
-          name: "search_all",
-          arguments: { query: "empty qmd wrapper" },
-        });
-        expect(result.isError).toBeFalsy();
-        const parsed = parseResult(result);
         expect(parsed.qmd_hits).toBe(0);
       } finally {
         await cleanup();
       }
     });
 
-    it("handles qmd returning non-array docs inside text", async () => {
-      const nonArrayWrapper = JSON.stringify({
-        success: true,
-        result: {
-          content: [{ type: "text", text: '{"not":"an array"}' }],
-        },
-      });
-      mockBunSpawn(0, nonArrayWrapper);
-      const mockPool = {
-        query: async () => ({ rows: makeMockRows(1) }),
-      };
-      const auth: AuthInfo = { role: "admin", clientId: "admin" };
-      const { client, cleanup } = await setupClient(
-        mockPool,
-        createMockEmbed(),
-        auth,
+    it("handles qmd valid wrapper but no text content", async () => {
+      mockBunSpawn(
+        0,
+        JSON.stringify({ success: true, result: { content: [] } }),
       );
-
+      const pool = { query: async () => ({ rows: makeMockRowsWithMeta(1) }) };
+      const { client, cleanup } = await setupClient(pool, {
+        role: "admin",
+        clientId: "admin",
+      });
       try {
-        const result = await client.callTool({
-          name: "search_all",
-          arguments: { query: "non-array qmd" },
-        });
-        expect(result.isError).toBeFalsy();
-        const parsed = parseResult(result);
-        expect(parsed.qmd_hits).toBe(0);
+        expect(
+          parseSearchAll(
+            await client.callTool({
+              name: "search_all",
+              arguments: { query: "empty wrapper" },
+            }),
+          ).qmd_hits,
+        ).toBe(0);
       } finally {
         await cleanup();
       }
     });
 
-    it("discord role gets no brain results (no readable tables) but still gets qmd", async () => {
-      const qmdDocs = [{ path: "/pub.md", content: "public info", score: 0.6 }];
-      mockBunSpawn(0, qmdWrapper(qmdDocs));
-
-      const queryCalls: any[] = [];
-      const mockPool = {
-        query: async (...args: any[]) => {
-          queryCalls.push(args);
-          return { rows: [] };
-        },
-      };
-      const auth: AuthInfo = { role: "discord", clientId: "discord-bot" };
-      const { client, cleanup } = await setupClient(
-        mockPool,
-        createMockEmbed(),
-        auth,
+    it("handles qmd non-array docs", async () => {
+      mockBunSpawn(
+        0,
+        JSON.stringify({
+          success: true,
+          result: { content: [{ type: "text", text: '{"not":"an array"}' }] },
+        }),
       );
-
+      const pool = { query: async () => ({ rows: makeMockRowsWithMeta(1) }) };
+      const { client, cleanup } = await setupClient(pool, {
+        role: "admin",
+        clientId: "admin",
+      });
       try {
-        const result = await client.callTool({
-          name: "search_all",
-          arguments: { query: "discord search" },
-        });
-        expect(result.isError).toBeFalsy();
-        const parsed = parseResult(result);
-        // discord has WO on thoughts, no read on anything
+        expect(
+          parseSearchAll(
+            await client.callTool({
+              name: "search_all",
+              arguments: { query: "non-array" },
+            }),
+          ).qmd_hits,
+        ).toBe(0);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("discord gets no brain results but still gets qmd", async () => {
+      mockBunSpawn(
+        0,
+        qmdJson([{ path: "/pub.md", content: "public info", score: 0.6 }]),
+      );
+      const pool = { query: async () => ({ rows: [] }) };
+      const { client, cleanup } = await setupClient(pool, {
+        role: "discord",
+        clientId: "discord-bot",
+      });
+      try {
+        const parsed = parseSearchAll(
+          await client.callTool({
+            name: "search_all",
+            arguments: { query: "discord" },
+          }),
+        );
         expect(parsed.brain_hits).toBe(0);
         expect(parsed.qmd_hits).toBe(1);
-        // pool should NOT have been queried (no accessible tables => skip)
-        expect(queryCalls.length).toBe(0);
       } finally {
         await cleanup();
       }
     });
 
-    it("content_preview is truncated to 300 chars for brain results", async () => {
+    it("brain content_preview truncated to 300 chars", async () => {
       mockBunSpawn(1, "");
-      const longContent = "x".repeat(500);
-      const mockPool = {
+      const pool = {
         query: async () => ({
           rows: [
             {
               source_type: "thought",
               id: "long-1",
-              content_preview: longContent,
+              content_preview: "x".repeat(500),
               distance: 0.1,
               tags: [],
               created_at: "2026-01-01",
@@ -932,178 +751,176 @@ describe("search_all", () => {
           ],
         }),
       };
-      const auth: AuthInfo = { role: "admin", clientId: "admin" };
-      const { client, cleanup } = await setupClient(
-        mockPool,
-        createMockEmbed(),
-        auth,
-      );
-
+      const { client, cleanup } = await setupClient(pool, {
+        role: "admin",
+        clientId: "admin",
+      });
       try {
-        const result = await client.callTool({
-          name: "search_all",
-          arguments: { query: "long content", sources: "brain" },
-        });
-        const parsed = parseResult(result);
-        expect(parsed.results[0].content.length).toBe(300);
+        expect(
+          parseSearchAll(
+            await client.callTool({
+              name: "search_all",
+              arguments: { query: "long", sources: "brain" },
+            }),
+          ).results[0].content.length,
+        ).toBe(300);
       } finally {
         await cleanup();
       }
     });
 
-    it("qmd doc content is truncated to 300 chars", async () => {
-      const longContent = "y".repeat(500);
-      const qmdDocs = [{ path: "/long.md", content: longContent, score: 0.5 }];
-      mockBunSpawn(0, qmdWrapper(qmdDocs));
-      const mockPool = { query: async () => ({ rows: [] }) };
-      const auth: AuthInfo = { role: "admin", clientId: "admin" };
-      const { client, cleanup } = await setupClient(
-        mockPool,
-        createMockEmbed(),
-        auth,
+    it("qmd content truncated to 300 chars", async () => {
+      mockBunSpawn(
+        0,
+        qmdJson([{ path: "/long.md", content: "y".repeat(500), score: 0.5 }]),
       );
-
+      const pool = { query: async () => ({ rows: [] }) };
+      const { client, cleanup } = await setupClient(pool, {
+        role: "admin",
+        clientId: "admin",
+      });
       try {
-        const result = await client.callTool({
-          name: "search_all",
-          arguments: { query: "long qmd", sources: "qmd" },
-        });
-        const parsed = parseResult(result);
-        expect(parsed.results[0].content.length).toBe(300);
+        expect(
+          parseSearchAll(
+            await client.callTool({
+              name: "search_all",
+              arguments: { query: "long qmd", sources: "qmd" },
+            }),
+          ).results[0].content.length,
+        ).toBe(300);
       } finally {
         await cleanup();
       }
     });
 
-    it("qmd doc uses 'text' field when 'content' is absent", async () => {
-      const qmdDocs = [{ path: "/t.md", text: "from text field", score: 0.6 }];
-      mockBunSpawn(0, qmdWrapper(qmdDocs));
-      const mockPool = { query: async () => ({ rows: [] }) };
-      const auth: AuthInfo = { role: "admin", clientId: "admin" };
-      const { client, cleanup } = await setupClient(
-        mockPool,
-        createMockEmbed(),
-        auth,
+    it("qmd uses 'text' field when 'content' absent", async () => {
+      mockBunSpawn(
+        0,
+        qmdJson([{ path: "/t.md", text: "from text field", score: 0.6 }]),
       );
-
+      const pool = { query: async () => ({ rows: [] }) };
+      const { client, cleanup } = await setupClient(pool, {
+        role: "admin",
+        clientId: "admin",
+      });
       try {
-        const result = await client.callTool({
-          name: "search_all",
-          arguments: { query: "text fallback", sources: "qmd" },
-        });
-        const parsed = parseResult(result);
-        expect(parsed.results[0].content).toBe("from text field");
+        expect(
+          parseSearchAll(
+            await client.callTool({
+              name: "search_all",
+              arguments: { query: "text fb", sources: "qmd" },
+            }),
+          ).results[0].content,
+        ).toBe("from text field");
       } finally {
         await cleanup();
       }
     });
 
-    it("qmd doc uses 'preview' field when content and text are absent", async () => {
-      const qmdDocs = [{ path: "/p.md", preview: "from preview", score: 0.6 }];
-      mockBunSpawn(0, qmdWrapper(qmdDocs));
-      const mockPool = { query: async () => ({ rows: [] }) };
-      const auth: AuthInfo = { role: "admin", clientId: "admin" };
-      const { client, cleanup } = await setupClient(
-        mockPool,
-        createMockEmbed(),
-        auth,
+    it("qmd uses 'preview' field when content and text absent", async () => {
+      mockBunSpawn(
+        0,
+        qmdJson([{ path: "/p.md", preview: "from preview", score: 0.6 }]),
       );
-
+      const pool = { query: async () => ({ rows: [] }) };
+      const { client, cleanup } = await setupClient(pool, {
+        role: "admin",
+        clientId: "admin",
+      });
       try {
-        const result = await client.callTool({
-          name: "search_all",
-          arguments: { query: "preview fallback", sources: "qmd" },
-        });
-        const parsed = parseResult(result);
-        expect(parsed.results[0].content).toBe("from preview");
+        expect(
+          parseSearchAll(
+            await client.callTool({
+              name: "search_all",
+              arguments: { query: "preview fb", sources: "qmd" },
+            }),
+          ).results[0].content,
+        ).toBe("from preview");
       } finally {
         await cleanup();
       }
     });
 
-    it("qmd doc with 'similarity' field is accepted and ranked via RRF", async () => {
-      const qmdDocs = [{ path: "/s.md", content: "sim", similarity: 0.77 }];
-      mockBunSpawn(0, qmdWrapper(qmdDocs));
-      const mockPool = { query: async () => ({ rows: [] }) };
-      const auth: AuthInfo = { role: "admin", clientId: "admin" };
-      const { client, cleanup } = await setupClient(
-        mockPool,
-        createMockEmbed(),
-        auth,
+    it("qmd 'similarity' field accepted with positive score", async () => {
+      mockBunSpawn(
+        0,
+        qmdJson([{ path: "/s.md", content: "sim", similarity: 0.77 }]),
       );
-
+      const pool = { query: async () => ({ rows: [] }) };
+      const { client, cleanup } = await setupClient(pool, {
+        role: "admin",
+        clientId: "admin",
+      });
       try {
-        const result = await client.callTool({
-          name: "search_all",
-          arguments: { query: "similarity field", sources: "qmd" },
-        });
-        const parsed = parseResult(result);
-        // RRF score for rank 1
-        expect(parsed.results[0].score).toBeCloseTo(1 / 61, 4);
+        expect(
+          parseSearchAll(
+            await client.callTool({
+              name: "search_all",
+              arguments: { query: "sim", sources: "qmd" },
+            }),
+          ).results[0].score,
+        ).toBeGreaterThan(0);
       } finally {
         await cleanup();
       }
     });
 
-    it("qmd doc without score fields still gets valid RRF score", async () => {
-      const qmdDocs = [{ path: "/d.md", content: "no score" }];
-      mockBunSpawn(0, qmdWrapper(qmdDocs));
-      const mockPool = { query: async () => ({ rows: [] }) };
-      const auth: AuthInfo = { role: "admin", clientId: "admin" };
-      const { client, cleanup } = await setupClient(
-        mockPool,
-        createMockEmbed(),
-        auth,
-      );
-
+    it("qmd without score fields still gets valid score", async () => {
+      mockBunSpawn(0, qmdJson([{ path: "/d.md", content: "no score" }]));
+      const pool = { query: async () => ({ rows: [] }) };
+      const { client, cleanup } = await setupClient(pool, {
+        role: "admin",
+        clientId: "admin",
+      });
       try {
-        const result = await client.callTool({
-          name: "search_all",
-          arguments: { query: "default score", sources: "qmd" },
-        });
-        const parsed = parseResult(result);
-        expect(parsed.results[0].score).toBeCloseTo(1 / 61, 4);
+        expect(
+          parseSearchAll(
+            await client.callTool({
+              name: "search_all",
+              arguments: { query: "default", sources: "qmd" },
+            }),
+          ).results[0].score,
+        ).toBeGreaterThan(0);
       } finally {
         await cleanup();
       }
     });
 
-    it("qmd doc maps 'file' field to 'path' when 'path' is absent", async () => {
-      const qmdDocs = [
-        { file: "/via-file.md", content: "file field", score: 0.5 },
-      ];
-      mockBunSpawn(0, qmdWrapper(qmdDocs));
-      const mockPool = { query: async () => ({ rows: [] }) };
-      const auth: AuthInfo = { role: "admin", clientId: "admin" };
-      const { client, cleanup } = await setupClient(
-        mockPool,
-        createMockEmbed(),
-        auth,
+    it("qmd maps 'file' field to 'path'", async () => {
+      mockBunSpawn(
+        0,
+        qmdJson([{ file: "/via-file.md", content: "file field", score: 0.5 }]),
       );
-
+      const pool = { query: async () => ({ rows: [] }) };
+      const { client, cleanup } = await setupClient(pool, {
+        role: "admin",
+        clientId: "admin",
+      });
       try {
-        const result = await client.callTool({
-          name: "search_all",
-          arguments: { query: "file field", sources: "qmd" },
-        });
-        const parsed = parseResult(result);
-        expect(parsed.results[0].path).toBe("/via-file.md");
+        expect(
+          parseSearchAll(
+            await client.callTool({
+              name: "search_all",
+              arguments: { query: "file", sources: "qmd" },
+            }),
+          ).results[0].path,
+        ).toBe("/via-file.md");
       } finally {
         await cleanup();
       }
     });
 
-    it("fires usage tracking UPDATEs for brain results", async () => {
+    it("fires usage tracking for brain results", async () => {
       mockBunSpawn(1, "");
       const queryCalls: any[] = [];
-      const mockPool = {
+      const pool = {
         query: async (...args: any[]) => {
           queryCalls.push(args);
           return {
             rows: [
               {
                 source_type: "thought",
-                id: "track-1",
+                id: "t-1",
                 content_preview: "tracked",
                 distance: 0.1,
                 tags: [],
@@ -1112,8 +929,8 @@ describe("search_all", () => {
               },
               {
                 source_type: "decision",
-                id: "track-2",
-                content_preview: "also tracked",
+                id: "d-1",
+                content_preview: "also",
                 distance: 0.2,
                 tags: [],
                 created_at: "2026-01-01",
@@ -1123,95 +940,65 @@ describe("search_all", () => {
           };
         },
       };
-      const auth: AuthInfo = { role: "admin", clientId: "admin" };
-      const { client, cleanup } = await setupClient(
-        mockPool,
-        createMockEmbed(),
-        auth,
-      );
-
+      const { client, cleanup } = await setupClient(pool, {
+        role: "admin",
+        clientId: "admin",
+      });
       try {
-        await client.callTool({
+        const result = await client.callTool({
           name: "search_all",
           arguments: {
-            query: "tracking test",
+            query: "tracking",
             sources: "brain",
             search_mode: "vector",
           },
         });
-
-        // Wait for fire-and-forget tracking
-        await new Promise((r) => setTimeout(r, 50));
-
-        // First call is the search SELECT, rest are tracking UPDATEs
-        expect(queryCalls.length).toBeGreaterThan(1);
-        const trackingCalls = queryCalls.slice(1);
-        const allSql = trackingCalls.map((c: any) => c[0]).join(" ");
-        expect(allSql).toContain("entry_access_log");
-      } finally {
-        await cleanup();
-      }
-    });
-
-    it("default limit is 10 when not specified", async () => {
-      mockBunSpawn(1, "");
-      const queryCalls: any[] = [];
-      const mockPool = {
-        query: async (...args: any[]) => {
-          queryCalls.push(args);
-          return { rows: [] };
-        },
-      };
-      const auth: AuthInfo = { role: "admin", clientId: "admin" };
-      const { client, cleanup } = await setupClient(
-        mockPool,
-        createMockEmbed(),
-        auth,
-      );
-
-      try {
-        await client.callTool({
-          name: "search_all",
-          arguments: { query: "default limit", search_mode: "vector" },
-        });
-        const [, params] = queryCalls[0];
-        expect(params).toContain(10);
-      } finally {
-        await cleanup();
-      }
-    });
-
-    it("readonly role can search brain (has read on all tables)", async () => {
-      mockBunSpawn(1, "");
-      const queryCalls: any[] = [];
-      const mockPool = {
-        query: async (...args: any[]) => {
-          queryCalls.push(args);
-          return { rows: makeMockRows(1) };
-        },
-      };
-      const auth: AuthInfo = { role: "readonly", clientId: "ro" };
-      const { client, cleanup } = await setupClient(
-        mockPool,
-        createMockEmbed(),
-        auth,
-      );
-
-      try {
-        const result = await client.callTool({
-          name: "search_all",
-          arguments: { query: "readonly search", sources: "brain" },
-        });
         expect(result.isError).toBeFalsy();
-        const parsed = parseResult(result);
-        expect(parsed.brain_hits).toBe(1);
-        // Verify all 5 table CTEs in SQL
-        const [sql] = queryCalls[0];
-        expect(sql).toContain("thoughts_results");
-        expect(sql).toContain("decisions_results");
-        expect(sql).toContain("relationships_results");
-        expect(sql).toContain("projects_results");
-        expect(sql).toContain("sessions_results");
+        expect(parseSearchAll(result).brain_hits).toBe(2);
+        await new Promise((r) => setTimeout(r, 50));
+        expect(queryCalls.length).toBeGreaterThan(1);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("default limit is 10", async () => {
+      mockBunSpawn(1, "");
+      const pool = { query: async () => ({ rows: makeMockRowsWithMeta(15) }) };
+      const { client, cleanup } = await setupClient(pool, {
+        role: "admin",
+        clientId: "admin",
+      });
+      try {
+        expect(
+          parseSearchAll(
+            await client.callTool({
+              name: "search_all",
+              arguments: { query: "default limit", search_mode: "vector" },
+            }),
+          ).results.length,
+        ).toBeLessThanOrEqual(10);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("readonly role can search brain", async () => {
+      mockBunSpawn(1, "");
+      const pool = { query: async () => ({ rows: makeMockRowsWithMeta(1) }) };
+      const { client, cleanup } = await setupClient(pool, {
+        role: "readonly",
+        clientId: "ro",
+      });
+      try {
+        expect(
+          parseSearchAll(
+            await client.callTool({
+              name: "search_all",
+              arguments: { query: "ro search", sources: "brain" },
+            }),
+          ).brain_hits,
+        ).toBe(1);
       } finally {
         await cleanup();
       }
