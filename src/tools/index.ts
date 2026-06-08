@@ -30,6 +30,9 @@ import { registerAppendSessionEvent } from "./append-session-event.ts";
 import { registerSessionContext } from "./session-context.ts";
 import { registerSessionStart } from "./session-start.ts";
 import { registerSessionWrap } from "./session-wrap.ts";
+import { registerUpsertEntity } from "./upsert-entity.ts";
+import { registerLinkEntities } from "./link-entities.ts";
+import { registerAdjacentContext } from "./adjacent-context.ts";
 
 export interface ToolDeps {
   pool: pg.Pool;
@@ -66,4 +69,7 @@ export function registerAllTools(server: McpServer, deps: ToolDeps): void {
   registerSessionContext(server, deps);
   registerSessionStart(server, deps);
   registerSessionWrap(server, deps);
+  registerUpsertEntity(server, deps);
+  registerLinkEntities(server, deps);
+  registerAdjacentContext(server, deps);
 }
