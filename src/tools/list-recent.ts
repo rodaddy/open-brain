@@ -13,6 +13,18 @@ import {
   VALID_TIERS,
 } from "./table-constants.ts";
 
+function buildWhereClause(
+  alias: string,
+  includeArchived: boolean,
+  tier?: Tier,
+): string {
+  const archiveFilter = includeArchived
+    ? ""
+    : ` AND ${alias}.archived_at IS NULL`;
+  const tierFilter = tier ? ` AND ${alias}.tier = '${tier}'` : "";
+  return `WHERE ${alias}.created_at >= NOW() - INTERVAL '1 day' * $1${archiveFilter}${tierFilter}`;
+}
+
 function buildTableSelect(
   table: Table,
   includeArchived: boolean,
@@ -22,11 +34,7 @@ function buildTableSelect(
   const alias = TABLE_ALIAS[table];
   const label = SOURCE_LABELS[table];
   const preview = CONTENT_PREVIEW[table];
-
-  const archiveFilter = includeArchived
-    ? ""
-    : ` AND ${alias}.archived_at IS NULL`;
-  const tierFilter = tier ? ` AND ${alias}.tier = '${tier}'` : "";
+  const where = buildWhereClause(alias, includeArchived, tier);
 
   return `SELECT
     '${label}' AS source_type,
@@ -36,7 +44,7 @@ function buildTableSelect(
     ${alias}.tier,
     ${alias}.created_at
   FROM ${table} ${alias}
-  WHERE ${alias}.created_at >= NOW() - INTERVAL '1 day' * $1${archiveFilter}${tierFilter}`;
+  ${where}`;
 }
 
 function buildCountSelect(
@@ -46,15 +54,11 @@ function buildCountSelect(
 ): string {
   if (tier && !VALID_TIERS.has(tier)) throw new Error(`Invalid tier: ${tier}`);
   const alias = TABLE_ALIAS[table];
-
-  const archiveFilter = includeArchived
-    ? ""
-    : ` AND ${alias}.archived_at IS NULL`;
-  const tierFilter = tier ? ` AND ${alias}.tier = '${tier}'` : "";
+  const where = buildWhereClause(alias, includeArchived, tier);
 
   return `SELECT COUNT(*) AS cnt
   FROM ${table} ${alias}
-  WHERE ${alias}.created_at >= NOW() - INTERVAL '1 day' * $1${archiveFilter}${tierFilter}`;
+  ${where}`;
 }
 
 export function registerListRecent(server: McpServer, deps: ToolDeps): void {
@@ -187,11 +191,14 @@ export function registerListRecent(server: McpServer, deps: ToolDeps): void {
 
       const [dataResult, countResult] = await Promise.all([
         deps.pool.query(sql, [days, limit, offset]),
-        deps.pool.query(countSql, [days]),
+        deps.pool.query(countSql, [days]).catch(() => null),
       ]);
 
-      const totalCount = countResult.rows[0]?.total_count ?? 0;
-      const hasMore = offset + dataResult.rows.length < totalCount;
+      const totalCount = countResult?.rows[0]?.total_count ?? null;
+      const hasMore =
+        totalCount !== null
+          ? offset + dataResult.rows.length < totalCount
+          : false;
 
       return {
         content: [

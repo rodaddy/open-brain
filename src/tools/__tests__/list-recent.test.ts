@@ -56,6 +56,10 @@ describe("list_recent", () => {
       const mockPool = {
         query: async (...args: any[]) => {
           queryCalls.push(args);
+          const [sql] = args;
+          if (sql.includes("SUM(cnt)")) {
+            return { rows: [{ total_count: 3 }] };
+          }
           return { rows: makeMockRows(3) };
         },
       };
@@ -95,8 +99,8 @@ describe("list_recent", () => {
         const parsed = JSON.parse((result.content as any)[0].text);
         expect(parsed.entries).toBeDefined();
         expect(Array.isArray(parsed.entries)).toBe(true);
-        expect(typeof parsed.total_count).toBe("number");
-        expect(typeof parsed.has_more).toBe("boolean");
+        expect(parsed.total_count).toBe(3);
+        expect(parsed.has_more).toBe(false);
         expect(parsed.entries.length).toBe(3);
       } finally {
         await cleanup();
@@ -110,6 +114,10 @@ describe("list_recent", () => {
       const mockPool = {
         query: async (...args: any[]) => {
           queryCalls.push(args);
+          const [sql] = args;
+          if (sql.includes("SUM(cnt)")) {
+            return { rows: [{ total_count: 1 }] };
+          }
           return { rows: makeMockRows(1) };
         },
       };
@@ -141,6 +149,10 @@ describe("list_recent", () => {
       const mockPool = {
         query: async (...args: any[]) => {
           queryCalls.push(args);
+          const [sql] = args;
+          if (sql.includes("SUM(cnt)")) {
+            return { rows: [{ total_count: 2 }] };
+          }
           return { rows: makeMockRows(2) };
         },
       };
@@ -169,6 +181,10 @@ describe("list_recent", () => {
       const mockPool = {
         query: async (...args: any[]) => {
           queryCalls.push(args);
+          const [sql] = args;
+          if (sql.includes("SUM(cnt)")) {
+            return { rows: [{ total_count: 0 }] };
+          }
           return { rows: [] };
         },
       };
@@ -196,6 +212,10 @@ describe("list_recent", () => {
       const mockPool = {
         query: async (...args: any[]) => {
           queryCalls.push(args);
+          const [sql] = args;
+          if (sql.includes("SUM(cnt)")) {
+            return { rows: [{ total_count: 5 }] };
+          }
           return { rows: makeMockRows(5) };
         },
       };
@@ -222,7 +242,13 @@ describe("list_recent", () => {
   describe("readonly role -- has read permission", () => {
     it("succeeds because readonly can read all tables", async () => {
       const mockPool = {
-        query: async () => ({ rows: makeMockRows(1) }),
+        query: async (...args: any[]) => {
+          const [sql] = args;
+          if (sql.includes("SUM(cnt)")) {
+            return { rows: [{ total_count: 1 }] };
+          }
+          return { rows: makeMockRows(1) };
+        },
       };
       const auth: AuthInfo = { role: "readonly", clientId: "ro-client" };
 
@@ -238,8 +264,8 @@ describe("list_recent", () => {
         const parsed = JSON.parse((result.content as any)[0].text);
         expect(parsed.entries).toBeDefined();
         expect(Array.isArray(parsed.entries)).toBe(true);
-        expect(typeof parsed.total_count).toBe("number");
-        expect(typeof parsed.has_more).toBe("boolean");
+        expect(parsed.total_count).toBe(1);
+        expect(parsed.has_more).toBe(false);
       } finally {
         await cleanup();
       }
@@ -277,6 +303,10 @@ describe("list_recent", () => {
       const mockPool = {
         query: async (...args: any[]) => {
           queryCalls.push(args);
+          const [sql] = args;
+          if (sql.includes("SUM(cnt)")) {
+            return { rows: [{ total_count: 1 }] };
+          }
           return { rows: makeMockRows(1) };
         },
       };
@@ -304,6 +334,10 @@ describe("list_recent", () => {
       const mockPool = {
         query: async (...args: any[]) => {
           queryCalls.push(args);
+          const [sql] = args;
+          if (sql.includes("SUM(cnt)")) {
+            return { rows: [{ total_count: 1 }] };
+          }
           return { rows: makeMockRows(1) };
         },
       };
@@ -329,6 +363,10 @@ describe("list_recent", () => {
       const mockPool = {
         query: async (...args: any[]) => {
           queryCalls.push(args);
+          const [sql] = args;
+          if (sql.includes("SUM(cnt)")) {
+            return { rows: [{ total_count: 1 }] };
+          }
           return { rows: makeMockRows(1) };
         },
       };
@@ -353,7 +391,13 @@ describe("list_recent", () => {
   describe("empty results", () => {
     it("returns empty array, no isError", async () => {
       const mockPool = {
-        query: async () => ({ rows: [] }),
+        query: async (...args: any[]) => {
+          const [sql] = args;
+          if (sql.includes("SUM(cnt)")) {
+            return { rows: [{ total_count: 0 }] };
+          }
+          return { rows: [] };
+        },
       };
       const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
 
@@ -369,9 +413,73 @@ describe("list_recent", () => {
         const parsed = JSON.parse((result.content as any)[0].text);
         expect(parsed.entries).toBeDefined();
         expect(Array.isArray(parsed.entries)).toBe(true);
-        expect(typeof parsed.total_count).toBe("number");
-        expect(typeof parsed.has_more).toBe("boolean");
+        expect(parsed.total_count).toBe(0);
+        expect(parsed.has_more).toBe(false);
         expect(parsed.entries.length).toBe(0);
+      } finally {
+        await cleanup();
+      }
+    });
+  });
+
+  describe("has_more pagination", () => {
+    it("returns has_more=true when total_count exceeds returned rows", async () => {
+      const mockPool = {
+        query: async (...args: any[]) => {
+          const [sql] = args;
+          if (sql.includes("SUM(cnt)")) {
+            return { rows: [{ total_count: 10 }] };
+          }
+          return { rows: makeMockRows(2) };
+        },
+      };
+      const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
+
+      const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+      try {
+        const result = await client.callTool({
+          name: "list_recent",
+          arguments: { limit: 2, offset: 0 },
+        });
+
+        expect(result.isError).toBeFalsy();
+        const parsed = JSON.parse((result.content as any)[0].text);
+        expect(parsed.entries.length).toBe(2);
+        expect(parsed.total_count).toBe(10);
+        expect(parsed.has_more).toBe(true);
+      } finally {
+        await cleanup();
+      }
+    });
+  });
+
+  describe("count query failure", () => {
+    it("returns data with total_count=null and has_more=false when count query fails", async () => {
+      const mockPool = {
+        query: async (...args: any[]) => {
+          const [sql] = args;
+          if (sql.includes("SUM(cnt)")) {
+            throw new Error("connection timeout");
+          }
+          return { rows: makeMockRows(3) };
+        },
+      };
+      const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
+
+      const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+      try {
+        const result = await client.callTool({
+          name: "list_recent",
+          arguments: {},
+        });
+
+        expect(result.isError).toBeFalsy();
+        const parsed = JSON.parse((result.content as any)[0].text);
+        expect(parsed.entries.length).toBe(3);
+        expect(parsed.total_count).toBeNull();
+        expect(parsed.has_more).toBe(false);
       } finally {
         await cleanup();
       }
