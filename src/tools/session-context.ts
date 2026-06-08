@@ -4,22 +4,9 @@ import { canRead } from "../permissions.ts";
 import type { AuthInfo } from "../types.ts";
 import type { ToolDeps } from "./index.ts";
 import { logger } from "../logger.ts";
+import { EVENT_TYPES, IMPORTANCE_LEVELS } from "./table-constants.ts";
 
-const EVENT_TYPES = [
-  "fact",
-  "decision",
-  "blocker",
-  "action",
-  "artifact",
-  "receipt",
-  "question",
-  "correction",
-  "handoff",
-] as const;
-
-const IMPORTANCE_LEVELS = ["hot", "warm", "cold"] as const;
-
-const LANE_COLUMNS = `id, session_key, namespace, status, agent, project, topic,
+const CONTEXT_LANE_COLUMNS = `id, session_key, namespace, status, agent, project, topic,
   current_context_md, metadata, created_at, updated_at`;
 
 export function registerSessionContext(
@@ -31,7 +18,8 @@ export function registerSessionContext(
     {
       description:
         "Load lane state and recent events for a session. " +
-        "Provides the full context needed to resume work on a lane.",
+        "Provides the full context needed to resume work on a lane. " +
+        "When both session_key and channel_id are provided, session_key takes precedence.",
       inputSchema: {
         session_key: z
           .string()
@@ -100,6 +88,18 @@ export function registerSessionContext(
         };
       }
 
+      if (!args.session_key && !args.channel_id) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "At least one of session_key or channel_id is required",
+            },
+          ],
+          isError: true,
+        };
+      }
+
       const ns = args.namespace ?? auth.clientId;
       const includeEvents = args.include_events !== false;
       const eventLimit = args.event_limit ?? 50;
@@ -132,7 +132,7 @@ export function registerSessionContext(
           }
         }
 
-        const laneSql = `SELECT ${LANE_COLUMNS}
+        const laneSql = `SELECT ${CONTEXT_LANE_COLUMNS}
 FROM ob_session_lanes
 WHERE ${laneConditions.join(" AND ")}
 ORDER BY updated_at DESC

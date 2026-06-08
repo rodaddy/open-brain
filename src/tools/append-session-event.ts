@@ -6,20 +6,7 @@ import { contentHash, EMBEDDING_MODEL } from "../embedding.ts";
 import type { AuthInfo } from "../types.ts";
 import { logger } from "../logger.ts";
 import type { ToolDeps } from "./index.ts";
-
-const EVENT_TYPES = [
-  "fact",
-  "decision",
-  "blocker",
-  "action",
-  "artifact",
-  "receipt",
-  "question",
-  "correction",
-  "handoff",
-] as const;
-
-const IMPORTANCE_LEVELS = ["hot", "warm", "cold"] as const;
+import { EVENT_TYPES, IMPORTANCE_LEVELS } from "./table-constants.ts";
 
 export function registerAppendSessionEvent(
   server: McpServer,
@@ -84,7 +71,7 @@ export function registerAppendSessionEvent(
         title: "Append Session Event",
         readOnlyHint: false,
         destructiveHint: false,
-        idempotentHint: false,
+        idempotentHint: true,
       },
     },
     async (args, extra) => {
@@ -123,7 +110,7 @@ export function registerAppendSessionEvent(
       try {
         // Look up the lane
         const { rows: laneRows } = await deps.pool.query(
-          `SELECT id FROM ob_session_lanes WHERE namespace = $1 AND session_key = $2`,
+          `SELECT id, status FROM ob_session_lanes WHERE namespace = $1 AND session_key = $2`,
           [ns, args.session_key],
         );
 
@@ -137,6 +124,18 @@ export function registerAppendSessionEvent(
               {
                 type: "text" as const,
                 text: `Lane not found for session_key "${args.session_key}" in namespace "${ns}"`,
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        if (laneRows[0].status === "archived") {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `Lane "${args.session_key}" is archived; reactivate before appending events`,
               },
             ],
             isError: true,
@@ -166,6 +165,7 @@ export function registerAppendSessionEvent(
              (lane_id, event_type, content, source, artifact_path, importance,
               metadata, embedding, content_hash, embedded_at, embedding_model, created_by)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+           ON CONFLICT (lane_id, content_hash) WHERE content_hash IS NOT NULL DO NOTHING
            RETURNING id, created_at`,
           [
             laneId,
@@ -182,6 +182,21 @@ export function registerAppendSessionEvent(
             auth.clientId,
           ],
         );
+
+        if (rows.length === 0) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: JSON.stringify({
+                  duplicate: true,
+                  message:
+                    "Event with identical content already exists in this lane",
+                }),
+              },
+            ],
+          };
+        }
 
         const result = {
           event_id: rows[0].id,

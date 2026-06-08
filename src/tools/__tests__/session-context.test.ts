@@ -231,6 +231,28 @@ describe("session_context", () => {
     }
   });
 
+  // ── MISSING LANE IDENTIFIER ──
+
+  it("requires at least one of session_key or channel_id", async () => {
+    const mockPool = createFullContextPool();
+    const auth: AuthInfo = { role: "admin", clientId: "skippy" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "session_context",
+        arguments: {},
+      });
+
+      expect(result.isError).toBe(true);
+      expect((result.content as any)[0].text).toContain(
+        "At least one of session_key or channel_id is required",
+      );
+    } finally {
+      await cleanup();
+    }
+  });
+
   // ── CHANNEL LOOKUP ──
 
   it("looks up lane by channel_id", async () => {

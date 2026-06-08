@@ -35,6 +35,10 @@ CREATE INDEX IF NOT EXISTS idx_session_events_importance
   ON ob_session_events (lane_id, importance)
   WHERE importance = 'hot';
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_session_events_content_hash
+  ON ob_session_events (lane_id, content_hash)
+  WHERE content_hash IS NOT NULL;
+
 CREATE INDEX IF NOT EXISTS idx_session_events_embedding
   ON ob_session_events USING hnsw (embedding halfvec_cosine_ops)
   WITH (m = 16, ef_construction = 200);

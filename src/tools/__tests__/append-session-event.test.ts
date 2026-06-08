@@ -54,11 +54,12 @@ function createLaneFoundPool(
   laneId = "lane-uuid-1",
   eventId = "event-uuid-1",
   createdAt = "2026-06-08T10:00:00Z",
+  status = "active",
 ) {
   return {
     query: async (sql: string, _params?: any[]) => {
       if (sql.includes("ob_session_lanes")) {
-        return { rows: [{ id: laneId }] };
+        return { rows: [{ id: laneId, status }] };
       }
       // INSERT into ob_session_events
       return { rows: [{ id: eventId, created_at: createdAt }] };
@@ -163,7 +164,7 @@ describe("append_session_event", () => {
       query: async (sql: string, params?: any[]) => {
         capturedQueries.push({ sql, params: params ?? [] });
         if (sql.includes("ob_session_lanes")) {
-          return { rows: [{ id: "lane-uuid-1" }] };
+          return { rows: [{ id: "lane-uuid-1", status: "active" }] };
         }
         return {
           rows: [{ id: "event-uuid-1", created_at: "2026-06-08T10:00:00Z" }],
@@ -285,6 +286,94 @@ describe("append_session_event", () => {
     }
   });
 
+  // ── ARCHIVED LANE ──
+
+  it("rejects append to archived lane", async () => {
+    const mockPool = createLaneFoundPool(
+      "lane-uuid-1",
+      "event-uuid-1",
+      "2026-06-08T10:00:00Z",
+      "archived",
+    );
+    const auth: AuthInfo = { role: "admin", clientId: "skippy" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "append_session_event",
+        arguments: {
+          session_key: "old-lane",
+          event_type: "fact",
+          content: "Should not be appended",
+        },
+      });
+      expect(result.isError).toBe(true);
+      expect((result.content as any)[0].text).toContain("archived");
+      expect((result.content as any)[0].text).toContain("reactivate");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("allows append to wrapped lane", async () => {
+    const mockPool = createLaneFoundPool(
+      "lane-uuid-1",
+      "event-uuid-1",
+      "2026-06-08T10:00:00Z",
+      "wrapped",
+    );
+    const auth: AuthInfo = { role: "admin", clientId: "skippy" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "append_session_event",
+        arguments: {
+          session_key: "wrapped-lane",
+          event_type: "handoff",
+          content: "Late event during wrap",
+        },
+      });
+      expect(result.isError).toBeFalsy();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  // ── DUPLICATE DETECTION ──
+
+  it("returns duplicate response when content_hash conflicts", async () => {
+    const mockPool = {
+      query: async (sql: string, _params?: any[]) => {
+        if (sql.includes("ob_session_lanes")) {
+          return { rows: [{ id: "lane-uuid-1", status: "active" }] };
+        }
+        // INSERT returns no rows due to ON CONFLICT DO NOTHING
+        return { rows: [] };
+      },
+    };
+    const auth: AuthInfo = { role: "admin", clientId: "skippy" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "append_session_event",
+        arguments: {
+          session_key: "test",
+          event_type: "fact",
+          content: "Already exists",
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.duplicate).toBe(true);
+      expect(parsed.message).toContain("identical content");
+    } finally {
+      await cleanup();
+    }
+  });
+
   // ── NAMESPACE DEFAULTING ──
 
   it("defaults namespace to auth.clientId when not provided", async () => {
@@ -293,7 +382,7 @@ describe("append_session_event", () => {
       query: async (sql: string, params?: any[]) => {
         if (sql.includes("ob_session_lanes")) {
           capturedLaneParams = params;
-          return { rows: [{ id: "lane-uuid-1" }] };
+          return { rows: [{ id: "lane-uuid-1", status: "active" }] };
         }
         return {
           rows: [{ id: "event-uuid-1", created_at: "2026-06-08T10:00:00Z" }],
@@ -381,7 +470,7 @@ describe("append_session_event", () => {
     const mockPool = {
       query: async (sql: string, params?: any[]) => {
         if (sql.includes("ob_session_lanes")) {
-          return { rows: [{ id: "lane-uuid-1" }] };
+          return { rows: [{ id: "lane-uuid-1", status: "active" }] };
         }
         capturedInsertParams = params;
         return {
@@ -457,7 +546,7 @@ describe("append_session_event", () => {
     const mockPool = {
       query: async (sql: string, params?: any[]) => {
         if (sql.includes("ob_session_lanes")) {
-          return { rows: [{ id: "lane-uuid-1" }] };
+          return { rows: [{ id: "lane-uuid-1", status: "active" }] };
         }
         capturedInsertParams = params;
         return {
