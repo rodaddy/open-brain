@@ -1,17 +1,10 @@
-import { describe, expect, test, mock, beforeEach } from "bun:test";
+import { describe, expect, test, mock, beforeEach, afterAll, spyOn } from "bun:test";
 import type { Request, Response, NextFunction } from "express";
+import { logger } from "../logger.ts";
+import { requestLogger } from "./request-logger.ts";
 
-// Mock logger before importing the module under test
-const mockLoggerInfo = mock(() => {});
-mock.module("../logger.ts", () => ({
-  logger: {
-    info: mockLoggerInfo,
-    warn: mock(() => {}),
-    error: mock(() => {}),
-  },
-}));
-
-const { requestLogger } = await import("./request-logger.ts");
+// Spy on logger.info instead of mock.module to avoid global module pollution
+const loggerInfoSpy = spyOn(logger, "info");
 
 // Helpers
 function mockReq(overrides: Partial<Record<string, unknown>> = {}) {
@@ -41,14 +34,18 @@ function mockRes() {
 type LogCall = [string, Record<string, unknown>];
 
 function lastInfoCall(): LogCall {
-  const call = mockLoggerInfo.mock.calls[0];
+  const call = loggerInfoSpy.mock.calls[0];
   if (!call) throw new Error("No logger.info calls recorded");
   return call as unknown as LogCall;
 }
 
 describe("requestLogger middleware", () => {
   beforeEach(() => {
-    mockLoggerInfo.mockClear();
+    loggerInfoSpy.mockClear();
+  });
+
+  afterAll(() => {
+    loggerInfoSpy.mockRestore();
   });
 
   test("calls next() immediately", () => {
@@ -69,7 +66,7 @@ describe("requestLogger middleware", () => {
     requestLogger(req, res, next as NextFunction);
     (res as any)._emit("finish");
 
-    expect(mockLoggerInfo).toHaveBeenCalledTimes(1);
+    expect(loggerInfoSpy).toHaveBeenCalledTimes(1);
     const [message, data] = lastInfoCall();
     expect(message).toBe("request");
     expect(data).toHaveProperty("method", "POST");

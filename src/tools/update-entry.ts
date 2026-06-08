@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { toSql } from "pgvector/pg";
 import { canWrite } from "../permissions.ts";
-import { contentHash } from "../embedding.ts";
+import { contentHash, EMBEDDING_MODEL } from "../embedding.ts";
 import type { AuthInfo, Table } from "../types.ts";
 import { logger } from "../logger.ts";
 import type { ToolDeps } from "./index.ts";
@@ -272,7 +272,7 @@ export function registerUpdateEntry(server: McpServer, deps: ToolDeps): void {
           paramIndex++;
 
           setClauses.push(`embedding_model = $${paramIndex}`);
-          params.push(embedding ? "gemini-embedding-001" : null);
+          params.push(embedding ? EMBEDDING_MODEL : null);
           paramIndex++;
         }
 

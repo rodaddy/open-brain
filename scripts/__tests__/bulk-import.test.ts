@@ -25,6 +25,7 @@ mock.module("../../src/logger.ts", () => ({
     error: (msg: string, extra?: Record<string, unknown>) => {
       logCalls.error.push([msg, extra]);
     },
+    debug: mock(() => {}),
   },
 }));
 
