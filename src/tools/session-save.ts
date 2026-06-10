@@ -38,6 +38,8 @@ export function registerSessionSave(server: McpServer, deps: ToolDeps): void {
           .describe("Key decisions made during this session"),
         namespace: z
           .string()
+          .min(1)
+          .max(500)
           .optional()
           .describe("Namespace to store in (defaults to caller's clientId)"),
       },
@@ -97,7 +99,7 @@ export function registerSessionSave(server: McpServer, deps: ToolDeps): void {
         const { rows } = await deps.pool.query(
           `INSERT INTO sessions (session_id, project, summary, tags, blockers, next_steps, key_decisions, created_by, namespace, embedding, content_hash, embedded_at, embedding_model)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-           ON CONFLICT (session_id) WHERE session_id IS NOT NULL
+           ON CONFLICT (namespace, session_id) WHERE session_id IS NOT NULL
            DO UPDATE SET
              summary = EXCLUDED.summary,
              tags = EXCLUDED.tags,

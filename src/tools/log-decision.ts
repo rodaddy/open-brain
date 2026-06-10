@@ -26,6 +26,8 @@ export function registerLogDecision(server: McpServer, deps: ToolDeps): void {
         context: z.string().optional().describe("Additional context"),
         namespace: z
           .string()
+          .min(1)
+          .max(500)
           .optional()
           .describe("Namespace to store in (defaults to caller's clientId)"),
       },

@@ -2,8 +2,7 @@
 -- Changes content_hash and person_name uniqueness from global to per-namespace.
 -- Allows the same content to exist in different namespaces (required for promotion).
 -- Safe for existing data: all rows currently have namespace = 'collab'.
-
-BEGIN;
+-- Transaction managed by migration runner -- do not wrap in BEGIN/COMMIT.
 
 -- thoughts: content_hash unique per namespace
 DROP INDEX IF EXISTS idx_thoughts_content_hash;
@@ -37,5 +36,3 @@ CREATE UNIQUE INDEX idx_projects_content_hash ON projects (content_hash, namespa
 DROP INDEX IF EXISTS idx_sessions_content_hash;
 CREATE UNIQUE INDEX idx_sessions_content_hash ON sessions (content_hash, namespace)
   WHERE content_hash IS NOT NULL;
-
-COMMIT;

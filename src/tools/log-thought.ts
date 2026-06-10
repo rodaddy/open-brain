@@ -19,6 +19,8 @@ export function registerLogThought(server: McpServer, deps: ToolDeps): void {
         tags: z.array(z.string()).optional().describe("Optional tags"),
         namespace: z
           .string()
+          .min(1)
+          .max(500)
           .optional()
           .describe("Namespace to store in (defaults to caller's clientId)"),
       },

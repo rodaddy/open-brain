@@ -58,6 +58,8 @@ export function registerUpsertPerson(server: McpServer, deps: ToolDeps): void {
           ),
         namespace: z
           .string()
+          .min(1)
+          .max(500)
           .optional()
           .describe("Namespace to store in (defaults to caller's clientId)"),
       },

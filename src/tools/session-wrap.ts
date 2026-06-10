@@ -156,7 +156,7 @@ WHERE namespace = $1 AND session_key = $2`,
           `INSERT INTO sessions
   (summary, key_decisions, next_steps, project, namespace, embedding, content_hash, embedded_at, embedding_model, created_by)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-ON CONFLICT (content_hash) DO NOTHING
+ON CONFLICT (content_hash, namespace) WHERE content_hash IS NOT NULL DO NOTHING
 RETURNING id, created_at`,
           [
             args.summary,
