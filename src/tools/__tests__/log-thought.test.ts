@@ -168,7 +168,7 @@ describe("log_thought", () => {
       }
     });
 
-    it("uses explicit namespace when provided", async () => {
+    it("denies explicit collab namespace for agent writes", async () => {
       let capturedParams: any[] = [];
       const mockPool = {
         query: async (...args: any[]) => {
@@ -191,10 +191,9 @@ describe("log_thought", () => {
           arguments: { content: "Shared thought", namespace: "collab" },
         });
 
-        expect(result.isError).toBeFalsy();
-        const parsed = JSON.parse((result.content as any)[0].text);
-        expect(parsed.namespace).toBe("collab");
-        expect(capturedParams[1]).toContain("collab");
+        expect(result.isError).toBe(true);
+        expect((result.content as any)[0].text).toContain("Permission denied");
+        expect(capturedParams).toEqual([]);
       } finally {
         await cleanup();
       }

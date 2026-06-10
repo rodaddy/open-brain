@@ -21,10 +21,6 @@ export function canWriteNamespace(
     return { allowed: true };
   }
 
-  if (targetNamespace === "collab" && auth.role === "agent") {
-    return { allowed: true };
-  }
-
   if (auth.role === "discord") {
     return {
       allowed: false,
