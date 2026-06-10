@@ -1,7 +1,13 @@
 import { createHash } from "node:crypto";
 import { logger } from "./logger.ts";
 
-const EMBEDDING_TIMEOUT_MS = 5000;
+const EMBEDDING_TIMEOUT_MS = parseInt(
+  process.env.EMBEDDING_TIMEOUT_MS ?? "8000",
+  10,
+);
+
+const MAX_RETRIES = 2;
+const BACKOFF_DELAYS_MS = [200, 800];
 
 /**
  * Embedding model identifier. Used by embedding.ts to call LiteLLM and stored
@@ -11,74 +17,280 @@ const EMBEDDING_TIMEOUT_MS = 5000;
 export const EMBEDDING_MODEL =
   process.env.EMBEDDING_MODEL ?? "gemini-embedding-001";
 
-export async function generateEmbedding(
+export interface EmbeddingError {
+  code:
+    | "timeout"
+    | "network"
+    | "server_error"
+    | "malformed_response"
+    | "input_invalid"
+    | "no_litellm_url";
+  message: string;
+  attempts: number;
+  lastStatus?: number;
+}
+
+export interface EmbeddingResult {
+  embedding: number[] | null;
+  error?: EmbeddingError;
+}
+
+/**
+ * Classify whether an error or HTTP status is transient and worth retrying.
+ * Only 5xx, AbortError (timeout), and network-level errors are retried.
+ * 4xx errors are never retried.
+ */
+function isTransient(err: unknown, status?: number): boolean {
+  if (status !== undefined && status >= 400 && status < 500) return false;
+  if (status !== undefined && status >= 500) return true;
+  if (err instanceof DOMException && err.name === "AbortError") return true;
+  if (err instanceof Error) {
+    const msg = err.message;
+    if (
+      msg.includes("ECONNRESET") ||
+      msg.includes("ECONNREFUSED") ||
+      msg.includes("ETIMEDOUT") ||
+      msg.includes("ENETUNREACH") ||
+      msg.includes("fetch failed")
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function classifyError(err: unknown, status?: number): EmbeddingError["code"] {
+  if (err instanceof DOMException && err.name === "AbortError") return "timeout";
+  if (status !== undefined && status >= 500) return "server_error";
+  if (err instanceof Error) return "network";
+  return "network";
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function generateEmbeddingWithMetadata(
   text: string,
   litellmUrl?: string,
-): Promise<number[] | null> {
+): Promise<EmbeddingResult> {
   if (!text || text.trim().length === 0 || text.length > 32000) {
-    logger.warn("Embedding text empty or too long", {
-      length: text?.length ?? 0,
-    });
-    return null;
+    const msg = "Embedding text empty or too long";
+    logger.warn(msg, { length: text?.length ?? 0 });
+    return {
+      embedding: null,
+      error: {
+        code: "input_invalid",
+        message: msg,
+        attempts: 0,
+      },
+    };
   }
 
   const baseUrl = litellmUrl ?? process.env.LITELLM_URL;
   if (!baseUrl) {
-    logger.warn("No LiteLLM URL configured");
-    return null;
+    const msg = "No LiteLLM URL configured";
+    logger.warn(msg);
+    return {
+      embedding: null,
+      error: {
+        code: "no_litellm_url",
+        message: msg,
+        attempts: 0,
+      },
+    };
   }
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), EMBEDDING_TIMEOUT_MS);
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  const apiKey = process.env.LITELLM_API_KEY;
+  if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
 
-  try {
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-    };
-    const apiKey = process.env.LITELLM_API_KEY;
-    if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
+  const body = JSON.stringify({
+    model: EMBEDDING_MODEL,
+    input: text,
+    dimensions: 768,
+  });
 
-    const response = await fetch(`${baseUrl}/embeddings`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        model: EMBEDDING_MODEL,
-        input: text,
-        dimensions: 768,
-      }),
-      signal: controller.signal,
-    });
+  let lastError: unknown = null;
+  let lastStatus: number | undefined;
+  const totalAttempts = MAX_RETRIES + 1;
 
-    if (!response.ok) {
-      logger.warn("LiteLLM embedding request failed", {
-        status: response.status,
+  for (let attempt = 1; attempt <= totalAttempts; attempt++) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), EMBEDDING_TIMEOUT_MS);
+    const start = Date.now();
+
+    try {
+      const response = await fetch(`${baseUrl}/embeddings`, {
+        method: "POST",
+        headers,
+        body,
+        signal: controller.signal,
       });
-      return null;
-    }
 
-    const json = (await response.json()) as {
-      data?: Array<{ embedding?: unknown }>;
-    };
+      lastStatus = response.status;
 
-    const embedding = json.data?.[0]?.embedding;
+      if (!response.ok) {
+        lastError = new Error(`HTTP ${response.status}`);
 
-    if (!Array.isArray(embedding) || embedding.length !== 768) {
-      logger.warn("LiteLLM returned malformed embedding", {
-        hasData: !!json.data,
-        length: Array.isArray(embedding) ? embedding.length : "not-array",
+        // 4xx: don't retry
+        if (response.status >= 400 && response.status < 500) {
+          const code =
+            response.status === 400 ? "input_invalid" : "server_error";
+          const msg = `LiteLLM returned ${response.status}`;
+          logger.error("Embedding request failed (non-retryable)", {
+            status: response.status,
+            attempts: attempt,
+          });
+          return {
+            embedding: null,
+            error: {
+              code,
+              message: msg,
+              attempts: attempt,
+              lastStatus: response.status,
+            },
+          };
+        }
+
+        // 5xx: retry if attempts remain
+        if (attempt < totalAttempts) {
+          const delay = BACKOFF_DELAYS_MS[attempt - 1];
+          logger.warn("Embedding request failed, retrying", {
+            attempt,
+            status: response.status,
+            code: "server_error",
+            delayMs: delay,
+          });
+          await sleep(delay);
+          continue;
+        }
+
+        // Final attempt exhausted
+        logger.error("Embedding request failed after all attempts", {
+          status: response.status,
+          attempts: attempt,
+        });
+        return {
+          embedding: null,
+          error: {
+            code: "server_error",
+            message: `LiteLLM returned ${response.status} after ${attempt} attempt(s)`,
+            attempts: attempt,
+            lastStatus: response.status,
+          },
+        };
+      }
+
+      const json = (await response.json()) as {
+        data?: Array<{ embedding?: unknown }>;
+      };
+
+      const embedding = json.data?.[0]?.embedding;
+
+      if (!Array.isArray(embedding) || embedding.length !== 768) {
+        const msg = "LiteLLM returned malformed embedding";
+        logger.error(msg, {
+          hasData: !!json.data,
+          length: Array.isArray(embedding) ? embedding.length : "not-array",
+          attempts: attempt,
+        });
+        return {
+          embedding: null,
+          error: {
+            code: "malformed_response",
+            message: msg,
+            attempts: attempt,
+            lastStatus: response.status,
+          },
+        };
+      }
+
+      const latency = Date.now() - start;
+      logger.info("Embedding generated", { latencyMs: latency, attempt });
+
+      return { embedding: embedding as number[] };
+    } catch (err) {
+      lastError = err;
+
+      if (!isTransient(err)) {
+        const code = classifyError(err);
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.error("Embedding request failed (non-retryable)", {
+          error: msg,
+          attempts: attempt,
+        });
+        return {
+          embedding: null,
+          error: {
+            code,
+            message: msg,
+            attempts: attempt,
+            lastStatus,
+          },
+        };
+      }
+
+      if (attempt < totalAttempts) {
+        const delay = BACKOFF_DELAYS_MS[attempt - 1];
+        const code = classifyError(err);
+        logger.warn("Embedding request failed, retrying", {
+          attempt,
+          code,
+          error: err instanceof Error ? err.message : String(err),
+          delayMs: delay,
+        });
+        await sleep(delay);
+        continue;
+      }
+
+      // Final attempt exhausted
+      const code = classifyError(err);
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.error("Embedding request failed after all attempts", {
+        error: msg,
+        code,
+        attempts: attempt,
       });
-      return null;
+      return {
+        embedding: null,
+        error: {
+          code,
+          message: `${msg} after ${attempt} attempt(s)`,
+          attempts: attempt,
+          lastStatus,
+        },
+      };
+    } finally {
+      clearTimeout(timeoutId);
     }
-
-    return embedding as number[];
-  } catch (err) {
-    logger.warn("LiteLLM embedding error", {
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return null;
-  } finally {
-    clearTimeout(timeoutId);
   }
+
+  // Should never reach here, but TypeScript needs it
+  const code = classifyError(lastError);
+  return {
+    embedding: null,
+    error: {
+      code,
+      message: "Unexpected: exhausted all attempts",
+      attempts: totalAttempts,
+      lastStatus,
+    },
+  };
+}
+
+/**
+ * Generate a 768-dimensional embedding vector for the given text.
+ * Returns null on any failure (timeout, network, bad response, etc.).
+ */
+export async function generateEmbedding(
+  text: string,
+  litellmUrl?: string,
+): Promise<number[] | null> {
+  const result = await generateEmbeddingWithMetadata(text, litellmUrl);
+  return result.embedding;
 }
 
 export function contentHash(text: string): string {
