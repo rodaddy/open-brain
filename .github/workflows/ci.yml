@@ -2,16 +2,17 @@ name: CI
 
 on:
   push:
-    branches: ["wip/**", "feat/**", "fix/**"]
+    branches: ["wip/**", "feat/**", "fix/**", main]
   pull_request:
     branches: [main]
 
 env:
+  BUN_VERSION: "1.3.13"
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, rodaddy]
     services:
       postgres:
         image: pgvector/pgvector:pg17
@@ -34,15 +35,67 @@ jobs:
       DB_NAME: open_brain_test
     steps:
       - uses: actions/checkout@v6
+
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: "1.3.9"
-      - run: bun install
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
       - name: Typecheck
         run: bunx tsc --noEmit
+
       - name: Create pgvector extension
         run: PGPASSWORD=test psql -h localhost -U test -d open_brain_test -c "CREATE EXTENSION IF NOT EXISTS vector"
+
       - name: Run migrations
         run: bun run migrate
-      - name: Unit tests
+
+      - name: Test
         run: bun test
+
+  deploy:
+    needs: check
+    runs-on: [self-hosted, rodaddy]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    env:
+      DEPLOY_HOST: 10.71.20.49
+      DEPLOY_USER: rico
+      SERVICE_NAME: open-brain
+      DEPLOY_PATH: /opt/open-brain
+
+    steps:
+      - name: Pull latest code
+        run: |
+          ssh ${{ env.DEPLOY_USER }}@${{ env.DEPLOY_HOST }} \
+            "cd ${{ env.DEPLOY_PATH }} && git pull origin main"
+
+      - name: Install dependencies
+        run: |
+          ssh ${{ env.DEPLOY_USER }}@${{ env.DEPLOY_HOST }} \
+            "cd ${{ env.DEPLOY_PATH }} && /usr/local/bin/bun install --frozen-lockfile"
+
+      - name: Run migrations
+        run: |
+          ssh ${{ env.DEPLOY_USER }}@${{ env.DEPLOY_HOST }} \
+            "cd ${{ env.DEPLOY_PATH }} && /usr/local/bin/bun run migrate"
+
+      - name: Restart service
+        run: |
+          ssh ${{ env.DEPLOY_USER }}@${{ env.DEPLOY_HOST }} \
+            "sudo systemctl restart ${{ env.SERVICE_NAME }}"
+
+      - name: Health check (with retry)
+        run: |
+          for i in 1 2 3 4 5; do
+            sleep 2
+            if ssh ${{ env.DEPLOY_USER }}@${{ env.DEPLOY_HOST }} \
+              "curl -sf --max-time 5 http://localhost:3100/mcp -X POST -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"id\":1}'" > /dev/null 2>&1; then
+              echo "Health check passed (attempt $i)"
+              exit 0
+            fi
+            echo "Health check attempt $i failed, retrying..."
+          done
+          echo "Health check failed after 5 attempts"
+          exit 1
