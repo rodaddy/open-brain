@@ -181,6 +181,7 @@ export function registerListStale(server: McpServer, deps: ToolDeps): void {
       const useArray = args.response_format === "array";
       const readable = readableNamespaces(auth);
       const namespaceParamIndex = readable ? 4 : undefined;
+      const countNamespaceParamIndex = readable ? 2 : undefined;
 
       const selects = accessibleTables.map((t) =>
         buildStaleSelect(t, tier, namespaceParamIndex),
@@ -189,7 +190,7 @@ export function registerListStale(server: McpServer, deps: ToolDeps): void {
       const sql = `${unionSql}\nORDER BY effective_last_access ASC\nLIMIT $2 OFFSET $3`;
 
       const countSelects = accessibleTables.map((t) =>
-        buildCountSelect(t, tier, namespaceParamIndex),
+        buildCountSelect(t, tier, countNamespaceParamIndex),
       );
       const countSql = `SELECT SUM(cnt)::int AS total_count FROM (${countSelects.join("\nUNION ALL\n")}) counts`;
 
@@ -203,7 +204,7 @@ export function registerListStale(server: McpServer, deps: ToolDeps): void {
 
       const [dataResult, countResult] = await Promise.all([
         deps.pool.query(sql, readable ? [days, limit, offset, readable] : [days, limit, offset]),
-        deps.pool.query(countSql, readable ? [days, undefined, undefined, readable] : [days]).catch(() => null),
+        deps.pool.query(countSql, readable ? [days, readable] : [days]).catch(() => null),
       ]);
 
       const totalCount = countResult?.rows[0]?.total_count ?? null;

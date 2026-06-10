@@ -108,6 +108,7 @@ describe("authMiddleware", () => {
   const tokenMap = new Map<string, AuthInfo>([
     ["valid-admin-token", { role: "admin", clientId: "admin" }],
     ["valid-agent-token", { role: "agent", clientId: "agent" }],
+    ["valid-readonly-token", { role: "readonly", clientId: "readonly" }],
   ]);
 
   const middleware = authMiddleware(tokenMap);
@@ -161,7 +162,6 @@ describe("authMiddleware", () => {
       tokenClientId: "admin",
       agentId: undefined,
       namespaceSource: "token",
-      headerRole: undefined,
     });
     expect(next).toHaveBeenCalledTimes(1);
   });
@@ -179,7 +179,6 @@ describe("authMiddleware", () => {
       tokenClientId: "agent",
       agentId: undefined,
       namespaceSource: "token",
-      headerRole: undefined,
     });
     expect(next).toHaveBeenCalledTimes(1);
   });
@@ -202,9 +201,23 @@ describe("authMiddleware", () => {
       tokenClientId: "agent",
       agentId: "bilby",
       namespaceSource: "header",
-      headerRole: "agent",
     });
     expect(next).toHaveBeenCalledTimes(1);
+  });
+
+  test("returns 403 when readonly token sends X-Namespace", () => {
+    const req = mockReq({
+      authorization: "Bearer valid-readonly-token",
+      "x-namespace": "bilby",
+    });
+    const res = mockRes();
+    const next = mock(() => {});
+
+    middleware(req as any, res as any, next);
+
+    expect(res.statusCode).toBe(403);
+    expect(res.body).toEqual({ error: "Role not permitted to delegate namespace" });
+    expect(next).not.toHaveBeenCalled();
   });
 
   test("rejects invalid delegated namespace header", () => {

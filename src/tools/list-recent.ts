@@ -184,6 +184,7 @@ export function registerListRecent(server: McpServer, deps: ToolDeps): void {
       const useArray = args.response_format === "array";
       const readable = readableNamespaces(auth);
       const namespaceParamIndex = readable ? 4 : undefined;
+      const countNamespaceParamIndex = readable ? 2 : undefined;
 
       // Build UNION ALL of table SELECTs
       const selects = accessibleTables.map((t) =>
@@ -195,7 +196,7 @@ export function registerListRecent(server: McpServer, deps: ToolDeps): void {
 
       // Build total count query
       const countSelects = accessibleTables.map((t) =>
-        buildCountSelect(t, includeArchived, tier, namespaceParamIndex),
+        buildCountSelect(t, includeArchived, tier, countNamespaceParamIndex),
       );
       const countSql = `SELECT SUM(cnt)::int AS total_count FROM (${countSelects.join("\nUNION ALL\n")}) counts`;
 
@@ -209,7 +210,7 @@ export function registerListRecent(server: McpServer, deps: ToolDeps): void {
 
       const [dataResult, countResult] = await Promise.all([
         deps.pool.query(sql, readable ? [days, limit, offset, readable] : [days, limit, offset]),
-        deps.pool.query(countSql, readable ? [days, undefined, undefined, readable] : [days]).catch(() => null),
+        deps.pool.query(countSql, readable ? [days, readable] : [days]).catch(() => null),
       ]);
 
       const totalCount = countResult?.rows[0]?.total_count ?? null;

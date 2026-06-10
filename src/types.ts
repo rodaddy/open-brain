@@ -29,7 +29,6 @@ export interface AuthInfo {
   tokenClientId?: string;
   agentId?: string;
   namespaceSource?: "token" | "header";
-  headerRole?: string;
 }
 
 export interface PoolHealth {

@@ -99,9 +99,11 @@ export function authMiddleware(
 
     if (matched) {
       const namespace = headerValue(req.headers["x-namespace"]);
+      if (namespace && matched.role !== "admin" && matched.role !== "n8n" && matched.role !== "agent") {
+        res.status(403).json({ error: "Role not permitted to delegate namespace" });
+        return;
+      }
       const agentId = headerValue(req.headers["x-agent-id"]);
-      const headerRole = headerValue(req.headers["x-role"]);
-
       if (namespace && !DELEGATED_ID_RE.test(namespace)) {
         res.status(400).json({ error: "Invalid X-Namespace header" });
         return;
@@ -117,7 +119,6 @@ export function authMiddleware(
         tokenClientId: matched.clientId,
         agentId,
         namespaceSource: namespace ? "header" : "token",
-        headerRole,
       } satisfies AuthInfo;
       next();
       return;

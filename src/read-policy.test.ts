@@ -15,10 +15,10 @@ describe("read-policy", () => {
       namespaceSource: "header",
     };
 
-    expect(readableNamespaces(auth)).toEqual(["bilby"]);
+    expect(readableNamespaces(auth)).toEqual(["bilby", "collab"]);
     expect(canReadNamespace(auth, "bilby")).toBe(true);
-    expect(canReadNamespace(auth, "collab")).toBe(false);
-    expect(namespaceFilterFor(auth)).toEqual(["bilby"]);
+    expect(canReadNamespace(auth, "collab")).toBe(true);
+    expect(namespaceFilterFor(auth)).toEqual(["bilby", "collab"]);
   });
 
   it("allows delegated admin to request namespace all", () => {
@@ -29,7 +29,7 @@ describe("read-policy", () => {
       namespaceSource: "header",
     };
 
-    expect(readableNamespaces(auth)).toEqual(["bilby"]);
+    expect(readableNamespaces(auth)).toEqual(["bilby", "collab"]);
     expect(canReadNamespace(auth, "all")).toBe(true);
     expect(namespaceFilterFor(auth, "all")).toBeUndefined();
   });

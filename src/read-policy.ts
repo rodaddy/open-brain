@@ -2,7 +2,7 @@ import type { AuthInfo } from "./types.ts";
 
 export function readableNamespaces(auth: AuthInfo): string[] | undefined {
   if (auth.namespaceSource === "header") {
-    return [auth.clientId];
+    return [auth.clientId, "collab"];
   }
   if (auth.role === "admin" || auth.role === "n8n") {
     return undefined;
