@@ -105,7 +105,7 @@ describe("generateEmbedding", () => {
 
     expect(capturedUrl).toBe("http://fake:4000/embeddings");
     expect(capturedBody).not.toBeNull();
-    expect(capturedBody!.model).toBe("embeddings");
+    expect(capturedBody!.model).toBe("gemini-embedding-001");
     expect(capturedBody!.dimensions).toBe(768);
     expect(capturedBody!.input).toBe("test input");
   });

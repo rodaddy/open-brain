@@ -9,7 +9,7 @@ const EMBEDDING_TIMEOUT_MS = 5000;
  * Override via EMBEDDING_MODEL env var (must match LiteLLM deployment name).
  */
 export const EMBEDDING_MODEL =
-  process.env.EMBEDDING_MODEL ?? "embeddings";
+  process.env.EMBEDDING_MODEL ?? "gemini-embedding-001";
 
 export async function generateEmbedding(
   text: string,
