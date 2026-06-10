@@ -12,6 +12,7 @@ import { runMigrations } from "./db/migrate.ts";
 import { logger } from "./logger.ts";
 import { requestLogger } from "./middleware/request-logger.ts";
 import { createRestRouter } from "./rest-api.ts";
+import { createPromotionRouter } from "./rest-promotion.ts";
 import type { AuthInfo, HealthStatus } from "./types.ts";
 
 const LITELLM_URL = process.env.LITELLM_URL;
@@ -70,6 +71,7 @@ export function createApp(
 
   // REST API -- no MCP handshake required
   app.use("/api/v1", auth, createRestRouter(toolDeps));
+  app.use("/api/v1", auth, createPromotionRouter(toolDeps));
 
   // MCP server factory -- creates a fresh server per session to avoid
   // "Already connected to a transport" errors with concurrent clients
