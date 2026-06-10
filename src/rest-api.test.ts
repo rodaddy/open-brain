@@ -10,6 +10,17 @@ function createMockPool(rows: Record<string, unknown>[] = [{ id: "test-uuid" }])
   };
 }
 
+function createRecordingPool(rows: Record<string, unknown>[] = [{ id: "test-uuid" }]) {
+  const calls: { sql: string; params?: unknown[] }[] = [];
+  return {
+    calls,
+    query: async (sql: string, params?: unknown[]) => {
+      calls.push({ sql, params });
+      return { rows };
+    },
+  };
+}
+
 function createMockEmbed(result: number[] | null = Array(768).fill(0.1)) {
   return async (_text: string) => result;
 }
@@ -85,7 +96,18 @@ describe("REST API", () => {
       const { status, json } = await req(app, "post", "/api/v1/thoughts", {});
 
       expect(status).toBe(400);
-      expect(json.error).toContain("content");
+      expect(json.error).toBe("Invalid request");
+    });
+
+    it("returns 400 when tags is not an array", async () => {
+      const app = buildApp({ role: "agent", clientId: "bilby" });
+      const { status, json } = await req(app, "post", "/api/v1/thoughts", {
+        content: "A test thought",
+        tags: "test",
+      });
+
+      expect(status).toBe(400);
+      expect(json.error).toBe("Invalid request");
     });
 
     it("returns 403 for cross-namespace write", async () => {
@@ -173,19 +195,51 @@ describe("REST API", () => {
   describe("GET /api/v1/entries/:table/:id", () => {
     it("returns entry by table and id", async () => {
       const pool = createMockPool([
-        { id: "e-uuid", content: "test thought", namespace: "bilby" },
+        {
+          id: "123e4567-e89b-12d3-a456-426614174000",
+          content: "test thought",
+          namespace: "bilby",
+          promoted_from: { source_id: "source-uuid" },
+        },
       ]);
       const app = buildApp({ role: "admin", clientId: "rico" }, pool);
 
       const { status, json } = await req(
         app,
         "get",
-        "/api/v1/entries/thoughts/e-uuid",
+        "/api/v1/entries/thoughts/123e4567-e89b-12d3-a456-426614174000",
       );
 
       expect(status).toBe(200);
-      expect(json.id).toBe("e-uuid");
+      expect(json.id).toBe("123e4567-e89b-12d3-a456-426614174000");
       expect(json.content).toBe("test thought");
+      expect(json.promoted_from).toEqual({ source_id: "source-uuid" });
+    });
+
+    it("adds namespace predicate for non-admin entry reads", async () => {
+      const pool = createRecordingPool([
+        {
+          id: "123e4567-e89b-12d3-a456-426614174000",
+          content: "test thought",
+          namespace: "collab",
+        },
+      ]);
+      const app = buildApp({ role: "agent", clientId: "bilby" }, pool as any);
+
+      const { status } = await req(
+        app,
+        "get",
+        "/api/v1/entries/thoughts/123e4567-e89b-12d3-a456-426614174000",
+      );
+
+      expect(status).toBe(200);
+      const call = pool.calls[0];
+      expect(call).toBeDefined();
+      expect(call!.sql).toContain("namespace = ANY");
+      expect(call!.params).toEqual([
+        "123e4567-e89b-12d3-a456-426614174000",
+        ["bilby", "collab"],
+      ]);
     });
 
     it("returns 404 when entry not found", async () => {
@@ -210,6 +264,39 @@ describe("REST API", () => {
       );
 
       expect(status).toBe(400);
+    });
+
+    it("returns 400 for invalid id", async () => {
+      const app = buildApp({ role: "admin", clientId: "rico" });
+      const { status } = await req(
+        app,
+        "get",
+        "/api/v1/entries/thoughts/not-a-uuid",
+      );
+
+      expect(status).toBe(400);
+    });
+  });
+
+  describe("GET /api/v1/search", () => {
+    it("denies unauthorized namespace filter", async () => {
+      const app = buildApp({ role: "agent", clientId: "bilby" });
+      const { status, json } = await req(
+        app,
+        "get",
+        "/api/v1/search?q=test&namespace=nagatha",
+      );
+
+      expect(status).toBe(403);
+      expect(json.error).toContain("namespace read access");
+    });
+
+    it("returns 400 for invalid limit", async () => {
+      const app = buildApp({ role: "agent", clientId: "bilby" });
+      const { status, json } = await req(app, "get", "/api/v1/search?q=test&limit=0");
+
+      expect(status).toBe(400);
+      expect(json.error).toBe("Invalid query");
     });
   });
 

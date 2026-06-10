@@ -24,6 +24,7 @@ const LABEL_TO_TABLE: Record<string, Table> = Object.fromEntries(
 ) as Record<string, Table>;
 
 export type SearchMode = "hybrid" | "vector" | "keyword";
+type NamespaceFilter = string | string[];
 
 /** RRF constant -- standard value from Cormack et al. 2009 */
 const RRF_K = 60;
@@ -111,7 +112,7 @@ function linkKey(type: string, id: string): string {
 
 function appendNamespaceParam(
   params: unknown[],
-  namespace?: string,
+  namespace?: NamespaceFilter,
 ): number | undefined {
   if (namespace === undefined) return undefined;
   params.push(namespace);
@@ -128,7 +129,7 @@ function paramRef(index: number): string {
 async function attachExplicitLinks(
   deps: ToolDeps,
   rows: SearchRow[],
-  namespace?: string,
+  namespace?: NamespaceFilter,
 ): Promise<SearchRow[]> {
   if (rows.length === 0) return rows;
 
@@ -137,7 +138,9 @@ async function attachExplicitLinks(
   const params: unknown[] = [resultTypes, resultIds];
   const namespaceParamIndex = appendNamespaceParam(params, namespace);
   const namespaceFilter = namespaceParamIndex
-    ? ` AND namespace = ${paramRef(namespaceParamIndex)}`
+    ? Array.isArray(namespace)
+      ? ` AND namespace = ANY(${paramRef(namespaceParamIndex)}::text[])`
+      : ` AND namespace = ${paramRef(namespaceParamIndex)}`
     : "";
 
   try {
@@ -214,6 +217,7 @@ function buildTableCTE(
   perTableLimit: number,
   tier?: Tier,
   namespaceParamIndex?: number,
+  namespaceIsArray = false,
 ): string {
   if (tier && !VALID_TIERS.has(tier)) throw new Error(`Invalid tier: ${tier}`);
   const alias = TABLE_ALIAS[table];
@@ -222,7 +226,9 @@ function buildTableCTE(
   const cteName = `${table}_results`;
   const tierFilter = tier ? ` AND ${alias}.tier = '${tier}'` : "";
   const nsFilter = namespaceParamIndex
-    ? ` AND ${alias}.namespace = ${paramRef(namespaceParamIndex)}`
+    ? namespaceIsArray
+      ? ` AND ${alias}.namespace = ANY(${paramRef(namespaceParamIndex)}::text[])`
+      : ` AND ${alias}.namespace = ${paramRef(namespaceParamIndex)}`
     : "";
   const metaCol = HAS_EXTRACTED_METADATA.has(table)
     ? `${alias}.extracted_metadata`
@@ -252,6 +258,7 @@ function buildFtsCTE(
   perTableLimit: number,
   tier?: Tier,
   namespaceParamIndex?: number,
+  namespaceIsArray = false,
 ): string {
   if (tier && !VALID_TIERS.has(tier)) throw new Error(`Invalid tier: ${tier}`);
   const alias = TABLE_ALIAS[table];
@@ -260,7 +267,9 @@ function buildFtsCTE(
   const cteName = `${table}_fts`;
   const tierFilter = tier ? ` AND ${alias}.tier = '${tier}'` : "";
   const nsFilter = namespaceParamIndex
-    ? ` AND ${alias}.namespace = ${paramRef(namespaceParamIndex)}`
+    ? namespaceIsArray
+      ? ` AND ${alias}.namespace = ANY(${paramRef(namespaceParamIndex)}::text[])`
+      : ` AND ${alias}.namespace = ${paramRef(namespaceParamIndex)}`
     : "";
 
   const metaCol = HAS_EXTRACTED_METADATA.has(table)
@@ -294,13 +303,14 @@ async function vectorSearch(
   fetchLimit: number,
   tier?: Tier,
   offset = 0,
-  namespace?: string,
+  namespace?: NamespaceFilter,
 ): Promise<SearchRow[]> {
   const perTableLimit = fetchLimit;
   const params = [toSql(embedding), fetchLimit, offset];
   const namespaceParamIndex = appendNamespaceParam(params, namespace);
+  const namespaceIsArray = Array.isArray(namespace);
   const ctes = accessibleTables.map((t) =>
-    buildTableCTE(t, perTableLimit, tier, namespaceParamIndex),
+    buildTableCTE(t, perTableLimit, tier, namespaceParamIndex, namespaceIsArray),
   );
   const cteNames = accessibleTables.map((t) => `${t}_results`);
   const unionAll = cteNames
@@ -328,13 +338,14 @@ async function ftsSearch(
   fetchLimit: number,
   tier?: Tier,
   offset = 0,
-  namespace?: string,
+  namespace?: NamespaceFilter,
 ): Promise<SearchRow[]> {
   const perTableLimit = fetchLimit;
   const params = [query, fetchLimit, offset];
   const namespaceParamIndex = appendNamespaceParam(params, namespace);
+  const namespaceIsArray = Array.isArray(namespace);
   const ctes = accessibleTables.map((t) =>
-    buildFtsCTE(t, perTableLimit, tier, namespaceParamIndex),
+    buildFtsCTE(t, perTableLimit, tier, namespaceParamIndex, namespaceIsArray),
   );
   const cteNames = accessibleTables.map((t) => `${t}_fts`);
   const unionAll = cteNames
@@ -479,7 +490,7 @@ export async function executeSearch(
   mode: SearchMode = "hybrid",
   tier?: Tier,
   offset = 0,
-  namespace?: string,
+  namespace?: NamespaceFilter,
   includeLinks?: boolean,
 ): Promise<SearchRow[]> {
   let rows: SearchRow[];
