@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { toSql } from "pgvector/pg";
 import { canWrite } from "../permissions.ts";
+import { canWriteNamespace } from "../namespace-policy.ts";
 import { contentHash, EMBEDDING_MODEL } from "../embedding.ts";
 import { backgroundExtract } from "../extraction.ts";
 import type { AuthInfo } from "../types.ts";
@@ -16,6 +17,12 @@ export function registerLogThought(server: McpServer, deps: ToolDeps): void {
       inputSchema: {
         content: z.string().min(1).describe("The thought content"),
         tags: z.array(z.string()).optional().describe("Optional tags"),
+        namespace: z
+          .string()
+          .min(1)
+          .max(500)
+          .optional()
+          .describe("Namespace to store in (defaults to caller's clientId)"),
       },
       annotations: {
         title: "Log Thought",
@@ -38,6 +45,20 @@ export function registerLogThought(server: McpServer, deps: ToolDeps): void {
         };
       }
 
+      const ns = args.namespace ?? auth.clientId;
+      const nsCheck = canWriteNamespace(auth, ns);
+      if (!nsCheck.allowed) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Permission denied: ${nsCheck.reason}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
       const hash = contentHash(args.content);
       const textToEmbed = args.tags?.length
         ? `${args.content}\n${args.tags.join(" ")}`
@@ -49,9 +70,9 @@ export function registerLogThought(server: McpServer, deps: ToolDeps): void {
       });
 
       const { rows } = await deps.pool.query(
-        `INSERT INTO thoughts (content, tags, source, created_by, embedding, content_hash, embedded_at, embedding_model)
-         VALUES ($1, $2, 'mcp', $3, $4, $5, $6, $7)
-         ON CONFLICT (content_hash) WHERE content_hash IS NOT NULL
+        `INSERT INTO thoughts (content, tags, source, created_by, namespace, embedding, content_hash, embedded_at, embedding_model)
+         VALUES ($1, $2, 'mcp', $3, $4, $5, $6, $7, $8)
+         ON CONFLICT (content_hash, namespace) WHERE content_hash IS NOT NULL
          DO UPDATE SET
            tags = (
              SELECT COALESCE(array_agg(DISTINCT tag), '{}')
@@ -64,6 +85,7 @@ export function registerLogThought(server: McpServer, deps: ToolDeps): void {
           args.content,
           args.tags ?? [],
           auth.clientId,
+          ns,
           embedding ? toSql(embedding) : null,
           hash,
           embedding ? new Date().toISOString() : null,
@@ -90,6 +112,7 @@ export function registerLogThought(server: McpServer, deps: ToolDeps): void {
             type: "text" as const,
             text: JSON.stringify({
               id: entryId,
+              namespace: ns,
               embedded: !!embedding,
               merged: !isNew,
             }),

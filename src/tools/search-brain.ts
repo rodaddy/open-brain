@@ -109,6 +109,22 @@ function linkKey(type: string, id: string): string {
   return `${type}:${id}`;
 }
 
+function appendNamespaceParam(
+  params: unknown[],
+  namespace?: string,
+): number | undefined {
+  if (namespace === undefined) return undefined;
+  params.push(namespace);
+  return params.length;
+}
+
+function paramRef(index: number): string {
+  if (!Number.isInteger(index) || index < 1) {
+    throw new Error(`Invalid SQL parameter index: ${index}`);
+  }
+  return `$${index}`;
+}
+
 async function attachExplicitLinks(
   deps: ToolDeps,
   rows: SearchRow[],
@@ -119,8 +135,10 @@ async function attachExplicitLinks(
   const resultTypes = rows.map((row) => row.source_type);
   const resultIds = rows.map((row) => row.id);
   const params: unknown[] = [resultTypes, resultIds];
-  const namespaceFilter = namespace ? " AND namespace = $3" : "";
-  if (namespace) params.push(namespace);
+  const namespaceParamIndex = appendNamespaceParam(params, namespace);
+  const namespaceFilter = namespaceParamIndex
+    ? ` AND namespace = ${paramRef(namespaceParamIndex)}`
+    : "";
 
   try {
     const { rows: linkRows } = await deps.pool.query<LinkRow>(
@@ -191,11 +209,11 @@ async function attachExplicitLinks(
   }
 }
 
-export function buildTableCTE(
+function buildTableCTE(
   table: Table,
   perTableLimit: number,
   tier?: Tier,
-  namespace?: string,
+  namespaceParamIndex?: number,
 ): string {
   if (tier && !VALID_TIERS.has(tier)) throw new Error(`Invalid tier: ${tier}`);
   const alias = TABLE_ALIAS[table];
@@ -203,7 +221,9 @@ export function buildTableCTE(
   const preview = CONTENT_PREVIEW[table];
   const cteName = `${table}_results`;
   const tierFilter = tier ? ` AND ${alias}.tier = '${tier}'` : "";
-  const nsFilter = namespace ? ` AND ${alias}.namespace = '${namespace}'` : "";
+  const nsFilter = namespaceParamIndex
+    ? ` AND ${alias}.namespace = ${paramRef(namespaceParamIndex)}`
+    : "";
   const metaCol = HAS_EXTRACTED_METADATA.has(table)
     ? `${alias}.extracted_metadata`
     : "NULL::jsonb AS extracted_metadata";
@@ -231,7 +251,7 @@ function buildFtsCTE(
   table: Table,
   perTableLimit: number,
   tier?: Tier,
-  namespace?: string,
+  namespaceParamIndex?: number,
 ): string {
   if (tier && !VALID_TIERS.has(tier)) throw new Error(`Invalid tier: ${tier}`);
   const alias = TABLE_ALIAS[table];
@@ -239,7 +259,9 @@ function buildFtsCTE(
   const preview = CONTENT_PREVIEW[table];
   const cteName = `${table}_fts`;
   const tierFilter = tier ? ` AND ${alias}.tier = '${tier}'` : "";
-  const nsFilter = namespace ? ` AND ${alias}.namespace = '${namespace}'` : "";
+  const nsFilter = namespaceParamIndex
+    ? ` AND ${alias}.namespace = ${paramRef(namespaceParamIndex)}`
+    : "";
 
   const metaCol = HAS_EXTRACTED_METADATA.has(table)
     ? `${alias}.extracted_metadata`
@@ -275,8 +297,10 @@ async function vectorSearch(
   namespace?: string,
 ): Promise<SearchRow[]> {
   const perTableLimit = fetchLimit;
+  const params = [toSql(embedding), fetchLimit, offset];
+  const namespaceParamIndex = appendNamespaceParam(params, namespace);
   const ctes = accessibleTables.map((t) =>
-    buildTableCTE(t, perTableLimit, tier, namespace),
+    buildTableCTE(t, perTableLimit, tier, namespaceParamIndex),
   );
   const cteNames = accessibleTables.map((t) => `${t}_results`);
   const unionAll = cteNames
@@ -293,11 +317,7 @@ ${unionAll}
 ORDER BY (distance * ${VECTOR_WEIGHT} + (1.0 - COALESCE(usefulness, 0.5)) * ${USEFULNESS_WEIGHT} + EXTRACT(EPOCH FROM (NOW() - created_at)) / 86400.0 * ${AGE_WEIGHT}) ASC
 LIMIT $2 OFFSET $3`;
 
-  const { rows } = await deps.pool.query(sql, [
-    toSql(embedding),
-    fetchLimit,
-    offset,
-  ]);
+  const { rows } = await deps.pool.query(sql, params);
   return rows as SearchRow[];
 }
 
@@ -311,8 +331,10 @@ async function ftsSearch(
   namespace?: string,
 ): Promise<SearchRow[]> {
   const perTableLimit = fetchLimit;
+  const params = [query, fetchLimit, offset];
+  const namespaceParamIndex = appendNamespaceParam(params, namespace);
   const ctes = accessibleTables.map((t) =>
-    buildFtsCTE(t, perTableLimit, tier, namespace),
+    buildFtsCTE(t, perTableLimit, tier, namespaceParamIndex),
   );
   const cteNames = accessibleTables.map((t) => `${t}_fts`);
   const unionAll = cteNames
@@ -329,7 +351,7 @@ ${unionAll}
 ORDER BY fts_rank DESC
 LIMIT $2 OFFSET $3`;
 
-  const { rows } = await deps.pool.query(sql, [query, fetchLimit, offset]);
+  const { rows } = await deps.pool.query(sql, params);
   return rows as SearchRow[];
 }
 
@@ -564,6 +586,9 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
           .describe("Optional: limit search to a specific table"),
         namespace: z
           .string()
+          .trim()
+          .min(1)
+          .max(500)
           .optional()
           .describe(
             "Optional: filter results to a specific namespace (e.g. clientId or 'collab')",

@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { toSql } from "pgvector/pg";
 import { canWrite } from "../permissions.ts";
+import { canWriteNamespace } from "../namespace-policy.ts";
 import { contentHash, EMBEDDING_MODEL } from "../embedding.ts";
 import { backgroundExtract } from "../extraction.ts";
 import type { AuthInfo } from "../types.ts";
@@ -23,6 +24,12 @@ export function registerLogDecision(server: McpServer, deps: ToolDeps): void {
           .describe("Alternatives that were considered"),
         tags: z.array(z.string()).optional().describe("Optional tags"),
         context: z.string().optional().describe("Additional context"),
+        namespace: z
+          .string()
+          .min(1)
+          .max(500)
+          .optional()
+          .describe("Namespace to store in (defaults to caller's clientId)"),
       },
       annotations: {
         title: "Log Decision",
@@ -45,6 +52,20 @@ export function registerLogDecision(server: McpServer, deps: ToolDeps): void {
         };
       }
 
+      const ns = args.namespace ?? auth.clientId;
+      const nsCheck = canWriteNamespace(auth, ns);
+      if (!nsCheck.allowed) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Permission denied: ${nsCheck.reason}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
       const parts = [args.title, args.rationale];
       if (args.context) parts.push(args.context);
       if (args.alternatives?.length) parts.push(args.alternatives.join(", "));
@@ -58,9 +79,9 @@ export function registerLogDecision(server: McpServer, deps: ToolDeps): void {
       });
 
       const { rows } = await deps.pool.query(
-        `INSERT INTO decisions (title, rationale, alternatives, tags, context, created_by, embedding, content_hash, embedded_at, embedding_model)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-         ON CONFLICT (content_hash) WHERE content_hash IS NOT NULL
+        `INSERT INTO decisions (title, rationale, alternatives, tags, context, created_by, namespace, embedding, content_hash, embedded_at, embedding_model)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         ON CONFLICT (content_hash, namespace) WHERE content_hash IS NOT NULL
          DO UPDATE SET
            tags = (
              SELECT COALESCE(array_agg(DISTINCT tag), '{}')
@@ -76,6 +97,7 @@ export function registerLogDecision(server: McpServer, deps: ToolDeps): void {
           args.tags ?? [],
           args.context ?? null,
           auth.clientId,
+          ns,
           embedding ? toSql(embedding) : null,
           hash,
           embedding ? new Date().toISOString() : null,
@@ -102,6 +124,7 @@ export function registerLogDecision(server: McpServer, deps: ToolDeps): void {
             type: "text" as const,
             text: JSON.stringify({
               id: entryId,
+              namespace: ns,
               embedded: !!embedding,
               merged: !isNew,
             }),

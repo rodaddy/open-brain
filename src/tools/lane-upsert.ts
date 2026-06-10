@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { toSql } from "pgvector/pg";
 import { canWrite } from "../permissions.ts";
+import { canWriteNamespace } from "../namespace-policy.ts";
 import { contentHash, EMBEDDING_MODEL } from "../embedding.ts";
 import type { AuthInfo } from "../types.ts";
 import { logger } from "../logger.ts";
@@ -110,6 +111,18 @@ export function registerLaneUpsert(server: McpServer, deps: ToolDeps): void {
       }
 
       const ns = args.namespace ?? auth.clientId;
+      const nsCheck = canWriteNamespace(auth, ns);
+      if (!nsCheck.allowed) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Permission denied: ${nsCheck.reason}`,
+            },
+          ],
+          isError: true,
+        };
+      }
       const status = args.status ?? null;
 
       logger.debug("lane_upsert_start", {

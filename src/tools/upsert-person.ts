@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { toSql } from "pgvector/pg";
 import { canWrite } from "../permissions.ts";
+import { canWriteNamespace } from "../namespace-policy.ts";
 import { contentHash, EMBEDDING_MODEL } from "../embedding.ts";
 import type { AuthInfo } from "../types.ts";
 import { logger } from "../logger.ts";
@@ -55,6 +56,12 @@ export function registerUpsertPerson(server: McpServer, deps: ToolDeps): void {
           .describe(
             "Additional structured data (e.g. apple_id, imessage, social handles)",
           ),
+        namespace: z
+          .string()
+          .min(1)
+          .max(500)
+          .optional()
+          .describe("Namespace to store in (defaults to caller's clientId)"),
       },
       annotations: {
         title: "Upsert Person",
@@ -77,6 +84,20 @@ export function registerUpsertPerson(server: McpServer, deps: ToolDeps): void {
         };
       }
 
+      const ns = args.namespace ?? auth.clientId;
+      const nsCheck = canWriteNamespace(auth, ns);
+      if (!nsCheck.allowed) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Permission denied: ${nsCheck.reason}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
       // Build embeddable text: name + context + notes
       const embeddableText = [args.name, args.context ?? "", args.notes ?? ""]
         .filter(Boolean)
@@ -93,13 +114,13 @@ export function registerUpsertPerson(server: McpServer, deps: ToolDeps): void {
         `INSERT INTO relationships (
           person_name, context, relationship_type, warmth, last_contact,
           email, phone, notes, tags, metadata,
-          created_by, embedding, content_hash, embedded_at, embedding_model
+          created_by, namespace, embedding, content_hash, embedded_at, embedding_model
         ) VALUES (
           $1, $2, $3, $4, $5::date,
           $6, $7, $8, COALESCE($9::text[], '{}'), COALESCE($10::jsonb, '{}'),
-          $11, $12, $13, $14, $15
+          $11, $12, $13, $14, $15, $16
         )
-        ON CONFLICT (person_name) DO UPDATE SET
+        ON CONFLICT (namespace, person_name) DO UPDATE SET
           context = COALESCE(EXCLUDED.context, relationships.context),
           relationship_type = COALESCE(EXCLUDED.relationship_type, relationships.relationship_type),
           warmth = COALESCE(EXCLUDED.warmth, relationships.warmth),
@@ -126,6 +147,7 @@ export function registerUpsertPerson(server: McpServer, deps: ToolDeps): void {
           args.tags ?? null,
           args.metadata ? JSON.stringify(args.metadata) : null,
           auth.clientId,
+          ns,
           embedding ? toSql(embedding) : null,
           hash,
           embedding ? new Date().toISOString() : null,
@@ -149,6 +171,7 @@ export function registerUpsertPerson(server: McpServer, deps: ToolDeps): void {
             text: JSON.stringify({
               id: row.id,
               person_name: args.name,
+              namespace: ns,
               action,
               embedded: !!embedding,
             }),

@@ -24,8 +24,145 @@ const searchPool = (rows: any[]) => ({
   },
 });
 
+function expectNamespaceParameterized(
+  sql: unknown,
+  params: unknown,
+  namespace: string,
+): void {
+  expect(Array.isArray(params)).toBe(true);
+  const namespaceParamIndex = (params as unknown[]).indexOf(namespace) + 1;
+  expect(namespaceParamIndex).toBeGreaterThan(0);
+  expect(String(sql)).toContain(`namespace = $${namespaceParamIndex}`);
+  expect(String(sql)).not.toContain(namespace);
+}
+
 describe("search_brain", () => {
   describe("admin role -- all tables accessible", () => {
+    it("parameterizes namespace in vector SQL", async () => {
+      const maliciousNamespace = "' OR 1=1 --";
+      const queryCalls: any[] = [];
+      const pool = {
+        query: async (...args: any[]) => {
+          queryCalls.push(args);
+          const [sql] = args;
+          if (String(sql).includes("FROM ob_links")) return { rows: [] };
+          return { rows: [] };
+        },
+      };
+      const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
+      const { client, cleanup } = await setup(pool, auth);
+
+      try {
+        const result = await client.callTool({
+          name: "search_brain",
+          arguments: {
+            query: "namespace injection",
+            namespace: maliciousNamespace,
+            search_mode: "vector",
+          },
+        });
+
+        expect(result.isError).toBeFalsy();
+        const [sql, params] = queryCalls[0];
+        expectNamespaceParameterized(sql, params, maliciousNamespace);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("parameterizes namespace in keyword SQL", async () => {
+      const maliciousNamespace = "' OR 1=1 --";
+      const queryCalls: any[] = [];
+      const pool = {
+        query: async (...args: any[]) => {
+          queryCalls.push(args);
+          const [sql] = args;
+          if (String(sql).includes("FROM ob_links")) return { rows: [] };
+          return { rows: [] };
+        },
+      };
+      const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
+      const { client, cleanup } = await setup(pool, auth);
+
+      try {
+        const result = await client.callTool({
+          name: "search_brain",
+          arguments: {
+            query: "namespace injection",
+            namespace: maliciousNamespace,
+            search_mode: "keyword",
+          },
+        });
+
+        expect(result.isError).toBeFalsy();
+        const [sql, params] = queryCalls[0];
+        expectNamespaceParameterized(sql, params, maliciousNamespace);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("parameterizes namespace in default hybrid SQL", async () => {
+      const maliciousNamespace = "' OR 1=1 --";
+      const searchCalls: any[] = [];
+      const pool = {
+        query: async (...args: any[]) => {
+          const [sql] = args;
+          if (String(sql).includes("FROM ob_links")) return { rows: [] };
+          searchCalls.push(args);
+          return { rows: [] };
+        },
+      };
+      const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
+      const { client, cleanup } = await setup(pool, auth);
+
+      try {
+        const result = await client.callTool({
+          name: "search_brain",
+          arguments: {
+            query: "namespace injection",
+            namespace: maliciousNamespace,
+          },
+        });
+
+        expect(result.isError).toBeFalsy();
+        expect(searchCalls.length).toBe(2);
+        for (const [sql, params] of searchCalls) {
+          expectNamespaceParameterized(sql, params, maliciousNamespace);
+        }
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("rejects blank namespace instead of running an unscoped search", async () => {
+      const queryCalls: any[] = [];
+      const pool = {
+        query: async (...args: any[]) => {
+          queryCalls.push(args);
+          return { rows: [] };
+        },
+      };
+      const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
+      const { client, cleanup } = await setup(pool, auth);
+
+      try {
+        const result = await client.callTool({
+          name: "search_brain",
+          arguments: {
+            query: "namespace injection",
+            namespace: "   ",
+            search_mode: "keyword",
+          },
+        });
+
+        expect(result.isError).toBe(true);
+        expect(queryCalls.length).toBe(0);
+      } finally {
+        await cleanup();
+      }
+    });
+
     it("returns ranked results with expected shape", async () => {
       const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
       const { client, cleanup } = await setup(

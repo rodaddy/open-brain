@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { toSql } from "pgvector/pg";
 import { canWrite } from "../permissions.ts";
+import { canWriteNamespace } from "../namespace-policy.ts";
 import { contentHash, EMBEDDING_MODEL } from "../embedding.ts";
 import type { AuthInfo } from "../types.ts";
 import { logger } from "../logger.ts";
@@ -75,6 +76,18 @@ export function registerSessionWrap(server: McpServer, deps: ToolDeps): void {
       }
 
       const ns = args.namespace ?? auth.clientId;
+      const nsCheck = canWriteNamespace(auth, ns);
+      if (!nsCheck.allowed) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Permission denied: ${nsCheck.reason}`,
+            },
+          ],
+          isError: true,
+        };
+      }
 
       logger.debug("session_wrap_begin", {
         session_key: args.session_key,
@@ -143,7 +156,7 @@ WHERE namespace = $1 AND session_key = $2`,
           `INSERT INTO sessions
   (summary, key_decisions, next_steps, project, namespace, embedding, content_hash, embedded_at, embedding_model, created_by)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-ON CONFLICT (content_hash) DO NOTHING
+ON CONFLICT (content_hash, namespace) WHERE content_hash IS NOT NULL DO NOTHING
 RETURNING id, created_at`,
           [
             args.summary,
