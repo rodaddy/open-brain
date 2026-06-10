@@ -22,9 +22,11 @@ describe("canWriteNamespace", () => {
     expect(canWriteNamespace(auth, "bilby").allowed).toBe(true);
   });
 
-  it("agent can write to collab", () => {
+  it("agent cannot write to collab directly", () => {
     const auth: AuthInfo = { role: "agent", clientId: "bilby" };
-    expect(canWriteNamespace(auth, "collab").allowed).toBe(true);
+    const result = canWriteNamespace(auth, "collab");
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toContain("collab");
   });
 
   it("agent cannot write to another agent's namespace", () => {
