@@ -1,10 +1,8 @@
 import { createHash } from "node:crypto";
 import { logger } from "./logger.ts";
 
-const EMBEDDING_TIMEOUT_MS = parseInt(
-  process.env.EMBEDDING_TIMEOUT_MS ?? "8000",
-  10,
-);
+const rawTimeout = parseInt(process.env.EMBEDDING_TIMEOUT_MS ?? "8000", 10);
+const EMBEDDING_TIMEOUT_MS = Number.isNaN(rawTimeout) ? 8000 : rawTimeout;
 
 const MAX_RETRIES = 2;
 const BACKOFF_DELAYS_MS = [200, 800];
@@ -22,6 +20,7 @@ export interface EmbeddingError {
     | "timeout"
     | "network"
     | "server_error"
+    | "client_error"
     | "malformed_response"
     | "input_invalid"
     | "no_litellm_url";
@@ -137,8 +136,12 @@ export async function generateEmbeddingWithMetadata(
 
         // 4xx: don't retry
         if (response.status >= 400 && response.status < 500) {
-          const code =
-            response.status === 400 ? "input_invalid" : "server_error";
+          const code: EmbeddingError["code"] =
+            response.status === 400 || response.status === 422
+              ? "input_invalid"
+              : response.status === 401 || response.status === 403
+                ? "client_error"
+                : "client_error";
           const msg = `LiteLLM returned ${response.status}`;
           logger.error("Embedding request failed (non-retryable)", {
             status: response.status,
@@ -157,7 +160,7 @@ export async function generateEmbeddingWithMetadata(
 
         // 5xx: retry if attempts remain
         if (attempt < totalAttempts) {
-          const delay = BACKOFF_DELAYS_MS[attempt - 1];
+          const delay = BACKOFF_DELAYS_MS[attempt - 1] ?? 800;
           logger.warn("Embedding request failed, retrying", {
             attempt,
             status: response.status,
@@ -234,7 +237,7 @@ export async function generateEmbeddingWithMetadata(
       }
 
       if (attempt < totalAttempts) {
-        const delay = BACKOFF_DELAYS_MS[attempt - 1];
+        const delay = BACKOFF_DELAYS_MS[attempt - 1] ?? 800;
         const code = classifyError(err);
         logger.warn("Embedding request failed, retrying", {
           attempt,

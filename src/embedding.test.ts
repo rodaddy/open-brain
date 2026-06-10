@@ -341,6 +341,24 @@ describe("generateEmbeddingWithMetadata", () => {
     expect(callCount).toBe(3);
   });
 
+  it("returns client_error on 401 without retry", async () => {
+    let callCount = 0;
+    mockFetch(async () => {
+      callCount++;
+      return new Response("Unauthorized", { status: 401 });
+    });
+
+    const result = await generateEmbeddingWithMetadata(
+      "hello",
+      "http://fake:4000",
+    );
+    expect(result.embedding).toBeNull();
+    expect(result.error).toBeDefined();
+    expect(result.error!.code).toBe("client_error");
+    expect(result.error!.lastStatus).toBe(401);
+    expect(callCount).toBe(1);
+  });
+
   it("returns input_invalid error on 400 without retry", async () => {
     let callCount = 0;
     mockFetch(async () => {
