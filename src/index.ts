@@ -11,6 +11,7 @@ import { generateEmbedding } from "./embedding.ts";
 import { runMigrations } from "./db/migrate.ts";
 import { logger } from "./logger.ts";
 import { requestLogger } from "./middleware/request-logger.ts";
+import { createRestRouter } from "./rest-api.ts";
 import type { AuthInfo, HealthStatus } from "./types.ts";
 
 const LITELLM_URL = process.env.LITELLM_URL;
@@ -61,12 +62,38 @@ export function createApp(
     res.status(status.status === "healthy" ? 200 : 503).json(status);
   });
 
-  // Auth middleware for MCP routes only
+  // Auth middleware
   const auth = authMiddleware(tokenMap);
+
+  // Shared deps for both MCP tools and REST API
+  const toolDeps = { pool, embedFn: generateEmbedding };
+
+  // REST API -- no MCP handshake required
+  app.use("/api/v1", auth, createRestRouter(toolDeps));
+  app.use(
+    "/api/v1",
+    (err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+      const pgCode =
+        typeof err === "object" && err !== null && "code" in err
+          ? String((err as { code?: unknown }).code)
+          : undefined;
+      const statusCode =
+        typeof err === "object" && err !== null && "statusCode" in err
+          ? Number((err as { statusCode?: unknown }).statusCode)
+          : undefined;
+      const status = statusCode && statusCode >= 400 ? statusCode : pgCode === "23505" ? 409 : 500;
+      logger.error("REST API error", {
+        error: err instanceof Error ? err.message : String(err),
+        code: pgCode,
+      });
+      res.status(status).json({
+        error: status === 500 ? "Internal error" : err instanceof Error ? err.message : "Request failed",
+      });
+    },
+  );
 
   // MCP server factory -- creates a fresh server per session to avoid
   // "Already connected to a transport" errors with concurrent clients
-  const toolDeps = { pool, embedFn: generateEmbedding };
   const serverFactory = () => {
     const s = createBrainServer();
     registerAllTools(s, toolDeps);
