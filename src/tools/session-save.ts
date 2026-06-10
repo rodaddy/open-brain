@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { toSql } from "pgvector/pg";
 import { canWrite } from "../permissions.ts";
+import { canWriteNamespace } from "../namespace-policy.ts";
 import { contentHash, EMBEDDING_MODEL } from "../embedding.ts";
 import type { AuthInfo } from "../types.ts";
 import { logger } from "../logger.ts";
@@ -35,6 +36,10 @@ export function registerSessionSave(server: McpServer, deps: ToolDeps): void {
           .array(z.string())
           .optional()
           .describe("Key decisions made during this session"),
+        namespace: z
+          .string()
+          .optional()
+          .describe("Namespace to store in (defaults to caller's clientId)"),
       },
       annotations: {
         title: "Save Session",
@@ -51,6 +56,20 @@ export function registerSessionSave(server: McpServer, deps: ToolDeps): void {
             {
               type: "text" as const,
               text: "Permission denied: cannot write to sessions",
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const ns = args.namespace ?? auth.clientId;
+      const nsCheck = canWriteNamespace(auth, ns);
+      if (!nsCheck.allowed) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Permission denied: ${nsCheck.reason}`,
             },
           ],
           isError: true,
@@ -76,8 +95,8 @@ export function registerSessionSave(server: McpServer, deps: ToolDeps): void {
       // If session_id provided, upsert: re-push updates the existing entry
       if (args.session_id) {
         const { rows } = await deps.pool.query(
-          `INSERT INTO sessions (session_id, project, summary, tags, blockers, next_steps, key_decisions, created_by, embedding, content_hash, embedded_at, embedding_model)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+          `INSERT INTO sessions (session_id, project, summary, tags, blockers, next_steps, key_decisions, created_by, namespace, embedding, content_hash, embedded_at, embedding_model)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
            ON CONFLICT (session_id) WHERE session_id IS NOT NULL
            DO UPDATE SET
              summary = EXCLUDED.summary,
@@ -99,6 +118,7 @@ export function registerSessionSave(server: McpServer, deps: ToolDeps): void {
             args.next_steps ?? [],
             args.key_decisions ?? [],
             auth.clientId,
+            ns,
             embeddingVal,
             hash,
             embeddedAt,
@@ -112,6 +132,7 @@ export function registerSessionSave(server: McpServer, deps: ToolDeps): void {
               type: "text" as const,
               text: JSON.stringify({
                 id: rows[0].id,
+                namespace: ns,
                 session_id: args.session_id,
                 embedded: !!embedding,
                 merged: !rows[0].is_new,
@@ -123,9 +144,9 @@ export function registerSessionSave(server: McpServer, deps: ToolDeps): void {
 
       // Legacy path: content_hash dedup (no session_id)
       const { rows } = await deps.pool.query(
-        `INSERT INTO sessions (project, summary, tags, blockers, next_steps, key_decisions, created_by, embedding, content_hash, embedded_at, embedding_model)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-         ON CONFLICT (content_hash) WHERE content_hash IS NOT NULL DO NOTHING
+        `INSERT INTO sessions (project, summary, tags, blockers, next_steps, key_decisions, created_by, namespace, embedding, content_hash, embedded_at, embedding_model)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+         ON CONFLICT (content_hash, namespace) WHERE content_hash IS NOT NULL DO NOTHING
          RETURNING id`,
         [
           args.project ?? null,
@@ -135,6 +156,7 @@ export function registerSessionSave(server: McpServer, deps: ToolDeps): void {
           args.next_steps ?? [],
           args.key_decisions ?? [],
           auth.clientId,
+          ns,
           embeddingVal,
           hash,
           embeddedAt,
@@ -159,6 +181,7 @@ export function registerSessionSave(server: McpServer, deps: ToolDeps): void {
             type: "text" as const,
             text: JSON.stringify({
               id: rows[0].id,
+              namespace: ns,
               embedded: !!embedding,
             }),
           },

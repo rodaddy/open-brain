@@ -135,6 +135,122 @@ describe("log_thought", () => {
     });
   });
 
+  describe("namespace support", () => {
+    it("defaults namespace to clientId when omitted", async () => {
+      let capturedParams: any[] = [];
+      const mockPool = {
+        query: async (...args: any[]) => {
+          capturedParams = args;
+          return { rows: [{ id: "ns-uuid", is_new: true }] };
+        },
+      };
+      const mockEmbed = createMockEmbed();
+      const auth: AuthInfo = { role: "agent", clientId: "bilby" };
+
+      const { client, cleanup } = await setupToolClient(
+        mockPool,
+        mockEmbed,
+        auth,
+      );
+
+      try {
+        const result = await client.callTool({
+          name: "log_thought",
+          arguments: { content: "Bilby's thought" },
+        });
+
+        expect(result.isError).toBeFalsy();
+        const parsed = JSON.parse((result.content as any)[0].text);
+        expect(parsed.namespace).toBe("bilby");
+        expect(capturedParams[1]).toContain("bilby");
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("uses explicit namespace when provided", async () => {
+      let capturedParams: any[] = [];
+      const mockPool = {
+        query: async (...args: any[]) => {
+          capturedParams = args;
+          return { rows: [{ id: "collab-uuid", is_new: true }] };
+        },
+      };
+      const mockEmbed = createMockEmbed();
+      const auth: AuthInfo = { role: "agent", clientId: "bilby" };
+
+      const { client, cleanup } = await setupToolClient(
+        mockPool,
+        mockEmbed,
+        auth,
+      );
+
+      try {
+        const result = await client.callTool({
+          name: "log_thought",
+          arguments: { content: "Shared thought", namespace: "collab" },
+        });
+
+        expect(result.isError).toBeFalsy();
+        const parsed = JSON.parse((result.content as any)[0].text);
+        expect(parsed.namespace).toBe("collab");
+        expect(capturedParams[1]).toContain("collab");
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("denies agent writing to another agent's namespace", async () => {
+      const mockPool = createMockPool();
+      const mockEmbed = createMockEmbed();
+      const auth: AuthInfo = { role: "agent", clientId: "bilby" };
+
+      const { client, cleanup } = await setupToolClient(
+        mockPool,
+        mockEmbed,
+        auth,
+      );
+
+      try {
+        const result = await client.callTool({
+          name: "log_thought",
+          arguments: { content: "Cross-write", namespace: "nagatha" },
+        });
+
+        expect(result.isError).toBe(true);
+        const text = (result.content as any)[0].text;
+        expect(text).toContain("Permission denied");
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("allows admin to write to any namespace", async () => {
+      const mockPool = createMockPool([{ id: "admin-uuid", is_new: true }]);
+      const mockEmbed = createMockEmbed();
+      const auth: AuthInfo = { role: "admin", clientId: "rico" };
+
+      const { client, cleanup } = await setupToolClient(
+        mockPool,
+        mockEmbed,
+        auth,
+      );
+
+      try {
+        const result = await client.callTool({
+          name: "log_thought",
+          arguments: { content: "Admin write", namespace: "bilby" },
+        });
+
+        expect(result.isError).toBeFalsy();
+        const parsed = JSON.parse((result.content as any)[0].text);
+        expect(parsed.namespace).toBe("bilby");
+      } finally {
+        await cleanup();
+      }
+    });
+  });
+
   describe("permission denied", () => {
     it("returns isError: true when role cannot write thoughts", async () => {
       const mockPool = createMockPool();
