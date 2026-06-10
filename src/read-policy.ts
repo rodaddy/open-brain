@@ -13,7 +13,7 @@ export function readableNamespaces(auth: AuthInfo): string[] | undefined {
 export function canReadNamespace(auth: AuthInfo, namespace: string): boolean {
   if (
     namespace === "all" &&
-    auth.namespaceSource === "header" &&
+    auth.namespaceSource !== "header" &&
     (auth.role === "admin" || auth.role === "n8n")
   ) {
     return true;
@@ -28,7 +28,7 @@ export function namespaceFilterFor(
 ): string | string[] | undefined {
   if (
     namespace === "all" &&
-    auth.namespaceSource === "header" &&
+    auth.namespaceSource !== "header" &&
     (auth.role === "admin" || auth.role === "n8n")
   ) {
     return undefined;

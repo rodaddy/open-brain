@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { canReadNamespace } from "../read-policy.ts";
 import type { AuthInfo, Table } from "../types.ts";
 import { logger } from "../logger.ts";
 import type { ToolDeps } from "./index.ts";
@@ -42,6 +43,12 @@ export function registerScanNamespace(server: McpServer, deps: ToolDeps): void {
       if (!auth || (auth.role !== "admin" && auth.role !== "n8n")) {
         return {
           content: [{ type: "text" as const, text: "Permission denied: admin or n8n role required" }],
+          isError: true,
+        };
+      }
+      if (!canReadNamespace(auth, args.namespace)) {
+        return {
+          content: [{ type: "text" as const, text: "Permission denied: namespace read access denied" }],
           isError: true,
         };
       }

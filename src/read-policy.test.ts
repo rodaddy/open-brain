@@ -21,7 +21,7 @@ describe("read-policy", () => {
     expect(namespaceFilterFor(auth)).toEqual(["bilby", "collab"]);
   });
 
-  it("allows delegated admin to request namespace all", () => {
+  it("keeps delegated admin scoped when requesting namespace all", () => {
     const auth: AuthInfo = {
       role: "admin",
       clientId: "bilby",
@@ -30,6 +30,18 @@ describe("read-policy", () => {
     };
 
     expect(readableNamespaces(auth)).toEqual(["bilby", "collab"]);
+    expect(canReadNamespace(auth, "all")).toBe(false);
+  });
+
+  it("allows token-sourced admin to request namespace all", () => {
+    const auth: AuthInfo = {
+      role: "admin",
+      clientId: "admin",
+      tokenClientId: "admin",
+      namespaceSource: "token",
+    };
+
+    expect(readableNamespaces(auth)).toBeUndefined();
     expect(canReadNamespace(auth, "all")).toBe(true);
     expect(namespaceFilterFor(auth, "all")).toBeUndefined();
   });
