@@ -155,7 +155,14 @@ describe("authMiddleware", () => {
 
     middleware(req as any, res as any, next);
 
-    expect((req as any).auth).toEqual({ role: "admin", clientId: "admin" });
+    expect((req as any).auth).toEqual({
+      role: "admin",
+      clientId: "admin",
+      tokenClientId: "admin",
+      agentId: undefined,
+      namespaceSource: "token",
+      headerRole: undefined,
+    });
     expect(next).toHaveBeenCalledTimes(1);
   });
 
@@ -166,8 +173,53 @@ describe("authMiddleware", () => {
 
     middleware(req as any, res as any, next);
 
-    expect((req as any).auth).toEqual({ role: "agent", clientId: "agent" });
+    expect((req as any).auth).toEqual({
+      role: "agent",
+      clientId: "agent",
+      tokenClientId: "agent",
+      agentId: undefined,
+      namespaceSource: "token",
+      headerRole: undefined,
+    });
     expect(next).toHaveBeenCalledTimes(1);
+  });
+
+  test("uses X-Namespace as effective clientId and keeps token identity", () => {
+    const req = mockReq({
+      authorization: "Bearer valid-agent-token",
+      "x-namespace": "bilby",
+      "x-agent-id": "bilby",
+      "x-role": "agent",
+    });
+    const res = mockRes();
+    const next = mock(() => {});
+
+    middleware(req as any, res as any, next);
+
+    expect((req as any).auth).toEqual({
+      role: "agent",
+      clientId: "bilby",
+      tokenClientId: "agent",
+      agentId: "bilby",
+      namespaceSource: "header",
+      headerRole: "agent",
+    });
+    expect(next).toHaveBeenCalledTimes(1);
+  });
+
+  test("rejects invalid delegated namespace header", () => {
+    const req = mockReq({
+      authorization: "Bearer valid-agent-token",
+      "x-namespace": "../bilby",
+    });
+    const res = mockRes();
+    const next = mock(() => {});
+
+    middleware(req as any, res as any, next);
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toEqual({ error: "Invalid X-Namespace header" });
+    expect(next).not.toHaveBeenCalled();
   });
 
   test("handles empty token map gracefully", () => {

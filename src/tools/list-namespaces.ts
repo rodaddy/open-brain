@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { canRead } from "../permissions.ts";
+import { readableNamespaces } from "../read-policy.ts";
 import type { AuthInfo, Table } from "../types.ts";
 import { logger } from "../logger.ts";
 import type { ToolDeps } from "./index.ts";
@@ -48,18 +49,23 @@ export function registerListNamespaces(server: McpServer, deps: ToolDeps): void 
       }
 
       // Query each table for namespace counts
-      const queries = accessibleTables.map((table) =>
-        deps.pool.query(
+      const readable = readableNamespaces(auth);
+      const queries = accessibleTables.map((table) => {
+        const namespacePredicate = readable
+          ? " AND namespace = ANY($1::text[])"
+          : "";
+        return deps.pool.query(
           `SELECT
             '${table}' AS table_name,
             namespace,
             COUNT(*) AS count
           FROM ${table}
-          WHERE archived_at IS NULL
+          WHERE archived_at IS NULL${namespacePredicate}
           GROUP BY namespace
           ORDER BY count DESC`,
-        ),
-      );
+          readable ? [readable] : [],
+        );
+      });
 
       const results = await Promise.all(queries);
 

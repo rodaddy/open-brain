@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { canRead } from "../permissions.ts";
+import { readableNamespaces } from "../read-policy.ts";
 import type { AuthInfo, Table, Tier } from "../types.ts";
 import { logger } from "../logger.ts";
 import type { ToolDeps } from "./index.ts";
@@ -17,24 +18,29 @@ function buildWhereClause(
   alias: string,
   includeArchived: boolean,
   tier?: Tier,
+  namespaceParamIndex?: number,
 ): string {
   const archiveFilter = includeArchived
     ? ""
     : ` AND ${alias}.archived_at IS NULL`;
   const tierFilter = tier ? ` AND ${alias}.tier = '${tier}'` : "";
-  return `WHERE ${alias}.created_at >= NOW() - INTERVAL '1 day' * $1${archiveFilter}${tierFilter}`;
+  const namespaceFilter = namespaceParamIndex
+    ? ` AND ${alias}.namespace = ANY($${namespaceParamIndex}::text[])`
+    : "";
+  return `WHERE ${alias}.created_at >= NOW() - INTERVAL '1 day' * $1${archiveFilter}${tierFilter}${namespaceFilter}`;
 }
 
 function buildTableSelect(
   table: Table,
   includeArchived: boolean,
   tier?: Tier,
+  namespaceParamIndex?: number,
 ): string {
   if (tier && !VALID_TIERS.has(tier)) throw new Error(`Invalid tier: ${tier}`);
   const alias = TABLE_ALIAS[table];
   const label = SOURCE_LABELS[table];
   const preview = CONTENT_PREVIEW[table];
-  const where = buildWhereClause(alias, includeArchived, tier);
+  const where = buildWhereClause(alias, includeArchived, tier, namespaceParamIndex);
 
   return `SELECT
     '${label}' AS source_type,
@@ -51,10 +57,11 @@ function buildCountSelect(
   table: Table,
   includeArchived: boolean,
   tier?: Tier,
+  namespaceParamIndex?: number,
 ): string {
   if (tier && !VALID_TIERS.has(tier)) throw new Error(`Invalid tier: ${tier}`);
   const alias = TABLE_ALIAS[table];
-  const where = buildWhereClause(alias, includeArchived, tier);
+  const where = buildWhereClause(alias, includeArchived, tier, namespaceParamIndex);
 
   return `SELECT COUNT(*) AS cnt
   FROM ${table} ${alias}
@@ -175,10 +182,12 @@ export function registerListRecent(server: McpServer, deps: ToolDeps): void {
       const includeArchived = args.include_archived ?? false;
       const tier = args.tier as Tier | undefined;
       const useArray = args.response_format === "array";
+      const readable = readableNamespaces(auth);
+      const namespaceParamIndex = readable ? 4 : undefined;
 
       // Build UNION ALL of table SELECTs
       const selects = accessibleTables.map((t) =>
-        buildTableSelect(t, includeArchived, tier),
+        buildTableSelect(t, includeArchived, tier, namespaceParamIndex),
       );
 
       const unionSql = selects.join("\nUNION ALL\n");
@@ -186,7 +195,7 @@ export function registerListRecent(server: McpServer, deps: ToolDeps): void {
 
       // Build total count query
       const countSelects = accessibleTables.map((t) =>
-        buildCountSelect(t, includeArchived, tier),
+        buildCountSelect(t, includeArchived, tier, namespaceParamIndex),
       );
       const countSql = `SELECT SUM(cnt)::int AS total_count FROM (${countSelects.join("\nUNION ALL\n")}) counts`;
 
@@ -199,8 +208,8 @@ export function registerListRecent(server: McpServer, deps: ToolDeps): void {
       });
 
       const [dataResult, countResult] = await Promise.all([
-        deps.pool.query(sql, [days, limit, offset]),
-        deps.pool.query(countSql, [days]).catch(() => null),
+        deps.pool.query(sql, readable ? [days, limit, offset, readable] : [days, limit, offset]),
+        deps.pool.query(countSql, readable ? [days, undefined, undefined, readable] : [days]).catch(() => null),
       ]);
 
       const totalCount = countResult?.rows[0]?.total_count ?? null;

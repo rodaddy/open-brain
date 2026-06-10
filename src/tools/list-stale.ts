@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { canRead } from "../permissions.ts";
+import { readableNamespaces } from "../read-policy.ts";
 import type { AuthInfo, Table, Tier } from "../types.ts";
 import { logger } from "../logger.ts";
 import type { ToolDeps } from "./index.ts";
@@ -13,18 +14,29 @@ import {
   VALID_TIERS,
 } from "./table-constants.ts";
 
-function buildWhereClause(alias: string, tier?: Tier): string {
+function buildWhereClause(
+  alias: string,
+  tier?: Tier,
+  namespaceParamIndex?: number,
+): string {
   const tierFilter = tier ? ` AND ${alias}.tier = '${tier}'` : "";
+  const namespaceFilter = namespaceParamIndex
+    ? ` AND ${alias}.namespace = ANY($${namespaceParamIndex}::text[])`
+    : "";
   return `WHERE ${alias}.archived_at IS NULL
-    AND COALESCE(${alias}.last_accessed_at, ${alias}.created_at) < NOW() - INTERVAL '1 day' * $1${tierFilter}`;
+    AND COALESCE(${alias}.last_accessed_at, ${alias}.created_at) < NOW() - INTERVAL '1 day' * $1${tierFilter}${namespaceFilter}`;
 }
 
-function buildStaleSelect(table: Table, tier?: Tier): string {
+function buildStaleSelect(
+  table: Table,
+  tier?: Tier,
+  namespaceParamIndex?: number,
+): string {
   if (tier && !VALID_TIERS.has(tier)) throw new Error(`Invalid tier: ${tier}`);
   const alias = TABLE_ALIAS[table];
   const label = SOURCE_LABELS[table];
   const preview = CONTENT_PREVIEW[table];
-  const where = buildWhereClause(alias, tier);
+  const where = buildWhereClause(alias, tier, namespaceParamIndex);
 
   return `SELECT
     '${label}' AS source_type,
@@ -40,10 +52,14 @@ function buildStaleSelect(table: Table, tier?: Tier): string {
   ${where}`;
 }
 
-function buildCountSelect(table: Table, tier?: Tier): string {
+function buildCountSelect(
+  table: Table,
+  tier?: Tier,
+  namespaceParamIndex?: number,
+): string {
   if (tier && !VALID_TIERS.has(tier)) throw new Error(`Invalid tier: ${tier}`);
   const alias = TABLE_ALIAS[table];
-  const where = buildWhereClause(alias, tier);
+  const where = buildWhereClause(alias, tier, namespaceParamIndex);
 
   return `SELECT COUNT(*) AS cnt
   FROM ${table} ${alias}
@@ -163,13 +179,17 @@ export function registerListStale(server: McpServer, deps: ToolDeps): void {
       const offset = args.offset ?? 0;
       const tier = args.tier as Tier | undefined;
       const useArray = args.response_format === "array";
+      const readable = readableNamespaces(auth);
+      const namespaceParamIndex = readable ? 4 : undefined;
 
-      const selects = accessibleTables.map((t) => buildStaleSelect(t, tier));
+      const selects = accessibleTables.map((t) =>
+        buildStaleSelect(t, tier, namespaceParamIndex),
+      );
       const unionSql = selects.join("\nUNION ALL\n");
       const sql = `${unionSql}\nORDER BY effective_last_access ASC\nLIMIT $2 OFFSET $3`;
 
       const countSelects = accessibleTables.map((t) =>
-        buildCountSelect(t, tier),
+        buildCountSelect(t, tier, namespaceParamIndex),
       );
       const countSql = `SELECT SUM(cnt)::int AS total_count FROM (${countSelects.join("\nUNION ALL\n")}) counts`;
 
@@ -182,8 +202,8 @@ export function registerListStale(server: McpServer, deps: ToolDeps): void {
       });
 
       const [dataResult, countResult] = await Promise.all([
-        deps.pool.query(sql, [days, limit, offset]),
-        deps.pool.query(countSql, [days]).catch(() => null),
+        deps.pool.query(sql, readable ? [days, limit, offset, readable] : [days, limit, offset]),
+        deps.pool.query(countSql, readable ? [days, undefined, undefined, readable] : [days]).catch(() => null),
       ]);
 
       const totalCount = countResult?.rows[0]?.total_count ?? null;
