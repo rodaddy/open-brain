@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { canRead } from "../permissions.ts";
+import { canReadNamespace, namespaceFilterFor } from "../read-policy.ts";
 import type { AuthInfo, Tier } from "../types.ts";
 import { logger } from "../logger.ts";
 import type { ToolDeps } from "./index.ts";
@@ -12,6 +13,8 @@ import {
   type SearchMode,
   type SearchRow,
 } from "./search-brain.ts";
+
+type NamespaceFilter = string | string[];
 
 interface UnifiedResult {
   source: "brain" | "qmd";
@@ -166,7 +169,19 @@ export function registerSearchAll(server: McpServer, deps: ToolDeps): void {
       const sources = (args.sources as "all" | "brain" | "qmd") ?? "all";
       const mode = (args.search_mode as SearchMode) ?? "hybrid";
       const tier = args.tier as Tier | undefined;
-      const namespace = args.namespace as string | undefined;
+      const requestedNamespace = args.namespace as string | undefined;
+      if (requestedNamespace && !canReadNamespace(auth, requestedNamespace)) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "Permission denied: namespace read access denied",
+            },
+          ],
+          isError: true,
+        };
+      }
+      const namespace = namespaceFilterFor(auth, requestedNamespace);
       const searchBrain = sources === "all" || sources === "brain";
       const searchQmdSource = sources === "all" || sources === "qmd";
 
@@ -229,7 +244,7 @@ async function searchOB(
   limit: number,
   mode: SearchMode = "hybrid",
   tier?: Tier,
-  namespace?: string,
+  namespace?: NamespaceFilter,
 ): Promise<UnifiedResult[]> {
   const accessibleTables = ALL_TABLES.filter((t) => canRead(auth.role, t));
   if (accessibleTables.length === 0) return [];

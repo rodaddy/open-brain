@@ -18,7 +18,18 @@ export function requestLogger(
       path: req.path,
       status: res.statusCode,
       durationMs,
-      consumerId: (req as any).auth?.clientId ?? "anonymous",
+      consumerId:
+        (req as any).auth?.tokenClientId ??
+        (req as any).auth?.clientId ??
+        "anonymous",
+      effectiveNamespace: (req as any).auth?.clientId,
+      namespaceSource:
+        (req as any).auth?.namespaceSource === "header"
+          ? "X-Namespace header"
+          : (req as any).auth
+            ? "token"
+            : undefined,
+      agentId: (req as any).auth?.agentId,
     });
   });
 

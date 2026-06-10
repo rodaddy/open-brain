@@ -78,6 +78,20 @@ function getSessionAuth(sessionId: string): AuthInfo | undefined {
   return sessions.get(sessionId)?.auth;
 }
 
+function tokenClientId(auth: AuthInfo | undefined): string | undefined {
+  return auth?.tokenClientId ?? auth?.clientId;
+}
+
+function sameTokenIdentity(
+  requestAuth: AuthInfo | undefined,
+  sessionAuth: AuthInfo,
+): boolean {
+  return (
+    tokenClientId(requestAuth) === tokenClientId(sessionAuth) &&
+    requestAuth?.role === sessionAuth.role
+  );
+}
+
 export function getSessionCount(): number {
   return sessions.size;
 }
@@ -102,10 +116,7 @@ export function createTransportHandlers(
         const entry = sessions.get(sessionId)!;
 
         // Verify the bearer token matches the session's original auth
-        if (
-          reqAuth?.clientId !== entry.auth.clientId ||
-          reqAuth?.role !== entry.auth.role
-        ) {
+        if (!sameTokenIdentity(reqAuth, entry.auth)) {
           res
             .status(403)
             .json({ error: "Token does not match session identity" });
@@ -199,10 +210,7 @@ export function createTransportHandlers(
         const entry = sessions.get(sessionId)!;
         const reqAuth = (req as any).auth as AuthInfo | undefined;
 
-        if (
-          reqAuth?.clientId !== entry.auth.clientId ||
-          reqAuth?.role !== entry.auth.role
-        ) {
+        if (!sameTokenIdentity(reqAuth, entry.auth)) {
           res
             .status(403)
             .json({ error: "Token does not match session identity" });
@@ -226,10 +234,7 @@ export function createTransportHandlers(
         const entry = sessions.get(sessionId)!;
         const reqAuth = (req as any).auth as AuthInfo | undefined;
 
-        if (
-          reqAuth?.clientId !== entry.auth.clientId ||
-          reqAuth?.role !== entry.auth.role
-        ) {
+        if (!sameTokenIdentity(reqAuth, entry.auth)) {
           res
             .status(403)
             .json({ error: "Token does not match session identity" });

@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { toSql } from "pgvector/pg";
 import { canRead } from "../permissions.ts";
+import { canReadNamespace, namespaceFilterFor } from "../read-policy.ts";
 import type { AuthInfo, LinkRelation, Table, Tier } from "../types.ts";
 import type { ToolDeps } from "./index.ts";
 import { logger } from "../logger.ts";
@@ -685,7 +686,19 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
       const offset = args.offset ?? 0;
       const mode = (args.search_mode as SearchMode) ?? "hybrid";
       const tier = args.tier as Tier | undefined;
-      const namespace = args.namespace as string | undefined;
+      const requestedNamespace = args.namespace as string | undefined;
+      if (requestedNamespace && !canReadNamespace(auth, requestedNamespace)) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "Permission denied: namespace read access denied",
+            },
+          ],
+          isError: true,
+        };
+      }
+      const namespace = namespaceFilterFor(auth, requestedNamespace);
 
       let rows;
       try {

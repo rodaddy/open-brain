@@ -9,6 +9,13 @@ export function canWriteNamespace(
   auth: AuthInfo,
   targetNamespace: string,
 ): NamespaceCheck {
+  if (auth.namespaceSource === "header" && targetNamespace !== auth.clientId) {
+    return {
+      allowed: false,
+      reason: `X-Namespace header requires writes to namespace '${auth.clientId}'`,
+    };
+  }
+
   if (auth.role === "admin" || auth.role === "n8n") {
     return { allowed: true };
   }

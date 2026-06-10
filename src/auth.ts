@@ -19,6 +19,8 @@ const ROLE_ENV_KEYS: Array<{ envKey: string; role: Role }> = [
   { envKey: "AUTH_TOKEN_READONLY", role: "readonly" },
 ];
 
+const DELEGATED_ID_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
+
 export function buildTokenMap(
   env: Record<string, string | undefined>,
 ): Map<string, AuthInfo> {
@@ -96,11 +98,37 @@ export function authMiddleware(
     }
 
     if (matched) {
-      (req as any).auth = matched;
+      const namespace = headerValue(req.headers["x-namespace"]);
+      if (namespace && matched.role !== "admin" && matched.role !== "n8n" && matched.role !== "agent") {
+        res.status(403).json({ error: "Role not permitted to delegate namespace" });
+        return;
+      }
+      const agentId = headerValue(req.headers["x-agent-id"]);
+      if (namespace && !DELEGATED_ID_RE.test(namespace)) {
+        res.status(400).json({ error: "Invalid X-Namespace header" });
+        return;
+      }
+      if (agentId && !DELEGATED_ID_RE.test(agentId)) {
+        res.status(400).json({ error: "Invalid X-Agent-Id header" });
+        return;
+      }
+
+      (req as any).auth = {
+        ...matched,
+        clientId: namespace ?? matched.clientId,
+        tokenClientId: matched.clientId,
+        agentId,
+        namespaceSource: namespace ? "header" : "token",
+      } satisfies AuthInfo;
       next();
       return;
     }
 
     res.status(401).json({ error: "Invalid token" });
   };
+}
+
+function headerValue(value: string | string[] | undefined): string | undefined {
+  if (Array.isArray(value)) return value[0]?.trim() || undefined;
+  return value?.trim() || undefined;
 }

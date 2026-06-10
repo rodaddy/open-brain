@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { canRead } from "../permissions.ts";
+import { readableNamespaces } from "../read-policy.ts";
 import type { AuthInfo, Table } from "../types.ts";
 import type { ToolDeps } from "./index.ts";
 import { TABLE_COLUMNS } from "../table-projections.ts";
@@ -49,9 +50,13 @@ export function registerGetEntry(server: McpServer, deps: ToolDeps): void {
       }
 
       const columns = TABLE_COLUMNS[table];
+      const readable = readableNamespaces(auth);
+      const namespacePredicate = readable
+        ? " AND namespace = ANY($2::text[])"
+        : "";
       const { rows } = await deps.pool.query(
-        `SELECT ${columns} FROM ${table} WHERE id = $1 AND archived_at IS NULL`,
-        [args.id],
+        `SELECT ${columns} FROM ${table} WHERE id = $1 AND archived_at IS NULL${namespacePredicate}`,
+        readable ? [args.id, readable] : [args.id],
       );
 
       if (rows.length === 0) {

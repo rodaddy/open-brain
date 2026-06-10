@@ -108,6 +108,7 @@ describe("authMiddleware", () => {
   const tokenMap = new Map<string, AuthInfo>([
     ["valid-admin-token", { role: "admin", clientId: "admin" }],
     ["valid-agent-token", { role: "agent", clientId: "agent" }],
+    ["valid-readonly-token", { role: "readonly", clientId: "readonly" }],
   ]);
 
   const middleware = authMiddleware(tokenMap);
@@ -155,7 +156,13 @@ describe("authMiddleware", () => {
 
     middleware(req as any, res as any, next);
 
-    expect((req as any).auth).toEqual({ role: "admin", clientId: "admin" });
+    expect((req as any).auth).toEqual({
+      role: "admin",
+      clientId: "admin",
+      tokenClientId: "admin",
+      agentId: undefined,
+      namespaceSource: "token",
+    });
     expect(next).toHaveBeenCalledTimes(1);
   });
 
@@ -166,8 +173,66 @@ describe("authMiddleware", () => {
 
     middleware(req as any, res as any, next);
 
-    expect((req as any).auth).toEqual({ role: "agent", clientId: "agent" });
+    expect((req as any).auth).toEqual({
+      role: "agent",
+      clientId: "agent",
+      tokenClientId: "agent",
+      agentId: undefined,
+      namespaceSource: "token",
+    });
     expect(next).toHaveBeenCalledTimes(1);
+  });
+
+  test("uses X-Namespace as effective clientId and keeps token identity", () => {
+    const req = mockReq({
+      authorization: "Bearer valid-agent-token",
+      "x-namespace": "bilby",
+      "x-agent-id": "bilby",
+      "x-role": "agent",
+    });
+    const res = mockRes();
+    const next = mock(() => {});
+
+    middleware(req as any, res as any, next);
+
+    expect((req as any).auth).toEqual({
+      role: "agent",
+      clientId: "bilby",
+      tokenClientId: "agent",
+      agentId: "bilby",
+      namespaceSource: "header",
+    });
+    expect(next).toHaveBeenCalledTimes(1);
+  });
+
+  test("returns 403 when readonly token sends X-Namespace", () => {
+    const req = mockReq({
+      authorization: "Bearer valid-readonly-token",
+      "x-namespace": "bilby",
+    });
+    const res = mockRes();
+    const next = mock(() => {});
+
+    middleware(req as any, res as any, next);
+
+    expect(res.statusCode).toBe(403);
+    expect(res.body).toEqual({ error: "Role not permitted to delegate namespace" });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  test("rejects invalid delegated namespace header", () => {
+    const req = mockReq({
+      authorization: "Bearer valid-agent-token",
+      "x-namespace": "../bilby",
+    });
+    const res = mockRes();
+    const next = mock(() => {});
+
+    middleware(req as any, res as any, next);
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toEqual({ error: "Invalid X-Namespace header" });
+    expect(next).not.toHaveBeenCalled();
   });
 
   test("handles empty token map gracefully", () => {

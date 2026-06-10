@@ -17,6 +17,19 @@ describe("canWriteNamespace", () => {
     expect(canWriteNamespace(auth, "bilby").allowed).toBe(true);
   });
 
+  it("header namespace locks admin writes to delegated namespace", () => {
+    const auth: AuthInfo = {
+      role: "admin",
+      clientId: "bilby",
+      tokenClientId: "admin",
+      namespaceSource: "header",
+    };
+    expect(canWriteNamespace(auth, "bilby").allowed).toBe(true);
+    const result = canWriteNamespace(auth, "skippy");
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toContain("X-Namespace");
+  });
+
   it("agent can write to own namespace", () => {
     const auth: AuthInfo = { role: "agent", clientId: "bilby" };
     expect(canWriteNamespace(auth, "bilby").allowed).toBe(true);

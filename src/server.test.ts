@@ -29,6 +29,7 @@ const mockPool = {
 // -- Token map ----------------------------------------------------------------
 const testTokenMap = new Map<string, AuthInfo>([
   ["test-token-123", { role: "admin" as const, clientId: "test" }],
+  ["agent-token-123", { role: "agent" as const, clientId: "agent" }],
 ]);
 
 // -- Server lifecycle ---------------------------------------------------------
@@ -182,5 +183,54 @@ describe("POST /mcp", () => {
     const sessionId = res.headers.get("mcp-session-id");
     expect(sessionId).toBeTruthy();
     expect(typeof sessionId).toBe("string");
+  });
+
+  it("allows same token session reuse with a different delegated namespace", async () => {
+    const initRequest = {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-03-26",
+        capabilities: {},
+        clientInfo: { name: "test", version: "1.0.0" },
+      },
+    };
+
+    const init = await fetch(`${baseUrl}/mcp`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer agent-token-123",
+        Accept: "application/json, text/event-stream",
+        "X-Namespace": "bilby",
+        "X-Agent-Id": "bilby",
+        "X-Role": "agent",
+      },
+      body: JSON.stringify(initRequest),
+    });
+
+    expect(init.status).toBe(200);
+    const sessionId = init.headers.get("mcp-session-id");
+    expect(sessionId).toBeTruthy();
+
+    const initialized = await fetch(`${baseUrl}/mcp`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer agent-token-123",
+        Accept: "application/json, text/event-stream",
+        "Mcp-Session-Id": sessionId!,
+        "X-Namespace": "skippy",
+        "X-Agent-Id": "skippy",
+        "X-Role": "agent",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        method: "notifications/initialized",
+      }),
+    });
+
+    expect(initialized.status).not.toBe(403);
   });
 });

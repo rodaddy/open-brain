@@ -86,6 +86,31 @@ describe("requestLogger middleware", () => {
 
     const [, data] = lastInfoCall();
     expect(data).toHaveProperty("consumerId", "admin");
+    expect(data).toHaveProperty("effectiveNamespace", "admin");
+    expect(data).toHaveProperty("namespaceSource", "token");
+  });
+
+  test("delegated namespace is logged separately from token consumer", () => {
+    const req = mockReq({
+      auth: {
+        role: "agent",
+        clientId: "bilby",
+        tokenClientId: "agent",
+        agentId: "bilby",
+        namespaceSource: "header",
+      },
+    });
+    const res = mockRes();
+    const next = mock(() => {});
+
+    requestLogger(req, res, next as NextFunction);
+    (res as any)._emit("finish");
+
+    const [, data] = lastInfoCall();
+    expect(data).toHaveProperty("consumerId", "agent");
+    expect(data).toHaveProperty("effectiveNamespace", "bilby");
+    expect(data).toHaveProperty("namespaceSource", "X-Namespace header");
+    expect(data).toHaveProperty("agentId", "bilby");
   });
 
   test("consumerId is 'anonymous' when req.auth is undefined", () => {

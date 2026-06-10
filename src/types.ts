@@ -26,6 +26,9 @@ export type Permission = "read" | "write" | "delete";
 export interface AuthInfo {
   role: Role;
   clientId: string;
+  tokenClientId?: string;
+  agentId?: string;
+  namespaceSource?: "token" | "header";
 }
 
 export interface PoolHealth {
