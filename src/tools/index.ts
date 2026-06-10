@@ -33,6 +33,9 @@ import { registerSessionWrap } from "./session-wrap.ts";
 import { registerUpsertEntity } from "./upsert-entity.ts";
 import { registerLinkEntities } from "./link-entities.ts";
 import { registerAdjacentContext } from "./adjacent-context.ts";
+import { registerPromoteEntry } from "./promote-entry.ts";
+import { registerDemoteEntry } from "./demote-entry.ts";
+import { registerScanNamespace } from "./scan-namespace.ts";
 
 export interface ToolDeps {
   pool: pg.Pool;
@@ -72,4 +75,7 @@ export function registerAllTools(server: McpServer, deps: ToolDeps): void {
   registerUpsertEntity(server, deps);
   registerLinkEntities(server, deps);
   registerAdjacentContext(server, deps);
+  registerPromoteEntry(server, deps);
+  registerDemoteEntry(server, deps);
+  registerScanNamespace(server, deps);
 }
