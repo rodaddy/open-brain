@@ -53,8 +53,11 @@ export function createApp(
       }
     }
 
+    // LiteLLM is an optional fallback/extraction dependency, not a core one:
+    // embeddings come from EMBEDDING_BASE_URL. Only the database gates health;
+    // litellm.connected stays reported for observability.
     const status: HealthStatus = {
-      status: dbHealth.connected && litellmConnected ? "healthy" : "degraded",
+      status: dbHealth.connected ? "healthy" : "degraded",
       database: dbHealth,
       litellm: { connected: litellmConnected },
       timestamp: new Date().toISOString(),
