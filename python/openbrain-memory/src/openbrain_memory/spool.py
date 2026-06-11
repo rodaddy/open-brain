@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import logging
 import os
 import stat
 import tempfile
@@ -13,6 +14,8 @@ from typing import Any, cast
 
 from .client import JSON
 from .policy import idempotency_key, redact_value
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -93,19 +96,59 @@ class JsonlSpool:
         self._reject_symlink(self.path)
         records: list[SpoolRecord] = []
         with self.path.open("r", encoding="utf-8") as handle:
-            for line in handle:
+            for line_number, line in enumerate(handle, start=1):
                 if not line.strip():
                     continue
-                payload = json.loads(line)
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    logger.warning(
+                        "Skipping corrupted spool record",
+                        extra={
+                            "spool_path": str(self.path),
+                            "spool_line": line_number,
+                        },
+                        exc_info=True,
+                    )
+                    continue
+                if not isinstance(payload, dict):
+                    self._warn_corrupted_record(line_number)
+                    continue
+                try:
+                    idempotency = str(payload["idempotency_key"])
+                    operation = str(payload["operation"])
+                    record_payload = payload.get("payload", {})
+                    created_at = float(payload.get("created_at", 0))
+                except (KeyError, TypeError, ValueError):
+                    self._warn_corrupted_record(line_number, exc_info=True)
+                    continue
+                if not isinstance(record_payload, dict):
+                    self._warn_corrupted_record(line_number)
+                    continue
                 records.append(
                     SpoolRecord(
-                        idempotency_key=str(payload["idempotency_key"]),
-                        operation=str(payload["operation"]),
-                        payload=payload.get("payload", {}),
-                        created_at=float(payload.get("created_at", 0)),
+                        idempotency_key=idempotency,
+                        operation=operation,
+                        payload=record_payload,
+                        created_at=created_at,
                     )
                 )
         return records
+
+    def _warn_corrupted_record(
+        self,
+        line_number: int,
+        *,
+        exc_info: bool = False,
+    ) -> None:
+        logger.warning(
+            "Skipping corrupted spool record",
+            extra={
+                "spool_path": str(self.path),
+                "spool_line": line_number,
+            },
+            exc_info=exc_info,
+        )
 
     def redacted_records(self) -> list[SpoolRecord]:
         return [record.redacted() for record in self.records()]

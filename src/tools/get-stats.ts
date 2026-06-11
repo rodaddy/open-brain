@@ -1,10 +1,40 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { canRead } from "../permissions.ts";
+import { appendReadNamespacePredicate } from "../read-policy.ts";
 import type { AuthInfo, Table } from "../types.ts";
 import { logger } from "../logger.ts";
 import type { ToolDeps } from "./index.ts";
 import { ALL_TABLES, CONTENT_PREVIEW, TABLE_ALIAS } from "./table-constants.ts";
+
+function readWhereClause(
+  auth: AuthInfo,
+  params: unknown[],
+  column = "namespace",
+): string {
+  const predicate = appendReadNamespacePredicate(auth, params, column);
+  return predicate ? `WHERE ${predicate.slice(" AND ".length)}` : "";
+}
+
+function accessLogScopeClause(
+  auth: AuthInfo,
+  tables: Table[],
+  params: unknown[],
+): string {
+  const existsParts = tables.map((table) => {
+    const predicate = appendReadNamespacePredicate(
+      auth,
+      params,
+      "source.namespace",
+    );
+    return `EXISTS (
+      SELECT 1 FROM ${table} source
+      WHERE source.id = eal.entry_id
+        AND eal.source_table = '${table}'${predicate}
+    )`;
+  });
+  return existsParts.length > 0 ? `WHERE ${existsParts.join(" OR ")}` : "";
+}
 
 export function registerGetStats(server: McpServer, deps: ToolDeps): void {
   server.registerTool(
@@ -48,73 +78,103 @@ export function registerGetStats(server: McpServer, deps: ToolDeps): void {
       }
 
       // 1. Entry counts per table (active vs archived)
-      const countQueries = accessibleTables.map((table) =>
-        deps.pool.query(
+      const countQueries = accessibleTables.map((table) => {
+        const params: unknown[] = [];
+        const whereClause = readWhereClause(auth, params);
+        return deps.pool.query(
           `SELECT
             '${table}' AS table_name,
             COUNT(*) FILTER (WHERE archived_at IS NULL) AS active,
             COUNT(*) FILTER (WHERE archived_at IS NOT NULL) AS archived
-          FROM ${table}`,
-        ),
-      );
+          FROM ${table}
+          ${whereClause}`,
+          params,
+        );
+      });
 
       // 2. Tier distribution per table
-      const tierQueries = accessibleTables.map((table) =>
-        deps.pool.query(
+      const tierQueries = accessibleTables.map((table) => {
+        const params: unknown[] = [];
+        const namespacePredicate = appendReadNamespacePredicate(auth, params);
+        return deps.pool.query(
           `SELECT
             '${table}' AS table_name,
             COALESCE(tier, 'warm') AS tier,
             COUNT(*) AS count
           FROM ${table}
-          WHERE archived_at IS NULL
+          WHERE archived_at IS NULL${namespacePredicate}
           GROUP BY tier`,
-        ),
-      );
+          params,
+        );
+      });
 
       // 3. Namespace breakdown (top 10)
-      const nsQueries = accessibleTables.map((table) =>
-        deps.pool.query(
+      const nsQueries = accessibleTables.map((table) => {
+        const params: unknown[] = [];
+        const namespacePredicate = appendReadNamespacePredicate(auth, params);
+        return deps.pool.query(
           `SELECT
             '${table}' AS table_name,
             namespace,
             COUNT(*) AS count
           FROM ${table}
-          WHERE archived_at IS NULL
+          WHERE archived_at IS NULL${namespacePredicate}
           GROUP BY namespace
           ORDER BY count DESC
           LIMIT 10`,
-        ),
-      );
+          params,
+        );
+      });
 
       // 4. Access stats
+      const accessStatsParams: unknown[] = [];
+      const accessStatsScope = accessLogScopeClause(
+        auth,
+        accessibleTables,
+        accessStatsParams,
+      );
       const accessStatsQuery = deps.pool.query(
         `SELECT
           COUNT(*) AS total_log_entries,
           COUNT(DISTINCT entry_id) AS unique_entries_accessed
-        FROM entry_access_log`,
+        FROM entry_access_log eal
+        ${accessStatsScope}`,
+        accessStatsParams,
       );
 
       // 5. Average access_count across all tables
-      const avgAccessQueries = accessibleTables.map((table) =>
-        deps.pool.query(
-          `SELECT AVG(COALESCE(access_count, 0)) AS avg_access FROM ${table} WHERE archived_at IS NULL`,
-        ),
-      );
+      const avgAccessQueries = accessibleTables.map((table) => {
+        const params: unknown[] = [];
+        const namespacePredicate = appendReadNamespacePredicate(auth, params);
+        return deps.pool.query(
+          `SELECT AVG(COALESCE(access_count, 0)) AS avg_access FROM ${table} WHERE archived_at IS NULL${namespacePredicate}`,
+          params,
+        );
+      });
 
       // 6. Zero-access entries per table
-      const zeroAccessQueries = accessibleTables.map((table) =>
-        deps.pool.query(
+      const zeroAccessQueries = accessibleTables.map((table) => {
+        const params: unknown[] = [];
+        const namespacePredicate = appendReadNamespacePredicate(auth, params);
+        return deps.pool.query(
           `SELECT '${table}' AS table_name, COUNT(*) AS count
           FROM ${table}
-          WHERE archived_at IS NULL AND COALESCE(access_count, 0) = 0`,
-        ),
-      );
+          WHERE archived_at IS NULL AND COALESCE(access_count, 0) = 0${namespacePredicate}`,
+          params,
+        );
+      });
 
       // 7. Top 10 most accessed entries
+      const topAccessedParams: unknown[] = [];
       const topAccessedParts = accessibleTables.map((table) => {
         const alias = TABLE_ALIAS[table];
         const preview = CONTENT_PREVIEW[table];
-        return `SELECT ${alias}.id, '${table}' AS table_name, ${preview} AS content_preview, COALESCE(${alias}.access_count, 0) AS access_count FROM ${table} ${alias} WHERE ${alias}.archived_at IS NULL`;
+        const namespacePredicate = appendReadNamespacePredicate(
+          auth,
+          topAccessedParams,
+          `${alias}.namespace`,
+        );
+        return `SELECT ${alias}.id, '${table}' AS table_name, ${preview} AS content_preview, COALESCE(${alias}.access_count, 0) AS access_count FROM ${table} ${alias} WHERE ${alias}.archived_at IS NULL${namespacePredicate}`;
       });
       const topAccessedSql = `SELECT id, table_name, LEFT(content_preview, 200) AS content_preview, access_count FROM (${topAccessedParts.join(" UNION ALL ")}) AS combined ORDER BY access_count DESC LIMIT 10`;
 
@@ -133,7 +193,7 @@ export function registerGetStats(server: McpServer, deps: ToolDeps): void {
         accessStatsQuery,
         Promise.all(avgAccessQueries),
         Promise.all(zeroAccessQueries),
-        deps.pool.query(topAccessedSql),
+        deps.pool.query(topAccessedSql, topAccessedParams),
       ]);
 
       // Build entry counts

@@ -99,7 +99,7 @@ export function authMiddleware(
 
     if (matched) {
       const namespace = headerValue(req.headers["x-namespace"]);
-      if (namespace && matched.role !== "admin" && matched.role !== "n8n" && matched.role !== "agent") {
+      if (namespace && matched.role !== "admin" && matched.role !== "n8n") {
         res.status(403).json({ error: "Role not permitted to delegate namespace" });
         return;
       }

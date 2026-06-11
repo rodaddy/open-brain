@@ -220,6 +220,42 @@ def test_non_idempotent_write_is_not_retried_but_is_spooled(tmp_path):
     assert spool.records()[0].operation == "log_thought"
 
 
+def test_spool_records_skip_corrupted_jsonl_lines(tmp_path, caplog):
+    spool = JsonlSpool(tmp_path / "spool.jsonl")
+    spool.path.write_text(
+        "\n".join(
+            [
+                '{"created_at":1,"idempotency_key":"good-1","operation":"one","payload":{"content":"ok"}}',
+                '{"created_at":2,"idempotency_key":"bad","operation":',
+                "{}",
+                "[]",
+                '{"idempotency_key":"missing-operation"}',
+                (
+                    '{"created_at":"not-a-float","idempotency_key":"bad-time",'
+                    '"operation":"bad","payload":{}}'
+                ),
+                (
+                    '{"created_at":2,"idempotency_key":"bad-payload",'
+                    '"operation":"bad","payload":[]}'
+                ),
+                (
+                    '{"created_at":3,"idempotency_key":"good-2",'
+                    '"operation":"two","payload":{"content":"still ok"}}'
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    records = spool.records()
+
+    assert [record.idempotency_key for record in records] == ["good-1", "good-2"]
+    assert [record.operation for record in records] == ["one", "two"]
+    assert "Skipping corrupted spool record" in caplog.text
+    assert caplog.text.count("Skipping corrupted spool record") == 6
+
+
 def test_failed_write_spools_replayable_payload_with_redacted_diagnostic_view(tmp_path):
     client = FlakyClient(failures=3)
     spool = JsonlSpool(tmp_path / "spool.jsonl")

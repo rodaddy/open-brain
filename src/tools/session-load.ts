@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { canRead } from "../permissions.ts";
+import { appendReadNamespacePredicate } from "../read-policy.ts";
 import type { AuthInfo } from "../types.ts";
 import type { ToolDeps } from "./index.ts";
 import { logger } from "../logger.ts";
@@ -44,10 +45,10 @@ export function registerSessionLoad(server: McpServer, deps: ToolDeps): void {
       }
 
       if (args.project) {
-        return handleProjectLoad(deps, args.project, auth.clientId);
+        return handleProjectLoad(deps, args.project, auth);
       }
 
-      return handleGlobalLoad(deps, auth.clientId);
+      return handleGlobalLoad(deps, auth);
     },
   );
 }
@@ -66,14 +67,16 @@ function logSessionAccess(deps: ToolDeps, sessionId: string, accessedBy?: string
     });
 }
 
-async function handleProjectLoad(deps: ToolDeps, project: string, accessedBy?: string) {
+async function handleProjectLoad(deps: ToolDeps, project: string, auth: AuthInfo) {
+  const params: unknown[] = [project];
+  const namespacePredicate = appendReadNamespacePredicate(auth, params);
   const sql = `SELECT ${SELECT_COLUMNS}
 FROM sessions
-WHERE project = $1 AND archived_at IS NULL
+WHERE project = $1 AND archived_at IS NULL${namespacePredicate}
 ORDER BY created_at DESC
 LIMIT 1`;
 
-  const { rows } = await deps.pool.query(sql, [project]);
+  const { rows } = await deps.pool.query(sql, params);
 
   if (rows.length === 0) {
     return {
@@ -86,7 +89,7 @@ LIMIT 1`;
     };
   }
 
-  logSessionAccess(deps, rows[0].id, accessedBy);
+  logSessionAccess(deps, rows[0].id, auth.clientId);
 
   return {
     content: [
@@ -98,14 +101,19 @@ LIMIT 1`;
   };
 }
 
-async function handleGlobalLoad(deps: ToolDeps, accessedBy?: string) {
+async function handleGlobalLoad(deps: ToolDeps, auth: AuthInfo) {
+  const params: unknown[] = [];
+  const namespacePredicate = appendReadNamespacePredicate(auth, params);
+  const whereClause = namespacePredicate
+    ? `WHERE archived_at IS NULL${namespacePredicate}`
+    : "WHERE archived_at IS NULL";
   const sql = `SELECT ${SELECT_COLUMNS}
 FROM sessions
-WHERE archived_at IS NULL
+${whereClause}
 ORDER BY created_at DESC
 LIMIT 1`;
 
-  const { rows } = await deps.pool.query(sql);
+  const { rows } = await deps.pool.query(sql, params);
 
   if (rows.length === 0) {
     return {
@@ -118,7 +126,7 @@ LIMIT 1`;
     };
   }
 
-  logSessionAccess(deps, rows[0].id, accessedBy);
+  logSessionAccess(deps, rows[0].id, auth.clientId);
 
   return {
     content: [

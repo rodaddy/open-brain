@@ -40,7 +40,10 @@ class FakeDreamClient:
             },
             "find_duplicates": {"duplicates": [{"table": "thoughts"}]},
             "scan_namespace": {
-                "candidates": [{"id": "promote-1", "table": "thoughts"}],
+                "candidates": [
+                    {"id": "promote-1", "table": "thoughts"},
+                    {"id": "promote-2", "table": "decisions"},
+                ],
                 "duplicates": [],
                 "already_promoted": [],
             },
@@ -83,8 +86,6 @@ def test_dream_once_defaults_to_dry_run_and_does_not_mutate():
     assert result.dry_run is True
     assert [name for name, _ in client.calls] == [
         "list_stale",
-        "tier_recommendations",
-        "tier_recommendations",
         "find_duplicates",
         "scan_namespace",
     ]
@@ -121,13 +122,28 @@ def test_dream_without_namespace_does_not_scan_or_promote():
     ]
 
 
+def test_dream_table_filter_scopes_tier_actions_without_namespace():
+    client = FakeDreamClient()
+    engine = DreamEngine(client)
+
+    result = engine.dream_once(table="thoughts")
+
+    assert [action.tool for action in result.actions] == ["set_tier"]
+    assert [action.arguments["table"] for action in result.actions] == ["thoughts"]
+    assert [action.arguments["id"] for action in result.actions] == ["hot-1"]
+
+
 def test_namespace_dream_suppresses_unscoped_tier_actions():
     client = FakeDreamClient()
     engine = DreamEngine(client)
 
     result = engine.dream_once(namespace="bilby")
 
-    assert [action.tool for action in result.actions] == ["promote_entry"]
+    assert [action.tool for action in result.actions] == [
+        "promote_entry",
+        "promote_entry",
+    ]
+    assert "tier_recommendations" not in [name for name, _ in client.calls]
 
 
 def test_namespace_dream_scans_against_policy_target_namespace():
@@ -147,6 +163,18 @@ def test_namespace_dream_scans_against_policy_target_namespace():
         },
     )
     assert result.actions[0].arguments["target_namespace"] == "team"
+    assert [action.arguments["table"] for action in result.actions] == ["thoughts"]
+
+
+def test_namespace_dream_table_filter_skips_non_matching_scan_candidates():
+    client = FakeDreamClient()
+    engine = DreamEngine(client)
+
+    result = engine.dream_once(namespace="bilby", table="decisions")
+
+    assert [action.tool for action in result.actions] == ["promote_entry"]
+    assert [action.arguments["table"] for action in result.actions] == ["decisions"]
+    assert [action.arguments["id"] for action in result.actions] == ["promote-2"]
 
 
 def test_dream_once_fails_closed_on_malformed_tier_candidate():

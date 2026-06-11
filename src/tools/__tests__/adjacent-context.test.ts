@@ -327,6 +327,35 @@ describe("adjacent_context", () => {
     }
   });
 
+  it("denies explicit unreadable namespace for agent role", async () => {
+    const calls: Array<{ sql: string; params?: any[] }> = [];
+    const mockPool = {
+      query: async (sql: string, params?: any[]) => {
+        calls.push({ sql, params });
+        return { rows: [] };
+      },
+    };
+    const auth: AuthInfo = { role: "agent", clientId: "bilby" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "adjacent_context",
+        arguments: {
+          type: "entity",
+          id: SOURCE_ID,
+          namespace: "skippy",
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      expect((result.content as any)[0].text).toContain("Permission denied");
+      expect(calls).toHaveLength(0);
+    } finally {
+      await cleanup();
+    }
+  });
+
   // ── EMPTY RESULTS ──
 
   it("returns empty links array when no links found", async () => {

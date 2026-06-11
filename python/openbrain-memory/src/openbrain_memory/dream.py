@@ -130,26 +130,27 @@ class DreamEngine:
                 ),
             )
         )
-        reports["promote_recommendations"] = self.tier_recommendations(
-            "promote",
-            limit=limit,
-            threshold_days=_bounded_int(
-                filters.get("promote_threshold_days"),
-                self.policy.promote_threshold_days,
-                "promote_threshold_days",
-                365,
-            ),
-        )
-        reports["demote_recommendations"] = self.tier_recommendations(
-            "demote",
-            limit=limit,
-            threshold_days=_bounded_int(
-                filters.get("demote_threshold_days"),
-                self.policy.demote_threshold_days,
-                "demote_threshold_days",
-                365,
-            ),
-        )
+        if namespace is None:
+            reports["promote_recommendations"] = self.tier_recommendations(
+                "promote",
+                limit=limit,
+                threshold_days=_bounded_int(
+                    filters.get("promote_threshold_days"),
+                    self.policy.promote_threshold_days,
+                    "promote_threshold_days",
+                    365,
+                ),
+            )
+            reports["demote_recommendations"] = self.tier_recommendations(
+                "demote",
+                limit=limit,
+                threshold_days=_bounded_int(
+                    filters.get("demote_threshold_days"),
+                    self.policy.demote_threshold_days,
+                    "demote_threshold_days",
+                    365,
+                ),
+            )
         reports["duplicates"] = self.find_duplicates(
             **_only(
                 filters,
@@ -260,6 +261,8 @@ class DreamEngine:
             scan = reports.get("namespace_scan")
             for candidate in _candidate_items(scan, "candidates"):
                 table = _required_str(candidate, "table")
+                if table_filter is not None and table != table_filter:
+                    continue
                 entry_id = _required_str(candidate, "id")
                 actions.append(
                     DreamAction(
