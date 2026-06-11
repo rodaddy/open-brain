@@ -85,16 +85,14 @@ def test_append_event_routes_to_session_event_wrapper():
 
     memory.append_event("assistant", "Here is the update.", event_type="action", turn=3)
 
-    assert client.calls[-1] == (
-        "append_session_event",
-        {
-            "event_type": "action",
-            "content": "Here is the update.",
-            "source": "assistant",
-            "metadata": {"turn": 3},
-            "session_key": "conversation",
-        },
-    )
+    name, payload = client.calls[-1]
+    assert name == "append_session_event"
+    assert payload["event_type"] == "action"
+    assert payload["content"] == "Here is the update."
+    assert payload["source"] == "assistant"
+    assert payload["metadata"]["turn"] == 3
+    assert payload["metadata"]["idempotency_key"].startswith("obmem-")
+    assert payload["session_key"] == "conversation"
 
 
 def test_remember_fact_routes_to_thought_memory_write_semantics():
@@ -104,13 +102,11 @@ def test_remember_fact_routes_to_thought_memory_write_semantics():
 
     memory.remember_fact("The client uses MCP-over-HTTP.", tags=["client"])
 
-    assert client.calls[-1] == (
-        "log_thought",
-        {
-            "content": "The client uses MCP-over-HTTP.",
-            "tags": ["fact", "client"],
-        },
-    )
+    name, payload = client.calls[-1]
+    assert name == "log_thought"
+    assert payload["content"] == "The client uses MCP-over-HTTP."
+    assert payload["tags"][:2] == ["fact", "client"]
+    assert payload["tags"][2].startswith("idempotency:obmem-")
 
 
 def test_remember_decision_routes_to_decision_logging_semantics():
@@ -119,15 +115,10 @@ def test_remember_decision_routes_to_decision_logging_semantics():
 
     memory.remember_decision("Use OpenBrainClient wrappers, not raw protocol calls.")
 
-    assert client.calls == [
-        (
-            "log_decision",
-            {
-                "title": "Use OpenBrainClient wrappers, not raw protocol calls.",
-                "rationale": "Use OpenBrainClient wrappers, not raw protocol calls.",
-            },
-        )
-    ]
+    assert client.calls[0][0] == "log_decision"
+    assert client.calls[0][1]["title"] == "Use OpenBrainClient wrappers, not raw protocol calls."
+    assert client.calls[0][1]["rationale"] == "Use OpenBrainClient wrappers, not raw protocol calls."
+    assert client.calls[0][1]["tags"][0].startswith("idempotency:obmem-")
 
 
 def test_recall_assembles_bounded_prompt_context():

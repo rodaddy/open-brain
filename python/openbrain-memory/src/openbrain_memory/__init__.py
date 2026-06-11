@@ -13,6 +13,8 @@ from .client import (
     OpenBrainProtocolError,
     OpenBrainToolError,
 )
+from .policy import RetryExhaustedError, RetryPolicy, redact_text, redact_value
+from .spool import JsonlSpool, SpoolRecord, replay_records
 
 __all__ = [
     "AgentMemory",
@@ -26,4 +28,11 @@ __all__ = [
     "OpenBrainHTTPError",
     "OpenBrainProtocolError",
     "OpenBrainToolError",
+    "JsonlSpool",
+    "RetryExhaustedError",
+    "RetryPolicy",
+    "SpoolRecord",
+    "redact_text",
+    "redact_value",
+    "replay_records",
 ]
