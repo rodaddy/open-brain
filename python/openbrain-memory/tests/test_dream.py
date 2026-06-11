@@ -126,6 +126,56 @@ def test_namespace_dream_suppresses_unscoped_tier_actions():
     assert [action.tool for action in result.actions] == ["promote_entry"]
 
 
+def test_dream_once_fails_closed_on_malformed_tier_candidate():
+    client = FakeDreamClient()
+    client.responses["tier_recommendations"]["promote"] = {
+        "candidates": [
+            {
+                "id": "hot-1",
+                "table": "thoughts",
+                "suggested_tier": "hot",
+            },
+            {
+                "id": "bad-1",
+                "table": "thoughts",
+            },
+        ]
+    }
+    engine = DreamEngine(client)
+
+    with pytest.raises(ValueError, match="suggested_tier"):
+        engine.dream_once()
+
+
+def test_dream_once_fails_closed_on_mixed_namespace_scan_candidates():
+    client = FakeDreamClient()
+    client.responses["scan_namespace"] = {
+        "candidates": [
+            {"id": "promote-1", "table": "thoughts"},
+            {"id": "bad-1"},
+        ],
+    }
+    engine = DreamEngine(client)
+
+    with pytest.raises(ValueError, match="table"):
+        engine.dream_once(namespace="bilby")
+
+
+def test_dream_once_fails_closed_on_malformed_report_shapes():
+    client = FakeDreamClient()
+    engine = DreamEngine(client)
+
+    client.responses["tier_recommendations"]["promote"] = {"candidates": "bad"}
+    with pytest.raises(ValueError, match="candidates"):
+        engine.dream_once()
+
+    client = FakeDreamClient()
+    client.responses["tier_recommendations"]["promote"] = "bad"
+    engine = DreamEngine(client)
+    with pytest.raises(ValueError, match="object"):
+        engine.dream_once()
+
+
 def test_wrapper_methods_pass_arguments_correctly():
     client = FakeDreamClient()
     engine = DreamEngine(client, policy={"target_namespace": "team"})

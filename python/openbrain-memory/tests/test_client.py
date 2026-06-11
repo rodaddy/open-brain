@@ -421,6 +421,34 @@ def test_error_body_redaction_scrubs_json_secret_fields():
     assert "failed" in message
 
 
+def test_error_body_redaction_scrubs_unlabelled_secret_shapes():
+    transport = FakeTransport()
+    transport.next_status = 500
+    aws_access_key = "AKIA" + "ABCDEFGHIJKLMNOP"
+    aws_secret = "abcdEFGH" + "ijklMNOP" + "qrstUVWX" + "yz012345" + "6789+/ab"
+    slack_token = "xoxb-" + "123456789012-" + "abcdefghijklmnop"
+    google_key = "AIza" + "ABCDEFGHIJKLMNOPQRSTUVWX" + "YZabcdefghi"
+    jwt_token = (
+        "eyJ" + "hbGciOiJIUzI1NiJ9."
+        "eyJzdWIiOiJvcGVuLWJyYWluIn0."
+        "c2lnbmF0dXJlX3ZhbHVl"
+    )
+    transport.next_text = "\n".join(
+        [aws_access_key, aws_secret, slack_token, google_key, jwt_token]
+    )
+    client = make_client(transport)
+
+    with pytest.raises(OpenBrainHTTPError) as exc_info:
+        client.search_all(query="x")
+
+    message = str(exc_info.value)
+    assert aws_access_key not in message
+    assert aws_secret not in message
+    assert slack_token not in message
+    assert google_key not in message
+    assert jwt_token not in message
+
+
 def test_missing_session_id_is_protocol_error():
     class MissingSessionTransport(FakeTransport):
         def post(self, url, *, headers, json_body, timeout):

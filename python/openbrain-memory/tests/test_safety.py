@@ -91,11 +91,72 @@ def test_redaction_scrubs_common_secret_shapes():
     assert redacted.count("[REDACTED]") >= 4
 
 
+def test_redaction_scrubs_unlabelled_cloud_and_token_shapes():
+    aws_access_key = token_sample("AKIA", "ABCDEFGHIJKLMNOP")
+    aws_secret = token_sample("abcdEFGH", "ijklMNOP", "qrstUVWX", "yz012345", "6789+/ab")
+    slack_token = token_sample("xoxb-", "123456789012-", "abcdefghijklmnop")
+    google_key = token_sample("AIza", "ABCDEFGHIJKLMNOPQRSTUVWX", "YZabcdefghi")
+    jwt_token = token_sample(
+        "eyJ", "hbGciOiJIUzI1NiJ9.",
+        "eyJzdWIiOiJvcGVuLWJyYWluIn0.",
+        "c2lnbmF0dXJlX3ZhbHVl",
+    )
+    text = "\n".join(
+        [
+            f"aws access {aws_access_key}",
+            f"aws secret {aws_secret}",
+            f"slack {slack_token}",
+            f"google {google_key}",
+            f"jwt {jwt_token}",
+            "plain sentence with punctuation should stay visible",
+        ]
+    )
+
+    redacted = redact_text(text)
+
+    assert aws_access_key not in redacted
+    assert aws_secret not in redacted
+    assert slack_token not in redacted
+    assert google_key not in redacted
+    assert jwt_token not in redacted
+    assert "plain sentence with punctuation should stay visible" in redacted
+    assert redacted.count("[REDACTED]") == 5
+
+
+def test_redaction_scrubs_labelled_alphanumeric_aws_secret():
+    aws_secret = token_sample("abcdEFGH", "ijklMNOP", "qrstUVWX", "yz012345", "6789")
+
+    redacted = redact_text(f"aws_secret_access_key={aws_secret}")
+
+    assert aws_secret not in redacted
+    assert "[REDACTED]" in redacted
+
+
+def test_redaction_keeps_benign_40_character_hex_ids_visible():
+    sha_like_id = token_sample("0123456789", "abcdef0123", "456789abcd", "ef01234567")
+
+    redacted = redact_text(f"commit {sha_like_id}")
+
+    assert sha_like_id in redacted
+    assert "[REDACTED]" not in redacted
+
+
 def test_redact_value_recurses_sensitive_keys():
-    value = {"nested": {"access_token": "secret-token"}, "safe": "visible"}
+    value = {
+        "nested": {
+            "access_token": "secret-token",
+            "session_id": "session-123",
+            "mcp_session_id": "session-456",
+        },
+        "safe": "visible",
+    }
 
     assert redact_value(value) == {
-        "nested": {"access_token": "[REDACTED]"},
+        "nested": {
+            "access_token": "[REDACTED]",
+            "session_id": "[REDACTED]",
+            "mcp_session_id": "[REDACTED]",
+        },
         "safe": "visible",
     }
 

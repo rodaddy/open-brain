@@ -18,6 +18,7 @@ EVENT_TYPES = {
     "correction",
     "handoff",
 }
+IMPORTANCE_LEVELS = {"hot", "warm", "cold"}
 PROTECTED_KEYS = {
     "agent",
     "authorization",
@@ -179,16 +180,25 @@ class AgentMemory:
         event_type = str(metadata.pop("event_type", "fact"))
         if event_type not in EVENT_TYPES:
             raise ValueError(f"Unsupported event_type: {event_type}")
+        artifact_path = metadata.pop("artifact_path", None)
+        importance = metadata.pop("importance", None)
         self._reject_reserved_metadata(metadata)
         key = idempotency_key()
-        payload = self._session_payload(
-            {
-                "event_type": event_type,
-                "content": content,
-                "source": role,
-                "metadata": {**dict(metadata), "idempotency_key": key},
-            }
-        )
+        payload = {
+            "event_type": event_type,
+            "content": content,
+            "source": role,
+            "metadata": {**dict(metadata), "idempotency_key": key},
+            "session_key": self.conversation_key,
+        }
+        if artifact_path is not None:
+            payload["artifact_path"] = _required_str(artifact_path, "artifact_path")
+        if importance is not None:
+            payload["importance"] = _enum_value(
+                importance,
+                "importance",
+                IMPORTANCE_LEVELS,
+            )
         return self._call_write(
             "append_session_event",
             payload,
@@ -214,9 +224,10 @@ class AgentMemory:
             "rationale": text,
             "tags": [f"idempotency:{idem}"],
         }
-        for key in DECISION_KEYS:
-            if key in metadata:
-                payload[key] = metadata[key]
+        if "alternatives" in metadata:
+            payload["alternatives"] = _str_list(metadata["alternatives"], "alternatives")
+        if "context" in metadata:
+            payload["context"] = _required_str(metadata["context"], "context")
         if "tags" in metadata:
             payload["tags"] = _tags(f"idempotency:{idem}", metadata["tags"])
         return self._call_write("log_decision", payload, self.client.log_decision, key=idem)
@@ -442,6 +453,26 @@ def _tags(required: str, value: Any) -> list[str]:
     if isinstance(value, list):
         tags.extend(str(item) for item in value if item != required)
     return tags
+
+
+def _required_str(value: Any, name: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{name} must be a non-empty string")
+    return value
+
+
+def _str_list(value: Any, name: str) -> list[str]:
+    if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
+        raise ValueError(f"{name} must be a list of non-empty strings")
+    return value
+
+
+def _enum_value(value: Any, name: str, allowed: set[str]) -> str:
+    text = _required_str(value, name)
+    if text not in allowed:
+        choices = ", ".join(sorted(allowed))
+        raise ValueError(f"{name} must be one of: {choices}")
+    return text
 
 
 def _bounded_metadata(result: Mapping[str, Any]) -> dict[str, Any]:

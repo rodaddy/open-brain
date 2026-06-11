@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from pathlib import Path
+import re
+
 import pytest
 
 from openbrain_memory import (
@@ -58,6 +61,62 @@ class FakeClient:
         return self._record("session_wrap", arguments)
 
 
+TOOL_SCHEMA_FILES = {
+    "append_session_event": "append-session-event.ts",
+    "log_decision": "log-decision.ts",
+    "log_thought": "log-thought.ts",
+    "search_all": "search-all.ts",
+    "session_start": "session-start.ts",
+    "session_wrap": "session-wrap.ts",
+}
+
+def server_tool_schema_block(name: str) -> str:
+    repo_root = Path(__file__).resolve().parents[3]
+    source = repo_root / "src" / "tools" / TOOL_SCHEMA_FILES[name]
+    text = source.read_text(encoding="utf-8")
+    return text.split("inputSchema:", 1)[1].split("annotations:", 1)[0]
+
+
+def server_tool_keys(name: str) -> set[str]:
+    block = server_tool_schema_block(name)
+    return set(re.findall(r"^\s{8}([A-Za-z_][A-Za-z0-9_]*)\s*:", block, flags=re.MULTILINE))
+
+
+def server_required_tool_keys(name: str) -> set[str]:
+    block = server_tool_schema_block(name)
+    keys = []
+    current_key = None
+    current_lines = []
+    for line in block.splitlines():
+        match = re.match(r"^\s{8}([A-Za-z_][A-Za-z0-9_]*)\s*:", line)
+        if match:
+            if current_key is not None and ".optional()" not in "\n".join(current_lines):
+                keys.append(current_key)
+            current_key = match.group(1)
+            current_lines = [line]
+            continue
+        if current_key is not None:
+            current_lines.append(line)
+    if current_key is not None and ".optional()" not in "\n".join(current_lines):
+        keys.append(current_key)
+    return set(keys)
+
+
+def assert_server_contract_call(name: str, payload: dict) -> None:
+    assert set(payload) <= server_tool_keys(name)
+    assert server_required_tool_keys(name) <= set(payload)
+    for key, value in payload.items():
+        if key in {"limit", "offset"}:
+            assert isinstance(value, int)
+        elif key in {"alternatives", "key_decisions", "next_steps", "tags"}:
+            assert isinstance(value, list)
+            assert all(isinstance(item, str) for item in value)
+        elif key == "metadata":
+            assert isinstance(value, dict)
+        else:
+            assert isinstance(value, str)
+
+
 def test_start_session_records_runtime_agnostic_conversation_key():
     client = FakeClient()
     memory = AgentMemory(client, agent="bilby", project="open-brain")
@@ -90,6 +149,7 @@ def test_append_event_routes_to_session_event_wrapper():
     assert payload["event_type"] == "action"
     assert payload["content"] == "Here is the update."
     assert payload["source"] == "assistant"
+    assert "project" not in payload
     assert payload["metadata"]["turn"] == 3
     assert payload["metadata"]["idempotency_key"].startswith("obmem-")
     assert payload["session_key"] == "conversation"
@@ -119,6 +179,42 @@ def test_remember_decision_routes_to_decision_logging_semantics():
     assert client.calls[0][1]["title"] == "Use OpenBrainClient wrappers, not raw protocol calls."
     assert client.calls[0][1]["rationale"] == "Use OpenBrainClient wrappers, not raw protocol calls."
     assert client.calls[0][1]["tags"][0].startswith("idempotency:obmem-")
+
+
+def test_representative_facade_payloads_match_server_tool_contracts():
+    client = FakeClient()
+    memory = AgentMemory(client, agent="bilby", project="open-brain")
+
+    memory.start_session("conversation", channel_id="c1", thread_id="t1", topic="contract")
+    memory.append_event(
+        "assistant",
+        "event",
+        event_type="action",
+        artifact_path="/tmp/a",
+        importance="hot",
+    )
+    memory.remember_fact("fact", tags=["contract"])
+    memory.remember_decision(
+        "decision",
+        alternatives=["other option"],
+        context="short context",
+        tags=["contract"],
+    )
+    memory.recall("contract", limit=3)
+    memory.checkpoint("checkpoint", key_decisions=["decision"])
+    memory.wrap_session("wrapped", next_steps=["ship"])
+
+    for name, payload in client.calls:
+        assert_server_contract_call(name, payload)
+
+    append = [payload for name, payload in client.calls if name == "append_session_event"][0]
+    assert append["artifact_path"] == "/tmp/a"
+    assert append["importance"] == "hot"
+    assert "artifact_path" not in append["metadata"]
+    assert "importance" not in append["metadata"]
+    decision = [payload for name, payload in client.calls if name == "log_decision"][0]
+    assert isinstance(decision["context"], str)
+    assert all(isinstance(item, str) for item in decision["alternatives"])
 
 
 def test_recall_assembles_bounded_prompt_context():
@@ -234,20 +330,23 @@ def test_reserved_metadata_cannot_spoof_identity_or_semantics():
         memory.append_event("assistant", "event", headers={"X_Namespace": "spoofed"})
 
 
-def test_nested_semantic_context_can_use_non_authority_names():
+def test_decision_context_and_alternatives_must_match_server_schema():
     client = FakeClient()
     memory = AgentMemory(client, agent="bilby")
 
     memory.remember_decision(
         "decision",
-        context={"source": "customer interview", "summary": "plain note"},
-        alternatives=[{"title": "Other path", "rationale": "too costly"}],
+        context="customer interview summary",
+        alternatives=["Other path was too costly"],
     )
 
-    assert client.calls[0][1]["context"] == {
-        "source": "customer interview",
-        "summary": "plain note",
-    }
+    assert client.calls[0][1]["context"] == "customer interview summary"
+    assert client.calls[0][1]["alternatives"] == ["Other path was too costly"]
+
+    with pytest.raises(ValueError, match="context"):
+        memory.remember_decision("decision", context={"summary": "plain note"})
+    with pytest.raises(ValueError, match="alternatives"):
+        memory.remember_decision("decision", alternatives=[{"title": "Other path"}])
 
 
 def test_unsupported_metadata_is_rejected_before_tool_calls():
@@ -263,6 +362,8 @@ def test_unsupported_metadata_is_rejected_before_tool_calls():
         memory.checkpoint("summary", status="green")
     with pytest.raises(ValueError, match="unsupported keys"):
         memory.wrap_session("summary", outcome="merged")
+    with pytest.raises(ValueError, match="importance"):
+        memory.append_event("assistant", "event", importance="urgent")
 
 
 def test_namespace_metadata_is_not_accepted_by_memory_facade():
