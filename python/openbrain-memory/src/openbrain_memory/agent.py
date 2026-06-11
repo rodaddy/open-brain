@@ -45,6 +45,7 @@ NESTED_AUTHORITY_KEYS = {
     "token",
     "x-namespace",
 }
+_MAX_METADATA_DEPTH = 16
 SESSION_START_KEYS = {"channel_id", "thread_id", "topic"}
 SESSION_WRAP_KEYS = {"key_decisions", "next_steps"}
 DECISION_KEYS = {"alternatives", "tags", "context"}
@@ -280,9 +281,11 @@ class AgentMemory:
         if collisions:
             names = ", ".join(sorted(collisions))
             raise ValueError(f"metadata contains reserved keys: {names}")
-        self._reject_reserved_nested_metadata(metadata, "metadata")
+        self._reject_reserved_nested_metadata(metadata, "metadata", depth=0)
 
-    def _reject_reserved_nested_metadata(self, value: Any, path: str) -> None:
+    def _reject_reserved_nested_metadata(self, value: Any, path: str, *, depth: int) -> None:
+        if depth > _MAX_METADATA_DEPTH:
+            raise ValueError(f"{path} exceeds maximum nesting depth ({_MAX_METADATA_DEPTH})")
         if isinstance(value, Mapping):
             collisions = {
                 str(key)
@@ -293,10 +296,10 @@ class AgentMemory:
                 names = ", ".join(sorted(collisions))
                 raise ValueError(f"{path} contains reserved authority keys: {names}")
             for key, item in value.items():
-                self._reject_reserved_nested_metadata(item, f"{path}.{key}")
+                self._reject_reserved_nested_metadata(item, f"{path}.{key}", depth=depth + 1)
         elif isinstance(value, list | tuple):
             for index, item in enumerate(value):
-                self._reject_reserved_nested_metadata(item, f"{path}[{index}]")
+                self._reject_reserved_nested_metadata(item, f"{path}[{index}]", depth=depth + 1)
 
     def _reject_unknown_metadata(
         self,
