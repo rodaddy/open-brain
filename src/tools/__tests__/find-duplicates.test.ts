@@ -103,6 +103,38 @@ describe("find_duplicates", () => {
     }
   });
 
+  it("scopes duplicate pair reads to readable namespaces", async () => {
+    const calls: Array<{ sql: string; params?: any[] }> = [];
+    const mockPool = {
+      query: async (sql: string, params?: any[]) => {
+        calls.push({ sql, params });
+        return { rows: [] };
+      },
+    };
+    const auth: AuthInfo = { role: "agent", clientId: "bilby" };
+
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "find_duplicates",
+        arguments: { table: "thoughts", threshold: 0.08 },
+      });
+
+      expect(result.isError).toBeFalsy();
+      expect(calls[0]!.sql).toContain("a.namespace = ANY($3::text[])");
+      expect(calls[0]!.sql).toContain("b.namespace = ANY($4::text[])");
+      expect(calls[0]!.params).toEqual([
+        0.08,
+        20,
+        ["bilby", "collab"],
+        ["bilby", "collab"],
+      ]);
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("denies discord role (no read access)", async () => {
     const mockPool = {
       query: async () => ({ rows: [] }),

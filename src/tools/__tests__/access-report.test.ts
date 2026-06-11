@@ -43,6 +43,9 @@ describe("access_report", () => {
   it("returns access report for a valid entry", async () => {
     const mockPool = {
       query: async (sql: string, _params?: any[]) => {
+        if (sql.includes("SELECT id FROM")) {
+          return { rows: [{ id: "550e8400-e29b-41d4-a716-446655440000" }] };
+        }
         if (sql.includes("COUNT(*) AS total")) {
           return { rows: [{ total: "25" }] };
         }
@@ -77,6 +80,7 @@ describe("access_report", () => {
       expect(result.isError).toBeFalsy();
       const parsed = JSON.parse((result.content as any)[0].text);
       expect(parsed.entry_id).toBe("550e8400-e29b-41d4-a716-446655440000");
+      expect(parsed.source_table).toBe("thoughts");
       expect(parsed.total_accesses).toBe(25);
       expect(parsed.unique_queries).toBe(8);
       expect(parsed.unique_agents).toBe(3);
@@ -91,6 +95,9 @@ describe("access_report", () => {
   it("returns stable trend when recent equals previous", async () => {
     const mockPool = {
       query: async (sql: string) => {
+        if (sql.includes("SELECT id FROM")) {
+          return { rows: [{ id: "550e8400-e29b-41d4-a716-446655440001" }] };
+        }
         if (sql.includes("COUNT(*) AS total")) return { rows: [{ total: "10" }] };
         if (sql.includes("DISTINCT query_text")) return { rows: [{ unique_queries: "5" }] };
         if (sql.includes("DISTINCT accessed_by")) return { rows: [{ unique_agents: "2" }] };
@@ -111,6 +118,36 @@ describe("access_report", () => {
       expect(result.isError).toBeFalsy();
       const parsed = JSON.parse((result.content as any)[0].text);
       expect(parsed.trend).toBe("stable");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("requires the reported entry to be in a readable namespace", async () => {
+    const calls: Array<{ sql: string; params?: any[] }> = [];
+    const mockPool = {
+      query: async (sql: string, params?: any[]) => {
+        calls.push({ sql, params });
+        return { rows: [] };
+      },
+    };
+    const auth: AuthInfo = { role: "agent", clientId: "bilby" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "access_report",
+        arguments: { entry_id: "550e8400-e29b-41d4-a716-446655440010" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect((result.content as any)[0].text).toContain("not readable");
+      expect(calls[0]!.sql).toContain("namespace = ANY($2::text[])");
+      expect(calls[0]!.params).toEqual([
+        "550e8400-e29b-41d4-a716-446655440010",
+        ["bilby", "collab"],
+      ]);
+      expect(calls.every((call) => !call.sql.includes("entry_access_log"))).toBe(true);
     } finally {
       await cleanup();
     }

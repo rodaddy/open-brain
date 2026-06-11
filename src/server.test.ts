@@ -201,7 +201,7 @@ describe("POST /mcp", () => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: "Bearer agent-token-123",
+        Authorization: "Bearer test-token-123",
         Accept: "application/json, text/event-stream",
         "X-Namespace": "bilby",
         "X-Agent-Id": "bilby",
@@ -218,7 +218,7 @@ describe("POST /mcp", () => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: "Bearer agent-token-123",
+        Authorization: "Bearer test-token-123",
         Accept: "application/json, text/event-stream",
         "Mcp-Session-Id": sessionId!,
         "X-Namespace": "skippy",
@@ -239,7 +239,7 @@ describe("POST /mcp", () => {
     const mismatchedGet = await fetch(`${baseUrl}/mcp`, {
       method: "GET",
       headers: {
-        Authorization: "Bearer agent-token-123",
+        Authorization: "Bearer test-token-123",
         Accept: "application/json, text/event-stream",
         "Mcp-Session-Id": sessionId!,
         "X-Namespace": "skippy",
@@ -253,7 +253,7 @@ describe("POST /mcp", () => {
     const mismatchedDelete = await fetch(`${baseUrl}/mcp`, {
       method: "DELETE",
       headers: {
-        Authorization: "Bearer agent-token-123",
+        Authorization: "Bearer test-token-123",
         Accept: "application/json, text/event-stream",
         "Mcp-Session-Id": sessionId!,
         "X-Namespace": "skippy",
@@ -267,7 +267,7 @@ describe("POST /mcp", () => {
     const cleanup = await fetch(`${baseUrl}/mcp`, {
       method: "DELETE",
       headers: {
-        Authorization: "Bearer agent-token-123",
+        Authorization: "Bearer test-token-123",
         Accept: "application/json, text/event-stream",
         "Mcp-Session-Id": sessionId!,
         "X-Namespace": "bilby",
@@ -295,7 +295,7 @@ describe("POST /mcp", () => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: "Bearer agent-token-123",
+        Authorization: "Bearer test-token-123",
         Accept: "application/json, text/event-stream",
         "X-Namespace": "bilby",
         "X-Agent-Id": "bilby",
@@ -312,7 +312,7 @@ describe("POST /mcp", () => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: "Bearer agent-token-123",
+        Authorization: "Bearer test-token-123",
         Accept: "application/json, text/event-stream",
         "Mcp-Session-Id": sessionId!,
         "X-Namespace": "bilby",
@@ -330,7 +330,7 @@ describe("POST /mcp", () => {
     const cleanup = await fetch(`${baseUrl}/mcp`, {
       method: "DELETE",
       headers: {
-        Authorization: "Bearer agent-token-123",
+        Authorization: "Bearer test-token-123",
         Accept: "application/json, text/event-stream",
         "Mcp-Session-Id": sessionId!,
         "X-Namespace": "bilby",

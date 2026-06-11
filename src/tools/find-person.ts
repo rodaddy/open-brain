@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { toSql } from "pgvector/pg";
 import { canRead } from "../permissions.ts";
+import { appendReadNamespacePredicate } from "../read-policy.ts";
 import type { AuthInfo } from "../types.ts";
 import type { ToolDeps } from "./index.ts";
 
@@ -65,10 +66,10 @@ export function registerFindPerson(server: McpServer, deps: ToolDeps): void {
       const offset = args.offset ?? 0;
 
       if (mode === "semantic") {
-        return handleSemanticSearch(deps, args.query, limit, offset);
+        return handleSemanticSearch(deps, args.query, limit, offset, auth);
       }
 
-      return handleNameSearch(deps, args.query, limit, offset);
+      return handleNameSearch(deps, args.query, limit, offset, auth);
     },
   );
 }
@@ -78,17 +79,20 @@ async function handleNameSearch(
   query: string,
   limit: number,
   offset: number,
+  auth: AuthInfo,
 ) {
   // Escape ILIKE special characters before wrapping with %
   const escaped = query.replace(/%/g, "\\%").replace(/_/g, "\\_");
+  const params: unknown[] = [`%${escaped}%`, limit, offset];
+  const namespacePredicate = appendReadNamespacePredicate(auth, params);
 
   const sql = `SELECT ${SELECT_COLUMNS}
 FROM relationships
-WHERE person_name ILIKE $1 AND archived_at IS NULL
+WHERE person_name ILIKE $1 AND archived_at IS NULL${namespacePredicate}
 ORDER BY warmth DESC NULLS LAST, last_contact DESC NULLS LAST
 LIMIT $2 OFFSET $3`;
 
-  const { rows } = await deps.pool.query(sql, [`%${escaped}%`, limit, offset]);
+  const { rows } = await deps.pool.query(sql, params);
 
   if (rows.length === 0) {
     return {
@@ -116,6 +120,7 @@ async function handleSemanticSearch(
   query: string,
   limit: number,
   offset: number,
+  auth: AuthInfo,
 ) {
   const embedding = await deps.embedFn(query);
   if (!embedding) {
@@ -130,18 +135,17 @@ async function handleSemanticSearch(
     };
   }
 
+  const params: unknown[] = [toSql(embedding), limit, offset];
+  const namespacePredicate = appendReadNamespacePredicate(auth, params);
+
   const sql = `SELECT ${SELECT_COLUMNS},
   embedding <=> $1::halfvec(768) AS distance
 FROM relationships
-WHERE embedding IS NOT NULL AND archived_at IS NULL
+WHERE embedding IS NOT NULL AND archived_at IS NULL${namespacePredicate}
 ORDER BY distance ASC
 LIMIT $2 OFFSET $3`;
 
-  const { rows } = await deps.pool.query(sql, [
-    toSql(embedding),
-    limit,
-    offset,
-  ]);
+  const { rows } = await deps.pool.query(sql, params);
 
   if (rows.length === 0) {
     return {

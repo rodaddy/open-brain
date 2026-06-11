@@ -101,6 +101,34 @@ describe("find_person", () => {
         await cleanup();
       }
     });
+
+    it("scopes name search to readable namespaces", async () => {
+      const calls: Array<{ sql: string; params?: any[] }> = [];
+      const mockPool = {
+        query: async (sql: string, params?: any[]) => {
+          calls.push({ sql, params });
+          return { rows: [] };
+        },
+      };
+      const auth: AuthInfo = { role: "agent", clientId: "bilby" };
+      const { client, cleanup } = await setupToolClient(
+        mockPool,
+        createMockEmbed(),
+        auth,
+      );
+
+      try {
+        await client.callTool({
+          name: "find_person",
+          arguments: { query: "Alice", mode: "name" },
+        });
+
+        expect(calls[0]!.sql).toContain("namespace = ANY($4::text[])");
+        expect(calls[0]!.params).toEqual(["%Alice%", 5, 0, ["bilby", "collab"]]);
+      } finally {
+        await cleanup();
+      }
+    });
   });
 
   describe("semantic mode", () => {
@@ -130,6 +158,34 @@ describe("find_person", () => {
         const parsed = JSON.parse((result.content as any)[0].text);
         expect(parsed[0].distance).toBe(0.123);
         expect(parsed[0].person_name).toBe("Alice Johnson");
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("scopes semantic search to readable namespaces", async () => {
+      const calls: Array<{ sql: string; params?: any[] }> = [];
+      const mockPool = {
+        query: async (sql: string, params?: any[]) => {
+          calls.push({ sql, params });
+          return { rows: [] };
+        },
+      };
+      const auth: AuthInfo = { role: "agent", clientId: "bilby" };
+      const { client, cleanup } = await setupToolClient(
+        mockPool,
+        createMockEmbed(),
+        auth,
+      );
+
+      try {
+        await client.callTool({
+          name: "find_person",
+          arguments: { query: "Alice", mode: "semantic" },
+        });
+
+        expect(calls[0]!.sql).toContain("namespace = ANY($4::text[])");
+        expect(calls[0]!.params?.slice(1)).toEqual([5, 0, ["bilby", "collab"]]);
       } finally {
         await cleanup();
       }

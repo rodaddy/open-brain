@@ -88,6 +88,75 @@ describe("get_stats", () => {
     }
   });
 
+  it("scopes aggregate queries to readable namespaces", async () => {
+    const calls: Array<{ sql: string; params?: any[] }> = [];
+    const mockPool = {
+      query: async (sql: string, params?: any[]) => {
+        calls.push({ sql, params });
+        if (sql.includes("COUNT(*) FILTER")) {
+          return { rows: [{ table_name: "thoughts", active: "1", archived: "0" }] };
+        }
+        if (sql.includes("GROUP BY tier")) {
+          return { rows: [] };
+        }
+        if (sql.includes("GROUP BY namespace")) {
+          return { rows: [] };
+        }
+        if (sql.includes("total_log_entries")) {
+          return { rows: [{ total_log_entries: "1", unique_entries_accessed: "1" }] };
+        }
+        if (sql.includes("AVG")) {
+          return { rows: [{ avg_access: "0" }] };
+        }
+        if (sql.includes("access_count, 0) = 0")) {
+          return { rows: [{ table_name: "thoughts", count: "0" }] };
+        }
+        if (sql.includes("ORDER BY access_count DESC")) {
+          return { rows: [] };
+        }
+        return { rows: [] };
+      },
+    };
+    const auth: AuthInfo = { role: "agent", clientId: "bilby" };
+
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "get_stats",
+        arguments: {},
+      });
+
+      expect(result.isError).toBeFalsy();
+      const countCall = calls.find((call) => call.sql.includes("COUNT(*) FILTER"));
+      expect(countCall!.sql).toContain("WHERE namespace = ANY($1::text[])");
+      expect(countCall!.params).toEqual([["bilby", "collab"]]);
+      const accessCall = calls.find((call) => call.sql.includes("total_log_entries"));
+      expect(accessCall!.sql).toContain("source.namespace = ANY($1::text[])");
+      expect(accessCall!.sql).toContain("source.namespace = ANY($5::text[])");
+      expect(accessCall!.params).toEqual([
+        ["bilby", "collab"],
+        ["bilby", "collab"],
+        ["bilby", "collab"],
+        ["bilby", "collab"],
+        ["bilby", "collab"],
+      ]);
+      const topAccessedCall = calls.find((call) =>
+        call.sql.includes("ORDER BY access_count DESC")
+      );
+      expect(topAccessedCall!.sql).toContain("namespace = ANY($1::text[])");
+      expect(topAccessedCall!.params).toEqual([
+        ["bilby", "collab"],
+        ["bilby", "collab"],
+        ["bilby", "collab"],
+        ["bilby", "collab"],
+        ["bilby", "collab"],
+      ]);
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("denies readonly with no tables", async () => {
     const mockPool = {
       query: async () => ({ rows: [] }),

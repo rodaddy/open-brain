@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { canRead } from "../permissions.ts";
+import { appendReadNamespacePredicate } from "../read-policy.ts";
 import type { AuthInfo, Table } from "../types.ts";
 import { logger } from "../logger.ts";
 import type { ToolDeps } from "./index.ts";
@@ -87,6 +88,12 @@ export function registerTierRecommendations(server: McpServer, deps: ToolDeps): 
         const remaining = limit - candidates.length;
         const alias = TABLE_ALIAS[table];
         const preview = CONTENT_PREVIEW[table];
+        const params: unknown[] = [thresholdDays, remaining];
+        const namespacePredicate = appendReadNamespacePredicate(
+          auth,
+          params,
+          `${alias}.namespace`,
+        );
 
         if (action === "demote") {
           // Find warm entries not accessed recently with low access_count
@@ -102,9 +109,10 @@ export function registerTierRecommendations(server: McpServer, deps: ToolDeps): 
               AND COALESCE(${alias}.tier, 'warm') = 'warm'
               AND (${alias}.last_accessed_at IS NULL OR ${alias}.last_accessed_at < NOW() - INTERVAL '1 day' * $1)
               AND COALESCE(${alias}.access_count, 0) < 3
+              ${namespacePredicate}
             ORDER BY COALESCE(${alias}.access_count, 0) ASC, ${alias}.created_at ASC
             LIMIT $2`,
-            [thresholdDays, remaining],
+            params,
           );
 
           for (const row of rows) {
@@ -138,15 +146,17 @@ export function registerTierRecommendations(server: McpServer, deps: ToolDeps): 
                 ${alias}.last_accessed_at,
                 (SELECT COUNT(*) FROM entry_access_log eal
                  WHERE eal.entry_id = ${alias}.id
+                   AND eal.source_table = '${table}'
                    AND eal.accessed_at >= NOW() - INTERVAL '1 day' * $1) AS recent_accesses
               FROM ${table} ${alias}
               WHERE ${alias}.archived_at IS NULL
                 AND COALESCE(${alias}.tier, 'warm') IN ('warm', 'cold')
+                ${namespacePredicate}
             ) sub
             WHERE sub.recent_accesses > 5
             ORDER BY sub.recent_accesses DESC
             LIMIT $2`,
-            [thresholdDays, remaining],
+            params,
           );
 
           for (const row of rows) {

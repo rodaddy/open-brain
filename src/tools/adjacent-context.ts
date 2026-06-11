@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { canRead } from "../permissions.ts";
+import { canReadNamespace } from "../read-policy.ts";
 import type { AuthInfo } from "../types.ts";
 import { logger } from "../logger.ts";
 import type { ToolDeps } from "./index.ts";
@@ -72,6 +73,17 @@ export function registerAdjacentContext(
       }
 
       const ns = args.namespace ?? auth.clientId;
+      if (!canReadNamespace(auth, ns)) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Permission denied: cannot read namespace '${ns}'`,
+            },
+          ],
+          isError: true,
+        };
+      }
       const direction = args.direction ?? "both";
       const limit = args.limit ?? 50;
 

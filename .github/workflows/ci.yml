@@ -62,6 +62,9 @@ jobs:
     needs: [check, python-package]
     runs-on: [self-hosted, rodaddy]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
     env:
       DEPLOY_HOST: 10.71.20.49
       DEPLOY_USER: rico

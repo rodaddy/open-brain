@@ -185,7 +185,7 @@ describe("authMiddleware", () => {
 
   test("uses X-Namespace as effective clientId and keeps token identity", () => {
     const req = mockReq({
-      authorization: "Bearer valid-agent-token",
+      authorization: "Bearer valid-admin-token",
       "x-namespace": "bilby",
       "x-agent-id": "bilby",
       "x-role": "agent",
@@ -196,13 +196,28 @@ describe("authMiddleware", () => {
     middleware(req as any, res as any, next);
 
     expect((req as any).auth).toEqual({
-      role: "agent",
+      role: "admin",
       clientId: "bilby",
-      tokenClientId: "agent",
+      tokenClientId: "admin",
       agentId: "bilby",
       namespaceSource: "header",
     });
     expect(next).toHaveBeenCalledTimes(1);
+  });
+
+  test("returns 403 when agent token sends X-Namespace", () => {
+    const req = mockReq({
+      authorization: "Bearer valid-agent-token",
+      "x-namespace": "bilby",
+    });
+    const res = mockRes();
+    const next = mock(() => {});
+
+    middleware(req as any, res as any, next);
+
+    expect(res.statusCode).toBe(403);
+    expect(res.body).toEqual({ error: "Role not permitted to delegate namespace" });
+    expect(next).not.toHaveBeenCalled();
   });
 
   test("returns 403 when readonly token sends X-Namespace", () => {
@@ -222,7 +237,7 @@ describe("authMiddleware", () => {
 
   test("rejects invalid delegated namespace header", () => {
     const req = mockReq({
-      authorization: "Bearer valid-agent-token",
+      authorization: "Bearer valid-admin-token",
       "x-namespace": "../bilby",
     });
     const res = mockRes();

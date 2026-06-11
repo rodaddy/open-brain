@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { canRead } from "../permissions.ts";
+import { canReadNamespace } from "../read-policy.ts";
 import type { AuthInfo } from "../types.ts";
 import type { ToolDeps } from "./index.ts";
 import { logger } from "../logger.ts";
@@ -101,6 +102,17 @@ export function registerSessionContext(
       }
 
       const ns = args.namespace ?? auth.clientId;
+      if (!canReadNamespace(auth, ns)) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Permission denied: cannot read namespace '${ns}'`,
+            },
+          ],
+          isError: true,
+        };
+      }
       const includeEvents = args.include_events !== false;
       const eventLimit = args.event_limit ?? 50;
 

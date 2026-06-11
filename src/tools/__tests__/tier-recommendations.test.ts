@@ -119,6 +119,71 @@ describe("tier_recommendations", () => {
     }
   });
 
+  it("scopes recommendation reads to readable namespaces", async () => {
+    const calls: Array<{ sql: string; params?: any[] }> = [];
+    const mockPool = {
+      query: async (sql: string, params?: any[]) => {
+        calls.push({ sql, params });
+        return { rows: [] };
+      },
+    };
+    const auth: AuthInfo = { role: "agent", clientId: "bilby" };
+
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "tier_recommendations",
+        arguments: { action: "demote", threshold_days: 30 },
+      });
+
+      expect(result.isError).toBeFalsy();
+      expect(calls[0]!.sql).toContain("namespace = ANY($3::text[])");
+      expect(calls[0]!.params).toEqual([30, 20, ["bilby", "collab"]]);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("scopes promote access counts to the source table", async () => {
+    const calls: Array<{ sql: string; params?: any[] }> = [];
+    const mockPool = {
+      query: async (sql: string, params?: any[]) => {
+        calls.push({ sql, params });
+        return { rows: [] };
+      },
+    };
+    const auth: AuthInfo = { role: "agent", clientId: "bilby" };
+
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "tier_recommendations",
+        arguments: {
+          action: "promote",
+          threshold_days: 7,
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      expect(calls).toHaveLength(5);
+      expect(calls.every((call) => call.sql.includes("eal.source_table ="))).toBe(true);
+      expect(calls.some((call) => call.sql.includes("eal.source_table = 'thoughts'"))).toBe(
+        true,
+      );
+      expect(calls.every((call) => call.sql.includes("namespace = ANY($3::text[])"))).toBe(
+        true,
+      );
+      const scopedParams = JSON.stringify([7, 20, ["bilby", "collab"]]);
+      expect(
+        calls.every((call) => JSON.stringify(call.params) === scopedParams),
+      ).toBe(true);
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("denies unauthenticated requests", async () => {
     const server = new McpServer({ name: "test", version: "1.0.0" });
     const mockPool = { query: async () => ({ rows: [] }) };

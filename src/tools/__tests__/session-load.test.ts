@@ -80,6 +80,31 @@ describe("session_load", () => {
         await cleanup();
       }
     });
+
+    it("scopes project load to readable namespaces", async () => {
+      const calls: Array<{ sql: string; params?: any[] }> = [];
+      const mockPool = {
+        query: async (sql: string, params?: any[]) => {
+          calls.push({ sql, params });
+          return { rows: [] };
+        },
+      };
+      const auth: AuthInfo = { role: "agent", clientId: "bilby" };
+
+      const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+      try {
+        await client.callTool({
+          name: "session_load",
+          arguments: { project: "open-brain" },
+        });
+
+        expect(calls[0]!.sql).toContain("namespace = ANY($2::text[])");
+        expect(calls[0]!.params).toEqual(["open-brain", ["bilby", "collab"]]);
+      } finally {
+        await cleanup();
+      }
+    });
   });
 
   describe("without project filter (global)", () => {
@@ -101,6 +126,31 @@ describe("session_load", () => {
         const parsed = JSON.parse((result.content as any)[0].text);
         expect(parsed.id).toBe("session-uuid");
         expect(parsed.summary).toBe("Implemented auth system");
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("scopes global load to readable namespaces", async () => {
+      const calls: Array<{ sql: string; params?: any[] }> = [];
+      const mockPool = {
+        query: async (sql: string, params?: any[]) => {
+          calls.push({ sql, params });
+          return { rows: [] };
+        },
+      };
+      const auth: AuthInfo = { role: "agent", clientId: "bilby" };
+
+      const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+      try {
+        await client.callTool({
+          name: "session_load",
+          arguments: {},
+        });
+
+        expect(calls[0]!.sql).toContain("namespace = ANY($1::text[])");
+        expect(calls[0]!.params).toEqual([["bilby", "collab"]]);
       } finally {
         await cleanup();
       }

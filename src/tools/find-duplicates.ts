@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { canRead } from "../permissions.ts";
+import { appendReadNamespacePredicate } from "../read-policy.ts";
 import type { AuthInfo, Table } from "../types.ts";
 import { logger } from "../logger.ts";
 import type { ToolDeps } from "./index.ts";
@@ -106,6 +107,17 @@ export function registerFindDuplicates(server: McpServer, deps: ToolDeps): void 
         const remaining = limit - duplicates.length;
         const previewA = contentPreviewForAlias(table, "a");
         const previewB = contentPreviewForAlias(table, "b");
+        const params: unknown[] = [threshold, remaining];
+        const namespacePredicateA = appendReadNamespacePredicate(
+          auth,
+          params,
+          "a.namespace",
+        );
+        const namespacePredicateB = appendReadNamespacePredicate(
+          auth,
+          params,
+          "b.namespace",
+        );
 
         // Table name is validated by Zod enum -- safe for interpolation
         const { rows } = await deps.pool.query(
@@ -122,9 +134,11 @@ export function registerFindDuplicates(server: McpServer, deps: ToolDeps): void 
           WHERE a.archived_at IS NULL
             AND a.embedding IS NOT NULL
             AND a.embedding <=> b.embedding < $1
+            ${namespacePredicateA}
+            ${namespacePredicateB}
           ORDER BY distance ASC
           LIMIT $2`,
-          [threshold, remaining],
+          params,
         );
 
         for (const row of rows) {
