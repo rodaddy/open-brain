@@ -75,6 +75,45 @@ describe("log_decision", () => {
         await cleanup();
       }
     });
+
+    it("passes alternatives as a JSON string for the jsonb column", async () => {
+      // Regression: a raw JS array is serialized by node-postgres as a
+      // Postgres array literal ('{..}'), which jsonb rejects with
+      // "invalid input syntax for type json" whenever it is non-empty.
+      let capturedParams: any[] = [];
+      const mockPool = {
+        query: async (_sql: string, params?: any[]) => {
+          if (params) capturedParams = params;
+          return { rows: [{ id: "decision-uuid" }] };
+        },
+      };
+      const mockEmbed = createMockEmbed();
+      const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
+
+      const { client, cleanup } = await setupDecisionClient(
+        mockPool,
+        mockEmbed,
+        auth,
+      );
+
+      try {
+        const result = await client.callTool({
+          name: "log_decision",
+          arguments: {
+            title: "Use Bun",
+            rationale: "Faster than Node.js for our use case",
+            alternatives: ["Node.js", "Deno"],
+          },
+        });
+
+        expect(result.isError).toBeFalsy();
+        const alternativesParam = capturedParams[2];
+        expect(typeof alternativesParam).toBe("string");
+        expect(JSON.parse(alternativesParam)).toEqual(["Node.js", "Deno"]);
+      } finally {
+        await cleanup();
+      }
+    });
   });
 
   describe("embedding text construction", () => {
