@@ -69,9 +69,15 @@ DB_NAME=open_brain
 DB_USER=postgres
 DB_PASSWORD=your-password
 
-# Embedding service (any OpenAI-compatible endpoint)
+# Embedding service (any OpenAI-compatible /v1/embeddings endpoint)
+EMBEDDING_BASE_URL=http://localhost:8791/v1
+EMBEDDING_API_KEY=your-key
+EMBEDDING_MODEL=embeddinggemma-300m-8bit
+EMBEDDING_DIMENSIONS=768
+
+# Optional LiteLLM fallback / extraction endpoint
 LITELLM_URL=http://localhost:4000
-LITELLM_API_KEY=your-key
+LITELLM_API_KEY=your-litellm-key
 
 # Metadata extraction model (optional — enables auto-tagging on writes)
 EXTRACTION_MODEL=gpt-4o-mini
@@ -161,7 +167,7 @@ Search modes: `hybrid` (default), `vector`, `keyword`.
 | `bun run migrate` | Run pending database migrations |
 | `bun run test` | Run test suite |
 | `bun run typecheck` | Type-check without emit |
-| `bun run backfill` | Backfill NULL embeddings across all tables |
+| `bun run backfill` | Backfill NULL embeddings across all tables (`-- --all` re-embeds every row for model migrations) |
 | `bun run curate` | Automated curation: dedup, staleness, quality scoring (`--dry-run` supported) |
 
 Additional utility scripts in `scripts/`:

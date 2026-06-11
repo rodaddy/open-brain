@@ -18,12 +18,15 @@ import { Glob } from "bun";
 import type pg from "pg";
 import { toSql } from "pgvector/pg";
 import { createPool } from "../src/db/pool.ts";
-import { contentHash, generateEmbedding } from "../src/embedding.ts";
+import {
+  contentHash,
+  generateEmbedding,
+  EMBEDDING_MODEL,
+} from "../src/embedding.ts";
 import { extractMetadata, mergeTags } from "../src/extraction.ts";
 import { logger } from "../src/logger.ts";
 
 const DELAY_MS = 200;
-const EMBEDDING_MODEL = "gemini-embedding-001";
 
 export type ImportTable = "thoughts" | "decisions" | "sessions";
 
