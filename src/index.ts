@@ -7,7 +7,7 @@ import { buildTokenMap, authMiddleware } from "./auth.ts";
 import { createBrainServer } from "./server.ts";
 import { createTransportHandlers } from "./transport.ts";
 import { registerAllTools } from "./tools/index.ts";
-import { generateEmbedding } from "./embedding.ts";
+import { generateEmbedding, EMBEDDING_DIMENSIONS } from "./embedding.ts";
 import { runMigrations } from "./db/migrate.ts";
 import { logger } from "./logger.ts";
 import { requestLogger } from "./middleware/request-logger.ts";
@@ -16,6 +16,22 @@ import { createPromotionRouter } from "./rest-promotion.ts";
 import type { AuthInfo, HealthStatus } from "./types.ts";
 
 const LITELLM_URL = process.env.LITELLM_URL;
+const EMBEDDING_BASE_URL = process.env.EMBEDDING_BASE_URL;
+
+async function probeUrl(
+  url: string,
+  headers: Record<string, string>,
+): Promise<boolean> {
+  try {
+    const resp = await fetch(url, {
+      headers,
+      signal: AbortSignal.timeout(3000),
+    });
+    return resp.ok;
+  } catch {
+    return false;
+  }
+}
 
 export function createApp(
   pool: pg.Pool,
@@ -34,28 +50,41 @@ export function createApp(
 
   // Health endpoint -- no auth required
   app.get("/health", async (_req: Request, res: Response) => {
-    const dbHealth = await checkPoolHealth(pool);
-
-    let litellmConnected = false;
-    if (LITELLM_URL) {
-      try {
-        const headers: Record<string, string> = {};
-        const apiKey = process.env.LITELLM_API_KEY;
-        if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
-        // LiteLLM uses "/health/liveliness" (not "liveness") — this is their actual endpoint spelling
-        const resp = await fetch(`${LITELLM_URL}/health/liveliness`, {
-          headers,
-          signal: AbortSignal.timeout(3000),
-        });
-        litellmConnected = resp.ok;
-      } catch {
-        litellmConnected = false;
-      }
+    const litellmHeaders: Record<string, string> = {};
+    if (process.env.LITELLM_API_KEY) {
+      litellmHeaders["Authorization"] = `Bearer ${process.env.LITELLM_API_KEY}`;
+    }
+    const embeddingHeaders: Record<string, string> = {};
+    if (process.env.EMBEDDING_API_KEY) {
+      embeddingHeaders["Authorization"] =
+        `Bearer ${process.env.EMBEDDING_API_KEY}`;
     }
 
+    const [dbHealth, litellmConnected, embeddingConnected] = await Promise.all([
+      checkPoolHealth(pool),
+      // LiteLLM uses "/health/liveliness" (not "liveness") — this is their actual endpoint spelling
+      LITELLM_URL
+        ? probeUrl(`${LITELLM_URL}/health/liveliness`, litellmHeaders)
+        : Promise.resolve(false),
+      // Any OpenAI-compatible provider serves GET {base}/models
+      EMBEDDING_BASE_URL
+        ? probeUrl(
+            `${EMBEDDING_BASE_URL.replace(/\/$/, "")}/models`,
+            embeddingHeaders,
+          )
+        : Promise.resolve(false),
+    ]);
+
+    // LiteLLM is an optional fallback/extraction dependency, not a core one:
+    // embeddings come from EMBEDDING_BASE_URL. Only the database gates health;
+    // the provider probes stay reported for observability.
     const status: HealthStatus = {
-      status: dbHealth.connected && litellmConnected ? "healthy" : "degraded",
+      status: dbHealth.connected ? "healthy" : "degraded",
       database: dbHealth,
+      embedding: {
+        configured: Boolean(EMBEDDING_BASE_URL),
+        connected: embeddingConnected,
+      },
       litellm: { connected: litellmConnected },
       timestamp: new Date().toISOString(),
     };
@@ -136,6 +165,16 @@ export function createApp(
 }
 
 if (import.meta.main) {
+  // The vector columns are halfvec(768) in the schema; a mismatched
+  // EMBEDDING_DIMENSIONS makes every embedding INSERT fail at runtime.
+  if (EMBEDDING_DIMENSIONS !== 768) {
+    logger.warn("EMBEDDING_DIMENSIONS does not match the halfvec(768) schema", {
+      configured: EMBEDDING_DIMENSIONS,
+      schema: 768,
+      consequence: "embedding writes will fail until columns are migrated",
+    });
+  }
+
   const pool = createPool();
 
   try {

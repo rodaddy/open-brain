@@ -28,6 +28,9 @@ case "$FIELD" in
   LITELLM_API_KEY)
     mcp2cli vaultwarden-secrets get_credential --params '{"query":"LiteLLM"}' 2>/dev/null | jq -r '.result.fields.password // empty'
     ;;
+  EMBEDDING_API_KEY)
+    mcp2cli vaultwarden-secrets get_credential --params '{"query":"MLX Embedding Server"}' 2>/dev/null | jq -r '.result.fields.password // empty'
+    ;;
   *)
     echo "Unknown field: $FIELD" >&2
     exit 1
