@@ -119,6 +119,15 @@ semantic fields, but authority-shaped keys such as `namespace`, `authorization`,
 Cross-namespace writes require an explicit privileged client/server path rather
 than facade metadata.
 
+`UrllibTransport` bounds JSON and SSE response reads with `max_response_bytes`
+and returns from SSE responses after the first JSON-RPC response event rather
+than waiting for the stream to close. It skips notification/progress SSE events
+that do not carry a JSON-RPC `id`. `health()` returns structured degraded
+health bodies for expected HTTP 503 responses. `OpenBrainClient.close()` and
+context manager exit clear the local MCP session id; the current Open Brain MCP
+surface does not expose an explicit remote session termination method, so
+server-side session cleanup remains TTL-based.
+
 `JsonlSpool` stores exact failed-write payloads so replay can faithfully rebuild
 the original client call. Spool and lock files are created with `0600`
 permissions and should be treated as trusted local recovery storage. Use
