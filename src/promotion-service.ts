@@ -4,6 +4,7 @@ import {
   appendReadNamespacePredicate,
   canReadNamespace,
 } from "./read-policy.ts";
+import { canWriteNamespace } from "./namespace-policy.ts";
 
 export const PROMOTION_CONTENT_COLUMNS: Record<Table, string> = {
   thoughts:
@@ -99,6 +100,15 @@ export async function promoteEntry(
     throw Object.assign(new Error("Target namespace read access denied"), {
       statusCode: 403,
     });
+  }
+  const writeCheck = canWriteNamespace(auth, targetNamespace);
+  if (!writeCheck.allowed) {
+    throw Object.assign(
+      new Error(writeCheck.reason ?? "Target namespace write access denied"),
+      {
+        statusCode: 403,
+      },
+    );
   }
 
   if (source.namespace === targetNamespace) {

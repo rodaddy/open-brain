@@ -70,6 +70,47 @@ describe("rate_entry", () => {
         await cleanup();
       }
     });
+
+    it("uses a namespace predicate for delegated admin", async () => {
+      const calls: Array<{ sql: string; params?: any[] }> = [];
+      const mockPool = {
+        query: async (sql: string, params?: any[]) => {
+          calls.push({ sql, params });
+          return {
+            rows: [{ id: "test-uuid", usefulness_score: 1.0 }],
+          };
+        },
+      };
+      const auth: AuthInfo = {
+        role: "admin",
+        clientId: "bilby",
+        tokenClientId: "admin",
+        namespaceSource: "header",
+      };
+
+      const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+      try {
+        const result = await client.callTool({
+          name: "rate_entry",
+          arguments: {
+            table: "thoughts",
+            id: "550e8400-e29b-41d4-a716-446655440010",
+            score: 1.0,
+          },
+        });
+
+        expect(result.isError).toBeFalsy();
+        expect(calls[0]!.sql).toContain("namespace = ANY($3::text[])");
+        expect(calls[0]!.params).toEqual([
+          1,
+          "550e8400-e29b-41d4-a716-446655440010",
+          ["bilby"],
+        ]);
+      } finally {
+        await cleanup();
+      }
+    });
   });
 
   describe("score 0.0 -- thumbs down", () => {

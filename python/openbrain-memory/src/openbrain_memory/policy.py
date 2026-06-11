@@ -4,7 +4,7 @@ import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeVar
 from uuid import uuid4
 
 SK_PREFIX = "sk" + "-"
@@ -56,6 +56,7 @@ SENSITIVE_KEY_RE = re.compile(
     r"(?i)(token|secret|password|api[_-]?key|credential|authorization|session[_-]?id)"
 )
 MAX_REDACT_DEPTH = 32
+T = TypeVar("T")
 
 
 class RetryExhaustedError(RuntimeError):
@@ -109,7 +110,7 @@ def _redact_value(value: Any, *, depth: int) -> Any:
     return value
 
 
-def with_retry[T](
+def with_retry(
     operation: Callable[[], T],
     *,
     retry_policy: RetryPolicy,

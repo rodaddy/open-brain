@@ -184,6 +184,21 @@ def test_health_raises_for_unstructured_503_body():
         client.health()
 
 
+def test_http_error_redacts_deep_json_without_recursion_error():
+    body = '{"safe":' * 1200 + '"secret-token"' + "}" * 1200
+
+    error = OpenBrainHTTPError(
+        "request failed",
+        status_code=500,
+        body=body,
+        token="secret-token",
+    )
+
+    assert "RecursionError" not in str(error)
+    assert "[REDACTED:depth]" in str(error)
+    assert "secret-token" not in str(error)
+
+
 def test_initialize_sends_auth_namespace_and_stores_session_id():
     transport = FakeTransport()
     client = make_client(transport)

@@ -10,7 +10,8 @@ function createSequencePool(rowSets: Array<Record<string, unknown>[]>) {
     calls,
     query: async (sql: string, params: unknown[] = []) => {
       calls.push({ sql, params });
-      return { rows: rowSets.shift() ?? [] };
+      const rows = rowSets.shift() ?? [];
+      return { rows, rowCount: rows.length };
     },
   };
 }
@@ -127,6 +128,78 @@ describe("promotion REST API", () => {
     expect(json.error).toContain("Source entry not found");
     expect(pool.calls[0]!.sql).toContain("namespace = ANY($2::text[])");
     expect(pool.calls[0]!.params).toEqual([sourceId, ["bilby", "collab"]]);
+  });
+
+  it("denies delegated promote writes to collab", async () => {
+    const sourceId = "123e4567-e89b-12d3-a456-426614174011";
+    const pool = createSequencePool([
+      [
+        {
+          id: sourceId,
+          namespace: "bilby",
+          created_by: "bilby",
+          content: "source",
+          content_hash: "hash-1",
+        },
+      ],
+    ]);
+    const app = buildApp(
+      {
+        role: "admin",
+        clientId: "bilby",
+        tokenClientId: "admin",
+        namespaceSource: "header",
+      },
+      pool,
+    );
+
+    const { status, json } = await req(app, "post", "/api/v1/promote", {
+      table: "thoughts",
+      id: sourceId,
+      target_namespace: "collab",
+    });
+
+    expect(status).toBe(403);
+    expect(json.error).toContain("X-Namespace header requires writes");
+    expect(pool.calls.length).toBe(1);
+  });
+
+  it("scopes delegated demote lookup and archive update", async () => {
+    const promotedId = "123e4567-e89b-12d3-a456-426614174012";
+    const pool = createSequencePool([
+      [
+        {
+          id: promotedId,
+          namespace: "bilby",
+          promoted_from: {
+            source_id: "123e4567-e89b-12d3-a456-426614174013",
+            source_namespace: "personal",
+          },
+        },
+      ],
+      [{ id: promotedId }],
+    ]);
+    const app = buildApp(
+      {
+        role: "admin",
+        clientId: "bilby",
+        tokenClientId: "admin",
+        namespaceSource: "header",
+      },
+      pool,
+    );
+
+    const { status, json } = await req(app, "post", "/api/v1/demote", {
+      table: "thoughts",
+      id: promotedId,
+    });
+
+    expect(status).toBe(200);
+    expect(json.status).toBe("demoted");
+    expect(pool.calls[0]!.sql).toContain("namespace = ANY($2::text[])");
+    expect(pool.calls[0]!.params).toEqual([promotedId, ["bilby", "collab"]]);
+    expect(pool.calls[1]!.sql).toContain("namespace = ANY($2::text[])");
+    expect(pool.calls[1]!.params).toEqual([promotedId, ["bilby"]]);
   });
 
   it("returns 400 for invalid scan limit", async () => {

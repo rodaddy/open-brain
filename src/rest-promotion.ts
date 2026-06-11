@@ -6,7 +6,8 @@ import type { AuthInfo, Table } from "./types.ts";
 import { ALL_TABLES } from "./tools/search-brain.ts";
 import type { generateEmbedding } from "./embedding.ts";
 import { promoteEntry } from "./promotion-service.ts";
-import { canReadNamespace } from "./read-policy.ts";
+import { appendReadNamespacePredicate, canReadNamespace } from "./read-policy.ts";
+import { appendWriteNamespacePredicate } from "./namespace-policy.ts";
 
 interface RestDeps {
   pool: pg.Pool;
@@ -95,9 +96,11 @@ export function createPromotionRouter(deps: RestDeps): Router {
     }
 
     const { table, id } = parsed.data;
+    const selectParams: unknown[] = [id];
+    const readPredicate = appendReadNamespacePredicate(auth, selectParams);
     const { rows } = await deps.pool.query(
-      `SELECT id, namespace, promoted_from FROM ${table} WHERE id = $1 AND archived_at IS NULL`,
-      [id],
+      `SELECT id, namespace, promoted_from FROM ${table} WHERE id = $1 AND archived_at IS NULL${readPredicate}`,
+      selectParams,
     );
 
     if (rows.length === 0) {
@@ -110,7 +113,16 @@ export function createPromotionRouter(deps: RestDeps): Router {
     }
 
     const provenance = rows[0].promoted_from;
-    await deps.pool.query(`UPDATE ${table} SET archived_at = NOW() WHERE id = $1`, [id]);
+    const updateParams: unknown[] = [id];
+    const writePredicate = appendWriteNamespacePredicate(auth, updateParams);
+    const { rowCount } = await deps.pool.query(
+      `UPDATE ${table} SET archived_at = NOW() WHERE id = $1${writePredicate}`,
+      updateParams,
+    );
+    if ((rowCount ?? 0) === 0) {
+      res.status(404).json({ error: "Entry not found or already archived" });
+      return;
+    }
 
     res.json({
       status: "demoted",

@@ -750,25 +750,30 @@ def _validate_base_url(base_url: str, *, allow_insecure_http: bool) -> None:
 SENSITIVE_KEY_PATTERN = re.compile(
     r"(?i)(token|secret|password|api[_-]?key|credential|authorization|session[_-]?id)"
 )
+MAX_REDACT_JSON_DEPTH = 32
 
 
-def _redact_json_value(value: Any) -> Any:
+def _redact_json_value(value: Any, *, depth: int = 0) -> Any:
+    if depth >= MAX_REDACT_JSON_DEPTH:
+        return "[REDACTED:depth]"
     if isinstance(value, dict):
         redacted: dict[str, Any] = {}
         for key, item in value.items():
             if SENSITIVE_KEY_PATTERN.search(str(key)):
                 redacted[str(key)] = "[REDACTED]"
             else:
-                redacted[str(key)] = _redact_json_value(item)
+                redacted[str(key)] = _redact_json_value(item, depth=depth + 1)
         return redacted
     if isinstance(value, list):
-        return [_redact_json_value(item) for item in value]
+        return [_redact_json_value(item, depth=depth + 1) for item in value]
     return value
 
 
 def _redact_json_text(text: str) -> str | None:
     try:
         parsed = json.loads(text)
+    except RecursionError:
+        return json.dumps("[REDACTED:depth]")
     except json.JSONDecodeError:
         return None
     return json.dumps(_redact_json_value(parsed), sort_keys=True)
