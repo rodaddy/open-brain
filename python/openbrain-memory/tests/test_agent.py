@@ -393,6 +393,20 @@ def test_namespace_metadata_is_not_accepted_by_memory_facade():
     assert client.calls == []
 
 
+def test_deeply_nested_metadata_is_rejected():
+    client = FakeClient()
+    memory = AgentMemory(client, agent="bilby")
+
+    nested: dict = {"safe": "value"}
+    for _ in range(20):
+        nested = {"layer": nested}
+
+    with pytest.raises(ValueError, match="nesting depth"):
+        memory.remember_fact("fact", tags=[nested])
+
+    assert client.calls == []
+
+
 def test_session_methods_require_started_session():
     memory = AgentMemory(FakeClient(), agent="bilby")
 
