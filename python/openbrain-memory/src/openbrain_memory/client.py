@@ -93,6 +93,7 @@ class UrllibTransport:
                     text=body,
                 )
         except HTTPError as exc:
+            headers: dict[str, str] = {}
             try:
                 headers = {k.lower(): v for k, v in exc.headers.items()}
                 body = self._read_response(
@@ -684,17 +685,19 @@ SENSITIVE_KEY_PATTERN = re.compile(
 )
 
 
-def _redact_json_value(value: Any) -> Any:
+def _redact_json_value(value: Any, *, _depth: int = 0) -> Any:
+    if _depth > 32:
+        return "[REDACTED:depth]"
     if isinstance(value, dict):
         redacted: dict[str, Any] = {}
         for key, item in value.items():
             if SENSITIVE_KEY_PATTERN.search(str(key)):
                 redacted[str(key)] = "[REDACTED]"
             else:
-                redacted[str(key)] = _redact_json_value(item)
+                redacted[str(key)] = _redact_json_value(item, _depth=_depth + 1)
         return redacted
     if isinstance(value, list):
-        return [_redact_json_value(item) for item in value]
+        return [_redact_json_value(item, _depth=_depth + 1) for item in value]
     return value
 
 
