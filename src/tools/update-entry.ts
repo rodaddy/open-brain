@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { toSql } from "pgvector/pg";
 import { canWrite } from "../permissions.ts";
+import { appendWriteNamespacePredicate } from "../namespace-policy.ts";
 import { contentHash, EMBEDDING_MODEL } from "../embedding.ts";
 import type { AuthInfo, Table } from "../types.ts";
 import { logger } from "../logger.ts";
@@ -167,9 +168,14 @@ export function registerUpdateEntry(server: McpServer, deps: ToolDeps): void {
 
         // SELECT existing row with FOR UPDATE lock -- explicit columns to avoid fetching embeddings
         const selectCols = [...VALID_FIELDS[table], "archived_at"].join(", ");
+        const selectParams: unknown[] = [args.id];
+        const selectNamespacePredicate = appendWriteNamespacePredicate(
+          auth,
+          selectParams,
+        );
         const { rows: existingRows } = await client.query(
-          `SELECT id, ${selectCols} FROM ${table} WHERE id = $1 FOR UPDATE`,
-          [args.id],
+          `SELECT id, namespace, ${selectCols} FROM ${table} WHERE id = $1${selectNamespacePredicate} FOR UPDATE`,
+          selectParams,
         );
 
         if (existingRows.length === 0) {
@@ -220,8 +226,8 @@ export function registerUpdateEntry(server: McpServer, deps: ToolDeps): void {
 
           // Check content_hash collision
           const { rows: collisionRows } = await client.query(
-            `SELECT id FROM ${table} WHERE content_hash = $1 AND id != $2`,
-            [hash, args.id],
+            `SELECT id FROM ${table} WHERE content_hash = $1 AND id != $2 AND namespace = $3`,
+            [hash, args.id, existingRow.namespace],
           );
 
           if (collisionRows.length > 0) {
@@ -278,9 +284,14 @@ export function registerUpdateEntry(server: McpServer, deps: ToolDeps): void {
 
         setClauses.push("updated_at = NOW()");
 
-        // Add WHERE id
+        // Add WHERE id plus caller write-scope namespace guard
         params.push(args.id);
-        const updateSql = `UPDATE ${table} SET ${setClauses.join(", ")} WHERE id = $${paramIndex} RETURNING id`;
+        const idParam = params.length;
+        const updateNamespacePredicate = appendWriteNamespacePredicate(
+          auth,
+          params,
+        );
+        const updateSql = `UPDATE ${table} SET ${setClauses.join(", ")} WHERE id = $${idParam}${updateNamespacePredicate} RETURNING id`;
 
         const { rows: updatedRows } = await client.query(updateSql, params);
 

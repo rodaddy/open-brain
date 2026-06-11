@@ -40,3 +40,28 @@ export function canWriteNamespace(
     reason: `${auth.role} role cannot write to namespace '${targetNamespace}'`,
   };
 }
+
+export function writableNamespaces(auth: AuthInfo): string[] | undefined {
+  if (auth.namespaceSource === "header") {
+    return [auth.clientId];
+  }
+
+  if (auth.role === "admin" || auth.role === "n8n") {
+    return undefined;
+  }
+
+  return [auth.clientId];
+}
+
+export function appendWriteNamespacePredicate(
+  auth: AuthInfo,
+  params: unknown[],
+  column = "namespace",
+): string {
+  const namespaces = writableNamespaces(auth);
+  if (namespaces === undefined) {
+    return "";
+  }
+  params.push(namespaces);
+  return ` AND ${column} = ANY($${params.length}::text[])`;
+}

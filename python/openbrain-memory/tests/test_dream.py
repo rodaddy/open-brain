@@ -126,6 +126,25 @@ def test_namespace_dream_suppresses_unscoped_tier_actions():
     assert [action.tool for action in result.actions] == ["promote_entry"]
 
 
+def test_namespace_dream_scans_against_policy_target_namespace():
+    client = FakeDreamClient()
+    engine = DreamEngine(client, policy={"target_namespace": "team"})
+
+    result = engine.dream_once(namespace="bilby", table="thoughts")
+
+    scan_call = [call for call in client.calls if call[0] == "scan_namespace"][0]
+    assert scan_call == (
+        "scan_namespace",
+        {
+            "namespace": "bilby",
+            "table": "thoughts",
+            "limit": 20,
+            "target_namespace": "team",
+        },
+    )
+    assert result.actions[0].arguments["target_namespace"] == "team"
+
+
 def test_dream_once_fails_closed_on_malformed_tier_candidate():
     client = FakeDreamClient()
     client.responses["tier_recommendations"]["promote"] = {

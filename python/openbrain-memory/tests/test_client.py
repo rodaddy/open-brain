@@ -34,6 +34,12 @@ class FakeTransport:
             text=json.dumps(self.health_payload) if not self.next_text else self.next_text,
         )
 
+    def delete(self, url, *, headers, timeout):
+        self.requests.append(
+            {"method": "DELETE", "url": url, "headers": dict(headers), "timeout": timeout}
+        )
+        return TransportResponse(status_code=200, headers={}, text="")
+
     def post(self, url, *, headers, json_body, timeout):
         self.requests.append(
             {
@@ -205,7 +211,7 @@ def test_initialized_notification_and_tool_calls_reuse_session_header():
     assert call["headers"]["MCP-Protocol-Version"] == "2025-03-26"
 
 
-def test_close_clears_local_session_and_context_manager_closes():
+def test_close_sends_delete_once_and_context_manager_closes():
     transport = FakeTransport()
     client = make_client(transport)
 
@@ -214,11 +220,51 @@ def test_close_clears_local_session_and_context_manager_closes():
 
     client.close()
     assert client.session_id is None
+    client.close()
 
-    with make_client(FakeTransport()) as scoped:
+    delete_requests = [
+        request for request in transport.requests if request["method"] == "DELETE"
+    ]
+    assert len(delete_requests) == 1
+    delete = delete_requests[0]
+    assert delete["url"] == "https://brain.example/mcp"
+    assert delete["headers"]["Authorization"] == "Bearer secret-token"
+    assert delete["headers"]["X-Namespace"] == "bilby"
+    assert delete["headers"]["X-Agent-Id"] == "bilby-agent"
+    assert delete["headers"]["X-Role"] == "agent"
+    assert delete["headers"]["Mcp-Session-Id"] == "session-123"
+    assert delete["headers"]["MCP-Protocol-Version"] == "2025-03-26"
+
+    scoped_transport = FakeTransport()
+    with make_client(scoped_transport) as scoped:
         scoped.search_all(query="x")
         assert scoped.session_id == "session-123"
     assert scoped.session_id is None
+    assert [
+        request["method"] for request in scoped_transport.requests
+    ].count("DELETE") == 1
+
+
+def test_close_is_best_effort_when_delete_fails():
+    class FailingDeleteTransport(FakeTransport):
+        def delete(self, url, *, headers, timeout):
+            self.requests.append(
+                {
+                    "method": "DELETE",
+                    "url": url,
+                    "headers": dict(headers),
+                    "timeout": timeout,
+                }
+            )
+            raise ConnectionError("delete failed")
+
+    transport = FailingDeleteTransport()
+    client = make_client(transport)
+
+    client.search_all(query="x")
+    client.close()
+
+    assert client.session_id is None
 
 
 def test_generic_call_tool_emits_json_rpc_tools_call_shape():

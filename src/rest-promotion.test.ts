@@ -113,4 +113,43 @@ describe("promotion REST API", () => {
     expect(status).toBe(400);
     expect(pool.calls.length).toBe(0);
   });
+
+  it("scans duplicates against a requested target namespace", async () => {
+    const pool = createSequencePool([
+      [
+        {
+          id: "source-1",
+          namespace: "bilby",
+          content_hash: "hash-1",
+          created_at: "2026-06-10T00:00:00.000Z",
+          promoted_from: null,
+        },
+      ],
+      [{ id: "team-1" }],
+    ]);
+    const app = buildApp({ role: "admin", clientId: "rico" }, pool);
+
+    const { status, json } = await req(
+      app,
+      "get",
+      "/api/v1/scan/bilby?table=thoughts&target_namespace=team",
+    );
+
+    expect(status).toBe(200);
+    expect(pool.calls[1]!.sql).toContain("namespace = $2");
+    expect(pool.calls[1]!.params).toEqual(["hash-1", "team"]);
+    expect(json).toMatchObject({
+      namespace: "bilby",
+      target_namespace: "team",
+      duplicates: [
+        {
+          table: "thoughts",
+          id: "source-1",
+          target_namespace: "team",
+          existing_target_id: "team-1",
+        },
+      ],
+    });
+    expect(json.duplicates[0].existing_collab_id).toBeUndefined();
+  });
 });

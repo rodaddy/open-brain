@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { canRead, canDelete } from "../permissions.ts";
+import { appendWriteNamespacePredicate } from "../namespace-policy.ts";
 import type { AuthInfo, Table } from "../types.ts";
 import { logger } from "../logger.ts";
 import type { ToolDeps } from "./index.ts";
@@ -158,6 +159,12 @@ export function registerCurateEntries(server: McpServer, deps: ToolDeps): void {
 
         // Duplicates
         if (mode === "duplicates" || mode === "all") {
+          const params: unknown[] = [DUPLICATE_THRESHOLD, limit];
+          const namespacePredicate = appendWriteNamespacePredicate(
+            auth,
+            params,
+            "a.namespace",
+          );
           const { rows } = await deps.pool.query(
             `SELECT
               a.id AS id_a,
@@ -166,20 +173,27 @@ export function registerCurateEntries(server: McpServer, deps: ToolDeps): void {
             FROM ${table} a
             JOIN ${table} b ON a.id < b.id
               AND b.archived_at IS NULL AND b.embedding IS NOT NULL
+              AND b.namespace = a.namespace
             WHERE a.archived_at IS NULL AND a.embedding IS NOT NULL
               AND a.embedding <=> b.embedding < $1
+              ${namespacePredicate}
             ORDER BY distance ASC
             LIMIT $2`,
-            [DUPLICATE_THRESHOLD, limit],
+            params,
           );
 
           for (const row of rows) {
             let action = "would_archive_older";
             if (!dryRun) {
               // Archive the first entry (a < b by ID, but we archive a)
+              const archiveParams: unknown[] = [row.id_a];
+              const archiveNamespacePredicate = appendWriteNamespacePredicate(
+                auth,
+                archiveParams,
+              );
               await deps.pool.query(
-                `UPDATE ${table} SET archived_at = NOW() WHERE id = $1 AND archived_at IS NULL`,
-                [row.id_a],
+                `UPDATE ${table} SET archived_at = NOW() WHERE id = $1 AND archived_at IS NULL${archiveNamespacePredicate}`,
+                archiveParams,
               );
               action = "archived";
               result.summary.archived++;
@@ -197,22 +211,33 @@ export function registerCurateEntries(server: McpServer, deps: ToolDeps): void {
 
         // Stale
         if (mode === "stale" || mode === "all") {
+          const params: unknown[] = [STALE_DAYS, limit];
+          const namespacePredicate = appendWriteNamespacePredicate(
+            auth,
+            params,
+          );
           const { rows } = await deps.pool.query(
             `SELECT id, ${preview} AS content_preview
              FROM ${table}
              WHERE archived_at IS NULL
                AND created_at < NOW() - INTERVAL '1 day' * $1
                AND COALESCE(access_count, 0) = 0
+               ${namespacePredicate}
              LIMIT $2`,
-            [STALE_DAYS, limit],
+            params,
           );
 
           for (const row of rows) {
             let action = "would_flag";
             if (!dryRun) {
+              const archiveParams: unknown[] = [row.id];
+              const archiveNamespacePredicate = appendWriteNamespacePredicate(
+                auth,
+                archiveParams,
+              );
               await deps.pool.query(
-                `UPDATE ${table} SET archived_at = NOW() WHERE id = $1 AND archived_at IS NULL`,
-                [row.id],
+                `UPDATE ${table} SET archived_at = NOW() WHERE id = $1 AND archived_at IS NULL${archiveNamespacePredicate}`,
+                archiveParams,
               );
               action = "archived";
               result.summary.archived++;
@@ -229,14 +254,20 @@ export function registerCurateEntries(server: McpServer, deps: ToolDeps): void {
 
         // Vague
         if (mode === "vague" || mode === "all") {
+          const params: unknown[] = [limit];
+          const namespacePredicate = appendWriteNamespacePredicate(
+            auth,
+            params,
+          );
           const { rows } = await deps.pool.query(
             `SELECT id, ${preview} AS content_preview
              FROM ${table}
              WHERE archived_at IS NULL
                AND (usefulness_score IS NULL OR usefulness_score < 0.3)
                AND (tags IS NULL OR array_length(tags, 1) IS NULL)
+               ${namespacePredicate}
              LIMIT $1`,
-            [limit],
+            params,
           );
 
           for (const row of rows) {

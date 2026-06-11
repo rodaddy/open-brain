@@ -57,6 +57,7 @@ SECRET_PATTERNS = [
 SENSITIVE_KEY_RE = re.compile(
     r"(?i)(token|secret|password|api[_-]?key|credential|authorization|session[_-]?id)"
 )
+MAX_REDACT_DEPTH = 32
 
 
 class RetryExhaustedError(RuntimeError):
@@ -90,16 +91,25 @@ def redact_text(text: str) -> str:
 
 
 def redact_value(value: Any) -> Any:
+    return _redact_value(value, depth=0)
+
+
+def _redact_value(value: Any, *, depth: int) -> Any:
+    if depth >= MAX_REDACT_DEPTH:
+        return "[REDACTED:depth]"
     if isinstance(value, str):
         return redact_text(value)
     if isinstance(value, dict):
         redacted: dict[str, Any] = {}
         for key, item in value.items():
             key_text = str(key)
-            redacted[key_text] = "[REDACTED]" if SENSITIVE_KEY_RE.search(key_text) else redact_value(item)
+            redacted[key_text] = (
+                "[REDACTED]" if SENSITIVE_KEY_RE.search(key_text)
+                else _redact_value(item, depth=depth + 1)
+            )
         return redacted
     if isinstance(value, list):
-        return [redact_value(item) for item in value]
+        return [_redact_value(item, depth=depth + 1) for item in value]
     return value
 
 

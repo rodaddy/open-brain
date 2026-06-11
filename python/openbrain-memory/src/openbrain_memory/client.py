@@ -33,6 +33,15 @@ class Transport(Protocol):
     def get(self, url: str, *, headers: Mapping[str, str], timeout: float) -> TransportResponse:
         ...
 
+    def delete(
+        self,
+        url: str,
+        *,
+        headers: Mapping[str, str],
+        timeout: float,
+    ) -> TransportResponse:
+        ...
+
     def post(
         self,
         url: str,
@@ -53,6 +62,16 @@ class UrllibTransport:
 
     def get(self, url: str, *, headers: Mapping[str, str], timeout: float) -> TransportResponse:
         request = Request(url, headers=dict(headers), method="GET")
+        return self._send(request, timeout, expected_response_id=None)
+
+    def delete(
+        self,
+        url: str,
+        *,
+        headers: Mapping[str, str],
+        timeout: float,
+    ) -> TransportResponse:
+        request = Request(url, headers=dict(headers), method="DELETE")
         return self._send(request, timeout, expected_response_id=None)
 
     def post(
@@ -249,7 +268,21 @@ class OpenBrainClient:
         return payload
 
     def close(self) -> None:
-        self._session_id = None
+        session_id = self._session_id
+        if not session_id:
+            return
+        try:
+            response = self.transport.delete(
+                self._url("mcp"),
+                headers=self._mcp_headers(include_session=True, session_id=session_id),
+                timeout=self.timeout,
+            )
+            if response.status_code < 200 or response.status_code >= 300:
+                return
+        except Exception:
+            return
+        finally:
+            self._session_id = None
 
     def __enter__(self) -> OpenBrainClient:
         return self

@@ -156,7 +156,12 @@ class DreamEngine:
         if namespace is not None:
             reports["namespace_scan"] = self.scan_namespace(
                 namespace,
-                **_only(filters, {"table", "since"}, limit=limit),
+                **_only(
+                    filters,
+                    {"table", "since"},
+                    limit=limit,
+                    target_namespace=self.policy.target_namespace,
+                ),
             )
 
         actions = self._planned_actions(reports, namespace=namespace, table_filter=table_filter)

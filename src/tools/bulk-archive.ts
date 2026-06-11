@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { canDelete } from "../permissions.ts";
+import { appendWriteNamespacePredicate } from "../namespace-policy.ts";
 import type { AuthInfo, Table } from "../types.ts";
 import { logger } from "../logger.ts";
 import type { ToolDeps } from "./index.ts";
@@ -78,9 +79,14 @@ export function registerBulkArchive(server: McpServer, deps: ToolDeps): void {
 
         for (const entry of entries) {
           // Table name is validated by Zod enum -- safe for interpolation
+          const params: unknown[] = [entry.id];
+          const namespacePredicate = appendWriteNamespacePredicate(
+            auth,
+            params,
+          );
           const { rowCount } = await client.query(
-            `UPDATE ${entry.table} SET archived_at = NOW() WHERE id = $1 AND archived_at IS NULL`,
-            [entry.id],
+            `UPDATE ${entry.table} SET archived_at = NOW() WHERE id = $1 AND archived_at IS NULL${namespacePredicate}`,
+            params,
           );
           archived += rowCount ?? 0;
         }

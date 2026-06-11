@@ -80,6 +80,49 @@ describe("bulk_set_tier", () => {
     }
   });
 
+  it("adds namespace predicates for each scoped agent entry update", async () => {
+    const updateCalls: Array<{ sql: string; params?: unknown[] }> = [];
+    const mockClient = {
+      query: async (sql: string, params?: unknown[]) => {
+        if (sql.includes("UPDATE")) {
+          updateCalls.push({ sql, params });
+          return { rowCount: 0 };
+        }
+        return { rows: [] };
+      },
+      release: () => {},
+    };
+    const mockPool = {
+      connect: async () => mockClient,
+      query: async () => ({ rows: [] }),
+    };
+    const auth: AuthInfo = { role: "agent", clientId: "agent-client" };
+
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "bulk_set_tier",
+        arguments: {
+          entries: [
+            { id: "550e8400-e29b-41d4-a716-446655440010", table: "thoughts", tier: "hot" },
+          ],
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      expect(JSON.parse((result.content as any)[0].text).updated).toBe(0);
+      expect(updateCalls[0]!.sql).toContain("namespace = ANY($3::text[])");
+      expect(updateCalls[0]!.params).toEqual([
+        "hot",
+        "550e8400-e29b-41d4-a716-446655440010",
+        ["agent-client"],
+      ]);
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("denies readonly role", async () => {
     const mockPool = {
       connect: async () => ({ query: async () => ({ rows: [] }), release: () => {} }),

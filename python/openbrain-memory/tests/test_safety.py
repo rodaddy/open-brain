@@ -161,6 +161,20 @@ def test_redact_value_recurses_sensitive_keys():
     }
 
 
+def test_redact_value_bounds_deeply_nested_values():
+    value = "secret"
+    for _ in range(1200):
+        value = {"safe": value}
+
+    redacted = redact_value(value)
+
+    cursor = redacted
+    for _ in range(32):
+        assert isinstance(cursor, dict)
+        cursor = cursor["safe"]
+    assert cursor == "[REDACTED:depth]"
+
+
 def test_retries_success_after_transient_failure_without_spooling(tmp_path):
     client = FlakyClient(failures=1)
     spool = JsonlSpool(tmp_path / "spool.jsonl")

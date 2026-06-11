@@ -388,6 +388,93 @@ describe("update_entry", () => {
         await cleanup();
       }
     });
+
+    it("locks the initial row lookup to the agent namespace", async () => {
+      const calls: Array<{ sql: string; params?: unknown[] }> = [];
+      const mockPool = createMockPool(async (sql: string, params?: unknown[]) => {
+        calls.push({ sql, params });
+        return { rows: [] };
+      });
+      const mockEmbed = createMockEmbed();
+      const auth: AuthInfo = { role: "agent", clientId: "agent-client" };
+
+      const { client, cleanup } = await setupToolClient(
+        mockPool,
+        mockEmbed,
+        auth,
+      );
+
+      try {
+        const result = await client.callTool({
+          name: "update_entry",
+          arguments: {
+            table: "thoughts",
+            id: "550e8400-e29b-41d4-a716-446655440010",
+            content: "agent update blocked by namespace",
+          },
+        });
+
+        expect(result.isError).toBe(true);
+        expect(calls[0]!.sql).toContain("namespace = ANY($2::text[])");
+        expect(calls[0]!.params).toEqual([
+          "550e8400-e29b-41d4-a716-446655440010",
+          ["agent-client"],
+        ]);
+      } finally {
+        await cleanup();
+      }
+    });
+  });
+
+  describe("namespace-scoped collision checks", () => {
+    it("checks content_hash collisions only in the existing row namespace", async () => {
+      const calls: Array<{ sql: string; params?: unknown[] }> = [];
+      let dataCallCount = 0;
+      const mockPool = createMockPool(async (sql: string, params?: unknown[]) => {
+        calls.push({ sql, params });
+        dataCallCount++;
+        if (dataCallCount === 1) {
+          return {
+            rows: [
+              {
+                id: "agent-uuid",
+                namespace: "agent-client",
+                content: "old",
+                tags: [],
+                archived_at: null,
+              },
+            ],
+          };
+        }
+        if (dataCallCount === 2) return { rows: [] };
+        return { rows: [{ id: "agent-uuid" }] };
+      });
+      const mockEmbed = createMockEmbed();
+      const auth: AuthInfo = { role: "agent", clientId: "agent-client" };
+
+      const { client, cleanup } = await setupToolClient(
+        mockPool,
+        mockEmbed,
+        auth,
+      );
+
+      try {
+        const result = await client.callTool({
+          name: "update_entry",
+          arguments: {
+            table: "thoughts",
+            id: "550e8400-e29b-41d4-a716-446655440011",
+            content: "new content",
+          },
+        });
+
+        expect(result.isError).toBeFalsy();
+        expect(calls[1]!.sql).toContain("namespace = $3");
+        expect(calls[1]!.params?.[2]).toBe("agent-client");
+      } finally {
+        await cleanup();
+      }
+    });
   });
 
   describe("readonly role -- permission denied", () => {
