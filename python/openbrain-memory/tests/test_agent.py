@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from pathlib import Path
 import re
+from pathlib import Path
 
 import pytest
 
@@ -70,6 +70,7 @@ TOOL_SCHEMA_FILES = {
     "session_wrap": "session-wrap.ts",
 }
 
+
 def server_tool_schema_block(name: str) -> str:
     repo_root = Path(__file__).resolve().parents[3]
     source = repo_root / "src" / "tools" / TOOL_SCHEMA_FILES[name]
@@ -79,7 +80,9 @@ def server_tool_schema_block(name: str) -> str:
 
 def server_tool_keys(name: str) -> set[str]:
     block = server_tool_schema_block(name)
-    return set(re.findall(r"^\s{8}([A-Za-z_][A-Za-z0-9_]*)\s*:", block, flags=re.MULTILINE))
+    return set(
+        re.findall(r"^\s{8}([A-Za-z_][A-Za-z0-9_]*)\s*:", block, flags=re.MULTILINE)
+    )
 
 
 def server_required_tool_keys(name: str) -> set[str]:
@@ -90,7 +93,9 @@ def server_required_tool_keys(name: str) -> set[str]:
     for line in block.splitlines():
         match = re.match(r"^\s{8}([A-Za-z_][A-Za-z0-9_]*)\s*:", line)
         if match:
-            if current_key is not None and ".optional()" not in "\n".join(current_lines):
+            if current_key is not None and ".optional()" not in "\n".join(
+                current_lines
+            ):
                 keys.append(current_key)
             current_key = match.group(1)
             current_lines = [line]
@@ -176,8 +181,14 @@ def test_remember_decision_routes_to_decision_logging_semantics():
     memory.remember_decision("Use OpenBrainClient wrappers, not raw protocol calls.")
 
     assert client.calls[0][0] == "log_decision"
-    assert client.calls[0][1]["title"] == "Use OpenBrainClient wrappers, not raw protocol calls."
-    assert client.calls[0][1]["rationale"] == "Use OpenBrainClient wrappers, not raw protocol calls."
+    assert (
+        client.calls[0][1]["title"]
+        == "Use OpenBrainClient wrappers, not raw protocol calls."
+    )
+    assert (
+        client.calls[0][1]["rationale"]
+        == "Use OpenBrainClient wrappers, not raw protocol calls."
+    )
     assert client.calls[0][1]["tags"][0].startswith("idempotency:obmem-")
 
 
@@ -185,7 +196,9 @@ def test_representative_facade_payloads_match_server_tool_contracts():
     client = FakeClient()
     memory = AgentMemory(client, agent="bilby", project="open-brain")
 
-    memory.start_session("conversation", channel_id="c1", thread_id="t1", topic="contract")
+    memory.start_session(
+        "conversation", channel_id="c1", thread_id="t1", topic="contract"
+    )
     memory.append_event(
         "assistant",
         "event",
@@ -207,7 +220,9 @@ def test_representative_facade_payloads_match_server_tool_contracts():
     for name, payload in client.calls:
         assert_server_contract_call(name, payload)
 
-    append = [payload for name, payload in client.calls if name == "append_session_event"][0]
+    append = [
+        payload for name, payload in client.calls if name == "append_session_event"
+    ][0]
     assert append["artifact_path"] == "/tmp/a"
     assert append["importance"] == "hot"
     assert "artifact_path" not in append["metadata"]
@@ -231,12 +246,12 @@ def test_recall_assembles_bounded_prompt_context():
 
     assert client.calls[-1] == (
         "search_all",
-            {
-                "query": "client facade",
-                "limit": 2,
-                "sources": "brain",
-            },
-        )
+        {
+            "query": "client facade",
+            "limit": 2,
+            "sources": "brain",
+        },
+    )
     assert len(context.items) == 2
     assert context.items[0].text == "First useful fact about the project."
     assert context.items[1].text == "Decision context that should be included."

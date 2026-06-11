@@ -104,6 +104,31 @@ describe("promotion REST API", () => {
     expect(pool.calls[1]!.sql).toContain("name = $2");
   });
 
+  it("scopes delegated promote source lookup to readable namespaces", async () => {
+    const sourceId = "123e4567-e89b-12d3-a456-426614174010";
+    const pool = createSequencePool([]);
+    const app = buildApp(
+      {
+        role: "admin",
+        clientId: "bilby",
+        tokenClientId: "admin",
+        namespaceSource: "header",
+      },
+      pool,
+    );
+
+    const { status, json } = await req(app, "post", "/api/v1/promote", {
+      table: "thoughts",
+      id: sourceId,
+      target_namespace: "collab",
+    });
+
+    expect(status).toBe(404);
+    expect(json.error).toContain("Source entry not found");
+    expect(pool.calls[0]!.sql).toContain("namespace = ANY($2::text[])");
+    expect(pool.calls[0]!.params).toEqual([sourceId, ["bilby", "collab"]]);
+  });
+
   it("returns 400 for invalid scan limit", async () => {
     const pool = createSequencePool([]);
     const app = buildApp({ role: "admin", clientId: "rico" }, pool);
@@ -111,6 +136,48 @@ describe("promotion REST API", () => {
     const { status } = await req(app, "get", "/api/v1/scan/bilby?limit=-1");
 
     expect(status).toBe(400);
+    expect(pool.calls.length).toBe(0);
+  });
+
+  it("denies delegated scans outside the delegated source namespace", async () => {
+    const pool = createSequencePool([]);
+    const app = buildApp(
+      {
+        role: "admin",
+        clientId: "bilby",
+        tokenClientId: "admin",
+        namespaceSource: "header",
+      },
+      pool,
+    );
+
+    const { status, json } = await req(app, "get", "/api/v1/scan/skippy");
+
+    expect(status).toBe(403);
+    expect(json.error).toContain("namespace read access denied");
+    expect(pool.calls.length).toBe(0);
+  });
+
+  it("denies delegated scans against unreadable target namespaces", async () => {
+    const pool = createSequencePool([]);
+    const app = buildApp(
+      {
+        role: "admin",
+        clientId: "bilby",
+        tokenClientId: "admin",
+        namespaceSource: "header",
+      },
+      pool,
+    );
+
+    const { status, json } = await req(
+      app,
+      "get",
+      "/api/v1/scan/bilby?target_namespace=team",
+    );
+
+    expect(status).toBe(403);
+    expect(json.error).toContain("target namespace read access denied");
     expect(pool.calls.length).toBe(0);
   });
 

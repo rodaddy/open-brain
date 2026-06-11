@@ -28,6 +28,8 @@ bun test                        # run tests
 ```bash
 cd python/openbrain-memory
 uv sync
+uv run mypy src/openbrain_memory
+uv run ruff check src tests
 uv run pytest -q
 ```
 
@@ -41,6 +43,7 @@ uv run pytest -q
 - For every security/isolation bug fix, add a regression test that fails on the old behavior and proves the exact predicate, header binding, or call shape.
 - Preserve DreamEngine dry-run behavior by default. No archive, promote, demote, or tier mutation should run from dream planning unless the caller explicitly opts into a mutating wrapper.
 - Python client behavior must be covered by fake transport tests for headers, session lifecycle, error redaction, and wrapper call shapes. Live canaries stay env-gated.
+- Python package source must pass `uv run mypy src/openbrain_memory` and `uv run ruff check src tests` with zero errors, matching the quality bar used by `/Volumes/ThunderBolt/Development/king-capital/king-signals`.
 - Keep fixes scoped to the issue. Avoid broad refactors unless they are required to close the bug safely.
 - When a review or post-merge issue exposes a missed pattern, update `docs/sme/` so the next swarm checks for it.
 

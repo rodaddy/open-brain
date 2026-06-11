@@ -118,6 +118,32 @@ describe("curate_entries", () => {
     }
   });
 
+  it("uses read-scope namespaces for dry_run scans", async () => {
+    const calls: Array<{ sql: string; params?: any[] }> = [];
+    const mockPool = {
+      query: async (sql: string, params?: any[]) => {
+        calls.push({ sql, params });
+        return { rows: [] };
+      },
+    };
+    const auth: AuthInfo = { role: "agent", clientId: "agent-client" };
+
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "curate_entries",
+        arguments: { mode: "vague", dry_run: true, table: "thoughts" },
+      });
+
+      expect(result.isError).toBeFalsy();
+      expect(calls[0]!.sql).toContain("namespace = ANY($2::text[])");
+      expect(calls[0]!.params).toEqual([20, ["agent-client", "collab"]]);
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("finds duplicates", async () => {
     const mockPool = {
       query: async (sql: string) => {

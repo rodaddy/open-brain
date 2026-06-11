@@ -124,4 +124,36 @@ describe("scan_namespace", () => {
       await cleanup();
     }
   });
+
+  it("denies delegated admin duplicate checks against unreadable target namespaces", async () => {
+    const mockPool = { query: async () => ({ rows: [] }) };
+    const auth: AuthInfo = {
+      role: "admin",
+      clientId: "bilby",
+      tokenClientId: "admin",
+      namespaceSource: "header",
+    };
+    const { client, cleanup } = await setupMcpClient(
+      registerScanNamespace,
+      mockPool,
+      createMockEmbed(),
+      auth,
+    );
+
+    try {
+      const result = await client.callTool({
+        name: "scan_namespace",
+        arguments: {
+          namespace: "bilby",
+          target_namespace: "team",
+          table: "thoughts",
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(getErrorText(result)).toContain("target namespace read access denied");
+    } finally {
+      await cleanup();
+    }
+  });
 });

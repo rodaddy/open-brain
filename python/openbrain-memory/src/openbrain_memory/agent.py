@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Protocol
+from typing import Any, Protocol, cast
 
 from .client import JSON
 from .policy import RetryPolicy, idempotency_key, with_retry
-
 
 EVENT_TYPES = {
     "fact",
@@ -52,23 +52,17 @@ THOUGHT_KEYS = {"tags"}
 
 
 class MemoryClient(Protocol):
-    def session_start(self, **arguments: Any) -> JSON:
-        ...
+    def session_start(self, **arguments: Any) -> JSON: ...
 
-    def append_session_event(self, **arguments: Any) -> JSON:
-        ...
+    def append_session_event(self, **arguments: Any) -> JSON: ...
 
-    def search_all(self, **arguments: Any) -> JSON:
-        ...
+    def search_all(self, **arguments: Any) -> JSON: ...
 
-    def log_thought(self, **arguments: Any) -> JSON:
-        ...
+    def log_thought(self, **arguments: Any) -> JSON: ...
 
-    def log_decision(self, **arguments: Any) -> JSON:
-        ...
+    def log_decision(self, **arguments: Any) -> JSON: ...
 
-    def session_wrap(self, **arguments: Any) -> JSON:
-        ...
+    def session_wrap(self, **arguments: Any) -> JSON: ...
 
 
 class MemorySpool(Protocol):
@@ -78,8 +72,7 @@ class MemorySpool(Protocol):
         payload: Mapping[str, Any],
         *,
         key: str | None = None,
-    ) -> str:
-        ...
+    ) -> str: ...
 
 
 @dataclass(frozen=True)
@@ -213,7 +206,12 @@ class AgentMemory:
         tags = _tags("fact", metadata.pop("tags", None))
         tags.append(f"idempotency:{key}")
         payload: dict[str, Any] = {"content": text, "tags": tags}
-        return self._call_write("log_thought", payload, self.client.log_thought, key=key)
+        return self._call_write(
+            "log_thought",
+            payload,
+            self.client.log_thought,
+            key=key,
+        )
 
     def remember_decision(self, text: str, **metadata: Any) -> JSON:
         self._reject_reserved_metadata(metadata)
@@ -225,12 +223,20 @@ class AgentMemory:
             "tags": [f"idempotency:{idem}"],
         }
         if "alternatives" in metadata:
-            payload["alternatives"] = _str_list(metadata["alternatives"], "alternatives")
+            payload["alternatives"] = _str_list(
+                metadata["alternatives"],
+                "alternatives",
+            )
         if "context" in metadata:
             payload["context"] = _required_str(metadata["context"], "context")
         if "tags" in metadata:
             payload["tags"] = _tags(f"idempotency:{idem}", metadata["tags"])
-        return self._call_write("log_decision", payload, self.client.log_decision, key=idem)
+        return self._call_write(
+            "log_decision",
+            payload,
+            self.client.log_decision,
+            key=idem,
+        )
 
     def checkpoint(self, summary: str, **metadata: Any) -> JSON:
         self._require_session("checkpoint")
@@ -327,10 +333,10 @@ class AgentMemory:
         try:
             if operation == "session_start":
                 return with_retry(
-                    lambda: call(**write_payload),
+                    lambda: cast(JSON, call(**write_payload)),
                     retry_policy=self.retry_policy,
                 )
-            return call(**write_payload)
+            return cast(JSON, call(**write_payload))
         except Exception as error:
             if self.spool is not None:
                 try:
@@ -462,7 +468,9 @@ def _required_str(value: Any, name: str) -> str:
 
 
 def _str_list(value: Any, name: str) -> list[str]:
-    if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
+    if not isinstance(value, list) or not all(
+        isinstance(item, str) and item for item in value
+    ):
         raise ValueError(f"{name} must be a list of non-empty strings")
     return value
 

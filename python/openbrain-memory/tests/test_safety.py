@@ -42,7 +42,9 @@ class FlakyClient:
 
     def search_all(self, **arguments):
         self.calls.append(("search_all", arguments))
-        return {"results": [{"content": "x" * 100, "type": "thought", "source": "brain"}]}
+        return {
+            "results": [{"content": "x" * 100, "type": "thought", "source": "brain"}]
+        }
 
     def log_thought(self, **arguments):
         self.calls.append(("log_thought", arguments))
@@ -74,8 +76,15 @@ def test_redaction_scrubs_common_secret_shapes():
             "password: " + token_sample("hunt", "er2"),
             '"api_key": "json-secret"',
             "token: " + token_sample("sk", "-abcdefghijklmnopqrstuvwxyz"),
-            token_sample("GITHUB_", "TOKEN=") + token_sample("ghp", "_abcdefghijklmnopqrstuvwxyz"),
-            token_sample("-----BEGIN ", "PRIVATE ", "KEY-----\nabc\n-----END ", "PRIVATE ", "KEY-----"),
+            token_sample("GITHUB_", "TOKEN=")
+            + token_sample("ghp", "_abcdefghijklmnopqrstuvwxyz"),
+            token_sample(
+                "-----BEGIN ",
+                "PRIVATE ",
+                "KEY-----\nabc\n-----END ",
+                "PRIVATE ",
+                "KEY-----",
+            ),
         ]
     )
 
@@ -93,11 +102,14 @@ def test_redaction_scrubs_common_secret_shapes():
 
 def test_redaction_scrubs_unlabelled_cloud_and_token_shapes():
     aws_access_key = token_sample("AKIA", "ABCDEFGHIJKLMNOP")
-    aws_secret = token_sample("abcdEFGH", "ijklMNOP", "qrstUVWX", "yz012345", "6789+/ab")
+    aws_secret = token_sample(
+        "abcdEFGH", "ijklMNOP", "qrstUVWX", "yz012345", "6789+/ab"
+    )
     slack_token = token_sample("xoxb-", "123456789012-", "abcdefghijklmnop")
     google_key = token_sample("AIza", "ABCDEFGHIJKLMNOPQRSTUVWX", "YZabcdefghi")
     jwt_token = token_sample(
-        "eyJ", "hbGciOiJIUzI1NiJ9.",
+        "eyJ",
+        "hbGciOiJIUzI1NiJ9.",
         "eyJzdWIiOiJvcGVuLWJyYWluIn0.",
         "c2lnbmF0dXJlX3ZhbHVl",
     )
@@ -246,7 +258,9 @@ def test_failed_write_spools_replayable_payload_with_redacted_diagnostic_view(tm
     ]
     assert token_sample("super", "secret") in str(records[0].payload)
     assert token_sample("super", "secret") not in str(records[0].redacted_payload())
-    assert token_sample("super", "secret") not in str(spool.redacted_records()[0].payload)
+    assert token_sample("super", "secret") not in str(
+        spool.redacted_records()[0].payload
+    )
     assert records[0].idempotency_key
     assert spool.replay(dispatch) == [{"ok": True}]
     assert replayed[0].operation == records[0].operation
@@ -301,7 +315,10 @@ def test_spool_replay_allows_appends_during_dispatch(tmp_path):
 
     def dispatch(record: SpoolRecord):
         thread = threading.Thread(
-            target=lambda: (spool.append("new", {"content": "2"}, key="new-key"), appended.set())
+            target=lambda: (
+                spool.append("new", {"content": "2"}, key="new-key"),
+                appended.set(),
+            )
         )
         thread.start()
         thread.join(timeout=1)

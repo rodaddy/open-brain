@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { canRead, canDelete } from "../permissions.ts";
+import { appendReadNamespacePredicate } from "../read-policy.ts";
 import { appendWriteNamespacePredicate } from "../namespace-policy.ts";
 import type { AuthInfo, Table } from "../types.ts";
 import { logger } from "../logger.ts";
@@ -160,7 +161,7 @@ export function registerCurateEntries(server: McpServer, deps: ToolDeps): void {
         // Duplicates
         if (mode === "duplicates" || mode === "all") {
           const params: unknown[] = [DUPLICATE_THRESHOLD, limit];
-          const namespacePredicate = appendWriteNamespacePredicate(
+          const namespacePredicate = appendReadNamespacePredicate(
             auth,
             params,
             "a.namespace",
@@ -212,7 +213,7 @@ export function registerCurateEntries(server: McpServer, deps: ToolDeps): void {
         // Stale
         if (mode === "stale" || mode === "all") {
           const params: unknown[] = [STALE_DAYS, limit];
-          const namespacePredicate = appendWriteNamespacePredicate(
+          const namespacePredicate = appendReadNamespacePredicate(
             auth,
             params,
           );
@@ -255,7 +256,7 @@ export function registerCurateEntries(server: McpServer, deps: ToolDeps): void {
         // Vague
         if (mode === "vague" || mode === "all") {
           const params: unknown[] = [limit];
-          const namespacePredicate = appendWriteNamespacePredicate(
+          const namespacePredicate = appendReadNamespacePredicate(
             auth,
             params,
           );

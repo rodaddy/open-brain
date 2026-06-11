@@ -24,7 +24,7 @@ class FakeDreamClient:
                             "table": "decisions",
                             "suggested_tier": "hot",
                             "reasoning": "frequently accessed",
-                        }
+                        },
                     ]
                 },
                 "demote": {
@@ -114,7 +114,11 @@ def test_dream_without_namespace_does_not_scan_or_promote():
     result = engine.dream_once()
 
     assert "scan_namespace" not in [name for name, _ in client.calls]
-    assert [action.tool for action in result.actions] == ["set_tier", "set_tier", "set_tier"]
+    assert [action.tool for action in result.actions] == [
+        "set_tier",
+        "set_tier",
+        "set_tier",
+    ]
 
 
 def test_namespace_dream_suppresses_unscoped_tier_actions():
@@ -199,10 +203,22 @@ def test_wrapper_methods_pass_arguments_correctly():
     client = FakeDreamClient()
     engine = DreamEngine(client, policy={"target_namespace": "team"})
 
-    assert engine.list_stale(table="thoughts", tier="warm") == client.responses["list_stale"]
-    assert engine.tier_recommendations("promote", limit=3) == client.responses["tier_recommendations"]["promote"]
-    assert engine.find_duplicates(table="decisions", threshold=0.05) == client.responses["find_duplicates"]
-    assert engine.scan_namespace("bilby", table="thoughts") == client.responses["scan_namespace"]
+    assert (
+        engine.list_stale(table="thoughts", tier="warm")
+        == client.responses["list_stale"]
+    )
+    assert (
+        engine.tier_recommendations("promote", limit=3)
+        == client.responses["tier_recommendations"]["promote"]
+    )
+    assert (
+        engine.find_duplicates(table="decisions", threshold=0.05)
+        == client.responses["find_duplicates"]
+    )
+    assert (
+        engine.scan_namespace("bilby", table="thoughts")
+        == client.responses["scan_namespace"]
+    )
 
     assert client.calls[:4] == [
         ("list_stale", {"table": "thoughts", "tier": "warm"}),
@@ -252,7 +268,9 @@ def test_mutating_wrappers_require_explicit_dry_run_false():
 
 
 def test_dream_structures_can_render_to_dicts():
-    action = DreamAction("set_tier", {"table": "thoughts", "id": "id-1", "tier": "cold"})
+    action = DreamAction(
+        "set_tier", {"table": "thoughts", "id": "id-1", "tier": "cold"}
+    )
     run = DreamRun(dry_run=True, reports={"stale": {}}, actions=(action,))
 
     assert run.as_dict() == {

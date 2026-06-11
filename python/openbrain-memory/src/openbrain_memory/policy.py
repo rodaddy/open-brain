@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import re
 import time
-from typing import Any, Callable, TypeVar
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
 from uuid import uuid4
-
 
 SK_PREFIX = "sk" + "-"
 GITHUB_PREFIX_RE = "gh" + r"[pousr]_"
@@ -32,9 +32,7 @@ JWT_LIKE_RE = (
     r"[A-Za-z0-9_-]{8,}"
 )
 PRIVATE_KEY_BLOCK_RE = (
-    "-----BEGIN [A-Z ]*PRIVATE "
-    "KEY-----.*?-----END [A-Z ]*PRIVATE "
-    "KEY-----"
+    "-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----"
 )
 
 SECRET_PATTERNS = [
@@ -76,9 +74,6 @@ class RetryPolicy:
             raise ValueError("RetryPolicy.backoff_seconds must be >= 0")
 
 
-T = TypeVar("T")
-
-
 def idempotency_key() -> str:
     return f"obmem-{uuid4().hex}"
 
@@ -104,7 +99,8 @@ def _redact_value(value: Any, *, depth: int) -> Any:
         for key, item in value.items():
             key_text = str(key)
             redacted[key_text] = (
-                "[REDACTED]" if SENSITIVE_KEY_RE.search(key_text)
+                "[REDACTED]"
+                if SENSITIVE_KEY_RE.search(key_text)
                 else _redact_value(item, depth=depth + 1)
             )
         return redacted
@@ -113,7 +109,7 @@ def _redact_value(value: Any, *, depth: int) -> Any:
     return value
 
 
-def with_retry(
+def with_retry[T](
     operation: Callable[[], T],
     *,
     retry_policy: RetryPolicy,

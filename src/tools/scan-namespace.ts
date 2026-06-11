@@ -62,6 +62,12 @@ export function registerScanNamespace(server: McpServer, deps: ToolDeps): void {
       const tables = args.table ? [args.table as Table] : ALL_TABLES;
       const limit = args.limit ?? 20;
       const targetNamespace = args.target_namespace ?? "collab";
+      if (!canReadNamespace(auth, targetNamespace)) {
+        return {
+          content: [{ type: "text" as const, text: "Permission denied: target namespace read access denied" }],
+          isError: true,
+        };
+      }
       const candidates: any[] = [];
       const duplicates: any[] = [];
       const alreadyPromoted: any[] = [];

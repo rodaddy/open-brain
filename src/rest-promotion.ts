@@ -6,6 +6,7 @@ import type { AuthInfo, Table } from "./types.ts";
 import { ALL_TABLES } from "./tools/search-brain.ts";
 import type { generateEmbedding } from "./embedding.ts";
 import { promoteEntry } from "./promotion-service.ts";
+import { canReadNamespace } from "./read-policy.ts";
 
 interface RestDeps {
   pool: pg.Pool;
@@ -59,14 +60,23 @@ export function createPromotionRouter(deps: RestDeps): Router {
     }
 
     const { table, id, reason, target_namespace } = parsed.data;
-    const result = await promoteEntry(
-      deps.pool,
-      table,
-      id,
-      target_namespace ?? "collab",
-      reason,
-      auth,
-    );
+    let result;
+    try {
+      result = await promoteEntry(
+        deps.pool,
+        table,
+        id,
+        target_namespace ?? "collab",
+        reason,
+        auth,
+      );
+    } catch (err) {
+      const statusCode = typeof (err as any)?.statusCode === "number"
+        ? (err as any).statusCode
+        : 500;
+      res.status(statusCode).json({ error: (err as Error).message });
+      return;
+    }
 
     res.status(result.status === "duplicate" ? 409 : 201).json(result);
   });
@@ -130,6 +140,15 @@ export function createPromotionRouter(deps: RestDeps): Router {
     }
 
     const { table, since, limit, target_namespace } = parsed.data;
+    if (!canReadNamespace(auth, namespace.data)) {
+      res.status(403).json({ error: "Permission denied: namespace read access denied" });
+      return;
+    }
+    if (!canReadNamespace(auth, target_namespace)) {
+      res.status(403).json({ error: "Permission denied: target namespace read access denied" });
+      return;
+    }
+
     const tables = table ? [table] : ALL_TABLES;
     const candidates: any[] = [];
     const duplicateEntries: any[] = [];
