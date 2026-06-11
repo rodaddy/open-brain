@@ -67,6 +67,43 @@ describe("archive_entry", () => {
         await cleanup();
       }
     });
+
+    it("uses a namespace predicate for delegated admin", async () => {
+      const calls: Array<{ sql: string; params?: any[] }> = [];
+      const mockPool = {
+        query: async (sql: string, params?: any[]) => {
+          calls.push({ sql, params });
+          return { rows: [{ id: "test-uuid" }] };
+        },
+      };
+      const auth: AuthInfo = {
+        role: "admin",
+        clientId: "bilby",
+        tokenClientId: "admin",
+        namespaceSource: "header",
+      };
+
+      const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+      try {
+        const result = await client.callTool({
+          name: "archive_entry",
+          arguments: {
+            table: "thoughts",
+            id: "550e8400-e29b-41d4-a716-446655440010",
+          },
+        });
+
+        expect(result.isError).toBeFalsy();
+        expect(calls[0]!.sql).toContain("namespace = ANY($2::text[])");
+        expect(calls[0]!.params).toEqual([
+          "550e8400-e29b-41d4-a716-446655440010",
+          ["bilby"],
+        ]);
+      } finally {
+        await cleanup();
+      }
+    });
   });
 
   describe("n8n role -- has delete permission", () => {

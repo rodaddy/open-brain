@@ -6,6 +6,8 @@ import type { AuthInfo, Table } from "./types.ts";
 import { ALL_TABLES } from "./tools/search-brain.ts";
 import type { generateEmbedding } from "./embedding.ts";
 import { promoteEntry } from "./promotion-service.ts";
+import { appendReadNamespacePredicate, canReadNamespace } from "./read-policy.ts";
+import { appendWriteNamespacePredicate } from "./namespace-policy.ts";
 
 interface RestDeps {
   pool: pg.Pool;
@@ -35,6 +37,7 @@ const scanQuerySchema = z.object({
   table: tableSchema.optional(),
   since: z.string().datetime().optional(),
   limit: z.coerce.number().int().min(1).max(100).default(20),
+  target_namespace: namespaceSchema.default("collab"),
 });
 
 function badRequest(res: Response, issues: z.ZodIssue[]): void {
@@ -58,14 +61,23 @@ export function createPromotionRouter(deps: RestDeps): Router {
     }
 
     const { table, id, reason, target_namespace } = parsed.data;
-    const result = await promoteEntry(
-      deps.pool,
-      table,
-      id,
-      target_namespace ?? "collab",
-      reason,
-      auth,
-    );
+    let result;
+    try {
+      result = await promoteEntry(
+        deps.pool,
+        table,
+        id,
+        target_namespace ?? "collab",
+        reason,
+        auth,
+      );
+    } catch (err) {
+      const statusCode = typeof (err as any)?.statusCode === "number"
+        ? (err as any).statusCode
+        : 500;
+      res.status(statusCode).json({ error: (err as Error).message });
+      return;
+    }
 
     res.status(result.status === "duplicate" ? 409 : 201).json(result);
   });
@@ -84,9 +96,11 @@ export function createPromotionRouter(deps: RestDeps): Router {
     }
 
     const { table, id } = parsed.data;
+    const selectParams: unknown[] = [id];
+    const readPredicate = appendReadNamespacePredicate(auth, selectParams);
     const { rows } = await deps.pool.query(
-      `SELECT id, namespace, promoted_from FROM ${table} WHERE id = $1 AND archived_at IS NULL`,
-      [id],
+      `SELECT id, namespace, promoted_from FROM ${table} WHERE id = $1 AND archived_at IS NULL${readPredicate}`,
+      selectParams,
     );
 
     if (rows.length === 0) {
@@ -99,7 +113,16 @@ export function createPromotionRouter(deps: RestDeps): Router {
     }
 
     const provenance = rows[0].promoted_from;
-    await deps.pool.query(`UPDATE ${table} SET archived_at = NOW() WHERE id = $1`, [id]);
+    const updateParams: unknown[] = [id];
+    const writePredicate = appendWriteNamespacePredicate(auth, updateParams);
+    const { rowCount } = await deps.pool.query(
+      `UPDATE ${table} SET archived_at = NOW() WHERE id = $1${writePredicate}`,
+      updateParams,
+    );
+    if ((rowCount ?? 0) === 0) {
+      res.status(404).json({ error: "Entry not found or already archived" });
+      return;
+    }
 
     res.json({
       status: "demoted",
@@ -128,7 +151,16 @@ export function createPromotionRouter(deps: RestDeps): Router {
       return;
     }
 
-    const { table, since, limit } = parsed.data;
+    const { table, since, limit, target_namespace } = parsed.data;
+    if (!canReadNamespace(auth, namespace.data)) {
+      res.status(403).json({ error: "Permission denied: namespace read access denied" });
+      return;
+    }
+    if (!canReadNamespace(auth, target_namespace)) {
+      res.status(403).json({ error: "Permission denied: target namespace read access denied" });
+      return;
+    }
+
     const tables = table ? [table] : ALL_TABLES;
     const candidates: any[] = [];
     const duplicateEntries: any[] = [];
@@ -155,17 +187,22 @@ export function createPromotionRouter(deps: RestDeps): Router {
           continue;
         }
         if (row.content_hash) {
-          const { rows: collabDupes } = await deps.pool.query(
-            `SELECT id FROM ${t} WHERE content_hash = $1 AND namespace = 'collab' LIMIT 1`,
-            [row.content_hash],
+          const { rows: targetDupes } = await deps.pool.query(
+            `SELECT id FROM ${t} WHERE content_hash = $1 AND namespace = $2 LIMIT 1`,
+            [row.content_hash, target_namespace],
           );
-          if (collabDupes.length > 0) {
-            duplicateEntries.push({
+          if (targetDupes.length > 0) {
+            const duplicate: Record<string, unknown> = {
               table: t,
               id: row.id,
-              existing_collab_id: collabDupes[0].id,
+              target_namespace,
+              existing_target_id: targetDupes[0].id,
               created_at: row.created_at,
-            });
+            };
+            if (target_namespace === "collab") {
+              duplicate.existing_collab_id = targetDupes[0].id;
+            }
+            duplicateEntries.push(duplicate);
             continue;
           }
         }
@@ -175,6 +212,7 @@ export function createPromotionRouter(deps: RestDeps): Router {
 
     res.json({
       namespace: namespace.data,
+      target_namespace,
       candidates,
       duplicates: duplicateEntries,
       already_promoted: alreadyPromoted,

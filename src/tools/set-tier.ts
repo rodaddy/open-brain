@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { canWrite } from "../permissions.ts";
+import { appendWriteNamespacePredicate } from "../namespace-policy.ts";
 import type { AuthInfo, Table, Tier } from "../types.ts";
 import { logger } from "../logger.ts";
 import type { ToolDeps } from "./index.ts";
@@ -52,9 +53,11 @@ export function registerSetTier(server: McpServer, deps: ToolDeps): void {
       }
 
       // Table name is validated by Zod enum -- safe for interpolation
+      const params: unknown[] = [args.tier, args.id];
+      const namespacePredicate = appendWriteNamespacePredicate(auth, params);
       const { rows } = await deps.pool.query(
-        `UPDATE ${table} SET tier = $1 WHERE id = $2 AND archived_at IS NULL RETURNING id, tier`,
-        [args.tier, args.id],
+        `UPDATE ${table} SET tier = $1 WHERE id = $2 AND archived_at IS NULL${namespacePredicate} RETURNING id, tier`,
+        params,
       );
 
       if (rows.length === 0) {

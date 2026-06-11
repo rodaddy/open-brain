@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import fcntl
 import json
 import os
-from pathlib import Path
 import stat
 import tempfile
 import time
-from typing import Any, Callable, Iterable, Mapping
-import fcntl
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, cast
 
 from .client import JSON
 from .policy import idempotency_key, redact_value
@@ -22,7 +23,7 @@ class SpoolRecord:
     created_at: float
 
     def redacted_payload(self) -> Mapping[str, Any]:
-        return redact_value(dict(self.payload))
+        return cast(Mapping[str, Any], redact_value(dict(self.payload)))
 
     def redacted(self) -> SpoolRecord:
         return SpoolRecord(

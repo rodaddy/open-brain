@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import json
-from http.server import BaseHTTPRequestHandler, HTTPServer
 import threading
 import time
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
@@ -31,8 +31,21 @@ class FakeTransport:
         return TransportResponse(
             status_code=self.next_status,
             headers={"content-type": "application/json"},
-            text=json.dumps(self.health_payload) if not self.next_text else self.next_text,
+            text=json.dumps(self.health_payload)
+            if not self.next_text
+            else self.next_text,
         )
+
+    def delete(self, url, *, headers, timeout):
+        self.requests.append(
+            {
+                "method": "DELETE",
+                "url": url,
+                "headers": dict(headers),
+                "timeout": timeout,
+            }
+        )
+        return TransportResponse(status_code=200, headers={}, text="")
 
     def post(self, url, *, headers, json_body, timeout):
         self.requests.append(
@@ -171,6 +184,21 @@ def test_health_raises_for_unstructured_503_body():
         client.health()
 
 
+def test_http_error_redacts_deep_json_without_recursion_error():
+    body = '{"safe":' * 1200 + '"secret-token"' + "}" * 1200
+
+    error = OpenBrainHTTPError(
+        "request failed",
+        status_code=500,
+        body=body,
+        token="secret-token",
+    )
+
+    assert "RecursionError" not in str(error)
+    assert "[REDACTED:depth]" in str(error)
+    assert "secret-token" not in str(error)
+
+
 def test_initialize_sends_auth_namespace_and_stores_session_id():
     transport = FakeTransport()
     client = make_client(transport)
@@ -205,7 +233,7 @@ def test_initialized_notification_and_tool_calls_reuse_session_header():
     assert call["headers"]["MCP-Protocol-Version"] == "2025-03-26"
 
 
-def test_close_clears_local_session_and_context_manager_closes():
+def test_close_sends_delete_once_and_context_manager_closes():
     transport = FakeTransport()
     client = make_client(transport)
 
@@ -214,11 +242,51 @@ def test_close_clears_local_session_and_context_manager_closes():
 
     client.close()
     assert client.session_id is None
+    client.close()
 
-    with make_client(FakeTransport()) as scoped:
+    delete_requests = [
+        request for request in transport.requests if request["method"] == "DELETE"
+    ]
+    assert len(delete_requests) == 1
+    delete = delete_requests[0]
+    assert delete["url"] == "https://brain.example/mcp"
+    assert delete["headers"]["Authorization"] == "Bearer secret-token"
+    assert delete["headers"]["X-Namespace"] == "bilby"
+    assert delete["headers"]["X-Agent-Id"] == "bilby-agent"
+    assert delete["headers"]["X-Role"] == "agent"
+    assert delete["headers"]["Mcp-Session-Id"] == "session-123"
+    assert delete["headers"]["MCP-Protocol-Version"] == "2025-03-26"
+
+    scoped_transport = FakeTransport()
+    with make_client(scoped_transport) as scoped:
         scoped.search_all(query="x")
         assert scoped.session_id == "session-123"
     assert scoped.session_id is None
+    assert [request["method"] for request in scoped_transport.requests].count(
+        "DELETE"
+    ) == 1
+
+
+def test_close_is_best_effort_when_delete_fails():
+    class FailingDeleteTransport(FakeTransport):
+        def delete(self, url, *, headers, timeout):
+            self.requests.append(
+                {
+                    "method": "DELETE",
+                    "url": url,
+                    "headers": dict(headers),
+                    "timeout": timeout,
+                }
+            )
+            raise ConnectionError("delete failed")
+
+    transport = FailingDeleteTransport()
+    client = make_client(transport)
+
+    client.search_all(query="x")
+    client.close()
+
+    assert client.session_id is None
 
 
 def test_generic_call_tool_emits_json_rpc_tools_call_shape():
@@ -324,13 +392,17 @@ def test_all_registered_tool_wrappers_call_matching_tool_names():
     for name in wrapper_names:
         getattr(client, name)(probe=True)
 
-    assert [call["json"]["params"]["name"] for call in tool_requests(transport)] == wrapper_names
+    assert [
+        call["json"]["params"]["name"] for call in tool_requests(transport)
+    ] == wrapper_names
 
 
 def test_http_errors_include_context_status_and_redact_token():
     transport = FakeTransport()
     transport.next_status = 401
-    transport.next_text = "authorization: bearer secret-token session Mcp-Session-Id=session-123"
+    transport.next_text = (
+        "authorization: bearer secret-token session Mcp-Session-Id=session-123"
+    )
     client = make_client(transport)
 
     with pytest.raises(OpenBrainHTTPError) as exc_info:
@@ -374,8 +446,7 @@ def test_error_body_redaction_caps_and_scrubs_secret_patterns():
         "content": [
             {
                 "type": "text",
-                "text": "api_key=abc123456789 password=hunter2 "
-                + ("x" * 1200),
+                "text": "api_key=abc123456789 password=hunter2 " + ("x" * 1200),
             }
         ],
     }
@@ -429,9 +500,7 @@ def test_error_body_redaction_scrubs_unlabelled_secret_shapes():
     slack_token = "xoxb-" + "123456789012-" + "abcdefghijklmnop"
     google_key = "AIza" + "ABCDEFGHIJKLMNOPQRSTUVWX" + "YZabcdefghi"
     jwt_token = (
-        "eyJ" + "hbGciOiJIUzI1NiJ9."
-        "eyJzdWIiOiJvcGVuLWJyYWluIn0."
-        "c2lnbmF0dXJlX3ZhbHVl"
+        "eyJ" + "hbGciOiJIUzI1NiJ9.eyJzdWIiOiJvcGVuLWJyYWluIn0.c2lnbmF0dXJlX3ZhbHVl"
     )
     transport.next_text = "\n".join(
         [aws_access_key, aws_secret, slack_token, google_key, jwt_token]
@@ -476,14 +545,19 @@ def test_initialized_failure_does_not_commit_session_and_retry_reinitializes():
             self.fail_initialized = True
 
         def post(self, url, *, headers, json_body, timeout):
-            if json_body.get("method") == "notifications/initialized" and self.fail_initialized:
+            if (
+                json_body.get("method") == "notifications/initialized"
+                and self.fail_initialized
+            ):
                 self.fail_initialized = False
                 return TransportResponse(
                     status_code=500,
                     headers={"content-type": "application/json"},
                     text='{"error":"init failed"}',
                 )
-            return super().post(url, headers=headers, json_body=json_body, timeout=timeout)
+            return super().post(
+                url, headers=headers, json_body=json_body, timeout=timeout
+            )
 
     transport = FailingInitializedTransport()
     client = make_client(transport)
@@ -562,7 +636,9 @@ def test_initialize_error_does_not_establish_session():
                         }
                     ),
                 )
-            return super().post(url, headers=headers, json_body=json_body, timeout=timeout)
+            return super().post(
+                url, headers=headers, json_body=json_body, timeout=timeout
+            )
 
     client = make_client(InitializeErrorTransport())
 
@@ -581,8 +657,7 @@ def test_sse_mcp_responses_are_decoded():
                 return TransportResponse(
                     status_code=200,
                     headers={"content-type": "text/event-stream"},
-                    text="event: message\n"
-                    f"data: {response.text}\n\n",
+                    text=f"event: message\ndata: {response.text}\n\n",
                 )
             return response
 
@@ -648,14 +723,18 @@ def test_openbrain_client_streams_until_matching_sse_jsonrpc_response():
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
                 self.end_headers()
-                self.wfile.write(
-                    b"event: message\n"
-                    b'data: {"jsonrpc":"2.0","method":"notifications/progress","params":{"progress":1}}\n\n'
+                progress = (
+                    b'{"jsonrpc":"2.0","method":"notifications/progress",'
+                    b'"params":{"progress":1}}'
                 )
+                self.wfile.write(b"event: message\n" + b"data: " + progress + b"\n\n")
                 self.wfile.flush()
+                wrong_result = (
+                    b'{"jsonrpc":"2.0","id":999,"result":{"content":['
+                    b'{"type":"text","text":"{\\"tool\\":\\"wrong\\"}"}]}}'
+                )
                 self.wfile.write(
-                    b"event: message\n"
-                    b'data: {"jsonrpc":"2.0","id":999,"result":{"content":[{"type":"text","text":"{\\"tool\\":\\"wrong\\"}"}]}}\n\n'
+                    b"event: message\n" + b"data: " + wrong_result + b"\n\n"
                 )
                 self.wfile.flush()
                 self.wfile.write(
@@ -789,7 +868,9 @@ def test_urllib_transport_returns_after_first_sse_event_without_waiting_for_eof(
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.end_headers()
-            self.wfile.write(b'event: message\ndata: {"jsonrpc":"2.0","id":1,"result":{}}\n\n')
+            self.wfile.write(
+                b'event: message\ndata: {"jsonrpc":"2.0","id":1,"result":{}}\n\n'
+            )
             self.wfile.flush()
             time.sleep(1.5)
 
@@ -813,7 +894,10 @@ def test_urllib_transport_returns_after_first_sse_event_without_waiting_for_eof(
         thread.join(timeout=2)
 
     assert elapsed < 1
-    assert response.text == 'event: message\ndata: {"jsonrpc":"2.0","id":1,"result":{}}\n\n'
+    assert (
+        response.text
+        == 'event: message\ndata: {"jsonrpc":"2.0","id":1,"result":{}}\n\n'
+    )
 
 
 def test_remote_http_requires_explicit_opt_in_but_loopback_is_allowed():

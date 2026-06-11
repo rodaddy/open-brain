@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { AuthInfo } from "./types.ts";
 import {
+  appendReadNamespacePredicate,
   canReadNamespace,
   namespaceFilterFor,
   readableNamespaces,
@@ -33,6 +34,21 @@ describe("read-policy", () => {
     expect(canReadNamespace(auth, "all")).toBe(false);
   });
 
+  it("adds a read predicate for scoped callers", () => {
+    const auth: AuthInfo = {
+      role: "admin",
+      clientId: "bilby",
+      tokenClientId: "admin",
+      namespaceSource: "header",
+    };
+    const params: unknown[] = ["id"];
+
+    const predicate = appendReadNamespacePredicate(auth, params, "source.namespace");
+
+    expect(predicate).toBe(" AND source.namespace = ANY($2::text[])");
+    expect(params).toEqual(["id", ["bilby", "collab"]]);
+  });
+
   it("allows token-sourced admin to request namespace all", () => {
     const auth: AuthInfo = {
       role: "admin",
@@ -44,5 +60,16 @@ describe("read-policy", () => {
     expect(readableNamespaces(auth)).toBeUndefined();
     expect(canReadNamespace(auth, "all")).toBe(true);
     expect(namespaceFilterFor(auth, "all")).toBeUndefined();
+  });
+
+  it("does not add a read predicate for token-sourced admin", () => {
+    const params: unknown[] = ["id"];
+    const predicate = appendReadNamespacePredicate(
+      { role: "admin", clientId: "admin", namespaceSource: "token" },
+      params,
+    );
+
+    expect(predicate).toBe("");
+    expect(params).toEqual(["id"]);
   });
 });

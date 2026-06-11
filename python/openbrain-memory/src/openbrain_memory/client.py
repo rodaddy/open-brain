@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
-from itertools import count
 import re
-from typing import Any, Mapping, Protocol
+from collections.abc import Mapping
+from dataclasses import dataclass
+from itertools import count
+from typing import Any, Protocol, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .policy import redact_text
-
 
 JSON = dict[str, Any]
 MCP_PROTOCOL_VERSION = "2025-03-26"
@@ -30,8 +30,21 @@ class TransportResponse:
 
 
 class Transport(Protocol):
-    def get(self, url: str, *, headers: Mapping[str, str], timeout: float) -> TransportResponse:
-        ...
+    def get(
+        self,
+        url: str,
+        *,
+        headers: Mapping[str, str],
+        timeout: float,
+    ) -> TransportResponse: ...
+
+    def delete(
+        self,
+        url: str,
+        *,
+        headers: Mapping[str, str],
+        timeout: float,
+    ) -> TransportResponse: ...
 
     def post(
         self,
@@ -40,8 +53,7 @@ class Transport(Protocol):
         headers: Mapping[str, str],
         json_body: JSON,
         timeout: float,
-    ) -> TransportResponse:
-        ...
+    ) -> TransportResponse: ...
 
 
 class UrllibTransport:
@@ -51,8 +63,24 @@ class UrllibTransport:
         self._opener = build_opener(_NoRedirectHandler)
         self.max_response_bytes = max_response_bytes
 
-    def get(self, url: str, *, headers: Mapping[str, str], timeout: float) -> TransportResponse:
+    def get(
+        self,
+        url: str,
+        *,
+        headers: Mapping[str, str],
+        timeout: float,
+    ) -> TransportResponse:
         request = Request(url, headers=dict(headers), method="GET")
+        return self._send(request, timeout, expected_response_id=None)
+
+    def delete(
+        self,
+        url: str,
+        *,
+        headers: Mapping[str, str],
+        timeout: float,
+    ) -> TransportResponse:
+        request = Request(url, headers=dict(headers), method="DELETE")
         return self._send(request, timeout, expected_response_id=None)
 
     def post(
@@ -69,7 +97,9 @@ class UrllibTransport:
         return self._send(
             request,
             timeout,
-            expected_response_id=expected_response_id if isinstance(expected_response_id, int) else None,
+            expected_response_id=(
+                expected_response_id if isinstance(expected_response_id, int) else None
+            ),
         )
 
     def _send(
@@ -126,7 +156,7 @@ class UrllibTransport:
                 response,
                 expected_response_id=expected_response_id,
             )
-        body = response.read(self.max_response_bytes + 1)
+        body = cast(bytes, response.read(self.max_response_bytes + 1))
         if len(body) > self.max_response_bytes:
             raise OpenBrainHTTPError(
                 "Open Brain response exceeded max_response_bytes",
@@ -245,11 +275,28 @@ class OpenBrainClient:
         self._raise_for_status(response, context="health")
         payload = self._decode_json_response(response, context="health")
         if not isinstance(payload, dict):
-            raise OpenBrainProtocolError("Health response was not a JSON object", context="health")
+            raise OpenBrainProtocolError(
+                "Health response was not a JSON object",
+                context="health",
+            )
         return payload
 
     def close(self) -> None:
-        self._session_id = None
+        session_id = self._session_id
+        if not session_id:
+            return
+        try:
+            response = self.transport.delete(
+                self._url("mcp"),
+                headers=self._mcp_headers(include_session=True, session_id=session_id),
+                timeout=self.timeout,
+            )
+            if response.status_code < 200 or response.status_code >= 300:
+                return
+        except Exception:
+            return
+        finally:
+            self._session_id = None
 
     def __enter__(self) -> OpenBrainClient:
         return self
@@ -280,7 +327,10 @@ class OpenBrainClient:
         )
         result = message.get("result")
         if not isinstance(result, dict):
-            raise OpenBrainProtocolError("MCP tool result was not a JSON object", context=f"call_tool:{name}")
+            raise OpenBrainProtocolError(
+                "MCP tool result was not a JSON object",
+                context=f"call_tool:{name}",
+            )
         if result.get("isError"):
             raise OpenBrainToolError(
                 "Open Brain tool returned an error",
@@ -419,7 +469,10 @@ class OpenBrainClient:
         self._raise_for_status(response, context="initialize")
         pending_session_id = _header(response.headers, "mcp-session-id")
         if not pending_session_id:
-            raise OpenBrainProtocolError("Initialize response missing mcp-session-id", context="initialize")
+            raise OpenBrainProtocolError(
+                "Initialize response missing mcp-session-id",
+                context="initialize",
+            )
         message = self._decode_jsonrpc_response(
             response,
             expected_id=request_id,
@@ -477,7 +530,10 @@ class OpenBrainClient:
         if include_session:
             active_session_id = session_id or self._session_id
             if not active_session_id:
-                raise OpenBrainProtocolError("MCP session has not been initialized", context="headers")
+                raise OpenBrainProtocolError(
+                    "MCP session has not been initialized",
+                    context="headers",
+                )
             headers["Mcp-Session-Id"] = active_session_id
             headers["MCP-Protocol-Version"] = self._protocol_version
         return headers
@@ -494,7 +550,12 @@ class OpenBrainClient:
             session_id=self._session_id,
         )
 
-    def _decode_json_response(self, response: TransportResponse, *, context: str) -> Any:
+    def _decode_json_response(
+        self,
+        response: TransportResponse,
+        *,
+        context: str,
+    ) -> Any:
         try:
             return response.json()
         except json.JSONDecodeError as exc:
@@ -518,7 +579,11 @@ class OpenBrainClient:
         if not text:
             return None
         content_type = _header(response.headers, "content-type") or ""
-        if "text/event-stream" in content_type or text.startswith("event:") or text.startswith("data:"):
+        if (
+            "text/event-stream" in content_type
+            or text.startswith("event:")
+            or text.startswith("data:")
+        ):
             text = _last_sse_data(text, expected_id=expected_id)
         try:
             return json.loads(text)
@@ -545,7 +610,10 @@ class OpenBrainClient:
             expected_id=expected_id,
         )
         if not isinstance(message, dict):
-            raise OpenBrainProtocolError("MCP response was not a JSON object", context=context)
+            raise OpenBrainProtocolError(
+                "MCP response was not a JSON object",
+                context=context,
+            )
         if message.get("jsonrpc") != "2.0":
             raise OpenBrainProtocolError(
                 "MCP response missing jsonrpc=2.0",
@@ -682,25 +750,30 @@ def _validate_base_url(base_url: str, *, allow_insecure_http: bool) -> None:
 SENSITIVE_KEY_PATTERN = re.compile(
     r"(?i)(token|secret|password|api[_-]?key|credential|authorization|session[_-]?id)"
 )
+MAX_REDACT_JSON_DEPTH = 32
 
 
-def _redact_json_value(value: Any) -> Any:
+def _redact_json_value(value: Any, *, depth: int = 0) -> Any:
+    if depth >= MAX_REDACT_JSON_DEPTH:
+        return "[REDACTED:depth]"
     if isinstance(value, dict):
         redacted: dict[str, Any] = {}
         for key, item in value.items():
             if SENSITIVE_KEY_PATTERN.search(str(key)):
                 redacted[str(key)] = "[REDACTED]"
             else:
-                redacted[str(key)] = _redact_json_value(item)
+                redacted[str(key)] = _redact_json_value(item, depth=depth + 1)
         return redacted
     if isinstance(value, list):
-        return [_redact_json_value(item) for item in value]
+        return [_redact_json_value(item, depth=depth + 1) for item in value]
     return value
 
 
 def _redact_json_text(text: str) -> str | None:
     try:
         parsed = json.loads(text)
+    except RecursionError:
+        return json.dumps("[REDACTED:depth]")
     except json.JSONDecodeError:
         return None
     return json.dumps(_redact_json_value(parsed), sort_keys=True)

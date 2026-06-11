@@ -1,5 +1,10 @@
 import type pg from "pg";
 import type { AuthInfo, Table } from "./types.ts";
+import {
+  appendReadNamespacePredicate,
+  canReadNamespace,
+} from "./read-policy.ts";
+import { canWriteNamespace } from "./namespace-policy.ts";
 
 export const PROMOTION_CONTENT_COLUMNS: Record<Table, string> = {
   thoughts:
@@ -74,9 +79,14 @@ export async function promoteEntry(
   reason: string | undefined,
   auth: AuthInfo,
 ): Promise<PromotionResult> {
+  const sourceParams: unknown[] = [id];
+  const sourceNamespacePredicate = appendReadNamespacePredicate(
+    auth,
+    sourceParams,
+  );
   const { rows: sourceRows } = await pool.query(
-    `SELECT *, namespace AS source_namespace FROM ${table} WHERE id = $1 AND archived_at IS NULL`,
-    [id],
+    `SELECT *, namespace AS source_namespace FROM ${table} WHERE id = $1 AND archived_at IS NULL${sourceNamespacePredicate}`,
+    sourceParams,
   );
 
   if (sourceRows.length === 0) {
@@ -86,6 +96,21 @@ export async function promoteEntry(
   }
 
   const source = sourceRows[0];
+  if (!canReadNamespace(auth, targetNamespace)) {
+    throw Object.assign(new Error("Target namespace read access denied"), {
+      statusCode: 403,
+    });
+  }
+  const writeCheck = canWriteNamespace(auth, targetNamespace);
+  if (!writeCheck.allowed) {
+    throw Object.assign(
+      new Error(writeCheck.reason ?? "Target namespace write access denied"),
+      {
+        statusCode: 403,
+      },
+    );
+  }
+
   if (source.namespace === targetNamespace) {
     throw Object.assign(new Error(`Entry is already in namespace '${targetNamespace}'`), {
       statusCode: 409,
@@ -116,10 +141,10 @@ export async function promoteEntry(
   const { rows: inserted } = await pool.query(
     `INSERT INTO ${table} (${columns}, namespace, promoted_from)
      SELECT ${columns}, $2, $3::jsonb
-     FROM ${table} WHERE id = $1
+     FROM ${table} WHERE id = $1 AND namespace = $4
      ON CONFLICT DO NOTHING
      RETURNING id`,
-    [id, targetNamespace, JSON.stringify(provenance)],
+    [id, targetNamespace, JSON.stringify(provenance), source.namespace],
   );
 
   if (inserted.length === 0) {

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Protocol
+from typing import Any, Protocol
 
 from .client import JSON
 
@@ -9,23 +10,17 @@ CURATION_LIMIT_MAX = 100
 
 
 class DreamClient(Protocol):
-    def list_stale(self, **arguments: Any) -> JSON:
-        ...
+    def list_stale(self, **arguments: Any) -> JSON: ...
 
-    def tier_recommendations(self, **arguments: Any) -> JSON:
-        ...
+    def tier_recommendations(self, **arguments: Any) -> JSON: ...
 
-    def set_tier(self, **arguments: Any) -> JSON:
-        ...
+    def set_tier(self, **arguments: Any) -> JSON: ...
 
-    def scan_namespace(self, **arguments: Any) -> JSON:
-        ...
+    def scan_namespace(self, **arguments: Any) -> JSON: ...
 
-    def promote_entry(self, **arguments: Any) -> JSON:
-        ...
+    def promote_entry(self, **arguments: Any) -> JSON: ...
 
-    def find_duplicates(self, **arguments: Any) -> JSON:
-        ...
+    def find_duplicates(self, **arguments: Any) -> JSON: ...
 
 
 @dataclass(frozen=True)
@@ -39,12 +34,20 @@ class DreamPolicy:
 
     def __post_init__(self) -> None:
         if type(self.limit) is not int or not 1 <= self.limit <= CURATION_LIMIT_MAX:
-            raise ValueError(f"DreamPolicy.limit must be between 1 and {CURATION_LIMIT_MAX}")
+            raise ValueError(
+                f"DreamPolicy.limit must be between 1 and {CURATION_LIMIT_MAX}"
+            )
         if type(self.stale_days) is not int or self.stale_days < 1:
             raise ValueError("DreamPolicy.stale_days must be >= 1")
-        if type(self.promote_threshold_days) is not int or self.promote_threshold_days < 1:
+        if (
+            type(self.promote_threshold_days) is not int
+            or self.promote_threshold_days < 1
+        ):
             raise ValueError("DreamPolicy.promote_threshold_days must be >= 1")
-        if type(self.demote_threshold_days) is not int or self.demote_threshold_days < 1:
+        if (
+            type(self.demote_threshold_days) is not int
+            or self.demote_threshold_days < 1
+        ):
             raise ValueError("DreamPolicy.demote_threshold_days must be >= 1")
         if (
             isinstance(self.duplicate_threshold, bool)
@@ -107,8 +110,13 @@ class DreamEngine:
         **filters: Any,
     ) -> DreamRun:
         if dry_run is not True:
-            raise ValueError("dream_once currently supports dry_run=True only; call set_tier/promote_entry explicitly")
-        limit = _bounded_int(filters.get("limit"), self.policy.limit, "limit", CURATION_LIMIT_MAX)
+            raise ValueError(
+                "dream_once currently supports dry_run=True only; "
+                "call set_tier/promote_entry explicitly"
+            )
+        limit = _bounded_int(
+            filters.get("limit"), self.policy.limit, "limit", CURATION_LIMIT_MAX
+        )
         table_filter = _optional_str(filters.get("table"))
         reports: dict[str, Any] = {}
 
@@ -117,7 +125,9 @@ class DreamEngine:
                 filters,
                 {"table", "tier", "offset", "response_format"},
                 limit=limit,
-                days=_bounded_int(filters.get("days"), self.policy.stale_days, "days", 365),
+                days=_bounded_int(
+                    filters.get("days"), self.policy.stale_days, "days", 365
+                ),
             )
         )
         reports["promote_recommendations"] = self.tier_recommendations(
@@ -156,10 +166,17 @@ class DreamEngine:
         if namespace is not None:
             reports["namespace_scan"] = self.scan_namespace(
                 namespace,
-                **_only(filters, {"table", "since"}, limit=limit),
+                **_only(
+                    filters,
+                    {"table", "since"},
+                    limit=limit,
+                    target_namespace=self.policy.target_namespace,
+                ),
             )
 
-        actions = self._planned_actions(reports, namespace=namespace, table_filter=table_filter)
+        actions = self._planned_actions(
+            reports, namespace=namespace, table_filter=table_filter
+        )
         return DreamRun(dry_run=True, reports=reports, actions=tuple(actions))
 
     def list_stale(self, **filters: Any) -> JSON:
@@ -167,7 +184,9 @@ class DreamEngine:
 
     def tier_recommendations(self, action: str, **filters: Any) -> JSON:
         if action not in {"promote", "demote"}:
-            raise ValueError("tier_recommendations action must be 'promote' or 'demote'")
+            raise ValueError(
+                "tier_recommendations action must be 'promote' or 'demote'"
+            )
         return self.client.tier_recommendations(action=action, **filters)
 
     def set_tier(
@@ -249,12 +268,15 @@ class DreamEngine:
                             "table": table,
                             "id": entry_id,
                             "target_namespace": self.policy.target_namespace,
-                            "reason": f"DreamEngine promotion candidate from {namespace}",
+                            "reason": (
+                                f"DreamEngine promotion candidate from {namespace}"
+                            ),
                         },
                         reason="namespace promotion candidate",
                     )
                 )
         return actions
+
 
 def _coerce_policy(policy: DreamPolicy | Mapping[str, Any] | None) -> DreamPolicy:
     if policy is None:
@@ -281,7 +303,11 @@ def _bounded_int(value: Any, default: int, name: str, maximum: int) -> int:
 def _float_between(value: Any, default: float, name: str) -> float:
     if value is None:
         return default
-    if isinstance(value, bool) or not isinstance(value, int | float) or not 0 <= float(value) <= 1:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int | float)
+        or not 0 <= float(value) <= 1
+    ):
         raise ValueError(f"{name} must be between 0 and 1")
     return float(value)
 

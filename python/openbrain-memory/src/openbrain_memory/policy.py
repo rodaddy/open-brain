@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import re
 import time
-from typing import Any, Callable, TypeVar
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any, TypeVar
 from uuid import uuid4
-
 
 SK_PREFIX = "sk" + "-"
 GITHUB_PREFIX_RE = "gh" + r"[pousr]_"
@@ -32,9 +32,7 @@ JWT_LIKE_RE = (
     r"[A-Za-z0-9_-]{8,}"
 )
 PRIVATE_KEY_BLOCK_RE = (
-    "-----BEGIN [A-Z ]*PRIVATE "
-    "KEY-----.*?-----END [A-Z ]*PRIVATE "
-    "KEY-----"
+    "-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----"
 )
 
 SECRET_PATTERNS = [
@@ -57,6 +55,8 @@ SECRET_PATTERNS = [
 SENSITIVE_KEY_RE = re.compile(
     r"(?i)(token|secret|password|api[_-]?key|credential|authorization|session[_-]?id)"
 )
+MAX_REDACT_DEPTH = 32
+T = TypeVar("T")
 
 
 class RetryExhaustedError(RuntimeError):
@@ -75,9 +75,6 @@ class RetryPolicy:
             raise ValueError("RetryPolicy.backoff_seconds must be >= 0")
 
 
-T = TypeVar("T")
-
-
 def idempotency_key() -> str:
     return f"obmem-{uuid4().hex}"
 
@@ -90,16 +87,26 @@ def redact_text(text: str) -> str:
 
 
 def redact_value(value: Any) -> Any:
+    return _redact_value(value, depth=0)
+
+
+def _redact_value(value: Any, *, depth: int) -> Any:
+    if depth >= MAX_REDACT_DEPTH:
+        return "[REDACTED:depth]"
     if isinstance(value, str):
         return redact_text(value)
     if isinstance(value, dict):
         redacted: dict[str, Any] = {}
         for key, item in value.items():
             key_text = str(key)
-            redacted[key_text] = "[REDACTED]" if SENSITIVE_KEY_RE.search(key_text) else redact_value(item)
+            redacted[key_text] = (
+                "[REDACTED]"
+                if SENSITIVE_KEY_RE.search(key_text)
+                else _redact_value(item, depth=depth + 1)
+            )
         return redacted
     if isinstance(value, list):
-        return [redact_value(item) for item in value]
+        return [_redact_value(item, depth=depth + 1) for item in value]
     return value
 
 

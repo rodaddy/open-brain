@@ -185,7 +185,7 @@ describe("POST /mcp", () => {
     expect(typeof sessionId).toBe("string");
   });
 
-  it("allows same token session reuse with a different delegated namespace", async () => {
+  it("rejects session reuse under a different delegated namespace", async () => {
     const initRequest = {
       jsonrpc: "2.0",
       id: 1,
@@ -214,7 +214,7 @@ describe("POST /mcp", () => {
     const sessionId = init.headers.get("mcp-session-id");
     expect(sessionId).toBeTruthy();
 
-    const initialized = await fetch(`${baseUrl}/mcp`, {
+    const mismatchedPost = await fetch(`${baseUrl}/mcp`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -231,6 +231,114 @@ describe("POST /mcp", () => {
       }),
     });
 
-    expect(initialized.status).not.toBe(403);
+    expect(mismatchedPost.status).toBe(403);
+    expect(await mismatchedPost.json()).toEqual({
+      error: "Request identity does not match session",
+    });
+
+    const mismatchedGet = await fetch(`${baseUrl}/mcp`, {
+      method: "GET",
+      headers: {
+        Authorization: "Bearer agent-token-123",
+        Accept: "application/json, text/event-stream",
+        "Mcp-Session-Id": sessionId!,
+        "X-Namespace": "skippy",
+        "X-Agent-Id": "skippy",
+        "X-Role": "agent",
+      },
+    });
+
+    expect(mismatchedGet.status).toBe(403);
+
+    const mismatchedDelete = await fetch(`${baseUrl}/mcp`, {
+      method: "DELETE",
+      headers: {
+        Authorization: "Bearer agent-token-123",
+        Accept: "application/json, text/event-stream",
+        "Mcp-Session-Id": sessionId!,
+        "X-Namespace": "skippy",
+        "X-Agent-Id": "skippy",
+        "X-Role": "agent",
+      },
+    });
+
+    expect(mismatchedDelete.status).toBe(403);
+
+    const cleanup = await fetch(`${baseUrl}/mcp`, {
+      method: "DELETE",
+      headers: {
+        Authorization: "Bearer agent-token-123",
+        Accept: "application/json, text/event-stream",
+        "Mcp-Session-Id": sessionId!,
+        "X-Namespace": "bilby",
+        "X-Agent-Id": "bilby",
+        "X-Role": "agent",
+      },
+    });
+
+    expect(cleanup.status).toBe(200);
+  });
+
+  it("rejects session reuse with a different agent id", async () => {
+    const initRequest = {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-03-26",
+        capabilities: {},
+        clientInfo: { name: "test", version: "1.0.0" },
+      },
+    };
+
+    const init = await fetch(`${baseUrl}/mcp`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer agent-token-123",
+        Accept: "application/json, text/event-stream",
+        "X-Namespace": "bilby",
+        "X-Agent-Id": "bilby",
+        "X-Role": "agent",
+      },
+      body: JSON.stringify(initRequest),
+    });
+
+    expect(init.status).toBe(200);
+    const sessionId = init.headers.get("mcp-session-id");
+    expect(sessionId).toBeTruthy();
+
+    const reusedByDifferentAgent = await fetch(`${baseUrl}/mcp`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer agent-token-123",
+        Accept: "application/json, text/event-stream",
+        "Mcp-Session-Id": sessionId!,
+        "X-Namespace": "bilby",
+        "X-Agent-Id": "skippy",
+        "X-Role": "agent",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        method: "notifications/initialized",
+      }),
+    });
+
+    expect(reusedByDifferentAgent.status).toBe(403);
+
+    const cleanup = await fetch(`${baseUrl}/mcp`, {
+      method: "DELETE",
+      headers: {
+        Authorization: "Bearer agent-token-123",
+        Accept: "application/json, text/event-stream",
+        "Mcp-Session-Id": sessionId!,
+        "X-Namespace": "bilby",
+        "X-Agent-Id": "bilby",
+        "X-Role": "agent",
+      },
+    });
+
+    expect(cleanup.status).toBe(200);
   });
 });

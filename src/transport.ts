@@ -82,14 +82,21 @@ function tokenClientId(auth: AuthInfo | undefined): string | undefined {
   return auth?.tokenClientId ?? auth?.clientId;
 }
 
-function sameTokenIdentity(
+function sameSessionIdentity(
   requestAuth: AuthInfo | undefined,
   sessionAuth: AuthInfo,
 ): boolean {
   return (
     tokenClientId(requestAuth) === tokenClientId(sessionAuth) &&
-    requestAuth?.role === sessionAuth.role
+    requestAuth?.role === sessionAuth.role &&
+    requestAuth?.clientId === sessionAuth.clientId &&
+    requestAuth?.namespaceSource === sessionAuth.namespaceSource &&
+    (requestAuth?.agentId ?? "") === (sessionAuth.agentId ?? "")
   );
+}
+
+function rejectSessionIdentityMismatch(res: Response): void {
+  res.status(403).json({ error: "Request identity does not match session" });
 }
 
 export function getSessionCount(): number {
@@ -116,10 +123,8 @@ export function createTransportHandlers(
         const entry = sessions.get(sessionId)!;
 
         // Verify the bearer token matches the session's original auth
-        if (!sameTokenIdentity(reqAuth, entry.auth)) {
-          res
-            .status(403)
-            .json({ error: "Token does not match session identity" });
+        if (!sameSessionIdentity(reqAuth, entry.auth)) {
+          rejectSessionIdentityMismatch(res);
           return;
         }
 
@@ -210,10 +215,8 @@ export function createTransportHandlers(
         const entry = sessions.get(sessionId)!;
         const reqAuth = (req as any).auth as AuthInfo | undefined;
 
-        if (!sameTokenIdentity(reqAuth, entry.auth)) {
-          res
-            .status(403)
-            .json({ error: "Token does not match session identity" });
+        if (!sameSessionIdentity(reqAuth, entry.auth)) {
+          rejectSessionIdentityMismatch(res);
           return;
         }
 
@@ -234,10 +237,8 @@ export function createTransportHandlers(
         const entry = sessions.get(sessionId)!;
         const reqAuth = (req as any).auth as AuthInfo | undefined;
 
-        if (!sameTokenIdentity(reqAuth, entry.auth)) {
-          res
-            .status(403)
-            .json({ error: "Token does not match session identity" });
+        if (!sameSessionIdentity(reqAuth, entry.auth)) {
+          rejectSessionIdentityMismatch(res);
           return;
         }
 

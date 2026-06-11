@@ -35,14 +35,22 @@ export function registerPromoteEntry(server: McpServer, deps: ToolDeps): void {
       }
 
       const table = args.table as Table;
-      const result = await promoteEntry(
-        deps.pool,
-        table,
-        args.id,
-        args.target_namespace ?? "collab",
-        args.reason,
-        auth,
-      );
+      let result;
+      try {
+        result = await promoteEntry(
+          deps.pool,
+          table,
+          args.id,
+          args.target_namespace ?? "collab",
+          args.reason,
+          auth,
+        );
+      } catch (err) {
+        return {
+          content: [{ type: "text" as const, text: (err as Error).message }],
+          isError: true,
+        };
+      }
 
       logger.info("promote_entry_ok", {
         table,

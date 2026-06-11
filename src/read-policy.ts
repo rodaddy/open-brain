@@ -38,3 +38,16 @@ export function namespaceFilterFor(
   }
   return readableNamespaces(auth);
 }
+
+export function appendReadNamespacePredicate(
+  auth: AuthInfo,
+  params: unknown[],
+  column = "namespace",
+): string {
+  const namespaces = readableNamespaces(auth);
+  if (namespaces === undefined) {
+    return "";
+  }
+  params.push(namespaces);
+  return ` AND ${column} = ANY($${params.length}::text[])`;
+}

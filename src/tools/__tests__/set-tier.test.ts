@@ -158,6 +158,81 @@ describe("set_tier", () => {
         await cleanup();
       }
     });
+
+    it("uses a namespace predicate so an agent cannot mutate another namespace by UUID", async () => {
+      const calls: Array<{ sql: string; params?: unknown[] }> = [];
+      const mockPool = {
+        query: async (sql: string, params?: unknown[]) => {
+          calls.push({ sql, params });
+          return { rows: [] };
+        },
+      };
+      const auth: AuthInfo = { role: "agent", clientId: "agent-client" };
+
+      const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+      try {
+        const result = await client.callTool({
+          name: "set_tier",
+          arguments: {
+            table: "thoughts",
+            id: "550e8400-e29b-41d4-a716-446655440010",
+            tier: "hot",
+          },
+        });
+
+        expect(result.isError).toBe(true);
+        expect(calls[0]!.sql).toContain("namespace = ANY($3::text[])");
+        expect(calls[0]!.params).toEqual([
+          "hot",
+          "550e8400-e29b-41d4-a716-446655440010",
+          ["agent-client"],
+        ]);
+      } finally {
+        await cleanup();
+      }
+    });
+  });
+
+  describe("delegated admin scope", () => {
+    it("uses the delegated namespace predicate instead of broad admin access", async () => {
+      const calls: Array<{ sql: string; params?: unknown[] }> = [];
+      const mockPool = {
+        query: async (sql: string, params?: unknown[]) => {
+          calls.push({ sql, params });
+          return { rows: [] };
+        },
+      };
+      const auth: AuthInfo = {
+        role: "admin",
+        clientId: "bilby",
+        tokenClientId: "admin-client",
+        namespaceSource: "header",
+      };
+
+      const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+      try {
+        const result = await client.callTool({
+          name: "set_tier",
+          arguments: {
+            table: "thoughts",
+            id: "550e8400-e29b-41d4-a716-446655440011",
+            tier: "cold",
+          },
+        });
+
+        expect(result.isError).toBe(true);
+        expect(calls[0]!.sql).toContain("namespace = ANY($3::text[])");
+        expect(calls[0]!.params).toEqual([
+          "cold",
+          "550e8400-e29b-41d4-a716-446655440011",
+          ["bilby"],
+        ]);
+      } finally {
+        await cleanup();
+      }
+    });
   });
 
   describe("readonly role -- permission denied", () => {

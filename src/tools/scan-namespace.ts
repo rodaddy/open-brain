@@ -15,6 +15,12 @@ export function registerScanNamespace(server: McpServer, deps: ToolDeps): void {
         "candidates (not yet in collab), duplicates (already in collab), or already_promoted.",
       inputSchema: {
         namespace: z.string().min(1).max(500).describe("Agent namespace to scan"),
+        target_namespace: z
+          .string()
+          .min(1)
+          .max(500)
+          .optional()
+          .describe("Namespace to check for existing promoted duplicates (default collab)"),
         table: z
           .enum(["thoughts", "decisions", "relationships", "projects", "sessions"])
           .optional()
@@ -55,6 +61,13 @@ export function registerScanNamespace(server: McpServer, deps: ToolDeps): void {
 
       const tables = args.table ? [args.table as Table] : ALL_TABLES;
       const limit = args.limit ?? 20;
+      const targetNamespace = args.target_namespace ?? "collab";
+      if (!canReadNamespace(auth, targetNamespace)) {
+        return {
+          content: [{ type: "text" as const, text: "Permission denied: target namespace read access denied" }],
+          isError: true,
+        };
+      }
       const candidates: any[] = [];
       const duplicates: any[] = [];
       const alreadyPromoted: any[] = [];
@@ -86,20 +99,25 @@ export function registerScanNamespace(server: McpServer, deps: ToolDeps): void {
           }
 
           if (row.content_hash) {
-            const { rows: collabDupes } = await deps.pool.query(
+            const { rows: targetDupes } = await deps.pool.query(
               `SELECT id FROM ${table}
-               WHERE content_hash = $1 AND namespace = 'collab' AND archived_at IS NULL
+               WHERE content_hash = $1 AND namespace = $2 AND archived_at IS NULL
                LIMIT 1`,
-              [row.content_hash],
+              [row.content_hash, targetNamespace],
             );
 
-            if (collabDupes.length > 0) {
-              duplicates.push({
+            if (targetDupes.length > 0) {
+              const duplicate: Record<string, unknown> = {
                 table: table,
                 id: row.id,
-                existing_collab_id: collabDupes[0].id,
+                target_namespace: targetNamespace,
+                existing_target_id: targetDupes[0].id,
                 created_at: row.created_at,
-              });
+              };
+              if (targetNamespace === "collab") {
+                duplicate.existing_collab_id = targetDupes[0].id;
+              }
+              duplicates.push(duplicate);
               continue;
             }
           }
@@ -114,6 +132,7 @@ export function registerScanNamespace(server: McpServer, deps: ToolDeps): void {
 
       logger.info("scan_namespace_ok", {
         namespace: args.namespace,
+        target_namespace: targetNamespace,
         candidates: candidates.length,
         duplicates: duplicates.length,
         already_promoted: alreadyPromoted.length,
@@ -124,6 +143,7 @@ export function registerScanNamespace(server: McpServer, deps: ToolDeps): void {
           type: "text" as const,
           text: JSON.stringify({
             namespace: args.namespace,
+            target_namespace: targetNamespace,
             candidates,
             duplicates,
             already_promoted: alreadyPromoted,

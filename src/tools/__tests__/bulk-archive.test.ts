@@ -80,6 +80,51 @@ describe("bulk_archive", () => {
     }
   });
 
+  it("uses namespace predicates for delegated admin archives", async () => {
+    const calls: Array<{ sql: string; params?: any[] }> = [];
+    const mockClient = {
+      query: async (sql: string, params?: any[]) => {
+        calls.push({ sql, params });
+        if (sql.includes("UPDATE")) return { rowCount: 1 };
+        return { rows: [] };
+      },
+      release: () => {},
+    };
+    const mockPool = {
+      connect: async () => mockClient,
+      query: async () => ({ rows: [] }),
+    };
+    const auth: AuthInfo = {
+      role: "admin",
+      clientId: "bilby",
+      tokenClientId: "admin",
+      namespaceSource: "header",
+    };
+
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "bulk_archive",
+        arguments: {
+          entries: [
+            { id: "550e8400-e29b-41d4-a716-446655440010", table: "thoughts" },
+          ],
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const update = calls.find((call) => call.sql.includes("UPDATE"));
+      expect(update!.sql).toContain("namespace = ANY($2::text[])");
+      expect(update!.params).toEqual([
+        "550e8400-e29b-41d4-a716-446655440010",
+        ["bilby"],
+      ]);
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("denies agent role (no delete permission)", async () => {
     const mockPool = {
       connect: async () => ({ query: async () => ({ rows: [] }), release: () => {} }),
