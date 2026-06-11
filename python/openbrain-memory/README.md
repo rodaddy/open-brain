@@ -109,6 +109,16 @@ prompt_context = context.as_prompt_text()
 `AgentMemory` sends the original caller payload to Open Brain. Redaction helpers
 are for diagnostics and display only; they do not mutate live writes.
 
+Namespace authority belongs to the configured `OpenBrainClient` and the Open
+Brain service. `OpenBrainClient` sends the configured namespace through
+`X-Namespace` when present, and the server validates that header against the
+bearer token role. `AgentMemory` never accepts `namespace` as facade metadata.
+Nested user-owned structures such as decision context remain available for
+semantic fields, but authority-shaped keys such as `namespace`, `authorization`,
+`headers`, `role`, `token`, or `X-Namespace` are rejected before client calls.
+Cross-namespace writes require an explicit privileged client/server path rather
+than facade metadata.
+
 `JsonlSpool` stores exact failed-write payloads so replay can faithfully rebuild
 the original client call. Spool and lock files are created with `0600`
 permissions and should be treated as trusted local recovery storage. Use

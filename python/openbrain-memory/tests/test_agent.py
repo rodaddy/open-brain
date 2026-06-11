@@ -218,7 +218,36 @@ def test_reserved_metadata_cannot_spoof_identity_or_semantics():
     with pytest.raises(ValueError, match="reserved keys"):
         memory.append_event("assistant", "event", session_key="spoofed")
     with pytest.raises(ValueError, match="reserved keys"):
+        memory.append_event("assistant", "event", namespace="spoofed")
+    with pytest.raises(ValueError, match="reserved keys"):
         memory.checkpoint("summary", session_key="spoofed")
+    with pytest.raises(ValueError, match="reserved authority keys"):
+        memory.remember_decision("decision", context={"namespace": "spoofed"})
+    with pytest.raises(ValueError, match="reserved authority keys"):
+        memory.remember_decision(
+            "decision",
+            context={"headers": {"X-Namespace": "spoofed"}},
+        )
+    with pytest.raises(ValueError, match="reserved authority keys"):
+        memory.remember_decision("decision", context={"Authorization": "Bearer x"})
+    with pytest.raises(ValueError, match="reserved authority keys"):
+        memory.append_event("assistant", "event", headers={"X_Namespace": "spoofed"})
+
+
+def test_nested_semantic_context_can_use_non_authority_names():
+    client = FakeClient()
+    memory = AgentMemory(client, agent="bilby")
+
+    memory.remember_decision(
+        "decision",
+        context={"source": "customer interview", "summary": "plain note"},
+        alternatives=[{"title": "Other path", "rationale": "too costly"}],
+    )
+
+    assert client.calls[0][1]["context"] == {
+        "source": "customer interview",
+        "summary": "plain note",
+    }
 
 
 def test_unsupported_metadata_is_rejected_before_tool_calls():
@@ -234,6 +263,18 @@ def test_unsupported_metadata_is_rejected_before_tool_calls():
         memory.checkpoint("summary", status="green")
     with pytest.raises(ValueError, match="unsupported keys"):
         memory.wrap_session("summary", outcome="merged")
+
+
+def test_namespace_metadata_is_not_accepted_by_memory_facade():
+    client = FakeClient()
+    memory = AgentMemory(client, agent="bilby")
+
+    with pytest.raises(ValueError, match="reserved keys"):
+        memory.remember_fact("fact", namespace="other")
+    with pytest.raises(ValueError, match="reserved keys"):
+        memory.remember_decision("decision", namespace="other")
+
+    assert client.calls == []
 
 
 def test_session_methods_require_started_session():
