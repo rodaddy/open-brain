@@ -21,6 +21,17 @@ class SpoolRecord:
     payload: Mapping[str, Any]
     created_at: float
 
+    def redacted_payload(self) -> Mapping[str, Any]:
+        return redact_value(dict(self.payload))
+
+    def redacted(self) -> SpoolRecord:
+        return SpoolRecord(
+            idempotency_key=self.idempotency_key,
+            operation=self.operation,
+            payload=self.redacted_payload(),
+            created_at=self.created_at,
+        )
+
 
 class JsonlSpool:
     def __init__(
@@ -52,10 +63,12 @@ class JsonlSpool:
         record = {
             "idempotency_key": safe_key,
             "operation": operation,
-            "payload": redact_value(dict(payload)),
+            "payload": dict(payload),
             "created_at": time.time(),
         }
         line = json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n"
+        if len(line.encode("utf-8")) > self.max_bytes:
+            raise ValueError("spool record exceeds max_bytes")
         lock_fd = self._lock()
         try:
             flags = os.O_CREAT | os.O_APPEND | os.O_WRONLY
@@ -93,16 +106,32 @@ class JsonlSpool:
                 )
         return records
 
+    def redacted_records(self) -> list[SpoolRecord]:
+        return [record.redacted() for record in self.records()]
+
     def replay(self, dispatcher: Callable[[SpoolRecord], JSON]) -> list[JSON]:
         results = []
-        remaining = []
         lock_fd = self._lock()
         try:
-            for record in self.records():
-                try:
-                    results.append(dispatcher(record))
-                except Exception:
-                    remaining.append(record)
+            snapshot = self.records()
+        finally:
+            self._unlock(lock_fd)
+
+        replayed_keys = set()
+        for record in snapshot:
+            try:
+                results.append(dispatcher(record))
+                replayed_keys.add(record.idempotency_key)
+            except Exception:
+                pass
+
+        lock_fd = self._lock()
+        try:
+            remaining = [
+                record
+                for record in self.records()
+                if record.idempotency_key not in replayed_keys
+            ]
             self._rewrite_records(remaining)
         finally:
             self._unlock(lock_fd)
@@ -125,7 +154,7 @@ class JsonlSpool:
                 {
                     "idempotency_key": record.idempotency_key,
                     "operation": record.operation,
-                    "payload": redact_value(dict(record.payload)),
+                    "payload": dict(record.payload),
                     "created_at": record.created_at,
                 },
                 sort_keys=True,

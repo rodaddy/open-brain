@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import threading
 
 import pytest
 
@@ -132,7 +133,7 @@ def test_non_idempotent_write_is_not_retried_but_is_spooled(tmp_path):
     assert spool.records()[0].operation == "log_thought"
 
 
-def test_failed_write_spools_redacted_payload_with_0600_mode(tmp_path):
+def test_failed_write_spools_replayable_payload_with_redacted_diagnostic_view(tmp_path):
     client = FlakyClient(failures=3)
     spool = JsonlSpool(tmp_path / "spool.jsonl")
     memory = AgentMemory(
@@ -143,27 +144,51 @@ def test_failed_write_spools_redacted_payload_with_0600_mode(tmp_path):
     )
 
     with pytest.raises(ConnectionError):
-        memory.remember_fact("token=" + token_sample("super", "secret"), namespace="bilby")
+        memory.remember_fact(
+            "token=" + token_sample("super", "secret"),
+            namespace="bilby",
+            tags=["incident", "memory"],
+        )
 
     mode = os.stat(spool.path).st_mode & 0o777
     lock_mode = os.stat(spool.lock_path).st_mode & 0o777
     records = spool.records()
+    replayed = []
+
+    def dispatch(record: SpoolRecord):
+        replayed.append(record)
+        return {"ok": True}
+
     assert mode == 0o600
     assert lock_mode == 0o600
     assert len(records) == 1
     assert records[0].operation == "log_thought"
-    assert token_sample("super", "secret") not in str(records[0].payload)
+    assert records[0].payload == client.calls[0][1]
+    assert records[0].payload["namespace"] == "bilby"
+    assert records[0].payload["tags"] == [
+        "fact",
+        "incident",
+        "memory",
+        f"idempotency:{records[0].idempotency_key}",
+    ]
+    assert token_sample("super", "secret") in str(records[0].payload)
+    assert token_sample("super", "secret") not in str(records[0].redacted_payload())
+    assert token_sample("super", "secret") not in str(spool.redacted_records()[0].payload)
     assert records[0].idempotency_key
+    assert spool.replay(dispatch) == [{"ok": True}]
+    assert replayed[0].operation == records[0].operation
+    assert replayed[0].idempotency_key == records[0].idempotency_key
+    assert replayed[0].payload == records[0].payload
 
 
-def test_live_write_payload_is_redacted_before_client_call():
+def test_live_write_payload_preserves_original_content():
     client = FlakyClient()
     memory = AgentMemory(client, agent="bilby")
 
     memory.remember_fact("password: " + token_sample("hunt", "er2"))
 
-    assert token_sample("hunt", "er2") not in client.calls[0][1]["content"]
-    assert "[REDACTED]" in client.calls[0][1]["content"]
+    assert token_sample("hunt", "er2") in client.calls[0][1]["content"]
+    assert "[REDACTED]" not in client.calls[0][1]["content"]
 
 
 def test_spool_trims_old_records_by_line_count(tmp_path):
@@ -194,6 +219,77 @@ def test_spool_replay_removes_successes_and_keeps_failures(tmp_path):
         ("fail-key", "fail", {"content": "2"}),
     ]
     assert [record.operation for record in spool.records()] == ["fail"]
+
+
+def test_spool_replay_allows_appends_during_dispatch(tmp_path):
+    spool = JsonlSpool(tmp_path / "spool.jsonl")
+    spool.append("ok", {"content": "1"}, key="ok-key")
+    appended = threading.Event()
+
+    def dispatch(record: SpoolRecord):
+        thread = threading.Thread(
+            target=lambda: (spool.append("new", {"content": "2"}, key="new-key"), appended.set())
+        )
+        thread.start()
+        thread.join(timeout=1)
+        assert appended.is_set()
+        return {"ok": True}
+
+    assert spool.replay(dispatch) == [{"ok": True}]
+    assert [record.idempotency_key for record in spool.records()] == ["new-key"]
+
+
+def test_spool_rejects_oversized_record_before_success(tmp_path):
+    spool = JsonlSpool(tmp_path / "spool.jsonl", max_bytes=120)
+
+    with pytest.raises(ValueError, match="max_bytes"):
+        spool.append("large", {"content": "x" * 500}, key="large-key")
+
+    assert spool.records() == []
+
+
+def test_spool_failure_does_not_mask_original_write_error(tmp_path):
+    client = FlakyClient(failures=1)
+    spool = JsonlSpool(tmp_path / "spool.jsonl", max_bytes=120)
+    memory = AgentMemory(client, agent="bilby", spool=spool)
+
+    with pytest.raises(ConnectionError) as error:
+        memory.remember_fact("x" * 500)
+
+    assert any("Failed to spool log_thought" in note for note in error.value.__notes__)
+    assert spool.records() == []
+
+
+def test_spooled_operation_can_replay_through_real_client_method(tmp_path):
+    client = FlakyClient(failures=1)
+    spool = JsonlSpool(tmp_path / "spool.jsonl")
+    memory = AgentMemory(client, agent="bilby", spool=spool)
+    secret = "password: " + token_sample("hunt", "er2")
+
+    with pytest.raises(ConnectionError):
+        memory.remember_fact(secret, namespace="bilby", tags=["replay"])
+
+    key = spool.records()[0].idempotency_key
+    replay_client = FlakyClient()
+
+    def dispatch(record: SpoolRecord):
+        return getattr(replay_client, record.operation)(**record.payload)
+
+    assert spool.replay(dispatch) == [{"ok": True}]
+    assert replay_client.calls == [
+        (
+            "log_thought",
+            {
+                "content": secret,
+                "namespace": "bilby",
+                "tags": [
+                    "fact",
+                    "replay",
+                    f"idempotency:{key}",
+                ],
+            },
+        )
+    ]
 
 
 def test_replay_records_passes_full_record():
