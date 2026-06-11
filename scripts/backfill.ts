@@ -5,7 +5,11 @@
 import type pg from "pg";
 import { toSql } from "pgvector/pg";
 import { createPool } from "../src/db/pool.ts";
-import { generateEmbedding, contentHash } from "../src/embedding.ts";
+import {
+  generateEmbedding,
+  contentHash,
+  EMBEDDING_MODEL,
+} from "../src/embedding.ts";
 import { logger } from "../src/logger.ts";
 
 type EmbedFn = (text: string) => Promise<number[] | null>;
@@ -39,7 +43,6 @@ const TABLE_CONFIGS: TableConfig[] = [
   },
 ];
 
-const EMBEDDING_MODEL = "gemini-embedding-001";
 const DELAY_MS = 150;
 
 interface BackfillResult {
@@ -47,19 +50,26 @@ interface BackfillResult {
   failed: number;
 }
 
+interface BackfillOptions {
+  all?: boolean;
+}
+
 export async function backfill(
   pool: pg.Pool,
   embedFn: EmbedFn,
+  options: BackfillOptions = {},
 ): Promise<BackfillResult> {
   let totalProcessed = 0;
   let totalFailed = 0;
+  const whereClause = options.all ? "" : " WHERE embedding IS NULL";
 
   for (const { table, textFn } of TABLE_CONFIGS) {
-    const { rows } = await pool.query(
-      `SELECT * FROM ${table} WHERE embedding IS NULL`,
-    );
+    const { rows } = await pool.query(`SELECT * FROM ${table}${whereClause}`);
 
-    logger.info(`Backfill: ${table}`, { nullCount: rows.length });
+    logger.info(`Backfill: ${table}`, {
+      nullCount: rows.length,
+      mode: options.all ? "all" : "missing",
+    });
 
     for (const row of rows) {
       const text = textFn(row);
@@ -94,7 +104,9 @@ export async function backfill(
 if (import.meta.main) {
   try {
     const pool = createPool();
-    const result = await backfill(pool, generateEmbedding);
+    const result = await backfill(pool, generateEmbedding, {
+      all: process.argv.includes("--all") || process.argv.includes("--force"),
+    });
     logger.info("Backfill finished", {
       processed: result.processed,
       failed: result.failed,

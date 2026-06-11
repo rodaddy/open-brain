@@ -317,4 +317,21 @@ describe("backfill", () => {
 
     expect(mockEnd).toHaveBeenCalledTimes(1);
   });
+
+  it("Test 12: can re-embed all rows with all=true", async () => {
+    const { pool, mockQuery } = createMockPool(defaultQueryImpl);
+    const embedFn = createMockEmbedFn();
+
+    await backfill(pool, embedFn, { all: true });
+
+    const selectCalls = mockQuery.mock.calls.filter(
+      (call: any[]) =>
+        typeof call[0] === "string" && call[0].startsWith("SELECT * FROM"),
+    );
+
+    expect(selectCalls.length).toBe(5);
+    for (const [sql] of selectCalls as Array<[string]>) {
+      expect(sql).not.toContain("WHERE embedding IS NULL");
+    }
+  });
 });
