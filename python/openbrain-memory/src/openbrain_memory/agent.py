@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping, Protocol
 
 from .client import JSON
-from .policy import RetryPolicy, idempotency_key, redact_value, with_retry
+from .policy import RetryPolicy, idempotency_key, with_retry
 
 
 EVENT_TYPES = {
@@ -284,17 +284,20 @@ class AgentMemory:
         *,
         key: str | None = None,
     ) -> JSON:
-        safe_payload = redact_value(dict(payload))
+        write_payload = dict(payload)
         try:
             if operation == "session_start":
                 return with_retry(
-                    lambda: call(**safe_payload),
+                    lambda: call(**write_payload),
                     retry_policy=self.retry_policy,
                 )
-            return call(**safe_payload)
-        except Exception:
+            return call(**write_payload)
+        except Exception as error:
             if self.spool is not None:
-                self.spool.append(operation, safe_payload, key=key)
+                try:
+                    self.spool.append(operation, write_payload, key=key)
+                except Exception as spool_error:
+                    error.add_note(f"Failed to spool {operation}: {spool_error}")
             raise
 
 

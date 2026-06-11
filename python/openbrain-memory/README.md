@@ -104,6 +104,17 @@ memory.wrap_session("Ready for PR review.")
 prompt_context = context.as_prompt_text()
 ```
 
+## Safety and Spooling
+
+`AgentMemory` sends the original caller payload to Open Brain. Redaction helpers
+are for diagnostics and display only; they do not mutate live writes.
+
+`JsonlSpool` stores exact failed-write payloads so replay can faithfully rebuild
+the original client call. Spool and lock files are created with `0600`
+permissions and should be treated as trusted local recovery storage. Use
+`SpoolRecord.redacted_payload()` or `JsonlSpool.redacted_records()` before
+showing spool contents in logs, UIs, or debug output.
+
 ## DreamEngine
 
 `DreamEngine` wraps Open Brain curation tools with a dry-run-first API. The
