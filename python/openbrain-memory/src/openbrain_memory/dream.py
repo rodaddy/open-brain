@@ -288,11 +288,13 @@ def _float_between(value: Any, default: float, name: str) -> float:
 
 def _candidate_items(report: Any, key: str) -> list[Mapping[str, Any]]:
     if not isinstance(report, Mapping):
-        return []
+        raise ValueError("Dream report was not an object")
     items = report.get(key, [])
     if not isinstance(items, list):
-        return []
-    return [item for item in items if isinstance(item, Mapping)]
+        raise ValueError(f"Dream report {key} was not a list")
+    if not all(isinstance(item, Mapping) for item in items):
+        raise ValueError(f"Dream report {key} contained non-object candidates")
+    return items
 
 
 def _required_str(mapping: Mapping[str, Any], key: str) -> str:

@@ -9,6 +9,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from .policy import redact_text
+
 
 JSON = dict[str, Any]
 MCP_PROTOCOL_VERSION = "2025-03-26"
@@ -677,13 +679,6 @@ def _validate_base_url(base_url: str, *, allow_insecure_http: bool) -> None:
     )
 
 
-SECRET_PATTERNS = [
-    re.compile(r"(?i)authorization\s*[:=]\s*bearer\s+[^\s,;]+"),
-    re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]{8,}"),
-    re.compile(r"(?i)mcp-session-id\s*[:=]\s*[A-Za-z0-9._:-]+"),
-    re.compile(r'(?i)"?(api[_-]?key|github[_-]?token|token|password|secret)"?\s*:\s*"[^"]+"'),
-    re.compile(r"(?i)(api[_-]?key|github[_-]?token|token|password|secret)\s*[:=]\s*[^\s,;]+"),
-]
 SENSITIVE_KEY_PATTERN = re.compile(
     r"(?i)(token|secret|password|api[_-]?key|credential|authorization|session[_-]?id)"
 )
@@ -722,8 +717,7 @@ def _redact(
     for secret in (token, session_id):
         if secret:
             redacted = redacted.replace(secret, "[REDACTED]")
-    for pattern in SECRET_PATTERNS:
-        redacted = pattern.sub("[REDACTED]", redacted)
+    redacted = redact_text(redacted)
     if len(redacted) > max_length:
         redacted = redacted[:max_length] + "...[truncated]"
     return redacted

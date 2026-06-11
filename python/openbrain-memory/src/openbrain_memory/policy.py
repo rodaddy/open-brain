@@ -10,6 +10,27 @@ from uuid import uuid4
 SK_PREFIX = "sk" + "-"
 GITHUB_PREFIX_RE = "gh" + r"[pousr]_"
 GITHUB_PAT_PREFIX = "github" + r"_pat_"
+AWS_ACCESS_KEY_PREFIX_RE = r"A[KS]IA[0-9A-Z]{16}"
+AWS_SECRET_LIKE_RE = (
+    r"(?<![A-Za-z0-9/+=])"
+    r"(?=[A-Za-z0-9/+=]*[A-Z])"
+    r"(?=[A-Za-z0-9/+=]*[a-z])"
+    r"(?=[A-Za-z0-9/+=]*[0-9])"
+    r"(?=[A-Za-z0-9/+=]*[/+=])"
+    r"[A-Za-z0-9/+=]{40}"
+    r"(?![A-Za-z0-9/+=])"
+)
+AWS_SECRET_CONTEXT_RE = (
+    r"(?i)(aws[_ -]?(secret|secret[_ -]?access[_ -]?key))\s*[:=]\s*"
+    r"[A-Za-z0-9/+=]{40}"
+)
+SLACK_TOKEN_RE = r"xox[baprs]-[A-Za-z0-9-]{10,}"
+GOOGLE_API_KEY_PREFIX = "AIza"
+JWT_LIKE_RE = (
+    r"eyJ[A-Za-z0-9_-]{8,}\."
+    r"[A-Za-z0-9_-]{8,}\."
+    r"[A-Za-z0-9_-]{8,}"
+)
 PRIVATE_KEY_BLOCK_RE = (
     "-----BEGIN [A-Z ]*PRIVATE "
     "KEY-----.*?-----END [A-Z ]*PRIVATE "
@@ -19,14 +40,23 @@ PRIVATE_KEY_BLOCK_RE = (
 SECRET_PATTERNS = [
     re.compile(r"(?i)authorization\s*[:=]\s*bearer\s+[^\s,;]+"),
     re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]{8,}"),
+    re.compile(r"(?i)mcp-session-id\s*[:=]\s*[A-Za-z0-9._:-]+"),
     re.compile(rf"\b{SK_PREFIX}[A-Za-z0-9_-]{{10,}}\b"),
     re.compile(rf"(?i){GITHUB_PAT_PREFIX}[A-Za-z0-9_]+"),
     re.compile(rf"(?i){GITHUB_PREFIX_RE}[A-Za-z0-9_]{{20,}}"),
+    re.compile(rf"\b{AWS_ACCESS_KEY_PREFIX_RE}\b"),
+    re.compile(AWS_SECRET_CONTEXT_RE),
+    re.compile(AWS_SECRET_LIKE_RE),
+    re.compile(rf"\b{SLACK_TOKEN_RE}\b"),
+    re.compile(rf"\b{GOOGLE_API_KEY_PREFIX}[A-Za-z0-9_-]{{35}}\b"),
+    re.compile(rf"\b{JWT_LIKE_RE}\b"),
     re.compile(r"(?i)(api[_-]?key|token|password|secret)\s*[:=]\s*[^\s,;]+"),
     re.compile(r'(?i)"(api[_-]?key|token|password|secret)"\s*:\s*"[^"]+"'),
     re.compile(PRIVATE_KEY_BLOCK_RE, re.S),
 ]
-SENSITIVE_KEY_RE = re.compile(r"(?i)(token|secret|password|api[_-]?key|credential|authorization)")
+SENSITIVE_KEY_RE = re.compile(
+    r"(?i)(token|secret|password|api[_-]?key|credential|authorization|session[_-]?id)"
+)
 
 
 class RetryExhaustedError(RuntimeError):
