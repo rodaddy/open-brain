@@ -146,7 +146,6 @@ def test_failed_write_spools_replayable_payload_with_redacted_diagnostic_view(tm
     with pytest.raises(ConnectionError):
         memory.remember_fact(
             "token=" + token_sample("super", "secret"),
-            namespace="bilby",
             tags=["incident", "memory"],
         )
 
@@ -164,7 +163,6 @@ def test_failed_write_spools_replayable_payload_with_redacted_diagnostic_view(tm
     assert len(records) == 1
     assert records[0].operation == "log_thought"
     assert records[0].payload == client.calls[0][1]
-    assert records[0].payload["namespace"] == "bilby"
     assert records[0].payload["tags"] == [
         "fact",
         "incident",
@@ -267,7 +265,7 @@ def test_spooled_operation_can_replay_through_real_client_method(tmp_path):
     secret = "password: " + token_sample("hunt", "er2")
 
     with pytest.raises(ConnectionError):
-        memory.remember_fact(secret, namespace="bilby", tags=["replay"])
+        memory.remember_fact(secret, tags=["replay"])
 
     key = spool.records()[0].idempotency_key
     replay_client = FlakyClient()
@@ -281,7 +279,6 @@ def test_spooled_operation_can_replay_through_real_client_method(tmp_path):
             "log_thought",
             {
                 "content": secret,
-                "namespace": "bilby",
                 "tags": [
                     "fact",
                     "replay",

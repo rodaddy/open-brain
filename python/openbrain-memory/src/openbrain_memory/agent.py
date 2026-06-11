@@ -20,8 +20,10 @@ EVENT_TYPES = {
 }
 PROTECTED_KEYS = {
     "agent",
+    "authorization",
     "project",
     "session_key",
+    "namespace",
     "role",
     "source",
     "event_type",
@@ -30,11 +32,22 @@ PROTECTED_KEYS = {
     "title",
     "rationale",
     "summary",
+    "token",
+    "x-namespace",
+    "x_namespace",
+}
+NESTED_AUTHORITY_KEYS = {
+    "authorization",
+    "headers",
+    "namespace",
+    "role",
+    "token",
+    "x-namespace",
 }
 SESSION_START_KEYS = {"channel_id", "thread_id", "topic"}
 SESSION_WRAP_KEYS = {"key_decisions", "next_steps"}
-DECISION_KEYS = {"alternatives", "tags", "context", "namespace"}
-THOUGHT_KEYS = {"tags", "namespace"}
+DECISION_KEYS = {"alternatives", "tags", "context"}
+THOUGHT_KEYS = {"tags"}
 
 
 class MemoryClient(Protocol):
@@ -190,8 +203,6 @@ class AgentMemory:
         tags = _tags("fact", metadata.pop("tags", None))
         tags.append(f"idempotency:{key}")
         payload: dict[str, Any] = {"content": text, "tags": tags}
-        if "namespace" in metadata:
-            payload["namespace"] = metadata["namespace"]
         return self._call_write("log_thought", payload, self.client.log_thought, key=key)
 
     def remember_decision(self, text: str, **metadata: Any) -> JSON:
@@ -258,6 +269,23 @@ class AgentMemory:
         if collisions:
             names = ", ".join(sorted(collisions))
             raise ValueError(f"metadata contains reserved keys: {names}")
+        self._reject_reserved_nested_metadata(metadata, "metadata")
+
+    def _reject_reserved_nested_metadata(self, value: Any, path: str) -> None:
+        if isinstance(value, Mapping):
+            collisions = {
+                str(key)
+                for key in value
+                if _authority_key(str(key)) in NESTED_AUTHORITY_KEYS
+            }
+            if collisions:
+                names = ", ".join(sorted(collisions))
+                raise ValueError(f"{path} contains reserved authority keys: {names}")
+            for key, item in value.items():
+                self._reject_reserved_nested_metadata(item, f"{path}.{key}")
+        elif isinstance(value, list | tuple):
+            for index, item in enumerate(value):
+                self._reject_reserved_nested_metadata(item, f"{path}[{index}]")
 
     def _reject_unknown_metadata(
         self,
@@ -419,3 +447,7 @@ def _tags(required: str, value: Any) -> list[str]:
 def _bounded_metadata(result: Mapping[str, Any]) -> dict[str, Any]:
     allowed = ("id", "path", "collection", "tags", "tier")
     return {key: result[key] for key in allowed if key in result}
+
+
+def _authority_key(key: str) -> str:
+    return key.lower().replace("_", "-")
