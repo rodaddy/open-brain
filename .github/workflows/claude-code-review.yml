@@ -27,10 +27,10 @@ jobs:
       # Point to your OpenAI-compatible proxy (e.g., LiteLLM) or remove for direct Anthropic API
       ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
       ANTHROPIC_API_KEY: ${{ secrets.LITELLM_API_KEY }}
-      ANTHROPIC_MODEL: opus
-      ANTHROPIC_DEFAULT_SONNET_MODEL: sonnet
-      ANTHROPIC_DEFAULT_OPUS_MODEL: opus
-      ANTHROPIC_DEFAULT_HAIKU_MODEL: haiku
+      ANTHROPIC_MODEL: claude-opus-4-6@default[1M]
+      ANTHROPIC_DEFAULT_SONNET_MODEL: claude-sonnet-4-6@default[1M]
+      ANTHROPIC_DEFAULT_OPUS_MODEL: claude-opus-4-6@default[1M]
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: claude-sonnet-4-6@default[1M]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
