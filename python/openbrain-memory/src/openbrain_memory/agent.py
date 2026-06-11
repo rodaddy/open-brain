@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping, Protocol
 
 from .client import JSON
+from .policy import RetryPolicy, idempotency_key, redact_value, with_retry
 
 
 EVENT_TYPES = {
@@ -21,7 +22,6 @@ PROTECTED_KEYS = {
     "agent",
     "project",
     "session_key",
-    "namespace",
     "role",
     "source",
     "event_type",
@@ -58,7 +58,13 @@ class MemoryClient(Protocol):
 
 
 class MemorySpool(Protocol):
-    def append(self, operation: str, payload: Mapping[str, Any]) -> None:
+    def append(
+        self,
+        operation: str,
+        payload: Mapping[str, Any],
+        *,
+        key: str | None = None,
+    ) -> str:
         ...
 
 
@@ -105,12 +111,14 @@ class AgentMemory:
         project: str | None = None,
         policy: MemoryPolicy | Mapping[str, Any] | None = None,
         spool: MemorySpool | None = None,
+        retry_policy: RetryPolicy | Mapping[str, Any] | None = None,
     ) -> None:
         self.client: MemoryClient = client
         self.agent = agent
         self.project = project
         self.policy = _coerce_policy(policy)
         self.spool = spool
+        self.retry_policy = _coerce_retry_policy(retry_policy)
         self.conversation_key: str | None = None
 
     def start_session(self, conversation_key: str, **metadata: Any) -> JSON:
@@ -121,7 +129,7 @@ class AgentMemory:
         payload["agent"] = self.agent
         if self.project is not None:
             payload["project"] = self.project
-        result = self.client.session_start(**payload)
+        result = self._call_write("session_start", payload, self.client.session_start)
         self.conversation_key = conversation_key
         return result
 
@@ -159,37 +167,48 @@ class AgentMemory:
         if event_type not in EVENT_TYPES:
             raise ValueError(f"Unsupported event_type: {event_type}")
         self._reject_reserved_metadata(metadata)
-        return self.client.append_session_event(
-            **self._session_payload(
-                {
-                    "event_type": event_type,
-                    "content": content,
-                    "source": role,
-                    "metadata": dict(metadata),
-                }
-            )
+        key = idempotency_key()
+        payload = self._session_payload(
+            {
+                "event_type": event_type,
+                "content": content,
+                "source": role,
+                "metadata": {**dict(metadata), "idempotency_key": key},
+            }
+        )
+        return self._call_write(
+            "append_session_event",
+            payload,
+            self.client.append_session_event,
+            key=key,
         )
 
     def remember_fact(self, text: str, **metadata: Any) -> JSON:
         self._reject_reserved_metadata(metadata)
         self._reject_unknown_metadata(metadata, THOUGHT_KEYS)
+        key = idempotency_key()
         tags = _tags("fact", metadata.pop("tags", None))
+        tags.append(f"idempotency:{key}")
         payload: dict[str, Any] = {"content": text, "tags": tags}
         if "namespace" in metadata:
             payload["namespace"] = metadata["namespace"]
-        return self.client.log_thought(**payload)
+        return self._call_write("log_thought", payload, self.client.log_thought, key=key)
 
     def remember_decision(self, text: str, **metadata: Any) -> JSON:
         self._reject_reserved_metadata(metadata)
         self._reject_unknown_metadata(metadata, DECISION_KEYS)
+        idem = idempotency_key()
         payload: dict[str, Any] = {
             "title": _title_from_text(text),
             "rationale": text,
+            "tags": [f"idempotency:{idem}"],
         }
         for key in DECISION_KEYS:
             if key in metadata:
                 payload[key] = metadata[key]
-        return self.client.log_decision(**payload)
+        if "tags" in metadata:
+            payload["tags"] = _tags(f"idempotency:{idem}", metadata["tags"])
+        return self._call_write("log_decision", payload, self.client.log_decision, key=idem)
 
     def checkpoint(self, summary: str, **metadata: Any) -> JSON:
         self._require_session("checkpoint")
@@ -197,8 +216,13 @@ class AgentMemory:
             raise ValueError("checkpoint summary must not be empty")
         self._reject_reserved_metadata(metadata)
         self._reject_unknown_metadata(metadata, SESSION_WRAP_KEYS)
-        return self.client.session_wrap(
-            **self._session_payload({"summary": summary, **metadata})
+        key = idempotency_key()
+        payload = self._session_payload({"summary": summary, **metadata})
+        return self._call_write(
+            "session_wrap",
+            payload,
+            self.client.session_wrap,
+            key=key,
         )
 
     def wrap_session(self, summary: str | None = None, **metadata: Any) -> JSON:
@@ -209,7 +233,13 @@ class AgentMemory:
         self._reject_unknown_metadata(metadata, SESSION_WRAP_KEYS)
         payload = dict(metadata)
         payload["summary"] = summary
-        return self.client.session_wrap(**self._session_payload(payload))
+        key = idempotency_key()
+        return self._call_write(
+            "session_wrap",
+            self._session_payload(payload),
+            self.client.session_wrap,
+            key=key,
+        )
 
     def _session_payload(self, metadata: Mapping[str, Any]) -> dict[str, Any]:
         payload = dict(metadata)
@@ -246,6 +276,27 @@ class AgentMemory:
             raise ValueError("recall limit must be >= 1")
         return min(limit, self.policy.max_items)
 
+    def _call_write(
+        self,
+        operation: str,
+        payload: Mapping[str, Any],
+        call: Any,
+        *,
+        key: str | None = None,
+    ) -> JSON:
+        safe_payload = redact_value(dict(payload))
+        try:
+            if operation == "session_start":
+                return with_retry(
+                    lambda: call(**safe_payload),
+                    retry_policy=self.retry_policy,
+                )
+            return call(**safe_payload)
+        except Exception:
+            if self.spool is not None:
+                self.spool.append(operation, safe_payload, key=key)
+            raise
+
 
 def _coerce_policy(policy: MemoryPolicy | Mapping[str, Any] | None) -> MemoryPolicy:
     if policy is None:
@@ -253,6 +304,14 @@ def _coerce_policy(policy: MemoryPolicy | Mapping[str, Any] | None) -> MemoryPol
     if isinstance(policy, MemoryPolicy):
         return policy
     return MemoryPolicy(**dict(policy))
+
+
+def _coerce_retry_policy(policy: RetryPolicy | Mapping[str, Any] | None) -> RetryPolicy:
+    if policy is None:
+        return RetryPolicy()
+    if isinstance(policy, RetryPolicy):
+        return policy
+    return RetryPolicy(**dict(policy))
 
 
 def _bounded_items(

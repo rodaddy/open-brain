@@ -1,0 +1,233 @@
+from __future__ import annotations
+
+import os
+
+import pytest
+
+from openbrain_memory import (
+    AgentMemory,
+    JsonlSpool,
+    RetryExhaustedError,
+    RetryPolicy,
+    SpoolRecord,
+    redact_text,
+    redact_value,
+    replay_records,
+)
+
+
+def token_sample(*parts: str) -> str:
+    return "".join(parts)
+
+
+class FlakyClient:
+    def __init__(self, failures: int = 0) -> None:
+        self.failures = failures
+        self.calls = []
+
+    def session_start(self, **arguments):
+        self.calls.append(("session_start", arguments))
+        if self.failures:
+            self.failures -= 1
+            raise ConnectionError("temporary")
+        return {"ok": True}
+
+    def append_session_event(self, **arguments):
+        self.calls.append(("append_session_event", arguments))
+        if self.failures:
+            self.failures -= 1
+            raise ConnectionError("temporary")
+        return {"ok": True}
+
+    def search_all(self, **arguments):
+        self.calls.append(("search_all", arguments))
+        return {"results": [{"content": "x" * 100, "type": "thought", "source": "brain"}]}
+
+    def log_thought(self, **arguments):
+        self.calls.append(("log_thought", arguments))
+        if self.failures:
+            self.failures -= 1
+            raise ConnectionError("temporary")
+        return {"ok": True}
+
+    def log_decision(self, **arguments):
+        self.calls.append(("log_decision", arguments))
+        if self.failures:
+            self.failures -= 1
+            raise ConnectionError("temporary")
+        return {"ok": True}
+
+    def session_wrap(self, **arguments):
+        self.calls.append(("session_wrap", arguments))
+        if self.failures:
+            self.failures -= 1
+            raise ConnectionError("temporary")
+        return {"ok": True}
+
+
+def test_redaction_scrubs_common_secret_shapes():
+    text = "\n".join(
+        [
+            "Authorization: Bearer " + token_sample("abcdefgh", "ijklmnop"),
+            token_sample("OPENAI_", "API_", "KEY=") + token_sample("sk", "-secret"),
+            "password: " + token_sample("hunt", "er2"),
+            '"api_key": "json-secret"',
+            "token: " + token_sample("sk", "-abcdefghijklmnopqrstuvwxyz"),
+            token_sample("GITHUB_", "TOKEN=") + token_sample("ghp", "_abcdefghijklmnopqrstuvwxyz"),
+            token_sample("-----BEGIN ", "PRIVATE ", "KEY-----\nabc\n-----END ", "PRIVATE ", "KEY-----"),
+        ]
+    )
+
+    redacted = redact_text(text)
+
+    assert "abcdefghijklmnop" not in redacted
+    assert token_sample("sk", "-secret") not in redacted
+    assert token_sample("hunt", "er2") not in redacted
+    assert "json-secret" not in redacted
+    assert token_sample("sk", "-abcdefghijklmnopqrstuvwxyz") not in redacted
+    assert token_sample("ghp", "_") not in redacted
+    assert token_sample("PRIVATE ", "KEY") not in redacted
+    assert redacted.count("[REDACTED]") >= 4
+
+
+def test_redact_value_recurses_sensitive_keys():
+    value = {"nested": {"access_token": "secret-token"}, "safe": "visible"}
+
+    assert redact_value(value) == {
+        "nested": {"access_token": "[REDACTED]"},
+        "safe": "visible",
+    }
+
+
+def test_retries_success_after_transient_failure_without_spooling(tmp_path):
+    client = FlakyClient(failures=1)
+    spool = JsonlSpool(tmp_path / "spool.jsonl")
+    memory = AgentMemory(
+        client,
+        agent="bilby",
+        spool=spool,
+        retry_policy=RetryPolicy(attempts=2, backoff_seconds=0),
+    )
+
+    memory.start_session("session")
+
+    assert [name for name, _ in client.calls] == ["session_start", "session_start"]
+    assert not spool.path.exists()
+
+
+def test_non_idempotent_write_is_not_retried_but_is_spooled(tmp_path):
+    client = FlakyClient(failures=1)
+    spool = JsonlSpool(tmp_path / "spool.jsonl")
+    memory = AgentMemory(
+        client,
+        agent="bilby",
+        spool=spool,
+        retry_policy=RetryPolicy(attempts=2, backoff_seconds=0),
+    )
+
+    with pytest.raises(ConnectionError):
+        memory.remember_fact("fact")
+
+    assert [name for name, _ in client.calls] == ["log_thought"]
+    assert spool.records()[0].operation == "log_thought"
+
+
+def test_failed_write_spools_redacted_payload_with_0600_mode(tmp_path):
+    client = FlakyClient(failures=3)
+    spool = JsonlSpool(tmp_path / "spool.jsonl")
+    memory = AgentMemory(
+        client,
+        agent="bilby",
+        spool=spool,
+        retry_policy=RetryPolicy(attempts=2, backoff_seconds=0),
+    )
+
+    with pytest.raises(ConnectionError):
+        memory.remember_fact("token=" + token_sample("super", "secret"), namespace="bilby")
+
+    mode = os.stat(spool.path).st_mode & 0o777
+    lock_mode = os.stat(spool.lock_path).st_mode & 0o777
+    records = spool.records()
+    assert mode == 0o600
+    assert lock_mode == 0o600
+    assert len(records) == 1
+    assert records[0].operation == "log_thought"
+    assert token_sample("super", "secret") not in str(records[0].payload)
+    assert records[0].idempotency_key
+
+
+def test_live_write_payload_is_redacted_before_client_call():
+    client = FlakyClient()
+    memory = AgentMemory(client, agent="bilby")
+
+    memory.remember_fact("password: " + token_sample("hunt", "er2"))
+
+    assert token_sample("hunt", "er2") not in client.calls[0][1]["content"]
+    assert "[REDACTED]" in client.calls[0][1]["content"]
+
+
+def test_spool_trims_old_records_by_line_count(tmp_path):
+    spool = JsonlSpool(tmp_path / "spool.jsonl", max_lines=2)
+
+    spool.append("one", {"content": "1"}, key="one")
+    spool.append("two", {"content": "2"}, key="two")
+    spool.append("three", {"content": "3"}, key="three")
+
+    assert [record.operation for record in spool.records()] == ["two", "three"]
+
+
+def test_spool_replay_removes_successes_and_keeps_failures(tmp_path):
+    spool = JsonlSpool(tmp_path / "spool.jsonl")
+    spool.append("ok", {"content": "1"}, key="ok-key")
+    spool.append("fail", {"content": "2"}, key="fail-key")
+    seen = []
+
+    def dispatch(record: SpoolRecord):
+        seen.append((record.idempotency_key, record.operation, dict(record.payload)))
+        if record.operation == "fail":
+            raise RuntimeError("still down")
+        return {"ok": True}
+
+    assert spool.replay(dispatch) == [{"ok": True}]
+    assert seen == [
+        ("ok-key", "ok", {"content": "1"}),
+        ("fail-key", "fail", {"content": "2"}),
+    ]
+    assert [record.operation for record in spool.records()] == ["fail"]
+
+
+def test_replay_records_passes_full_record():
+    records = [SpoolRecord("key", "op", {"content": "x"}, 1.0)]
+
+    assert replay_records(records, lambda record: {"key": record.idempotency_key}) == [
+        {"key": "key"}
+    ]
+
+
+def test_spool_rejects_symlink_path(tmp_path):
+    target = tmp_path / "target.jsonl"
+    link = tmp_path / "link.jsonl"
+    target.write_text("", encoding="utf-8")
+    link.symlink_to(target)
+
+    with pytest.raises(OSError, match="symlink"):
+        JsonlSpool(link).append("op", {"content": "x"})
+
+
+def test_recall_context_is_bounded_by_count_and_character_budget():
+    memory = AgentMemory(
+        FlakyClient(),
+        agent="bilby",
+        policy={"max_items": 1, "max_chars": 20, "max_item_chars": 100},
+    )
+
+    context = memory.recall("bounded")
+
+    assert len(context.items) == 1
+    assert len(context.as_prompt_text()) <= 20
+    assert context.raw == {}
+
+
+def test_safety_exports_are_public():
+    assert RetryExhaustedError
+    assert replay_records
