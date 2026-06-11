@@ -16,29 +16,37 @@ type EmbedFn = (text: string) => Promise<number[] | null>;
 
 interface TableConfig {
   table: string;
+  /** Columns to fetch -- projecting instead of SELECT * keeps the existing
+   * 768-dim vectors (and other wide columns) out of JS memory on --all runs. */
+  columns: string[];
   textFn: (row: Record<string, unknown>) => string;
 }
 
 const TABLE_CONFIGS: TableConfig[] = [
   {
     table: "thoughts",
+    columns: ["id", "content"],
     textFn: (row) => row.content as string,
   },
   {
     table: "decisions",
+    columns: ["id", "title", "rationale"],
     textFn: (row) => `${row.title}\n${row.rationale}`,
   },
   {
     table: "relationships",
+    columns: ["id", "person_name", "context", "notes"],
     textFn: (row) =>
       [row.person_name, row.context, row.notes].filter(Boolean).join("\n"),
   },
   {
     table: "projects",
+    columns: ["id", "name", "description"],
     textFn: (row) => [row.name, row.description].filter(Boolean).join("\n"),
   },
   {
     table: "sessions",
+    columns: ["id", "summary"],
     textFn: (row) => row.summary as string,
   },
 ];
@@ -74,8 +82,12 @@ export async function backfill(
   let totalFailed = 0;
   const whereClause = options.all ? "" : " WHERE embedding IS NULL";
 
-  for (const { table, textFn } of TABLE_CONFIGS) {
-    const { rows } = await pool.query(`SELECT * FROM ${table}${whereClause}`);
+  for (const { table, columns, textFn } of TABLE_CONFIGS) {
+    // table/columns come from the static TABLE_CONFIGS allowlist above, never
+    // from user input -- interpolation is safe here.
+    const { rows } = await pool.query(
+      `SELECT ${columns.join(", ")} FROM ${table}${whereClause}`,
+    );
 
     logger.info(`Backfill: ${table}`, {
       nullCount: rows.length,
@@ -130,14 +142,14 @@ export async function backfill(
 
   logger.info("Backfill complete", { totalProcessed, totalFailed });
 
-  await pool.end();
-
   return { processed: totalProcessed, failed: totalFailed };
 }
 
 if (import.meta.main) {
+  // Pool lifecycle belongs to the entrypoint, not backfill() -- callers that
+  // pass a shared pool keep it alive.
+  const pool = createPool();
   try {
-    const pool = createPool();
     const result = await backfill(pool, generateEmbedding, {
       all: process.argv.includes("--all") || process.argv.includes("--force"),
     });
@@ -145,11 +157,13 @@ if (import.meta.main) {
       processed: result.processed,
       failed: result.failed,
     });
+    await pool.end();
     process.exit(0);
   } catch (err) {
     logger.error("Backfill fatal error", {
       error: err instanceof Error ? err.message : String(err),
     });
+    await pool.end().catch(() => {});
     process.exit(1);
   }
 }
