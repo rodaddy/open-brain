@@ -4,6 +4,7 @@ import {
   generateEmbeddingWithMetadata,
   contentHash,
   EMBEDDING_MODEL,
+  EMBEDDING_DIMENSIONS,
 } from "./embedding.ts";
 
 // Helper: create a mock 768-length embedding array
@@ -94,7 +95,7 @@ describe("generateEmbedding", () => {
     expect(result).toBeNull();
   });
 
-  it("calls embedding provider with model and dimensions 768", async () => {
+  it("calls embedding provider with configured model and dimensions", async () => {
     let capturedBody: Record<string, unknown> | null = null;
     let capturedUrl = "";
 
@@ -117,7 +118,7 @@ describe("generateEmbedding", () => {
     // EMBEDDING_MODEL is captured from env at module load -- assert the
     // exported constant so the test passes regardless of local .env config.
     expect(capturedBody!.model).toBe(EMBEDDING_MODEL);
-    expect(capturedBody!.dimensions).toBe(768);
+    expect(capturedBody!.dimensions).toBe(EMBEDDING_DIMENSIONS);
     expect(capturedBody!.input).toBe("test input");
   });
 

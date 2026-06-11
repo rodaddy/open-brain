@@ -309,13 +309,13 @@ describe("backfill", () => {
     expect(summaryLog![1]).toHaveProperty("totalFailed");
   });
 
-  it("Test 11: calls pool.end() after completion", async () => {
+  it("Test 11: does not end the injected pool (caller owns its lifecycle)", async () => {
     const { pool, mockEnd } = createMockPool(defaultQueryImpl);
     const embedFn = createMockEmbedFn();
 
     await backfill(pool, embedFn);
 
-    expect(mockEnd).toHaveBeenCalledTimes(1);
+    expect(mockEnd).not.toHaveBeenCalled();
   });
 
   it("Test 12: can re-embed all rows with all=true", async () => {
@@ -326,12 +326,14 @@ describe("backfill", () => {
 
     const selectCalls = mockQuery.mock.calls.filter(
       (call: any[]) =>
-        typeof call[0] === "string" && call[0].startsWith("SELECT * FROM"),
+        typeof call[0] === "string" && call[0].startsWith("SELECT id"),
     );
 
     expect(selectCalls.length).toBe(5);
     for (const [sql] of selectCalls as Array<[string]>) {
       expect(sql).not.toContain("WHERE embedding IS NULL");
+      // Projection, not SELECT * -- existing vectors stay out of JS memory
+      expect(sql).not.toContain("SELECT *");
     }
   });
 });
