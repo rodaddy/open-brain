@@ -123,13 +123,13 @@ The MCP server listens on `http://localhost:3100` with Streamable HTTP transport
 
 Each consumer gets a scoped Bearer token. Roles control which tables are readable/writable:
 
-| Role | Read | Write |
-|------|------|-------|
-| `admin` | All tables | All tables |
-| `agent` | All tables | thoughts, decisions, sessions |
-| `discord` | thoughts, decisions, relationships | sessions |
-| `n8n` | All tables | sessions |
-| `readonly` | All tables | — |
+| Role | Read | Write | Delete |
+|------|------|-------|--------|
+| `admin` | All tables | All tables | All tables |
+| `agent` | All tables | thoughts, decisions, relationships, sessions | — |
+| `discord` | — | thoughts | — |
+| `n8n` | All tables | All tables | All tables |
+| `readonly` | All tables | — | — |
 
 Set tokens via `AUTH_TOKEN_ADMIN`, `AUTH_TOKEN_AGENT`, etc. in your `.env`. You can also add custom per-user tokens with the `AUTH_TOKEN_USER_*` pattern.
 
