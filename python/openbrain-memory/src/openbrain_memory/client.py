@@ -12,6 +12,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 JSON = dict[str, Any]
 MCP_PROTOCOL_VERSION = "2025-03-26"
+DEFAULT_MAX_RESPONSE_BYTES = 1_000_000
 
 
 @dataclass(frozen=True)
@@ -42,12 +43,15 @@ class Transport(Protocol):
 
 
 class UrllibTransport:
-    def __init__(self) -> None:
+    def __init__(self, *, max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES) -> None:
+        if max_response_bytes < 1:
+            raise ValueError("max_response_bytes must be >= 1")
         self._opener = build_opener(_NoRedirectHandler)
+        self.max_response_bytes = max_response_bytes
 
     def get(self, url: str, *, headers: Mapping[str, str], timeout: float) -> TransportResponse:
         request = Request(url, headers=dict(headers), method="GET")
-        return self._send(request, timeout)
+        return self._send(request, timeout, expected_response_id=None)
 
     def post(
         self,
@@ -59,25 +63,46 @@ class UrllibTransport:
     ) -> TransportResponse:
         data = json.dumps(json_body).encode("utf-8")
         request = Request(url, data=data, headers=dict(headers), method="POST")
-        return self._send(request, timeout)
+        expected_response_id = json_body.get("id")
+        return self._send(
+            request,
+            timeout,
+            expected_response_id=expected_response_id if isinstance(expected_response_id, int) else None,
+        )
 
-    def _send(self, request: Request, timeout: float) -> TransportResponse:
+    def _send(
+        self,
+        request: Request,
+        timeout: float,
+        *,
+        expected_response_id: int | None,
+    ) -> TransportResponse:
         try:
             with self._opener.open(request, timeout=timeout) as response:
-                body = response.read().decode("utf-8")
+                headers = {k.lower(): v for k, v in response.headers.items()}
+                body = self._read_response(
+                    response,
+                    headers=headers,
+                    expected_response_id=expected_response_id,
+                ).decode("utf-8")
                 return TransportResponse(
                     status_code=response.status,
-                    headers={k.lower(): v for k, v in response.headers.items()},
+                    headers=headers,
                     text=body,
                 )
         except HTTPError as exc:
             try:
-                body = exc.read().decode("utf-8", errors="replace")
+                headers = {k.lower(): v for k, v in exc.headers.items()}
+                body = self._read_response(
+                    exc,
+                    headers=headers,
+                    expected_response_id=expected_response_id,
+                ).decode("utf-8", errors="replace")
             except OSError:
                 body = ""
             return TransportResponse(
                 status_code=exc.code,
-                headers={k.lower(): v for k, v in exc.headers.items()},
+                headers=headers,
                 text=body,
             )
         except URLError as exc:
@@ -85,6 +110,55 @@ class UrllibTransport:
                 f"Open Brain request failed: {exc.reason}",
                 context="transport",
             ) from exc
+
+    def _read_response(
+        self,
+        response: Any,
+        *,
+        headers: Mapping[str, str],
+        expected_response_id: int | None,
+    ) -> bytes:
+        content_type = _header(headers, "content-type") or ""
+        if "text/event-stream" in content_type:
+            return self._read_first_sse_event(
+                response,
+                expected_response_id=expected_response_id,
+            )
+        body = response.read(self.max_response_bytes + 1)
+        if len(body) > self.max_response_bytes:
+            raise OpenBrainHTTPError(
+                "Open Brain response exceeded max_response_bytes",
+                context="transport",
+            )
+        return body
+
+    def _read_first_sse_event(
+        self,
+        response: Any,
+        *,
+        expected_response_id: int | None,
+    ) -> bytes:
+        total = 0
+        event_lines: list[bytes] = []
+        while True:
+            line = response.readline(self.max_response_bytes + 1)
+            if line == b"":
+                break
+            total += len(line)
+            if total > self.max_response_bytes:
+                raise OpenBrainHTTPError(
+                    "Open Brain SSE response exceeded max_response_bytes",
+                    context="transport",
+                )
+            event_lines.append(line)
+            if line in {b"\n", b"\r\n"} and any(
+                item.startswith(b"data:") for item in event_lines
+            ):
+                event = b"".join(event_lines)
+                if _sse_event_has_response_id(event, expected_id=expected_response_id):
+                    return event
+                event_lines = []
+        return b"".join(event_lines)
 
 
 class _NoRedirectHandler(HTTPRedirectHandler):
@@ -162,11 +236,24 @@ class OpenBrainClient:
             headers={"Accept": "application/json"},
             timeout=self.timeout,
         )
+        if response.status_code == 503:
+            payload = self._decode_json_response(response, context="health")
+            if isinstance(payload, dict) and payload.get("status") == "degraded":
+                return payload
         self._raise_for_status(response, context="health")
         payload = self._decode_json_response(response, context="health")
         if not isinstance(payload, dict):
             raise OpenBrainProtocolError("Health response was not a JSON object", context="health")
         return payload
+
+    def close(self) -> None:
+        self._session_id = None
+
+    def __enter__(self) -> OpenBrainClient:
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+        self.close()
 
     def call_tool(self, name: str, arguments: Mapping[str, Any] | None = None) -> JSON:
         self._ensure_session()
@@ -418,13 +505,19 @@ class OpenBrainClient:
                 session_id=self._session_id,
             ) from exc
 
-    def _decode_mcp_response(self, response: TransportResponse, *, context: str) -> Any:
+    def _decode_mcp_response(
+        self,
+        response: TransportResponse,
+        *,
+        context: str,
+        expected_id: int | None = None,
+    ) -> Any:
         text = response.text.strip()
         if not text:
             return None
         content_type = _header(response.headers, "content-type") or ""
         if "text/event-stream" in content_type or text.startswith("event:") or text.startswith("data:"):
-            text = _last_sse_data(text)
+            text = _last_sse_data(text, expected_id=expected_id)
         try:
             return json.loads(text)
         except json.JSONDecodeError as exc:
@@ -444,7 +537,11 @@ class OpenBrainClient:
         expected_id: int,
         context: str,
     ) -> JSON:
-        message = self._decode_mcp_response(response, context=context)
+        message = self._decode_mcp_response(
+            response,
+            context=context,
+            expected_id=expected_id,
+        )
         if not isinstance(message, dict):
             raise OpenBrainProtocolError("MCP response was not a JSON object", context=context)
         if message.get("jsonrpc") != "2.0":
@@ -482,7 +579,7 @@ def _header(headers: Mapping[str, str], name: str) -> str | None:
     return None
 
 
-def _last_sse_data(text: str) -> str:
+def _last_sse_data(text: str, *, expected_id: int | None = None) -> str:
     data_blocks: list[str] = []
     current: list[str] = []
     for line in text.splitlines():
@@ -497,7 +594,45 @@ def _last_sse_data(text: str) -> str:
         data_blocks.append("\n".join(current))
     if not data_blocks:
         raise OpenBrainProtocolError("MCP SSE response did not contain data")
+    if expected_id is not None:
+        for block in data_blocks:
+            try:
+                message = json.loads(block)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(message, dict) and message.get("id") == expected_id:
+                return block
     return data_blocks[-1]
+
+
+def _sse_event_has_response_id(event: bytes, *, expected_id: int | None = None) -> bool:
+    text = event.decode("utf-8", errors="replace")
+    for block in _sse_data_blocks(text):
+        try:
+            message = json.loads(block)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(message, dict) or "id" not in message:
+            continue
+        if expected_id is None or message.get("id") == expected_id:
+            return True
+    return False
+
+
+def _sse_data_blocks(text: str) -> list[str]:
+    data_blocks: list[str] = []
+    current: list[str] = []
+    for line in text.splitlines():
+        if not line:
+            if current:
+                data_blocks.append("\n".join(current))
+                current = []
+            continue
+        if line.startswith("data:"):
+            current.append(line.removeprefix("data:").strip())
+    if current:
+        data_blocks.append("\n".join(current))
+    return data_blocks
 
 
 def _tool_text(result: Mapping[str, Any]) -> str:

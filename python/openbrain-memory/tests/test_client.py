@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import threading
+import time
 
 import pytest
 
@@ -123,6 +124,14 @@ def tool_requests(transport: FakeTransport):
     ]
 
 
+def header_value(headers: dict[str, str], name: str) -> str | None:
+    wanted = name.lower()
+    for key, value in headers.items():
+        if key.lower() == wanted:
+            return value
+    return None
+
+
 def test_health_check_uses_public_health_endpoint_without_credentials():
     transport = FakeTransport()
     client = make_client(transport)
@@ -133,6 +142,33 @@ def test_health_check_uses_public_health_endpoint_without_credentials():
     assert request["method"] == "GET"
     assert request["url"] == "https://brain.example/health"
     assert request["headers"] == {"Accept": "application/json"}
+
+
+def test_health_returns_structured_degraded_body_for_503():
+    transport = FakeTransport()
+    transport.next_status = 503
+    transport.health_payload = {
+        "status": "degraded",
+        "database": {"connected": False},
+        "error": "database unavailable",
+    }
+    client = make_client(transport)
+
+    assert client.health() == {
+        "status": "degraded",
+        "database": {"connected": False},
+        "error": "database unavailable",
+    }
+
+
+def test_health_raises_for_unstructured_503_body():
+    transport = FakeTransport()
+    transport.next_status = 503
+    transport.health_payload = {"error": "proxy unavailable"}
+    client = make_client(transport)
+
+    with pytest.raises(OpenBrainHTTPError, match="status=503"):
+        client.health()
 
 
 def test_initialize_sends_auth_namespace_and_stores_session_id():
@@ -167,6 +203,22 @@ def test_initialized_notification_and_tool_calls_reuse_session_header():
     assert initialized["headers"]["MCP-Protocol-Version"] == "2025-03-26"
     assert call["headers"]["Mcp-Session-Id"] == "session-123"
     assert call["headers"]["MCP-Protocol-Version"] == "2025-03-26"
+
+
+def test_close_clears_local_session_and_context_manager_closes():
+    transport = FakeTransport()
+    client = make_client(transport)
+
+    client.search_all(query="x")
+    assert client.session_id == "session-123"
+
+    client.close()
+    assert client.session_id is None
+
+    with make_client(FakeTransport()) as scoped:
+        scoped.search_all(query="x")
+        assert scoped.session_id == "session-123"
+    assert scoped.session_id is None
 
 
 def test_generic_call_tool_emits_json_rpc_tools_call_shape():
@@ -509,6 +561,231 @@ def test_sse_mcp_responses_are_decoded():
     client = make_client(SseTransport())
 
     assert client.search_all(query="x")["tool"] == "search_all"
+
+
+def test_openbrain_client_streams_until_matching_sse_jsonrpc_response():
+    seen = []
+
+    class StreamingMcpHandler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_POST(self):
+            content_length = int(self.headers.get("Content-Length", "0"))
+            payload = json.loads(self.rfile.read(content_length))
+            seen.append(
+                {
+                    "headers": dict(self.headers.items()),
+                    "json": payload,
+                }
+            )
+
+            method = payload.get("method")
+            if method == "initialize":
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Mcp-Session-Id", "session-stream")
+                self.end_headers()
+                self.wfile.write(
+                    json.dumps(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": payload["id"],
+                            "result": {"protocolVersion": "2025-03-26"},
+                        }
+                    ).encode("utf-8")
+                )
+                return
+
+            if method == "notifications/initialized":
+                self.send_response(202)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+
+            if method == "tools/call":
+                result = {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "tool": payload["params"]["name"],
+                                    "ok": True,
+                                    "results": [],
+                                }
+                            ),
+                        }
+                    ]
+                }
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.end_headers()
+                self.wfile.write(
+                    b"event: message\n"
+                    b'data: {"jsonrpc":"2.0","method":"notifications/progress","params":{"progress":1}}\n\n'
+                )
+                self.wfile.flush()
+                self.wfile.write(
+                    b"event: message\n"
+                    b'data: {"jsonrpc":"2.0","id":999,"result":{"content":[{"type":"text","text":"{\\"tool\\":\\"wrong\\"}"}]}}\n\n'
+                )
+                self.wfile.flush()
+                self.wfile.write(
+                    b"event: message\n"
+                    + (
+                        "data: "
+                        + json.dumps(
+                            {
+                                "jsonrpc": "2.0",
+                                "id": payload["id"],
+                                "result": result,
+                            }
+                        )
+                        + "\n\n"
+                    ).encode("utf-8")
+                )
+                self.wfile.flush()
+                time.sleep(1.5)
+                return
+
+            self.send_response(400)
+            self.end_headers()
+
+        def log_message(self, _format, *args):
+            return
+
+    server = HTTPServer(("127.0.0.1", 0), StreamingMcpHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        client = OpenBrainClient(
+            f"http://127.0.0.1:{server.server_port}",
+            "secret-token",
+            "bilby",
+            agent_id="bilby-agent",
+            role="agent",
+            timeout=2,
+            transport=UrllibTransport(),
+        )
+        started = time.monotonic()
+        result = client.search_all(query="stream")
+        elapsed = time.monotonic() - started
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+
+    assert elapsed < 1
+    assert result == {"tool": "search_all", "ok": True, "results": []}
+    assert [request["json"].get("method") for request in seen] == [
+        "initialize",
+        "notifications/initialized",
+        "tools/call",
+    ]
+
+    initialize, initialized, call = seen
+    assert header_value(initialize["headers"], "Authorization") == "Bearer secret-token"
+    assert header_value(initialize["headers"], "X-Namespace") == "bilby"
+    assert header_value(initialize["headers"], "X-Agent-Id") == "bilby-agent"
+    assert header_value(initialize["headers"], "X-Role") == "agent"
+    assert header_value(initialize["headers"], "Mcp-Session-Id") is None
+    assert initialize["json"]["id"] == 1
+
+    assert header_value(initialized["headers"], "Mcp-Session-Id") == "session-stream"
+    assert header_value(initialized["headers"], "MCP-Protocol-Version") == "2025-03-26"
+    assert header_value(call["headers"], "Mcp-Session-Id") == "session-stream"
+    assert header_value(call["headers"], "MCP-Protocol-Version") == "2025-03-26"
+    assert call["json"] == {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {"name": "search_all", "arguments": {"query": "stream"}},
+    }
+
+
+def test_urllib_transport_bounds_json_response_size():
+    class OversizedHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b"x" * 16)
+
+        def log_message(self, _format, *args):
+            return
+
+    server = HTTPServer(("127.0.0.1", 0), OversizedHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with pytest.raises(OpenBrainHTTPError, match="max_response_bytes"):
+            UrllibTransport(max_response_bytes=8).get(
+                f"http://127.0.0.1:{server.server_port}/health",
+                headers={},
+                timeout=2,
+            )
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+
+
+def test_urllib_transport_bounds_sse_response_size():
+    class OversizedSseHandler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            self.wfile.write(b"data: " + (b"x" * 32) + b"\n\n")
+
+        def log_message(self, _format, *args):
+            return
+
+    server = HTTPServer(("127.0.0.1", 0), OversizedSseHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with pytest.raises(OpenBrainHTTPError, match="SSE response exceeded"):
+            UrllibTransport(max_response_bytes=8).post(
+                f"http://127.0.0.1:{server.server_port}/mcp",
+                headers={"Accept": "application/json, text/event-stream"},
+                json_body={"jsonrpc": "2.0", "id": 1},
+                timeout=2,
+            )
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+
+
+def test_urllib_transport_returns_after_first_sse_event_without_waiting_for_eof():
+    class StreamingSseHandler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            self.wfile.write(b'event: message\ndata: {"jsonrpc":"2.0","id":1,"result":{}}\n\n')
+            self.wfile.flush()
+            time.sleep(1.5)
+
+        def log_message(self, _format, *args):
+            return
+
+    server = HTTPServer(("127.0.0.1", 0), StreamingSseHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        started = time.monotonic()
+        response = UrllibTransport().post(
+            f"http://127.0.0.1:{server.server_port}/mcp",
+            headers={"Accept": "application/json, text/event-stream"},
+            json_body={"jsonrpc": "2.0", "id": 1},
+            timeout=2,
+        )
+        elapsed = time.monotonic() - started
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+
+    assert elapsed < 1
+    assert response.text == 'event: message\ndata: {"jsonrpc":"2.0","id":1,"result":{}}\n\n'
 
 
 def test_remote_http_requires_explicit_opt_in_but_loopback_is_allowed():

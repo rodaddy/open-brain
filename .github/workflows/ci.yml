@@ -38,8 +38,28 @@ jobs:
       - name: Test
         run: bun test
 
+  python-package:
+    runs-on: [self-hosted, rodaddy]
+    defaults:
+      run:
+        working-directory: python/openbrain-memory
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v8.2.0
+
+      - name: Test python package
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: uv run pytest -q
+
+      - name: Build python package
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: uv build
+
   deploy:
-    needs: check
+    needs: [check, python-package]
     runs-on: [self-hosted, rodaddy]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     env:
