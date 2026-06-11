@@ -13,11 +13,17 @@ from .client import (
     OpenBrainProtocolError,
     OpenBrainToolError,
 )
+from .dream import DreamAction, DreamClient, DreamEngine, DreamPolicy, DreamRun
 from .policy import RetryExhaustedError, RetryPolicy, redact_text, redact_value
 from .spool import JsonlSpool, SpoolRecord, replay_records
 
 __all__ = [
     "AgentMemory",
+    "DreamAction",
+    "DreamClient",
+    "DreamEngine",
+    "DreamPolicy",
+    "DreamRun",
     "MemoryClient",
     "MemoryContext",
     "MemoryItem",

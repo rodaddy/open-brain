@@ -30,6 +30,45 @@ memory.wrap_session("Ready for PR review.")
 prompt_context = context.as_prompt_text()
 ```
 
+## DreamEngine
+
+`DreamEngine` wraps Open Brain curation tools with a dry-run-first API. The
+default `dream_once()` call gathers stale entries, tier recommendations,
+duplicates, and optional namespace promotion candidates without mutating tiers
+or promotions.
+
+```python
+from openbrain_memory import DreamEngine, OpenBrainClient
+
+client = OpenBrainClient(
+    "https://brain.example",
+    token="...",
+    namespace="bilby",
+    agent_id="bilby",
+    role="n8n",
+)
+dreams = DreamEngine(client)
+
+plan = dreams.dream_once(namespace="bilby")
+for action in plan.actions:
+    print(action.as_dict())
+```
+
+`dream_once()` is dry-run-only in the first release, so it never applies a whole
+dream cycle in bulk. When `namespace` is supplied it only plans namespace
+promotion actions because tier recommendations are not namespace-scoped by the
+Open Brain tool contract. Namespace promotion planning calls `scan_namespace`,
+which requires an admin or n8n-capable Open Brain role.
+
+Mutation is opt-in at the wrapper level. `set_tier()` and `promote_entry()` only
+write to Open Brain when called directly with `dry_run=False`. There is no
+archive/apply behavior by default.
+
+```python
+dreams.set_tier("thoughts", "<entry-id>", "hot", dry_run=False)
+dreams.promote_entry("thoughts", "<entry-id>", reason="useful", dry_run=False)
+```
+
 ## Test
 
 ```bash
