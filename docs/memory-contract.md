@@ -84,6 +84,8 @@ Open Brain is the **durable operational memory** for PAI agents. It stores:
 Codex should use Open Brain through daemon-mode `mcp2cli open-brain`, not direct
 MCP server config.
 
+### Quickstart
+
 Start or resume a lane:
 
 ```bash
@@ -134,6 +136,33 @@ configured Open Brain service:
 OPEN_BRAIN_CODEX_SMOKE_WRITE=1 bun run codex-memory-smoke
 ```
 
+Run the memory eval suite when changing retrieval, synthesis, citation, or
+Codex workflow fixtures:
+
+```bash
+bun run eval:memory
+bun run eval:memory -- --fixture eval/open-brain/fixtures/codex-workflows.json
+```
+
+Treat eval failures as contract failures. Recall and precision failures mean the
+retriever is not surfacing the right evidence; temporal, contradiction, and
+namespace failures mean Codex cannot safely trust the answer surface; citation
+failures mean user-facing memory answers are not auditable.
+
+### Short-Term Versus Long-Term Memory
+
+Short-term Codex memory is the active session lane plus recent session events.
+Use `session_start`, `append_session_event`, `session_context`, and
+`session_wrap` for active work, compaction recovery, and checkpoint summaries.
+
+Long-term memory is distilled project knowledge: decisions, reusable facts,
+relationships, validated artifacts, and promoted shared knowledge. Use
+`log_decision`, `log_thought`, entity/link tools, and promotion flows when a
+fact should survive beyond the current lane. Do not promote raw chat logs,
+secrets, private source identifiers, or unvalidated guesses.
+
+### Citation And Answering Rules
+
 Memory-derived facts should be cited with the returned source identity: for
 Open Brain entries, cite `source_ref.source`, `source_ref.type`,
 `source_ref.id`, and when useful `source_ref.namespace`; for qmd results, cite
@@ -149,6 +178,35 @@ cites every bullet with a `source_ref`, and returns `known_gaps` / `uncertainty`
 when evidence is missing, stale, mixed, or unsafe to cite. When no readable or
 citable evidence is available, `answer` is `null`; the tool must not fabricate
 uncited facts.
+
+### Difference From Hermes Agents
+
+Hermes agents are long-running services that can keep platform state, channels,
+and event loops warm. Codex sessions are bounded coding runs that may compact or
+end abruptly. Codex should therefore treat Open Brain as an explicit durable
+handoff layer: read it when prior decisions matter, write only distilled events
+and checkpoints, and cite memory-derived claims in final answers.
+
+Hermes can react continuously to messages and scheduled work. Codex should not
+auto-write every turn or treat memory as live truth. It must verify drift-prone
+facts when cheap, surface stale or conflicting evidence, and keep repo-local
+policy files as the behavior source of truth.
+
+### Failure-Mode Checklist
+
+- `mcp2cli` or Open Brain unavailable: do not invent memory state; continue from
+  repo/live evidence and note that durable memory lookup or capture failed.
+- Missing readable evidence: return a known gap instead of synthesizing an
+  answer from vibes or unrelated search hits.
+- Stale evidence: mention that the memory may be outdated and verify live state
+  when the fact is likely to drift.
+- Contradictory evidence: surface uncertainty and cite both sides when safe.
+- Namespace denial or unreadable source: respect the denial; do not broaden
+  namespace access unless the caller's token and policy allow it.
+- Secret or raw transcript content: do not store it. Save a redacted decision,
+  artifact path, or validation receipt instead.
+- Eval regression: fix retrieval, citation, fixture, or policy behavior before
+  forcing the memory protocol in AGENTS or skills.
 
 ## Capability Audit Gate
 
