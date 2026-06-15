@@ -54,12 +54,13 @@ describe("brain_answer", () => {
     try {
       const result = await client.callTool({
         name: "brain_answer",
-        arguments: { query: "What memory system should Codex use?" },
+        arguments: { query: "What memory system should Codex use?", limit: 1 },
       });
       expect(result.isError).toBeFalsy();
       const parsed = parseToolResult(result);
       expect(parsed.answer).toContain("[1]");
       expect(parsed.answer).toContain("Prefer Open Brain");
+      expect(parsed.known_gaps).toEqual([]);
       expect(parsed.citations).toHaveLength(1);
       expect(parsed.citations[0].source_ref).toMatchObject({
         source: "brain",
@@ -101,7 +102,11 @@ describe("brain_answer", () => {
       });
       expect(result.isError).toBeFalsy();
       expect(queries.some(({ params }) => params.includes("skippy"))).toBe(true);
-      expect(queries.some(({ sql }) => sql.includes("namespace"))).toBe(true);
+      expect(
+        queries.some(({ sql }) =>
+          /WHERE[\s\S]*\.namespace\s*=/.test(sql),
+        ),
+      ).toBe(true);
     } finally {
       await cleanup();
     }
@@ -144,7 +149,7 @@ describe("brain_answer", () => {
     }
   });
 
-  it("surfaces contradictory evidence as uncertainty", async () => {
+  it("surfaces mixed affirmative and negative evidence as uncertainty", async () => {
     const { setup } = setupClient([
       row({
         id: "yes-1",
@@ -167,6 +172,60 @@ describe("brain_answer", () => {
       expect(parsed.uncertainty.join(" ")).toContain(
         "affirmative and negative",
       );
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("does not flag reinforcing do-not and use guidance as contradiction", async () => {
+    const { setup } = setupClient([
+      row({
+        id: "avoid-1",
+        content_preview:
+          "Do not use ~/.codex-clean; use the lowercase Codex home path only.",
+      }),
+      row({
+        id: "use-1",
+        content_preview: "Use the lowercase Codex home path only.",
+      }),
+    ]);
+    const { client, cleanup } = await setup;
+    try {
+      const parsed = parseToolResult(
+        await client.callTool({
+          name: "brain_answer",
+          arguments: { query: "which codex home path should be used" },
+        }),
+      );
+      expect(parsed.uncertainty.join(" ")).not.toContain(
+        "affirmative and negative",
+      );
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("omits malformed evidence and reports a gap instead of uncited bullets", async () => {
+    const { setup } = setupClient([
+      row({
+        id: "blank-1",
+        content_preview: "   ",
+      }),
+    ]);
+    const { client, cleanup } = await setup;
+    try {
+      const parsed = parseToolResult(
+        await client.callTool({
+          name: "brain_answer",
+          arguments: { query: "malformed evidence", include_raw: true },
+        }),
+      );
+      expect(parsed.answer).toBeNull();
+      expect(parsed.citations).toEqual([]);
+      expect(parsed.known_gaps.join(" ")).toContain(
+        "lacked citation metadata or usable preview text",
+      );
+      expect(parsed.raw_results).toHaveLength(1);
     } finally {
       await cleanup();
     }

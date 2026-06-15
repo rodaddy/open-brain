@@ -23,12 +23,19 @@ interface Citation {
   stale: boolean;
 }
 
+interface Evidence {
+  row: SearchRow;
+  excerpt: string;
+  source_ref: SourceRef;
+}
+
 function scoreFor(row: SearchRow): number {
   return row.distance != null ? 1 - row.distance : (row.fts_rank ?? 0.5);
 }
 
-function sentenceFor(row: SearchRow): string {
-  return row.content_preview.replace(/\s+/g, " ").trim().slice(0, 500);
+function excerptFor(row: SearchRow): string | null {
+  const excerpt = row.content_preview.replace(/\s+/g, " ").trim().slice(0, 500);
+  return excerpt.length > 0 ? excerpt : null;
 }
 
 function rowTimestamp(row: SearchRow): Date | null {
@@ -45,20 +52,50 @@ function isStale(row: SearchRow, maxAgeDays: number): boolean {
   return ageMs > maxAgeDays * 24 * 60 * 60 * 1000;
 }
 
-function polarity(text: string): "positive" | "negative" | "unknown" {
-  const lower = text.toLowerCase();
-  if (/\b(no|not|never|disable|disabled|forbid|avoid|reject)\b/.test(lower)) {
-    return "negative";
-  }
-  if (/\b(yes|should|must|use|enable|enabled|allow|prefer|approved)\b/.test(lower)) {
-    return "positive";
-  }
-  return "unknown";
+function normalizeUseTarget(target: string): string {
+  return target
+    .toLowerCase()
+    .replace(/[`~"'()]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
-function hasContradiction(rows: SearchRow[]): boolean {
-  const polarities = new Set(rows.map((row) => polarity(row.content_preview)));
-  return polarities.has("positive") && polarities.has("negative");
+function useTargets(
+  text: string,
+  pattern: RegExp,
+): Set<string> {
+  const targets = new Set<string>();
+  for (const match of text.matchAll(pattern)) {
+    const target = normalizeUseTarget(match[1] ?? "");
+    if (target) targets.add(target);
+  }
+  return targets;
+}
+
+function hasConflictingUseTargets(evidence: Evidence[]): boolean {
+  const negativeTargets = new Set<string>();
+  const affirmativeTargets = new Set<string>();
+
+  for (const item of evidence) {
+    const lower = item.excerpt.toLowerCase();
+    for (const target of useTargets(
+      lower,
+      /\b(?:should not|must not|do not|don't|never)\s+use\s+([^.;,]+)/g,
+    )) {
+      negativeTargets.add(target);
+    }
+    for (const target of useTargets(
+      lower,
+      /\b(?:should|must)\s+use\s+([^.;,]+)/g,
+    )) {
+      affirmativeTargets.add(target);
+    }
+  }
+
+  for (const target of negativeTargets) {
+    if (affirmativeTargets.has(target)) return true;
+  }
+  return false;
 }
 
 function gapMessage(query: string): string {
@@ -70,7 +107,7 @@ export function registerBrainAnswer(server: McpServer, deps: ToolDeps): void {
     "brain_answer",
     {
       description:
-        "Answer from readable Open Brain evidence only. Returns cited extractive prose plus known gaps and uncertainty.",
+        "Render cited evidence from readable Open Brain rows only. Returns extractive bullets plus known gaps and uncertainty.",
       inputSchema: {
         query: z.string().min(1).describe("Question to answer from memory"),
         namespace: z
@@ -187,7 +224,7 @@ export function registerBrainAnswer(server: McpServer, deps: ToolDeps): void {
         };
       }
 
-      trackUsage(deps, rows, query, "search", auth.clientId);
+      trackUsage(deps, rows, query, "answer", auth.clientId);
 
       if (rows.length === 0) {
         return {
@@ -207,39 +244,78 @@ export function registerBrainAnswer(server: McpServer, deps: ToolDeps): void {
         };
       }
 
-      const citations: Citation[] = rows.map((row, index) => ({
-        index: index + 1,
-        source_ref: row.source_ref!,
-        excerpt: sentenceFor(row),
-        score: scoreFor(row),
-        stale: isStale(row, maxAgeDays),
-      }));
-      const staleCount = citations.filter((citation) => citation.stale).length;
-      const contradictory = hasContradiction(rows);
+      const evidence: Evidence[] = [];
       const knownGaps: string[] = [];
       const uncertainty: string[] = [];
+
+      for (const row of rows) {
+        const excerpt = excerptFor(row);
+        if (!row.source_ref || !excerpt) {
+          knownGaps.push(
+            `Skipped ${row.source_type}:${row.id} because it lacked citation metadata or usable preview text.`,
+          );
+          continue;
+        }
+        evidence.push({ row, excerpt, source_ref: row.source_ref });
+      }
+
+      if (evidence.length === 0) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({
+                query,
+                answer: null,
+                evidence_count: 0,
+                citations: [],
+                known_gaps: [
+                  ...knownGaps,
+                  "No retrieved evidence had both citation metadata and usable preview text.",
+                ],
+                uncertainty: [
+                  "Readable rows were retrieved, but none were safe to cite.",
+                ],
+                raw_results: args.include_raw ? rows : undefined,
+              }),
+            },
+          ],
+        };
+      }
+
+      const citations: Citation[] = evidence.map((item, index) => ({
+        index: index + 1,
+        source_ref: item.source_ref,
+        excerpt: item.excerpt,
+        score: scoreFor(item.row),
+        stale: isStale(item.row, maxAgeDays),
+      }));
+      const staleCount = citations.filter((citation) => citation.stale).length;
+      const hasMixedUseTargets = hasConflictingUseTargets(evidence);
 
       if (staleCount > 0) {
         uncertainty.push(
           `${staleCount} cited entr${staleCount === 1 ? "y is" : "ies are"} older than ${maxAgeDays} days or missing a usable timestamp.`,
         );
       }
-      if (contradictory) {
+      if (hasMixedUseTargets) {
         uncertainty.push(
-          "Retrieved evidence contains both affirmative and negative signals; verify before treating this as settled.",
+          "Retrieved evidence contains both affirmative and negative wording; verify whether these are truly contradictory before treating this as settled.",
         );
       }
-      if (rows.length < limit) {
+      if (evidence.length < rows.length) {
+        uncertainty.push(
+          "Some retrieved rows were omitted because they were not safe to cite.",
+        );
+      }
+      if (evidence.length < limit) {
         knownGaps.push(
-          `Only ${rows.length} readable evidence entr${rows.length === 1 ? "y was" : "ies were"} found for this query.`,
+          `Only ${evidence.length} citable evidence entr${evidence.length === 1 ? "y was" : "ies were"} found for this query.`,
         );
-      }
-      if (knownGaps.length === 0 && uncertainty.length === 0) {
-        knownGaps.push("No obvious gaps were detected in the cited evidence.");
       }
 
       const answer = [
-        "Based only on retrieved Open Brain evidence:",
+        "Cited Open Brain evidence:",
         "",
         ...citations.map(
           (citation) => `- ${citation.excerpt} [${citation.index}]`,

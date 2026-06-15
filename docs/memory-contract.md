@@ -75,6 +75,7 @@ Open Brain is the **durable operational memory** for PAI agents. It stores:
 | adjacent_context | Traverse link graph from a node | read |
 | search_brain | Semantic search across all tables | read |
 | search_all | Federated search (OB + qmd) | read |
+| brain_answer | Extractive cited evidence bullets from Open Brain | read |
 | log_thought | Record a learning/insight | write |
 | log_decision | Record a decision with rationale | write |
 
@@ -113,8 +114,8 @@ Search before answering when prior context matters:
 mcp2cli open-brain search_all --params '{"query":"<query>","limit":10}'
 ```
 
-Ask for an extractive, cited memory answer when Codex needs prose instead of
-raw hits:
+Ask for extractive, cited memory evidence when Codex needs a concise rendered
+answer surface instead of raw hits:
 
 ```bash
 mcp2cli open-brain brain_answer --params '{"query":"what did we decide about codex memory?","limit":5}'
@@ -143,10 +144,11 @@ identity, label/preview, creator, namespace, and timestamps for the readable row
 They do not expose raw promotion provenance such as a private source namespace
 or source id.
 
-`brain_answer` answers only from readable Open Brain rows, cites every material
-bullet with a `source_ref`, and returns `known_gaps` / `uncertainty` when
-evidence is missing, stale, or contradictory. When no readable evidence is
-available, `answer` is `null`; the tool must not fabricate uncited facts.
+`brain_answer` renders only citable snippets from readable Open Brain rows. It
+cites every bullet with a `source_ref`, and returns `known_gaps` / `uncertainty`
+when evidence is missing, stale, mixed, or unsafe to cite. When no readable or
+citable evidence is available, `answer` is `null`; the tool must not fabricate
+uncited facts.
 
 ## Capability Audit Gate
 
@@ -156,6 +158,7 @@ or deciding what Codex memory already supports, inspect current capabilities:
 ```bash
 mcp2cli open-brain --help
 mcp2cli schema open-brain.search_all
+mcp2cli schema open-brain.brain_answer
 mcp2cli schema open-brain.session_start
 mcp2cli schema open-brain.append_session_event
 mcp2cli schema open-brain.session_context

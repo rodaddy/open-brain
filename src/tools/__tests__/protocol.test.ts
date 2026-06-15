@@ -161,6 +161,59 @@ describe("Protocol tests: write tools via InMemoryTransport", () => {
     });
   });
 
+  describe("brain_answer via protocol", () => {
+    it("returns cited evidence through the full tool registry", async () => {
+      const searchRows = [
+        {
+          source_type: "thought",
+          id: "answer-uuid",
+          namespace: "proto-admin",
+          content_preview: "Use Open Brain for cited Codex memory.",
+          distance: 0.05,
+          tags: ["memory"],
+          created_at: "2026-01-01T00:00:00Z",
+        },
+      ];
+      const auth: AuthInfo = { role: "admin", clientId: "proto-admin" };
+      const { client, cleanup } = await createProtocolClient(auth, searchRows);
+
+      try {
+        const result = await client.callTool({
+          name: "brain_answer",
+          arguments: { query: "codex memory" },
+        });
+
+        expect(result.isError).toBeFalsy();
+        const parsed = JSON.parse((result.content as any)[0].text);
+        expect(parsed.answer).toContain("[1]");
+        expect(parsed.citations[0].source_ref).toMatchObject({
+          source: "brain",
+          type: "thought",
+          id: "answer-uuid",
+          namespace: "proto-admin",
+        });
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("returns validation error for empty query", async () => {
+      const auth: AuthInfo = { role: "admin", clientId: "proto-admin" };
+      const { client, cleanup } = await createProtocolClient(auth);
+
+      try {
+        const result = await client.callTool({
+          name: "brain_answer",
+          arguments: { query: "" },
+        });
+
+        expect(result.isError).toBe(true);
+      } finally {
+        await cleanup();
+      }
+    });
+  });
+
   describe("find_person via protocol", () => {
     it("name mode returns valid JSON array with admin auth", async () => {
       const personRows = [
