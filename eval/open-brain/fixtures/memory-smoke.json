@@ -1,0 +1,321 @@
+{
+  "schema_version": 1,
+  "corpus_id": "open-brain-memory-smoke-v1",
+  "generated_at": "2026-06-15T00:00:00.000Z",
+  "corpus": [
+    {
+      "id": "decision-codex-home",
+      "namespace": "skippy",
+      "type": "decision",
+      "title": "Codex home path decision",
+      "content": "Use the lowercase Codex home path only. ~/.codex-clean is the clean sidecar and must not be treated as the live home.",
+      "tags": ["codex", "policy", "path"],
+      "aliases": ["lowercase Codex home", "codex home"],
+      "created_at": "2026-06-01T10:00:00.000Z",
+      "updated_at": "2026-06-10T10:00:00.000Z",
+      "source_ref": {
+        "source": "brain",
+        "type": "decision",
+        "id": "decision-codex-home",
+        "namespace": "skippy",
+        "label": "Codex home path decision",
+        "preview": "Use the lowercase Codex home path only.",
+        "created_at": "2026-06-01T10:00:00.000Z",
+        "last_updated_at": "2026-06-10T10:00:00.000Z"
+      }
+    },
+    {
+      "id": "thought-temp-root",
+      "namespace": "skippy",
+      "type": "thought",
+      "title": "ThunderBolt temp root",
+      "content": "Codex temporary worktrees, review checkouts, generated patches, downloads, and one-off test artifacts belong under /Volumes/ThunderBolt/_tmp.",
+      "tags": ["codex", "temp", "workflow"],
+      "aliases": ["tmp root", "temporary worktree path"],
+      "created_at": "2026-06-11T08:00:00.000Z",
+      "source_ref": {
+        "source": "brain",
+        "type": "thought",
+        "id": "thought-temp-root",
+        "namespace": "skippy",
+        "label": "ThunderBolt temp root",
+        "preview": "Codex temporary work belongs under /Volumes/ThunderBolt/_tmp.",
+        "created_at": "2026-06-11T08:00:00.000Z"
+      }
+    },
+    {
+      "id": "decision-pai-memory",
+      "namespace": "collab",
+      "type": "decision",
+      "title": "PAI memory operating model",
+      "content": "Open Brain is the durable operational memory for PAI agents. Memory-derived answers must cite source references and call out known gaps.",
+      "tags": ["memory", "open-brain", "citations"],
+      "aliases": ["durable memory", "open brain memory"],
+      "created_at": "2026-06-14T12:00:00.000Z",
+      "source_ref": {
+        "source": "brain",
+        "type": "decision",
+        "id": "decision-pai-memory",
+        "namespace": "collab",
+        "label": "PAI memory operating model",
+        "preview": "Open Brain is the durable operational memory for PAI agents.",
+        "created_at": "2026-06-14T12:00:00.000Z"
+      }
+    },
+    {
+      "id": "person-rico",
+      "namespace": "collab",
+      "type": "relationship",
+      "title": "Rico profile",
+      "content": "Rico prefers board-first goal runs, live evidence, and critical review gates before merging production-impacting PRs.",
+      "tags": ["person", "rico", "workflow"],
+      "aliases": ["Rico", "rodaddy"],
+      "created_at": "2026-06-13T09:00:00.000Z",
+      "source_ref": {
+        "source": "brain",
+        "type": "relationship",
+        "id": "person-rico",
+        "namespace": "collab",
+        "label": "Rico profile",
+        "preview": "Rico prefers board-first goal runs and live evidence.",
+        "created_at": "2026-06-13T09:00:00.000Z"
+      }
+    },
+    {
+      "id": "person-rika",
+      "namespace": "collab",
+      "type": "relationship",
+      "title": "Rika profile",
+      "content": "Rika is a synthetic designer persona who prefers playful mockups and is unrelated to Rico's infrastructure workflow.",
+      "tags": ["person", "rika", "synthetic"],
+      "aliases": ["Rika"],
+      "created_at": "2026-06-13T09:05:00.000Z",
+      "source_ref": {
+        "source": "brain",
+        "type": "relationship",
+        "id": "person-rika",
+        "namespace": "collab",
+        "label": "Rika profile",
+        "preview": "Rika is a synthetic designer persona.",
+        "created_at": "2026-06-13T09:05:00.000Z"
+      }
+    },
+    {
+      "id": "decision-runner-old",
+      "namespace": "collab",
+      "type": "decision",
+      "title": "Old runner policy",
+      "content": "Old note: use GitHub-hosted runners for King Capital automation.",
+      "tags": ["runner", "stale"],
+      "created_at": "2024-01-01T00:00:00.000Z",
+      "source_ref": {
+        "source": "brain",
+        "type": "decision",
+        "id": "decision-runner-old",
+        "namespace": "collab",
+        "label": "Old runner policy",
+        "preview": "Old note: use GitHub-hosted runners.",
+        "created_at": "2024-01-01T00:00:00.000Z"
+      }
+    },
+    {
+      "id": "decision-runner-new",
+      "namespace": "collab",
+      "type": "decision",
+      "title": "Current runner policy",
+      "content": "Current policy: King Capital automation should use the King self-hosted runner fleet, not personal local quota.",
+      "tags": ["runner", "current", "king-capital"],
+      "created_at": "2026-06-12T00:00:00.000Z",
+      "source_ref": {
+        "source": "brain",
+        "type": "decision",
+        "id": "decision-runner-new",
+        "namespace": "collab",
+        "label": "Current runner policy",
+        "preview": "King Capital automation should use the King self-hosted runner fleet.",
+        "created_at": "2026-06-12T00:00:00.000Z"
+      }
+    },
+    {
+      "id": "contradict-use-home",
+      "namespace": "skippy",
+      "type": "thought",
+      "title": "Use live Codex home",
+      "content": "Use the lowercase Codex home path only.",
+      "tags": ["codex", "contradiction-fixture"],
+      "created_at": "2026-06-14T00:00:00.000Z",
+      "source_ref": {
+        "source": "brain",
+        "type": "thought",
+        "id": "contradict-use-home",
+        "namespace": "skippy",
+        "label": "Use live Codex home",
+        "preview": "Use the lowercase Codex home path only.",
+        "created_at": "2026-06-14T00:00:00.000Z"
+      }
+    },
+    {
+      "id": "contradict-do-not-use-home",
+      "namespace": "skippy",
+      "type": "thought",
+      "title": "Conflicting Codex home claim",
+      "content": "Do not use the lowercase Codex home path only.",
+      "tags": ["codex", "contradiction-fixture"],
+      "created_at": "2026-06-14T00:05:00.000Z",
+      "source_ref": {
+        "source": "brain",
+        "type": "thought",
+        "id": "contradict-do-not-use-home",
+        "namespace": "skippy",
+        "label": "Conflicting Codex home claim",
+        "preview": "Do not use the lowercase Codex home path only.",
+        "created_at": "2026-06-14T00:05:00.000Z"
+      }
+    },
+    {
+      "id": "private-secret-project",
+      "namespace": "private-agent",
+      "type": "project",
+      "title": "Private project fixture",
+      "content": "Private namespace fixture that must never appear for a skippy-only caller.",
+      "tags": ["private", "namespace"],
+      "created_at": "2026-06-15T00:00:00.000Z",
+      "source_ref": {
+        "source": "brain",
+        "type": "project",
+        "id": "private-secret-project",
+        "namespace": "private-agent",
+        "label": "Private project fixture",
+        "preview": "Private namespace fixture.",
+        "created_at": "2026-06-15T00:00:00.000Z"
+      }
+    },
+    {
+      "id": "junk-browser-memory",
+      "namespace": "collab",
+      "type": "thought",
+      "title": "Browser memory pressure",
+      "content": "Browser tab sleeping and discarding can reduce local macOS memory pressure.",
+      "tags": ["browser", "memory", "macos"],
+      "created_at": "2026-06-14T15:00:00.000Z",
+      "source_ref": {
+        "source": "brain",
+        "type": "thought",
+        "id": "junk-browser-memory",
+        "namespace": "collab",
+        "label": "Browser memory pressure",
+        "preview": "Browser tab sleeping can reduce memory pressure.",
+        "created_at": "2026-06-14T15:00:00.000Z"
+      }
+    },
+    {
+      "id": "scale-codex-memory-001",
+      "namespace": "collab",
+      "type": "session",
+      "title": "Scale fixture target",
+      "content": "Scale target: Codex durable memory eval harness should remain fast over a synthetic expanded corpus.",
+      "tags": ["scale", "eval", "target"],
+      "created_at": "2026-06-15T01:00:00.000Z",
+      "source_ref": {
+        "source": "brain",
+        "type": "session",
+        "id": "scale-codex-memory-001",
+        "namespace": "collab",
+        "label": "Scale fixture target",
+        "preview": "Codex durable memory eval harness should remain fast.",
+        "created_at": "2026-06-15T01:00:00.000Z"
+      }
+    }
+  ],
+  "probes": [
+    {
+      "id": "recall-temp-root",
+      "category": "recall",
+      "query": "Where should Codex put temporary worktrees?",
+      "readable_namespaces": ["skippy", "collab"],
+      "top_k": 3,
+      "relevant_ids": ["thought-temp-root"],
+      "min_recall_at_k": 1,
+      "min_precision_at_k": 0.33
+    },
+    {
+      "id": "precision-memory-model",
+      "category": "precision",
+      "query": "Open Brain durable operational memory citations known gaps",
+      "readable_namespaces": ["skippy", "collab"],
+      "top_k": 3,
+      "relevant_ids": ["decision-pai-memory"],
+      "junk_ids": ["junk-browser-memory"],
+      "min_recall_at_k": 1,
+      "min_precision_at_k": 0.33
+    },
+    {
+      "id": "temporal-runner-policy",
+      "category": "temporal",
+      "query": "current King Capital runner policy",
+      "readable_namespaces": ["collab"],
+      "top_k": 3,
+      "relevant_ids": ["decision-runner-new"],
+      "expected_uncertainty": ["stale"],
+      "max_age_days": 30,
+      "as_of": "2026-06-15T00:00:00.000Z",
+      "min_recall_at_k": 1,
+      "min_precision_at_k": 0.33
+    },
+    {
+      "id": "identity-rico-rika",
+      "category": "identity",
+      "query": "Rico board first workflow preference",
+      "readable_namespaces": ["collab"],
+      "top_k": 3,
+      "relevant_ids": ["person-rico"],
+      "junk_ids": ["person-rika"],
+      "min_recall_at_k": 1,
+      "min_precision_at_k": 0.33
+    },
+    {
+      "id": "citation-brain-answer",
+      "category": "citation",
+      "query": "What should memory-derived Open Brain answers include?",
+      "readable_namespaces": ["collab"],
+      "top_k": 3,
+      "relevant_ids": ["decision-pai-memory"],
+      "expected_citation_ids": ["decision-pai-memory"],
+      "min_recall_at_k": 1,
+      "min_precision_at_k": 0.33
+    },
+    {
+      "id": "contradiction-codex-home",
+      "category": "contradiction",
+      "query": "should Codex use the lowercase Codex home path only",
+      "readable_namespaces": ["skippy"],
+      "top_k": 5,
+      "relevant_ids": ["contradict-use-home", "contradict-do-not-use-home"],
+      "expected_uncertainty": ["contradiction"],
+      "min_recall_at_k": 1,
+      "min_precision_at_k": 0.4
+    },
+    {
+      "id": "namespace-private-leak",
+      "category": "namespace",
+      "query": "private namespace fixture project",
+      "readable_namespaces": ["skippy"],
+      "top_k": 5,
+      "relevant_ids": [],
+      "expected_forbidden_ids": ["private-secret-project"],
+      "min_recall_at_k": 1,
+      "min_precision_at_k": 1
+    },
+    {
+      "id": "scale-smoke",
+      "category": "scale",
+      "query": "synthetic expanded corpus Codex durable memory eval target",
+      "readable_namespaces": ["collab"],
+      "top_k": 5,
+      "relevant_ids": ["scale-codex-memory-001"],
+      "min_recall_at_k": 1,
+      "min_precision_at_k": 0.2,
+      "max_latency_ms": 50
+    }
+  ]
+}
