@@ -76,7 +76,7 @@ function recallAtK(retrievedIds: string[], relevantIds: string[]): number {
 
 function precisionAtK(retrievedIds: string[], relevantIds: string[]): number {
   if (retrievedIds.length === 0) return relevantIds.length === 0 ? 1 : 0;
-  if (relevantIds.length === 0) return 1;
+  if (relevantIds.length === 0) return 0;
   const hits = retrievedIds.filter((id) => relevantIds.includes(id)).length;
   return hits / retrievedIds.length;
 }
@@ -105,17 +105,23 @@ function hasUseContradiction(entries: EvalCorpusEntry[]): boolean {
   const affirmative = new Set<string>();
   const negative = new Set<string>();
   for (const entry of entries) {
-    for (const target of normalizedUseTargets(
+    const negativeTargets = normalizedUseTargets(
       entry.content,
+      /\b(?:should not|must not|do not|don't|never)\s+use\s+([^.;,]+)/g,
+    );
+    for (const target of negativeTargets) {
+      negative.add(target);
+    }
+
+    const withoutNegativeUse = entry.content.replace(
+      /\b(?:should not|must not|do not|don't|never)\s+use\s+[^.;,]+/gi,
+      " ",
+    );
+    for (const target of normalizedUseTargets(
+      withoutNegativeUse,
       /\b(?:should\s+use|must\s+use|use)\s+([^.;,]+)/g,
     )) {
       affirmative.add(target);
-    }
-    for (const target of normalizedUseTargets(
-      entry.content,
-      /\b(?:should not|must not|do not|don't|never)\s+use\s+([^.;,]+)/g,
-    )) {
-      negative.add(target);
     }
   }
   return Array.from(negative).some((target) => affirmative.has(target));
@@ -150,6 +156,14 @@ export function scoreProbe(corpus: EvalCorpusEntry[], probe: EvalProbe): ProbeSc
   }
   if (forbiddenIds.some((id) => retrievedIds.includes(id))) {
     failures.push("retrieved forbidden namespace evidence");
+  }
+  if (probe.expect_no_results && retrievedIds.length > 0) {
+    failures.push("expected no retrievable evidence");
+  }
+  for (const junkId of probe.junk_ids ?? []) {
+    if (retrievedIds.includes(junkId)) {
+      failures.push(`retrieved declared junk ${junkId}`);
+    }
   }
   for (const expectedCitation of probe.expected_citation_ids ?? []) {
     if (!citationIds.includes(expectedCitation)) {

@@ -42,6 +42,7 @@ export interface EvalProbe {
   top_k: number;
   relevant_ids: string[];
   junk_ids?: string[];
+  expect_no_results?: boolean;
   expected_citation_ids?: string[];
   expected_uncertainty?: string[];
   expected_forbidden_ids?: string[];

@@ -243,7 +243,7 @@
       "category": "precision",
       "query": "Open Brain durable operational memory citations known gaps",
       "readable_namespaces": ["skippy", "collab"],
-      "top_k": 3,
+      "top_k": 1,
       "relevant_ids": ["decision-pai-memory"],
       "junk_ids": ["junk-browser-memory"],
       "min_recall_at_k": 1,
@@ -267,7 +267,7 @@
       "category": "identity",
       "query": "Rico board first workflow preference",
       "readable_namespaces": ["collab"],
-      "top_k": 3,
+      "top_k": 1,
       "relevant_ids": ["person-rico"],
       "junk_ids": ["person-rika"],
       "min_recall_at_k": 1,
@@ -303,8 +303,9 @@
       "top_k": 5,
       "relevant_ids": [],
       "expected_forbidden_ids": ["private-secret-project"],
+      "expect_no_results": true,
       "min_recall_at_k": 1,
-      "min_precision_at_k": 1
+      "min_precision_at_k": 0
     },
     {
       "id": "scale-smoke",
