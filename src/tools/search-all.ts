@@ -275,7 +275,7 @@ async function searchOB(
       tier,
       0,
       namespace,
-      true,
+      false,
     );
   } catch (err) {
     logger.warn("searchOB_failed", {
@@ -295,7 +295,8 @@ async function searchOB(
       source: "brain" as const,
       type: row.source_type,
       id: row.id,
-      created_at: new Date(row.created_at).toISOString(),
+      label: row.content_preview.slice(0, 120),
+      preview: row.content_preview.slice(0, 300),
     },
     id: row.id,
     tags: row.tags ?? undefined,

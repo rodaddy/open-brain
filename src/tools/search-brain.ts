@@ -79,8 +79,10 @@ export interface SourceRef {
   id: string;
   namespace?: string;
   created_by?: string | null;
-  created_at: string;
-  promoted_from?: Record<string, unknown> | null;
+  created_at?: string;
+  last_updated_at?: string;
+  label: string;
+  preview: string;
 }
 
 export interface SearchRow {
@@ -91,7 +93,7 @@ export interface SearchRow {
   tags: string[] | null;
   created_by?: string | null;
   created_at: string;
-  promoted_from?: Record<string, unknown> | null;
+  updated_at?: string | null;
   usefulness: number;
   tier?: string;
   distance?: number;
@@ -125,6 +127,13 @@ function linkKey(type: string, id: string): string {
   return `${type}:${id}`;
 }
 
+function toIsoString(value: unknown): string | undefined {
+  if (typeof value !== "string" && !(value instanceof Date)) return undefined;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return undefined;
+  return date.toISOString();
+}
+
 function withSourceRefs(rows: SearchRow[]): SearchRow[] {
   return rows.map((row) => ({
     ...row,
@@ -134,8 +143,10 @@ function withSourceRefs(rows: SearchRow[]): SearchRow[] {
       id: row.id,
       namespace: row.namespace,
       created_by: row.created_by,
-      created_at: new Date(row.created_at).toISOString(),
-      promoted_from: row.promoted_from ?? null,
+      created_at: toIsoString(row.created_at),
+      last_updated_at: toIsoString(row.updated_at) ?? toIsoString(row.created_at),
+      label: row.content_preview.slice(0, 120),
+      preview: row.content_preview.slice(0, 300),
     },
   }));
 }
@@ -273,7 +284,7 @@ function buildTableCTE(
     ${alias}.tags,
     ${alias}.created_by,
     ${alias}.created_at,
-    ${alias}.promoted_from,
+    ${alias}.updated_at,
     ${alias}.tier,
     ${alias}.embedding <=> (SELECT emb FROM query_embedding) AS distance,
     COALESCE(${alias}.usefulness_score, 0.5) AS usefulness,
@@ -318,7 +329,7 @@ function buildFtsCTE(
     ${alias}.tags,
     ${alias}.created_by,
     ${alias}.created_at,
-    ${alias}.promoted_from,
+    ${alias}.updated_at,
     ${alias}.tier,
     ts_rank_cd(${alias}.search_vector, plainto_tsquery('english', (SELECT q FROM fts_query))) AS fts_rank,
     COALESCE(${alias}.usefulness_score, 0.5) AS usefulness,

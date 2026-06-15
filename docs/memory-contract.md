@@ -116,20 +116,25 @@ mcp2cli open-brain search_all --params '{"query":"<query>","limit":10}'
 Dry-run the Codex lifecycle command sequence without writing memory:
 
 ```bash
-bun run scripts/codex-memory-smoke.ts
+bun run codex-memory-smoke
 ```
 
 Execute the disposable live smoke only when intentionally validating the
 configured Open Brain service:
 
 ```bash
-OPEN_BRAIN_CODEX_SMOKE_WRITE=1 bun run scripts/codex-memory-smoke.ts
+OPEN_BRAIN_CODEX_SMOKE_WRITE=1 bun run codex-memory-smoke
 ```
 
 Memory-derived facts should be cited with the returned source identity: for
 Open Brain entries, cite `source_ref.source`, `source_ref.type`,
 `source_ref.id`, and when useful `source_ref.namespace`; for qmd results, cite
 `source_ref.path` and `source_ref.collection`.
+
+Search result `source_ref` values intentionally expose only citation-safe
+identity, label/preview, creator, namespace, and timestamps for the readable row.
+They do not expose raw promotion provenance such as a private source namespace
+or source id.
 
 ## Capability Audit Gate
 

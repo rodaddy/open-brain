@@ -171,10 +171,7 @@ describe("search_brain", () => {
             ...row,
             namespace: "collab",
             created_by: "codex",
-            promoted_from: {
-              source_namespace: "skippy",
-              source_id: "00000000-0000-4000-8000-000000000010",
-            },
+            updated_at: "2026-01-02T00:00:00Z",
           })),
         ),
         auth,
@@ -202,10 +199,46 @@ describe("search_brain", () => {
           namespace: "collab",
           created_by: "codex",
           created_at: "2026-01-01T00:00:00.000Z",
-          promoted_from: {
-            source_namespace: "skippy",
-            source_id: "00000000-0000-4000-8000-000000000010",
+          last_updated_at: "2026-01-02T00:00:00.000Z",
+          label: "Content preview 0",
+          preview: "Content preview 0",
+        });
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("does not fail when a search row has an invalid timestamp", async () => {
+      const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
+      const { client, cleanup } = await setup(
+        searchPool([
+          {
+            source_type: "thought",
+            id: "uuid-invalid-date",
+            namespace: "collab",
+            content_preview: "Invalid timestamp row",
+            distance: 0.1,
+            tags: [],
+            created_at: "not-a-date",
           },
+        ]),
+        auth,
+      );
+
+      try {
+        const result = await client.callTool({
+          name: "search_brain",
+          arguments: { query: "invalid date" },
+        });
+        expect(result.isError).toBeFalsy();
+        const parsed = parseToolResult(result);
+        expect(parsed[0].source_ref).toEqual({
+          source: "brain",
+          type: "thought",
+          id: "uuid-invalid-date",
+          namespace: "collab",
+          label: "Invalid timestamp row",
+          preview: "Invalid timestamp row",
         });
       } finally {
         await cleanup();

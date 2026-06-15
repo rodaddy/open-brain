@@ -47,7 +47,7 @@ const steps: SmokeStep[] = [
     },
   },
   {
-    name: "load lane context",
+    name: "load lane context before checkpoint",
     tool: "session_context",
     params: {
       session_key: sessionKey,
@@ -67,6 +67,24 @@ const steps: SmokeStep[] = [
         "Codex durable memory captures distilled events instead of raw transcripts.",
       ],
       next_steps: ["Delete or ignore disposable smoke lane if no longer useful."],
+    },
+  },
+  {
+    name: "reload lane context after checkpoint",
+    tool: "session_context",
+    params: {
+      session_key: sessionKey,
+      include_events: true,
+      event_limit: 10,
+    },
+  },
+  {
+    name: "search saved checkpoint context",
+    tool: "search_all",
+    params: {
+      query: sessionKey,
+      sources: "brain",
+      limit: 5,
     },
   },
 ];

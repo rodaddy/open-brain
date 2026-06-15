@@ -194,20 +194,24 @@ describe("search_all", () => {
 
     it("returns single brain result correctly", async () => {
       mockBunSpawn(1, "");
+      const queries: string[] = [];
       const pool = {
-        query: async () => ({
-          rows: [
-            {
-              source_type: "decision",
-              id: "dec-1",
-              content_preview: "Use Bun over Node",
-              distance: 0.08,
-              tags: ["runtime"],
-              created_at: "2026-01-10",
-              usefulness: 0.7,
-            },
-          ],
-        }),
+        query: async (sql: string) => {
+          queries.push(sql);
+          return {
+            rows: [
+              {
+                source_type: "decision",
+                id: "dec-1",
+                content_preview: "Use Bun over Node",
+                distance: 0.08,
+                tags: ["runtime"],
+                created_at: "2026-01-10",
+                usefulness: 0.7,
+              },
+            ],
+          };
+        },
       };
       const { client, cleanup } = await setupClient(pool, {
         role: "admin",
@@ -230,8 +234,13 @@ describe("search_all", () => {
           type: "decision",
           id: "dec-1",
           created_at: "2026-01-10T00:00:00.000Z",
-          promoted_from: null,
+          last_updated_at: "2026-01-10T00:00:00.000Z",
+          label: "Use Bun over Node",
+          preview: "Use Bun over Node",
         });
+        expect(queries.some((sql) => sql.includes("FROM ob_links"))).toBe(
+          false,
+        );
       } finally {
         await cleanup();
       }
