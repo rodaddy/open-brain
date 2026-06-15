@@ -93,7 +93,9 @@ export function registerLogDecision(server: McpServer, deps: ToolDeps): void {
         [
           args.title,
           args.rationale,
-          args.alternatives ?? [],
+          // alternatives is a jsonb column -- a raw JS array serializes as a
+          // Postgres array literal ("{..}"), invalid JSON whenever non-empty.
+          JSON.stringify(args.alternatives ?? []),
           args.tags ?? [],
           args.context ?? null,
           auth.clientId,

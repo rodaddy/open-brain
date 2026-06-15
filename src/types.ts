@@ -41,6 +41,7 @@ export interface PoolHealth {
 export interface HealthStatus {
   status: "healthy" | "degraded";
   database: PoolHealth;
+  embedding: { configured: boolean; connected: boolean };
   litellm: { connected: boolean };
   timestamp: string;
 }

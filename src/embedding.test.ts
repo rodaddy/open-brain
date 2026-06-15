@@ -3,11 +3,17 @@ import {
   generateEmbedding,
   generateEmbeddingWithMetadata,
   contentHash,
+  EMBEDDING_MODEL,
+  EMBEDDING_DIMENSIONS,
 } from "./embedding.ts";
 
 // Helper: create a mock 768-length embedding array
 function make768(): number[] {
   return Array.from({ length: 768 }, (_, i) => i * 0.001);
+}
+
+function makeEmbedding(length: number): number[] {
+  return Array.from({ length }, (_, i) => i * 0.001);
 }
 
 // Helper: mock globalThis.fetch while satisfying Bun's extended fetch type
@@ -28,7 +34,7 @@ describe("generateEmbedding", () => {
     globalThis.fetch = originalFetch;
   });
 
-  it("returns 768-length number array on successful LiteLLM response", async () => {
+  it("returns 768-length number array on successful embedding response", async () => {
     const embedding = make768();
     mockFetch(
       async () =>
@@ -45,7 +51,7 @@ describe("generateEmbedding", () => {
     expect(result![767]).toBeCloseTo(0.767, 5);
   });
 
-  it("returns null when LiteLLM returns non-200 status", async () => {
+  it("returns null when embedding provider returns non-200 status", async () => {
     mockFetch(
       async () => new Response("Internal Server Error", { status: 500 }),
     );
@@ -89,7 +95,7 @@ describe("generateEmbedding", () => {
     expect(result).toBeNull();
   });
 
-  it("calls LiteLLM with model 'embeddings' and dimensions 768", async () => {
+  it("calls embedding provider with configured model and dimensions", async () => {
     let capturedBody: Record<string, unknown> | null = null;
     let capturedUrl = "";
 
@@ -109,9 +115,82 @@ describe("generateEmbedding", () => {
 
     expect(capturedUrl).toBe("http://fake:4000/embeddings");
     expect(capturedBody).not.toBeNull();
-    expect(capturedBody!.model).toBe("gemini-embedding-001");
-    expect(capturedBody!.dimensions).toBe(768);
+    // EMBEDDING_MODEL is captured from env at module load -- assert the
+    // exported constant so the test passes regardless of local .env config.
+    expect(capturedBody!.model).toBe(EMBEDDING_MODEL);
+    expect(capturedBody!.dimensions).toBe(EMBEDDING_DIMENSIONS);
     expect(capturedBody!.input).toBe("test input");
+  });
+
+  it("prefers EMBEDDING_BASE_URL over LITELLM_URL and normalizes trailing slash", async () => {
+    const originalEmbeddingUrl = process.env.EMBEDDING_BASE_URL;
+    const originalLiteLlmUrl = process.env.LITELLM_URL;
+    let capturedUrl = "";
+
+    process.env.EMBEDDING_BASE_URL = "http://embedding-provider:8791/v1/";
+    process.env.LITELLM_URL = "http://litellm:4000";
+
+    try {
+      mockFetch(async (input) => {
+        capturedUrl = typeof input === "string" ? input : input.toString();
+        return new Response(
+          JSON.stringify({ data: [{ embedding: make768() }] }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      });
+
+      const result = await generateEmbedding("test input");
+
+      expect(result).not.toBeNull();
+      expect(capturedUrl).toBe("http://embedding-provider:8791/v1/embeddings");
+    } finally {
+      if (originalEmbeddingUrl === undefined) {
+        delete process.env.EMBEDDING_BASE_URL;
+      } else {
+        process.env.EMBEDDING_BASE_URL = originalEmbeddingUrl;
+      }
+      if (originalLiteLlmUrl === undefined) {
+        delete process.env.LITELLM_URL;
+      } else {
+        process.env.LITELLM_URL = originalLiteLlmUrl;
+      }
+    }
+  });
+
+  it("prefers EMBEDDING_API_KEY over LITELLM_API_KEY", async () => {
+    const originalEmbeddingKey = process.env.EMBEDDING_API_KEY;
+    const originalLiteLlmKey = process.env.LITELLM_API_KEY;
+    let capturedAuth = "";
+
+    process.env.EMBEDDING_API_KEY = "embedding-key";
+    process.env.LITELLM_API_KEY = "litellm-key";
+
+    try {
+      mockFetch(async (_input, init) => {
+        capturedAuth =
+          (init?.headers as Record<string, string>).Authorization ?? "";
+        return new Response(
+          JSON.stringify({ data: [{ embedding: make768() }] }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      });
+
+      const result = await generateEmbedding("test input", "http://fake:4000");
+
+      expect(result).not.toBeNull();
+      expect(capturedAuth).toBe("Bearer embedding-key");
+    } finally {
+      if (originalEmbeddingKey === undefined) {
+        delete process.env.EMBEDDING_API_KEY;
+      } else {
+        process.env.EMBEDDING_API_KEY = originalEmbeddingKey;
+      }
+      if (originalLiteLlmKey === undefined) {
+        delete process.env.LITELLM_API_KEY;
+      } else {
+        process.env.LITELLM_API_KEY = originalLiteLlmKey;
+      }
+    }
   });
 
   it("returns null on timeout (AbortError)", async () => {
@@ -293,16 +372,26 @@ describe("generateEmbeddingWithMetadata", () => {
     expect(result.error!.attempts).toBe(0);
   });
 
-  it("returns no_litellm_url error when no URL provided", async () => {
+  it("returns no_embedding_url error when no URL provided", async () => {
+    const origEmbeddingUrl = process.env.EMBEDDING_BASE_URL;
     const origUrl = process.env.LITELLM_URL;
+    delete process.env.EMBEDDING_BASE_URL;
     delete process.env.LITELLM_URL;
 
-    const result = await generateEmbeddingWithMetadata("hello");
-    expect(result.embedding).toBeNull();
-    expect(result.error).toBeDefined();
-    expect(result.error!.code).toBe("no_litellm_url");
+    try {
+      const result = await generateEmbeddingWithMetadata("hello");
+      expect(result.embedding).toBeNull();
+      expect(result.error).toBeDefined();
+      expect(result.error!.code).toBe("no_embedding_url");
+    } finally {
+      if (origEmbeddingUrl !== undefined) {
+        process.env.EMBEDDING_BASE_URL = origEmbeddingUrl;
+      }
 
-    if (origUrl !== undefined) process.env.LITELLM_URL = origUrl;
+      if (origUrl !== undefined) {
+        process.env.LITELLM_URL = origUrl;
+      }
+    }
   });
 
   it("returns malformed_response error for wrong embedding shape", async () => {
@@ -375,6 +464,71 @@ describe("generateEmbeddingWithMetadata", () => {
     expect(result.error!.code).toBe("input_invalid");
     expect(result.error!.lastStatus).toBe(400);
     expect(callCount).toBe(1);
+  });
+});
+
+describe("configurable embedding dimensions", () => {
+  let originalFetch: typeof globalThis.fetch;
+  const originalDimensions = process.env.EMBEDDING_DIMENSIONS;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    if (originalDimensions === undefined) {
+      delete process.env.EMBEDDING_DIMENSIONS;
+    } else {
+      process.env.EMBEDDING_DIMENSIONS = originalDimensions;
+    }
+  });
+
+  it("validates returned embedding length against EMBEDDING_DIMENSIONS", async () => {
+    process.env.EMBEDDING_DIMENSIONS = "3";
+    const module = await import(`./embedding.ts?dim-test=${Date.now()}`);
+    let capturedBody: Record<string, unknown> | null = null;
+
+    mockFetch(async (_input, init) => {
+      capturedBody = JSON.parse(init?.body as string) as Record<
+        string,
+        unknown
+      >;
+      return new Response(
+        JSON.stringify({ data: [{ embedding: makeEmbedding(3) }] }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
+
+    const result = await module.generateEmbeddingWithMetadata(
+      "hello",
+      "http://fake:4000",
+    );
+
+    expect(result.embedding).toEqual(makeEmbedding(3));
+    expect(result.error).toBeUndefined();
+    expect(capturedBody!.dimensions).toBe(3);
+  });
+
+  it("rejects embeddings that do not match EMBEDDING_DIMENSIONS", async () => {
+    process.env.EMBEDDING_DIMENSIONS = "3";
+    const module = await import(`./embedding.ts?dim-test-bad=${Date.now()}`);
+
+    mockFetch(
+      async () =>
+        new Response(JSON.stringify({ data: [{ embedding: makeEmbedding(4) }] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+
+    const result = await module.generateEmbeddingWithMetadata(
+      "hello",
+      "http://fake:4000",
+    );
+
+    expect(result.embedding).toBeNull();
+    expect(result.error?.code).toBe("malformed_response");
   });
 });
 

@@ -3,14 +3,17 @@ import { logger } from "./logger.ts";
 
 const rawTimeout = parseInt(process.env.EMBEDDING_TIMEOUT_MS ?? "8000", 10);
 const EMBEDDING_TIMEOUT_MS = Number.isNaN(rawTimeout) ? 8000 : rawTimeout;
+const rawDimensions = parseInt(process.env.EMBEDDING_DIMENSIONS ?? "768", 10);
+export const EMBEDDING_DIMENSIONS =
+  Number.isNaN(rawDimensions) || rawDimensions <= 0 ? 768 : rawDimensions;
 
 const MAX_RETRIES = 2;
 const BACKOFF_DELAYS_MS = [200, 800];
 
 /**
- * Embedding model identifier. Used by embedding.ts to call LiteLLM and stored
+ * Embedding model identifier. Used by embedding.ts to call the provider and stored
  * in embedding_model columns so we can track which model produced each vector.
- * Override via EMBEDDING_MODEL env var (must match LiteLLM deployment name).
+ * Override via EMBEDDING_MODEL env var (must match the provider deployment name).
  */
 export const EMBEDDING_MODEL =
   process.env.EMBEDDING_MODEL ?? "gemini-embedding-001";
@@ -23,7 +26,7 @@ export interface EmbeddingError {
     | "client_error"
     | "malformed_response"
     | "input_invalid"
-    | "no_litellm_url";
+    | "no_embedding_url";
   message: string;
   attempts: number;
   lastStatus?: number;
@@ -69,9 +72,18 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function embeddingBaseUrl(explicitUrl?: string): string | undefined {
+  const raw = explicitUrl ?? process.env.EMBEDDING_BASE_URL ?? process.env.LITELLM_URL;
+  return raw?.replace(/\/+$/, "");
+}
+
+function embeddingApiKey(): string | undefined {
+  return process.env.EMBEDDING_API_KEY ?? process.env.LITELLM_API_KEY;
+}
+
 export async function generateEmbeddingWithMetadata(
   text: string,
-  litellmUrl?: string,
+  embeddingUrl?: string,
 ): Promise<EmbeddingResult> {
   if (!text || text.trim().length === 0 || text.length > 32000) {
     const msg = "Embedding text empty or too long";
@@ -86,14 +98,14 @@ export async function generateEmbeddingWithMetadata(
     };
   }
 
-  const baseUrl = litellmUrl ?? process.env.LITELLM_URL;
+  const baseUrl = embeddingBaseUrl(embeddingUrl);
   if (!baseUrl) {
-    const msg = "No LiteLLM URL configured";
+    const msg = "No embedding URL configured";
     logger.warn(msg);
     return {
       embedding: null,
       error: {
-        code: "no_litellm_url",
+        code: "no_embedding_url",
         message: msg,
         attempts: 0,
       },
@@ -103,13 +115,13 @@ export async function generateEmbeddingWithMetadata(
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
-  const apiKey = process.env.LITELLM_API_KEY;
+  const apiKey = embeddingApiKey();
   if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
 
   const body = JSON.stringify({
     model: EMBEDDING_MODEL,
     input: text,
-    dimensions: 768,
+    dimensions: EMBEDDING_DIMENSIONS,
   });
 
   let lastError: unknown = null;
@@ -142,8 +154,8 @@ export async function generateEmbeddingWithMetadata(
               : response.status === 401 || response.status === 403
                 ? "client_error"
                 : "client_error";
-          const msg = `LiteLLM returned ${response.status}`;
-          logger.error("Embedding request failed (non-retryable)", {
+          const msg = `Embedding provider returned ${response.status}`;
+          logger.error("Embedding provider request failed (non-retryable)", {
             status: response.status,
             attempts: attempt,
           });
@@ -180,7 +192,7 @@ export async function generateEmbeddingWithMetadata(
           embedding: null,
           error: {
             code: "server_error",
-            message: `LiteLLM returned ${response.status} after ${attempt} attempt(s)`,
+            message: `Embedding provider returned ${response.status} after ${attempt} attempt(s)`,
             attempts: attempt,
             lastStatus: response.status,
           },
@@ -193,11 +205,12 @@ export async function generateEmbeddingWithMetadata(
 
       const embedding = json.data?.[0]?.embedding;
 
-      if (!Array.isArray(embedding) || embedding.length !== 768) {
-        const msg = "LiteLLM returned malformed embedding";
+      if (!Array.isArray(embedding) || embedding.length !== EMBEDDING_DIMENSIONS) {
+        const msg = "Embedding provider returned malformed embedding";
         logger.error(msg, {
           hasData: !!json.data,
           length: Array.isArray(embedding) ? embedding.length : "not-array",
+          expectedLength: EMBEDDING_DIMENSIONS,
           attempts: attempt,
         });
         return {
@@ -290,9 +303,9 @@ export async function generateEmbeddingWithMetadata(
  */
 export async function generateEmbedding(
   text: string,
-  litellmUrl?: string,
+  embeddingUrl?: string,
 ): Promise<number[] | null> {
-  const result = await generateEmbeddingWithMetadata(text, litellmUrl);
+  const result = await generateEmbeddingWithMetadata(text, embeddingUrl);
   return result.embedding;
 }
 
