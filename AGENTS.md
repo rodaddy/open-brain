@@ -23,6 +23,13 @@ bun run migrate                 # run migrations
 bun test                        # run tests
 ```
 
+## Codex Durable Memory
+
+Codex memory protocol and rollout guidance lives in
+`docs/memory-contract.md`. Read it before changing session lifecycle tools,
+`brain_answer`, eval fixtures, or AGENTS/skill directives that force Open Brain
+as Codex durable memory.
+
 ## Python Package
 
 ```bash
