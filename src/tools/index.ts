@@ -13,6 +13,7 @@ import { registerListStale } from "./list-stale.ts";
 import { registerUpdateEntry } from "./update-entry.ts";
 import { registerRateEntry } from "./rate-entry.ts";
 import { registerSearchAll } from "./search-all.ts";
+import { registerBrainAnswer } from "./brain-answer.ts";
 import { registerUpsertPerson } from "./upsert-person.ts";
 import { registerSetTier } from "./set-tier.ts";
 import { registerGetEntry } from "./get-entry.ts";
@@ -55,6 +56,7 @@ export function registerAllTools(server: McpServer, deps: ToolDeps): void {
   registerUpdateEntry(server, deps);
   registerRateEntry(server, deps);
   registerSearchAll(server, deps);
+  registerBrainAnswer(server, deps);
   registerUpsertPerson(server, deps);
   registerSetTier(server, deps);
   registerGetEntry(server, deps);

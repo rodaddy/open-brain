@@ -89,7 +89,7 @@ export interface SearchRow {
   source_type: string;
   id: string;
   namespace?: string;
-  content_preview: string;
+  content_preview: string | null;
   tags: string[] | null;
   created_by?: string | null;
   created_at: string;
@@ -145,8 +145,8 @@ function withSourceRefs(rows: SearchRow[]): SearchRow[] {
       created_by: row.created_by,
       created_at: toIsoString(row.created_at),
       last_updated_at: toIsoString(row.updated_at) ?? toIsoString(row.created_at),
-      label: row.content_preview.slice(0, 120),
-      preview: row.content_preview.slice(0, 300),
+      label: (row.content_preview ?? "").slice(0, 120),
+      preview: (row.content_preview ?? "").slice(0, 300),
     },
   }));
 }
