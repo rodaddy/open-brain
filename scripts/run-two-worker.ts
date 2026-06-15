@@ -54,6 +54,7 @@ const children = workers.map((worker) => {
 });
 
 let nextWorker = 0;
+const mcpSessions = new Map<string, WorkerConfig>();
 
 async function workerHealth(worker: WorkerConfig) {
   try {
@@ -79,11 +80,15 @@ async function workerHealth(worker: WorkerConfig) {
 }
 
 async function proxyRequest(request: Request): Promise<Response> {
-  const worker = workers[nextWorker % workers.length];
+  const sessionId = request.headers.get("mcp-session-id");
+  let worker = sessionId ? mcpSessions.get(sessionId) : undefined;
+  worker ??= workers[nextWorker % workers.length];
   if (!worker) {
     return Response.json({ error: "No Open Brain workers configured" }, { status: 503 });
   }
-  nextWorker += 1;
+  if (!sessionId) {
+    nextWorker += 1;
+  }
 
   const incomingUrl = new URL(request.url);
   const targetUrl = new URL(incomingUrl.pathname + incomingUrl.search, `http://127.0.0.1:${worker.port}`);
@@ -91,7 +96,7 @@ async function proxyRequest(request: Request): Promise<Response> {
   headers.set("x-open-brain-worker", worker.name);
   headers.delete("host");
 
-  return fetch(targetUrl, {
+  const response = await fetch(targetUrl, {
     method: request.method,
     headers,
     body:
@@ -101,6 +106,16 @@ async function proxyRequest(request: Request): Promise<Response> {
     redirect: "manual",
     signal: request.signal,
   });
+
+  const responseSessionId = response.headers.get("mcp-session-id");
+  if (responseSessionId) {
+    mcpSessions.set(responseSessionId, worker);
+  }
+  if (sessionId && request.method === "DELETE" && response.ok) {
+    mcpSessions.delete(sessionId);
+  }
+
+  return response;
 }
 
 const proxy = Bun.serve({
