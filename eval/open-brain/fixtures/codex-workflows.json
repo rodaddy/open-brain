@@ -1,0 +1,296 @@
+{
+  "schema_version": 1,
+  "corpus_id": "open-brain-codex-workflows-v1",
+  "generated_at": "2026-06-15T00:00:00.000Z",
+  "corpus": [
+    {
+      "id": "session-issue-110-next-action",
+      "namespace": "skippy",
+      "type": "session",
+      "title": "Open Brain issue 110 handoff",
+      "content": "Repo /Volumes/ThunderBolt/Development/open-brain is working issue #110 on branch codex/codex-memory-eval-scenarios. Next action: add a Codex workflow eval fixture, runner fixture loading, and targeted tests before opening the PR.",
+      "tags": ["codex", "resume", "open-brain", "issue-110", "next-action"],
+      "aliases": ["issue 110 resume", "codex workflow eval next action"],
+      "created_at": "2026-06-15T14:00:00.000Z",
+      "source_ref": {
+        "source": "brain",
+        "type": "session",
+        "id": "session-issue-110-next-action",
+        "namespace": "skippy",
+        "label": "Open Brain issue 110 handoff",
+        "preview": "Next action: add a Codex workflow eval fixture, runner fixture loading, and targeted tests.",
+        "created_at": "2026-06-15T14:00:00.000Z"
+      }
+    },
+    {
+      "id": "decision-fixture-loading",
+      "namespace": "skippy",
+      "type": "decision",
+      "title": "Codex eval fixture loading decision",
+      "content": "Decision: keep the original memory smoke fixture stable and add Codex workflow scenarios as a separate fixture loaded with --fixture.",
+      "tags": ["codex", "decision", "eval", "fixture"],
+      "aliases": ["separate codex fixture", "--fixture workflow"],
+      "created_at": "2026-06-15T14:05:00.000Z",
+      "source_ref": {
+        "source": "brain",
+        "type": "decision",
+        "id": "decision-fixture-loading",
+        "namespace": "skippy",
+        "label": "Codex eval fixture loading decision",
+        "preview": "Keep the original memory smoke fixture stable and add Codex workflow scenarios as a separate fixture loaded with --fixture.",
+        "created_at": "2026-06-15T14:05:00.000Z"
+      }
+    },
+    {
+      "id": "session-pr114-validation",
+      "namespace": "collab",
+      "type": "session",
+      "title": "PR 114 validation evidence",
+      "content": "Validation evidence for PR #114: bun run eval:memory passed with recall@k=1.000, citation=1.000, namespace_leaks=0; bun test eval/open-brain/__tests__/runner.test.ts passed; bun run typecheck passed.",
+      "tags": ["validation", "pr-114", "eval", "typecheck"],
+      "aliases": ["PR 114 evidence", "memory eval validation"],
+      "created_at": "2026-06-15T13:30:00.000Z",
+      "source_ref": {
+        "source": "brain",
+        "type": "session",
+        "id": "session-pr114-validation",
+        "namespace": "collab",
+        "label": "PR 114 validation evidence",
+        "preview": "PR #114 validation: eval runner, targeted tests, and typecheck passed.",
+        "created_at": "2026-06-15T13:30:00.000Z"
+      }
+    },
+    {
+      "id": "preference-thunderbolt-temp",
+      "namespace": "skippy",
+      "type": "decision",
+      "title": "Durable Codex temp preference",
+      "content": "Durable preference: Codex temporary worktrees, scratch reports, review checkouts, and generated artifacts should use /Volumes/ThunderBolt/_tmp when available.",
+      "tags": ["durable", "preference", "temp", "codex"],
+      "aliases": ["ThunderBolt temp preference", "temporary worktree root"],
+      "created_at": "2026-06-11T08:00:00.000Z",
+      "source_ref": {
+        "source": "brain",
+        "type": "decision",
+        "id": "preference-thunderbolt-temp",
+        "namespace": "skippy",
+        "label": "Durable Codex temp preference",
+        "preview": "Codex temporary work should use /Volumes/ThunderBolt/_tmp when available.",
+        "created_at": "2026-06-11T08:00:00.000Z"
+      }
+    },
+    {
+      "id": "oneoff-use-system-tmp",
+      "namespace": "skippy",
+      "type": "thought",
+      "title": "One-off system tmp instruction",
+      "content": "One-off task instruction: for this single tool compatibility check, write the transient socket probe under /tmp and delete it immediately.",
+      "tags": ["one-off", "tmp", "tool-compatibility"],
+      "aliases": ["single tool compatibility check"],
+      "created_at": "2026-06-12T08:00:00.000Z",
+      "source_ref": {
+        "source": "brain",
+        "type": "thought",
+        "id": "oneoff-use-system-tmp",
+        "namespace": "skippy",
+        "label": "One-off system tmp instruction",
+        "preview": "For this single compatibility check, write the transient socket probe under /tmp.",
+        "created_at": "2026-06-12T08:00:00.000Z"
+      }
+    },
+    {
+      "id": "repo-current-bun-runtime",
+      "namespace": "collab",
+      "type": "project",
+      "title": "Current Open Brain runtime evidence",
+      "content": "Current repo evidence from AGENTS.md: Open Brain uses Bun 1.3.13 for TypeScript commands and bun run typecheck for validation.",
+      "tags": ["open-brain", "runtime", "current", "bun"],
+      "aliases": ["current repo runtime", "Bun 1.3.13"],
+      "created_at": "2026-06-15T12:00:00.000Z",
+      "updated_at": "2026-06-15T12:00:00.000Z",
+      "source_ref": {
+        "source": "brain",
+        "type": "project",
+        "id": "repo-current-bun-runtime",
+        "namespace": "collab",
+        "label": "Current Open Brain runtime evidence",
+        "preview": "Current repo evidence: Open Brain uses Bun 1.3.13 for TypeScript commands.",
+        "created_at": "2026-06-15T12:00:00.000Z",
+        "last_updated_at": "2026-06-15T12:00:00.000Z"
+      }
+    },
+    {
+      "id": "repo-stale-node-runtime",
+      "namespace": "collab",
+      "type": "project",
+      "title": "Stale Open Brain runtime note",
+      "content": "Old note: Open Brain should use npm and Node 20 scripts for TypeScript validation.",
+      "tags": ["open-brain", "runtime", "stale", "node"],
+      "aliases": ["old node runtime", "npm typecheck"],
+      "created_at": "2024-02-01T00:00:00.000Z",
+      "updated_at": "2024-02-01T00:00:00.000Z",
+      "source_ref": {
+        "source": "brain",
+        "type": "project",
+        "id": "repo-stale-node-runtime",
+        "namespace": "collab",
+        "label": "Stale Open Brain runtime note",
+        "preview": "Old note: Open Brain should use npm and Node 20 scripts.",
+        "created_at": "2024-02-01T00:00:00.000Z",
+        "last_updated_at": "2024-02-01T00:00:00.000Z"
+      }
+    },
+    {
+      "id": "decision-citation-contract",
+      "namespace": "skippy",
+      "type": "decision",
+      "title": "Codex memory citation contract",
+      "content": "When Codex answers from memory without live verification, the final answer must include memory citations and note when the fact may be stale.",
+      "tags": ["codex", "citation", "memory", "answer"],
+      "aliases": ["memory citation contract", "cite memory-derived facts"],
+      "created_at": "2026-06-15T11:00:00.000Z",
+      "source_ref": {
+        "source": "brain",
+        "type": "decision",
+        "id": "decision-citation-contract",
+        "namespace": "skippy",
+        "label": "Codex memory citation contract",
+        "preview": "Memory-derived final answers must include citations and stale-fact caveats.",
+        "created_at": "2026-06-15T11:00:00.000Z"
+      }
+    },
+    {
+      "id": "decision-brain-answer-tool",
+      "namespace": "skippy",
+      "type": "decision",
+      "title": "brain_answer synthesis tool",
+      "content": "Use brain_answer when Codex needs a cited extractive answer from readable Open Brain rows instead of raw search hits.",
+      "tags": ["brain_answer", "synthesis", "codex", "tool"],
+      "aliases": ["brain answer", "cited synthesis"],
+      "created_at": "2026-06-15T12:30:00.000Z",
+      "source_ref": {
+        "source": "brain",
+        "type": "decision",
+        "id": "decision-brain-answer-tool",
+        "namespace": "skippy",
+        "label": "brain_answer synthesis tool",
+        "preview": "Use brain_answer when Codex needs a cited extractive answer from readable Open Brain rows.",
+        "created_at": "2026-06-15T12:30:00.000Z"
+      }
+    },
+    {
+      "id": "private-user-secret",
+      "namespace": "private-agent",
+      "type": "decision",
+      "title": "Private namespace fact",
+      "content": "Private namespace zetaquartz credential routing note that a skippy-only caller must refuse or flag as unreadable.",
+      "tags": ["private", "namespace", "zetaquartz"],
+      "aliases": ["zetaquartz credential route"],
+      "created_at": "2026-06-15T12:45:00.000Z",
+      "source_ref": {
+        "source": "brain",
+        "type": "decision",
+        "id": "private-user-secret",
+        "namespace": "private-agent",
+        "label": "Private namespace fact",
+        "preview": "Private namespace zetaquartz credential routing note.",
+        "created_at": "2026-06-15T12:45:00.000Z"
+      }
+    }
+  ],
+  "probes": [
+    {
+      "id": "codex-resume-next-action",
+      "category": "codex",
+      "query": "Resume Open Brain issue 110 and identify the next action for Codex workflow evals",
+      "readable_namespaces": ["skippy", "collab"],
+      "top_k": 1,
+      "relevant_ids": ["session-issue-110-next-action"],
+      "expected_citation_ids": ["session-issue-110-next-action"],
+      "min_recall_at_k": 1,
+      "min_precision_at_k": 1
+    },
+    {
+      "id": "codex-recover-user-decision",
+      "category": "codex",
+      "query": "What decision did we make about keeping memory smoke stable and loading Codex workflow scenarios?",
+      "readable_namespaces": ["skippy", "collab"],
+      "top_k": 1,
+      "relevant_ids": ["decision-fixture-loading"],
+      "expected_citation_ids": ["decision-fixture-loading"],
+      "min_recall_at_k": 1,
+      "min_precision_at_k": 1
+    },
+    {
+      "id": "codex-validation-evidence",
+      "category": "codex",
+      "query": "Find previous validation evidence for PR 114 memory eval typecheck runner tests",
+      "readable_namespaces": ["skippy", "collab"],
+      "top_k": 1,
+      "relevant_ids": ["session-pr114-validation"],
+      "expected_citation_ids": ["session-pr114-validation"],
+      "min_recall_at_k": 1,
+      "min_precision_at_k": 1
+    },
+    {
+      "id": "codex-durable-preference-not-oneoff",
+      "category": "codex",
+      "query": "What durable preference controls Codex temporary worktrees and scratch reports?",
+      "readable_namespaces": ["skippy", "collab"],
+      "top_k": 2,
+      "relevant_ids": ["preference-thunderbolt-temp"],
+      "junk_ids": ["oneoff-use-system-tmp"],
+      "expected_citation_ids": ["preference-thunderbolt-temp"],
+      "min_recall_at_k": 1,
+      "min_precision_at_k": 0.5
+    },
+    {
+      "id": "codex-current-repo-over-stale-memory",
+      "category": "codex",
+      "query": "Current Open Brain runtime evidence TypeScript validation Bun 1.3.13",
+      "readable_namespaces": ["skippy", "collab"],
+      "top_k": 1,
+      "relevant_ids": ["repo-current-bun-runtime"],
+      "junk_ids": ["repo-stale-node-runtime"],
+      "expected_citation_ids": ["repo-current-bun-runtime"],
+      "max_age_days": 30,
+      "as_of": "2026-06-15T12:00:00.000Z",
+      "min_recall_at_k": 1,
+      "min_precision_at_k": 1
+    },
+    {
+      "id": "codex-cite-memory-derived-facts",
+      "category": "citation",
+      "query": "How should Codex cite memory-derived facts in final answers?",
+      "readable_namespaces": ["skippy", "collab"],
+      "top_k": 1,
+      "relevant_ids": ["decision-citation-contract"],
+      "expected_citation_ids": ["decision-citation-contract"],
+      "min_recall_at_k": 1,
+      "min_precision_at_k": 1
+    },
+    {
+      "id": "codex-brain-answer-synthesis",
+      "category": "codex",
+      "query": "Which tool gives Codex a cited extractive answer from readable Open Brain rows?",
+      "readable_namespaces": ["skippy", "collab"],
+      "top_k": 1,
+      "relevant_ids": ["decision-brain-answer-tool"],
+      "expected_citation_ids": ["decision-brain-answer-tool"],
+      "min_recall_at_k": 1,
+      "min_precision_at_k": 1
+    },
+    {
+      "id": "codex-unreadable-namespace-refusal",
+      "category": "namespace",
+      "query": "zetaquartz credential route",
+      "readable_namespaces": ["skippy"],
+      "top_k": 3,
+      "relevant_ids": [],
+      "expect_no_results": true,
+      "expected_forbidden_ids": ["private-user-secret"],
+      "min_recall_at_k": 1,
+      "min_precision_at_k": 1
+    }
+  ]
+}

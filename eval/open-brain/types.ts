@@ -6,6 +6,7 @@ export type EvalCategory =
   | "citation"
   | "contradiction"
   | "namespace"
+  | "codex"
   | "scale";
 
 export type CorpusEntryType = "thought" | "decision" | "relationship" | "project" | "session";

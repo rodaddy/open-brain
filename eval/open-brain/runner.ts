@@ -16,6 +16,7 @@ const CATEGORY_ORDER: EvalCategory[] = [
   "citation",
   "contradiction",
   "namespace",
+  "codex",
   "scale",
 ];
 

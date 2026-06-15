@@ -1,9 +1,11 @@
 import { describe, expect, it } from "bun:test";
+import codexFixture from "../fixtures/codex-workflows.json" assert { type: "json" };
 import fixture from "../fixtures/memory-smoke.json" assert { type: "json" };
 import { retrieve, runEvalSuite, scoreProbe } from "../runner.ts";
 import type { EvalFixture } from "../types.ts";
 
 const typedFixture = fixture as EvalFixture;
+const typedCodexFixture = codexFixture as EvalFixture;
 
 describe("Open Brain memory eval runner", () => {
   it("keeps gold answers sealed outside retrieved public results", () => {
@@ -98,5 +100,51 @@ describe("Open Brain memory eval runner", () => {
     expect(scorecard.probes_failed).toBe(0);
     expect(scorecard.metrics.namespace_leak_count).toBe(0);
     expect(scorecard.metrics.recall_at_k).toBeGreaterThanOrEqual(1);
+  });
+
+  it("covers Codex durable memory workflow scenarios", () => {
+    const scorecard = runEvalSuite(typedCodexFixture, {
+      commit: "test",
+      generatedAt: "2026-06-15T00:00:00.000Z",
+    });
+    expect(scorecard.corpus_id).toBe("open-brain-codex-workflows-v1");
+    expect(scorecard.probes_total).toBe(8);
+    expect(scorecard.probes_failed).toBe(0);
+    expect(scorecard.categories.codex.probes_total).toBe(6);
+    expect(scorecard.categories.citation.probes_passed).toBe(1);
+    expect(scorecard.categories.namespace.probes_passed).toBe(1);
+  });
+
+  it("prefers durable Codex preferences over one-off task instructions", () => {
+    const probe = typedCodexFixture.probes.find(
+      (item) => item.id === "codex-durable-preference-not-oneoff",
+    );
+    expect(probe).toBeDefined();
+    const score = scoreProbe(typedCodexFixture.corpus, probe!);
+    expect(score.passed).toBe(true);
+    expect(score.retrieved_ids).toContain("preference-thunderbolt-temp");
+    expect(score.retrieved_ids).not.toContain("oneoff-use-system-tmp");
+  });
+
+  it("keeps current repo evidence ahead of stale memory", () => {
+    const probe = typedCodexFixture.probes.find(
+      (item) => item.id === "codex-current-repo-over-stale-memory",
+    );
+    expect(probe).toBeDefined();
+    const score = scoreProbe(typedCodexFixture.corpus, probe!);
+    expect(score.passed).toBe(true);
+    expect(score.retrieved_ids).toEqual(["repo-current-bun-runtime"]);
+    expect(score.uncertainty).toEqual([]);
+  });
+
+  it("refuses unreadable Codex workflow facts", () => {
+    const probe = typedCodexFixture.probes.find(
+      (item) => item.id === "codex-unreadable-namespace-refusal",
+    );
+    expect(probe).toBeDefined();
+    const score = scoreProbe(typedCodexFixture.corpus, probe!);
+    expect(score.passed).toBe(true);
+    expect(score.retrieved_ids).toEqual([]);
+    expect(score.failures).toEqual([]);
   });
 });
