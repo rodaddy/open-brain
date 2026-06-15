@@ -253,6 +253,17 @@
       "relevant_ids": ["repo-current-bun-runtime"],
       "expected_citation_ids": ["repo-current-bun-runtime"],
       "expected_uncertainty": ["stale"],
+      "current_evidence": {
+        "id": "repo://AGENTS.md#stack",
+        "label": "AGENTS.md Stack",
+        "content": "Current repo file AGENTS.md says Runtime: Bun 1.3.13 and validation command bunx tsc --noEmit.",
+        "contradicts_ids": ["repo-stale-node-runtime"]
+      },
+      "expected_answer_terms": [
+        "Current repo file AGENTS.md",
+        "Bun 1.3.13",
+        "contradicts memory ids repo-stale-node-runtime"
+      ],
       "max_age_days": 30,
       "as_of": "2026-06-15T12:00:00.000Z",
       "min_recall_at_k": 1,
@@ -266,6 +277,10 @@
       "top_k": 1,
       "relevant_ids": ["decision-citation-contract"],
       "expected_citation_ids": ["decision-citation-contract"],
+      "expected_answer_terms": [
+        "decision-citation-contract",
+        "Memory-derived final answers must include citations"
+      ],
       "min_recall_at_k": 1,
       "min_precision_at_k": 1
     },

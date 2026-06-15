@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import codexFixture from "../fixtures/codex-workflows.json" assert { type: "json" };
 import fixture from "../fixtures/memory-smoke.json" assert { type: "json" };
-import { retrieve, runEvalSuite, scoreProbe } from "../runner.ts";
+import { answerForProbe, retrieve, runEvalSuite, scoreProbe } from "../runner.ts";
 import type { EvalFixture } from "../types.ts";
 
 const typedFixture = fixture as EvalFixture;
@@ -136,6 +136,24 @@ describe("Open Brain memory eval runner", () => {
     expect(score.retrieved_ids).toContain("repo-current-bun-runtime");
     expect(score.retrieved_ids).toContain("repo-stale-node-runtime");
     expect(score.uncertainty).toEqual(["stale"]);
+    const answer = answerForProbe(
+      retrieve(typedCodexFixture.corpus, probe!).map(({ entry }) => entry),
+      probe!,
+    );
+    expect(answer).toContain("Current repo file AGENTS.md");
+    expect(answer).toContain("contradicts memory ids repo-stale-node-runtime");
+  });
+
+  it("checks final-answer citation shape for memory-derived facts", () => {
+    const probe = typedCodexFixture.probes.find(
+      (item) => item.id === "codex-cite-memory-derived-facts",
+    );
+    expect(probe).toBeDefined();
+    const entries = retrieve(typedCodexFixture.corpus, probe!).map(({ entry }) => entry);
+    const answer = answerForProbe(entries, probe!);
+    expect(scoreProbe(typedCodexFixture.corpus, probe!).passed).toBe(true);
+    expect(answer).toContain("[decision-citation-contract]");
+    expect(answer).toContain("Memory-derived final answers must include citations");
   });
 
   it("refuses unreadable Codex workflow facts", () => {

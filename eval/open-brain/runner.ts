@@ -148,6 +148,7 @@ export function scoreProbe(corpus: EvalCorpusEntry[], probe: EvalProbe): ProbeSc
   const precision = precisionAtK(retrievedIds, probe.relevant_ids);
   const citationIds = entries.map((entry) => entry.source_ref.id);
   const forbiddenIds = probe.expected_forbidden_ids ?? [];
+  const answer = answerForProbe(entries, probe);
 
   if (recall < (probe.min_recall_at_k ?? 1)) {
     failures.push(`recall ${recall.toFixed(3)} below threshold`);
@@ -169,6 +170,11 @@ export function scoreProbe(corpus: EvalCorpusEntry[], probe: EvalProbe): ProbeSc
   for (const expectedCitation of probe.expected_citation_ids ?? []) {
     if (!citationIds.includes(expectedCitation)) {
       failures.push(`missing expected citation ${expectedCitation}`);
+    }
+  }
+  for (const expectedTerm of probe.expected_answer_terms ?? []) {
+    if (!answer.toLowerCase().includes(expectedTerm.toLowerCase())) {
+      failures.push(`missing expected answer term ${expectedTerm}`);
     }
   }
   if (entries.some((entry) => isStale(entry, probe))) {
@@ -198,6 +204,23 @@ export function scoreProbe(corpus: EvalCorpusEntry[], probe: EvalProbe): ProbeSc
     uncertainty,
     failures,
   };
+}
+
+export function answerForProbe(entries: EvalCorpusEntry[], probe: EvalProbe): string {
+  const lines = entries.map(
+    (entry) => `- ${entry.source_ref.preview} [${entry.source_ref.id}]`,
+  );
+  if (probe.current_evidence) {
+    lines.push(
+      `- Current evidence (${probe.current_evidence.label}): ${probe.current_evidence.content} [${probe.current_evidence.id}]`,
+    );
+  }
+  if (probe.current_evidence?.contradicts_ids?.length) {
+    lines.push(
+      `Known gap: current evidence contradicts memory ids ${probe.current_evidence.contradicts_ids.join(", ")}.`,
+    );
+  }
+  return lines.join("\n");
 }
 
 function mean(values: number[]): number {
