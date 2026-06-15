@@ -286,21 +286,24 @@ async function searchOB(
 
   trackUsage(deps, rows, query, "search", auth.clientId);
 
-  return rows.map((row) => ({
-    source: "brain" as const,
-    type: row.source_type,
-    content: row.content_preview.slice(0, 300),
-    score: row.distance != null ? 1 - row.distance : (row.fts_rank ?? 0.5),
-    source_ref: row.source_ref ?? {
+  return rows.map((row) => {
+    const preview = row.content_preview ?? "";
+    return {
       source: "brain" as const,
       type: row.source_type,
+      content: preview.slice(0, 300),
+      score: row.distance != null ? 1 - row.distance : (row.fts_rank ?? 0.5),
+      source_ref: row.source_ref ?? {
+        source: "brain" as const,
+        type: row.source_type,
+        id: row.id,
+        label: preview.slice(0, 120),
+        preview: preview.slice(0, 300),
+      },
       id: row.id,
-      label: row.content_preview.slice(0, 120),
-      preview: row.content_preview.slice(0, 300),
-    },
-    id: row.id,
-    tags: row.tags ?? undefined,
-    tier: row.tier,
-    explicit_links: row.explicit_links,
-  }));
+      tags: row.tags ?? undefined,
+      tier: row.tier,
+      explicit_links: row.explicit_links,
+    };
+  });
 }

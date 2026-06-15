@@ -112,6 +112,25 @@ describe("brain_answer", () => {
     }
   });
 
+  it("does not perform usage-tracking writes from the read-only answer tool", async () => {
+    const { setup, queries } = setupClient([row()]);
+    const { client, cleanup } = await setup;
+    try {
+      const result = await client.callTool({
+        name: "brain_answer",
+        arguments: { query: "memory" },
+      });
+      expect(result.isError).toBeFalsy();
+      expect(
+        queries.some(({ sql }) =>
+          /\b(UPDATE|INSERT\s+INTO\s+entry_access_log)\b/i.test(sql),
+        ),
+      ).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("denies unreadable namespace filters", async () => {
     const { setup } = setupClient([], { role: "agent", clientId: "agent-a" });
     const { client, cleanup } = await setup;
@@ -177,6 +196,34 @@ describe("brain_answer", () => {
     }
   });
 
+  it("surfaces imperative use and do-not-use contradictions as uncertainty", async () => {
+    const { setup } = setupClient([
+      row({
+        id: "use-1",
+        content_preview: "Use the lowercase Codex home path only.",
+      }),
+      row({
+        id: "do-not-1",
+        content_preview: "Do not use the lowercase Codex home path only.",
+      }),
+    ]);
+    const { client, cleanup } = await setup;
+    try {
+      const parsed = parseToolResult(
+        await client.callTool({
+          name: "brain_answer",
+          arguments: { query: "which codex home path should be used" },
+        }),
+      );
+      expect(parsed.citations).toHaveLength(2);
+      expect(parsed.uncertainty.join(" ")).toContain(
+        "affirmative and negative",
+      );
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("does not flag reinforcing do-not and use guidance as contradiction", async () => {
     const { setup } = setupClient([
       row({
@@ -226,6 +273,37 @@ describe("brain_answer", () => {
         "lacked citation metadata or usable preview text",
       );
       expect(parsed.raw_results).toHaveLength(1);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("omits null previews and counts only citable evidence", async () => {
+    const { setup } = setupClient([
+      row({
+        id: "valid-1",
+        content_preview: "Use Open Brain when prior Codex context matters.",
+      }),
+      row({
+        id: "null-1",
+        content_preview: null,
+      }),
+    ]);
+    const { client, cleanup } = await setup;
+    try {
+      const parsed = parseToolResult(
+        await client.callTool({
+          name: "brain_answer",
+          arguments: { query: "codex memory" },
+        }),
+      );
+      expect(parsed.evidence_count).toBe(1);
+      expect(parsed.citations).toHaveLength(1);
+      expect(parsed.answer).toContain("Use Open Brain");
+      expect(parsed.known_gaps.join(" ")).toContain(
+        "lacked citation metadata or usable preview text",
+      );
+      expect(parsed.uncertainty.join(" ")).toContain("omitted");
     } finally {
       await cleanup();
     }

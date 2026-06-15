@@ -7,7 +7,6 @@ import type { ToolDeps } from "./index.ts";
 import {
   ALL_TABLES,
   executeSearch,
-  trackUsage,
   type SearchMode,
   type SearchRow,
   type SourceRef,
@@ -34,7 +33,10 @@ function scoreFor(row: SearchRow): number {
 }
 
 function excerptFor(row: SearchRow): string | null {
-  const excerpt = row.content_preview.replace(/\s+/g, " ").trim().slice(0, 500);
+  const excerpt = (row.content_preview ?? "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 500);
   return excerpt.length > 0 ? excerpt : null;
 }
 
@@ -86,7 +88,7 @@ function hasConflictingUseTargets(evidence: Evidence[]): boolean {
     }
     for (const target of useTargets(
       lower,
-      /\b(?:should|must)\s+use\s+([^.;,]+)/g,
+      /\b(?<!not\s)(?:should\s+use|must\s+use|use)\s+([^.;,]+)/g,
     )) {
       affirmativeTargets.add(target);
     }
@@ -224,8 +226,6 @@ export function registerBrainAnswer(server: McpServer, deps: ToolDeps): void {
         };
       }
 
-      trackUsage(deps, rows, query, "answer", auth.clientId);
-
       if (rows.length === 0) {
         return {
           content: [
@@ -326,10 +326,10 @@ export function registerBrainAnswer(server: McpServer, deps: ToolDeps): void {
         content: [
           {
             type: "text" as const,
-            text: JSON.stringify({
-              query,
-              answer,
-              evidence_count: rows.length,
+              text: JSON.stringify({
+                query,
+                answer,
+                evidence_count: evidence.length,
               citations,
               known_gaps: knownGaps,
               uncertainty,
