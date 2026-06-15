@@ -113,6 +113,13 @@ Search before answering when prior context matters:
 mcp2cli open-brain search_all --params '{"query":"<query>","limit":10}'
 ```
 
+Ask for an extractive, cited memory answer when Codex needs prose instead of
+raw hits:
+
+```bash
+mcp2cli open-brain brain_answer --params '{"query":"what did we decide about codex memory?","limit":5}'
+```
+
 Dry-run the Codex lifecycle command sequence without writing memory:
 
 ```bash
@@ -135,6 +142,11 @@ Search result `source_ref` values intentionally expose only citation-safe
 identity, label/preview, creator, namespace, and timestamps for the readable row.
 They do not expose raw promotion provenance such as a private source namespace
 or source id.
+
+`brain_answer` answers only from readable Open Brain rows, cites every material
+bullet with a `source_ref`, and returns `known_gaps` / `uncertainty` when
+evidence is missing, stale, or contradictory. When no readable evidence is
+available, `answer` is `null`; the tool must not fabricate uncited facts.
 
 ## Capability Audit Gate
 
