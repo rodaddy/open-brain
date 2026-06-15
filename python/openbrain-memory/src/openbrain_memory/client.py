@@ -314,12 +314,11 @@ class OpenBrainClient:
             "method": "tools/call",
             "params": {"name": name, "arguments": dict(arguments or {})},
         }
-        response = self.transport.post(
-            self._url("mcp"),
-            headers=self._mcp_headers(include_session=True),
-            json_body=payload,
-            timeout=self.timeout,
-        )
+        response = self._post_tool_call(payload)
+        if self._is_expired_session_response(response):
+            self._session_id = None
+            self._ensure_session()
+            response = self._post_tool_call(payload)
         self._raise_for_status(response, context=f"call_tool:{name}")
         message = self._decode_jsonrpc_response(
             response,
@@ -508,6 +507,38 @@ class OpenBrainClient:
             timeout=self.timeout,
         )
         self._raise_for_status(response, context="initialized")
+
+    def _post_tool_call(self, payload: JSON) -> TransportResponse:
+        return self.transport.post(
+            self._url("mcp"),
+            headers=self._mcp_headers(include_session=True),
+            json_body=payload,
+            timeout=self.timeout,
+        )
+
+    def _is_expired_session_response(self, response: TransportResponse) -> bool:
+        if response.status_code == 404:
+            return True
+        if response.status_code != 400:
+            return False
+        messages = {
+            "bad request: missing session or not an initialize request",
+            "invalid or missing session",
+        }
+        try:
+            body = response.json()
+        except json.JSONDecodeError:
+            return response.text.strip().lower() in messages
+        if not isinstance(body, dict):
+            return False
+        error = body.get("error")
+        if isinstance(error, str):
+            return error.strip().lower() in messages
+        if isinstance(error, dict):
+            message = error.get("message")
+            return isinstance(message, str) and message.strip().lower() in messages
+        return False
+
 
     def _url(self, path: str) -> str:
         return urljoin(self.base_url, path)
