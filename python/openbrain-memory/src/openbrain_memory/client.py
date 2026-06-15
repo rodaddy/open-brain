@@ -123,18 +123,19 @@ class UrllibTransport:
                     text=body,
                 )
         except HTTPError as exc:
+            error_headers: dict[str, str] = {}
             try:
-                headers = {k.lower(): v for k, v in exc.headers.items()}
+                error_headers = {k.lower(): v for k, v in exc.headers.items()}
                 body = self._read_response(
                     exc,
-                    headers=headers,
+                    headers=error_headers,
                     expected_response_id=expected_response_id,
                 ).decode("utf-8", errors="replace")
             except OSError:
                 body = ""
             return TransportResponse(
                 status_code=exc.code,
-                headers=headers,
+                headers=error_headers,
                 text=body,
             )
         except URLError as exc:

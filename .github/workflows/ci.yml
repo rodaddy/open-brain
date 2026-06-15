@@ -97,7 +97,7 @@ jobs:
           for i in 1 2 3 4 5; do
             sleep 2
             if ssh ${{ env.DEPLOY_USER }}@${{ env.DEPLOY_HOST }} \
-              "curl -sf --max-time 5 http://localhost:3100/mcp -X POST -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"id\":1}'" > /dev/null 2>&1; then
+              "curl -sf --max-time 5 http://localhost:3100/health" > /dev/null 2>&1; then
               echo "Health check passed (attempt $i)"
               exit 0
             fi
