@@ -4,6 +4,7 @@ type SmokeStep = {
   name: string;
   tool: string;
   params: Record<string, unknown>;
+  expectOutput?: string[];
 };
 
 const writeEnabled = process.env.OPEN_BRAIN_CODEX_SMOKE_WRITE === "1";
@@ -77,6 +78,7 @@ const steps: SmokeStep[] = [
       include_events: true,
       event_limit: 10,
     },
+    expectOutput: [sessionKey, "Disposable Codex memory smoke checkpoint"],
   },
   {
     name: "search saved checkpoint context",
@@ -86,6 +88,7 @@ const steps: SmokeStep[] = [
       sources: "brain",
       limit: 5,
     },
+    expectOutput: [sessionKey, "Disposable Codex memory smoke checkpoint"],
   },
 ];
 
@@ -114,14 +117,26 @@ for (const step of steps) {
   const command = commandFor(step);
   console.log(`\n# ${step.name}`);
   const proc = Bun.spawnSync(command, { stdout: "pipe", stderr: "pipe" });
+  const stdout = new TextDecoder().decode(proc.stdout).trim();
+  const stderr = new TextDecoder().decode(proc.stderr).trim();
   if (proc.stdout.byteLength > 0) {
-    console.log(new TextDecoder().decode(proc.stdout).trim());
+    console.log(stdout);
   }
   if (proc.stderr.byteLength > 0) {
-    console.error(new TextDecoder().decode(proc.stderr).trim());
+    console.error(stderr);
   }
   if (proc.exitCode !== 0) {
     console.error(`${step.tool} failed with exit code ${proc.exitCode}`);
     process.exit(proc.exitCode);
+  }
+  for (const expected of step.expectOutput ?? []) {
+    if (!stdout.includes(expected)) {
+      console.error(
+        `${step.tool} output did not include expected text: ${JSON.stringify(
+          expected,
+        )}`,
+      );
+      process.exit(1);
+    }
   }
 }
