@@ -119,6 +119,46 @@ bun run start
 
 The MCP server listens on `http://localhost:3100` with Streamable HTTP transport.
 
+### Mini two-worker mode
+
+For the Mini deployment, run two local Open Brain workers behind one stable
+entrypoint:
+
+```bash
+bun run start:two-worker
+```
+
+Defaults:
+
+- Public entrypoint: `http://localhost:3100`
+- Worker ports: `3101,3102`
+- Worker count: `2`
+- DB pool per worker: `5`
+- Migrations: only worker 1 runs migrations; worker 2 starts with
+  `OPEN_BRAIN_RUN_MIGRATIONS=0`
+
+Useful overrides:
+
+```bash
+OPEN_BRAIN_PUBLIC_PORT=3100 \
+OPEN_BRAIN_WORKERS=2 \
+OPEN_BRAIN_WORKER_PORTS=3101,3102 \
+OPEN_BRAIN_WORKER_DB_POOL_MAX=5 \
+bun run start:two-worker
+```
+
+The public `/health` endpoint aggregates both workers. MCP and REST traffic are
+round-robin proxied to the workers.
+
+Smoke after startup:
+
+```bash
+curl -fsS http://127.0.0.1:3100/health
+mcp2cli cache warm open-brain
+mcp2cli cache diff open-brain
+OPEN_BRAIN_CODEX_SMOKE_WRITE=1 bun run codex-memory-smoke
+```
+
 ## Auth & Permissions
 
 Each consumer gets a scoped Bearer token. Roles control which tables are readable/writable:

@@ -6,6 +6,7 @@
   "private": true,
   "scripts": {
     "start": "bun run src/index.ts",
+    "start:two-worker": "bun run scripts/run-two-worker.ts",
     "migrate": "bun run scripts/migrate.ts",
     "test": "bun test",
     "typecheck": "bunx tsc --noEmit",
