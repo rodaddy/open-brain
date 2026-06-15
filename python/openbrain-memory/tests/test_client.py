@@ -647,6 +647,215 @@ def test_initialize_error_does_not_establish_session():
     assert client.session_id is None
 
 
+def test_expired_session_400_reinitializes_and_retries_tool_call_once():
+    class ExpiredSessionTransport(FakeTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.sessions = iter(["session-old", "session-new"])
+            self.expired_once = False
+
+        def post(self, url, *, headers, json_body, timeout):
+            if json_body.get("method") == "initialize":
+                session_id = next(self.sessions)
+                self.requests.append(
+                    {
+                        "method": "POST",
+                        "url": url,
+                        "headers": dict(headers),
+                        "json": json_body,
+                        "timeout": timeout,
+                    }
+                )
+                return TransportResponse(
+                    status_code=200,
+                    headers={
+                        "content-type": "application/json",
+                        "mcp-session-id": session_id,
+                    },
+                    text=json.dumps(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": json_body["id"],
+                            "result": {"protocolVersion": "2025-03-26"},
+                        }
+                    ),
+                )
+            if json_body.get("method") == "tools/call" and not self.expired_once:
+                self.expired_once = True
+                self.requests.append(
+                    {
+                        "method": "POST",
+                        "url": url,
+                        "headers": dict(headers),
+                        "json": json_body,
+                        "timeout": timeout,
+                    }
+                )
+                return TransportResponse(
+                    status_code=400,
+                    headers={"content-type": "application/json"},
+                    text=(
+                        '{"error":"Bad request: missing session or not an '
+                        'initialize request"}'
+                    ),
+                )
+            return super().post(
+                url, headers=headers, json_body=json_body, timeout=timeout
+            )
+
+    transport = ExpiredSessionTransport()
+    client = make_client(transport)
+
+    assert client.search_all(query="x")["tool"] == "search_all"
+    assert client.session_id == "session-new"
+    assert [request["json"].get("method") for request in post_requests(transport)] == [
+        "initialize",
+        "notifications/initialized",
+        "tools/call",
+        "initialize",
+        "notifications/initialized",
+        "tools/call",
+    ]
+
+    tool_calls = tool_requests(transport)
+    assert len(tool_calls) == 2
+    assert header_value(tool_calls[0]["headers"], "Mcp-Session-Id") == "session-old"
+    assert header_value(tool_calls[1]["headers"], "Mcp-Session-Id") == "session-new"
+    assert tool_calls[0]["json"] == tool_calls[1]["json"]
+
+
+def test_expired_session_404_reinitializes_and_retries_tool_call_once():
+    class GoneSessionTransport(FakeTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.sessions = iter(["session-old", "session-new"])
+            self.expired_once = False
+
+        def post(self, url, *, headers, json_body, timeout):
+            if json_body.get("method") == "initialize":
+                session_id = next(self.sessions)
+                self.requests.append(
+                    {
+                        "method": "POST",
+                        "url": url,
+                        "headers": dict(headers),
+                        "json": json_body,
+                        "timeout": timeout,
+                    }
+                )
+                return TransportResponse(
+                    status_code=200,
+                    headers={
+                        "content-type": "application/json",
+                        "mcp-session-id": session_id,
+                    },
+                    text=json.dumps(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": json_body["id"],
+                            "result": {"protocolVersion": "2025-03-26"},
+                        }
+                    ),
+                )
+            if json_body.get("method") == "tools/call" and not self.expired_once:
+                self.expired_once = True
+                self.requests.append(
+                    {
+                        "method": "POST",
+                        "url": url,
+                        "headers": dict(headers),
+                        "json": json_body,
+                        "timeout": timeout,
+                    }
+                )
+                return TransportResponse(
+                    status_code=404,
+                    headers={"content-type": "application/json"},
+                    text='{"error":"session not found"}',
+                )
+            return super().post(
+                url, headers=headers, json_body=json_body, timeout=timeout
+            )
+
+    transport = GoneSessionTransport()
+    client = make_client(transport)
+
+    assert client.search_all(query="x")["tool"] == "search_all"
+    assert client.session_id == "session-new"
+    assert len(tool_requests(transport)) == 2
+
+
+def test_auth_error_does_not_reinitialize_or_retry_tool_call():
+    class AuthErrorTransport(FakeTransport):
+        def post(self, url, *, headers, json_body, timeout):
+            if json_body.get("method") == "tools/call":
+                self.requests.append(
+                    {
+                        "method": "POST",
+                        "url": url,
+                        "headers": dict(headers),
+                        "json": json_body,
+                        "timeout": timeout,
+                    }
+                )
+                return TransportResponse(
+                    status_code=401,
+                    headers={"content-type": "application/json"},
+                    text='{"error":"unauthorized"}',
+                )
+            return super().post(
+                url, headers=headers, json_body=json_body, timeout=timeout
+            )
+
+    transport = AuthErrorTransport()
+    client = make_client(transport)
+
+    with pytest.raises(OpenBrainHTTPError, match="status=401"):
+        client.search_all(query="x")
+
+    assert [request["json"].get("method") for request in post_requests(transport)] == [
+        "initialize",
+        "notifications/initialized",
+        "tools/call",
+    ]
+
+
+def test_tool_validation_400_missing_session_text_does_not_retry():
+    class ValidationErrorTransport(FakeTransport):
+        def post(self, url, *, headers, json_body, timeout):
+            if json_body.get("method") == "tools/call":
+                self.requests.append(
+                    {
+                        "method": "POST",
+                        "url": url,
+                        "headers": dict(headers),
+                        "json": json_body,
+                        "timeout": timeout,
+                    }
+                )
+                return TransportResponse(
+                    status_code=400,
+                    headers={"content-type": "application/json"},
+                    text='{"error":"missing session_key argument"}',
+                )
+            return super().post(
+                url, headers=headers, json_body=json_body, timeout=timeout
+            )
+
+    transport = ValidationErrorTransport()
+    client = make_client(transport)
+
+    with pytest.raises(OpenBrainHTTPError, match="missing session_key"):
+        client.session_context()
+
+    assert client.session_id == "session-123"
+    assert [request["json"].get("method") for request in post_requests(transport)] == [
+        "initialize",
+        "notifications/initialized",
+        "tools/call",
+    ]
+
+
 def test_sse_mcp_responses_are_decoded():
     class SseTransport(FakeTransport):
         def post(self, url, *, headers, json_body, timeout):
