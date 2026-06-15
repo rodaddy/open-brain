@@ -1,5 +1,4 @@
 #!/usr/bin/env bun
-import fixture from "../eval/open-brain/fixtures/memory-smoke.json" assert { type: "json" };
 import { formatScorecard, runEvalSuite } from "../eval/open-brain/runner.ts";
 import type { EvalFixture } from "../eval/open-brain/types.ts";
 
@@ -23,10 +22,35 @@ async function gitCommit(): Promise<string> {
   return code === 0 ? output.trim() : "unknown";
 }
 
+async function loadFixture(
+  path = "eval/open-brain/fixtures/memory-smoke.json",
+): Promise<EvalFixture> {
+  try {
+    const file = Bun.file(path);
+    const fixture = (await file.json()) as EvalFixture;
+    if (
+      fixture.schema_version !== 1 ||
+      !Array.isArray(fixture.corpus) ||
+      !Array.isArray(fixture.probes)
+    ) {
+      throw new Error("expected schema_version=1 with corpus and probes arrays");
+    }
+    return fixture;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to load Open Brain eval fixture ${path}: ${message}`);
+  }
+}
+
 const reportPath = argValue("report");
+const fixturePath = argValue("fixture");
 const jsonOnly = Bun.argv.includes("--json");
 const commit = await gitCommit();
-const scorecard = runEvalSuite(fixture as EvalFixture, { commit });
+const fixture = await loadFixture(fixturePath).catch((error) => {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(2);
+});
+const scorecard = runEvalSuite(fixture, { commit });
 
 if (reportPath) {
   await Bun.write(reportPath, `${JSON.stringify(scorecard, null, 2)}\n`);

@@ -13,6 +13,7 @@ issues a place to add live adapters and Codex workflow scenarios.
 
 ```bash
 bun run eval:memory
+bun run eval:memory -- --fixture eval/open-brain/fixtures/codex-workflows.json
 bun run eval:memory -- --json
 bun run eval:memory -- --report eval/open-brain/reports/latest.json
 ```
@@ -24,9 +25,13 @@ when the report is intended to be durable; otherwise write scratch reports under
 ## Fixture Layout
 
 - `fixtures/memory-smoke.json`: synthetic corpus plus sealed probe expectations.
+- `fixtures/codex-workflows.json`: Codex session-resume, decision reuse,
+  validation-evidence, preference, stale-memory, citation, synthesis-tool
+  selection, simulated-current-evidence, and unreadable-namespace scenarios.
 - `runner.ts`: deterministic retrieval, scoring, uncertainty, and scorecard code.
 - `__tests__/runner.test.ts`: tests for sealed answers, namespace isolation,
-  stale/contradiction uncertainty, and aggregate scorecards.
+  stale/contradiction uncertainty, Codex workflow scenarios, and aggregate
+  scorecards.
 
 ## Current Categories
 
@@ -37,13 +42,16 @@ when the report is intended to be durable; otherwise write scratch reports under
 - Citation grounding: expected source refs are cited.
 - Contradiction handling: conflicting memories are surfaced as uncertainty.
 - Namespace isolation: unreadable namespace entries are not returned.
+- Codex workflows: coding-agent memory tasks resolve the right durable evidence.
 - Scale/performance: smoke latency is tracked against an expanded-corpus target.
 
 ## Next Expansion Points
 
 - Add a live Open Brain adapter that loads synthetic fixtures into an isolated
   namespace and calls `search_brain` / `brain_answer`.
-- Add Codex workflow probes for session resume, user decision reuse, validation
-  receipt lookup, stale-memory avoidance, and memory citation behavior.
+- Add live-adapter probes once the eval harness can call `brain_answer` through
+  MCP. The current offline fixture checks that Codex retrieves the right
+  synthesis-tool policy and can render cited answer evidence; it does not
+  execute `brain_answer` or read the live repo.
 - Publish durable scorecards only when the corpus and command are intentionally
   pinned for comparison.

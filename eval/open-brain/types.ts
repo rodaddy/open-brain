@@ -6,6 +6,7 @@ export type EvalCategory =
   | "citation"
   | "contradiction"
   | "namespace"
+  | "codex"
   | "scale";
 
 export type CorpusEntryType = "thought" | "decision" | "relationship" | "project" | "session";
@@ -41,6 +42,13 @@ export interface EvalProbe {
   readable_namespaces: string[];
   top_k: number;
   relevant_ids: string[];
+  current_evidence?: {
+    id: string;
+    label: string;
+    content: string;
+    contradicts_ids?: string[];
+  };
+  expected_answer_terms?: string[];
   junk_ids?: string[];
   expect_no_results?: boolean;
   expected_citation_ids?: string[];
