@@ -62,10 +62,9 @@ const steps: SmokeStep[] = [
     params: {
       session_key: sessionKey,
       project: "open-brain",
-      summary:
-        "Disposable Codex memory smoke checkpoint. Confirms session_start, append_session_event, session_context, and session_wrap command shapes.",
+      summary: `Disposable Codex memory smoke checkpoint for ${sessionKey}. Confirms session_start, append_session_event, session_context, and session_wrap command shapes.`,
       key_decisions: [
-        "Codex durable memory captures distilled events instead of raw transcripts.",
+        `Codex durable memory captures distilled events instead of raw transcripts for ${sessionKey}.`,
       ],
       next_steps: ["Delete or ignore disposable smoke lane if no longer useful."],
     },
@@ -78,7 +77,10 @@ const steps: SmokeStep[] = [
       include_events: true,
       event_limit: 10,
     },
-    expectOutput: [sessionKey, "Disposable Codex memory smoke checkpoint"],
+    expectOutput: [
+      sessionKey,
+      "Codex smoke flow reached validation receipt step.",
+    ],
   },
   {
     name: "search saved checkpoint context",
@@ -88,7 +90,10 @@ const steps: SmokeStep[] = [
       sources: "brain",
       limit: 5,
     },
-    expectOutput: [sessionKey, "Disposable Codex memory smoke checkpoint"],
+    expectOutput: [
+      sessionKey,
+      `Disposable Codex memory smoke checkpoint for ${sessionKey}`,
+    ],
   },
 ];
 
