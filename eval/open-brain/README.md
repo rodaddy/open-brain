@@ -26,8 +26,8 @@ when the report is intended to be durable; otherwise write scratch reports under
 
 - `fixtures/memory-smoke.json`: synthetic corpus plus sealed probe expectations.
 - `fixtures/codex-workflows.json`: Codex session-resume, decision reuse,
-  validation-evidence, preference, stale-memory, citation, synthesis, and
-  unreadable-namespace scenarios.
+  validation-evidence, preference, stale-memory, citation, synthesis-tool
+  selection, and unreadable-namespace scenarios.
 - `runner.ts`: deterministic retrieval, scoring, uncertainty, and scorecard code.
 - `__tests__/runner.test.ts`: tests for sealed answers, namespace isolation,
   stale/contradiction uncertainty, Codex workflow scenarios, and aggregate
@@ -49,8 +49,8 @@ when the report is intended to be durable; otherwise write scratch reports under
 
 - Add a live Open Brain adapter that loads synthetic fixtures into an isolated
   namespace and calls `search_brain` / `brain_answer`.
-- Extend the Codex workflow fixture with live-adapter probes once the eval
-  harness can call `brain_answer` through MCP instead of checking the offline
-  synthesis contract.
+- Add live-adapter probes once the eval harness can call `brain_answer` through
+  MCP. The current offline fixture checks that Codex retrieves the right
+  synthesis-tool policy and citations; it does not execute `brain_answer`.
 - Publish durable scorecards only when the corpus and command are intentionally
   pinned for comparison.

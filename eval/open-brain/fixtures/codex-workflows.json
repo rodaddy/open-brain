@@ -84,9 +84,9 @@
       "namespace": "skippy",
       "type": "thought",
       "title": "One-off system tmp instruction",
-      "content": "One-off task instruction: for this single tool compatibility check, write the transient socket probe under /tmp and delete it immediately.",
-      "tags": ["one-off", "tmp", "tool-compatibility"],
-      "aliases": ["single tool compatibility check"],
+      "content": "One-off task instruction: for this single tool compatibility check, write Codex temporary worktrees and scratch reports under /tmp and delete them immediately.",
+      "tags": ["one-off", "tmp", "tool-compatibility", "codex"],
+      "aliases": ["single tool compatibility check", "temporary worktrees scratch reports"],
       "created_at": "2026-06-12T08:00:00.000Z",
       "source_ref": {
         "source": "brain",
@@ -94,7 +94,7 @@
         "id": "oneoff-use-system-tmp",
         "namespace": "skippy",
         "label": "One-off system tmp instruction",
-        "preview": "For this single compatibility check, write the transient socket probe under /tmp.",
+        "preview": "For this single compatibility check, write Codex temporary worktrees and scratch reports under /tmp.",
         "created_at": "2026-06-12T08:00:00.000Z"
       }
     },
@@ -124,9 +124,9 @@
       "namespace": "collab",
       "type": "project",
       "title": "Stale Open Brain runtime note",
-      "content": "Old note: Open Brain should use npm and Node 20 scripts for TypeScript validation.",
-      "tags": ["open-brain", "runtime", "stale", "node"],
-      "aliases": ["old node runtime", "npm typecheck"],
+      "content": "Old repo evidence: Open Brain runtime TypeScript validation should use npm and Node 20 scripts.",
+      "tags": ["open-brain", "runtime", "stale", "node", "typescript"],
+      "aliases": ["old node runtime", "npm typecheck", "Open Brain runtime TypeScript validation"],
       "created_at": "2024-02-01T00:00:00.000Z",
       "updated_at": "2024-02-01T00:00:00.000Z",
       "source_ref": {
@@ -135,7 +135,7 @@
         "id": "repo-stale-node-runtime",
         "namespace": "collab",
         "label": "Stale Open Brain runtime note",
-        "preview": "Old note: Open Brain should use npm and Node 20 scripts.",
+        "preview": "Old repo evidence: Open Brain runtime TypeScript validation should use npm and Node 20 scripts.",
         "created_at": "2024-02-01T00:00:00.000Z",
         "last_updated_at": "2024-02-01T00:00:00.000Z"
       }
@@ -235,9 +235,9 @@
     {
       "id": "codex-durable-preference-not-oneoff",
       "category": "codex",
-      "query": "What durable preference controls Codex temporary worktrees and scratch reports?",
+      "query": "Codex temporary worktrees scratch reports durable preference",
       "readable_namespaces": ["skippy", "collab"],
-      "top_k": 2,
+      "top_k": 1,
       "relevant_ids": ["preference-thunderbolt-temp"],
       "junk_ids": ["oneoff-use-system-tmp"],
       "expected_citation_ids": ["preference-thunderbolt-temp"],
@@ -247,16 +247,16 @@
     {
       "id": "codex-current-repo-over-stale-memory",
       "category": "codex",
-      "query": "Current Open Brain runtime evidence TypeScript validation Bun 1.3.13",
+      "query": "Open Brain runtime TypeScript validation evidence",
       "readable_namespaces": ["skippy", "collab"],
-      "top_k": 1,
+      "top_k": 2,
       "relevant_ids": ["repo-current-bun-runtime"],
-      "junk_ids": ["repo-stale-node-runtime"],
       "expected_citation_ids": ["repo-current-bun-runtime"],
+      "expected_uncertainty": ["stale"],
       "max_age_days": 30,
       "as_of": "2026-06-15T12:00:00.000Z",
       "min_recall_at_k": 1,
-      "min_precision_at_k": 1
+      "min_precision_at_k": 0.5
     },
     {
       "id": "codex-cite-memory-derived-facts",

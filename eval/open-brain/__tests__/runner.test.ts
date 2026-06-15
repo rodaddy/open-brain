@@ -133,8 +133,9 @@ describe("Open Brain memory eval runner", () => {
     expect(probe).toBeDefined();
     const score = scoreProbe(typedCodexFixture.corpus, probe!);
     expect(score.passed).toBe(true);
-    expect(score.retrieved_ids).toEqual(["repo-current-bun-runtime"]);
-    expect(score.uncertainty).toEqual([]);
+    expect(score.retrieved_ids).toContain("repo-current-bun-runtime");
+    expect(score.retrieved_ids).toContain("repo-stale-node-runtime");
+    expect(score.uncertainty).toEqual(["stale"]);
   });
 
   it("refuses unreadable Codex workflow facts", () => {
@@ -146,5 +147,59 @@ describe("Open Brain memory eval runner", () => {
     expect(score.passed).toBe(true);
     expect(score.retrieved_ids).toEqual([]);
     expect(score.failures).toEqual([]);
+  });
+
+  it("proves the unreadable namespace probe has a positive control", () => {
+    const probe = typedCodexFixture.probes.find(
+      (item) => item.id === "codex-unreadable-namespace-refusal",
+    );
+    expect(probe).toBeDefined();
+    const score = scoreProbe(typedCodexFixture.corpus, {
+      ...probe!,
+      readable_namespaces: ["skippy", "private-agent"],
+      relevant_ids: ["private-user-secret"],
+      expect_no_results: false,
+    });
+    expect(score.retrieved_ids).toContain("private-user-secret");
+  });
+
+  it("runs the CLI against an alternate fixture", async () => {
+    const proc = Bun.spawn(
+      [
+        "bun",
+        "run",
+        "scripts/eval-open-brain-memory.ts",
+        "--fixture",
+        "eval/open-brain/fixtures/codex-workflows.json",
+      ],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const stdout = await new Response(proc.stdout).text();
+    const stderr = await new Response(proc.stderr).text();
+    expect(await proc.exited).toBe(0);
+    expect(stderr).toBe("");
+    expect(stdout).toContain("corpus=open-brain-codex-workflows-v1");
+    expect(stdout).toContain("- codex: 6/6 pass");
+    expect(stdout).not.toContain("0/0 pass");
+  });
+
+  it("returns a controlled CLI error for a missing fixture", async () => {
+    const proc = Bun.spawn(
+      [
+        "bun",
+        "run",
+        "scripts/eval-open-brain-memory.ts",
+        "--fixture",
+        "eval/open-brain/fixtures/does-not-exist.json",
+      ],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const stdout = await new Response(proc.stdout).text();
+    const stderr = await new Response(proc.stderr).text();
+    expect(await proc.exited).toBe(2);
+    expect(stdout).toBe("");
+    expect(stderr).toContain(
+      "Failed to load Open Brain eval fixture eval/open-brain/fixtures/does-not-exist.json",
+    );
   });
 });

@@ -267,6 +267,7 @@ export function formatScorecard(scorecard: EvalScorecard): string {
   ];
   for (const category of CATEGORY_ORDER) {
     const result = scorecard.categories[category];
+    if (result.probes_total === 0) continue;
     lines.push(
       `- ${category}: ${result.probes_passed}/${result.probes_total} pass recall=${result.recall_at_k.toFixed(3)} precision=${result.precision_at_k.toFixed(3)}`,
     );
