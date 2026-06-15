@@ -166,7 +166,17 @@ describe("search_brain", () => {
     it("returns ranked results with expected shape", async () => {
       const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
       const { client, cleanup } = await setup(
-        searchPool(makeMockRows(3)),
+        searchPool(
+          makeMockRows(3).map((row) => ({
+            ...row,
+            namespace: "collab",
+            created_by: "codex",
+            promoted_from: {
+              source_namespace: "skippy",
+              source_id: "00000000-0000-4000-8000-000000000010",
+            },
+          })),
+        ),
         auth,
       );
 
@@ -185,6 +195,18 @@ describe("search_brain", () => {
         expect(parsed[0]).toHaveProperty("distance");
         expect(parsed[0]).toHaveProperty("tags");
         expect(parsed[0]).toHaveProperty("created_at");
+        expect(parsed[0].source_ref).toEqual({
+          source: "brain",
+          type: "thought",
+          id: "uuid-0",
+          namespace: "collab",
+          created_by: "codex",
+          created_at: "2026-01-01T00:00:00.000Z",
+          promoted_from: {
+            source_namespace: "skippy",
+            source_id: "00000000-0000-4000-8000-000000000010",
+          },
+        });
       } finally {
         await cleanup();
       }

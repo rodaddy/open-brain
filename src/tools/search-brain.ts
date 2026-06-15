@@ -73,18 +73,32 @@ export interface ExplicitLink {
   created_at: string;
 }
 
+export interface SourceRef {
+  source: "brain";
+  type: string;
+  id: string;
+  namespace?: string;
+  created_by?: string | null;
+  created_at: string;
+  promoted_from?: Record<string, unknown> | null;
+}
+
 export interface SearchRow {
   source_type: string;
   id: string;
+  namespace?: string;
   content_preview: string;
   tags: string[] | null;
+  created_by?: string | null;
   created_at: string;
+  promoted_from?: Record<string, unknown> | null;
   usefulness: number;
   tier?: string;
   distance?: number;
   fts_rank?: number;
   access_count?: number;
   explicit_links?: ExplicitLink[];
+  source_ref?: SourceRef;
   extracted_metadata?: {
     topics?: string[];
     people?: string[];
@@ -109,6 +123,21 @@ type LinkRow = {
 
 function linkKey(type: string, id: string): string {
   return `${type}:${id}`;
+}
+
+function withSourceRefs(rows: SearchRow[]): SearchRow[] {
+  return rows.map((row) => ({
+    ...row,
+    source_ref: {
+      source: "brain",
+      type: row.source_type,
+      id: row.id,
+      namespace: row.namespace,
+      created_by: row.created_by,
+      created_at: new Date(row.created_at).toISOString(),
+      promoted_from: row.promoted_from ?? null,
+    },
+  }));
 }
 
 function appendNamespaceParam(
@@ -239,9 +268,12 @@ function buildTableCTE(
   SELECT
     '${label}' AS source_type,
     ${alias}.id,
+    ${alias}.namespace,
     ${preview} AS content_preview,
     ${alias}.tags,
+    ${alias}.created_by,
     ${alias}.created_at,
+    ${alias}.promoted_from,
     ${alias}.tier,
     ${alias}.embedding <=> (SELECT emb FROM query_embedding) AS distance,
     COALESCE(${alias}.usefulness_score, 0.5) AS usefulness,
@@ -281,9 +313,12 @@ function buildFtsCTE(
   SELECT
     '${label}' AS source_type,
     ${alias}.id,
+    ${alias}.namespace,
     ${preview} AS content_preview,
     ${alias}.tags,
+    ${alias}.created_by,
     ${alias}.created_at,
+    ${alias}.promoted_from,
     ${alias}.tier,
     ts_rank_cd(${alias}.search_vector, plainto_tsquery('english', (SELECT q FROM fts_query))) AS fts_rank,
     COALESCE(${alias}.usefulness_score, 0.5) AS usefulness,
@@ -329,7 +364,7 @@ ORDER BY (distance * ${VECTOR_WEIGHT} + (1.0 - COALESCE(usefulness, 0.5)) * ${US
 LIMIT $2 OFFSET $3`;
 
   const { rows } = await deps.pool.query(sql, params);
-  return rows as SearchRow[];
+  return withSourceRefs(rows as SearchRow[]);
 }
 
 async function ftsSearch(
@@ -364,7 +399,7 @@ ORDER BY fts_rank DESC
 LIMIT $2 OFFSET $3`;
 
   const { rows } = await deps.pool.query(sql, params);
-  return rows as SearchRow[];
+  return withSourceRefs(rows as SearchRow[]);
 }
 
 /**

@@ -12,6 +12,7 @@ import {
   TIER_BOOST,
   type SearchMode,
   type SearchRow,
+  type SourceRef,
 } from "./search-brain.ts";
 
 type NamespaceFilter = string | string[];
@@ -21,12 +22,20 @@ interface UnifiedResult {
   type: string;
   content: string;
   score: number;
+  source_ref: SourceRef | QmdSourceRef;
   id?: string;
   path?: string;
   tags?: string[];
   collection?: string;
   tier?: string;
   explicit_links?: SearchRow["explicit_links"];
+}
+
+interface QmdSourceRef {
+  source: "qmd";
+  type: "file";
+  path?: string;
+  collection?: string;
 }
 
 interface QmdDocument {
@@ -90,6 +99,12 @@ async function searchQmd(
       score: doc.score ?? doc.similarity ?? 0.5,
       path: doc.path || doc.file,
       collection: doc.collection,
+      source_ref: {
+        source: "qmd" as const,
+        type: "file" as const,
+        path: doc.path || doc.file,
+        collection: doc.collection,
+      },
     }));
   } catch (err) {
     logger.warn("qmd search error", {
@@ -260,7 +275,7 @@ async function searchOB(
       tier,
       0,
       namespace,
-      false,
+      true,
     );
   } catch (err) {
     logger.warn("searchOB_failed", {
@@ -276,6 +291,12 @@ async function searchOB(
     type: row.source_type,
     content: row.content_preview.slice(0, 300),
     score: row.distance != null ? 1 - row.distance : (row.fts_rank ?? 0.5),
+    source_ref: row.source_ref ?? {
+      source: "brain" as const,
+      type: row.source_type,
+      id: row.id,
+      created_at: new Date(row.created_at).toISOString(),
+    },
     id: row.id,
     tags: row.tags ?? undefined,
     tier: row.tier,

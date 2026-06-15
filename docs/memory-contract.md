@@ -16,6 +16,9 @@ Open Brain is the **durable operational memory** for PAI agents. It stores:
 
 - **Not a behavior layer.** Rules, routing, and personality live in CLAUDE.md / skill files.
 - **Not raw recall.** Session transcripts and logs are separate from OB entries.
+- **Not a dumping ground.** Store distilled facts, decisions, blockers,
+  artifacts, validation receipts, and checkpoint summaries. Do not store raw
+  transcripts, secrets, or long command output.
 - **Not Honcho.** OB is the authoritative source for operational state. Honcho/session vibes are not canonical.
 
 ## Memory Tiers
@@ -50,8 +53,12 @@ Open Brain is the **durable operational memory** for PAI agents. It stores:
 ## Namespace Convention
 
 - Namespace defaults to `auth.clientId` (agent identity)
-- Cross-namespace access is allowed for coordination (not a security boundary)
-- `collab` namespace for shared/cross-agent knowledge
+- Namespace isolation is a security boundary. ID-based reads and mutations must
+  include auth-derived namespace predicates unless a token-sourced global role
+  is intentionally broad.
+- `collab` namespace is for shared/cross-agent knowledge. Agents should promote
+  into `collab` through promotion flows rather than hard-coding `collab` as the
+  only destination.
 
 ## Tool Reference
 
@@ -70,3 +77,76 @@ Open Brain is the **durable operational memory** for PAI agents. It stores:
 | search_all | Federated search (OB + qmd) | read |
 | log_thought | Record a learning/insight | write |
 | log_decision | Record a decision with rationale | write |
+
+## Codex Durable Memory Flow
+
+Codex should use Open Brain through daemon-mode `mcp2cli open-brain`, not direct
+MCP server config.
+
+Start or resume a lane:
+
+```bash
+mcp2cli open-brain session_start --params '{"session_key":"<stable-key>","project":"open-brain","agent":"codex","topic":"<short topic>"}'
+```
+
+Read current lane context without writing a new event:
+
+```bash
+mcp2cli open-brain session_context --params '{"session_key":"<stable-key>","include_events":true,"event_limit":50}'
+```
+
+Append only high-signal events:
+
+```bash
+mcp2cli open-brain append_session_event --params '{"session_key":"<stable-key>","event_type":"decision","content":"<distilled decision and rationale>","source":"codex","importance":"warm"}'
+```
+
+Checkpoint a compact durable summary:
+
+```bash
+mcp2cli open-brain session_wrap --params '{"session_key":"<stable-key>","project":"open-brain","summary":"<checkpoint>","key_decisions":["<decision>"],"next_steps":["<next action>"]}'
+```
+
+Search before answering when prior context matters:
+
+```bash
+mcp2cli open-brain search_all --params '{"query":"<query>","limit":10}'
+```
+
+Dry-run the Codex lifecycle command sequence without writing memory:
+
+```bash
+bun run scripts/codex-memory-smoke.ts
+```
+
+Execute the disposable live smoke only when intentionally validating the
+configured Open Brain service:
+
+```bash
+OPEN_BRAIN_CODEX_SMOKE_WRITE=1 bun run scripts/codex-memory-smoke.ts
+```
+
+Memory-derived facts should be cited with the returned source identity: for
+Open Brain entries, cite `source_ref.source`, `source_ref.type`,
+`source_ref.id`, and when useful `source_ref.namespace`; for qmd results, cite
+`source_ref.path` and `source_ref.collection`.
+
+## Capability Audit Gate
+
+Before planning Open Brain architecture, creating issues, changing schema/tools,
+or deciding what Codex memory already supports, inspect current capabilities:
+
+```bash
+mcp2cli open-brain --help
+mcp2cli schema open-brain.search_all
+mcp2cli schema open-brain.session_start
+mcp2cli schema open-brain.append_session_event
+mcp2cli schema open-brain.session_context
+mcp2cli schema open-brain.session_wrap
+mcp2cli open-brain get_stats --params '{}'
+mcp2cli open-brain list_namespaces --params '{}'
+```
+
+In this repo, also inspect `src/tools/` and `src/db/migrations/` before
+proposing new primitives. State what exists, what is missing, and what should be
+docs/protocol instead of code.
