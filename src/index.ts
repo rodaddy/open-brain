@@ -177,14 +177,20 @@ if (import.meta.main) {
 
   const pool = createPool();
 
-  try {
-    await runMigrations(pool);
-    logger.info("Migrations complete");
-  } catch (err) {
-    logger.error("migration_failed", {
-      error: String(err),
+  if (process.env.OPEN_BRAIN_RUN_MIGRATIONS !== "0") {
+    try {
+      await runMigrations(pool);
+      logger.info("Migrations complete");
+    } catch (err) {
+      logger.error("migration_failed", {
+        error: String(err),
+      });
+      process.exit(1);
+    }
+  } else {
+    logger.info("Skipping migrations for worker", {
+      OPEN_BRAIN_RUN_MIGRATIONS: process.env.OPEN_BRAIN_RUN_MIGRATIONS,
     });
-    process.exit(1);
   }
 
   const tokenMap = buildTokenMap(

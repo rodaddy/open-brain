@@ -3,6 +3,12 @@ import pgvector from "pgvector/pg";
 import { logger } from "../logger.ts";
 import type { PoolHealth } from "../types.ts";
 
+function parsePositiveInt(value: string | undefined, fallback: number): number {
+  if (!value) return fallback;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 export function createPool(overrides?: Partial<pg.PoolConfig>): pg.Pool {
   const host = process.env.DB_HOST;
   if (!host) throw new Error("DB_HOST environment variable is required");
@@ -15,7 +21,7 @@ export function createPool(overrides?: Partial<pg.PoolConfig>): pg.Pool {
     database: process.env.DB_NAME || "open_brain",
     user,
     password: process.env.DB_PASSWORD,
-    max: 10,
+    max: parsePositiveInt(process.env.DB_POOL_MAX, 10),
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 5000,
     maxUses: 7500,
