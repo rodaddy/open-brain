@@ -10,6 +10,7 @@
     "test": "bun test",
     "typecheck": "bunx tsc --noEmit",
     "backfill": "bun run scripts/backfill.ts",
+    "codex-memory-smoke": "bun run scripts/codex-memory-smoke.ts",
     "import-kb": "bun run scripts/import-legacy-kb.ts",
     "curate": "bun run scripts/curate.ts"
   },

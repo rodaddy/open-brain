@@ -158,7 +158,14 @@ describe("search_all", () => {
         const parsed = parseSearchAll(result);
         expect(parsed.brain_hits).toBe(0);
         expect(parsed.qmd_hits).toBe(2);
-        expect(parsed.results.every((r: any) => r.source === "qmd")).toBe(true);
+        expect(parsed.results.every((r: any) => r.source === "qmd")).toBe(
+          true,
+        );
+        expect(parsed.results[0].source_ref).toEqual({
+          source: "qmd",
+          type: "file",
+          path: "/a.md",
+        });
       } finally {
         await cleanup();
       }
@@ -187,20 +194,24 @@ describe("search_all", () => {
 
     it("returns single brain result correctly", async () => {
       mockBunSpawn(1, "");
+      const queries: string[] = [];
       const pool = {
-        query: async () => ({
-          rows: [
-            {
-              source_type: "decision",
-              id: "dec-1",
-              content_preview: "Use Bun over Node",
-              distance: 0.08,
-              tags: ["runtime"],
-              created_at: "2026-01-10",
-              usefulness: 0.7,
-            },
-          ],
-        }),
+        query: async (sql: string) => {
+          queries.push(sql);
+          return {
+            rows: [
+              {
+                source_type: "decision",
+                id: "dec-1",
+                content_preview: "Use Bun over Node",
+                distance: 0.08,
+                tags: ["runtime"],
+                created_at: "2026-01-10",
+                usefulness: 0.7,
+              },
+            ],
+          };
+        },
       };
       const { client, cleanup } = await setupClient(pool, {
         role: "admin",
@@ -218,6 +229,18 @@ describe("search_all", () => {
         expect(parsed.results[0].type).toBe("decision");
         expect(parsed.results[0].id).toBe("dec-1");
         expect(parsed.results[0].tags).toEqual(["runtime"]);
+        expect(parsed.results[0].source_ref).toEqual({
+          source: "brain",
+          type: "decision",
+          id: "dec-1",
+          created_at: "2026-01-10T00:00:00.000Z",
+          last_updated_at: "2026-01-10T00:00:00.000Z",
+          label: "Use Bun over Node",
+          preview: "Use Bun over Node",
+        });
+        expect(queries.some((sql) => sql.includes("FROM ob_links"))).toBe(
+          false,
+        );
       } finally {
         await cleanup();
       }
