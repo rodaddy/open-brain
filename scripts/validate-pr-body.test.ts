@@ -22,12 +22,12 @@ const validBody = `## Summary
 
 - [x] Critical self-review fields above are filled with specific, non-placeholder content
 - [x] MEDIUM+ review findings were captured in \`docs/sme/\` or explicitly marked not applicable
-- [x] Live Open Brain checks are linked below when an issue acceptance criterion requires live proof
+- Live Open Brain checks: [ ] linked below or [x] not applicable because: this fixture does not require live proof
 `;
 
 describe("validatePrBody", () => {
   it("accepts a complete critical self-review and checked review gate", () => {
-    expect(validatePrBody(validBody)).toEqual({ bypassed: false, errors: [] });
+    expect(validatePrBody(validBody)).toEqual({ errors: [] });
   });
 
   it("rejects the blank PR template", () => {
@@ -64,10 +64,17 @@ describe("validatePrBody", () => {
     );
   });
 
-  it("allows Rico-approved bypass marker", () => {
-    expect(validatePrBody("review-gate-bypass: rico-approved")).toEqual({
-      bypassed: true,
-      errors: [],
-    });
+  it("rejects ambiguous live-check disposition", () => {
+    const body = validBody.replace(
+      "- Live Open Brain checks: [ ] linked below or [x] not applicable because: this fixture does not require live proof",
+      "- Live Open Brain checks: [x] linked below or [x] not applicable because: duplicate",
+    );
+    expect(validatePrBody(body).errors).toContain(
+      "Live Open Brain checks must check exactly one disposition.",
+    );
+  });
+
+  it("rejects self-attested bypass text", () => {
+    expect(validatePrBody("review-gate-bypass: rico-approved").errors.length).toBeGreaterThan(0);
   });
 });

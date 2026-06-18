@@ -1,9 +1,6 @@
 interface ValidationResult {
-  bypassed: boolean;
   errors: string[];
 }
-
-const bypassMarker = "review-gate-bypass: rico-approved";
 
 function section(body: string, name: string): string {
   const lines = body.split(/\r?\n/);
@@ -37,13 +34,26 @@ function checked(sectionBody: string, label: string): boolean {
   return new RegExp(`^-\\s*\\[[xX]\\]\\s*${escaped}`, "im").test(sectionBody);
 }
 
+function exactlyOneDisposition(
+  line: string,
+  firstLabel: string,
+  secondLabel: string,
+  errorPrefix: string,
+  errors: string[],
+): void {
+  const firstChecked = new RegExp(`\\[[xX]\\]\\s*${firstLabel}`).test(line);
+  const secondMatch = new RegExp(`\\[[xX]\\]\\s*${secondLabel}:\\s*(.+)$`, "i").exec(line);
+  const secondChecked = Boolean(secondMatch);
+  const secondReason = secondMatch?.[1]?.trim() ?? "";
+  if (firstChecked === secondChecked) {
+    errors.push(`${errorPrefix} must check exactly one disposition.`);
+  } else if (secondChecked && (!secondReason || secondReason === "-")) {
+    errors.push(`${errorPrefix} not-applicable disposition needs a reason.`);
+  }
+}
+
 export function validatePrBody(body: string): ValidationResult {
   const errors: string[] = [];
-
-  if (body.toLowerCase().includes(bypassMarker)) {
-    return { bypassed: true, errors };
-  }
-
   const criticalSelfReview = section(body, "Critical Self-Review");
   if (!criticalSelfReview) {
     errors.push("Missing '## Critical Self-Review' section.");
@@ -65,14 +75,13 @@ export function validatePrBody(body: string): ValidationResult {
     const smeLine = criticalSelfReview.match(
       /^-\s*SME review-memory update:\s*(.+)$/im,
     )?.[1] ?? "";
-    const updatedChecked = /\[[xX]\]\s*`?docs\/sme\/`?\s*updated/.test(smeLine);
-    const notApplicableMatch = /\[[xX]\]\s*not applicable because:\s*(.+)$/i.exec(smeLine);
-    const notApplicableBecause = notApplicableMatch?.[1]?.trim() ?? "";
-    if (updatedChecked === Boolean(notApplicableMatch)) {
-      errors.push("SME review-memory update must check exactly one disposition.");
-    } else if (notApplicableMatch && (!notApplicableBecause || notApplicableBecause === "-")) {
-      errors.push("SME review-memory not-applicable disposition needs a reason.");
-    }
+    exactlyOneDisposition(
+      smeLine,
+      "`?docs/sme/`? updated",
+      "not applicable because",
+      "SME review-memory update",
+      errors,
+    );
   }
 
   const reviewGate = section(body, "Review Gate");
@@ -82,15 +91,25 @@ export function validatePrBody(body: string): ValidationResult {
     for (const label of [
       "Critical self-review fields above are filled",
       "MEDIUM+ review findings were captured",
-      "Live Open Brain checks are linked below",
     ]) {
       if (!checked(reviewGate, label)) {
         errors.push(`Review Gate checkbox must be checked: ${label}`);
       }
     }
+
+    const liveLine = reviewGate.match(
+      /^-\s*Live Open Brain checks:\s*(.+)$/im,
+    )?.[1] ?? "";
+    exactlyOneDisposition(
+      liveLine,
+      "linked below",
+      "not applicable because",
+      "Live Open Brain checks",
+      errors,
+    );
   }
 
-  return { bypassed: false, errors };
+  return { errors };
 }
 
 if (import.meta.main) {
@@ -98,17 +117,11 @@ if (import.meta.main) {
   const title = process.env.PR_TITLE ?? "";
   const result = validatePrBody(body);
 
-  if (result.bypassed) {
-    console.log(`PR body validation bypassed for ${title}: ${bypassMarker}`);
-    process.exit(0);
-  }
-
   if (result.errors.length > 0) {
     console.error("PR body validation failed:");
     for (const error of result.errors) {
       console.error(`- ${error}`);
     }
-    console.error(`Use '${bypassMarker}' only when Rico explicitly approves a bypass.`);
     process.exit(1);
   }
 

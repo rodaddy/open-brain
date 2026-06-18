@@ -25,7 +25,7 @@
 
 - [ ] Critical self-review fields above are filled with specific, non-placeholder content
 - [ ] MEDIUM+ review findings were captured in `docs/sme/` or explicitly marked not applicable
-- [ ] Live Open Brain checks are linked below when an issue acceptance criterion requires live proof
+- Live Open Brain checks: [ ] linked below or [ ] not applicable because:
 
 ## Downstream Rollout
 
