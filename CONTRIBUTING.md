@@ -68,6 +68,31 @@ git diff --cached | grep -E '10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+'
 
 If you find a match, replace it with `localhost` or a descriptive placeholder before pushing.
 
+## Critical Self-Review Before PR
+
+Before opening or marking a non-trivial PR ready, write a concise critical
+self-review in the PR body or a PR comment. This is author-owned process; it
+does not replace CI, reviewer sign-off, or review swarms.
+
+Use this format:
+
+```text
+Critical self-review:
+- Highest-risk behavior:
+- Assumptions that could be wrong:
+- Missing/weak tests:
+- Security/permission risk:
+- Migration/deploy risk:
+- Downstream client/runtime risk:
+- Rollback/cleanup concern:
+- Fixes made before PR:
+- Known residual risk:
+```
+
+If the self-review exposes a real issue, fix it before asking for review or
+mark it deferred only with explicit Rico approval. Avoid "all good" receipts;
+name the risks you checked.
+
 ## Stack
 
 - **Runtime:** [Bun](https://bun.sh/)

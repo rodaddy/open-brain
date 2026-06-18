@@ -6,8 +6,8 @@ Open Brain stores curated qmd-derived repo facts as graph entities through
 Use the promotion command with an explicit curated manifest:
 
 ```bash
-bun run promote:qmd-facts -- --file docs/repo-facts/king-capital.qmd-facts.json --namespace collab --dry-run
-bun run promote:qmd-facts -- --file docs/repo-facts/king-capital.qmd-facts.json --namespace collab
+bun run promote:qmd-facts -- --file docs/repo-facts/king-capital.qmd-facts.json --namespace shared-kb --dry-run
+bun run promote:qmd-facts -- --file docs/repo-facts/king-capital.qmd-facts.json --namespace shared-kb
 ```
 
 The command reports `would_promote`, `promoted`, `updated`, `skipped`,

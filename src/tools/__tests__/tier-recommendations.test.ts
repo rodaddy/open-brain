@@ -139,7 +139,7 @@ describe("tier_recommendations", () => {
 
       expect(result.isError).toBeFalsy();
       expect(calls[0]!.sql).toContain("namespace = ANY($3::text[])");
-      expect(calls[0]!.params).toEqual([30, 20, ["bilby", "collab"]]);
+      expect(calls[0]!.params).toEqual([30, 20, ["bilby", "shared-kb"]]);
     } finally {
       await cleanup();
     }
@@ -175,7 +175,7 @@ describe("tier_recommendations", () => {
       expect(calls.every((call) => call.sql.includes("namespace = ANY($3::text[])"))).toBe(
         true,
       );
-      const scopedParams = JSON.stringify([7, 20, ["bilby", "collab"]]);
+      const scopedParams = JSON.stringify([7, 20, ["bilby", "shared-kb"]]);
       expect(
         calls.every((call) => JSON.stringify(call.params) === scopedParams),
       ).toBe(true);

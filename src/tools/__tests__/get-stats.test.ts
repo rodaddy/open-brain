@@ -90,6 +90,9 @@ describe("get_stats", () => {
       const parsed = JSON.parse((result.content as any)[0].text);
       expect(parsed.entry_counts).toBeDefined();
       expect(parsed.tier_distribution).toBeDefined();
+      expect(parsed.namespaces).toEqual([
+        { table: "thoughts", namespace: "shared-kb", count: 50 },
+      ]);
       expect(parsed.access_stats).toBeDefined();
       expect(parsed.graph_counts).toEqual({
         entities: 3,
@@ -153,33 +156,84 @@ describe("get_stats", () => {
       expect(result.isError).toBeFalsy();
       const countCall = calls.find((call) => call.sql.includes("COUNT(*) FILTER"));
       expect(countCall!.sql).toContain("WHERE namespace = ANY($1::text[])");
-      expect(countCall!.params).toEqual([["bilby", "collab"]]);
+      expect(countCall!.params).toEqual([["bilby", "shared-kb"]]);
       const accessCall = calls.find((call) => call.sql.includes("total_log_entries"));
       expect(accessCall!.sql).toContain("source.namespace = ANY($1::text[])");
       expect(accessCall!.sql).toContain("source.namespace = ANY($5::text[])");
       expect(accessCall!.params).toEqual([
-        ["bilby", "collab"],
-        ["bilby", "collab"],
-        ["bilby", "collab"],
-        ["bilby", "collab"],
-        ["bilby", "collab"],
+        ["bilby", "shared-kb"],
+        ["bilby", "shared-kb"],
+        ["bilby", "shared-kb"],
+        ["bilby", "shared-kb"],
+        ["bilby", "shared-kb"],
       ]);
       const topAccessedCall = calls.find((call) =>
         call.sql.includes("ORDER BY access_count DESC")
       );
       expect(topAccessedCall!.sql).toContain("namespace = ANY($1::text[])");
       expect(topAccessedCall!.params).toEqual([
-        ["bilby", "collab"],
-        ["bilby", "collab"],
-        ["bilby", "collab"],
-        ["bilby", "collab"],
-        ["bilby", "collab"],
+        ["bilby", "shared-kb"],
+        ["bilby", "shared-kb"],
+        ["bilby", "shared-kb"],
+        ["bilby", "shared-kb"],
+        ["bilby", "shared-kb"],
       ]);
       const entityCountCall = calls.find((call) =>
         call.sql.includes("FROM ob_entities") && call.sql.includes("COUNT(*) AS total")
       );
       expect(entityCountCall!.sql).toContain("WHERE namespace = ANY($1::text[])");
-      expect(entityCountCall!.params).toEqual([["bilby", "collab"]]);
+      expect(entityCountCall!.params).toEqual([["bilby", "shared-kb"]]);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("keeps legacy collab visible in raw namespace stats", async () => {
+    const mockPool = {
+      query: async (sql: string) => {
+        if (sql.includes("COUNT(*) FILTER")) {
+          return { rows: [{ table_name: "thoughts", active: "1", archived: "0" }] };
+        }
+        if (sql.includes("GROUP BY tier")) return { rows: [] };
+        if (sql.includes("GROUP BY namespace")) {
+          return {
+            rows: [
+              { table_name: "thoughts", namespace: "collab", count: "10" },
+              { table_name: "thoughts", namespace: "shared-kb", count: "5" },
+            ],
+          };
+        }
+        if (sql.includes("total_log_entries")) {
+          return { rows: [{ total_log_entries: "0", unique_entries_accessed: "0" }] };
+        }
+        if (sql.includes("AVG")) return { rows: [{ avg_access: "0" }] };
+        if (sql.includes("access_count, 0) = 0")) {
+          return { rows: [{ table_name: "thoughts", count: "0" }] };
+        }
+        if (sql.includes("ORDER BY access_count DESC")) return { rows: [] };
+        if (sql.includes("FROM ob_entities") && sql.includes("GROUP BY entity_type")) {
+          return { rows: [] };
+        }
+        if (sql.includes("FROM ob_entities")) return { rows: [{ total: "0" }] };
+        if (sql.includes("FROM ob_links")) return { rows: [{ total: "0" }] };
+        return { rows: [] };
+      },
+    };
+    const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "get_stats",
+        arguments: { raw: true },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.namespaces).toEqual([
+        { table: "thoughts", namespace: "collab", count: 50 },
+        { table: "thoughts", namespace: "shared-kb", count: 25 },
+      ]);
     } finally {
       await cleanup();
     }

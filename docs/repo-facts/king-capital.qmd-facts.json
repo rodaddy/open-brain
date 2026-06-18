@@ -7,7 +7,7 @@
     "note": "Curated from qmd context list for the local King Capital collection. These are portable facts and source pointers, not raw qmd/code chunks."
   },
   "defaults": {
-    "namespace": "collab"
+    "namespace": "shared-kb"
   },
   "facts": [
     {

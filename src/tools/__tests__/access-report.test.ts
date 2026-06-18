@@ -145,7 +145,7 @@ describe("access_report", () => {
       expect(calls[0]!.sql).toContain("namespace = ANY($2::text[])");
       expect(calls[0]!.params).toEqual([
         "550e8400-e29b-41d4-a716-446655440010",
-        ["bilby", "collab"],
+        ["bilby", "shared-kb"],
       ]);
       expect(calls.every((call) => !call.sql.includes("entry_access_log"))).toBe(true);
     } finally {

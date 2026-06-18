@@ -53,7 +53,7 @@ describe("demote_entry", () => {
       expect(result.isError).toBeFalsy();
       expect(parseToolResult(result).status).toBe("demoted");
       expect(calls[0]!.sql).toContain("namespace = ANY($2::text[])");
-      expect(calls[0]!.params).toEqual([promotedId, ["bilby", "collab"]]);
+      expect(calls[0]!.params).toEqual([promotedId, ["bilby", "shared-kb"]]);
       expect(calls[1]!.sql).toContain("namespace = ANY($2::text[])");
       expect(calls[1]!.params).toEqual([promotedId, ["bilby"]]);
     } finally {

@@ -8,12 +8,14 @@ import type { ToolDeps } from "./index.ts";
 import {
   ALL_TABLES,
   executeSearch,
+  executeSearchWithSharedFallback,
   trackUsage,
   TIER_BOOST,
   type SearchMode,
   type SearchRow,
   type SourceRef,
 } from "./search-brain.ts";
+import { isSharedNamespace } from "../shared-namespace.ts";
 
 type NamespaceFilter = string | string[];
 
@@ -126,7 +128,7 @@ export function registerSearchAll(server: McpServer, deps: ToolDeps): void {
           .string()
           .optional()
           .describe(
-            "Optional: filter brain results to a specific namespace (e.g. clientId or 'collab')",
+            "Optional: filter brain results to a specific namespace (e.g. clientId or 'shared-kb')",
           ),
         limit: z
           .number()
@@ -266,17 +268,30 @@ async function searchOB(
 
   let rows: SearchRow[];
   try {
-    rows = await executeSearch(
-      deps,
-      accessibleTables,
-      query,
-      limit,
-      mode,
-      tier,
-      0,
-      namespace,
-      false,
-    );
+    rows =
+      typeof namespace === "string" && isSharedNamespace(namespace)
+        ? await executeSearchWithSharedFallback(
+            deps,
+            accessibleTables,
+            query,
+            limit,
+            mode,
+            tier,
+            0,
+            namespace,
+            false,
+          )
+        : await executeSearch(
+            deps,
+            accessibleTables,
+            query,
+            limit,
+            mode,
+            tier,
+            0,
+            namespace,
+            false,
+          );
   } catch (err) {
     logger.warn("searchOB_failed", {
       error: err instanceof Error ? err.message : String(err),

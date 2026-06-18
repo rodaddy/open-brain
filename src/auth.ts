@@ -54,7 +54,10 @@ export function buildTokenMap(
     }
     const role = rawRole as Role;
     const token = value.slice(colonIdx + 1);
-    const userName = key.replace("AUTH_TOKEN_USER_", "").toLowerCase();
+    const userName = key
+      .replace("AUTH_TOKEN_USER_", "")
+      .toLowerCase()
+      .replaceAll("_", "-");
     map.set(token, { role, clientId: userName });
   }
 

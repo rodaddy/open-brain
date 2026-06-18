@@ -19,7 +19,8 @@ triggers:
   - remember this
   - my brain
   - personal brain
-  - collab brain
+  - shared-kb
+  - shared brain
 ---
 
 # Brain - Open Brain with Namespace Awareness
@@ -31,9 +32,9 @@ All Open Brain interactions MUST go through this skill. Direct `mcp2cli open-bra
 Before ANY write to OB, resolve the namespace. See [references/namespace-guide.md](references/namespace-guide.md) for full rules.
 
 **Quick version:**
-1. **Explicit intent** -- user says "personal"/"my brain" -> `<caller_identity>`; says "collab"/"team"/"king" -> `collab`
-2. **Host type** -- `cc-*` LXC -> `collab`; `*.local` -> `<caller_identity>`
-3. **Directory** -- personal machines only: `king*` dirs -> `collab`
+1. **Explicit intent** -- user says "personal"/"my brain" -> `<caller_identity>`; says "shared"/"team"/"king" -> `shared-kb`
+2. **Host type** -- `cc-*` LXC -> `shared-kb`; `*.local` -> `<caller_identity>`
+3. **Directory** -- personal machines only: `king*` dirs -> `shared-kb`
 4. **Fallback** -- `<caller_identity>` from auth token
 
 ## Tools Available
@@ -83,9 +84,9 @@ This applies to `list_recent`, `search_brain`, `search_all`, and `find_person`.
 Use graph tools for rows in `ob_entities`, not legacy `projects` rows:
 
 ```bash
-mcp2cli open-brain upsert_entity --params '{"namespace":"collab","entity_type":"project","name":"open-brain"}'
-mcp2cli open-brain link_entities --params '{"namespace":"collab","from_type":"entity","from_id":"<uuid>","to_type":"entity","to_id":"<uuid>","relation":"depends_on"}'
-mcp2cli open-brain unlink_entities --params '{"namespace":"collab","from_type":"entity","from_id":"<uuid>","to_type":"entity","to_id":"<uuid>","relation":"depends_on"}'
+mcp2cli open-brain upsert_entity --params '{"namespace":"shared-kb","entity_type":"project","name":"open-brain"}'
+mcp2cli open-brain link_entities --params '{"namespace":"shared-kb","from_type":"entity","from_id":"<uuid>","to_type":"entity","to_id":"<uuid>","relation":"depends_on"}'
+mcp2cli open-brain unlink_entities --params '{"namespace":"shared-kb","from_type":"entity","from_id":"<uuid>","to_type":"entity","to_id":"<uuid>","relation":"depends_on"}'
 mcp2cli open-brain archive_entity --params '{"id":"<entity-uuid>"}'
 ```
 
@@ -93,7 +94,7 @@ If entity search must be available immediately after bulk imports or schema
 changes, push hydration instead of waiting for future upserts:
 
 ```bash
-mcp2cli open-brain hydrate_entities --params '{"namespace":"collab","only_missing_embedding":true,"limit":100}'
+mcp2cli open-brain hydrate_entities --params '{"namespace":"shared-kb","only_missing_embedding":true,"limit":100}'
 ```
 
 ## Graceful Degradation

@@ -127,8 +127,8 @@ describe("find_duplicates", () => {
       expect(calls[0]!.params).toEqual([
         0.08,
         20,
-        ["bilby", "collab"],
-        ["bilby", "collab"],
+        ["bilby", "shared-kb"],
+        ["bilby", "shared-kb"],
       ]);
     } finally {
       await cleanup();

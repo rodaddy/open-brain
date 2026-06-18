@@ -474,6 +474,59 @@ describe("search_all", () => {
         await cleanup();
       }
     });
+
+    it("falls back from shared-kb to legacy collab for brain results and canonicalizes output", async () => {
+      mockBunSpawn(1, "");
+      const seenNamespaces: unknown[] = [];
+      const pool = {
+        query: async (_sql: string, params: unknown[] = []) => {
+          const namespace = params.at(-1);
+          seenNamespaces.push(namespace);
+          if (namespace === "shared-kb") return { rows: [] };
+          if (namespace === "collab") {
+            return {
+              rows: [
+                {
+                  source_type: "thought",
+                  id: "legacy-1",
+                  namespace: "collab",
+                  content_preview: "Legacy shared knowledge",
+                  distance: 0.1,
+                  tags: [],
+                  created_at: "2026-01-01",
+                  usefulness: 0.5,
+                },
+              ],
+            };
+          }
+          return { rows: [] };
+        },
+      };
+      const { client, cleanup } = await setupClient(pool, {
+        role: "admin",
+        clientId: "admin",
+      });
+      try {
+        const parsed = parseSearchAll(
+          await client.callTool({
+            name: "search_all",
+            arguments: {
+              query: "legacy",
+              namespace: "shared-kb",
+              sources: "brain",
+              search_mode: "keyword",
+            },
+          }),
+        );
+        expect(parsed.brain_hits).toBe(1);
+        expect(parsed.results[0].source_ref.namespace).toBe("shared-kb");
+        expect(
+          seenNamespaces.filter((value) => typeof value === "string"),
+        ).toEqual(["shared-kb", "collab", "admin"]);
+      } finally {
+        await cleanup();
+      }
+    });
   });
 
   describe("Large -- max limit, all 5 tables", () => {

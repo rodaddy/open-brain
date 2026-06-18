@@ -3,6 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AuthInfo, Table } from "../types.ts";
 import { logger } from "../logger.ts";
 import { promoteEntry } from "../promotion-service.ts";
+import { sharedNamespaceConfig } from "../shared-namespace.ts";
 import type { ToolDeps } from "./index.ts";
 
 export function registerPromoteEntry(server: McpServer, deps: ToolDeps): void {
@@ -10,13 +11,22 @@ export function registerPromoteEntry(server: McpServer, deps: ToolDeps): void {
     "promote_entry",
     {
       description:
-        "Promote an entry from an agent namespace to collab (or another target namespace). " +
+        "Promote an entry from an agent namespace to shared-kb or another target namespace. " +
         "Copies the entry with provenance tracking and detects duplicate target rows.",
       inputSchema: {
         table: z.enum(["thoughts", "decisions", "relationships", "projects", "sessions"]).describe("Source table"),
         id: z.string().uuid().describe("Source entry UUID"),
         reason: z.string().max(1000).optional().describe("Why this entry is being promoted"),
-        target_namespace: z.string().min(1).max(500).optional().describe("Target namespace (default: collab)"),
+        target_namespace: z
+          .string()
+          .min(1)
+          .max(500)
+          .optional()
+          .describe("Target namespace (default: shared-kb)"),
+        dry_run: z
+          .boolean()
+          .optional()
+          .describe("Return a promotion report without inserting into the target namespace"),
       },
       annotations: {
         title: "Promote Entry",
@@ -41,9 +51,12 @@ export function registerPromoteEntry(server: McpServer, deps: ToolDeps): void {
           deps.pool,
           table,
           args.id,
-          args.target_namespace ?? "collab",
+          args.target_namespace ?? sharedNamespaceConfig().sharedNamespace,
           args.reason,
           auth,
+          {
+            dryRun: args.dry_run ?? false,
+          },
         );
       } catch (err) {
         return {
@@ -59,6 +72,7 @@ export function registerPromoteEntry(server: McpServer, deps: ToolDeps): void {
         existing_id: result.existing_id,
         target_namespace: result.target_namespace,
         status: result.status,
+        dry_run: result.dry_run,
       });
 
       return {

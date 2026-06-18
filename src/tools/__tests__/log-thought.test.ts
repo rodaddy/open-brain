@@ -193,6 +193,38 @@ describe("log_thought", () => {
 
         expect(result.isError).toBe(true);
         expect((result.content as any)[0].text).toContain("Permission denied");
+        expect((result.content as any)[0].text).toContain("shared-kb");
+        expect(capturedParams).toEqual([]);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("denies explicit shared-kb namespace for normal agent writes", async () => {
+      let capturedParams: any[] = [];
+      const mockPool = {
+        query: async (...args: any[]) => {
+          capturedParams = args;
+          return { rows: [{ id: "shared-uuid", is_new: true }] };
+        },
+      };
+      const mockEmbed = createMockEmbed();
+      const auth: AuthInfo = { role: "agent", clientId: "bilby" };
+
+      const { client, cleanup } = await setupToolClient(
+        mockPool,
+        mockEmbed,
+        auth,
+      );
+
+      try {
+        const result = await client.callTool({
+          name: "log_thought",
+          arguments: { content: "Shared truth", namespace: "shared-kb" },
+        });
+
+        expect(result.isError).toBe(true);
+        expect((result.content as any)[0].text).toContain("Permission denied");
         expect(capturedParams).toEqual([]);
       } finally {
         await cleanup();

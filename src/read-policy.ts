@@ -1,22 +1,39 @@
 import type { AuthInfo } from "./types.ts";
+import { sharedNamespaceConfig } from "./shared-namespace.ts";
 
-export function readableNamespaces(auth: AuthInfo): string[] | undefined {
+export function readableNamespaces(
+  auth: AuthInfo,
+  options: { includeLegacySharedFallback?: boolean } = {},
+): string[] | undefined {
+  const config = sharedNamespaceConfig();
+  const sharedNamespaces = [config.sharedNamespace];
+  if (options.includeLegacySharedFallback === true) {
+    sharedNamespaces.push(config.legacySharedNamespace);
+  }
   if (auth.namespaceSource === "header") {
-    return [auth.clientId, "collab"];
+    return [auth.clientId, ...sharedNamespaces];
   }
   if (auth.role === "admin" || auth.role === "n8n") {
     return undefined;
   }
-  return [auth.clientId, "collab"];
+  return [auth.clientId, ...sharedNamespaces];
 }
 
 export function canReadNamespace(auth: AuthInfo, namespace: string): boolean {
+  const config = sharedNamespaceConfig();
   if (
     namespace === "all" &&
     auth.namespaceSource !== "header" &&
     (auth.role === "admin" || auth.role === "n8n")
   ) {
     return true;
+  }
+  if (
+    namespace === config.legacySharedNamespace &&
+    auth.role !== "admin" &&
+    auth.role !== "n8n"
+  ) {
+    return false;
   }
   const allowed = readableNamespaces(auth);
   return !allowed || allowed.includes(namespace);
@@ -25,6 +42,7 @@ export function canReadNamespace(auth: AuthInfo, namespace: string): boolean {
 export function namespaceFilterFor(
   auth: AuthInfo,
   namespace?: string,
+  options: { includeLegacySharedFallback?: boolean } = {},
 ): string | string[] | undefined {
   if (
     namespace === "all" &&
@@ -36,15 +54,16 @@ export function namespaceFilterFor(
   if (namespace !== undefined) {
     return namespace;
   }
-  return readableNamespaces(auth);
+  return readableNamespaces(auth, options);
 }
 
 export function appendReadNamespacePredicate(
   auth: AuthInfo,
   params: unknown[],
   column = "namespace",
+  options: { includeLegacySharedFallback?: boolean } = {},
 ): string {
-  const namespaces = readableNamespaces(auth);
+  const namespaces = readableNamespaces(auth, options);
   if (namespaces === undefined) {
     return "";
   }

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { canReadNamespace } from "../read-policy.ts";
+import { sharedNamespaceConfig } from "../shared-namespace.ts";
 import type { AuthInfo, Table } from "../types.ts";
 import { logger } from "../logger.ts";
 import type { ToolDeps } from "./index.ts";
@@ -12,7 +13,7 @@ export function registerScanNamespace(server: McpServer, deps: ToolDeps): void {
     {
       description:
         "Scan an agent namespace for promotion candidates. Returns entries categorized as " +
-        "candidates (not yet in collab), duplicates (already in collab), or already_promoted.",
+        "candidates, duplicates in the target namespace, or already_promoted.",
       inputSchema: {
         namespace: z.string().min(1).max(500).describe("Agent namespace to scan"),
         target_namespace: z
@@ -20,7 +21,9 @@ export function registerScanNamespace(server: McpServer, deps: ToolDeps): void {
           .min(1)
           .max(500)
           .optional()
-          .describe("Namespace to check for existing promoted duplicates (default collab)"),
+          .describe(
+            "Namespace to check for existing promoted duplicates (default shared-kb)",
+          ),
         table: z
           .enum(["thoughts", "decisions", "relationships", "projects", "sessions"])
           .optional()
@@ -61,7 +64,8 @@ export function registerScanNamespace(server: McpServer, deps: ToolDeps): void {
 
       const tables = args.table ? [args.table as Table] : ALL_TABLES;
       const limit = args.limit ?? 20;
-      const targetNamespace = args.target_namespace ?? "collab";
+      const targetNamespace =
+        args.target_namespace ?? sharedNamespaceConfig().sharedNamespace;
       if (!canReadNamespace(auth, targetNamespace)) {
         return {
           content: [{ type: "text" as const, text: "Permission denied: target namespace read access denied" }],

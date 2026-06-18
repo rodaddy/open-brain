@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { canRead } from "../permissions.ts";
 import { readableNamespaces } from "../read-policy.ts";
+import { canonicalNamespace } from "../shared-namespace.ts";
 import type { AuthInfo, Table } from "../types.ts";
 import { logger } from "../logger.ts";
 import type { ToolDeps } from "./index.ts";
@@ -13,7 +14,14 @@ export function registerListNamespaces(server: McpServer, deps: ToolDeps): void 
     {
       description:
         "List all namespaces with entry counts per table. Useful for understanding data distribution across agents/users.",
-      inputSchema: {},
+      inputSchema: {
+        raw: z
+          .boolean()
+          .optional()
+          .describe(
+            "Return physical namespace names instead of canonical public names",
+          ),
+      },
       annotations: {
         title: "List Namespaces",
         readOnlyHint: true,
@@ -49,6 +57,7 @@ export function registerListNamespaces(server: McpServer, deps: ToolDeps): void 
       }
 
       // Query each table for namespace counts
+      const raw = Boolean((_args as { raw?: boolean }).raw);
       const readable = readableNamespaces(auth);
       const queries = accessibleTables.map((table) => {
         const namespacePredicate = readable
@@ -77,7 +86,10 @@ export function registerListNamespaces(server: McpServer, deps: ToolDeps): void 
 
       for (const result of results) {
         for (const row of result.rows) {
-          const ns = row.namespace as string;
+          const physicalNamespace = row.namespace as string;
+          const ns = raw
+            ? physicalNamespace
+            : canonicalNamespace(physicalNamespace);
           const existing = nsMap.get(ns) ?? { total: 0, per_table: {} };
           const count = Number(row.count);
           existing.total += count;

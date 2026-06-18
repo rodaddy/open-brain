@@ -5,6 +5,11 @@ import { toSql } from "pgvector/pg";
 import { canRead, canWrite } from "../permissions.ts";
 import { canWriteNamespace } from "../namespace-policy.ts";
 import { canReadNamespace, namespaceFilterFor } from "../read-policy.ts";
+import {
+  canonicalNamespace,
+  isSharedNamespace,
+  sharedNamespaceConfig,
+} from "../shared-namespace.ts";
 import type { AuthInfo } from "../types.ts";
 import { logger } from "../logger.ts";
 import type { ToolDeps } from "./index.ts";
@@ -294,6 +299,28 @@ function namespaceClause(
     : ` AND namespace = $${params.length}`;
 }
 
+function canonicalizeRepoFactRows(rows: Record<string, unknown>[]) {
+  return rows.map((row) => ({
+    ...row,
+    namespace:
+      typeof row.namespace === "string"
+        ? canonicalNamespace(row.namespace)
+        : row.namespace,
+  }));
+}
+
+function dedupeRepoFactRows(rows: Record<string, unknown>[]) {
+  const seen = new Set<unknown>();
+  const deduped: Record<string, unknown>[] = [];
+  for (const row of rows) {
+    const key = row.id ?? `${row.entity_type}:${row.name}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(row);
+  }
+  return deduped;
+}
+
 export function registerUpsertRepoFact(server: McpServer, deps: ToolDeps): void {
   server.registerTool(
     "upsert_repo_fact",
@@ -477,49 +504,86 @@ export function registerListRepoFacts(server: McpServer, deps: ToolDeps): void {
         };
       }
 
-      const params: unknown[] = [];
-      const filters = ["entity_type = 'repo_fact'", "archived_at IS NULL"];
       const namespace = namespaceFilterFor(auth, requestedNamespace);
-      const ns = namespaceClause(namespace, params);
-      if (ns) filters.push(ns.slice(" AND ".length));
-      if (args.repo) {
-        params.push(args.repo);
-        filters.push(`metadata->>'repo' = $${params.length}`);
-      }
-      if (args.collection) {
-        params.push(args.collection);
-        filters.push(`metadata->>'collection' = $${params.length}`);
-      }
-      if (args.path) {
-        params.push(args.path);
-        filters.push(`metadata->>'path' = $${params.length}`);
-      }
-      if (args.fact_type) {
-        params.push(args.fact_type);
-        filters.push(`metadata->>'fact_type' = $${params.length}`);
-      }
-      if (args.subject) {
-        params.push(args.subject);
-        filters.push(
-          `(metadata->>'subject' = $${params.length} OR metadata->>'symbol' = $${params.length})`,
-        );
-      }
-
       const limit = args.limit ?? 50;
       const offset = args.offset ?? 0;
-      params.push(limit, offset);
+      const queryRows = async (
+        queryNamespace: string | string[] | undefined,
+        queryLimit: number,
+        queryOffset: number,
+      ) => {
+        const params: unknown[] = [];
+        const filters = ["entity_type = 'repo_fact'", "archived_at IS NULL"];
+        const ns = namespaceClause(queryNamespace, params);
+        if (ns) filters.push(ns.slice(" AND ".length));
+        if (args.repo) {
+          params.push(args.repo);
+          filters.push(`metadata->>'repo' = $${params.length}`);
+        }
+        if (args.collection) {
+          params.push(args.collection);
+          filters.push(`metadata->>'collection' = $${params.length}`);
+        }
+        if (args.path) {
+          params.push(args.path);
+          filters.push(`metadata->>'path' = $${params.length}`);
+        }
+        if (args.fact_type) {
+          params.push(args.fact_type);
+          filters.push(`metadata->>'fact_type' = $${params.length}`);
+        }
+        if (args.subject) {
+          params.push(args.subject);
+          filters.push(
+            `(metadata->>'subject' = $${params.length} OR metadata->>'symbol' = $${params.length})`,
+          );
+        }
 
-      const { rows } = await deps.pool.query(
-        `SELECT id, entity_type, name, canonical_id, namespace, metadata, created_by, created_at, updated_at
-         FROM ob_entities
-         WHERE ${filters.join(" AND ")}
-         ORDER BY updated_at DESC, created_at DESC
-         LIMIT $${params.length - 1} OFFSET $${params.length}`,
-        params,
-      );
+        params.push(queryLimit, queryOffset);
+        const { rows } = await deps.pool.query(
+          `SELECT id, entity_type, name, canonical_id, namespace, metadata, created_by, created_at, updated_at
+           FROM ob_entities
+           WHERE ${filters.join(" AND ")}
+           ORDER BY updated_at DESC, created_at DESC
+           LIMIT $${params.length - 1} OFFSET $${params.length}`,
+          params,
+        );
+        return rows as Record<string, unknown>[];
+      };
+
+      let rows: Record<string, unknown>[];
+      const config = sharedNamespaceConfig();
+      if (
+        typeof namespace === "string" &&
+        isSharedNamespace(namespace) &&
+        config.legacyFallbackEnabled &&
+        offset === 0
+      ) {
+        const sharedRows = await queryRows(config.sharedNamespace, limit, 0);
+        if (
+          sharedRows.length >= limit ||
+          sharedRows.length >= config.fallbackMinResults
+        ) {
+          rows = sharedRows;
+        } else {
+          const legacyRows = await queryRows(
+            config.legacySharedNamespace,
+            limit - sharedRows.length,
+            0,
+          );
+          rows = dedupeRepoFactRows([...sharedRows, ...legacyRows]);
+        }
+      } else {
+        rows = await queryRows(namespace, limit, offset);
+      }
 
       return {
-        content: [{ type: "text" as const, text: JSON.stringify(rows) }],
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(canonicalizeRepoFactRows(rows)),
+          },
+        ],
       };
     },
   );

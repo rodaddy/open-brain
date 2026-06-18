@@ -16,10 +16,14 @@ describe("read-policy", () => {
       namespaceSource: "header",
     };
 
-    expect(readableNamespaces(auth)).toEqual(["bilby", "collab"]);
+    expect(readableNamespaces(auth)).toEqual(["bilby", "shared-kb"]);
     expect(canReadNamespace(auth, "bilby")).toBe(true);
-    expect(canReadNamespace(auth, "collab")).toBe(true);
-    expect(namespaceFilterFor(auth)).toEqual(["bilby", "collab"]);
+    expect(canReadNamespace(auth, "shared-kb")).toBe(true);
+    expect(canReadNamespace(auth, "collab")).toBe(false);
+    expect(namespaceFilterFor(auth)).toEqual(["bilby", "shared-kb"]);
+    expect(
+      namespaceFilterFor(auth, undefined, { includeLegacySharedFallback: true }),
+    ).toEqual(["bilby", "shared-kb", "collab"]);
   });
 
   it("keeps delegated admin scoped when requesting namespace all", () => {
@@ -30,7 +34,7 @@ describe("read-policy", () => {
       namespaceSource: "header",
     };
 
-    expect(readableNamespaces(auth)).toEqual(["bilby", "collab"]);
+    expect(readableNamespaces(auth)).toEqual(["bilby", "shared-kb"]);
     expect(canReadNamespace(auth, "all")).toBe(false);
   });
 
@@ -46,7 +50,27 @@ describe("read-policy", () => {
     const predicate = appendReadNamespacePredicate(auth, params, "source.namespace");
 
     expect(predicate).toBe(" AND source.namespace = ANY($2::text[])");
-    expect(params).toEqual(["id", ["bilby", "collab"]]);
+    expect(params).toEqual(["id", ["bilby", "shared-kb"]]);
+  });
+
+  it("adds legacy collab only for explicit server fallback reads", () => {
+    const auth: AuthInfo = {
+      role: "admin",
+      clientId: "bilby",
+      tokenClientId: "admin",
+      namespaceSource: "header",
+    };
+    const params: unknown[] = ["id"];
+
+    const predicate = appendReadNamespacePredicate(
+      auth,
+      params,
+      "source.namespace",
+      { includeLegacySharedFallback: true },
+    );
+
+    expect(predicate).toBe(" AND source.namespace = ANY($2::text[])");
+    expect(params).toEqual(["id", ["bilby", "shared-kb", "collab"]]);
   });
 
   it("allows token-sourced admin to request namespace all", () => {

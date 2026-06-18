@@ -3,6 +3,11 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { toSql } from "pgvector/pg";
 import { canRead } from "../permissions.ts";
 import { canReadNamespace, namespaceFilterFor } from "../read-policy.ts";
+import {
+  canonicalNamespace,
+  isSharedNamespace,
+  sharedNamespaceConfig,
+} from "../shared-namespace.ts";
 import type { AuthInfo, LinkRelation, Table, Tier } from "../types.ts";
 import type { ToolDeps } from "./index.ts";
 import { logger } from "../logger.ts";
@@ -196,6 +201,38 @@ function withSourceRefs(rows: SearchRow[]): SearchRow[] {
       preview: (row.content_preview ?? "").slice(0, 300),
     },
   }));
+}
+
+function withCanonicalNamespaces(rows: SearchRow[]): SearchRow[] {
+  return rows.map((row) => {
+    const namespace = row.namespace
+      ? canonicalNamespace(row.namespace)
+      : row.namespace;
+    return {
+      ...row,
+      namespace,
+      source_ref: row.source_ref
+        ? {
+            ...row.source_ref,
+            namespace: row.source_ref.namespace
+              ? canonicalNamespace(row.source_ref.namespace)
+              : row.source_ref.namespace,
+          }
+        : row.source_ref,
+    };
+  });
+}
+
+function dedupeSearchRows(rows: SearchRow[]): SearchRow[] {
+  const seen = new Set<string>();
+  const deduped: SearchRow[] = [];
+  for (const row of rows) {
+    const key = `${row.source_type}:${row.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(row);
+  }
+  return deduped;
 }
 
 function appendNamespaceParam(
@@ -757,6 +794,70 @@ export async function executeSearch(
   return rows;
 }
 
+export async function executeSearchWithSharedFallback(
+  deps: ToolDeps,
+  accessibleTables: SearchTable[],
+  query: string,
+  limit: number,
+  mode: SearchMode,
+  tier: Tier | undefined,
+  offset: number,
+  namespace: NamespaceFilter | undefined,
+  includeLinks?: boolean,
+): Promise<SearchRow[]> {
+  const config = sharedNamespaceConfig();
+  if (
+    !config.legacyFallbackEnabled ||
+    offset !== 0 ||
+    namespace !== config.sharedNamespace
+  ) {
+    return withCanonicalNamespaces(
+      await executeSearch(
+        deps,
+        accessibleTables,
+        query,
+        limit,
+        mode,
+        tier,
+        offset,
+        namespace,
+        includeLinks,
+      ),
+    );
+  }
+
+  const sharedRows = await executeSearch(
+    deps,
+    accessibleTables,
+    query,
+    limit,
+    mode,
+    tier,
+    0,
+    config.sharedNamespace,
+    includeLinks,
+  );
+  if (
+    sharedRows.length >= limit ||
+    sharedRows.length >= config.fallbackMinResults
+  ) {
+    return withCanonicalNamespaces(sharedRows);
+  }
+
+  const legacyRows = await executeSearch(
+    deps,
+    accessibleTables,
+    query,
+    limit - sharedRows.length,
+    mode,
+    tier,
+    0,
+    config.legacySharedNamespace,
+    includeLinks,
+  );
+  return withCanonicalNamespaces(dedupeSearchRows([...sharedRows, ...legacyRows]));
+}
+
 export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
   server.registerTool(
     "search_brain",
@@ -783,7 +884,7 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
           .max(500)
           .optional()
           .describe(
-            "Optional: filter results to a specific namespace (e.g. clientId or 'collab')",
+            "Optional: filter results to a specific namespace (e.g. clientId or 'shared-kb')",
           ),
         limit: z
           .number()
@@ -896,19 +997,34 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
         };
       }
       const namespace = namespaceFilterFor(auth, requestedNamespace);
+      const shouldUseSharedFallback =
+        requestedNamespace !== undefined && isSharedNamespace(requestedNamespace);
 
       let rows;
       try {
-        rows = await executeSearch(
-          deps,
-          accessibleTables,
-          args.query,
-          limit,
-          mode,
-          tier,
-          offset,
-          namespace,
-        );
+        rows = shouldUseSharedFallback
+          ? await executeSearchWithSharedFallback(
+              deps,
+              accessibleTables,
+              args.query,
+              limit,
+              mode,
+              tier,
+              offset,
+              namespace,
+            )
+          : withCanonicalNamespaces(
+              await executeSearch(
+                deps,
+                accessibleTables,
+                args.query,
+                limit,
+                mode,
+                tier,
+                offset,
+                namespace,
+              ),
+            );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return {

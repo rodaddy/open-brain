@@ -30,7 +30,7 @@ class DreamPolicy:
     duplicate_threshold: float = 0.08
     promote_threshold_days: int = 7
     demote_threshold_days: int = 30
-    target_namespace: str = "collab"
+    target_namespace: str = "shared-kb"
 
     def __post_init__(self) -> None:
         if type(self.limit) is not int or not 1 <= self.limit <= CURATION_LIMIT_MAX:

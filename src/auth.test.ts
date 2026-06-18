@@ -84,6 +84,36 @@ describe("buildTokenMap", () => {
     expect(map.size).toBe(1);
     expect(map.has("readonly-token")).toBe(true);
   });
+
+  test("maps named person, agent, and promoter identities from per-user tokens", () => {
+    const env: Record<string, string | undefined> = {
+      AUTH_TOKEN_USER_RICO: "admin:rico-token",
+      AUTH_TOKEN_USER_KEVIN: "readonly:kevin-token",
+      AUTH_TOKEN_USER_BILBY: "agent:bilby-token",
+      AUTH_TOKEN_USER_SKIPPY: "agent:skippy-token",
+      AUTH_TOKEN_USER_OPENBRAIN_PROMOTER: "n8n:promoter-token",
+    };
+
+    const map = buildTokenMap(env);
+
+    expect(map.get("rico-token")).toEqual({ role: "admin", clientId: "rico" });
+    expect(map.get("kevin-token")).toEqual({
+      role: "readonly",
+      clientId: "kevin",
+    });
+    expect(map.get("bilby-token")).toEqual({
+      role: "agent",
+      clientId: "bilby",
+    });
+    expect(map.get("skippy-token")).toEqual({
+      role: "agent",
+      clientId: "skippy",
+    });
+    expect(map.get("promoter-token")).toEqual({
+      role: "n8n",
+      clientId: "openbrain-promoter",
+    });
+  });
 });
 
 describe("verifyToken", () => {

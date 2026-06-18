@@ -43,7 +43,7 @@ describe("list_entities", () => {
       expect(calls[0]?.sql).toContain("namespace = ANY($1::text[])");
       expect(calls[0]?.sql).toContain("entity_type = $2");
       expect(calls[0]?.sql).toContain("name ILIKE $3");
-      expect(calls[0]?.params).toEqual([["bilby", "collab"], "project", "%hu%", 10, 0]);
+      expect(calls[0]?.params).toEqual([["bilby", "shared-kb"], "project", "%hu%", 10, 0]);
     } finally {
       await cleanup();
     }

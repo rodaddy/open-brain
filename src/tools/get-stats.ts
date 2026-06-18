@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { canRead } from "../permissions.ts";
 import { appendReadNamespacePredicate } from "../read-policy.ts";
+import { canonicalNamespace } from "../shared-namespace.ts";
 import type { AuthInfo, Table } from "../types.ts";
 import { logger } from "../logger.ts";
 import type { ToolDeps } from "./index.ts";
@@ -42,7 +43,14 @@ export function registerGetStats(server: McpServer, deps: ToolDeps): void {
     {
       description:
         "Returns aggregate statistics about the Open Brain knowledge base: entry counts, tier distribution, namespace breakdown, and access analytics.",
-      inputSchema: {},
+      inputSchema: {
+        raw: z
+          .boolean()
+          .optional()
+          .describe(
+            "Return physical namespace names instead of canonical public names",
+          ),
+      },
       annotations: {
         title: "Get Stats",
         readOnlyHint: true,
@@ -107,6 +115,8 @@ export function registerGetStats(server: McpServer, deps: ToolDeps): void {
           params,
         );
       });
+
+      const raw = Boolean((_args as { raw?: boolean }).raw);
 
       // 3. Namespace breakdown (top 10)
       const nsQueries = accessibleTables.map((table) => {
@@ -248,16 +258,22 @@ export function registerGetStats(server: McpServer, deps: ToolDeps): void {
       }
 
       // Build namespace breakdown
-      const namespaces: Array<{ table: string; namespace: string; count: number }> = [];
+      const namespaceMap = new Map<string, number>();
       for (const result of nsResults) {
         for (const row of result.rows) {
-          namespaces.push({
-            table: row.table_name,
-            namespace: row.namespace,
-            count: Number(row.count),
-          });
+          const namespace = raw
+            ? row.namespace
+            : canonicalNamespace(row.namespace);
+          const key = `${row.table_name}\0${namespace}`;
+          namespaceMap.set(key, (namespaceMap.get(key) ?? 0) + Number(row.count));
         }
       }
+      const namespaces = Array.from(namespaceMap.entries())
+        .map(([key, count]) => {
+          const [table, namespace] = key.split("\0");
+          return { table, namespace, count };
+        })
+        .sort((a, b) => b.count - a.count);
 
       // Compute average access count across tables
       let totalAvg = 0;

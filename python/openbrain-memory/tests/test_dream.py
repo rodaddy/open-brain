@@ -166,6 +166,17 @@ def test_namespace_dream_scans_against_policy_target_namespace():
     assert [action.arguments["table"] for action in result.actions] == ["thoughts"]
 
 
+def test_namespace_dream_defaults_target_namespace_to_shared_kb():
+    client = FakeDreamClient()
+    engine = DreamEngine(client)
+
+    result = engine.dream_once(namespace="bilby", table="thoughts")
+
+    scan_call = [call for call in client.calls if call[0] == "scan_namespace"][0]
+    assert scan_call[1]["target_namespace"] == "shared-kb"
+    assert result.actions[0].arguments["target_namespace"] == "shared-kb"
+
+
 def test_namespace_dream_table_filter_skips_non_matching_scan_candidates():
     client = FakeDreamClient()
     engine = DreamEngine(client)

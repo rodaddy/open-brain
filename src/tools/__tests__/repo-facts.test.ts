@@ -523,17 +523,69 @@ describe("repo fact tools", () => {
       });
 
       expect(result.isError).toBeFalsy();
-      expect(parseToolResult(result)).toHaveLength(1);
+      const parsed = parseToolResult(result);
+      expect(parsed).toHaveLength(1);
+      expect(parsed[0].namespace).toBe("shared-kb");
       expect(calls[0]?.sql).toContain("entity_type = 'repo_fact'");
       expect(calls[0]?.sql).toContain("namespace = ANY($1::text[])");
       expect(calls[0]?.sql).toContain("metadata->>'repo' = $2");
       expect(calls[0]?.sql).toContain("metadata->>'subject' = $3 OR metadata->>'symbol' = $3");
       expect(calls[0]?.params).toEqual([
-        ["bilby", "collab"],
+        ["bilby", "shared-kb"],
         "king-core",
         "ApiResponse",
         10,
         0,
+      ]);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("falls back from shared-kb to legacy collab when listing repo facts", async () => {
+    const calls: Array<{ sql: string; params?: unknown[] }> = [];
+    const mockPool = {
+      query: async (sql: string, params?: unknown[]) => {
+        calls.push({ sql, params });
+        const namespace = params?.[0];
+        if (namespace === "shared-kb") return { rows: [] };
+        if (namespace === "collab") {
+          return {
+            rows: [
+              {
+                id: "550e8400-e29b-41d4-a716-446655440001",
+                entity_type: "repo_fact",
+                name: "king-core:api",
+                namespace: "collab",
+                metadata: repoFact,
+              },
+            ],
+          };
+        }
+        return { rows: [] };
+      },
+    };
+    const auth: AuthInfo = { role: "admin", clientId: "rico" };
+    const { client, cleanup } = await setupMcpClient(
+      registerListRepoFacts,
+      mockPool,
+      createMockEmbed(),
+      auth,
+    );
+
+    try {
+      const result = await client.callTool({
+        name: "list_repo_facts",
+        arguments: { namespace: "shared-kb", limit: 10 },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const parsed = parseToolResult(result);
+      expect(parsed).toHaveLength(1);
+      expect(parsed[0].namespace).toBe("shared-kb");
+      expect(calls.map((call) => call.params?.[0])).toEqual([
+        "shared-kb",
+        "collab",
       ]);
     } finally {
       await cleanup();

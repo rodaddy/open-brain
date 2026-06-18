@@ -124,7 +124,7 @@ describe("find_person", () => {
         });
 
         expect(calls[0]!.sql).toContain("namespace = ANY($4::text[])");
-        expect(calls[0]!.params).toEqual(["%Alice%", 5, 0, ["bilby", "collab"]]);
+        expect(calls[0]!.params).toEqual(["%Alice%", 5, 0, ["bilby", "shared-kb"]]);
       } finally {
         await cleanup();
       }
@@ -185,7 +185,7 @@ describe("find_person", () => {
         });
 
         expect(calls[0]!.sql).toContain("namespace = ANY($4::text[])");
-        expect(calls[0]!.params?.slice(1)).toEqual([5, 0, ["bilby", "collab"]]);
+        expect(calls[0]!.params?.slice(1)).toEqual([5, 0, ["bilby", "shared-kb"]]);
       } finally {
         await cleanup();
       }
