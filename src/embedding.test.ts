@@ -5,6 +5,8 @@ import {
   contentHash,
   EMBEDDING_MODEL,
   EMBEDDING_DIMENSIONS,
+  __resetEmbeddingWatchdogForTests,
+  __setEmbeddingWatchdogRestartSpawnerForTests,
 } from "./embedding.ts";
 
 // Helper: create a mock 768-length embedding array
@@ -32,6 +34,10 @@ describe("generateEmbedding", () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    __resetEmbeddingWatchdogForTests();
+    delete process.env.EMBEDDING_WATCHDOG_RESTART_SCRIPT;
+    delete process.env.EMBEDDING_WATCHDOG_FAILURE_THRESHOLD;
+    delete process.env.EMBEDDING_WATCHDOG_COOLDOWN_MS;
   });
 
   it("returns 768-length number array on successful embedding response", async () => {
@@ -187,6 +193,105 @@ describe("generateEmbedding", () => {
 
     const result = await generateEmbedding("hello", "http://fake:4000");
     expect(result).toBeNull();
+  });
+});
+
+describe("embedding watchdog", () => {
+  let originalFetch: typeof globalThis.fetch;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    __resetEmbeddingWatchdogForTests();
+    process.env.EMBEDDING_WATCHDOG_RESTART_SCRIPT = "/fake/restart";
+    process.env.EMBEDDING_WATCHDOG_FAILURE_THRESHOLD = "2";
+    process.env.EMBEDDING_WATCHDOG_COOLDOWN_MS = "300000";
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    __resetEmbeddingWatchdogForTests();
+    delete process.env.EMBEDDING_WATCHDOG_RESTART_SCRIPT;
+    delete process.env.EMBEDDING_WATCHDOG_FAILURE_THRESHOLD;
+    delete process.env.EMBEDDING_WATCHDOG_COOLDOWN_MS;
+  });
+
+  function fakeSpawnProcess(
+    mode: "spawn" | "error" = "spawn",
+  ): ReturnType<Parameters<typeof __setEmbeddingWatchdogRestartSpawnerForTests>[0]> {
+    const handlers = new Map<string, (arg?: Error) => void>();
+    return {
+      once: (event: string, handler: (arg?: Error) => void) => {
+        handlers.set(event, handler);
+        if (event === mode) {
+          queueMicrotask(() =>
+            handler(
+              mode === "error" ? new Error("restart script missing") : undefined,
+            ),
+          );
+        }
+        return undefined;
+      },
+      unref: () => undefined,
+    } as unknown as ReturnType<
+      Parameters<typeof __setEmbeddingWatchdogRestartSpawnerForTests>[0]
+    >;
+  }
+
+  it("triggers restart after mixed restartable provider failures", async () => {
+    let spawnCount = 0;
+    __setEmbeddingWatchdogRestartSpawnerForTests(() => {
+      spawnCount += 1;
+      return fakeSpawnProcess();
+    });
+
+    mockFetch(async () => {
+      throw new DOMException("The operation was aborted.", "AbortError");
+    });
+    await generateEmbeddingWithMetadata("first failure", "http://fake:4000");
+
+    mockFetch(async () => {
+      throw new Error("ECONNRESET");
+    });
+    await generateEmbeddingWithMetadata("second failure", "http://fake:4000");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(spawnCount).toBe(1);
+  });
+
+  it("does not cooldown-suppress retry when restart spawn fails", async () => {
+    let spawnCount = 0;
+    __setEmbeddingWatchdogRestartSpawnerForTests(() => {
+      spawnCount += 1;
+      return fakeSpawnProcess("error");
+    });
+
+    mockFetch(async () => {
+      throw new DOMException("The operation was aborted.", "AbortError");
+    });
+    await generateEmbeddingWithMetadata("first failure", "http://fake:4000");
+    await generateEmbeddingWithMetadata("second failure", "http://fake:4000");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    await generateEmbeddingWithMetadata("third failure", "http://fake:4000");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(spawnCount).toBe(2);
+  });
+
+  it("does not restart after non-restartable client failures", async () => {
+    let spawnCount = 0;
+    __setEmbeddingWatchdogRestartSpawnerForTests(() => {
+      spawnCount += 1;
+      return fakeSpawnProcess();
+    });
+
+    mockFetch(async () => new Response("Unauthorized", { status: 401 }));
+
+    await generateEmbeddingWithMetadata("first failure", "http://fake:4000");
+    await generateEmbeddingWithMetadata("second failure", "http://fake:4000");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(spawnCount).toBe(0);
   });
 });
 

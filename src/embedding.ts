@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { logger } from "./logger.ts";
 
 const rawTimeout = parseInt(process.env.EMBEDDING_TIMEOUT_MS ?? "8000", 10);
@@ -16,28 +16,15 @@ const WATCHDOG_RESTARTABLE_CODES = new Set<EmbeddingError["code"]>([
   "server_error",
 ]);
 
-const rawWatchdogThreshold = parseInt(
-  process.env.EMBEDDING_WATCHDOG_FAILURE_THRESHOLD ?? "2",
-  10,
-);
-const WATCHDOG_FAILURE_THRESHOLD =
-  Number.isNaN(rawWatchdogThreshold) || rawWatchdogThreshold <= 0
-    ? 2
-    : rawWatchdogThreshold;
-
-const rawWatchdogCooldown = parseInt(
-  process.env.EMBEDDING_WATCHDOG_COOLDOWN_MS ?? "300000",
-  10,
-);
-const WATCHDOG_COOLDOWN_MS =
-  Number.isNaN(rawWatchdogCooldown) || rawWatchdogCooldown < 0
-    ? 300000
-    : rawWatchdogCooldown;
-
 let lastFailureCode: EmbeddingError["code"] | null = null;
-let consecutiveFailureCount = 0;
+let consecutiveRestartableFailures = 0;
 let lastWatchdogRestartAt = 0;
 let watchdogRestartInFlight = false;
+let restartProcessSpawner = (restartScript: string): ChildProcess =>
+  spawn(restartScript, {
+    detached: true,
+    stdio: "ignore",
+  });
 
 /**
  * Embedding model identifier. Used by embedding.ts to call the provider and stored
@@ -105,9 +92,22 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function watchdogFailureThreshold(): number {
+  const raw = parseInt(
+    process.env.EMBEDDING_WATCHDOG_FAILURE_THRESHOLD ?? "2",
+    10,
+  );
+  return Number.isNaN(raw) || raw <= 0 ? 2 : raw;
+}
+
+function watchdogCooldownMs(): number {
+  const raw = parseInt(process.env.EMBEDDING_WATCHDOG_COOLDOWN_MS ?? "300000", 10);
+  return Number.isNaN(raw) || raw < 0 ? 300000 : raw;
+}
+
 function resetWatchdogFailures(): void {
   lastFailureCode = null;
-  consecutiveFailureCount = 0;
+  consecutiveRestartableFailures = 0;
 }
 
 function recordWatchdogFailure(error: EmbeddingError): void {
@@ -116,20 +116,16 @@ function recordWatchdogFailure(error: EmbeddingError): void {
     return;
   }
 
-  if (lastFailureCode === error.code) {
-    consecutiveFailureCount += 1;
-  } else {
-    lastFailureCode = error.code;
-    consecutiveFailureCount = 1;
-  }
+  lastFailureCode = error.code;
+  consecutiveRestartableFailures += 1;
 
   logger.warn("embedding_watchdog_failure_recorded", {
     code: error.code,
-    consecutiveFailures: consecutiveFailureCount,
-    threshold: WATCHDOG_FAILURE_THRESHOLD,
+    consecutiveFailures: consecutiveRestartableFailures,
+    threshold: watchdogFailureThreshold(),
   });
 
-  if (consecutiveFailureCount >= WATCHDOG_FAILURE_THRESHOLD) {
+  if (consecutiveRestartableFailures >= watchdogFailureThreshold()) {
     triggerEmbeddingWatchdogRestart(error.code);
   }
 }
@@ -139,6 +135,7 @@ function triggerEmbeddingWatchdogRestart(code: EmbeddingError["code"]): void {
   if (!restartScript) return;
 
   const now = Date.now();
+  const cooldownMs = watchdogCooldownMs();
   if (watchdogRestartInFlight) {
     logger.warn("embedding_watchdog_restart_skipped", {
       code,
@@ -146,28 +143,33 @@ function triggerEmbeddingWatchdogRestart(code: EmbeddingError["code"]): void {
     });
     return;
   }
-  if (now - lastWatchdogRestartAt < WATCHDOG_COOLDOWN_MS) {
+  if (now - lastWatchdogRestartAt < cooldownMs) {
     logger.warn("embedding_watchdog_restart_skipped", {
       code,
       reason: "cooldown",
-      cooldownMs: WATCHDOG_COOLDOWN_MS,
+      cooldownMs,
     });
     return;
   }
 
   watchdogRestartInFlight = true;
-  lastWatchdogRestartAt = now;
-  resetWatchdogFailures();
 
   logger.error("embedding_watchdog_restart_triggered", {
     code,
     restartScript,
   });
 
-  const child = spawn(restartScript, {
-    detached: true,
-    stdio: "ignore",
-  });
+  let child: ChildProcess;
+  try {
+    child = restartProcessSpawner(restartScript);
+  } catch (err) {
+    watchdogRestartInFlight = false;
+    logger.error("embedding_watchdog_restart_failed", {
+      error: err instanceof Error ? err.message : String(err),
+      restartScript,
+    });
+    return;
+  }
 
   child.once("error", (err) => {
     watchdogRestartInFlight = false;
@@ -178,9 +180,28 @@ function triggerEmbeddingWatchdogRestart(code: EmbeddingError["code"]): void {
   });
 
   child.once("spawn", () => {
+    lastWatchdogRestartAt = Date.now();
+    resetWatchdogFailures();
     watchdogRestartInFlight = false;
     child.unref();
   });
+}
+
+export function __resetEmbeddingWatchdogForTests(): void {
+  resetWatchdogFailures();
+  lastWatchdogRestartAt = 0;
+  watchdogRestartInFlight = false;
+  restartProcessSpawner = (restartScript: string): ChildProcess =>
+    spawn(restartScript, {
+      detached: true,
+      stdio: "ignore",
+    });
+}
+
+export function __setEmbeddingWatchdogRestartSpawnerForTests(
+  spawner: typeof restartProcessSpawner,
+): void {
+  restartProcessSpawner = spawner;
 }
 
 function embeddingFailure(error: EmbeddingError): EmbeddingResult {
