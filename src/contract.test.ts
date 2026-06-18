@@ -9,7 +9,7 @@ describe("Open Brain contract manifest", () => {
     const contract = buildContract("2026-06-18T00:00:00.000Z");
 
     expect(contract.service).toBe("open-brain");
-    expect(contract.contract_version).toContain("repo-facts");
+    expect(contract.contract_version).toContain("memory-tools");
     expect(contract.contract_scope).toBe("required_openbrain_memory_contract");
     expect(contract.schema_hash).toMatch(/^[0-9a-f]{64}$/);
     expect(contract.min_client_versions.mcp2cli).toBe("0.3.6");
@@ -17,14 +17,47 @@ describe("Open Brain contract manifest", () => {
     expect(contract.capabilities.map((c) => c.name)).toContain(
       "upsert_repo_fact",
     );
+    for (const tool of [
+      "get_contract",
+      "log_thought",
+      "search_all",
+      "session_start",
+      "session_context",
+      "append_session_event",
+      "session_wrap",
+      "list_repo_facts",
+      "upsert_repo_fact",
+    ]) {
+      expect(contract.tool_contracts[tool]).toBeDefined();
+    }
     const upsertRepoFact = contract.tool_contracts.upsert_repo_fact;
     expect(upsertRepoFact).toBeDefined();
-    expect((upsertRepoFact?.input_schema as any).metadata.source_url.required).toBe(
-      true,
-    );
-    expect((upsertRepoFact?.input_schema as any).validation.source_url.repo_match).toContain(
-      "metadata.repo",
-    );
+    const searchAll = contract.tool_contracts.search_all;
+    expect(searchAll).toBeDefined();
+    expect((searchAll?.input_schema as any).namespace.type).toBe("string");
+    expect((searchAll?.input_schema as any).limit.max).toBe(250);
+    expect((searchAll?.input_schema as any).offset.min).toBe(0);
+    expect((searchAll?.input_schema as any).sources.values).toEqual([
+      "all",
+      "brain",
+      "qmd",
+    ]);
+    expect((searchAll?.input_schema as any).search_mode.values).toEqual([
+      "hybrid",
+      "vector",
+      "keyword",
+    ]);
+    expect((searchAll?.input_schema as any).tier.values).toEqual([
+      "hot",
+      "warm",
+      "cold",
+    ]);
+    expect(
+      (upsertRepoFact?.input_schema as any).metadata.source_url.required,
+    ).toBe(true);
+    expect(
+      (upsertRepoFact?.input_schema as any).validation.source_url.repo_match,
+    ).toContain("metadata.repo");
   });
 
   it("keeps the schema hash stable when only generated_at changes", () => {
