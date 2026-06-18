@@ -8,6 +8,18 @@
 - [ ] Python package checks passed or are not applicable
 - [ ] Live Open Brain smoke passed or is not applicable
 
+## Critical Self-Review
+
+- Highest-risk behavior:
+- Assumptions that could be wrong:
+- Missing/weak tests:
+- Security/permission risk:
+- Migration/deploy risk:
+- Downstream client/runtime risk:
+- Rollback/cleanup concern:
+- Fixes made before PR:
+- Known residual risk:
+
 ## Downstream Rollout
 
 - [ ] I checked `docs/downstream-rollout.md`
