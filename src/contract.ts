@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
-import { REPO_FACT_METADATA_CONTRACT } from "./tools/repo-facts.ts";
+import {
+  REPO_FACT_METADATA_CONTRACT,
+  REPO_FACT_VALIDATION_CONTRACT,
+} from "./tools/repo-facts.ts";
 
 export const CONTRACT_VERSION = "2026-06-18.repo-facts.v1";
 export const CONTRACT_SCHEMA_VERSION = 1;
@@ -14,6 +17,7 @@ export interface ContractCapability {
 export interface OpenBrainContract {
   service: "open-brain";
   contract_version: string;
+  contract_scope: "required_openbrain_memory_contract";
   schema_version: number;
   schema_hash: string;
   generated_at: string;
@@ -103,6 +107,7 @@ export function buildContract(generatedAt = new Date().toISOString()): OpenBrain
   const payload = {
     service: "open-brain" as const,
     contract_version: CONTRACT_VERSION,
+    contract_scope: "required_openbrain_memory_contract" as const,
     schema_version: CONTRACT_SCHEMA_VERSION,
     min_client_versions: {
       "openbrain-memory": "0.1.0",
@@ -134,6 +139,7 @@ export function buildContract(generatedAt = new Date().toISOString()): OpenBrain
         input_schema: {
           namespace: { type: "string", required: false, maxLength: 500 },
           metadata: REPO_FACT_METADATA_CONTRACT,
+          validation: REPO_FACT_VALIDATION_CONTRACT,
         },
         output_shape: "ob_entities repo_fact row JSON text payload",
       },

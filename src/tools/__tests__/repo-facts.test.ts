@@ -167,6 +167,40 @@ describe("repo fact tools", () => {
     }
   });
 
+  it("rejects AWS secret-access-key-like material before embedding or storage", async () => {
+    let queried = false;
+    const auth: AuthInfo = { role: "admin", clientId: "rico" };
+    const { client, cleanup } = await setupMcpClient(
+      registerUpsertRepoFact,
+      {
+        query: async () => {
+          queried = true;
+          return { rows: [] };
+        },
+      },
+      createMockEmbed(),
+      auth,
+    );
+
+    try {
+      const result = await client.callTool({
+        name: "upsert_repo_fact",
+        arguments: {
+          metadata: {
+            ...repoFact,
+            fact: "Never store this fixture: abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN",
+          },
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(getErrorText(result)).toContain("credential-like material");
+      expect(queried).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("requires either symbol or subject", async () => {
     const auth: AuthInfo = { role: "admin", clientId: "rico" };
     const { client, cleanup } = await setupMcpClient(
@@ -238,6 +272,72 @@ describe("repo fact tools", () => {
       expect(getErrorText(result)).toContain(
         "source_url must include source_commit and source path",
       );
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("rejects source commit hidden in query or fragment", async () => {
+    const auth: AuthInfo = { role: "admin", clientId: "rico" };
+    const { client, cleanup } = await setupMcpClient(
+      registerUpsertRepoFact,
+      { query: async () => ({ rows: [] }) },
+      createMockEmbed(),
+      auth,
+    );
+
+    try {
+      for (const source_url of [
+        `https://github.com/rodaddy/king-core/blob/main/src/types/api.ts?commit=${repoFact.source_commit}`,
+        `https://github.com/rodaddy/king-core/blob/main/src/types/api.ts#${repoFact.source_commit}`,
+      ]) {
+        const result = await client.callTool({
+          name: "upsert_repo_fact",
+          arguments: {
+            metadata: {
+              ...repoFact,
+              source_url,
+            },
+          },
+        });
+        expect(result.isError).toBe(true);
+        expect(getErrorText(result)).toContain(
+          "source_url must include source_commit and source path",
+        );
+      }
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("rejects source URLs from a different repository or suffix path", async () => {
+    const auth: AuthInfo = { role: "admin", clientId: "rico" };
+    const { client, cleanup } = await setupMcpClient(
+      registerUpsertRepoFact,
+      { query: async () => ({ rows: [] }) },
+      createMockEmbed(),
+      auth,
+    );
+
+    try {
+      for (const source_url of [
+        `https://github.com/rodaddy/other-repo/blob/${repoFact.source_commit}/src/types/api.ts`,
+        `https://github.com/rodaddy/king-core/blob/${repoFact.source_commit}/src/types/api.ts.evil`,
+      ]) {
+        const result = await client.callTool({
+          name: "upsert_repo_fact",
+          arguments: {
+            metadata: {
+              ...repoFact,
+              source_url,
+            },
+          },
+        });
+        expect(result.isError).toBe(true);
+        expect(getErrorText(result)).toContain(
+          "source_url must include source_commit and source path",
+        );
+      }
     } finally {
       await cleanup();
     }

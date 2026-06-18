@@ -110,6 +110,7 @@ contract manifest through `get_contract`.
 The manifest includes:
 
 - `contract_version`
+- `contract_scope`
 - `schema_version`
 - `schema_hash`
 - `generated_at`
@@ -117,11 +118,19 @@ The manifest includes:
 - `compatible_client_ranges`
 - `transport`
 - `capabilities`
+- `tool_contracts`
 
-`schema_hash` is deterministic and excludes `generated_at`. Downstream clients
-such as `rtech-hermes` should validate `contract_version`, `schema_hash`,
-minimum client version, compatible range, and required capabilities at startup.
-In required memory mode, incompatible or unreachable contracts must fail closed.
+`contract_scope` is `required_openbrain_memory_contract`. The manifest is the
+canonical compatibility contract for required memory/session/repo-fact behavior
+that Hermes, mcp2cli, and generated Open Brain skills must depend on. It is not
+yet a typed schema export for every optional Open Brain MCP tool.
+
+`schema_hash` is deterministic and excludes `generated_at`. It includes the
+required capability list, required tool contracts, repo-fact metadata contract,
+and repo-fact validation semantics. Downstream clients such as `rtech-hermes`
+should validate `contract_version`, `contract_scope`, `schema_hash`, minimum
+client version, compatible range, and required capabilities at startup. In
+required memory mode, incompatible or unreachable contracts must fail closed.
 
 ## qmd-Derived Repo Facts
 
@@ -148,6 +157,14 @@ includes:
 - `confidence`
 - `staleness_policy`
 - `refresh_hint`
+
+`source_url` must be an HTTPS GitHub source URL with no embedded credentials.
+For `github.com`, it must match
+`/<owner>/<repo>/blob/<source_commit>/<repo_relative_path>`. For
+`raw.githubusercontent.com`, it must match
+`/<owner>/<repo>/<source_commit>/<repo_relative_path>`. The URL repo segment
+must match the repo fact's `repo` slug, and the source commit must be a path
+segment, not a query string or fragment.
 
 Promotion rule: if distributed agents are expected to rely on a qmd-derived repo
 fact during normal work, that fact must be present in Open Brain. Remote qmd can

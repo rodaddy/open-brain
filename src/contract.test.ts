@@ -10,6 +10,7 @@ describe("Open Brain contract manifest", () => {
 
     expect(contract.service).toBe("open-brain");
     expect(contract.contract_version).toContain("repo-facts");
+    expect(contract.contract_scope).toBe("required_openbrain_memory_contract");
     expect(contract.schema_hash).toMatch(/^[0-9a-f]{64}$/);
     expect(contract.min_client_versions.mcp2cli).toBe("0.3.6");
     expect(contract.transport.namespace_boundary).toBe("authorization");
@@ -20,6 +21,9 @@ describe("Open Brain contract manifest", () => {
     expect(upsertRepoFact).toBeDefined();
     expect((upsertRepoFact?.input_schema as any).metadata.source_url.required).toBe(
       true,
+    );
+    expect((upsertRepoFact?.input_schema as any).validation.source_url.repo_match).toContain(
+      "metadata.repo",
     );
   });
 
@@ -36,6 +40,7 @@ describe("Open Brain contract manifest", () => {
     const changedPayload: ContractPayload = {
       service: base.service,
       contract_version: base.contract_version,
+      contract_scope: base.contract_scope,
       schema_version: base.schema_version,
       min_client_versions: base.min_client_versions,
       compatible_client_ranges: base.compatible_client_ranges,
@@ -63,6 +68,7 @@ describe("Open Brain contract manifest", () => {
     const changedPayload: ContractPayload = {
       service: base.service,
       contract_version: base.contract_version,
+      contract_scope: base.contract_scope,
       schema_version: base.schema_version,
       min_client_versions: base.min_client_versions,
       compatible_client_ranges: base.compatible_client_ranges,
@@ -77,6 +83,42 @@ describe("Open Brain contract manifest", () => {
             metadata: {
               ...((upsertRepoFact!.input_schema as any).metadata as any),
               fact: { type: "string", required: true, maxLength: 1000 },
+            },
+          },
+        },
+      },
+    };
+
+    expect(contractHash(changedPayload)).not.toBe(base.schema_hash);
+  });
+
+  it("changes the schema hash when repo fact validation semantics change", () => {
+    const base = buildContract("2026-06-18T00:00:00.000Z");
+    const upsertRepoFact = base.tool_contracts.upsert_repo_fact;
+    expect(upsertRepoFact).toBeDefined();
+
+    const changedPayload: ContractPayload = {
+      service: base.service,
+      contract_version: base.contract_version,
+      contract_scope: base.contract_scope,
+      schema_version: base.schema_version,
+      min_client_versions: base.min_client_versions,
+      compatible_client_ranges: base.compatible_client_ranges,
+      transport: base.transport,
+      capabilities: base.capabilities,
+      tool_contracts: {
+        ...base.tool_contracts,
+        upsert_repo_fact: {
+          ...upsertRepoFact!,
+          input_schema: {
+            ...(upsertRepoFact!.input_schema as any),
+            validation: {
+              ...((upsertRepoFact!.input_schema as any).validation as any),
+              fact_body: {
+                ...((upsertRepoFact!.input_schema as any).validation as any)
+                  .fact_body,
+                max_lines: 20,
+              },
             },
           },
         },

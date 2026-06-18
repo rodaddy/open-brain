@@ -63,21 +63,46 @@ function isTrustedSourceUrl(rawUrl: string): boolean {
   }
 }
 
-function sourceUrlContainsPath(rawUrl: string, path: string): boolean {
+function sourceUrlMatchesSource(
+  rawUrl: string,
+  repo: string,
+  path: string,
+  commit: string,
+): boolean {
   try {
     const parsed = new URL(rawUrl);
-    const decodedPath = decodeURIComponent(parsed.pathname);
+    const decodedPath = decodeURIComponent(parsed.pathname).replace(/^\/+/, "");
     const normalizedPath = path.replace(/^\/+/, "");
+    const repoSlug = repo.replace(/^\/+|\/+$/g, "").split("/").at(-1) ?? repo;
     const pathParts = normalizedPath.split("/");
-    const withoutRepoPrefix =
-      pathParts.length > 1 ? pathParts.slice(1).join("/") : normalizedPath;
+    const repoRelativePath =
+      pathParts[0] === repoSlug && pathParts.length > 1
+        ? pathParts.slice(1).join("/")
+        : normalizedPath;
 
-    return (
-      decodedPath.includes(normalizedPath) ||
-      decodedPath.includes(encodeURI(normalizedPath)) ||
-      decodedPath.includes(withoutRepoPrefix) ||
-      decodedPath.includes(encodeURI(withoutRepoPrefix))
-    );
+    if (parsed.hostname.toLowerCase() === "github.com") {
+      const [owner, urlRepo, blob, urlCommit, ...sourceParts] =
+        decodedPath.split("/");
+      void owner;
+      return (
+        urlRepo === repoSlug &&
+        blob === "blob" &&
+        urlCommit === commit &&
+        sourceParts.join("/") === repoRelativePath
+      );
+    }
+
+    if (parsed.hostname.toLowerCase() === "raw.githubusercontent.com") {
+      const [owner, urlRepo, urlCommit, ...sourceParts] = decodedPath.split("/");
+      void owner;
+      return (
+        urlRepo === repoSlug &&
+        urlCommit === commit &&
+        sourceParts.join("/") === repoRelativePath
+      );
+    }
+
+    return false;
   } catch {
     return false;
   }
@@ -119,8 +144,12 @@ export const repoFactMetadata = z
   })
   .refine(
     (value) =>
-      value.source_url.includes(value.source_commit) &&
-      sourceUrlContainsPath(value.source_url, value.path),
+      sourceUrlMatchesSource(
+        value.source_url,
+        value.repo,
+        value.path,
+        value.source_commit,
+      ),
     {
       message: "source_url must include source_commit and source path",
       path: ["source_url"],
@@ -148,6 +177,35 @@ export const REPO_FACT_METADATA_CONTRACT = {
     values: STALENESS_POLICIES,
   },
   refresh_hint: { type: "string", required: false, maxLength: 1000 },
+} as const;
+
+export const REPO_FACT_VALIDATION_CONTRACT = {
+  source_url: {
+    allowed_hosts: ["github.com", "raw.githubusercontent.com"],
+    protocol: "https",
+    credentials_allowed: false,
+    local_private_hosts_allowed: false,
+    github_url_shapes: [
+      "/<owner>/<repo>/blob/<source_commit>/<repo_relative_path>",
+      "/<owner>/<repo>/<source_commit>/<repo_relative_path>",
+    ],
+    repo_match: "url repo segment must match metadata.repo slug",
+    commit_match: "source_commit must be a path segment, not query or fragment",
+    path_match: "exact repo-relative path match; suffix matches are rejected",
+  },
+  fact_body: {
+    raw_code_chunks_allowed: false,
+    credential_like_material_allowed: false,
+    max_lines: 6,
+    rejected_secret_shapes: [
+      "labelled token/password/secret/api_key/authorization values",
+      "AWS access key IDs",
+      "AWS secret-access-key-like 40 character base64 values",
+      "Slack xox tokens",
+      "Google API keys",
+      "JWT-like strings",
+    ],
+  },
 } as const;
 
 function slugPart(value: string): string {
@@ -217,6 +275,7 @@ function containsSecretLikeValue(fact: string): boolean {
   const secretSignals = [
     /\b(?:token|password|passwd|secret|api[_-]?key|authorization)\s*[:=]\s*\S{8,}/i,
     /\bAKIA[0-9A-Z]{16}\b/,
+    /(^|[^A-Za-z0-9/+=])[A-Za-z0-9/+=]{40}($|[^A-Za-z0-9/+=])/,
     /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/,
     /\bAIza[0-9A-Za-z_-]{20,}\b/,
     /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/,
