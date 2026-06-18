@@ -122,13 +122,11 @@ describe("generateEmbedding", () => {
     expect(capturedBody!.input).toBe("test input");
   });
 
-  it("prefers EMBEDDING_BASE_URL over LITELLM_URL and normalizes trailing slash", async () => {
+  it("uses EMBEDDING_BASE_URL and normalizes trailing slash", async () => {
     const originalEmbeddingUrl = process.env.EMBEDDING_BASE_URL;
-    const originalLiteLlmUrl = process.env.LITELLM_URL;
     let capturedUrl = "";
 
     process.env.EMBEDDING_BASE_URL = "http://embedding-provider:8791/v1/";
-    process.env.LITELLM_URL = "http://litellm:4000";
 
     try {
       mockFetch(async (input) => {
@@ -149,21 +147,14 @@ describe("generateEmbedding", () => {
       } else {
         process.env.EMBEDDING_BASE_URL = originalEmbeddingUrl;
       }
-      if (originalLiteLlmUrl === undefined) {
-        delete process.env.LITELLM_URL;
-      } else {
-        process.env.LITELLM_URL = originalLiteLlmUrl;
-      }
     }
   });
 
-  it("prefers EMBEDDING_API_KEY over LITELLM_API_KEY", async () => {
+  it("uses EMBEDDING_API_KEY for provider auth", async () => {
     const originalEmbeddingKey = process.env.EMBEDDING_API_KEY;
-    const originalLiteLlmKey = process.env.LITELLM_API_KEY;
     let capturedAuth = "";
 
     process.env.EMBEDDING_API_KEY = "embedding-key";
-    process.env.LITELLM_API_KEY = "litellm-key";
 
     try {
       mockFetch(async (_input, init) => {
@@ -184,11 +175,6 @@ describe("generateEmbedding", () => {
         delete process.env.EMBEDDING_API_KEY;
       } else {
         process.env.EMBEDDING_API_KEY = originalEmbeddingKey;
-      }
-      if (originalLiteLlmKey === undefined) {
-        delete process.env.LITELLM_API_KEY;
-      } else {
-        process.env.LITELLM_API_KEY = originalLiteLlmKey;
       }
     }
   });
@@ -374,9 +360,7 @@ describe("generateEmbeddingWithMetadata", () => {
 
   it("returns no_embedding_url error when no URL provided", async () => {
     const origEmbeddingUrl = process.env.EMBEDDING_BASE_URL;
-    const origUrl = process.env.LITELLM_URL;
     delete process.env.EMBEDDING_BASE_URL;
-    delete process.env.LITELLM_URL;
 
     try {
       const result = await generateEmbeddingWithMetadata("hello");
@@ -388,9 +372,6 @@ describe("generateEmbeddingWithMetadata", () => {
         process.env.EMBEDDING_BASE_URL = origEmbeddingUrl;
       }
 
-      if (origUrl !== undefined) {
-        process.env.LITELLM_URL = origUrl;
-      }
     }
   });
 

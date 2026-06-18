@@ -77,12 +77,12 @@ function sleep(ms: number): Promise<void> {
 }
 
 function embeddingBaseUrl(explicitUrl?: string): string | undefined {
-  const raw = explicitUrl ?? process.env.EMBEDDING_BASE_URL ?? process.env.LITELLM_URL;
+  const raw = explicitUrl ?? process.env.EMBEDDING_BASE_URL;
   return raw?.replace(/\/+$/, "");
 }
 
 function embeddingApiKey(): string | undefined {
-  return process.env.EMBEDDING_API_KEY ?? process.env.LITELLM_API_KEY;
+  return process.env.EMBEDDING_API_KEY;
 }
 
 export async function generateEmbeddingWithMetadata(

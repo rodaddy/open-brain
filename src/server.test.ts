@@ -75,7 +75,7 @@ afterEach(() => {
 });
 
 // -- Helpers ------------------------------------------------------------------
-// The mock intercepts only LiteLLM health checks (non-localhost URLs with /health).
+// The mock intercepts only provider health checks (non-localhost URLs with /health).
 // Test-side fetches to 127.0.0.1 pass through to Express normally.
 function mockFetchOk() {
   (globalThis as Record<string, unknown>).fetch = (
@@ -92,24 +92,35 @@ function mockFetchOk() {
 
 // -- Tests --------------------------------------------------------------------
 describe("GET /health", () => {
-  it("returns degraded status when LiteLLM is unreachable", async () => {
-    // Mock fetch to simulate LiteLLM being unreachable
+  it("does not degrade when the embedding provider is unreachable", async () => {
+    const originalEmbeddingBaseUrl = process.env.EMBEDDING_BASE_URL;
+    process.env.EMBEDDING_BASE_URL = "http://embedding-provider:8791/v1";
+
     (globalThis as Record<string, unknown>).fetch = (
       input: string | URL | globalThis.Request,
       init?: RequestInit,
     ) => {
       const url = typeof input === "string" ? input : input.toString();
-      if (url.includes("/health") && !url.includes("127.0.0.1")) {
+      if (url.includes("/models") && !url.includes("127.0.0.1")) {
         return Promise.reject(new Error("connection refused"));
       }
       return originalFetch(input, init);
     };
 
-    const res = await fetch(`${baseUrl}/health`);
-    const body = (await res.json()) as HealthStatus;
-    expect(body.litellm.connected).toBe(false);
-    expect(body.database.connected).toBe(true);
-    expect(typeof body.timestamp).toBe("string");
+    try {
+      const res = await fetch(`${baseUrl}/health`);
+      const body = (await res.json()) as HealthStatus;
+      expect(body.status).toBe("healthy");
+      expect(body.embedding.connected).toBe(false);
+      expect(body.database.connected).toBe(true);
+      expect(typeof body.timestamp).toBe("string");
+    } finally {
+      if (originalEmbeddingBaseUrl === undefined) {
+        delete process.env.EMBEDDING_BASE_URL;
+      } else {
+        process.env.EMBEDDING_BASE_URL = originalEmbeddingBaseUrl;
+      }
+    }
   });
 
   it("returns 503 when pool query throws", async () => {

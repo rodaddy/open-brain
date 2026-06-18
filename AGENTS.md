@@ -10,7 +10,7 @@ MCP server providing a unified semantic brain over PostgreSQL + pgvector. TypeSc
 
 - **Runtime:** Bun 1.3.13
 - **Database:** PostgreSQL 17 + pgvector (halfvec 768)
-- **Embeddings:** Any OpenAI-compatible endpoint via `EMBEDDING_BASE_URL` (prod: local MLX server on 127.0.0.1:8791, `embeddinggemma-300m-8bit`); LiteLLM as optional fallback/extraction
+- **Embeddings:** Any OpenAI-compatible endpoint via `EMBEDDING_BASE_URL` (prod: local MLX server on 127.0.0.1:8791, `embeddinggemma-300m-8bit`)
 - **Auth:** Per-consumer Bearer tokens (admin, agent, discord, n8n, readonly)
 - **Deploy:** Mac Mini via launchd `com.rico.open-brain` (10.71.1.21:3100). LXC 208 decommissioned 2026-06-11; its Postgres (10.71.20.49) retained as a pre-cutover snapshot.
 

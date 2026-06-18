@@ -406,7 +406,7 @@ describe("append_session_event", () => {
     const { client, cleanup } = await setupToolClient(
       mockPool,
       auth,
-      createThrowingEmbed(new Error("LiteLLM timeout")),
+      createThrowingEmbed(new Error("embedding provider timeout")),
     );
 
     try {

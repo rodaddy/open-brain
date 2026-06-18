@@ -8,10 +8,12 @@ Never commit real IP addresses, hostnames, credentials, or internal URLs.
 
 ```typescript
 // WRONG — exposes your network topology
-const LITELLM_URL = process.env.LITELLM_URL ?? "http://10.71.20.53:4000";
+const EMBEDDING_BASE_URL =
+  process.env.EMBEDDING_BASE_URL ?? "http://10.71.20.53:8791/v1";
 
 // RIGHT — safe default, real value comes from env
-const LITELLM_URL = process.env.LITELLM_URL ?? "http://localhost:4000";
+const EMBEDDING_BASE_URL =
+  process.env.EMBEDDING_BASE_URL ?? "http://localhost:8791/v1";
 ```
 
 **What counts as infrastructure detail:**
@@ -37,7 +39,7 @@ const DB_HOST = process.env.DB_HOST ?? "localhost";
 `.env.example` uses descriptive placeholders to show what's needed:
 ```env
 DB_HOST=your-postgres-host
-LITELLM_API_KEY=your-litellm-api-key
+EMBEDDING_API_KEY=your-embedding-api-key
 ```
 
 `.env.schema` (for varlock) uses fake but realistic values with comments:
