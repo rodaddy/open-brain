@@ -23,6 +23,8 @@ describe("Open Brain contract manifest", () => {
       "search_all",
       "session_start",
       "session_context",
+      "lane_upsert",
+      "lane_load",
       "append_session_event",
       "session_wrap",
       "list_repo_facts",
@@ -52,6 +54,18 @@ describe("Open Brain contract manifest", () => {
       "warm",
       "cold",
     ]);
+    const laneUpsert = contract.tool_contracts.lane_upsert;
+    expect(laneUpsert).toBeDefined();
+    expect((laneUpsert?.input_schema as any).current_context_md.maxLength).toBe(
+      100000,
+    );
+    expect((laneUpsert?.input_schema as any).metadata.propertyNames.maxLength).toBe(
+      100,
+    );
+    const laneLoad = contract.tool_contracts.lane_load;
+    expect(laneLoad).toBeDefined();
+    expect((laneLoad?.input_schema as any).status.default).toBe("active");
+    expect((laneLoad?.input_schema as any).limit.max).toBe(50);
     expect(
       (upsertRepoFact?.input_schema as any).metadata.source_url.required,
     ).toBe(true);

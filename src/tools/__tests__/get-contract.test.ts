@@ -29,7 +29,7 @@ describe("get_contract", () => {
       expect(parsed.service).toBe("open-brain");
       expect(parsed.schema_hash).toMatch(/^[0-9a-f]{64}$/);
       expect(parsed.capabilities.map((c: { name: string }) => c.name)).toContain(
-        "list_repo_facts",
+        "lane_upsert",
       );
     } finally {
       await cleanup();
