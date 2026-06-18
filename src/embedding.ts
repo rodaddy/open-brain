@@ -180,10 +180,24 @@ function triggerEmbeddingWatchdogRestart(code: EmbeddingError["code"]): void {
   });
 
   child.once("spawn", () => {
+    child.unref();
+  });
+
+  child.once("close", (exitCode) => {
+    watchdogRestartInFlight = false;
+    if (exitCode !== 0) {
+      logger.error("embedding_watchdog_restart_failed", {
+        exitCode,
+        restartScript,
+      });
+      return;
+    }
+
     lastWatchdogRestartAt = Date.now();
     resetWatchdogFailures();
-    watchdogRestartInFlight = false;
-    child.unref();
+    logger.warn("embedding_watchdog_restart_completed", {
+      restartScript,
+    });
   });
 }
 

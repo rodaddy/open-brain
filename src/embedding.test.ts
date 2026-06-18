@@ -216,18 +216,19 @@ describe("embedding watchdog", () => {
   });
 
   function fakeSpawnProcess(
-    mode: "spawn" | "error" = "spawn",
+    options: { mode?: "success" | "error" | "exit-nonzero" } = {},
   ): ReturnType<Parameters<typeof __setEmbeddingWatchdogRestartSpawnerForTests>[0]> {
-    const handlers = new Map<string, (arg?: Error) => void>();
+    const mode = options.mode ?? "success";
     return {
-      once: (event: string, handler: (arg?: Error) => void) => {
-        handlers.set(event, handler);
-        if (event === mode) {
-          queueMicrotask(() =>
-            handler(
-              mode === "error" ? new Error("restart script missing") : undefined,
-            ),
-          );
+      once: (event: string, handler: (...args: unknown[]) => void) => {
+        if (mode === "error" && event === "error") {
+          queueMicrotask(() => handler(new Error("restart script missing")));
+        } else if (mode !== "error" && event === "spawn") {
+          queueMicrotask(() => handler());
+        } else if (mode === "success" && event === "close") {
+          queueMicrotask(() => handler(0));
+        } else if (mode === "exit-nonzero" && event === "close") {
+          queueMicrotask(() => handler(1));
         }
         return undefined;
       },
@@ -236,6 +237,52 @@ describe("embedding watchdog", () => {
       Parameters<typeof __setEmbeddingWatchdogRestartSpawnerForTests>[0]
     >;
   }
+
+  async function triggerRestartableFailures(count: number): Promise<void> {
+    mockFetch(async () => {
+      throw new DOMException("The operation was aborted.", "AbortError");
+    });
+
+    for (let i = 0; i < count; i += 1) {
+      await generateEmbeddingWithMetadata(
+        `restartable failure ${i}`,
+        "http://fake:4000",
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  it("resets failure history only after successful restart script exit", async () => {
+    process.env.EMBEDDING_WATCHDOG_COOLDOWN_MS = "0";
+    let spawnCount = 0;
+    __setEmbeddingWatchdogRestartSpawnerForTests(() => {
+      spawnCount += 1;
+      return fakeSpawnProcess({ mode: "success" });
+    });
+
+    await triggerRestartableFailures(2);
+    expect(spawnCount).toBe(1);
+
+    await triggerRestartableFailures(1);
+    expect(spawnCount).toBe(1);
+
+    await triggerRestartableFailures(1);
+    expect(spawnCount).toBe(2);
+  });
+
+  it("does not cooldown-suppress retry when restart script exits non-zero", async () => {
+    let spawnCount = 0;
+    __setEmbeddingWatchdogRestartSpawnerForTests(() => {
+      spawnCount += 1;
+      return fakeSpawnProcess({ mode: "exit-nonzero" });
+    });
+
+    await triggerRestartableFailures(2);
+    expect(spawnCount).toBe(1);
+
+    await triggerRestartableFailures(1);
+    expect(spawnCount).toBe(2);
+  });
 
   it("triggers restart after mixed restartable provider failures", async () => {
     let spawnCount = 0;
@@ -262,7 +309,7 @@ describe("embedding watchdog", () => {
     let spawnCount = 0;
     __setEmbeddingWatchdogRestartSpawnerForTests(() => {
       spawnCount += 1;
-      return fakeSpawnProcess("error");
+      return fakeSpawnProcess({ mode: "error" });
     });
 
     mockFetch(async () => {
