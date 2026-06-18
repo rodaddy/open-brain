@@ -53,6 +53,9 @@ const setupClient = (
   embed = createMockEmbed(),
 ) => setupMcpClient(registerSearchAll, mockPool, embed, auth);
 
+const neverResolvingEmbed = async () =>
+  new Promise<number[] | null>(() => undefined);
+
 /** Parse search_all structured response. */
 function parseSearchAll(result: any) {
   return parseToolResult(result) as {
@@ -615,6 +618,38 @@ describe("search_all", () => {
   });
 
   describe("Edge cases", () => {
+    it("returns qmd-only when vector embedding times out", async () => {
+      const previousTimeout = process.env.SEARCH_EMBEDDING_TIMEOUT_MS;
+      process.env.SEARCH_EMBEDDING_TIMEOUT_MS = "10";
+      mockBunSpawn(
+        0,
+        qmdJson([{ path: "/f.md", content: "qmd only", score: 0.7 }]),
+      );
+      const pool = { query: async () => ({ rows: makeMockRowsWithMeta(2) }) };
+      const { client, cleanup } = await setupClient(
+        pool,
+        { role: "admin", clientId: "admin" },
+        neverResolvingEmbed,
+      );
+      try {
+        const parsed = parseSearchAll(
+          await client.callTool({
+            name: "search_all",
+            arguments: { query: "embed timeout", search_mode: "vector" },
+          }),
+        );
+        expect(parsed.brain_hits).toBe(0);
+        expect(parsed.qmd_hits).toBe(1);
+      } finally {
+        if (previousTimeout === undefined) {
+          delete process.env.SEARCH_EMBEDDING_TIMEOUT_MS;
+        } else {
+          process.env.SEARCH_EMBEDDING_TIMEOUT_MS = previousTimeout;
+        }
+        await cleanup();
+      }
+    });
+
     it("returns qmd-only when embedFn returns null (brain skipped)", async () => {
       mockBunSpawn(
         0,

@@ -15,6 +15,9 @@ const setup = (
   embed = createMockEmbed(),
 ) => setupMcpClient(registerSearchBrain, mockPool, embed, auth);
 
+const neverResolvingEmbed = async () =>
+  new Promise<number[] | null>(() => undefined);
+
 /** Pool that returns rows for search queries and empty for links. */
 const searchPool = (rows: any[]) => ({
   query: async (...args: any[]) => {
@@ -624,6 +627,30 @@ describe("search_brain", () => {
           "Failed to generate query embedding",
         );
       } finally {
+        await cleanup();
+      }
+    });
+
+    it("falls back to keyword search when hybrid embedding times out", async () => {
+      const previousTimeout = process.env.SEARCH_EMBEDDING_TIMEOUT_MS;
+      process.env.SEARCH_EMBEDDING_TIMEOUT_MS = "10";
+      const pool = searchPool(makeMockRows(2));
+      const auth: AuthInfo = { role: "admin", clientId: "admin" };
+      const { client, cleanup } = await setup(pool, auth, neverResolvingEmbed);
+
+      try {
+        const result = await client.callTool({
+          name: "search_brain",
+          arguments: { query: "embed timeout" },
+        });
+        expect(result.isError).toBeFalsy();
+        expect(parseToolResult(result).length).toBe(2);
+      } finally {
+        if (previousTimeout === undefined) {
+          delete process.env.SEARCH_EMBEDDING_TIMEOUT_MS;
+        } else {
+          process.env.SEARCH_EMBEDDING_TIMEOUT_MS = previousTimeout;
+        }
         await cleanup();
       }
     });

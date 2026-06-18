@@ -33,6 +33,7 @@ const RRF_K = 60;
 
 /** Over-fetch multiplier for hybrid mode (fetch N*3 from each path, merge to N) */
 const HYBRID_FETCH_MULTIPLIER = 3;
+const DEFAULT_SEARCH_EMBEDDING_TIMEOUT_MS = 3000;
 
 /** Tier-based RRF score adjustments for cognitive tiering */
 export const TIER_BOOST: Record<Tier, number> = {
@@ -55,6 +56,42 @@ const TABLE_WEIGHT: Record<string, number> = {
   session: 0.8,
   entity: 1.0,
 };
+
+function searchEmbeddingTimeoutMs(): number {
+  const raw =
+    process.env.SEARCH_EMBEDDING_TIMEOUT_MS ??
+    process.env.OPENBRAIN_SEARCH_EMBEDDING_TIMEOUT_MS;
+  if (!raw) return DEFAULT_SEARCH_EMBEDDING_TIMEOUT_MS;
+  const parsed = parseInt(raw, 10);
+  return Number.isNaN(parsed) || parsed < 1
+    ? DEFAULT_SEARCH_EMBEDDING_TIMEOUT_MS
+    : parsed;
+}
+
+async function generateSearchEmbedding(
+  deps: ToolDeps,
+  query: string,
+): Promise<number[] | null> {
+  const timeoutMs = searchEmbeddingTimeoutMs();
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    return await Promise.race([
+      deps.embedFn(query),
+      new Promise<null>((resolve) => {
+        timeoutId = setTimeout(() => {
+          logger.warn("search_embedding_timeout", {
+            timeoutMs,
+            query: query.slice(0, 50),
+          });
+          resolve(null);
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
 
 /** Gentle recency factor: today=1.0, 30d=0.97, 90d=0.92, 365d=0.73 */
 function recencyFactor(createdAt: string): number {
@@ -652,7 +689,7 @@ export async function executeSearch(
   }
 
   // Vector and hybrid both need an embedding
-  const embedding = await deps.embedFn(query);
+  const embedding = await generateSearchEmbedding(deps, query);
   if (!embedding) {
     // Fall back to keyword-only if embedding fails in hybrid mode
     if (mode === "hybrid") {
