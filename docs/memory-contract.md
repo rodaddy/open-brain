@@ -77,6 +77,9 @@ Open Brain is the **durable operational memory** for PAI agents. It stores:
 | list_entities | List graph entities by type/name/namespace | read |
 | link_entities | Create relationship between entries | write |
 | adjacent_context | Traverse link graph from a node | read |
+| get_contract | Read the public Open Brain contract manifest | read |
+| upsert_repo_fact | Store curated qmd-derived repo fact metadata | write |
+| list_repo_facts | Read curated qmd-derived repo facts | read |
 | search_brain | Semantic search across all tables | read |
 | search_all | Federated search (OB + qmd) | read |
 | brain_answer | Extractive cited evidence bullets from Open Brain | read |
@@ -164,6 +167,23 @@ relationships, validated artifacts, and promoted shared knowledge. Use
 `log_decision`, `log_thought`, entity/link tools, and promotion flows when a
 fact should survive beyond the current lane. Do not promote raw chat logs,
 secrets, private source identifiers, or unvalidated guesses.
+
+### Repo Knowledge From qmd
+
+qmd is the local GPU-backed code knowledge compiler. It can index source, embed
+chunks, and attach context to paths. Agents that do not run on that machine
+cannot depend on qmd during normal memory flow, so required qmd-derived repo
+facts must be promoted into Open Brain.
+
+Use `upsert_repo_fact` for curated, durable operating knowledge such as
+ownership, gotchas, dependency rules, import rules, validation notes, and source
+pointers. The fact must include source provenance and staleness metadata:
+`repo`, `collection`, `path`, `source_commit`, `verified_at`, `fact_type`,
+`staleness_policy`, and either `symbol` or `subject` when applicable.
+
+Do not mirror raw qmd chunks or full code excerpts into Open Brain by default.
+For volatile implementation details, store a stable fact plus a source pointer
+and verify the live source through `gh` or a checkout before editing.
 
 ### Citation And Answering Rules
 

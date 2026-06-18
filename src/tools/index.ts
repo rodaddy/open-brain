@@ -42,6 +42,8 @@ import { registerAdjacentContext } from "./adjacent-context.ts";
 import { registerPromoteEntry } from "./promote-entry.ts";
 import { registerDemoteEntry } from "./demote-entry.ts";
 import { registerScanNamespace } from "./scan-namespace.ts";
+import { registerGetContract } from "./get-contract.ts";
+import { registerListRepoFacts, registerUpsertRepoFact } from "./repo-facts.ts";
 
 export interface ToolDeps {
   pool: pg.Pool;
@@ -90,4 +92,7 @@ export function registerAllTools(server: McpServer, deps: ToolDeps): void {
   registerPromoteEntry(server, deps);
   registerDemoteEntry(server, deps);
   registerScanNamespace(server, deps);
+  registerGetContract(server, deps);
+  registerUpsertRepoFact(server, deps);
+  registerListRepoFacts(server, deps);
 }

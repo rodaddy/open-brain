@@ -100,3 +100,72 @@ steps above are either:
 Do not close the issue or report the rollout done after only local tests,
 hosted Open Brain tests, or mcp2cli schema checks when Hermes agent behavior is
 in scope.
+
+## Contract Manifest
+
+Downstream runtimes must not infer Open Brain compatibility from memory,
+generated docs, or partial tool discovery. Open Brain exposes a canonical
+contract manifest through `get_contract`.
+
+The manifest includes:
+
+- `contract_version`
+- `contract_scope`
+- `schema_version`
+- `schema_hash`
+- `generated_at`
+- `min_client_versions`
+- `compatible_client_ranges`
+- `transport`
+- `capabilities`
+- `tool_contracts`
+
+`contract_scope` is `required_openbrain_memory_contract`. The manifest is the
+canonical compatibility contract for required memory/session/repo-fact behavior
+that Hermes, mcp2cli, and generated Open Brain skills must depend on. It is not
+yet a typed schema export for every optional Open Brain MCP tool.
+
+`schema_hash` is deterministic and excludes `generated_at`. It includes the
+required capability list, required tool contracts, repo-fact metadata contract,
+and repo-fact validation semantics. Downstream clients such as `rtech-hermes`
+should validate `contract_version`, `contract_scope`, `schema_hash`, minimum
+client version, compatible range, and required capabilities at startup. In
+required memory mode, incompatible or unreachable contracts must fail closed.
+
+## qmd-Derived Repo Facts
+
+qmd runs on the local GPU machine and acts as the repo-knowledge compiler. Open
+Brain is the shared runtime distribution layer for agents that cannot run qmd.
+Required repo knowledge is promoted into Open Brain with `upsert_repo_fact` and
+read with `list_repo_facts`.
+
+Repo facts are curated operating knowledge plus source pointers. They are not
+raw qmd/code chunks. Each fact is stored as an `ob_entities` graph entity with
+`entity_type = 'repo_fact'`, a deterministic `canonical_id`, and metadata that
+includes:
+
+- `source_system: "qmd"`
+- `repo`
+- `collection`
+- `path`
+- `symbol` or `subject`
+- `fact_type`
+- `fact`
+- `source_commit`
+- `source_url`
+- `verified_at`
+- `confidence`
+- `staleness_policy`
+- `refresh_hint`
+
+`source_url` must be an HTTPS GitHub source URL with no embedded credentials.
+For `github.com`, it must match
+`/<owner>/<repo>/blob/<source_commit>/<repo_relative_path>`. For
+`raw.githubusercontent.com`, it must match
+`/<owner>/<repo>/<source_commit>/<repo_relative_path>`. The URL repo segment
+must match the repo fact's `repo` slug, and the source commit must be a path
+segment, not a query string or fragment.
+
+Promotion rule: if distributed agents are expected to rely on a qmd-derived repo
+fact during normal work, that fact must be present in Open Brain. Remote qmd can
+exist as a best-effort deep lookup path, but it is not the memory contract.
