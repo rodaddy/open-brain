@@ -15,8 +15,23 @@ const setup = (
   embed = createMockEmbed(),
 ) => setupMcpClient(registerSearchBrain, mockPool, embed, auth);
 
-const neverResolvingEmbed = async () =>
-  new Promise<number[] | null>(() => undefined);
+const abortAwareNeverResolvingEmbed =
+  (onAbort: () => void) =>
+  async (
+    _text: string,
+    _embeddingUrl?: string,
+    options?: { signal?: AbortSignal },
+  ) =>
+    new Promise<number[] | null>((resolve) => {
+      options?.signal?.addEventListener(
+        "abort",
+        () => {
+          onAbort();
+          resolve(null);
+        },
+        { once: true },
+      );
+    });
 
 /** Pool that returns rows for search queries and empty for links. */
 const searchPool = (rows: any[]) => ({
@@ -632,11 +647,18 @@ describe("search_brain", () => {
     });
 
     it("falls back to keyword search when hybrid embedding times out", async () => {
-      const previousTimeout = process.env.SEARCH_EMBEDDING_TIMEOUT_MS;
-      process.env.SEARCH_EMBEDDING_TIMEOUT_MS = "10";
+      const previousTimeout = process.env.OPENBRAIN_SEARCH_EMBEDDING_TIMEOUT_MS;
+      process.env.OPENBRAIN_SEARCH_EMBEDDING_TIMEOUT_MS = "10";
+      let aborted = false;
       const pool = searchPool(makeMockRows(2));
       const auth: AuthInfo = { role: "admin", clientId: "admin" };
-      const { client, cleanup } = await setup(pool, auth, neverResolvingEmbed);
+      const { client, cleanup } = await setup(
+        pool,
+        auth,
+        abortAwareNeverResolvingEmbed(() => {
+          aborted = true;
+        }),
+      );
 
       try {
         const result = await client.callTool({
@@ -645,11 +667,12 @@ describe("search_brain", () => {
         });
         expect(result.isError).toBeFalsy();
         expect(parseToolResult(result).length).toBe(2);
+        expect(aborted).toBe(true);
       } finally {
         if (previousTimeout === undefined) {
-          delete process.env.SEARCH_EMBEDDING_TIMEOUT_MS;
+          delete process.env.OPENBRAIN_SEARCH_EMBEDDING_TIMEOUT_MS;
         } else {
-          process.env.SEARCH_EMBEDDING_TIMEOUT_MS = previousTimeout;
+          process.env.OPENBRAIN_SEARCH_EMBEDDING_TIMEOUT_MS = previousTimeout;
         }
         await cleanup();
       }
