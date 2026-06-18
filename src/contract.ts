@@ -4,7 +4,7 @@ import {
   REPO_FACT_VALIDATION_CONTRACT,
 } from "./tools/repo-facts.ts";
 
-export const CONTRACT_VERSION = "2026-06-18.memory-tools.v1";
+export const CONTRACT_VERSION = "2026-06-18.memory-tools.v2";
 export const CONTRACT_SCHEMA_VERSION = 1;
 
 export interface ContractCapability {
@@ -86,6 +86,20 @@ export const CONTRACT_CAPABILITIES: ContractCapability[] = [
     version: 1,
     kind: "tool",
     description: "Read durable session lane state and recent events.",
+  },
+  {
+    name: "lane_upsert",
+    version: 1,
+    kind: "tool",
+    description:
+      "Create or update durable session lane metadata and current context.",
+  },
+  {
+    name: "lane_load",
+    version: 1,
+    kind: "tool",
+    description:
+      "Load durable session lanes by key, project, agent, channel, or status.",
   },
   {
     name: "append_session_event",
@@ -272,6 +286,60 @@ export function buildContract(
           },
         },
         output_shape: "session lane plus recent events JSON text payload",
+      },
+      lane_upsert: {
+        version: 1,
+        input_schema: {
+          session_key: {
+            type: "string",
+            required: true,
+            minLength: 1,
+            maxLength: 500,
+          },
+          namespace: { type: "string", required: false, maxLength: 500 },
+          status: {
+            type: "enum",
+            required: false,
+            values: ["active", "wrapped", "archived"],
+          },
+          agent: { type: "string", required: false, maxLength: 500 },
+          source: { type: "string", required: false, maxLength: 500 },
+          channel_id: { type: "string", required: false, maxLength: 500 },
+          thread_id: { type: "string", required: false, maxLength: 500 },
+          project: { type: "string", required: false, maxLength: 500 },
+          topic: { type: "string", required: false, maxLength: 500 },
+          current_context_md: {
+            type: "string",
+            required: false,
+            maxLength: 100000,
+          },
+          metadata: {
+            type: "object",
+            required: false,
+            propertyNames: { type: "string", maxLength: 100 },
+            maxKeys: 50,
+            maxJsonBytes: 100000,
+          },
+        },
+        output_shape: "session lane JSON text payload",
+      },
+      lane_load: {
+        version: 1,
+        input_schema: {
+          session_key: { type: "string", required: false },
+          namespace: { type: "string", required: false },
+          project: { type: "string", required: false },
+          agent: { type: "string", required: false },
+          channel_id: { type: "string", required: false },
+          status: {
+            type: "enum",
+            required: false,
+            default: "active",
+            values: ["active", "wrapped", "archived"],
+          },
+          limit: { type: "integer", required: false, min: 1, max: 50 },
+        },
+        output_shape: "session lane array JSON text payload",
       },
       append_session_event: {
         version: 1,
