@@ -7,10 +7,15 @@ import { canWrite, canRead } from "./permissions.ts";
 import { canWriteNamespace } from "./namespace-policy.ts";
 import { contentHash, EMBEDDING_MODEL } from "./embedding.ts";
 import { backgroundExtract } from "./extraction.ts";
-import { executeSearch, type SearchMode } from "./tools/search-brain.ts";
+import {
+  executeSearch,
+  executeSearchWithSharedFallback,
+  type SearchMode,
+} from "./tools/search-brain.ts";
 import { ALL_TABLES } from "./tools/table-constants.ts";
 import { TABLE_COLUMNS } from "./table-projections.ts";
 import { canReadNamespace, namespaceFilterFor, readableNamespaces } from "./read-policy.ts";
+import { isSharedNamespace } from "./shared-namespace.ts";
 import type { AuthInfo, Table, Tier } from "./types.ts";
 import type { generateEmbedding } from "./embedding.ts";
 
@@ -496,16 +501,29 @@ export function createRestRouter(deps: RestDeps): Router {
       return;
     }
 
-    const rows = await executeSearch(
-      deps,
-      accessibleTables,
-      q,
-      limit,
-      mode as SearchMode,
-      tier as Tier | undefined,
-      offset,
-      namespaceFilterFor(auth, namespace),
-    );
+    const namespaceFilter = namespaceFilterFor(auth, namespace);
+    const rows =
+      typeof namespaceFilter === "string" && isSharedNamespace(namespaceFilter)
+        ? await executeSearchWithSharedFallback(
+            deps,
+            accessibleTables,
+            q,
+            limit,
+            mode as SearchMode,
+            tier as Tier | undefined,
+            offset,
+            namespaceFilter,
+          )
+        : await executeSearch(
+            deps,
+            accessibleTables,
+            q,
+            limit,
+            mode as SearchMode,
+            tier as Tier | undefined,
+            offset,
+            namespaceFilter,
+          );
 
     res.json({ results: rows, count: rows.length });
   }));

@@ -39,6 +39,32 @@ For MCP tool/schema/protocol/client-facing changes, "verified" means the
 applicable rtech-mcps, mcp2cli, rtech-hermes Python runtime/plugin, and live
 Hermes agent canary steps are complete or explicitly marked not applicable.
 
+## Critical Self-Review Pre-PR Gate
+
+Before opening or marking a non-trivial PR ready, the author or controller MUST
+run a critical self-review and include a concise receipt in the PR body or a PR
+comment. This is a separate author-side gate and does not replace fresh-context
+review swarms, CI, or fix-verification.
+
+Required receipt:
+
+```text
+Critical self-review:
+- Highest-risk behavior:
+- Assumptions that could be wrong:
+- Missing/weak tests:
+- Security/permission risk:
+- Migration/deploy risk:
+- Downstream client/runtime risk:
+- Rollback/cleanup concern:
+- Fixes made before PR:
+- Known residual risk:
+```
+
+If the self-review finds a material issue, fix it before requesting review or
+mark it as deferred only with explicit Rico approval. Do not use empty
+"all good" language; name the risks checked and the evidence behind them.
+
 ## Python Package
 
 ```bash
@@ -53,7 +79,9 @@ uv run pytest -q
 
 - Do not code on `main`; branch first and keep unrelated local files out of commits.
 - Treat namespace isolation as a security boundary. Any ID-based read or mutation must include an auth-derived namespace predicate unless the token-sourced role is intentionally global.
-- Do not hard-code `collab` as the only promotion target. Promotion and scan flows must accept and test `target_namespace` where relevant.
+- Use `shared-kb` for shared Open Brain knowledge. Promotion and scan flows
+  must accept and test `target_namespace` where relevant, with legacy `collab`
+  treated only as an internal migration source.
 - Keep SQL parameterized. Table names may be interpolated only after Zod enum validation or another explicit allowlist.
 - Put auth, namespace, and permission checks on the server side. Client-side convenience checks are not security controls.
 - For every security/isolation bug fix, add a regression test that fails on the old behavior and proves the exact predicate, header binding, or call shape.

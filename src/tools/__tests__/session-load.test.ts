@@ -100,7 +100,7 @@ describe("session_load", () => {
         });
 
         expect(calls[0]!.sql).toContain("namespace = ANY($2::text[])");
-        expect(calls[0]!.params).toEqual(["open-brain", ["bilby", "collab"]]);
+        expect(calls[0]!.params).toEqual(["open-brain", ["bilby", "shared-kb"]]);
       } finally {
         await cleanup();
       }
@@ -150,7 +150,7 @@ describe("session_load", () => {
         });
 
         expect(calls[0]!.sql).toContain("namespace = ANY($1::text[])");
-        expect(calls[0]!.params).toEqual([["bilby", "collab"]]);
+        expect(calls[0]!.params).toEqual([["bilby", "shared-kb"]]);
       } finally {
         await cleanup();
       }

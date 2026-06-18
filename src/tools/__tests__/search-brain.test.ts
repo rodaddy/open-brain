@@ -187,7 +187,7 @@ describe("search_brain", () => {
         searchPool(
           makeMockRows(3).map((row) => ({
             ...row,
-            namespace: "collab",
+            namespace: "shared-kb",
             created_by: "codex",
             updated_at: "2026-01-02T00:00:00Z",
           })),
@@ -214,7 +214,7 @@ describe("search_brain", () => {
           source: "brain",
           type: "thought",
           id: "uuid-0",
-          namespace: "collab",
+          namespace: "shared-kb",
           created_by: "codex",
           created_at: "2026-01-01T00:00:00.000Z",
           last_updated_at: "2026-01-02T00:00:00.000Z",
@@ -238,7 +238,7 @@ describe("search_brain", () => {
               {
                 source_type: "entity",
                 id: "550e8400-e29b-41d4-a716-446655440000",
-                namespace: "collab",
+                namespace: "shared-kb",
                 content_preview: "project: hub",
                 tags: null,
                 created_by: "codex",
@@ -325,7 +325,7 @@ describe("search_brain", () => {
           {
             source_type: "thought",
             id: "uuid-invalid-date",
-            namespace: "collab",
+            namespace: "shared-kb",
             content_preview: "Invalid timestamp row",
             distance: 0.1,
             tags: [],
@@ -346,10 +346,71 @@ describe("search_brain", () => {
           source: "brain",
           type: "thought",
           id: "uuid-invalid-date",
-          namespace: "collab",
+          namespace: "shared-kb",
           label: "Invalid timestamp row",
           preview: "Invalid timestamp row",
         });
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("falls back from canonical shared-kb to legacy collab and canonicalizes results", async () => {
+      const searchCalls: any[] = [];
+      const pool = {
+        query: async (...args: any[]) => {
+          const [sql, params] = args;
+          if (String(sql).includes("FROM ob_links")) return { rows: [] };
+          if (String(sql).startsWith("INSERT INTO entry_access_log")) {
+            return { rows: [] };
+          }
+          searchCalls.push(args);
+          const namespace = Array.isArray(params) ? params.at(-1) : undefined;
+          if (namespace === "shared-kb") return { rows: [] };
+          if (namespace === "collab") {
+            return {
+              rows: [
+                {
+                  source_type: "thought",
+                  id: "00000000-0000-4000-8000-000000000099",
+                  namespace: "collab",
+                  content_preview: "Legacy shared hit",
+                  tags: [],
+                  created_by: "codex",
+                  created_at: "2026-01-01T00:00:00Z",
+                  usefulness: 0,
+                  fts_rank: 1,
+                },
+              ],
+            };
+          }
+          return { rows: [] };
+        },
+      };
+      const auth: AuthInfo = { role: "agent", clientId: "bilby" };
+      const { client, cleanup } = await setup(pool, auth);
+
+      try {
+        const result = await client.callTool({
+          name: "search_brain",
+          arguments: {
+            query: "legacy hit",
+            namespace: "shared-kb",
+            search_mode: "keyword",
+            limit: 3,
+          },
+        });
+
+        expect(result.isError).toBeFalsy();
+        const parsed = parseToolResult(result);
+        expect(parsed).toHaveLength(1);
+        expect(parsed[0].namespace).toBe("shared-kb");
+        expect(parsed[0].source_ref.namespace).toBe("shared-kb");
+        expect(
+          searchCalls
+            .map((call) => call[1].at(-1))
+            .filter((value) => typeof value === "string"),
+        ).toEqual(["shared-kb", "collab"]);
       } finally {
         await cleanup();
       }

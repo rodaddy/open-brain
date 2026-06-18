@@ -8,6 +8,7 @@ import type { generateEmbedding } from "./embedding.ts";
 import { promoteEntry } from "./promotion-service.ts";
 import { appendReadNamespacePredicate, canReadNamespace } from "./read-policy.ts";
 import { appendWriteNamespacePredicate } from "./namespace-policy.ts";
+import { sharedNamespaceConfig } from "./shared-namespace.ts";
 
 interface RestDeps {
   pool: pg.Pool;
@@ -26,6 +27,7 @@ const promoteSchema = z.object({
   id: z.string().uuid(),
   reason: z.string().max(1000).optional(),
   target_namespace: namespaceSchema.optional(),
+  dry_run: z.boolean().optional(),
 });
 
 const demoteSchema = z.object({
@@ -37,7 +39,7 @@ const scanQuerySchema = z.object({
   table: tableSchema.optional(),
   since: z.string().datetime().optional(),
   limit: z.coerce.number().int().min(1).max(100).default(20),
-  target_namespace: namespaceSchema.default("collab"),
+  target_namespace: namespaceSchema.optional(),
 });
 
 function badRequest(res: Response, issues: z.ZodIssue[]): void {
@@ -60,16 +62,21 @@ export function createPromotionRouter(deps: RestDeps): Router {
       return;
     }
 
-    const { table, id, reason, target_namespace } = parsed.data;
+    const { table, id, reason, target_namespace, dry_run } = parsed.data;
+    const resolvedTargetNamespace =
+      target_namespace ?? sharedNamespaceConfig().sharedNamespace;
     let result;
     try {
       result = await promoteEntry(
         deps.pool,
         table,
         id,
-        target_namespace ?? "collab",
+        resolvedTargetNamespace,
         reason,
         auth,
+        {
+          dryRun: dry_run ?? false,
+        },
       );
     } catch (err) {
       const statusCode = typeof (err as any)?.statusCode === "number"
@@ -79,7 +86,7 @@ export function createPromotionRouter(deps: RestDeps): Router {
       return;
     }
 
-    res.status(result.status === "duplicate" ? 409 : 201).json(result);
+    res.status(result.status === "duplicate" ? 409 : result.status === "dry_run" ? 200 : 201).json(result);
   });
 
   router.post("/demote", async (req: Request, res: Response) => {
@@ -152,11 +159,13 @@ export function createPromotionRouter(deps: RestDeps): Router {
     }
 
     const { table, since, limit, target_namespace } = parsed.data;
+    const resolvedTargetNamespace =
+      target_namespace ?? sharedNamespaceConfig().sharedNamespace;
     if (!canReadNamespace(auth, namespace.data)) {
       res.status(403).json({ error: "Permission denied: namespace read access denied" });
       return;
     }
-    if (!canReadNamespace(auth, target_namespace)) {
+    if (!canReadNamespace(auth, resolvedTargetNamespace)) {
       res.status(403).json({ error: "Permission denied: target namespace read access denied" });
       return;
     }
@@ -189,17 +198,17 @@ export function createPromotionRouter(deps: RestDeps): Router {
         if (row.content_hash) {
           const { rows: targetDupes } = await deps.pool.query(
             `SELECT id FROM ${t} WHERE content_hash = $1 AND namespace = $2 LIMIT 1`,
-            [row.content_hash, target_namespace],
+            [row.content_hash, resolvedTargetNamespace],
           );
           if (targetDupes.length > 0) {
             const duplicate: Record<string, unknown> = {
               table: t,
               id: row.id,
-              target_namespace,
+              target_namespace: resolvedTargetNamespace,
               existing_target_id: targetDupes[0].id,
               created_at: row.created_at,
             };
-            if (target_namespace === "collab") {
+            if (resolvedTargetNamespace === "collab") {
               duplicate.existing_collab_id = targetDupes[0].id;
             }
             duplicateEntries.push(duplicate);
@@ -212,7 +221,7 @@ export function createPromotionRouter(deps: RestDeps): Router {
 
     res.json({
       namespace: namespace.data,
-      target_namespace,
+      target_namespace: resolvedTargetNamespace,
       candidates,
       duplicates: duplicateEntries,
       already_promoted: alreadyPromoted,

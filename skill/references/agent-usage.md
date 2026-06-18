@@ -17,11 +17,11 @@ CWD_BASE=$(basename "$PWD")
 
 # 3. Resolve
 if [[ "$HOST" == cc-* ]]; then
-  # LXC -- default collab
-  NS="collab"
+  # LXC -- default shared-kb
+  NS="shared-kb"
 elif [[ "$CWD_BASE" == king* ]] || [[ "$CWD_BASE" == King* ]]; then
   # Personal machine + king directory
-  NS="collab"
+  NS="shared-kb"
 else
   # Personal machine + non-king directory
   # Use your authenticated identity (from your auth token)
@@ -33,13 +33,13 @@ fi
 
 - You run on `rodaddy-air-2.local` (Air) or `Mini-M4-Pro.local` (local)
 - Your `clientId` is `skippy`
-- Default: `namespace = "skippy"` (unless in a king dir -> "collab")
-- If a user explicitly tells you "this is for the team" or "push to collab" -> use "collab"
+- Default: `namespace = "skippy"` (unless in a king dir -> "shared-kb")
+- If a user explicitly tells you "this is for the team" or "push to shared-kb" -> use "shared-kb"
 - If a user says "save this to Rico's brain" or "this is personal for me" -> use that user's identity, NOT "skippy"
 
 ### For LXC Agents (cc-king, cc-kevin, cc-geetesh)
 
-- Default: `namespace = "collab"` (you're doing team work)
+- Default: `namespace = "shared-kb"` (you're doing team work)
 - Only switch to personal namespace if the user explicitly asks
 - Your `clientId` from the auth token tells OB who you are for audit purposes
 
@@ -69,7 +69,7 @@ Never omit namespace. Never omit tags. Empty tags array `[]` is acceptable if ge
 
 ## Common Mistakes
 
-1. **Omitting namespace** -- the server defaults to your `clientId`, which may be wrong for collab work
+1. **Omitting namespace** -- the server defaults to your `clientId`, which may be wrong for shared work
 2. **Hardcoding "rico"** -- use the authenticated identity, not a hardcoded string
 3. **Ignoring user intent** -- "save this to my brain" means THEIR namespace, not yours
 4. **No tags** -- always tag with at least the project context for traceability
@@ -81,7 +81,7 @@ Never omit namespace. Never omit tags. Empty tags array `[]` is acceptable if ge
 mcp2cli open-brain log_thought --params '{
   "content": "The RRF fusion weights need tuning -- k=60 is too aggressive for short queries",
   "tags": ["king", "king-trading", "search", "rrf"],
-  "namespace": "collab"
+  "namespace": "shared-kb"
 }'
 ```
 

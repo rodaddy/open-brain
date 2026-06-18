@@ -30,7 +30,7 @@ describe("Open Brain memory eval runner", () => {
     expect(probe).toBeDefined();
     const score = scoreProbe(typedFixture.corpus, {
       ...probe!,
-      readable_namespaces: ["skippy", "collab"],
+      readable_namespaces: ["skippy", "shared-kb"],
     });
     expect(score.passed).toBe(false);
     expect(score.failures).toContain("expected no retrievable evidence");

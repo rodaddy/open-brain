@@ -67,8 +67,44 @@ describe("list_namespaces", () => {
       expect(result.isError).toBeFalsy();
       const parsed = JSON.parse((result.content as any)[0].text);
       expect(parsed.namespace_count).toBeGreaterThan(0);
-      expect(parsed.namespaces[0].namespace).toBeDefined();
-      expect(parsed.namespaces[0].total).toBeGreaterThan(0);
+      expect(parsed.namespaces[0]).toEqual({
+        namespace: "shared-kb",
+        total: 75,
+        per_table: { thoughts: 15 },
+      });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("returns physical namespace names in raw view", async () => {
+    const mockPool = {
+      query: async (sql: string) => {
+        if (sql.includes("GROUP BY namespace")) {
+          return {
+            rows: [
+              { table_name: "thoughts", namespace: "collab", count: "15" },
+              { table_name: "thoughts", namespace: "shared-kb", count: "5" },
+            ],
+          };
+        }
+        return { rows: [] };
+      },
+    };
+    const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
+
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "list_namespaces",
+        arguments: { raw: true },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.namespaces.map((ns: any) => ns.namespace)).toContain("collab");
+      expect(parsed.namespaces.map((ns: any) => ns.namespace)).toContain("shared-kb");
     } finally {
       await cleanup();
     }

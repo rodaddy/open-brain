@@ -232,6 +232,18 @@ bun run typecheck   # type-check without emit
 
 Tests live alongside source files and cover auth, embedding, search, migrations, and tool behavior. Coverage threshold: 80% for lines, functions, and statements (configured in `bunfig.toml`).
 
+## Identity and Shared Knowledge Boundary
+
+Open Brain treats `shared-kb` as the canonical shared knowledge namespace, not
+as a caller identity. Person identities such as `rico` and `kevin`, agent lane
+identities such as `bilby` and `skippy`, and promoter service identities such as
+`openbrain-promoter` or `hermes-promoter` are bearer-token identities.
+
+Normal agents write their own lane and read their lane plus shared knowledge
+through server read policy. Direct `shared-kb` writes require an explicit
+promoter service identity and provenance; `X-Namespace` alone is not shared
+truth authority. See [docs/identity-boundary.md](docs/identity-boundary.md).
+
 ## CI/CD
 
 Pull requests trigger automated checks via GitHub Actions:

@@ -138,7 +138,7 @@ describe("curate_entries", () => {
 
       expect(result.isError).toBeFalsy();
       expect(calls[0]!.sql).toContain("namespace = ANY($2::text[])");
-      expect(calls[0]!.params).toEqual([20, ["agent-client", "collab"]]);
+      expect(calls[0]!.params).toEqual([20, ["agent-client", "shared-kb"]]);
     } finally {
       await cleanup();
     }

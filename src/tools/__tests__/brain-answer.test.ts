@@ -112,6 +112,55 @@ describe("brain_answer", () => {
     }
   });
 
+  it("falls back from shared-kb to legacy collab and canonicalizes citations", async () => {
+    const queries: Array<{ sql: string; params: unknown[] }> = [];
+    const pool = {
+      query: async (sql: string, params: unknown[] = []) => {
+        queries.push({ sql, params });
+        const namespace = params.at(-1);
+        if (namespace === "shared-kb") return { rows: [] };
+        if (namespace === "collab") {
+          return {
+            rows: [
+              row({
+                id: "legacy-1",
+                namespace: "collab",
+                content_preview: "Legacy collab row should answer shared-kb reads.",
+              }),
+            ],
+          };
+        }
+        return { rows: [] };
+      },
+    };
+    const { client, cleanup } = await setupMcpClient(
+      registerBrainAnswer,
+      pool,
+      createMockEmbed(),
+      { role: "admin", clientId: "admin" },
+    );
+    try {
+      const parsed = parseToolResult(
+        await client.callTool({
+          name: "brain_answer",
+          arguments: {
+            query: "legacy shared knowledge",
+            namespace: "shared-kb",
+            search_mode: "keyword",
+          },
+        }),
+      );
+      expect(parsed.evidence_count).toBe(1);
+      expect(parsed.citations[0].source_ref.namespace).toBe("shared-kb");
+      expect(queries.map(({ params }) => params.at(-1))).toEqual([
+        "shared-kb",
+        "collab",
+      ]);
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("does not perform usage-tracking writes from the read-only answer tool", async () => {
     const { setup, queries } = setupClient([row()]);
     const { client, cleanup } = await setup;

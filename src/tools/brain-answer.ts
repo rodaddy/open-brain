@@ -7,10 +7,12 @@ import type { ToolDeps } from "./index.ts";
 import {
   ALL_TABLES,
   executeSearch,
+  executeSearchWithSharedFallback,
   type SearchMode,
   type SearchRow,
   type SourceRef,
 } from "./search-brain.ts";
+import { isSharedNamespace } from "../shared-namespace.ts";
 
 type NamespaceFilter = string | string[];
 
@@ -207,17 +209,30 @@ export function registerBrainAnswer(server: McpServer, deps: ToolDeps): void {
 
       let rows: SearchRow[];
       try {
-        rows = await executeSearch(
-          deps,
-          accessibleTables,
-          query,
-          limit,
-          mode,
-          tier,
-          0,
-          namespace,
-          false,
-        );
+        rows =
+          typeof namespace === "string" && isSharedNamespace(namespace)
+            ? await executeSearchWithSharedFallback(
+                deps,
+                accessibleTables,
+                query,
+                limit,
+                mode,
+                tier,
+                0,
+                namespace,
+                false,
+              )
+            : await executeSearch(
+                deps,
+                accessibleTables,
+                query,
+                limit,
+                mode,
+                tier,
+                0,
+                namespace,
+                false,
+              );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return {

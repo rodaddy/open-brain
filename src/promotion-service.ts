@@ -5,6 +5,7 @@ import {
   canReadNamespace,
 } from "./read-policy.ts";
 import { canWriteNamespace } from "./namespace-policy.ts";
+import { isSharedNamespace } from "./shared-namespace.ts";
 
 export const PROMOTION_CONTENT_COLUMNS: Record<Table, string> = {
   thoughts:
@@ -20,7 +21,7 @@ export const PROMOTION_CONTENT_COLUMNS: Record<Table, string> = {
 };
 
 export interface PromotionResult {
-  status: "promoted" | "duplicate";
+  status: "promoted" | "duplicate" | "dry_run";
   new_id?: string;
   existing_id?: string;
   existing_archived?: boolean;
@@ -28,6 +29,17 @@ export interface PromotionResult {
   source_namespace?: string;
   target_namespace: string;
   provenance?: Record<string, unknown>;
+  dry_run?: boolean;
+  would_insert?: boolean;
+  backoff?: {
+    retryable: boolean;
+    suggested_delay_ms: number;
+  };
+}
+
+export interface PromotionOptions {
+  dryRun?: boolean;
+  now?: () => Date;
 }
 
 function duplicatePredicates(table: Table, source: any, params: unknown[]): string[] {
@@ -78,6 +90,7 @@ export async function promoteEntry(
   targetNamespace: string,
   reason: string | undefined,
   auth: AuthInfo,
+  options: PromotionOptions = {},
 ): Promise<PromotionResult> {
   const sourceParams: unknown[] = [id];
   const sourceNamespacePredicate = appendReadNamespacePredicate(
@@ -128,14 +141,52 @@ export async function promoteEntry(
     };
   }
 
+  const promotedAt = (options.now ?? (() => new Date()))().toISOString();
   const provenance = {
+    source_physical_namespace: source.namespace,
     source_namespace: source.namespace,
+    source_table: table,
     source_id: id,
+    source_lane_id: source.session_id ?? source.extracted_metadata?.lane_id ?? source.metadata?.lane_id ?? null,
+    source_event_id: source.extracted_metadata?.event_id ?? source.metadata?.event_id ?? null,
     source_agent: source.created_by,
+    source_identity: source.created_by ?? null,
+    source_discord: {
+      server_id: source.extracted_metadata?.discord_server_id ?? source.metadata?.discord_server_id ?? null,
+      channel_id: source.extracted_metadata?.discord_channel_id ?? source.metadata?.discord_channel_id ?? null,
+      thread_id: source.extracted_metadata?.discord_thread_id ?? source.metadata?.discord_thread_id ?? null,
+    },
+    source_repo: source.extracted_metadata?.repo ?? source.metadata?.repo ?? null,
+    source_project: source.project ?? source.extracted_metadata?.project ?? source.metadata?.project ?? null,
+    target_namespace: targetNamespace,
+    target_kind: isSharedNamespace(targetNamespace) ? "shared-kb" : "namespace",
     promotion_reason: reason ?? null,
-    promoted_at: new Date().toISOString(),
+    promotion_confidence: null,
+    promoted_at: promotedAt,
     promoted_by: auth.clientId,
   };
+
+  if (options.dryRun) {
+    return {
+      status: "dry_run",
+      dry_run: true,
+      would_insert: true,
+      source_id: id,
+      source_namespace: source.namespace,
+      target_namespace: targetNamespace,
+      provenance,
+      backoff: {
+        retryable: true,
+        suggested_delay_ms: 250,
+      },
+    };
+  }
+
+  if (process.env.OPENBRAIN_PROMOTION_KILL_SWITCH === "1") {
+    throw Object.assign(new Error("Promotion apply mode disabled by OPENBRAIN_PROMOTION_KILL_SWITCH"), {
+      statusCode: 503,
+    });
+  }
 
   const columns = PROMOTION_CONTENT_COLUMNS[table];
   const { rows: inserted } = await pool.query(

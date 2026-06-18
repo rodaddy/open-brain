@@ -44,12 +44,21 @@ as #77-#82.
 
 For each issue PR, the PR comment must document:
 
+- Critical self-review receipt from the author/controller, kept separate from
+  swarm findings.
 - Swarm lanes run and model/effort.
 - Gotcha-agent findings from `gotcha-agent.md`.
 - Findings fixed, grouped by severity.
 - Findings intentionally deferred, with linked issue if any.
 - Validation evidence from local tests/builds/checks.
 - Whether any existing SME entry should be updated after the PR.
+
+The critical self-review must attack the proposed change before review swarms
+or CI are treated as evidence. It should cover highest-risk changed behavior,
+wrong assumptions, missing tests, migration/deploy risk, security/permission
+risk, downstream client/runtime risk, rollback/cleanup concerns, fixes made
+before PR, and known residual risk. If it finds a material issue, fix it before
+requesting review or mark it deferred only with explicit Rico approval.
 
 ## Trust Model
 

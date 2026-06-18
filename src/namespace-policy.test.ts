@@ -2,6 +2,7 @@ import { describe, it, expect } from "bun:test";
 import {
   appendWriteNamespacePredicate,
   canWriteNamespace,
+  isPromoterIdentity,
   writableNamespaces,
 } from "./namespace-policy.ts";
 import type { AuthInfo } from "./types.ts";
@@ -10,15 +11,45 @@ describe("canWriteNamespace", () => {
   it("admin can write to any namespace", () => {
     const auth: AuthInfo = { role: "admin", clientId: "rico" };
     expect(canWriteNamespace(auth, "rico").allowed).toBe(true);
-    expect(canWriteNamespace(auth, "collab").allowed).toBe(true);
     expect(canWriteNamespace(auth, "bilby").allowed).toBe(true);
     expect(canWriteNamespace(auth, "nagatha").allowed).toBe(true);
   });
 
   it("n8n can write to any namespace", () => {
     const auth: AuthInfo = { role: "n8n", clientId: "n8n" };
-    expect(canWriteNamespace(auth, "collab").allowed).toBe(true);
     expect(canWriteNamespace(auth, "bilby").allowed).toBe(true);
+  });
+
+  it("requires explicit promoter identity for direct shared-kb writes", () => {
+    expect(
+      canWriteNamespace({ role: "admin", clientId: "rico" }, "shared-kb"),
+    ).toEqual({
+      allowed: false,
+      reason:
+        "shared-kb writes require the openbrain-promoter or hermes-promoter service identity",
+    });
+    expect(
+      canWriteNamespace({ role: "agent", clientId: "bilby" }, "shared-kb")
+        .allowed,
+    ).toBe(false);
+    expect(
+      canWriteNamespace(
+        { role: "n8n", clientId: "openbrain-promoter" },
+        "shared-kb",
+      ).allowed,
+    ).toBe(true);
+  });
+
+  it("allows promoter service identity delegated to shared-kb", () => {
+    const auth: AuthInfo = {
+      role: "n8n",
+      clientId: "shared-kb",
+      tokenClientId: "openbrain-promoter",
+      namespaceSource: "header",
+    };
+
+    expect(isPromoterIdentity(auth)).toBe(true);
+    expect(canWriteNamespace(auth, "shared-kb").allowed).toBe(true);
   });
 
   it("header namespace locks admin writes to delegated namespace", () => {
@@ -62,7 +93,7 @@ describe("canWriteNamespace", () => {
     const auth: AuthInfo = { role: "discord", clientId: "discord-bot" };
     const result = canWriteNamespace(auth, "collab");
     expect(result.allowed).toBe(false);
-    expect(result.reason).toContain("discord");
+    expect(result.reason).toContain("legacy shared namespace");
   });
 
   it("readonly cannot write to any namespace", () => {
@@ -101,10 +132,21 @@ describe("writableNamespaces", () => {
 });
 
 describe("appendWriteNamespacePredicate", () => {
-  it("adds no predicate for token-sourced admin", () => {
+  it("excludes shared-kb for token-sourced non-promoter admin", () => {
     const params: unknown[] = ["id"];
     const predicate = appendWriteNamespacePredicate(
       { role: "admin", clientId: "admin" },
+      params,
+    );
+
+    expect(predicate).toBe(" AND namespace <> $2");
+    expect(params).toEqual(["id", "shared-kb"]);
+  });
+
+  it("adds no predicate for token-sourced promoter identity", () => {
+    const params: unknown[] = ["id"];
+    const predicate = appendWriteNamespacePredicate(
+      { role: "n8n", clientId: "openbrain-promoter" },
       params,
     );
 

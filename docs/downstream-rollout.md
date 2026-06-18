@@ -69,7 +69,7 @@ If none of those apply, say so explicitly in the PR and release notes.
 6. **Hermes live rollout**
    - Do not use TN01 / `10.71.1.11` as the control point for this workflow.
    - SSH to `10.71.1.71` as Rico or `bilby`.
-   - From there, update the collab checkout and run the agent update path:
+   - From there, update the fs collab checkout and run the agent update path:
 
      ```bash
      cd /mnt/collab/agent-backups/rtech-hermes

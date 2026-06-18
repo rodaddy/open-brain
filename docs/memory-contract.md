@@ -58,9 +58,9 @@ Open Brain is the **durable operational memory** for PAI agents. It stores:
 - Namespace isolation is a security boundary. ID-based reads and mutations must
   include auth-derived namespace predicates unless a token-sourced global role
   is intentionally broad.
-- `collab` namespace is for shared/cross-agent knowledge. Agents should promote
-  into `collab` through promotion flows rather than hard-coding `collab` as the
-  only destination.
+- `shared-kb` namespace is for shared/cross-agent Open Brain knowledge. Agents should promote
+  into `shared-kb` through promotion flows rather than hard-coding legacy `collab` as a
+  destination.
 
 ## Tool Reference
 
