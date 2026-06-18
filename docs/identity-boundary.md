@@ -28,7 +28,9 @@ write `bilby`; a `skippy` token can write `skippy`. They may not direct-write
 `shared-kb` writes require an explicit promoter service identity:
 `openbrain-promoter` or `hermes-promoter`. The promoter path must include
 provenance describing the source namespace, source table/id, source identity
-when known, promotion actor, reason, confidence when available, and timestamp.
+when known, authenticated promoter identity, reason, confidence when available,
+and timestamp. The authoritative `promoted_by` value is derived from the bearer
+token identity, not caller-supplied request text.
 
 `X-Namespace` is delegation context for trusted `admin` and `n8n` callers. It is
 not shared-write authority by itself. A non-promoter `admin` token delegated with
@@ -46,3 +48,14 @@ both namespaces.
 Host, runtime, project, Discord channel, or thread identity belongs in metadata
 and provenance. It must not replace the bearer-token person, agent, or promoter
 identity that defines the namespace boundary.
+
+## Verification hooks
+
+The namespace and auth tests cover this boundary:
+
+- named `AUTH_TOKEN_USER_*` identities map to person, agent, and promoter
+  identities;
+- normal agents can read `shared-kb` but cannot direct-write shared truth;
+- promoter service identities can write approved `shared-kb` promotions;
+- `X-Namespace` delegation does not grant normal-agent shared-write authority;
+- promotion provenance records authenticated promoter identity.
