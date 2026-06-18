@@ -93,36 +93,36 @@ const sourceUrl = z
 
 export const repoFactMetadata = z
   .object({
-  source_system: z.literal("qmd").describe("Fact source system."),
-  repo: z.string().trim().min(1).max(300),
-  collection: z.string().trim().min(1).max(300),
-  path: z.string().trim().min(1).max(1000),
-  symbol: z.string().trim().min(1).max(300).optional(),
-  subject: z.string().trim().min(1).max(500).optional(),
-  fact_type: z.enum(FACT_TYPES),
-  fact: z.string().trim().min(1).max(2000),
-  source_commit: sourceCommit,
-  source_url: sourceUrl,
-  verified_at: z
-    .string()
-    .datetime()
-    .refine((value) => Date.parse(value) <= Date.now(), {
-      message: "verified_at cannot be in the future",
-    }),
-  confidence: z.number().min(0).max(1).default(1),
-  staleness_policy: z.enum(STALENESS_POLICIES),
-  refresh_hint: z.string().trim().min(1).max(1000).optional(),
-})
+    source_system: z.literal("qmd").describe("Fact source system."),
+    repo: z.string().trim().min(1).max(300),
+    collection: z.string().trim().min(1).max(300),
+    path: z.string().trim().min(1).max(1000),
+    symbol: z.string().trim().min(1).max(300).optional(),
+    subject: z.string().trim().min(1).max(500).optional(),
+    fact_type: z.enum(FACT_TYPES),
+    fact: z.string().trim().min(1).max(2000),
+    source_commit: sourceCommit,
+    source_url: sourceUrl,
+    verified_at: z
+      .string()
+      .datetime()
+      .refine((value) => Date.parse(value) <= Date.now(), {
+        message: "verified_at cannot be in the future",
+      }),
+    confidence: z.number().min(0).max(1).default(1),
+    staleness_policy: z.enum(STALENESS_POLICIES),
+    refresh_hint: z.string().trim().min(1).max(1000).optional(),
+  })
   .refine((value) => Boolean(value.symbol ?? value.subject), {
     message: "repo facts require symbol or subject",
     path: ["subject"],
   })
   .refine(
     (value) =>
-      !value.source_url.includes(value.source_commit) ||
+      value.source_url.includes(value.source_commit) &&
       sourceUrlContainsPath(value.source_url, value.path),
     {
-      message: "source_url must include source path when commit-pinned",
+      message: "source_url must include source_commit and source path",
       path: ["source_url"],
     },
   );
@@ -202,7 +202,7 @@ function looksLikeRawCodeDump(fact: string): boolean {
     /^\s*class\s+\w+[:(]/m,
     /^\s*(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER)\s+/im,
     /^\s*#!\/(?:usr\/bin\/env\s+)?(?:ba|z|fi)?sh/m,
-    /^\s*[a-zA-Z_][\w-]*:\s*[{["\w-]/m,
+    /^\s*[a-zA-Z_][\w-]*:\s*[{["]/m,
     /```/,
     /=>\s*[{(]/,
     /\b(return|await|try|catch|finally)\b/,

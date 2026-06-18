@@ -214,6 +214,35 @@ describe("repo fact tools", () => {
     }
   });
 
+  it("requires source URLs to include the source commit and path", async () => {
+    const auth: AuthInfo = { role: "admin", clientId: "rico" };
+    const { client, cleanup } = await setupMcpClient(
+      registerUpsertRepoFact,
+      { query: async () => ({ rows: [] }) },
+      createMockEmbed(),
+      auth,
+    );
+
+    try {
+      const result = await client.callTool({
+        name: "upsert_repo_fact",
+        arguments: {
+          metadata: {
+            ...repoFact,
+            source_url:
+              "https://github.com/rodaddy/king-core/blob/main/src/types/api.ts",
+          },
+        },
+      });
+      expect(result.isError).toBe(true);
+      expect(getErrorText(result)).toContain(
+        "source_url must include source_commit and source path",
+      );
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("rejects future verification timestamps", async () => {
     const auth: AuthInfo = { role: "admin", clientId: "rico" };
     const { client, cleanup } = await setupMcpClient(
@@ -234,6 +263,47 @@ describe("repo fact tools", () => {
         },
       });
       expect(result.isError).toBe(true);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("allows normal prose with colon punctuation", async () => {
+    const mockPool = {
+      query: async (_sql: string, params?: unknown[]) => ({
+        rows: [
+          {
+            id: "550e8400-e29b-41d4-a716-446655440000",
+            is_new: true,
+            entity_type: "repo_fact",
+            name: params?.[0],
+            canonical_id: params?.[1],
+            namespace: params?.[2],
+            metadata: JSON.parse(params?.[3] as string),
+          },
+        ],
+      }),
+    };
+    const auth: AuthInfo = { role: "admin", clientId: "rico" };
+    const { client, cleanup } = await setupMcpClient(
+      registerUpsertRepoFact,
+      mockPool,
+      createMockEmbed(),
+      auth,
+    );
+
+    try {
+      const result = await client.callTool({
+        name: "upsert_repo_fact",
+        arguments: {
+          metadata: {
+            ...repoFact,
+            fact: "Note: read the source pointer before changing the response envelope.",
+          },
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
     } finally {
       await cleanup();
     }
