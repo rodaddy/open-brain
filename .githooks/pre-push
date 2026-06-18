@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Open Brain pre-push gate.
+# Runs the repo validation that should be green before a branch is pushed.
+
+echo "pre-push: running Open Brain validation..."
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+echo "  bun run typecheck ..."
+bun run typecheck
+echo "  ✓ TypeScript passed"
+
+echo "  bun test ..."
+bun test
+echo "  ✓ Bun tests passed"
+
+MAIN_BRANCH="main"
+if git rev-parse --verify "$MAIN_BRANCH" >/dev/null 2>&1; then
+  BASE="$MAIN_BRANCH"
+elif git rev-parse --verify "origin/$MAIN_BRANCH" >/dev/null 2>&1; then
+  BASE="origin/$MAIN_BRANCH"
+else
+  BASE=""
+fi
+
+if [[ -n "$BASE" ]]; then
+  CHANGED_PYTHON=$(git diff --name-only "$BASE"...HEAD -- 'python/openbrain-memory/**' 2>/dev/null || true)
+else
+  CHANGED_PYTHON=$(git diff --name-only HEAD -- 'python/openbrain-memory/**' 2>/dev/null || true)
+fi
+
+if [[ -n "$CHANGED_PYTHON" ]]; then
+  echo "  Python package changed; running Python validation ..."
+  (
+    cd python/openbrain-memory
+    echo "    uv run mypy src/openbrain_memory ..."
+    uv run mypy src/openbrain_memory
+    echo "    ✓ mypy passed"
+
+    echo "    uv run ruff check src tests ..."
+    uv run ruff check src tests
+    echo "    ✓ ruff passed"
+
+    echo "    uv run pytest -q ..."
+    uv run pytest -q
+    echo "    ✓ pytest passed"
+  )
+else
+  echo "  Python package unchanged; skipping Python package gate"
+fi
+
+echo "pre-push: all checks passed ✓"

@@ -6,7 +6,7 @@ synthetic public corpus, sealed expected answers, deterministic runner,
 scorecard output, and reproducible local commands.
 
 The smoke suite is intentionally offline. It does not call PostgreSQL,
-LiteLLM, or private memory. It validates the harness contract and gives later
+external model providers, or private memory. It validates the harness contract and gives later
 issues a place to add live adapters and Codex workflow scenarios.
 
 ## Run

@@ -15,7 +15,6 @@ import { createRestRouter } from "./rest-api.ts";
 import { createPromotionRouter } from "./rest-promotion.ts";
 import type { AuthInfo, HealthStatus } from "./types.ts";
 
-const LITELLM_URL = process.env.LITELLM_URL;
 const EMBEDDING_BASE_URL = process.env.EMBEDDING_BASE_URL;
 
 async function probeUrl(
@@ -50,22 +49,14 @@ export function createApp(
 
   // Health endpoint -- no auth required
   app.get("/health", async (_req: Request, res: Response) => {
-    const litellmHeaders: Record<string, string> = {};
-    if (process.env.LITELLM_API_KEY) {
-      litellmHeaders["Authorization"] = `Bearer ${process.env.LITELLM_API_KEY}`;
-    }
     const embeddingHeaders: Record<string, string> = {};
     if (process.env.EMBEDDING_API_KEY) {
       embeddingHeaders["Authorization"] =
         `Bearer ${process.env.EMBEDDING_API_KEY}`;
     }
 
-    const [dbHealth, litellmConnected, embeddingConnected] = await Promise.all([
+    const [dbHealth, embeddingConnected] = await Promise.all([
       checkPoolHealth(pool),
-      // LiteLLM uses "/health/liveliness" (not "liveness") — this is their actual endpoint spelling
-      LITELLM_URL
-        ? probeUrl(`${LITELLM_URL}/health/liveliness`, litellmHeaders)
-        : Promise.resolve(false),
       // Any OpenAI-compatible provider serves GET {base}/models
       EMBEDDING_BASE_URL
         ? probeUrl(
@@ -75,9 +66,6 @@ export function createApp(
         : Promise.resolve(false),
     ]);
 
-    // LiteLLM is an optional fallback/extraction dependency, not a core one:
-    // embeddings come from EMBEDDING_BASE_URL. Only the database gates health;
-    // the provider probes stay reported for observability.
     const status: HealthStatus = {
       status: dbHealth.connected ? "healthy" : "degraded",
       database: dbHealth,
@@ -85,7 +73,6 @@ export function createApp(
         configured: Boolean(EMBEDDING_BASE_URL),
         connected: embeddingConnected,
       },
-      litellm: { connected: litellmConnected },
       timestamp: new Date().toISOString(),
     };
 

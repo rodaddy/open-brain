@@ -12,8 +12,7 @@ Built for AI agents that need persistent, searchable memory across conversations
 - **Hybrid search** — reciprocal rank fusion (RRF) over HNSW vector similarity + PostgreSQL full-text search
 - **Cognitive tiering** — hot/warm/cold memory lifecycle with usage-based scoring
 - **Per-consumer auth** — role-based access control with scoped tokens (admin, agent, readonly, etc.)
-- **Auto-embedding** — content is embedded on write via any OpenAI-compatible endpoint
-- **Metadata extraction** — automatic topic, entity, and action-item extraction via LLM
+- **Auto-embedding** — content is embedded on write via `EMBEDDING_BASE_URL`
 - **Session management** — stateful MCP sessions with upsert, deduplication, and TTL expiry
 - **Curation pipeline** — automated duplicate detection, staleness decay, and LLM-as-judge quality scoring
 
@@ -41,7 +40,7 @@ Built for AI agents that need persistent, searchable memory across conversations
 
 - [Bun](https://bun.sh/) runtime
 - PostgreSQL 13+ with [pgvector](https://github.com/pgvector/pgvector) extension
-- An OpenAI-compatible embedding endpoint (e.g., [LiteLLM](https://github.com/BerriAI/litellm), OpenAI, Ollama)
+- An OpenAI-compatible embedding endpoint
 
 ## Setup
 
@@ -74,13 +73,6 @@ EMBEDDING_BASE_URL=http://localhost:8791/v1
 EMBEDDING_API_KEY=your-key
 EMBEDDING_MODEL=embeddinggemma-300m-8bit
 EMBEDDING_DIMENSIONS=768
-
-# Optional LiteLLM fallback / extraction endpoint
-LITELLM_URL=http://localhost:4000
-LITELLM_API_KEY=your-litellm-key
-
-# Metadata extraction model (optional — enables auto-tagging on writes)
-EXTRACTION_MODEL=gpt-4o-mini
 
 # Server
 PORT=3100

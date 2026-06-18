@@ -22,8 +22,7 @@ const CLAUDE_PROJECTS_DIR =
 
 const HISTORY_FILE = join(process.env.HOME ?? "", ".claude/history.jsonl");
 
-// Falls back to a local LiteLLM instance — override via LITELLM_URL env var
-const LITELLM_URL = process.env.LITELLM_URL ?? "http://localhost:4000";
+const LLM_BASE_URL = process.env.LLM_BASE_URL ?? "http://localhost:4000";
 const EXTRACTION_MODEL = process.env.EXTRACTION_MODEL ?? "sonnet";
 
 /** Failed sessions queue -- persisted locally for retry on next session-start/wrap */
@@ -300,10 +299,10 @@ ${conversation}`;
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
     };
-    const apiKey = process.env.LITELLM_API_KEY;
+    const apiKey = process.env.LLM_API_KEY;
     if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
 
-    const response = await fetch(`${LITELLM_URL}/chat/completions`, {
+    const response = await fetch(`${LLM_BASE_URL}/chat/completions`, {
       method: "POST",
       headers,
       body: JSON.stringify({

@@ -350,7 +350,7 @@ describe("session_wrap", () => {
     const { client, cleanup } = await setupToolClient(
       mockPool,
       auth,
-      createThrowingEmbed(new Error("LiteLLM down")),
+      createThrowingEmbed(new Error("embedding provider down")),
     );
 
     try {

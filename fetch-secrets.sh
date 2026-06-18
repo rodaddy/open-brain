@@ -25,9 +25,6 @@ case "$FIELD" in
   AUTH_TOKEN_READONLY)
     mcp2cli vaultwarden-secrets get_secret_fields --params '{"name":"Open Brain - Auth Tokens"}' 2>/dev/null | jq -r '.result.AUTH_TOKEN_READONLY // empty'
     ;;
-  LITELLM_API_KEY)
-    mcp2cli vaultwarden-secrets get_credential --params '{"query":"LiteLLM"}' 2>/dev/null | jq -r '.result.fields.password // empty'
-    ;;
   EMBEDDING_API_KEY)
     mcp2cli vaultwarden-secrets get_credential --params '{"query":"MLX Embedding Server"}' 2>/dev/null | jq -r '.result.fields.password // empty'
     ;;

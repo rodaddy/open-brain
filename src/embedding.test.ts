@@ -5,6 +5,8 @@ import {
   contentHash,
   EMBEDDING_MODEL,
   EMBEDDING_DIMENSIONS,
+  __resetEmbeddingWatchdogForTests,
+  __setEmbeddingWatchdogRestartSpawnerForTests,
 } from "./embedding.ts";
 
 // Helper: create a mock 768-length embedding array
@@ -32,6 +34,10 @@ describe("generateEmbedding", () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    __resetEmbeddingWatchdogForTests();
+    delete process.env.EMBEDDING_WATCHDOG_RESTART_SCRIPT;
+    delete process.env.EMBEDDING_WATCHDOG_FAILURE_THRESHOLD;
+    delete process.env.EMBEDDING_WATCHDOG_COOLDOWN_MS;
   });
 
   it("returns 768-length number array on successful embedding response", async () => {
@@ -122,13 +128,11 @@ describe("generateEmbedding", () => {
     expect(capturedBody!.input).toBe("test input");
   });
 
-  it("prefers EMBEDDING_BASE_URL over LITELLM_URL and normalizes trailing slash", async () => {
+  it("uses EMBEDDING_BASE_URL and normalizes trailing slash", async () => {
     const originalEmbeddingUrl = process.env.EMBEDDING_BASE_URL;
-    const originalLiteLlmUrl = process.env.LITELLM_URL;
     let capturedUrl = "";
 
     process.env.EMBEDDING_BASE_URL = "http://embedding-provider:8791/v1/";
-    process.env.LITELLM_URL = "http://litellm:4000";
 
     try {
       mockFetch(async (input) => {
@@ -149,21 +153,14 @@ describe("generateEmbedding", () => {
       } else {
         process.env.EMBEDDING_BASE_URL = originalEmbeddingUrl;
       }
-      if (originalLiteLlmUrl === undefined) {
-        delete process.env.LITELLM_URL;
-      } else {
-        process.env.LITELLM_URL = originalLiteLlmUrl;
-      }
     }
   });
 
-  it("prefers EMBEDDING_API_KEY over LITELLM_API_KEY", async () => {
+  it("uses EMBEDDING_API_KEY for provider auth", async () => {
     const originalEmbeddingKey = process.env.EMBEDDING_API_KEY;
-    const originalLiteLlmKey = process.env.LITELLM_API_KEY;
     let capturedAuth = "";
 
     process.env.EMBEDDING_API_KEY = "embedding-key";
-    process.env.LITELLM_API_KEY = "litellm-key";
 
     try {
       mockFetch(async (_input, init) => {
@@ -185,11 +182,6 @@ describe("generateEmbedding", () => {
       } else {
         process.env.EMBEDDING_API_KEY = originalEmbeddingKey;
       }
-      if (originalLiteLlmKey === undefined) {
-        delete process.env.LITELLM_API_KEY;
-      } else {
-        process.env.LITELLM_API_KEY = originalLiteLlmKey;
-      }
     }
   });
 
@@ -201,6 +193,152 @@ describe("generateEmbedding", () => {
 
     const result = await generateEmbedding("hello", "http://fake:4000");
     expect(result).toBeNull();
+  });
+});
+
+describe("embedding watchdog", () => {
+  let originalFetch: typeof globalThis.fetch;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    __resetEmbeddingWatchdogForTests();
+    process.env.EMBEDDING_WATCHDOG_RESTART_SCRIPT = "/fake/restart";
+    process.env.EMBEDDING_WATCHDOG_FAILURE_THRESHOLD = "2";
+    process.env.EMBEDDING_WATCHDOG_COOLDOWN_MS = "300000";
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    __resetEmbeddingWatchdogForTests();
+    delete process.env.EMBEDDING_WATCHDOG_RESTART_SCRIPT;
+    delete process.env.EMBEDDING_WATCHDOG_FAILURE_THRESHOLD;
+    delete process.env.EMBEDDING_WATCHDOG_COOLDOWN_MS;
+  });
+
+  function fakeSpawnProcess(
+    options: { mode?: "success" | "error" | "exit-nonzero" } = {},
+  ): ReturnType<Parameters<typeof __setEmbeddingWatchdogRestartSpawnerForTests>[0]> {
+    const mode = options.mode ?? "success";
+    return {
+      once: (event: string, handler: (...args: unknown[]) => void) => {
+        if (mode === "error" && event === "error") {
+          queueMicrotask(() => handler(new Error("restart script missing")));
+        } else if (mode !== "error" && event === "spawn") {
+          queueMicrotask(() => handler());
+        } else if (mode === "success" && event === "close") {
+          queueMicrotask(() => handler(0));
+        } else if (mode === "exit-nonzero" && event === "close") {
+          queueMicrotask(() => handler(1));
+        }
+        return undefined;
+      },
+      unref: () => undefined,
+    } as unknown as ReturnType<
+      Parameters<typeof __setEmbeddingWatchdogRestartSpawnerForTests>[0]
+    >;
+  }
+
+  async function triggerRestartableFailures(count: number): Promise<void> {
+    mockFetch(async () => {
+      throw new DOMException("The operation was aborted.", "AbortError");
+    });
+
+    for (let i = 0; i < count; i += 1) {
+      await generateEmbeddingWithMetadata(
+        `restartable failure ${i}`,
+        "http://fake:4000",
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  it("resets failure history only after successful restart script exit", async () => {
+    process.env.EMBEDDING_WATCHDOG_COOLDOWN_MS = "0";
+    let spawnCount = 0;
+    __setEmbeddingWatchdogRestartSpawnerForTests(() => {
+      spawnCount += 1;
+      return fakeSpawnProcess({ mode: "success" });
+    });
+
+    await triggerRestartableFailures(2);
+    expect(spawnCount).toBe(1);
+
+    await triggerRestartableFailures(1);
+    expect(spawnCount).toBe(1);
+
+    await triggerRestartableFailures(1);
+    expect(spawnCount).toBe(2);
+  });
+
+  it("does not cooldown-suppress retry when restart script exits non-zero", async () => {
+    let spawnCount = 0;
+    __setEmbeddingWatchdogRestartSpawnerForTests(() => {
+      spawnCount += 1;
+      return fakeSpawnProcess({ mode: "exit-nonzero" });
+    });
+
+    await triggerRestartableFailures(2);
+    expect(spawnCount).toBe(1);
+
+    await triggerRestartableFailures(1);
+    expect(spawnCount).toBe(2);
+  });
+
+  it("triggers restart after mixed restartable provider failures", async () => {
+    let spawnCount = 0;
+    __setEmbeddingWatchdogRestartSpawnerForTests(() => {
+      spawnCount += 1;
+      return fakeSpawnProcess();
+    });
+
+    mockFetch(async () => {
+      throw new DOMException("The operation was aborted.", "AbortError");
+    });
+    await generateEmbeddingWithMetadata("first failure", "http://fake:4000");
+
+    mockFetch(async () => {
+      throw new Error("ECONNRESET");
+    });
+    await generateEmbeddingWithMetadata("second failure", "http://fake:4000");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(spawnCount).toBe(1);
+  });
+
+  it("does not cooldown-suppress retry when restart spawn fails", async () => {
+    let spawnCount = 0;
+    __setEmbeddingWatchdogRestartSpawnerForTests(() => {
+      spawnCount += 1;
+      return fakeSpawnProcess({ mode: "error" });
+    });
+
+    mockFetch(async () => {
+      throw new DOMException("The operation was aborted.", "AbortError");
+    });
+    await generateEmbeddingWithMetadata("first failure", "http://fake:4000");
+    await generateEmbeddingWithMetadata("second failure", "http://fake:4000");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    await generateEmbeddingWithMetadata("third failure", "http://fake:4000");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(spawnCount).toBe(2);
+  });
+
+  it("does not restart after non-restartable client failures", async () => {
+    let spawnCount = 0;
+    __setEmbeddingWatchdogRestartSpawnerForTests(() => {
+      spawnCount += 1;
+      return fakeSpawnProcess();
+    });
+
+    mockFetch(async () => new Response("Unauthorized", { status: 401 }));
+
+    await generateEmbeddingWithMetadata("first failure", "http://fake:4000");
+    await generateEmbeddingWithMetadata("second failure", "http://fake:4000");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(spawnCount).toBe(0);
   });
 });
 
@@ -374,9 +512,7 @@ describe("generateEmbeddingWithMetadata", () => {
 
   it("returns no_embedding_url error when no URL provided", async () => {
     const origEmbeddingUrl = process.env.EMBEDDING_BASE_URL;
-    const origUrl = process.env.LITELLM_URL;
     delete process.env.EMBEDDING_BASE_URL;
-    delete process.env.LITELLM_URL;
 
     try {
       const result = await generateEmbeddingWithMetadata("hello");
@@ -388,9 +524,6 @@ describe("generateEmbeddingWithMetadata", () => {
         process.env.EMBEDDING_BASE_URL = origEmbeddingUrl;
       }
 
-      if (origUrl !== undefined) {
-        process.env.LITELLM_URL = origUrl;
-      }
     }
   });
 
