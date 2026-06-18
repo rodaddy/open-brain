@@ -32,6 +32,26 @@ describe("Open Brain contract manifest", () => {
     }
     const upsertRepoFact = contract.tool_contracts.upsert_repo_fact;
     expect(upsertRepoFact).toBeDefined();
+    const searchAll = contract.tool_contracts.search_all;
+    expect(searchAll).toBeDefined();
+    expect((searchAll?.input_schema as any).namespace.type).toBe("string");
+    expect((searchAll?.input_schema as any).limit.max).toBe(250);
+    expect((searchAll?.input_schema as any).offset.min).toBe(0);
+    expect((searchAll?.input_schema as any).sources.values).toEqual([
+      "all",
+      "brain",
+      "qmd",
+    ]);
+    expect((searchAll?.input_schema as any).search_mode.values).toEqual([
+      "hybrid",
+      "vector",
+      "keyword",
+    ]);
+    expect((searchAll?.input_schema as any).tier.values).toEqual([
+      "hot",
+      "warm",
+      "cold",
+    ]);
     expect(
       (upsertRepoFact?.input_schema as any).metadata.source_url.required,
     ).toBe(true);

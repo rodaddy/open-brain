@@ -195,20 +195,26 @@ export function buildContract(
         input_schema: {
           query: { type: "string", required: true, minLength: 1 },
           namespace: {
-            type: "string_or_string_array",
+            type: "string",
             required: false,
             maxLength: 500,
           },
-          limit: { type: "integer", required: false, min: 1, max: 100 },
+          limit: { type: "integer", required: false, min: 1, max: 250 },
+          offset: { type: "integer", required: false, min: 0 },
           sources: {
             type: "enum",
             required: false,
-            values: ["brain", "qmd", "all"],
+            values: ["all", "brain", "qmd"],
           },
           search_mode: {
             type: "enum",
             required: false,
-            values: ["hybrid", "semantic", "lexical"],
+            values: ["hybrid", "vector", "keyword"],
+          },
+          tier: {
+            type: "enum",
+            required: false,
+            values: ["hot", "warm", "cold"],
           },
         },
         output_shape: "unified search results JSON text payload",
