@@ -11,15 +11,21 @@ PORT="${MLX_EMBED_PORT:-8791}"
 HEALTH_URL="${MLX_EMBED_HEALTH_URL:-http://127.0.0.1:$PORT/v1/models}"
 HEALTH_RETRIES="${MLX_EMBED_HEALTH_RETRIES:-20}"
 HEALTH_SLEEP_SECONDS="${MLX_EMBED_HEALTH_SLEEP_SECONDS:-1}"
+RESTART_SETTLE_SECONDS="${MLX_EMBED_RESTART_SETTLE_SECONDS:-2}"
 LOCK_SENTINEL="open-brain-mlx-embed-restart"
 
 mkdir -p "$LOG_DIR"
 
 remove_lock_dir() {
+  local default_lock_dir="$LOG_DIR/open-brain-mlx-embed-restart.lock"
   if [[ -f "$LOCK_DIR/sentinel" ]] && [[ "$(cat "$LOCK_DIR/sentinel" 2>/dev/null || true)" == "$LOCK_SENTINEL" ]]; then
+    rm -rf "$LOCK_DIR"
+  elif [[ "$LOCK_DIR" == "$default_lock_dir" ]]; then
+    echo "mlx embedding restart cleaning partial default lock without sentinel: $LOCK_DIR" >> "$LOG_FILE"
     rm -rf "$LOCK_DIR"
   else
     echo "mlx embedding restart refused lock cleanup without sentinel: $LOCK_DIR" >> "$ERR_FILE"
+    return 1
   fi
 }
 
@@ -48,7 +54,9 @@ acquire_lock() {
   fi
 
   echo "mlx embedding restart removing stale lock pid=${lock_pid:-unknown} age=${lock_age}s" >> "$LOG_FILE"
-  remove_lock_dir
+  if ! remove_lock_dir; then
+    return 1
+  fi
   if mkdir "$LOCK_DIR" 2>/dev/null; then
     printf '%s\n' "$LOCK_SENTINEL" > "$LOCK_DIR/sentinel"
     printf '%s\n' "$$" > "$LOCK_DIR/pid"
@@ -61,13 +69,13 @@ acquire_lock() {
 }
 
 if ! acquire_lock; then
-  exit 0
+  exit 1
 fi
 trap 'remove_lock_dir 2>/dev/null || true' EXIT
 
 launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.local.mlx-embedding-server.plist" >/dev/null 2>&1 || true
 pkill -f "qwen_embedding_server.main:app.*--port $PORT" >/dev/null 2>&1 || true
-sleep 2
+sleep "$RESTART_SETTLE_SECONDS"
 
 if [[ ! -x "$DAEMON" ]]; then
   echo "mlx embedding restart failed: daemon not executable: $DAEMON" >> "$ERR_FILE"
