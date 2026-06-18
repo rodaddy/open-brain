@@ -19,6 +19,13 @@
 - Rollback/cleanup concern:
 - Fixes made before PR:
 - Known residual risk:
+- SME review-memory update: [ ] `docs/sme/` updated or [ ] not applicable because:
+
+## Review Gate
+
+- [ ] Critical self-review fields above are filled with specific, non-placeholder content
+- [ ] MEDIUM+ review findings were captured in `docs/sme/` or explicitly marked not applicable
+- [ ] Live Open Brain checks are linked below when an issue acceptance criterion requires live proof
 
 ## Downstream Rollout
 

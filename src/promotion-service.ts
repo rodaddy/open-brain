@@ -163,7 +163,7 @@ export async function promoteEntry(
     promotion_reason: reason ?? null,
     promotion_confidence: null,
     promoted_at: promotedAt,
-    promoted_by: auth.clientId,
+    promoted_by: auth.tokenClientId ?? auth.clientId,
   };
 
   if (options.dryRun) {

@@ -167,6 +167,49 @@ describe("promotion REST API", () => {
     expect(pool.calls.some((call) => call.sql.includes("INSERT INTO"))).toBe(false);
   });
 
+  it("records delegated promoter token identity in promotion provenance", async () => {
+    const sourceId = "123e4567-e89b-12d3-a456-426614174021";
+    const pool = createSequencePool([
+      [
+        {
+          id: sourceId,
+          namespace: "bilby",
+          created_by: "rico",
+          content: "verified shared knowledge",
+          content_hash: null,
+        },
+      ],
+      [],
+    ]);
+    const app = buildApp(
+      {
+        role: "admin",
+        clientId: "shared-kb",
+        tokenClientId: "openbrain-promoter",
+        namespaceSource: "header",
+      },
+      pool,
+    );
+
+    const { status, json } = await req(app, "post", "/api/v1/promote", {
+      table: "thoughts",
+      id: sourceId,
+      target_namespace: "shared-kb",
+      reason: "delegated promoter canary",
+      dry_run: true,
+    });
+
+    expect(status).toBe(200);
+    expect(json.provenance).toMatchObject({
+      source_id: sourceId,
+      source_namespace: "bilby",
+      target_namespace: "shared-kb",
+      promoted_by: "openbrain-promoter",
+    });
+    expect(json.provenance.promoted_by).not.toBe("shared-kb");
+    expect(pool.calls.some((call) => call.sql.includes("INSERT INTO"))).toBe(false);
+  });
+
   it("blocks mutating promotion when the kill switch is enabled", async () => {
     const previous = process.env.OPENBRAIN_PROMOTION_KILL_SWITCH;
     process.env.OPENBRAIN_PROMOTION_KILL_SWITCH = "1";
