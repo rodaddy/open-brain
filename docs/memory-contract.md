@@ -10,7 +10,9 @@ Open Brain is the **durable operational memory** for PAI agents. It stores:
 - **Decisions**: choices made with rationale
 - **Relationships**: people and contacts
 - **Projects**: project metadata
-- **Entities & Links**: explicit knowledge graph adjacency
+- **Entities & Links**: explicit knowledge graph adjacency. Graph entities live
+  in `ob_entities`; `entity_type: "project"` is not a row in the legacy
+  `projects` table.
 
 ## What Open Brain Is NOT
 
@@ -71,6 +73,8 @@ Open Brain is the **durable operational memory** for PAI agents. It stores:
 | lane_upsert | Update lane metadata/context | write |
 | lane_load | Query lanes by filters | read |
 | upsert_entity | Create/update graph entity | write |
+| get_entity | Fetch a graph entity by ID | read |
+| list_entities | List graph entities by type/name/namespace | read |
 | link_entities | Create relationship between entries | write |
 | adjacent_context | Traverse link graph from a node | read |
 | search_brain | Semantic search across all tables | read |

@@ -178,6 +178,32 @@ export function registerGetStats(server: McpServer, deps: ToolDeps): void {
       });
       const topAccessedSql = `SELECT id, table_name, LEFT(content_preview, 200) AS content_preview, access_count FROM (${topAccessedParts.join(" UNION ALL ")}) AS combined ORDER BY access_count DESC LIMIT 10`;
 
+      // 8. Knowledge graph counts. These live in ob_entities/ob_links, not the
+      // legacy domain tables exposed under entry_counts.
+      const entityCountParams: unknown[] = [];
+      const entityWhere = readWhereClause(auth, entityCountParams);
+      const entityCountQuery = deps.pool.query(
+        `SELECT COUNT(*) AS total FROM ob_entities ${entityWhere}`,
+        entityCountParams,
+      );
+      const entityTypeParams: unknown[] = [];
+      const entityTypeWhere = readWhereClause(auth, entityTypeParams);
+      const entityTypeQuery = deps.pool.query(
+        `SELECT entity_type, COUNT(*) AS count
+         FROM ob_entities
+         ${entityTypeWhere}
+         GROUP BY entity_type
+         ORDER BY count DESC, entity_type ASC
+         LIMIT 25`,
+        entityTypeParams,
+      );
+      const linkCountParams: unknown[] = [];
+      const linkWhere = readWhereClause(auth, linkCountParams);
+      const linkCountQuery = deps.pool.query(
+        `SELECT COUNT(*) AS total FROM ob_links ${linkWhere}`,
+        linkCountParams,
+      );
+
       const [
         countResults,
         tierResults,
@@ -186,6 +212,9 @@ export function registerGetStats(server: McpServer, deps: ToolDeps): void {
         avgAccessResults,
         zeroAccessResults,
         topAccessed,
+        entityCount,
+        entityTypes,
+        linkCount,
       ] = await Promise.all([
         Promise.all(countQueries),
         Promise.all(tierQueries),
@@ -194,6 +223,9 @@ export function registerGetStats(server: McpServer, deps: ToolDeps): void {
         Promise.all(avgAccessQueries),
         Promise.all(zeroAccessQueries),
         deps.pool.query(topAccessedSql, topAccessedParams),
+        entityCountQuery,
+        entityTypeQuery,
+        linkCountQuery,
       ]);
 
       // Build entry counts
@@ -251,6 +283,14 @@ export function registerGetStats(server: McpServer, deps: ToolDeps): void {
           total_log_entries: Number(accessStats.rows[0]?.total_log_entries ?? 0),
           unique_entries_accessed: Number(accessStats.rows[0]?.unique_entries_accessed ?? 0),
           avg_access_count: avgCount > 0 ? Math.round((totalAvg / avgCount) * 100) / 100 : 0,
+        },
+        graph_counts: {
+          entities: Number(entityCount.rows[0]?.total ?? 0),
+          links: Number(linkCount.rows[0]?.total ?? 0),
+          entity_types: entityTypes.rows.map((r: any) => ({
+            entity_type: r.entity_type,
+            count: Number(r.count),
+          })),
         },
         zero_access_entries: zeroAccess,
         top_accessed: topAccessed.rows.map((r: any) => ({

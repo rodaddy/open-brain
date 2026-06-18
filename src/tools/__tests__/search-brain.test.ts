@@ -208,6 +208,56 @@ describe("search_brain", () => {
       }
     });
 
+    it("can search graph entities explicitly", async () => {
+      const queryCalls: any[] = [];
+      const pool = {
+        query: async (...args: any[]) => {
+          queryCalls.push(args);
+          const [sql] = args;
+          if (String(sql).includes("FROM ob_links")) return { rows: [] };
+          return {
+            rows: [
+              {
+                source_type: "entity",
+                id: "550e8400-e29b-41d4-a716-446655440000",
+                namespace: "collab",
+                content_preview: "project: hub",
+                tags: null,
+                created_by: "codex",
+                created_at: "2026-01-01T00:00:00Z",
+                updated_at: "2026-01-02T00:00:00Z",
+                tier: "warm",
+                fts_rank: 1,
+                usefulness: 0.5,
+                access_count: 0,
+              },
+            ],
+          };
+        },
+      };
+      const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
+      const { client, cleanup } = await setup(pool, auth);
+
+      try {
+        const result = await client.callTool({
+          name: "search_brain",
+          arguments: {
+            query: "hub",
+            table: "entities",
+            search_mode: "keyword",
+          },
+        });
+
+        expect(result.isError).toBeFalsy();
+        const parsed = parseToolResult(result);
+        expect(parsed[0].source_type).toBe("entity");
+        expect(parsed[0].source_ref.type).toBe("entity");
+        expect(queryCalls[0][0]).toContain("FROM ob_entities");
+      } finally {
+        await cleanup();
+      }
+    });
+
     it("does not fail when a search row has an invalid timestamp", async () => {
       const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
       const { client, cleanup } = await setup(

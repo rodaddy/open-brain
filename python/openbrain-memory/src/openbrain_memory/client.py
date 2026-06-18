@@ -380,6 +380,9 @@ class OpenBrainClient:
     def get_entry(self, **arguments: Any) -> JSON:
         return self.call_tool("get_entry", arguments)
 
+    def get_entity(self, **arguments: Any) -> JSON:
+        return self.call_tool("get_entity", arguments)
+
     def get_stats(self, **arguments: Any) -> JSON:
         return self.call_tool("get_stats", arguments)
 
@@ -394,6 +397,9 @@ class OpenBrainClient:
 
     def list_namespaces(self, **arguments: Any) -> JSON:
         return self.call_tool("list_namespaces", arguments)
+
+    def list_entities(self, **arguments: Any) -> JSON:
+        return self.call_tool("list_entities", arguments)
 
     def list_recent(self, **arguments: Any) -> JSON:
         return self.call_tool("list_recent", arguments)

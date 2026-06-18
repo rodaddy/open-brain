@@ -64,6 +64,15 @@ describe("get_stats", () => {
         if (sql.includes("ORDER BY access_count DESC")) {
           return { rows: [{ id: "uuid-1", table_name: "thoughts", content_preview: "test content", access_count: "15" }] };
         }
+        if (sql.includes("FROM ob_entities") && sql.includes("GROUP BY entity_type")) {
+          return { rows: [{ entity_type: "project", count: "3" }] };
+        }
+        if (sql.includes("FROM ob_entities")) {
+          return { rows: [{ total: "3" }] };
+        }
+        if (sql.includes("FROM ob_links")) {
+          return { rows: [{ total: "5" }] };
+        }
         return { rows: [] };
       },
     };
@@ -82,6 +91,11 @@ describe("get_stats", () => {
       expect(parsed.entry_counts).toBeDefined();
       expect(parsed.tier_distribution).toBeDefined();
       expect(parsed.access_stats).toBeDefined();
+      expect(parsed.graph_counts).toEqual({
+        entities: 3,
+        links: 5,
+        entity_types: [{ entity_type: "project", count: 3 }],
+      });
       expect(parsed.top_accessed).toBeDefined();
     } finally {
       await cleanup();
@@ -113,6 +127,15 @@ describe("get_stats", () => {
         }
         if (sql.includes("ORDER BY access_count DESC")) {
           return { rows: [] };
+        }
+        if (sql.includes("FROM ob_entities") && sql.includes("GROUP BY entity_type")) {
+          return { rows: [] };
+        }
+        if (sql.includes("FROM ob_entities")) {
+          return { rows: [{ total: "0" }] };
+        }
+        if (sql.includes("FROM ob_links")) {
+          return { rows: [{ total: "0" }] };
         }
         return { rows: [] };
       },
@@ -152,6 +175,11 @@ describe("get_stats", () => {
         ["bilby", "collab"],
         ["bilby", "collab"],
       ]);
+      const entityCountCall = calls.find((call) =>
+        call.sql.includes("FROM ob_entities") && call.sql.includes("COUNT(*) AS total")
+      );
+      expect(entityCountCall!.sql).toContain("WHERE namespace = ANY($1::text[])");
+      expect(entityCountCall!.params).toEqual([["bilby", "collab"]]);
     } finally {
       await cleanup();
     }

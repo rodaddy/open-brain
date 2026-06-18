@@ -32,6 +32,8 @@ import { registerSessionContext } from "./session-context.ts";
 import { registerSessionStart } from "./session-start.ts";
 import { registerSessionWrap } from "./session-wrap.ts";
 import { registerUpsertEntity } from "./upsert-entity.ts";
+import { registerGetEntity } from "./get-entity.ts";
+import { registerListEntities } from "./list-entities.ts";
 import { registerLinkEntities } from "./link-entities.ts";
 import { registerAdjacentContext } from "./adjacent-context.ts";
 import { registerPromoteEntry } from "./promote-entry.ts";
@@ -75,6 +77,8 @@ export function registerAllTools(server: McpServer, deps: ToolDeps): void {
   registerSessionStart(server, deps);
   registerSessionWrap(server, deps);
   registerUpsertEntity(server, deps);
+  registerGetEntity(server, deps);
+  registerListEntities(server, deps);
   registerLinkEntities(server, deps);
   registerAdjacentContext(server, deps);
   registerPromoteEntry(server, deps);
