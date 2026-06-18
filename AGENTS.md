@@ -30,6 +30,15 @@ Codex memory protocol and rollout guidance lives in
 `brain_answer`, eval fixtures, or AGENTS/skill directives that force Open Brain
 as Codex durable memory.
 
+## Downstream Rollout Gate
+
+Open Brain is a live dependency of mcp2cli, generated agent skills, and Hermes
+agents. Before closing an issue or reporting a PR complete, read
+`docs/downstream-rollout.md` and classify whether downstream rollout applies.
+For MCP tool/schema/protocol/client-facing changes, "verified" means the
+applicable rtech-mcps, mcp2cli, rtech-hermes Python runtime/plugin, and live
+Hermes agent canary steps are complete or explicitly marked not applicable.
+
 ## Python Package
 
 ```bash
@@ -53,6 +62,9 @@ uv run pytest -q
 - Python package source must pass `uv run mypy src/openbrain_memory` and `uv run ruff check src tests` with zero errors, matching the quality bar used by `/Volumes/ThunderBolt/Development/king-capital/king-signals`.
 - Keep fixes scoped to the issue. Avoid broad refactors unless they are required to close the bug safely.
 - When a review or post-merge issue exposes a missed pattern, update `docs/sme/` so the next swarm checks for it.
+- For contract-changing MCP, transport, Python client, or agent-facing changes,
+  follow `docs/downstream-rollout.md`; do not treat local tests or hosted
+  Open Brain smokes alone as the full definition of done.
 
 ## Review Swarms and SME Knowledge
 
