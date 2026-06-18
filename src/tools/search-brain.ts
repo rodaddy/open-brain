@@ -26,6 +26,7 @@ const LABEL_TO_TABLE: Record<string, Table> = Object.fromEntries(
 
 export type SearchMode = "hybrid" | "vector" | "keyword";
 type NamespaceFilter = string | string[];
+type SearchTable = Table | "entities";
 
 /** RRF constant -- standard value from Cormack et al. 2009 */
 const RRF_K = 60;
@@ -52,6 +53,7 @@ const TABLE_WEIGHT: Record<string, number> = {
   relationship: 1.0,
   project: 0.9,
   session: 0.8,
+  entity: 1.0,
 };
 
 /** Gentle recency factor: today=1.0, 30d=0.97, 90d=0.92, 365d=0.73 */
@@ -254,13 +256,42 @@ async function attachExplicitLinks(
 }
 
 function buildTableCTE(
-  table: Table,
+  table: SearchTable,
   perTableLimit: number,
   tier?: Tier,
   namespaceParamIndex?: number,
   namespaceIsArray = false,
 ): string {
   if (tier && !VALID_TIERS.has(tier)) throw new Error(`Invalid tier: ${tier}`);
+  if (table === "entities") {
+    const tierFilter = tier && tier !== "warm" ? " AND FALSE" : "";
+    const nsFilter = namespaceParamIndex
+      ? namespaceIsArray
+        ? ` AND e.namespace = ANY(${paramRef(namespaceParamIndex)}::text[])`
+        : ` AND e.namespace = ${paramRef(namespaceParamIndex)}`
+      : "";
+    return `entities_results AS (
+  SELECT
+    'entity' AS source_type,
+    e.id,
+    e.namespace,
+    e.entity_type || ': ' || e.name ||
+      CASE WHEN e.canonical_id IS NOT NULL THEN ' (' || e.canonical_id || ')' ELSE '' END AS content_preview,
+    NULL::text[] AS tags,
+    e.created_by,
+    e.created_at,
+    e.updated_at,
+    'warm'::text AS tier,
+    e.embedding <=> (SELECT emb FROM query_embedding) AS distance,
+    0.5 AS usefulness,
+    0 AS access_count,
+    NULL::jsonb AS extracted_metadata
+  FROM ob_entities e
+  WHERE e.embedding IS NOT NULL${tierFilter}${nsFilter}
+  ORDER BY e.embedding <=> (SELECT emb FROM query_embedding) ASC
+  LIMIT ${perTableLimit}
+)`;
+  }
   const alias = TABLE_ALIAS[table];
   const label = SOURCE_LABELS[table];
   const preview = CONTENT_PREVIEW[table];
@@ -298,13 +329,47 @@ function buildTableCTE(
 }
 
 function buildFtsCTE(
-  table: Table,
+  table: SearchTable,
   perTableLimit: number,
   tier?: Tier,
   namespaceParamIndex?: number,
   namespaceIsArray = false,
 ): string {
   if (tier && !VALID_TIERS.has(tier)) throw new Error(`Invalid tier: ${tier}`);
+  if (table === "entities") {
+    const tierFilter = tier && tier !== "warm" ? " AND FALSE" : "";
+    const nsFilter = namespaceParamIndex
+      ? namespaceIsArray
+        ? ` AND e.namespace = ANY(${paramRef(namespaceParamIndex)}::text[])`
+        : ` AND e.namespace = ${paramRef(namespaceParamIndex)}`
+      : "";
+    return `entities_fts AS (
+  SELECT
+    'entity' AS source_type,
+    e.id,
+    e.namespace,
+    e.entity_type || ': ' || e.name ||
+      CASE WHEN e.canonical_id IS NOT NULL THEN ' (' || e.canonical_id || ')' ELSE '' END AS content_preview,
+    NULL::text[] AS tags,
+    e.created_by,
+    e.created_at,
+    e.updated_at,
+    'warm'::text AS tier,
+    1.0 AS fts_rank,
+    0.5 AS usefulness,
+    0 AS access_count,
+    NULL::jsonb AS extracted_metadata
+  FROM ob_entities e
+  WHERE (
+      e.name ILIKE '%' || (SELECT q FROM fts_query) || '%'
+      OR e.entity_type ILIKE '%' || (SELECT q FROM fts_query) || '%'
+      OR e.canonical_id ILIKE '%' || (SELECT q FROM fts_query) || '%'
+      OR e.metadata::text ILIKE '%' || (SELECT q FROM fts_query) || '%'
+    )${tierFilter}${nsFilter}
+  ORDER BY e.updated_at DESC
+  LIMIT ${perTableLimit}
+)`;
+  }
   const alias = TABLE_ALIAS[table];
   const label = SOURCE_LABELS[table];
   const preview = CONTENT_PREVIEW[table];
@@ -345,7 +410,7 @@ function buildFtsCTE(
 
 async function vectorSearch(
   deps: ToolDeps,
-  accessibleTables: Table[],
+  accessibleTables: SearchTable[],
   embedding: number[],
   fetchLimit: number,
   tier?: Tier,
@@ -380,7 +445,7 @@ LIMIT $2 OFFSET $3`;
 
 async function ftsSearch(
   deps: ToolDeps,
-  accessibleTables: Table[],
+  accessibleTables: SearchTable[],
   query: string,
   fetchLimit: number,
   tier?: Tier,
@@ -531,7 +596,7 @@ export function trackUsage(
 
 export async function executeSearch(
   deps: ToolDeps,
-  accessibleTables: Table[],
+  accessibleTables: SearchTable[],
   query: string,
   limit: number,
   mode: SearchMode = "hybrid",
@@ -639,6 +704,7 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
             "relationships",
             "projects",
             "sessions",
+            "entities",
           ])
           .optional()
           .describe("Optional: limit search to a specific table"),
@@ -696,11 +762,24 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
         };
       }
 
-      const tableFilter = args.table as Table | undefined;
-      let accessibleTables: Table[];
+      const tableFilter = args.table as SearchTable | undefined;
+      let accessibleTables: SearchTable[];
 
       if (tableFilter) {
-        if (!canRead(auth.role, tableFilter)) {
+        if (tableFilter === "entities") {
+          if (!canRead(auth.role, "sessions")) {
+            return {
+              content: [
+                {
+                  type: "text" as const,
+                  text: "Permission denied: cannot read entities",
+                },
+              ],
+              isError: true,
+            };
+          }
+          accessibleTables = ["entities"];
+        } else if (!canRead(auth.role, tableFilter)) {
           return {
             content: [
               {
@@ -710,10 +789,14 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
             ],
             isError: true,
           };
+        } else {
+          accessibleTables = [tableFilter];
         }
-        accessibleTables = [tableFilter];
       } else {
         accessibleTables = ALL_TABLES.filter((t) => canRead(auth.role, t));
+        if (canRead(auth.role, "sessions")) {
+          accessibleTables.push("entities");
+        }
       }
 
       if (accessibleTables.length === 0) {
