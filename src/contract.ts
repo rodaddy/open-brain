@@ -4,7 +4,7 @@ import {
   REPO_FACT_VALIDATION_CONTRACT,
 } from "./tools/repo-facts.ts";
 
-export const CONTRACT_VERSION = "2026-06-18.repo-facts.v1";
+export const CONTRACT_VERSION = "2026-06-18.memory-tools.v1";
 export const CONTRACT_SCHEMA_VERSION = 1;
 
 export interface ContractCapability {
@@ -62,6 +62,44 @@ export const CONTRACT_CAPABILITIES: ContractCapability[] = [
       "Read curated qmd-derived repository facts with namespace scoping.",
   },
   {
+    name: "log_thought",
+    version: 1,
+    kind: "tool",
+    description: "Write a durable thought or observation to Open Brain.",
+  },
+  {
+    name: "search_all",
+    version: 1,
+    kind: "tool",
+    description:
+      "Search Open Brain memory and optional qmd-backed code context.",
+  },
+  {
+    name: "session_start",
+    version: 1,
+    kind: "tool",
+    description:
+      "Find or create a durable session lane and return recent events.",
+  },
+  {
+    name: "session_context",
+    version: 1,
+    kind: "tool",
+    description: "Read durable session lane state and recent events.",
+  },
+  {
+    name: "append_session_event",
+    version: 1,
+    kind: "tool",
+    description: "Append a durable event to a session lane journal.",
+  },
+  {
+    name: "session_wrap",
+    version: 1,
+    kind: "tool",
+    description: "Checkpoint a session lane with a durable summary.",
+  },
+  {
     name: "entity_graph",
     version: 2,
     kind: "schema",
@@ -99,11 +137,15 @@ export function stableJson(value: unknown): string {
   return JSON.stringify(sortValue(value));
 }
 
-export function contractHash(payload: Omit<OpenBrainContract, "generated_at" | "schema_hash">): string {
+export function contractHash(
+  payload: Omit<OpenBrainContract, "generated_at" | "schema_hash">,
+): string {
   return createHash("sha256").update(stableJson(payload)).digest("hex");
 }
 
-export function buildContract(generatedAt = new Date().toISOString()): OpenBrainContract {
+export function buildContract(
+  generatedAt = new Date().toISOString(),
+): OpenBrainContract {
   const payload = {
     service: "open-brain" as const,
     contract_version: CONTRACT_VERSION,
@@ -133,6 +175,173 @@ export function buildContract(generatedAt = new Date().toISOString()): OpenBrain
         version: 1,
         input_schema: {},
         output_shape: "OpenBrainContract JSON text payload",
+      },
+      log_thought: {
+        version: 1,
+        input_schema: {
+          content: { type: "string", required: true, minLength: 1 },
+          tags: { type: "array", required: false, items: "string" },
+          namespace: {
+            type: "string",
+            required: false,
+            minLength: 1,
+            maxLength: 500,
+          },
+        },
+        output_shape: "thought id/namespace/embedded/merged JSON text payload",
+      },
+      search_all: {
+        version: 1,
+        input_schema: {
+          query: { type: "string", required: true, minLength: 1 },
+          namespace: {
+            type: "string_or_string_array",
+            required: false,
+            maxLength: 500,
+          },
+          limit: { type: "integer", required: false, min: 1, max: 100 },
+          sources: {
+            type: "enum",
+            required: false,
+            values: ["brain", "qmd", "all"],
+          },
+          search_mode: {
+            type: "enum",
+            required: false,
+            values: ["hybrid", "semantic", "lexical"],
+          },
+        },
+        output_shape: "unified search results JSON text payload",
+      },
+      session_start: {
+        version: 1,
+        input_schema: {
+          session_key: {
+            type: "string",
+            required: true,
+            minLength: 1,
+            maxLength: 500,
+          },
+          namespace: { type: "string", required: false, maxLength: 500 },
+          project: { type: "string", required: false, maxLength: 500 },
+          agent: { type: "string", required: false, maxLength: 500 },
+          channel_id: { type: "string", required: false, maxLength: 500 },
+          thread_id: { type: "string", required: false, maxLength: 500 },
+          topic: { type: "string", required: false, maxLength: 500 },
+        },
+        output_shape: "session lane plus recent events JSON text payload",
+      },
+      session_context: {
+        version: 1,
+        input_schema: {
+          session_key: {
+            type: "string",
+            required: "session_key_or_channel_id",
+            maxLength: 500,
+          },
+          namespace: { type: "string", required: false, maxLength: 500 },
+          channel_id: {
+            type: "string",
+            required: "session_key_or_channel_id",
+            maxLength: 500,
+          },
+          thread_id: { type: "string", required: false, maxLength: 500 },
+          include_events: { type: "boolean", required: false, default: true },
+          event_limit: {
+            type: "integer",
+            required: false,
+            min: 1,
+            max: 200,
+            default: 50,
+          },
+          event_types: {
+            type: "array",
+            required: false,
+            items: "session_event_type",
+          },
+          importance: {
+            type: "enum",
+            required: false,
+            values: ["hot", "warm", "cold"],
+          },
+        },
+        output_shape: "session lane plus recent events JSON text payload",
+      },
+      append_session_event: {
+        version: 1,
+        input_schema: {
+          session_key: {
+            type: "string",
+            required: true,
+            minLength: 1,
+            maxLength: 500,
+          },
+          namespace: { type: "string", required: false, maxLength: 500 },
+          event_type: {
+            type: "enum",
+            required: true,
+            values: [
+              "fact",
+              "decision",
+              "blocker",
+              "action",
+              "artifact",
+              "receipt",
+              "question",
+              "correction",
+              "handoff",
+            ],
+          },
+          content: {
+            type: "string",
+            required: true,
+            minLength: 1,
+            maxLength: 50000,
+          },
+          source: { type: "string", required: false, maxLength: 500 },
+          artifact_path: { type: "string", required: false, maxLength: 2000 },
+          importance: {
+            type: "enum",
+            required: false,
+            values: ["hot", "warm", "cold"],
+          },
+          metadata: {
+            type: "object",
+            required: false,
+            maxKeys: 50,
+            maxJsonBytes: 100000,
+          },
+        },
+        output_shape: "session event JSON text payload",
+      },
+      session_wrap: {
+        version: 1,
+        input_schema: {
+          session_key: {
+            type: "string",
+            required: true,
+            minLength: 1,
+            maxLength: 500,
+          },
+          namespace: { type: "string", required: false, maxLength: 500 },
+          summary: { type: "string", required: true, maxLength: 100000 },
+          key_decisions: {
+            type: "array",
+            required: false,
+            items: "string",
+            maxItems: 20,
+            maxItemLength: 2000,
+          },
+          next_steps: {
+            type: "array",
+            required: false,
+            items: "string",
+            maxItems: 20,
+            maxItemLength: 2000,
+          },
+          project: { type: "string", required: false, maxLength: 500 },
+        },
+        output_shape: "session wrap checkpoint JSON text payload",
       },
       upsert_repo_fact: {
         version: 1,
