@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { spawn } from "node:child_process";
 import { logger } from "./logger.ts";
 
 const rawTimeout = parseInt(process.env.EMBEDDING_TIMEOUT_MS ?? "8000", 10);
@@ -9,6 +10,34 @@ export const EMBEDDING_DIMENSIONS =
 
 const MAX_RETRIES = 2;
 const BACKOFF_DELAYS_MS = [200, 800];
+const WATCHDOG_RESTARTABLE_CODES = new Set<EmbeddingError["code"]>([
+  "timeout",
+  "network",
+  "server_error",
+]);
+
+const rawWatchdogThreshold = parseInt(
+  process.env.EMBEDDING_WATCHDOG_FAILURE_THRESHOLD ?? "2",
+  10,
+);
+const WATCHDOG_FAILURE_THRESHOLD =
+  Number.isNaN(rawWatchdogThreshold) || rawWatchdogThreshold <= 0
+    ? 2
+    : rawWatchdogThreshold;
+
+const rawWatchdogCooldown = parseInt(
+  process.env.EMBEDDING_WATCHDOG_COOLDOWN_MS ?? "300000",
+  10,
+);
+const WATCHDOG_COOLDOWN_MS =
+  Number.isNaN(rawWatchdogCooldown) || rawWatchdogCooldown < 0
+    ? 300000
+    : rawWatchdogCooldown;
+
+let lastFailureCode: EmbeddingError["code"] | null = null;
+let consecutiveFailureCount = 0;
+let lastWatchdogRestartAt = 0;
+let watchdogRestartInFlight = false;
 
 /**
  * Embedding model identifier. Used by embedding.ts to call the provider and stored
@@ -74,6 +103,89 @@ function classifyError(err: unknown, status?: number): EmbeddingError["code"] {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function resetWatchdogFailures(): void {
+  lastFailureCode = null;
+  consecutiveFailureCount = 0;
+}
+
+function recordWatchdogFailure(error: EmbeddingError): void {
+  if (!WATCHDOG_RESTARTABLE_CODES.has(error.code)) {
+    resetWatchdogFailures();
+    return;
+  }
+
+  if (lastFailureCode === error.code) {
+    consecutiveFailureCount += 1;
+  } else {
+    lastFailureCode = error.code;
+    consecutiveFailureCount = 1;
+  }
+
+  logger.warn("embedding_watchdog_failure_recorded", {
+    code: error.code,
+    consecutiveFailures: consecutiveFailureCount,
+    threshold: WATCHDOG_FAILURE_THRESHOLD,
+  });
+
+  if (consecutiveFailureCount >= WATCHDOG_FAILURE_THRESHOLD) {
+    triggerEmbeddingWatchdogRestart(error.code);
+  }
+}
+
+function triggerEmbeddingWatchdogRestart(code: EmbeddingError["code"]): void {
+  const restartScript = process.env.EMBEDDING_WATCHDOG_RESTART_SCRIPT;
+  if (!restartScript) return;
+
+  const now = Date.now();
+  if (watchdogRestartInFlight) {
+    logger.warn("embedding_watchdog_restart_skipped", {
+      code,
+      reason: "restart_in_flight",
+    });
+    return;
+  }
+  if (now - lastWatchdogRestartAt < WATCHDOG_COOLDOWN_MS) {
+    logger.warn("embedding_watchdog_restart_skipped", {
+      code,
+      reason: "cooldown",
+      cooldownMs: WATCHDOG_COOLDOWN_MS,
+    });
+    return;
+  }
+
+  watchdogRestartInFlight = true;
+  lastWatchdogRestartAt = now;
+  resetWatchdogFailures();
+
+  logger.error("embedding_watchdog_restart_triggered", {
+    code,
+    restartScript,
+  });
+
+  const child = spawn(restartScript, {
+    detached: true,
+    stdio: "ignore",
+  });
+
+  child.once("error", (err) => {
+    watchdogRestartInFlight = false;
+    logger.error("embedding_watchdog_restart_failed", {
+      error: err.message,
+      restartScript,
+    });
+  });
+
+  child.once("spawn", () => {
+    watchdogRestartInFlight = false;
+    child.unref();
+  });
+}
+
+function embeddingFailure(error: EmbeddingError): EmbeddingResult {
+  recordWatchdogFailure(error);
+  return { embedding: null, error };
 }
 
 function embeddingBaseUrl(explicitUrl?: string): string | undefined {
@@ -172,15 +284,12 @@ export async function generateEmbeddingWithMetadata(
             status: response.status,
             attempts: attempt,
           });
-          return {
-            embedding: null,
-            error: {
+          return embeddingFailure({
               code,
               message: msg,
               attempts: attempt,
               lastStatus: response.status,
-            },
-          };
+          });
         }
 
         // 5xx: retry if attempts remain
@@ -201,15 +310,12 @@ export async function generateEmbeddingWithMetadata(
           status: response.status,
           attempts: attempt,
         });
-        return {
-          embedding: null,
-          error: {
+        return embeddingFailure({
             code: "server_error",
             message: `Embedding provider returned ${response.status} after ${attempt} attempt(s)`,
             attempts: attempt,
             lastStatus: response.status,
-          },
-        };
+        });
       }
 
       const json = (await response.json()) as {
@@ -226,20 +332,18 @@ export async function generateEmbeddingWithMetadata(
           expectedLength: EMBEDDING_DIMENSIONS,
           attempts: attempt,
         });
-        return {
-          embedding: null,
-          error: {
+        return embeddingFailure({
             code: "malformed_response",
             message: msg,
             attempts: attempt,
             lastStatus: response.status,
-          },
-        };
+        });
       }
 
       const latency = Date.now() - start;
       logger.info("Embedding generated", { latencyMs: latency, attempt });
 
+      resetWatchdogFailures();
       return { embedding: embedding as number[] };
     } catch (err) {
       lastError = err;
@@ -251,15 +355,12 @@ export async function generateEmbeddingWithMetadata(
           error: msg,
           attempts: attempt,
         });
-        return {
-          embedding: null,
-          error: {
+        return embeddingFailure({
             code,
             message: msg,
             attempts: attempt,
             lastStatus,
-          },
-        };
+        });
       }
 
       if (attempt < totalAttempts) {
@@ -283,15 +384,12 @@ export async function generateEmbeddingWithMetadata(
         code,
         attempts: attempt,
       });
-      return {
-        embedding: null,
-        error: {
+      return embeddingFailure({
           code,
           message: `${msg} after ${attempt} attempt(s)`,
           attempts: attempt,
           lastStatus,
-        },
-      };
+      });
     } finally {
       clearTimeout(timeoutId);
       options.signal?.removeEventListener("abort", abortFromParent);
@@ -300,15 +398,12 @@ export async function generateEmbeddingWithMetadata(
 
   // Should never reach here, but TypeScript needs it
   const code = classifyError(lastError);
-  return {
-    embedding: null,
-    error: {
+  return embeddingFailure({
       code,
       message: "Unexpected: exhausted all attempts",
       attempts: totalAttempts,
       lastStatus,
-    },
-  };
+  });
 }
 
 /**
