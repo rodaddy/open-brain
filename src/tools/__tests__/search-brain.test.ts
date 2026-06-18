@@ -258,6 +258,47 @@ describe("search_brain", () => {
       }
     });
 
+    it("treats graph entities as warm-only when tier filtering", async () => {
+      const queryCalls: any[] = [];
+      const pool = {
+        query: async (...args: any[]) => {
+          queryCalls.push(args);
+          return { rows: [] };
+        },
+      };
+      const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
+      const { client, cleanup } = await setup(pool, auth);
+
+      try {
+        const hotResult = await client.callTool({
+          name: "search_brain",
+          arguments: {
+            query: "hub",
+            table: "entities",
+            search_mode: "keyword",
+            tier: "hot",
+          },
+        });
+        expect(hotResult.isError).toBeFalsy();
+        expect(parseToolResult(hotResult)).toEqual([]);
+        expect(queryCalls[0][0]).toContain("AND FALSE");
+
+        const warmResult = await client.callTool({
+          name: "search_brain",
+          arguments: {
+            query: "hub",
+            table: "entities",
+            search_mode: "keyword",
+            tier: "warm",
+          },
+        });
+        expect(warmResult.isError).toBeFalsy();
+        expect(queryCalls[1][0]).not.toContain("AND FALSE");
+      } finally {
+        await cleanup();
+      }
+    });
+
     it("does not fail when a search row has an invalid timestamp", async () => {
       const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
       const { client, cleanup } = await setup(

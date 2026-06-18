@@ -264,6 +264,7 @@ function buildTableCTE(
 ): string {
   if (tier && !VALID_TIERS.has(tier)) throw new Error(`Invalid tier: ${tier}`);
   if (table === "entities") {
+    const tierFilter = tier && tier !== "warm" ? " AND FALSE" : "";
     const nsFilter = namespaceParamIndex
       ? namespaceIsArray
         ? ` AND e.namespace = ANY(${paramRef(namespaceParamIndex)}::text[])`
@@ -286,7 +287,7 @@ function buildTableCTE(
     0 AS access_count,
     NULL::jsonb AS extracted_metadata
   FROM ob_entities e
-  WHERE e.embedding IS NOT NULL${nsFilter}
+  WHERE e.embedding IS NOT NULL${tierFilter}${nsFilter}
   ORDER BY e.embedding <=> (SELECT emb FROM query_embedding) ASC
   LIMIT ${perTableLimit}
 )`;
@@ -336,6 +337,7 @@ function buildFtsCTE(
 ): string {
   if (tier && !VALID_TIERS.has(tier)) throw new Error(`Invalid tier: ${tier}`);
   if (table === "entities") {
+    const tierFilter = tier && tier !== "warm" ? " AND FALSE" : "";
     const nsFilter = namespaceParamIndex
       ? namespaceIsArray
         ? ` AND e.namespace = ANY(${paramRef(namespaceParamIndex)}::text[])`
@@ -363,7 +365,7 @@ function buildFtsCTE(
       OR e.entity_type ILIKE '%' || (SELECT q FROM fts_query) || '%'
       OR e.canonical_id ILIKE '%' || (SELECT q FROM fts_query) || '%'
       OR e.metadata::text ILIKE '%' || (SELECT q FROM fts_query) || '%'
-    )${nsFilter}
+    )${tierFilter}${nsFilter}
   ORDER BY e.updated_at DESC
   LIMIT ${perTableLimit}
 )`;
