@@ -106,6 +106,198 @@ describe("repo fact tools", () => {
     }
   });
 
+  it("rejects short Python code chunks", async () => {
+    const auth: AuthInfo = { role: "admin", clientId: "rico" };
+    const { client, cleanup } = await setupMcpClient(
+      registerUpsertRepoFact,
+      { query: async () => ({ rows: [] }) },
+      createMockEmbed(),
+      auth,
+    );
+
+    try {
+      const result = await client.callTool({
+        name: "upsert_repo_fact",
+        arguments: {
+          metadata: {
+            ...repoFact,
+            fact: "def load_contract(path):\n    return open(path).read()",
+          },
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(getErrorText(result)).toContain("raw code chunk");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("rejects credential-like material before embedding or storage", async () => {
+    let queried = false;
+    const auth: AuthInfo = { role: "admin", clientId: "rico" };
+    const { client, cleanup } = await setupMcpClient(
+      registerUpsertRepoFact,
+      {
+        query: async () => {
+          queried = true;
+          return { rows: [] };
+        },
+      },
+      createMockEmbed(),
+      auth,
+    );
+
+    try {
+      const result = await client.callTool({
+        name: "upsert_repo_fact",
+        arguments: {
+          metadata: {
+            ...repoFact,
+            fact: ["token=", "not-a-real-token-value"].join(""),
+          },
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(getErrorText(result)).toContain("credential-like material");
+      expect(queried).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("requires either symbol or subject", async () => {
+    const auth: AuthInfo = { role: "admin", clientId: "rico" };
+    const { client, cleanup } = await setupMcpClient(
+      registerUpsertRepoFact,
+      { query: async () => ({ rows: [] }) },
+      createMockEmbed(),
+      auth,
+    );
+
+    const { symbol: _symbol, ...metadataWithoutSubject } = repoFact;
+
+    try {
+      const result = await client.callTool({
+        name: "upsert_repo_fact",
+        arguments: { metadata: metadataWithoutSubject },
+      });
+      expect(result.isError).toBe(true);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("requires trusted HTTPS GitHub source URLs", async () => {
+    const auth: AuthInfo = { role: "admin", clientId: "rico" };
+    const { client, cleanup } = await setupMcpClient(
+      registerUpsertRepoFact,
+      { query: async () => ({ rows: [] }) },
+      createMockEmbed(),
+      auth,
+    );
+
+    try {
+      const result = await client.callTool({
+        name: "upsert_repo_fact",
+        arguments: {
+          metadata: {
+            ...repoFact,
+            source_url: "http://localhost/source",
+          },
+        },
+      });
+      expect(result.isError).toBe(true);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("rejects future verification timestamps", async () => {
+    const auth: AuthInfo = { role: "admin", clientId: "rico" };
+    const { client, cleanup } = await setupMcpClient(
+      registerUpsertRepoFact,
+      { query: async () => ({ rows: [] }) },
+      createMockEmbed(),
+      auth,
+    );
+
+    try {
+      const result = await client.callTool({
+        name: "upsert_repo_fact",
+        arguments: {
+          metadata: {
+            ...repoFact,
+            verified_at: "2999-01-01T00:00:00.000Z",
+          },
+        },
+      });
+      expect(result.isError).toBe(true);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("adds a digest to canonical IDs so long truncated paths do not collide", async () => {
+    const ids: string[] = [];
+    const mockPool = {
+      query: async (_sql: string, params?: unknown[]) => {
+        ids.push(params?.[1] as string);
+        return {
+          rows: [
+            {
+              id: `id-${ids.length}`,
+              is_new: true,
+              entity_type: "repo_fact",
+              name: params?.[0],
+              canonical_id: params?.[1],
+              namespace: params?.[2],
+              metadata: JSON.parse(params?.[3] as string),
+            },
+          ],
+        };
+      },
+    };
+    const auth: AuthInfo = { role: "admin", clientId: "rico" };
+    const { client, cleanup } = await setupMcpClient(
+      registerUpsertRepoFact,
+      mockPool,
+      createMockEmbed(),
+      auth,
+    );
+
+    try {
+      const longPath = `${"a".repeat(220)}/api.ts`;
+      await client.callTool({
+        name: "upsert_repo_fact",
+        arguments: {
+          metadata: {
+            ...repoFact,
+            path: longPath,
+            source_url: `https://github.com/rodaddy/king-core/blob/${repoFact.source_commit}/${longPath}`,
+          },
+        },
+      });
+      await client.callTool({
+        name: "upsert_repo_fact",
+        arguments: {
+          metadata: {
+            ...repoFact,
+            path: `${"a".repeat(220)}/db.ts`,
+            source_url: `https://github.com/rodaddy/king-core/blob/${repoFact.source_commit}/${"a".repeat(220)}/db.ts`,
+          },
+        },
+      });
+
+      expect(ids[0]).not.toBe(ids[1]);
+      expect(ids[0]?.split(":").at(-1)).toMatch(/^[0-9a-f]{16}$/);
+      expect(ids[1]?.split(":").at(-1)).toMatch(/^[0-9a-f]{16}$/);
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("enforces namespace write policy", async () => {
     const auth: AuthInfo = { role: "agent", clientId: "bilby" };
     const { client, cleanup } = await setupMcpClient(

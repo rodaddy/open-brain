@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { REPO_FACT_METADATA_CONTRACT } from "./tools/repo-facts.ts";
 
 export const CONTRACT_VERSION = "2026-06-18.repo-facts.v1";
 export const CONTRACT_SCHEMA_VERSION = 1;
@@ -25,6 +26,14 @@ export interface OpenBrainContract {
     session_required: true;
   };
   capabilities: ContractCapability[];
+  tool_contracts: Record<
+    string,
+    {
+      version: number;
+      input_schema: unknown;
+      output_shape: string;
+    }
+  >;
 }
 
 export const CONTRACT_CAPABILITIES: ContractCapability[] = [
@@ -114,6 +123,39 @@ export function buildContract(generatedAt = new Date().toISOString()): OpenBrain
     capabilities: [...CONTRACT_CAPABILITIES].sort((a, b) =>
       a.name.localeCompare(b.name),
     ),
+    tool_contracts: {
+      get_contract: {
+        version: 1,
+        input_schema: {},
+        output_shape: "OpenBrainContract JSON text payload",
+      },
+      upsert_repo_fact: {
+        version: 1,
+        input_schema: {
+          namespace: { type: "string", required: false, maxLength: 500 },
+          metadata: REPO_FACT_METADATA_CONTRACT,
+        },
+        output_shape: "ob_entities repo_fact row JSON text payload",
+      },
+      list_repo_facts: {
+        version: 1,
+        input_schema: {
+          namespace: { type: "string", required: false, maxLength: 500 },
+          repo: { type: "string", required: false, maxLength: 300 },
+          collection: { type: "string", required: false, maxLength: 300 },
+          path: { type: "string", required: false, maxLength: 1000 },
+          fact_type: {
+            type: "enum",
+            required: false,
+            values: REPO_FACT_METADATA_CONTRACT.fact_type.values,
+          },
+          subject: { type: "string", required: false, maxLength: 500 },
+          limit: { type: "integer", required: false, min: 1, max: 250 },
+          offset: { type: "integer", required: false, min: 0 },
+        },
+        output_shape: "repo_fact ob_entities row array JSON text payload",
+      },
+    },
   };
 
   return {

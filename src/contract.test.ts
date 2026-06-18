@@ -1,5 +1,8 @@
 import { describe, expect, it } from "bun:test";
+import type { OpenBrainContract } from "./contract.ts";
 import { buildContract, contractHash } from "./contract.ts";
+
+type ContractPayload = Omit<OpenBrainContract, "generated_at" | "schema_hash">;
 
 describe("Open Brain contract manifest", () => {
   it("builds a manifest with required compatibility fields", () => {
@@ -13,6 +16,11 @@ describe("Open Brain contract manifest", () => {
     expect(contract.capabilities.map((c) => c.name)).toContain(
       "upsert_repo_fact",
     );
+    const upsertRepoFact = contract.tool_contracts.upsert_repo_fact;
+    expect(upsertRepoFact).toBeDefined();
+    expect((upsertRepoFact?.input_schema as any).metadata.source_url.required).toBe(
+      true,
+    );
   });
 
   it("keeps the schema hash stable when only generated_at changes", () => {
@@ -25,7 +33,7 @@ describe("Open Brain contract manifest", () => {
 
   it("changes the schema hash when public capabilities change", () => {
     const base = buildContract("2026-06-18T00:00:00.000Z");
-    const changedPayload = {
+    const changedPayload: ContractPayload = {
       service: base.service,
       contract_version: base.contract_version,
       schema_version: base.schema_version,
@@ -41,6 +49,38 @@ describe("Open Brain contract manifest", () => {
           description: "Fixture capability used to prove hash drift.",
         },
       ],
+      tool_contracts: base.tool_contracts,
+    };
+
+    expect(contractHash(changedPayload)).not.toBe(base.schema_hash);
+  });
+
+  it("changes the schema hash when repo fact metadata contract changes", () => {
+    const base = buildContract("2026-06-18T00:00:00.000Z");
+    const upsertRepoFact = base.tool_contracts.upsert_repo_fact;
+    expect(upsertRepoFact).toBeDefined();
+
+    const changedPayload: ContractPayload = {
+      service: base.service,
+      contract_version: base.contract_version,
+      schema_version: base.schema_version,
+      min_client_versions: base.min_client_versions,
+      compatible_client_ranges: base.compatible_client_ranges,
+      transport: base.transport,
+      capabilities: base.capabilities,
+      tool_contracts: {
+        ...base.tool_contracts,
+        upsert_repo_fact: {
+          ...upsertRepoFact!,
+          input_schema: {
+            ...(upsertRepoFact!.input_schema as any),
+            metadata: {
+              ...((upsertRepoFact!.input_schema as any).metadata as any),
+              fact: { type: "string", required: true, maxLength: 1000 },
+            },
+          },
+        },
+      },
     };
 
     expect(contractHash(changedPayload)).not.toBe(base.schema_hash);
