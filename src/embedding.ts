@@ -37,6 +37,10 @@ export interface EmbeddingResult {
   error?: EmbeddingError;
 }
 
+export interface EmbeddingOptions {
+  signal?: AbortSignal;
+}
+
 /**
  * Classify whether an error or HTTP status is transient and worth retrying.
  * Only 5xx, AbortError (timeout), and network-level errors are retried.
@@ -84,6 +88,7 @@ function embeddingApiKey(): string | undefined {
 export async function generateEmbeddingWithMetadata(
   text: string,
   embeddingUrl?: string,
+  options: EmbeddingOptions = {},
 ): Promise<EmbeddingResult> {
   if (!text || text.trim().length === 0 || text.length > 32000) {
     const msg = "Embedding text empty or too long";
@@ -130,6 +135,14 @@ export async function generateEmbeddingWithMetadata(
 
   for (let attempt = 1; attempt <= totalAttempts; attempt++) {
     const controller = new AbortController();
+    const abortFromParent = () => controller.abort(options.signal?.reason);
+    if (options.signal?.aborted) {
+      abortFromParent();
+    } else {
+      options.signal?.addEventListener("abort", abortFromParent, {
+        once: true,
+      });
+    }
     const timeoutId = setTimeout(() => controller.abort(), EMBEDDING_TIMEOUT_MS);
     const start = Date.now();
 
@@ -281,6 +294,7 @@ export async function generateEmbeddingWithMetadata(
       };
     } finally {
       clearTimeout(timeoutId);
+      options.signal?.removeEventListener("abort", abortFromParent);
     }
   }
 
@@ -304,8 +318,9 @@ export async function generateEmbeddingWithMetadata(
 export async function generateEmbedding(
   text: string,
   embeddingUrl?: string,
+  options: EmbeddingOptions = {},
 ): Promise<number[] | null> {
-  const result = await generateEmbeddingWithMetadata(text, embeddingUrl);
+  const result = await generateEmbeddingWithMetadata(text, embeddingUrl, options);
   return result.embedding;
 }
 

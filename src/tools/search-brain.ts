@@ -59,8 +59,8 @@ const TABLE_WEIGHT: Record<string, number> = {
 
 function searchEmbeddingTimeoutMs(): number {
   const raw =
-    process.env.SEARCH_EMBEDDING_TIMEOUT_MS ??
-    process.env.OPENBRAIN_SEARCH_EMBEDDING_TIMEOUT_MS;
+    process.env.OPENBRAIN_SEARCH_EMBEDDING_TIMEOUT_MS ??
+    process.env.SEARCH_EMBEDDING_TIMEOUT_MS;
   if (!raw) return DEFAULT_SEARCH_EMBEDDING_TIMEOUT_MS;
   const parsed = parseInt(raw, 10);
   return Number.isNaN(parsed) || parsed < 1
@@ -73,16 +73,18 @@ async function generateSearchEmbedding(
   query: string,
 ): Promise<number[] | null> {
   const timeoutMs = searchEmbeddingTimeoutMs();
+  const controller = new AbortController();
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
   try {
     return await Promise.race([
-      deps.embedFn(query),
+      deps.embedFn(query, undefined, { signal: controller.signal }),
       new Promise<null>((resolve) => {
         timeoutId = setTimeout(() => {
+          controller.abort();
           logger.warn("search_embedding_timeout", {
             timeoutMs,
-            query: query.slice(0, 50),
+            queryLength: query.length,
           });
           resolve(null);
         }, timeoutMs);
@@ -694,7 +696,7 @@ export async function executeSearch(
     // Fall back to keyword-only if embedding fails in hybrid mode
     if (mode === "hybrid") {
       logger.warn("embedding_failed_fallback_fts", {
-        query: query.slice(0, 50),
+        queryLength: query.length,
       });
       rows = await ftsSearch(
         deps,
