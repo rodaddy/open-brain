@@ -8,6 +8,8 @@ ERR_FILE="$LOG_DIR/mlx-embedding-server.err.log"
 LOCK_DIR="${MLX_EMBED_RESTART_LOCK:-$LOG_DIR/open-brain-mlx-embed-restart.lock}"
 LOCK_STALE_AFTER_SECONDS="${MLX_EMBED_RESTART_LOCK_STALE_AFTER_SECONDS:-300}"
 PORT="${MLX_EMBED_PORT:-8791}"
+# The hosted MLX embedding daemon exposes an unauthenticated /health route.
+# Override MLX_EMBED_HEALTH_URL for OpenAI-compatible daemons that only expose /v1/models.
 HEALTH_URL="${MLX_EMBED_HEALTH_URL:-http://127.0.0.1:$PORT/health}"
 HEALTH_RETRIES="${MLX_EMBED_HEALTH_RETRIES:-20}"
 HEALTH_SLEEP_SECONDS="${MLX_EMBED_HEALTH_SLEEP_SECONDS:-1}"
@@ -23,6 +25,11 @@ if [[ -z "$CURL_BIN" ]]; then
   elif [[ -x /usr/bin/curl ]]; then
     CURL_BIN="/usr/bin/curl"
   fi
+fi
+
+if [[ -z "$CURL_BIN" || ! -x "$CURL_BIN" ]]; then
+  echo "mlx embedding restart failed: curl not found or not executable: ${CURL_BIN:-unset}" >> "$ERR_FILE"
+  exit 1
 fi
 
 remove_lock_dir() {

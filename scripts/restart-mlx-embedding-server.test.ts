@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -63,5 +70,19 @@ describe("restart-mlx-embedding-server.sh", () => {
     expect(result.status).toBe(1);
     expect(result.error).toBeUndefined();
     expect(existsSync(lockDir)).toBe(true);
+  });
+
+  it("fails clearly when the configured curl binary is not executable", () => {
+    const root = makeTempRoot();
+
+    const result = runScript(root, {
+      MLX_EMBED_CURL: join(root, "missing-curl"),
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.error).toBeUndefined();
+    expect(readFileSync(join(root, "runtime", "mlx-embedding-server.err.log"), "utf8")).toContain(
+      "curl not found or not executable",
+    );
   });
 });
