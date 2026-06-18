@@ -253,6 +253,7 @@ describe("search_brain", () => {
         expect(parsed[0].source_type).toBe("entity");
         expect(parsed[0].source_ref.type).toBe("entity");
         expect(queryCalls[0][0]).toContain("FROM ob_entities");
+        expect(queryCalls[0][0]).toContain("e.archived_at IS NULL");
       } finally {
         await cleanup();
       }

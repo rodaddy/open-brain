@@ -53,6 +53,13 @@ Before ANY write to OB, resolve the namespace. See [references/namespace-guide.m
 | `archive_entry` | Soft-delete entry | No |
 | `set_tier` | Set entry cognitive tier (hot/warm/cold) | No |
 | `upsert_person` | Create/update contact | **Yes** |
+| `upsert_entity` | Create/update graph entity | **Yes** |
+| `get_entity` | Fetch active graph entity by UUID | No |
+| `list_entities` | List active graph entities | Optional (filter) |
+| `link_entities` | Link graph nodes | **Yes** |
+| `unlink_entities` | Soft-delete one graph edge | **Yes** |
+| `archive_entity` | Soft-delete graph entity and active links | No |
+| `hydrate_entities` | Refresh graph entity embeddings immediately | Optional (filter) |
 
 ## Pagination
 
@@ -70,6 +77,24 @@ mcp2cli open-brain list_recent --params '{"limit": 100, "offset": 200, "days": 3
 ```
 
 This applies to `list_recent`, `search_brain`, `search_all`, and `find_person`.
+
+## Graph Entity Lifecycle
+
+Use graph tools for rows in `ob_entities`, not legacy `projects` rows:
+
+```bash
+mcp2cli open-brain upsert_entity --params '{"namespace":"collab","entity_type":"project","name":"open-brain"}'
+mcp2cli open-brain link_entities --params '{"namespace":"collab","from_type":"entity","from_id":"<uuid>","to_type":"entity","to_id":"<uuid>","relation":"depends_on"}'
+mcp2cli open-brain unlink_entities --params '{"namespace":"collab","from_type":"entity","from_id":"<uuid>","to_type":"entity","to_id":"<uuid>","relation":"depends_on"}'
+mcp2cli open-brain archive_entity --params '{"id":"<entity-uuid>"}'
+```
+
+If entity search must be available immediately after bulk imports or schema
+changes, push hydration instead of waiting for future upserts:
+
+```bash
+mcp2cli open-brain hydrate_entities --params '{"namespace":"collab","only_missing_embedding":true,"limit":100}'
+```
 
 ## Graceful Degradation
 

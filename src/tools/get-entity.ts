@@ -4,6 +4,7 @@ import { canRead } from "../permissions.ts";
 import { readableNamespaces } from "../read-policy.ts";
 import type { AuthInfo } from "../types.ts";
 import type { ToolDeps } from "./index.ts";
+import { graphUuid } from "./graph-ids.ts";
 
 export function registerGetEntity(server: McpServer, deps: ToolDeps): void {
   server.registerTool(
@@ -12,7 +13,7 @@ export function registerGetEntity(server: McpServer, deps: ToolDeps): void {
       description:
         "Fetch a knowledge graph entity by ID from ob_entities. Use for IDs returned by upsert_entity or linked as type 'entity'.",
       inputSchema: {
-        id: z.string().uuid().describe("Entity UUID from upsert_entity or graph links"),
+        id: graphUuid.describe("Entity UUID from upsert_entity or graph links"),
       },
       annotations: {
         title: "Get Entity",
@@ -35,7 +36,7 @@ export function registerGetEntity(server: McpServer, deps: ToolDeps): void {
       const { rows } = await deps.pool.query(
         `SELECT id, entity_type, name, canonical_id, namespace, metadata, created_by, created_at, updated_at
          FROM ob_entities
-         WHERE id = $1${namespacePredicate}`,
+         WHERE id = $1 AND archived_at IS NULL${namespacePredicate}`,
         readable ? [args.id, readable] : [args.id],
       );
 

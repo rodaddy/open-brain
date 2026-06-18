@@ -359,6 +359,9 @@ class OpenBrainClient:
     def archive_entry(self, **arguments: Any) -> JSON:
         return self.call_tool("archive_entry", arguments)
 
+    def archive_entity(self, **arguments: Any) -> JSON:
+        return self.call_tool("archive_entity", arguments)
+
     def bulk_archive(self, **arguments: Any) -> JSON:
         return self.call_tool("bulk_archive", arguments)
 
@@ -394,6 +397,9 @@ class OpenBrainClient:
 
     def link_entities(self, **arguments: Any) -> JSON:
         return self.call_tool("link_entities", arguments)
+
+    def hydrate_entities(self, **arguments: Any) -> JSON:
+        return self.call_tool("hydrate_entities", arguments)
 
     def list_namespaces(self, **arguments: Any) -> JSON:
         return self.call_tool("list_namespaces", arguments)
@@ -445,6 +451,9 @@ class OpenBrainClient:
 
     def update_entry(self, **arguments: Any) -> JSON:
         return self.call_tool("update_entry", arguments)
+
+    def unlink_entities(self, **arguments: Any) -> JSON:
+        return self.call_tool("unlink_entities", arguments)
 
     def upsert_entity(self, **arguments: Any) -> JSON:
         return self.call_tool("upsert_entity", arguments)

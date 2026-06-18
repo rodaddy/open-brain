@@ -39,6 +39,7 @@ describe("list_entities", () => {
       expect(result.isError).toBeFalsy();
       expect(parseToolResult(result)).toHaveLength(1);
       expect(calls[0]?.sql).toContain("FROM ob_entities");
+      expect(calls[0]?.sql).toContain("archived_at IS NULL");
       expect(calls[0]?.sql).toContain("namespace = ANY($1::text[])");
       expect(calls[0]?.sql).toContain("entity_type = $2");
       expect(calls[0]?.sql).toContain("name ILIKE $3");

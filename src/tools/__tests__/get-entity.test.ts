@@ -44,11 +44,53 @@ describe("get_entity", () => {
       expect(result.isError).toBeFalsy();
       expect(parseToolResult(result).entity_type).toBe("project");
       expect(calls[0]?.sql).toContain("FROM ob_entities");
+      expect(calls[0]?.sql).toContain("archived_at IS NULL");
       expect(calls[0]?.sql).toContain("namespace = ANY($2::text[])");
       expect(calls[0]?.params).toEqual([
         "550e8400-e29b-41d4-a716-446655440000",
         ["bilby", "collab"],
       ]);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("accepts stored UUID-like graph IDs with a high version nibble", async () => {
+    const calls: Array<{ sql: string; params?: unknown[] }> = [];
+    const mockPool = {
+      query: async (sql: string, params?: unknown[]) => {
+        calls.push({ sql, params });
+        return {
+          rows: [
+            {
+              id: params?.[0],
+              entity_type: "project",
+              name: "king-core",
+              namespace: "collab",
+              metadata: {},
+            },
+          ],
+        };
+      },
+    };
+    const auth: AuthInfo = { role: "admin", clientId: "skippy" };
+    const { client, cleanup } = await setupMcpClient(
+      registerGetEntity,
+      mockPool,
+      createMockEmbed(),
+      auth,
+    );
+
+    try {
+      const id = "649f5c00-c4d1-9f9b-a2eb-69536909f4b6";
+      const result = await client.callTool({
+        name: "get_entity",
+        arguments: { id },
+      });
+
+      expect(result.isError).toBeFalsy();
+      expect(parseToolResult(result).id).toBe(id);
+      expect(calls[0]?.params).toEqual([id]);
     } finally {
       await cleanup();
     }

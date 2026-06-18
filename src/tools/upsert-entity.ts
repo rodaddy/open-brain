@@ -117,10 +117,12 @@ export function registerUpsertEntity(server: McpServer, deps: ToolDeps): void {
              (entity_type, name, canonical_id, namespace, metadata, embedding, created_by)
            VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
            ON CONFLICT (namespace, entity_type, lower(name))
+           WHERE archived_at IS NULL
            DO UPDATE SET
              canonical_id = COALESCE(EXCLUDED.canonical_id, ob_entities.canonical_id),
              metadata = ob_entities.metadata || EXCLUDED.metadata,
              embedding = COALESCE(EXCLUDED.embedding, ob_entities.embedding),
+             archived_at = NULL,
              updated_at = NOW()
            RETURNING id, (xmax = 0) AS is_new, entity_type, name, namespace, created_at, updated_at`,
           [
