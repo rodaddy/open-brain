@@ -158,8 +158,21 @@ describe("adjacent_context", () => {
   // ── OUTGOING LINKS ──
 
   it("returns outgoing links with correct direction labeling", async () => {
+    const calls: Array<{ sql: string; params?: any[] }> = [];
     const mockPool = {
-      query: async () => ({ rows: MOCK_OUTGOING_LINKS }),
+      query: async (sql: string, params?: any[]) => {
+        calls.push({ sql, params });
+        return {
+          rows: [
+            {
+              ...MOCK_OUTGOING_LINKS[0],
+              to_name: "Neighbor thought",
+              to_canonical_id: "thought:neighbor",
+            },
+            MOCK_OUTGOING_LINKS[1],
+          ],
+        };
+      },
     };
     const auth: AuthInfo = { role: "admin", clientId: "skippy" };
     const { client, cleanup } = await setupToolClient(mockPool, auth);
@@ -180,8 +193,12 @@ describe("adjacent_context", () => {
       expect(parsed.links[0].direction).toBe("outgoing");
       expect(parsed.links[0].linked_type).toBe("thought");
       expect(parsed.links[0].linked_id).toBe(LINKED_ID_1);
+      expect(parsed.links[0].linked_name).toBe("Neighbor thought");
+      expect(parsed.links[0].canonical_id).toBe("thought:neighbor");
       expect(parsed.links[0].relation).toBe("mentions");
       expect(parsed.links[1].linked_type).toBe("decision");
+      expect(calls[0]?.sql).toContain("l.archived_at IS NULL");
+      expect(calls[0]?.sql).toContain("to_entity.name AS to_name");
     } finally {
       await cleanup();
     }

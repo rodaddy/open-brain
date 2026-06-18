@@ -71,6 +71,8 @@ export interface ExplicitLink {
   weight: number;
   linked_type: string;
   linked_id: string;
+  linked_name?: string | null;
+  canonical_id?: string | null;
   metadata: Record<string, unknown>;
   created_at: string;
 }
@@ -123,6 +125,10 @@ type LinkRow = {
   weight: number;
   metadata: Record<string, unknown>;
   created_at: string;
+  from_name: string | null;
+  from_canonical_id: string | null;
+  to_name: string | null;
+  to_canonical_id: string | null;
 };
 
 function linkKey(type: string, id: string): string {
@@ -188,19 +194,37 @@ async function attachExplicitLinks(
 
   try {
     const { rows: linkRows } = await deps.pool.query<LinkRow>(
-      `SELECT id, from_type, from_id, to_type, to_id, relation, weight, metadata, created_at
-       FROM ob_links
+      `SELECT
+         l.id, l.from_type, l.from_id, l.to_type, l.to_id, l.relation, l.weight, l.metadata, l.created_at,
+         from_entity.name AS from_name,
+         from_entity.canonical_id AS from_canonical_id,
+         to_entity.name AS to_name,
+         to_entity.canonical_id AS to_canonical_id
+       FROM ob_links l
+       LEFT JOIN ob_entities from_entity
+         ON l.from_type = 'entity'
+        AND from_entity.id = l.from_id
+        AND from_entity.namespace = l.namespace
+        AND from_entity.archived_at IS NULL
+       LEFT JOIN ob_entities to_entity
+         ON l.to_type = 'entity'
+        AND to_entity.id = l.to_id
+        AND to_entity.namespace = l.namespace
+        AND to_entity.archived_at IS NULL
        WHERE (
-         (from_type, from_id) IN (
+         (l.from_type, l.from_id) IN (
            SELECT result_type, result_id
            FROM unnest($1::text[], $2::uuid[]) AS result_refs(result_type, result_id)
          )
-         OR (to_type, to_id) IN (
+         OR (l.to_type, l.to_id) IN (
            SELECT result_type, result_id
            FROM unnest($1::text[], $2::uuid[]) AS result_refs(result_type, result_id)
          )
-       )${namespaceFilter}
-       ORDER BY weight DESC, created_at DESC
+       )
+         AND l.archived_at IS NULL
+         AND (l.from_type <> 'entity' OR from_entity.id IS NOT NULL)
+         AND (l.to_type <> 'entity' OR to_entity.id IS NOT NULL)${namespaceFilter.replaceAll("namespace", "l.namespace")}
+       ORDER BY l.weight DESC, l.created_at DESC
        LIMIT 200`,
       params,
     );
@@ -224,6 +248,8 @@ async function attachExplicitLinks(
         weight: link.weight,
         linked_type: link.to_type,
         linked_id: link.to_id,
+        linked_name: link.to_name,
+        canonical_id: link.to_canonical_id,
         metadata: link.metadata ?? {},
         created_at: new Date(link.created_at).toISOString(),
       });
@@ -237,6 +263,8 @@ async function attachExplicitLinks(
         weight: link.weight,
         linked_type: link.from_type,
         linked_id: link.from_id,
+        linked_name: link.from_name,
+        canonical_id: link.from_canonical_id,
         metadata: link.metadata ?? {},
         created_at: new Date(link.created_at).toISOString(),
       });
@@ -287,7 +315,7 @@ function buildTableCTE(
     0 AS access_count,
     NULL::jsonb AS extracted_metadata
   FROM ob_entities e
-  WHERE e.embedding IS NOT NULL${tierFilter}${nsFilter}
+  WHERE e.embedding IS NOT NULL AND e.archived_at IS NULL${tierFilter}${nsFilter}
   ORDER BY e.embedding <=> (SELECT emb FROM query_embedding) ASC
   LIMIT ${perTableLimit}
 )`;
@@ -365,7 +393,8 @@ function buildFtsCTE(
       OR e.entity_type ILIKE '%' || (SELECT q FROM fts_query) || '%'
       OR e.canonical_id ILIKE '%' || (SELECT q FROM fts_query) || '%'
       OR e.metadata::text ILIKE '%' || (SELECT q FROM fts_query) || '%'
-    )${tierFilter}${nsFilter}
+    )
+    AND e.archived_at IS NULL${tierFilter}${nsFilter}
   ORDER BY e.updated_at DESC
   LIMIT ${perTableLimit}
 )`;

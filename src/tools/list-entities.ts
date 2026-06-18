@@ -55,7 +55,7 @@ export function registerListEntities(server: McpServer, deps: ToolDeps): void {
       }
 
       const params: unknown[] = [];
-      const filters: string[] = [];
+      const filters: string[] = ["archived_at IS NULL"];
       const namespace = namespaceFilterFor(auth, requestedNamespace);
       const ns = namespaceClause(namespace, params);
       if (ns) filters.push(ns.slice(" AND ".length));

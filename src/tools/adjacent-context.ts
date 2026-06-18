@@ -5,6 +5,7 @@ import { canReadNamespace } from "../read-policy.ts";
 import type { AuthInfo } from "../types.ts";
 import { logger } from "../logger.ts";
 import type { ToolDeps } from "./index.ts";
+import { graphUuid } from "./graph-ids.ts";
 import { LINK_RELATIONS } from "./table-constants.ts";
 
 const DIRECTIONS = ["outgoing", "incoming", "both"] as const;
@@ -21,7 +22,7 @@ export function registerAdjacentContext(
         "Traverses the knowledge graph from a source node in one or both directions.",
       inputSchema: {
         type: z.string().min(1).max(200).describe("Type of the source node"),
-        id: z.string().uuid().describe("UUID of the source node"),
+        id: graphUuid.describe("UUID of the source node"),
         namespace: z
           .string()
           .max(500)
@@ -104,33 +105,60 @@ export function registerAdjacentContext(
         let paramIdx = 3;
 
         if (direction === "outgoing") {
-          conditions.push("from_type = $1 AND from_id = $2");
+          conditions.push("l.from_type = $1 AND l.from_id = $2");
         } else if (direction === "incoming") {
-          conditions.push("to_type = $1 AND to_id = $2");
+          conditions.push("l.to_type = $1 AND l.to_id = $2");
         } else {
           // "both"
           conditions.push(
-            "(from_type = $1 AND from_id = $2) OR (to_type = $1 AND to_id = $2)",
+            "(l.from_type = $1 AND l.from_id = $2) OR (l.to_type = $1 AND l.to_id = $2)",
           );
         }
 
         // Optional namespace filter
-        const nsCondition = `namespace = $${paramIdx++}`;
+        const nsCondition = `l.namespace = $${paramIdx++}`;
         params.push(ns);
 
         // Optional relation filter
         let relationCondition = "";
         if (args.relation) {
-          relationCondition = ` AND relation = $${paramIdx++}`;
+          relationCondition = ` AND l.relation = $${paramIdx++}`;
           params.push(args.relation);
         }
 
         params.push(limit);
 
-        const sql = `SELECT id, from_type, from_id, to_type, to_id, relation, weight, metadata, created_at
-FROM ob_links
-WHERE (${conditions.join("")}) AND ${nsCondition}${relationCondition}
-ORDER BY weight DESC, created_at DESC
+        const sql = `SELECT
+  l.id,
+  l.from_type,
+  l.from_id,
+  l.to_type,
+  l.to_id,
+  l.relation,
+  l.weight,
+  l.metadata,
+  l.created_at,
+  from_entity.name AS from_name,
+  from_entity.canonical_id AS from_canonical_id,
+  to_entity.name AS to_name,
+  to_entity.canonical_id AS to_canonical_id
+FROM ob_links l
+LEFT JOIN ob_entities from_entity
+  ON l.from_type = 'entity'
+ AND from_entity.id = l.from_id
+ AND from_entity.namespace = l.namespace
+ AND from_entity.archived_at IS NULL
+LEFT JOIN ob_entities to_entity
+  ON l.to_type = 'entity'
+ AND to_entity.id = l.to_id
+ AND to_entity.namespace = l.namespace
+ AND to_entity.archived_at IS NULL
+WHERE (${conditions.join("")})
+  AND ${nsCondition}
+  AND l.archived_at IS NULL${relationCondition}
+  AND (l.from_type <> 'entity' OR from_entity.id IS NOT NULL)
+  AND (l.to_type <> 'entity' OR to_entity.id IS NOT NULL)
+ORDER BY l.weight DESC, l.created_at DESC
 LIMIT $${paramIdx}`;
 
         const { rows } = await deps.pool.query(sql, params);
@@ -146,6 +174,10 @@ LIMIT $${paramIdx}`;
             weight: row.weight,
             linked_type: isOutgoing ? row.to_type : row.from_type,
             linked_id: isOutgoing ? row.to_id : row.from_id,
+            linked_name: isOutgoing ? row.to_name : row.from_name,
+            canonical_id: isOutgoing
+              ? row.to_canonical_id
+              : row.from_canonical_id,
             metadata: row.metadata ?? {},
             created_at: row.created_at,
           };

@@ -5,6 +5,7 @@ import { canWriteNamespace } from "../namespace-policy.ts";
 import type { AuthInfo } from "../types.ts";
 import { logger } from "../logger.ts";
 import type { ToolDeps } from "./index.ts";
+import { graphUuid } from "./graph-ids.ts";
 import { LINK_RELATIONS } from "./table-constants.ts";
 
 export function registerLinkEntities(server: McpServer, deps: ToolDeps): void {
@@ -22,9 +23,9 @@ export function registerLinkEntities(server: McpServer, deps: ToolDeps): void {
           .describe(
             'Source node type, e.g. "thought", "decision", "entity", "session"',
           ),
-        from_id: z.string().uuid().describe("Source node UUID"),
+        from_id: graphUuid.describe("Source node UUID"),
         to_type: z.string().min(1).max(200).describe("Target node type"),
-        to_id: z.string().uuid().describe("Target node UUID"),
+        to_id: graphUuid.describe("Target node UUID"),
         relation: z
           .enum(LINK_RELATIONS)
           .describe("Relationship type between the two nodes"),
@@ -125,9 +126,11 @@ export function registerLinkEntities(server: McpServer, deps: ToolDeps): void {
              (from_type, from_id, to_type, to_id, relation, weight, namespace, metadata, created_by)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)
            ON CONFLICT (namespace, from_type, from_id, to_type, to_id, relation)
+           WHERE archived_at IS NULL
            DO UPDATE SET
              weight = EXCLUDED.weight,
              metadata = ob_links.metadata || EXCLUDED.metadata,
+             archived_at = NULL,
              updated_at = NOW()
            RETURNING id, (xmax = 0) AS is_new, relation, weight, created_at`,
           [

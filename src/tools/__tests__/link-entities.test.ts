@@ -144,7 +144,23 @@ describe("link_entities", () => {
   // ── HAPPY PATH ──
 
   it("admin can create link (is_new: true) with full output", async () => {
-    const mockPool = createLinkPool("link-uuid-1", true, "depends_on", 1.0);
+    const calls: Array<{ sql: string; params?: any[] }> = [];
+    const mockPool = {
+      query: async (sql: string, params?: any[]) => {
+        calls.push({ sql, params });
+        return {
+          rows: [
+            {
+              id: "link-uuid-1",
+              is_new: true,
+              relation: "depends_on",
+              weight: 1.0,
+              created_at: "2026-06-08T10:00:00Z",
+            },
+          ],
+        };
+      },
+    };
     const auth: AuthInfo = { role: "admin", clientId: "skippy" };
     const { client, cleanup } = await setupToolClient(mockPool, auth);
 
@@ -172,6 +188,30 @@ describe("link_entities", () => {
       expect(parsed.to_id).toBe(TO_ID);
       expect(parsed.relation).toBe("depends_on");
       expect(parsed.is_new).toBe(true);
+      expect(calls[0]?.sql).toContain("WHERE archived_at IS NULL");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("accepts relaxed graph UUIDs for link endpoints", async () => {
+    const mockPool = createLinkPool();
+    const auth: AuthInfo = { role: "admin", clientId: "skippy" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "link_entities",
+        arguments: {
+          from_type: "entity",
+          from_id: "aaaaaaaa-bbbb-9ccc-8ddd-eeeeeeeeeeee",
+          to_type: "entity",
+          to_id: "11111111-2222-9333-9444-555555555555",
+          relation: "depends_on",
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
     } finally {
       await cleanup();
     }
