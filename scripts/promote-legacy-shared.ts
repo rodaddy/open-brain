@@ -162,7 +162,7 @@ function validateLegacySharedRoute(args: Args): void {
   const config = sharedNamespaceConfig();
   if (
     args.sourceNamespace !== config.legacySharedNamespace ||
-    canonicalNamespace(args.targetNamespace) !== config.canonicalSharedNamespace
+    args.targetNamespace !== config.canonicalSharedNamespace
   ) {
     throw new Error(
       [
