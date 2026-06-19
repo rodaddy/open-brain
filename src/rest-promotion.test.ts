@@ -77,6 +77,31 @@ describe("promotion REST API", () => {
     expect(pool.calls.length).toBe(0);
   });
 
+  it("accepts the promoter role at the REST promote gate (not 403)", async () => {
+    const pool = createSequencePool([]);
+    const app = buildApp({ role: "promoter", clientId: "promoter" }, pool);
+
+    // Invalid id → 400 proves the request passed the auth gate (not 403).
+    const { status } = await req(app, "post", "/api/v1/promote", {
+      table: "thoughts",
+      id: "not-a-uuid",
+    });
+
+    expect(status).toBe(400);
+  });
+
+  it("rejects non-promoter, non-admin roles at the REST promote gate (403)", async () => {
+    for (const role of ["agent", "discord", "readonly"] as const) {
+      const pool = createSequencePool([]);
+      const app = buildApp({ role, clientId: "x" }, pool);
+      const { status } = await req(app, "post", "/api/v1/promote", {
+        table: "thoughts",
+        id: "not-a-uuid",
+      });
+      expect(status).toBe(403);
+    }
+  });
+
   it("returns duplicate when a project name already exists in the target namespace", async () => {
     const sourceId = "123e4567-e89b-12d3-a456-426614174000";
     const pool = createSequencePool([

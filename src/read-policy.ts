@@ -16,7 +16,12 @@ export function readableNamespaces(
   if (auth.namespaceSource === "header") {
     return [auth.clientId, ...sharedNamespaces];
   }
-  if (auth.role === "admin" || auth.role === "n8n") {
+  // Promoter reads across namespaces to source promotion candidates (#147).
+  if (
+    auth.role === "admin" ||
+    auth.role === "n8n" ||
+    auth.role === "promoter"
+  ) {
     return undefined;
   }
   return [auth.clientId, ...sharedNamespaces];

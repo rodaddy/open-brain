@@ -52,6 +52,43 @@ describe("canWriteNamespace", () => {
     expect(canWriteNamespace(auth, "shared-kb").allowed).toBe(true);
   });
 
+  it("first-class promoter role is a promoter identity by role alone", () => {
+    const auth: AuthInfo = { role: "promoter", clientId: "promoter" };
+    expect(isPromoterIdentity(auth)).toBe(true);
+    expect(canWriteNamespace(auth, "shared-kb").allowed).toBe(true);
+    // and can write into agent namespaces it promotes from
+    expect(canWriteNamespace(auth, "bilby").allowed).toBe(true);
+  });
+
+  it("promoter role does NOT require the legacy promoter clientId convention", () => {
+    // role alone is sufficient; clientId is not the openbrain/hermes-promoter literal
+    const auth: AuthInfo = { role: "promoter", clientId: "some-service" };
+    expect(isPromoterIdentity(auth)).toBe(true);
+    expect(canWriteNamespace(auth, "shared-kb").allowed).toBe(true);
+  });
+
+  it("non-promoter roles still cannot write shared-kb (regression)", () => {
+    for (const role of ["agent", "discord", "readonly"] as const) {
+      expect(
+        canWriteNamespace({ role, clientId: "x" }, "shared-kb").allowed,
+      ).toBe(false);
+    }
+    // bare admin/n8n (no promoter clientId) still rejected
+    expect(
+      canWriteNamespace({ role: "admin", clientId: "rico" }, "shared-kb")
+        .allowed,
+    ).toBe(false);
+  });
+
+  it("promoter is blocked from writing legacy collab (canonical shared-kb only)", () => {
+    // Pins the collab-vs-shared-kb boundary: promoter writes canonical
+    // shared-kb but must NOT write the legacy collab namespace. A refactor
+    // that adds promoter to shouldRejectLegacySharedWrite would break this.
+    const auth: AuthInfo = { role: "promoter", clientId: "promoter" };
+    expect(canWriteNamespace(auth, "collab").allowed).toBe(false);
+    expect(canWriteNamespace(auth, "shared-kb").allowed).toBe(true);
+  });
+
   it("header namespace locks admin writes to delegated namespace", () => {
     const auth: AuthInfo = {
       role: "admin",

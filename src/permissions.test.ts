@@ -12,10 +12,36 @@ const ALL_TABLES: Table[] = [
 
 describe("PERMISSIONS matrix", () => {
   test("exports a PERMISSIONS object keyed by role", () => {
-    const roles: Role[] = ["admin", "agent", "discord", "n8n", "readonly"];
+    const roles: Role[] = [
+      "admin",
+      "agent",
+      "discord",
+      "n8n",
+      "promoter",
+      "readonly",
+    ];
     for (const role of roles) {
       expect(PERMISSIONS[role]).toBeDefined();
     }
+  });
+});
+
+describe("promoter role", () => {
+  // Promotion writes curated content into shared truth; it needs write on the
+  // curation tables but is not a broad project author.
+  test.each(["thoughts", "decisions", "relationships", "sessions"] as Table[])(
+    "canWrite(promoter, %s) returns true",
+    (table) => {
+      expect(canWrite("promoter", table)).toBe(true);
+    },
+  );
+
+  test("canWrite(promoter, projects) returns false (read-only)", () => {
+    expect(canWrite("promoter", "projects")).toBe(false);
+  });
+
+  test.each(ALL_TABLES)("canRead(promoter, %s) returns true", (table) => {
+    expect(canRead("promoter", table)).toBe(true);
   });
 });
 
