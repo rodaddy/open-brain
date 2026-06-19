@@ -192,7 +192,7 @@ export function registerLaneUpsert(server: McpServer, deps: ToolDeps): void {
            VALUES ($1, $2, $24, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
            ON CONFLICT (namespace, session_key)
            DO UPDATE SET
-             status = CASE WHEN $3 IS NULL THEN ob_session_lanes.status ELSE EXCLUDED.status END,
+             status = CASE WHEN $3::text IS NULL THEN ob_session_lanes.status ELSE EXCLUDED.status END,
              agent = CASE WHEN $17 THEN EXCLUDED.agent ELSE COALESCE(EXCLUDED.agent, ob_session_lanes.agent) END,
              source = CASE WHEN $18 THEN EXCLUDED.source ELSE COALESCE(EXCLUDED.source, ob_session_lanes.source) END,
              channel_id = CASE WHEN $19 THEN EXCLUDED.channel_id ELSE COALESCE(EXCLUDED.channel_id, ob_session_lanes.channel_id) END,
@@ -207,9 +207,9 @@ export function registerLaneUpsert(server: McpServer, deps: ToolDeps): void {
              content_hash = COALESCE(EXCLUDED.content_hash, ob_session_lanes.content_hash),
              embedded_at = COALESCE(EXCLUDED.embedded_at, ob_session_lanes.embedded_at),
              embedding_model = COALESCE(EXCLUDED.embedding_model, ob_session_lanes.embedding_model),
-             ended_at = CASE WHEN $3 = 'wrapped' OR $3 = 'archived'
+             ended_at = CASE WHEN $3::text = 'wrapped' OR $3::text = 'archived'
                         THEN COALESCE(ob_session_lanes.ended_at, NOW())
-                        WHEN $3 = 'active'
+                        WHEN $3::text = 'active'
                         THEN NULL
                         ELSE ob_session_lanes.ended_at END
            RETURNING id, (xmax = 0) AS is_new, status, updated_at`,
