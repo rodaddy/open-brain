@@ -1,7 +1,11 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { canReadNamespace } from "../read-policy.ts";
-import { sharedNamespaceConfig } from "../shared-namespace.ts";
+import {
+  canonicalNamespace,
+  physicalNamespace,
+  sharedNamespaceConfig,
+} from "../shared-namespace.ts";
 import type { AuthInfo, Table } from "../types.ts";
 import { logger } from "../logger.ts";
 import type { ToolDeps } from "./index.ts";
@@ -66,6 +70,8 @@ export function registerScanNamespace(server: McpServer, deps: ToolDeps): void {
       const limit = args.limit ?? 20;
       const targetNamespace =
         args.target_namespace ?? sharedNamespaceConfig().sharedNamespace;
+      const targetPhysicalNamespace = physicalNamespace(targetNamespace);
+      const targetCanonicalNamespace = canonicalNamespace(targetPhysicalNamespace);
       if (!canReadNamespace(auth, targetNamespace)) {
         return {
           content: [{ type: "text" as const, text: "Permission denied: target namespace read access denied" }],
@@ -107,18 +113,18 @@ export function registerScanNamespace(server: McpServer, deps: ToolDeps): void {
               `SELECT id FROM ${table}
                WHERE content_hash = $1 AND namespace = $2 AND archived_at IS NULL
                LIMIT 1`,
-              [row.content_hash, targetNamespace],
+              [row.content_hash, targetPhysicalNamespace],
             );
 
             if (targetDupes.length > 0) {
               const duplicate: Record<string, unknown> = {
                 table: table,
                 id: row.id,
-                target_namespace: targetNamespace,
+                target_namespace: targetCanonicalNamespace,
                 existing_target_id: targetDupes[0].id,
                 created_at: row.created_at,
               };
-              if (targetNamespace === "collab") {
+              if (targetPhysicalNamespace === "collab") {
                 duplicate.existing_collab_id = targetDupes[0].id;
               }
               duplicates.push(duplicate);
@@ -136,7 +142,7 @@ export function registerScanNamespace(server: McpServer, deps: ToolDeps): void {
 
       logger.info("scan_namespace_ok", {
         namespace: args.namespace,
-        target_namespace: targetNamespace,
+        target_namespace: targetCanonicalNamespace,
         candidates: candidates.length,
         duplicates: duplicates.length,
         already_promoted: alreadyPromoted.length,
@@ -147,7 +153,7 @@ export function registerScanNamespace(server: McpServer, deps: ToolDeps): void {
           type: "text" as const,
           text: JSON.stringify({
             namespace: args.namespace,
-            target_namespace: targetNamespace,
+            target_namespace: targetCanonicalNamespace,
             candidates,
             duplicates,
             already_promoted: alreadyPromoted,

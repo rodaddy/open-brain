@@ -3,6 +3,10 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { toSql } from "pgvector/pg";
 import { canWrite } from "../permissions.ts";
 import { canWriteNamespace } from "../namespace-policy.ts";
+import {
+  canonicalNamespace,
+  physicalNamespace,
+} from "../shared-namespace.ts";
 import { contentHash, EMBEDDING_MODEL } from "../embedding.ts";
 import { backgroundExtract } from "../extraction.ts";
 import type { AuthInfo } from "../types.ts";
@@ -45,8 +49,8 @@ export function registerLogThought(server: McpServer, deps: ToolDeps): void {
         };
       }
 
-      const ns = args.namespace ?? auth.clientId;
-      const nsCheck = canWriteNamespace(auth, ns);
+      const requestedNamespace = args.namespace ?? auth.clientId;
+      const nsCheck = canWriteNamespace(auth, requestedNamespace);
       if (!nsCheck.allowed) {
         return {
           content: [
@@ -58,6 +62,7 @@ export function registerLogThought(server: McpServer, deps: ToolDeps): void {
           isError: true,
         };
       }
+      const ns = physicalNamespace(requestedNamespace);
 
       const hash = contentHash(args.content);
       const textToEmbed = args.tags?.length
@@ -112,7 +117,7 @@ export function registerLogThought(server: McpServer, deps: ToolDeps): void {
             type: "text" as const,
             text: JSON.stringify({
               id: entryId,
-              namespace: ns,
+              namespace: canonicalNamespace(ns),
               embedded: !!embedding,
               merged: !isNew,
             }),

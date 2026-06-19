@@ -4,6 +4,14 @@ const DEFAULT_SHARED_NAMESPACE = "shared-kb";
 const DEFAULT_LEGACY_SHARED_NAMESPACE = "collab";
 const DEFAULT_FALLBACK_MIN_RESULTS = 5;
 
+function envString(names: string[], defaultValue: string): string {
+  for (const name of names) {
+    const raw = process.env[name]?.trim();
+    if (raw) return raw;
+  }
+  return defaultValue;
+}
+
 function envBoolean(name: string, defaultValue: boolean): boolean {
   const raw = process.env[name];
   if (raw === undefined || raw.trim() === "") return defaultValue;
@@ -18,6 +26,9 @@ function envPositiveInteger(name: string, defaultValue: number): number {
 }
 
 export interface SharedNamespaceConfig {
+  canonicalSharedNamespace: string;
+  physicalSharedNamespace: string;
+  /** Physical shared namespace used by existing read/write call sites. */
   sharedNamespace: string;
   legacySharedNamespace: string;
   legacyFallbackEnabled: boolean;
@@ -26,12 +37,22 @@ export interface SharedNamespaceConfig {
 }
 
 export function sharedNamespaceConfig(): SharedNamespaceConfig {
+  const canonicalSharedNamespace = envString(
+    ["SHARED_NAMESPACE_CANONICAL", "OPENBRAIN_SHARED_NAMESPACE"],
+    DEFAULT_SHARED_NAMESPACE,
+  );
+  const physicalSharedNamespace = envString(
+    ["SHARED_NAMESPACE_PHYSICAL", "OPENBRAIN_SHARED_NAMESPACE"],
+    canonicalSharedNamespace,
+  );
   return {
-    sharedNamespace:
-      process.env.OPENBRAIN_SHARED_NAMESPACE?.trim() || DEFAULT_SHARED_NAMESPACE,
-    legacySharedNamespace:
-      process.env.OPENBRAIN_LEGACY_SHARED_NAMESPACE?.trim() ||
+    canonicalSharedNamespace,
+    physicalSharedNamespace,
+    sharedNamespace: physicalSharedNamespace,
+    legacySharedNamespace: envString(
+      ["SHARED_NAMESPACE_LEGACY", "OPENBRAIN_LEGACY_SHARED_NAMESPACE"],
       DEFAULT_LEGACY_SHARED_NAMESPACE,
+    ),
     legacyFallbackEnabled: envBoolean(
       "OPENBRAIN_LEGACY_SHARED_FALLBACK",
       true,
@@ -48,7 +69,11 @@ export function sharedNamespaceConfig(): SharedNamespaceConfig {
 }
 
 export function isSharedNamespace(namespace: string): boolean {
-  return namespace === sharedNamespaceConfig().sharedNamespace;
+  const config = sharedNamespaceConfig();
+  return (
+    namespace === config.canonicalSharedNamespace ||
+    namespace === config.physicalSharedNamespace
+  );
 }
 
 export function isLegacySharedNamespace(namespace: string): boolean {
@@ -57,8 +82,16 @@ export function isLegacySharedNamespace(namespace: string): boolean {
 
 export function canonicalNamespace(namespace: string): string {
   const config = sharedNamespaceConfig();
-  return namespace === config.legacySharedNamespace
-    ? config.sharedNamespace
+  return namespace === config.legacySharedNamespace ||
+    namespace === config.physicalSharedNamespace
+    ? config.canonicalSharedNamespace
+    : namespace;
+}
+
+export function physicalNamespace(namespace: string): string {
+  const config = sharedNamespaceConfig();
+  return namespace === config.canonicalSharedNamespace
+    ? config.physicalSharedNamespace
     : namespace;
 }
 

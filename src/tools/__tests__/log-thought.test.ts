@@ -280,6 +280,55 @@ describe("log_thought", () => {
         await cleanup();
       }
     });
+
+    it("promoter writes canonical shared-kb requests to physical shared storage", async () => {
+      const savedCanonical = process.env.SHARED_NAMESPACE_CANONICAL;
+      const savedPhysical = process.env.SHARED_NAMESPACE_PHYSICAL;
+      let capturedParams: any[] = [];
+      const mockPool = {
+        query: async (...args: any[]) => {
+          capturedParams = args;
+          return { rows: [{ id: "shared-uuid", is_new: true }] };
+        },
+      };
+      const mockEmbed = createMockEmbed();
+      const auth: AuthInfo = {
+        role: "n8n",
+        clientId: "openbrain-promoter",
+      };
+
+      process.env.SHARED_NAMESPACE_CANONICAL = "public-shared";
+      process.env.SHARED_NAMESPACE_PHYSICAL = "shared_storage";
+      const { client, cleanup } = await setupToolClient(
+        mockPool,
+        mockEmbed,
+        auth,
+      );
+
+      try {
+        const result = await client.callTool({
+          name: "log_thought",
+          arguments: { content: "Shared truth", namespace: "public-shared" },
+        });
+
+        expect(result.isError).toBeFalsy();
+        const parsed = JSON.parse((result.content as any)[0].text);
+        expect(parsed.namespace).toBe("public-shared");
+        expect(capturedParams[1][3]).toBe("shared_storage");
+      } finally {
+        await cleanup();
+        if (savedCanonical === undefined) {
+          delete process.env.SHARED_NAMESPACE_CANONICAL;
+        } else {
+          process.env.SHARED_NAMESPACE_CANONICAL = savedCanonical;
+        }
+        if (savedPhysical === undefined) {
+          delete process.env.SHARED_NAMESPACE_PHYSICAL;
+        } else {
+          process.env.SHARED_NAMESPACE_PHYSICAL = savedPhysical;
+        }
+      }
+    });
   });
 
   describe("permission denied", () => {

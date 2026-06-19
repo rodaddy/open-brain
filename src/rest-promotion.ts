@@ -8,7 +8,11 @@ import type { generateEmbedding } from "./embedding.ts";
 import { promoteEntry } from "./promotion-service.ts";
 import { appendReadNamespacePredicate, canReadNamespace } from "./read-policy.ts";
 import { appendWriteNamespacePredicate } from "./namespace-policy.ts";
-import { sharedNamespaceConfig } from "./shared-namespace.ts";
+import {
+  canonicalNamespace,
+  physicalNamespace,
+  sharedNamespaceConfig,
+} from "./shared-namespace.ts";
 
 interface RestDeps {
   pool: pg.Pool;
@@ -161,6 +165,8 @@ export function createPromotionRouter(deps: RestDeps): Router {
     const { table, since, limit, target_namespace } = parsed.data;
     const resolvedTargetNamespace =
       target_namespace ?? sharedNamespaceConfig().sharedNamespace;
+    const targetPhysicalNamespace = physicalNamespace(resolvedTargetNamespace);
+    const targetCanonicalNamespace = canonicalNamespace(targetPhysicalNamespace);
     if (!canReadNamespace(auth, namespace.data)) {
       res.status(403).json({ error: "Permission denied: namespace read access denied" });
       return;
@@ -198,17 +204,17 @@ export function createPromotionRouter(deps: RestDeps): Router {
         if (row.content_hash) {
           const { rows: targetDupes } = await deps.pool.query(
             `SELECT id FROM ${t} WHERE content_hash = $1 AND namespace = $2 LIMIT 1`,
-            [row.content_hash, resolvedTargetNamespace],
+            [row.content_hash, targetPhysicalNamespace],
           );
           if (targetDupes.length > 0) {
             const duplicate: Record<string, unknown> = {
               table: t,
               id: row.id,
-              target_namespace: resolvedTargetNamespace,
+              target_namespace: targetCanonicalNamespace,
               existing_target_id: targetDupes[0].id,
               created_at: row.created_at,
             };
-            if (resolvedTargetNamespace === "collab") {
+            if (targetPhysicalNamespace === "collab") {
               duplicate.existing_collab_id = targetDupes[0].id;
             }
             duplicateEntries.push(duplicate);
@@ -221,7 +227,7 @@ export function createPromotionRouter(deps: RestDeps): Router {
 
     res.json({
       namespace: namespace.data,
-      target_namespace: resolvedTargetNamespace,
+      target_namespace: targetCanonicalNamespace,
       candidates,
       duplicates: duplicateEntries,
       already_promoted: alreadyPromoted,

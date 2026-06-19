@@ -8,6 +8,39 @@ import {
 } from "./read-policy.ts";
 
 describe("read-policy", () => {
+  it("uses physical shared storage for predicates while accepting canonical input", () => {
+    const savedCanonical = process.env.SHARED_NAMESPACE_CANONICAL;
+    const savedPhysical = process.env.SHARED_NAMESPACE_PHYSICAL;
+    const savedLegacy = process.env.SHARED_NAMESPACE_LEGACY;
+    try {
+      process.env.SHARED_NAMESPACE_CANONICAL = "public-shared";
+      process.env.SHARED_NAMESPACE_PHYSICAL = "shared_storage";
+      process.env.SHARED_NAMESPACE_LEGACY = "old_collab";
+      const auth: AuthInfo = {
+        role: "agent",
+        clientId: "bilby",
+        namespaceSource: "header",
+      };
+
+      expect(readableNamespaces(auth)).toEqual(["bilby", "shared_storage"]);
+      expect(canReadNamespace(auth, "public-shared")).toBe(true);
+      expect(canReadNamespace(auth, "old_collab")).toBe(false);
+      expect(namespaceFilterFor(auth, "public-shared")).toBe("shared_storage");
+      expect(
+        namespaceFilterFor(auth, undefined, {
+          includeLegacySharedFallback: true,
+        }),
+      ).toEqual(["bilby", "shared_storage", "old_collab"]);
+    } finally {
+      if (savedCanonical === undefined) delete process.env.SHARED_NAMESPACE_CANONICAL;
+      else process.env.SHARED_NAMESPACE_CANONICAL = savedCanonical;
+      if (savedPhysical === undefined) delete process.env.SHARED_NAMESPACE_PHYSICAL;
+      else process.env.SHARED_NAMESPACE_PHYSICAL = savedPhysical;
+      if (savedLegacy === undefined) delete process.env.SHARED_NAMESPACE_LEGACY;
+      else process.env.SHARED_NAMESPACE_LEGACY = savedLegacy;
+    }
+  });
+
   it("scopes delegated header callers to the header namespace", () => {
     const auth: AuthInfo = {
       role: "agent",

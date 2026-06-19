@@ -361,7 +361,7 @@ describe("search_brain", () => {
         query: async (...args: any[]) => {
           const [sql, params] = args;
           if (String(sql).includes("FROM ob_links")) return { rows: [] };
-          if (String(sql).startsWith("INSERT INTO entry_access_log")) {
+          if (String(sql).includes("entry_access_log")) {
             return { rows: [] };
           }
           searchCalls.push(args);
@@ -411,6 +411,74 @@ describe("search_brain", () => {
             .map((call) => call[1].at(-1))
             .filter((value) => typeof value === "string"),
         ).toEqual(["shared-kb", "collab"]);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("uses hidden legacy collab fallback for omitted namespace scoped searches", async () => {
+      const searchCalls: any[] = [];
+      const pool = {
+        query: async (...args: any[]) => {
+          const [sql, params] = args;
+          if (String(sql).includes("FROM ob_links")) return { rows: [] };
+          if (String(sql).startsWith("INSERT INTO entry_access_log")) {
+            return { rows: [] };
+          }
+          const namespace = Array.isArray(params) ? params.at(-1) : undefined;
+          if (
+            Array.isArray(namespace) &&
+            namespace.every((value) => String(value).startsWith("00000000-"))
+          ) {
+            return { rows: [] };
+          }
+          searchCalls.push(args);
+          if (Array.isArray(namespace)) {
+            expect(namespace).toEqual(["bilby", "shared-kb"]);
+            return { rows: [] };
+          }
+          if (namespace === "collab") {
+            return {
+              rows: [
+                {
+                  source_type: "thought",
+                  id: "00000000-0000-4000-8000-000000000100",
+                  namespace: "collab",
+                  content_preview: "Implicit legacy shared hit",
+                  tags: [],
+                  created_by: "codex",
+                  created_at: "2026-01-01T00:00:00Z",
+                  usefulness: 0,
+                  fts_rank: 1,
+                },
+              ],
+            };
+          }
+          return { rows: [] };
+        },
+      };
+      const auth: AuthInfo = { role: "agent", clientId: "bilby" };
+      const { client, cleanup } = await setup(pool, auth);
+
+      try {
+        const result = await client.callTool({
+          name: "search_brain",
+          arguments: {
+            query: "legacy hit",
+            search_mode: "keyword",
+            limit: 3,
+          },
+        });
+
+        expect(result.isError).toBeFalsy();
+        const parsed = parseToolResult(result);
+        expect(parsed).toHaveLength(1);
+        expect(parsed[0].namespace).toBe("shared-kb");
+        expect(
+          searchCalls
+            .map((call) => call[1].at(-1))
+            .filter((value) => Array.isArray(value) || typeof value === "string"),
+        ).toEqual([["bilby", "shared-kb"], "collab"]);
       } finally {
         await cleanup();
       }

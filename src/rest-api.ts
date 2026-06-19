@@ -9,6 +9,7 @@ import { contentHash, EMBEDDING_MODEL } from "./embedding.ts";
 import { backgroundExtract } from "./extraction.ts";
 import {
   executeSearch,
+  executeSearchWithScopedSharedFallback,
   executeSearchWithSharedFallback,
   type SearchMode,
 } from "./tools/search-brain.ts";
@@ -514,7 +515,7 @@ export function createRestRouter(deps: RestDeps): Router {
             offset,
             namespaceFilter,
           )
-        : await executeSearch(
+        : await executeSearchWithScopedSharedFallback(
             deps,
             accessibleTables,
             q,

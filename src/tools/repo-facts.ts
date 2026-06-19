@@ -573,6 +573,26 @@ export function registerListRepoFacts(server: McpServer, deps: ToolDeps): void {
           );
           rows = dedupeRepoFactRows([...sharedRows, ...legacyRows]);
         }
+      } else if (
+        Array.isArray(namespace) &&
+        namespace.includes(config.physicalSharedNamespace) &&
+        config.legacyFallbackEnabled &&
+        offset === 0
+      ) {
+        const primaryRows = await queryRows(namespace, limit, 0);
+        if (
+          primaryRows.length >= limit ||
+          primaryRows.length >= config.fallbackMinResults
+        ) {
+          rows = primaryRows;
+        } else {
+          const legacyRows = await queryRows(
+            config.legacySharedNamespace,
+            limit - primaryRows.length,
+            0,
+          );
+          rows = dedupeRepoFactRows([...primaryRows, ...legacyRows]);
+        }
       } else {
         rows = await queryRows(namespace, limit, offset);
       }

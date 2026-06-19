@@ -1,12 +1,15 @@
 import type { AuthInfo } from "./types.ts";
-import { sharedNamespaceConfig } from "./shared-namespace.ts";
+import {
+  physicalNamespace,
+  sharedNamespaceConfig,
+} from "./shared-namespace.ts";
 
 export function readableNamespaces(
   auth: AuthInfo,
   options: { includeLegacySharedFallback?: boolean } = {},
 ): string[] | undefined {
   const config = sharedNamespaceConfig();
-  const sharedNamespaces = [config.sharedNamespace];
+  const sharedNamespaces = [config.physicalSharedNamespace];
   if (options.includeLegacySharedFallback === true) {
     sharedNamespaces.push(config.legacySharedNamespace);
   }
@@ -36,7 +39,7 @@ export function canReadNamespace(auth: AuthInfo, namespace: string): boolean {
     return false;
   }
   const allowed = readableNamespaces(auth);
-  return !allowed || allowed.includes(namespace);
+  return !allowed || allowed.includes(physicalNamespace(namespace));
 }
 
 export function namespaceFilterFor(
@@ -52,7 +55,7 @@ export function namespaceFilterFor(
     return undefined;
   }
   if (namespace !== undefined) {
-    return namespace;
+    return physicalNamespace(namespace);
   }
   return readableNamespaces(auth, options);
 }

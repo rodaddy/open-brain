@@ -858,6 +858,73 @@ export async function executeSearchWithSharedFallback(
   return withCanonicalNamespaces(dedupeSearchRows([...sharedRows, ...legacyRows]));
 }
 
+export async function executeSearchWithScopedSharedFallback(
+  deps: ToolDeps,
+  accessibleTables: SearchTable[],
+  query: string,
+  limit: number,
+  mode: SearchMode,
+  tier: Tier | undefined,
+  offset: number,
+  namespace: NamespaceFilter | undefined,
+  includeLinks?: boolean,
+): Promise<SearchRow[]> {
+  const config = sharedNamespaceConfig();
+  const scopedNamespaces = Array.isArray(namespace) ? namespace : [];
+  if (
+    !config.legacyFallbackEnabled ||
+    offset !== 0 ||
+    !scopedNamespaces.includes(config.physicalSharedNamespace)
+  ) {
+    return withCanonicalNamespaces(
+      await executeSearch(
+        deps,
+        accessibleTables,
+        query,
+        limit,
+        mode,
+        tier,
+        offset,
+        namespace,
+        includeLinks,
+      ),
+    );
+  }
+
+  const primaryRows = await executeSearch(
+    deps,
+    accessibleTables,
+    query,
+    limit,
+    mode,
+    tier,
+    0,
+    namespace,
+    includeLinks,
+  );
+  if (
+    primaryRows.length >= limit ||
+    primaryRows.length >= config.fallbackMinResults
+  ) {
+    return withCanonicalNamespaces(primaryRows);
+  }
+
+  const legacyRows = await executeSearch(
+    deps,
+    accessibleTables,
+    query,
+    limit - primaryRows.length,
+    mode,
+    tier,
+    0,
+    config.legacySharedNamespace,
+    includeLinks,
+  );
+  return withCanonicalNamespaces(
+    dedupeSearchRows([...primaryRows, ...legacyRows]),
+  );
+}
+
 export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
   server.registerTool(
     "search_brain",
@@ -1013,17 +1080,15 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
               offset,
               namespace,
             )
-          : withCanonicalNamespaces(
-              await executeSearch(
-                deps,
-                accessibleTables,
-                args.query,
-                limit,
-                mode,
-                tier,
-                offset,
-                namespace,
-              ),
+          : await executeSearchWithScopedSharedFallback(
+              deps,
+              accessibleTables,
+              args.query,
+              limit,
+              mode,
+              tier,
+              offset,
+              namespace,
             );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

@@ -592,6 +592,59 @@ describe("repo fact tools", () => {
     }
   });
 
+  it("uses hidden legacy collab fallback for omitted namespace repo fact reads", async () => {
+    const calls: Array<{ sql: string; params?: unknown[] }> = [];
+    const mockPool = {
+      query: async (sql: string, params?: unknown[]) => {
+        calls.push({ sql, params });
+        const namespace = params?.[0];
+        if (Array.isArray(namespace)) {
+          expect(namespace).toEqual(["bilby", "shared-kb"]);
+          return { rows: [] };
+        }
+        if (namespace === "collab") {
+          return {
+            rows: [
+              {
+                id: "550e8400-e29b-41d4-a716-446655440002",
+                entity_type: "repo_fact",
+                name: "king-core:legacy-api",
+                namespace: "collab",
+                metadata: repoFact,
+              },
+            ],
+          };
+        }
+        return { rows: [] };
+      },
+    };
+    const auth: AuthInfo = { role: "agent", clientId: "bilby" };
+    const { client, cleanup } = await setupMcpClient(
+      registerListRepoFacts,
+      mockPool,
+      createMockEmbed(),
+      auth,
+    );
+
+    try {
+      const result = await client.callTool({
+        name: "list_repo_facts",
+        arguments: { limit: 10 },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const parsed = parseToolResult(result);
+      expect(parsed).toHaveLength(1);
+      expect(parsed[0].namespace).toBe("shared-kb");
+      expect(calls.map((call) => call.params?.[0])).toEqual([
+        ["bilby", "shared-kb"],
+        "collab",
+      ]);
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("rejects unreadable explicit namespaces when listing repo facts", async () => {
     const auth: AuthInfo = { role: "agent", clientId: "bilby" };
     const { client, cleanup } = await setupMcpClient(
