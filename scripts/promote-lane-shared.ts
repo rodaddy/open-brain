@@ -490,19 +490,21 @@ export async function runSharedPromoter(args: Args): Promise<Receipt> {
         );
         if (decision !== "share") {
           addCount(receipt, table, rejectionField(decision));
-          // Clear the nomination on a terminal reject so it is not re-swept.
-          // manual-review keeps the flag for a human.
-          if (
-            args.apply &&
-            decision !== "manual-review"
-          ) {
-            await clearNomination(
-              pool,
-              table,
-              "extracted_metadata",
-              row.id,
-              new Date().toISOString(),
-            );
+          if (args.apply) {
+            // Clear the nomination on a terminal reject so it is not re-swept.
+            // manual-review keeps the flag for a human to resolve.
+            if (decision !== "manual-review") {
+              await clearNomination(
+                pool,
+                table,
+                "extracted_metadata",
+                row.id,
+                new Date().toISOString(),
+              );
+            }
+            // Advance the cursor for EVERY processed row, including
+            // manual-review — otherwise a trailing manual-review row pins the
+            // cursor and the runner re-scans it forever (stuck-loop).
             state.cursors[table] = nextCursor;
           }
           continue;
@@ -551,6 +553,12 @@ export async function runSharedPromoter(args: Args): Promise<Receipt> {
             id: row.id,
             error: sanitizeError(err),
           });
+          // Advance the cursor past a failed row (apply mode) before stopping
+          // the sweep, so a deterministically-failing row cannot pin the cursor
+          // and block every row behind it on the next run (poison-pill loop).
+          // The nomination flag is intentionally left set and the failure is
+          // recorded in receipt.failures for human follow-up.
+          if (args.apply) state.cursors[table] = nextCursor;
           break sources;
         }
 
@@ -583,14 +591,21 @@ export async function runSharedPromoter(args: Args): Promise<Receipt> {
         );
         if (decision !== "share") {
           addCount(receipt, "ob_session_events", rejectionField(decision));
-          if (args.apply && decision !== "manual-review") {
-            await clearNomination(
-              pool,
-              "ob_session_events",
-              "metadata",
-              event.id,
-              new Date().toISOString(),
-            );
+          if (args.apply) {
+            // Clear the nomination on a terminal reject so it is not re-swept.
+            // manual-review keeps the flag for a human to resolve.
+            if (decision !== "manual-review") {
+              await clearNomination(
+                pool,
+                "ob_session_events",
+                "metadata",
+                event.id,
+                new Date().toISOString(),
+              );
+            }
+            // Advance the cursor for EVERY processed row, including
+            // manual-review — otherwise a trailing manual-review event pins the
+            // cursor and the runner re-scans it forever (stuck-loop).
             state.cursors.ob_session_events = nextCursor;
           }
           continue;
@@ -599,16 +614,19 @@ export async function runSharedPromoter(args: Args): Promise<Receipt> {
         if (args.apply && applied >= args.maxApply) break events;
 
         try {
+          // Dry-run must not call the embedding endpoint: it neither writes nor
+          // needs the vector, and the embedding call is the expensive part of a
+          // sweep. Count the would-share and move on before embedding.
+          if (!args.apply) {
+            addCount(receipt, "ob_session_events", "would_share");
+            continue;
+          }
+
           let embedding: number[] | null = null;
           try {
             embedding = await generateEmbedding(event.content);
           } catch {
             embedding = null;
-          }
-
-          if (!args.apply) {
-            addCount(receipt, "ob_session_events", "would_share");
-            continue;
           }
 
           const inserted = await shareEventToSharedKb(
@@ -646,6 +664,10 @@ export async function runSharedPromoter(args: Args): Promise<Receipt> {
             id: event.id,
             error: sanitizeError(err),
           });
+          // Advance past a failed event (apply mode) before stopping so a
+          // deterministically-failing event cannot pin the cursor and re-embed
+          // every run (poison-pill loop). Nomination left set; failure recorded.
+          if (args.apply) state.cursors.ob_session_events = nextCursor;
           break events;
         }
 

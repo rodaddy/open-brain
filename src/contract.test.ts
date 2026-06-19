@@ -74,6 +74,27 @@ describe("Open Brain contract manifest", () => {
     ).toContain("metadata.repo");
   });
 
+  it("pins the contract version and append_session_event nomination contract", () => {
+    // The Python client pins CURRENT_CONTRACT_VERSION and cross-checks it
+    // against this source, but nothing on the TS side caught a forgotten bump.
+    // Pin the version string and the append_session_event v2 nomination
+    // contract so a future TS/Python divergence fails here, in lockstep with
+    // python/openbrain-memory CURRENT_CONTRACT_VERSION.
+    const contract = buildContract("2026-06-18T00:00:00.000Z");
+    expect(contract.contract_version).toBe("2026-06-19.memory-tools.v4");
+
+    const appendEvent = contract.tool_contracts.append_session_event;
+    expect(appendEvent).toBeDefined();
+    expect(appendEvent?.version).toBe(2);
+    const shareCandidate = (appendEvent?.input_schema as any).metadata.fields
+      .share_candidate;
+    expect(shareCandidate.type).toBe("boolean");
+    // The help must document the two-stage (sync reject / async promote) model
+    // so a contract-driven agent learns the behavior, not just the type.
+    expect(shareCandidate.description).toContain("share_candidate_rejected");
+    expect(shareCandidate.description.toLowerCase()).toContain("secret");
+  });
+
   it("keeps the schema hash stable when only generated_at changes", () => {
     const first = buildContract("2026-06-18T00:00:00.000Z");
     const second = buildContract("2026-06-18T01:00:00.000Z");

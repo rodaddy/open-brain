@@ -107,7 +107,7 @@ prompt_context = context.as_prompt_text()
 ## Current Open Brain Tools
 
 `OpenBrainClient` exposes first-class methods for the current required Open
-Brain memory contract, currently `2026-06-19.memory-tools.v3`. Agent runtimes
+Brain memory contract, currently `2026-06-19.memory-tools.v4`. Agent runtimes
 should call these package methods instead of carrying local copies of tool
 schemas, stale mcp2cli paths, or Hermes-specific Open Brain adapters.
 

@@ -19,6 +19,11 @@ jobs:
       DB_USER: test
       DB_PASSWORD: test
       DB_NAME: open_brain_test
+      # Enable the env-gated real-Pool integration tests in CI (issue #165).
+      # Without this, every `dbDescribe`-gated suite (lane_upsert, the #161
+      # cursor-stall promoter tests) silently SKIPs and the SQL write paths get
+      # zero CI coverage — the exact gap that let the #162 lane_upsert bugs ship.
+      OPENBRAIN_TEST_DATABASE_URL: postgres://test:test@localhost:5432/open_brain_test
     steps:
       - uses: actions/checkout@v6
 

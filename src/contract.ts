@@ -4,7 +4,7 @@ import {
   REPO_FACT_VALIDATION_CONTRACT,
 } from "./tools/repo-facts.ts";
 
-export const CONTRACT_VERSION = "2026-06-19.memory-tools.v3";
+export const CONTRACT_VERSION = "2026-06-19.memory-tools.v4";
 export const CONTRACT_SCHEMA_VERSION = 1;
 
 export interface ContractCapability {
@@ -103,7 +103,7 @@ export const CONTRACT_CAPABILITIES: ContractCapability[] = [
   },
   {
     name: "append_session_event",
-    version: 1,
+    version: 2,
     kind: "tool",
     description: "Append a durable event to a session lane journal.",
   },
@@ -342,7 +342,7 @@ export function buildContract(
         output_shape: "session lane array JSON text payload",
       },
       append_session_event: {
-        version: 1,
+        version: 2,
         input_schema: {
           session_key: {
             type: "string",
@@ -389,9 +389,15 @@ export function buildContract(
                 type: "boolean",
                 required: false,
                 description:
-                  "Nominate this event for shared-kb promotion. Set true to flag the " +
-                  "content for the promoter-gated shared-worthiness sweep; the promoter " +
-                  "identity re-classifies and may refuse (e.g. secrets/private content).",
+                  "Nominate this event for shared-kb promotion (shared truth every " +
+                  "agent reads). Set true on a substantive fact/decision/handoff worth " +
+                  "sharing. Adjudication is two-stage: SYNCHRONOUSLY the server refuses " +
+                  "and strips the nomination if the content looks like a secret or " +
+                  "person-private data — when that happens the event still saves but the " +
+                  "response carries share_candidate_rejected with the reason. " +
+                  "ASYNCHRONOUSLY a promoter-gated sweep re-classifies worthiness, " +
+                  "de-duplicates against shared-kb, and promotes survivors. Do NOT set " +
+                  "true for secrets, credentials, or private/personal content.",
               },
             },
           },
