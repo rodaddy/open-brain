@@ -58,8 +58,9 @@ interface Args {
   batchSize: number;
   maxApply: number;
   delayMs: number;
+  loop: boolean;
+  intervalMs: number;
   minContentLength: number;
-  once: boolean;
 }
 
 const TABLE_CONTENT_SQL: Record<Table, string> = {
@@ -70,19 +71,21 @@ const TABLE_CONTENT_SQL: Record<Table, string> = {
   sessions: "COALESCE(project, '') || ' ' || COALESCE(summary, '')",
 };
 
-function usage(): never {
+function usage(exitCode = 2): never {
   console.error(
     [
       "Usage: bun run scripts/promote-legacy-shared.ts [--apply] [--once]",
       "       [--source-namespace collab] [--target-namespace shared-kb]",
       "       [--state-file <path>] [--tables thoughts,decisions]",
       "       [--batch-size 20] [--max-apply 5] [--delay-ms 250]",
+      "       [--loop] [--interval-ms 60000]",
       "",
-      "Dry-run is the default. Apply mode is bounded by --max-apply and uses",
-      "the server promotion service for provenance, duplicate checks, and policy.",
+      "Dry-run is the default and does not advance the persistent cursor.",
+      "Apply mode is bounded by --max-apply and uses the server promotion",
+      "service for provenance, duplicate checks, and policy.",
     ].join("\n"),
   );
-  process.exit(2);
+  process.exit(exitCode);
 }
 
 function parseArgs(argv: string[]): Args {
@@ -98,16 +101,20 @@ function parseArgs(argv: string[]): Args {
     batchSize: Number(process.env.OPENBRAIN_LEGACY_PROMOTER_BATCH_SIZE ?? 20),
     maxApply: Number(process.env.OPENBRAIN_LEGACY_PROMOTER_MAX_APPLY ?? 5),
     delayMs: Number(process.env.OPENBRAIN_LEGACY_PROMOTER_DELAY_MS ?? 250),
+    loop: false,
+    intervalMs: Number(
+      process.env.OPENBRAIN_LEGACY_PROMOTER_INTERVAL_MS ?? 60000,
+    ),
     minContentLength: Number(
       process.env.OPENBRAIN_LEGACY_PROMOTER_MIN_CONTENT_LENGTH ?? 24,
     ),
-    once: false,
   };
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--apply") args.apply = true;
-    else if (arg === "--once") args.once = true;
+    else if (arg === "--once") args.loop = false;
+    else if (arg === "--loop") args.loop = true;
     else if (arg === "--source-namespace") args.sourceNamespace = argv[++i] ?? "";
     else if (arg === "--target-namespace") args.targetNamespace = argv[++i] ?? "";
     else if (arg === "--state-file") args.stateFile = argv[++i] ?? "";
@@ -115,10 +122,11 @@ function parseArgs(argv: string[]): Args {
     else if (arg === "--batch-size") args.batchSize = Number(argv[++i] ?? 0);
     else if (arg === "--max-apply") args.maxApply = Number(argv[++i] ?? 0);
     else if (arg === "--delay-ms") args.delayMs = Number(argv[++i] ?? 0);
+    else if (arg === "--interval-ms") args.intervalMs = Number(argv[++i] ?? 0);
     else if (arg === "--min-content-length") {
       args.minContentLength = Number(argv[++i] ?? 0);
     } else if (arg === "--help" || arg === "-h") {
-      usage();
+      usage(0);
     } else {
       console.error(`Unknown argument: ${arg}`);
       usage();
@@ -138,6 +146,8 @@ function parseArgs(argv: string[]): Args {
     args.maxApply > 100 ||
     !Number.isInteger(args.delayMs) ||
     args.delayMs < 0 ||
+    !Number.isInteger(args.intervalMs) ||
+    args.intervalMs < 1000 ||
     !Number.isInteger(args.minContentLength) ||
     args.minContentLength < 0
   ) {
@@ -274,6 +284,7 @@ export async function runLegacyPromoter(args: Args): Promise<Receipt> {
   let applied = 0;
 
   try {
+    tables:
     for (const table of args.tables) {
       const rows = await candidateRows(
         pool,
@@ -284,18 +295,18 @@ export async function runLegacyPromoter(args: Args): Promise<Receipt> {
       );
       for (const row of rows) {
         addCount(receipt, table, "scanned");
-        state.cursors[table] = {
+        const nextCursor = {
           created_at: new Date(row.created_at).toISOString(),
           id: row.id,
         };
 
         if ((row.preview ?? "").trim().length < args.minContentLength) {
           addCount(receipt, table, "skipped");
+          if (args.apply) state.cursors[table] = nextCursor;
           continue;
         }
         if (args.apply && applied >= args.maxApply) {
-          addCount(receipt, table, "skipped");
-          continue;
+          break tables;
         }
 
         try {
@@ -308,12 +319,15 @@ export async function runLegacyPromoter(args: Args): Promise<Receipt> {
             auth,
             { dryRun: !args.apply },
           );
-          if (result.status === "duplicate") addCount(receipt, table, "duplicates");
-          else if (result.status === "dry_run") {
+          if (result.status === "duplicate") {
+            addCount(receipt, table, "duplicates");
+            if (args.apply) state.cursors[table] = nextCursor;
+          } else if (result.status === "dry_run") {
             addCount(receipt, table, "would_promote");
           } else if (result.status === "promoted") {
             applied += 1;
             addCount(receipt, table, "promoted");
+            state.cursors[table] = nextCursor;
           }
         } catch (err) {
           addCount(receipt, table, "failed");
@@ -337,26 +351,33 @@ export async function runLegacyPromoter(args: Args): Promise<Receipt> {
 
 if (import.meta.main) {
   const args = parseArgs(Bun.argv.slice(2));
-  const receiptPath = resolve(
-    dirname(args.stateFile),
-    `receipt-${new Date().toISOString().replace(/[:.]/g, "-")}.json`,
-  );
-  runLegacyPromoter(args)
-    .then((receipt) => {
-      mkdirSync(dirname(receiptPath), { recursive: true });
-      writeFileSync(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
-      logger.info("legacy_promoter_receipt", {
-        receipt_path: receiptPath,
-        dry_run: receipt.dry_run,
-        scanned: receipt.scanned,
-        promoted: receipt.promoted,
-        would_promote: receipt.would_promote,
-        duplicates: receipt.duplicates,
-        skipped: receipt.skipped,
-        failed: receipt.failed,
-      });
-      console.log(JSON.stringify({ ...receipt, receipt_path: receiptPath }));
-    })
+  const runOnce = async (): Promise<void> => {
+    const receiptPath = resolve(
+      dirname(args.stateFile),
+      `receipt-${new Date().toISOString().replace(/[:.]/g, "-")}.json`,
+    );
+    const receipt = await runLegacyPromoter(args);
+    mkdirSync(dirname(receiptPath), { recursive: true });
+    writeFileSync(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
+    logger.info("legacy_promoter_receipt", {
+      receipt_path: receiptPath,
+      dry_run: receipt.dry_run,
+      scanned: receipt.scanned,
+      promoted: receipt.promoted,
+      would_promote: receipt.would_promote,
+      duplicates: receipt.duplicates,
+      skipped: receipt.skipped,
+      failed: receipt.failed,
+    });
+    console.log(JSON.stringify({ ...receipt, receipt_path: receiptPath }));
+  };
+  const run = async (): Promise<void> => {
+    do {
+      await runOnce();
+      if (args.loop) await sleep(args.intervalMs);
+    } while (args.loop);
+  };
+  run()
     .catch((err) => {
       logger.error("legacy_promoter_failed", { error: sanitizeError(err) });
       process.exit(1);
