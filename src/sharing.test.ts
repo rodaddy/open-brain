@@ -79,6 +79,16 @@ describe("containsSecret", () => {
     expect(containsSecret("HTTPS://admin:hunter2pw@host/x")).toBe(true);
   });
 
+  it("scans large input in linear time (ReDoS regression)", () => {
+    // The URL credential pattern once had an unanchored `[a-z][a-z0-9+.-]*://`
+    // prefix that backtracked O(n^2) on long input with no `://`. A fixed scheme
+    // alternation fixed it. Guard: 80k chars must scan well under a second.
+    const t = performance.now();
+    containsSecret("a".repeat(80_000));
+    containsSecret("http" + ":x".repeat(40_000));
+    expect(performance.now() - t).toBeLessThan(500);
+  });
+
   it("detects a labeled long secret value", () => {
     expect(
       containsSecret("client_secret=" + "Ab9".repeat(8) + "xyz"),
