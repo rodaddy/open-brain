@@ -35,6 +35,18 @@ export const PERMISSIONS: Record<Role, Record<Table, Set<Permission>>> = {
     projects: RWD,
     sessions: RWD,
   },
+  // Promotion service identity (#147). Reads source entries and writes/archives
+  // into the shared namespace with provenance. RWD on curation tables so
+  // promote + demote/archive work; RO on projects (promotion never authors
+  // projects). Namespace authority (who can write shared-kb) is enforced
+  // separately in namespace-policy.isPromoterIdentity.
+  promoter: {
+    thoughts: RWD,
+    decisions: RWD,
+    relationships: RWD,
+    projects: RO,
+    sessions: RWD,
+  },
   readonly: {
     thoughts: RO,
     decisions: RO,

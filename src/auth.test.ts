@@ -39,10 +39,15 @@ describe("buildTokenMap", () => {
       AUTH_TOKEN_AGENT: "agent-token-456",
       AUTH_TOKEN_DISCORD: "discord-token-789",
       AUTH_TOKEN_N8N: "n8n-token-abc",
+      AUTH_TOKEN_PROMOTER: "promoter-token-ghi",
       AUTH_TOKEN_READONLY: "readonly-token-def",
     };
     const map = buildTokenMap(env);
-    expect(map.size).toBe(5);
+    expect(map.size).toBe(6);
+    expect(map.get("promoter-token-ghi")).toEqual({
+      role: "promoter",
+      clientId: "promoter",
+    });
     expect(map.get("admin-token-123")).toEqual({
       role: "admin",
       clientId: "admin",

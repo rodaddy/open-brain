@@ -8,6 +8,7 @@ const VALID_ROLES: Set<string> = new Set<string>([
   "agent",
   "discord",
   "n8n",
+  "promoter",
   "readonly",
 ]);
 
@@ -16,6 +17,7 @@ const ROLE_ENV_KEYS: Array<{ envKey: string; role: Role }> = [
   { envKey: "AUTH_TOKEN_AGENT", role: "agent" },
   { envKey: "AUTH_TOKEN_DISCORD", role: "discord" },
   { envKey: "AUTH_TOKEN_N8N", role: "n8n" },
+  { envKey: "AUTH_TOKEN_PROMOTER", role: "promoter" },
   { envKey: "AUTH_TOKEN_READONLY", role: "readonly" },
 ];
 

@@ -1,4 +1,10 @@
-export type Role = "admin" | "agent" | "discord" | "n8n" | "readonly";
+export type Role =
+  | "admin"
+  | "agent"
+  | "discord"
+  | "n8n"
+  | "promoter"
+  | "readonly";
 export type Table =
   | "thoughts"
   | "decisions"

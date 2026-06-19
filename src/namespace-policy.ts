@@ -16,6 +16,12 @@ export interface NamespaceCheck {
 }
 
 export function isPromoterIdentity(auth: AuthInfo): boolean {
+  // First-class promoter role (#147) is a promoter identity by role alone.
+  if (auth.role === "promoter") {
+    return true;
+  }
+  // Backward-compat: the legacy clientId-on-admin/n8n convention (e.g. the
+  // in-process legacy-shared promoter CLI) remains a promoter identity.
   return (
     (auth.role === "admin" || auth.role === "n8n") &&
     PROMOTER_CLIENT_IDS.has(auth.tokenClientId ?? auth.clientId)
@@ -56,7 +62,11 @@ export function canWriteNamespace(
     };
   }
 
-  if (auth.role === "admin" || auth.role === "n8n") {
+  if (
+    auth.role === "admin" ||
+    auth.role === "n8n" ||
+    auth.role === "promoter"
+  ) {
     return { allowed: true };
   }
 
@@ -86,7 +96,12 @@ export function writableNamespaces(auth: AuthInfo): string[] | undefined {
     return [auth.clientId];
   }
 
-  if (auth.role === "admin" || auth.role === "n8n") {
+  // Promoter writes across namespaces (incl. shared-kb) by design (#147).
+  if (
+    auth.role === "admin" ||
+    auth.role === "n8n" ||
+    auth.role === "promoter"
+  ) {
     return undefined;
   }
 
