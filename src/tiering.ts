@@ -194,6 +194,14 @@ export async function graduateLaneEvent(
   embedding: number[] | null,
   reason: string,
 ): Promise<GraduateResult> {
+  // Defense-in-depth: a lane event must only graduate into ITS OWN namespace.
+  // Callers already scope the source read by namespace, but assert here so a
+  // future caller that constructs rows differently cannot write cross-namespace.
+  if (event.namespace !== namespace) {
+    throw new Error(
+      `lane event namespace '${event.namespace}' does not match graduation target '${namespace}'`,
+    );
+  }
   const hash = event.content_hash ?? contentHash(event.content);
   const tags = [
     "tiered-from-lane",

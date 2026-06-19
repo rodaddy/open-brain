@@ -2,7 +2,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { createPool } from "../src/db/pool.ts";
-import { generateEmbedding } from "../src/embedding.ts";
+import { contentHash, generateEmbedding } from "../src/embedding.ts";
 import { logger } from "../src/logger.ts";
 import {
   classifyLaneEvent,
@@ -87,7 +87,7 @@ function usage(exitCode = 2): never {
   process.exit(exitCode);
 }
 
-function parseArgs(argv: string[]): Args {
+export function parseArgs(argv: string[]): Args {
   const args: Args = {
     apply: false,
     stateFile:
@@ -326,10 +326,14 @@ export async function runLaneTiering(args: Args): Promise<Receipt> {
             embedding = null;
           }
 
+          // Recompute the hash when the event row has none, matching the tool
+          // path — otherwise a null-hash event skips exact dedup and gets
+          // mis-reported as graduated/would_graduate.
+          const dedupHash = event.content_hash ?? contentHash(event.content);
           const duplicate = await findDurableDuplicate(
             pool,
             namespace,
-            event.content_hash,
+            dedupHash,
             embedding,
             args.dupThreshold,
           );
