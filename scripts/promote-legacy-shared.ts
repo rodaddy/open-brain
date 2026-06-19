@@ -81,7 +81,7 @@ function usage(exitCode = 2): never {
       "       [--loop] [--interval-ms 60000]",
       "",
       "Dry-run is the default and does not advance the persistent cursor.",
-      "Apply mode is bounded by --max-apply and uses the server promotion",
+      "Apply mode is bounded by --max-apply promotions and uses the server promotion",
       "service for provenance, duplicate checks, and policy.",
     ].join("\n"),
   );
@@ -96,7 +96,7 @@ function parseArgs(argv: string[]): Args {
     targetNamespace: config.canonicalSharedNamespace,
     stateFile:
       process.env.OPENBRAIN_LEGACY_PROMOTER_STATE ??
-      "/Volumes/ThunderBolt/_tmp/open-brain-legacy-promoter/state.json",
+      `${process.env.HOME ?? "."}/.local/state/open-brain/legacy-promoter/state.json`,
     tables: ALL_TABLES,
     batchSize: Number(process.env.OPENBRAIN_LEGACY_PROMOTER_BATCH_SIZE ?? 20),
     maxApply: Number(process.env.OPENBRAIN_LEGACY_PROMOTER_MAX_APPLY ?? 5),
@@ -153,8 +153,25 @@ function parseArgs(argv: string[]): Args {
   ) {
     usage();
   }
+  validateLegacySharedRoute(args);
 
   return args;
+}
+
+function validateLegacySharedRoute(args: Args): void {
+  const config = sharedNamespaceConfig();
+  if (
+    args.sourceNamespace !== config.legacySharedNamespace ||
+    canonicalNamespace(args.targetNamespace) !== config.canonicalSharedNamespace
+  ) {
+    throw new Error(
+      [
+        "legacy shared promoter is restricted to the configured legacy shared",
+        `namespace '${config.legacySharedNamespace}' -> canonical shared namespace`,
+        `'${config.canonicalSharedNamespace}'`,
+      ].join(" "),
+    );
+  }
 }
 
 function parseTables(raw: string): Table[] {
@@ -182,11 +199,32 @@ function defaultState(args: Args): State {
 }
 
 function loadState(args: Args): State {
+  const expectedSource = args.sourceNamespace;
+  const expectedTarget = canonicalNamespace(args.targetNamespace);
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(readFileSync(args.stateFile, "utf8"));
-    if (parsed?.version === 1) return parsed as State;
+    parsed = JSON.parse(readFileSync(args.stateFile, "utf8"));
   } catch {
     // First run or corrupt state: start conservatively from the beginning.
+    return defaultState(args);
+  }
+  if (typeof parsed === "object" && parsed !== null && "version" in parsed) {
+    const state = parsed as State;
+    if (state.version === 1) {
+      if (
+        state.source_namespace !== expectedSource ||
+        state.target_namespace !== expectedTarget
+      ) {
+        throw new Error(
+          [
+            `state file ${args.stateFile} was created for`,
+            `${state.source_namespace} -> ${state.target_namespace},`,
+            `not ${expectedSource} -> ${expectedTarget}`,
+          ].join(" "),
+        );
+      }
+      return state;
+    }
   }
   return defaultState(args);
 }
@@ -332,6 +370,7 @@ export async function runLegacyPromoter(args: Args): Promise<Receipt> {
         } catch (err) {
           addCount(receipt, table, "failed");
           receipt.failures.push({ table, id: row.id, error: sanitizeError(err) });
+          break tables;
         }
 
         if (args.delayMs > 0) await sleep(args.delayMs);
