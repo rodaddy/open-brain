@@ -1,4 +1,5 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect, afterAll } from "bun:test";
+import { Pool } from "pg";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -705,7 +706,9 @@ describe("lane_upsert", () => {
       // status-omitted update would reactivate a wrapped/archived lane. The
       // ended_at clause is the segment after the embedding_model update line.
       const endedAtClause = capturedSql.slice(capturedSql.indexOf("ended_at ="));
-      expect(endedAtClause).toContain("$3 = 'active'");
+      // $3 is cast to ::text so Postgres can infer the param type (it is no
+      // longer bound into a typed column position).
+      expect(endedAtClause).toContain("$3::text = 'active'");
       expect(endedAtClause).not.toContain("EXCLUDED.status");
     } finally {
       await cleanup();
@@ -744,6 +747,92 @@ describe("lane_upsert", () => {
       expect(parsed.embedded).toBe(false);
     } finally {
       await cleanup();
+    }
+  });
+});
+
+// ── DB-BACKED INTEGRATION ──
+// The mock harness above cannot catch Postgres parameter-type inference or the
+// real NOT NULL / ended_at behavior. These tests run the ACTUAL query through a
+// real pool and are gated on OPENBRAIN_TEST_DATABASE_URL so the default suite
+// stays infra-free. Run with:
+//   OPENBRAIN_TEST_DATABASE_URL=postgres://... bun test src/tools/__tests__/lane-upsert.test.ts
+const DB_URL = process.env.OPENBRAIN_TEST_DATABASE_URL;
+const dbDescribe = DB_URL ? describe : describe.skip;
+
+dbDescribe("lane_upsert (live Postgres)", () => {
+  const pool = new Pool({ connectionString: DB_URL });
+  const ns = "test-lane-upsert-live";
+
+  async function callLaneUpsert(args: Record<string, unknown>) {
+    const server = new McpServer({ name: "test", version: "1.0.0" });
+    const deps: ToolDeps = { pool: pool as any, embedFn: createMockEmbed(null) };
+    registerLaneUpsert(server, deps);
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    const original = ct.send.bind(ct);
+    ct.send = (m: any, o?: any) =>
+      original(m, { ...o, authInfo: { role: "admin", clientId: ns } });
+    const client = new Client({ name: "tc", version: "1.0.0" });
+    await server.connect(st);
+    await client.connect(ct);
+    const res = await client.callTool({ name: "lane_upsert", arguments: args });
+    await client.close();
+    await server.close();
+    return res;
+  }
+
+  async function cleanupNs() {
+    await pool.query("DELETE FROM ob_session_lanes WHERE namespace = $1", [ns]);
+  }
+
+  afterAll(async () => {
+    await pool.end();
+  });
+
+  it("creates a new lane with status omitted (no $3 type-inference error, NOT NULL satisfied)", async () => {
+    await cleanupNs();
+    try {
+      const res = await callLaneUpsert({ session_key: "live-new", namespace: ns });
+      expect(res.isError).toBeFalsy();
+      const parsed = JSON.parse((res.content as any)[0].text);
+      expect(parsed.is_new).toBe(true);
+      expect(parsed.status).toBe("active");
+    } finally {
+      await cleanupNs();
+    }
+  });
+
+  it("preserves status and ended_at on a status-omitted update of a wrapped lane", async () => {
+    await cleanupNs();
+    try {
+      await callLaneUpsert({ session_key: "live-wrap", namespace: ns });
+      await callLaneUpsert({
+        session_key: "live-wrap",
+        namespace: ns,
+        status: "wrapped",
+      });
+      const { rows: afterWrap } = await pool.query(
+        "SELECT status, ended_at FROM ob_session_lanes WHERE namespace=$1 AND session_key=$2",
+        [ns, "live-wrap"],
+      );
+      expect(afterWrap[0].status).toBe("wrapped");
+      expect(afterWrap[0].ended_at).not.toBeNull();
+
+      // status omitted: must NOT reactivate the lane
+      const res = await callLaneUpsert({
+        session_key: "live-wrap",
+        namespace: ns,
+        topic: "touch",
+      });
+      expect(res.isError).toBeFalsy();
+      const { rows: afterTouch } = await pool.query(
+        "SELECT status, ended_at FROM ob_session_lanes WHERE namespace=$1 AND session_key=$2",
+        [ns, "live-wrap"],
+      );
+      expect(afterTouch[0].status).toBe("wrapped");
+      expect(afterTouch[0].ended_at).not.toBeNull();
+    } finally {
+      await cleanupNs();
     }
   });
 });
