@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import pathlib
+import re
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -418,10 +420,68 @@ def test_required_contract_tools_have_first_class_wrappers_and_help():
         assert CURRENT_TOOL_HELP[tool_name]
 
 
+def _server_contract_source() -> str:
+    # tests/ -> openbrain-memory/ -> python/ -> repo root
+    repo_root = pathlib.Path(__file__).resolve().parents[3]
+    contract = repo_root / "src" / "contract.ts"
+    return contract.read_text(encoding="utf-8")
+
+
+def _server_contract_version(source: str) -> str:
+    match = re.search(r'CONTRACT_VERSION\s*=\s*"([^"]+)"', source)
+    assert match, "could not find CONTRACT_VERSION in src/contract.ts"
+    return match.group(1)
+
+
+def _server_required_tools(source: str) -> set[str]:
+    return {
+        name
+        for name, kind in re.findall(
+            r'\{\s*name:\s*"([^"]+)",\s*version:\s*\d+,\s*kind:\s*"([^"]+)"',
+            source,
+        )
+        if kind == "tool"
+    }
+
+
+def test_required_contract_matches_server_source_of_truth():
+    # Guards against silent drift between the Python snapshot and the server's
+    # canonical src/contract.ts. A server version bump or tool change must fail
+    # here, forcing both sides to update in one PR.
+    source = _server_contract_source()
+
+    assert CURRENT_CONTRACT_VERSION == _server_contract_version(source)
+    assert set(REQUIRED_CONTRACT_TOOLS) == _server_required_tools(source)
+
+
 def test_current_agent_read_helpers_have_first_class_wrappers():
     for tool_name in ("brain_answer", "list_repo_facts", "get_contract"):
         assert hasattr(OpenBrainClient, tool_name), tool_name
         assert tool_name in CURRENT_TOOL_HELP
+
+
+def test_upsert_repo_fact_sends_payload_and_binds_namespace_header():
+    # A write wrapper must (1) reach the server as the matching tool with the
+    # caller payload intact, and (2) keep X-Namespace bound to the client's
+    # configured namespace even when caller metadata tries to override it.
+    transport = FakeTransport()
+    client = make_client(transport)
+
+    client.upsert_repo_fact(
+        repo="rodaddy/open-brain",
+        metadata={"namespace": "other-namespace", "fact": "x"},
+    )
+
+    calls = tool_requests(transport)
+    assert len(calls) == 1
+    params = calls[0]["json"]["params"]
+    assert params["name"] == "upsert_repo_fact"
+    assert params["arguments"] == {
+        "repo": "rodaddy/open-brain",
+        "metadata": {"namespace": "other-namespace", "fact": "x"},
+    }
+    # Server-authoritative namespace header must not be overridden by metadata.
+    assert header_value(calls[0]["headers"], "X-Namespace") == "bilby"
 
 
 def test_client_exposes_current_tool_help():

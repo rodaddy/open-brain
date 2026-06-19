@@ -144,6 +144,27 @@ facts = client.list_repo_facts(repo="rodaddy/open-brain", limit=10)
 client.upsert_repo_fact(metadata={...})
 ```
 
+### Authority boundaries
+
+These wrappers describe the *expected* contract; they are not proof of live
+behavior. Read them with three boundaries in mind:
+
+- **The server owns the contract.** `client.get_contract()` returns the
+  authoritative live manifest. `CURRENT_CONTRACT_VERSION` /
+  `REQUIRED_CONTRACT_TOOLS` are a snapshot pinned in this package release and may
+  lag the deployed server. A wrapper existing here does not prove the connected
+  Open Brain implements that tool — confirm with `get_contract()` against the
+  live endpoint.
+- **A wrapper call is not a confirmed write.** Importing this package and calling
+  `log_thought()` / `upsert_repo_fact()` does not guarantee the runtime is wired
+  to a reachable Open Brain. If `OPENBRAIN_BASE_URL`, the token, or the namespace
+  is misconfigured, or the service is unreachable, writes can fail and be spooled
+  locally (see [Safety and Spooling](#safety-and-spooling)) rather than landing
+  in Open Brain. Verify live writes; do not treat "spooled" as "saved."
+- **The server owns namespace authority.** Namespace is bound from the client's
+  configured `X-Namespace`, not from caller metadata. Passing `namespace` inside
+  a wrapper's arguments does not override it.
+
 ## Safety and Spooling
 
 `AgentMemory` sends the original caller payload to Open Brain. Redaction helpers
