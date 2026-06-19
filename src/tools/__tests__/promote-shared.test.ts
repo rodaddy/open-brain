@@ -341,10 +341,18 @@ dbDescribe("promote_shared (live Postgres)", () => {
   }
 
   async function cleanup() {
+    // Source rows in the test's own namespace.
     await pool.query("DELETE FROM thoughts WHERE namespace = $1", [ns]);
-    await pool.query("DELETE FROM thoughts WHERE namespace = 'shared-kb' AND created_by = $1", [
-      "openbrain-promoter",
-    ]);
+    // Promoted copies land in shared-kb. promoteEntry copies the SOURCE row's
+    // created_by verbatim (seedThought sets created_by = ns, NOT the promoter
+    // identity), so a created_by='openbrain-promoter' predicate MISSES them and
+    // the leaked row makes the next run resolve to "duplicate". Delete the
+    // promoted copies by their provenance, which points back at this test's
+    // namespace — precise and never touches unrelated shared-kb rows.
+    await pool.query(
+      "DELETE FROM thoughts WHERE namespace = 'shared-kb' AND promoted_from->>'source_physical_namespace' = $1",
+      [ns],
+    );
   }
 
   afterAll(async () => {

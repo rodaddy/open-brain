@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Pool } from "pg";
 import { parseArgs, runSharedPromoter } from "./promote-lane-shared.ts";
+import { sharedNamespaceConfig } from "../src/shared-namespace.ts";
 
 // ── Cursor-stall + dry-run-embedding coverage (Issue #161, hybrid timing) ──
 //
@@ -70,14 +71,49 @@ dbDescribe("runSharedPromoter cursor-stall fix (live Postgres)", () => {
     }
   }
 
+  // The runner's events loop inserts promoted lane events into the REAL physical
+  // shared-kb namespace (config.physicalSharedNamespace), not ns+"-shared", so we
+  // resolve it the same way the runner does for an exhaustive cleanup.
+  const sharedPhysicalNs = sharedNamespaceConfig().physicalSharedNamespace;
+
   async function cleanupNs(): Promise<void> {
-    // Events cascade-delete with their lanes; delete lanes for the test ns and
-    // any shared rows we may have inserted under provenance from this ns.
+    // Make cleanup namespace-exhaustive across EVERYTHING any test in this file
+    // can create, deleting by namespace rather than by fragile source strings.
+    //
+    // Sources of residue per test:
+    //  1. Seeded source thoughts  → namespace = ns
+    //  2. promoteEntry-promoted thought/decision COPIES → namespace = ns+"-shared".
+    //     These keep the SOURCE row's `source` value (NOT 'lane-shared-promotion')
+    //     so a source-string predicate misses them entirely.
+    //  3. Events + lanes → ob_session_events cascade-delete with ob_session_lanes.
+    //  4. Promoted lane-event copies → namespace = sharedPhysicalNs (real shared-kb),
+    //     source = 'lane-shared-promotion', provenance source_physical_namespace = ns.
+    //
+    // Lanes/events: delete lanes for the test ns (events cascade).
     await pool.query("DELETE FROM ob_session_lanes WHERE namespace = $1", [ns]);
+    // Seeded source rows AND promoteEntry-promoted copies, by namespace.
+    await pool.query(
+      "DELETE FROM thoughts WHERE namespace = ANY($1::text[])",
+      [[ns, ns + "-shared"]],
+    );
+    await pool.query(
+      "DELETE FROM decisions WHERE namespace = ANY($1::text[])",
+      [[ns, ns + "-shared"]],
+    );
+    // Promoted lane-event copies that land in the real shared-kb namespace are
+    // scoped to THIS test's provenance so we never touch unrelated shared-kb rows.
     await pool.query(
       `DELETE FROM thoughts
-       WHERE source = 'lane-shared-promotion'
-         AND promoted_from->>'source_physical_namespace' = $1`,
+       WHERE namespace = $1
+         AND source = 'lane-shared-promotion'
+         AND promoted_from->>'source_physical_namespace' = $2`,
+      [sharedPhysicalNs, ns],
+    );
+    // Belt-and-suspenders: any promoted copy whose provenance target points at
+    // this test's shared namespace, regardless of which physical ns it landed in.
+    await pool.query(
+      `DELETE FROM thoughts
+       WHERE promoted_from->>'source_physical_namespace' = $1`,
       [ns],
     );
   }
@@ -154,8 +190,11 @@ dbDescribe("runSharedPromoter cursor-stall fix (live Postgres)", () => {
     return JSON.parse(readFileSync(stateFile, "utf8"));
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
     applyDbEnv(DB_URL as string);
+    // Defend against a PRIOR crashed test leaving residue that a namespace-wide
+    // scan (nominatedTableRows has no namespace filter) would re-pick up.
+    await cleanupNs();
     // DEV_TMP (macOS dev) when set; otherwise the OS temp dir so this runs on
     // the Linux CI runner (the Mac /Volumes path does not exist there).
     tmpDir = mkdtempSync(
