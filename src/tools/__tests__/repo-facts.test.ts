@@ -705,7 +705,6 @@ describe("repo fact tools", () => {
       const parsed = parseToolResult(result);
       expect(parsed.map((row: any) => row.namespace)).toEqual([
         "bilby",
-        "bilby",
         "shared-kb",
       ]);
     } finally {

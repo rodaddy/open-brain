@@ -255,6 +255,25 @@ function dedupeFallbackSearchRows(rows: SearchRow[]): SearchRow[] {
   return deduped;
 }
 
+function mergeFallbackSearchRows(
+  primaryRows: SearchRow[],
+  legacyRows: SearchRow[],
+  limit: number,
+): SearchRow[] {
+  const primary = dedupeFallbackSearchRows(primaryRows);
+  const primaryKeys = new Set(primary.map(fallbackDedupeKey));
+  const legacy = dedupeFallbackSearchRows(
+    legacyRows.filter((row) => !primaryKeys.has(fallbackDedupeKey(row))),
+  );
+  if (legacy.length === 0) return primary.slice(0, limit);
+  if (primary.length >= limit) {
+    const fallbackRow = legacy[0];
+    if (!fallbackRow) return primary.slice(0, limit);
+    return [...primary.slice(0, Math.max(0, limit - 1)), fallbackRow];
+  }
+  return [...primary, ...legacy.slice(0, limit - primary.length)];
+}
+
 function appendNamespaceParam(
   params: unknown[],
   namespace?: NamespaceFilter,
@@ -876,7 +895,7 @@ export async function executeSearchWithSharedFallback(
     includeLinks,
   );
   return withCanonicalNamespaces(
-    dedupeFallbackSearchRows([...sharedRows, ...legacyRows]),
+    mergeFallbackSearchRows(sharedRows, legacyRows, limit),
   );
 }
 
@@ -956,7 +975,7 @@ export async function executeSearchWithScopedSharedFallback(
     includeLinks,
   );
   return withCanonicalNamespaces(
-    dedupeFallbackSearchRows([...primaryRows, ...legacyRows]),
+    mergeFallbackSearchRows(primaryRows, legacyRows, limit),
   );
 }
 
