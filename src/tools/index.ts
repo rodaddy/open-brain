@@ -43,6 +43,7 @@ import { registerPromoteEntry } from "./promote-entry.ts";
 import { registerDemoteEntry } from "./demote-entry.ts";
 import { registerScanNamespace } from "./scan-namespace.ts";
 import { registerTierLane } from "./tier-lane.ts";
+import { registerPromoteShared } from "./promote-shared.ts";
 import { registerGetContract } from "./get-contract.ts";
 import { registerListRepoFacts, registerUpsertRepoFact } from "./repo-facts.ts";
 
@@ -94,6 +95,7 @@ export function registerAllTools(server: McpServer, deps: ToolDeps): void {
   registerDemoteEntry(server, deps);
   registerScanNamespace(server, deps);
   registerTierLane(server, deps);
+  registerPromoteShared(server, deps);
   registerGetContract(server, deps);
   registerUpsertRepoFact(server, deps);
   registerListRepoFacts(server, deps);

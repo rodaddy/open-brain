@@ -144,6 +144,53 @@ def test_redaction_scrubs_labelled_alphanumeric_aws_secret():
     assert "[REDACTED]" in redacted
 
 
+def test_redaction_scrubs_stripe_style_underscore_keys():
+    stripe_live = token_sample("sk", "_live_", "a" * 24)
+    stripe_test = token_sample("pk", "_test_", "b" * 24)
+
+    redacted = redact_text(f"stripe {stripe_live} and {stripe_test}")
+
+    assert stripe_live not in redacted
+    assert stripe_test not in redacted
+    assert redacted.count("[REDACTED]") == 2
+
+
+def test_redaction_scrubs_url_embedded_credentials():
+    url = token_sample("postgres://", "admin:", "hunter2pw", "@10.0.0.1:5432/app")
+
+    redacted = redact_text(f"db at {url}")
+
+    assert "hunter2pw" not in redacted
+    assert "[REDACTED]" in redacted
+
+
+def test_redaction_scrubs_url_credentials_uppercase_scheme():
+    # URI schemes are case-insensitive; keep 1:1 with the TS /i-compiled pattern.
+    url = token_sample("HTTPS://", "admin:", "hunter2pw", "@host/x")
+
+    redacted = redact_text(f"db at {url}")
+
+    assert "hunter2pw" not in redacted
+    assert "[REDACTED]" in redacted
+
+
+def test_redaction_scrubs_labeled_long_secret():
+    secret = token_sample("client_secret=", "Ab9" * 8, "xyz")
+
+    redacted = redact_text(secret)
+
+    assert "[REDACTED]" in redacted
+
+
+def test_redaction_keeps_plain_url_without_credentials_visible():
+    url = "https://github.com/rodaddy/open-brain"
+
+    redacted = redact_text(f"see {url}")
+
+    assert url in redacted
+    assert "[REDACTED]" not in redacted
+
+
 def test_redaction_keeps_benign_40_character_hex_ids_visible():
     sha_like_id = token_sample("0123456789", "abcdef0123", "456789abcd", "ef01234567")
 

@@ -24,6 +24,42 @@ export const PROMOTION_CONTENT_COLUMNS: Record<Table, string> = {
     "session_id, project, summary, tags, blockers, next_steps, key_decisions, created_by, embedding, content_hash, embedded_at, embedding_model, tier",
 };
 
+/**
+ * Nomination/audit keys that must NOT survive into a promoted copy. A promoted
+ * row that still carries `share_candidate` would re-nominate itself on the next
+ * promoter sweep (the sweep is namespace-wide), causing an endless re-scan and
+ * re-promotion attempt. Stripped from the metadata column in the SELECT.
+ */
+const STRIPPED_PROMOTION_METADATA_KEYS = [
+  "share_candidate",
+  "share_rejected_sync",
+  "share_promoted_at",
+] as const;
+
+/**
+ * Build the SELECT projection for a promotion copy: identical to the INSERT
+ * column list, except the metadata jsonb column (`extracted_metadata` for
+ * thoughts/decisions, `metadata` for others) has the nomination keys stripped
+ * via `- key` so the promoted copy is not itself a standing nomination.
+ */
+function promotionSelectExpression(columns: string): string {
+  const metaCol = columns.includes("extracted_metadata")
+    ? "extracted_metadata"
+    : columns.includes(" metadata") || columns.startsWith("metadata")
+      ? "metadata"
+      : null;
+  if (!metaCol) return columns;
+  const stripped = STRIPPED_PROMOTION_METADATA_KEYS.map((k) => `- '${k}'`).join(
+    " ",
+  );
+  // Replace the bare column token with the stripped expression aliased back to
+  // the column name so positional INSERT/SELECT alignment is preserved.
+  return columns
+    .split(", ")
+    .map((c) => (c === metaCol ? `(${metaCol} ${stripped}) AS ${metaCol}` : c))
+    .join(", ");
+}
+
 export interface PromotionResult {
   status: "promoted" | "duplicate" | "dry_run";
   new_id?: string;
@@ -196,9 +232,10 @@ export async function promoteEntry(
   }
 
   const columns = PROMOTION_CONTENT_COLUMNS[table];
+  const selectExpr = promotionSelectExpression(columns);
   const { rows: inserted } = await pool.query(
     `INSERT INTO ${table} (${columns}, namespace, promoted_from)
-     SELECT ${columns}, $2, $3::jsonb
+     SELECT ${selectExpr}, $2, $3::jsonb
      FROM ${table} WHERE id = $1 AND namespace = $4
      ON CONFLICT DO NOTHING
      RETURNING id`,

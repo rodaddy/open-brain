@@ -412,7 +412,7 @@ def test_all_registered_tool_wrappers_call_matching_tool_names():
 
 
 def test_required_contract_tools_have_first_class_wrappers_and_help():
-    assert CURRENT_CONTRACT_VERSION == "2026-06-18.memory-tools.v2"
+    assert CURRENT_CONTRACT_VERSION == "2026-06-19.memory-tools.v5"
     assert set(REQUIRED_CONTRACT_TOOLS) <= set(CURRENT_TOOL_HELP)
 
     for tool_name in REQUIRED_CONTRACT_TOOLS:
@@ -1244,3 +1244,131 @@ def test_urllib_transport_does_not_follow_redirects_with_auth_headers():
         thread.join(timeout=2)
 
     assert response.status_code == 302
+
+
+def test_append_session_event_carries_share_candidate_nomination():
+    # Issue #161: an agent nominates a session event for sharing by setting
+    # metadata.share_candidate=true. The Python client must carry that
+    # nomination through to the server as a tools/call argument, untouched.
+    transport = FakeTransport()
+    client = make_client(transport)
+
+    client.append_session_event(
+        session_key="chan/thread",
+        event_type="fact",
+        content="Promotable knowledge.",
+        metadata={"share_candidate": True, "source": "agent"},
+    )
+
+    calls = tool_requests(transport)
+    assert len(calls) == 1
+    params = calls[0]["json"]["params"]
+    assert params["name"] == "append_session_event"
+    assert params["arguments"] == {
+        "session_key": "chan/thread",
+        "event_type": "fact",
+        "content": "Promotable knowledge.",
+        "metadata": {"share_candidate": True, "source": "agent"},
+    }
+    # The nomination flag must reach the server as a genuine boolean True.
+    assert params["arguments"]["metadata"]["share_candidate"] is True
+
+
+def test_append_session_event_surfaces_share_candidate_rejection():
+    # The server may synchronously refuse a nomination (e.g. secret/private)
+    # and return share_candidate_rejected. The client must surface that field
+    # unchanged in the returned payload rather than swallowing it.
+    transport = FakeTransport()
+    transport.tool_results["append_session_event"] = {
+        "content": [
+            {
+                "type": "text",
+                "text": json.dumps(
+                    {
+                        "tool": "append_session_event",
+                        "ok": True,
+                        "event_id": "evt-1",
+                        "share_candidate_rejected": "reject-secret",
+                    }
+                ),
+            }
+        ]
+    }
+    client = make_client(transport)
+
+    result = client.append_session_event(
+        session_key="chan/thread",
+        event_type="fact",
+        content="Looks promotable but is secret.",
+        metadata={"share_candidate": True},
+    )
+
+    assert result["share_candidate_rejected"] == "reject-secret"
+    assert result["event_id"] == "evt-1"
+
+
+def test_append_session_event_error_still_redacts_secret_metadata_values():
+    # Adding the nomination field must not weaken error redaction. If a write
+    # carrying secret-looking metadata fails, the secret value must not leak
+    # into the raised error, matching existing redaction guarantees.
+    transport = FakeTransport()
+    transport.tool_results["append_session_event"] = {
+        "isError": True,
+        "content": [
+            {
+                "type": "text",
+                "text": "append failed: api_key=abc123456789 password=hunter2",
+            }
+        ],
+    }
+    client = make_client(transport)
+
+    with pytest.raises(OpenBrainToolError) as exc_info:
+        client.append_session_event(
+            session_key="chan/thread",
+            event_type="fact",
+            content="x",
+            metadata={"share_candidate": True, "api_key": "abc123456789"},
+        )
+
+    message = str(exc_info.value)
+    assert "context=call_tool:append_session_event" in message
+    assert "abc123456789" not in message
+    assert "hunter2" not in message
+    assert "[REDACTED]" in message
+
+
+def test_append_session_event_does_not_mutate_sensitive_looking_payload():
+    # GOTCHA (#77 / "Live Writes vs Redaction"): a legitimate but
+    # sensitive-LOOKING payload must be transmitted faithfully on the write
+    # path. Redaction/refusal is the server's job for stored memory; the client
+    # must not strip or mutate share_candidate, content, or metadata
+    # client-side. This proves the outgoing body equals the caller's payload.
+    transport = FakeTransport()
+    client = make_client(transport)
+
+    metadata = {
+        "share_candidate": True,
+        # Sensitive-looking keys/values that the diagnostic redaction layer
+        # would scrub in an ERROR body, but which are legitimate write content.
+        "api_key": "abc123456789",
+        "password": "hunter2",
+        "token": "looks-like-a-token",
+    }
+    content = "Token rotation runbook: password=hunter2 api_key=abc123456789"
+
+    client.append_session_event(
+        session_key="chan/thread",
+        event_type="fact",
+        content=content,
+        metadata=metadata,
+    )
+
+    calls = tool_requests(transport)
+    assert len(calls) == 1
+    arguments = calls[0]["json"]["params"]["arguments"]
+    # The write path transmits the payload verbatim -- no client-side scrubbing.
+    assert arguments["content"] == content
+    assert arguments["metadata"] == metadata
+    assert arguments["metadata"]["share_candidate"] is True
+    assert "[REDACTED]" not in json.dumps(arguments)

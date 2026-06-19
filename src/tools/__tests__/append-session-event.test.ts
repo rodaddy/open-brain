@@ -494,6 +494,199 @@ describe("append_session_event", () => {
     }
   });
 
+  // ── SYNC SHARE-NOMINATION GATE (Issue #161, Q1) ──
+  // adjudicateNominationSync runs inline on the write path: a share_candidate
+  // carrying a secret or person-private content is hard-rejected, the nomination
+  // flag is STRIPPED before persist (so the async promoter never sweeps it), a
+  // share_rejected_sync marker is stamped on the persisted metadata, and the
+  // tool response surfaces share_candidate_rejected. Clean/absent nominations
+  // pass through untouched — worthiness stays for the async cron, NOT this gate.
+  //
+  // We assert the persisted metadata by capturing the INSERT params on the mock
+  // pool. The metadata is the 7th INSERT param ($7, index 6), JSON.stringify'd.
+
+  /** Lane-found pool that captures the params of the events INSERT. */
+  function createCapturingPool() {
+    const captured: { metadata: Record<string, unknown> | null } = {
+      metadata: null,
+    };
+    const pool = {
+      captured,
+      query: async (sql: string, params?: any[]) => {
+        if (sql.includes("ob_session_lanes")) {
+          return { rows: [{ id: "lane-uuid-1", status: "active" }] };
+        }
+        // INSERT INTO ob_session_events — $7 (index 6) is the metadata JSON.
+        if (params && typeof params[6] === "string") {
+          captured.metadata = JSON.parse(params[6]);
+        }
+        return { rows: [{ id: "event-uuid-1", created_at: "2026-06-08T10:00:00Z" }] };
+      },
+    };
+    return pool;
+  }
+
+  it("strips share_candidate and reports reject-secret when content carries a secret", async () => {
+    const mockPool = createCapturingPool();
+    const auth: AuthInfo = { role: "admin", clientId: "skippy" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "append_session_event",
+        arguments: {
+          session_key: "test",
+          event_type: "fact",
+          // Substantive content that also embeds an OpenAI-style key.
+          content:
+            "Configured the deploy pipeline with key " + "sk-" + "a".repeat(20),
+          metadata: { share_candidate: true },
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.share_candidate_rejected).toBe("reject-secret");
+
+      // Persisted metadata: nomination stripped, audit marker stamped.
+      expect(mockPool.captured.metadata).not.toBeNull();
+      expect(mockPool.captured.metadata!.share_candidate).toBeUndefined();
+      expect(mockPool.captured.metadata!.share_rejected_sync).toBe(
+        "reject-secret",
+      );
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("treats string \"true\" nomination like boolean true (matches async SQL truthiness)", async () => {
+    // The async promoter nominates on `metadata->>'share_candidate' = 'true'`,
+    // which matches a JSON string "true". If the sync gate only accepted boolean
+    // true, a mistyped nomination would skip the inline secret check yet still
+    // be swept async — voiding this gate. Regression for that bypass.
+    const mockPool = createCapturingPool();
+    const auth: AuthInfo = { role: "admin", clientId: "skippy" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "append_session_event",
+        arguments: {
+          session_key: "test",
+          event_type: "fact",
+          content:
+            "Configured the deploy pipeline with key " + "sk-" + "a".repeat(20),
+          metadata: { share_candidate: "true" },
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.share_candidate_rejected).toBe("reject-secret");
+      expect(mockPool.captured.metadata!.share_candidate).toBeUndefined();
+      expect(mockPool.captured.metadata!.share_rejected_sync).toBe(
+        "reject-secret",
+      );
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("strips share_candidate and reports reject-private when metadata.private is true", async () => {
+    const mockPool = createCapturingPool();
+    const auth: AuthInfo = { role: "admin", clientId: "skippy" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "append_session_event",
+        arguments: {
+          session_key: "test",
+          event_type: "fact",
+          // Clean, substantive content — only the private marker triggers reject.
+          content: "This is a substantive personal note about my own plans.",
+          metadata: { share_candidate: true, private: true },
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.share_candidate_rejected).toBe("reject-private");
+
+      expect(mockPool.captured.metadata).not.toBeNull();
+      expect(mockPool.captured.metadata!.share_candidate).toBeUndefined();
+      expect(mockPool.captured.metadata!.share_rejected_sync).toBe(
+        "reject-private",
+      );
+      // The original private marker is preserved (only share_candidate stripped).
+      expect(mockPool.captured.metadata!.private).toBe(true);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("keeps share_candidate for clean substantive content — async cron owns worthiness", async () => {
+    const mockPool = createCapturingPool();
+    const auth: AuthInfo = { role: "admin", clientId: "skippy" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "append_session_event",
+        arguments: {
+          session_key: "test",
+          event_type: "fact",
+          content:
+            "Chose pgvector halfvec(768) for the embedding column to halve storage.",
+          metadata: { share_candidate: true },
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const parsed = JSON.parse((result.content as any)[0].text);
+      // No sync rejection — the sync gate ONLY hard-rejects secret/private.
+      expect(parsed.share_candidate_rejected).toBeUndefined();
+
+      // Nomination survives to persist; the async promoter decides worthiness.
+      expect(mockPool.captured.metadata).not.toBeNull();
+      expect(mockPool.captured.metadata!.share_candidate).toBe(true);
+      expect(mockPool.captured.metadata!.share_rejected_sync).toBeUndefined();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("passes metadata through unchanged when no share_candidate is present", async () => {
+    const mockPool = createCapturingPool();
+    const auth: AuthInfo = { role: "admin", clientId: "skippy" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "append_session_event",
+        arguments: {
+          session_key: "test",
+          event_type: "fact",
+          // Content that WOULD be a secret, but with no nomination the sync gate
+          // must not run — share_rejected_sync must never appear.
+          content: "password: hunter2something nominated nowhere",
+          metadata: { pr: 42 },
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.share_candidate_rejected).toBeUndefined();
+
+      expect(mockPool.captured.metadata).not.toBeNull();
+      expect(mockPool.captured.metadata!.pr).toBe(42);
+      expect(mockPool.captured.metadata!.share_candidate).toBeUndefined();
+      expect(mockPool.captured.metadata!.share_rejected_sync).toBeUndefined();
+    } finally {
+      await cleanup();
+    }
+  });
+
   // ── DATABASE ERROR ──
 
   it("returns isError=true with message when DB query throws", async () => {

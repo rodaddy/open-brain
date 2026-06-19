@@ -4,10 +4,67 @@ import { toSql } from "pgvector/pg";
 import { canWrite } from "../permissions.ts";
 import { canWriteNamespace } from "../namespace-policy.ts";
 import { contentHash, EMBEDDING_MODEL } from "../embedding.ts";
+import { classifyShareCandidate } from "../sharing.ts";
 import type { AuthInfo } from "../types.ts";
 import { logger } from "../logger.ts";
 import type { ToolDeps } from "./index.ts";
 import { EVENT_TYPES, IMPORTANCE_LEVELS } from "./table-constants.ts";
+
+/**
+ * Hybrid-timing sync gate for the share_candidate nomination (Issue #161, Q1).
+ *
+ * An agent nominates an event for shared-kb promotion by setting
+ * `metadata.share_candidate = true` on this write. The full worthiness +
+ * dedup + promote adjudication is ASYNC (the promoter cron). But the ONE check
+ * we must run synchronously is the cheap, security-critical one: a secret or
+ * person-private nomination must never even enter the promotion queue.
+ *
+ * `classifyShareCandidate` is pure (no DB, no embedding) so it is safe on the
+ * write path. We only act on its hard-reject decisions here; worthiness/noise
+ * stays for the async adjudicator. On a hard reject we STRIP the nomination
+ * flag (the event itself still persists — it is the agent's lane journal) and
+ * report it, so the cron never sees a secret/private candidate.
+ *
+ * Returns the metadata to persist (nomination stripped if rejected) and the
+ * sync decision to surface back to the agent, or null when no nomination was
+ * present.
+ */
+function adjudicateNominationSync(
+  eventType: string,
+  importance: string,
+  content: string,
+  metadata: Record<string, unknown>,
+): {
+  metadata: Record<string, unknown>;
+  rejected: "reject-secret" | "reject-private" | null;
+} {
+  // Match the async promoter's truthiness exactly: its SQL nominates on
+  // `metadata->>'share_candidate' = 'true'`, which matches both a JSON boolean
+  // true and the string "true". If the sync gate only accepted boolean true, a
+  // mistyped string nomination would skip the inline secret/private check yet
+  // still be swept async — voiding this gate's guarantee. Accept both.
+  const nominated =
+    metadata.share_candidate === true || metadata.share_candidate === "true";
+  if (!nominated) {
+    return { metadata, rejected: null };
+  }
+  const decision = classifyShareCandidate({
+    event_type: eventType,
+    importance,
+    content,
+    metadata,
+  });
+  if (decision === "reject-secret" || decision === "reject-private") {
+    // Strip the nomination so the async promoter never sweeps it. Stamp a
+    // marker for auditability; the event content itself is untouched.
+    const { share_candidate: _drop, ...rest } = metadata;
+    return {
+      metadata: { ...rest, share_rejected_sync: decision },
+      rejected: decision,
+    };
+  }
+  return { metadata, rejected: null };
+}
 
 export function registerAppendSessionEvent(
   server: McpServer,
@@ -157,6 +214,25 @@ export function registerAppendSessionEvent(
 
         const laneId = laneRows[0].id;
 
+        // Hybrid sync gate: a share_candidate nomination carrying a secret or
+        // person-private content is rejected inline (cheap, no embedding) and
+        // its nomination stripped before persist, so the async promoter never
+        // sees it. Worthiness/dedup/promote remain async.
+        const nomination = adjudicateNominationSync(
+          args.event_type,
+          importance,
+          args.content,
+          args.metadata ?? {},
+        );
+        if (nomination.rejected) {
+          logger.warn("append_session_event_share_rejected", {
+            session_key: args.session_key,
+            namespace: ns,
+            decision: nomination.rejected,
+            clientId: auth.clientId,
+          });
+        }
+
         // Generate embedding (non-fatal)
         let embedding: number[] | null = null;
         try {
@@ -187,7 +263,7 @@ export function registerAppendSessionEvent(
             args.source ?? null,
             args.artifact_path ?? null,
             importance,
-            JSON.stringify(args.metadata ?? {}),
+            JSON.stringify(nomination.metadata),
             embeddingVal,
             hash,
             embeddedAt,
@@ -217,6 +293,11 @@ export function registerAppendSessionEvent(
           event_type: args.event_type,
           importance,
           created_at: rows[0].created_at,
+          // Surface the sync nomination outcome so a contract-driven agent
+          // learns its share_candidate was refused (and why) without polling.
+          ...(nomination.rejected
+            ? { share_candidate_rejected: nomination.rejected }
+            : {}),
         };
 
         logger.info("append_session_event_ok", {

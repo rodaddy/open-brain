@@ -1,10 +1,7 @@
 import { createHash } from "node:crypto";
-import {
-  REPO_FACT_METADATA_CONTRACT,
-  REPO_FACT_VALIDATION_CONTRACT,
-} from "./tools/repo-facts.ts";
+import { TOOL_CONTRACTS } from "./contract-schemas.ts";
 
-export const CONTRACT_VERSION = "2026-06-18.memory-tools.v2";
+export const CONTRACT_VERSION = "2026-06-19.memory-tools.v5";
 export const CONTRACT_SCHEMA_VERSION = 1;
 
 export interface ContractCapability {
@@ -49,69 +46,97 @@ export const CONTRACT_CAPABILITIES: ContractCapability[] = [
   },
   {
     name: "upsert_repo_fact",
-    version: 1,
+    version: 2,
     kind: "tool",
     description:
-      "Upsert a curated qmd-derived repository fact into graph entity metadata.",
+      "Record or update one curated, citation-backed fact about a code repository " +
+      "(qmd-derived) into graph entity metadata. Use to persist durable repo " +
+      "knowledge (how a module works, an invariant, a gotcha) with a source URL " +
+      "that proves it; re-upsert with the same key to correct an existing fact.",
   },
   {
     name: "list_repo_facts",
-    version: 1,
+    version: 2,
     kind: "tool",
     description:
-      "Read curated qmd-derived repository facts with namespace scoping.",
+      "Read back curated repository facts, scoped to your namespace and filtered " +
+      "by repo, collection, path, fact_type, or subject. Use to recall what is " +
+      "already known about a repo before re-deriving it.",
   },
   {
     name: "log_thought",
-    version: 1,
+    version: 2,
     kind: "tool",
-    description: "Write a durable thought or observation to Open Brain.",
+    description:
+      "Write a single durable thought, observation, or note to long-term memory. " +
+      "Use for free-form knowledge that is not tied to a session journal; it is " +
+      "embedded for later semantic search. For session-scoped events use " +
+      "append_session_event instead.",
   },
   {
     name: "search_all",
-    version: 1,
+    version: 2,
     kind: "tool",
     description:
-      "Search Open Brain memory and optional qmd-backed code context.",
+      "Primary recall tool. Semantic + keyword search across Open Brain memory " +
+      "(thoughts, session events, facts) and optional qmd-backed code context. " +
+      "Call this before answering from assumption to ground yourself in stored " +
+      "knowledge.",
   },
   {
     name: "session_start",
-    version: 1,
+    version: 2,
     kind: "tool",
     description:
-      "Find or create a durable session lane and return recent events.",
+      "Open or resume a durable session lane and get recent events back. Call " +
+      "this at the start of a conversation/task to establish the lane other " +
+      "session tools write to, and to rehydrate prior context.",
   },
   {
     name: "session_context",
-    version: 1,
+    version: 2,
     kind: "tool",
-    description: "Read durable session lane state and recent events.",
+    description:
+      "Read a session lane's current state and recent events without creating " +
+      "one. Use to rehydrate context for an existing session (by session_key or " +
+      "channel_id) before continuing work.",
   },
   {
     name: "lane_upsert",
-    version: 1,
+    version: 2,
     kind: "tool",
     description:
-      "Create or update durable session lane metadata and current context.",
+      "Create or update the metadata and rolling context of a session lane " +
+      "(status, project, agent, topic, current_context_md). Use to set or refresh " +
+      "the lane's high-level state; use append_session_event for individual " +
+      "journal entries.",
   },
   {
     name: "lane_load",
-    version: 1,
+    version: 2,
     kind: "tool",
     description:
-      "Load durable session lanes by key, project, agent, channel, or status.",
+      "List session lanes matching filters (key, project, agent, channel, " +
+      "status). Use to discover or pick up existing lanes; defaults to active " +
+      "lanes when status is omitted.",
   },
   {
     name: "append_session_event",
-    version: 1,
+    version: 3,
     kind: "tool",
-    description: "Append a durable event to a session lane journal.",
+    description:
+      "Append one durable, typed event (fact, decision, blocker, action, etc.) " +
+      "to a session lane's journal. This is the main way to record what happened " +
+      "during a session so it survives and can be recalled later.",
   },
   {
     name: "session_wrap",
-    version: 1,
+    version: 2,
     kind: "tool",
-    description: "Checkpoint a session lane with a durable summary.",
+    description:
+      "Checkpoint a session lane with a durable summary, key decisions, and next " +
+      "steps. Call at the end of a work session so the next session can resume " +
+      "from a clean handoff.",
   },
   {
     name: "entity_graph",
@@ -184,267 +209,7 @@ export function buildContract(
     capabilities: [...CONTRACT_CAPABILITIES].sort((a, b) =>
       a.name.localeCompare(b.name),
     ),
-    tool_contracts: {
-      get_contract: {
-        version: 1,
-        input_schema: {},
-        output_shape: "OpenBrainContract JSON text payload",
-      },
-      log_thought: {
-        version: 1,
-        input_schema: {
-          content: { type: "string", required: true, minLength: 1 },
-          tags: { type: "array", required: false, items: "string" },
-          namespace: {
-            type: "string",
-            required: false,
-            minLength: 1,
-            maxLength: 500,
-          },
-        },
-        output_shape: "thought id/namespace/embedded/merged JSON text payload",
-      },
-      search_all: {
-        version: 1,
-        input_schema: {
-          query: { type: "string", required: true, minLength: 1 },
-          namespace: {
-            type: "string",
-            required: false,
-            maxLength: 500,
-          },
-          limit: { type: "integer", required: false, min: 1, max: 250 },
-          offset: { type: "integer", required: false, min: 0 },
-          sources: {
-            type: "enum",
-            required: false,
-            values: ["all", "brain", "qmd"],
-          },
-          search_mode: {
-            type: "enum",
-            required: false,
-            values: ["hybrid", "vector", "keyword"],
-          },
-          tier: {
-            type: "enum",
-            required: false,
-            values: ["hot", "warm", "cold"],
-          },
-        },
-        output_shape: "unified search results JSON text payload",
-      },
-      session_start: {
-        version: 1,
-        input_schema: {
-          session_key: {
-            type: "string",
-            required: true,
-            minLength: 1,
-            maxLength: 500,
-          },
-          namespace: { type: "string", required: false, maxLength: 500 },
-          project: { type: "string", required: false, maxLength: 500 },
-          agent: { type: "string", required: false, maxLength: 500 },
-          channel_id: { type: "string", required: false, maxLength: 500 },
-          thread_id: { type: "string", required: false, maxLength: 500 },
-          topic: { type: "string", required: false, maxLength: 500 },
-        },
-        output_shape: "session lane plus recent events JSON text payload",
-      },
-      session_context: {
-        version: 1,
-        input_schema: {
-          session_key: {
-            type: "string",
-            required: "session_key_or_channel_id",
-            maxLength: 500,
-          },
-          namespace: { type: "string", required: false, maxLength: 500 },
-          channel_id: {
-            type: "string",
-            required: "session_key_or_channel_id",
-            maxLength: 500,
-          },
-          thread_id: { type: "string", required: false, maxLength: 500 },
-          include_events: { type: "boolean", required: false, default: true },
-          event_limit: {
-            type: "integer",
-            required: false,
-            min: 1,
-            max: 200,
-            default: 50,
-          },
-          event_types: {
-            type: "array",
-            required: false,
-            items: "session_event_type",
-          },
-          importance: {
-            type: "enum",
-            required: false,
-            values: ["hot", "warm", "cold"],
-          },
-        },
-        output_shape: "session lane plus recent events JSON text payload",
-      },
-      lane_upsert: {
-        version: 1,
-        input_schema: {
-          session_key: {
-            type: "string",
-            required: true,
-            minLength: 1,
-            maxLength: 500,
-          },
-          namespace: { type: "string", required: false, maxLength: 500 },
-          status: {
-            type: "enum",
-            required: false,
-            values: ["active", "wrapped", "archived"],
-          },
-          agent: { type: "string", required: false, maxLength: 500 },
-          source: { type: "string", required: false, maxLength: 500 },
-          channel_id: { type: "string", required: false, maxLength: 500 },
-          thread_id: { type: "string", required: false, maxLength: 500 },
-          project: { type: "string", required: false, maxLength: 500 },
-          topic: { type: "string", required: false, maxLength: 500 },
-          current_context_md: {
-            type: "string",
-            required: false,
-            maxLength: 100000,
-          },
-          metadata: {
-            type: "object",
-            required: false,
-            propertyNames: { type: "string", maxLength: 100 },
-            maxKeys: 50,
-            maxJsonBytes: 100000,
-          },
-        },
-        output_shape: "session lane JSON text payload",
-      },
-      lane_load: {
-        version: 1,
-        input_schema: {
-          session_key: { type: "string", required: false },
-          namespace: { type: "string", required: false },
-          project: { type: "string", required: false },
-          agent: { type: "string", required: false },
-          channel_id: { type: "string", required: false },
-          status: {
-            type: "enum",
-            required: false,
-            default: "active",
-            values: ["active", "wrapped", "archived"],
-          },
-          limit: { type: "integer", required: false, min: 1, max: 50 },
-        },
-        output_shape: "session lane array JSON text payload",
-      },
-      append_session_event: {
-        version: 1,
-        input_schema: {
-          session_key: {
-            type: "string",
-            required: true,
-            minLength: 1,
-            maxLength: 500,
-          },
-          namespace: { type: "string", required: false, maxLength: 500 },
-          event_type: {
-            type: "enum",
-            required: true,
-            values: [
-              "fact",
-              "decision",
-              "blocker",
-              "action",
-              "artifact",
-              "receipt",
-              "question",
-              "correction",
-              "handoff",
-            ],
-          },
-          content: {
-            type: "string",
-            required: true,
-            minLength: 1,
-            maxLength: 50000,
-          },
-          source: { type: "string", required: false, maxLength: 500 },
-          artifact_path: { type: "string", required: false, maxLength: 2000 },
-          importance: {
-            type: "enum",
-            required: false,
-            values: ["hot", "warm", "cold"],
-          },
-          metadata: {
-            type: "object",
-            required: false,
-            maxKeys: 50,
-            maxJsonBytes: 100000,
-          },
-        },
-        output_shape: "session event JSON text payload",
-      },
-      session_wrap: {
-        version: 1,
-        input_schema: {
-          session_key: {
-            type: "string",
-            required: true,
-            minLength: 1,
-            maxLength: 500,
-          },
-          namespace: { type: "string", required: false, maxLength: 500 },
-          summary: { type: "string", required: true, maxLength: 100000 },
-          key_decisions: {
-            type: "array",
-            required: false,
-            items: "string",
-            maxItems: 20,
-            maxItemLength: 2000,
-          },
-          next_steps: {
-            type: "array",
-            required: false,
-            items: "string",
-            maxItems: 20,
-            maxItemLength: 2000,
-          },
-          project: { type: "string", required: false, maxLength: 500 },
-        },
-        output_shape: "session wrap checkpoint JSON text payload",
-      },
-      upsert_repo_fact: {
-        version: 1,
-        input_schema: {
-          namespace: { type: "string", required: false, maxLength: 500 },
-          metadata: REPO_FACT_METADATA_CONTRACT,
-          validation: REPO_FACT_VALIDATION_CONTRACT,
-        },
-        output_shape: "ob_entities repo_fact row JSON text payload",
-      },
-      list_repo_facts: {
-        version: 1,
-        input_schema: {
-          namespace: { type: "string", required: false, maxLength: 500 },
-          repo: { type: "string", required: false, maxLength: 300 },
-          collection: { type: "string", required: false, maxLength: 300 },
-          path: { type: "string", required: false, maxLength: 1000 },
-          fact_type: {
-            type: "enum",
-            required: false,
-            values: REPO_FACT_METADATA_CONTRACT.fact_type.values,
-          },
-          subject: { type: "string", required: false, maxLength: 500 },
-          limit: { type: "integer", required: false, min: 1, max: 250 },
-          offset: { type: "integer", required: false, min: 0 },
-        },
-        output_shape: "repo_fact ob_entities row array JSON text payload",
-      },
-    },
+    tool_contracts: TOOL_CONTRACTS,
   };
 
   return {

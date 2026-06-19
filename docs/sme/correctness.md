@@ -119,3 +119,60 @@ behaving poorly on malformed or mixed valid/invalid server candidates.
 
 PR #75 made `dream_once()` dry-run-only, bounded limits to 100, suppressed
 unscoped tier actions for namespace dreams, and rejected boolean numeric config.
+
+## [2026-06-19] Sync and async gates on the same flag must share truthiness
+
+**Severity:** MEDIUM
+**Source:** Issue #161, PR #171 (share_candidate nomination, hybrid timing)
+**Scope:** any field validated both inline (TS) and in SQL (`->>'x' = 'true'`)
+**Status:** active
+
+### Pattern
+
+`append_session_event`'s sync gate checked `metadata.share_candidate !== true`
+(strict boolean), but the async promoter nominated on
+`metadata->>'share_candidate' = 'true'` — which also matches the JSON string
+`"true"`. A mistyped string nomination skipped the inline secret/private check
+yet was still swept async, voiding the sync gate's security guarantee.
+Defense-in-depth (the async re-classify) prevented an actual promotion hole, but
+the sync rationale was void and the agent got no rejection feedback.
+
+### Review Questions
+
+- When the same flag is gated in two places (inline code + SQL `->>`), do both
+  accept the same set of truthy values?
+- Is the inline check at least as permissive as the SQL one, so nothing the
+  async path will act on bypasses the sync guard?
+
+### Prior Fix
+
+PR #171 made the sync gate accept `=== true || === "true"` to match the SQL
+truthiness; regression test asserts a string `"true"` nomination with secret
+content is still rejected inline.
+
+## [2026-06-19] Env-gated DB tests skip silently in CI unless the URL is set
+
+**Severity:** HIGH
+**Source:** Issue #165 / #161, PR #171
+**Scope:** `.github/workflows/ci.yml`, all `dbDescribe`-gated suites
+**Status:** active
+
+### Pattern
+
+The env-gated real-Pool tests (the only ones that catch SQL bugs per the
+mock-pool finding above) gate on `OPENBRAIN_TEST_DATABASE_URL`. CI set `DB_*`
+and ran migrations against a real Postgres but never set
+`OPENBRAIN_TEST_DATABASE_URL`, so every `dbDescribe` suite SKIPPED in CI — the
+exact write paths the discipline rule exists to protect had zero CI coverage.
+
+### Review Questions
+
+- Does CI export `OPENBRAIN_TEST_DATABASE_URL` so `dbDescribe` suites actually
+  run, not skip?
+- When a critical guarantee is only covered by an env-gated test, is that env
+  wired in CI, or is it a silent gap?
+
+### Prior Fix
+
+PR #171 set `OPENBRAIN_TEST_DATABASE_URL` in the CI `check` job env, built from
+the existing `DB_*` values, enabling all env-gated suites in CI.
