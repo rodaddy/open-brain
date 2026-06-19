@@ -663,6 +663,55 @@ describe("lane_upsert", () => {
     }
   });
 
+  it("inserts status 'active' for a new lane when status is omitted (NOT NULL regression)", async () => {
+    // Regression for lane_upsert_db_error: omitting status previously bound an
+    // explicit NULL into the NOT NULL status column, so creating a NEW lane
+    // failed the constraint. The INSERT value must default to 'active' while
+    // the ON CONFLICT path keeps a nullable status to preserve existing rows.
+    let capturedSql = "";
+    let capturedParams: any[] = [];
+    const mockPool = {
+      query: async (sql: string, params: any[]) => {
+        capturedSql = sql;
+        capturedParams = params;
+        return {
+          rows: [
+            {
+              id: "uuid-new",
+              is_new: true,
+              status: "active",
+              updated_at: "2026-06-07T15:30:00Z",
+            },
+          ],
+        };
+      },
+    };
+    const auth: AuthInfo = { role: "admin", clientId: "bilby" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "lane_upsert",
+        arguments: { session_key: "new-lane-no-status" },
+      });
+
+      expect(result.isError).toBeFalsy();
+      // $3 (ON CONFLICT / status-preserve source) stays NULL on omission.
+      expect(capturedParams[2]).toBeNull();
+      // $24 (INSERT VALUES status) defaults to 'active' so the NOT NULL
+      // column is satisfied for brand-new lanes.
+      expect(capturedParams[23]).toBe("active");
+      // ended_at must key off $3 (nullable), NOT EXCLUDED.status, otherwise a
+      // status-omitted update would reactivate a wrapped/archived lane. The
+      // ended_at clause is the segment after the embedding_model update line.
+      const endedAtClause = capturedSql.slice(capturedSql.indexOf("ended_at ="));
+      expect(endedAtClause).toContain("$3 = 'active'");
+      expect(endedAtClause).not.toContain("EXCLUDED.status");
+    } finally {
+      await cleanup();
+    }
+  });
+
   // ── MINIMAL CALL ──
 
   it("succeeds with only the required session_key", async () => {
