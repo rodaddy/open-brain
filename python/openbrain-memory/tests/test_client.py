@@ -8,6 +8,9 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import pytest
 
 from openbrain_memory import (
+    CURRENT_CONTRACT_VERSION,
+    CURRENT_TOOL_HELP,
+    REQUIRED_CONTRACT_TOOLS,
     OpenBrainClient,
     OpenBrainHTTPError,
     OpenBrainProtocolError,
@@ -357,12 +360,14 @@ def test_all_registered_tool_wrappers_call_matching_tool_names():
         "append_session_event",
         "archive_entity",
         "archive_entry",
+        "brain_answer",
         "bulk_archive",
         "bulk_set_tier",
         "curate_entries",
         "demote_entry",
         "find_duplicates",
         "find_person",
+        "get_contract",
         "get_entry",
         "get_entity",
         "get_stats",
@@ -372,6 +377,7 @@ def test_all_registered_tool_wrappers_call_matching_tool_names():
         "link_entities",
         "list_entities",
         "list_namespaces",
+        "list_repo_facts",
         "list_recent",
         "list_stale",
         "log_decision",
@@ -391,6 +397,7 @@ def test_all_registered_tool_wrappers_call_matching_tool_names():
         "unlink_entities",
         "update_entry",
         "upsert_entity",
+        "upsert_repo_fact",
         "upsert_person",
     ]
 
@@ -400,6 +407,31 @@ def test_all_registered_tool_wrappers_call_matching_tool_names():
     assert [
         call["json"]["params"]["name"] for call in tool_requests(transport)
     ] == wrapper_names
+
+
+def test_required_contract_tools_have_first_class_wrappers_and_help():
+    assert CURRENT_CONTRACT_VERSION == "2026-06-18.memory-tools.v2"
+    assert set(REQUIRED_CONTRACT_TOOLS) <= set(CURRENT_TOOL_HELP)
+
+    for tool_name in REQUIRED_CONTRACT_TOOLS:
+        assert hasattr(OpenBrainClient, tool_name), tool_name
+        assert CURRENT_TOOL_HELP[tool_name]
+
+
+def test_current_agent_read_helpers_have_first_class_wrappers():
+    for tool_name in ("brain_answer", "list_repo_facts", "get_contract"):
+        assert hasattr(OpenBrainClient, tool_name), tool_name
+        assert tool_name in CURRENT_TOOL_HELP
+
+
+def test_client_exposes_current_tool_help():
+    client = make_client(FakeTransport())
+
+    assert "get_contract" in client.known_tools()
+    assert "canonical Open Brain public contract" in client.tool_help("get_contract")
+    help_map = client.tool_help()
+    assert isinstance(help_map, dict)
+    assert help_map["brain_answer"].startswith("Return cited answer")
 
 
 def test_http_errors_include_context_status_and_redact_token():

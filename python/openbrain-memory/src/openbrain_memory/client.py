@@ -15,6 +15,34 @@ from .policy import redact_text
 JSON = dict[str, Any]
 MCP_PROTOCOL_VERSION = "2025-03-26"
 DEFAULT_MAX_RESPONSE_BYTES = 1_000_000
+CURRENT_CONTRACT_VERSION = "2026-06-18.memory-tools.v2"
+REQUIRED_CONTRACT_TOOLS = (
+    "append_session_event",
+    "get_contract",
+    "lane_load",
+    "lane_upsert",
+    "list_repo_facts",
+    "log_thought",
+    "search_all",
+    "session_context",
+    "session_start",
+    "session_wrap",
+    "upsert_repo_fact",
+)
+CURRENT_TOOL_HELP: Mapping[str, str] = {
+    "append_session_event": "Append a durable event to a session lane journal.",
+    "brain_answer": "Return cited answer bullets from readable Open Brain evidence.",
+    "get_contract": "Read the canonical Open Brain public contract manifest.",
+    "lane_load": "Load durable session lanes by filters.",
+    "lane_upsert": "Create or update durable session lane metadata.",
+    "list_repo_facts": "Read curated qmd-derived repository facts.",
+    "log_thought": "Write a durable thought or observation to Open Brain.",
+    "search_all": "Search Open Brain memory and optional qmd-backed code context.",
+    "session_context": "Read durable session lane state and recent events.",
+    "session_start": "Find or create a durable session lane and return recent events.",
+    "session_wrap": "Checkpoint a session lane with a durable summary.",
+    "upsert_repo_fact": "Upsert a curated qmd-derived repository fact.",
+}
 
 
 @dataclass(frozen=True)
@@ -341,11 +369,25 @@ class OpenBrainClient:
             )
         return _decode_tool_payload(result)
 
+    def known_tools(self) -> tuple[str, ...]:
+        return tuple(CURRENT_TOOL_HELP)
+
+    def tool_help(self, name: str | None = None) -> Mapping[str, str] | str:
+        if name is None:
+            return dict(CURRENT_TOOL_HELP)
+        try:
+            return CURRENT_TOOL_HELP[name]
+        except KeyError as exc:
+            raise KeyError(f"Unknown Open Brain tool: {name}") from exc
+
     def access_report(self, **arguments: Any) -> JSON:
         return self.call_tool("access_report", arguments)
 
     def adjacent_context(self, **arguments: Any) -> JSON:
         return self.call_tool("adjacent_context", arguments)
+
+    def brain_answer(self, **arguments: Any) -> JSON:
+        return self.call_tool("brain_answer", arguments)
 
     def session_start(self, **arguments: Any) -> JSON:
         return self.call_tool("session_start", arguments)
@@ -386,6 +428,9 @@ class OpenBrainClient:
     def get_entity(self, **arguments: Any) -> JSON:
         return self.call_tool("get_entity", arguments)
 
+    def get_contract(self, **arguments: Any) -> JSON:
+        return self.call_tool("get_contract", arguments)
+
     def get_stats(self, **arguments: Any) -> JSON:
         return self.call_tool("get_stats", arguments)
 
@@ -403,6 +448,9 @@ class OpenBrainClient:
 
     def list_namespaces(self, **arguments: Any) -> JSON:
         return self.call_tool("list_namespaces", arguments)
+
+    def list_repo_facts(self, **arguments: Any) -> JSON:
+        return self.call_tool("list_repo_facts", arguments)
 
     def list_entities(self, **arguments: Any) -> JSON:
         return self.call_tool("list_entities", arguments)
@@ -457,6 +505,9 @@ class OpenBrainClient:
 
     def upsert_entity(self, **arguments: Any) -> JSON:
         return self.call_tool("upsert_entity", arguments)
+
+    def upsert_repo_fact(self, **arguments: Any) -> JSON:
+        return self.call_tool("upsert_repo_fact", arguments)
 
     def upsert_person(self, **arguments: Any) -> JSON:
         return self.call_tool("upsert_person", arguments)
@@ -553,7 +604,6 @@ class OpenBrainClient:
             message = error.get("message")
             return isinstance(message, str) and message.strip().lower() in messages
         return False
-
 
     def _url(self, path: str) -> str:
         return urljoin(self.base_url, path)
