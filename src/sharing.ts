@@ -43,6 +43,21 @@ const JWT_LIKE_RE =
   "[A-Za-z0-9_-]{8,}";
 const PRIVATE_KEY_BLOCK_RE =
   "-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*?-----END [A-Z ]*PRIVATE KEY-----";
+// Stripe-style keys use an underscore separator (sk_live_, pk_live_, rk_live_,
+// and the test variants), which the OpenAI `sk-` pattern above does not catch.
+const STRIPE_KEY_RE = "[sprk]k_(live|test)_[A-Za-z0-9]{16,}";
+// Credentials embedded in a URL's userinfo (`scheme://user:pass@host`). The
+// password is unlabeled and a realistic lane-journal leak. Require a non-empty
+// password and a host to avoid matching `a://b:@` noise.
+const URL_USERINFO_CRED_RE =
+  "[a-z][a-z0-9+.-]*://[^\\s:@/]+:[^\\s@/]+@[^\\s/]+";
+// Context-labeled long hex/base64 secrets (client_secret, access_token, etc.).
+// Deliberately requires a credential LABEL — bare high-entropy hex is left
+// alone because git SHAs and content_hashes are pervasive and legitimate here
+// (avoiding the over-rejection the SME guidance warns against).
+const LABELED_LONG_SECRET_RE =
+  "(client[_-]?secret|access[_-]?token|refresh[_-]?token|private[_-]?key)" +
+  "\\s*[:=]\\s*[A-Za-z0-9._/+=-]{20,}";
 
 /**
  * Compiled secret detectors. `i` mirrors the Python `(?i)` inline flags; the
@@ -65,6 +80,9 @@ export const SECRET_PATTERNS: readonly RegExp[] = [
   /(api[_-]?key|token|password|secret)\s*[:=]\s*[^\s,;]+/i,
   /"(api[_-]?key|token|password|secret)"\s*:\s*"[^"]+"/i,
   new RegExp(PRIVATE_KEY_BLOCK_RE),
+  new RegExp(`\\b${STRIPE_KEY_RE}\\b`),
+  new RegExp(URL_USERINFO_CRED_RE, "i"),
+  new RegExp(LABELED_LONG_SECRET_RE, "i"),
 ];
 
 /**

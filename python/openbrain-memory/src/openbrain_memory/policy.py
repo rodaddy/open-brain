@@ -34,6 +34,17 @@ JWT_LIKE_RE = (
 PRIVATE_KEY_BLOCK_RE = (
     "-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----"
 )
+# Stripe-style keys use an underscore separator (sk_live_, pk_live_, rk_live_,
+# and the test variants), which the OpenAI `sk-` pattern does not catch.
+STRIPE_KEY_RE = r"[sprk]k_(live|test)_[A-Za-z0-9]{16,}"
+# Credentials embedded in a URL's userinfo (scheme://user:pass@host).
+URL_USERINFO_CRED_RE = r"[a-z][a-z0-9+.-]*://[^\s:@/]+:[^\s@/]+@[^\s/]+"
+# Context-labeled long hex/base64 secrets; requires a credential LABEL so bare
+# git SHAs / content hashes are not over-rejected.
+LABELED_LONG_SECRET_RE = (
+    r"(?i)(client[_-]?secret|access[_-]?token|refresh[_-]?token|private[_-]?key)"
+    r"\s*[:=]\s*[A-Za-z0-9._/+=-]{20,}"
+)
 
 SECRET_PATTERNS = [
     re.compile(r"(?i)authorization\s*[:=]\s*bearer\s+[^\s,;]+"),
@@ -51,6 +62,9 @@ SECRET_PATTERNS = [
     re.compile(r"(?i)(api[_-]?key|token|password|secret)\s*[:=]\s*[^\s,;]+"),
     re.compile(r'(?i)"(api[_-]?key|token|password|secret)"\s*:\s*"[^"]+"'),
     re.compile(PRIVATE_KEY_BLOCK_RE, re.S),
+    re.compile(rf"\b{STRIPE_KEY_RE}\b"),
+    re.compile(URL_USERINFO_CRED_RE),
+    re.compile(LABELED_LONG_SECRET_RE),
 ]
 SENSITIVE_KEY_RE = re.compile(
     r"(?i)(token|secret|password|api[_-]?key|credential|authorization|session[_-]?id)"

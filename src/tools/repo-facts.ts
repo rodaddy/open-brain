@@ -164,24 +164,120 @@ export const repoFactMetadata = z
 type RepoFactMetadata = z.infer<typeof repoFactMetadata>;
 
 export const REPO_FACT_METADATA_CONTRACT = {
-  source_system: { type: "literal", value: "qmd", required: true },
-  repo: { type: "string", required: true, maxLength: 300 },
-  collection: { type: "string", required: true, maxLength: 300 },
-  path: { type: "string", required: true, maxLength: 1000 },
-  symbol: { type: "string", required: "symbol_or_subject", maxLength: 300 },
-  subject: { type: "string", required: "symbol_or_subject", maxLength: 500 },
-  fact_type: { type: "enum", required: true, values: FACT_TYPES },
-  fact: { type: "string", required: true, maxLength: 2000 },
-  source_commit: { type: "git_sha", required: true },
-  source_url: { type: "https_github_url", required: true },
-  verified_at: { type: "datetime_not_future", required: true },
-  confidence: { type: "number", min: 0, max: 1, default: 1 },
+  source_system: {
+    type: "literal",
+    value: "qmd",
+    required: true,
+    description:
+      'Provenance marker; must be the literal "qmd". Repo facts are only ' +
+      "accepted from the qmd derivation pipeline.",
+  },
+  repo: {
+    type: "string",
+    required: true,
+    maxLength: 300,
+    description:
+      "Repository slug this fact is about (e.g. owner/repo). Must match the " +
+      "repo segment of source_url.",
+  },
+  collection: {
+    type: "string",
+    required: true,
+    maxLength: 300,
+    description:
+      "qmd collection the fact was derived from. Groups facts by their " +
+      "source index.",
+  },
+  path: {
+    type: "string",
+    required: true,
+    maxLength: 1000,
+    description:
+      "Repo-relative file path the fact concerns. Must exactly match the " +
+      "path encoded in source_url (suffix matches are rejected).",
+  },
+  symbol: {
+    type: "string",
+    required: "symbol_or_subject",
+    maxLength: 300,
+    description:
+      "The code symbol (function/class/const) the fact is about. Provide " +
+      "either symbol OR subject — use symbol when the fact targets a specific " +
+      "named identifier.",
+  },
+  subject: {
+    type: "string",
+    required: "symbol_or_subject",
+    maxLength: 500,
+    description:
+      "Human-readable subject when the fact is not about one named symbol. " +
+      "Provide either subject OR symbol — use subject for file- or " +
+      "concept-level facts.",
+  },
+  fact_type: {
+    type: "enum",
+    required: true,
+    values: FACT_TYPES,
+    description:
+      "Category of fact, used for filtering on read. Pick the value that best " +
+      "classifies what this fact asserts.",
+  },
+  fact: {
+    type: "string",
+    required: true,
+    maxLength: 2000,
+    description:
+      "The fact itself, as prose (max ~6 lines). State the durable truth " +
+      "plainly. Do NOT paste raw code chunks or any credential-like material — " +
+      "those are rejected.",
+  },
+  source_commit: {
+    type: "git_sha",
+    required: true,
+    description:
+      "Git SHA the fact was verified against. Must appear as a path segment " +
+      "in source_url so the citation is pinned to an exact commit.",
+  },
+  source_url: {
+    type: "https_github_url",
+    required: true,
+    description:
+      "HTTPS GitHub URL (github.com or raw.githubusercontent.com) proving the " +
+      "fact, pinned to source_commit and the exact path. No credentials or " +
+      "private hosts; the repo/commit/path must match the other fields.",
+  },
+  verified_at: {
+    type: "datetime_not_future",
+    required: true,
+    description:
+      "ISO timestamp when the fact was verified against source_commit. Must " +
+      "not be in the future; drives staleness evaluation.",
+  },
+  confidence: {
+    type: "number",
+    min: 0,
+    max: 1,
+    default: 1,
+    description:
+      "How confident you are in the fact, 0-1 (default 1). Lower it for " +
+      "inferred or uncertain facts so consumers can weight accordingly.",
+  },
   staleness_policy: {
     type: "enum",
     required: true,
     values: STALENESS_POLICIES,
+    description:
+      "How this fact should be treated as the repo evolves — controls when it " +
+      "is considered out of date and in need of re-verification.",
   },
-  refresh_hint: { type: "string", required: false, maxLength: 1000 },
+  refresh_hint: {
+    type: "string",
+    required: false,
+    maxLength: 1000,
+    description:
+      "Optional note on how/when to re-verify this fact (e.g. what to re-run " +
+      "or watch). Helps a future agent refresh it efficiently.",
+  },
 } as const;
 
 export const REPO_FACT_VALIDATION_CONTRACT = {

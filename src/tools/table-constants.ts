@@ -70,7 +70,8 @@ export const TABLE_ALIAS: Record<Table, string> = {
 /**
  * All valid link relation types for the entity graph.
  * Keep in sync with CHECK (relation IN (...)) in 010_entity_links.sql
- * and LinkRelation type in ../types.ts.
+ * (extended by 018_link_relation_supplements.sql) and LinkRelation type in
+ * ../types.ts.
  */
 export const LINK_RELATIONS = [
   "artifact",
@@ -86,4 +87,5 @@ export const LINK_RELATIONS = [
   "relates_to",
   "contradicts",
   "duplicates",
+  "supplements",
 ] as const;

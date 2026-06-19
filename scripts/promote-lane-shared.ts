@@ -6,8 +6,10 @@ import { createPool } from "../src/db/pool.ts";
 import { contentHash, EMBEDDING_MODEL, generateEmbedding } from "../src/embedding.ts";
 import { logger } from "../src/logger.ts";
 import { promoteEntry } from "../src/promotion-service.ts";
+import { clusterPromotedThought } from "./cluster-promoted-thought.ts";
 import {
   canonicalNamespace,
+  physicalNamespace,
   sharedNamespaceConfig,
 } from "../src/shared-namespace.ts";
 import { classifyShareCandidate, type ShareDecision } from "../src/sharing.ts";
@@ -58,6 +60,8 @@ interface SourceReceipt {
   manual_review: number;
   duplicates: number;
   failed: number;
+  /** New shared thoughts linked into an existing cluster (apply only, #173). */
+  clustered: number;
 }
 
 interface Receipt {
@@ -74,6 +78,7 @@ interface Receipt {
   manual_review: number;
   duplicates: number;
   failed: number;
+  clustered: number;
   sources: Partial<Record<Source, SourceReceipt>>;
   failures: Array<{ source: Source; id: string; error: string }>;
 }
@@ -210,6 +215,7 @@ function newSourceReceipt(): SourceReceipt {
     manual_review: 0,
     duplicates: 0,
     failed: 0,
+    clustered: 0,
   };
 }
 
@@ -332,7 +338,8 @@ async function nominatedEventRows(
 /**
  * Insert a nominated lane event into shared-kb as a thought, with the SAME
  * provenance shape promoteEntry builds. Idempotent via ON CONFLICT
- * (content_hash, namespace). Returns true if a new row was inserted.
+ * (content_hash, namespace). Returns the inserted thought id, or null if the
+ * row already existed (ON CONFLICT DO NOTHING).
  */
 export async function shareEventToSharedKb(
   pool: ReturnType<typeof createPool>,
@@ -342,7 +349,7 @@ export async function shareEventToSharedKb(
   embedding: number[] | null,
   reason: string,
   promotedBy: string,
-): Promise<boolean> {
+): Promise<string | null> {
   const hash = event.content_hash ?? contentHash(event.content);
   const provenance = {
     source_physical_namespace: event.namespace,
@@ -396,7 +403,7 @@ export async function shareEventToSharedKb(
       JSON.stringify(provenance),
     ],
   );
-  return rows.length > 0;
+  return rows.length > 0 ? (rows[0].id as string) : null;
 }
 
 /**
@@ -443,6 +450,7 @@ export async function runSharedPromoter(args: Args): Promise<Receipt> {
     manual_review: 0,
     duplicates: 0,
     failed: 0,
+    clustered: 0,
     sources: {},
     failures: [],
   };
@@ -535,6 +543,17 @@ export async function runSharedPromoter(args: Args): Promise<Receipt> {
               id: row.id,
               new_id: result.new_id,
             });
+            // Cluster-supplement (#173): thoughts only (decisions go to their
+            // own table), against the ns promoteEntry wrote to.
+            if (table === "thoughts" && result.new_id) {
+              const clustered = await clusterPromotedThought(
+                pool,
+                result.new_id,
+                physicalNamespace(args.targetNamespace),
+                promotedBy,
+              );
+              if (clustered) addCount(receipt, table, "clustered");
+            }
           }
           if (args.apply) {
             await clearNomination(
@@ -614,9 +633,8 @@ export async function runSharedPromoter(args: Args): Promise<Receipt> {
         if (args.apply && applied >= args.maxApply) break events;
 
         try {
-          // Dry-run must not call the embedding endpoint: it neither writes nor
-          // needs the vector, and the embedding call is the expensive part of a
-          // sweep. Count the would-share and move on before embedding.
+          // Dry-run must not call the embedding endpoint (no write, no vector
+          // needed, and it is the expensive part of a sweep). Count and skip.
           if (!args.apply) {
             addCount(receipt, "ob_session_events", "would_share");
             continue;
@@ -629,7 +647,7 @@ export async function runSharedPromoter(args: Args): Promise<Receipt> {
             embedding = null;
           }
 
-          const inserted = await shareEventToSharedKb(
+          const insertedId = await shareEventToSharedKb(
             pool,
             event,
             targetPhysicalNamespace,
@@ -638,7 +656,7 @@ export async function runSharedPromoter(args: Args): Promise<Receipt> {
             "lane-shared promoter nomination",
             promotedBy,
           );
-          if (inserted) {
+          if (insertedId) {
             applied += 1;
             addCount(receipt, "ob_session_events", "shared");
             logger.info("shared_promoter_promoted", {
@@ -646,6 +664,14 @@ export async function runSharedPromoter(args: Args): Promise<Receipt> {
               source: "ob_session_events",
               id: event.id,
             });
+            // Cluster-supplement (#173): APPLY-only, post-insert, never dry-run.
+            const clustered = await clusterPromotedThought(
+              pool,
+              insertedId,
+              targetPhysicalNamespace,
+              promotedBy,
+            );
+            if (clustered) addCount(receipt, "ob_session_events", "clustered");
           } else {
             addCount(receipt, "ob_session_events", "duplicates");
           }
@@ -707,6 +733,7 @@ if (import.meta.main) {
       manual_review: receipt.manual_review,
       duplicates: receipt.duplicates,
       failed: receipt.failed,
+      clustered: receipt.clustered,
     });
     console.log(JSON.stringify({ ...receipt, receipt_path: receiptPath }));
   };

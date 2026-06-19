@@ -89,6 +89,16 @@ dbDescribe("runSharedPromoter cursor-stall fix (live Postgres)", () => {
     //  4. Promoted lane-event copies → namespace = sharedPhysicalNs (real shared-kb),
     //     source = 'lane-shared-promotion', provenance source_physical_namespace = ns.
     //
+    // ob_links created by thought-cluster supplementation (#173) live in the
+    // pinned shared namespace (ns+"-shared"); also sweep the real shared-kb ns
+    // for any auto-cluster links the events loop could have produced.
+    await pool.query(
+      `DELETE FROM ob_links
+        WHERE relation = 'supplements'
+          AND namespace = ANY($1::text[])
+          AND metadata->>'clustered_by' = 'lane-shared-promoter'`,
+      [[ns + "-shared", sharedPhysicalNs]],
+    );
     // Lanes/events: delete lanes for the test ns (events cascade).
     await pool.query("DELETE FROM ob_session_lanes WHERE namespace = $1", [ns]);
     // Seeded source rows AND promoteEntry-promoted copies, by namespace.
@@ -211,6 +221,169 @@ dbDescribe("runSharedPromoter cursor-stall fix (live Postgres)", () => {
 
   afterAll(async () => {
     await pool.end();
+  });
+
+  // ── Thought-cluster supplementation (#173) ──
+  //
+  // We drive the THOUGHTS promoteEntry path with DETERMINISTIC embeddings so the
+  // cosine distance between a promoted thought and a seeded shared-kb anchor is
+  // exact and controllable — no embedding server needed. promoteEntry copies the
+  // source thought's `embedding` column verbatim into the shared-kb copy, so the
+  // promoted row's vector equals the source vector we set here.
+  //
+  // Construction: all vectors are 768-dim unit vectors in the span of basis
+  // components 0 and 1. For unit vectors u=[a,b,0…] and v=[c,d,0…] the cosine
+  // similarity is a*c + b*d, and pgvector's `<=>` (halfvec_cosine_ops) returns
+  // cosine DISTANCE = 1 - similarity. So choosing the dot product picks the band.
+  const EMBED_DIM = 768;
+
+  /** A 768-dim halfvec literal for a unit vector with the given [c0, c1] head. */
+  function unitVec(c0: number, c1: number): string {
+    const rest = new Array(EMBED_DIM - 2).fill(0);
+    return JSON.stringify([c0, c1, ...rest]);
+  }
+
+  // Promoted thought direction: pure basis-0 unit vector.
+  const NEW_VEC = unitVec(1, 0);
+  // similarity 0.85 → distance 0.15 → inside band [0.08, 0.25): supplements.
+  const IN_BAND_VEC = unitVec(0.85, Math.sqrt(1 - 0.85 * 0.85));
+  // similarity 0.5 → distance 0.5 → >= 0.25: out of band, NO link (cluster seed).
+  const FAR_VEC = unitVec(0.5, Math.sqrt(1 - 0.5 * 0.5));
+  // similarity 0.96 → distance 0.04 → < 0.08: exact-dup band, NOT clustered.
+  const DUP_VEC = unitVec(0.96, Math.sqrt(1 - 0.96 * 0.96));
+
+  /** Seed a source thought (namespace=ns) with a nomination flag + embedding. */
+  async function seedThoughtWithEmbedding(
+    content: string,
+    createdAt: string,
+    vecLiteral: string,
+  ): Promise<string> {
+    const { rows } = await pool.query(
+      `INSERT INTO thoughts
+         (content, namespace, extracted_metadata, created_by, created_at,
+          embedding, content_hash)
+       VALUES ($1, $2, $3::jsonb, 'test', $4::timestamptz, $5::halfvec, $6)
+       RETURNING id`,
+      [
+        content,
+        ns,
+        JSON.stringify({ share_candidate: true }),
+        createdAt,
+        vecLiteral,
+        `src-hash-${createdAt}`,
+      ],
+    );
+    return rows[0].id as string;
+  }
+
+  /** Seed an EXISTING shared-kb anchor thought with a controlled embedding. */
+  async function seedSharedAnchor(
+    content: string,
+    vecLiteral: string,
+  ): Promise<string> {
+    const { rows } = await pool.query(
+      `INSERT INTO thoughts
+         (content, namespace, created_by, embedding, content_hash)
+       VALUES ($1, $2, 'test', $3::halfvec, $4)
+       RETURNING id`,
+      [content, ns + "-shared", vecLiteral, `anchor-hash-${content.length}-${content}`],
+    );
+    return rows[0].id as string;
+  }
+
+  /** Count supplements links FROM a given new thought. */
+  async function supplementsLinks(
+    fromId: string,
+  ): Promise<Array<{ to_id: string; metadata: Record<string, unknown> }>> {
+    const { rows } = await pool.query(
+      `SELECT to_id, metadata FROM ob_links
+        WHERE from_type = 'thought' AND from_id = $1
+          AND relation = 'supplements' AND archived_at IS NULL`,
+      [fromId],
+    );
+    return rows as Array<{ to_id: string; metadata: Record<string, unknown> }>;
+  }
+
+  test("clustering: in-band neighbour gets a 'supplements' link to the anchor", async () => {
+    const anchorId = await seedSharedAnchor("Existing shared cluster anchor about schema.", IN_BAND_VEC);
+    await seedThoughtWithEmbedding(SHARE_CONTENT, "2026-08-01T00:00:00Z", NEW_VEC);
+
+    const receipt = await runSharedPromoter(makeArgs(true));
+    const thoughts = receipt.sources.thoughts;
+    expect(thoughts).toBeDefined();
+    expect(thoughts!.shared).toBe(1);
+    expect(thoughts!.clustered).toBe(1);
+    expect(receipt.clustered).toBe(1);
+
+    // Find the promoted copy in the shared ns and assert the supplements edge.
+    const { rows: copies } = await pool.query(
+      `SELECT id FROM thoughts
+        WHERE namespace = $1 AND content = $2`,
+      [ns + "-shared", SHARE_CONTENT],
+    );
+    expect(copies.length).toBe(1);
+    const links = await supplementsLinks(copies[0].id);
+    expect(links.length).toBe(1);
+    const link = links[0]!;
+    expect(link.to_id).toBe(anchorId);
+    expect(link.metadata.auto_clustered).toBe(true);
+    expect(Number(link.metadata.distance)).toBeCloseTo(0.15, 2);
+  });
+
+  test("clustering: no in-band neighbour creates NO link (orphan cluster seed)", async () => {
+    await seedSharedAnchor("Distant shared anchor, different topic entirely.", FAR_VEC);
+    await seedThoughtWithEmbedding(SHARE_CONTENT, "2026-08-02T00:00:00Z", NEW_VEC);
+
+    const receipt = await runSharedPromoter(makeArgs(true));
+    expect(receipt.sources.thoughts!.shared).toBe(1);
+    expect(receipt.sources.thoughts!.clustered).toBe(0);
+    expect(receipt.clustered).toBe(0);
+
+    const { rows: copies } = await pool.query(
+      `SELECT id FROM thoughts WHERE namespace = $1 AND content = $2`,
+      [ns + "-shared", SHARE_CONTENT],
+    );
+    const links = await supplementsLinks(copies[0].id);
+    expect(links.length).toBe(0);
+  });
+
+  test("clustering: an exact/near-dup neighbour (dist < 0.08) is NOT clustered", async () => {
+    // The anchor is within the dedup band (distance 0.04). Dedup here is
+    // content_hash-only, so promoteEntry still promotes the new row, but
+    // clustering must SKIP linking because it sits below EXACT_DUP_THRESHOLD.
+    await seedSharedAnchor("Near-duplicate shared anchor close in space.", DUP_VEC);
+    await seedThoughtWithEmbedding(SHARE_CONTENT, "2026-08-03T00:00:00Z", NEW_VEC);
+
+    const receipt = await runSharedPromoter(makeArgs(true));
+    expect(receipt.sources.thoughts!.shared).toBe(1);
+    expect(receipt.sources.thoughts!.clustered).toBe(0);
+
+    const { rows: copies } = await pool.query(
+      `SELECT id FROM thoughts WHERE namespace = $1 AND content = $2`,
+      [ns + "-shared", SHARE_CONTENT],
+    );
+    const links = await supplementsLinks(copies[0].id);
+    expect(links.length).toBe(0);
+  });
+
+  test("clustering: dry-run creates NO link even with an in-band neighbour", async () => {
+    await seedSharedAnchor("Dry-run anchor that would be in band.", IN_BAND_VEC);
+    const srcId = await seedThoughtWithEmbedding(SHARE_CONTENT, "2026-08-04T00:00:00Z", NEW_VEC);
+
+    const receipt = await runSharedPromoter(makeArgs(false));
+    expect(receipt.dry_run).toBe(true);
+    expect(receipt.sources.thoughts!.would_share).toBe(1);
+    expect(receipt.clustered).toBe(0);
+
+    // No promoted copy and therefore no link of any kind was created.
+    const { rows: copies } = await pool.query(
+      `SELECT id FROM thoughts WHERE namespace = $1 AND content = $2`,
+      [ns + "-shared", SHARE_CONTENT],
+    );
+    expect(copies.length).toBe(0);
+    // And no supplements link from the (un-promoted) source either.
+    const links = await supplementsLinks(srcId);
+    expect(links.length).toBe(0);
   });
 
   test("events loop: trailing manual-review event does NOT pin the cursor", async () => {

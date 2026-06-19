@@ -25,7 +25,8 @@ export type LinkRelation =
   | "decided_by"
   | "relates_to"
   | "contradicts"
-  | "duplicates";
+  | "duplicates"
+  | "supplements";
 export type Tier = "hot" | "warm" | "cold";
 export type Permission = "read" | "write" | "delete";
 

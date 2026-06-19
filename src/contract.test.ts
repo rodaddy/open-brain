@@ -81,11 +81,11 @@ describe("Open Brain contract manifest", () => {
     // contract so a future TS/Python divergence fails here, in lockstep with
     // python/openbrain-memory CURRENT_CONTRACT_VERSION.
     const contract = buildContract("2026-06-18T00:00:00.000Z");
-    expect(contract.contract_version).toBe("2026-06-19.memory-tools.v4");
+    expect(contract.contract_version).toBe("2026-06-19.memory-tools.v5");
 
     const appendEvent = contract.tool_contracts.append_session_event;
     expect(appendEvent).toBeDefined();
-    expect(appendEvent?.version).toBe(2);
+    expect(appendEvent?.version).toBe(3);
     const shareCandidate = (appendEvent?.input_schema as any).metadata.fields
       .share_candidate;
     expect(shareCandidate.type).toBe("boolean");
