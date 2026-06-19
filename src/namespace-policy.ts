@@ -1,5 +1,6 @@
 import type { AuthInfo } from "./types.ts";
 import {
+  physicalNamespace,
   sharedNamespaceConfig,
   shouldRejectLegacySharedWrite,
 } from "./shared-namespace.ts";
@@ -25,14 +26,18 @@ export function canWriteNamespace(
   auth: AuthInfo,
   targetNamespace: string,
 ): NamespaceCheck {
+  const physicalTargetNamespace = physicalNamespace(targetNamespace);
   if (shouldRejectLegacySharedWrite(auth, targetNamespace)) {
     return {
       allowed: false,
-      reason: `legacy shared namespace '${targetNamespace}' is read-only for normal clients; use '${sharedNamespaceConfig().sharedNamespace}'`,
+      reason: `legacy shared namespace '${targetNamespace}' is read-only for normal clients; use '${sharedNamespaceConfig().canonicalSharedNamespace}'`,
     };
   }
 
-  if (auth.namespaceSource === "header" && targetNamespace !== auth.clientId) {
+  if (
+    auth.namespaceSource === "header" &&
+    physicalTargetNamespace !== auth.clientId
+  ) {
     return {
       allowed: false,
       reason: `X-Namespace header requires writes to namespace '${auth.clientId}'`,
@@ -40,7 +45,10 @@ export function canWriteNamespace(
   }
 
   const config = sharedNamespaceConfig();
-  if (targetNamespace === config.sharedNamespace && !isPromoterIdentity(auth)) {
+  if (
+    physicalTargetNamespace === config.physicalSharedNamespace &&
+    !isPromoterIdentity(auth)
+  ) {
     return {
       allowed: false,
       reason:
@@ -56,7 +64,7 @@ export function canWriteNamespace(
     return { allowed: false, reason: "readonly role cannot write" };
   }
 
-  if (targetNamespace === auth.clientId) {
+  if (physicalTargetNamespace === auth.clientId) {
     return { allowed: true };
   }
 

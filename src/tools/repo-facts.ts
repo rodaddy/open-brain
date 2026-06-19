@@ -309,16 +309,49 @@ function canonicalizeRepoFactRows(rows: Record<string, unknown>[]) {
   }));
 }
 
+function repoFactDedupeKey(row: Record<string, unknown>) {
+  const metadata =
+    row.metadata && typeof row.metadata === "object"
+      ? (row.metadata as Record<string, unknown>)
+      : {};
+  const metadataKey = `${metadata.repo ?? ""}:${metadata.path ?? ""}:${metadata.subject ?? metadata.symbol ?? ""}:${metadata.fact_type ?? ""}`;
+  return (
+    row.canonical_id ??
+    (row.name ? `${row.entity_type}:${row.name}` : undefined) ??
+    (metadataKey === ":::" ? undefined : metadataKey) ??
+    row.id
+  );
+}
+
 function dedupeRepoFactRows(rows: Record<string, unknown>[]) {
   const seen = new Set<unknown>();
   const deduped: Record<string, unknown>[] = [];
   for (const row of rows) {
-    const key = row.id ?? `${row.entity_type}:${row.name}`;
+    const key = repoFactDedupeKey(row);
     if (seen.has(key)) continue;
     seen.add(key);
     deduped.push(row);
   }
   return deduped;
+}
+
+function mergeRepoFactFallbackRows(
+  primaryRows: Record<string, unknown>[],
+  legacyRows: Record<string, unknown>[],
+  limit: number,
+) {
+  const primary = dedupeRepoFactRows(primaryRows);
+  const primaryKeys = new Set(primary.map(repoFactDedupeKey));
+  const legacy = dedupeRepoFactRows(
+    legacyRows.filter((row) => !primaryKeys.has(repoFactDedupeKey(row))),
+  );
+  if (legacy.length === 0) return primary.slice(0, limit);
+  if (primary.length >= limit) {
+    const fallbackRow = legacy[0];
+    if (!fallbackRow) return primary.slice(0, limit);
+    return [...primary.slice(0, Math.max(0, limit - 1)), fallbackRow];
+  }
+  return [...primary, ...legacy.slice(0, limit - primary.length)];
 }
 
 export function registerUpsertRepoFact(server: McpServer, deps: ToolDeps): void {
@@ -568,10 +601,33 @@ export function registerListRepoFacts(server: McpServer, deps: ToolDeps): void {
         } else {
           const legacyRows = await queryRows(
             config.legacySharedNamespace,
-            limit - sharedRows.length,
+            limit,
             0,
           );
-          rows = dedupeRepoFactRows([...sharedRows, ...legacyRows]);
+          rows = mergeRepoFactFallbackRows(sharedRows, legacyRows, limit);
+        }
+      } else if (
+        Array.isArray(namespace) &&
+        namespace.includes(config.physicalSharedNamespace) &&
+        config.legacyFallbackEnabled &&
+        offset === 0
+      ) {
+        const [primaryRows, sharedRows] = await Promise.all([
+          queryRows(namespace, limit, 0),
+          queryRows(config.physicalSharedNamespace, limit, 0),
+        ]);
+        if (
+          sharedRows.length >= limit ||
+          sharedRows.length >= config.fallbackMinResults
+        ) {
+          rows = primaryRows;
+        } else {
+          const legacyRows = await queryRows(
+            config.legacySharedNamespace,
+            limit,
+            0,
+          );
+          rows = mergeRepoFactFallbackRows(primaryRows, legacyRows, limit);
         }
       } else {
         rows = await queryRows(namespace, limit, offset);

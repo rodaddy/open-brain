@@ -235,6 +235,45 @@ function dedupeSearchRows(rows: SearchRow[]): SearchRow[] {
   return deduped;
 }
 
+function fallbackDedupeKey(row: SearchRow): string {
+  const preview = row.content_preview?.replace(/\s+/g, " ").trim();
+  if (preview) {
+    return `${row.source_type}:content:${preview}`;
+  }
+  return `${row.source_type}:id:${row.id}`;
+}
+
+function dedupeFallbackSearchRows(rows: SearchRow[]): SearchRow[] {
+  const seen = new Set<string>();
+  const deduped: SearchRow[] = [];
+  for (const row of rows) {
+    const key = fallbackDedupeKey(row);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(row);
+  }
+  return deduped;
+}
+
+function mergeFallbackSearchRows(
+  primaryRows: SearchRow[],
+  legacyRows: SearchRow[],
+  limit: number,
+): SearchRow[] {
+  const primary = dedupeFallbackSearchRows(primaryRows);
+  const primaryKeys = new Set(primary.map(fallbackDedupeKey));
+  const legacy = dedupeFallbackSearchRows(
+    legacyRows.filter((row) => !primaryKeys.has(fallbackDedupeKey(row))),
+  );
+  if (legacy.length === 0) return primary.slice(0, limit);
+  if (primary.length >= limit) {
+    const fallbackRow = legacy[0];
+    if (!fallbackRow) return primary.slice(0, limit);
+    return [...primary.slice(0, Math.max(0, limit - 1)), fallbackRow];
+  }
+  return [...primary, ...legacy.slice(0, limit - primary.length)];
+}
+
 function appendNamespaceParam(
   params: unknown[],
   namespace?: NamespaceFilter,
@@ -855,7 +894,89 @@ export async function executeSearchWithSharedFallback(
     config.legacySharedNamespace,
     includeLinks,
   );
-  return withCanonicalNamespaces(dedupeSearchRows([...sharedRows, ...legacyRows]));
+  return withCanonicalNamespaces(
+    mergeFallbackSearchRows(sharedRows, legacyRows, limit),
+  );
+}
+
+export async function executeSearchWithScopedSharedFallback(
+  deps: ToolDeps,
+  accessibleTables: SearchTable[],
+  query: string,
+  limit: number,
+  mode: SearchMode,
+  tier: Tier | undefined,
+  offset: number,
+  namespace: NamespaceFilter | undefined,
+  includeLinks?: boolean,
+): Promise<SearchRow[]> {
+  const config = sharedNamespaceConfig();
+  const scopedNamespaces = Array.isArray(namespace) ? namespace : [];
+  if (
+    !config.legacyFallbackEnabled ||
+    offset !== 0 ||
+    !scopedNamespaces.includes(config.physicalSharedNamespace)
+  ) {
+    return withCanonicalNamespaces(
+      await executeSearch(
+        deps,
+        accessibleTables,
+        query,
+        limit,
+        mode,
+        tier,
+        offset,
+        namespace,
+        includeLinks,
+      ),
+    );
+  }
+
+  const [primaryRows, sharedRows] = await Promise.all([
+    executeSearch(
+      deps,
+      accessibleTables,
+      query,
+      limit,
+      mode,
+      tier,
+      0,
+      namespace,
+      includeLinks,
+    ),
+    executeSearch(
+      deps,
+      accessibleTables,
+      query,
+      limit,
+      mode,
+      tier,
+      0,
+      config.physicalSharedNamespace,
+      includeLinks,
+    ),
+  ]);
+  if (
+    sharedRows.length >= limit ||
+    sharedRows.length >= config.fallbackMinResults
+  ) {
+    return withCanonicalNamespaces(primaryRows);
+  }
+
+  const legacyRows = await executeSearch(
+    deps,
+    accessibleTables,
+    query,
+    limit,
+    mode,
+    tier,
+    0,
+    config.legacySharedNamespace,
+    includeLinks,
+  );
+  return withCanonicalNamespaces(
+    mergeFallbackSearchRows(primaryRows, legacyRows, limit),
+  );
 }
 
 export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
@@ -1013,17 +1134,15 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
               offset,
               namespace,
             )
-          : withCanonicalNamespaces(
-              await executeSearch(
-                deps,
-                accessibleTables,
-                args.query,
-                limit,
-                mode,
-                tier,
-                offset,
-                namespace,
-              ),
+          : await executeSearchWithScopedSharedFallback(
+              deps,
+              accessibleTables,
+              args.query,
+              limit,
+              mode,
+              tier,
+              offset,
+              namespace,
             );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

@@ -7,6 +7,7 @@ import type { ToolDeps } from "./index.ts";
 import {
   ALL_TABLES,
   executeSearch,
+  executeSearchWithScopedSharedFallback,
   executeSearchWithSharedFallback,
   type SearchMode,
   type SearchRow,
@@ -222,7 +223,7 @@ export function registerBrainAnswer(server: McpServer, deps: ToolDeps): void {
                 namespace,
                 false,
               )
-            : await executeSearch(
+            : await executeSearchWithScopedSharedFallback(
                 deps,
                 accessibleTables,
                 query,

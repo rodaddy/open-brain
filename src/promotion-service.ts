@@ -5,7 +5,11 @@ import {
   canReadNamespace,
 } from "./read-policy.ts";
 import { canWriteNamespace } from "./namespace-policy.ts";
-import { isSharedNamespace } from "./shared-namespace.ts";
+import {
+  canonicalNamespace,
+  isSharedNamespace,
+  physicalNamespace,
+} from "./shared-namespace.ts";
 
 export const PROMOTION_CONTENT_COLUMNS: Record<Table, string> = {
   thoughts:
@@ -124,20 +128,23 @@ export async function promoteEntry(
     );
   }
 
-  if (source.namespace === targetNamespace) {
+  const targetPhysicalNamespace = physicalNamespace(targetNamespace);
+  const targetCanonicalNamespace = canonicalNamespace(targetPhysicalNamespace);
+
+  if (source.namespace === targetPhysicalNamespace) {
     throw Object.assign(new Error(`Entry is already in namespace '${targetNamespace}'`), {
       statusCode: 409,
     });
   }
 
-  const existing = await findDuplicate(pool, table, source, targetNamespace);
+  const existing = await findDuplicate(pool, table, source, targetPhysicalNamespace);
   if (existing) {
     return {
       status: "duplicate",
       existing_id: existing.id,
       existing_archived: !!existing.archived_at,
       source_id: id,
-      target_namespace: targetNamespace,
+      target_namespace: targetCanonicalNamespace,
     };
   }
 
@@ -158,7 +165,7 @@ export async function promoteEntry(
     },
     source_repo: source.extracted_metadata?.repo ?? source.metadata?.repo ?? null,
     source_project: source.project ?? source.extracted_metadata?.project ?? source.metadata?.project ?? null,
-    target_namespace: targetNamespace,
+    target_namespace: targetCanonicalNamespace,
     target_kind: isSharedNamespace(targetNamespace) ? "shared-kb" : "namespace",
     promotion_reason: reason ?? null,
     promotion_confidence: null,
@@ -173,7 +180,7 @@ export async function promoteEntry(
       would_insert: true,
       source_id: id,
       source_namespace: source.namespace,
-      target_namespace: targetNamespace,
+      target_namespace: targetCanonicalNamespace,
       provenance,
       backoff: {
         retryable: true,
@@ -195,18 +202,23 @@ export async function promoteEntry(
      FROM ${table} WHERE id = $1 AND namespace = $4
      ON CONFLICT DO NOTHING
      RETURNING id`,
-    [id, targetNamespace, JSON.stringify(provenance), source.namespace],
+    [id, targetPhysicalNamespace, JSON.stringify(provenance), source.namespace],
   );
 
   if (inserted.length === 0) {
-    const duplicate = await findDuplicate(pool, table, source, targetNamespace);
+    const duplicate = await findDuplicate(
+      pool,
+      table,
+      source,
+      targetPhysicalNamespace,
+    );
     if (duplicate) {
       return {
         status: "duplicate",
         existing_id: duplicate.id,
         existing_archived: !!duplicate.archived_at,
         source_id: id,
-        target_namespace: targetNamespace,
+        target_namespace: targetCanonicalNamespace,
       };
     }
     throw Object.assign(new Error("Promotion conflicted with an existing row"), {
@@ -219,7 +231,7 @@ export async function promoteEntry(
     new_id: inserted[0].id,
     source_id: id,
     source_namespace: source.namespace,
-    target_namespace: targetNamespace,
+    target_namespace: targetCanonicalNamespace,
     provenance,
   };
 }

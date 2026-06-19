@@ -8,6 +8,7 @@ import type { ToolDeps } from "./index.ts";
 import {
   ALL_TABLES,
   executeSearch,
+  executeSearchWithScopedSharedFallback,
   executeSearchWithSharedFallback,
   trackUsage,
   TIER_BOOST,
@@ -281,7 +282,7 @@ async function searchOB(
             namespace,
             false,
           )
-        : await executeSearch(
+        : await executeSearchWithScopedSharedFallback(
             deps,
             accessibleTables,
             query,
