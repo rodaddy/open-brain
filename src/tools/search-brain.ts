@@ -235,6 +235,26 @@ function dedupeSearchRows(rows: SearchRow[]): SearchRow[] {
   return deduped;
 }
 
+function fallbackDedupeKey(row: SearchRow): string {
+  const preview = row.content_preview?.replace(/\s+/g, " ").trim();
+  if (preview) {
+    return `${row.source_type}:content:${preview}`;
+  }
+  return `${row.source_type}:id:${row.id}`;
+}
+
+function dedupeFallbackSearchRows(rows: SearchRow[]): SearchRow[] {
+  const seen = new Set<string>();
+  const deduped: SearchRow[] = [];
+  for (const row of rows) {
+    const key = fallbackDedupeKey(row);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(row);
+  }
+  return deduped;
+}
+
 function appendNamespaceParam(
   params: unknown[],
   namespace?: NamespaceFilter,
@@ -855,7 +875,9 @@ export async function executeSearchWithSharedFallback(
     config.legacySharedNamespace,
     includeLinks,
   );
-  return withCanonicalNamespaces(dedupeSearchRows([...sharedRows, ...legacyRows]));
+  return withCanonicalNamespaces(
+    dedupeFallbackSearchRows([...sharedRows, ...legacyRows]),
+  );
 }
 
 export async function executeSearchWithScopedSharedFallback(
@@ -891,20 +913,33 @@ export async function executeSearchWithScopedSharedFallback(
     );
   }
 
-  const primaryRows = await executeSearch(
-    deps,
-    accessibleTables,
-    query,
-    limit,
-    mode,
-    tier,
-    0,
-    namespace,
-    includeLinks,
-  );
+  const [primaryRows, sharedRows] = await Promise.all([
+    executeSearch(
+      deps,
+      accessibleTables,
+      query,
+      limit,
+      mode,
+      tier,
+      0,
+      namespace,
+      includeLinks,
+    ),
+    executeSearch(
+      deps,
+      accessibleTables,
+      query,
+      limit,
+      mode,
+      tier,
+      0,
+      config.physicalSharedNamespace,
+      includeLinks,
+    ),
+  ]);
   if (
-    primaryRows.length >= limit ||
-    primaryRows.length >= config.fallbackMinResults
+    sharedRows.length >= limit ||
+    sharedRows.length >= config.fallbackMinResults
   ) {
     return withCanonicalNamespaces(primaryRows);
   }
@@ -913,7 +948,7 @@ export async function executeSearchWithScopedSharedFallback(
     deps,
     accessibleTables,
     query,
-    limit - primaryRows.length,
+    limit,
     mode,
     tier,
     0,
@@ -921,7 +956,7 @@ export async function executeSearchWithScopedSharedFallback(
     includeLinks,
   );
   return withCanonicalNamespaces(
-    dedupeSearchRows([...primaryRows, ...legacyRows]),
+    dedupeFallbackSearchRows([...primaryRows, ...legacyRows]),
   );
 }
 

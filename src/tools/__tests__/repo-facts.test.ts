@@ -638,8 +638,135 @@ describe("repo fact tools", () => {
       expect(parsed[0].namespace).toBe("shared-kb");
       expect(calls.map((call) => call.params?.[0])).toEqual([
         ["bilby", "shared-kb"],
+        "shared-kb",
         "collab",
       ]);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("still queries legacy collab when private repo facts fill omitted namespace reads", async () => {
+    const mockPool = {
+      query: async (_sql: string, params?: unknown[]) => {
+        const namespace = params?.[0];
+        if (Array.isArray(namespace)) {
+          return {
+            rows: [
+              {
+                id: "550e8400-e29b-41d4-a716-446655440101",
+                entity_type: "repo_fact",
+                name: "private-one",
+                namespace: "bilby",
+                metadata: { ...repoFact, subject: "private-one" },
+              },
+              {
+                id: "550e8400-e29b-41d4-a716-446655440102",
+                entity_type: "repo_fact",
+                name: "private-two",
+                namespace: "bilby",
+                metadata: { ...repoFact, subject: "private-two" },
+              },
+            ],
+          };
+        }
+        if (namespace === "shared-kb") return { rows: [] };
+        if (namespace === "collab") {
+          return {
+            rows: [
+              {
+                id: "550e8400-e29b-41d4-a716-446655440103",
+                entity_type: "repo_fact",
+                name: "legacy-shared",
+                namespace: "collab",
+                metadata: { ...repoFact, subject: "legacy-shared" },
+              },
+            ],
+          };
+        }
+        return { rows: [] };
+      },
+    };
+    const auth: AuthInfo = { role: "agent", clientId: "bilby" };
+    const { client, cleanup } = await setupMcpClient(
+      registerListRepoFacts,
+      mockPool,
+      createMockEmbed(),
+      auth,
+    );
+
+    try {
+      const result = await client.callTool({
+        name: "list_repo_facts",
+        arguments: { limit: 2 },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const parsed = parseToolResult(result);
+      expect(parsed.map((row: any) => row.namespace)).toEqual([
+        "bilby",
+        "bilby",
+        "shared-kb",
+      ]);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("dedupes migrated shared-kb and legacy collab repo facts by stable identity", async () => {
+    const mockPool = {
+      query: async (_sql: string, params?: unknown[]) => {
+        const namespace = params?.[0];
+        if (namespace === "shared-kb") {
+          return {
+            rows: [
+              {
+                id: "550e8400-e29b-41d4-a716-446655440201",
+                canonical_id: "repo-fact:shared",
+                entity_type: "repo_fact",
+                name: "shared-fact",
+                namespace: "shared-kb",
+                metadata: repoFact,
+              },
+            ],
+          };
+        }
+        if (namespace === "collab") {
+          return {
+            rows: [
+              {
+                id: "550e8400-e29b-41d4-a716-446655440202",
+                canonical_id: "repo-fact:shared",
+                entity_type: "repo_fact",
+                name: "shared-fact",
+                namespace: "collab",
+                metadata: repoFact,
+              },
+            ],
+          };
+        }
+        return { rows: [] };
+      },
+    };
+    const auth: AuthInfo = { role: "agent", clientId: "bilby" };
+    const { client, cleanup } = await setupMcpClient(
+      registerListRepoFacts,
+      mockPool,
+      createMockEmbed(),
+      auth,
+    );
+
+    try {
+      const result = await client.callTool({
+        name: "list_repo_facts",
+        arguments: { namespace: "shared-kb", limit: 3 },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const parsed = parseToolResult(result);
+      expect(parsed).toHaveLength(1);
+      expect(parsed[0].id).toBe("550e8400-e29b-41d4-a716-446655440201");
+      expect(parsed[0].namespace).toBe("shared-kb");
     } finally {
       await cleanup();
     }

@@ -313,7 +313,16 @@ function dedupeRepoFactRows(rows: Record<string, unknown>[]) {
   const seen = new Set<unknown>();
   const deduped: Record<string, unknown>[] = [];
   for (const row of rows) {
-    const key = row.id ?? `${row.entity_type}:${row.name}`;
+    const metadata =
+      row.metadata && typeof row.metadata === "object"
+        ? (row.metadata as Record<string, unknown>)
+        : {};
+    const metadataKey = `${metadata.repo ?? ""}:${metadata.path ?? ""}:${metadata.subject ?? metadata.symbol ?? ""}:${metadata.fact_type ?? ""}`;
+    const key =
+      row.canonical_id ??
+      (row.name ? `${row.entity_type}:${row.name}` : undefined) ??
+      (metadataKey === ":::" ? undefined : metadataKey) ??
+      row.id;
     if (seen.has(key)) continue;
     seen.add(key);
     deduped.push(row);
@@ -579,16 +588,19 @@ export function registerListRepoFacts(server: McpServer, deps: ToolDeps): void {
         config.legacyFallbackEnabled &&
         offset === 0
       ) {
-        const primaryRows = await queryRows(namespace, limit, 0);
+        const [primaryRows, sharedRows] = await Promise.all([
+          queryRows(namespace, limit, 0),
+          queryRows(config.physicalSharedNamespace, limit, 0),
+        ]);
         if (
-          primaryRows.length >= limit ||
-          primaryRows.length >= config.fallbackMinResults
+          sharedRows.length >= limit ||
+          sharedRows.length >= config.fallbackMinResults
         ) {
           rows = primaryRows;
         } else {
           const legacyRows = await queryRows(
             config.legacySharedNamespace,
-            limit - primaryRows.length,
+            limit,
             0,
           );
           rows = dedupeRepoFactRows([...primaryRows, ...legacyRows]);
