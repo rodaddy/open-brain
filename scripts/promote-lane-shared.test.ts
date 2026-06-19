@@ -7,6 +7,7 @@ import {
   test,
 } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Pool } from "pg";
 import { parseArgs, runSharedPromoter } from "./promote-lane-shared.ts";
@@ -155,11 +156,10 @@ dbDescribe("runSharedPromoter cursor-stall fix (live Postgres)", () => {
 
   beforeEach(() => {
     applyDbEnv(DB_URL as string);
+    // DEV_TMP (macOS dev) when set; otherwise the OS temp dir so this runs on
+    // the Linux CI runner (the Mac /Volumes path does not exist there).
     tmpDir = mkdtempSync(
-      join(
-        process.env.DEV_TMP ?? "/Volumes/ThunderBolt/_tmp",
-        "promote-lane-shared-",
-      ),
+      join(process.env.DEV_TMP ?? tmpdir(), "promote-lane-shared-"),
     );
     stateFile = join(tmpDir, "state.json");
   });
