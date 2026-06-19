@@ -48,9 +48,12 @@ const PRIVATE_KEY_BLOCK_RE =
 const STRIPE_KEY_RE = "[sprk]k_(live|test)_[A-Za-z0-9]{16,}";
 // Credentials embedded in a URL's userinfo (`scheme://user:pass@host`). The
 // password is unlabeled and a realistic lane-journal leak. Require a non-empty
-// password and a host to avoid matching `a://b:@` noise.
+// password and a host to avoid matching `a://b:@` noise. Userinfo segments are
+// length-bounded ({1,256}) so the pattern cannot backtrack quadratically on
+// colon-heavy input that lacks a trailing `@` (ReDoS guard); real credentials
+// are far shorter than 256 chars.
 const URL_USERINFO_CRED_RE =
-  "[a-z][a-z0-9+.-]*://[^\\s:@/]+:[^\\s@/]+@[^\\s/]+";
+  "[a-z][a-z0-9+.-]*://[^\\s:@/]{1,256}:[^\\s@/]{1,256}@[^\\s/]+";
 // Context-labeled long hex/base64 secrets (client_secret, access_token, etc.).
 // Deliberately requires a credential LABEL — bare high-entropy hex is left
 // alone because git SHAs and content_hashes are pervasive and legitimate here

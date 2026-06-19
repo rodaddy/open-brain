@@ -164,6 +164,16 @@ def test_redaction_scrubs_url_embedded_credentials():
     assert "[REDACTED]" in redacted
 
 
+def test_redaction_scrubs_url_credentials_uppercase_scheme():
+    # URI schemes are case-insensitive; keep 1:1 with the TS /i-compiled pattern.
+    url = token_sample("HTTPS://", "admin:", "hunter2pw", "@host/x")
+
+    redacted = redact_text(f"db at {url}")
+
+    assert "hunter2pw" not in redacted
+    assert "[REDACTED]" in redacted
+
+
 def test_redaction_scrubs_labeled_long_secret():
     secret = token_sample("client_secret=", "Ab9" * 8, "xyz")
 

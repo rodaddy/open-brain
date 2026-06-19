@@ -37,8 +37,11 @@ PRIVATE_KEY_BLOCK_RE = (
 # Stripe-style keys use an underscore separator (sk_live_, pk_live_, rk_live_,
 # and the test variants), which the OpenAI `sk-` pattern does not catch.
 STRIPE_KEY_RE = r"[sprk]k_(live|test)_[A-Za-z0-9]{16,}"
-# Credentials embedded in a URL's userinfo (scheme://user:pass@host).
-URL_USERINFO_CRED_RE = r"[a-z][a-z0-9+.-]*://[^\s:@/]+:[^\s@/]+@[^\s/]+"
+# Credentials embedded in a URL's userinfo (scheme://user:pass@host). Userinfo
+# segments are length-bounded ({1,256}) to avoid quadratic backtracking (ReDoS)
+# on colon-heavy input without a trailing @. (?i) so uppercase schemes (HTTP://)
+# match too, keeping this 1:1 with the TS `/i`-compiled pattern.
+URL_USERINFO_CRED_RE = r"(?i)[a-z][a-z0-9+.-]*://[^\s:@/]{1,256}:[^\s@/]{1,256}@[^\s/]+"
 # Context-labeled long hex/base64 secrets; requires a credential LABEL so bare
 # git SHAs / content hashes are not over-rejected.
 LABELED_LONG_SECRET_RE = (

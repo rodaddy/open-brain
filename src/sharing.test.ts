@@ -74,6 +74,11 @@ describe("containsSecret", () => {
     ).toBe(true);
   });
 
+  it("detects URL credentials regardless of scheme case", () => {
+    // URI schemes are case-insensitive; an uppercase scheme must not leak.
+    expect(containsSecret("HTTPS://admin:hunter2pw@host/x")).toBe(true);
+  });
+
   it("detects a labeled long secret value", () => {
     expect(
       containsSecret("client_secret=" + "Ab9".repeat(8) + "xyz"),
