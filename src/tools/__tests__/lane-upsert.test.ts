@@ -1,4 +1,4 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect, afterAll } from "bun:test";
 import { Pool } from "pg";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -785,6 +785,10 @@ dbDescribe("lane_upsert (live Postgres)", () => {
     await pool.query("DELETE FROM ob_session_lanes WHERE namespace = $1", [ns]);
   }
 
+  afterAll(async () => {
+    await pool.end();
+  });
+
   it("creates a new lane with status omitted (no $3 type-inference error, NOT NULL satisfied)", async () => {
     await cleanupNs();
     try {
@@ -829,7 +833,6 @@ dbDescribe("lane_upsert (live Postgres)", () => {
       expect(afterTouch[0].ended_at).not.toBeNull();
     } finally {
       await cleanupNs();
-      await pool.end();
     }
   });
 });
