@@ -174,6 +174,18 @@ def test_redaction_scrubs_url_credentials_uppercase_scheme():
     assert "[REDACTED]" in redacted
 
 
+def test_redaction_scans_large_input_in_linear_time():
+    # ReDoS regression: the URL credential pattern once backtracked O(n^2) on
+    # long input via an unanchored scheme prefix. A fixed scheme alternation
+    # fixed it. 80k chars must redact well under a second.
+    import time
+
+    start = time.perf_counter()
+    redact_text("a" * 80_000)
+    redact_text("http" + ":x" * 40_000)
+    assert time.perf_counter() - start < 1.0
+
+
 def test_redaction_scrubs_labeled_long_secret():
     secret = token_sample("client_secret=", "Ab9" * 8, "xyz")
 
