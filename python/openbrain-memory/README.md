@@ -12,7 +12,7 @@ does not move the Open Brain service or database onto that host.
 
 | Component | Runs where | Responsibility |
 | --- | --- | --- |
-| Open Brain service | Remote LXC, for example `http://10.71.20.49:3100` | Owns MCP-over-HTTP, auth, namespace policy, storage, search, curation tools. |
+| Open Brain service | Remote service, for example `https://open-brain.rodaddy.live` or trusted lab `http://10.71.1.21:3100` | Owns MCP-over-HTTP, auth, namespace policy, storage, search, curation tools. |
 | `openbrain-memory` | Bilby, Skippy, Nagatha, automation hosts, or any Python agent runtime | Reusable Python client, memory facade, safety/retry/spool helpers, and dry-run dream planning. |
 | Hermes provider | `rtech-hermes` | Thin adapter from Hermes lifecycle/events into this package. |
 
@@ -51,11 +51,11 @@ export OPENBRAIN_AGENT_ID="bilby"
 export OPENBRAIN_PROJECT="open-brain"
 ```
 
-For trusted lab-only HTTP endpoints, such as `http://10.71.20.49:3100`, opt in
+For trusted lab-only HTTP endpoints, such as `http://10.71.1.21:3100`, opt in
 explicitly:
 
 ```bash
-export OPENBRAIN_BASE_URL="http://10.71.20.49:3100"
+export OPENBRAIN_BASE_URL="http://10.71.1.21:3100"
 export OPENBRAIN_ALLOW_INSECURE_HTTP="1"
 ```
 
@@ -103,6 +103,67 @@ memory.wrap_session("Ready for PR review.")
 
 prompt_context = context.as_prompt_text()
 ```
+
+## Current Open Brain Tools
+
+`OpenBrainClient` exposes first-class methods for the current required Open
+Brain memory contract, currently `2026-06-18.memory-tools.v2`. Agent runtimes
+should call these package methods instead of carrying local copies of tool
+schemas, stale mcp2cli paths, or Hermes-specific Open Brain adapters.
+
+Required memory contract methods:
+
+- `get_contract()`
+- `session_start()`
+- `session_context()`
+- `append_session_event()`
+- `lane_upsert()`
+- `lane_load()`
+- `session_wrap()`
+- `log_thought()`
+- `search_all()`
+- `upsert_repo_fact()`
+- `list_repo_facts()`
+
+Additional current read helpers:
+
+- `brain_answer()`
+- `search_brain()`
+- `get_entity()`
+- `list_entities()`
+- `hydrate_entities()`
+
+The generic `call_tool(name, arguments)` method remains available for forward
+compatibility, but missing first-class wrappers for required contract tools are
+a package bug.
+
+```python
+contract = client.get_contract()
+answer = client.brain_answer(query="what did we decide?", limit=5)
+facts = client.list_repo_facts(repo="rodaddy/open-brain", limit=10)
+client.upsert_repo_fact(metadata={...})
+```
+
+### Authority boundaries
+
+These wrappers describe the *expected* contract; they are not proof of live
+behavior. Read them with three boundaries in mind:
+
+- **The server owns the contract.** `client.get_contract()` returns the
+  authoritative live manifest. `CURRENT_CONTRACT_VERSION` /
+  `REQUIRED_CONTRACT_TOOLS` are a snapshot pinned in this package release and may
+  lag the deployed server. A wrapper existing here does not prove the connected
+  Open Brain implements that tool — confirm with `get_contract()` against the
+  live endpoint.
+- **A wrapper call is not a confirmed write.** Importing this package and calling
+  `log_thought()` / `upsert_repo_fact()` does not guarantee the runtime is wired
+  to a reachable Open Brain. If `OPENBRAIN_BASE_URL`, the token, or the namespace
+  is misconfigured, or the service is unreachable, writes can fail and be spooled
+  locally (see [Safety and Spooling](#safety-and-spooling)) rather than landing
+  in Open Brain. Verify live writes; do not treat "spooled" as "saved."
+- **The server owns namespace authority.** Namespace is bound from the client's
+  configured `X-Namespace`, not from caller metadata. Passing `namespace` inside
+  a wrapper's arguments does not override it.
 
 ## Safety and Spooling
 

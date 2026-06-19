@@ -7,6 +7,9 @@ from .agent import (
     MemorySpool,
 )
 from .client import (
+    CURRENT_CONTRACT_VERSION,
+    CURRENT_TOOL_HELP,
+    REQUIRED_CONTRACT_TOOLS,
     OpenBrainClient,
     OpenBrainError,
     OpenBrainHTTPError,
@@ -34,6 +37,9 @@ __all__ = [
     "OpenBrainHTTPError",
     "OpenBrainProtocolError",
     "OpenBrainToolError",
+    "CURRENT_CONTRACT_VERSION",
+    "CURRENT_TOOL_HELP",
+    "REQUIRED_CONTRACT_TOOLS",
     "JsonlSpool",
     "RetryExhaustedError",
     "RetryPolicy",
