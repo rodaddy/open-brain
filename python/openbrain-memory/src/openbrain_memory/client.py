@@ -15,7 +15,7 @@ from .policy import redact_text
 JSON = dict[str, Any]
 MCP_PROTOCOL_VERSION = "2025-03-26"
 DEFAULT_MAX_RESPONSE_BYTES = 1_000_000
-CURRENT_CONTRACT_VERSION = "2026-06-18.memory-tools.v2"
+CURRENT_CONTRACT_VERSION = "2026-06-19.memory-tools.v3"
 REQUIRED_CONTRACT_TOOLS = (
     "append_session_event",
     "get_contract",

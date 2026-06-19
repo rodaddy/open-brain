@@ -4,7 +4,7 @@ import {
   REPO_FACT_VALIDATION_CONTRACT,
 } from "./tools/repo-facts.ts";
 
-export const CONTRACT_VERSION = "2026-06-18.memory-tools.v2";
+export const CONTRACT_VERSION = "2026-06-19.memory-tools.v3";
 export const CONTRACT_SCHEMA_VERSION = 1;
 
 export interface ContractCapability {
@@ -384,6 +384,16 @@ export function buildContract(
             required: false,
             maxKeys: 50,
             maxJsonBytes: 100000,
+            fields: {
+              share_candidate: {
+                type: "boolean",
+                required: false,
+                description:
+                  "Nominate this event for shared-kb promotion. Set true to flag the " +
+                  "content for the promoter-gated shared-worthiness sweep; the promoter " +
+                  "identity re-classifies and may refuse (e.g. secrets/private content).",
+              },
+            },
           },
         },
         output_shape: "session event JSON text payload",
