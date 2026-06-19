@@ -14,6 +14,7 @@
     "codex-memory-smoke": "bun run scripts/codex-memory-smoke.ts",
     "eval:memory": "bun run scripts/eval-open-brain-memory.ts",
     "import-kb": "bun run scripts/import-legacy-kb.ts",
+    "promote:legacy-shared": "bun run scripts/promote-legacy-shared.ts",
     "promote:qmd-facts": "bun run scripts/promote-qmd-repo-facts.ts",
     "curate": "bun run scripts/curate.ts"
   },
