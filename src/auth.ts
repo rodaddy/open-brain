@@ -104,6 +104,9 @@ export function authMiddleware(
 
     if (matched) {
       const namespace = headerValue(req.headers["x-namespace"]);
+      // Promoter is intentionally NOT allowed to delegate via X-Namespace: it is
+      // a service identity that writes under its own token authority, not a
+      // proxy delegating arbitrary client namespaces. Only admin/n8n delegate.
       if (namespace && matched.role !== "admin" && matched.role !== "n8n") {
         res.status(403).json({ error: "Role not permitted to delegate namespace" });
         return;

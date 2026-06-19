@@ -80,6 +80,15 @@ describe("canWriteNamespace", () => {
     ).toBe(false);
   });
 
+  it("promoter is blocked from writing legacy collab (canonical shared-kb only)", () => {
+    // Pins the collab-vs-shared-kb boundary: promoter writes canonical
+    // shared-kb but must NOT write the legacy collab namespace. A refactor
+    // that adds promoter to shouldRejectLegacySharedWrite would break this.
+    const auth: AuthInfo = { role: "promoter", clientId: "promoter" };
+    expect(canWriteNamespace(auth, "collab").allowed).toBe(false);
+    expect(canWriteNamespace(auth, "shared-kb").allowed).toBe(true);
+  });
+
   it("header namespace locks admin writes to delegated namespace", () => {
     const auth: AuthInfo = {
       role: "admin",

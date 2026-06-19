@@ -143,6 +143,7 @@ describe("authMiddleware", () => {
   const tokenMap = new Map<string, AuthInfo>([
     ["valid-admin-token", { role: "admin", clientId: "admin" }],
     ["valid-agent-token", { role: "agent", clientId: "agent" }],
+    ["valid-promoter-token", { role: "promoter", clientId: "promoter" }],
     ["valid-readonly-token", { role: "readonly", clientId: "readonly" }],
   ]);
 
@@ -252,6 +253,23 @@ describe("authMiddleware", () => {
 
     expect(res.statusCode).toBe(403);
     expect(res.body).toEqual({ error: "Role not permitted to delegate namespace" });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  test("returns 403 when promoter token sends X-Namespace (service identity, no delegation)", () => {
+    const req = mockReq({
+      authorization: "Bearer valid-promoter-token",
+      "x-namespace": "bilby",
+    });
+    const res = mockRes();
+    const next = mock(() => {});
+
+    middleware(req as any, res as any, next);
+
+    expect(res.statusCode).toBe(403);
+    expect(res.body).toEqual({
+      error: "Role not permitted to delegate namespace",
+    });
     expect(next).not.toHaveBeenCalled();
   });
 

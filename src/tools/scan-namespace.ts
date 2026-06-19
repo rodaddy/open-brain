@@ -53,9 +53,19 @@ export function registerScanNamespace(server: McpServer, deps: ToolDeps): void {
     },
     async (args, extra) => {
       const auth = extra.authInfo as AuthInfo | undefined;
-      if (!auth || (auth.role !== "admin" && auth.role !== "n8n")) {
+      if (
+        !auth ||
+        (auth.role !== "admin" &&
+          auth.role !== "n8n" &&
+          auth.role !== "promoter")
+      ) {
         return {
-          content: [{ type: "text" as const, text: "Permission denied: admin or n8n role required" }],
+          content: [
+            {
+              type: "text" as const,
+              text: "Permission denied: admin, n8n, or promoter role required",
+            },
+          ],
           isError: true,
         };
       }
