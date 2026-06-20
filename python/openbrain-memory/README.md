@@ -12,7 +12,7 @@ does not move the Open Brain service or database onto that host.
 
 | Component | Runs where | Responsibility |
 | --- | --- | --- |
-| Open Brain service | Remote service, for example `https://open-brain.rodaddy.live` or trusted lab `http://10.71.1.21:3100` | Owns MCP-over-HTTP, auth, namespace policy, storage, search, curation tools. |
+| Open Brain service | Remote service, for example `https://open-brain.rodaddy.live` or trusted lab `http://10.71.1.21:3100` | Owns direct HTTP `/mcp`, auth, namespace policy, storage, search, curation tools. |
 | `openbrain-memory` | Bilby, Skippy, Nagatha, automation hosts, or any Python agent runtime | Reusable Python client, memory facade, safety/retry/spool helpers, and dry-run dream planning. |
 | Hermes provider | `rtech-hermes` | Thin adapter from Hermes lifecycle/events into this package. |
 
@@ -21,21 +21,42 @@ Dependency direction is one-way:
 - `open-brain` owns the reusable client and memory brain package.
 - `rtech-hermes` owns the Hermes adapter and lifecycle integration.
 - The Python package should not import Hermes runtime code.
-- Hermes should consume this package instead of reimplementing MCP-over-HTTP.
+- Hermes should consume this package instead of reimplementing direct HTTP
+  calls to Open Brain `/mcp`.
 
 ## Install
 
-Install from the package subdirectory until the package is published:
+Install this package into the host Python environment that runs the agent
+runtime or adapter. The Open Brain service stays remote.
 
-```bash
-uv pip install "git+ssh://git@github.com/rodaddy/open-brain.git#subdirectory=python/openbrain-memory"
-```
+Preferred options, in order:
 
-Future package install:
+1. **Published/internal package.** Use this after `openbrain-memory` is
+   published to the chosen package index or internal wheelhouse:
 
-```bash
-uv pip install openbrain-memory
-```
+   ```bash
+   uv pip install openbrain-memory
+   ```
+
+2. **Wheel artifact.** Use this for pinned rollout when publication is not done
+   yet, or when promoting the exact artifact built and tested by CI:
+
+   ```bash
+   cd python/openbrain-memory
+   uv build
+   uv pip install dist/openbrain_memory-*.whl
+   ```
+
+3. **Transitional git-subdirectory install.** This is the current recommended
+   path for Hermes agents until a published/internal package or CI wheel
+   artifact is available:
+
+   ```bash
+   uv pip install "git+ssh://git@github.com/rodaddy/open-brain.git#subdirectory=python/openbrain-memory"
+   ```
+
+For deterministic host installs, pin the git dependency to a reviewed commit or
+tag rather than a moving branch.
 
 ## Runtime Config
 
@@ -107,7 +128,7 @@ prompt_context = context.as_prompt_text()
 ## Current Open Brain Tools
 
 `OpenBrainClient` exposes first-class methods for the current required Open
-Brain memory contract, currently `2026-06-19.memory-tools.v4`. Agent runtimes
+Brain memory contract, currently `2026-06-19.memory-tools.v5`. Agent runtimes
 should call these package methods instead of carrying local copies of tool
 schemas, stale mcp2cli paths, or Hermes-specific Open Brain adapters.
 
@@ -149,12 +170,12 @@ client.upsert_repo_fact(metadata={...})
 These wrappers describe the *expected* contract; they are not proof of live
 behavior. Read them with three boundaries in mind:
 
-- **The server owns the contract.** `client.get_contract()` returns the
-  authoritative live manifest. `CURRENT_CONTRACT_VERSION` /
-  `REQUIRED_CONTRACT_TOOLS` are a snapshot pinned in this package release and may
-  lag the deployed server. A wrapper existing here does not prove the connected
-  Open Brain implements that tool — confirm with `get_contract()` against the
-  live endpoint.
+- **The server owns the contract.** `client.get_contract()` returns the live
+  source of truth for the connected Open Brain endpoint. `CURRENT_CONTRACT_VERSION`
+  / `REQUIRED_CONTRACT_TOOLS` are a package snapshot for compatibility checks and
+  tests; they may lag or lead a specific deployment. A wrapper existing here does
+  not prove the connected Open Brain implements that tool. Confirm against the
+  live endpoint with `get_contract()`.
 - **A wrapper call is not a confirmed write.** Importing this package and calling
   `log_thought()` / `upsert_repo_fact()` does not guarantee the runtime is wired
   to a reachable Open Brain. If `OPENBRAIN_BASE_URL`, the token, or the namespace
@@ -164,6 +185,19 @@ behavior. Read them with three boundaries in mind:
 - **The server owns namespace authority.** Namespace is bound from the client's
   configured `X-Namespace`, not from caller metadata. Passing `namespace` inside
   a wrapper's arguments does not override it.
+
+### Transport
+
+Today this package talks directly to the Open Brain service over HTTP endpoints
+such as `/health` and `/mcp`. The `/mcp` endpoint uses the Open Brain server's
+streamable JSON-RPC/MCP surface, but the host install should be described as
+"direct HTTP to Open Brain `/mcp`" rather than generic "MCP HTTP" so it is not
+confused with mcp2cli daemon routing or other MCP transports.
+
+NATS or another transport may be added later for agent-host routing, but it is
+not the current package transport. Until a future transport is implemented and
+documented, Hermes agents should configure `OPENBRAIN_BASE_URL`,
+`OPENBRAIN_TOKEN`, and namespace identity for direct HTTP access to Open Brain.
 
 ## Safety and Spooling
 
@@ -257,3 +291,35 @@ uv run pytest tests/test_live_canary.py
 Non-local `http://` endpoints are rejected by default because MCP requests carry
 bearer tokens. For trusted lab-only HTTP endpoints, set
 `OPENBRAIN_ALLOW_INSECURE_HTTP=1` explicitly.
+
+### Canary Coverage Expectations
+
+Before claiming a Hermes agent or other host runtime is ready on this package,
+run a live canary that covers the required memory contract, not only package
+import or `/health`.
+
+Required coverage:
+
+- **Contract authority:** call `get_contract()` against the configured live
+  endpoint and treat its manifest as the source of truth. Check
+  `contract_version`, `contract_scope`, `schema_hash`, compatible/minimum client
+  version fields, required capabilities, and required tool names before enabling
+  required-memory mode. The package exposes helpers and constants, but required
+  contract validation remains a runtime integration responsibility until a
+  shared validator lands.
+- **Lane tools:** exercise `session_start`, `session_context`, `lane_upsert`,
+  `lane_load`, and `session_wrap` for the agent namespace.
+- **Append/write:** verify `append_session_event`, `log_thought`, and
+  `upsert_repo_fact` can write through the configured token and namespace.
+- **Read:** verify `search_all`, `brain_answer`, and `list_repo_facts` can read
+  expected results without crossing namespace or role boundaries.
+- **Spool distinction:** verify a successful live write is reported as saved in
+  Open Brain, and separately verify that unreachable or rejected writes are
+  spooled locally when a spool is configured. A spooled record is not a saved
+  Open Brain memory; readiness requires either replay success or an explicit
+  decision that the failed write is acceptable for the canary.
+
+The current `tests/test_live_canary.py` is intentionally small and env-gated.
+It is a smoke test, not the full Hermes readiness canary. Host rollouts should
+record which live endpoint, package version or artifact, namespace, and canary
+operations were verified.
