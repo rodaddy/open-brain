@@ -332,8 +332,7 @@ def _preserve_metadata(
         elif key == "additionalProperties":
             if not isinstance(value, bool):
                 raise ContractSchemaError(
-                    f"{path}.{key}: additionalProperties must be a boolean "
-                    "or mapping",
+                    f"{path}.{key}: additionalProperties must be a boolean or mapping",
                 )
             schema[key] = value
         elif key in {"minLength", "maxLength", "maxItems"}:
@@ -376,8 +375,7 @@ def _preserve_nonstandard_bounds(
             or items.get("type") != "string"
         ):
             raise ContractSchemaError(
-                f"{path}.maxItemLength: maxItemLength only maps to string "
-                "array items",
+                f"{path}.maxItemLength: maxItemLength only maps to string array items",
             )
         items["maxLength"] = value
     if "maxKeys" in node:

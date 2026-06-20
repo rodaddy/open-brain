@@ -16,7 +16,11 @@ from .client import (
     OpenBrainProtocolError,
     OpenBrainToolError,
 )
-from .contract import ContractValidationResult, validate_contract_manifest
+from .contract import (
+    ContractValidationResult,
+    validate_contract_manifest,
+    validate_required_memory_contract,
+)
 from .dream import DreamAction, DreamClient, DreamEngine, DreamPolicy, DreamRun
 from .policy import RetryExhaustedError, RetryPolicy, redact_text, redact_value
 from .schema import (
@@ -26,7 +30,7 @@ from .schema import (
     tool_contract_to_input_schema,
     tool_contracts_to_tool_schemas,
 )
-from .spool import JsonlSpool, SpoolRecord, replay_records
+from .spool import JsonlSpool, SpoolRecord, SpoolStatus, replay_records
 
 __all__ = [
     "AgentMemory",
@@ -54,6 +58,7 @@ __all__ = [
     "RetryExhaustedError",
     "RetryPolicy",
     "SpoolRecord",
+    "SpoolStatus",
     "contract_field_to_json_schema",
     "contract_input_to_json_schema",
     "redact_text",
@@ -62,4 +67,5 @@ __all__ = [
     "tool_contract_to_input_schema",
     "tool_contracts_to_tool_schemas",
     "validate_contract_manifest",
+    "validate_required_memory_contract",
 ]

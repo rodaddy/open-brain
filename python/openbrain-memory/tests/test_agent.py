@@ -44,12 +44,27 @@ class FakeClient:
     def session_start(self, **arguments):
         return self._record("session_start", arguments)
 
+    def session_context(self, **arguments):
+        return self._record("session_context", arguments)
+
     def append_session_event(self, **arguments):
         return self._record("append_session_event", arguments)
 
     def search_all(self, **arguments):
         self.calls.append(("search_all", arguments))
         return self.search_payload
+
+    def brain_answer(self, **arguments):
+        return self._record("brain_answer", arguments)
+
+    def lane_load(self, **arguments):
+        return self._record("lane_load", arguments)
+
+    def lane_upsert(self, **arguments):
+        return self._record("lane_upsert", arguments)
+
+    def list_repo_facts(self, **arguments):
+        return self._record("list_repo_facts", arguments)
 
     def log_thought(self, **arguments):
         return self._record("log_thought", arguments)
@@ -60,14 +75,23 @@ class FakeClient:
     def session_wrap(self, **arguments):
         return self._record("session_wrap", arguments)
 
+    def upsert_repo_fact(self, **arguments):
+        return self._record("upsert_repo_fact", arguments)
+
 
 TOOL_SCHEMA_FILES = {
     "append_session_event": "append-session-event.ts",
+    "brain_answer": "brain-answer.ts",
+    "lane_load": "lane-load.ts",
+    "lane_upsert": "lane-upsert.ts",
+    "list_repo_facts": "repo-facts.ts",
     "log_decision": "log-decision.ts",
     "log_thought": "log-thought.ts",
     "search_all": "search-all.ts",
+    "session_context": "session-context.ts",
     "session_start": "session-start.ts",
     "session_wrap": "session-wrap.ts",
+    "upsert_repo_fact": "repo-facts.ts",
 }
 
 
@@ -118,6 +142,11 @@ def assert_server_contract_call(name: str, payload: dict) -> None:
             assert all(isinstance(item, str) for item in value)
         elif key == "metadata":
             assert isinstance(value, dict)
+        elif key in {"include_events", "include_raw"}:
+            assert isinstance(value, bool)
+        elif key in {"event_types"}:
+            assert isinstance(value, list)
+            assert all(isinstance(item, str) for item in value)
         else:
             assert isinstance(value, str)
 
@@ -230,6 +259,146 @@ def test_representative_facade_payloads_match_server_tool_contracts():
     decision = [payload for name, payload in client.calls if name == "log_decision"][0]
     assert isinstance(decision["context"], str)
     assert all(isinstance(item, str) for item in decision["alternatives"])
+
+
+def test_agent_memory_convenience_helpers_route_to_wrapper_tools():
+    client = FakeClient()
+    memory = AgentMemory(client, agent="bilby", project="open-brain")
+
+    memory.load_session_context(
+        "lane-1",
+        include_events=True,
+        event_limit=5,
+        event_types=["decision"],
+        importance="hot",
+    )
+    memory.load_lane(status="active", limit=3)
+    memory.update_lane(
+        "lane-1",
+        status="active",
+        current_context_md="Current state.",
+        metadata={"run_id": "run-1"},
+    )
+    memory.answer("What changed?", limit=2, search_mode="hybrid", tier="warm")
+    memory.repo_facts(repo="owner/repo", fact_type="workflow", limit=10, offset=0)
+    memory.upsert_repo_fact(
+        repo="owner/repo",
+        collection="main",
+        path="src/app.ts",
+        subject="runtime package",
+        fact_type="workflow",
+        fact="The runtime package owns memory facade helpers.",
+        source_commit="0123456789abcdef0123456789abcdef01234567",
+        source_url=(
+            "https://github.com/owner/repo/blob/"
+            "0123456789abcdef0123456789abcdef01234567/src/app.ts"
+        ),
+        verified_at="2026-06-20T00:00:00Z",
+        staleness_policy="refresh_required",
+    )
+
+    assert client.calls == [
+        (
+            "session_context",
+            {
+                "session_key": "lane-1",
+                "include_events": True,
+                "event_limit": 5,
+                "event_types": ["decision"],
+                "importance": "hot",
+            },
+        ),
+        (
+            "lane_load",
+            {"project": "open-brain", "status": "active", "limit": 3},
+        ),
+        (
+            "lane_upsert",
+            {
+                "session_key": "lane-1",
+                "status": "active",
+                "agent": "bilby",
+                "project": "open-brain",
+                "current_context_md": "Current state.",
+                "metadata": {"run_id": "run-1"},
+            },
+        ),
+        (
+            "brain_answer",
+            {
+                "query": "What changed?",
+                "limit": 2,
+                "search_mode": "hybrid",
+                "tier": "warm",
+            },
+        ),
+        (
+            "list_repo_facts",
+            {
+                "repo": "owner/repo",
+                "fact_type": "workflow",
+                "limit": 10,
+                "offset": 0,
+            },
+        ),
+        (
+            "upsert_repo_fact",
+            {
+                "metadata": {
+                    "source_system": "qmd",
+                    "repo": "owner/repo",
+                    "collection": "main",
+                    "path": "src/app.ts",
+                    "fact_type": "workflow",
+                    "fact": "The runtime package owns memory facade helpers.",
+                    "source_commit": "0123456789abcdef0123456789abcdef01234567",
+                    "source_url": (
+                        "https://github.com/owner/repo/blob/"
+                        "0123456789abcdef0123456789abcdef01234567/src/app.ts"
+                    ),
+                    "verified_at": "2026-06-20T00:00:00Z",
+                    "staleness_policy": "refresh_required",
+                    "subject": "runtime package",
+                },
+            },
+        ),
+    ]
+
+
+def test_convenience_helpers_only_include_explicit_namespace_arguments():
+    client = FakeClient()
+    memory = AgentMemory(client, agent="bilby", project="open-brain")
+
+    memory.load_session_context("lane-1", namespace="shared-kb")
+    memory.load_lane(namespace="shared-kb")
+    memory.update_lane("lane-1", namespace="shared-kb")
+    memory.answer("question", namespace="shared-kb")
+    memory.repo_facts(namespace="shared-kb")
+    memory.upsert_repo_fact(
+        namespace="shared-kb",
+        repo="owner/repo",
+        collection="main",
+        path="src/app.ts",
+        subject="runtime package",
+        fact_type="workflow",
+        fact="The runtime package owns memory facade helpers.",
+        source_commit="0123456789abcdef0123456789abcdef01234567",
+        source_url=(
+            "https://github.com/owner/repo/blob/"
+            "0123456789abcdef0123456789abcdef01234567/src/app.ts"
+        ),
+        verified_at="2026-06-20T00:00:00Z",
+        staleness_policy="refresh_required",
+    )
+
+    for _name, payload in client.calls:
+        assert payload["namespace"] == "shared-kb"
+
+    client = FakeClient()
+    memory = AgentMemory(client, agent="bilby", project="open-brain")
+    memory.answer("question")
+    memory.repo_facts()
+    assert all("namespace" not in payload for _name, payload in client.calls)
 
 
 def test_recall_assembles_bounded_prompt_context():

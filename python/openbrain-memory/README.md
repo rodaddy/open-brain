@@ -330,7 +330,7 @@ OPENBRAIN_LIVE_CANARY=1 \
 OPENBRAIN_BASE_URL=http://127.0.0.1:3100 \
 OPENBRAIN_TOKEN=... \
 OPENBRAIN_NAMESPACE=bilby \
-uv run pytest tests/test_live_canary.py
+uv run pytest tests/test_live_canary.py -q
 ```
 
 Set `OPENBRAIN_ROLE`/`OPENBRAIN_AGENT_ID` for the identity labels expected by
@@ -340,6 +340,26 @@ tokens; the server should derive their namespace from the token.
 Non-local `http://` endpoints are rejected by default because MCP requests carry
 bearer tokens. For trusted lab-only HTTP endpoints, set
 `OPENBRAIN_ALLOW_INSECURE_HTTP=1` explicitly.
+
+The default live canary now checks package helper readiness, not just `/health`:
+
+- `health()` and `search_all()` read access.
+- `get_contract()` plus `validate_contract_manifest()` against
+  `REQUIRED_CONTRACT_TOOLS` and the package `CURRENT_CONTRACT_VERSION`.
+- Low-impact session lane writes and reads through `session_start()`,
+  `lane_upsert()`, `append_session_event()`, `session_context()`,
+  `lane_load()`, and `session_wrap()`.
+
+`upsert_repo_fact()` is intentionally not part of the default canary because it
+creates curated repo-fact rows. To opt into that higher-impact write, set both:
+
+```bash
+OPENBRAIN_LIVE_CANARY_REPO_FACT_WRITE=1 \
+OPENBRAIN_LIVE_CANARY_REPO_FACT_COMMIT=<git-sha>
+```
+
+The commit must be the source commit used in the GitHub source URL embedded in
+the repo-fact metadata.
 
 ### Canary Coverage Expectations
 
@@ -358,8 +378,10 @@ Required coverage:
   shared validator lands.
 - **Lane tools:** exercise `session_start`, `session_context`, `lane_upsert`,
   `lane_load`, and `session_wrap` for the agent namespace.
-- **Append/write:** verify `append_session_event`, `log_thought`, and
-  `upsert_repo_fact` can write through the configured token and namespace.
+- **Append/write:** verify `append_session_event` can write through the
+  configured token and namespace. Verify `upsert_repo_fact` only when the
+  explicit repo-fact write gate is enabled. Use a separate `log_thought` check
+  only when durable general-memory writes are intended for the rollout.
 - **Read:** verify `search_all`, `brain_answer`, and `list_repo_facts` can read
   expected results without crossing namespace or role boundaries.
 - **Spool distinction:** verify a successful live write is reported as saved in
@@ -368,7 +390,7 @@ Required coverage:
   Open Brain memory; readiness requires either replay success or an explicit
   decision that the failed write is acceptable for the canary.
 
-The current `tests/test_live_canary.py` is intentionally small and env-gated.
-It is a smoke test, not the full Hermes readiness canary. Host rollouts should
-record which live endpoint, package version or artifact, namespace, and canary
-operations were verified.
+`tests/test_live_canary.py` is env-gated and suitable for package helper
+readiness checks. Host rollouts should record which live endpoint, package
+version or artifact, namespace, optional write gates, and canary operations were
+verified.

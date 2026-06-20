@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from hashlib import sha256
 from typing import Any
 
+from .client import CURRENT_CONTRACT_VERSION, REQUIRED_CONTRACT_TOOLS
+
 EXPECTED_CONTRACT_SCOPE = "required_openbrain_memory_contract"
 DEFAULT_CLIENT_NAME = "openbrain-memory"
 
@@ -72,6 +74,23 @@ def validate_contract_manifest(
         )
 
     return ContractValidationResult(ok=not reasons, reasons=tuple(reasons))
+
+
+def validate_required_memory_contract(
+    manifest: Mapping[str, Any],
+    *,
+    client_name: str = DEFAULT_CLIENT_NAME,
+    client_version: str | None = None,
+) -> ContractValidationResult:
+    """Validate the package's required Open Brain memory contract."""
+
+    return validate_contract_manifest(
+        manifest,
+        client_name=client_name,
+        client_version=client_version,
+        required_tools=REQUIRED_CONTRACT_TOOLS,
+        compatible_contract_versions=(CURRENT_CONTRACT_VERSION,),
+    )
 
 
 def _validate_required_tools(
