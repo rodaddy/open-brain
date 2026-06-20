@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from hashlib import sha256
 
 from openbrain_memory import (
     CURRENT_CONTRACT_VERSION,
     REQUIRED_CONTRACT_TOOLS,
     validate_contract_manifest,
 )
+
+
+def safe_string_display(value: str) -> str:
+    digest = sha256(value.encode("utf-8")).hexdigest()[:12]
+    return f"str(len={len(value)}, sha256={digest})"
 
 
 def representative_contract_manifest() -> dict:
@@ -172,9 +178,11 @@ def test_validate_contract_manifest_reports_scope_and_contract_version_mismatch(
     assert result.ok is False
     assert result.reasons == (
         "contract_scope mismatch: expected "
-        "'required_openbrain_memory_contract', got 'optional_tool_listing'",
-        "contract_version '2026-01-01.memory-tools.v1' is not compatible; "
-        f"expected one of: {CURRENT_CONTRACT_VERSION!r}",
+        "'required_openbrain_memory_contract', got "
+        f"{safe_string_display('optional_tool_listing')}",
+        "contract_version "
+        f"{safe_string_display('2026-01-01.memory-tools.v1')} is not compatible; "
+        f"expected one of: {safe_string_display(CURRENT_CONTRACT_VERSION)}",
     )
 
 
@@ -185,8 +193,12 @@ def test_validate_contract_manifest_reports_min_client_version_failure():
 
     assert result.ok is False
     assert result.reasons == (
-        "openbrain-memory '0.0.9' is below required minimum '0.1.0'",
-        "openbrain-memory '0.0.9' does not satisfy compatible range '>=0.1.0 <1.0.0'",
+        "openbrain-memory "
+        f"{safe_string_display('0.0.9')} is below required minimum "
+        f"{safe_string_display('0.1.0')}",
+        "openbrain-memory "
+        f"{safe_string_display('0.0.9')} does not satisfy compatible range "
+        f"{safe_string_display('>=0.1.0 <1.0.0')}",
     )
 
 
@@ -197,7 +209,9 @@ def test_validate_contract_manifest_reports_compatible_range_failure():
 
     assert result.ok is False
     assert result.reasons == (
-        "openbrain-memory '1.0.0' does not satisfy compatible range '>=0.1.0 <1.0.0'",
+        "openbrain-memory "
+        f"{safe_string_display('1.0.0')} does not satisfy compatible range "
+        f"{safe_string_display('>=0.1.0 <1.0.0')}",
     )
 
 
@@ -223,8 +237,9 @@ def test_validate_contract_manifest_rejects_malformed_compatible_range_text():
 
     assert result.ok is False
     assert result.reasons == (
-        "openbrain-memory '0.1.0' does not satisfy compatible range "
-        "'>=0.1.0 <1.0.0 trailing'",
+        "openbrain-memory "
+        f"{safe_string_display('0.1.0')} does not satisfy compatible range "
+        f"{safe_string_display('>=0.1.0 <1.0.0 trailing')}",
     )
 
 
@@ -236,7 +251,9 @@ def test_validate_contract_manifest_rejects_unsupported_range_operator():
 
     assert result.ok is False
     assert result.reasons == (
-        "openbrain-memory '0.1.0' does not satisfy compatible range '~>0.1.0'",
+        "openbrain-memory "
+        f"{safe_string_display('0.1.0')} does not satisfy compatible range "
+        f"{safe_string_display('~>0.1.0')}",
     )
 
 
@@ -276,11 +293,39 @@ def test_validate_contract_manifest_redacts_long_manifest_values_in_reasons():
 
     assert result.ok is False
     assert len(result.reasons) == 2
-    assert "evil-" in result.reasons[0]
-    assert "xxx" in result.reasons[0]
-    assert "..." in result.reasons[0]
+    assert safe_string_display(manifest["contract_scope"]) in result.reasons[0]
+    assert (
+        safe_string_display(
+            manifest["compatible_client_ranges"]["openbrain-memory"],
+        )
+        in result.reasons[1]
+    )
+    assert "evil-" not in result.reasons[0]
+    assert "xxx" not in result.reasons[0]
     assert "x" * 100 not in result.reasons[0]
     assert "x" * 100 not in result.reasons[1]
+
+
+def test_validate_contract_manifest_redacts_token_like_manifest_values_in_reasons():
+    manifest = representative_contract_manifest()
+    token_body = "sk_live_sensitive_body_" + ("A" * 120)
+    jwt_header = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
+    jwt_payload = "eyJzdWIiOiJzZW5zaXRpdmUtcGF5bG9hZCIsInJvbGUiOiJhZG1pbiJ9"
+    jwt_signature = "sensitive_signature_" + ("B" * 80)
+    jwt_value = f"{jwt_header}.{jwt_payload}.{jwt_signature}"
+    manifest["contract_scope"] = token_body
+    manifest["compatible_client_ranges"]["openbrain-memory"] = jwt_value
+
+    result = validate_contract_manifest(manifest, client_version="0.1.0")
+    reason_text = "\n".join(result.reasons)
+
+    assert result.ok is False
+    assert safe_string_display(token_body) in reason_text
+    assert safe_string_display(jwt_value) in reason_text
+    assert "sk_live_sensitive_body" not in reason_text
+    assert "eyJhbGci" not in reason_text
+    assert "eyJzdWIi" not in reason_text
+    assert "sensitive_signature" not in reason_text
 
 
 def test_validate_contract_manifest_does_not_require_snapshot_constants():

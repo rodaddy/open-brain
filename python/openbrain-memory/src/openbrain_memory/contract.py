@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from hashlib import sha256
 from typing import Any
 
 EXPECTED_CONTRACT_SCOPE = "required_openbrain_memory_contract"
@@ -10,7 +11,7 @@ DEFAULT_CLIENT_NAME = "openbrain-memory"
 
 _VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 _RANGE_TOKEN_RE = re.compile(r"(>=|>|<=|<|=)?\s*([0-9]+\.[0-9]+\.[0-9]+)")
-_DISPLAY_MAX_LENGTH = 80
+_DISPLAY_DIGEST_LENGTH = 12
 
 
 @dataclass(frozen=True)
@@ -287,9 +288,7 @@ def _parse_version(version: str) -> tuple[int, int, int] | None:
 
 def _display_value(value: Any) -> str:
     if isinstance(value, str):
-        display = value
+        digest = sha256(value.encode("utf-8")).hexdigest()[:_DISPLAY_DIGEST_LENGTH]
+        return f"str(len={len(value)}, sha256={digest})"
     else:
-        display = f"{type(value).__name__}"
-    if len(display) > _DISPLAY_MAX_LENGTH:
-        display = display[: _DISPLAY_MAX_LENGTH - 3] + "..."
-    return repr(display)
+        return repr(type(value).__name__)
