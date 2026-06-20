@@ -278,6 +278,7 @@ class OpenBrainClient:
         timeout: float = 30.0,
         transport: Transport | None = None,
         allow_insecure_http: bool = False,
+        delegate_namespace: bool = False,
     ) -> None:
         _validate_base_url(base_url, allow_insecure_http=allow_insecure_http)
         self.base_url = base_url.rstrip("/") + "/"
@@ -287,6 +288,7 @@ class OpenBrainClient:
         self.role = role
         self.timeout = timeout
         self.transport = transport or UrllibTransport()
+        self.delegate_namespace = delegate_namespace
         self._session_id: str | None = None
         self._protocol_version = MCP_PROTOCOL_VERSION
         self._ids = count(1)
@@ -622,8 +624,9 @@ class OpenBrainClient:
             "Authorization": f"Bearer {self.token}",
             "Accept": "application/json, text/event-stream",
             "Content-Type": "application/json",
-            "X-Namespace": self.namespace,
         }
+        if self.delegate_namespace:
+            headers["X-Namespace"] = self.namespace
         if self.agent_id:
             headers["X-Agent-Id"] = self.agent_id
         if self.role:

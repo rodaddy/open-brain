@@ -90,7 +90,8 @@ version, and request body shape.
 
 - Is there an in-process HTTP/MCP test using real `OpenBrainClient` and
   `UrllibTransport`?
-- Does the test observe `Authorization`, `X-Namespace`, `X-Agent-Id`, `X-Role`,
+- Does the test observe `Authorization`, default omission of `X-Namespace`,
+  explicit delegated `X-Namespace` when enabled, `X-Agent-Id`, `X-Role`,
   `Mcp-Session-Id`, `MCP-Protocol-Version`, JSON-RPC ids, and bodies?
 - Does it cover `/health`, initialize, initialized notification, and
   `tools/call`?

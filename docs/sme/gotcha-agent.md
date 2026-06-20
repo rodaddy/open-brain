@@ -29,8 +29,8 @@ but legitimate content.
 
 **Prior miss:** #78, from PR #73.
 
-- Generic metadata must not override `X-Namespace` or configured client
-  namespace.
+- Generic metadata must not create `X-Namespace`, override token-derived
+  namespace, or override an explicit privileged delegation path.
 - Cross-namespace writes need explicit privileged API design.
 - Facades should reject or ignore `namespace="other"` for normal clients.
 
