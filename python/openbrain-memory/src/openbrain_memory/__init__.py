@@ -19,6 +19,13 @@ from .client import (
 from .contract import ContractValidationResult, validate_contract_manifest
 from .dream import DreamAction, DreamClient, DreamEngine, DreamPolicy, DreamRun
 from .policy import RetryExhaustedError, RetryPolicy, redact_text, redact_value
+from .schema import (
+    ContractSchemaError,
+    contract_field_to_json_schema,
+    contract_input_to_json_schema,
+    tool_contract_to_input_schema,
+    tool_contracts_to_tool_schemas,
+)
 from .spool import JsonlSpool, SpoolRecord, replay_records
 
 __all__ = [
@@ -42,12 +49,17 @@ __all__ = [
     "CURRENT_TOOL_HELP",
     "REQUIRED_CONTRACT_TOOLS",
     "ContractValidationResult",
+    "ContractSchemaError",
     "JsonlSpool",
     "RetryExhaustedError",
     "RetryPolicy",
     "SpoolRecord",
+    "contract_field_to_json_schema",
+    "contract_input_to_json_schema",
     "redact_text",
     "redact_value",
     "replay_records",
+    "tool_contract_to_input_schema",
+    "tool_contracts_to_tool_schemas",
     "validate_contract_manifest",
 ]
