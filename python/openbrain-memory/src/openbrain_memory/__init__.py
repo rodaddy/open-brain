@@ -16,6 +16,7 @@ from .client import (
     OpenBrainProtocolError,
     OpenBrainToolError,
 )
+from .contract import ContractValidationResult, validate_contract_manifest
 from .dream import DreamAction, DreamClient, DreamEngine, DreamPolicy, DreamRun
 from .policy import RetryExhaustedError, RetryPolicy, redact_text, redact_value
 from .spool import JsonlSpool, SpoolRecord, replay_records
@@ -40,6 +41,7 @@ __all__ = [
     "CURRENT_CONTRACT_VERSION",
     "CURRENT_TOOL_HELP",
     "REQUIRED_CONTRACT_TOOLS",
+    "ContractValidationResult",
     "JsonlSpool",
     "RetryExhaustedError",
     "RetryPolicy",
@@ -47,4 +49,5 @@ __all__ = [
     "redact_text",
     "redact_value",
     "replay_records",
+    "validate_contract_manifest",
 ]
