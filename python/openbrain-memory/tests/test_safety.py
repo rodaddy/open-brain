@@ -315,6 +315,97 @@ def test_spool_records_skip_corrupted_jsonl_lines(tmp_path, caplog):
     assert caplog.text.count("Skipping corrupted spool record") == 6
 
 
+def test_spool_status_missing_path_is_empty(tmp_path):
+    spool = JsonlSpool(tmp_path / "missing.jsonl", max_lines=7, max_bytes=700)
+
+    status = spool.status()
+
+    assert status.path == str(spool.path)
+    assert status.exists is False
+    assert status.pending_count == 0
+    assert status.max_lines == 7
+    assert status.max_bytes == 700
+    assert status.oldest_created_at is None
+    assert status.newest_created_at is None
+    assert status.operation_counts == {}
+    assert status.corrupted_line_count == 0
+
+
+def test_spool_status_empty_path_is_empty_but_existing(tmp_path):
+    spool = JsonlSpool(tmp_path / "spool.jsonl")
+    spool.path.write_text("", encoding="utf-8")
+
+    status = spool.status()
+
+    assert status.exists is True
+    assert status.pending_count == 0
+    assert status.operation_counts == {}
+    assert status.corrupted_line_count == 0
+
+
+def test_spool_status_counts_records_without_payload_leakage(tmp_path):
+    spool = JsonlSpool(tmp_path / "spool.jsonl")
+    secret = "password: " + token_sample("hunt", "er2")
+
+    spool.append("log_thought", {"content": secret}, key="one")
+    spool.append("log_thought", {"content": "safe"}, key="two")
+    spool.append("session_start", {"topic": "canary"}, key="three")
+
+    status = spool.status()
+
+    assert status.exists is True
+    assert status.pending_count == 3
+    assert status.operation_counts == {"log_thought": 2, "session_start": 1}
+    assert status.corrupted_line_count == 0
+    assert status.oldest_created_at is not None
+    assert status.newest_created_at is not None
+    assert status.oldest_created_at <= status.newest_created_at
+    assert token_sample("hunt", "er2") not in repr(status)
+    assert "content" not in repr(status)
+    assert "safe" not in repr(status)
+
+
+def test_spool_status_counts_corrupted_lines_without_changing_records(tmp_path):
+    spool = JsonlSpool(tmp_path / "spool.jsonl")
+    spool.path.write_text(
+        "\n".join(
+            [
+                '{"created_at":1,"idempotency_key":"good-1","operation":"one","payload":{"content":"ok"}}',
+                '{"created_at":2,"idempotency_key":"bad","operation":',
+                "{}",
+                "[]",
+                '{"idempotency_key":"missing-operation"}',
+                (
+                    '{"created_at":"not-a-float","idempotency_key":"bad-time",'
+                    '"operation":"bad","payload":{}}'
+                ),
+                (
+                    '{"created_at":2,"idempotency_key":"bad-payload",'
+                    '"operation":"bad","payload":[]}'
+                ),
+                (
+                    '{"created_at":3,"idempotency_key":"good-2",'
+                    '"operation":"two","payload":{"content":"still ok"}}'
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    status = spool.status()
+
+    assert status.pending_count == 2
+    assert status.operation_counts == {"one": 1, "two": 1}
+    assert status.oldest_created_at == 1
+    assert status.newest_created_at == 3
+    assert status.corrupted_line_count == 6
+    assert [record.idempotency_key for record in spool.records()] == [
+        "good-1",
+        "good-2",
+    ]
+
+
 def test_failed_write_spools_replayable_payload_with_redacted_diagnostic_view(tmp_path):
     client = FlakyClient(failures=3)
     spool = JsonlSpool(tmp_path / "spool.jsonl")

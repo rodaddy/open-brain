@@ -37,6 +37,19 @@ class SpoolRecord:
         )
 
 
+@dataclass(frozen=True)
+class SpoolStatus:
+    path: str
+    exists: bool
+    pending_count: int
+    max_lines: int
+    max_bytes: int
+    oldest_created_at: float | None
+    newest_created_at: float | None
+    operation_counts: Mapping[str, int]
+    corrupted_line_count: int
+
+
 class JsonlSpool:
     def __init__(
         self,
@@ -152,6 +165,63 @@ class JsonlSpool:
 
     def redacted_records(self) -> list[SpoolRecord]:
         return [record.redacted() for record in self.records()]
+
+    def status(self) -> SpoolStatus:
+        if not self.path.exists():
+            return SpoolStatus(
+                path=str(self.path),
+                exists=False,
+                pending_count=0,
+                max_lines=self.max_lines,
+                max_bytes=self.max_bytes,
+                oldest_created_at=None,
+                newest_created_at=None,
+                operation_counts={},
+                corrupted_line_count=0,
+            )
+        self._reject_symlink(self.path)
+        operation_counts: dict[str, int] = {}
+        oldest_created_at: float | None = None
+        newest_created_at: float | None = None
+        pending_count = 0
+        corrupted_line_count = 0
+        with self.path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                try:
+                    payload = json.loads(line)
+                    if not isinstance(payload, dict):
+                        corrupted_line_count += 1
+                        continue
+                    operation = str(payload["operation"])
+                    record_payload = payload.get("payload", {})
+                    created_at = float(payload.get("created_at", 0))
+                    if not isinstance(record_payload, dict):
+                        corrupted_line_count += 1
+                        continue
+                except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+                    corrupted_line_count += 1
+                    continue
+
+                pending_count += 1
+                operation_counts[operation] = operation_counts.get(operation, 0) + 1
+                if oldest_created_at is None or created_at < oldest_created_at:
+                    oldest_created_at = created_at
+                if newest_created_at is None or created_at > newest_created_at:
+                    newest_created_at = created_at
+
+        return SpoolStatus(
+            path=str(self.path),
+            exists=True,
+            pending_count=pending_count,
+            max_lines=self.max_lines,
+            max_bytes=self.max_bytes,
+            oldest_created_at=oldest_created_at,
+            newest_created_at=newest_created_at,
+            operation_counts=operation_counts,
+            corrupted_line_count=corrupted_line_count,
+        )
 
     def replay(self, dispatcher: Callable[[SpoolRecord], JSON]) -> list[JSON]:
         results = []

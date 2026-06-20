@@ -7,6 +7,7 @@ from openbrain_memory import (
     CURRENT_CONTRACT_VERSION,
     REQUIRED_CONTRACT_TOOLS,
     validate_contract_manifest,
+    validate_required_memory_contract,
 )
 
 
@@ -67,6 +68,30 @@ def test_validate_contract_manifest_accepts_representative_contract_shape():
 
     assert result.ok is True
     assert result.reasons == ()
+
+
+def test_validate_required_memory_contract_pins_package_contract_defaults():
+    result = validate_required_memory_contract(
+        representative_contract_manifest(),
+        client_version="0.1.0",
+    )
+
+    assert result.ok is True
+    assert result.reasons == ()
+
+
+def test_validate_required_memory_contract_reports_package_required_tool_gap():
+    manifest = representative_contract_manifest()
+    manifest["capabilities"] = [
+        item for item in manifest["capabilities"] if item["name"] != "lane_upsert"
+    ]
+
+    result = validate_required_memory_contract(manifest)
+
+    assert result.ok is False
+    assert result.reasons == (
+        "required tool(s) missing from contract capabilities: lane_upsert",
+    )
 
 
 def test_validate_contract_manifest_reports_missing_required_tool():
