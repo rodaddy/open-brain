@@ -137,7 +137,7 @@ def test_arrays_convert_string_item_refs_and_manifest_enum_refs():
     }
 
 
-def test_manifest_enum_ref_conflicts_fail_with_path():
+def test_same_named_enums_are_scoped_to_each_tool_contract():
     manifest = {
         "tool_contracts": {
             "first": {
@@ -153,11 +153,94 @@ def test_manifest_enum_ref_conflicts_fail_with_path():
         },
     }
 
-    with pytest.raises(
-        ContractSchemaError,
-        match=r"conflicting enum reference 'status'",
-    ):
-        tool_contracts_to_tool_schemas(manifest)
+    schemas = tool_contracts_to_tool_schemas(manifest)
+
+    assert schemas[0]["name"] == "first"
+    assert schemas[0]["input_schema"]["properties"]["status"] == {
+        "type": "string",
+        "enum": ["open", "closed"],
+    }
+    assert schemas[1]["name"] == "second"
+    assert schemas[1]["input_schema"]["properties"]["status"] == {
+        "type": "string",
+        "enum": ["hot", "cold"],
+    }
+
+
+def test_selected_tool_conversion_ignores_unrelated_enum_name_collisions():
+    manifest = {
+        "tool_contracts": {
+            "first": {
+                "input_schema": {
+                    "status": {"type": "enum", "values": ["open", "closed"]},
+                },
+            },
+            "second": {
+                "input_schema": {
+                    "status": {"type": "enum", "values": ["hot", "cold"]},
+                },
+            },
+        },
+    }
+
+    [schema] = tool_contracts_to_tool_schemas(manifest, tool_names=["second"])
+
+    assert schema["name"] == "second"
+    assert schema["input_schema"]["properties"]["status"] == {
+        "type": "string",
+        "enum": ["hot", "cold"],
+    }
+
+
+def test_selected_tool_local_session_event_type_enum_shadows_shared_alias():
+    manifest = {
+        "tool_contracts": {
+            "append_session_event": {
+                "input_schema": {
+                    "event_type": {"type": "enum", "values": ["fact", "decision"]},
+                },
+            },
+            "selected": {
+                "input_schema": {
+                    "session_event_type": {
+                        "type": "enum",
+                        "values": ["local", "only"],
+                    },
+                },
+            },
+        },
+    }
+
+    [schema] = tool_contracts_to_tool_schemas(manifest, tool_names=["selected"])
+
+    assert schema["input_schema"]["properties"]["session_event_type"] == {
+        "type": "string",
+        "enum": ["local", "only"],
+    }
+
+
+def test_selected_tool_without_shared_ref_does_not_validate_unrelated_alias_source():
+    manifest = {
+        "tool_contracts": {
+            "append_session_event": {
+                "input_schema": {
+                    "event_type": {
+                        "type": "enum",
+                        "values": "malformed",
+                    },
+                },
+            },
+            "selected": {
+                "input_schema": {
+                    "query": {"type": "string"},
+                },
+            },
+        },
+    }
+
+    [schema] = tool_contracts_to_tool_schemas(manifest, tool_names=["selected"])
+
+    assert schema["input_schema"]["properties"]["query"] == {"type": "string"}
 
 
 def test_session_event_type_alias_is_scoped_to_append_session_event():

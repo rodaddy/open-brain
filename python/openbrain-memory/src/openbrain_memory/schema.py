@@ -85,7 +85,6 @@ def tool_contracts_to_tool_schemas(
     selected_names = (
         list(tool_names) if tool_names is not None else sorted(tool_contracts)
     )
-    enum_refs = _collect_manifest_enum_refs(tool_contracts)
     schemas: list[JSONSchema] = []
     for tool_name in selected_names:
         if tool_name not in tool_contracts:
@@ -102,6 +101,19 @@ def tool_contracts_to_tool_schemas(
             raise ContractSchemaError(
                 f"$.tool_contracts.{tool_name}.input_schema: input_schema "
                 "must be a mapping",
+            )
+        enum_refs = _collect_enum_refs(
+            input_schema,
+            path=f"$.tool_contracts.{tool_name}.input_schema",
+            scoped_session_aliases=tool_name == "append_session_event",
+        )
+        if "session_event_type" not in enum_refs and _uses_string_ref(
+            input_schema, "session_event_type"
+        ):
+            _merge_enum_refs(
+                enum_refs,
+                _collect_manifest_shared_enum_refs(tool_contracts),
+                path="$.tool_contracts.append_session_event.input_schema.event_type",
             )
         schemas.append(
             {
@@ -408,24 +420,47 @@ def _resolve_string_ref(
     raise ContractSchemaError(f"{path}: unresolved contract schema reference {ref!r}")
 
 
-def _collect_manifest_enum_refs(
+def _collect_manifest_shared_enum_refs(
     tool_contracts: Mapping[str, Any],
 ) -> dict[str, JSONSchema]:
+    """Collect explicit cross-tool enum aliases.
+
+    Inline enum fields are scoped to their own tool contract. Only aliases that
+    the contract deliberately exposes across tools belong in this manifest-wide
+    map.
+    """
+
     refs: dict[str, JSONSchema] = {}
-    for tool_name, tool_contract in tool_contracts.items():
-        if not isinstance(tool_contract, Mapping):
-            continue
+    tool_contract = tool_contracts.get("append_session_event")
+    if isinstance(tool_contract, Mapping):
         input_schema = tool_contract.get("input_schema")
-        if isinstance(input_schema, Mapping):
+        event_type = (
+            input_schema.get("event_type")
+            if isinstance(input_schema, Mapping)
+            else None
+        )
+        if isinstance(event_type, Mapping) and event_type.get("type") == "enum":
             _merge_enum_refs(
                 refs,
-                _collect_enum_refs(
-                    input_schema,
-                    path=f"$.tool_contracts.{tool_name}.input_schema",
-                    scoped_session_aliases=tool_name == "append_session_event",
-                ),
+                {
+                    "session_event_type": _enum_node_to_json_schema(
+                        event_type,
+                        path="$.tool_contracts.append_session_event.input_schema.event_type",
+                    ),
+                },
+                path="$.tool_contracts.append_session_event.input_schema.event_type",
             )
     return refs
+
+
+def _uses_string_ref(node: Any, ref: str) -> bool:
+    if node == ref:
+        return True
+    if isinstance(node, Mapping):
+        return any(_uses_string_ref(value, ref) for value in node.values())
+    if isinstance(node, list):
+        return any(_uses_string_ref(value, ref) for value in node)
+    return False
 
 
 def _collect_enum_refs(
