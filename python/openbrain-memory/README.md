@@ -37,7 +37,7 @@ Preferred options, in order:
    published to the chosen package index or internal wheelhouse:
 
    ```bash
-   uv pip install openbrain-memory
+   uv pip install "openbrain-memory==<version>"
    ```
 
 2. **Prebuilt CI/release wheel artifact.** Use this for pinned rollout when
@@ -64,11 +64,19 @@ Preferred options, in order:
    artifact is available:
 
    ```bash
-   uv pip install "git+ssh://git@github.com/rodaddy/open-brain.git#subdirectory=python/openbrain-memory"
+   uv pip install \
+     "git+https://github.com/rodaddy/open-brain.git@<40-char-commit>#subdirectory=python/openbrain-memory"
    ```
 
-For deterministic host installs, pin the git dependency to a reviewed commit or
-tag rather than a moving branch.
+For deterministic host installs, pin the package to an exact version or reviewed
+wheel, or pin the git dependency to a reviewed commit or tag rather than a
+moving branch.
+
+Hermes deployments usually do not call `uv pip install` by hand. In
+`rtech-hermes`, set `openbrain_memory.package_spec` in the target agent manifest
+or set `OPENBRAIN_MEMORY_PACKAGE_SPEC` for an emergency override. Both paths
+must use a reviewed wheel, exact package version, or full commit-pinned
+git-subdirectory URL.
 
 ## Runtime Config
 
@@ -83,6 +91,20 @@ export OPENBRAIN_NAMESPACE="bilby"
 export OPENBRAIN_AGENT_ID="bilby"
 export OPENBRAIN_PROJECT="open-brain"
 ```
+
+Current production-style examples:
+
+```bash
+# Caddy/TLS in front of the Mac Mini Open Brain service
+export OPENBRAIN_BASE_URL="https://open-brain.rodaddy.live"
+
+# Trusted lab direct endpoint; requires explicit insecure-HTTP opt-in
+export OPENBRAIN_BASE_URL="http://10.71.1.21:3100"
+export OPENBRAIN_ALLOW_INSECURE_HTTP="1"
+```
+
+Do not use retained pre-cutover LXC snapshots such as `10.71.20.49` for current
+host canaries.
 
 For trusted lab-only HTTP endpoints, such as `http://10.71.1.21:3100`, opt in
 explicitly:
@@ -222,6 +244,11 @@ Use `contract_field_to_json_schema()` for one field node and
 `tool_contract_to_input_schema()` when you already selected one tool contract,
 and `tool_contracts_to_tool_schemas()` when converting a manifest's
 `tool_contracts` into a list of `{name, input_schema}` entries.
+
+`tool_contracts_to_tool_schemas()` accepts the live `get_contract()` manifest
+and reads its `tool_contracts` mapping. Downstream callers should keep tests
+pinned to the package version they install and should not hand-maintain a
+second converter in the consuming repo.
 
 Malformed contract DSL raises `ContractSchemaError` with the failing path rather
 than emitting invalid JSON Schema. Open Brain-specific constraints that do not
