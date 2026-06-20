@@ -8,7 +8,7 @@ Built for AI agents that need persistent, searchable memory across conversations
 
 ## Features
 
-- **15 MCP tools** for reading, writing, and managing knowledge
+- **Contract-first MCP tools** for reading, writing, and managing knowledge
 - **Hybrid search** — reciprocal rank fusion (RRF) over HNSW vector similarity + PostgreSQL full-text search
 - **Cognitive tiering** — hot/warm/cold memory lifecycle with usage-based scoring
 - **Per-consumer auth** — role-based access control with scoped tokens (admin, agent, readonly, etc.)
@@ -16,25 +16,19 @@ Built for AI agents that need persistent, searchable memory across conversations
 - **Session management** — stateful MCP sessions with upsert, deduplication, and TTL expiry
 - **Curation pipeline** — automated duplicate detection, staleness decay, and LLM-as-judge quality scoring
 
-## Tools
+## Tools and Contract
 
-| Tool | Description |
-|------|-------------|
-| `search_brain` | Hybrid semantic + keyword search across any table. Supports vector, keyword, or fused mode with tier boosting and recency weighting. |
-| `search_all` | Unified search across Open Brain tables and external knowledge bases. |
-| `log_thought` | Store a thought, idea, or observation. Auto-embeds and extracts metadata. |
-| `log_decision` | Record a decision with rationale and considered alternatives. |
-| `find_person` | Search contacts by name (partial match) or semantic similarity. |
-| `upsert_person` | Create or update a contact record (name, relationship, warmth, notes). |
-| `session_save` | Save a session summary with structured fields. Supports upsert via session ID. |
-| `session_load` | Load the most recent session, optionally filtered by project. |
-| `list_recent` | List recent entries across all tables with offset pagination and tier filtering. |
-| `get_entry` | Fetch a single entry by table and ID. |
-| `update_entry` | Update content, tags, or metadata on an existing entry. |
-| `archive_entry` | Soft-delete an entry with an optional reason. |
-| `rate_entry` | Score an entry's usefulness (0–1) for quality feedback. |
-| `list_stale` | Find entries not accessed recently — candidates for tier demotion (hot→warm→cold). Filterable by table, current tier, and staleness threshold. |
-| `set_tier` | Move an entry between cognitive tiers (hot/warm/cold). |
+`get_contract` is the source of truth for the Open Brain tool surface and input
+contract. Downstream clients should not hard-code the tool list from this
+README; they should fetch the live contract and, when they need model tool
+schemas, convert it through the `openbrain-memory` Python package.
+
+Major tool groups include search and synthesis (`search_brain`, `search_all`,
+`brain_answer`), memory writes (`log_thought`, `log_decision`,
+`append_session_event`, `session_wrap`), session lifecycle (`session_start`,
+`session_context`, `session_load`, `session_save`), repo facts
+(`upsert_repo_fact`, `list_repo_facts`), lane state (`lane_upsert`,
+`lane_load`), contacts, entries, tiers, and curation.
 
 ## Prerequisites
 
@@ -80,10 +74,15 @@ PORT=3100
 # Auth tokens (generate with: openssl rand -hex 32)
 AUTH_TOKEN_ADMIN=
 AUTH_TOKEN_AGENT=
+AUTH_TOKEN_DISCORD=
+AUTH_TOKEN_N8N=
+AUTH_TOKEN_PROMOTER=
 AUTH_TOKEN_READONLY=
 ```
 
-A helper script is also available for token management:
+A helper script is also available for the standard admin, agent, discord, n8n,
+and readonly token set. Manage `AUTH_TOKEN_PROMOTER` explicitly until the
+helper supports promoter rotation:
 
 ```bash
 ./scripts/generate-tokens.sh           # show all tokens
@@ -151,6 +150,58 @@ mcp2cli cache diff open-brain
 OPEN_BRAIN_CODEX_SMOKE_WRITE=1 bun run codex-memory-smoke
 ```
 
+## Python Client Package
+
+The reusable Python package lives in `python/openbrain-memory/`. Install it on
+agent hosts, automation hosts, or any Python runtime that talks to Open Brain.
+Installing the package does not run the Open Brain service locally; the service
+remains remote.
+
+Preferred install sources:
+
+```bash
+# Published/internal package, once available
+uv pip install --python /path/to/venv/bin/python openbrain-memory==<version>
+
+# Reviewed wheel artifact
+uv pip install --python /path/to/venv/bin/python /path/to/openbrain_memory-<version>-py3-none-any.whl
+
+# Transitional git-subdirectory install, pinned to a reviewed commit
+uv pip install --python /path/to/venv/bin/python \
+  "git+https://github.com/rodaddy/open-brain.git@<40-char-commit>#subdirectory=python/openbrain-memory"
+```
+
+Do not use a moving branch or unpinned package for host installs. Use a
+reviewed wheel, exact package version, or a full 40-character commit pin.
+
+Runtime configuration for package consumers:
+
+```bash
+export OPENBRAIN_BASE_URL="https://open-brain.rodaddy.live"
+export OPENBRAIN_TOKEN="..."              # bearer token; never commit this
+export OPENBRAIN_NAMESPACE="nagatha"      # normal agent token namespace
+export OPENBRAIN_AGENT_ID="nagatha"
+```
+
+For normal agent-role tokens, namespace authority is enforced by the server from
+the bearer token. `OPENBRAIN_NAMESPACE` must match the token-bound identity;
+cross-namespace access requires an explicit delegated privileged role/path.
+
+Trusted lab-only direct HTTP to the active Mac Mini endpoint requires an
+explicit opt-in because bearer tokens travel over the request:
+
+```bash
+export OPENBRAIN_BASE_URL="http://10.71.1.21:3100"
+export OPENBRAIN_ALLOW_INSECURE_HTTP=1
+```
+
+`10.71.20.49` is a retained pre-cutover snapshot, not the active production
+Open Brain endpoint. Use `https://open-brain.rodaddy.live` or direct
+`10.71.1.21:3100` for current host canaries.
+
+For full package usage, schema helper, live canary, and Hermes integration
+guidance, see [`python/openbrain-memory/README.md`](python/openbrain-memory/README.md).
+
 ## Auth & Permissions
 
 Each consumer gets a scoped Bearer token. Roles control which tables are readable/writable:
@@ -161,9 +212,14 @@ Each consumer gets a scoped Bearer token. Roles control which tables are readabl
 | `agent` | All tables | thoughts, decisions, relationships, sessions | — |
 | `discord` | — | thoughts | — |
 | `n8n` | All tables | All tables | All tables |
+| `promoter` | Shared promotion scope | Curated shared-kb promotions | — |
 | `readonly` | All tables | — | — |
 
-Set tokens via `AUTH_TOKEN_ADMIN`, `AUTH_TOKEN_AGENT`, etc. in your `.env`. You can also add custom per-user tokens with the `AUTH_TOKEN_USER_*` pattern.
+Set tokens via `AUTH_TOKEN_ADMIN`, `AUTH_TOKEN_AGENT`, `AUTH_TOKEN_DISCORD`,
+`AUTH_TOKEN_N8N`, `AUTH_TOKEN_PROMOTER`, and `AUTH_TOKEN_READONLY` in your
+`.env`. You can also add custom per-user tokens with the `AUTH_TOKEN_USER_*`
+pattern. `promoter` is for controlled shared-kb promotion flows, not normal
+agent identity.
 
 ## Database Schema
 
@@ -292,6 +348,12 @@ To connect from an MCP client (e.g., Claude Desktop, Claude Code):
   }
 }
 ```
+
+Hermes and Python package consumers normally use direct HTTP through
+`openbrain-memory`, not a local mcp2cli daemon. Configure them with
+`OPENBRAIN_BASE_URL`, `OPENBRAIN_TOKEN`, `OPENBRAIN_NAMESPACE`, and
+`OPENBRAIN_AGENT_ID`; use `OPENBRAIN_ALLOW_INSECURE_HTTP=1` only for trusted
+lab HTTP endpoints such as `http://10.71.1.21:3100`.
 
 ## Documentation
 

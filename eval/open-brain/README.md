@@ -47,10 +47,9 @@ when the report is intended to be durable; otherwise write scratch reports under
 
 ## Next Expansion Points
 
-- Add a live Open Brain adapter that loads synthetic fixtures into an isolated
-  namespace and calls `search_brain` / `brain_answer`.
-- Add live-adapter probes once the eval harness can call `brain_answer` through
-  MCP. The current offline fixture checks that Codex retrieves the right
+- Add a live Open Brain adapter that loads fixtures into an isolated namespace
+  and calls `search_brain` / `brain_answer` through the current contract/direct
+  HTTP client. The current offline fixture checks that Codex retrieves the right
   synthesis-tool policy and can render cited answer evidence; it does not
   execute `brain_answer` or read the live repo.
 - Publish durable scorecards only when the corpus and command are intentionally
