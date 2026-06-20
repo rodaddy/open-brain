@@ -21,8 +21,10 @@ Dependency direction is one-way:
 - `open-brain` owns the reusable client and memory brain package.
 - `rtech-hermes` owns the Hermes adapter and lifecycle integration.
 - The Python package should not import Hermes runtime code.
-- Hermes should consume this package instead of reimplementing direct HTTP
-  calls to Open Brain `/mcp`.
+- Hermes migration should move lifecycle/event wiring toward this package
+  rather than growing a long-lived fork of Open Brain client behavior. Until
+  that wiring lands in the deployed Hermes adapter, treat this package as the
+  migration target, not proof of current Hermes runtime state.
 
 ## Install
 
@@ -38,8 +40,18 @@ Preferred options, in order:
    uv pip install openbrain-memory
    ```
 
-2. **Wheel artifact.** Use this for pinned rollout when publication is not done
-   yet, or when promoting the exact artifact built and tested by CI:
+2. **Prebuilt CI/release wheel artifact.** Use this for pinned rollout when
+   publication is not done yet, or when promoting the exact wheel built and
+   tested by CI or a release job. Download or copy that reviewed artifact from
+   the CI/release artifact store, then install that file on the host:
+
+   ```bash
+   uv pip install /path/to/openbrain_memory-<version>-py3-none-any.whl
+   ```
+
+3. **Local development build.** Use this to test packaging from a checkout or
+   to install an unreleased local build for development. This creates a new
+   wheel on the host, so it is not the same artifact CI already reviewed:
 
    ```bash
    cd python/openbrain-memory
@@ -47,8 +59,8 @@ Preferred options, in order:
    uv pip install dist/openbrain_memory-*.whl
    ```
 
-3. **Transitional git-subdirectory install.** This is the current recommended
-   path for Hermes agents until a published/internal package or CI wheel
+4. **Transitional git-subdirectory install.** Use this only while a consuming
+   runtime is migrating and no published/internal package or reviewed wheel
    artifact is available:
 
    ```bash
@@ -127,10 +139,10 @@ prompt_context = context.as_prompt_text()
 
 ## Current Open Brain Tools
 
-`OpenBrainClient` exposes first-class methods for the current required Open
-Brain memory contract, currently `2026-06-19.memory-tools.v5`. Agent runtimes
-should call these package methods instead of carrying local copies of tool
-schemas, stale mcp2cli paths, or Hermes-specific Open Brain adapters.
+`OpenBrainClient` exposes first-class methods for the Open Brain memory
+contract. Agent runtimes should call these package methods and confirm the live
+endpoint contract with `client.get_contract()` instead of carrying local copies
+of tool schemas, stale mcp2cli paths, or Hermes-specific Open Brain adapters.
 
 Required memory contract methods:
 
@@ -171,11 +183,12 @@ These wrappers describe the *expected* contract; they are not proof of live
 behavior. Read them with three boundaries in mind:
 
 - **The server owns the contract.** `client.get_contract()` returns the live
-  source of truth for the connected Open Brain endpoint. `CURRENT_CONTRACT_VERSION`
-  / `REQUIRED_CONTRACT_TOOLS` are a package snapshot for compatibility checks and
-  tests; they may lag or lead a specific deployment. A wrapper existing here does
-  not prove the connected Open Brain implements that tool. Confirm against the
-  live endpoint with `get_contract()`.
+  source of truth for the connected Open Brain endpoint, including version,
+  required tools, compatibility fields, and schema metadata. Package constants
+  such as `CURRENT_CONTRACT_VERSION` / `REQUIRED_CONTRACT_TOOLS` are snapshots
+  for compatibility checks and tests; they may lag or lead a specific
+  deployment. A wrapper existing here does not prove the connected Open Brain
+  implements that tool. Confirm against the live endpoint with `get_contract()`.
 - **A wrapper call is not a confirmed write.** Importing this package and calling
   `log_thought()` / `upsert_repo_fact()` does not guarantee the runtime is wired
   to a reachable Open Brain. If `OPENBRAIN_BASE_URL`, the token, or the namespace
