@@ -3,7 +3,7 @@
 Security reviewers focus on boundaries: namespaces, bearer tokens, secret
 handling, trusted headers, redirect behavior, and plaintext transport.
 
-## [2026-06-11] Namespace metadata must not bypass client/header authority
+## [2026-06-11] Namespace metadata must not bypass token/header authority
 
 **Severity:** HIGH
 **Source:** Issue #78, PR #73 follow-up
@@ -14,12 +14,13 @@ handling, trusted headers, redirect behavior, and plaintext transport.
 
 `AgentMemory.remember_fact()` and `remember_decision()` accepted free-form
 `namespace` metadata and forwarded it into tool arguments. That can conflict
-with or attempt to override `OpenBrainClient`'s `X-Namespace` authority.
+with or attempt to override the server's token-derived namespace authority or
+an explicit privileged `X-Namespace` delegation path.
 
 ### Review Questions
 
 - Is `namespace` removed from generic metadata pass-through, or verified against
-  the configured client namespace?
+  the authenticated server-side namespace/delegation policy?
 - If namespace override is required, is it an explicit privileged API rather
   than arbitrary metadata?
 - Are there tests for `namespace="other"` on normal clients?

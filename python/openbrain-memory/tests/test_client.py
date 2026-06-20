@@ -130,6 +130,19 @@ def make_client(transport: FakeTransport) -> OpenBrainClient:
     )
 
 
+def make_delegating_client(transport: FakeTransport) -> OpenBrainClient:
+    return OpenBrainClient(
+        "https://brain.example",
+        "secret-token",
+        "bilby",
+        agent_id="bilby-agent",
+        role="agent",
+        timeout=12.5,
+        transport=transport,
+        delegate_namespace=True,
+    )
+
+
 def post_requests(transport: FakeTransport):
     return [request for request in transport.requests if request["method"] == "POST"]
 
@@ -204,7 +217,7 @@ def test_http_error_redacts_deep_json_without_recursion_error():
     assert "secret-token" not in str(error)
 
 
-def test_initialize_sends_auth_namespace_and_stores_session_id():
+def test_initialize_omits_namespace_delegation_by_default_and_stores_session_id():
     transport = FakeTransport()
     client = make_client(transport)
 
@@ -215,12 +228,25 @@ def test_initialize_sends_auth_namespace_and_stores_session_id():
     assert headers["Authorization"] == "Bearer secret-token"
     assert headers["Accept"] == "application/json, text/event-stream"
     assert headers["Content-Type"] == "application/json"
-    assert headers["X-Namespace"] == "bilby"
+    assert "X-Namespace" not in headers
     assert headers["X-Agent-Id"] == "bilby-agent"
     assert headers["X-Role"] == "agent"
     assert "Mcp-Session-Id" not in headers
     assert initialize["json"]["method"] == "initialize"
     assert client.session_id == "session-123"
+
+
+def test_initialize_sends_namespace_only_when_delegation_is_enabled():
+    transport = FakeTransport()
+    client = make_delegating_client(transport)
+
+    client.call_tool("search_all", {"query": "namespace routing"})
+
+    initialize = post_requests(transport)[0]
+    headers = initialize["headers"]
+    assert headers["X-Namespace"] == "bilby"
+    assert headers["X-Agent-Id"] == "bilby-agent"
+    assert headers["X-Role"] == "agent"
 
 
 def test_initialized_notification_and_tool_calls_reuse_session_header():
@@ -256,7 +282,7 @@ def test_close_sends_delete_once_and_context_manager_closes():
     delete = delete_requests[0]
     assert delete["url"] == "https://brain.example/mcp"
     assert delete["headers"]["Authorization"] == "Bearer secret-token"
-    assert delete["headers"]["X-Namespace"] == "bilby"
+    assert "X-Namespace" not in delete["headers"]
     assert delete["headers"]["X-Agent-Id"] == "bilby-agent"
     assert delete["headers"]["X-Role"] == "agent"
     assert delete["headers"]["Mcp-Session-Id"] == "session-123"
@@ -460,10 +486,10 @@ def test_current_agent_read_helpers_have_first_class_wrappers():
         assert tool_name in CURRENT_TOOL_HELP
 
 
-def test_upsert_repo_fact_sends_payload_and_binds_namespace_header():
+def test_upsert_repo_fact_sends_payload_without_default_namespace_delegation():
     # A write wrapper must (1) reach the server as the matching tool with the
-    # caller payload intact, and (2) keep X-Namespace bound to the client's
-    # configured namespace even when caller metadata tries to override it.
+    # caller payload intact, and (2) keep caller metadata from creating a
+    # delegation header. Agent-role tokens derive namespace server-side.
     transport = FakeTransport()
     client = make_client(transport)
 
@@ -480,7 +506,20 @@ def test_upsert_repo_fact_sends_payload_and_binds_namespace_header():
         "repo": "rodaddy/open-brain",
         "metadata": {"namespace": "other-namespace", "fact": "x"},
     }
-    # Server-authoritative namespace header must not be overridden by metadata.
+    assert header_value(calls[0]["headers"], "X-Namespace") is None
+
+
+def test_upsert_repo_fact_sends_delegation_header_when_enabled():
+    transport = FakeTransport()
+    client = make_delegating_client(transport)
+
+    client.upsert_repo_fact(
+        repo="rodaddy/open-brain",
+        metadata={"namespace": "other-namespace", "fact": "x"},
+    )
+
+    calls = tool_requests(transport)
+    assert len(calls) == 1
     assert header_value(calls[0]["headers"], "X-Namespace") == "bilby"
 
 
@@ -1097,7 +1136,7 @@ def test_openbrain_client_streams_until_matching_sse_jsonrpc_response():
 
     initialize, initialized, call = seen
     assert header_value(initialize["headers"], "Authorization") == "Bearer secret-token"
-    assert header_value(initialize["headers"], "X-Namespace") == "bilby"
+    assert header_value(initialize["headers"], "X-Namespace") is None
     assert header_value(initialize["headers"], "X-Agent-Id") == "bilby-agent"
     assert header_value(initialize["headers"], "X-Role") == "agent"
     assert header_value(initialize["headers"], "Mcp-Session-Id") is None
@@ -1113,6 +1152,75 @@ def test_openbrain_client_streams_until_matching_sse_jsonrpc_response():
         "method": "tools/call",
         "params": {"name": "search_all", "arguments": {"query": "stream"}},
     }
+
+
+def test_urllib_transport_sends_namespace_when_delegation_is_enabled():
+    seen = []
+
+    class DelegatingMcpHandler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            content_length = int(self.headers.get("Content-Length", "0"))
+            payload = json.loads(self.rfile.read(content_length))
+            seen.append(
+                {
+                    "headers": dict(self.headers.items()),
+                    "json": payload,
+                }
+            )
+            method = payload.get("method")
+            if method == "initialize":
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Mcp-Session-Id", "session-delegated")
+                self.end_headers()
+                self.wfile.write(
+                    json.dumps(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": payload["id"],
+                            "result": {"protocolVersion": "2025-03-26"},
+                        }
+                    ).encode("utf-8")
+                )
+                return
+            if method == "notifications/initialized":
+                self.send_response(202)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            self.send_response(400)
+            self.end_headers()
+
+        def log_message(self, _format, *args):
+            return
+
+    server = HTTPServer(("127.0.0.1", 0), DelegatingMcpHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        client = OpenBrainClient(
+            f"http://127.0.0.1:{server.server_port}",
+            "secret-token",
+            "bilby",
+            agent_id="bilby-agent",
+            role="agent",
+            timeout=2,
+            transport=UrllibTransport(),
+            delegate_namespace=True,
+        )
+        client._ensure_session()
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+
+    initialize, initialized = seen
+    assert header_value(initialize["headers"], "Authorization") == "Bearer secret-token"
+    assert header_value(initialize["headers"], "X-Namespace") == "bilby"
+    assert header_value(initialize["headers"], "X-Agent-Id") == "bilby-agent"
+    assert header_value(initialize["headers"], "X-Role") == "agent"
+    assert header_value(initialize["headers"], "Mcp-Session-Id") is None
+    assert header_value(initialized["headers"], "X-Namespace") == "bilby"
+    assert header_value(initialized["headers"], "Mcp-Session-Id") == "session-delegated"
 
 
 def test_urllib_transport_bounds_json_response_size():

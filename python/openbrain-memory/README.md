@@ -112,6 +112,12 @@ memory = AgentMemory(
 )
 ```
 
+Normal agent-role tokens derive namespace authority server-side from the token.
+`OpenBrainClient` therefore does not send `X-Namespace` by default. Trusted
+admin or n8n callers that intentionally need namespace delegation can opt in
+with `delegate_namespace=True`; doing so sends `X-Namespace` and requires a
+server role that is allowed to delegate.
+
 ## Quickstart
 
 ```python
@@ -195,9 +201,12 @@ behavior. Read them with three boundaries in mind:
   is misconfigured, or the service is unreachable, writes can fail and be spooled
   locally (see [Safety and Spooling](#safety-and-spooling)) rather than landing
   in Open Brain. Verify live writes; do not treat "spooled" as "saved."
-- **The server owns namespace authority.** Namespace is bound from the client's
-  configured `X-Namespace`, not from caller metadata. Passing `namespace` inside
-  a wrapper's arguments does not override it.
+- **The server owns namespace authority.** Normal agent-role tokens derive the
+  caller namespace server-side, so `OpenBrainClient` omits `X-Namespace` by
+  default. `delegate_namespace=True` is an explicit privileged delegation mode
+  for roles such as admin or n8n that are allowed to send `X-Namespace`.
+  Passing `namespace` inside a wrapper's arguments does not create or override
+  delegation.
 
 ### Transport
 
@@ -218,14 +227,16 @@ documented, Hermes agents should configure `OPENBRAIN_BASE_URL`,
 are for diagnostics and display only; they do not mutate live writes.
 
 Namespace authority belongs to the configured `OpenBrainClient` and the Open
-Brain service. `OpenBrainClient` sends the configured namespace through
-`X-Namespace` when present, and the server validates that header against the
-bearer token role. `AgentMemory` never accepts `namespace` as facade metadata.
-Nested user-owned structures such as decision context remain available for
-semantic fields, but authority-shaped keys such as `namespace`, `authorization`,
-`headers`, `role`, `token`, or `X-Namespace` are rejected before client calls.
-Cross-namespace writes require an explicit privileged client/server path rather
-than facade metadata.
+Brain service. `OpenBrainClient` does not send `X-Namespace` for normal agent
+clients; the server derives the namespace from the bearer token. When a trusted
+admin/n8n-style caller passes `delegate_namespace=True`, the client sends its
+configured namespace through `X-Namespace`, and the server validates that
+delegation against the bearer token role. `AgentMemory` never accepts
+`namespace` as facade metadata. Nested user-owned structures such as decision
+context remain available for semantic fields, but authority-shaped keys such as
+`namespace`, `authorization`, `headers`, `role`, `token`, or `X-Namespace` are
+rejected before client calls. Cross-namespace writes require an explicit
+privileged client/server path rather than facade metadata.
 
 `UrllibTransport` bounds JSON and SSE response reads with `max_response_bytes`
 and returns from SSE responses after the first JSON-RPC response event rather
@@ -300,6 +311,10 @@ OPENBRAIN_TOKEN=... \
 OPENBRAIN_NAMESPACE=bilby \
 uv run pytest tests/test_live_canary.py
 ```
+
+Set `OPENBRAIN_ROLE`/`OPENBRAIN_AGENT_ID` for the identity labels expected by
+the target deployment. Do not enable namespace delegation for normal agent-role
+tokens; the server should derive their namespace from the token.
 
 Non-local `http://` endpoints are rejected by default because MCP requests carry
 bearer tokens. For trusted lab-only HTTP endpoints, set
