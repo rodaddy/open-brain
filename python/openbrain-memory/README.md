@@ -208,6 +208,27 @@ behavior. Read them with three boundaries in mind:
   Passing `namespace` inside a wrapper's arguments does not create or override
   delegation.
 
+### Schema Helpers
+
+`openbrain_memory.schema` converts the server's `get_contract()` DSL into JSON
+Schema-shaped input definitions for downstream validators and tool registries.
+The live `get_contract()` manifest remains the source of truth; these helpers
+only translate a manifest the caller already obtained or a package test fixture.
+They do not prove that a deployed Open Brain endpoint, Hermes adapter, or agent
+runtime is wired correctly.
+
+Use `contract_field_to_json_schema()` for one field node and
+`contract_input_to_json_schema()` for one tool's `input_schema` mapping. Use
+`tool_contract_to_input_schema()` when you already selected one tool contract,
+and `tool_contracts_to_tool_schemas()` when converting a manifest's
+`tool_contracts` into a list of `{name, input_schema}` entries.
+
+Malformed contract DSL raises `ContractSchemaError` with the failing path rather
+than emitting invalid JSON Schema. Open Brain-specific constraints that do not
+map cleanly to standard JSON Schema are preserved with `x-openbrain-*` vendor
+extensions. Hermes policy, readiness checks, and runtime enforcement remain
+downstream integration responsibilities.
+
 ### Transport
 
 Today this package talks directly to the Open Brain service over HTTP endpoints

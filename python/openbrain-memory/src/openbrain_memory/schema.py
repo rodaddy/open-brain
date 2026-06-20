@@ -23,6 +23,7 @@ _PRESERVED_KEYS = frozenset(
         "additionalProperties",
         "default",
         "description",
+        "maxItems",
         "maxLength",
         "minLength",
         "propertyNames",
@@ -155,7 +156,8 @@ def _contract_field_to_json_schema(
         _apply_object_fields(node, schema, path=path, enum_refs=enum_refs)
 
     _preserve_metadata(node, schema, path=path, enum_refs=enum_refs)
-    _preserve_numeric_bounds(node, schema)
+    _preserve_numeric_bounds(node, schema, path=path)
+    _preserve_nonstandard_bounds(node, schema, path=path)
     return schema
 
 
@@ -246,6 +248,7 @@ def _fields_to_object_schema(
 ) -> JSONSchema:
     properties: dict[str, Any] = {}
     required: list[str] = []
+    required_groups: dict[str, list[str]] = {}
     for name, field in fields.items():
         if not isinstance(name, str):
             raise ContractSchemaError(f"{path}: field names must be strings")
@@ -255,8 +258,18 @@ def _fields_to_object_schema(
             path=field_path,
             enum_refs=enum_refs,
         )
-        if isinstance(field, Mapping) and field.get("required") is True:
-            required.append(name)
+        if isinstance(field, Mapping) and "required" in field:
+            required_value = field["required"]
+            if required_value is True:
+                required.append(name)
+            elif required_value is False:
+                continue
+            elif isinstance(required_value, str):
+                required_groups.setdefault(required_value, []).append(name)
+            else:
+                raise ContractSchemaError(
+                    f"{field_path}.required: required must be a boolean or string",
+                )
 
     schema: JSONSchema = {
         "type": "object",
@@ -265,6 +278,15 @@ def _fields_to_object_schema(
     }
     if required:
         schema["required"] = required
+    if required_groups:
+        group_constraints = [
+            {"anyOf": [{"required": [name]} for name in group_names]}
+            for group_names in required_groups.values()
+        ]
+        if len(group_constraints) == 1:
+            schema.update(group_constraints[0])
+        else:
+            schema["allOf"] = group_constraints
     return schema
 
 
@@ -306,15 +328,67 @@ def _preserve_metadata(
                 path=f"{path}.{key}",
                 enum_refs=enum_refs,
             )
+        elif key == "additionalProperties":
+            if not isinstance(value, bool):
+                raise ContractSchemaError(
+                    f"{path}.{key}: additionalProperties must be a boolean "
+                    "or mapping",
+                )
+            schema[key] = value
+        elif key in {"minLength", "maxLength", "maxItems"}:
+            schema[key] = _nonnegative_integer(value, path=f"{path}.{key}")
+        elif key == "description":
+            if not isinstance(value, str):
+                raise ContractSchemaError(f"{path}.{key}: description must be a string")
+            schema[key] = value
         else:
             schema[key] = value
 
 
-def _preserve_numeric_bounds(node: Mapping[str, Any], schema: JSONSchema) -> None:
+def _preserve_numeric_bounds(
+    node: Mapping[str, Any],
+    schema: JSONSchema,
+    *,
+    path: str,
+) -> None:
     if "min" in node:
-        schema["minimum"] = node["min"]
+        schema["minimum"] = _number(node["min"], path=f"{path}.min")
     if "max" in node:
-        schema["maximum"] = node["max"]
+        schema["maximum"] = _number(node["max"], path=f"{path}.max")
+
+
+def _preserve_nonstandard_bounds(
+    node: Mapping[str, Any],
+    schema: JSONSchema,
+    *,
+    path: str,
+) -> None:
+    if "maxItemLength" in node:
+        value = _nonnegative_integer(
+            node["maxItemLength"],
+            path=f"{path}.maxItemLength",
+        )
+        items = schema.get("items")
+        if (
+            schema.get("type") != "array"
+            or not isinstance(items, dict)
+            or items.get("type") != "string"
+        ):
+            raise ContractSchemaError(
+                f"{path}.maxItemLength: maxItemLength only maps to string "
+                "array items",
+            )
+        items["maxLength"] = value
+    if "maxKeys" in node:
+        schema["x-openbrain-maxKeys"] = _nonnegative_integer(
+            node["maxKeys"],
+            path=f"{path}.maxKeys",
+        )
+    if "maxJsonBytes" in node:
+        schema["x-openbrain-maxJsonBytes"] = _nonnegative_integer(
+            node["maxJsonBytes"],
+            path=f"{path}.maxJsonBytes",
+        )
 
 
 def _resolve_string_ref(
@@ -339,28 +413,61 @@ def _collect_manifest_enum_refs(
     tool_contracts: Mapping[str, Any],
 ) -> dict[str, JSONSchema]:
     refs: dict[str, JSONSchema] = {}
-    for tool_contract in tool_contracts.values():
+    for tool_name, tool_contract in tool_contracts.items():
         if not isinstance(tool_contract, Mapping):
             continue
         input_schema = tool_contract.get("input_schema")
         if isinstance(input_schema, Mapping):
-            refs.update(_collect_enum_refs(input_schema))
+            _merge_enum_refs(
+                refs,
+                _collect_enum_refs(
+                    input_schema,
+                    path=f"$.tool_contracts.{tool_name}.input_schema",
+                    scoped_session_aliases=tool_name == "append_session_event",
+                ),
+            )
     return refs
 
 
-def _collect_enum_refs(fields: Mapping[str, Any]) -> dict[str, JSONSchema]:
+def _collect_enum_refs(
+    fields: Mapping[str, Any],
+    *,
+    path: str = "$",
+    scoped_session_aliases: bool = False,
+) -> dict[str, JSONSchema]:
     refs: dict[str, JSONSchema] = {}
     for name, field in fields.items():
         if not isinstance(name, str) or not isinstance(field, Mapping):
             continue
+        field_path = f"{path}.{name}"
         if field.get("type") == "enum":
-            refs[name] = _enum_node_to_json_schema(field, path=f"$.{name}")
-            if name.endswith("_type"):
-                refs[f"session_{name}"] = refs[name]
+            schema = _enum_node_to_json_schema(field, path=field_path)
+            _merge_enum_refs(refs, {name: schema}, path=field_path)
+            if scoped_session_aliases and name == "event_type":
+                _merge_enum_refs(refs, {"session_event_type": schema}, path=field_path)
         nested_fields = field.get("fields")
         if isinstance(nested_fields, Mapping):
-            refs.update(_collect_enum_refs(nested_fields))
+            _merge_enum_refs(
+                refs,
+                _collect_enum_refs(
+                    nested_fields,
+                    path=f"{field_path}.fields",
+                    scoped_session_aliases=scoped_session_aliases,
+                ),
+            )
     return refs
+
+
+def _merge_enum_refs(
+    refs: dict[str, JSONSchema],
+    candidates: Mapping[str, JSONSchema],
+    *,
+    path: str = "$",
+) -> None:
+    for name, schema in candidates.items():
+        if name in refs and refs[name] != schema:
+            raise ContractSchemaError(f"{path}: conflicting enum reference {name!r}")
+        refs[name] = dict(schema)
 
 
 def _has_explicit_object_marker(node: Mapping[str, Any]) -> bool:
@@ -436,3 +543,15 @@ def _json_primitive_type(value: Any) -> str | None:
     if isinstance(value, str):
         return "string"
     return None
+
+
+def _number(value: Any, *, path: str) -> int | float:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ContractSchemaError(f"{path}: bound must be a number")
+    return value
+
+
+def _nonnegative_integer(value: Any, *, path: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ContractSchemaError(f"{path}: bound must be a non-negative integer")
+    return value

@@ -50,6 +50,27 @@ def test_min_max_constraints_convert_to_json_schema_bounds():
     ) == {"type": "number", "default": 1, "minimum": 0, "maximum": 1}
 
 
+def test_malformed_schema_keyword_types_fail_with_path():
+    invalid_nodes = [
+        ("$.score.min", {"type": "number", "min": "0"}),
+        ("$.name.maxLength", {"type": "string", "maxLength": "100"}),
+        ("$.tags.maxItems", {"type": "array", "items": "string", "maxItems": 3.5}),
+        (
+            "$.metadata.additionalProperties",
+            {"type": "object", "additionalProperties": "no"},
+        ),
+        (
+            "$.tags.maxItemLength",
+            {"type": "array", "items": "string", "maxItemLength": -1},
+        ),
+    ]
+
+    for expected_path, node in invalid_nodes:
+        path_match = expected_path.replace("$", r"\$")
+        with pytest.raises(ContractSchemaError, match=path_match):
+            contract_field_to_json_schema(node, path=expected_path.rsplit(".", 1)[0])
+
+
 def test_nested_fields_convert_to_properties_and_required_list():
     assert contract_field_to_json_schema(
         {
@@ -114,6 +135,52 @@ def test_arrays_convert_string_item_refs_and_manifest_enum_refs():
             "enum": ["fact", "decision", "blocker"],
         },
     }
+
+
+def test_manifest_enum_ref_conflicts_fail_with_path():
+    manifest = {
+        "tool_contracts": {
+            "first": {
+                "input_schema": {
+                    "status": {"type": "enum", "values": ["open", "closed"]},
+                },
+            },
+            "second": {
+                "input_schema": {
+                    "status": {"type": "enum", "values": ["hot", "cold"]},
+                },
+            },
+        },
+    }
+
+    with pytest.raises(
+        ContractSchemaError,
+        match=r"conflicting enum reference 'status'",
+    ):
+        tool_contracts_to_tool_schemas(manifest)
+
+
+def test_session_event_type_alias_is_scoped_to_append_session_event():
+    manifest = {
+        "tool_contracts": {
+            "other_tool": {
+                "input_schema": {
+                    "event_type": {"type": "enum", "values": ["unrelated"]},
+                },
+            },
+            "session_context": {
+                "input_schema": {
+                    "event_types": {"type": "array", "items": "session_event_type"},
+                },
+            },
+        },
+    }
+
+    with pytest.raises(
+        ContractSchemaError,
+        match=r"\$\.tool_contracts\.session_context\.input_schema\.event_types\.items",
+    ):
+        tool_contracts_to_tool_schemas(manifest, tool_names=["session_context"])
 
 
 def test_typeless_contract_field_maps_convert_to_object_properties():
@@ -231,6 +298,91 @@ def test_real_repo_fact_metadata_typeless_contract_converts_to_object_schema():
         "minimum": 0,
         "maximum": 1,
     }
+    assert schema["anyOf"] == [{"required": ["symbol"]}, {"required": ["subject"]}]
+
+
+def test_required_string_groups_convert_to_anyof_required_alternatives():
+    assert contract_input_to_json_schema(
+        {
+            "session_key": {"type": "string", "required": "session_key_or_channel_id"},
+            "channel_id": {"type": "string", "required": "session_key_or_channel_id"},
+        },
+    ) == {
+        "type": "object",
+        "properties": {
+            "session_key": {"type": "string"},
+            "channel_id": {"type": "string"},
+        },
+        "additionalProperties": False,
+        "anyOf": [{"required": ["session_key"]}, {"required": ["channel_id"]}],
+    }
+
+
+def test_multiple_required_string_groups_require_each_group():
+    assert contract_input_to_json_schema(
+        {
+            "session_key": {"type": "string", "required": "session_key_or_channel_id"},
+            "channel_id": {"type": "string", "required": "session_key_or_channel_id"},
+            "symbol": {"type": "string", "required": "symbol_or_subject"},
+            "subject": {"type": "string", "required": "symbol_or_subject"},
+        },
+    ) == {
+        "type": "object",
+        "properties": {
+            "session_key": {"type": "string"},
+            "channel_id": {"type": "string"},
+            "symbol": {"type": "string"},
+            "subject": {"type": "string"},
+        },
+        "additionalProperties": False,
+        "allOf": [
+            {
+                "anyOf": [
+                    {"required": ["session_key"]},
+                    {"required": ["channel_id"]},
+                ],
+            },
+            {
+                "anyOf": [
+                    {"required": ["symbol"]},
+                    {"required": ["subject"]},
+                ],
+            },
+        ],
+    }
+
+
+def test_current_dsl_bounds_convert_or_use_vendor_extensions():
+    assert contract_field_to_json_schema(
+        {
+            "type": "array",
+            "items": "string",
+            "maxItems": 4,
+            "maxItemLength": 20,
+        },
+        path="$.tags",
+    ) == {
+        "type": "array",
+        "items": {"type": "string", "maxLength": 20},
+        "maxItems": 4,
+    }
+
+    assert contract_field_to_json_schema(
+        {"type": "object", "maxKeys": 8, "maxJsonBytes": 4096},
+        path="$.metadata",
+    ) == {
+        "type": "object",
+        "x-openbrain-maxKeys": 8,
+        "x-openbrain-maxJsonBytes": 4096,
+    }
+
+
+def test_max_item_length_on_non_string_array_fails_with_path():
+    with pytest.raises(ContractSchemaError, match=r"\$\.ids\.maxItemLength"):
+        contract_field_to_json_schema(
+            {"type": "array", "items": "integer", "maxItemLength": 20},
+            path="$.ids",
+        )
 
 
 def test_real_repo_fact_validation_metadata_converts_to_conservative_schema():
@@ -370,3 +522,103 @@ def test_unresolved_array_ref_fails_with_path():
         contract_input_to_json_schema(
             {"event_types": {"type": "array", "items": "session_event_type"}},
         )
+
+
+def test_representative_get_contract_manifest_converts_current_shapes():
+    manifest = {
+        "tool_contracts": {
+            "append_session_event": {
+                "version": 3,
+                "input_schema": {
+                    "session_key": {
+                        "type": "string",
+                        "required": "session_key_or_channel_id",
+                    },
+                    "channel_id": {
+                        "type": "string",
+                        "required": "session_key_or_channel_id",
+                    },
+                    "event_type": {
+                        "type": "enum",
+                        "required": True,
+                        "values": ["fact", "decision", "blocker"],
+                    },
+                },
+                "output_shape": "event",
+            },
+            "session_context": {
+                "version": 2,
+                "input_schema": {
+                    "event_types": {
+                        "type": "array",
+                        "items": "session_event_type",
+                        "maxItems": 12,
+                    },
+                },
+                "output_shape": "context",
+            },
+            "upsert_repo_fact": {
+                "version": 1,
+                "input_schema": {
+                    "metadata": {
+                        "source_system": {
+                            "type": "literal",
+                            "value": "qmd",
+                            "required": True,
+                        },
+                        "symbol": {
+                            "type": "string",
+                            "required": "symbol_or_subject",
+                            "maxLength": 300,
+                        },
+                        "subject": {
+                            "type": "string",
+                            "required": "symbol_or_subject",
+                            "maxLength": 500,
+                        },
+                        "tags": {
+                            "type": "array",
+                            "items": "string",
+                            "maxItems": 5,
+                            "maxItemLength": 40,
+                        },
+                    },
+                    "validation": {
+                        "fact_body": {
+                            "type": "object",
+                            "maxJsonBytes": 4096,
+                            "maxKeys": 8,
+                        },
+                    },
+                },
+                "output_shape": "repo_fact",
+            },
+        },
+    }
+
+    schemas = {
+        schema["name"]: schema["input_schema"]
+        for schema in tool_contracts_to_tool_schemas(manifest)
+    }
+
+    assert schemas["session_context"]["properties"]["event_types"] == {
+        "type": "array",
+        "items": {"type": "string", "enum": ["fact", "decision", "blocker"]},
+        "maxItems": 12,
+    }
+    assert schemas["append_session_event"]["anyOf"] == [
+        {"required": ["session_key"]},
+        {"required": ["channel_id"]},
+    ]
+    metadata = schemas["upsert_repo_fact"]["properties"]["metadata"]
+    assert metadata["anyOf"] == [{"required": ["symbol"]}, {"required": ["subject"]}]
+    assert metadata["properties"]["tags"]["items"] == {
+        "type": "string",
+        "maxLength": 40,
+    }
+    validation = schemas["upsert_repo_fact"]["properties"]["validation"]
+    assert validation["properties"]["fact_body"] == {
+        "type": "object",
+        "x-openbrain-maxKeys": 8,
+        "x-openbrain-maxJsonBytes": 4096,
+    }
