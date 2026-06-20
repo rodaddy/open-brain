@@ -352,6 +352,26 @@ def test_multiple_required_string_groups_require_each_group():
     }
 
 
+def test_typed_object_fields_preserve_required_string_groups():
+    assert contract_field_to_json_schema(
+        {
+            "type": "object",
+            "fields": {
+                "symbol": {"type": "string", "required": "symbol_or_subject"},
+                "subject": {"type": "string", "required": "symbol_or_subject"},
+            },
+        },
+        path="$.metadata",
+    ) == {
+        "type": "object",
+        "properties": {
+            "symbol": {"type": "string"},
+            "subject": {"type": "string"},
+        },
+        "anyOf": [{"required": ["symbol"]}, {"required": ["subject"]}],
+    }
+
+
 def test_current_dsl_bounds_convert_or_use_vendor_extensions():
     assert contract_field_to_json_schema(
         {

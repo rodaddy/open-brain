@@ -236,8 +236,9 @@ def _apply_object_fields(
         enum_refs={**enum_refs, **_collect_enum_refs(fields)},
     )
     schema["properties"] = child_schema["properties"]
-    if "required" in child_schema:
-        schema["required"] = child_schema["required"]
+    for key in ("required", "anyOf", "allOf"):
+        if key in child_schema:
+            schema[key] = child_schema[key]
 
 
 def _fields_to_object_schema(
