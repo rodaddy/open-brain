@@ -53,6 +53,16 @@ jobs:
 
       - uses: astral-sh/setup-uv@v8.2.0
 
+      - name: Lint python package
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: uv run ruff check src tests
+
+      - name: Typecheck python package
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: uv run mypy src/openbrain_memory
+
       - name: Test python package
         env:
           TMPDIR: ${{ runner.temp }}

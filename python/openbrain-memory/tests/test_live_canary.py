@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import UTC, datetime
+from importlib.metadata import PackageNotFoundError, version
 from typing import Any
 from uuid import uuid4
 
@@ -10,9 +11,8 @@ import pytest
 
 from openbrain_memory import (
     CURRENT_CONTRACT_VERSION,
-    REQUIRED_CONTRACT_TOOLS,
     OpenBrainClient,
-    validate_contract_manifest,
+    validate_required_memory_contract,
 )
 
 LIVE_CANARY_ENABLED = os.environ.get("OPENBRAIN_LIVE_CANARY") == "1"
@@ -59,6 +59,13 @@ def _unique_session_key() -> str:
     return f"openbrain-memory-live-canary/{uuid4()}"
 
 
+def _package_version() -> str | None:
+    try:
+        return version("openbrain-memory")
+    except PackageNotFoundError:
+        return None
+
+
 def test_live_health_and_search_all_canary(live_client: OpenBrainClient):
     health = live_client.health()
     assert "status" in health
@@ -79,10 +86,9 @@ def test_live_contract_manifest_validates_required_memory_helpers(
     manifest = _tool_payload(live_client.get_contract())
     assert isinstance(manifest, dict)
 
-    validation = validate_contract_manifest(
+    validation = validate_required_memory_contract(
         manifest,
-        required_tools=REQUIRED_CONTRACT_TOOLS,
-        compatible_contract_versions=(CURRENT_CONTRACT_VERSION,),
+        client_version=_package_version(),
     )
 
     assert validation.ok, validation.reasons
@@ -91,11 +97,29 @@ def test_live_contract_manifest_validates_required_memory_helpers(
     assert manifest["schema_hash"]
 
 
+def test_live_read_helpers_canary(live_client: OpenBrainClient):
+    answer = _tool_payload(
+        live_client.brain_answer(query="openbrain-memory live canary", limit=1)
+    )
+    assert isinstance(answer, dict)
+
+    facts = _tool_payload(live_client.list_repo_facts(limit=1))
+    if isinstance(facts, dict):
+        fact_items = facts.get("facts", facts.get("results", []))
+    else:
+        fact_items = facts
+    assert isinstance(fact_items, list)
+
+
 def test_live_lane_session_append_read_and_wrap_helpers(
     live_client: OpenBrainClient,
 ):
+    if os.environ.get("OPENBRAIN_LIVE_CANARY_WRITE") != "1":
+        pytest.skip("set OPENBRAIN_LIVE_CANARY_WRITE=1 to run lane/session writes")
+
     session_key = _unique_session_key()
     project = "openbrain-memory-live-canary"
+    receipt_content = "openbrain-memory live canary append/read helper check."
 
     started = _tool_payload(
         live_client.session_start(
@@ -125,7 +149,7 @@ def test_live_lane_session_append_read_and_wrap_helpers(
         live_client.append_session_event(
             session_key=session_key,
             event_type="receipt",
-            content="openbrain-memory live canary append/read helper check.",
+            content=receipt_content,
             source="tests/test_live_canary.py",
             importance="cold",
             metadata={"canary": "openbrain-memory"},
@@ -142,8 +166,12 @@ def test_live_lane_session_append_read_and_wrap_helpers(
         )
     )
     assert isinstance(context, dict)
-    assert context.get("session_key") == session_key
-    assert "events" in context
+    lane = context.get("lane")
+    assert isinstance(lane, dict)
+    assert lane.get("session_key") == session_key
+    events = context.get("events")
+    assert isinstance(events, list)
+    assert any(event.get("content") == receipt_content for event in events)
 
     lanes = _tool_payload(live_client.lane_load(session_key=session_key, limit=1))
     if isinstance(lanes, dict):

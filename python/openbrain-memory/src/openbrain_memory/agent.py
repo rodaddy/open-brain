@@ -62,12 +62,6 @@ REPO_FACT_TYPES = {
     "validation",
     "workflow",
 }
-STALENESS_POLICIES = {
-    "commit_pinned",
-    "refresh_required",
-    "stable_fact_verify_source",
-    "volatile_pointer_only",
-}
 
 
 class MemoryClient(Protocol):
@@ -203,7 +197,6 @@ class AgentMemory:
         self,
         session_key: str | None = None,
         *,
-        namespace: str | None = None,
         channel_id: str | None = None,
         thread_id: str | None = None,
         include_events: bool | None = None,
@@ -215,7 +208,6 @@ class AgentMemory:
             raise ValueError("load_session_context requires session_key or channel_id")
         payload: dict[str, Any] = {}
         _set_optional_str(payload, "session_key", session_key)
-        _set_optional_str(payload, "namespace", namespace)
         _set_optional_str(payload, "channel_id", channel_id)
         _set_optional_str(payload, "thread_id", thread_id)
         if include_events is not None:
@@ -241,7 +233,6 @@ class AgentMemory:
         self,
         session_key: str | None = None,
         *,
-        namespace: str | None = None,
         project: str | None = None,
         agent: str | None = None,
         channel_id: str | None = None,
@@ -250,7 +241,6 @@ class AgentMemory:
     ) -> JSON:
         payload: dict[str, Any] = {}
         _set_optional_str(payload, "session_key", session_key)
-        _set_optional_str(payload, "namespace", namespace)
         _set_optional_str(
             payload,
             "project",
@@ -268,7 +258,6 @@ class AgentMemory:
         self,
         session_key: str,
         *,
-        namespace: str | None = None,
         status: str | None = None,
         agent: str | None = None,
         source: str | None = None,
@@ -282,7 +271,6 @@ class AgentMemory:
         payload: dict[str, Any] = {
             "session_key": _required_str(session_key, "session_key")
         }
-        _set_optional_str(payload, "namespace", namespace)
         if status is not None:
             payload["status"] = _enum_value(status, "status", LANE_STATUSES)
         _set_optional_str(payload, "agent", agent if agent is not None else self.agent)
@@ -305,7 +293,6 @@ class AgentMemory:
         self,
         query: str,
         *,
-        namespace: str | None = None,
         limit: int | None = None,
         search_mode: str | None = None,
         tier: str | None = None,
@@ -313,7 +300,6 @@ class AgentMemory:
         include_raw: bool | None = None,
     ) -> JSON:
         payload: dict[str, Any] = {"query": _required_str(query, "query")}
-        _set_optional_str(payload, "namespace", namespace)
         if limit is not None:
             payload["limit"] = _bounded_int(limit, "limit", minimum=1, maximum=25)
         if search_mode is not None:
@@ -338,7 +324,6 @@ class AgentMemory:
     def repo_facts(
         self,
         *,
-        namespace: str | None = None,
         repo: str | None = None,
         collection: str | None = None,
         path: str | None = None,
@@ -348,7 +333,6 @@ class AgentMemory:
         offset: int | None = None,
     ) -> JSON:
         payload: dict[str, Any] = {}
-        _set_optional_str(payload, "namespace", namespace)
         _set_optional_str(payload, "repo", repo)
         _set_optional_str(payload, "collection", collection)
         _set_optional_str(payload, "path", path)
@@ -367,52 +351,15 @@ class AgentMemory:
 
     def upsert_repo_fact(
         self,
+        metadata: Mapping[str, Any],
         *,
-        repo: str,
-        collection: str,
-        path: str,
-        fact_type: str,
-        fact: str,
-        source_commit: str,
-        source_url: str,
-        verified_at: str,
-        staleness_policy: str,
-        namespace: str | None = None,
-        symbol: str | None = None,
-        subject: str | None = None,
-        confidence: int | float | None = None,
-        refresh_hint: str | None = None,
+        validation: Mapping[str, Any] | None = None,
     ) -> JSON:
-        if not symbol and not subject:
-            raise ValueError("upsert_repo_fact requires symbol or subject")
-        metadata: dict[str, Any] = {
-            "source_system": "qmd",
-            "repo": _required_str(repo, "repo"),
-            "collection": _required_str(collection, "collection"),
-            "path": _required_str(path, "path"),
-            "fact_type": _enum_value(fact_type, "fact_type", REPO_FACT_TYPES),
-            "fact": _required_str(fact, "fact"),
-            "source_commit": _required_str(source_commit, "source_commit"),
-            "source_url": _required_str(source_url, "source_url"),
-            "verified_at": _required_str(verified_at, "verified_at"),
-            "staleness_policy": _enum_value(
-                staleness_policy,
-                "staleness_policy",
-                STALENESS_POLICIES,
-            ),
-        }
-        _set_optional_str(metadata, "symbol", symbol)
-        _set_optional_str(metadata, "subject", subject)
-        _set_optional_str(metadata, "refresh_hint", refresh_hint)
-        if confidence is not None:
-            metadata["confidence"] = _bounded_number(
-                confidence,
-                "confidence",
-                minimum=0,
-                maximum=1,
-            )
-        payload: dict[str, Any] = {"metadata": metadata}
-        _set_optional_str(payload, "namespace", namespace)
+        self._reject_reserved_metadata(metadata)
+        payload: dict[str, Any] = {"metadata": dict(metadata)}
+        if validation is not None:
+            self._reject_reserved_metadata(validation)
+            payload["validation"] = dict(validation)
         return self._call_write(
             "upsert_repo_fact",
             payload,
@@ -769,22 +716,6 @@ def _bounded_int(
     if value < minimum:
         raise ValueError(f"{name} must be >= {minimum}")
     if maximum is not None and value > maximum:
-        raise ValueError(f"{name} must be <= {maximum}")
-    return value
-
-
-def _bounded_number(
-    value: Any,
-    name: str,
-    *,
-    minimum: int | float,
-    maximum: int | float,
-) -> int | float:
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        raise ValueError(f"{name} must be a number")
-    if value < minimum:
-        raise ValueError(f"{name} must be >= {minimum}")
-    if value > maximum:
         raise ValueError(f"{name} must be <= {maximum}")
     return value
 

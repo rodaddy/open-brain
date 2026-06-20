@@ -344,11 +344,20 @@ bearer tokens. For trusted lab-only HTTP endpoints, set
 The default live canary now checks package helper readiness, not just `/health`:
 
 - `health()` and `search_all()` read access.
-- `get_contract()` plus `validate_contract_manifest()` against
+- `get_contract()` plus `validate_required_memory_contract()` against
   `REQUIRED_CONTRACT_TOOLS` and the package `CURRENT_CONTRACT_VERSION`.
-- Low-impact session lane writes and reads through `session_start()`,
-  `lane_upsert()`, `append_session_event()`, `session_context()`,
-  `lane_load()`, and `session_wrap()`.
+- `brain_answer()` and `list_repo_facts()` read access.
+
+Write canaries are intentionally opt-in because they create durable session
+state. To exercise lane/session writes, set:
+
+```bash
+OPENBRAIN_LIVE_CANARY_WRITE=1
+```
+
+That write canary checks `session_start()`, `lane_upsert()`,
+`append_session_event()`, `session_context()`, `lane_load()`, and
+`session_wrap()`, including proof that the appended event is readable afterward.
 
 `upsert_repo_fact()` is intentionally not part of the default canary because it
 creates curated repo-fact rows. To opt into that higher-impact write, set both:
@@ -373,9 +382,10 @@ Required coverage:
   endpoint and treat its manifest as the source of truth. Check
   `contract_version`, `contract_scope`, `schema_hash`, compatible/minimum client
   version fields, required capabilities, and required tool names before enabling
-  required-memory mode. The package exposes helpers and constants, but required
-  contract validation remains a runtime integration responsibility until a
-  shared validator lands.
+  required-memory mode. The package exposes `validate_required_memory_contract()`
+  for this check; the connected endpoint's `get_contract()` manifest remains
+  authoritative, and the runtime that consumes the package still owns the
+  fail-closed decision.
 - **Lane tools:** exercise `session_start`, `session_context`, `lane_upsert`,
   `lane_load`, and `session_wrap` for the agent namespace.
 - **Append/write:** verify `append_session_event` can write through the
@@ -391,6 +401,7 @@ Required coverage:
   decision that the failed write is acceptable for the canary.
 
 `tests/test_live_canary.py` is env-gated and suitable for package helper
-readiness checks. Host rollouts should record which live endpoint, package
+readiness checks. The default gate is read-only; write checks require explicit
+write env flags. Host rollouts should record which live endpoint, package
 version or artifact, namespace, optional write gates, and canary operations were
 verified.

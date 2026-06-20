@@ -282,19 +282,22 @@ def test_agent_memory_convenience_helpers_route_to_wrapper_tools():
     memory.answer("What changed?", limit=2, search_mode="hybrid", tier="warm")
     memory.repo_facts(repo="owner/repo", fact_type="workflow", limit=10, offset=0)
     memory.upsert_repo_fact(
-        repo="owner/repo",
-        collection="main",
-        path="src/app.ts",
-        subject="runtime package",
-        fact_type="workflow",
-        fact="The runtime package owns memory facade helpers.",
-        source_commit="0123456789abcdef0123456789abcdef01234567",
-        source_url=(
-            "https://github.com/owner/repo/blob/"
-            "0123456789abcdef0123456789abcdef01234567/src/app.ts"
-        ),
-        verified_at="2026-06-20T00:00:00Z",
-        staleness_policy="refresh_required",
+        {
+            "source_system": "qmd",
+            "repo": "owner/repo",
+            "collection": "main",
+            "path": "src/app.ts",
+            "subject": "runtime package",
+            "fact_type": "workflow",
+            "fact": "The runtime package owns memory facade helpers.",
+            "source_commit": "0123456789abcdef0123456789abcdef01234567",
+            "source_url": (
+                "https://github.com/owner/repo/blob/"
+                "0123456789abcdef0123456789abcdef01234567/src/app.ts"
+            ),
+            "verified_at": "2026-06-20T00:00:00Z",
+            "staleness_policy": "refresh_required",
+        }
     )
 
     assert client.calls == [
@@ -365,37 +368,23 @@ def test_agent_memory_convenience_helpers_route_to_wrapper_tools():
     ]
 
 
-def test_convenience_helpers_only_include_explicit_namespace_arguments():
+def test_convenience_helpers_do_not_accept_payload_namespace():
     client = FakeClient()
     memory = AgentMemory(client, agent="bilby", project="open-brain")
 
-    memory.load_session_context("lane-1", namespace="shared-kb")
-    memory.load_lane(namespace="shared-kb")
-    memory.update_lane("lane-1", namespace="shared-kb")
-    memory.answer("question", namespace="shared-kb")
-    memory.repo_facts(namespace="shared-kb")
-    memory.upsert_repo_fact(
-        namespace="shared-kb",
-        repo="owner/repo",
-        collection="main",
-        path="src/app.ts",
-        subject="runtime package",
-        fact_type="workflow",
-        fact="The runtime package owns memory facade helpers.",
-        source_commit="0123456789abcdef0123456789abcdef01234567",
-        source_url=(
-            "https://github.com/owner/repo/blob/"
-            "0123456789abcdef0123456789abcdef01234567/src/app.ts"
-        ),
-        verified_at="2026-06-20T00:00:00Z",
-        staleness_policy="refresh_required",
-    )
+    with pytest.raises(TypeError):
+        getattr(memory, "load_session_context")("lane-1", namespace="shared-kb")
+    with pytest.raises(TypeError):
+        getattr(memory, "load_lane")(namespace="shared-kb")
+    with pytest.raises(TypeError):
+        getattr(memory, "update_lane")("lane-1", namespace="shared-kb")
+    with pytest.raises(TypeError):
+        getattr(memory, "answer")("question", namespace="shared-kb")
+    with pytest.raises(TypeError):
+        getattr(memory, "repo_facts")(namespace="shared-kb")
+    with pytest.raises(ValueError, match="reserved"):
+        memory.upsert_repo_fact({"namespace": "shared-kb", "repo": "owner/repo"})
 
-    for _name, payload in client.calls:
-        assert payload["namespace"] == "shared-kb"
-
-    client = FakeClient()
-    memory = AgentMemory(client, agent="bilby", project="open-brain")
     memory.answer("question")
     memory.repo_facts()
     assert all("namespace" not in payload for _name, payload in client.calls)
