@@ -186,7 +186,11 @@ def _typeless_node_to_json_schema(
         return schema
 
     if node and all(_is_contract_field_node(value) for value in node.values()):
-        return _fields_to_object_schema(node, path=path, enum_refs=enum_refs)
+        return _fields_to_object_schema(
+            node,
+            path=path,
+            enum_refs={**enum_refs, **_collect_enum_refs(node, path=path)},
+        )
 
     if any(_is_contract_field_node(value) for value in node.values()):
         raise ContractSchemaError(

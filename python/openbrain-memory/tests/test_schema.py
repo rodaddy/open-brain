@@ -326,6 +326,48 @@ def test_typeless_contract_field_maps_convert_to_object_properties():
     }
 
 
+def test_typeless_contract_field_maps_resolve_sibling_enum_refs_locally():
+    assert contract_field_to_json_schema(
+        {
+            "status": {"type": "enum", "values": ["green", "yellow", "red"]},
+            "history": {"type": "array", "items": "status"},
+        },
+        path="$.metadata",
+    ) == {
+        "type": "object",
+        "properties": {
+            "status": {"type": "string", "enum": ["green", "yellow", "red"]},
+            "history": {
+                "type": "array",
+                "items": {"type": "string", "enum": ["green", "yellow", "red"]},
+            },
+        },
+        "additionalProperties": False,
+    }
+
+
+def test_typeless_nested_enum_refs_shadow_outer_aliases():
+    assert contract_input_to_json_schema(
+        {
+            "status": {"type": "enum", "values": ["active", "wrapped", "archived"]},
+            "metadata": {
+                "status": {"type": "enum", "values": ["green", "yellow", "red"]},
+                "history": {"type": "array", "items": "status"},
+            },
+        },
+    )["properties"]["metadata"] == {
+        "type": "object",
+        "properties": {
+            "status": {"type": "string", "enum": ["green", "yellow", "red"]},
+            "history": {
+                "type": "array",
+                "items": {"type": "string", "enum": ["green", "yellow", "red"]},
+            },
+        },
+        "additionalProperties": False,
+    }
+
+
 def test_typeless_object_markers_convert_property_names_and_additional_properties():
     assert contract_field_to_json_schema(
         {
