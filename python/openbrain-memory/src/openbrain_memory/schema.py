@@ -479,16 +479,6 @@ def _collect_enum_refs(
             _merge_enum_refs(refs, {name: schema}, path=field_path)
             if scoped_session_aliases and name == "event_type":
                 _merge_enum_refs(refs, {"session_event_type": schema}, path=field_path)
-        nested_fields = field.get("fields")
-        if isinstance(nested_fields, Mapping):
-            _merge_enum_refs(
-                refs,
-                _collect_enum_refs(
-                    nested_fields,
-                    path=f"{field_path}.fields",
-                    scoped_session_aliases=scoped_session_aliases,
-                ),
-            )
     return refs
 
 
