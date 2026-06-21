@@ -186,7 +186,11 @@ def _typeless_node_to_json_schema(
         return schema
 
     if node and all(_is_contract_field_node(value) for value in node.values()):
-        return _fields_to_object_schema(node, path=path, enum_refs=enum_refs)
+        return _fields_to_object_schema(
+            node,
+            path=path,
+            enum_refs={**enum_refs, **_collect_enum_refs(node, path=path)},
+        )
 
     if any(_is_contract_field_node(value) for value in node.values()):
         raise ContractSchemaError(
@@ -479,16 +483,6 @@ def _collect_enum_refs(
             _merge_enum_refs(refs, {name: schema}, path=field_path)
             if scoped_session_aliases and name == "event_type":
                 _merge_enum_refs(refs, {"session_event_type": schema}, path=field_path)
-        nested_fields = field.get("fields")
-        if isinstance(nested_fields, Mapping):
-            _merge_enum_refs(
-                refs,
-                _collect_enum_refs(
-                    nested_fields,
-                    path=f"{field_path}.fields",
-                    scoped_session_aliases=scoped_session_aliases,
-                ),
-            )
     return refs
 
 

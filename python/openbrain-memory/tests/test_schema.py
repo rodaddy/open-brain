@@ -192,6 +192,41 @@ def test_selected_tool_conversion_ignores_unrelated_enum_name_collisions():
     }
 
 
+def test_nested_inline_enums_do_not_create_bare_alias_collisions():
+    manifest = {
+        "tool_contracts": {
+            "lane_update": {
+                "input_schema": {
+                    "status": {
+                        "type": "enum",
+                        "values": ["active", "wrapped", "archived"],
+                    },
+                    "metadata": {
+                        "type": "object",
+                        "fields": {
+                            "status": {
+                                "type": "enum",
+                                "values": ["green", "yellow", "red"],
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    }
+
+    [schema] = tool_contracts_to_tool_schemas(manifest)
+
+    assert schema["input_schema"]["properties"]["status"] == {
+        "type": "string",
+        "enum": ["active", "wrapped", "archived"],
+    }
+    assert schema["input_schema"]["properties"]["metadata"]["properties"]["status"] == {
+        "type": "string",
+        "enum": ["green", "yellow", "red"],
+    }
+
+
 def test_selected_tool_local_session_event_type_enum_shadows_shared_alias():
     manifest = {
         "tool_contracts": {
@@ -288,6 +323,48 @@ def test_typeless_contract_field_maps_convert_to_object_properties():
         },
         "additionalProperties": False,
         "required": ["source_system", "repo"],
+    }
+
+
+def test_typeless_contract_field_maps_resolve_sibling_enum_refs_locally():
+    assert contract_field_to_json_schema(
+        {
+            "status": {"type": "enum", "values": ["green", "yellow", "red"]},
+            "history": {"type": "array", "items": "status"},
+        },
+        path="$.metadata",
+    ) == {
+        "type": "object",
+        "properties": {
+            "status": {"type": "string", "enum": ["green", "yellow", "red"]},
+            "history": {
+                "type": "array",
+                "items": {"type": "string", "enum": ["green", "yellow", "red"]},
+            },
+        },
+        "additionalProperties": False,
+    }
+
+
+def test_typeless_nested_enum_refs_shadow_outer_aliases():
+    assert contract_input_to_json_schema(
+        {
+            "status": {"type": "enum", "values": ["active", "wrapped", "archived"]},
+            "metadata": {
+                "status": {"type": "enum", "values": ["green", "yellow", "red"]},
+                "history": {"type": "array", "items": "status"},
+            },
+        },
+    )["properties"]["metadata"] == {
+        "type": "object",
+        "properties": {
+            "status": {"type": "string", "enum": ["green", "yellow", "red"]},
+            "history": {
+                "type": "array",
+                "items": {"type": "string", "enum": ["green", "yellow", "red"]},
+            },
+        },
+        "additionalProperties": False,
     }
 
 
