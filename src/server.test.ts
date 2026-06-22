@@ -8,6 +8,7 @@ import {
   afterEach,
 } from "bun:test";
 import { createApp } from "./index.ts";
+import { getSessionCount } from "./transport.ts";
 import type { AuthInfo, HealthStatus } from "./types.ts";
 import type { Server } from "node:http";
 
@@ -194,6 +195,56 @@ describe("POST /mcp", () => {
     const sessionId = res.headers.get("mcp-session-id");
     expect(sessionId).toBeTruthy();
     expect(typeof sessionId).toBe("string");
+  });
+
+  it("returns retryable session-cap diagnostics when initialize is over cap", async () => {
+    const originalMax = process.env.OPEN_BRAIN_MAX_SESSIONS;
+    const originalRetryAfter = process.env.OPEN_BRAIN_SESSION_RETRY_AFTER_SECONDS;
+    const cappedAt = getSessionCount();
+    process.env.OPEN_BRAIN_MAX_SESSIONS = String(cappedAt);
+    process.env.OPEN_BRAIN_SESSION_RETRY_AFTER_SECONDS = "7";
+
+    try {
+      const res = await fetch(`${baseUrl}/mcp`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer test-token-123",
+          Accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-03-26",
+            capabilities: {},
+            clientInfo: { name: "test", version: "1.0.0" },
+          },
+        }),
+      });
+
+      expect(res.status).toBe(429);
+      expect(res.headers.get("Retry-After")).toBe("7");
+      expect(await res.json()).toEqual({
+        error: "Too many active sessions",
+        code: "session_cap_exceeded",
+        active_sessions: cappedAt,
+        max_sessions: cappedAt,
+        retry_after_seconds: 7,
+      });
+    } finally {
+      if (originalMax === undefined) {
+        delete process.env.OPEN_BRAIN_MAX_SESSIONS;
+      } else {
+        process.env.OPEN_BRAIN_MAX_SESSIONS = originalMax;
+      }
+      if (originalRetryAfter === undefined) {
+        delete process.env.OPEN_BRAIN_SESSION_RETRY_AFTER_SECONDS;
+      } else {
+        process.env.OPEN_BRAIN_SESSION_RETRY_AFTER_SECONDS = originalRetryAfter;
+      }
+    }
   });
 
   it("rejects session reuse under a different delegated namespace", async () => {

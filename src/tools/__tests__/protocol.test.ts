@@ -91,6 +91,41 @@ describe("Protocol tests: write tools via InMemoryTransport", () => {
         await cleanup();
       }
     });
+
+    it("returns a machine-readable failing-field summary", async () => {
+      const auth: AuthInfo = { role: "admin", clientId: "proto-admin" };
+      const { client, cleanup } = await createProtocolClient(auth);
+
+      try {
+        const result = await client.callTool({
+          name: "append_session_event",
+          arguments: {
+            session_key: "test",
+            event_type: "invalid-event-type",
+            content: "bad enum",
+          },
+        });
+
+        expect(result.isError).toBe(true);
+        const text = (result.content as any)[0].text as string;
+        expect(text).toContain("Input validation error: ");
+        const summary = JSON.parse(
+          text.slice(text.indexOf("Input validation error: ") + 24),
+        );
+        expect(summary).toMatchObject({
+          error: "input_validation_failed",
+          tool: "append_session_event",
+        });
+        expect(summary.fields).toContainEqual(
+          expect.objectContaining({
+            field: "event_type",
+            code: "invalid_value",
+          }),
+        );
+      } finally {
+        await cleanup();
+      }
+    });
   });
 
   describe("search_brain via protocol", () => {
