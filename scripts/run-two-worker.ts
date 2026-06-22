@@ -14,6 +14,13 @@ const workerPorts = (process.env.OPEN_BRAIN_WORKER_PORTS ?? "3101,3102")
 const workerCount = parseInt(process.env.OPEN_BRAIN_WORKERS ?? "2", 10);
 const poolMax = process.env.OPEN_BRAIN_WORKER_DB_POOL_MAX ?? "5";
 
+function serverIps(): string[] {
+  const configured = process.env.OPEN_BRAIN_SERVER_IP?.trim();
+  if (configured) return [configured];
+
+  return ["unknown"];
+}
+
 if (workerCount < 1) {
   throw new Error("OPEN_BRAIN_WORKERS must be at least 1");
 }
@@ -125,9 +132,12 @@ const proxy = Bun.serve({
     if (url.pathname === "/health") {
       const results = await Promise.all(workers.map(workerHealth));
       const healthy = results.every((result) => result.ok);
+      const ips = serverIps();
       return Response.json(
         {
           status: healthy ? "healthy" : "degraded",
+          server_ip: ips[0] ?? "unknown",
+          server_ips: ips,
           workers: results,
           timestamp: new Date().toISOString(),
         },

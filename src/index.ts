@@ -17,6 +17,13 @@ import type { AuthInfo, HealthStatus } from "./types.ts";
 
 const EMBEDDING_BASE_URL = process.env.EMBEDDING_BASE_URL;
 
+function serverIps(): string[] {
+  const configured = process.env.OPEN_BRAIN_SERVER_IP?.trim();
+  if (configured) return [configured];
+
+  return ["unknown"];
+}
+
 async function probeUrl(
   url: string,
   headers: Record<string, string>,
@@ -66,8 +73,11 @@ export function createApp(
         : Promise.resolve(false),
     ]);
 
+    const ips = serverIps();
     const status: HealthStatus = {
       status: dbHealth.connected ? "healthy" : "degraded",
+      server_ip: ips[0] ?? "unknown",
+      server_ips: ips,
       database: dbHealth,
       embedding: {
         configured: Boolean(EMBEDDING_BASE_URL),

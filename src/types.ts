@@ -47,6 +47,8 @@ export interface PoolHealth {
 
 export interface HealthStatus {
   status: "healthy" | "degraded";
+  server_ip: string;
+  server_ips: string[];
   database: PoolHealth;
   embedding: { configured: boolean; connected: boolean };
   timestamp: string;

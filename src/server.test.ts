@@ -93,6 +93,42 @@ function mockFetchOk() {
 
 // -- Tests --------------------------------------------------------------------
 describe("GET /health", () => {
+  it("includes server IP identity", async () => {
+    const originalServerIp = process.env.OPEN_BRAIN_SERVER_IP;
+    process.env.OPEN_BRAIN_SERVER_IP = "10.71.1.21";
+
+    try {
+      const res = await fetch(`${baseUrl}/health`);
+      const body = (await res.json()) as HealthStatus;
+
+      expect(body.server_ip).toBe("10.71.1.21");
+      expect(body.server_ips).toEqual(["10.71.1.21"]);
+    } finally {
+      if (originalServerIp === undefined) {
+        delete process.env.OPEN_BRAIN_SERVER_IP;
+      } else {
+        process.env.OPEN_BRAIN_SERVER_IP = originalServerIp;
+      }
+    }
+  });
+
+  it("does not auto-disclose host interface IPs when identity is not configured", async () => {
+    const originalServerIp = process.env.OPEN_BRAIN_SERVER_IP;
+    delete process.env.OPEN_BRAIN_SERVER_IP;
+
+    try {
+      const res = await fetch(`${baseUrl}/health`);
+      const body = (await res.json()) as HealthStatus;
+
+      expect(body.server_ip).toBe("unknown");
+      expect(body.server_ips).toEqual(["unknown"]);
+    } finally {
+      if (originalServerIp !== undefined) {
+        process.env.OPEN_BRAIN_SERVER_IP = originalServerIp;
+      }
+    }
+  });
+
   it("does not degrade when the embedding provider is unreachable", async () => {
     const originalEmbeddingBaseUrl = process.env.EMBEDDING_BASE_URL;
     process.env.EMBEDDING_BASE_URL = "http://embedding-provider:8791/v1";
