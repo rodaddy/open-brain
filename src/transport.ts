@@ -22,6 +22,7 @@ interface SessionEntry {
 }
 
 const sessions: Map<string, SessionEntry> = new Map();
+let pendingInitializes = 0;
 
 function readPositiveInt(
   value: string | undefined,
@@ -53,7 +54,7 @@ function rejectSessionCap(res: Response): void {
   res.status(429).json({
     error: "Too many active sessions",
     code: "session_cap_exceeded",
-    active_sessions: sessions.size,
+    active_sessions: sessions.size + pendingInitializes,
     max_sessions: max,
     retry_after_seconds: retryAfter,
   });
@@ -171,7 +172,7 @@ export function createTransportHandlers(
       }
 
       if (!sessionId && isInitializeRequest(req.body)) {
-        if (sessions.size >= maxSessions()) {
+        if (sessions.size + pendingInitializes >= maxSessions()) {
           rejectSessionCap(res);
           return;
         }
@@ -181,13 +182,11 @@ export function createTransportHandlers(
           return;
         }
 
+        pendingInitializes++;
+        let initialized = false;
         const transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
           onsessioninitialized: (id: string) => {
-            // Re-check cap at registration time. A narrow race exists between the
-            // initial cap check above and this callback: a concurrent request could
-            // slip through. This is acceptable given MAX_SESSIONS=100 provides
-            // headroom and the transport is closed immediately if exceeded.
             const max = maxSessions();
             if (sessions.size >= max) {
               logger.warn("session_cap_race", {
@@ -195,12 +194,11 @@ export function createTransportHandlers(
                 active: sessions.size,
                 max,
                 message:
-                  "Concurrent request slipped past initial cap check; closing transport",
+                  "Admitted initialize completed while active sessions met or exceeded current cap",
               });
-              void transport.close().catch(() => {}); // clean up untracked transport
-              return;
             }
 
+            initialized = true;
             const timer = setTimeout(() => {
               expireSession(id, "inactivity");
             }, SESSION_TTL_MS);
@@ -227,14 +225,18 @@ export function createTransportHandlers(
         };
 
         const server = serverFactory();
-        await server.connect(transport);
         try {
+          await server.connect(transport);
           await transport.handleRequest(req, res, req.body);
         } catch (err) {
           // If handleRequest fails after session was registered, clean up
           const id = transport.sessionId;
           if (id) expireSession(id, "init-error");
           throw err;
+        } finally {
+          if (initialized || pendingInitializes > 0) {
+            pendingInitializes--;
+          }
         }
         return;
       }

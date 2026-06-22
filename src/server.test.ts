@@ -200,7 +200,27 @@ describe("POST /mcp", () => {
   it("returns retryable session-cap diagnostics when initialize is over cap", async () => {
     const originalMax = process.env.OPEN_BRAIN_MAX_SESSIONS;
     const originalRetryAfter = process.env.OPEN_BRAIN_SESSION_RETRY_AFTER_SECONDS;
+    const seed = await fetch(`${baseUrl}/mcp`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer test-token-123",
+        Accept: "application/json, text/event-stream",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-03-26",
+          capabilities: {},
+          clientInfo: { name: "test", version: "1.0.0" },
+        },
+      }),
+    });
+    expect(seed.status).toBe(200);
     const cappedAt = getSessionCount();
+    expect(cappedAt).toBeGreaterThan(0);
     process.env.OPEN_BRAIN_MAX_SESSIONS = String(cappedAt);
     process.env.OPEN_BRAIN_SESSION_RETRY_AFTER_SECONDS = "7";
 
@@ -229,7 +249,7 @@ describe("POST /mcp", () => {
       expect(await res.json()).toEqual({
         error: "Too many active sessions",
         code: "session_cap_exceeded",
-        active_sessions: cappedAt,
+        active_sessions: getSessionCount(),
         max_sessions: cappedAt,
         retry_after_seconds: 7,
       });

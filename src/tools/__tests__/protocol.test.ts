@@ -108,9 +108,10 @@ describe("Protocol tests: write tools via InMemoryTransport", () => {
 
         expect(result.isError).toBe(true);
         const text = (result.content as any)[0].text as string;
-        expect(text).toContain("Input validation error: ");
+        const prefix = "Input validation error: ";
+        expect(text).toContain(prefix);
         const summary = JSON.parse(
-          text.slice(text.indexOf("Input validation error: ") + 24),
+          text.slice(text.indexOf(prefix) + prefix.length),
         );
         expect(summary).toMatchObject({
           error: "input_validation_failed",

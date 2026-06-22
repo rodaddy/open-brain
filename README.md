@@ -110,6 +110,22 @@ bun run start
 
 The MCP server listens on `http://localhost:3100` with Streamable HTTP transport.
 
+### MCP Session Limits
+
+Open Brain keeps stateful Streamable HTTP sessions in memory and expires idle
+sessions after 30 minutes. Initialize requests over the active-session cap return
+HTTP 429 with `Retry-After` and a machine-readable
+`session_cap_exceeded` response.
+
+Defaults:
+
+- `OPEN_BRAIN_MAX_SESSIONS=100`
+- `OPEN_BRAIN_SESSION_RETRY_AFTER_SECONDS=2`
+
+`OPEN_BRAIN_MAX_SESSIONS` is a safety cap, not the primary fleet-throttling
+mechanism. Prefer client retry/backoff behavior and explicit session cleanup
+before raising it.
+
 ### Mini two-worker mode
 
 For the Mini deployment, run two local Open Brain workers behind one stable
