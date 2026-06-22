@@ -10,7 +10,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from .policy import redact_text
+from .policy import RetryPolicy, redact_text, with_retry
 
 JSON = dict[str, Any]
 MCP_PROTOCOL_VERSION = "2025-03-26"
@@ -241,9 +241,11 @@ class OpenBrainError(RuntimeError):
         body: str | None = None,
         token: str | None = None,
         session_id: str | None = None,
+        retry_after_seconds: float | None = None,
     ) -> None:
         self.status_code = status_code
         self.context = context
+        self.retry_after_seconds = retry_after_seconds
         self.body = _redact(body or "", token=token, session_id=session_id)
         parts = [message]
         if status_code is not None:
@@ -279,6 +281,7 @@ class OpenBrainClient:
         transport: Transport | None = None,
         allow_insecure_http: bool = False,
         delegate_namespace: bool = False,
+        retry_policy: RetryPolicy | Mapping[str, Any] | None = None,
     ) -> None:
         _validate_base_url(base_url, allow_insecure_http=allow_insecure_http)
         self.base_url = base_url.rstrip("/") + "/"
@@ -289,6 +292,7 @@ class OpenBrainClient:
         self.timeout = timeout
         self.transport = transport or UrllibTransport()
         self.delegate_namespace = delegate_namespace
+        self.retry_policy = _coerce_retry_policy(retry_policy)
         self._session_id: str | None = None
         self._protocol_version = MCP_PROTOCOL_VERSION
         self._ids = count(1)
@@ -521,6 +525,13 @@ class OpenBrainClient:
     def _ensure_session(self) -> None:
         if self._session_id:
             return
+        with_retry(
+            self._initialize_session,
+            retry_policy=self.retry_policy,
+            retryable=_is_rate_limit_error,
+        )
+
+    def _initialize_session(self) -> None:
         request_id = next(self._ids)
         payload: JSON = {
             "jsonrpc": "2.0",
@@ -645,6 +656,7 @@ class OpenBrainClient:
     def _raise_for_status(self, response: TransportResponse, *, context: str) -> None:
         if 200 <= response.status_code < 300:
             return
+        retry_after = _retry_after_seconds(response)
         raise OpenBrainHTTPError(
             "Open Brain HTTP error",
             status_code=response.status_code,
@@ -652,6 +664,7 @@ class OpenBrainClient:
             body=response.text,
             token=self.token,
             session_id=self._session_id,
+            retry_after_seconds=retry_after,
         )
 
     def _decode_json_response(
@@ -751,6 +764,41 @@ def _header(headers: Mapping[str, str], name: str) -> str | None:
         if key.lower() == wanted:
             return value
     return None
+
+
+def _retry_after_seconds(response: TransportResponse) -> float | None:
+    header = _header(response.headers, "retry-after")
+    if header is not None:
+        try:
+            parsed = float(header)
+            if parsed >= 0:
+                return parsed
+        except ValueError:
+            pass
+    try:
+        body = response.json()
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(body, dict):
+        return None
+    value = body.get("retry_after_seconds")
+    if isinstance(value, (int, float)) and value >= 0:
+        return float(value)
+    return None
+
+
+def _coerce_retry_policy(
+    policy: RetryPolicy | Mapping[str, Any] | None,
+) -> RetryPolicy:
+    if policy is None:
+        return RetryPolicy()
+    if isinstance(policy, RetryPolicy):
+        return policy
+    return RetryPolicy(**dict(policy))
+
+
+def _is_rate_limit_error(exc: BaseException) -> bool:
+    return getattr(exc, "status_code", None) == 429
 
 
 def _last_sse_data(text: str, *, expected_id: int | None = None) -> str:

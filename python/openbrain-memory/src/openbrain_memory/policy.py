@@ -91,12 +91,16 @@ class RetryExhaustedError(RuntimeError):
 class RetryPolicy:
     attempts: int = 2
     backoff_seconds: float = 0.05
+    max_backoff_seconds: float = 2.0
+    honor_retry_after: bool = True
 
     def __post_init__(self) -> None:
         if self.attempts < 1:
             raise ValueError("RetryPolicy.attempts must be >= 1")
         if self.backoff_seconds < 0:
             raise ValueError("RetryPolicy.backoff_seconds must be >= 0")
+        if self.max_backoff_seconds < 0:
+            raise ValueError("RetryPolicy.max_backoff_seconds must be >= 0")
 
 
 def idempotency_key() -> str:
@@ -149,7 +153,15 @@ def with_retry(
             last_error = exc
             if attempt >= retry_policy.attempts or not retryable(exc):
                 raise
-            time.sleep(retry_policy.backoff_seconds * attempt)
+            delay = retry_policy.backoff_seconds * attempt
+            retry_after = getattr(exc, "retry_after_seconds", None)
+            if retry_policy.honor_retry_after and isinstance(
+                retry_after, (int, float)
+            ):
+                delay = max(delay, float(retry_after))
+            if retry_policy.max_backoff_seconds > 0:
+                delay = min(delay, retry_policy.max_backoff_seconds)
+            time.sleep(delay)
     raise RetryExhaustedError("retry attempts exhausted") from last_error
 
 

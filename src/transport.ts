@@ -9,7 +9,8 @@ import { logger } from "./logger.ts";
 const SESSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const SWEEP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const CLOSE_TIMEOUT_MS = 5_000; // 5 seconds max for transport.close()
-const MAX_SESSIONS = 100;
+const DEFAULT_MAX_SESSIONS = 100;
+const DEFAULT_SESSION_RETRY_AFTER_SECONDS = 2;
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -21,6 +22,43 @@ interface SessionEntry {
 }
 
 const sessions: Map<string, SessionEntry> = new Map();
+let pendingInitializes = 0;
+
+function readPositiveInt(
+  value: string | undefined,
+  fallback: number,
+): number {
+  if (!value) return fallback;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function maxSessions(): number {
+  return readPositiveInt(
+    process.env.OPEN_BRAIN_MAX_SESSIONS,
+    DEFAULT_MAX_SESSIONS,
+  );
+}
+
+function retryAfterSeconds(): number {
+  return readPositiveInt(
+    process.env.OPEN_BRAIN_SESSION_RETRY_AFTER_SECONDS,
+    DEFAULT_SESSION_RETRY_AFTER_SECONDS,
+  );
+}
+
+function rejectSessionCap(res: Response): void {
+  const max = maxSessions();
+  const retryAfter = retryAfterSeconds();
+  res.setHeader("Retry-After", String(retryAfter));
+  res.status(429).json({
+    error: "Too many active sessions",
+    code: "session_cap_exceeded",
+    active_sessions: sessions.size + pendingInitializes,
+    max_sessions: max,
+    retry_after_seconds: retryAfter,
+  });
+}
 
 async function expireSession(sessionId: string, reason: string): Promise<void> {
   const entry = sessions.get(sessionId);
@@ -134,8 +172,8 @@ export function createTransportHandlers(
       }
 
       if (!sessionId && isInitializeRequest(req.body)) {
-        if (sessions.size >= MAX_SESSIONS) {
-          res.status(503).json({ error: "Too many active sessions" });
+        if (sessions.size + pendingInitializes >= maxSessions()) {
+          rejectSessionCap(res);
           return;
         }
 
@@ -144,25 +182,23 @@ export function createTransportHandlers(
           return;
         }
 
+        pendingInitializes++;
+        let initialized = false;
         const transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
           onsessioninitialized: (id: string) => {
-            // Re-check cap at registration time. A narrow race exists between the
-            // initial cap check above and this callback: a concurrent request could
-            // slip through. This is acceptable given MAX_SESSIONS=100 provides
-            // headroom and the transport is closed immediately if exceeded.
-            if (sessions.size >= MAX_SESSIONS) {
+            const max = maxSessions();
+            if (sessions.size >= max) {
               logger.warn("session_cap_race", {
                 id,
                 active: sessions.size,
-                max: MAX_SESSIONS,
+                max,
                 message:
-                  "Concurrent request slipped past initial cap check; closing transport",
+                  "Admitted initialize completed while active sessions met or exceeded current cap",
               });
-              void transport.close().catch(() => {}); // clean up untracked transport
-              return;
             }
 
+            initialized = true;
             const timer = setTimeout(() => {
               expireSession(id, "inactivity");
             }, SESSION_TTL_MS);
@@ -189,14 +225,18 @@ export function createTransportHandlers(
         };
 
         const server = serverFactory();
-        await server.connect(transport);
         try {
+          await server.connect(transport);
           await transport.handleRequest(req, res, req.body);
         } catch (err) {
           // If handleRequest fails after session was registered, clean up
           const id = transport.sessionId;
           if (id) expireSession(id, "init-error");
           throw err;
+        } finally {
+          if (initialized || pendingInitializes > 0) {
+            pendingInitializes--;
+          }
         }
         return;
       }

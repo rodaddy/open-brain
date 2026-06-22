@@ -140,6 +140,34 @@ admin or n8n callers that intentionally need namespace delegation can opt in
 with `delegate_namespace=True`; doing so sends `X-Namespace` and requires a
 server role that is allowed to delegate.
 
+### Retry policy
+
+`OpenBrainClient` retries MCP `initialize` when the service returns HTTP 429 for
+session-cap pressure. The default retry policy is conservative and honors
+server `Retry-After` or `retry_after_seconds` metadata, capped by
+`max_backoff_seconds`.
+
+```python
+from openbrain_memory import OpenBrainClient, RetryPolicy
+
+client = OpenBrainClient(
+    "https://brain.example",
+    token="...",
+    namespace="bilby",
+    agent_id="bilby",
+    retry_policy=RetryPolicy(
+        attempts=3,
+        backoff_seconds=0.25,
+        max_backoff_seconds=5.0,
+        honor_retry_after=True,
+    ),
+)
+```
+
+Set `honor_retry_after=False` only for controlled tests or a caller-managed
+backoff policy. Session pressure is expected to be handled by client backoff and
+session cleanup, not by raising the server cap as the first response.
+
 ## Quickstart
 
 ```python

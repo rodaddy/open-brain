@@ -17,6 +17,7 @@ from openbrain_memory import (
     OpenBrainHTTPError,
     OpenBrainProtocolError,
     OpenBrainToolError,
+    RetryPolicy,
 )
 from openbrain_memory.client import TransportResponse, UrllibTransport
 
@@ -127,6 +128,23 @@ def make_client(transport: FakeTransport) -> OpenBrainClient:
         role="agent",
         timeout=12.5,
         transport=transport,
+    )
+
+
+def make_retrying_client(transport: FakeTransport) -> OpenBrainClient:
+    return OpenBrainClient(
+        "https://brain.example",
+        "secret-token",
+        "bilby",
+        agent_id="bilby-agent",
+        role="agent",
+        timeout=12.5,
+        transport=transport,
+        retry_policy=RetryPolicy(
+            attempts=3,
+            backoff_seconds=0,
+            max_backoff_seconds=0,
+        ),
     )
 
 
@@ -672,6 +690,106 @@ def test_missing_session_id_is_protocol_error():
 
     with pytest.raises(OpenBrainProtocolError, match="mcp-session-id"):
         client.search_all(query="x")
+
+
+def test_initialize_rate_limit_retries_with_retry_after_metadata():
+    class RateLimitedInitializeTransport(FakeTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.rate_limited_once = False
+
+        def post(self, url, *, headers, json_body, timeout):
+            if (
+                json_body.get("method") == "initialize"
+                and not self.rate_limited_once
+            ):
+                self.rate_limited_once = True
+                self.requests.append(
+                    {
+                        "method": "POST",
+                        "url": url,
+                        "headers": dict(headers),
+                        "json": json_body,
+                        "timeout": timeout,
+                    }
+                )
+                return TransportResponse(
+                    status_code=429,
+                    headers={
+                        "content-type": "application/json",
+                        "retry-after": "0",
+                    },
+                    text=json.dumps(
+                        {
+                            "error": "Too many active sessions",
+                            "code": "session_cap_exceeded",
+                            "active_sessions": 100,
+                            "max_sessions": 100,
+                            "retry_after_seconds": 0,
+                        }
+                    ),
+                )
+            return super().post(
+                url, headers=headers, json_body=json_body, timeout=timeout
+            )
+
+    transport = RateLimitedInitializeTransport()
+    client = make_retrying_client(transport)
+
+    assert client.search_all(query="x")["tool"] == "search_all"
+    assert [
+        request["json"]["method"]
+        for request in post_requests(transport)
+        if request["json"].get("method") == "initialize"
+    ] == ["initialize", "initialize"]
+
+
+def test_initialize_rate_limit_exhaustion_surfaces_retry_after():
+    class AlwaysRateLimitedInitializeTransport(FakeTransport):
+        def post(self, url, *, headers, json_body, timeout):
+            if json_body.get("method") == "initialize":
+                self.requests.append(
+                    {
+                        "method": "POST",
+                        "url": url,
+                        "headers": dict(headers),
+                        "json": json_body,
+                        "timeout": timeout,
+                    }
+                )
+                return TransportResponse(
+                    status_code=429,
+                    headers={
+                        "content-type": "application/json",
+                        "retry-after": "0.25",
+                    },
+                    text=json.dumps(
+                        {
+                            "error": "Too many active sessions",
+                            "code": "session_cap_exceeded",
+                            "active_sessions": 100,
+                            "max_sessions": 100,
+                            "retry_after_seconds": 0.25,
+                        }
+                    ),
+                )
+            return super().post(
+                url, headers=headers, json_body=json_body, timeout=timeout
+            )
+
+    transport = AlwaysRateLimitedInitializeTransport()
+    client = make_retrying_client(transport)
+
+    with pytest.raises(OpenBrainHTTPError) as exc_info:
+        client.search_all(query="x")
+
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.retry_after_seconds == 0.25
+    assert [
+        request["json"]["method"]
+        for request in post_requests(transport)
+        if request["json"].get("method") == "initialize"
+    ] == ["initialize", "initialize", "initialize"]
 
 
 def test_initialized_failure_does_not_commit_session_and_retry_reinitializes():
