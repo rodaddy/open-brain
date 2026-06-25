@@ -78,6 +78,7 @@ Open Brain is the **durable operational memory** for PAI agents. It stores:
 | link_entities | Create relationship between entries | write |
 | adjacent_context | Traverse link graph from a node | read |
 | get_contract | Read the public Open Brain contract manifest | read |
+| get_entry | Fetch a full readable memory row by table and ID | read |
 | upsert_repo_fact | Store curated qmd-derived repo fact metadata | write |
 | list_repo_facts | Read curated qmd-derived repo facts | read |
 | search_brain | Semantic search across all tables | read |

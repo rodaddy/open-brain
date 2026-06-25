@@ -15,10 +15,11 @@ from .policy import RetryPolicy, redact_text, with_retry
 JSON = dict[str, Any]
 MCP_PROTOCOL_VERSION = "2025-03-26"
 DEFAULT_MAX_RESPONSE_BYTES = 1_000_000
-CURRENT_CONTRACT_VERSION = "2026-06-19.memory-tools.v5"
+CURRENT_CONTRACT_VERSION = "2026-06-25.memory-tools.v6"
 REQUIRED_CONTRACT_TOOLS = (
     "append_session_event",
     "get_contract",
+    "get_entry",
     "lane_load",
     "lane_upsert",
     "list_repo_facts",
@@ -34,6 +35,7 @@ CURRENT_TOOL_HELP: Mapping[str, str] = {
     "brain_answer": "Return cited answer bullets from readable Open Brain evidence.",
     "get_entity": "Fetch a graph entity by ID.",
     "get_contract": "Read the canonical Open Brain public contract manifest.",
+    "get_entry": "Fetch one full readable memory row by table and UUID.",
     "hydrate_entities": "Refresh missing graph entity embeddings.",
     "lane_load": "Load durable session lanes by filters.",
     "lane_upsert": "Create or update durable session lane metadata.",

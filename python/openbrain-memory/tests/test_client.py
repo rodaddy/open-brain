@@ -456,7 +456,7 @@ def test_all_registered_tool_wrappers_call_matching_tool_names():
 
 
 def test_required_contract_tools_have_first_class_wrappers_and_help():
-    assert CURRENT_CONTRACT_VERSION == "2026-06-19.memory-tools.v5"
+    assert CURRENT_CONTRACT_VERSION == "2026-06-25.memory-tools.v6"
     assert set(REQUIRED_CONTRACT_TOOLS) <= set(CURRENT_TOOL_HELP)
 
     for tool_name in REQUIRED_CONTRACT_TOOLS:
@@ -499,7 +499,7 @@ def test_required_contract_matches_server_source_of_truth():
 
 
 def test_current_agent_read_helpers_have_first_class_wrappers():
-    for tool_name in ("brain_answer", "list_repo_facts", "get_contract"):
+    for tool_name in ("brain_answer", "list_repo_facts", "get_contract", "get_entry"):
         assert hasattr(OpenBrainClient, tool_name), tool_name
         assert tool_name in CURRENT_TOOL_HELP
 
