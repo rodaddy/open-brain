@@ -96,6 +96,15 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
           "memory — thoughts, session events, facts), qmd (only indexed code " +
           "context). Narrow this when you know which corpus you need.",
       },
+      collection: {
+        type: "string",
+        required: false,
+        minLength: 1,
+        description:
+          "Optional qmd collection filter. Use with sources='qmd' or " +
+          "sources='all' when you need code/document context from one indexed " +
+          "collection such as open-brain-runtime.",
+      },
       search_mode: {
         type: "enum",
         required: false,

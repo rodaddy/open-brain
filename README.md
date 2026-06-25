@@ -157,6 +157,44 @@ bun run start:two-worker
 The public `/health` endpoint aggregates both workers. MCP and REST traffic are
 round-robin proxied to the workers.
 
+### core01 Deploy And qmd Runtime
+
+The active production service runs on core01 (`10.71.1.21`) through launchd.
+Keep the boundaries explicit:
+
+- source checkout: `/Volumes/ThunderBolt/Development/open-brain`
+- running app: `/Volumes/ThunderBolt/open-brain/app`
+- database data/backups: `/Volumes/ThunderBolt/open-brain/pgdata18` and
+  `/Volumes/ThunderBolt/open-brain/backups`
+- qmd runtime/index/models: `/Volumes/ThunderBolt/qmd`
+
+Deploys should be owned by this repository, not by hand-copying files:
+
+```bash
+bun run deploy:core01
+```
+
+On GitHub, the `deploy` job targets a core01 macOS self-hosted runner with
+labels `[self-hosted, macOS, core01]`. The job rsyncs this checkout into the
+running app directory, installs runtime dependencies there, runs migrations,
+bootstraps the pinned qmd runtime, restarts `com.rico.open-brain`, and checks
+`/health`.
+
+qmd is pinned and bootstrapped by:
+
+```bash
+bun run qmd:core01:bootstrap
+```
+
+The Open Brain runtime reads qmd through `QMD_PATH`, normally:
+
+```bash
+QMD_PATH=/Volumes/ThunderBolt/qmd/open-brain-qmd.ts
+```
+
+Do not put qmd indexes, qmd models, Postgres data, or required production
+`node_modules` under `/Volumes/ThunderBolt/Development`.
+
 Smoke after startup:
 
 ```bash

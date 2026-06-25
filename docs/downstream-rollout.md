@@ -134,8 +134,9 @@ required memory mode, incompatible or unreachable contracts must fail closed.
 
 ## qmd-Derived Repo Facts
 
-qmd runs on the local GPU machine and acts as the repo-knowledge compiler. Open
-Brain is the shared runtime distribution layer for agents that cannot run qmd.
+qmd runs with Open Brain on core01 (`10.71.1.21`) and acts as the
+repo-knowledge compiler. Open Brain is the shared runtime distribution layer
+for agents that cannot run qmd.
 Required repo knowledge is promoted into Open Brain with `upsert_repo_fact` and
 read with `list_repo_facts`.
 
