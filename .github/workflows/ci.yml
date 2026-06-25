@@ -12,7 +12,7 @@ env:
 
 jobs:
   check:
-    runs-on: [self-hosted, rodaddy]
+    runs-on: [self-hosted, Linux, rodaddy]
     env:
       DB_HOST: localhost
       DB_PORT: 5432
@@ -44,7 +44,7 @@ jobs:
         run: bun test
 
   python-package:
-    runs-on: [self-hosted, rodaddy]
+    runs-on: [self-hosted, Linux, rodaddy]
     defaults:
       run:
         working-directory: python/openbrain-memory
