@@ -31,6 +31,11 @@ if [[ ! -r "$ENV_FILE" ]]; then
   exit 1
 fi
 
+set -a
+# shellcheck disable=SC1090
+source "$ENV_FILE"
+set +a
+
 rm -rf "$STAGING_DIR"
 mkdir -p "$STAGING_DIR"
 

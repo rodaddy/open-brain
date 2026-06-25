@@ -87,4 +87,4 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Deploy to core01 launchd runtime
-        run: bash scripts/core01-deploy-local.sh
+        run: /opt/homebrew/bin/bash scripts/core01-deploy-local.sh

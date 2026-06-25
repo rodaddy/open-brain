@@ -17,8 +17,8 @@
     "promote:legacy-shared": "bun run scripts/promote-legacy-shared.ts",
     "promote:qmd-facts": "bun run scripts/promote-qmd-repo-facts.ts",
     "curate": "bun run scripts/curate.ts",
-    "deploy:core01": "bash scripts/core01-deploy-local.sh",
-    "qmd:core01:bootstrap": "bash scripts/core01-qmd-bootstrap.sh"
+    "deploy:core01": "/opt/homebrew/bin/bash scripts/core01-deploy-local.sh",
+    "qmd:core01:bootstrap": "/opt/homebrew/bin/bash scripts/core01-qmd-bootstrap.sh"
   },
   "devDependencies": {
     "@types/bun": "latest",
