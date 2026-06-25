@@ -15,6 +15,28 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
     input_schema: {},
     output_shape: "OpenBrainContract JSON text payload",
   },
+  get_entry: {
+    version: 1,
+    input_schema: {
+      table: {
+        type: "enum",
+        required: true,
+        values: ["thoughts", "decisions", "relationships", "projects", "sessions"],
+        description:
+          "Readable table containing the target row. Use the plural table " +
+          "name derived from search result source_type.",
+      },
+      id: {
+        type: "string",
+        required: true,
+        format: "uuid",
+        description:
+          "Entry UUID to fetch. The server applies auth-derived namespace " +
+          "predicates before returning any row.",
+      },
+    },
+    output_shape: "full readable entry row JSON text payload",
+  },
   log_thought: {
     version: 2,
     input_schema: {

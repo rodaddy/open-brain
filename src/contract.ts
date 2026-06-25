@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { TOOL_CONTRACTS } from "./contract-schemas.ts";
 
-export const CONTRACT_VERSION = "2026-06-19.memory-tools.v5";
+export const CONTRACT_VERSION = "2026-06-25.memory-tools.v6";
 export const CONTRACT_SCHEMA_VERSION = 1;
 
 export interface ContractCapability {
@@ -43,6 +43,14 @@ export const CONTRACT_CAPABILITIES: ContractCapability[] = [
     version: 1,
     kind: "tool",
     description: "Read the canonical Open Brain public contract manifest.",
+  },
+  {
+    name: "get_entry",
+    version: 1,
+    kind: "tool",
+    description:
+      "Fetch one full readable memory row by table and UUID. Server-side auth " +
+      "and namespace predicates remain the security boundary for ID reads.",
   },
   {
     name: "upsert_repo_fact",
