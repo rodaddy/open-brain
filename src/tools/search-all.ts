@@ -48,6 +48,7 @@ interface QmdDocument {
   content?: string;
   text?: string;
   preview?: string;
+  snippet?: string;
   score?: number;
   similarity?: number;
   collection?: string;
@@ -60,10 +61,22 @@ const QMD_TIMEOUT_MS = 10_000;
 async function searchQmd(
   query: string,
   limit: number,
+  collection?: string,
 ): Promise<UnifiedResult[]> {
   try {
+    const qmdArgs = [
+      "bun",
+      QMD_PATH,
+      "search",
+      query,
+      "--json",
+      "-n",
+      String(limit),
+    ];
+    if (collection) qmdArgs.push("-c", collection);
+
     const proc = Bun.spawn(
-      ["bun", QMD_PATH, "search", query, "--json", "-n", String(limit)],
+      qmdArgs,
       { stdout: "pipe", stderr: "pipe" },
     );
 
@@ -98,7 +111,13 @@ async function searchQmd(
     return docs.map((doc) => ({
       source: "qmd" as const,
       type: "file",
-      content: (doc.content || doc.text || doc.preview || "").slice(0, 300),
+      content: (
+        doc.content ||
+        doc.text ||
+        doc.preview ||
+        doc.snippet ||
+        ""
+      ).slice(0, 300),
       score: doc.score ?? doc.similarity ?? 0.5,
       path: doc.path || doc.file,
       collection: doc.collection,
@@ -148,6 +167,11 @@ export function registerSearchAll(server: McpServer, deps: ToolDeps): void {
           .enum(["all", "brain", "qmd"])
           .optional()
           .describe("Which sources to search (default: all)"),
+        collection: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Optional: restrict qmd search to one collection"),
         search_mode: z
           .enum(["hybrid", "vector", "keyword"])
           .optional()
@@ -187,6 +211,7 @@ export function registerSearchAll(server: McpServer, deps: ToolDeps): void {
       const sources = (args.sources as "all" | "brain" | "qmd") ?? "all";
       const mode = (args.search_mode as SearchMode) ?? "hybrid";
       const tier = args.tier as Tier | undefined;
+      const collection = args.collection as string | undefined;
       const requestedNamespace = args.namespace as string | undefined;
       if (requestedNamespace && !canReadNamespace(auth, requestedNamespace)) {
         return {
@@ -212,7 +237,7 @@ export function registerSearchAll(server: McpServer, deps: ToolDeps): void {
           ? searchOB(deps, auth, args.query, totalNeeded, mode, tier, namespace)
           : Promise.resolve([]),
         searchQmdSource
-          ? searchQmd(args.query, totalNeeded)
+          ? searchQmd(args.query, totalNeeded, collection)
           : Promise.resolve([]),
       ]);
 

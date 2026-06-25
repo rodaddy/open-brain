@@ -50,6 +50,9 @@ mcp2cli open-brain search_all --params '{"query": "deployment", "sources": "brai
 
 # qmd only (skip brain)
 mcp2cli open-brain search_all --params '{"query": "deployment", "sources": "qmd"}'
+
+# qmd collection only
+mcp2cli open-brain search_all --params '{"query": "search_all qmd", "sources": "qmd", "collection": "open-brain-runtime"}'
 ```
 
 ## Output Format

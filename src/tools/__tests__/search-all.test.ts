@@ -971,6 +971,84 @@ describe("search_all", () => {
       }
     });
 
+    it("qmd uses 'snippet' field when other content fields are absent", async () => {
+      mockBunSpawn(
+        0,
+        qmdJson([{ path: "/s.md", snippet: "from snippet", score: 0.6 }]),
+      );
+      const pool = { query: async () => ({ rows: [] }) };
+      const { client, cleanup } = await setupClient(pool, {
+        role: "admin",
+        clientId: "admin",
+      });
+      try {
+        expect(
+          parseSearchAll(
+            await client.callTool({
+              name: "search_all",
+              arguments: { query: "snippet fb", sources: "qmd" },
+            }),
+          ).results[0].content,
+        ).toBe("from snippet");
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("passes collection filter to qmd search", async () => {
+      let spawnArgs: string[] | undefined;
+      (Bun as any).spawn = (args: string[]) => {
+        spawnArgs = args;
+        const encoder = new TextEncoder();
+        return {
+          stdout: new ReadableStream({
+            start(c) {
+              c.enqueue(
+                encoder.encode(
+                  qmdJson([
+                    {
+                      path: "qmd://open-brain-runtime/src/tools/search-all.ts",
+                      snippet: "scoped qmd result",
+                      score: 0.6,
+                    },
+                  ]),
+                ),
+              );
+              c.close();
+            },
+          }),
+          stderr: new ReadableStream({
+            start(c) {
+              c.close();
+            },
+          }),
+          exited: Promise.resolve(0),
+        };
+      };
+      const pool = { query: async () => ({ rows: [] }) };
+      const { client, cleanup } = await setupClient(pool, {
+        role: "admin",
+        clientId: "admin",
+      });
+      try {
+        const parsed = parseSearchAll(
+          await client.callTool({
+            name: "search_all",
+            arguments: {
+              query: "collection scoped",
+              sources: "qmd",
+              collection: "open-brain-runtime",
+            },
+          }),
+        );
+        expect(parsed.results[0].content).toBe("scoped qmd result");
+        expect(spawnArgs).toContain("-c");
+        expect(spawnArgs).toContain("open-brain-runtime");
+      } finally {
+        await cleanup();
+      }
+    });
+
     it("qmd 'similarity' field accepted with positive score", async () => {
       mockBunSpawn(
         0,
