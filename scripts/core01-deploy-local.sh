@@ -31,7 +31,7 @@ fi
 
 mkdir -p "$RUNTIME_DIR"
 
-rsync -a --delete \
+rsync -rlpt --delete-delay --timeout=120 \
   --exclude ".git/" \
   --exclude ".github/" \
   --exclude ".planning/" \
@@ -39,7 +39,9 @@ rsync -a --delete \
   --exclude ".omc/" \
   --exclude ".DS_Store" \
   --exclude "node_modules/" \
+  --exclude "dist/" \
   --exclude "python/openbrain-memory/.venv/" \
+  --exclude "python/openbrain-memory/dist/" \
   --exclude ".env" \
   --exclude ".env.*" \
   "$REPO_DIR"/ "$RUNTIME_DIR"/
