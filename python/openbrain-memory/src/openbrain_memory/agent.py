@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any, Protocol, cast
 
 from .client import JSON
@@ -45,6 +47,9 @@ NESTED_AUTHORITY_KEYS = {
     "token",
     "x-namespace",
 }
+_MAX_METADATA_KEYS = 50
+_MAX_METADATA_KEY_LENGTH = 100
+_MAX_METADATA_JSON_BYTES = 100_000
 _MAX_METADATA_DEPTH = 16
 SESSION_START_KEYS = {"channel_id", "thread_id", "topic"}
 SESSION_WRAP_KEYS = {"key_decisions", "next_steps"}
@@ -366,6 +371,48 @@ class AgentMemory:
             self.client.upsert_repo_fact,
         )
 
+    def record_receipt(
+        self,
+        action: str,
+        *,
+        sources: list[Mapping[str, Any]],
+        outputs: list[Mapping[str, Any]],
+        validations: list[Mapping[str, Any]],
+        timestamp: str | None = None,
+        residual_risk: str | None = None,
+        **metadata: Any,
+    ) -> JSON:
+        self._require_session("record_receipt")
+        self._reject_reserved_metadata(metadata)
+        if "receipt" in metadata:
+            raise ValueError("metadata contains reserved keys: receipt")
+
+        receipt: dict[str, Any] = {
+            "schema": "openbrain.receipt.v1",
+            "action": _required_str(action, "action"),
+            "agent": self.agent,
+            "session_key": self.conversation_key,
+            "timestamp": timestamp if timestamp is not None else _utc_now(),
+            "sources": _mapping_list(sources, "sources"),
+            "outputs": _mapping_list(outputs, "outputs"),
+            "validations": _mapping_list(validations, "validations"),
+        }
+        if self.project is not None:
+            receipt["project"] = self.project
+        if residual_risk is not None:
+            receipt["residual_risk"] = _required_str(
+                residual_risk,
+                "residual_risk",
+            )
+
+        return self.append_event(
+            self.agent,
+            f"Receipt: {action}",
+            event_type="receipt",
+            receipt=receipt,
+            **metadata,
+        )
+
     def append_event(self, role: str, content: str, **metadata: Any) -> JSON:
         self._require_session("append_event")
         event_type = str(metadata.pop("event_type", "fact"))
@@ -480,6 +527,27 @@ class AgentMemory:
             raise RuntimeError(f"{method_name} requires start_session() first")
 
     def _reject_reserved_metadata(self, metadata: Mapping[str, Any]) -> None:
+        if len(metadata) > _MAX_METADATA_KEYS:
+            raise ValueError(f"metadata must have at most {_MAX_METADATA_KEYS} keys")
+        long_keys = [
+            str(key)
+            for key in metadata
+            if len(str(key)) > _MAX_METADATA_KEY_LENGTH
+        ]
+        if long_keys:
+            names = ", ".join(sorted(long_keys))
+            raise ValueError(
+                "metadata keys must be at most "
+                f"{_MAX_METADATA_KEY_LENGTH} characters: {names}"
+            )
+        try:
+            encoded = json.dumps(metadata, separators=(",", ":")).encode("utf-8")
+        except (TypeError, ValueError) as error:
+            raise ValueError("metadata must be JSON serializable") from error
+        if len(encoded) > _MAX_METADATA_JSON_BYTES:
+            raise ValueError(
+                f"metadata JSON must be at most {_MAX_METADATA_JSON_BYTES} bytes"
+            )
         collisions = PROTECTED_KEYS.intersection(metadata)
         if collisions:
             names = ", ".join(sorted(collisions))
@@ -691,6 +759,14 @@ def _str_list(value: Any, name: str) -> list[str]:
     return value
 
 
+def _mapping_list(value: Any, name: str) -> list[dict[str, Any]]:
+    if not isinstance(value, list) or not all(
+        isinstance(item, Mapping) for item in value
+    ):
+        raise ValueError(f"{name} must be a list of mappings")
+    return [dict(item) for item in value]
+
+
 def _enum_value(value: Any, name: str, allowed: set[str]) -> str:
     text = _required_str(value, name)
     if text not in allowed:
@@ -727,3 +803,7 @@ def _bounded_metadata(result: Mapping[str, Any]) -> dict[str, Any]:
 
 def _authority_key(key: str) -> str:
     return key.lower().replace("_", "-")
+
+
+def _utc_now() -> str:
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")

@@ -118,6 +118,8 @@ The manifest includes:
 - `compatible_client_ranges`
 - `transport`
 - `interchange_profiles`
+- `agent_memory_adapter`
+- `receipt_contract`
 - `capabilities`
 - `tool_contracts`
 
@@ -171,3 +173,27 @@ segment, not a query string or fragment.
 Promotion rule: if distributed agents are expected to rely on a qmd-derived repo
 fact during normal work, that fact must be present in Open Brain. Remote qmd can
 exist as a best-effort deep lookup path, but it is not the memory contract.
+
+## Memory Substrate Local Slice Classification
+
+Issues #207 and #210 add draft-local `agent_memory_adapter` and
+`receipt_contract` manifest fields plus documentation for
+`openbrain.receipt.v1`. This is a public contract/documentation change and is
+therefore downstream-applicable.
+
+Local classification:
+
+- Open Brain local verification applies.
+- Python package contract-version pin applies.
+- Hosted Open Brain deploy, mcp2cli cache refresh/generated skills, rtech-mcps
+  handoff, rtech-hermes runtime changes, Hermes live rollout, and live agent
+  canaries are deferred to #216 and must not run during the local-complete
+  slice without explicit Rico approval.
+
+Required #216 evidence later:
+
+- Hosted `get_contract` returns the new `contract_version`,
+  `agent_memory_adapter`, and `receipt_contract`.
+- mcp2cli and generated skills consume the refreshed manifest.
+- Hermes runtime/plugin compatibility is checked against the new adapter and
+  receipt contract fields before live canaries.

@@ -1,11 +1,13 @@
 import { describe, expect, it } from "bun:test";
 import codexFixture from "../fixtures/codex-workflows.json" assert { type: "json" };
 import fixture from "../fixtures/memory-smoke.json" assert { type: "json" };
+import substrateFixture from "../fixtures/memory-substrate.json" assert { type: "json" };
 import { answerForProbe, retrieve, runEvalSuite, scoreProbe } from "../runner.ts";
 import type { EvalFixture } from "../types.ts";
 
 const typedFixture = fixture as EvalFixture;
 const typedCodexFixture = codexFixture as EvalFixture;
+const typedSubstrateFixture = substrateFixture as EvalFixture;
 
 describe("Open Brain memory eval runner", () => {
   it("keeps gold answers sealed outside retrieved public results", () => {
@@ -115,6 +117,45 @@ describe("Open Brain memory eval runner", () => {
     expect(scorecard.categories.namespace.probes_passed).toBe(1);
   });
 
+  it("covers memory substrate compaction, privacy, receipts, and linked recall", () => {
+    const scorecard = runEvalSuite(typedSubstrateFixture, {
+      commit: "test",
+      generatedAt: "2026-06-26T00:00:00.000Z",
+    });
+    expect(scorecard.corpus_id).toBe("open-brain-memory-substrate-v1");
+    expect(scorecard.probes_total).toBe(4);
+    expect(scorecard.probes_failed).toBe(0);
+    expect(scorecard.categories.codex.probes_passed).toBe(1);
+    expect(scorecard.categories.namespace.probes_passed).toBe(1);
+    expect(scorecard.categories.citation.probes_passed).toBe(1);
+    expect(scorecard.categories.recall.probes_passed).toBe(1);
+  });
+
+  it("fails the memory substrate receipt probe when receipt evidence is incomplete", () => {
+    const probe = typedSubstrateFixture.probes.find(
+      (item) => item.id === "substrate-complete-receipt",
+    );
+    expect(probe).toBeDefined();
+    const brokenCorpus = typedSubstrateFixture.corpus.map((entry) =>
+      entry.id === "receipt-complete-report"
+        ? {
+            ...entry,
+            content: entry.content.replace("base template reports/base-template.pdf, ", ""),
+            source_ref: {
+              ...entry.source_ref,
+              preview: entry.source_ref.preview.replace(
+                "base template reports/base-template.pdf, ",
+                "",
+              ),
+            },
+          }
+        : entry,
+    );
+    const score = scoreProbe(brokenCorpus, probe!);
+    expect(score.passed).toBe(false);
+    expect(score.failures).toContain("missing expected answer term base-template.pdf");
+  });
+
   it("prefers durable Codex preferences over one-off task instructions", () => {
     const probe = typedCodexFixture.probes.find(
       (item) => item.id === "codex-durable-preference-not-oneoff",
@@ -199,6 +240,26 @@ describe("Open Brain memory eval runner", () => {
     expect(stdout).toContain("corpus=open-brain-codex-workflows-v1");
     expect(stdout).toContain("- codex: 6/6 pass");
     expect(stdout).not.toContain("0/0 pass");
+  });
+
+  it("runs the CLI against the memory substrate fixture", async () => {
+    const proc = Bun.spawn(
+      [
+        "bun",
+        "run",
+        "scripts/eval-open-brain-memory.ts",
+        "--fixture",
+        "eval/open-brain/fixtures/memory-substrate.json",
+      ],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const stdout = await new Response(proc.stdout).text();
+    const stderr = await new Response(proc.stderr).text();
+    expect(await proc.exited).toBe(0);
+    expect(stderr).toBe("");
+    expect(stdout).toContain("corpus=open-brain-memory-substrate-v1");
+    expect(stdout).toContain("- codex: 1/1 pass");
+    expect(stdout).toContain("- namespace: 1/1 pass");
   });
 
   it("returns a controlled CLI error for a missing fixture", async () => {

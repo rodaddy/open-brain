@@ -1,0 +1,126 @@
+{
+  "schema_version": 1,
+  "corpus_id": "open-brain-memory-substrate-v1",
+  "generated_at": "2026-06-26T00:00:00.000Z",
+  "corpus": [
+    {
+      "id": "codex-compact-recovery",
+      "namespace": "skippy",
+      "type": "session",
+      "title": "Codex compact recovery checkpoint",
+      "content": "After compaction, Codex resumes issue #214 on repo open-brain branch feat/memory-substrate-adapter-contract. Next action: run memory substrate eval fixture and keep hosted rollout deferred to issue #216.",
+      "tags": ["codex", "compaction", "open-brain", "issue-214"],
+      "aliases": ["local compact wrap recovery", "compaction recovery"],
+      "created_at": "2026-06-26T12:00:00.000Z",
+      "source_ref": {
+        "source": "brain",
+        "type": "session",
+        "id": "codex-compact-recovery",
+        "namespace": "skippy",
+        "label": "Codex compact recovery checkpoint",
+        "preview": "Resume issue #214 on open-brain branch feat/memory-substrate-adapter-contract; defer hosted rollout to issue #216.",
+        "created_at": "2026-06-26T12:00:00.000Z"
+      }
+    },
+    {
+      "id": "receipt-complete-report",
+      "namespace": "skippy",
+      "type": "session",
+      "title": "Complete report generation receipt",
+      "content": "Receipt openbrain.receipt.v1 for report generation cites input files docs/source-a.md and docs/source-b.md, base template reports/base-template.pdf, output artifact reports/generated-report.md, and validations bun test src/report.test.ts plus manual PDF comparison.",
+      "tags": ["receipt", "report", "validation", "artifact"],
+      "aliases": ["report document receipt", "base template pdf receipt"],
+      "created_at": "2026-06-26T12:10:00.000Z",
+      "source_ref": {
+        "source": "brain",
+        "type": "session",
+        "id": "receipt-complete-report",
+        "namespace": "skippy",
+        "label": "Complete report generation receipt",
+        "preview": "Receipt cites input files docs/source-a.md and docs/source-b.md, base template reports/base-template.pdf, output artifact reports/generated-report.md, and validations including manual PDF comparison.",
+        "created_at": "2026-06-26T12:10:00.000Z"
+      }
+    },
+    {
+      "id": "recall-linked-agent-context",
+      "namespace": "skippy",
+      "type": "relationship",
+      "title": "Linked agent context for recall",
+      "content": "Rico asked Skippy in Discord channel C123 thread T456 on 2026-06-26 at 14:30 UTC to continue repo open-brain file docs/agent-memory-substrate-plan.md. The linked graph entity is issue #215 Add OKF disclosure export bundle.",
+      "tags": ["rico", "skippy", "discord", "open-brain", "issue-215"],
+      "aliases": ["Rico Skippy channel C123 thread T456", "OKF disclosure issue"],
+      "created_at": "2026-06-26T14:30:00.000Z",
+      "source_ref": {
+        "source": "brain",
+        "type": "relationship",
+        "id": "recall-linked-agent-context",
+        "namespace": "skippy",
+        "label": "Linked agent context for recall",
+        "preview": "Rico, Skippy, Discord C123/T456, open-brain, docs/agent-memory-substrate-plan.md, issue #215.",
+        "created_at": "2026-06-26T14:30:00.000Z"
+      }
+    },
+    {
+      "id": "private-lane-secret",
+      "namespace": "private-agent",
+      "type": "thought",
+      "title": "Private lane data",
+      "content": "Private lane data must never enter shared-kb or appear for a skippy-only caller.",
+      "tags": ["private", "shared-kb", "privacy"],
+      "aliases": ["private lane shared kb leak"],
+      "created_at": "2026-06-26T12:20:00.000Z",
+      "source_ref": {
+        "source": "brain",
+        "type": "thought",
+        "id": "private-lane-secret",
+        "namespace": "private-agent",
+        "label": "Private lane data",
+        "preview": "Private lane data must never enter shared-kb.",
+        "created_at": "2026-06-26T12:20:00.000Z"
+      }
+    }
+  ],
+  "probes": [
+    {
+      "id": "substrate-compact-recovery",
+      "category": "codex",
+      "query": "after compaction resume open-brain issue 214 branch hosted rollout deferred",
+      "readable_namespaces": ["skippy", "shared-kb"],
+      "top_k": 3,
+      "relevant_ids": ["codex-compact-recovery"],
+      "expected_answer_terms": ["issue #214", "feat/memory-substrate-adapter-contract", "issue #216"],
+      "required_source_ref_ids": ["codex-compact-recovery"]
+    },
+    {
+      "id": "substrate-private-data-not-shared",
+      "category": "namespace",
+      "query": "private lane shared kb leak",
+      "readable_namespaces": ["skippy", "shared-kb"],
+      "top_k": 3,
+      "relevant_ids": [],
+      "expect_no_results": true,
+      "expected_forbidden_ids": ["private-lane-secret"]
+    },
+    {
+      "id": "substrate-complete-receipt",
+      "category": "citation",
+      "query": "report receipt input files base template pdf output artifact validations",
+      "readable_namespaces": ["skippy", "shared-kb"],
+      "top_k": 3,
+      "relevant_ids": ["receipt-complete-report"],
+      "expected_citation_ids": ["receipt-complete-report"],
+      "expected_answer_terms": ["docs/source-a.md", "base-template.pdf", "reports/generated-report.md", "manual PDF comparison"],
+      "required_source_ref_ids": ["receipt-complete-report"]
+    },
+    {
+      "id": "substrate-linked-recall",
+      "category": "recall",
+      "query": "Rico Skippy Discord C123 T456 2026-06-26 open-brain docs agent memory substrate plan issue 215",
+      "readable_namespaces": ["skippy", "shared-kb"],
+      "top_k": 3,
+      "relevant_ids": ["recall-linked-agent-context"],
+      "expected_answer_terms": ["Rico", "Skippy", "C123", "T456", "docs/agent-memory-substrate-plan.md", "issue #215"],
+      "required_source_ref_ids": ["recall-linked-agent-context"]
+    }
+  ]
+}

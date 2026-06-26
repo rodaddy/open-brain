@@ -368,6 +368,110 @@ def test_agent_memory_convenience_helpers_route_to_wrapper_tools():
     ]
 
 
+def test_record_receipt_routes_to_receipt_session_event():
+    client = FakeClient()
+    memory = AgentMemory(client, agent="bilby", project="open-brain")
+    memory.start_session("conversation")
+
+    memory.record_receipt(
+        "contract_update",
+        timestamp="2026-06-26T16:00:00.000Z",
+        sources=[
+            {
+                "kind": "repo_path",
+                "path": "docs/agent-memory-adapter-contract.md",
+            }
+        ],
+        outputs=[{"kind": "repo_path", "path": "python/openbrain-memory"}],
+        validations=[
+            {
+                "kind": "test",
+                "status": "passed",
+                "command": "uv run pytest python/openbrain-memory/tests/test_agent.py",
+            }
+        ],
+        residual_risk="Review still pending.",
+        branch="feat/memory-substrate-adapter-contract",
+    )
+
+    name, payload = client.calls[-1]
+    assert name == "append_session_event"
+    assert payload["event_type"] == "receipt"
+    assert payload["content"] == "Receipt: contract_update"
+    assert payload["source"] == "bilby"
+    assert payload["session_key"] == "conversation"
+    assert payload["metadata"]["branch"] == "feat/memory-substrate-adapter-contract"
+    assert payload["metadata"]["idempotency_key"].startswith("obmem-")
+    assert payload["metadata"]["receipt"] == {
+        "schema": "openbrain.receipt.v1",
+        "action": "contract_update",
+        "agent": "bilby",
+        "session_key": "conversation",
+        "timestamp": "2026-06-26T16:00:00.000Z",
+        "sources": [
+            {
+                "kind": "repo_path",
+                "path": "docs/agent-memory-adapter-contract.md",
+            }
+        ],
+        "outputs": [{"kind": "repo_path", "path": "python/openbrain-memory"}],
+        "validations": [
+            {
+                "kind": "test",
+                "status": "passed",
+                "command": "uv run pytest python/openbrain-memory/tests/test_agent.py",
+            }
+        ],
+        "project": "open-brain",
+        "residual_risk": "Review still pending.",
+    }
+
+
+def test_record_receipt_validates_shape_and_reserved_metadata():
+    client = FakeClient()
+    memory = AgentMemory(client, agent="bilby")
+    memory.start_session("conversation")
+
+    with pytest.raises(ValueError, match="sources"):
+        memory.record_receipt(
+            "bad",
+            sources=["not a mapping"],
+            outputs=[],
+            validations=[],
+        )
+    with pytest.raises(ValueError, match="reserved keys: receipt"):
+        memory.record_receipt(
+            "bad",
+            sources=[],
+            outputs=[],
+            validations=[],
+            receipt={"schema": "spoofed"},
+        )
+    with pytest.raises(ValueError, match="reserved authority keys"):
+        memory.record_receipt(
+            "bad",
+            sources=[],
+            outputs=[],
+            validations=[],
+            context={"headers": {"Authorization": "Bearer x"}},
+        )
+
+
+def test_metadata_bounds_are_rejected_before_tool_calls():
+    client = FakeClient()
+    memory = AgentMemory(client, agent="bilby")
+
+    too_many_keys = {f"key_{index}": index for index in range(51)}
+    with pytest.raises(ValueError, match="at most 50 keys"):
+        memory.start_session("conversation", **too_many_keys)
+    with pytest.raises(ValueError, match="at most 100 characters"):
+        memory.start_session("conversation", **{"x" * 101: True})
+
+    memory.start_session("conversation")
+    with pytest.raises(ValueError, match="at most 100000 bytes"):
+        memory.append_event("assistant", "event", payload="x" * 100001)
+
+
 def test_convenience_helpers_do_not_accept_payload_namespace():
     client = FakeClient()
     memory = AgentMemory(client, agent="bilby", project="open-brain")

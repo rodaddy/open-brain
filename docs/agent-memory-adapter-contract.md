@@ -1,0 +1,239 @@
+# Agent Memory Adapter Contract
+
+## Purpose
+
+This document defines the local Open Brain adapter contract for Codex, Hermes,
+thin clients, and future Closed Brain workflows. It is the issue-sized contract
+for #207 and #210. Runtime adapters may wrap these calls, but Open Brain remains
+the server authority for auth, namespace isolation, storage, promotion policy,
+and public contract discovery.
+
+## Ownership Boundary
+
+Server-owned behavior:
+
+- Bearer-token identity, role checks, and namespace predicates.
+- Session lane and session event storage.
+- Shared knowledge promotion policy, secret rejection, deduplication, and
+  provenance stamped from trusted auth context.
+- Public contract discovery through `get_contract`.
+
+Client-owned behavior:
+
+- Local distillation before writes.
+- Context-window compaction strategy.
+- Retry/spool behavior for unavailable memory service calls.
+- Receipt assembly from local file, command, artifact, and channel evidence.
+- OKF-like disclosure bundle export until a server exporter exists.
+
+Clients must not treat convenience checks as security controls. Any ID-based
+read or mutation still depends on server-side auth-derived namespace checks.
+
+The initial TypeScript wrapper in `src/agent-memory.ts` uses a caller-provided
+`callTool(name, args)` transport and validates local call shape and metadata
+safety. It intentionally defers HTTP/MCP transport construction and retry/spool
+durability; callers that need offline retry must provide it outside this thin
+wrapper until a later issue adds a shared transport layer.
+
+## Adapter Methods
+
+| Method | Owner | Maps to | Status | Contract |
+| --- | --- | --- | --- | --- |
+| `start` | client + server | `session_start`, optional `lane_upsert` | available | Open or resume a lane using stable `session_key`, `project`, `agent`, optional `channel_id`, `thread_id`, `topic`, color, and metadata. |
+| `recall` | client + server | `session_context`, `search_all`, `brain_answer` | available | Retrieve lane context and cited memory evidence. Clients choose prompt shaping; Open Brain returns readable, namespace-safe rows only. |
+| `append_event` | client + server | `append_session_event` | available | Write distilled `fact`, `decision`, `blocker`, `action`, `artifact`, `receipt`, `question`, `correction`, or `handoff` events. |
+| `compact` | client | `session_context`, local distillation, `session_wrap` | client-wrapper | Read current context, distill it locally, then checkpoint via `session_wrap`. Open Brain does not store raw compaction transcripts. |
+| `wrap` | client + server | `session_context`, `session_wrap` | available | Checkpoint a completed work phase with summary, key decisions, next steps, and optional receipt references. |
+| `record_receipt` | client + server | `append_session_event` with `event_type=receipt` | client-wrapper | Assemble citation-safe receipt metadata locally and write it as a receipt event. |
+| `nominate_shared` | client + server | `append_session_event.metadata.share_candidate` | available | Nominate only non-private, durable facts or decisions for server-side shared-kb promotion. Server rejection and promoter adjudication remain authoritative. |
+| `export_disclosure_bundle` | client | `interchange_profiles.okf` | client-wrapper | Generate an OKF-like bundle from readable lane events, repo facts, citations, and receipt metadata without changing Open Brain storage. |
+
+## Payload Expectations
+
+All adapter calls should carry:
+
+- `session_key`: stable lane key chosen by the runtime.
+- `agent`: local agent identity, such as `codex`, `bilby`, or `skippy`.
+- `project`: repository or project slug when known.
+- `namespace`: optional override only when the token is authorized.
+- `source`: runtime source, such as `codex`, `hermes`, `mcp2cli`, or `n8n`.
+- `channel_id` and `thread_id`: external conversation identifiers when
+  available.
+- `metadata`: bounded JSON for color, display labels, OKF hooks, caller version,
+  and local runtime facts.
+
+## Disclosure Export
+
+`export_disclosure_bundle` is a deterministic edge exporter. It emits an
+OKF-like progressive disclosure bundle from caller-supplied lane context, scoped
+events, repo facts, citations, and receipts:
+
+- `index.md`: lane/project/topic summary plus links into the bundle.
+- `log.md`: timestamp-sorted scoped session events.
+- `concepts/*.md`: repo fact/concept pages.
+- `citations.md`: citations derived from `source_ref`, `artifact_path`, repo
+  fact source URLs/paths, explicit citations, and receipt ids.
+- `receipts.md`: receipt appendices with sources, outputs, and validations.
+
+Open Brain remains the storage model. OKF metadata is preserved as an
+edge-profile compatibility hook under `metadata.okf`, including unknown keys,
+but imports are staging-only until a separate reviewer/promoter chooses what is
+safe to store or share.
+
+Hermes adapters should also preserve platform identity, Discord channel/thread
+mapping, and agent profile metadata. Codex adapters should preserve current
+branch, dirty state, validation receipts, and next-step handoff context when
+wrapping.
+
+### Codex Lifecycle Profile
+
+Codex uses the same adapter methods, but its runtime is bounded and may compact
+or stop abruptly. A Codex adapter should:
+
+- call `start` at task/session start with a stable `session_key`;
+- call `refreshLane`/`lane_upsert` when branch, dirty state, current context,
+  or next action changes materially;
+- call `record_receipt` after validation or artifact-producing work;
+- call `compact` before context loss, preserving summary, current context,
+  dirty state, decisions, next steps, and receipt pointers;
+- avoid raw transcript, secret, token, and long command-log storage.
+
+`scripts/codex-memory-smoke.ts` is the repo-local dry-run/live smoke for this
+profile. Dry-run mode prints command JSON without writing memory.
+
+### Hermes Lifecycle Profile
+
+Hermes remains the owner of live platform loops, profile policy, Discord
+gateway state, and deployment. The Open Brain-side contract requires a Hermes
+adapter to map platform identity into lane metadata without importing Hermes
+runtime code into this repo:
+
+- `agent`: Hermes agent identity such as `bilby` or `skippy`;
+- `source`: Hermes runtime/plugin source, such as `hermes-discord`;
+- `channel_id` and `thread_id`: Discord channel/thread identifiers;
+- `metadata.platform`: `discord` or another platform label;
+- `metadata.agent_profile`: profile/config identifier safe to store;
+- `metadata.transport`: `openbrain-memory`, `mcp2cli`, or direct provider path;
+- `record_receipt`: external channel, spool, validation, and handoff receipts.
+
+Open Brain local tests may fixture these call shapes through fake transports.
+Actual rtech-hermes runtime/plugin changes, hosted verification, and live
+Hermes canaries belong to #216 unless Rico explicitly approves that rollout
+phase.
+
+## Lightweight Receipt Schema
+
+Open Brain receipts are session events with `event_type=receipt`. The event
+`content` should be a short human-readable summary. Structured receipt metadata
+belongs under `metadata.receipt`.
+
+Required `metadata.receipt` fields:
+
+- `schema`: stable schema label, currently `openbrain.receipt.v1`.
+- `action`: short action name, such as `report_generation`,
+  `source_inspection`, `contract_update`, or `validation`.
+- `agent`: runtime identity that assembled the receipt.
+- `session_key`: lane key for the work.
+- `timestamp`: ISO-8601 time when the receipt was assembled.
+- `sources`: citation-safe source references read or used.
+- `outputs`: files, artifacts, issue comments, PRs, or memory entries produced.
+- `validations`: commands, tests, canaries, or manual checks and their result.
+
+Recommended fields:
+
+- `namespace`, `project`, and `branch`.
+- `commands` with command name, purpose, exit status, and redacted summary.
+- `external_channels` with platform, channel/thread identifiers, and purpose.
+- `artifact_hashes` for generated durable outputs.
+- `source_refs` for issue URLs, repo paths, commit SHAs, qmd collection names,
+  or Open Brain source refs.
+- `residual_risk` for known gaps, skipped checks, or stale evidence.
+
+Secret-safe rules:
+
+- Do not store raw transcripts, secrets, tokens, credential names with values,
+  private source bodies, or long command logs.
+- Prefer hashes, paths, issue URLs, source refs, and short redacted summaries.
+- If a receipt would expose sensitive content, store a redacted blocker or
+  validation summary instead.
+
+## Examples
+
+Report generation receipt:
+
+```json
+{
+  "schema": "openbrain.receipt.v1",
+  "action": "report_generation",
+  "agent": "codex",
+  "session_key": "open-brain-memory-substrate",
+  "timestamp": "2026-06-26T16:00:00.000Z",
+  "sources": [
+    {"kind": "repo_path", "path": "docs/agent-memory-substrate-plan.md"},
+    {"kind": "issue", "url": "https://github.com/rodaddy/open-brain/issues/207"}
+  ],
+  "outputs": [
+    {"kind": "repo_path", "path": "docs/agent-memory-adapter-contract.md"}
+  ],
+  "validations": [
+    {"kind": "test", "command": "bun test src/contract.test.ts", "status": "passed"}
+  ]
+}
+```
+
+Source inspection receipt:
+
+```json
+{
+  "schema": "openbrain.receipt.v1",
+  "action": "source_inspection",
+  "agent": "codex",
+  "session_key": "open-brain-memory-substrate",
+  "timestamp": "2026-06-26T16:10:00.000Z",
+  "sources": [
+    {"kind": "repo_path", "path": "src/contract.ts"},
+    {"kind": "repo_path", "path": "python/openbrain-memory/src/openbrain_memory/agent.py"}
+  ],
+  "outputs": [],
+  "validations": [
+    {"kind": "manual", "status": "passed", "summary": "Confirmed existing Python helper covers start/recall/write but lacks disclosure export."}
+  ]
+}
+```
+
+Base document/template receipt:
+
+```json
+{
+  "schema": "openbrain.receipt.v1",
+  "action": "template_use",
+  "agent": "codex",
+  "session_key": "open-brain-memory-substrate",
+  "timestamp": "2026-06-26T16:20:00.000Z",
+  "sources": [
+    {"kind": "base_document", "path": "reports/template.md", "sha256": "redacted-or-hash"}
+  ],
+  "outputs": [
+    {"kind": "artifact", "path": "reports/generated.md", "sha256": "redacted-or-hash"}
+  ],
+  "validations": [
+    {"kind": "manual", "status": "passed", "summary": "Generated report preserves required headings."}
+  ]
+}
+```
+
+## Closed Brain Strict Deltas
+
+Closed Brain may consume this shape, but privileged Closed Brain receipts need
+stricter evidence than Open Brain requires. These fields are explicitly not
+required for normal Open Brain receipt writes yet:
+
+- `preimage_hashes` and `postimage_hashes` for every mutated file or object.
+- `base_document_hashes` for source PDFs, templates, and imported bundles.
+- `tool_call_ids` or equivalent non-repudiation references.
+- `approval_chain` for privileged actions or human-gated publication.
+- `redaction_policy` explaining removed sensitive content.
+- Tamper-evident storage outside normal session event rows.
+
+Until those strict hooks exist, do not claim Open Brain receipts satisfy Closed
+Brain privileged audit requirements.

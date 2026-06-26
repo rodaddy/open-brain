@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { TOOL_CONTRACTS } from "./contract-schemas.ts";
 
-export const CONTRACT_VERSION = "2026-06-26.memory-tools.v8";
+export const CONTRACT_VERSION = "2026-06-26.memory-tools.v9";
 export const CONTRACT_SCHEMA_VERSION = 1;
 
 export interface ContractCapability {
@@ -41,8 +41,43 @@ export interface OpenBrainContract {
         "tags",
         "timestamp",
       ];
-      export_surfaces: readonly ["concept", "index", "log", "citations"];
+      export_surfaces: readonly ["concept", "index", "log", "citations", "receipts"];
     };
+  };
+  agent_memory_adapter: {
+    status: "draft-local-contract";
+    contract_doc: "docs/agent-memory-adapter-contract.md";
+    server_authority: readonly [
+      "auth",
+      "namespace",
+      "storage",
+      "promotion_policy",
+      "contract_discovery",
+    ];
+    client_authority: readonly [
+      "distillation",
+      "local_context",
+      "retry_spool",
+      "receipt_assembly",
+      "disclosure_export",
+    ];
+    methods: Record<
+      string,
+      {
+        maps_to: readonly string[];
+        owner: "server" | "client" | "client_and_server";
+        status: "available" | "client-wrapper" | "planned";
+      }
+    >;
+  };
+  receipt_contract: {
+    status: "lightweight-openbrain-receipts";
+    event_type: "receipt";
+    contract_doc: "docs/agent-memory-adapter-contract.md";
+    required_fields: readonly string[];
+    recommended_fields: readonly string[];
+    closed_brain_strict_fields: readonly string[];
+    secret_safe: true;
   };
   capabilities: ContractCapability[];
   tool_contracts: Record<
@@ -178,6 +213,24 @@ export const CONTRACT_CAPABILITIES: ContractCapability[] = [
     description: "Durable session lanes, events, context, and wraps.",
   },
   {
+    name: "agent_memory_adapter",
+    version: 1,
+    kind: "schema",
+    description:
+      "Draft local adapter contract for agent memory lifecycle clients. " +
+      "Defines start, recall, append_event, compact, wrap, record_receipt, " +
+      "nominate_shared, and export_disclosure_bundle without moving server " +
+      "auth or namespace authority into clients.",
+  },
+  {
+    name: "receipt_contract",
+    version: 1,
+    kind: "schema",
+    description:
+      "Lightweight citation-safe receipt metadata model for Open Brain " +
+      "session events, with stricter Closed Brain fields marked separately.",
+  },
+  {
     name: "streamable_http_auth",
     version: 1,
     kind: "transport",
@@ -247,8 +300,101 @@ export function buildContract(
           "tags",
           "timestamp",
         ] as const,
-        export_surfaces: ["concept", "index", "log", "citations"] as const,
+        export_surfaces: ["concept", "index", "log", "citations", "receipts"] as const,
       },
+    },
+    agent_memory_adapter: {
+      status: "draft-local-contract" as const,
+      contract_doc: "docs/agent-memory-adapter-contract.md" as const,
+      server_authority: [
+        "auth",
+        "namespace",
+        "storage",
+        "promotion_policy",
+        "contract_discovery",
+      ] as const,
+      client_authority: [
+        "distillation",
+        "local_context",
+        "retry_spool",
+        "receipt_assembly",
+        "disclosure_export",
+      ] as const,
+      methods: {
+        start: {
+          maps_to: ["session_start", "lane_upsert"] as const,
+          owner: "client_and_server" as const,
+          status: "available" as const,
+        },
+        recall: {
+          maps_to: ["session_context", "search_all", "brain_answer"] as const,
+          owner: "client_and_server" as const,
+          status: "available" as const,
+        },
+        append_event: {
+          maps_to: ["append_session_event"] as const,
+          owner: "client_and_server" as const,
+          status: "available" as const,
+        },
+        compact: {
+          maps_to: ["session_context", "session_wrap"] as const,
+          owner: "client" as const,
+          status: "client-wrapper" as const,
+        },
+        wrap: {
+          maps_to: ["session_context", "session_wrap"] as const,
+          owner: "client_and_server" as const,
+          status: "available" as const,
+        },
+        record_receipt: {
+          maps_to: ["append_session_event:event_type=receipt"] as const,
+          owner: "client_and_server" as const,
+          status: "client-wrapper" as const,
+        },
+        nominate_shared: {
+          maps_to: ["append_session_event:metadata.share_candidate"] as const,
+          owner: "client_and_server" as const,
+          status: "available" as const,
+        },
+        export_disclosure_bundle: {
+          maps_to: ["interchange_profiles.okf"] as const,
+          owner: "client" as const,
+          status: "client-wrapper" as const,
+        },
+      },
+    },
+    receipt_contract: {
+      status: "lightweight-openbrain-receipts" as const,
+      event_type: "receipt" as const,
+      contract_doc: "docs/agent-memory-adapter-contract.md" as const,
+      required_fields: [
+        "schema",
+        "action",
+        "agent",
+        "session_key",
+        "timestamp",
+        "sources",
+        "outputs",
+        "validations",
+      ] as const,
+      recommended_fields: [
+        "namespace",
+        "project",
+        "commands",
+        "external_channels",
+        "artifact_hashes",
+        "source_refs",
+        "residual_risk",
+      ] as const,
+      closed_brain_strict_fields: [
+        "preimage_hashes",
+        "postimage_hashes",
+        "base_document_hashes",
+        "tool_call_ids",
+        "approval_chain",
+        "redaction_policy",
+      ] as const,
+      secret_safe: true as const,
     },
     capabilities: [...CONTRACT_CAPABILITIES].sort((a, b) =>
       a.name.localeCompare(b.name),
