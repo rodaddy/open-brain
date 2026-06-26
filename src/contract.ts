@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { TOOL_CONTRACTS } from "./contract-schemas.ts";
 
-export const CONTRACT_VERSION = "2026-06-25.memory-tools.v6";
+export const CONTRACT_VERSION = "2026-06-26.memory-tools.v7";
 export const CONTRACT_SCHEMA_VERSION = 1;
 
 export interface ContractCapability {
@@ -130,7 +130,7 @@ export const CONTRACT_CAPABILITIES: ContractCapability[] = [
   },
   {
     name: "append_session_event",
-    version: 3,
+    version: 4,
     kind: "tool",
     description:
       "Append one durable, typed event (fact, decision, blocker, action, etc.) " +

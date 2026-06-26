@@ -93,15 +93,17 @@ describe("Open Brain contract manifest", () => {
   it("pins the contract version and append_session_event nomination contract", () => {
     // The Python client pins CURRENT_CONTRACT_VERSION and cross-checks it
     // against this source, but nothing on the TS side caught a forgotten bump.
-    // Pin the version string and the append_session_event v2 nomination
+    // Pin the version string and the append_session_event nomination/provenance
     // contract so a future TS/Python divergence fails here, in lockstep with
     // python/openbrain-memory CURRENT_CONTRACT_VERSION.
     const contract = buildContract("2026-06-18T00:00:00.000Z");
-    expect(contract.contract_version).toBe("2026-06-25.memory-tools.v6");
+    expect(contract.contract_version).toBe("2026-06-26.memory-tools.v7");
 
     const appendEvent = contract.tool_contracts.append_session_event;
     expect(appendEvent).toBeDefined();
-    expect(appendEvent?.version).toBe(3);
+    expect(appendEvent?.version).toBe(4);
+    expect(appendEvent?.output_shape).toContain("writer_identity");
+    expect(appendEvent?.output_shape).toContain("token_identity");
     const shareCandidate = (appendEvent?.input_schema as any).metadata.fields
       .share_candidate;
     expect(shareCandidate.type).toBe("boolean");

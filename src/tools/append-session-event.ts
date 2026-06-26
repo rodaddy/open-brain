@@ -66,6 +66,27 @@ function adjudicateNominationSync(
   return { metadata, rejected: null };
 }
 
+function appendWriterProvenance(
+  metadata: Record<string, unknown>,
+  auth: AuthInfo,
+): Record<string, unknown> {
+  const { _openbrain: callerOpenBrainMetadata, ...rest } = metadata;
+  return {
+    ...rest,
+    ...(callerOpenBrainMetadata === undefined
+      ? {}
+      : { _caller_openbrain_metadata: callerOpenBrainMetadata }),
+    _openbrain: {
+      writer: {
+        client_id: auth.clientId,
+        token_client_id: auth.tokenClientId ?? auth.clientId,
+        agent_id: auth.agentId ?? null,
+        namespace_source: auth.namespaceSource ?? "token",
+      },
+    },
+  };
+}
+
 export function registerAppendSessionEvent(
   server: McpServer,
   deps: ToolDeps,
@@ -224,6 +245,7 @@ export function registerAppendSessionEvent(
           args.content,
           args.metadata ?? {},
         );
+        const metadata = appendWriterProvenance(nomination.metadata, auth);
         if (nomination.rejected) {
           logger.warn("append_session_event_share_rejected", {
             session_key: args.session_key,
@@ -263,7 +285,7 @@ export function registerAppendSessionEvent(
             args.source ?? null,
             args.artifact_path ?? null,
             importance,
-            JSON.stringify(nomination.metadata),
+            JSON.stringify(metadata),
             embeddingVal,
             hash,
             embeddedAt,
@@ -293,6 +315,10 @@ export function registerAppendSessionEvent(
           event_type: args.event_type,
           importance,
           created_at: rows[0].created_at,
+          writer_identity: auth.clientId,
+          token_identity: auth.tokenClientId ?? auth.clientId,
+          delegated_agent_id: auth.agentId ?? null,
+          namespace_source: auth.namespaceSource ?? "token",
           // Surface the sync nomination outcome so a contract-driven agent
           // learns its share_candidate was refused (and why) without polling.
           ...(nomination.rejected
