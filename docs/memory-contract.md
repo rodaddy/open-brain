@@ -204,6 +204,36 @@ when evidence is missing, stale, mixed, or unsafe to cite. When no readable or
 citable evidence is available, `answer` is `null`; the tool must not fabricate
 uncited facts.
 
+### OKF Compatibility Hooks
+
+Open Brain does not implement OKF as its storage model. Treat OKF as an edge
+profile for disclosure, export, import staging, and portable review bundles.
+The canonical memory record remains the Open Brain lane/event/entity row, and
+Closed Brain provenance receipts remain stricter than OKF frontmatter.
+
+Clients may add optional `metadata.okf` objects to session events, lane
+metadata, and curated repo facts when the record should later export cleanly to
+an OKF-like bundle. The compatibility shape should use OKF vocabulary where it
+fits: `type`, `title`, `description`, `resource`, `tags`, `timestamp`,
+`links`, and `citations`. Unknown keys are allowed and should be preserved by
+clients and exporters. The `get_contract` manifest advertises this as the
+`interchange_profiles.okf` profile so thin clients can discover the hook without
+guessing.
+
+Export mapping is intentionally one-way until an importer exists:
+- Concept bodies: distilled OB thoughts, entities, repo facts, or important
+  session events become non-reserved Markdown files with YAML frontmatter.
+- `index.md`: generated from lane/project/repo grouping metadata and used only
+  as a progressive-disclosure navigation surface.
+- `log.md`: generated from scoped session events and wraps.
+- `# Citations`: generated from `source_ref`, `artifact_path`, receipt metadata,
+  repo fact source URLs, and Closed Brain receipt entries.
+
+Do not auto-promote imported OKF content into `shared-kb`. Imports should create
+candidate lane events, entities, or repo facts first, then use the normal
+promotion and namespace checks. Do not store secrets, raw transcripts, or
+private source bodies merely because an OKF bundle contains them.
+
 ### Difference From Hermes Agents
 
 Hermes agents are long-running services that can keep platform state, channels,

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { TOOL_CONTRACTS } from "./contract-schemas.ts";
 
-export const CONTRACT_VERSION = "2026-06-26.memory-tools.v7";
+export const CONTRACT_VERSION = "2026-06-26.memory-tools.v8";
 export const CONTRACT_SCHEMA_VERSION = 1;
 
 export interface ContractCapability {
@@ -25,6 +25,24 @@ export interface OpenBrainContract {
     auth: "bearer";
     namespace_boundary: "authorization";
     session_required: true;
+  };
+  interchange_profiles: {
+    okf: {
+      status: "compatibility-hooks";
+      version: "draft";
+      role: "edge-export-import-profile";
+      metadata_path: "metadata.okf";
+      reserved_files: readonly ["index.md", "log.md"];
+      required_frontmatter: readonly ["type"];
+      recommended_frontmatter: readonly [
+        "title",
+        "description",
+        "resource",
+        "tags",
+        "timestamp",
+      ];
+      export_surfaces: readonly ["concept", "index", "log", "citations"];
+    };
   };
   capabilities: ContractCapability[];
   tool_contracts: Record<
@@ -213,6 +231,24 @@ export function buildContract(
       auth: "bearer" as const,
       namespace_boundary: "authorization" as const,
       session_required: true as const,
+    },
+    interchange_profiles: {
+      okf: {
+        status: "compatibility-hooks" as const,
+        version: "draft" as const,
+        role: "edge-export-import-profile" as const,
+        metadata_path: "metadata.okf" as const,
+        reserved_files: ["index.md", "log.md"] as const,
+        required_frontmatter: ["type"] as const,
+        recommended_frontmatter: [
+          "title",
+          "description",
+          "resource",
+          "tags",
+          "timestamp",
+        ] as const,
+        export_surfaces: ["concept", "index", "log", "citations"] as const,
+      },
     },
     capabilities: [...CONTRACT_CAPABILITIES].sort((a, b) =>
       a.name.localeCompare(b.name),
