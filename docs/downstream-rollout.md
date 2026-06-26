@@ -74,7 +74,7 @@ If none of those apply, say so explicitly in the PR and release notes.
      ```bash
      cd /mnt/collab/agent-backups/rtech-hermes
      git pull --ff-only origin main
-     bash scripts/update.sh
+     /opt/homebrew/bin/bash scripts/update.sh
      ```
 
    - Run this for each opted-in agent/profile that should receive the Open
@@ -117,6 +117,7 @@ The manifest includes:
 - `min_client_versions`
 - `compatible_client_ranges`
 - `transport`
+- `interchange_profiles`
 - `capabilities`
 - `tool_contracts`
 
