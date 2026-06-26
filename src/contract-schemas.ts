@@ -543,6 +543,16 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
               "de-duplicates against shared-kb, and promotes survivors. Do NOT set " +
               "true for secrets, credentials, or private/personal content.",
           },
+          okf: {
+            type: "object",
+            required: false,
+            description:
+              "Optional Open Knowledge Format compatibility metadata for future " +
+              "edge export/import. Open Brain remains authoritative; this object " +
+              "is only a disclosure/interchange hook. Use OKF-like keys such as " +
+              "type, title, description, resource, tags, timestamp, citations, " +
+              "and links. Unknown keys should be preserved by clients/exporters.",
+          },
         },
       },
     },

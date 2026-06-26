@@ -14,6 +14,19 @@ describe("Open Brain contract manifest", () => {
     expect(contract.schema_hash).toMatch(/^[0-9a-f]{64}$/);
     expect(contract.min_client_versions.mcp2cli).toBe("0.3.6");
     expect(contract.transport.namespace_boundary).toBe("authorization");
+    expect(contract.interchange_profiles.okf.status).toBe(
+      "compatibility-hooks",
+    );
+    expect(contract.interchange_profiles.okf.metadata_path).toBe(
+      "metadata.okf",
+    );
+    expect(contract.interchange_profiles.okf.reserved_files).toEqual([
+      "index.md",
+      "log.md",
+    ]);
+    expect(contract.interchange_profiles.okf.required_frontmatter).toEqual([
+      "type",
+    ]);
     expect(contract.capabilities.map((c) => c.name)).toContain(
       "upsert_repo_fact",
     );
@@ -97,7 +110,7 @@ describe("Open Brain contract manifest", () => {
     // contract so a future TS/Python divergence fails here, in lockstep with
     // python/openbrain-memory CURRENT_CONTRACT_VERSION.
     const contract = buildContract("2026-06-18T00:00:00.000Z");
-    expect(contract.contract_version).toBe("2026-06-26.memory-tools.v7");
+    expect(contract.contract_version).toBe("2026-06-26.memory-tools.v8");
 
     const appendEvent = contract.tool_contracts.append_session_event;
     expect(appendEvent).toBeDefined();
@@ -113,6 +126,10 @@ describe("Open Brain contract manifest", () => {
     // so a contract-driven agent learns the behavior, not just the type.
     expect(shareCandidate.description).toContain("share_candidate_rejected");
     expect(shareCandidate.description.toLowerCase()).toContain("secret");
+    const okf = (appendEvent?.input_schema as any).metadata.fields.okf;
+    expect(okf.type).toBe("object");
+    expect(okf.description).toContain("edge export/import");
+    expect(okf.description).toContain("Unknown keys should be preserved");
   });
 
   it("keeps the schema hash stable when only generated_at changes", () => {
@@ -133,6 +150,7 @@ describe("Open Brain contract manifest", () => {
       min_client_versions: base.min_client_versions,
       compatible_client_ranges: base.compatible_client_ranges,
       transport: base.transport,
+      interchange_profiles: base.interchange_profiles,
       capabilities: [
         ...base.capabilities,
         {
@@ -161,6 +179,7 @@ describe("Open Brain contract manifest", () => {
       min_client_versions: base.min_client_versions,
       compatible_client_ranges: base.compatible_client_ranges,
       transport: base.transport,
+      interchange_profiles: base.interchange_profiles,
       capabilities: base.capabilities,
       tool_contracts: {
         ...base.tool_contracts,
@@ -193,6 +212,7 @@ describe("Open Brain contract manifest", () => {
       min_client_versions: base.min_client_versions,
       compatible_client_ranges: base.compatible_client_ranges,
       transport: base.transport,
+      interchange_profiles: base.interchange_profiles,
       capabilities: base.capabilities,
       tool_contracts: {
         ...base.tool_contracts,
