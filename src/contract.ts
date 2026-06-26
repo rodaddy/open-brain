@@ -32,16 +32,16 @@ export interface OpenBrainContract {
       version: "draft";
       role: "edge-export-import-profile";
       metadata_path: "metadata.okf";
-      reserved_files: ["index.md", "log.md"];
-      required_frontmatter: ["type"];
-      recommended_frontmatter: [
+      reserved_files: readonly ["index.md", "log.md"];
+      required_frontmatter: readonly ["type"];
+      recommended_frontmatter: readonly [
         "title",
         "description",
         "resource",
         "tags",
         "timestamp",
       ];
-      export_surfaces: ["concept", "index", "log", "citations"];
+      export_surfaces: readonly ["concept", "index", "log", "citations"];
     };
   };
   capabilities: ContractCapability[];
