@@ -444,7 +444,7 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
     output_shape: "session lane array JSON text payload",
   },
   append_session_event: {
-    version: 3,
+    version: 4,
     input_schema: {
       session_key: {
         type: "string",
@@ -546,7 +546,9 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
         },
       },
     },
-    output_shape: "session event JSON text payload",
+    output_shape:
+      "session event JSON text payload with writer_identity, token_identity, " +
+      "delegated_agent_id, and namespace_source provenance fields",
   },
   session_wrap: {
     version: 2,
