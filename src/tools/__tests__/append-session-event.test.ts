@@ -341,6 +341,10 @@ describe("append_session_event", () => {
       const parsed = JSON.parse((result.content as any)[0].text);
       expect(parsed.duplicate).toBe(true);
       expect(parsed.message).toContain("identical content");
+      expect(parsed.writer_identity).toBe("skippy");
+      expect(parsed.token_identity).toBe("skippy");
+      expect(parsed.delegated_agent_id).toBeNull();
+      expect(parsed.namespace_source).toBe("token");
     } finally {
       await cleanup();
     }
@@ -575,6 +579,48 @@ describe("append_session_event", () => {
     }
   });
 
+  it("does not treat X-Agent-Id as delegated provenance without X-Namespace", async () => {
+    const mockPool = createCapturingPool();
+    const auth: AuthInfo = {
+      role: "agent",
+      clientId: "skippy",
+      tokenClientId: "skippy",
+      agentId: "spoofed-agent",
+      namespaceSource: "token",
+    };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "append_session_event",
+        arguments: {
+          session_key: "test",
+          event_type: "fact",
+          content: "Non-delegated agent id should not become provenance",
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.writer_identity).toBe("skippy");
+      expect(parsed.token_identity).toBe("skippy");
+      expect(parsed.delegated_agent_id).toBeNull();
+      expect(parsed.namespace_source).toBe("token");
+
+      expect(mockPool.captured.metadata).not.toBeNull();
+      expect(mockPool.captured.metadata!._openbrain).toEqual({
+        writer: {
+          client_id: "skippy",
+          token_client_id: "skippy",
+          agent_id: null,
+          namespace_source: "token",
+        },
+      });
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("records delegated namespace writer separately from token provenance", async () => {
     const mockPool = createCapturingPool();
     const auth: AuthInfo = {
@@ -613,6 +659,44 @@ describe("append_session_event", () => {
           token_client_id: "rico",
           agent_id: "nagatha",
           namespace_source: "header",
+        },
+      });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("preserves caller _openbrain metadata while stamping trusted writer provenance", async () => {
+    const mockPool = createCapturingPool();
+    const auth: AuthInfo = { role: "admin", clientId: "skippy" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "append_session_event",
+        arguments: {
+          session_key: "test",
+          event_type: "fact",
+          content: "Caller metadata should not clobber OpenBrain provenance",
+          metadata: {
+            _openbrain: { writer: { client_id: "spoofed" } },
+            user_value: "kept",
+          },
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      expect(mockPool.captured.metadata).not.toBeNull();
+      expect(mockPool.captured.metadata!.user_value).toBe("kept");
+      expect(mockPool.captured.metadata!._caller_openbrain_metadata).toEqual({
+        writer: { client_id: "spoofed" },
+      });
+      expect(mockPool.captured.metadata!._openbrain).toEqual({
+        writer: {
+          client_id: "skippy",
+          token_client_id: "skippy",
+          agent_id: null,
+          namespace_source: "token",
         },
       });
     } finally {

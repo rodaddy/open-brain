@@ -66,22 +66,41 @@ function adjudicateNominationSync(
   return { metadata, rejected: null };
 }
 
+function writerProvenance(auth: AuthInfo): {
+  writer_identity: string;
+  token_identity: string;
+  delegated_agent_id: string | null;
+  namespace_source: "token" | "header";
+} {
+  const namespaceSource = auth.namespaceSource ?? "token";
+  return {
+    writer_identity: auth.clientId,
+    token_identity: auth.tokenClientId ?? auth.clientId,
+    delegated_agent_id: namespaceSource === "header" ? (auth.agentId ?? null) : null,
+    namespace_source: namespaceSource,
+  };
+}
+
 function appendWriterProvenance(
   metadata: Record<string, unknown>,
   auth: AuthInfo,
 ): Record<string, unknown> {
   const { _openbrain: callerOpenBrainMetadata, ...rest } = metadata;
+  const provenance = writerProvenance(auth);
   return {
     ...rest,
     ...(callerOpenBrainMetadata === undefined
       ? {}
       : { _caller_openbrain_metadata: callerOpenBrainMetadata }),
+    // The public metadata limit applies to caller input. OpenBrain adds this
+    // small bounded block after validation so later readback can audit writer
+    // provenance without trusting caller-supplied metadata.
     _openbrain: {
       writer: {
-        client_id: auth.clientId,
-        token_client_id: auth.tokenClientId ?? auth.clientId,
-        agent_id: auth.agentId ?? null,
-        namespace_source: auth.namespaceSource ?? "token",
+        client_id: provenance.writer_identity,
+        token_client_id: provenance.token_identity,
+        agent_id: provenance.delegated_agent_id,
+        namespace_source: provenance.namespace_source,
       },
     },
   };
@@ -188,6 +207,7 @@ export function registerAppendSessionEvent(
         };
       }
       const importance = args.importance ?? "warm";
+      const provenance = writerProvenance(auth);
 
       logger.debug("append_session_event_start", {
         session_key: args.session_key,
@@ -303,6 +323,7 @@ export function registerAppendSessionEvent(
                   duplicate: true,
                   message:
                     "Event with identical content already exists in this lane",
+                  ...provenance,
                 }),
               },
             ],
@@ -315,10 +336,7 @@ export function registerAppendSessionEvent(
           event_type: args.event_type,
           importance,
           created_at: rows[0].created_at,
-          writer_identity: auth.clientId,
-          token_identity: auth.tokenClientId ?? auth.clientId,
-          delegated_agent_id: auth.agentId ?? null,
-          namespace_source: auth.namespaceSource ?? "token",
+          ...provenance,
           // Surface the sync nomination outcome so a contract-driven agent
           // learns its share_candidate was refused (and why) without polling.
           ...(nomination.rejected

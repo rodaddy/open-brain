@@ -104,6 +104,8 @@ describe("Open Brain contract manifest", () => {
     expect(appendEvent?.version).toBe(4);
     expect(appendEvent?.output_shape).toContain("writer_identity");
     expect(appendEvent?.output_shape).toContain("token_identity");
+    expect(appendEvent?.output_shape).toContain("delegated_agent_id");
+    expect(appendEvent?.output_shape).toContain("namespace_source");
     const shareCandidate = (appendEvent?.input_schema as any).metadata.fields
       .share_candidate;
     expect(shareCandidate.type).toBe("boolean");
