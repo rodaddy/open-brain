@@ -491,7 +491,9 @@ class AgentMemory:
         self._reject_reserved_metadata(metadata)
         self._reject_unknown_metadata(metadata, SESSION_WRAP_KEYS)
         key = idempotency_key()
-        payload = self._session_payload({"summary": summary, **metadata})
+        payload = self._session_payload(
+            _session_wrap_metadata({"summary": summary, **metadata})
+        )
         return self._call_write(
             "session_wrap",
             payload,
@@ -532,27 +534,7 @@ class AgentMemory:
             raise ValueError("wrap_session summary must not be empty")
         self._reject_reserved_metadata(metadata)
         self._reject_unknown_metadata(metadata, SESSION_WRAP_KEYS)
-        payload = dict(metadata)
-        receipt_refs = payload.pop("receipt_refs", None)
-        if receipt_refs is not None:
-            next_steps = payload.get("next_steps", [])
-            if next_steps is None:
-                next_steps = []
-            next_steps = _str_list(next_steps, "next_steps")
-            receipt_next_steps = [
-                f"Receipt ref: {item}"
-                for item in _str_list(receipt_refs, "receipt_refs")
-            ]
-            next_steps = [
-                *next_steps,
-                *receipt_next_steps,
-            ]
-            if len(next_steps) > 20:
-                raise ValueError(
-                    "next_steps plus receipt_refs must contain at most 20 items"
-                )
-            payload["next_steps"] = next_steps
-        payload["summary"] = summary
+        payload = _session_wrap_metadata({"summary": summary, **metadata})
         key = idempotency_key()
         return self._call_write(
             "session_wrap",
@@ -878,6 +860,26 @@ def _validation_list(value: Any) -> list[dict[str, Any]]:
         _required_str(validation.get("kind"), f"validations[{index}].kind")
         _required_str(validation.get("status"), f"validations[{index}].status")
     return validations
+
+
+def _session_wrap_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
+    payload = dict(metadata)
+    receipt_refs = payload.pop("receipt_refs", None)
+    if receipt_refs is not None:
+        next_steps = payload.get("next_steps", [])
+        if next_steps is None:
+            next_steps = []
+        next_steps = _str_list(next_steps, "next_steps")
+        receipt_next_steps = [
+            f"Receipt ref: {item}" for item in _str_list(receipt_refs, "receipt_refs")
+        ]
+        next_steps = [*next_steps, *receipt_next_steps]
+        if len(next_steps) > 20:
+            raise ValueError(
+                "next_steps plus receipt_refs must contain at most 20 items"
+            )
+        payload["next_steps"] = next_steps
+    return payload
 
 
 def _enum_value(value: Any, name: str, allowed: set[str]) -> str:

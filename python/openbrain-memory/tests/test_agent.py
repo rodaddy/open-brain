@@ -653,6 +653,36 @@ def test_wrap_receipt_refs_are_encoded_as_server_supported_next_steps():
         )
 
 
+def test_checkpoint_receipt_refs_share_wrap_schema_normalization():
+    client = FakeClient()
+    memory = AgentMemory(client, agent="bilby")
+    memory.start_session("conversation")
+
+    memory.checkpoint(
+        "Checkpoint.",
+        key_decisions=["Keep Python parity"],
+        receipt_refs=["receipt-1"],
+    )
+
+    assert client.calls[-1] == (
+        "session_wrap",
+        {
+            "key_decisions": ["Keep Python parity"],
+            "next_steps": ["Receipt ref: receipt-1"],
+            "summary": "Checkpoint.",
+            "session_key": "conversation",
+        },
+    )
+    assert "receipt_refs" not in client.calls[-1][1]
+
+    with pytest.raises(ValueError, match="at most 20"):
+        memory.checkpoint(
+            "Too much.",
+            next_steps=["step"],
+            receipt_refs=[f"receipt-{index}" for index in range(20)],
+        )
+
+
 def test_export_disclosure_bundle_matches_ts_feature_shape():
     client = FakeClient()
     memory = AgentMemory(client, agent="bilby", project="open-brain")
