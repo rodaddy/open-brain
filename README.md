@@ -168,17 +168,32 @@ Keep the boundaries explicit:
   `/Volumes/ThunderBolt/open-brain/backups`
 - qmd runtime/index/models: `/Volumes/ThunderBolt/qmd`
 
-Deploys should be owned by this repository, not by hand-copying files:
+Deploys should be owned by this repository, not by hand-copying files. To
+install a new Open Brain version on core01, merge the reviewed change to
+`main` and let the repo deploy job run, or run the same repo-owned deploy
+command on core01 from this checkout:
 
 ```bash
 bun run deploy:core01
 ```
+
+That command installs the checked-out repo version into
+`/Volumes/ThunderBolt/open-brain/app`. Do not install Open Brain into
+`/Volumes/ThunderBolt/Development`; that is the source/mirror area, not the
+runtime. Do not install qmd or Postgres data under the source checkout either.
 
 On GitHub, the `deploy` job targets a core01 macOS self-hosted runner with
 labels `[self-hosted, macOS, core01]`. The job rsyncs this checkout into the
 running app directory, installs runtime dependencies there, runs migrations,
 bootstraps the pinned qmd runtime, restarts `com.rico.open-brain`, and checks
 `/health`.
+
+macOS shell rule: never call `/bin/bash` or rely on the old Apple bash. Use the
+Homebrew bash path explicitly in automation:
+
+```bash
+/opt/homebrew/bin/bash scripts/core01-deploy-local.sh
+```
 
 qmd is pinned and bootstrapped by:
 
