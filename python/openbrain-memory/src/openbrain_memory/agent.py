@@ -8,7 +8,13 @@ from datetime import UTC, datetime
 from typing import Any, Protocol, cast
 
 from .client import JSON
-from .policy import RetryPolicy, idempotency_key, with_retry
+from .policy import (
+    SECRET_PATTERNS,
+    SENSITIVE_KEY_RE,
+    RetryPolicy,
+    idempotency_key,
+    with_retry,
+)
 
 EVENT_TYPES = {
     "fact",
@@ -136,6 +142,8 @@ class MemoryContext:
     items: tuple[MemoryItem, ...]
     text: str
     raw: Mapping[str, Any]
+    session: JSON | None = None
+    answer: JSON | None = None
 
     def as_prompt_text(self) -> str:
         return self.text
@@ -179,6 +187,8 @@ class AgentMemory:
         include_decisions: bool = True,
         include_facts: bool = True,
         include_raw: bool = False,
+        include_session: bool = False,
+        include_answer: bool = False,
     ) -> MemoryContext:
         effective_limit = self._effective_limit(limit)
         sources = _sources(include_decisions, include_facts)
@@ -189,7 +199,21 @@ class AgentMemory:
         if sources:
             payload["sources"] = sources
 
+        session = (
+            self.client.session_context(
+                session_key=self.conversation_key,
+                include_events=True,
+                event_limit=effective_limit,
+            )
+            if include_session and self.conversation_key
+            else None
+        )
         raw = self.client.search_all(**payload)
+        answer = (
+            self.client.brain_answer(query=query, limit=effective_limit)
+            if include_answer
+            else None
+        )
         raw_mapping = raw if isinstance(raw, Mapping) else {}
         items = _bounded_items(raw_mapping, self.policy, effective_limit)
         return MemoryContext(
@@ -197,6 +221,8 @@ class AgentMemory:
             items=items,
             text=_prompt_text(items, self.policy),
             raw=raw_mapping if include_raw else {},
+            session=cast(JSON | None, session),
+            answer=cast(JSON | None, answer),
         )
 
     def load_session_context(
@@ -405,6 +431,7 @@ class AgentMemory:
                 residual_risk,
                 "residual_risk",
             )
+        _reject_receipt_secrets(receipt, metadata)
 
         return self.append_event(
             self.agent,
@@ -864,6 +891,19 @@ def _validation_list(value: Any) -> list[dict[str, Any]]:
 
 def _session_wrap_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
     payload = dict(metadata)
+    if "key_decisions" in payload:
+        payload["key_decisions"] = _str_list(
+            payload["key_decisions"],
+            "key_decisions",
+        )
+        if len(payload["key_decisions"]) > 20:
+            raise ValueError("key_decisions must contain at most 20 items")
+    if payload.get("next_steps") is None:
+        payload.pop("next_steps", None)
+    elif "next_steps" in payload:
+        payload["next_steps"] = _str_list(payload["next_steps"], "next_steps")
+        if len(payload["next_steps"]) > 20:
+            raise ValueError("next_steps must contain at most 20 items")
     receipt_refs = payload.pop("receipt_refs", None)
     if receipt_refs is not None:
         next_steps = payload.get("next_steps", [])
@@ -880,6 +920,30 @@ def _session_wrap_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
             )
         payload["next_steps"] = next_steps
     return payload
+
+
+def _reject_receipt_secrets(
+    receipt: Mapping[str, Any],
+    metadata: Mapping[str, Any],
+) -> None:
+    _reject_secret_payload(receipt, "receipt")
+    _reject_secret_payload(metadata, "metadata")
+
+
+def _reject_secret_payload(value: Any, path: str) -> None:
+    if isinstance(value, str):
+        if any(pattern.search(value) for pattern in SECRET_PATTERNS):
+            raise ValueError(f"{path} contains secret-like material")
+        return
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            key_text = str(key)
+            if SENSITIVE_KEY_RE.search(key_text):
+                raise ValueError(f"{path}.{key_text} contains secret-like material")
+            _reject_secret_payload(item, f"{path}.{key_text}")
+    elif isinstance(value, list | tuple):
+        for index, item in enumerate(value):
+            _reject_secret_payload(item, f"{path}[{index}]")
 
 
 def _enum_value(value: Any, name: str, allowed: set[str]) -> str:
@@ -1107,26 +1171,29 @@ def _collect_disclosure_citations(
 ) -> list[dict[str, Any]]:
     citations: dict[str, dict[str, Any]] = {}
     for event in events:
-        if event.get("sourceRef"):
+        source_ref = _event_source_ref(event)
+        artifact_path = _event_artifact_path(event)
+        if source_ref:
             citations[f"event:{event['id']}:source"] = {
                 "id": f"event:{event['id']}:source",
                 "label": "source_ref",
-                "sourceRef": event["sourceRef"],
+                "sourceRef": source_ref,
             }
-        if event.get("artifactPath"):
+        if artifact_path:
             citations[f"event:{event['id']}:artifact"] = {
                 "id": f"event:{event['id']}:artifact",
                 "label": "artifact_path",
-                "path": event["artifactPath"],
+                "path": artifact_path,
             }
         for citation in event.get("citations", []):
             citations[citation["id"]] = dict(citation)
     for fact in facts:
-        if fact.get("sourceUrl"):
+        source_url = _fact_source_url(fact)
+        if source_url:
             citations[f"fact:{fact['id']}:source_url"] = {
                 "id": f"fact:{fact['id']}:source_url",
                 "label": fact["subject"],
-                "url": fact["sourceUrl"],
+                "url": source_url,
             }
         if fact.get("path"):
             citations[f"fact:{fact['id']}:path"] = {
@@ -1170,10 +1237,12 @@ def _concept_path(fact: Mapping[str, Any]) -> str:
 
 def _event_citation_lines(event: Mapping[str, Any]) -> list[str]:
     lines: list[str] = []
-    if event.get("sourceRef"):
-        lines.append(f"- Source ref: {event['sourceRef']}")
-    if event.get("artifactPath"):
-        lines.append(f"- Artifact: {event['artifactPath']}")
+    source_ref = _event_source_ref(event)
+    artifact_path = _event_artifact_path(event)
+    if source_ref:
+        lines.append(f"- Source ref: {source_ref}")
+    if artifact_path:
+        lines.append(f"- Artifact: {artifact_path}")
     lines.extend(
         f"- Citation: {_citation_label(citation)}"
         for citation in event.get("citations", [])
@@ -1183,14 +1252,30 @@ def _event_citation_lines(event: Mapping[str, Any]) -> list[str]:
 
 def _fact_citation_lines(fact: Mapping[str, Any]) -> list[str]:
     lines: list[str] = []
-    if fact.get("sourceUrl"):
-        lines.append(f"- Source URL: {fact['sourceUrl']}")
+    source_url = _fact_source_url(fact)
+    if source_url:
+        lines.append(f"- Source URL: {source_url}")
     if fact.get("path"):
         lines.append(f"- Path: {fact['path']}")
     lines.extend(
         f"- {_citation_label(citation)}" for citation in fact.get("citations", [])
     )
     return lines or ["- None"]
+
+
+def _event_source_ref(event: Mapping[str, Any]) -> str | None:
+    value = event.get("sourceRef", event.get("source_ref"))
+    return value if isinstance(value, str) else None
+
+
+def _event_artifact_path(event: Mapping[str, Any]) -> str | None:
+    value = event.get("artifactPath", event.get("artifact_path"))
+    return value if isinstance(value, str) else None
+
+
+def _fact_source_url(fact: Mapping[str, Any]) -> str | None:
+    value = fact.get("sourceUrl", fact.get("source_url"))
+    return value if isinstance(value, str) else None
 
 
 def _citation_label(citation: Mapping[str, Any]) -> str:

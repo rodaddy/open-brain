@@ -1,4 +1,6 @@
 import { describe, expect, it } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { AgentMemory, type JsonObject } from "../agent-memory.ts";
 import { scoreProbe } from "../../eval/open-brain/runner.ts";
 import type { EvalCorpusEntry, EvalProbe } from "../../eval/open-brain/types.ts";
@@ -11,6 +13,17 @@ class FakeTransport {
     return { tool: name, args };
   }
 }
+
+const disclosureGolden = JSON.parse(
+  readFileSync(
+    join(import.meta.dir, "../../tests/fixtures/agent-memory-disclosure-golden.json"),
+    "utf8",
+  ),
+) as {
+  adapter: { agent: string; project: string; sessionKey: string };
+  input: Parameters<AgentMemory["exportDisclosureBundle"]>[0];
+  expected: ReturnType<AgentMemory["exportDisclosureBundle"]>;
+};
 
 describe("AgentMemory TypeScript wrapper", () => {
   it("starts a lane with contract-shaped session_start and lane_upsert arguments", async () => {
@@ -549,6 +562,18 @@ describe("AgentMemory TypeScript wrapper", () => {
     }
   });
 
+  it("matches the shared TS/Python disclosure golden fixture", async () => {
+    const memory = new AgentMemory(new FakeTransport(), {
+      agent: disclosureGolden.adapter.agent,
+      project: disclosureGolden.adapter.project,
+    });
+    await memory.start({ sessionKey: disclosureGolden.adapter.sessionKey });
+
+    expect(memory.exportDisclosureBundle(disclosureGolden.input)).toEqual(
+      disclosureGolden.expected,
+    );
+  });
+
   it("makes disclosure concept paths stable and collision-resistant", async () => {
     const memory = new AgentMemory(new FakeTransport(), { agent: "codex" });
     await memory.start({ sessionKey: "session-disclosure" });
@@ -595,6 +620,36 @@ describe("AgentMemory TypeScript wrapper", () => {
         receiptRefs: Array.from({ length: 6 }, (_, index) => `receipt-${index}`),
       }),
     ).rejects.toThrow("nextSteps plus receiptRefs must contain at most 20 items");
+
+    await expect(
+      memory.wrap({
+        summary: "Too many decisions.",
+        keyDecisions: Array.from({ length: 21 }, (_, index) => `decision-${index}`),
+      }),
+    ).rejects.toThrow("keyDecisions must contain at most 20 items");
+  });
+
+  it("rejects secret-like receipt evidence before durable writes", async () => {
+    const memory = new AgentMemory(new FakeTransport(), { agent: "codex" });
+    await memory.start({ sessionKey: "open-brain/run" });
+
+    await expect(
+      memory.recordReceipt({
+        action: "validation",
+        sources: [{ kind: "env", api_key: "redacted-test-key" }],
+        outputs: [],
+        validations: [{ kind: "manual", status: "passed" }],
+      }),
+    ).rejects.toThrow("secret-like material");
+
+    await expect(
+      memory.recordReceipt({
+        action: "validation",
+        sources: [{ kind: "command", summary: "Authorization: Bearer abcdef123456" }],
+        outputs: [],
+        validations: [{ kind: "manual", status: "passed" }],
+      }),
+    ).rejects.toThrow("secret-like material");
   });
 
   it("keeps disclosure bundle identity bound to the active lane", async () => {

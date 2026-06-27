@@ -48,7 +48,7 @@ adapter facade.
 | `recall` | client + server | `session_context`, `search_all`, `brain_answer` | available | Retrieve lane context and cited memory evidence. Clients choose prompt shaping; Open Brain returns readable, namespace-safe rows only. |
 | `append_event` | client + server | `append_session_event` | available | Write distilled `fact`, `decision`, `blocker`, `action`, `artifact`, `receipt`, `question`, `correction`, or `handoff` events. |
 | `compact` | client | `session_context`, caller-provided local distillation, `session_wrap` | client-wrapper | Read current context, distill it through caller policy or an explicit summary, then checkpoint via `session_wrap`. Open Brain does not store raw compaction transcripts. |
-| `wrap` | client + server | `session_context`, `session_wrap` | available | Checkpoint a completed work phase with summary, key decisions, next steps, and optional receipt references. |
+| `wrap` | client + server | `session_wrap` | available | Checkpoint a completed work phase with summary, key decisions, next steps, and optional receipt references. Use `compact` when the adapter should read current session context before wrapping. |
 | `record_receipt` | client + server | `append_session_event` with `event_type=receipt` | client-wrapper | Assemble citation-safe receipt metadata locally and write it as a receipt event. |
 | `nominate_shared` | client + server | `append_session_event.metadata.share_candidate` | available | Nominate only non-private, durable facts or decisions for server-side shared-kb promotion. Server rejection and promoter adjudication remain authoritative. |
 | `export_disclosure_bundle` | client | `interchange_profiles.okf` | client-wrapper | Generate an OKF-like bundle from readable lane events, repo facts, citations, and receipt metadata without changing Open Brain storage. |
@@ -201,7 +201,7 @@ Source inspection receipt:
   ],
   "outputs": [],
   "validations": [
-    {"kind": "manual", "status": "passed", "summary": "Confirmed existing Python helper covers start/recall/write but lacks disclosure export."}
+    {"kind": "manual", "status": "passed", "summary": "Confirmed Python AgentMemory covers start/recall/write, compaction, receipt capture, and disclosure export."}
   ]
 }
 ```

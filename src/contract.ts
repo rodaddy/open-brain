@@ -342,7 +342,7 @@ export function buildContract(
           status: "client-wrapper" as const,
         },
         wrap: {
-          maps_to: ["session_context", "session_wrap"] as const,
+          maps_to: ["session_wrap"] as const,
           owner: "client_and_server" as const,
           status: "available" as const,
         },

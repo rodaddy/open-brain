@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -470,6 +471,32 @@ def test_record_receipt_validates_shape_and_reserved_metadata():
         )
 
 
+def test_record_receipt_rejects_secret_like_evidence_before_writes():
+    client = FakeClient()
+    memory = AgentMemory(client, agent="bilby")
+    memory.start_session("conversation")
+
+    with pytest.raises(ValueError, match="secret-like material"):
+        memory.record_receipt(
+            "bad",
+            sources=[{"kind": "env", "api_key": "redacted-test-key"}],
+            outputs=[],
+            validations=[],
+        )
+    with pytest.raises(ValueError, match="secret-like material"):
+        memory.record_receipt(
+            "bad",
+            sources=[
+                {
+                    "kind": "command",
+                    "summary": "Authorization: Bearer abcdef123456",
+                }
+            ],
+            outputs=[],
+            validations=[],
+        )
+
+
 def test_metadata_bounds_are_rejected_before_tool_calls():
     client = FakeClient()
     memory = AgentMemory(client, agent="bilby")
@@ -551,6 +578,32 @@ def test_recall_can_exclude_fact_and_decision_classes():
             "sources": "qmd",
         },
     )
+
+
+def test_recall_can_include_session_context_and_answer():
+    client = FakeClient()
+    memory = AgentMemory(client, agent="bilby")
+    memory.start_session("conversation")
+
+    context = memory.recall("client facade", include_session=True, include_answer=True)
+
+    assert [name for name, _ in client.calls[-3:]] == [
+        "session_context",
+        "search_all",
+        "brain_answer",
+    ]
+    assert context.session == {
+        "tool": "session_context",
+        "arguments": {
+            "session_key": "conversation",
+            "include_events": True,
+            "event_limit": 8,
+        },
+    }
+    assert context.answer == {
+        "tool": "brain_answer",
+        "arguments": {"query": "client facade", "limit": 8},
+    }
 
 
 def test_checkpoint_and_wrap_use_session_tools():
@@ -652,6 +705,11 @@ def test_wrap_receipt_refs_are_encoded_as_server_supported_next_steps():
             receipt_refs=[f"receipt-{index}" for index in range(20)],
         )
 
+    with pytest.raises(ValueError, match="key_decisions"):
+        memory.wrap_session("Bad decisions.", key_decisions="not-list")
+    with pytest.raises(ValueError, match="next_steps"):
+        memory.wrap_session("Bad steps.", next_steps=[{"bad": True}])
+
 
 def test_checkpoint_receipt_refs_share_wrap_schema_normalization():
     client = FakeClient()
@@ -752,6 +810,27 @@ def test_export_disclosure_bundle_matches_ts_feature_shape():
     assert "fact:fact-a:path" in files["citations.md"]
     assert "receipt:receipt-1" in files["citations.md"]
     assert '"status":"passed"' in files["receipts.md"]
+
+
+def test_export_disclosure_bundle_matches_shared_golden_fixture():
+    fixture_path = (
+        Path(__file__).resolve().parents[3]
+        / "tests"
+        / "fixtures"
+        / "agent-memory-disclosure-golden.json"
+    )
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    client = FakeClient()
+    memory = AgentMemory(
+        client,
+        agent=fixture["adapter"]["agent"],
+        project=fixture["adapter"]["project"],
+    )
+    memory.start_session(fixture["adapter"]["sessionKey"])
+
+    fixture_input = dict(fixture["input"])
+    fixture_input["repo_facts"] = fixture_input.pop("repoFacts")
+    assert memory.export_disclosure_bundle(**fixture_input) == fixture["expected"]
 
 
 def test_public_facade_exports_quickstart_types():

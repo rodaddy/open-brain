@@ -3,6 +3,7 @@ import {
   type DisclosureBundle,
   type DisclosureBundleInput,
 } from "./disclosure-bundle.ts";
+import { containsSecret } from "./sharing.ts";
 
 export type JsonObject = Record<string, unknown>;
 
@@ -305,9 +306,15 @@ export class AgentMemory {
     setOptional(payload, "project", this.project);
     if (options.keyDecisions !== undefined) {
       payload.key_decisions = stringList(options.keyDecisions, "keyDecisions");
+      if ((payload.key_decisions as string[]).length > 20) {
+        throw new Error("keyDecisions must contain at most 20 items");
+      }
     }
     if (options.nextSteps !== undefined) {
       payload.next_steps = stringList(options.nextSteps, "nextSteps");
+      if ((payload.next_steps as string[]).length > 20) {
+        throw new Error("nextSteps must contain at most 20 items");
+      }
     }
     if (options.receiptRefs !== undefined) {
       const receiptRefs = stringList(options.receiptRefs, "receiptRefs");
@@ -337,6 +344,7 @@ export class AgentMemory {
     };
     setOptional(receipt, "project", this.project);
     setOptional(receipt, "residual_risk", options.residualRisk);
+    rejectReceiptSecrets(receipt, metadata);
     return this.appendEvent({
       eventType: "receipt",
       content: `Receipt: ${options.action}`,
@@ -461,6 +469,32 @@ function validationList(values: ReceiptValidation[]): JsonObject[] {
     requiredString(validation.status as string | undefined, `validations[${index}].status`);
   });
   return validations;
+}
+
+const RECEIPT_SECRET_KEYS =
+  /(api[_-]?key|token|password|secret|credential|authorization|session[_-]?id)/i;
+
+function rejectReceiptSecrets(receipt: JsonObject, metadata: JsonObject): void {
+  rejectSecretPayload(receipt, "receipt");
+  rejectSecretPayload(metadata, "metadata");
+}
+
+function rejectSecretPayload(value: unknown, path: string): void {
+  if (typeof value === "string") {
+    if (containsSecret(value)) throw new Error(`${path} contains secret-like material`);
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => rejectSecretPayload(item, `${path}[${index}]`));
+    return;
+  }
+  if (!value || typeof value !== "object") return;
+  for (const [key, item] of Object.entries(value as JsonObject)) {
+    if (RECEIPT_SECRET_KEYS.test(key)) {
+      throw new Error(`${path}.${key} contains secret-like material`);
+    }
+    rejectSecretPayload(item, `${path}.${key}`);
+  }
 }
 
 function safeMetadata(value: JsonObject): JsonObject {

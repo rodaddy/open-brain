@@ -12,7 +12,9 @@ export interface DisclosureEvent {
   content: string;
   timestamp: string;
   sourceRef?: string;
+  source_ref?: string;
   artifactPath?: string;
+  artifact_path?: string;
   citations?: DisclosureCitation[];
   metadata?: Record<string, unknown>;
 }
@@ -22,6 +24,7 @@ export interface DisclosureRepoFact {
   subject: string;
   fact: string;
   sourceUrl?: string;
+  source_url?: string;
   path?: string;
   citations?: DisclosureCitation[];
   metadata?: Record<string, unknown>;
@@ -215,12 +218,15 @@ function collectCitations(
 ): DisclosureCitation[] {
   const citations = new Map<string, DisclosureCitation>();
   for (const event of events) {
-    if (event.sourceRef) addCitation(citations, { id: `event:${event.id}:source`, label: "source_ref", sourceRef: event.sourceRef });
-    if (event.artifactPath) addCitation(citations, { id: `event:${event.id}:artifact`, label: "artifact_path", path: event.artifactPath });
+    const sourceRef = eventSourceRef(event);
+    const artifactPath = eventArtifactPath(event);
+    if (sourceRef) addCitation(citations, { id: `event:${event.id}:source`, label: "source_ref", sourceRef });
+    if (artifactPath) addCitation(citations, { id: `event:${event.id}:artifact`, label: "artifact_path", path: artifactPath });
     for (const citation of event.citations ?? []) addCitation(citations, citation);
   }
   for (const fact of facts) {
-    if (fact.sourceUrl) addCitation(citations, { id: `fact:${fact.id}:source_url`, label: fact.subject, url: fact.sourceUrl });
+    const sourceUrl = factSourceUrl(fact);
+    if (sourceUrl) addCitation(citations, { id: `fact:${fact.id}:source_url`, label: fact.subject, url: sourceUrl });
     if (fact.path) addCitation(citations, { id: `fact:${fact.id}:path`, label: fact.subject, path: fact.path });
     for (const citation of fact.citations ?? []) addCitation(citations, citation);
   }
@@ -236,18 +242,33 @@ function addCitation(citations: Map<string, DisclosureCitation>, citation: Discl
 
 function eventCitationLines(event: DisclosureEvent): string[] {
   const lines = [];
-  if (event.sourceRef) lines.push(`- Source ref: ${event.sourceRef}`);
-  if (event.artifactPath) lines.push(`- Artifact: ${event.artifactPath}`);
+  const sourceRef = eventSourceRef(event);
+  const artifactPath = eventArtifactPath(event);
+  if (sourceRef) lines.push(`- Source ref: ${sourceRef}`);
+  if (artifactPath) lines.push(`- Artifact: ${artifactPath}`);
   for (const citation of event.citations ?? []) lines.push(`- Citation: ${citationLabel(citation)}`);
   return lines.length > 0 ? ["### Citations", "", ...lines, ""] : [];
 }
 
 function factCitationLines(fact: DisclosureRepoFact): string[] {
   const lines = [];
-  if (fact.sourceUrl) lines.push(`- Source URL: ${fact.sourceUrl}`);
+  const sourceUrl = factSourceUrl(fact);
+  if (sourceUrl) lines.push(`- Source URL: ${sourceUrl}`);
   if (fact.path) lines.push(`- Path: ${fact.path}`);
   for (const citation of fact.citations ?? []) lines.push(`- ${citationLabel(citation)}`);
   return lines.length > 0 ? lines : ["- None"];
+}
+
+function eventSourceRef(event: DisclosureEvent): string | undefined {
+  return event.sourceRef ?? event.source_ref;
+}
+
+function eventArtifactPath(event: DisclosureEvent): string | undefined {
+  return event.artifactPath ?? event.artifact_path;
+}
+
+function factSourceUrl(fact: DisclosureRepoFact): string | undefined {
+  return fact.sourceUrl ?? fact.source_url;
 }
 
 function citationLabel(citation: DisclosureCitation): string {
