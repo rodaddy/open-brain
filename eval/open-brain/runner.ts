@@ -172,6 +172,11 @@ export function scoreProbe(corpus: EvalCorpusEntry[], probe: EvalProbe): ProbeSc
       failures.push(`missing expected citation ${expectedCitation}`);
     }
   }
+  for (const expectedSourceRef of probe.required_source_ref_ids ?? []) {
+    if (!citationIds.includes(expectedSourceRef)) {
+      failures.push(`missing required source ref ${expectedSourceRef}`);
+    }
+  }
   for (const expectedTerm of probe.expected_answer_terms ?? []) {
     if (!answer.toLowerCase().includes(expectedTerm.toLowerCase())) {
       failures.push(`missing expected answer term ${expectedTerm}`);

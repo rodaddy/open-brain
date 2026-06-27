@@ -14,6 +14,7 @@ issues a place to add live adapters and Codex workflow scenarios.
 ```bash
 bun run eval:memory
 bun run eval:memory -- --fixture eval/open-brain/fixtures/codex-workflows.json
+bun run eval:memory -- --fixture eval/open-brain/fixtures/memory-substrate.json
 bun run eval:memory -- --json
 bun run eval:memory -- --report eval/open-brain/reports/latest.json
 ```
@@ -28,6 +29,9 @@ when the report is intended to be durable; otherwise write scratch reports under
 - `fixtures/codex-workflows.json`: Codex session-resume, decision reuse,
   validation-evidence, preference, stale-memory, citation, synthesis-tool
   selection, simulated-current-evidence, and unreadable-namespace scenarios.
+- `fixtures/memory-substrate.json`: local memory substrate coverage for
+  compaction recovery, private lane isolation, complete receipts, and linked
+  recall across names, repos, dates/times, channels, files, and graph entities.
 - `runner.ts`: deterministic retrieval, scoring, uncertainty, and scorecard code.
 - `__tests__/runner.test.ts`: tests for sealed answers, namespace isolation,
   stale/contradiction uncertainty, Codex workflow scenarios, and aggregate
@@ -43,6 +47,8 @@ when the report is intended to be durable; otherwise write scratch reports under
 - Contradiction handling: conflicting memories are surfaced as uncertainty.
 - Namespace isolation: unreadable namespace entries are not returned.
 - Codex workflows: coding-agent memory tasks resolve the right durable evidence.
+- Memory substrate: local fixtures prove compaction, privacy, receipts, and
+  linked recall without calling hosted Open Brain.
 - Scale/performance: smoke latency is tracked against an expanded-corpus target.
 
 ## Next Expansion Points

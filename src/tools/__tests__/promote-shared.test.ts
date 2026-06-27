@@ -33,9 +33,12 @@ function createMockPool(opts: {
       ? { id: SOURCE_ID, content: LONG_FACT, namespace: "bilby", content_hash: contentHash(LONG_FACT) }
       : opts.row;
   const writes: Array<{ sql: string; params: any[] }> = [];
+  const reads: Array<{ sql: string; params: any[] }> = [];
   const pool = {
+    reads,
     writes,
     query: async (sql: string, params: any[] = []) => {
+      reads.push({ sql, params });
       if (sql.startsWith("INSERT")) {
         writes.push({ sql, params });
         return { rows: [{ id: "new-shared-id" }] };
@@ -45,6 +48,14 @@ function createMockPool(opts: {
         return { rows: [] };
       }
       if (sql.includes("WHERE id = $1")) {
+        if (
+          sql.includes("namespace = ANY") &&
+          row &&
+          Array.isArray(params[1]) &&
+          !params[1].includes(row.namespace)
+        ) {
+          return { rows: [] };
+        }
         return { rows: row ? [row] : [] };
       }
       return { rows: [] };
@@ -291,6 +302,41 @@ describe("promote_shared", () => {
       });
       expect(res.isError).toBe(true);
       expect((res.content as any)[0].text).toContain("not found");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("scopes the pre-classification source read for delegated/header identities", async () => {
+    const mockPool = createMockPool({
+      row: {
+        id: SOURCE_ID,
+        content: LONG_FACT,
+        namespace: "bilby",
+        content_hash: contentHash(LONG_FACT),
+      },
+    });
+    const auth: AuthInfo = {
+      role: "promoter",
+      clientId: "skippy",
+      tokenClientId: "openbrain-promoter",
+      agentId: "skippy",
+      namespaceSource: "header",
+    };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+    try {
+      const res = await client.callTool({
+        name: "promote_shared",
+        arguments: { table: "thoughts", id: SOURCE_ID, dry_run: false },
+      });
+      expect(res.isError).toBe(true);
+      expect((res.content as any)[0].text).toContain("not found");
+      expect((mockPool as any).writes.length).toBe(0);
+      expect((mockPool as any).reads[0].sql).toContain("namespace = ANY");
+      expect((mockPool as any).reads[0].params[1]).toEqual([
+        "skippy",
+        "shared-kb",
+      ]);
     } finally {
       await cleanup();
     }

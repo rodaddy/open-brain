@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { isPromoterIdentity } from "../namespace-policy.ts";
 import { promoteEntry } from "../promotion-service.ts";
+import { appendReadNamespacePredicate } from "../read-policy.ts";
 import { sharedNamespaceConfig } from "../shared-namespace.ts";
 import { classifyShareCandidate } from "../sharing.ts";
 import type { AuthInfo, Table } from "../types.ts";
@@ -93,11 +94,16 @@ export function registerPromoteShared(server: McpServer, deps: ToolDeps): void {
         // Zod enum, so this branch is a safe allowlist, not interpolation risk.
         const contentColumns =
           table === "decisions" ? "title, rationale" : "content";
+        const sourceParams: unknown[] = [args.id];
+        const sourceNamespacePredicate = appendReadNamespacePredicate(
+          auth,
+          sourceParams,
+        );
         const { rows } = await deps.pool.query(
           `SELECT id, ${contentColumns}, tags, extracted_metadata
            FROM ${table}
-           WHERE id = $1 AND archived_at IS NULL`,
-          [args.id],
+           WHERE id = $1 AND archived_at IS NULL${sourceNamespacePredicate}`,
+          sourceParams,
         );
         if (rows.length === 0) {
           return {

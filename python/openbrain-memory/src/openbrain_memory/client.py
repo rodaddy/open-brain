@@ -15,7 +15,7 @@ from .policy import RetryPolicy, redact_text, with_retry
 JSON = dict[str, Any]
 MCP_PROTOCOL_VERSION = "2025-03-26"
 DEFAULT_MAX_RESPONSE_BYTES = 1_000_000
-CURRENT_CONTRACT_VERSION = "2026-06-26.memory-tools.v8"
+CURRENT_CONTRACT_VERSION = "2026-06-26.memory-tools.v9"
 REQUIRED_CONTRACT_TOOLS = (
     "append_session_event",
     "get_contract",

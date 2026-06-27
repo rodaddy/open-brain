@@ -1,0 +1,95 @@
+{
+  "adapter": {
+    "agent": "bilby",
+    "project": "open-brain",
+    "sessionKey": "fixture-session"
+  },
+  "input": {
+    "lane": {
+      "topic": "Hermes memory",
+      "metadata": {
+        "okf": {
+          "mode": "edge"
+        }
+      }
+    },
+    "events": [
+      {
+        "id": "event-2",
+        "type": "decision",
+        "content": "Use Open Brain memory.",
+        "timestamp": "2026-06-26T12:01:00Z",
+        "source_ref": "issue-210"
+      },
+      {
+        "id": "event-1",
+        "type": "fact",
+        "content": "Hermes uses Python.",
+        "timestamp": "2026-06-26T12:00:00Z",
+        "artifact_path": "python/openbrain-memory/src/openbrain_memory/agent.py"
+      }
+    ],
+    "repoFacts": [
+      {
+        "id": "fact-a",
+        "subject": "AgentMemory",
+        "fact": "Python facade exports bundles.",
+        "path": "python/openbrain-memory/src/openbrain_memory/agent.py"
+      },
+      {
+        "id": "fact-a",
+        "subject": "AgentMemory",
+        "fact": "Duplicate ids still get unique concept paths."
+      }
+    ],
+    "receipts": [
+      {
+        "id": "receipt-1",
+        "action": "validation",
+        "timestamp": "2026-06-26T12:02:00Z",
+        "sources": [
+          {
+            "kind": "repo_path",
+            "path": "agent.py"
+          }
+        ],
+        "outputs": [],
+        "validations": [
+          {
+            "kind": "pytest",
+            "status": "passed"
+          }
+        ]
+      }
+    ]
+  },
+  "expected": {
+    "profile": "okf-like",
+    "files": [
+      {
+        "path": "index.md",
+        "content": "---\nprofile: \"okf-like\"\ntype: \"index\"\nsession_key: \"fixture-session\"\nagent: \"bilby\"\nproject: \"open-brain\"\nokf: {\"mode\":\"edge\"}\n---\n\n# Hermes memory\n\n- Session: fixture-session\n- Agent: bilby\n- Project: open-brain\n- Events: 2\n- Concepts: 2\n- Receipts: 1\n- Citations: 4\n\n## Files\n\n- [log.md](log.md)\n- [citations.md](citations.md)\n- [receipts.md](receipts.md)\n- [AgentMemory](concepts/agentmemory.md)\n- [AgentMemory](concepts/agentmemory-fact-a.md)\n"
+      },
+      {
+        "path": "log.md",
+        "content": "---\nprofile: \"okf-like\"\ntype: \"log\"\n---\n\n# Log\n\n## 2026-06-26T12:00:00Z fact\n\nHermes uses Python.\n\n### Citations\n\n- Artifact: python/openbrain-memory/src/openbrain_memory/agent.py\n\n## 2026-06-26T12:01:00Z decision\n\nUse Open Brain memory.\n\n### Citations\n\n- Source ref: issue-210\n"
+      },
+      {
+        "path": "concepts/agentmemory.md",
+        "content": "---\nprofile: \"okf-like\"\ntype: \"concept\"\nid: \"fact-a\"\n---\n\n# AgentMemory\n\nPython facade exports bundles.\n\n## Citations\n\n- Path: python/openbrain-memory/src/openbrain_memory/agent.py\n"
+      },
+      {
+        "path": "concepts/agentmemory-fact-a.md",
+        "content": "---\nprofile: \"okf-like\"\ntype: \"concept\"\nid: \"fact-a\"\n---\n\n# AgentMemory\n\nDuplicate ids still get unique concept paths.\n\n## Citations\n\n- None\n"
+      },
+      {
+        "path": "citations.md",
+        "content": "---\nprofile: \"okf-like\"\ntype: \"citations\"\n---\n\n# Citations\n\n- event:event-1:artifact: artifact_path python/openbrain-memory/src/openbrain_memory/agent.py\n- event:event-2:source: source_ref issue-210\n- fact:fact-a:path: AgentMemory python/openbrain-memory/src/openbrain_memory/agent.py\n- receipt:receipt-1: validation receipt-1\n"
+      },
+      {
+        "path": "receipts.md",
+        "content": "---\nprofile: \"okf-like\"\ntype: \"receipts\"\n---\n\n# Receipts\n\n## validation\n\n- ID: receipt-1\n- Timestamp: 2026-06-26T12:02:00Z\n- Sources: [{\"kind\":\"repo_path\",\"path\":\"agent.py\"}]\n- Outputs: []\n- Validations: [{\"kind\":\"pytest\",\"status\":\"passed\"}]\n"
+      }
+    ]
+  }
+}

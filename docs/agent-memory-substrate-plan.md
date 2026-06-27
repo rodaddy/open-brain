@@ -40,6 +40,10 @@ Clients become lifecycle-aware memory managers:
 - `export_disclosure_bundle`: generate OKF-like `index.md`, `log.md`, concept
   files, citations, and receipt appendices without changing OB storage.
 
+The detailed adapter and lightweight receipt contracts live in
+`docs/agent-memory-adapter-contract.md` and are discoverable through
+`get_contract` as `agent_memory_adapter` and `receipt_contract`.
+
 ## Memory Lanes
 
 A lane is the active memory object. It must carry enough metadata for local
@@ -68,6 +72,11 @@ Brain's stricter model. Receipt records should represent:
 - external channels such as Discord, Hermes, n8n, or user prompts
 - timestamps, agent identity, session key, namespace, and source references
 
+The current Open Brain receipt schema is `openbrain.receipt.v1`, stored as
+structured `metadata.receipt` on `append_session_event` calls with
+`event_type=receipt`. Closed Brain strict-mode fields are documented separately
+and are not required for normal Open Brain writes.
+
 ## Promotion
 
 Clients may set `metadata.share_candidate = true`, but server-side policy owns
@@ -88,6 +97,16 @@ compatibility hooks. Exporters should map:
 
 Imports should stage candidate OB records. They must not bypass namespace,
 receipt, promotion, or secret handling rules.
+
+## Local Validation Fixtures
+
+The offline eval harness includes
+`eval/open-brain/fixtures/memory-substrate.json` for the local memory substrate
+slice. It covers Codex compact/wrap recovery, private lane data staying out of
+shared readable namespaces, complete report/document receipts, and recall across
+names, repos, dates/times, Discord channel/thread ids, files, and linked issue
+entities. The fixture is deterministic and does not call the hosted Open Brain
+service.
 
 ## Friday-Sunday Timeline
 

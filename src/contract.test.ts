@@ -27,8 +27,89 @@ describe("Open Brain contract manifest", () => {
     expect(contract.interchange_profiles.okf.required_frontmatter).toEqual([
       "type",
     ]);
+    expect(contract.interchange_profiles.okf.export_surfaces).toEqual([
+      "concept",
+      "index",
+      "log",
+      "citations",
+      "receipts",
+    ]);
+    expect(contract.agent_memory_adapter.status).toBe("draft-local-contract");
+    expect(contract.agent_memory_adapter.contract_doc).toBe(
+      "docs/agent-memory-adapter-contract.md",
+    );
+    expect(contract.agent_memory_adapter.server_authority).toEqual([
+      "auth",
+      "namespace",
+      "storage",
+      "promotion_policy",
+      "contract_discovery",
+    ]);
+    expect(contract.agent_memory_adapter.client_authority).toContain(
+      "receipt_assembly",
+    );
+    expect(Object.keys(contract.agent_memory_adapter.methods).sort()).toEqual([
+      "append_event",
+      "compact",
+      "export_disclosure_bundle",
+      "nominate_shared",
+      "recall",
+      "record_receipt",
+      "start",
+      "wrap",
+    ]);
+    const adapterMethods = contract.agent_memory_adapter.methods;
+    expect(adapterMethods.start!.maps_to).toEqual([
+      "session_start",
+      "lane_upsert",
+    ]);
+    expect(adapterMethods.compact!.owner).toBe("client");
+    expect(adapterMethods.record_receipt!.maps_to).toEqual([
+      "append_session_event:event_type=receipt",
+    ]);
+    expect(adapterMethods.nominate_shared!.maps_to).toEqual([
+      "append_session_event:metadata.share_candidate",
+    ]);
+    expect(adapterMethods.export_disclosure_bundle).toEqual({
+      maps_to: ["interchange_profiles.okf"],
+      owner: "client",
+      status: "client-wrapper",
+    });
+    expect(contract.receipt_contract).toMatchObject({
+      status: "lightweight-openbrain-receipts",
+      event_type: "receipt",
+      contract_doc: "docs/agent-memory-adapter-contract.md",
+      secret_safe: true,
+    });
+    expect(contract.receipt_contract.required_fields).toEqual([
+      "schema",
+      "action",
+      "agent",
+      "session_key",
+      "timestamp",
+      "sources",
+      "outputs",
+      "validations",
+    ]);
+    expect(contract.receipt_contract.recommended_fields).toContain(
+      "residual_risk",
+    );
+    expect(contract.receipt_contract.closed_brain_strict_fields).toEqual([
+      "preimage_hashes",
+      "postimage_hashes",
+      "base_document_hashes",
+      "tool_call_ids",
+      "approval_chain",
+      "redaction_policy",
+    ]);
     expect(contract.capabilities.map((c) => c.name)).toContain(
       "upsert_repo_fact",
+    );
+    expect(contract.capabilities.map((c) => c.name)).toContain(
+      "agent_memory_adapter",
+    );
+    expect(contract.capabilities.map((c) => c.name)).toContain(
+      "receipt_contract",
     );
     for (const tool of [
       "get_contract",
@@ -110,7 +191,7 @@ describe("Open Brain contract manifest", () => {
     // contract so a future TS/Python divergence fails here, in lockstep with
     // python/openbrain-memory CURRENT_CONTRACT_VERSION.
     const contract = buildContract("2026-06-18T00:00:00.000Z");
-    expect(contract.contract_version).toBe("2026-06-26.memory-tools.v8");
+    expect(contract.contract_version).toBe("2026-06-26.memory-tools.v9");
 
     const appendEvent = contract.tool_contracts.append_session_event;
     expect(appendEvent).toBeDefined();
@@ -151,6 +232,8 @@ describe("Open Brain contract manifest", () => {
       compatible_client_ranges: base.compatible_client_ranges,
       transport: base.transport,
       interchange_profiles: base.interchange_profiles,
+      agent_memory_adapter: base.agent_memory_adapter,
+      receipt_contract: base.receipt_contract,
       capabilities: [
         ...base.capabilities,
         {
@@ -180,6 +263,8 @@ describe("Open Brain contract manifest", () => {
       compatible_client_ranges: base.compatible_client_ranges,
       transport: base.transport,
       interchange_profiles: base.interchange_profiles,
+      agent_memory_adapter: base.agent_memory_adapter,
+      receipt_contract: base.receipt_contract,
       capabilities: base.capabilities,
       tool_contracts: {
         ...base.tool_contracts,
@@ -213,6 +298,8 @@ describe("Open Brain contract manifest", () => {
       compatible_client_ranges: base.compatible_client_ranges,
       transport: base.transport,
       interchange_profiles: base.interchange_profiles,
+      agent_memory_adapter: base.agent_memory_adapter,
+      receipt_contract: base.receipt_contract,
       capabilities: base.capabilities,
       tool_contracts: {
         ...base.tool_contracts,

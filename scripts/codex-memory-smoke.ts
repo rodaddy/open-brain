@@ -11,6 +11,8 @@ const writeEnabled = process.env.OPEN_BRAIN_CODEX_SMOKE_WRITE === "1";
 const sessionKey =
   process.env.OPEN_BRAIN_CODEX_SMOKE_SESSION_KEY ??
   `codex-smoke-${new Date().toISOString().slice(0, 10)}`;
+const branch = process.env.OPEN_BRAIN_CODEX_SMOKE_BRANCH ?? "unknown";
+const dirtyState = process.env.OPEN_BRAIN_CODEX_SMOKE_DIRTY_STATE ?? "unknown";
 
 const steps: SmokeStep[] = [
   {
@@ -21,6 +23,30 @@ const steps: SmokeStep[] = [
       project: "open-brain",
       agent: "codex-smoke",
       topic: "Codex durable memory smoke flow",
+    },
+  },
+  {
+    name: "refresh lane context",
+    tool: "lane_upsert",
+    params: {
+      session_key: sessionKey,
+      project: "open-brain",
+      agent: "codex-smoke",
+      source: "scripts/codex-memory-smoke.ts",
+      topic: "Codex durable memory smoke flow",
+      current_context_md: [
+        "## Codex memory smoke",
+        "",
+        `- session_key: ${sessionKey}`,
+        `- branch: ${branch}`,
+        `- dirty_state: ${dirtyState}`,
+        "- raw transcripts: not stored",
+      ].join("\n"),
+      metadata: {
+        branch,
+        dirty_state: dirtyState,
+        smoke: true,
+      },
     },
   },
   {
@@ -44,7 +70,42 @@ const steps: SmokeStep[] = [
       content: "Codex smoke flow reached validation receipt step.",
       source: "scripts/codex-memory-smoke.ts",
       importance: "cold",
-      metadata: { smoke: true },
+      metadata: {
+        smoke: true,
+        receipt: {
+          schema: "openbrain.receipt.v1",
+          action: "codex_memory_smoke",
+          agent: "codex-smoke",
+          session_key: sessionKey,
+          timestamp: new Date().toISOString(),
+          sources: [
+            {
+              kind: "repo_path",
+              path: "scripts/codex-memory-smoke.ts",
+            },
+            {
+              kind: "repo_path",
+              path: "docs/memory-contract.md",
+            },
+          ],
+          outputs: [
+            {
+              kind: "session_event",
+              event_type: "receipt",
+            },
+          ],
+          validations: [
+            {
+              kind: "dry_run",
+              status: writeEnabled ? "skipped" : "passed",
+              summary: "Command JSON rendered without executing writes.",
+            },
+          ],
+          project: "open-brain",
+          branch,
+          dirty_state: dirtyState,
+        },
+      },
     },
   },
   {

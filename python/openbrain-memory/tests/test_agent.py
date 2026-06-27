@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -321,6 +322,7 @@ def test_agent_memory_convenience_helpers_route_to_wrapper_tools():
                 "session_key": "lane-1",
                 "status": "active",
                 "agent": "bilby",
+                "source": "bilby",
                 "project": "open-brain",
                 "current_context_md": "Current state.",
                 "metadata": {"run_id": "run-1"},
@@ -366,6 +368,209 @@ def test_agent_memory_convenience_helpers_route_to_wrapper_tools():
             },
         ),
     ]
+
+
+def test_record_receipt_routes_to_receipt_session_event():
+    client = FakeClient()
+    memory = AgentMemory(client, agent="bilby", project="open-brain")
+    memory.start_session("conversation")
+
+    memory.record_receipt(
+        "contract_update",
+        timestamp="2026-06-26T16:00:00.000Z",
+        sources=[
+            {
+                "kind": "repo_path",
+                "path": "docs/agent-memory-adapter-contract.md",
+            }
+        ],
+        outputs=[{"kind": "repo_path", "path": "python/openbrain-memory"}],
+        validations=[
+            {
+                "kind": "test",
+                "status": "passed",
+                "command": "uv run pytest python/openbrain-memory/tests/test_agent.py",
+            }
+        ],
+        residual_risk="Review still pending.",
+        branch="feat/memory-substrate-adapter-contract",
+    )
+
+    name, payload = client.calls[-1]
+    assert name == "append_session_event"
+    assert [name for name, _ in client.calls] == [
+        "session_start",
+        "append_session_event",
+    ]
+    assert payload["event_type"] == "receipt"
+    assert payload["content"] == "Receipt: contract_update"
+    assert payload["source"] == "bilby"
+    assert payload["session_key"] == "conversation"
+    assert payload["metadata"]["branch"] == "feat/memory-substrate-adapter-contract"
+    assert payload["metadata"]["idempotency_key"].startswith("obmem-")
+    assert payload["metadata"]["receipt"] == {
+        "schema": "openbrain.receipt.v1",
+        "action": "contract_update",
+        "agent": "bilby",
+        "session_key": "conversation",
+        "timestamp": "2026-06-26T16:00:00.000Z",
+        "sources": [
+            {
+                "kind": "repo_path",
+                "path": "docs/agent-memory-adapter-contract.md",
+            }
+        ],
+        "outputs": [{"kind": "repo_path", "path": "python/openbrain-memory"}],
+        "validations": [
+            {
+                "kind": "test",
+                "status": "passed",
+                "command": "uv run pytest python/openbrain-memory/tests/test_agent.py",
+            }
+        ],
+        "project": "open-brain",
+        "residual_risk": "Review still pending.",
+    }
+
+
+def test_wrapper_source_can_differ_from_agent_for_events_and_receipts():
+    client = FakeClient()
+    memory = AgentMemory(client, agent="bilby", source="hermes-discord")
+    memory.start_session("conversation")
+
+    memory.append_event("hermes-discord", "Here is the update.", event_type="action")
+    memory.record_receipt(
+        "runtime_memory_write",
+        sources=[{"kind": "repo_path", "path": "python/openbrain-memory"}],
+        outputs=[{"kind": "artifact", "path": "receipt.json"}],
+        validations=[{"kind": "manual", "status": "passed"}],
+    )
+    memory.update_lane("conversation", current_context_md="Hermes is active.")
+
+    event_payload = client.calls[1][1]
+    receipt_payload = client.calls[2][1]
+    lane_payload = client.calls[3][1]
+
+    assert event_payload["source"] == "hermes-discord"
+    assert receipt_payload["source"] == "hermes-discord"
+    assert receipt_payload["metadata"]["receipt"]["agent"] == "bilby"
+    assert lane_payload["agent"] == "bilby"
+    assert lane_payload["source"] == "hermes-discord"
+
+
+def test_record_receipt_validates_shape_and_reserved_metadata():
+    client = FakeClient()
+    memory = AgentMemory(client, agent="bilby")
+    memory.start_session("conversation")
+
+    with pytest.raises(ValueError, match="sources"):
+        memory.record_receipt(
+            "bad",
+            sources=["not a mapping"],
+            outputs=[],
+            validations=[],
+        )
+    with pytest.raises(ValueError, match="reserved keys: receipt"):
+        memory.record_receipt(
+            "bad",
+            sources=[],
+            outputs=[],
+            validations=[],
+            receipt={"schema": "spoofed"},
+        )
+    with pytest.raises(ValueError, match="reserved authority keys"):
+        memory.record_receipt(
+            "bad",
+            sources=[{"headers": {"Authorization": "Bearer x"}}],
+            outputs=[],
+            validations=[],
+        )
+    with pytest.raises(ValueError, match="reserved authority keys"):
+        memory.record_receipt(
+            "bad",
+            sources=[],
+            outputs=[{"namespace": "other"}],
+            validations=[],
+        )
+    with pytest.raises(ValueError, match="validations\\[0\\].kind"):
+        memory.record_receipt(
+            "bad",
+            sources=[],
+            outputs=[],
+            validations=[{"kind": "", "status": "passed"}],
+        )
+
+
+def test_record_receipt_rejects_secret_like_evidence_before_writes():
+    client = FakeClient()
+    memory = AgentMemory(client, agent="bilby")
+    memory.start_session("conversation")
+
+    cases = [
+        {
+            "sources": [{"kind": "env", "api_key": "redacted-test-key"}],
+            "outputs": [],
+            "validations": [],
+        },
+        {
+            "sources": [
+                {
+                    "kind": "command",
+                    "summary": "Authorization: Bearer abcdef123456",
+                }
+            ],
+            "outputs": [],
+            "validations": [],
+        },
+        {
+            "sources": [],
+            "outputs": [{"kind": "artifact", "summary": "api_key=redacted-test-key"}],
+            "validations": [],
+        },
+        {
+            "sources": [],
+            "outputs": [],
+            "validations": [
+                {
+                    "kind": "manual",
+                    "status": "passed",
+                    "summary": "api_key=abc123456789",
+                }
+            ],
+        },
+        {
+            "sources": [],
+            "outputs": [],
+            "validations": [],
+            "residual_risk": "Bearer abcdef123456",
+        },
+        {
+            "sources": [],
+            "outputs": [],
+            "validations": [],
+            "note": "password=redacted-test-password",
+        },
+    ]
+
+    for kwargs in cases:
+        with pytest.raises(ValueError, match="secret-like material"):
+            memory.record_receipt("bad", **kwargs)
+    assert [name for name, _ in client.calls] == ["session_start"]
+
+
+def test_metadata_bounds_are_rejected_before_tool_calls():
+    client = FakeClient()
+    memory = AgentMemory(client, agent="bilby")
+
+    too_many_keys = {f"key_{index}": index for index in range(51)}
+    with pytest.raises(ValueError, match="at most 50 keys"):
+        memory.start_session("conversation", **too_many_keys)
+    with pytest.raises(ValueError, match="at most 100 characters"):
+        memory.start_session("conversation", **{"x" * 101: True})
+
+    memory.start_session("conversation")
+    with pytest.raises(ValueError, match="at most 100000 bytes"):
+        memory.append_event("assistant", "event", payload="x" * 100001)
 
 
 def test_convenience_helpers_do_not_accept_payload_namespace():
@@ -436,6 +641,32 @@ def test_recall_can_exclude_fact_and_decision_classes():
     )
 
 
+def test_recall_can_include_session_context_and_answer():
+    client = FakeClient()
+    memory = AgentMemory(client, agent="bilby")
+    memory.start_session("conversation")
+
+    context = memory.recall("client facade", include_session=True, include_answer=True)
+
+    assert [name for name, _ in client.calls[-3:]] == [
+        "session_context",
+        "search_all",
+        "brain_answer",
+    ]
+    assert context.session == {
+        "tool": "session_context",
+        "arguments": {
+            "session_key": "conversation",
+            "include_events": True,
+            "event_limit": 8,
+        },
+    }
+    assert context.answer == {
+        "tool": "brain_answer",
+        "arguments": {"query": "client facade", "limit": 8},
+    }
+
+
 def test_checkpoint_and_wrap_use_session_tools():
     client = FakeClient()
     memory = AgentMemory(client, agent="bilby")
@@ -462,6 +693,205 @@ def test_checkpoint_and_wrap_use_session_tools():
             },
         ),
     ]
+
+
+def test_compact_reads_context_and_wraps_distilled_summary():
+    client = FakeClient()
+    memory = AgentMemory(
+        client,
+        agent="bilby",
+        project="open-brain",
+        policy=MemoryPolicy(max_items=3),
+    )
+    memory.start_session("conversation")
+
+    memory.compact(
+        "fallback summary",
+        key_decisions=["Use Python facade"],
+        next_steps=["Ship Hermes adapter"],
+        receipt_refs=["receipt-1"],
+        context_to_summary=lambda context: f"distilled {context['tool']}",
+    )
+
+    assert client.calls[-2:] == [
+        (
+            "session_context",
+            {
+                "session_key": "conversation",
+                "include_events": True,
+                "event_limit": 3,
+            },
+        ),
+        (
+            "session_wrap",
+            {
+                "key_decisions": ["Use Python facade"],
+                "next_steps": ["Ship Hermes adapter", "Receipt ref: receipt-1"],
+                "summary": "distilled session_context",
+                "project": "open-brain",
+                "session_key": "conversation",
+            },
+        ),
+    ]
+
+
+def test_wrap_receipt_refs_are_encoded_as_server_supported_next_steps():
+    client = FakeClient()
+    memory = AgentMemory(client, agent="bilby")
+    memory.start_session("conversation")
+
+    memory.wrap_session(
+        "Done.",
+        next_steps=["Open PR"],
+        receipt_refs=["receipt-1", "receipt-2"],
+    )
+
+    assert client.calls[-1] == (
+        "session_wrap",
+        {
+            "next_steps": [
+                "Open PR",
+                "Receipt ref: receipt-1",
+                "Receipt ref: receipt-2",
+            ],
+            "summary": "Done.",
+            "session_key": "conversation",
+        },
+    )
+
+    with pytest.raises(ValueError, match="at most 20"):
+        memory.wrap_session(
+            "Too much.",
+            next_steps=["step"],
+            receipt_refs=[f"receipt-{index}" for index in range(20)],
+        )
+
+    with pytest.raises(ValueError, match="key_decisions"):
+        memory.wrap_session("Bad decisions.", key_decisions="not-list")
+    with pytest.raises(ValueError, match="next_steps"):
+        memory.wrap_session("Bad steps.", next_steps=[{"bad": True}])
+
+
+def test_checkpoint_receipt_refs_share_wrap_schema_normalization():
+    client = FakeClient()
+    memory = AgentMemory(client, agent="bilby")
+    memory.start_session("conversation")
+
+    memory.checkpoint(
+        "Checkpoint.",
+        key_decisions=["Keep Python parity"],
+        receipt_refs=["receipt-1"],
+    )
+
+    assert client.calls[-1] == (
+        "session_wrap",
+        {
+            "key_decisions": ["Keep Python parity"],
+            "next_steps": ["Receipt ref: receipt-1"],
+            "summary": "Checkpoint.",
+            "session_key": "conversation",
+        },
+    )
+    assert "receipt_refs" not in client.calls[-1][1]
+
+    with pytest.raises(ValueError, match="at most 20"):
+        memory.checkpoint(
+            "Too much.",
+            next_steps=["step"],
+            receipt_refs=[f"receipt-{index}" for index in range(20)],
+        )
+
+
+def test_export_disclosure_bundle_matches_ts_feature_shape():
+    client = FakeClient()
+    memory = AgentMemory(client, agent="bilby", project="open-brain")
+    memory.start_session("conversation")
+
+    bundle = memory.export_disclosure_bundle(
+        lane={"topic": "Hermes memory", "metadata": {"okf": {"mode": "edge"}}},
+        events=[
+            {
+                "id": "event-2",
+                "type": "decision",
+                "content": "Use Open Brain memory.",
+                "timestamp": "2026-06-26T12:01:00Z",
+                "sourceRef": "issue-210",
+            },
+            {
+                "id": "event-1",
+                "type": "fact",
+                "content": "Hermes uses Python.",
+                "timestamp": "2026-06-26T12:00:00Z",
+                "artifactPath": "python/openbrain-memory/src/openbrain_memory/agent.py",
+            },
+        ],
+        repo_facts=[
+            {
+                "id": "fact-a",
+                "subject": "AgentMemory",
+                "fact": "Python facade exports bundles.",
+                "path": "python/openbrain-memory/src/openbrain_memory/agent.py",
+            },
+            {
+                "id": "fact-a",
+                "subject": "AgentMemory",
+                "fact": "Duplicate ids still get unique concept paths.",
+            },
+        ],
+        receipts=[
+            {
+                "id": "receipt-1",
+                "action": "validation",
+                "timestamp": "2026-06-26T12:02:00Z",
+                "sources": [{"kind": "repo_path", "path": "agent.py"}],
+                "outputs": [],
+                "validations": [{"kind": "pytest", "status": "passed"}],
+            }
+        ],
+    )
+
+    assert bundle["profile"] == "okf-like"
+    files = {file["path"]: file["content"] for file in bundle["files"]}
+    assert list(files) == [
+        "index.md",
+        "log.md",
+        "concepts/agentmemory.md",
+        "concepts/agentmemory-fact-a.md",
+        "citations.md",
+        "receipts.md",
+    ]
+    assert "session_key: \"conversation\"" in files["index.md"]
+    assert "agent: \"bilby\"" in files["index.md"]
+    assert "project: \"open-brain\"" in files["index.md"]
+    assert "okf: {\"mode\":\"edge\"}" in files["index.md"]
+    assert files["log.md"].find("Hermes uses Python.") < files["log.md"].find(
+        "Use Open Brain memory."
+    )
+    assert "- Source ref: issue-210" in files["log.md"]
+    assert "fact:fact-a:path" in files["citations.md"]
+    assert "receipt:receipt-1" in files["citations.md"]
+    assert '"status":"passed"' in files["receipts.md"]
+
+
+def test_export_disclosure_bundle_matches_shared_golden_fixture():
+    fixture_path = (
+        Path(__file__).resolve().parents[3]
+        / "tests"
+        / "fixtures"
+        / "agent-memory-disclosure-golden.json"
+    )
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    client = FakeClient()
+    memory = AgentMemory(
+        client,
+        agent=fixture["adapter"]["agent"],
+        project=fixture["adapter"]["project"],
+    )
+    memory.start_session(fixture["adapter"]["sessionKey"])
+
+    fixture_input = dict(fixture["input"])
+    fixture_input["repo_facts"] = fixture_input.pop("repoFacts")
+    assert memory.export_disclosure_bundle(**fixture_input) == fixture["expected"]
 
 
 def test_public_facade_exports_quickstart_types():
@@ -574,6 +1004,10 @@ def test_session_methods_require_started_session():
         memory.checkpoint("summary")
     with pytest.raises(RuntimeError, match="start_session"):
         memory.wrap_session("summary")
+    with pytest.raises(RuntimeError, match="start_session"):
+        memory.compact("summary")
+    with pytest.raises(RuntimeError, match="start_session"):
+        memory.export_disclosure_bundle()
 
 
 def test_policy_and_limit_bounds_are_validated():

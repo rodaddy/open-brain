@@ -59,6 +59,7 @@ export interface EvalProbe {
   min_recall_at_k?: number;
   min_precision_at_k?: number;
   max_latency_ms?: number;
+  required_source_ref_ids?: string[];
 }
 
 export interface EvalFixture {
