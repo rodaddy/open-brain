@@ -10,6 +10,26 @@ BUN_BIN="${BUN_BIN:-}"
 STAGING_DIR="${STAGING_DIR:-${RUNTIME_DIR}.next}"
 PREVIOUS_DIR="${PREVIOUS_DIR:-${RUNTIME_DIR}.previous}"
 
+cleanup_previous_dir() {
+  local phase="$1"
+
+  if [[ ! -e "$PREVIOUS_DIR" ]]; then
+    return 0
+  fi
+
+  if rm -rf "$PREVIOUS_DIR"; then
+    return 0
+  fi
+
+  if [[ "$phase" == "post-health" ]]; then
+    echo "WARN: deployed successfully but could not remove rollback dir: $PREVIOUS_DIR" >&2
+    return 0
+  fi
+
+  echo "FATAL: could not remove stale rollback dir before deploy: $PREVIOUS_DIR" >&2
+  return 1
+}
+
 if [[ -z "$BUN_BIN" ]]; then
   if [[ -x "/Users/rico/Library/Application Support/reflex/bun/bin/bun" ]]; then
     BUN_BIN="/Users/rico/Library/Application Support/reflex/bun/bin/bun"
@@ -37,6 +57,7 @@ source "$ENV_FILE"
 set +a
 
 rm -rf "$STAGING_DIR"
+cleanup_previous_dir pre-deploy
 mkdir -p "$STAGING_DIR"
 
 tar \
@@ -69,7 +90,6 @@ fi
 cd "$STAGING_DIR"
 "$BUN_BIN" run migrate
 
-rm -rf "$PREVIOUS_DIR"
 if [[ -d "$RUNTIME_DIR" ]]; then
   mv "$RUNTIME_DIR" "$PREVIOUS_DIR"
 fi
@@ -81,7 +101,7 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
   if curl -fsS --max-time 5 http://127.0.0.1:3100/health >/dev/null 2>&1; then
     echo "Open Brain health check passed"
     "$BUN_BIN" test src/tools/__tests__/search-all.test.ts
-    rm -rf "$PREVIOUS_DIR"
+    cleanup_previous_dir post-health
     exit 0
   fi
   sleep 2
