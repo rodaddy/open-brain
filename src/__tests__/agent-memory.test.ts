@@ -188,6 +188,7 @@ describe("AgentMemory TypeScript wrapper", () => {
     });
 
     expect(transport.calls[1]!.name).toBe("append_session_event");
+    expect(transport.calls).toHaveLength(2);
     expect(transport.calls[1]!.args).toMatchObject({
       session_key: "open-brain/run",
       event_type: "receipt",

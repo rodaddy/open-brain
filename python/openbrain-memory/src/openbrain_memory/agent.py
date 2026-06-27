@@ -431,7 +431,15 @@ class AgentMemory:
                 residual_risk,
                 "residual_risk",
             )
-        _reject_receipt_secrets(receipt, metadata)
+        _reject_receipt_secrets(
+            {
+                "sources": receipt["sources"],
+                "outputs": receipt["outputs"],
+                "validations": receipt["validations"],
+                "residual_risk": receipt.get("residual_risk"),
+                "metadata": metadata,
+            }
+        )
 
         return self.append_event(
             self.agent,
@@ -922,12 +930,8 @@ def _session_wrap_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
     return payload
 
 
-def _reject_receipt_secrets(
-    receipt: Mapping[str, Any],
-    metadata: Mapping[str, Any],
-) -> None:
-    _reject_secret_payload(receipt, "receipt")
-    _reject_secret_payload(metadata, "metadata")
+def _reject_receipt_secrets(value: Mapping[str, Any]) -> None:
+    _reject_secret_payload(value, "receipt")
 
 
 def _reject_secret_payload(value: Any, path: str) -> None:

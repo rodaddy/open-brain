@@ -344,7 +344,13 @@ export class AgentMemory {
     };
     setOptional(receipt, "project", this.project);
     setOptional(receipt, "residual_risk", options.residualRisk);
-    rejectReceiptSecrets(receipt, metadata);
+    rejectReceiptSecrets({
+      sources: receipt.sources,
+      outputs: receipt.outputs,
+      validations: receipt.validations,
+      residualRisk: receipt.residual_risk,
+      metadata,
+    });
     return this.appendEvent({
       eventType: "receipt",
       content: `Receipt: ${options.action}`,
@@ -474,9 +480,8 @@ function validationList(values: ReceiptValidation[]): JsonObject[] {
 const RECEIPT_SECRET_KEYS =
   /(api[_-]?key|token|password|secret|credential|authorization|session[_-]?id)/i;
 
-function rejectReceiptSecrets(receipt: JsonObject, metadata: JsonObject): void {
-  rejectSecretPayload(receipt, "receipt");
-  rejectSecretPayload(metadata, "metadata");
+function rejectReceiptSecrets(value: JsonObject): void {
+  rejectSecretPayload(value, "receipt");
 }
 
 function rejectSecretPayload(value: unknown, path: string): void {

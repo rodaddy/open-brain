@@ -397,6 +397,10 @@ def test_record_receipt_routes_to_receipt_session_event():
 
     name, payload = client.calls[-1]
     assert name == "append_session_event"
+    assert [name for name, _ in client.calls] == [
+        "session_start",
+        "append_session_event",
+    ]
     assert payload["event_type"] == "receipt"
     assert payload["content"] == "Receipt: contract_update"
     assert payload["source"] == "bilby"
