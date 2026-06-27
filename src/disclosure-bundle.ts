@@ -65,14 +65,15 @@ export function exportDisclosureBundle(input: DisclosureBundleInput): Disclosure
   const facts = [...(input.repoFacts ?? [])].sort((a, b) => a.id.localeCompare(b.id));
   const receipts = [...(input.receipts ?? [])].sort(byTimestampThenId);
   const citations = collectCitations(events, facts, receipts);
+  const factPaths = conceptPaths(facts);
 
   return {
     profile: "okf-like",
     files: [
-      { path: "index.md", content: renderIndex(input, events, facts, receipts, citations) },
+      { path: "index.md", content: renderIndex(input, events, facts, receipts, citations, factPaths) },
       { path: "log.md", content: renderLog(events) },
-      ...facts.map((fact) => ({
-        path: `concepts/${slug(fact.subject || fact.id)}.md`,
+      ...facts.map((fact, index) => ({
+        path: factPaths[index] ?? conceptPath(fact),
         content: renderConcept(fact),
       })),
       { path: "citations.md", content: renderCitations(citations) },
@@ -95,6 +96,7 @@ function renderIndex(
   facts: DisclosureRepoFact[],
   receipts: DisclosureReceipt[],
   citations: DisclosureCitation[],
+  factPaths: string[],
 ): string {
   const title = input.lane.topic ?? input.lane.sessionKey;
   return [
@@ -121,11 +123,32 @@ function renderIndex(
     "- [log.md](log.md)",
     "- [citations.md](citations.md)",
     "- [receipts.md](receipts.md)",
-    ...facts.map((fact) => `- [${fact.subject}](concepts/${slug(fact.subject || fact.id)}.md)`),
+    ...facts.map((fact, index) => `- [${fact.subject}](${factPaths[index] ?? conceptPath(fact)})`),
     "",
   ]
     .filter((line): line is string => line !== undefined)
     .join("\n");
+}
+
+function conceptPaths(facts: DisclosureRepoFact[]): string[] {
+  const paths: string[] = [];
+  const seen = new Set<string>();
+  facts.forEach((fact, index) => {
+    let path = conceptPath(fact);
+    if (seen.has(path)) {
+      path = `concepts/${slug(fact.subject || "concept")}-${slug(fact.id)}.md`;
+    }
+    while (seen.has(path)) {
+      path = `concepts/${slug(fact.subject || "concept")}-${slug(fact.id || "fact")}-${index}.md`;
+    }
+    seen.add(path);
+    paths.push(path);
+  });
+  return paths;
+}
+
+function conceptPath(fact: DisclosureRepoFact): string {
+  return `concepts/${slug(fact.subject || fact.id)}.md`;
 }
 
 function renderLog(events: DisclosureEvent[]): string {

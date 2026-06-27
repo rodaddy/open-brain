@@ -450,10 +450,23 @@ def test_record_receipt_validates_shape_and_reserved_metadata():
     with pytest.raises(ValueError, match="reserved authority keys"):
         memory.record_receipt(
             "bad",
-            sources=[],
+            sources=[{"headers": {"Authorization": "Bearer x"}}],
             outputs=[],
             validations=[],
-            context={"headers": {"Authorization": "Bearer x"}},
+        )
+    with pytest.raises(ValueError, match="reserved authority keys"):
+        memory.record_receipt(
+            "bad",
+            sources=[],
+            outputs=[{"namespace": "other"}],
+            validations=[],
+        )
+    with pytest.raises(ValueError, match="validations\\[0\\].kind"):
+        memory.record_receipt(
+            "bad",
+            sources=[],
+            outputs=[],
+            validations=[{"kind": "", "status": "passed"}],
         )
 
 

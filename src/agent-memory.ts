@@ -70,6 +70,7 @@ export interface CompactOptions {
   keyDecisions?: string[];
   nextSteps?: string[];
   receiptRefs?: string[];
+  contextToSummary?: (context: unknown) => string;
 }
 
 export interface WrapOptions extends CompactOptions {}
@@ -102,7 +103,6 @@ export type RepoFactType =
   | "workflow";
 
 export interface ListRepoFactsOptions {
-  namespace?: string;
   repo?: string;
   collection?: string;
   path?: string;
@@ -113,7 +113,6 @@ export interface ListRepoFactsOptions {
 }
 
 export interface UpsertRepoFactOptions {
-  namespace?: string;
   metadata: JsonObject;
   validation: JsonObject;
 }
@@ -194,14 +193,25 @@ export class AgentMemory {
       agent: this.agent,
     };
     setOptional(payload, "project", this.project);
-    setOptional(payload, "source", this.source);
     setOptional(payload, "topic", options.topic);
     setOptional(payload, "channel_id", options.channelId);
     setOptional(payload, "thread_id", options.threadId);
-    if (Object.keys(metadata).length > 0) payload.metadata = metadata;
 
     const result = await this.transport.callTool("session_start", payload);
     this.sessionKey = options.sessionKey;
+    if (this.source !== this.agent || Object.keys(metadata).length > 0) {
+      const lanePayload: JsonObject = {
+        session_key: options.sessionKey,
+        agent: this.agent,
+        source: this.source,
+      };
+      setOptional(lanePayload, "project", this.project);
+      setOptional(lanePayload, "topic", options.topic);
+      setOptional(lanePayload, "channel_id", options.channelId);
+      setOptional(lanePayload, "thread_id", options.threadId);
+      if (Object.keys(metadata).length > 0) lanePayload.metadata = metadata;
+      await this.transport.callTool("lane_upsert", lanePayload);
+    }
     return result;
   }
 
@@ -276,12 +286,14 @@ export class AgentMemory {
 
   async compact(options: CompactOptions): Promise<unknown> {
     this.requireSession("compact");
-    await this.transport.callTool("session_context", {
+    const context = await this.transport.callTool("session_context", {
       session_key: this.sessionKey,
       include_events: true,
       event_limit: this.defaultLimit,
     });
-    return this.wrap(options);
+    const summary =
+      options.contextToSummary?.(context) ?? requiredString(options.summary, "summary");
+    return this.wrap({ ...options, summary });
   }
 
   async wrap(options: WrapOptions): Promise<unknown> {
@@ -298,7 +310,15 @@ export class AgentMemory {
       payload.next_steps = stringList(options.nextSteps, "nextSteps");
     }
     if (options.receiptRefs !== undefined) {
-      payload.metadata = { receipt_refs: stringList(options.receiptRefs, "receiptRefs") };
+      const receiptRefs = stringList(options.receiptRefs, "receiptRefs");
+      const nextSteps = [
+        ...((payload.next_steps as string[] | undefined) ?? []),
+        ...receiptRefs.map((receiptRef) => `Receipt ref: ${receiptRef}`),
+      ];
+      if (nextSteps.length > 20) {
+        throw new Error("nextSteps plus receiptRefs must contain at most 20 items");
+      }
+      payload.next_steps = nextSteps;
     }
     return this.transport.callTool("session_wrap", payload);
   }
@@ -355,7 +375,6 @@ export class AgentMemory {
 
   async listRepoFacts(options: ListRepoFactsOptions = {}): Promise<unknown> {
     const payload: JsonObject = {};
-    setOptional(payload, "namespace", options.namespace);
     setOptional(payload, "repo", options.repo);
     setOptional(payload, "collection", options.collection);
     setOptional(payload, "path", options.path);
@@ -377,7 +396,6 @@ export class AgentMemory {
       metadata: safeMetadata(options.metadata),
       validation: safeMetadata(options.validation),
     };
-    setOptional(payload, "namespace", options.namespace);
     return this.transport.callTool("upsert_repo_fact", payload);
   }
 

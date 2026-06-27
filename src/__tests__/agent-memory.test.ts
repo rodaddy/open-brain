@@ -13,7 +13,7 @@ class FakeTransport {
 }
 
 describe("AgentMemory TypeScript wrapper", () => {
-  it("starts a lane with contract-shaped session_start arguments", async () => {
+  it("starts a lane with contract-shaped session_start and lane_upsert arguments", async () => {
     const transport = new FakeTransport();
     const memory = new AgentMemory(transport, {
       agent: "codex",
@@ -36,7 +36,18 @@ describe("AgentMemory TypeScript wrapper", () => {
           session_key: "open-brain/run",
           agent: "codex",
           project: "open-brain",
+          topic: "memory substrate",
+          channel_id: "chan-1",
+          thread_id: "thread-1",
+        },
+      },
+      {
+        name: "lane_upsert",
+        args: {
+          session_key: "open-brain/run",
+          agent: "codex",
           source: "codex-local",
+          project: "open-brain",
           topic: "memory substrate",
           channel_id: "chan-1",
           thread_id: "thread-1",
@@ -94,7 +105,7 @@ describe("AgentMemory TypeScript wrapper", () => {
       metadata: { color: "blue" },
     });
 
-    expect(transport.calls[1]).toEqual({
+    expect(transport.calls[2]).toEqual({
       name: "lane_upsert",
       args: {
         session_key: "open-brain/run",
@@ -324,6 +335,15 @@ describe("AgentMemory TypeScript wrapper", () => {
         session_key: "hermes/discord/chan-1/thread-1",
         agent: "bilby",
         project: "open-brain",
+        channel_id: "chan-1",
+        thread_id: "thread-1",
+      },
+    });
+    expect(transport.calls[1]).toMatchObject({
+      name: "lane_upsert",
+      args: {
+        session_key: "hermes/discord/chan-1/thread-1",
+        agent: "bilby",
         source: "hermes-discord",
         channel_id: "chan-1",
         thread_id: "thread-1",
@@ -334,19 +354,7 @@ describe("AgentMemory TypeScript wrapper", () => {
         },
       },
     });
-    expect(transport.calls[1]).toMatchObject({
-      name: "lane_upsert",
-      args: {
-        session_key: "hermes/discord/chan-1/thread-1",
-        agent: "bilby",
-        source: "hermes-discord",
-        metadata: {
-          platform: "discord",
-          agent_profile: "bilby-default",
-        },
-      },
-    });
-    expect(transport.calls[2]).toMatchObject({
+    expect(transport.calls[3]).toMatchObject({
       name: "append_session_event",
       args: {
         event_type: "receipt",
@@ -370,7 +378,7 @@ describe("AgentMemory TypeScript wrapper", () => {
     });
   });
 
-  it("compacts by reading context before writing a session wrap", async () => {
+  it("compacts by reading context and distilling it before writing a session wrap", async () => {
     const transport = new FakeTransport();
     const memory = new AgentMemory(transport, {
       agent: "codex",
@@ -380,6 +388,8 @@ describe("AgentMemory TypeScript wrapper", () => {
 
     await memory.compact({
       summary: "Phase A contract complete.",
+      contextToSummary: (context) =>
+        `Distilled: ${(context as { tool: string }).tool}`,
       keyDecisions: ["Keep auth authority server-side."],
       nextSteps: ["Implement TS wrapper tests."],
       receiptRefs: ["https://github.com/rodaddy/open-brain/issues/207#receipt"],
@@ -392,13 +402,13 @@ describe("AgentMemory TypeScript wrapper", () => {
     ]);
     expect(transport.calls[2]!.args).toEqual({
       session_key: "open-brain/run",
-      summary: "Phase A contract complete.",
+      summary: "Distilled: session_context",
       project: "open-brain",
       key_decisions: ["Keep auth authority server-side."],
-      next_steps: ["Implement TS wrapper tests."],
-      metadata: {
-        receipt_refs: ["https://github.com/rodaddy/open-brain/issues/207#receipt"],
-      },
+      next_steps: [
+        "Implement TS wrapper tests.",
+        "Receipt ref: https://github.com/rodaddy/open-brain/issues/207#receipt",
+      ],
     });
   });
 
@@ -537,6 +547,54 @@ describe("AgentMemory TypeScript wrapper", () => {
       expect(file.content).toContain("type:");
       expect(file.content).not.toContain("kind:");
     }
+  });
+
+  it("makes disclosure concept paths stable and collision-resistant", async () => {
+    const memory = new AgentMemory(new FakeTransport(), { agent: "codex" });
+    await memory.start({ sessionKey: "session-disclosure" });
+
+    const bundle = memory.exportDisclosureBundle({
+      events: [],
+      repoFacts: [
+        {
+          id: "fact-a",
+          subject: "Duplicate Subject",
+          fact: "First fact.",
+        },
+        {
+          id: "fact-b",
+          subject: "Duplicate Subject",
+          fact: "Second fact.",
+        },
+        {
+          id: "fact-b",
+          subject: "Duplicate Subject",
+          fact: "Third fact with duplicate id.",
+        },
+      ],
+      receipts: [],
+    });
+
+    const paths = bundle.files.map((file) => file.path);
+    expect(paths).toContain("concepts/duplicate-subject.md");
+    expect(paths).toContain("concepts/duplicate-subject-fact-b.md");
+    expect(new Set(paths).size).toBe(paths.length);
+    expect(bundle.files.find((file) => file.path === "index.md")!.content).toContain(
+      "concepts/duplicate-subject-fact-b.md",
+    );
+  });
+
+  it("rejects wraps that would exceed the server next_steps cap", async () => {
+    const memory = new AgentMemory(new FakeTransport(), { agent: "codex" });
+    await memory.start({ sessionKey: "open-brain/run" });
+
+    await expect(
+      memory.wrap({
+        summary: "Too many refs.",
+        nextSteps: Array.from({ length: 15 }, (_, index) => `step-${index}`),
+        receiptRefs: Array.from({ length: 6 }, (_, index) => `receipt-${index}`),
+      }),
+    ).rejects.toThrow("nextSteps plus receiptRefs must contain at most 20 items");
   });
 
   it("keeps disclosure bundle identity bound to the active lane", async () => {

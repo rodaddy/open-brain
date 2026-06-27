@@ -395,7 +395,7 @@ class AgentMemory:
             "timestamp": timestamp if timestamp is not None else _utc_now(),
             "sources": _mapping_list(sources, "sources"),
             "outputs": _mapping_list(outputs, "outputs"),
-            "validations": _mapping_list(validations, "validations"),
+            "validations": _validation_list(validations),
         }
         if self.project is not None:
             receipt["project"] = self.project
@@ -764,7 +764,49 @@ def _mapping_list(value: Any, name: str) -> list[dict[str, Any]]:
         isinstance(item, Mapping) for item in value
     ):
         raise ValueError(f"{name} must be a list of mappings")
-    return [dict(item) for item in value]
+    result: list[dict[str, Any]] = []
+    for index, item in enumerate(value):
+        copied = dict(item)
+        _reject_nested_authority_keys(copied, f"{name}[{index}]", 0)
+        try:
+            encoded = json.dumps(copied, separators=(",", ":")).encode("utf-8")
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"{name}[{index}] must be JSON serializable") from error
+        if len(encoded) > _MAX_METADATA_JSON_BYTES:
+            raise ValueError(
+                f"{name}[{index}] JSON must be at most {_MAX_METADATA_JSON_BYTES} bytes"
+            )
+        result.append(copied)
+    return result
+
+
+def _reject_nested_authority_keys(value: Any, path: str, depth: int) -> None:
+    if depth > _MAX_METADATA_DEPTH:
+        raise ValueError(
+            f"{path} exceeds maximum nesting depth ({_MAX_METADATA_DEPTH})"
+        )
+    if isinstance(value, Mapping):
+        collisions = {
+            str(key)
+            for key in value
+            if _authority_key(str(key)) in NESTED_AUTHORITY_KEYS
+        }
+        if collisions:
+            names = ", ".join(sorted(collisions))
+            raise ValueError(f"{path} contains reserved authority keys: {names}")
+        for key, item in value.items():
+            _reject_nested_authority_keys(item, f"{path}.{key}", depth + 1)
+    elif isinstance(value, list | tuple):
+        for index, item in enumerate(value):
+            _reject_nested_authority_keys(item, f"{path}[{index}]", depth + 1)
+
+
+def _validation_list(value: Any) -> list[dict[str, Any]]:
+    validations = _mapping_list(value, "validations")
+    for index, validation in enumerate(validations):
+        _required_str(validation.get("kind"), f"validations[{index}].kind")
+        _required_str(validation.get("status"), f"validations[{index}].status")
+    return validations
 
 
 def _enum_value(value: Any, name: str, allowed: set[str]) -> str:
