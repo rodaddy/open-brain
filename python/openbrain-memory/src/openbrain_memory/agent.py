@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+import re
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol, cast
@@ -52,7 +53,7 @@ _MAX_METADATA_KEY_LENGTH = 100
 _MAX_METADATA_JSON_BYTES = 100_000
 _MAX_METADATA_DEPTH = 16
 SESSION_START_KEYS = {"channel_id", "thread_id", "topic"}
-SESSION_WRAP_KEYS = {"key_decisions", "next_steps"}
+SESSION_WRAP_KEYS = {"key_decisions", "next_steps", "receipt_refs"}
 DECISION_KEYS = {"alternatives", "tags", "context"}
 THOUGHT_KEYS = {"tags"}
 LANE_STATUSES = {"active", "wrapped", "archived"}
@@ -498,6 +499,33 @@ class AgentMemory:
             key=key,
         )
 
+    def compact(
+        self,
+        summary: str,
+        *,
+        key_decisions: list[str] | None = None,
+        next_steps: list[str] | None = None,
+        receipt_refs: list[str] | None = None,
+        context_to_summary: Callable[[JSON], str] | None = None,
+    ) -> JSON:
+        self._require_session("compact")
+        context = self.client.session_context(
+            session_key=self.conversation_key,
+            include_events=True,
+            event_limit=self.policy.max_items,
+        )
+        distilled_summary = (
+            context_to_summary(context)
+            if context_to_summary is not None
+            else _required_str(summary, "summary")
+        )
+        return self.wrap_session(
+            distilled_summary,
+            key_decisions=key_decisions,
+            next_steps=next_steps,
+            receipt_refs=receipt_refs,
+        )
+
     def wrap_session(self, summary: str | None = None, **metadata: Any) -> JSON:
         self._require_session("wrap_session")
         if not summary:
@@ -505,6 +533,25 @@ class AgentMemory:
         self._reject_reserved_metadata(metadata)
         self._reject_unknown_metadata(metadata, SESSION_WRAP_KEYS)
         payload = dict(metadata)
+        receipt_refs = payload.pop("receipt_refs", None)
+        if receipt_refs is not None:
+            next_steps = payload.get("next_steps", [])
+            if next_steps is None:
+                next_steps = []
+            next_steps = _str_list(next_steps, "next_steps")
+            receipt_next_steps = [
+                f"Receipt ref: {item}"
+                for item in _str_list(receipt_refs, "receipt_refs")
+            ]
+            next_steps = [
+                *next_steps,
+                *receipt_next_steps,
+            ]
+            if len(next_steps) > 20:
+                raise ValueError(
+                    "next_steps plus receipt_refs must contain at most 20 items"
+                )
+            payload["next_steps"] = next_steps
         payload["summary"] = summary
         key = idempotency_key()
         return self._call_write(
@@ -512,6 +559,30 @@ class AgentMemory:
             self._session_payload(payload),
             self.client.session_wrap,
             key=key,
+        )
+
+    def export_disclosure_bundle(
+        self,
+        *,
+        events: list[Mapping[str, Any]] | None = None,
+        repo_facts: list[Mapping[str, Any]] | None = None,
+        receipts: list[Mapping[str, Any]] | None = None,
+        lane: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        self._require_session("export_disclosure_bundle")
+        lane_payload: dict[str, Any] = dict(lane or {})
+        lane_payload["sessionKey"] = self.conversation_key
+        lane_payload["agent"] = self.agent
+        if self.project is not None:
+            lane_payload["project"] = self.project
+        event_payloads = [dict(item) for item in events or []]
+        fact_payloads = [dict(item) for item in repo_facts or []]
+        receipt_payloads = [dict(item) for item in receipts or []]
+        return _export_disclosure_bundle(
+            lane=lane_payload,
+            events=event_payloads,
+            repo_facts=fact_payloads,
+            receipts=receipt_payloads,
         )
 
     def _session_payload(self, metadata: Mapping[str, Any]) -> dict[str, Any]:
@@ -845,6 +916,327 @@ def _bounded_metadata(result: Mapping[str, Any]) -> dict[str, Any]:
 
 def _authority_key(key: str) -> str:
     return key.lower().replace("_", "-")
+
+
+def _export_disclosure_bundle(
+    *,
+    lane: Mapping[str, Any],
+    events: list[dict[str, Any]],
+    repo_facts: list[dict[str, Any]],
+    receipts: list[dict[str, Any]],
+) -> dict[str, Any]:
+    sorted_events = sorted(events, key=lambda item: (item["timestamp"], item["id"]))
+    sorted_facts = sorted(repo_facts, key=lambda item: item["id"])
+    sorted_receipts = sorted(
+        receipts,
+        key=lambda item: (item["timestamp"], item["id"]),
+    )
+    citations = _collect_disclosure_citations(
+        sorted_events,
+        sorted_facts,
+        sorted_receipts,
+    )
+    fact_paths = _concept_paths(sorted_facts)
+    files = [
+        {
+            "path": "index.md",
+            "content": _render_disclosure_index(
+                lane,
+                sorted_events,
+                sorted_facts,
+                sorted_receipts,
+                citations,
+                fact_paths,
+            ),
+        },
+        {"path": "log.md", "content": _render_disclosure_log(sorted_events)},
+    ]
+    files.extend(
+        {
+            "path": fact_paths[index],
+            "content": _render_disclosure_concept(fact),
+        }
+        for index, fact in enumerate(sorted_facts)
+    )
+    files.extend(
+        [
+            {
+                "path": "citations.md",
+                "content": _render_disclosure_citations(citations),
+            },
+            {
+                "path": "receipts.md",
+                "content": _render_disclosure_receipts(sorted_receipts),
+            },
+        ]
+    )
+    return {"profile": "okf-like", "files": files}
+
+
+def _render_disclosure_index(
+    lane: Mapping[str, Any],
+    events: list[dict[str, Any]],
+    facts: list[dict[str, Any]],
+    receipts: list[dict[str, Any]],
+    citations: list[dict[str, Any]],
+    fact_paths: list[str],
+) -> str:
+    title = lane.get("topic") or lane["sessionKey"]
+    lines = [
+        _frontmatter(
+            {
+                "profile": "okf-like",
+                "type": "index",
+                "session_key": lane["sessionKey"],
+                "agent": lane.get("agent"),
+                "project": lane.get("project"),
+                "okf": _okf_metadata(lane.get("metadata")),
+            }
+        ),
+        f"# {title}",
+        "",
+        f"- Session: {lane['sessionKey']}",
+    ]
+    if lane.get("agent"):
+        lines.append(f"- Agent: {lane['agent']}")
+    if lane.get("project"):
+        lines.append(f"- Project: {lane['project']}")
+    lines.extend(
+        [
+            f"- Events: {len(events)}",
+            f"- Concepts: {len(facts)}",
+            f"- Receipts: {len(receipts)}",
+            f"- Citations: {len(citations)}",
+            "",
+            "## Files",
+            "",
+            "- [log.md](log.md)",
+            "- [citations.md](citations.md)",
+            "- [receipts.md](receipts.md)",
+        ]
+    )
+    lines.extend(
+        f"- [{fact['subject']}]({fact_paths[index]})"
+        for index, fact in enumerate(facts)
+    )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _render_disclosure_log(events: list[dict[str, Any]]) -> str:
+    lines = [_frontmatter({"profile": "okf-like", "type": "log"}), "# Log", ""]
+    for event in events:
+        lines.extend(
+            [
+                f"## {event['timestamp']} {event['type']}",
+                "",
+                event["content"],
+                "",
+            ]
+        )
+        lines.extend(_event_citation_lines(event))
+    return "\n".join(lines)
+
+
+def _render_disclosure_concept(fact: Mapping[str, Any]) -> str:
+    return "\n".join(
+        [
+            _frontmatter(
+                {
+                    "profile": "okf-like",
+                    "type": "concept",
+                    "id": fact["id"],
+                    "okf": _okf_metadata(fact.get("metadata")),
+                }
+            ),
+            f"# {fact['subject']}",
+            "",
+            fact["fact"],
+            "",
+            "## Citations",
+            "",
+            *_fact_citation_lines(fact),
+            "",
+        ]
+    )
+
+
+def _render_disclosure_citations(citations: list[dict[str, Any]]) -> str:
+    return "\n".join(
+        [
+            _frontmatter({"profile": "okf-like", "type": "citations"}),
+            "# Citations",
+            "",
+            *[
+                f"- {citation['id']}: {_citation_label(citation)}"
+                for citation in citations
+            ],
+            "",
+        ]
+    )
+
+
+def _render_disclosure_receipts(receipts: list[dict[str, Any]]) -> str:
+    lines = [
+        _frontmatter({"profile": "okf-like", "type": "receipts"}),
+        "# Receipts",
+        "",
+    ]
+    for receipt in receipts:
+        lines.extend(
+            [
+                f"## {receipt['action']}",
+                "",
+                f"- ID: {receipt['id']}",
+                f"- Timestamp: {receipt['timestamp']}",
+                f"- Sources: {_stable_json(receipt.get('sources', []))}",
+                f"- Outputs: {_stable_json(receipt.get('outputs', []))}",
+                f"- Validations: {_stable_json(receipt.get('validations', []))}",
+                "",
+            ]
+        )
+    return "\n".join(lines)
+
+
+def _collect_disclosure_citations(
+    events: list[dict[str, Any]],
+    facts: list[dict[str, Any]],
+    receipts: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    citations: dict[str, dict[str, Any]] = {}
+    for event in events:
+        if event.get("sourceRef"):
+            citations[f"event:{event['id']}:source"] = {
+                "id": f"event:{event['id']}:source",
+                "label": "source_ref",
+                "sourceRef": event["sourceRef"],
+            }
+        if event.get("artifactPath"):
+            citations[f"event:{event['id']}:artifact"] = {
+                "id": f"event:{event['id']}:artifact",
+                "label": "artifact_path",
+                "path": event["artifactPath"],
+            }
+        for citation in event.get("citations", []):
+            citations[citation["id"]] = dict(citation)
+    for fact in facts:
+        if fact.get("sourceUrl"):
+            citations[f"fact:{fact['id']}:source_url"] = {
+                "id": f"fact:{fact['id']}:source_url",
+                "label": fact["subject"],
+                "url": fact["sourceUrl"],
+            }
+        if fact.get("path"):
+            citations[f"fact:{fact['id']}:path"] = {
+                "id": f"fact:{fact['id']}:path",
+                "label": fact["subject"],
+                "path": fact["path"],
+            }
+        for citation in fact.get("citations", []):
+            citations[citation["id"]] = dict(citation)
+    for receipt in receipts:
+        citations[f"receipt:{receipt['id']}"] = {
+            "id": f"receipt:{receipt['id']}",
+            "label": receipt["action"],
+            "sourceRef": receipt["id"],
+        }
+    return [citations[key] for key in sorted(citations)]
+
+
+def _concept_paths(facts: list[dict[str, Any]]) -> list[str]:
+    paths: list[str] = []
+    seen: set[str] = set()
+    for index, fact in enumerate(facts):
+        path = _concept_path(fact)
+        if path in seen:
+            subject_slug = _slug(fact.get("subject") or "concept")
+            id_slug = _slug(fact.get("id") or "fact")
+            path = f"concepts/{subject_slug}-{id_slug}.md"
+        while path in seen:
+            path = (
+                f"concepts/{_slug(fact.get('subject') or 'concept')}-"
+                f"{_slug(fact.get('id') or 'fact')}-{index}.md"
+            )
+        seen.add(path)
+        paths.append(path)
+    return paths
+
+
+def _concept_path(fact: Mapping[str, Any]) -> str:
+    return f"concepts/{_slug(str(fact.get('subject') or fact['id']))}.md"
+
+
+def _event_citation_lines(event: Mapping[str, Any]) -> list[str]:
+    lines: list[str] = []
+    if event.get("sourceRef"):
+        lines.append(f"- Source ref: {event['sourceRef']}")
+    if event.get("artifactPath"):
+        lines.append(f"- Artifact: {event['artifactPath']}")
+    lines.extend(
+        f"- Citation: {_citation_label(citation)}"
+        for citation in event.get("citations", [])
+    )
+    return ["### Citations", "", *lines, ""] if lines else []
+
+
+def _fact_citation_lines(fact: Mapping[str, Any]) -> list[str]:
+    lines: list[str] = []
+    if fact.get("sourceUrl"):
+        lines.append(f"- Source URL: {fact['sourceUrl']}")
+    if fact.get("path"):
+        lines.append(f"- Path: {fact['path']}")
+    lines.extend(
+        f"- {_citation_label(citation)}" for citation in fact.get("citations", [])
+    )
+    return lines or ["- None"]
+
+
+def _citation_label(citation: Mapping[str, Any]) -> str:
+    return " ".join(
+        str(value)
+        for value in (
+            citation.get("label"),
+            citation.get("url"),
+            citation.get("path"),
+            citation.get("sourceRef"),
+        )
+        if value
+    )
+
+
+def _frontmatter(values: Mapping[str, Any]) -> str:
+    lines = ["---"]
+    for key, value in values.items():
+        if value is None:
+            continue
+        lines.append(f"{key}: {_stable_json(value)}")
+    lines.extend(["---", ""])
+    return "\n".join(lines)
+
+
+def _okf_metadata(metadata: Any) -> Any | None:
+    if isinstance(metadata, Mapping):
+        okf = metadata.get("okf")
+        if isinstance(okf, Mapping):
+            return dict(okf)
+    return None
+
+
+def _stable_json(value: Any) -> str:
+    return json.dumps(_sort_json(value), separators=(",", ":"))
+
+
+def _sort_json(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _sort_json(value[key]) for key in sorted(value)}
+    if isinstance(value, list):
+        return [_sort_json(item) for item in value]
+    return value
+
+
+def _slug(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return slug[:80] or "concept"
 
 
 def _utc_now() -> str:

@@ -581,6 +581,149 @@ def test_checkpoint_and_wrap_use_session_tools():
     ]
 
 
+def test_compact_reads_context_and_wraps_distilled_summary():
+    client = FakeClient()
+    memory = AgentMemory(
+        client,
+        agent="bilby",
+        project="open-brain",
+        policy=MemoryPolicy(max_items=3),
+    )
+    memory.start_session("conversation")
+
+    memory.compact(
+        "fallback summary",
+        key_decisions=["Use Python facade"],
+        next_steps=["Ship Hermes adapter"],
+        receipt_refs=["receipt-1"],
+        context_to_summary=lambda context: f"distilled {context['tool']}",
+    )
+
+    assert client.calls[-2:] == [
+        (
+            "session_context",
+            {
+                "session_key": "conversation",
+                "include_events": True,
+                "event_limit": 3,
+            },
+        ),
+        (
+            "session_wrap",
+            {
+                "key_decisions": ["Use Python facade"],
+                "next_steps": ["Ship Hermes adapter", "Receipt ref: receipt-1"],
+                "summary": "distilled session_context",
+                "project": "open-brain",
+                "session_key": "conversation",
+            },
+        ),
+    ]
+
+
+def test_wrap_receipt_refs_are_encoded_as_server_supported_next_steps():
+    client = FakeClient()
+    memory = AgentMemory(client, agent="bilby")
+    memory.start_session("conversation")
+
+    memory.wrap_session(
+        "Done.",
+        next_steps=["Open PR"],
+        receipt_refs=["receipt-1", "receipt-2"],
+    )
+
+    assert client.calls[-1] == (
+        "session_wrap",
+        {
+            "next_steps": [
+                "Open PR",
+                "Receipt ref: receipt-1",
+                "Receipt ref: receipt-2",
+            ],
+            "summary": "Done.",
+            "session_key": "conversation",
+        },
+    )
+
+    with pytest.raises(ValueError, match="at most 20"):
+        memory.wrap_session(
+            "Too much.",
+            next_steps=["step"],
+            receipt_refs=[f"receipt-{index}" for index in range(20)],
+        )
+
+
+def test_export_disclosure_bundle_matches_ts_feature_shape():
+    client = FakeClient()
+    memory = AgentMemory(client, agent="bilby", project="open-brain")
+    memory.start_session("conversation")
+
+    bundle = memory.export_disclosure_bundle(
+        lane={"topic": "Hermes memory", "metadata": {"okf": {"mode": "edge"}}},
+        events=[
+            {
+                "id": "event-2",
+                "type": "decision",
+                "content": "Use Open Brain memory.",
+                "timestamp": "2026-06-26T12:01:00Z",
+                "sourceRef": "issue-210",
+            },
+            {
+                "id": "event-1",
+                "type": "fact",
+                "content": "Hermes uses Python.",
+                "timestamp": "2026-06-26T12:00:00Z",
+                "artifactPath": "python/openbrain-memory/src/openbrain_memory/agent.py",
+            },
+        ],
+        repo_facts=[
+            {
+                "id": "fact-a",
+                "subject": "AgentMemory",
+                "fact": "Python facade exports bundles.",
+                "path": "python/openbrain-memory/src/openbrain_memory/agent.py",
+            },
+            {
+                "id": "fact-a",
+                "subject": "AgentMemory",
+                "fact": "Duplicate ids still get unique concept paths.",
+            },
+        ],
+        receipts=[
+            {
+                "id": "receipt-1",
+                "action": "validation",
+                "timestamp": "2026-06-26T12:02:00Z",
+                "sources": [{"kind": "repo_path", "path": "agent.py"}],
+                "outputs": [],
+                "validations": [{"kind": "pytest", "status": "passed"}],
+            }
+        ],
+    )
+
+    assert bundle["profile"] == "okf-like"
+    files = {file["path"]: file["content"] for file in bundle["files"]}
+    assert list(files) == [
+        "index.md",
+        "log.md",
+        "concepts/agentmemory.md",
+        "concepts/agentmemory-fact-a.md",
+        "citations.md",
+        "receipts.md",
+    ]
+    assert "session_key: \"conversation\"" in files["index.md"]
+    assert "agent: \"bilby\"" in files["index.md"]
+    assert "project: \"open-brain\"" in files["index.md"]
+    assert "okf: {\"mode\":\"edge\"}" in files["index.md"]
+    assert files["log.md"].find("Hermes uses Python.") < files["log.md"].find(
+        "Use Open Brain memory."
+    )
+    assert "- Source ref: issue-210" in files["log.md"]
+    assert "fact:fact-a:path" in files["citations.md"]
+    assert "receipt:receipt-1" in files["citations.md"]
+    assert '"status":"passed"' in files["receipts.md"]
+
+
 def test_public_facade_exports_quickstart_types():
     assert AgentMemory
     assert MemoryClient
@@ -691,6 +834,10 @@ def test_session_methods_require_started_session():
         memory.checkpoint("summary")
     with pytest.raises(RuntimeError, match="start_session"):
         memory.wrap_session("summary")
+    with pytest.raises(RuntimeError, match="start_session"):
+        memory.compact("summary")
+    with pytest.raises(RuntimeError, match="start_session"):
+        memory.export_disclosure_bundle()
 
 
 def test_policy_and_limit_bounds_are_validated():

@@ -29,13 +29,16 @@ Client-owned behavior:
 Clients must not treat convenience checks as security controls. Any ID-based
 read or mutation still depends on server-side auth-derived namespace checks.
 
-The initial TypeScript wrapper in `src/agent-memory.ts` uses a caller-provided
+The TypeScript wrapper in `src/agent-memory.ts` uses a caller-provided
 `callTool(name, args)` transport and validates local call shape and metadata
-safety. Normal convenience methods do not expose caller-selected namespace
+safety. The Python package exposes the same Hermes-facing facade through
+`openbrain_memory.AgentMemory`, including session start/recall/write,
+compaction, receipt recording, repo fact helpers, and OKF-like disclosure bundle
+export. Normal convenience methods do not expose caller-selected namespace
 overrides; namespace delegation stays in the authenticated transport/header
-layer. It intentionally defers HTTP/MCP transport construction and retry/spool
-durability; callers that need offline retry must provide it outside this thin
-wrapper until a later issue adds a shared transport layer.
+layer. The thin wrappers intentionally defer transport construction; callers
+that need custom HTTP/MCP/NATS routing or offline retry provide that outside the
+adapter facade.
 
 ## Adapter Methods
 
