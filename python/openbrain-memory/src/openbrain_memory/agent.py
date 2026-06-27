@@ -155,12 +155,14 @@ class AgentMemory:
         client: MemoryClient,
         agent: str,
         project: str | None = None,
+        source: str | None = None,
         policy: MemoryPolicy | Mapping[str, Any] | None = None,
         spool: MemorySpool | None = None,
         retry_policy: RetryPolicy | Mapping[str, Any] | None = None,
     ) -> None:
         self.client: MemoryClient = client
         self.agent = agent
+        self.source = _required_str(source, "source") if source is not None else agent
         self.project = project
         self.policy = _coerce_policy(policy)
         self.spool = spool
@@ -306,7 +308,11 @@ class AgentMemory:
         if status is not None:
             payload["status"] = _enum_value(status, "status", LANE_STATUSES)
         _set_optional_str(payload, "agent", agent if agent is not None else self.agent)
-        _set_optional_str(payload, "source", source)
+        _set_optional_str(
+            payload,
+            "source",
+            source if source is not None else self.source,
+        )
         _set_optional_str(payload, "channel_id", channel_id)
         _set_optional_str(payload, "thread_id", thread_id)
         _set_optional_str(
@@ -442,7 +448,7 @@ class AgentMemory:
         )
 
         return self.append_event(
-            self.agent,
+            self.source,
             f"Receipt: {action}",
             event_type="receipt",
             receipt=receipt,

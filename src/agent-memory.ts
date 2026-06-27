@@ -262,7 +262,10 @@ export class AgentMemory {
     const search = await this.transport.callTool("search_all", searchPayload);
     const answer =
       options.includeAnswer === true
-        ? await this.transport.callTool("brain_answer", { query, limit })
+        ? await this.transport.callTool("brain_answer", {
+            query,
+            limit: Math.min(limit, 25),
+          })
         : undefined;
     return { session, search, answer };
   }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { AgentMemory, type JsonObject } from "../agent-memory.ts";
+import { AgentMemory, type JsonObject, type ReceiptOptions } from "../agent-memory.ts";
 import { scoreProbe } from "../../eval/open-brain/runner.ts";
 import type { EvalCorpusEntry, EvalProbe } from "../../eval/open-brain/types.ts";
 
@@ -99,6 +99,29 @@ describe("AgentMemory TypeScript wrapper", () => {
       limit: 5,
       search_mode: "hybrid",
       tier: "warm",
+    });
+    expect(transport.calls[3]!.args).toEqual({
+      query: "adapter contract",
+      limit: 5,
+    });
+  });
+
+  it("clamps cited answer recall to the brain_answer server limit", async () => {
+    const transport = new FakeTransport();
+    const memory = new AgentMemory(transport, { agent: "codex" });
+    await memory.start({ sessionKey: "open-brain/run" });
+
+    await memory.recall({
+      query: "adapter contract",
+      limit: 50,
+      includeAnswer: true,
+    });
+
+    expect(transport.calls[1]!.args).toMatchObject({ event_limit: 50 });
+    expect(transport.calls[2]!.args).toMatchObject({ limit: 50 });
+    expect(transport.calls[3]!.args).toEqual({
+      query: "adapter contract",
+      limit: 25,
     });
   });
 
@@ -634,23 +657,77 @@ describe("AgentMemory TypeScript wrapper", () => {
     const memory = new AgentMemory(new FakeTransport(), { agent: "codex" });
     await memory.start({ sessionKey: "open-brain/run" });
 
-    await expect(
-      memory.recordReceipt({
-        action: "validation",
-        sources: [{ kind: "env", api_key: "redacted-test-key" }],
-        outputs: [],
-        validations: [{ kind: "manual", status: "passed" }],
-      }),
-    ).rejects.toThrow("secret-like material");
+    const cases: Array<[string, ReceiptOptions]> = [
+      [
+        "source key",
+        {
+          action: "validation",
+          sources: [{ kind: "env", api_key: "redacted-test-key" }],
+          outputs: [],
+          validations: [{ kind: "manual", status: "passed" }],
+        },
+      ],
+      [
+        "source value",
+        {
+          action: "validation",
+          sources: [{ kind: "command", summary: "Authorization: Bearer abcdef123456" }],
+          outputs: [],
+          validations: [{ kind: "manual", status: "passed" }],
+        },
+      ],
+      [
+        "output value",
+        {
+          action: "validation",
+          sources: [],
+          outputs: [{ kind: "artifact", summary: "api_key=redacted-test-key" }],
+          validations: [{ kind: "manual", status: "passed" }],
+        },
+      ],
+      [
+        "validation value",
+        {
+          action: "validation",
+          sources: [],
+          outputs: [],
+          validations: [
+            { kind: "manual", status: "passed", summary: "api_key=abc123456789" },
+          ],
+        },
+      ],
+      [
+        "residual risk",
+        {
+          action: "validation",
+          sources: [],
+          outputs: [],
+          validations: [{ kind: "manual", status: "passed" }],
+          residualRisk: "Bearer abcdef123456",
+        },
+      ],
+      [
+        "caller metadata",
+        {
+          action: "validation",
+          sources: [],
+          outputs: [],
+          validations: [{ kind: "manual", status: "passed" }],
+          metadata: { note: "password=redacted-test-password" },
+        },
+      ],
+    ];
 
-    await expect(
-      memory.recordReceipt({
-        action: "validation",
-        sources: [{ kind: "command", summary: "Authorization: Bearer abcdef123456" }],
-        outputs: [],
-        validations: [{ kind: "manual", status: "passed" }],
-      }),
-    ).rejects.toThrow("secret-like material");
+    for (const [label, options] of cases) {
+      await expect(memory.recordReceipt(options), label).rejects.toThrow(
+        "secret-like material",
+      );
+    }
+    expect(
+      (memory.transport as FakeTransport).calls.filter(
+        (call) => call.name === "append_session_event",
+      ),
+    ).toHaveLength(0);
   });
 
   it("keeps disclosure bundle identity bound to the active lane", async () => {

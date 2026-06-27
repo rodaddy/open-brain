@@ -322,6 +322,7 @@ def test_agent_memory_convenience_helpers_route_to_wrapper_tools():
                 "session_key": "lane-1",
                 "status": "active",
                 "agent": "bilby",
+                "source": "bilby",
                 "project": "open-brain",
                 "current_context_md": "Current state.",
                 "metadata": {"run_id": "run-1"},
@@ -432,6 +433,31 @@ def test_record_receipt_routes_to_receipt_session_event():
     }
 
 
+def test_wrapper_source_can_differ_from_agent_for_events_and_receipts():
+    client = FakeClient()
+    memory = AgentMemory(client, agent="bilby", source="hermes-discord")
+    memory.start_session("conversation")
+
+    memory.append_event("hermes-discord", "Here is the update.", event_type="action")
+    memory.record_receipt(
+        "runtime_memory_write",
+        sources=[{"kind": "repo_path", "path": "python/openbrain-memory"}],
+        outputs=[{"kind": "artifact", "path": "receipt.json"}],
+        validations=[{"kind": "manual", "status": "passed"}],
+    )
+    memory.update_lane("conversation", current_context_md="Hermes is active.")
+
+    event_payload = client.calls[1][1]
+    receipt_payload = client.calls[2][1]
+    lane_payload = client.calls[3][1]
+
+    assert event_payload["source"] == "hermes-discord"
+    assert receipt_payload["source"] == "hermes-discord"
+    assert receipt_payload["metadata"]["receipt"]["agent"] == "bilby"
+    assert lane_payload["agent"] == "bilby"
+    assert lane_payload["source"] == "hermes-discord"
+
+
 def test_record_receipt_validates_shape_and_reserved_metadata():
     client = FakeClient()
     memory = AgentMemory(client, agent="bilby")
@@ -480,25 +506,56 @@ def test_record_receipt_rejects_secret_like_evidence_before_writes():
     memory = AgentMemory(client, agent="bilby")
     memory.start_session("conversation")
 
-    with pytest.raises(ValueError, match="secret-like material"):
-        memory.record_receipt(
-            "bad",
-            sources=[{"kind": "env", "api_key": "redacted-test-key"}],
-            outputs=[],
-            validations=[],
-        )
-    with pytest.raises(ValueError, match="secret-like material"):
-        memory.record_receipt(
-            "bad",
-            sources=[
+    cases = [
+        {
+            "sources": [{"kind": "env", "api_key": "redacted-test-key"}],
+            "outputs": [],
+            "validations": [],
+        },
+        {
+            "sources": [
                 {
                     "kind": "command",
                     "summary": "Authorization: Bearer abcdef123456",
                 }
             ],
-            outputs=[],
-            validations=[],
-        )
+            "outputs": [],
+            "validations": [],
+        },
+        {
+            "sources": [],
+            "outputs": [{"kind": "artifact", "summary": "api_key=redacted-test-key"}],
+            "validations": [],
+        },
+        {
+            "sources": [],
+            "outputs": [],
+            "validations": [
+                {
+                    "kind": "manual",
+                    "status": "passed",
+                    "summary": "api_key=abc123456789",
+                }
+            ],
+        },
+        {
+            "sources": [],
+            "outputs": [],
+            "validations": [],
+            "residual_risk": "Bearer abcdef123456",
+        },
+        {
+            "sources": [],
+            "outputs": [],
+            "validations": [],
+            "note": "password=redacted-test-password",
+        },
+    ]
+
+    for kwargs in cases:
+        with pytest.raises(ValueError, match="secret-like material"):
+            memory.record_receipt("bad", **kwargs)
+    assert [name for name, _ in client.calls] == ["session_start"]
 
 
 def test_metadata_bounds_are_rejected_before_tool_calls():
