@@ -42,16 +42,37 @@ If none of those apply, say so explicitly in the PR and release notes.
 
 4. **mcp2cli pull and generated skill refresh**
    - Have mcp2cli consume the registry-backed service definition.
-   - Run:
+   - Invalidate the stale schema cache, then regenerate skills:
 
      ```bash
-     mcp2cli cache diff open-brain
-     mcp2cli cache warm open-brain
      mcp2cli generate-skills open-brain --conflict=merge
      ```
 
+   - KNOWN ISSUE (rodaddy/mcp2cli#58): mcp2cli's schema cache is NOT invalidated
+     automatically on a contract bump — it serves the old tool shape until the
+     24h TTL expires. After an Open Brain contract change you must force a
+     refresh. `mcp2cli cache warm open-brain` is currently broken on the CT216
+     daemon (self-call: "Daemon failed to start within 10000ms"). Until #58
+     lands, clear the cached schema so the next call refetches the live contract,
+     across BOTH layers and all credential keys:
+
+     ```bash
+     # client (per host)
+     rm -f ~/.cache/mcp2cli/schemas/open-brain.json \
+           ~/.cache/mcp2cli/schemas/credential:*open-brain*.json 2>/dev/null
+     # daemon (CT216 — serves OB to all other hosts)
+     ssh root@10.71.20.63 'rm -f /var/lib/mcp2cli/schemas/open-brain.json \
+           "/var/lib/mcp2cli/schemas/credential:"*.json'
+     mcp2cli schema open-brain.append_session_event   # refetches v11; confirm new fields
+     ```
+
+   - The durable fix (mcp2cli#58) should pin on Open Brain's authoritative
+     `schema_hash` from `get_contract` (deterministic; excludes `generated_at`)
+     and push-invalidate all cache layers on drift — not a per-read live probe.
    - Verify the hosted daemon sees the updated tools/schemas and can call a
-     representative changed operation.
+     representative changed operation. A correct refresh shows the new fields,
+     e.g. `mcp2cli schema open-brain.append_session_event` includes
+     `create_if_missing`.
    - Update the mcp2cli Open Brain skill generation docs/skill when the new
      behavior changes user-facing agent guidance.
 
