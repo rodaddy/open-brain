@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { TOOL_CONTRACTS } from "./contract-schemas.ts";
 
-export const CONTRACT_VERSION = "2026-06-26.memory-tools.v9";
+export const CONTRACT_VERSION = "2026-06-28.memory-tools.v10";
 export const CONTRACT_SCHEMA_VERSION = 1;
 
 export interface ContractCapability {
@@ -69,6 +69,41 @@ export interface OpenBrainContract {
         status: "available" | "client-wrapper" | "planned";
       }
     >;
+  };
+  agent_context_pack: {
+    status: "planned-contract";
+    availability: "not_runtime_available";
+    contract_doc: "docs/agent-context-pack-contract.md";
+    parent_issue: 220;
+    exact_scope_required: true;
+    scope_keys: readonly [
+      "namespace",
+      "agent",
+      "platform",
+      "server_id",
+      "channel_id",
+      "thread_id",
+      "session_key",
+    ];
+    sections: readonly [
+      "working_set",
+      "durable_lane_context",
+      "durable_memory",
+      "profile_guidance",
+      "process_guidance",
+      "repo_facts",
+      "pointers",
+      "candidate_memory",
+    ];
+    envelope_fields: readonly ["warnings", "budget", "citations"];
+    warning_fields: readonly [
+      "missing_facts",
+      "stale_sources",
+      "degraded_sources",
+      "scope_denials",
+      "truncation",
+      "uncertainty",
+    ];
   };
   receipt_contract: {
     status: "lightweight-openbrain-receipts";
@@ -211,6 +246,15 @@ export const CONTRACT_CAPABILITIES: ContractCapability[] = [
     version: 1,
     kind: "schema",
     description: "Durable session lanes, events, context, and wraps.",
+  },
+  {
+    name: "agent_context_pack",
+    version: 1,
+    kind: "schema",
+    description:
+      "Planned first-class realtime context-pack contract for Hermes and " +
+      "future agents. It is not an available runtime tool until a later " +
+      "implementation exposes it explicitly.",
   },
   {
     name: "agent_memory_adapter",
@@ -362,6 +406,41 @@ export function buildContract(
           status: "client-wrapper" as const,
         },
       },
+    },
+    agent_context_pack: {
+      status: "planned-contract" as const,
+      availability: "not_runtime_available" as const,
+      contract_doc: "docs/agent-context-pack-contract.md" as const,
+      parent_issue: 220 as const,
+      exact_scope_required: true as const,
+      scope_keys: [
+        "namespace",
+        "agent",
+        "platform",
+        "server_id",
+        "channel_id",
+        "thread_id",
+        "session_key",
+      ] as const,
+      sections: [
+        "working_set",
+        "durable_lane_context",
+        "durable_memory",
+        "profile_guidance",
+        "process_guidance",
+        "repo_facts",
+        "pointers",
+        "candidate_memory",
+      ] as const,
+      envelope_fields: ["warnings", "budget", "citations"] as const,
+      warning_fields: [
+        "missing_facts",
+        "stale_sources",
+        "degraded_sources",
+        "scope_denials",
+        "truncation",
+        "uncertainty",
+      ] as const,
     },
     receipt_contract: {
       status: "lightweight-openbrain-receipts" as const,

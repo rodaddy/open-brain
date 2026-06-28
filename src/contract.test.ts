@@ -75,6 +75,45 @@ describe("Open Brain contract manifest", () => {
       owner: "client",
       status: "client-wrapper",
     });
+    expect(contract.agent_context_pack).toMatchObject({
+      status: "planned-contract",
+      availability: "not_runtime_available",
+      contract_doc: "docs/agent-context-pack-contract.md",
+      parent_issue: 220,
+      exact_scope_required: true,
+    });
+    expect(contract.agent_context_pack.scope_keys).toEqual([
+      "namespace",
+      "agent",
+      "platform",
+      "server_id",
+      "channel_id",
+      "thread_id",
+      "session_key",
+    ]);
+    expect(contract.agent_context_pack.sections).toEqual([
+      "working_set",
+      "durable_lane_context",
+      "durable_memory",
+      "profile_guidance",
+      "process_guidance",
+      "repo_facts",
+      "pointers",
+      "candidate_memory",
+    ]);
+    // candidate_memory carries the candidate-only / not-a-durable-write label,
+    // so it must appear in the machine-readable section enumeration.
+    expect(contract.agent_context_pack.sections).toContain("candidate_memory");
+    // Envelope fields are top-level response keys, not section members; keep
+    // them distinct so requested_sections stays a true subset of sections.
+    expect(contract.agent_context_pack.envelope_fields).toEqual([
+      "warnings",
+      "budget",
+      "citations",
+    ]);
+    expect(contract.agent_context_pack.warning_fields).toContain(
+      "scope_denials",
+    );
     expect(contract.receipt_contract).toMatchObject({
       status: "lightweight-openbrain-receipts",
       event_type: "receipt",
@@ -109,6 +148,9 @@ describe("Open Brain contract manifest", () => {
       "agent_memory_adapter",
     );
     expect(contract.capabilities.map((c) => c.name)).toContain(
+      "agent_context_pack",
+    );
+    expect(contract.capabilities.map((c) => c.name)).toContain(
       "receipt_contract",
     );
     for (const tool of [
@@ -127,6 +169,7 @@ describe("Open Brain contract manifest", () => {
     ]) {
       expect(contract.tool_contracts[tool]).toBeDefined();
     }
+    expect(contract.tool_contracts.agent_context_pack).toBeUndefined();
     const upsertRepoFact = contract.tool_contracts.upsert_repo_fact;
     expect(upsertRepoFact).toBeDefined();
     const getEntry = contract.tool_contracts.get_entry;
@@ -191,7 +234,7 @@ describe("Open Brain contract manifest", () => {
     // contract so a future TS/Python divergence fails here, in lockstep with
     // python/openbrain-memory CURRENT_CONTRACT_VERSION.
     const contract = buildContract("2026-06-18T00:00:00.000Z");
-    expect(contract.contract_version).toBe("2026-06-26.memory-tools.v9");
+    expect(contract.contract_version).toBe("2026-06-28.memory-tools.v10");
 
     const appendEvent = contract.tool_contracts.append_session_event;
     expect(appendEvent).toBeDefined();
@@ -233,6 +276,7 @@ describe("Open Brain contract manifest", () => {
       transport: base.transport,
       interchange_profiles: base.interchange_profiles,
       agent_memory_adapter: base.agent_memory_adapter,
+      agent_context_pack: base.agent_context_pack,
       receipt_contract: base.receipt_contract,
       capabilities: [
         ...base.capabilities,
@@ -264,6 +308,7 @@ describe("Open Brain contract manifest", () => {
       transport: base.transport,
       interchange_profiles: base.interchange_profiles,
       agent_memory_adapter: base.agent_memory_adapter,
+      agent_context_pack: base.agent_context_pack,
       receipt_contract: base.receipt_contract,
       capabilities: base.capabilities,
       tool_contracts: {
@@ -299,6 +344,7 @@ describe("Open Brain contract manifest", () => {
       transport: base.transport,
       interchange_profiles: base.interchange_profiles,
       agent_memory_adapter: base.agent_memory_adapter,
+      agent_context_pack: base.agent_context_pack,
       receipt_contract: base.receipt_contract,
       capabilities: base.capabilities,
       tool_contracts: {
