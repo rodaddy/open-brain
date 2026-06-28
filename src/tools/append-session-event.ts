@@ -10,6 +10,193 @@ import { logger } from "../logger.ts";
 import type { ToolDeps } from "./index.ts";
 import { EVENT_TYPES, IMPORTANCE_LEVELS } from "./table-constants.ts";
 
+type AppendErrorClass =
+  | "retryable_outage"
+  | "auth_denied"
+  | "scope_validation"
+  | "unsupported_operation"
+  | "conflict_retry";
+
+function appendSessionEventError(
+  errorClass: AppendErrorClass,
+  message: string,
+  retryable: boolean,
+  details: Record<string, unknown> = {},
+) {
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: JSON.stringify({
+          error: errorClass,
+          message,
+          retryable,
+          ...details,
+        }),
+      },
+    ],
+    isError: true,
+  };
+}
+
+function scopeConflicts(
+  lane: Record<string, unknown>,
+  args: {
+    agent?: string;
+    platform?: string;
+    server_id?: string;
+    channel_id?: string;
+    thread_id?: string | null;
+  },
+): string[] {
+  const conflicts: string[] = [];
+  const metadata =
+    lane.metadata && typeof lane.metadata === "object"
+      ? (lane.metadata as Record<string, unknown>)
+      : {};
+
+  const checks: Array<[string, unknown, unknown]> = [
+    ["agent", lane.agent, args.agent],
+    ["platform", lane.source, args.platform],
+    ["server_id", metadata.server_id, args.server_id],
+    ["channel_id", lane.channel_id, args.channel_id],
+    ["thread_id", lane.thread_id, args.thread_id],
+  ];
+
+  for (const [field, existing, requested] of checks) {
+    if (requested === undefined) continue;
+    if (existing !== requested) conflicts.push(field);
+  }
+
+  return conflicts;
+}
+
+async function ensureLaneForAppend(
+  deps: ToolDeps,
+  args: {
+    session_key: string;
+    namespace: string;
+    create_if_missing?: boolean;
+    agent?: string;
+    platform?: string;
+    server_id?: string;
+    channel_id?: string;
+    thread_id?: string | null;
+    project?: string;
+    topic?: string;
+  },
+  auth: AuthInfo,
+): Promise<
+  | { ok: true; lane: Record<string, unknown>; created: boolean }
+  | { ok: false; response: ReturnType<typeof appendSessionEventError> }
+> {
+  const laneColumns =
+    "id, status, agent, source, channel_id, thread_id, metadata";
+  const laneParams = [args.namespace, args.session_key];
+  const { rows: laneRows } = await deps.pool.query(
+    `SELECT ${laneColumns}
+FROM ob_session_lanes
+WHERE namespace = $1 AND session_key = $2`,
+    laneParams,
+  );
+
+  let lane = laneRows[0] as Record<string, unknown> | undefined;
+  let created = false;
+  let attemptedCreate = false;
+
+  if (!lane && args.create_if_missing === true) {
+    attemptedCreate = true;
+    const metadata =
+      args.server_id === undefined ? {} : { server_id: args.server_id };
+    const { rows: insertedRows } = await deps.pool.query(
+      `INSERT INTO ob_session_lanes
+  (session_key, namespace, status, agent, source, channel_id, thread_id,
+   project, topic, metadata, created_by)
+VALUES ($1, $2, 'active', $3, $4, $5, $6, $7, $8, $9, $10)
+ON CONFLICT (namespace, session_key) DO NOTHING
+RETURNING ${laneColumns}`,
+      [
+        args.session_key,
+        args.namespace,
+        args.agent ?? null,
+        args.platform ?? null,
+        args.channel_id ?? null,
+        args.thread_id ?? null,
+        args.project ?? null,
+        args.topic ?? null,
+        JSON.stringify(metadata),
+        auth.clientId,
+      ],
+    );
+    if (insertedRows.length > 0) {
+      lane = insertedRows[0] as Record<string, unknown>;
+      created = true;
+    } else {
+      const { rows: racedRows } = await deps.pool.query(
+        `SELECT ${laneColumns}
+FROM ob_session_lanes
+WHERE namespace = $1 AND session_key = $2`,
+        laneParams,
+      );
+      lane = racedRows[0] as Record<string, unknown> | undefined;
+    }
+  }
+
+  if (!lane) {
+    logger.info("append_session_event_lane_not_found", {
+      session_key: args.session_key,
+      namespace: args.namespace,
+      create_if_missing: args.create_if_missing === true,
+    });
+    if (attemptedCreate) {
+      return {
+        ok: false,
+        response: appendSessionEventError(
+          "conflict_retry",
+          "Lane creation raced but the lane was not visible after retry lookup",
+          true,
+          {
+            session_key: args.session_key,
+            namespace: args.namespace,
+          },
+        ),
+      };
+    }
+    return {
+      ok: false,
+      response: appendSessionEventError(
+        "scope_validation",
+        `Lane not found for session_key "${args.session_key}" in namespace "${args.namespace}"`,
+        false,
+        {
+          session_key: args.session_key,
+          namespace: args.namespace,
+          remedy: "Call session_start first or retry append_session_event with create_if_missing=true.",
+        },
+      ),
+    };
+  }
+
+  const conflicts = scopeConflicts(lane, args);
+  if (conflicts.length > 0) {
+    return {
+      ok: false,
+      response: appendSessionEventError(
+        "scope_validation",
+        "Existing lane scope does not match requested append scope",
+        false,
+        {
+          session_key: args.session_key,
+          namespace: args.namespace,
+          conflicts,
+        },
+      ),
+    };
+  }
+
+  return { ok: true, lane, created };
+}
+
 /**
  * Hybrid-timing sync gate for the share_candidate nomination (Issue #161, Q1).
  *
@@ -115,7 +302,9 @@ export function registerAppendSessionEvent(
     {
       description:
         "Append an event to a session lane's journal. Events are append-only " +
-        "and capture discrete facts, decisions, blockers, actions, etc.",
+        "and capture discrete facts, decisions, blockers, actions, etc. " +
+        "For realtime agents, create_if_missing can create the scoped lane on " +
+        "first write instead of requiring manual pre-provisioning.",
       inputSchema: {
         session_key: z
           .string()
@@ -129,6 +318,50 @@ export function registerAppendSessionEvent(
           .max(500)
           .optional()
           .describe("Namespace for isolation (defaults to agent's clientId)"),
+        create_if_missing: z
+          .boolean()
+          .optional()
+          .describe(
+            "Create the session lane when missing, then append the event. " +
+              "Use for first-write realtime agent scopes; repeated calls are idempotent.",
+          ),
+        agent: z
+          .string()
+          .max(500)
+          .optional()
+          .describe("Agent identity for first-write lane creation and scope checks"),
+        platform: z
+          .string()
+          .max(500)
+          .optional()
+          .describe(
+            "Platform/source identity for first-write lane creation, such as discord",
+          ),
+        server_id: z
+          .string()
+          .max(500)
+          .optional()
+          .describe("Server/guild identity for exact realtime lane scope"),
+        channel_id: z
+          .string()
+          .max(500)
+          .optional()
+          .describe("Channel identity for exact realtime lane scope"),
+        thread_id: z
+          .string()
+          .max(500)
+          .optional()
+          .describe("Thread identity for exact realtime lane scope"),
+        project: z
+          .string()
+          .max(500)
+          .optional()
+          .describe("Project name to set when first-write creates the lane"),
+        topic: z
+          .string()
+          .max(500)
+          .optional()
+          .describe("Human-readable lane topic to set when first-write creates the lane"),
         event_type: z
           .enum(EVENT_TYPES)
           .describe(
@@ -182,29 +415,22 @@ export function registerAppendSessionEvent(
           clientId: auth?.clientId ?? "none",
           session_key: args.session_key,
         });
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: "Permission denied: cannot write to session events",
-            },
-          ],
-          isError: true,
-        };
+        return appendSessionEventError(
+          "auth_denied",
+          "Permission denied: cannot write to session events",
+          false,
+        );
       }
 
       const ns = args.namespace ?? auth.clientId;
       const nsCheck = canWriteNamespace(auth, ns);
       if (!nsCheck.allowed) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Permission denied: ${nsCheck.reason}`,
-            },
-          ],
-          isError: true,
-        };
+        return appendSessionEventError(
+          "auth_denied",
+          `Permission denied: ${nsCheck.reason}`,
+          false,
+          { namespace: ns },
+        );
       }
       const importance = args.importance ?? "warm";
       const provenance = writerProvenance(auth);
@@ -219,41 +445,39 @@ export function registerAppendSessionEvent(
       });
 
       try {
-        // Look up the lane
-        const { rows: laneRows } = await deps.pool.query(
-          `SELECT id, status FROM ob_session_lanes WHERE namespace = $1 AND session_key = $2`,
-          [ns, args.session_key],
-        );
-
-        if (laneRows.length === 0) {
-          logger.info("append_session_event_lane_not_found", {
+        const laneResult = await ensureLaneForAppend(
+          deps,
+          {
             session_key: args.session_key,
             namespace: ns,
-          });
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: `Lane not found for session_key "${args.session_key}" in namespace "${ns}"`,
-              },
-            ],
-            isError: true,
-          };
+            create_if_missing: args.create_if_missing,
+            agent: args.agent,
+            platform: args.platform,
+            server_id: args.server_id,
+            channel_id: args.channel_id,
+            thread_id:
+              args.create_if_missing === true && args.channel_id !== undefined
+                ? (args.thread_id ?? null)
+                : args.thread_id,
+            project: args.project,
+            topic: args.topic,
+          },
+          auth,
+        );
+        if (!laneResult.ok) {
+          return laneResult.response;
         }
 
-        if (laneRows[0].status === "archived") {
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: `Lane "${args.session_key}" is archived; reactivate before appending events`,
-              },
-            ],
-            isError: true,
-          };
+        if (laneResult.lane.status === "archived") {
+          return appendSessionEventError(
+            "unsupported_operation",
+            `Lane "${args.session_key}" is archived; reactivate before appending events`,
+            false,
+            { session_key: args.session_key, namespace: ns },
+          );
         }
 
-        const laneId = laneRows[0].id;
+        const laneId = laneResult.lane.id;
 
         // Hybrid sync gate: a share_candidate nomination carrying a secret or
         // person-private content is rejected inline (cheap, no embedding) and
@@ -333,6 +557,7 @@ export function registerAppendSessionEvent(
         const result = {
           event_id: rows[0].id,
           lane_id: laneId,
+          lane_created: laneResult.created,
           event_type: args.event_type,
           importance,
           created_at: rows[0].created_at,
@@ -370,7 +595,13 @@ export function registerAppendSessionEvent(
           content: [
             {
               type: "text" as const,
-              text: `Database error during event append: ${err instanceof Error ? err.message : String(err)}`,
+              text: JSON.stringify({
+                error: "retryable_outage",
+                message: `Database error during event append: ${err instanceof Error ? err.message : String(err)}`,
+                retryable: true,
+                session_key: args.session_key,
+                namespace: ns,
+              }),
             },
           ],
           isError: true,
