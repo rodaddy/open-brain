@@ -1,4 +1,5 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect, afterAll } from "bun:test";
+import { Pool } from "pg";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -253,6 +254,444 @@ describe("append_session_event", () => {
       expect(result.isError).toBe(true);
       expect((result.content as any)[0].text).toContain("Lane not found");
       expect((result.content as any)[0].text).toContain("nonexistent");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("creates a scoped lane on first append when create_if_missing is true", async () => {
+    const captured: {
+      laneInsertParams?: any[];
+      eventInsertParams?: any[];
+    } = {};
+    const mockPool = {
+      query: async (sql: string, params?: any[]) => {
+        if (sql.includes("INSERT INTO ob_session_lanes")) {
+          captured.laneInsertParams = params;
+          return {
+            rows: [
+              {
+                id: "lane-uuid-new",
+                status: "active",
+                agent: "nagatha",
+                source: "discord",
+                channel_id: "channel-1",
+                thread_id: "thread-1",
+                metadata: { server_id: "guild-1" },
+              },
+            ],
+          };
+        }
+        if (sql.includes("FROM ob_session_lanes")) {
+          return { rows: [] };
+        }
+        if (sql.includes("INSERT INTO ob_session_events")) {
+          captured.eventInsertParams = params;
+          return {
+            rows: [{ id: "event-uuid-1", created_at: "2026-06-28T18:00:00Z" }],
+          };
+        }
+        return { rows: [] };
+      },
+    };
+    const auth: AuthInfo = { role: "agent", clientId: "nagatha" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "append_session_event",
+        arguments: {
+          session_key: "discord:guild-1:channel-1:thread-1:nagatha",
+          create_if_missing: true,
+          agent: "nagatha",
+          platform: "discord",
+          server_id: "guild-1",
+          channel_id: "channel-1",
+          thread_id: "thread-1",
+          project: "rtech-hermes",
+          topic: "Nagatha Discord scoped memory",
+          event_type: "correction",
+          content: "GitHub issue URLs must use live gh first.",
+          source: "nagatha",
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.event_id).toBe("event-uuid-1");
+      expect(parsed.lane_id).toBe("lane-uuid-new");
+      expect(parsed.lane_created).toBe(true);
+      expect(captured.laneInsertParams).toEqual([
+        "discord:guild-1:channel-1:thread-1:nagatha",
+        "nagatha",
+        "nagatha",
+        "discord",
+        "channel-1",
+        "thread-1",
+        "rtech-hermes",
+        "Nagatha Discord scoped memory",
+        JSON.stringify({ server_id: "guild-1" }),
+        "nagatha",
+      ]);
+      expect(captured.eventInsertParams?.[0]).toBe("lane-uuid-new");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("reuses an existing scoped lane when create_if_missing is true", async () => {
+    const mockPool = {
+      query: async (sql: string, _params?: any[]) => {
+        if (sql.includes("FROM ob_session_lanes")) {
+          return {
+            rows: [
+              {
+                id: "lane-uuid-existing",
+                status: "active",
+                agent: "nagatha",
+                source: "discord",
+                channel_id: "channel-1",
+                thread_id: "thread-1",
+                metadata: { server_id: "guild-1" },
+              },
+            ],
+          };
+        }
+        if (sql.includes("INSERT INTO ob_session_events")) {
+          return {
+            rows: [{ id: "event-uuid-1", created_at: "2026-06-28T18:00:00Z" }],
+          };
+        }
+        throw new Error(`unexpected query: ${sql}`);
+      },
+    };
+    const auth: AuthInfo = { role: "agent", clientId: "nagatha" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "append_session_event",
+        arguments: {
+          session_key: "discord:guild-1:channel-1:thread-1:nagatha",
+          create_if_missing: true,
+          agent: "nagatha",
+          platform: "discord",
+          server_id: "guild-1",
+          channel_id: "channel-1",
+          thread_id: "thread-1",
+          event_type: "fact",
+          content: "Existing scoped lane append succeeds.",
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.lane_id).toBe("lane-uuid-existing");
+      expect(parsed.lane_created).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("handles first-write lane creation races by returning the existing lane", async () => {
+    let laneSelects = 0;
+    const mockPool = {
+      query: async (sql: string, _params?: any[]) => {
+        if (sql.includes("INSERT INTO ob_session_lanes")) {
+          return { rows: [] };
+        }
+        if (sql.includes("FROM ob_session_lanes")) {
+          laneSelects += 1;
+          if (laneSelects === 1) return { rows: [] };
+          return {
+            rows: [
+              {
+                id: "lane-uuid-raced",
+                status: "active",
+                agent: "nagatha",
+                source: "discord",
+                channel_id: "channel-1",
+                thread_id: null,
+                metadata: { server_id: "guild-1" },
+              },
+            ],
+          };
+        }
+        if (sql.includes("INSERT INTO ob_session_events")) {
+          return {
+            rows: [{ id: "event-uuid-1", created_at: "2026-06-28T18:00:00Z" }],
+          };
+        }
+        return { rows: [] };
+      },
+    };
+    const auth: AuthInfo = { role: "agent", clientId: "nagatha" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "append_session_event",
+        arguments: {
+          session_key: "discord:guild-1:channel-1:nagatha",
+          create_if_missing: true,
+          agent: "nagatha",
+          platform: "discord",
+          server_id: "guild-1",
+          channel_id: "channel-1",
+          event_type: "fact",
+          content: "Raced lane creation still appends.",
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.lane_id).toBe("lane-uuid-raced");
+      expect(parsed.lane_created).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("denies append when supplied exact scope conflicts with the existing lane", async () => {
+    let eventInsertAttempted = false;
+    const mockPool = {
+      query: async (sql: string, _params?: any[]) => {
+        if (sql.includes("FROM ob_session_lanes")) {
+          return {
+            rows: [
+              {
+                id: "lane-uuid-1",
+                status: "active",
+                agent: "nagatha",
+                source: "discord",
+                channel_id: "channel-1",
+                thread_id: "thread-1",
+                metadata: { server_id: "guild-1" },
+              },
+            ],
+          };
+        }
+        if (sql.includes("INSERT INTO ob_session_events")) {
+          eventInsertAttempted = true;
+        }
+        return { rows: [] };
+      },
+    };
+    const auth: AuthInfo = { role: "agent", clientId: "nagatha" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "append_session_event",
+        arguments: {
+          session_key: "discord:guild-1:channel-1:thread-1:nagatha",
+          create_if_missing: true,
+          agent: "nagatha",
+          platform: "discord",
+          server_id: "guild-1",
+          channel_id: "other-channel",
+          thread_id: "thread-1",
+          event_type: "fact",
+          content: "This should not spill into another channel.",
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.error).toBe("scope_validation");
+      expect(parsed.retryable).toBe(false);
+      expect(parsed.conflicts).toEqual(["channel_id"]);
+      expect(eventInsertAttempted).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("denies unthreaded realtime append against an existing threaded lane", async () => {
+    const mockPool = {
+      query: async (sql: string, _params?: any[]) => {
+        if (sql.includes("FROM ob_session_lanes")) {
+          return {
+            rows: [
+              {
+                id: "lane-uuid-threaded",
+                status: "active",
+                agent: "nagatha",
+                source: "discord",
+                channel_id: "channel-1",
+                thread_id: "thread-1",
+                metadata: { server_id: "guild-1" },
+              },
+            ],
+          };
+        }
+        return { rows: [] };
+      },
+    };
+    const auth: AuthInfo = { role: "agent", clientId: "nagatha" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "append_session_event",
+        arguments: {
+          session_key: "discord:guild-1:channel-1:nagatha",
+          create_if_missing: true,
+          agent: "nagatha",
+          platform: "discord",
+          server_id: "guild-1",
+          channel_id: "channel-1",
+          event_type: "fact",
+          content: "Unthreaded writes must not target threaded lanes.",
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.error).toBe("scope_validation");
+      expect(parsed.conflicts).toEqual(["thread_id"]);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("appends to a session_start-created lane with null scope without false conflict", async () => {
+    // Lanes created by session_start/lane_upsert do not write the `source`
+    // column or `metadata.server_id`. A later scoped realtime append must
+    // attach to such a lane rather than fail scope_validation on null vs
+    // "discord"/"guild-1".
+    let eventInsertAttempted = false;
+    const mockPool = {
+      query: async (sql: string, _params?: any[]) => {
+        if (sql.includes("FROM ob_session_lanes")) {
+          return {
+            rows: [
+              {
+                id: "lane-uuid-sessionstart",
+                status: "active",
+                agent: "nagatha",
+                source: null,
+                channel_id: "channel-1",
+                thread_id: null,
+                metadata: {},
+              },
+            ],
+          };
+        }
+        if (sql.includes("INSERT INTO ob_session_events")) {
+          eventInsertAttempted = true;
+          return {
+            rows: [{ id: "event-uuid-1", created_at: "2026-06-28T10:00:00Z" }],
+          };
+        }
+        return { rows: [] };
+      },
+    };
+    const auth: AuthInfo = { role: "agent", clientId: "nagatha" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "append_session_event",
+        arguments: {
+          session_key: "discord:guild-1:channel-1:nagatha",
+          agent: "nagatha",
+          platform: "discord",
+          server_id: "guild-1",
+          channel_id: "channel-1",
+          event_type: "fact",
+          content: "Scoped append onto a session_start-created lane.",
+        },
+      });
+
+      expect(result.isError).toBeUndefined();
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.event_id).toBe("event-uuid-1");
+      expect(eventInsertAttempted).toBe(true);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("still denies a non-null scope mismatch against an existing lane", async () => {
+    // The null-tolerance above must not weaken real spill protection: a lane
+    // that DID assert a channel still rejects a mismatched scoped append.
+    let eventInsertAttempted = false;
+    const mockPool = {
+      query: async (sql: string, _params?: any[]) => {
+        if (sql.includes("FROM ob_session_lanes")) {
+          return {
+            rows: [
+              {
+                id: "lane-uuid-asserted",
+                status: "active",
+                agent: "nagatha",
+                source: "discord",
+                channel_id: "channel-1",
+                thread_id: null,
+                metadata: { server_id: "guild-1" },
+              },
+            ],
+          };
+        }
+        if (sql.includes("INSERT INTO ob_session_events")) {
+          eventInsertAttempted = true;
+        }
+        return { rows: [] };
+      },
+    };
+    const auth: AuthInfo = { role: "agent", clientId: "nagatha" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "append_session_event",
+        arguments: {
+          session_key: "discord:guild-1:channel-1:nagatha",
+          agent: "nagatha",
+          platform: "discord",
+          server_id: "guild-1",
+          channel_id: "channel-2",
+          event_type: "fact",
+          content: "Mismatched channel must still be denied.",
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.error).toBe("scope_validation");
+      expect(parsed.conflicts).toEqual(["channel_id"]);
+      expect(eventInsertAttempted).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("returns retryable_outage when the database fails before append", async () => {
+    const mockPool = {
+      query: async () => {
+        throw new Error("connection timeout");
+      },
+    };
+    const auth: AuthInfo = { role: "agent", clientId: "nagatha" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "append_session_event",
+        arguments: {
+          session_key: "discord:guild-1:channel-1:nagatha",
+          create_if_missing: true,
+          event_type: "fact",
+          content: "This should be spooled by Hermes.",
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.error).toBe("retryable_outage");
+      expect(parsed.retryable).toBe(true);
+      expect(parsed.message).toContain("connection timeout");
     } finally {
       await cleanup();
     }
@@ -891,6 +1330,198 @@ describe("append_session_event", () => {
       expect((result.content as any)[0].text).toContain("Database error");
     } finally {
       await cleanup();
+    }
+  });
+});
+
+// ── LIVE POSTGRES (real ON CONFLICT / race / scope-isolation coverage) ──
+// Mock pools cannot execute ON CONFLICT, real UNIQUE constraints, or genuine
+// concurrent inserts, so the create_if_missing race + scope-isolation guarantee
+// the contract depends on (consumed by rtech-hermes#276) is proven here against
+// a real pool. Gated on OPENBRAIN_TEST_DATABASE_URL; CI sets it (ci.yml), the
+// default infra-free suite skips. Run locally with:
+//   OPENBRAIN_TEST_DATABASE_URL=postgres://... bun test src/tools/__tests__/append-session-event.test.ts
+const DB_URL = process.env.OPENBRAIN_TEST_DATABASE_URL;
+const dbDescribe = DB_URL ? describe : describe.skip;
+
+dbDescribe("append_session_event create_if_missing (live Postgres)", () => {
+  const pool = new Pool({ connectionString: DB_URL });
+  const ns = "test-append-live";
+
+  async function callAppend(
+    args: Record<string, unknown>,
+    auth: AuthInfo = { role: "agent", clientId: ns },
+  ) {
+    const server = new McpServer({ name: "test", version: "1.0.0" });
+    const deps: ToolDeps = {
+      pool: pool as any,
+      embedFn: createMockEmbed(null),
+    };
+    registerAppendSessionEvent(server, deps);
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    const original = ct.send.bind(ct);
+    ct.send = (m: any, o?: any) => original(m, { ...o, authInfo: auth });
+    const client = new Client({ name: "tc", version: "1.0.0" });
+    await server.connect(st);
+    await client.connect(ct);
+    const res = await client.callTool({
+      name: "append_session_event",
+      arguments: args,
+    });
+    await client.close();
+    await server.close();
+    return res;
+  }
+
+  async function cleanupNs() {
+    // Events cascade from lanes; delete by namespace-scoped lane ids.
+    await pool.query(
+      `DELETE FROM ob_session_events WHERE lane_id IN
+         (SELECT id FROM ob_session_lanes WHERE namespace = $1)`,
+      [ns],
+    );
+    await pool.query("DELETE FROM ob_session_lanes WHERE namespace = $1", [ns]);
+  }
+
+  afterAll(async () => {
+    await pool.end();
+  });
+
+  it("creates the lane on first write and reuses it idempotently on the second", async () => {
+    await cleanupNs();
+    try {
+      const first = await callAppend({
+        session_key: "live-first",
+        create_if_missing: true,
+        agent: "nagatha",
+        platform: "discord",
+        server_id: "guild-1",
+        channel_id: "channel-1",
+        event_type: "fact",
+        content: "first scoped event",
+      });
+      expect(first.isError).toBeFalsy();
+      const p1 = JSON.parse((first.content as any)[0].text);
+      expect(p1.lane_created).toBe(true);
+
+      const second = await callAppend({
+        session_key: "live-first",
+        create_if_missing: true,
+        agent: "nagatha",
+        platform: "discord",
+        server_id: "guild-1",
+        channel_id: "channel-1",
+        event_type: "fact",
+        content: "second scoped event",
+      });
+      expect(second.isError).toBeFalsy();
+      const p2 = JSON.parse((second.content as any)[0].text);
+      expect(p2.lane_created).toBe(false);
+      expect(p2.lane_id).toBe(p1.lane_id);
+
+      const { rows } = await pool.query(
+        "SELECT COUNT(*)::int AS n FROM ob_session_lanes WHERE namespace=$1 AND session_key=$2",
+        [ns, "live-first"],
+      );
+      expect(rows[0].n).toBe(1);
+    } finally {
+      await cleanupNs();
+    }
+  });
+
+  it("creates exactly one lane under a genuine concurrent first-write race", async () => {
+    await cleanupNs();
+    try {
+      const mk = (content: string) =>
+        callAppend({
+          session_key: "live-race",
+          create_if_missing: true,
+          agent: "nagatha",
+          platform: "discord",
+          server_id: "guild-1",
+          channel_id: "channel-1",
+          event_type: "fact",
+          content,
+        });
+      const [a, b] = await Promise.all([mk("racer A"), mk("racer B")]);
+      expect(a.isError).toBeFalsy();
+      expect(b.isError).toBeFalsy();
+      const pa = JSON.parse((a.content as any)[0].text);
+      const pb = JSON.parse((b.content as any)[0].text);
+      // Exactly one call reports it created the lane; both resolve to the same lane.
+      expect(Number(pa.lane_created) + Number(pb.lane_created)).toBe(1);
+      expect(pa.lane_id).toBe(pb.lane_id);
+
+      const { rows } = await pool.query(
+        "SELECT COUNT(*)::int AS n FROM ob_session_lanes WHERE namespace=$1 AND session_key=$2",
+        [ns, "live-race"],
+      );
+      expect(rows[0].n).toBe(1);
+    } finally {
+      await cleanupNs();
+    }
+  });
+
+  it("denies a scoped append that conflicts with the real stored lane scope", async () => {
+    await cleanupNs();
+    try {
+      await callAppend({
+        session_key: "live-conflict",
+        create_if_missing: true,
+        agent: "nagatha",
+        platform: "discord",
+        server_id: "guild-1",
+        channel_id: "channel-1",
+        event_type: "fact",
+        content: "owns channel-1",
+      });
+      const conflict = await callAppend({
+        session_key: "live-conflict",
+        create_if_missing: true,
+        agent: "nagatha",
+        platform: "discord",
+        server_id: "guild-1",
+        channel_id: "channel-2",
+        event_type: "fact",
+        content: "must not spill into channel-2",
+      });
+      expect(conflict.isError).toBe(true);
+      const parsed = JSON.parse((conflict.content as any)[0].text);
+      expect(parsed.error).toBe("scope_validation");
+      expect(parsed.conflicts).toEqual(["channel_id"]);
+    } finally {
+      await cleanupNs();
+    }
+  });
+
+  it("denies cross-namespace create_if_missing for a non-global token", async () => {
+    await cleanupNs();
+    try {
+      const res = await callAppend(
+        {
+          session_key: "live-cross-ns",
+          namespace: "some-other-namespace",
+          create_if_missing: true,
+          agent: "nagatha",
+          platform: "discord",
+          server_id: "guild-1",
+          channel_id: "channel-1",
+          event_type: "fact",
+          content: "should never be written",
+        },
+        { role: "agent", clientId: ns },
+      );
+      expect(res.isError).toBe(true);
+      const parsed = JSON.parse((res.content as any)[0].text);
+      expect(parsed.error).toBe("auth_denied");
+      // No lane may have been created in the foreign namespace.
+      const { rows } = await pool.query(
+        "SELECT COUNT(*)::int AS n FROM ob_session_lanes WHERE namespace=$1",
+        ["some-other-namespace"],
+      );
+      expect(rows[0].n).toBe(0);
+    } finally {
+      await cleanupNs();
     }
   });
 });

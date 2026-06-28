@@ -444,7 +444,7 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
     output_shape: "session lane array JSON text payload",
   },
   append_session_event: {
-    version: 4,
+    version: 5,
     input_schema: {
       session_key: {
         type: "string",
@@ -452,8 +452,8 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
         minLength: 1,
         maxLength: 500,
         description:
-          "Identifier of the lane to append to. Must match a lane you " +
-          "started or upserted; the event is journaled under this lane.",
+          "Identifier of the lane to append to. With create_if_missing=true, " +
+          "a missing lane is created first and the event is journaled under it.",
       },
       namespace: {
         type: "string",
@@ -462,6 +462,68 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
         description:
           "Memory partition for the event. Defaults to your own " +
           "auth-derived namespace; override only when authorized for another.",
+      },
+      create_if_missing: {
+        type: "boolean",
+        required: false,
+        description:
+          "Create the session lane when it is missing, then append the event. " +
+          "Use for first-write realtime agent scopes so callers do not have to " +
+          "pre-provision lanes manually. Repeated calls with the same " +
+          "namespace/session_key return or reuse the same lane.",
+      },
+      agent: {
+        type: "string",
+        required: false,
+        maxLength: 500,
+        description:
+          "Agent identity to bind when create_if_missing creates a lane, and " +
+          "to validate against an existing lane when supplied.",
+      },
+      platform: {
+        type: "string",
+        required: false,
+        maxLength: 500,
+        description:
+          "Platform/source identity to bind when create_if_missing creates a " +
+          "lane, such as discord. Stored as the lane source.",
+      },
+      server_id: {
+        type: "string",
+        required: false,
+        maxLength: 500,
+        description:
+          "Server/guild identity for exact realtime scope. Stored in lane metadata.",
+      },
+      channel_id: {
+        type: "string",
+        required: false,
+        maxLength: 500,
+        description:
+          "Channel identity to bind when create_if_missing creates a lane, and " +
+          "to validate against an existing lane when supplied.",
+      },
+      thread_id: {
+        type: "string",
+        required: false,
+        maxLength: 500,
+        description:
+          "Thread identity to bind when create_if_missing creates a lane, and " +
+          "to validate against an existing lane when supplied.",
+      },
+      project: {
+        type: "string",
+        required: false,
+        maxLength: 500,
+        description:
+          "Project name to set if create_if_missing creates the lane.",
+      },
+      topic: {
+        type: "string",
+        required: false,
+        maxLength: 500,
+        description:
+          "Human-readable topic to set if create_if_missing creates the lane.",
       },
       event_type: {
         type: "enum",
@@ -557,8 +619,10 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
       },
     },
     output_shape:
-      "session event JSON text payload with writer_identity, token_identity, " +
-      "delegated_agent_id, and namespace_source provenance fields",
+      "session event JSON text payload with lane_created, writer_identity, " +
+      "token_identity, delegated_agent_id, and namespace_source provenance " +
+      "fields; error payloads use error classes retryable_outage, auth_denied, " +
+      "scope_validation, unsupported_operation, or conflict_retry",
   },
   session_wrap: {
     version: 2,

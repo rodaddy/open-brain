@@ -46,7 +46,7 @@ adapter facade.
 | --- | --- | --- | --- | --- |
 | `start` | client + server | `session_start`, optional `lane_upsert` | available | Open or resume a lane using stable `session_key`, `project`, `agent`, optional `channel_id`, `thread_id`, `topic`, color, and metadata. |
 | `recall` | client + server | `session_context`, `search_all`, `brain_answer` | available | Retrieve lane context and cited memory evidence. Clients choose prompt shaping; Open Brain returns readable, namespace-safe rows only. |
-| `append_event` | client + server | `append_session_event` | available | Write distilled `fact`, `decision`, `blocker`, `action`, `artifact`, `receipt`, `question`, `correction`, or `handoff` events. |
+| `append_event` | client + server | `append_session_event` | available | Write distilled `fact`, `decision`, `blocker`, `action`, `artifact`, `receipt`, `question`, `correction`, or `handoff` events. Realtime agents may set `create_if_missing=true` with exact scope fields so the first scoped append creates the lane instead of requiring manual setup. |
 | `compact` | client | `session_context`, caller-provided local distillation, `session_wrap` | client-wrapper | Read current context, distill it through caller policy or an explicit summary, then checkpoint via `session_wrap`. Open Brain does not store raw compaction transcripts. |
 | `wrap` | client + server | `session_wrap` | available | Checkpoint a completed work phase with summary, key decisions, next steps, and optional receipt references. Use `compact` when the adapter should read current session context before wrapping. |
 | `record_receipt` | client + server | `append_session_event` with `event_type=receipt` | client-wrapper | Assemble citation-safe receipt metadata locally and write it as a receipt event. |
@@ -66,6 +66,27 @@ All adapter calls should carry:
   available.
 - `metadata`: bounded JSON for color, display labels, OKF hooks, caller version,
   and local runtime facts.
+
+For realtime first-write lane creation, `append_session_event` accepts
+`create_if_missing=true` plus exact-scope fields:
+
+- `agent`;
+- `platform`;
+- `server_id`;
+- `channel_id`;
+- `thread_id`.
+
+When the lane is missing, Open Brain creates it and appends the event in the
+same tool call. When the lane already exists, any supplied exact-scope field
+must match the stored lane scope; mismatches fail with a structured
+`scope_validation` error instead of silently spilling events across agents,
+servers, channels, threads, or sessions.
+
+Structured append failures use the `error` classes `retryable_outage`,
+`auth_denied`, `scope_validation`, `unsupported_operation`, and
+`conflict_retry`, plus `retryable` so Hermes can decide whether to spool/retry
+or stop. Clients should not parse generic text such as "lane not found" for
+control flow.
 
 ## Disclosure Export
 
@@ -114,17 +135,31 @@ adapter to map platform identity into lane metadata without importing Hermes
 runtime code into this repo:
 
 - `agent`: Hermes agent identity such as `bilby` or `skippy`;
-- `source`: Hermes runtime/plugin source, such as `hermes-discord`;
+- `platform`: platform label such as `discord` — stored as the lane `source`
+  column and compared on subsequent scoped appends;
+- `server_id`: server/guild identity — stored in `metadata.server_id` and
+  compared on subsequent scoped appends;
 - `channel_id` and `thread_id`: Discord channel/thread identifiers;
-- `metadata.platform`: `discord` or another platform label;
 - `metadata.agent_profile`: profile/config identifier safe to store;
 - `metadata.transport`: `openbrain-memory`, `mcp2cli`, or direct provider path;
 - `record_receipt`: external channel, spool, validation, and handoff receipts.
 
+Scope comparison treats a null/absent stored value as unconstrained: a lane
+created by `session_start`/`lane_upsert` (which do not record `source` or
+`metadata.server_id`) accepts a first scoped append instead of failing
+`scope_validation`. Only a non-null mismatch on agent, platform, server_id,
+channel_id, or thread_id is rejected as a cross-scope spill.
+
+For Nagatha-style realtime Discord writes, Hermes should call
+`append_session_event` with `create_if_missing=true` and the Discord exact scope.
+Missing lanes are normal first-write state. Hermes should spool and retry
+`retryable_outage` failures, stop on `auth_denied` or `scope_validation`, and
+avoid falling back from scoped session events to unscoped `log_thought`.
+
 Open Brain local tests may fixture these call shapes through fake transports.
 Actual rtech-hermes runtime/plugin changes, hosted verification, and live
-Hermes canaries belong to #216 unless Rico explicitly approves that rollout
-phase.
+Hermes canaries belong to the consuming Hermes issue (rtech-hermes#276) unless
+Rico explicitly approves that rollout phase.
 
 ## Lightweight Receipt Schema
 

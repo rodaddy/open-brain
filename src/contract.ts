@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { TOOL_CONTRACTS } from "./contract-schemas.ts";
 
-export const CONTRACT_VERSION = "2026-06-28.memory-tools.v10";
+export const CONTRACT_VERSION = "2026-06-28.memory-tools.v11";
 export const CONTRACT_SCHEMA_VERSION = 1;
 
 export interface ContractCapability {
@@ -218,12 +218,13 @@ export const CONTRACT_CAPABILITIES: ContractCapability[] = [
   },
   {
     name: "append_session_event",
-    version: 4,
+    version: 5,
     kind: "tool",
     description:
       "Append one durable, typed event (fact, decision, blocker, action, etc.) " +
       "to a session lane's journal. This is the main way to record what happened " +
-      "during a session so it survives and can be recalled later.",
+      "during a session so it survives and can be recalled later. Supports " +
+      "first-write lane creation with create_if_missing for realtime agents.",
   },
   {
     name: "session_wrap",

@@ -234,15 +234,31 @@ describe("Open Brain contract manifest", () => {
     // contract so a future TS/Python divergence fails here, in lockstep with
     // python/openbrain-memory CURRENT_CONTRACT_VERSION.
     const contract = buildContract("2026-06-18T00:00:00.000Z");
-    expect(contract.contract_version).toBe("2026-06-28.memory-tools.v10");
+    expect(contract.contract_version).toBe("2026-06-28.memory-tools.v11");
 
     const appendEvent = contract.tool_contracts.append_session_event;
     expect(appendEvent).toBeDefined();
-    expect(appendEvent?.version).toBe(4);
+    expect(appendEvent?.version).toBe(5);
     expect(appendEvent?.output_shape).toContain("writer_identity");
     expect(appendEvent?.output_shape).toContain("token_identity");
     expect(appendEvent?.output_shape).toContain("delegated_agent_id");
     expect(appendEvent?.output_shape).toContain("namespace_source");
+    expect(appendEvent?.output_shape).toContain("lane_created");
+    expect(appendEvent?.output_shape).toContain("retryable_outage");
+    const appendInput = appendEvent?.input_schema as any;
+    expect(appendInput.create_if_missing.type).toBe("boolean");
+    expect(appendInput.create_if_missing.description).toContain(
+      "first-write realtime agent scopes",
+    );
+    expect(appendInput.agent.description).toContain("validate against an existing lane");
+    expect(appendInput.platform.description).toContain("Stored as the lane source");
+    expect(appendInput.server_id.description).toContain("exact realtime scope");
+    expect(appendInput.channel_id.description).toContain(
+      "validate against an existing lane",
+    );
+    expect(appendInput.thread_id.description).toContain(
+      "validate against an existing lane",
+    );
     const shareCandidate = (appendEvent?.input_schema as any).metadata.fields
       .share_candidate;
     expect(shareCandidate.type).toBe("boolean");
