@@ -1,4 +1,5 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect, afterAll } from "bun:test";
+import { Pool } from "pg";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -1329,6 +1330,198 @@ describe("append_session_event", () => {
       expect((result.content as any)[0].text).toContain("Database error");
     } finally {
       await cleanup();
+    }
+  });
+});
+
+// ── LIVE POSTGRES (real ON CONFLICT / race / scope-isolation coverage) ──
+// Mock pools cannot execute ON CONFLICT, real UNIQUE constraints, or genuine
+// concurrent inserts, so the create_if_missing race + scope-isolation guarantee
+// the contract depends on (consumed by rtech-hermes#276) is proven here against
+// a real pool. Gated on OPENBRAIN_TEST_DATABASE_URL; CI sets it (ci.yml), the
+// default infra-free suite skips. Run locally with:
+//   OPENBRAIN_TEST_DATABASE_URL=postgres://... bun test src/tools/__tests__/append-session-event.test.ts
+const DB_URL = process.env.OPENBRAIN_TEST_DATABASE_URL;
+const dbDescribe = DB_URL ? describe : describe.skip;
+
+dbDescribe("append_session_event create_if_missing (live Postgres)", () => {
+  const pool = new Pool({ connectionString: DB_URL });
+  const ns = "test-append-live";
+
+  async function callAppend(
+    args: Record<string, unknown>,
+    auth: AuthInfo = { role: "agent", clientId: ns },
+  ) {
+    const server = new McpServer({ name: "test", version: "1.0.0" });
+    const deps: ToolDeps = {
+      pool: pool as any,
+      embedFn: createMockEmbed(null),
+    };
+    registerAppendSessionEvent(server, deps);
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    const original = ct.send.bind(ct);
+    ct.send = (m: any, o?: any) => original(m, { ...o, authInfo: auth });
+    const client = new Client({ name: "tc", version: "1.0.0" });
+    await server.connect(st);
+    await client.connect(ct);
+    const res = await client.callTool({
+      name: "append_session_event",
+      arguments: args,
+    });
+    await client.close();
+    await server.close();
+    return res;
+  }
+
+  async function cleanupNs() {
+    // Events cascade from lanes; delete by namespace-scoped lane ids.
+    await pool.query(
+      `DELETE FROM ob_session_events WHERE lane_id IN
+         (SELECT id FROM ob_session_lanes WHERE namespace = $1)`,
+      [ns],
+    );
+    await pool.query("DELETE FROM ob_session_lanes WHERE namespace = $1", [ns]);
+  }
+
+  afterAll(async () => {
+    await pool.end();
+  });
+
+  it("creates the lane on first write and reuses it idempotently on the second", async () => {
+    await cleanupNs();
+    try {
+      const first = await callAppend({
+        session_key: "live-first",
+        create_if_missing: true,
+        agent: "nagatha",
+        platform: "discord",
+        server_id: "guild-1",
+        channel_id: "channel-1",
+        event_type: "fact",
+        content: "first scoped event",
+      });
+      expect(first.isError).toBeFalsy();
+      const p1 = JSON.parse((first.content as any)[0].text);
+      expect(p1.lane_created).toBe(true);
+
+      const second = await callAppend({
+        session_key: "live-first",
+        create_if_missing: true,
+        agent: "nagatha",
+        platform: "discord",
+        server_id: "guild-1",
+        channel_id: "channel-1",
+        event_type: "fact",
+        content: "second scoped event",
+      });
+      expect(second.isError).toBeFalsy();
+      const p2 = JSON.parse((second.content as any)[0].text);
+      expect(p2.lane_created).toBe(false);
+      expect(p2.lane_id).toBe(p1.lane_id);
+
+      const { rows } = await pool.query(
+        "SELECT COUNT(*)::int AS n FROM ob_session_lanes WHERE namespace=$1 AND session_key=$2",
+        [ns, "live-first"],
+      );
+      expect(rows[0].n).toBe(1);
+    } finally {
+      await cleanupNs();
+    }
+  });
+
+  it("creates exactly one lane under a genuine concurrent first-write race", async () => {
+    await cleanupNs();
+    try {
+      const mk = (content: string) =>
+        callAppend({
+          session_key: "live-race",
+          create_if_missing: true,
+          agent: "nagatha",
+          platform: "discord",
+          server_id: "guild-1",
+          channel_id: "channel-1",
+          event_type: "fact",
+          content,
+        });
+      const [a, b] = await Promise.all([mk("racer A"), mk("racer B")]);
+      expect(a.isError).toBeFalsy();
+      expect(b.isError).toBeFalsy();
+      const pa = JSON.parse((a.content as any)[0].text);
+      const pb = JSON.parse((b.content as any)[0].text);
+      // Exactly one call reports it created the lane; both resolve to the same lane.
+      expect(Number(pa.lane_created) + Number(pb.lane_created)).toBe(1);
+      expect(pa.lane_id).toBe(pb.lane_id);
+
+      const { rows } = await pool.query(
+        "SELECT COUNT(*)::int AS n FROM ob_session_lanes WHERE namespace=$1 AND session_key=$2",
+        [ns, "live-race"],
+      );
+      expect(rows[0].n).toBe(1);
+    } finally {
+      await cleanupNs();
+    }
+  });
+
+  it("denies a scoped append that conflicts with the real stored lane scope", async () => {
+    await cleanupNs();
+    try {
+      await callAppend({
+        session_key: "live-conflict",
+        create_if_missing: true,
+        agent: "nagatha",
+        platform: "discord",
+        server_id: "guild-1",
+        channel_id: "channel-1",
+        event_type: "fact",
+        content: "owns channel-1",
+      });
+      const conflict = await callAppend({
+        session_key: "live-conflict",
+        create_if_missing: true,
+        agent: "nagatha",
+        platform: "discord",
+        server_id: "guild-1",
+        channel_id: "channel-2",
+        event_type: "fact",
+        content: "must not spill into channel-2",
+      });
+      expect(conflict.isError).toBe(true);
+      const parsed = JSON.parse((conflict.content as any)[0].text);
+      expect(parsed.error).toBe("scope_validation");
+      expect(parsed.conflicts).toEqual(["channel_id"]);
+    } finally {
+      await cleanupNs();
+    }
+  });
+
+  it("denies cross-namespace create_if_missing for a non-global token", async () => {
+    await cleanupNs();
+    try {
+      const res = await callAppend(
+        {
+          session_key: "live-cross-ns",
+          namespace: "some-other-namespace",
+          create_if_missing: true,
+          agent: "nagatha",
+          platform: "discord",
+          server_id: "guild-1",
+          channel_id: "channel-1",
+          event_type: "fact",
+          content: "should never be written",
+        },
+        { role: "agent", clientId: ns },
+      );
+      expect(res.isError).toBe(true);
+      const parsed = JSON.parse((res.content as any)[0].text);
+      expect(parsed.error).toBe("auth_denied");
+      // No lane may have been created in the foreign namespace.
+      const { rows } = await pool.query(
+        "SELECT COUNT(*)::int AS n FROM ob_session_lanes WHERE namespace=$1",
+        ["some-other-namespace"],
+      );
+      expect(rows[0].n).toBe(0);
+    } finally {
+      await cleanupNs();
     }
   });
 });
