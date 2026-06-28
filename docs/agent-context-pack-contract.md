@@ -60,7 +60,9 @@ Optional fields:
 
 - `thread_id`: distinguishes Discord threads or equivalent platform threads.
 - `user_id`: caller/user identity when safe and useful for profile scoping.
-- `requested_sections`: subset of known response sections.
+- `requested_sections`: subset of the known section names listed under
+  "Response Shape". It selects `sections` members only; it does not toggle the
+  always-present envelope fields (`warnings`, `budget`, `citations`).
 - `repo`: repo slug for repo-fact filtering, such as `rodaddy/open-brain`.
 - `task`: short current task label for ranking and warnings.
 - `include_unreviewed_recovery`: false by default; true only for explicit
@@ -79,6 +81,10 @@ The scope key is:
 ```text
 namespace + agent + platform + server_id + channel_id + thread_id + session_key
 ```
+
+`session_key` is the canonical, contract-pinned name for the per-session scope
+element that the #225 research note (`docs/realtime-agent-memory-research.md`)
+refers to as `session_id`; they denote the same element.
 
 Exact-scope filters must run before semantic search, ranking, or truncation.
 Working-set and recovery sections require an exact match. Missing `thread_id`
@@ -122,7 +128,9 @@ Top-level fields:
 }
 ```
 
-Known section names:
+Known section names (the `sections` object members; this list is what
+`requested_sections` selects from, and it is mirrored by
+`get_contract().agent_context_pack.sections`):
 
 - `working_set`: exact-scope hot state only; labeled working context, not
   durable memory.
@@ -139,6 +147,11 @@ Known section names:
   follow-up fetching.
 - `candidate_memory`: explicit candidates only; presence in the pack is not a
   durable write or shared-kb promotion.
+
+`warnings`, `budget`, and `citations` are always-present top-level envelope
+fields, not section members. They are mirrored by
+`get_contract().agent_context_pack.envelope_fields` and cannot be toggled
+through `requested_sections`.
 
 Warning fields:
 
@@ -174,8 +187,7 @@ Hermes should be able to request:
     "durable_lane_context",
     "durable_memory",
     "repo_facts",
-    "pointers",
-    "warnings"
+    "pointers"
   ],
   "budget": {
     "max_tokens": 3500,
@@ -202,11 +214,15 @@ The response must make the source boundary explicit:
 
 ## Acceptance Fixtures
 
-Implementation must include fixtures that prove:
+Implementation must include the fixtures below. Working-set/recovery denial
+coverage MUST include one explicit denial case per scope key (all seven keys
+from "Exact Scope Predicate"), not a subset:
 
 - same namespace/agent/platform/server/channel/session can receive working-set
   context;
+- different namespace is denied working-set context;
 - different agent is denied working-set context;
+- different platform/source is denied working-set context;
 - different server/guild is denied working-set context;
 - different channel is denied working-set context;
 - different thread is denied working-set context;
@@ -219,7 +235,10 @@ Implementation must include fixtures that prove:
 
 ## Contract Availability
 
-`get_contract` exposes this as:
+`get_contract` exposes this as (abbreviated; the emitted object also carries
+`parent_issue`, `exact_scope_required`, `scope_keys`, `sections`,
+`envelope_fields`, and `warning_fields` — see `src/contract.ts` for the full
+authoritative shape):
 
 ```json
 {

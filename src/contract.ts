@@ -85,7 +85,7 @@ export interface OpenBrainContract {
       "thread_id",
       "session_key",
     ];
-    output_sections: readonly [
+    sections: readonly [
       "working_set",
       "durable_lane_context",
       "durable_memory",
@@ -93,10 +93,9 @@ export interface OpenBrainContract {
       "process_guidance",
       "repo_facts",
       "pointers",
-      "warnings",
-      "budget",
-      "citations",
+      "candidate_memory",
     ];
+    envelope_fields: readonly ["warnings", "budget", "citations"];
     warning_fields: readonly [
       "missing_facts",
       "stale_sources",
@@ -423,7 +422,7 @@ export function buildContract(
         "thread_id",
         "session_key",
       ] as const,
-      output_sections: [
+      sections: [
         "working_set",
         "durable_lane_context",
         "durable_memory",
@@ -431,10 +430,9 @@ export function buildContract(
         "process_guidance",
         "repo_facts",
         "pointers",
-        "warnings",
-        "budget",
-        "citations",
+        "candidate_memory",
       ] as const,
+      envelope_fields: ["warnings", "budget", "citations"] as const,
       warning_fields: [
         "missing_facts",
         "stale_sources",

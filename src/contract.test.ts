@@ -91,7 +91,7 @@ describe("Open Brain contract manifest", () => {
       "thread_id",
       "session_key",
     ]);
-    expect(contract.agent_context_pack.output_sections).toEqual([
+    expect(contract.agent_context_pack.sections).toEqual([
       "working_set",
       "durable_lane_context",
       "durable_memory",
@@ -99,6 +99,14 @@ describe("Open Brain contract manifest", () => {
       "process_guidance",
       "repo_facts",
       "pointers",
+      "candidate_memory",
+    ]);
+    // candidate_memory carries the candidate-only / not-a-durable-write label,
+    // so it must appear in the machine-readable section enumeration.
+    expect(contract.agent_context_pack.sections).toContain("candidate_memory");
+    // Envelope fields are top-level response keys, not section members; keep
+    // them distinct so requested_sections stays a true subset of sections.
+    expect(contract.agent_context_pack.envelope_fields).toEqual([
       "warnings",
       "budget",
       "citations",
