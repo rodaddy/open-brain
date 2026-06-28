@@ -135,12 +135,20 @@ adapter to map platform identity into lane metadata without importing Hermes
 runtime code into this repo:
 
 - `agent`: Hermes agent identity such as `bilby` or `skippy`;
-- `source`: Hermes runtime/plugin source, such as `hermes-discord`;
+- `platform`: platform label such as `discord` — stored as the lane `source`
+  column and compared on subsequent scoped appends;
+- `server_id`: server/guild identity — stored in `metadata.server_id` and
+  compared on subsequent scoped appends;
 - `channel_id` and `thread_id`: Discord channel/thread identifiers;
-- `metadata.platform`: `discord` or another platform label;
 - `metadata.agent_profile`: profile/config identifier safe to store;
 - `metadata.transport`: `openbrain-memory`, `mcp2cli`, or direct provider path;
 - `record_receipt`: external channel, spool, validation, and handoff receipts.
+
+Scope comparison treats a null/absent stored value as unconstrained: a lane
+created by `session_start`/`lane_upsert` (which do not record `source` or
+`metadata.server_id`) accepts a first scoped append instead of failing
+`scope_validation`. Only a non-null mismatch on agent, platform, server_id,
+channel_id, or thread_id is rejected as a cross-scope spill.
 
 For Nagatha-style realtime Discord writes, Hermes should call
 `append_session_event` with `create_if_missing=true` and the Discord exact scope.
@@ -150,8 +158,8 @@ avoid falling back from scoped session events to unscoped `log_thought`.
 
 Open Brain local tests may fixture these call shapes through fake transports.
 Actual rtech-hermes runtime/plugin changes, hosted verification, and live
-Hermes canaries belong to the consuming Hermes issue unless Rico explicitly
-approves that rollout phase.
+Hermes canaries belong to the consuming Hermes issue (rtech-hermes#276) unless
+Rico explicitly approves that rollout phase.
 
 ## Lightweight Receipt Schema
 

@@ -65,6 +65,12 @@ function scopeConflicts(
 
   for (const [field, existing, requested] of checks) {
     if (requested === undefined) continue;
+    // A null/absent existing value means this lane never asserted that scope
+    // dimension (e.g. a lane created by session_start/lane_upsert, which do not
+    // write `source` or `metadata.server_id`). Treat it as unconstrained so a
+    // first scoped append attaches instead of falsely failing scope_validation.
+    // Only a non-null mismatch is a real cross-scope spill.
+    if (existing === null || existing === undefined) continue;
     if (existing !== requested) conflicts.push(field);
   }
 

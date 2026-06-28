@@ -554,6 +554,118 @@ describe("append_session_event", () => {
     }
   });
 
+  it("appends to a session_start-created lane with null scope without false conflict", async () => {
+    // Lanes created by session_start/lane_upsert do not write the `source`
+    // column or `metadata.server_id`. A later scoped realtime append must
+    // attach to such a lane rather than fail scope_validation on null vs
+    // "discord"/"guild-1".
+    let eventInsertAttempted = false;
+    const mockPool = {
+      query: async (sql: string, _params?: any[]) => {
+        if (sql.includes("FROM ob_session_lanes")) {
+          return {
+            rows: [
+              {
+                id: "lane-uuid-sessionstart",
+                status: "active",
+                agent: "nagatha",
+                source: null,
+                channel_id: "channel-1",
+                thread_id: null,
+                metadata: {},
+              },
+            ],
+          };
+        }
+        if (sql.includes("INSERT INTO ob_session_events")) {
+          eventInsertAttempted = true;
+          return {
+            rows: [{ id: "event-uuid-1", created_at: "2026-06-28T10:00:00Z" }],
+          };
+        }
+        return { rows: [] };
+      },
+    };
+    const auth: AuthInfo = { role: "agent", clientId: "nagatha" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "append_session_event",
+        arguments: {
+          session_key: "discord:guild-1:channel-1:nagatha",
+          agent: "nagatha",
+          platform: "discord",
+          server_id: "guild-1",
+          channel_id: "channel-1",
+          event_type: "fact",
+          content: "Scoped append onto a session_start-created lane.",
+        },
+      });
+
+      expect(result.isError).toBeUndefined();
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.event_id).toBe("event-uuid-1");
+      expect(eventInsertAttempted).toBe(true);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("still denies a non-null scope mismatch against an existing lane", async () => {
+    // The null-tolerance above must not weaken real spill protection: a lane
+    // that DID assert a channel still rejects a mismatched scoped append.
+    let eventInsertAttempted = false;
+    const mockPool = {
+      query: async (sql: string, _params?: any[]) => {
+        if (sql.includes("FROM ob_session_lanes")) {
+          return {
+            rows: [
+              {
+                id: "lane-uuid-asserted",
+                status: "active",
+                agent: "nagatha",
+                source: "discord",
+                channel_id: "channel-1",
+                thread_id: null,
+                metadata: { server_id: "guild-1" },
+              },
+            ],
+          };
+        }
+        if (sql.includes("INSERT INTO ob_session_events")) {
+          eventInsertAttempted = true;
+        }
+        return { rows: [] };
+      },
+    };
+    const auth: AuthInfo = { role: "agent", clientId: "nagatha" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "append_session_event",
+        arguments: {
+          session_key: "discord:guild-1:channel-1:nagatha",
+          agent: "nagatha",
+          platform: "discord",
+          server_id: "guild-1",
+          channel_id: "channel-2",
+          event_type: "fact",
+          content: "Mismatched channel must still be denied.",
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.error).toBe("scope_validation");
+      expect(parsed.conflicts).toEqual(["channel_id"]);
+      expect(eventInsertAttempted).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("returns retryable_outage when the database fails before append", async () => {
     const mockPool = {
       query: async () => {
