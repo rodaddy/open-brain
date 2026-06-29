@@ -1,0 +1,122 @@
+name: Codex Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: codex-review-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  codex-review:
+    if: |
+      (github.event_name == 'pull_request') ||
+      (github.event_name == 'issue_comment' && (
+        contains(github.event.comment.body, '@codex') ||
+        contains(github.event.comment.body, '/codex-review') ||
+        contains(github.event.comment.body, '/codex-deep')
+      ))
+    runs-on: [self-hosted, Linux, rodaddy]
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Resolve review context
+        id: review-context
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            pr_number="${{ github.event.pull_request.number }}"
+            base_ref="${{ github.event.pull_request.base.ref }}"
+          else
+            pr_number="${{ github.event.issue.number }}"
+            if ! gh api "repos/${{ github.repository }}/pulls/${pr_number}" >/dev/null; then
+              echo "Issue comment did not target a pull request; skipping Codex review."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            base_ref="$(gh pr view "$pr_number" --json baseRefName --jq .baseRefName)"
+            gh pr checkout "$pr_number"
+          fi
+
+          git fetch origin "$base_ref"
+
+          changed_files="$(gh pr diff "$pr_number" --name-only | sed '/^$/d' | wc -l | tr -d ' ')"
+          changed_lines="$(gh pr diff "$pr_number" --patch | awk '/^[+-][^+-]/ { count++ } END { print count + 0 }')"
+
+          model="gpt-5.5"
+          effort="low"
+          review_depth="normal"
+          if [[ "${COMMENT_BODY:-}" == *"/codex-deep"* || "${COMMENT_BODY:-}" == *"@codex-deep"* || "$changed_files" -ge 8 || "$changed_lines" -ge 400 ]]; then
+            model="gpt-5.4"
+            effort="medium"
+            review_depth="deep"
+          fi
+
+          {
+            echo "skip=false"
+            echo "pr-number=$pr_number"
+            echo "base-ref=$base_ref"
+            echo "changed-files=$changed_files"
+            echo "changed-lines=$changed_lines"
+            echo "model=$model"
+            echo "effort=$effort"
+            echo "review-depth=$review_depth"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Run Codex review
+        if: steps.review-context.outputs.skip != 'true'
+        id: codex-review
+        run: |
+          set +e
+          codex e review \
+            --base "origin/${{ steps.review-context.outputs.base-ref }}" \
+            -m "${{ steps.review-context.outputs.model }}" \
+            -c "model_reasoning_effort=\"${{ steps.review-context.outputs.effort }}\"" \
+            "Review this PR. Focus on:
+            1. Bugs and logic errors
+            2. Security issues (OWASP top 10, SQL injection via dynamic table names)
+            3. Performance concerns (N+1 queries, missing indexes, O(n^2) patterns)
+            4. Missing error handling at system boundaries
+            5. Embedding quality (correct text construction per table type)
+            6. If you find a recurring mistake pattern, suggest an AGENTS.md correction at the end of your review." \
+            > codex-review.md
+          status=$?
+          echo "exit-code=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Post Codex review
+        if: steps.review-context.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Codex Review (${{ steps.review-context.outputs.review-depth }})"
+            echo
+            echo "- Model: \`${{ steps.review-context.outputs.model }}\`"
+            echo "- Reasoning effort: \`${{ steps.review-context.outputs.effort }}\`"
+            echo "- Changed files: \`${{ steps.review-context.outputs.changed-files }}\`"
+            echo "- Changed lines: \`${{ steps.review-context.outputs.changed-lines }}\`"
+            echo
+            cat codex-review.md
+          } > codex-review-comment.md
+          gh pr comment "${{ steps.review-context.outputs.pr-number }}" --body-file codex-review-comment.md
+
+      - name: Fail on Codex review error
+        if: steps.review-context.outputs.skip != 'true' && steps.codex-review.outputs.exit-code != '0'
+        run: exit 1
