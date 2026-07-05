@@ -23,6 +23,7 @@ jobs:
       DB_USER: test
       DB_PASSWORD: test
       DB_NAME: open_brain_test
+      DB_NAME_TEST: open_brain_test_migrations_${{ github.run_id }}_${{ github.run_attempt }}
       # Enable the env-gated real-Pool integration tests in CI (issue #165).
       # Without this, every `dbDescribe`-gated suite (lane_upsert, the #161
       # cursor-stall promoter tests) silently SKIPs and the SQL write paths get
@@ -44,8 +45,19 @@ jobs:
       - name: Run migrations
         run: bun run migrate
 
+      - name: Create isolated migration-test database
+        run: |
+          PGPASSWORD="${DB_PASSWORD}" createdb -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" "${DB_NAME_TEST}"
+          PGPASSWORD="${DB_PASSWORD}" psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME_TEST}" \
+            -v ON_ERROR_STOP=1 \
+            -c "CREATE EXTENSION IF NOT EXISTS vector;"
+
       - name: Test
         run: bun test
+
+      - name: Drop isolated migration-test database
+        if: always()
+        run: PGPASSWORD="${DB_PASSWORD}" dropdb --if-exists --force -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" "${DB_NAME_TEST}"
 
   # Issue #165: authoritative DB-backed integration gate.
   #
