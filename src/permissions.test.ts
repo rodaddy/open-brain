@@ -16,7 +16,7 @@ describe("PERMISSIONS matrix", () => {
       "admin",
       "agent",
       "discord",
-      "n8n",
+      "ob-admin",
       "promoter",
       "readonly",
     ];
@@ -106,13 +106,13 @@ describe("discord role", () => {
   });
 });
 
-describe("n8n role", () => {
-  test.each(ALL_TABLES)("canRead(n8n, %s) returns true", (table) => {
-    expect(canRead("n8n", table)).toBe(true);
+describe("ob-admin role", () => {
+  test.each(ALL_TABLES)("canRead(ob-admin, %s) returns true", (table) => {
+    expect(canRead("ob-admin", table)).toBe(true);
   });
 
-  test.each(ALL_TABLES)("canWrite(n8n, %s) returns true", (table) => {
-    expect(canWrite("n8n", table)).toBe(true);
+  test.each(ALL_TABLES)("canWrite(ob-admin, %s) returns true", (table) => {
+    expect(canWrite("ob-admin", table)).toBe(true);
   });
 });
 

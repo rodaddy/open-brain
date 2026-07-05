@@ -7,7 +7,7 @@ const VALID_ROLES: Set<string> = new Set<string>([
   "admin",
   "agent",
   "discord",
-  "n8n",
+  "ob-admin",
   "promoter",
   "readonly",
 ]);
@@ -16,7 +16,7 @@ const ROLE_ENV_KEYS: Array<{ envKey: string; role: Role }> = [
   { envKey: "AUTH_TOKEN_ADMIN", role: "admin" },
   { envKey: "AUTH_TOKEN_AGENT", role: "agent" },
   { envKey: "AUTH_TOKEN_DISCORD", role: "discord" },
-  { envKey: "AUTH_TOKEN_N8N", role: "n8n" },
+  { envKey: "AUTH_TOKEN_OB_ADMIN", role: "ob-admin" },
   { envKey: "AUTH_TOKEN_PROMOTER", role: "promoter" },
   { envKey: "AUTH_TOKEN_READONLY", role: "readonly" },
 ];
@@ -106,8 +106,8 @@ export function authMiddleware(
       const namespace = headerValue(req.headers["x-namespace"]);
       // Promoter is intentionally NOT allowed to delegate via X-Namespace: it is
       // a service identity that writes under its own token authority, not a
-      // proxy delegating arbitrary client namespaces. Only admin/n8n delegate.
-      if (namespace && matched.role !== "admin" && matched.role !== "n8n") {
+      // proxy delegating arbitrary client namespaces. Only admin/ob-admin delegate.
+      if (namespace && matched.role !== "admin" && matched.role !== "ob-admin") {
         res.status(403).json({ error: "Role not permitted to delegate namespace" });
         return;
       }

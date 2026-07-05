@@ -22,7 +22,7 @@ export function readableNamespaces(
   // Promoter reads across namespaces to source promotion candidates (#147).
   if (
     auth.role === "admin" ||
-    auth.role === "n8n" ||
+    auth.role === "ob-admin" ||
     auth.role === "promoter"
   ) {
     return undefined;
@@ -35,7 +35,7 @@ export function canReadNamespace(auth: AuthInfo, namespace: string): boolean {
   if (
     namespace === "all" &&
     auth.namespaceSource !== "header" &&
-    (auth.role === "admin" || auth.role === "n8n")
+    (auth.role === "admin" || auth.role === "ob-admin")
   ) {
     return true;
   }
@@ -43,7 +43,7 @@ export function canReadNamespace(auth: AuthInfo, namespace: string): boolean {
     config.legacySharedNamespace !== "" &&
     namespace === config.legacySharedNamespace &&
     auth.role !== "admin" &&
-    auth.role !== "n8n"
+    auth.role !== "ob-admin"
   ) {
     return false;
   }
@@ -59,7 +59,7 @@ export function namespaceFilterFor(
   if (
     namespace === "all" &&
     auth.namespaceSource !== "header" &&
-    (auth.role === "admin" || auth.role === "n8n")
+    (auth.role === "admin" || auth.role === "ob-admin")
   ) {
     return undefined;
   }

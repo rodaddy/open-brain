@@ -297,7 +297,7 @@ describe("log_thought", () => {
       };
       const mockEmbed = createMockEmbed();
       const auth: AuthInfo = {
-        role: "n8n",
+        role: "ob-admin",
         clientId: "openbrain-promoter",
       };
 

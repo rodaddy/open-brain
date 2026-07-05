@@ -396,7 +396,7 @@ describe("link_entities", () => {
     }
   });
 
-  // ── AGENT / N8N ROLES ──
+  // ── AGENT / OB_ADMIN ROLES ──
 
   it("allows agent role", async () => {
     const mockPool = createLinkPool();

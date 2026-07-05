@@ -223,7 +223,7 @@ describe("session_save", () => {
       const mockPool = {
         query: async () => ({ rows: [{ id: "defaults-uuid" }] }),
       };
-      const auth: AuthInfo = { role: "n8n", clientId: "test-n8n" };
+      const auth: AuthInfo = { role: "ob-admin", clientId: "test-ob-admin" };
 
       const { client, cleanup } = await setupToolClient(
         mockPool,

@@ -119,5 +119,5 @@ export function shouldRejectLegacySharedWrite(
   if (config.allowLegacySharedWrites) return false;
   if (config.legacySharedNamespace === "") return false;
   if (targetNamespace !== config.legacySharedNamespace) return false;
-  return auth.role !== "admin" && auth.role !== "n8n";
+  return auth.role !== "admin" && auth.role !== "ob-admin";
 }

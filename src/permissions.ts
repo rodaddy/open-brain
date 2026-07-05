@@ -28,7 +28,11 @@ export const PERMISSIONS: Record<Role, Record<Table, Set<Permission>>> = {
     projects: NONE,
     sessions: NONE,
   },
-  n8n: {
+  // Break-glass server-side admin identity (#168). Full RWD on every table --
+  // identical to `admin`. This is the honest name for what was historically the
+  // misnamed, 100%-unused `n8n` role; it is for HUMAN server-side surgery
+  // (deletions, manual user promotions), not for n8n.io automations.
+  "ob-admin": {
     thoughts: RWD,
     decisions: RWD,
     relationships: RWD,

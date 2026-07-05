@@ -215,9 +215,9 @@ describe("append_session_event", () => {
     }
   });
 
-  it("allows n8n role", async () => {
+  it("allows ob-admin role", async () => {
     const mockPool = createLaneFoundPool();
-    const auth: AuthInfo = { role: "n8n", clientId: "n8n-worker" };
+    const auth: AuthInfo = { role: "ob-admin", clientId: "ob-admin-worker" };
     const { client, cleanup } = await setupToolClient(mockPool, auth);
 
     try {

@@ -46,10 +46,10 @@ export function isPromoterIdentity(auth: AuthInfo): boolean {
   if (auth.role === "promoter") {
     return true;
   }
-  // Backward-compat: the legacy clientId-on-admin/n8n convention (e.g. the
+  // Backward-compat: the legacy clientId-on-admin/ob-admin convention (e.g. the
   // in-process legacy-shared promoter CLI) remains a promoter identity.
   return (
-    (auth.role === "admin" || auth.role === "n8n") &&
+    (auth.role === "admin" || auth.role === "ob-admin") &&
     PROMOTER_CLIENT_IDS.has(auth.tokenClientId ?? auth.clientId)
   );
 }
@@ -102,7 +102,7 @@ export function canWriteNamespace(
 
   if (
     auth.role === "admin" ||
-    auth.role === "n8n" ||
+    auth.role === "ob-admin" ||
     auth.role === "promoter"
   ) {
     return { allowed: true };
@@ -137,7 +137,7 @@ export function writableNamespaces(auth: AuthInfo): string[] | undefined {
   // Promoter writes across namespaces (incl. shared-kb) by design (#147).
   if (
     auth.role === "admin" ||
-    auth.role === "n8n" ||
+    auth.role === "ob-admin" ||
     auth.role === "promoter"
   ) {
     return undefined;
@@ -154,7 +154,7 @@ export function appendWriteNamespacePredicate(
   const namespaces = writableNamespaces(auth);
   if (namespaces === undefined) {
     if (
-      (auth.role === "admin" || auth.role === "n8n") &&
+      (auth.role === "admin" || auth.role === "ob-admin") &&
       !isPromoterIdentity(auth)
     ) {
       params.push(sharedNamespaceConfig().sharedNamespace);

@@ -16,8 +16,8 @@ describe("canWriteNamespace", () => {
     expect(canWriteNamespace(auth, "nagatha").allowed).toBe(true);
   });
 
-  it("n8n can write to any namespace", () => {
-    const auth: AuthInfo = { role: "n8n", clientId: "n8n" };
+  it("ob-admin can write to any namespace", () => {
+    const auth: AuthInfo = { role: "ob-admin", clientId: "ob-admin" };
     expect(canWriteNamespace(auth, "bilby").allowed).toBe(true);
   });
 
@@ -35,7 +35,7 @@ describe("canWriteNamespace", () => {
     ).toBe(false);
     expect(
       canWriteNamespace(
-        { role: "n8n", clientId: "openbrain-promoter" },
+        { role: "ob-admin", clientId: "openbrain-promoter" },
         "shared-kb",
       ).allowed,
     ).toBe(true);
@@ -43,7 +43,7 @@ describe("canWriteNamespace", () => {
 
   it("allows promoter service identity delegated to shared-kb", () => {
     const auth: AuthInfo = {
-      role: "n8n",
+      role: "ob-admin",
       clientId: "shared-kb",
       tokenClientId: "openbrain-promoter",
       namespaceSource: "header",
@@ -74,7 +74,7 @@ describe("canWriteNamespace", () => {
         canWriteNamespace({ role, clientId: "x" }, "shared-kb").allowed,
       ).toBe(false);
     }
-    // bare admin/n8n (no promoter clientId) still rejected
+    // bare admin/ob-admin (no promoter clientId) still rejected
     expect(
       canWriteNamespace({ role: "admin", clientId: "rico" }, "shared-kb")
         .allowed,
@@ -211,9 +211,9 @@ describe("canWriteNamespace", () => {
 });
 
 describe("writableNamespaces", () => {
-  it("keeps token-sourced admin and n8n broad", () => {
+  it("keeps token-sourced admin and ob-admin broad", () => {
     expect(writableNamespaces({ role: "admin", clientId: "admin" })).toBeUndefined();
-    expect(writableNamespaces({ role: "n8n", clientId: "n8n" })).toBeUndefined();
+    expect(writableNamespaces({ role: "ob-admin", clientId: "ob-admin" })).toBeUndefined();
   });
 
   it("scopes ordinary writers to their own namespace", () => {
@@ -252,7 +252,7 @@ describe("appendWriteNamespacePredicate", () => {
   it("adds no predicate for token-sourced promoter identity", () => {
     const params: unknown[] = ["id"];
     const predicate = appendWriteNamespacePredicate(
-      { role: "n8n", clientId: "openbrain-promoter" },
+      { role: "ob-admin", clientId: "openbrain-promoter" },
       params,
     );
 
