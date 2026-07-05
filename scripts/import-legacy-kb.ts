@@ -10,6 +10,7 @@ import type pg from "pg";
 import { createPool } from "../src/db/pool.ts";
 import { contentHash } from "../src/embedding.ts";
 import { logger } from "../src/logger.ts";
+import { sharedNamespaceConfig } from "../src/shared-namespace.ts";
 
 interface LegacyEntry {
   date: string;
@@ -26,6 +27,7 @@ interface LegacyEntry {
 }
 
 const KB_DIR = `${process.env.HOME}/.config/pai-private/knowledge`;
+const LEGACY_IMPORT_NAMESPACE = sharedNamespaceConfig().sharedNamespace;
 
 function safeDate(dateStr: string): Date {
   const d = new Date(dateStr);
@@ -76,9 +78,9 @@ async function importDecisions(
     const hash = contentHash(text);
 
     const { rowCount } = await pool.query(
-      `INSERT INTO decisions (title, rationale, tags, context, created_by, created_at, content_hash)
-       SELECT $1, $2, $3, $4, $5, $6, $7
-       WHERE NOT EXISTS (SELECT 1 FROM decisions WHERE content_hash = $7)`,
+      `INSERT INTO decisions (title, rationale, tags, context, created_by, created_at, namespace, content_hash)
+       SELECT $1, $2, $3, $4, $5, $6, $7, $8
+       WHERE NOT EXISTS (SELECT 1 FROM decisions WHERE namespace = $7 AND content_hash = $8)`,
       [
         entry.title,
         rationale,
@@ -86,6 +88,7 @@ async function importDecisions(
         `Legacy import. Weight: ${entry.weight}, Occurrences: ${entry.occurrences}`,
         "legacy-import",
         safeDate(entry.date),
+        LEGACY_IMPORT_NAMESPACE,
         hash,
       ],
     );
@@ -115,15 +118,16 @@ async function importThoughts(
     const hash = contentHash(content);
 
     const { rowCount } = await pool.query(
-      `INSERT INTO thoughts (content, tags, source, created_by, created_at, content_hash)
-       SELECT $1, $2, $3, $4, $5, $6
-       WHERE NOT EXISTS (SELECT 1 FROM thoughts WHERE content_hash = $6)`,
+      `INSERT INTO thoughts (content, tags, source, created_by, created_at, namespace, content_hash)
+       SELECT $1, $2, $3, $4, $5, $6, $7
+       WHERE NOT EXISTS (SELECT 1 FROM thoughts WHERE namespace = $6 AND content_hash = $7)`,
       [
         content,
         entry.tags || [],
         source,
         "legacy-import",
         safeDate(entry.date),
+        LEGACY_IMPORT_NAMESPACE,
         hash,
       ],
     );

@@ -173,7 +173,7 @@ describe("append_session_event", () => {
         name: "append_session_event",
         arguments: {
           session_key: "ob-v2-dev",
-          namespace: "collab",
+          namespace: "team-kb",
           event_type: "decision",
           content: "Decided to use append-only event journal",
           source: "skippy",

@@ -1,7 +1,12 @@
 import type { AuthInfo } from "./types.ts";
 
 const DEFAULT_SHARED_NAMESPACE = "shared-kb";
-const DEFAULT_LEGACY_SHARED_NAMESPACE = "collab";
+// The `collab` namespace was retired (#167). shared-kb is canonical and collab
+// is frozen and mirrored. There is no default legacy shared namespace anymore;
+// an operator can still set SHARED_NAMESPACE_LEGACY explicitly (plus
+// OPENBRAIN_LEGACY_SHARED_FALLBACK=1) as a transient escape hatch during a
+// migration window, but nothing is legacy by default.
+const DEFAULT_LEGACY_SHARED_NAMESPACE = "";
 const DEFAULT_FALLBACK_MIN_RESULTS = 5;
 
 function envString(names: string[], defaultValue: string): string {
@@ -55,7 +60,7 @@ export function sharedNamespaceConfig(): SharedNamespaceConfig {
     ),
     legacyFallbackEnabled: envBoolean(
       "OPENBRAIN_LEGACY_SHARED_FALLBACK",
-      true,
+      false,
     ),
     fallbackMinResults: envPositiveInteger(
       "OPENBRAIN_SHARED_FALLBACK_MIN_RESULTS",
@@ -76,14 +81,25 @@ export function isSharedNamespace(namespace: string): boolean {
   );
 }
 
+/**
+ * True only when a non-empty legacy shared namespace is configured and matches.
+ * With the default (empty) legacy namespace, no input is ever legacy — this
+ * prevents an empty config from matching unnamespaced input.
+ */
 export function isLegacySharedNamespace(namespace: string): boolean {
-  return namespace === sharedNamespaceConfig().legacySharedNamespace;
+  const legacy = sharedNamespaceConfig().legacySharedNamespace;
+  return legacy !== "" && namespace === legacy;
 }
 
 export function canonicalNamespace(namespace: string): string {
   const config = sharedNamespaceConfig();
-  return namespace === config.legacySharedNamespace ||
-    namespace === config.physicalSharedNamespace
+  if (
+    config.legacySharedNamespace !== "" &&
+    namespace === config.legacySharedNamespace
+  ) {
+    return config.canonicalSharedNamespace;
+  }
+  return namespace === config.physicalSharedNamespace
     ? config.canonicalSharedNamespace
     : namespace;
 }
@@ -101,6 +117,7 @@ export function shouldRejectLegacySharedWrite(
 ): boolean {
   const config = sharedNamespaceConfig();
   if (config.allowLegacySharedWrites) return false;
+  if (config.legacySharedNamespace === "") return false;
   if (targetNamespace !== config.legacySharedNamespace) return false;
   return auth.role !== "admin" && auth.role !== "ob-admin";
 }

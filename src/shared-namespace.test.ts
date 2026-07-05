@@ -30,17 +30,28 @@ afterEach(() => {
 });
 
 describe("shared namespace config", () => {
-  it("defaults canonical and physical shared namespace to shared-kb", () => {
+  it("defaults canonical/physical to shared-kb and retires the legacy namespace (#167)", () => {
     for (const key of ENV_KEYS) delete process.env[key];
 
     expect(sharedNamespaceConfig()).toMatchObject({
       canonicalSharedNamespace: "shared-kb",
       physicalSharedNamespace: "shared-kb",
       sharedNamespace: "shared-kb",
-      legacySharedNamespace: "collab",
+      // #167: no default legacy shared namespace anymore; collab is retired.
+      legacySharedNamespace: "",
+      legacyFallbackEnabled: false,
     });
-    expect(canonicalNamespace("collab")).toBe("shared-kb");
+    // With collab retired, it is NOT canonicalized to shared-kb by default —
+    // it is treated as an ordinary (frozen) namespace name.
+    expect(canonicalNamespace("collab")).toBe("collab");
     expect(physicalNamespace("shared-kb")).toBe("shared-kb");
+  });
+
+  it("still canonicalizes an explicitly configured legacy namespace (#167 escape hatch)", () => {
+    for (const key of ENV_KEYS) delete process.env[key];
+    process.env.SHARED_NAMESPACE_LEGACY = "collab";
+    expect(sharedNamespaceConfig().legacySharedNamespace).toBe("collab");
+    expect(canonicalNamespace("collab")).toBe("shared-kb");
   });
 
   it("supports explicit canonical, physical, and legacy namespace env names", () => {

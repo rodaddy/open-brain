@@ -134,9 +134,6 @@ export function registerScanNamespace(server: McpServer, deps: ToolDeps): void {
                 existing_target_id: targetDupes[0].id,
                 created_at: row.created_at,
               };
-              if (targetPhysicalNamespace === "collab") {
-                duplicate.existing_collab_id = targetDupes[0].id;
-              }
               duplicates.push(duplicate);
               continue;
             }

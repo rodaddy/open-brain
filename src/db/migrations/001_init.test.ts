@@ -95,15 +95,20 @@ describe.skipIf(!canConnect)("001_init migration", () => {
   });
 
   describe("HNSW indexes", () => {
-    it("should have 5 HNSW indexes using halfvec_cosine_ops", async () => {
+    it("should have HNSW indexes on all 5 legacy data tables using halfvec_cosine_ops", async () => {
       const { rows } = await pool.query(`
-        SELECT indexname, indexdef
-        FROM pg_indexes
-        WHERE schemaname = 'public'
-          AND indexdef ILIKE '%hnsw%'
-        ORDER BY indexname
-      `);
-      expect(rows.length).toBe(5);
+        SELECT
+          ic.relname AS index_name,
+          tc.relname AS table_name,
+          pg_get_indexdef(ix.indexrelid) AS indexdef
+        FROM pg_index ix
+        JOIN pg_class ic ON ix.indexrelid = ic.oid
+        JOIN pg_class tc ON ix.indrelid = tc.oid
+        WHERE tc.relname = ANY($1::text[])
+          AND pg_get_indexdef(ix.indexrelid) ILIKE '%hnsw%'
+        ORDER BY tc.relname
+      `, [TABLES]);
+      expect(rows.map((r) => r.table_name).sort()).toEqual([...TABLES].sort());
       for (const row of rows) {
         expect(row.indexdef).toContain("halfvec_cosine_ops");
         expect(row.indexdef).not.toContain("vector_cosine_ops");
@@ -122,9 +127,10 @@ describe.skipIf(!canConnect)("001_init migration", () => {
         JOIN pg_class ic ON ix.indexrelid = ic.oid
         JOIN pg_class tc ON ix.indrelid = tc.oid
         WHERE ic.relname LIKE '%content_hash%'
+          AND tc.relname = ANY($1::text[])
         ORDER BY tc.relname
-      `);
-      expect(rows.length).toBe(5);
+      `, [TABLES]);
+      expect(rows.map((r) => r.table_name).sort()).toEqual([...TABLES].sort());
       for (const row of rows) {
         expect(row.indisunique).toBe(true);
       }
@@ -207,23 +213,23 @@ describe.skipIf(!canConnect)("001_init migration", () => {
       const [fromId, toId] = inserted.rows.map((r) => r.id as string);
 
       await pool.query(
-        `INSERT INTO ob_links (from_type, from_id, to_type, to_id, relation, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
+        `INSERT INTO ob_links (namespace, from_type, from_id, to_type, to_id, relation, created_by)
+         VALUES ('test', $1, $2, $3, $4, $5, $6)`,
         ["entity", fromId, "entity", toId, "depends_on", "test"],
       );
 
       await expect(
         pool.query(
-          `INSERT INTO ob_links (from_type, from_id, to_type, to_id, relation, created_by)
-           VALUES ($1, $2, $3, $4, $5, $6)`,
+          `INSERT INTO ob_links (namespace, from_type, from_id, to_type, to_id, relation, created_by)
+           VALUES ('test', $1, $2, $3, $4, $5, $6)`,
           ["entity", fromId, "entity", toId, "mystery_relation", "test"],
         ),
       ).rejects.toThrow();
 
       await expect(
         pool.query(
-          `INSERT INTO ob_links (from_type, from_id, to_type, to_id, relation, created_by)
-           VALUES ($1, $2, $3, $4, $5, $6)`,
+          `INSERT INTO ob_links (namespace, from_type, from_id, to_type, to_id, relation, created_by)
+           VALUES ('test', $1, $2, $3, $4, $5, $6)`,
           ["entity", fromId, "entity", fromId, "adjacent", "test"],
         ),
       ).rejects.toThrow();
@@ -265,10 +271,18 @@ describe.skipIf(!canConnect)("001_init migration", () => {
       const testHash = "test_roundtrip_" + Date.now();
 
       // Insert
+      // namespace explicit: migration 019 dropped the legacy 'collab' default
+      // (#167), so inserts that omit namespace fail by design.
       await pool.query(
-        `INSERT INTO thoughts (content, created_by, embedding, content_hash)
-         VALUES ($1, $2, $3, $4)`,
-        ["test round-trip", "test", JSON.stringify(testEmbedding), testHash],
+        `INSERT INTO thoughts (content, created_by, embedding, content_hash, namespace)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [
+          "test round-trip",
+          "test",
+          JSON.stringify(testEmbedding),
+          testHash,
+          "test",
+        ],
       );
 
       // Select

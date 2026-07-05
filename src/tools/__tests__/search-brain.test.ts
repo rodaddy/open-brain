@@ -3,6 +3,7 @@ import { registerSearchBrain } from "../search-brain.ts";
 import type { AuthInfo } from "../../types.ts";
 import {
   createMockEmbed,
+  enableLegacyCollabFallback,
   makeMockRows,
   setupMcpClient,
   parseToolResult,
@@ -356,6 +357,7 @@ describe("search_brain", () => {
     });
 
     it("falls back from canonical shared-kb to legacy collab and canonicalizes results", async () => {
+      const fallbackEnv = enableLegacyCollabFallback();
       const searchCalls: any[] = [];
       const pool = {
         query: async (...args: any[]) => {
@@ -412,11 +414,46 @@ describe("search_brain", () => {
             .filter((value) => typeof value === "string"),
         ).toEqual(["shared-kb", "collab"]);
       } finally {
+        fallbackEnv.restore();
         await cleanup();
       }
     });
 
+    it("does NOT query legacy collab by default after retirement (#167)", () => {
+      // Regression: with the default config (no escape-hatch env), a shared-kb
+      // search must never issue a second query against the collab namespace.
+      const searchCalls: any[] = [];
+      const pool = {
+        query: async (...args: any[]) => {
+          const [sql, params] = args;
+          if (String(sql).includes("FROM ob_links")) return { rows: [] };
+          if (String(sql).includes("entry_access_log")) return { rows: [] };
+          searchCalls.push(args);
+          return { rows: [] };
+        },
+      };
+      const auth: AuthInfo = { role: "agent", clientId: "bilby" };
+      return (async () => {
+        const { client, cleanup } = await setup(pool, auth);
+        try {
+          const result = await client.callTool({
+            name: "search_brain",
+            arguments: { query: "no collab please", namespace: "shared-kb" },
+          });
+          expect(result.isError).toBeFalsy();
+          const queriedNamespaces = searchCalls
+            .map((call) => call[1]?.at?.(-1))
+            .filter((value) => typeof value === "string" || Array.isArray(value));
+          const flat = queriedNamespaces.flat();
+          expect(flat).not.toContain("collab");
+        } finally {
+          await cleanup();
+        }
+      })();
+    });
+
     it("uses hidden legacy collab fallback for omitted namespace scoped searches", async () => {
+      const fallbackEnv = enableLegacyCollabFallback();
       const searchCalls: any[] = [];
       const pool = {
         query: async (...args: any[]) => {
@@ -480,11 +517,13 @@ describe("search_brain", () => {
             .filter((value) => Array.isArray(value) || typeof value === "string"),
         ).toEqual([["bilby", "shared-kb"], "shared-kb", "collab"]);
       } finally {
+        fallbackEnv.restore();
         await cleanup();
       }
     });
 
     it("still queries legacy collab when private hits fill omitted namespace search", async () => {
+      const fallbackEnv = enableLegacyCollabFallback();
       const pool = {
         query: async (...args: any[]) => {
           const [sql, params] = args;
@@ -566,11 +605,13 @@ describe("search_brain", () => {
           "shared-kb",
         ]);
       } finally {
+        fallbackEnv.restore();
         await cleanup();
       }
     });
 
     it("dedupes migrated shared-kb and legacy collab fallback rows by content", async () => {
+      const fallbackEnv = enableLegacyCollabFallback();
       const pool = {
         query: async (...args: any[]) => {
           const [sql, params] = args;
@@ -640,6 +681,7 @@ describe("search_brain", () => {
         expect(parsed[0].id).toBe("00000000-0000-4000-8000-000000000301");
         expect(parsed[0].namespace).toBe("shared-kb");
       } finally {
+        fallbackEnv.restore();
         await cleanup();
       }
     });

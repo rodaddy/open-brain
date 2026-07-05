@@ -10,7 +10,10 @@ export function readableNamespaces(
 ): string[] | undefined {
   const config = sharedNamespaceConfig();
   const sharedNamespaces = [config.physicalSharedNamespace];
-  if (options.includeLegacySharedFallback === true) {
+  if (
+    options.includeLegacySharedFallback === true &&
+    config.legacySharedNamespace !== ""
+  ) {
     sharedNamespaces.push(config.legacySharedNamespace);
   }
   if (auth.namespaceSource === "header") {
@@ -37,6 +40,7 @@ export function canReadNamespace(auth: AuthInfo, namespace: string): boolean {
     return true;
   }
   if (
+    config.legacySharedNamespace !== "" &&
     namespace === config.legacySharedNamespace &&
     auth.role !== "admin" &&
     auth.role !== "ob-admin"

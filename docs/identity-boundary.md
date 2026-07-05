@@ -39,9 +39,11 @@ not shared-write authority by itself. A non-promoter `admin` token delegated wit
 ## Read boundary
 
 Normal agents read their own lane plus the canonical shared namespace exposed by
-server read policy. During the `collab` to `shared-kb` transition, legacy
-fallback is server-owned. Clients should request `shared-kb`, not manually query
-both namespaces.
+server read policy. The legacy `collab` shared namespace is retired (#167):
+`shared-kb` is canonical and there is no default legacy read fallback. Clients
+should request `shared-kb`. An operator can still re-enable a legacy fallback
+transiently via `SHARED_NAMESPACE_LEGACY` + `OPENBRAIN_LEGACY_SHARED_FALLBACK=1`
+during a migration window, but it is server-owned and off by default.
 
 ## Host identity
 

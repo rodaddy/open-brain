@@ -10,6 +10,32 @@ export const PROMOTER_CLIENT_IDS = new Set([
   "hermes-promoter",
 ]);
 
+/**
+ * Namespaces frozen as read-only snapshots (#167). With `collab` retired as
+ * the default legacy shared namespace, nothing would otherwise stop an
+ * admin/n8n/promoter token from writing a namespace literally named `collab`
+ * and silently breaking the frozen-snapshot model with invisible orphans.
+ * This rejection is independent of the legacy-shared mechanism. The only
+ * bypass is the explicit operator escape hatch: configuring the namespace as
+ * legacy (SHARED_NAMESPACE_LEGACY) with OPENBRAIN_ALLOW_LEGACY_SHARED_WRITES=1
+ * for a migration window.
+ */
+export const FROZEN_NAMESPACES = new Set(["collab"]);
+
+function isFrozenNamespaceWrite(targetNamespace: string): boolean {
+  if (!FROZEN_NAMESPACES.has(targetNamespace)) return false;
+  const config = sharedNamespaceConfig();
+  // Operator escape hatch: an explicitly configured legacy namespace with
+  // legacy writes enabled stays writable for the migration window.
+  if (
+    config.allowLegacySharedWrites &&
+    config.legacySharedNamespace === targetNamespace
+  ) {
+    return false;
+  }
+  return true;
+}
+
 export interface NamespaceCheck {
   allowed: boolean;
   reason?: string;
@@ -37,6 +63,18 @@ export function canWriteNamespace(
     return {
       allowed: false,
       reason: `legacy shared namespace '${targetNamespace}' is read-only for normal clients; use '${sharedNamespaceConfig().canonicalSharedNamespace}'`,
+    };
+  }
+
+  // Frozen snapshot namespaces reject writes for ALL roles, including
+  // admin/n8n/promoter (#167). See FROZEN_NAMESPACES.
+  if (
+    isFrozenNamespaceWrite(targetNamespace) ||
+    isFrozenNamespaceWrite(physicalTargetNamespace)
+  ) {
+    return {
+      allowed: false,
+      reason: `namespace '${targetNamespace}' is a frozen snapshot (retired legacy namespace) and rejects all writes`,
     };
   }
 
@@ -115,12 +153,18 @@ export function appendWriteNamespacePredicate(
 ): string {
   const namespaces = writableNamespaces(auth);
   if (namespaces === undefined) {
+    const excludedNamespaces = Array.from(FROZEN_NAMESPACES).filter(
+      (namespace) => isFrozenNamespaceWrite(namespace),
+    );
     if (
       (auth.role === "admin" || auth.role === "ob-admin") &&
       !isPromoterIdentity(auth)
     ) {
-      params.push(sharedNamespaceConfig().sharedNamespace);
-      return ` AND ${column} <> $${params.length}`;
+      excludedNamespaces.push(sharedNamespaceConfig().sharedNamespace);
+    }
+    if (excludedNamespaces.length > 0) {
+      params.push(excludedNamespaces);
+      return ` AND ${column} <> ALL($${params.length}::text[])`;
     }
     return "";
   }
