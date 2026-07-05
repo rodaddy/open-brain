@@ -73,23 +73,26 @@ Deploy optionality update on 2026-07-05:
 - Open issues remain 17.
 - PR #240 changes deploy policy so `main` pushes validate but do not deploy.
   Production deploy is allowed only from a `v*` tag whose target commit is
-  reachable from `origin/main`, or manual `workflow_dispatch` from `main` with
-  `deploy_core01=true`.
+  reachable from `origin/main`, or manual `workflow_dispatch` from the current
+  `origin/main` tip with `deploy_core01=true`.
 - PR #240 adds `docs/local-release-deploy-sop.md` and updates `README.md` so
   local full testing, release-candidate creation, and core01 deploy verification
   are a separate release phase after PR merges.
-- PR #240 live checks must be re-read for the current head before merge.
+- PR #240 completed the pre-merge-gauntlet on this branch: initial swarm,
+  Claude cross-review, fixes, and focused fix-verification all reached zero
+  known material findings. Live checks must still be re-read for the current
+  head immediately before merge.
 - Project 8 item for #240 is current:
   - Status: `In Review`
   - Validation: follow live PR checks for the current head.
-  - Review Gate: `Fixes In Progress` while initial gauntlet findings are being
-    addressed.
+  - Review Gate: `Zero Known Issues` after gauntlet/fix-verification passes;
+    re-read Project 8 before merge.
   - Component/Surface: `Deploy/Canary`
   - Phase: `P6 Deploy/Canary Follow-On`
   - Owner: `codex`
-  - Next Action: run `pre-merge-gauntlet` for deploy trigger/SOP semantics; if
-    clean, merge only with Rico approval, then cut a versioned release candidate
-    and deploy via `v*` tag or manual dispatch.
+  - Next Action: await Rico approval to merge PR #240; after merge, cut a
+    versioned release candidate and deploy via `v*` tag or manual dispatch only
+    after the local release gate.
 - PR #240 is not merged. Do not deploy hosted Open Brain from this PR; use it to
   make deploy optional and document the release gate.
 
