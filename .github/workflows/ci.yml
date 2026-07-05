@@ -103,6 +103,26 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Wait for Postgres to accept real TCP connections
+        env:
+          PGPORT: ${{ job.services.postgres.ports['5432'] }}
+        # The service health-check can report "healthy" against the pg image's
+        # transient initdb server before the final server is listening on the
+        # published TCP port (symptom: "server closed the connection
+        # unexpectedly"). Poll a real query from the runner host before use.
+        run: |
+          for i in $(seq 1 30); do
+            if PGPASSWORD=ci psql -h 127.0.0.1 -p "${PGPORT}" -U ci \
+                -d open_brain_ci -tc "SELECT 1;" >/dev/null 2>&1; then
+              echo "Postgres reachable on 127.0.0.1:${PGPORT}"
+              exit 0
+            fi
+            echo "waiting for Postgres (attempt ${i})..."
+            sleep 2
+          done
+          echo "Postgres did not become reachable on 127.0.0.1:${PGPORT}" >&2
+          exit 1
+
       - name: Create isolated migration-test database
         env:
           PGPORT: ${{ job.services.postgres.ports['5432'] }}
