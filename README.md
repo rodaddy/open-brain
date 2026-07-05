@@ -195,10 +195,10 @@ commit is reachable from `origin/main`, or a manual workflow dispatch from
 the current `origin/main` tip with `deploy_core01=true`. The deploy script is
 the authoritative deploy-ref guard: tag deploys must be reachable from
 `origin/main`, and manual dispatches must match the current `origin/main` tip
-before staging files or restarting core01. The job rsyncs this checkout into the
-running app directory, installs runtime dependencies there, runs migrations,
-bootstraps the pinned qmd runtime, restarts `com.rico.open-brain`, and checks
-`/health`.
+before staging files or restarting core01. The job stages the checked-out repo
+with `tar`, installs runtime dependencies there, bootstraps the pinned qmd
+runtime, runs migrations, swaps the staged directory into place, restarts
+`com.rico.open-brain`, and checks `/health`.
 
 macOS shell rule: never call `/bin/bash` or rely on the old Apple bash. Use the
 Homebrew bash path explicitly in automation:

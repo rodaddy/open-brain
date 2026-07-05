@@ -160,7 +160,11 @@ Do not treat local runtime health alone as downstream completion.
 After the full local gate passes:
 
 ```zsh
-git status --short --branch
+test -z "$(git status --short)" || {
+  git status --short --branch
+  echo "release candidate worktree must be clean before tagging"
+  exit 1
+}
 git fetch origin main --tags
 test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" || {
   echo "HEAD must equal the current origin/main tip before tagging"
