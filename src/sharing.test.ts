@@ -3,6 +3,7 @@ import {
   classifyShareCandidate,
   containsSecret,
   DEFAULT_MIN_SHARE_LENGTH,
+  redactText,
   SECRET_PATTERNS,
 } from "./sharing.ts";
 
@@ -123,6 +124,42 @@ describe("containsSecret", () => {
 
   it("ships a non-trivial set of patterns", () => {
     expect(SECRET_PATTERNS.length).toBeGreaterThanOrEqual(10);
+  });
+});
+
+describe("redactText", () => {
+  it("scrubs known secret shapes while preserving surrounding diagnostics", () => {
+    const input = [
+      `aws ${FAKE_AWS_ACCESS_KEY}`,
+      `jwt ${FAKE_JWT}`,
+      `pat ${FAKE_GH_PAT}`,
+      `openai ${FAKE_SK}`,
+      `slack ${FAKE_SLACK}`,
+      "plain diagnostic text stays visible",
+    ].join("\n");
+
+    const redacted = redactText(input);
+
+    expect(redacted).toContain("plain diagnostic text stays visible");
+    for (const secret of [
+      FAKE_AWS_ACCESS_KEY,
+      FAKE_JWT,
+      FAKE_GH_PAT,
+      FAKE_SK,
+      FAKE_SLACK,
+    ]) {
+      expect(redacted).not.toContain(secret);
+    }
+    expect(redacted).toContain("[REDACTED]");
+  });
+
+  it("scrubs repeated secrets that match the same pattern", () => {
+    const secondFakeSk = "sk" + "-" + "zyxwvutsrqponmlkjihgfedcba9876543210";
+    const redacted = redactText(`first ${FAKE_SK} second ${secondFakeSk}`);
+
+    expect(redacted).not.toContain(FAKE_SK);
+    expect(redacted).not.toContain(secondFakeSk);
+    expect(redacted.match(/\[REDACTED\]/g)).toHaveLength(2);
   });
 });
 

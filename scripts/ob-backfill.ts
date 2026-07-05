@@ -15,6 +15,7 @@ import { readdir, readFile, stat, writeFile, mkdir } from "fs/promises";
 import { join, basename, dirname } from "path";
 import { createHash } from "crypto";
 import { existsSync } from "fs";
+import { containsSecret, redactText } from "../src/sharing.ts";
 
 const CLAUDE_PROJECTS_DIR =
   process.env.CLAUDE_PROJECTS_DIR ??
@@ -358,12 +359,261 @@ ${conversation}`;
 
 // --- Sanitization ---
 
-function sanitize(text: string): string {
+const TOKEN_FRAGMENT_RE = /[A-Za-z0-9._~+/=:@-]+/g;
+const MAX_REFORMED_FRAGMENT_COUNT = 16;
+const MAX_REFORMED_LABELED_FRAGMENT_COUNT = 4;
+const MAX_REFORMED_SECRET_LENGTH = 512;
+const AWS_SECRET_WIDTH = 40;
+const BOUNDARYLESS_SCAN_INTERVAL = 128;
+const WRAPPED_SECRET_SEPARATOR_RE = /[\s,;"'()[\]<>?!&%#|`*{}^$\\]/;
+const BOUNDARYLESS_SECRET_PATTERNS = [
+  /authorization[:=]?bearer[A-Za-z0-9._~+/=-]{8,}/i,
+  /bearer[A-Za-z0-9._~+/=-]{8,}/i,
+  /mcp-session-id[:=]?[A-Za-z0-9._:-]{6,}/i,
+  /sk-[A-Za-z0-9_-]{20,}/i,
+  /github_pat_[A-Za-z0-9_]{20,}/i,
+  /gh[pousr]_[A-Za-z0-9_]{20,}/i,
+  /A[KS]IA[A-Z0-9]{16}/,
+  /xox[baprs]-[A-Za-z0-9-]{10,}/i,
+  /AIza[0-9A-Za-z_-]{35}/,
+  /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/,
+  /[sprk]k_(?:live|test)_[A-Za-z0-9]{16,}/i,
+];
+
+function startsLikeStandaloneSecret(fragment: string): boolean {
+  return /^(authorization|bearer|mcp-session-id|sk-|github_pat_|gh[pousr]_|A[KS]IA|xox[baprs]-|AIza|eyJ|[sprk]k_(live|test)_|https?:\/\/|ftp:\/\/|postgres(?:ql)?:\/\/|mysql:\/\/|mariadb:\/\/|mongodb:\/\/|redis:\/\/|amqps?:\/\/|ssh:\/\/|sftp?:\/\/|smtps?:\/\/|imaps?:\/\/|ldaps?:\/\/)/i.test(
+    fragment,
+  );
+}
+
+function startsLikeUrl(fragment: string): boolean {
+  return /^(?:https?|ftp|postgres(?:ql)?|mysql|mariadb|mongodb|redis|amqps?|ssh|sftp|smtps?|imaps?|ldaps?):\/\//i.test(
+    fragment,
+  );
+}
+
+function isPlainWordFragment(fragment: string): boolean {
+  return /^[A-Za-z]+$/.test(fragment);
+}
+
+function startsLikeLabeledSecret(fragment: string): boolean {
+  return /^(mcp-session-id|api[_-]?key|token|password|secret|client[_-]?secret|access[_-]?token|refresh[_-]?token|private[_-]?key)\s*[:=]/i.test(
+    fragment,
+  );
+}
+
+function hasPlausibleLabeledSecretValue(fragment: string): boolean {
+  const match = /^(?:mcp-session-id|api[_-]?key|token|password|secret|client[_-]?secret|access[_-]?token|refresh[_-]?token|private[_-]?key)\s*[:=]\s*(.+)$/i.exec(
+    fragment,
+  );
+  const value = match?.[1] ?? "";
+  const characterClassCount = [
+    /[a-z]/,
+    /[A-Z]/,
+    /[0-9]/,
+    /[_~+/=.-]/,
+  ].filter((pattern) => pattern.test(value)).length;
+  return (
+    (value.length >= 12 && characterClassCount >= 2) ||
+    (value.length >= 6 && /[A-Za-z]/.test(value) && /[0-9]/.test(value))
+  );
+}
+
+function containsBoundarylessSecretAcrossSeparator(
+  text: string,
+  separatorBefore: boolean[],
+): boolean {
+  return BOUNDARYLESS_SECRET_PATTERNS.some((pattern) => {
+    const match = pattern.exec(text);
+    if (!match?.[0]) return false;
+    const start = match.index;
+    const end = start + match[0].length;
+    return separatorBefore.slice(start, end).some(Boolean);
+  });
+}
+
+function hasAwsSecretWindow(compacted: string): boolean {
+  for (let start = 0; start <= compacted.length - AWS_SECRET_WIDTH; start += 1) {
+    const window = compacted.slice(start, start + AWS_SECRET_WIDTH);
+    if (
+      /[A-Z]/.test(window) &&
+      /[a-z]/.test(window) &&
+      /[0-9]/.test(window) &&
+      /[/+=]/.test(window)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function containsWrappedBoundarylessSecret(text: string): boolean {
+  let compacted = "";
+  let separatorBefore: boolean[] = [];
+  let pendingSeparator = false;
+  let sawSeparator = false;
+
+  const maybeMatch = (): boolean =>
+    sawSeparator &&
+    containsBoundarylessSecretAcrossSeparator(compacted, separatorBefore);
+
+  const append = (char: string): boolean => {
+    compacted += char;
+    separatorBefore.push(pendingSeparator);
+    pendingSeparator = false;
+    if (compacted.length > MAX_REFORMED_SECRET_LENGTH) {
+      compacted = compacted.slice(-MAX_REFORMED_SECRET_LENGTH);
+      separatorBefore = separatorBefore.slice(-MAX_REFORMED_SECRET_LENGTH);
+    }
+    return compacted.length % BOUNDARYLESS_SCAN_INTERVAL === 0 && maybeMatch();
+  };
+
+  const flush = (): boolean => {
+    const matched = maybeMatch();
+    compacted = "";
+    separatorBefore = [];
+    pendingSeparator = false;
+    sawSeparator = false;
+    return matched;
+  };
+
+  for (const char of text) {
+    if (/[A-Za-z0-9._~+/=:@-]/.test(char)) {
+      if (append(char)) return true;
+      continue;
+    }
+    if (WRAPPED_SECRET_SEPARATOR_RE.test(char) && compacted) {
+      sawSeparator = true;
+      pendingSeparator = true;
+      continue;
+    }
+    if (compacted && flush()) return true;
+  }
+
+  return compacted ? flush() : false;
+}
+
+function containsWrappedAwsSecret(text: string): boolean {
+  let run = "";
+  let sawSeparator = false;
+
+  const flush = (): boolean => {
+    const compacted = run.replace(new RegExp(WRAPPED_SECRET_SEPARATOR_RE, "g"), "");
+    const matched =
+      sawSeparator &&
+      compacted.length >= AWS_SECRET_WIDTH &&
+      hasAwsSecretWindow(compacted);
+    run = "";
+    sawSeparator = false;
+    return matched;
+  };
+
+  for (const char of text) {
+    if (/[A-Za-z0-9/+=]/.test(char)) {
+      run += char;
+      continue;
+    }
+    if (WRAPPED_SECRET_SEPARATOR_RE.test(char) && run) {
+      run += char;
+      sawSeparator = true;
+      continue;
+    }
+    if (run && flush()) return true;
+  }
+
+  return run ? flush() : false;
+}
+
+function containsWhitespaceReformedSecret(text: string): boolean {
+  const fragments = Array.from(
+    text.matchAll(TOKEN_FRAGMENT_RE),
+    (match) => match[0],
+  );
+  for (let start = 0; start < fragments.length; start += 1) {
+    const first = fragments[start] ?? "";
+    const startsLabeled = startsLikeLabeledSecret(first);
+    const startsUrl = startsLikeUrl(first);
+    if (!startsLikeStandaloneSecret(first) && !startsLabeled) continue;
+    if (
+      !startsLabeled &&
+      (containsSecret(first) || containsSecret(` ${first} `))
+    ) {
+      continue;
+    }
+
+    let joined = first;
+    const maxEnd = Math.min(
+      fragments.length,
+      start +
+        (startsLabeled
+          ? MAX_REFORMED_LABELED_FRAGMENT_COUNT
+          : MAX_REFORMED_FRAGMENT_COUNT),
+    );
+    for (let end = start + 1; end < maxEnd; end += 1) {
+      const next = fragments[end] ?? "";
+      if (startsUrl && (isPlainWordFragment(next) || startsLikeUrl(next))) break;
+      joined += next;
+      if (joined.length > MAX_REFORMED_SECRET_LENGTH) break;
+      const secretMatch =
+        containsSecret(joined) || containsSecret(` ${joined} `);
+      if (!secretMatch) continue;
+      if (!startsLabeled || hasPlausibleLabeledSecretValue(joined)) {
+        return true;
+      }
+    }
+  }
+  return containsWrappedAwsSecret(text) || containsWrappedBoundarylessSecret(text);
+}
+
+export function sanitize(text: string): string {
   // eslint-disable-next-line no-control-regex
-  return text
+  const normalized = text
     .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, "")
-    .replace(/\n/g, " ")
-    .trim();
+    .replace(/\n/g, " ");
+  // Reformed or wrapped candidates fall back to whole-field redaction. Once a
+  // secret has been split across tokens, surgical replacement can leave tails.
+  if (containsWhitespaceReformedSecret(normalized)) return "[REDACTED]";
+
+  const redacted = redactText(normalized).trim();
+  const spaceCompacted = redacted.replace(/\s+/g, " ");
+  if (
+    containsSecret(redacted) ||
+    containsSecret(spaceCompacted) ||
+    containsWhitespaceReformedSecret(redacted) ||
+    containsWrappedBoundarylessSecret(redacted)
+  ) {
+    return "[REDACTED]";
+  }
+  return redacted;
+}
+
+function sanitizeDecisionBeforeSplit(decision: string): string {
+  const withoutStructuralBecause = decision.replace(/\s+because\s+/gi, " ");
+  if (
+    withoutStructuralBecause !== decision &&
+    sanitize(withoutStructuralBecause) === "[REDACTED]"
+  ) {
+    return "[REDACTED]";
+  }
+  return sanitize(decision);
+}
+
+function sanitizeStructuralField(text: string): string {
+  return sanitize(text).slice(0, 200);
+}
+
+export function buildDecisionLogParams(decision: string, project: string): {
+  title: string;
+  rationale: string;
+  tags: string[];
+} {
+  const cleanDecision = sanitizeDecisionBeforeSplit(decision);
+  const [title = "", ...rationaleParts] = cleanDecision.split(" because ");
+  return {
+    title: title.slice(0, 200),
+    rationale: rationaleParts.join(" because ").slice(0, 200),
+    tags: ["backfill", sanitizeStructuralField(project)],
+  };
 }
 
 // --- OB push ---
@@ -373,32 +623,41 @@ async function pushToOB(
   sessionId: string,
   dryRun: boolean,
 ): Promise<boolean> {
+  const project = sanitizeStructuralField(extract.project);
+  const date = extract.date ? sanitizeStructuralField(extract.date) : undefined;
+
   if (dryRun) {
     console.log(`  [DRY RUN] session_id: ${sessionId}`);
-    console.log(`    project: ${extract.project}`);
-    if (extract.date) console.log(`    date: ${extract.date}`);
-    console.log(`    summary: ${extract.summary.slice(0, 150)}...`);
+    console.log(`    project: ${project}`);
+    if (date) console.log(`    date: ${date}`);
+    console.log(`    summary: ${sanitize(extract.summary).slice(0, 150)}...`);
     console.log(
-      `    decisions: ${extract.key_decisions.length}, learnings: ${extract.learnings.length}, next_steps: ${extract.next_steps.length}`,
+      `    decisions: ${extract.key_decisions.length}, learnings: ${extract.learnings.length}, next_steps: ${extract.next_steps.length}, blockers: ${extract.blockers.length}`,
     );
     if (extract.key_decisions.length > 0)
       console.log(
-        `    decision[0]: ${extract.key_decisions[0]!.slice(0, 120)}`,
+        `    decision[0]: ${sanitize(extract.key_decisions[0]!).slice(0, 120)}`,
       );
     if (extract.learnings.length > 0)
-      console.log(`    learning[0]: ${extract.learnings[0]!.slice(0, 120)}`);
+      console.log(
+        `    learning[0]: ${sanitize(extract.learnings[0]!).slice(0, 120)}`,
+      );
+    if (extract.next_steps.length > 0)
+      console.log(
+        `    next_step[0]: ${sanitize(extract.next_steps[0]!).slice(0, 120)}`,
+      );
+    if (extract.blockers.length > 0)
+      console.log(
+        `    blocker[0]: ${sanitize(extract.blockers[0]!).slice(0, 120)}`,
+      );
     return true;
   }
 
   const params = JSON.stringify({
     session_id: sessionId,
-    project: extract.project,
+    project,
     summary: sanitize(extract.summary),
-    tags: [
-      "backfill",
-      extract.project,
-      ...(extract.date ? [extract.date] : []),
-    ],
+    tags: ["backfill", project, ...(date ? [date] : [])],
     key_decisions: extract.key_decisions.map(sanitize),
     next_steps: extract.next_steps.map(sanitize),
     blockers: extract.blockers.map(sanitize),
@@ -425,7 +684,7 @@ async function pushToOB(
   for (const learning of extract.learnings) {
     const lParams = JSON.stringify({
       content: sanitize(learning),
-      tags: ["backfill", extract.project],
+      tags: ["backfill", project],
     });
     const lProc = Bun.spawn(
       ["mcp2cli", "open-brain", "log_thought", "--params", lParams],
@@ -436,12 +695,9 @@ async function pushToOB(
 
   // Log decisions
   for (const decision of extract.key_decisions) {
-    const parts = decision.split(" because ");
-    const dParams = JSON.stringify({
-      title: sanitize(parts[0]!).slice(0, 200),
-      rationale: sanitize(parts[1] ?? decision),
-      tags: ["backfill", extract.project],
-    });
+    const dParams = JSON.stringify(
+      buildDecisionLogParams(decision, project),
+    );
     const dProc = Bun.spawn(
       ["mcp2cli", "open-brain", "log_decision", "--params", dParams],
       { stdout: "pipe", stderr: "pipe" },
@@ -710,4 +966,6 @@ async function main() {
   if (dryRun) console.log("(dry-run mode — nothing was written)");
 }
 
-main().catch(console.error);
+if (import.meta.main) {
+  main().catch(console.error);
+}
