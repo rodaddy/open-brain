@@ -51,6 +51,7 @@ export interface SuiteStats {
 export interface GuardResult {
   errors: string[];
   executedLiveTestcases: number;
+  executedLiveTestcasesBySuite: Map<string, number>;
   suiteStats: Map<string, SuiteStats>;
 }
 
@@ -85,6 +86,7 @@ export function evaluateJunit(xml: string): GuardResult {
   // <error .../> child.
   let executedLiveTestcases = 0;
   let erroredLiveTestcases = 0;
+  const executedLiveTestcasesBySuite = new Map<string, number>();
   const testcaseRe = /<testcase\b[^>]*?(\/>|>[\s\S]*?<\/testcase>)/g;
   for (const block of xml.match(testcaseRe) ?? []) {
     const open = block.match(/<testcase\b[^>]*>/)?.[0] ?? block;
@@ -94,6 +96,10 @@ export function evaluateJunit(xml: string): GuardResult {
       /<skipped\b/.test(block) || attr(open, "skipped") === "true";
     if (isSkipped) continue;
     executedLiveTestcases += 1;
+    executedLiveTestcasesBySuite.set(
+      classname,
+      (executedLiveTestcasesBySuite.get(classname) ?? 0) + 1,
+    );
     if (/<error\b/.test(block)) erroredLiveTestcases += 1;
   }
 
@@ -127,6 +133,13 @@ export function evaluateJunit(xml: string): GuardResult {
           `${req.minTests}.`,
       );
     }
+    const executed = executedLiveTestcasesBySuite.get(req.name) ?? 0;
+    if (executed < req.minTests) {
+      errors.push(
+        `"${req.name}" executed ${executed} non-skipped live-Postgres ` +
+          `testcases, expected at least ${req.minTests}.`,
+      );
+    }
   }
 
   if (erroredLiveTestcases > 0) {
@@ -144,7 +157,12 @@ export function evaluateJunit(xml: string): GuardResult {
     );
   }
 
-  return { errors, executedLiveTestcases, suiteStats };
+  return {
+    errors,
+    executedLiveTestcases,
+    executedLiveTestcasesBySuite,
+    suiteStats,
+  };
 }
 
 function main(): void {

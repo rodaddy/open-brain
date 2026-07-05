@@ -159,4 +159,35 @@ describe("assert-db-tests-ran anti-skip guard", () => {
       ),
     ).toBe(true);
   });
+
+  it("fails when one required suite has no executed testcases but the global floor is met", () => {
+    const skippedName = "lane_upsert (live Postgres)";
+    const extraName = "runSharedPromoter cursor-stall fix (live Postgres)";
+    const suites = REQUIRED_SUITES.map((s) => {
+      if (s.name === skippedName) {
+        return suiteXml(s.name, {
+          tests: s.minTests,
+          testcases: Array.from(
+            { length: s.minTests },
+            (_, i) =>
+              `<testcase name="case ${i}" classname="${s.name}"><skipped /></testcase>`,
+          ).join("\n"),
+        });
+      }
+      if (s.name === extraName) {
+        return suiteXml(s.name, { tests: s.minTests + 2 });
+      }
+      return suiteXml(s.name, { tests: s.minTests });
+    }).join("\n");
+
+    const result = evaluateJunit(wrap(suites));
+    expect(result.executedLiveTestcases).toBe(17);
+    expect(
+      result.errors.some((e) =>
+        e.includes(
+          `"${skippedName}" executed 0 non-skipped live-Postgres testcases`,
+        ),
+      ),
+    ).toBe(true);
+  });
 });
