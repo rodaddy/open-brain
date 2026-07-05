@@ -66,22 +66,24 @@ Deploy optionality update on 2026-07-05:
 
 - Opened PR #240:
   https://github.com/rodaddy/open-brain/pull/240
-- Head: `082c965`
-  (`fix/optional-release-deploy`).
+- Branch: `fix/optional-release-deploy`.
+- Head/check state must be verified live before merge; do not rely on this file
+  as the current SHA source of truth.
 - Open PRs are now 8 until #240 or another open PR is merged/closed.
 - Open issues remain 17.
 - PR #240 changes deploy policy so `main` pushes validate but do not deploy.
-  Production deploy is allowed only from a `v*` tag or manual
-  `workflow_dispatch` with `deploy_core01=true`.
+  Production deploy is allowed only from a `v*` tag whose target commit is
+  reachable from `origin/main`, or manual `workflow_dispatch` from `main` with
+  `deploy_core01=true`.
 - PR #240 adds `docs/local-release-deploy-sop.md` and updates `README.md` so
   local full testing, release-candidate creation, and core01 deploy verification
   are a separate release phase after PR merges.
-- PR #240 live checks for `082c965`: `check`, `python-package`, `validate`,
-  `GitGuardian Security Checks`, and `claude-review` passed; `deploy` skipped.
+- PR #240 live checks must be re-read for the current head before merge.
 - Project 8 item for #240 is current:
   - Status: `In Review`
-  - Validation: `CI Passed`
-  - Review Gate: `Initial Swarm Pending`
+  - Validation: follow live PR checks for the current head.
+  - Review Gate: `Fixes In Progress` while initial gauntlet findings are being
+    addressed.
   - Component/Surface: `Deploy/Canary`
   - Phase: `P6 Deploy/Canary Follow-On`
   - Owner: `codex`

@@ -30,6 +30,37 @@ cleanup_previous_dir() {
   return 1
 }
 
+verify_github_deploy_ref() {
+  if [[ "${GITHUB_ACTIONS:-}" != "true" ]]; then
+    return 0
+  fi
+
+  local event_name="${GITHUB_EVENT_NAME:-}"
+  local ref="${GITHUB_REF:-}"
+  local head_sha
+
+  case "$event_name:$ref" in
+    workflow_dispatch:refs/heads/main)
+      ;;
+    push:refs/tags/v*)
+      ;;
+    *)
+      echo "FATAL: refusing core01 deploy from unsupported GitHub ref: event=$event_name ref=$ref" >&2
+      exit 1
+      ;;
+  esac
+
+  git -C "$REPO_DIR" fetch --no-tags origin main:refs/remotes/origin/main >/dev/null 2>&1
+  head_sha="$(git -C "$REPO_DIR" rev-parse HEAD)"
+
+  if ! git -C "$REPO_DIR" merge-base --is-ancestor "$head_sha" origin/main; then
+    echo "FATAL: refusing core01 deploy because HEAD is not reachable from origin/main: $head_sha" >&2
+    exit 1
+  fi
+}
+
+verify_github_deploy_ref
+
 if [[ -z "$BUN_BIN" ]]; then
   if [[ -x "/Users/rico/Library/Application Support/reflex/bun/bin/bun" ]]; then
     BUN_BIN="/Users/rico/Library/Application Support/reflex/bun/bin/bun"

@@ -9,8 +9,9 @@ deliberately.
 
 - Merging to `main` is not a deploy signal.
 - Production deploy is allowed only from:
-  - a manual CI workflow dispatch with `deploy_core01=true`; or
-  - a pushed version tag matching `v*`.
+  - a manual CI workflow dispatch from `main` with `deploy_core01=true`; or
+  - a pushed version tag matching `v*` whose target commit is reachable from
+    `origin/main`.
 - Never use production secrets in command logs, PR bodies, issues, or reports.
   Evidence may name env vars and commands only.
 - Use a clean release-candidate worktree under
@@ -38,6 +39,7 @@ DB_PORT=5432
 DB_NAME=open_brain_release_test
 DB_USER=open_brain_release
 DB_PASSWORD=...
+OPENBRAIN_TEST_DATABASE_URL=postgres://open_brain_release:PASSWORD@127.0.0.1:5432/open_brain_release_test
 AUTH_TOKEN_ADMIN=...
 AUTH_TOKEN_AGENT=...
 AUTH_TOKEN_READONLY=...
@@ -69,9 +71,13 @@ The status must be clean before testing.
 Run the repository checks from the release candidate worktree:
 
 ```zsh
+set -a
+source /Users/rico/.config/open-brain/env.release-test
+set +a
+: "${OPENBRAIN_TEST_DATABASE_URL:?env.release-test must set OPENBRAIN_TEST_DATABASE_URL}"
 bun install --frozen-lockfile
 bunx tsc --noEmit
-OPENBRAIN_TEST_DATABASE_URL=postgres://open_brain_release:REDACTED@127.0.0.1:5432/open_brain_release_test bun test
+bun test
 ```
 
 Run the Python package checks:
@@ -114,6 +120,10 @@ Expected result:
 
 Run a REST write/read smoke with the test admin token:
 
+Run these commands only on the local single-user test box. On shared hosts, use a
+temporary curl config/header file with mode `0600` so bearer tokens do not appear
+in process arguments.
+
 ```zsh
 curl -fsS \
   -H "Authorization: Bearer $AUTH_TOKEN_ADMIN" \
@@ -150,16 +160,19 @@ After the full local gate passes:
 
 ```zsh
 git status --short --branch
+git fetch origin main --tags
+git merge-base --is-ancestor HEAD origin/main
 git tag -a v0.1.1-rc.1 -m "Open Brain v0.1.1-rc.1"
 git push origin v0.1.1-rc.1
 ```
 
 Pushing a `v*` tag runs CI and, once CI passes, the deploy job is eligible to
-run on core01. Watch the workflow. Do not leave a tag deploy unattended.
+run on core01 only if the tagged commit is reachable from `origin/main`. Watch
+the workflow. Do not leave a tag deploy unattended.
 
 For a manual deploy instead of a tag deploy, run the CI workflow from GitHub
-Actions with `deploy_core01=true` after selecting the exact commit/tag that
-passed the local gate.
+Actions on `main` with `deploy_core01=true` after the exact `main` commit passed
+the local gate.
 
 ## Core01 Deploy Verification
 
@@ -167,6 +180,9 @@ After the deploy workflow finishes:
 
 ```zsh
 curl -fsS http://127.0.0.1:3100/health
+curl -fsS http://127.0.0.1:3101/health
+curl -fsS http://127.0.0.1:3102/health
+curl -fsS https://open-brain.rodaddy.live/health
 ```
 
 Also verify from the normal client path:

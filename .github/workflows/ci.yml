@@ -85,7 +85,7 @@ jobs:
     needs: [check, python-package]
     runs-on: [self-hosted, macOS, core01]
     if: |
-      (github.event_name == 'workflow_dispatch' && inputs.deploy_core01) ||
+      (github.event_name == 'workflow_dispatch' && inputs.deploy_core01 && github.ref == 'refs/heads/main') ||
       (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
     concurrency:
       group: deploy-core01-production
@@ -95,6 +95,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Deploy to core01 launchd runtime
         run: /opt/homebrew/bin/bash scripts/core01-deploy-local.sh
