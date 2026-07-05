@@ -150,11 +150,11 @@ describe("canWriteNamespace", () => {
     expect(agentResult.reason).toContain("frozen snapshot");
   });
 
-  it("frozen collab rejects writes for admin, n8n, and promoter too (#167)", () => {
+  it("frozen collab rejects writes for admin, ob-admin, and promoter too (#167)", () => {
     // Independent of the legacy mechanism: with collab retired, no role —
     // including global writers — may create rows in the frozen snapshot.
     // Prevents invisible orphans in a namespace nothing reads by default.
-    for (const role of ["admin", "n8n", "promoter"] as const) {
+    for (const role of ["admin", "ob-admin", "promoter"] as const) {
       const result = canWriteNamespace(
         { role, clientId: "global-writer" },
         "collab",
