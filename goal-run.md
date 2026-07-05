@@ -13,8 +13,9 @@ Updated after the 2026-07-05 PR merge batch and Project 8 sync.
     `python-package`, `validate`, GitGuardian), and `deploy` skipped.
   - Current blocker: local GitHub CLI token lacks the `workflow` OAuth scope
     required to merge a PR that changes `.github/workflows/ci.yml`.
-    In-flight repair command: `gh auth refresh -h github.com -s workflow`.
-    After authorization: re-run `gh auth status`, then
+    Latest repair attempt timed out waiting for GitHub device-flow approval.
+    Rerun `gh auth refresh -h github.com -s workflow`; after authorization,
+    re-run `gh auth status`, then
     `gh pr merge 234 --squash`.
 - Merged in this controller batch:
   - #231 merged as `c9888cc584fe68b5ff91906d56ef26c7fb40afef`;
