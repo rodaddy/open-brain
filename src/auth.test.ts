@@ -38,7 +38,7 @@ describe("buildTokenMap", () => {
       AUTH_TOKEN_ADMIN: "admin-token-123",
       AUTH_TOKEN_AGENT: "agent-token-456",
       AUTH_TOKEN_DISCORD: "discord-token-789",
-      AUTH_TOKEN_N8N: "n8n-token-abc",
+      AUTH_TOKEN_OB_ADMIN: "ob-admin-token-abc",
       AUTH_TOKEN_PROMOTER: "promoter-token-ghi",
       AUTH_TOKEN_READONLY: "readonly-token-def",
     };
@@ -60,9 +60,9 @@ describe("buildTokenMap", () => {
       role: "discord",
       clientId: "discord",
     });
-    expect(map.get("n8n-token-abc")).toEqual({
-      role: "n8n",
-      clientId: "n8n",
+    expect(map.get("ob-admin-token-abc")).toEqual({
+      role: "ob-admin",
+      clientId: "ob-admin",
     });
     expect(map.get("readonly-token-def")).toEqual({
       role: "readonly",
@@ -96,7 +96,7 @@ describe("buildTokenMap", () => {
       AUTH_TOKEN_USER_KEVIN: "readonly:kevin-token",
       AUTH_TOKEN_USER_BILBY: "agent:bilby-token",
       AUTH_TOKEN_USER_SKIPPY: "agent:skippy-token",
-      AUTH_TOKEN_USER_OPENBRAIN_PROMOTER: "n8n:promoter-token",
+      AUTH_TOKEN_USER_OPENBRAIN_PROMOTER: "ob-admin:promoter-token",
     };
 
     const map = buildTokenMap(env);
@@ -115,7 +115,7 @@ describe("buildTokenMap", () => {
       clientId: "skippy",
     });
     expect(map.get("promoter-token")).toEqual({
-      role: "n8n",
+      role: "ob-admin",
       clientId: "openbrain-promoter",
     });
   });

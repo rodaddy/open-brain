@@ -55,6 +55,25 @@ LABELED_LONG_SECRET_RE = (
     r"(?i)(client[_-]?secret|access[_-]?token|refresh[_-]?token|private[_-]?key)"
     r"\s*[:=]\s*[A-Za-z0-9._/+=-]{20,}"
 )
+BARE_THREE_SEGMENT_TOKEN_RE = (
+    r"(?<![A-Za-z0-9_-])"
+    r"(?=[A-Za-z0-9_-]*[A-Z])(?=[A-Za-z0-9_-]*[a-z])"
+    r"(?=[A-Za-z0-9_-]*[0-9])[A-Za-z0-9_-]{20,}\."
+    r"(?=[A-Za-z0-9_-]*[A-Z])(?=[A-Za-z0-9_-]*[a-z])"
+    r"(?=[A-Za-z0-9_-]*[0-9])[A-Za-z0-9_-]{6,}\."
+    r"(?=[A-Za-z0-9_-]*[A-Z])(?=[A-Za-z0-9_-]*[a-z])"
+    r"(?=[A-Za-z0-9_-]*[0-9])[A-Za-z0-9_-]{20,}"
+    r"(?![A-Za-z0-9_-])"
+)
+UNLABELED_HIGH_ENTROPY_BLOB_RE = (
+    r"(?<![A-Za-z0-9+=/])"
+    r"(?=[A-Za-z0-9+=/]{40,}(?![A-Za-z0-9+=/]))"
+    r"(?=[A-Za-z0-9+=/]*[A-Z])"
+    r"(?=[A-Za-z0-9+=/]*[a-z])"
+    r"(?=[A-Za-z0-9+=/]*[0-9])"
+    r"(?=[A-Za-z0-9+=/]*[+=])"
+    r"[A-Za-z0-9+=/]+"
+)
 
 SECRET_PATTERNS = [
     re.compile(r"(?i)authorization\s*[:=]\s*bearer\s+[^\s,;]+"),
@@ -76,6 +95,14 @@ SECRET_PATTERNS = [
     re.compile(URL_USERINFO_CRED_RE),
     re.compile(LABELED_LONG_SECRET_RE),
 ]
+HEURISTIC_REDACTION_PATTERNS = [
+    re.compile(BARE_THREE_SEGMENT_TOKEN_RE),
+    re.compile(UNLABELED_HIGH_ENTROPY_BLOB_RE),
+]
+# Display-only aggregate for diagnostic redaction. ``agent._reject_secret_payload``
+# intentionally consumes only SECRET_PATTERNS because heuristic patterns are too
+# broad for fail-closed write rejection.
+REDACTION_PATTERNS = SECRET_PATTERNS + HEURISTIC_REDACTION_PATTERNS
 SENSITIVE_KEY_RE = re.compile(
     r"(?i)(token|secret|password|api[_-]?key|credential|authorization|session[_-]?id)"
 )
@@ -110,6 +137,13 @@ def idempotency_key() -> str:
 def redact_text(text: str) -> str:
     redacted = text
     for pattern in SECRET_PATTERNS:
+        redacted = pattern.sub("[REDACTED]", redacted)
+    # Heuristic-only display redaction deliberately starts at 40 characters to
+    # avoid shredding short benign IDs; shorter opaque values need labels such
+    # as ``access_token=`` when they must be rejected or redacted.
+    if len(redacted) < 40:
+        return redacted
+    for pattern in HEURISTIC_REDACTION_PATTERNS:
         redacted = pattern.sub("[REDACTED]", redacted)
     return redacted
 

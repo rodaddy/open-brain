@@ -56,14 +56,14 @@ export function registerScanNamespace(server: McpServer, deps: ToolDeps): void {
       if (
         !auth ||
         (auth.role !== "admin" &&
-          auth.role !== "n8n" &&
+          auth.role !== "ob-admin" &&
           auth.role !== "promoter")
       ) {
         return {
           content: [
             {
               type: "text" as const,
-              text: "Permission denied: admin, n8n, or promoter role required",
+              text: "Permission denied: admin, ob-admin, or promoter role required",
             },
           ],
           isError: true,
@@ -134,9 +134,6 @@ export function registerScanNamespace(server: McpServer, deps: ToolDeps): void {
                 existing_target_id: targetDupes[0].id,
                 created_at: row.created_at,
               };
-              if (targetPhysicalNamespace === "collab") {
-                duplicate.existing_collab_id = targetDupes[0].id;
-              }
               duplicates.push(duplicate);
               continue;
             }

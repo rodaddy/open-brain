@@ -6,6 +6,7 @@ import {
 import type { AuthInfo } from "../../types.ts";
 import {
   createMockEmbed,
+  enableLegacyCollabFallback,
   getErrorText,
   parseToolResult,
   setupMcpClient,
@@ -62,13 +63,13 @@ describe("repo fact tools", () => {
     try {
       const result = await client.callTool({
         name: "upsert_repo_fact",
-        arguments: { namespace: "collab", metadata: repoFact },
+        arguments: { namespace: "team-kb", metadata: repoFact },
       });
 
       expect(result.isError).toBeFalsy();
       const parsed = parseToolResult(result);
       expect(parsed.entity_type).toBe("repo_fact");
-      expect(parsed.namespace).toBe("collab");
+      expect(parsed.namespace).toBe("team-kb");
       expect(parsed.canonical_id).toContain("repo_fact:qmd:king-core");
       expect(parsed.metadata.source_system).toBe("qmd");
       expect(parsed.metadata.source_commit).toBe(repoFact.source_commit);
@@ -480,7 +481,7 @@ describe("repo fact tools", () => {
     try {
       const result = await client.callTool({
         name: "upsert_repo_fact",
-        arguments: { namespace: "collab", metadata: repoFact },
+        arguments: { namespace: "team-kb", metadata: repoFact },
       });
 
       expect(result.isError).toBe(true);
@@ -501,7 +502,10 @@ describe("repo fact tools", () => {
               id: "550e8400-e29b-41d4-a716-446655440000",
               entity_type: "repo_fact",
               name: "king-core:api",
-              namespace: "collab",
+              // #167: this test is about read scoping, not legacy fallback.
+              // Use the canonical shared physical namespace directly now that
+              // collab is retired.
+              namespace: "shared-kb",
               metadata: repoFact,
             },
           ],
@@ -543,6 +547,7 @@ describe("repo fact tools", () => {
   });
 
   it("falls back from shared-kb to legacy collab when listing repo facts", async () => {
+    const fallbackEnv = enableLegacyCollabFallback();
     const calls: Array<{ sql: string; params?: unknown[] }> = [];
     const mockPool = {
       query: async (sql: string, params?: unknown[]) => {
@@ -588,11 +593,13 @@ describe("repo fact tools", () => {
         "collab",
       ]);
     } finally {
+      fallbackEnv.restore();
       await cleanup();
     }
   });
 
   it("uses hidden legacy collab fallback for omitted namespace repo fact reads", async () => {
+    const fallbackEnv = enableLegacyCollabFallback();
     const calls: Array<{ sql: string; params?: unknown[] }> = [];
     const mockPool = {
       query: async (sql: string, params?: unknown[]) => {
@@ -642,11 +649,13 @@ describe("repo fact tools", () => {
         "collab",
       ]);
     } finally {
+      fallbackEnv.restore();
       await cleanup();
     }
   });
 
   it("still queries legacy collab when private repo facts fill omitted namespace reads", async () => {
+    const fallbackEnv = enableLegacyCollabFallback();
     const mockPool = {
       query: async (_sql: string, params?: unknown[]) => {
         const namespace = params?.[0];
@@ -708,11 +717,13 @@ describe("repo fact tools", () => {
         "shared-kb",
       ]);
     } finally {
+      fallbackEnv.restore();
       await cleanup();
     }
   });
 
   it("dedupes migrated shared-kb and legacy collab repo facts by stable identity", async () => {
+    const fallbackEnv = enableLegacyCollabFallback();
     const mockPool = {
       query: async (_sql: string, params?: unknown[]) => {
         const namespace = params?.[0];
@@ -767,6 +778,7 @@ describe("repo fact tools", () => {
       expect(parsed[0].id).toBe("550e8400-e29b-41d4-a716-446655440201");
       expect(parsed[0].namespace).toBe("shared-kb");
     } finally {
+      fallbackEnv.restore();
       await cleanup();
     }
   });

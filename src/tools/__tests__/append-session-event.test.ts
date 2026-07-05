@@ -173,7 +173,7 @@ describe("append_session_event", () => {
         name: "append_session_event",
         arguments: {
           session_key: "ob-v2-dev",
-          namespace: "collab",
+          namespace: "team-kb",
           event_type: "decision",
           content: "Decided to use append-only event journal",
           source: "skippy",
@@ -215,9 +215,9 @@ describe("append_session_event", () => {
     }
   });
 
-  it("allows n8n role", async () => {
+  it("allows ob-admin role", async () => {
     const mockPool = createLaneFoundPool();
-    const auth: AuthInfo = { role: "n8n", clientId: "n8n-worker" };
+    const auth: AuthInfo = { role: "ob-admin", clientId: "ob-admin-worker" };
     const { client, cleanup } = await setupToolClient(mockPool, auth);
 
     try {

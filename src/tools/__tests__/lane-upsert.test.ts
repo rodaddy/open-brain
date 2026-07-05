@@ -170,7 +170,7 @@ describe("lane_upsert", () => {
     }
   });
 
-  it("allows n8n role", async () => {
+  it("allows ob-admin role", async () => {
     const mockPool = {
       query: async () => ({
         rows: [
@@ -183,7 +183,7 @@ describe("lane_upsert", () => {
         ],
       }),
     };
-    const auth: AuthInfo = { role: "n8n", clientId: "n8n-worker" };
+    const auth: AuthInfo = { role: "ob-admin", clientId: "ob-admin-worker" };
     const { client, cleanup } = await setupToolClient(mockPool, auth);
 
     try {
@@ -220,7 +220,7 @@ describe("lane_upsert", () => {
         name: "lane_upsert",
         arguments: {
           session_key: "ob-v2-session-lanes",
-          namespace: "collab",
+          namespace: "team-kb",
           project: "open-brain",
           agent: "skippy",
           source: "discord",
@@ -236,7 +236,7 @@ describe("lane_upsert", () => {
       const parsed = JSON.parse((result.content as any)[0].text);
       expect(parsed.id).toBe("uuid-new");
       expect(parsed.session_key).toBe("ob-v2-session-lanes");
-      expect(parsed.namespace).toBe("collab");
+      expect(parsed.namespace).toBe("team-kb");
       expect(parsed.is_new).toBe(true);
       expect(parsed.status).toBe("active");
       expect(parsed.embedded).toBe(true);
@@ -329,11 +329,11 @@ describe("lane_upsert", () => {
     try {
       const result = await client.callTool({
         name: "lane_upsert",
-        arguments: { session_key: "shared-lane", namespace: "collab" },
+        arguments: { session_key: "shared-lane", namespace: "team-kb" },
       });
 
       const parsed = JSON.parse((result.content as any)[0].text);
-      expect(parsed.namespace).toBe("collab");
+      expect(parsed.namespace).toBe("team-kb");
     } finally {
       await cleanup();
     }

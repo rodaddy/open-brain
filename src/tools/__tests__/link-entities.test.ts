@@ -173,7 +173,7 @@ describe("link_entities", () => {
           to_type: "decision",
           to_id: TO_ID,
           relation: "depends_on",
-          namespace: "collab",
+          namespace: "team-kb",
           weight: 2.5,
           metadata: { reason: "causal" },
         },
@@ -396,7 +396,7 @@ describe("link_entities", () => {
     }
   });
 
-  // ── AGENT / N8N ROLES ──
+  // ── AGENT / OB_ADMIN ROLES ──
 
   it("allows agent role", async () => {
     const mockPool = createLinkPool();

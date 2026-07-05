@@ -3,6 +3,7 @@ import { registerSearchAll } from "../search-all.ts";
 import type { AuthInfo } from "../../types.ts";
 import {
   createMockEmbed,
+  enableLegacyCollabFallback,
   makeMockRows,
   setupMcpClient,
   parseToolResult,
@@ -476,6 +477,7 @@ describe("search_all", () => {
     });
 
     it("falls back from shared-kb to legacy collab for brain results and canonicalizes output", async () => {
+      const fallbackEnv = enableLegacyCollabFallback();
       mockBunSpawn(1, "");
       const seenNamespaces: unknown[] = [];
       const pool = {
@@ -524,6 +526,7 @@ describe("search_all", () => {
           seenNamespaces.filter((value) => typeof value === "string"),
         ).toEqual(["shared-kb", "collab", "admin"]);
       } finally {
+        fallbackEnv.restore();
         await cleanup();
       }
     });

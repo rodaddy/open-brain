@@ -58,11 +58,11 @@ export function createPromotionRouter(deps: RestDeps): Router {
     if (
       !auth ||
       (auth.role !== "admin" &&
-        auth.role !== "n8n" &&
+        auth.role !== "ob-admin" &&
         auth.role !== "promoter")
     ) {
       res.status(403).json({
-        error: "Permission denied: admin, n8n, or promoter role required",
+        error: "Permission denied: admin, ob-admin, or promoter role required",
       });
       return;
     }
@@ -102,8 +102,8 @@ export function createPromotionRouter(deps: RestDeps): Router {
 
   router.post("/demote", async (req: Request, res: Response) => {
     const auth = getAuth(req);
-    if (!auth || auth.role !== "admin") {
-      res.status(403).json({ error: "Permission denied: admin role required" });
+    if (!auth || (auth.role !== "admin" && auth.role !== "ob-admin")) {
+      res.status(403).json({ error: "Permission denied: admin or ob-admin role required" });
       return;
     }
 
@@ -155,11 +155,11 @@ export function createPromotionRouter(deps: RestDeps): Router {
     if (
       !auth ||
       (auth.role !== "admin" &&
-        auth.role !== "n8n" &&
+        auth.role !== "ob-admin" &&
         auth.role !== "promoter")
     ) {
       res.status(403).json({
-        error: "Permission denied: admin, n8n, or promoter role required",
+        error: "Permission denied: admin, ob-admin, or promoter role required",
       });
       return;
     }
@@ -228,9 +228,6 @@ export function createPromotionRouter(deps: RestDeps): Router {
               existing_target_id: targetDupes[0].id,
               created_at: row.created_at,
             };
-            if (targetPhysicalNamespace === "collab") {
-              duplicate.existing_collab_id = targetDupes[0].id;
-            }
             duplicateEntries.push(duplicate);
             continue;
           }

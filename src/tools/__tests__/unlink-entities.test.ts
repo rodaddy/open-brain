@@ -31,7 +31,7 @@ describe("unlink_entities", () => {
       const result = await client.callTool({
         name: "unlink_entities",
         arguments: {
-          namespace: "collab",
+          namespace: "team-kb",
           from_type: "entity",
           from_id: FROM_ID,
           to_type: "entity",
@@ -43,13 +43,13 @@ describe("unlink_entities", () => {
       expect(result.isError).toBeFalsy();
       expect(parseToolResult(result)).toEqual({
         id: "link-id",
-        namespace: "collab",
+        namespace: "team-kb",
         unlinked: true,
       });
       expect(calls[0]?.sql).toContain("SET archived_at = NOW()");
       expect(calls[0]?.sql).toContain("namespace = $1");
       expect(calls[0]?.params).toEqual([
-        "collab",
+        "team-kb",
         "entity",
         FROM_ID,
         "entity",

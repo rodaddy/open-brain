@@ -191,9 +191,13 @@ describe("log_thought", () => {
           arguments: { content: "Shared thought", namespace: "collab" },
         });
 
+        // #167: collab is retired as a legacy shared namespace, so an agent
+        // write to collab is now denied by ordinary namespace isolation
+        // (own-namespace rule) rather than the legacy-shared reject. The deny
+        // outcome and the empty DB call are the load-bearing invariants.
         expect(result.isError).toBe(true);
         expect((result.content as any)[0].text).toContain("Permission denied");
-        expect((result.content as any)[0].text).toContain("shared-kb");
+        expect((result.content as any)[0].text).toContain("collab");
         expect(capturedParams).toEqual([]);
       } finally {
         await cleanup();
@@ -293,7 +297,7 @@ describe("log_thought", () => {
       };
       const mockEmbed = createMockEmbed();
       const auth: AuthInfo = {
-        role: "n8n",
+        role: "ob-admin",
         clientId: "openbrain-promoter",
       };
 

@@ -5,13 +5,16 @@ import pathlib
 import re
 import threading
 import time
+import tomllib
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from importlib.metadata import PackageNotFoundError, version
 
 import pytest
 
 from openbrain_memory import (
     CURRENT_CONTRACT_VERSION,
     CURRENT_TOOL_HELP,
+    PACKAGE_VERSION,
     REQUIRED_CONTRACT_TOOLS,
     OpenBrainClient,
     OpenBrainHTTPError,
@@ -19,7 +22,11 @@ from openbrain_memory import (
     OpenBrainToolError,
     RetryPolicy,
 )
-from openbrain_memory.client import TransportResponse, UrllibTransport
+from openbrain_memory.client import (
+    TransportResponse,
+    UrllibTransport,
+    _resolve_package_version,
+)
 
 
 class FakeTransport:
@@ -251,7 +258,42 @@ def test_initialize_omits_namespace_delegation_by_default_and_stores_session_id(
     assert headers["X-Role"] == "agent"
     assert "Mcp-Session-Id" not in headers
     assert initialize["json"]["method"] == "initialize"
+    assert initialize["json"]["params"]["clientInfo"] == {
+        "name": "openbrain-memory",
+        "version": PACKAGE_VERSION,
+    }
     assert client.session_id == "session-123"
+
+
+def test_package_version_matches_installed_metadata():
+    assert PACKAGE_VERSION == version("openbrain-memory")
+
+
+def test_package_version_falls_back_to_source_pyproject(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    def missing_distribution(_: str) -> str:
+        raise PackageNotFoundError("openbrain-memory")
+
+    monkeypatch.setattr("openbrain_memory.client.version", missing_distribution)
+
+    pyproject = pathlib.Path(__file__).resolve().parents[1] / "pyproject.toml"
+    expected_version = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"][
+        "version"
+    ]
+    assert _resolve_package_version() == expected_version
+
+
+def test_package_version_fallback_returns_unknown_without_source_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+):
+    def missing_distribution(_: str) -> str:
+        raise PackageNotFoundError("openbrain-memory")
+
+    monkeypatch.setattr("openbrain_memory.client.version", missing_distribution)
+
+    assert _resolve_package_version(tmp_path / "missing.toml") == "0.0.0+unknown"
 
 
 def test_initialize_sends_namespace_only_when_delegation_is_enabled():

@@ -25,8 +25,10 @@ import {
 } from "../src/embedding.ts";
 import { extractMetadata, mergeTags } from "../src/extraction.ts";
 import { logger } from "../src/logger.ts";
+import { sharedNamespaceConfig } from "../src/shared-namespace.ts";
 
 const DELAY_MS = 200;
+const DEFAULT_IMPORT_NAMESPACE = sharedNamespaceConfig().sharedNamespace;
 
 export type ImportTable = "thoughts" | "decisions" | "sessions";
 
@@ -127,14 +129,15 @@ export async function importThought(
 
   try {
     const { rowCount } = await pool.query(
-      `INSERT INTO thoughts (content, tags, source, created_by, embedding, content_hash, embedded_at, embedding_model, extracted_metadata)
-       SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9
-       WHERE NOT EXISTS (SELECT 1 FROM thoughts WHERE content_hash = $6)`,
+      `INSERT INTO thoughts (content, tags, source, created_by, namespace, embedding, content_hash, embedded_at, embedding_model, extracted_metadata)
+       SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+       WHERE NOT EXISTS (SELECT 1 FROM thoughts WHERE namespace = $5 AND content_hash = $7)`,
       [
         content,
         tags,
         opts.sourceLabel,
         "bulk-import",
+        DEFAULT_IMPORT_NAMESPACE,
         embedding ? toSql(embedding) : null,
         hash,
         embedding ? new Date().toISOString() : null,
@@ -193,15 +196,16 @@ export async function importDecision(
 
   try {
     const { rowCount } = await pool.query(
-      `INSERT INTO decisions (title, rationale, tags, context, created_by, embedding, content_hash, embedded_at, embedding_model, extracted_metadata)
-       SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
-       WHERE NOT EXISTS (SELECT 1 FROM decisions WHERE content_hash = $7)`,
+      `INSERT INTO decisions (title, rationale, tags, context, created_by, namespace, embedding, content_hash, embedded_at, embedding_model, extracted_metadata)
+       SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+       WHERE NOT EXISTS (SELECT 1 FROM decisions WHERE namespace = $6 AND content_hash = $8)`,
       [
         title,
         rationale,
         tags,
         `Imported from: ${file.filePath}`,
         "bulk-import",
+        DEFAULT_IMPORT_NAMESPACE,
         embedding ? toSql(embedding) : null,
         hash,
         embedding ? new Date().toISOString() : null,
@@ -246,13 +250,14 @@ export async function importSession(
 
   try {
     const { rowCount } = await pool.query(
-      `INSERT INTO sessions (project, summary, tags, created_by, embedding, content_hash, embedded_at, embedding_model)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      `INSERT INTO sessions (project, summary, tags, created_by, namespace, embedding, content_hash, embedded_at, embedding_model)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
       [
         project,
         summary,
         tags,
         "bulk-import",
+        DEFAULT_IMPORT_NAMESPACE,
         embedding ? toSql(embedding) : null,
         hash,
         embedding ? new Date().toISOString() : null,

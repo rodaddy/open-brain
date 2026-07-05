@@ -67,8 +67,9 @@ describe("list_namespaces", () => {
       expect(result.isError).toBeFalsy();
       const parsed = JSON.parse((result.content as any)[0].text);
       expect(parsed.namespace_count).toBeGreaterThan(0);
+      // #167: collab is retired and no longer canonicalized to shared-kb.
       expect(parsed.namespaces[0]).toEqual({
-        namespace: "shared-kb",
+        namespace: "collab",
         total: 75,
         per_table: { thoughts: 15 },
       });

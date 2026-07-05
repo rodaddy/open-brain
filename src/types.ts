@@ -2,7 +2,7 @@ export type Role =
   | "admin"
   | "agent"
   | "discord"
-  | "n8n"
+  | "ob-admin"
   | "promoter"
   | "readonly";
 export type Table =

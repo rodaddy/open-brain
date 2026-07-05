@@ -20,7 +20,7 @@ describe("hydrate_entities", () => {
                 id: "550e8400-e29b-91d4-a716-446655440000",
                 entity_type: "project",
                 name: "open-brain",
-                namespace: "collab",
+                namespace: "team-kb",
               },
             ],
           };
@@ -39,7 +39,7 @@ describe("hydrate_entities", () => {
     try {
       const result = await client.callTool({
         name: "hydrate_entities",
-        arguments: { namespace: "collab", only_missing_embedding: true },
+        arguments: { namespace: "team-kb", only_missing_embedding: true },
       });
 
       expect(result.isError).toBeFalsy();
@@ -65,7 +65,7 @@ describe("hydrate_entities", () => {
     try {
       const result = await client.callTool({
         name: "hydrate_entities",
-        arguments: { namespace: "collab" },
+        arguments: { namespace: "team-kb" },
       });
       expect(result.isError).toBe(true);
     } finally {

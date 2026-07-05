@@ -14,7 +14,9 @@ from openbrain_memory import (
     MemoryPolicy,
     MemorySpool,
     OpenBrainClient,
+    redact_text,
 )
+from openbrain_memory.agent import _reject_secret_payload
 
 
 class FakeClient:
@@ -556,6 +558,23 @@ def test_record_receipt_rejects_secret_like_evidence_before_writes():
         with pytest.raises(ValueError, match="secret-like material"):
             memory.record_receipt("bad", **kwargs)
     assert [name for name, _ in client.calls] == ["session_start"]
+
+
+def test_receipt_rejection_excludes_heuristic_only_redaction_shapes():
+    bare_three_segment = ".".join(
+        [
+            "AbCdEf2" * 4,
+            "aBcD3f",
+            "WxYz4Q" * 4,
+        ]
+    )
+    unlabeled_blob = "Aa1Bb2" * 4 + "+=" + "Hh7Ii8" * 4
+
+    assert "[REDACTED]" in redact_text(f"{bare_three_segment} {unlabeled_blob}")
+    _reject_secret_payload(
+        {"summary": bare_three_segment, "details": [unlabeled_blob]},
+        "receipt",
+    )
 
 
 def test_metadata_bounds_are_rejected_before_tool_calls():

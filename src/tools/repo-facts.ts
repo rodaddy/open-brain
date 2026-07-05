@@ -686,6 +686,7 @@ export function registerListRepoFacts(server: McpServer, deps: ToolDeps): void {
         typeof namespace === "string" &&
         isSharedNamespace(namespace) &&
         config.legacyFallbackEnabled &&
+        config.legacySharedNamespace !== "" &&
         offset === 0
       ) {
         const sharedRows = await queryRows(config.sharedNamespace, limit, 0);
@@ -706,6 +707,7 @@ export function registerListRepoFacts(server: McpServer, deps: ToolDeps): void {
         Array.isArray(namespace) &&
         namespace.includes(config.physicalSharedNamespace) &&
         config.legacyFallbackEnabled &&
+        config.legacySharedNamespace !== "" &&
         offset === 0
       ) {
         const [primaryRows, sharedRows] = await Promise.all([

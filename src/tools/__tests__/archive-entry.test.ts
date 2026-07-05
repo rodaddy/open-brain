@@ -106,12 +106,12 @@ describe("archive_entry", () => {
     });
   });
 
-  describe("n8n role -- has delete permission", () => {
-    it("succeeds because n8n has delete on all tables", async () => {
+  describe("ob-admin role -- has delete permission", () => {
+    it("succeeds because ob-admin has delete on all tables", async () => {
       const mockPool = {
-        query: async () => ({ rows: [{ id: "n8n-uuid" }] }),
+        query: async () => ({ rows: [{ id: "ob-admin-uuid" }] }),
       };
-      const auth: AuthInfo = { role: "n8n", clientId: "n8n-client" };
+      const auth: AuthInfo = { role: "ob-admin", clientId: "ob-admin-client" };
 
       const { client, cleanup } = await setupToolClient(mockPool, auth);
 

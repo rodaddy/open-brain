@@ -30,6 +30,7 @@ mock.module("../../src/logger.ts", () => ({
 }));
 
 mock.module("../../src/embedding.ts", () => ({
+  EMBEDDING_MODEL: "embeddinggemma-300m-8bit",
   contentHash: (text: string) => {
     // Deterministic hash for testing -- just use a simple string hash
     const { createHash } = require("node:crypto");
@@ -337,18 +338,19 @@ describe("small: single file import", () => {
     expect(sql).toContain("INSERT INTO thoughts");
     expect(sql).toContain("content_hash");
     expect(sql).toContain("WHERE NOT EXISTS");
-    // params: content, tags, source, created_by, embedding, hash, embedded_at, model, extracted
+    // params: content, tags, source, created_by, namespace, embedding, hash, embedded_at, model, extracted
     expect(params![0]).toBe(
       "This is my thought content for testing the import function.",
     );
     expect(params![1]).toEqual(["ai", "test"]);
     expect(params![2]).toBe("bulk-import"); // sourceLabel
     expect(params![3]).toBe("bulk-import"); // created_by
-    expect(params![4]).toBeNull(); // embedding (embed=false)
-    expect(typeof params![5]).toBe("string"); // hash
-    expect(params![6]).toBeNull(); // embedded_at
-    expect(params![7]).toBeNull(); // embedding_model
-    expect(params![8]).toBeNull(); // extracted_metadata
+    expect(params![4]).toBe("shared-kb"); // namespace
+    expect(params![5]).toBeNull(); // embedding (embed=false)
+    expect(typeof params![6]).toBe("string"); // hash
+    expect(params![7]).toBeNull(); // embedded_at
+    expect(params![8]).toBeNull(); // embedding_model
+    expect(params![9]).toBeNull(); // extracted_metadata
   });
 
   it("returns 'duplicate' when rowCount is 0", async () => {
@@ -401,7 +403,7 @@ describe("medium: 10-file import with dedup", () => {
     // First call succeeds (rowCount=1), subsequent calls with same hash return rowCount=0
     const seenHashes = new Set<string>();
     const { pool } = createMockPool(async (_sql: unknown, params: unknown) => {
-      const hash = (params as unknown[])[5] as string;
+      const hash = (params as unknown[])[6] as string;
       if (seenHashes.has(hash)) {
         return { rows: [], rowCount: 0 };
       }
@@ -482,7 +484,7 @@ describe("large: 100-file import", () => {
   it("100 files with mix of unique and duplicate content", async () => {
     const seenHashes = new Set<string>();
     const { pool } = createMockPool(async (_sql: unknown, params: unknown) => {
-      const hash = (params as unknown[])[5] as string;
+      const hash = (params as unknown[])[6] as string;
       if (seenHashes.has(hash)) {
         return { rows: [], rowCount: 0 };
       }
@@ -526,6 +528,7 @@ describe("table routing", () => {
 
     const [sql] = mockQuery.mock.calls[0] as [string, unknown[]];
     expect(sql).toContain("INSERT INTO thoughts");
+    expect(sql).toContain("namespace");
     expect(sql).not.toContain("INSERT INTO decisions");
     expect(sql).not.toContain("INSERT INTO sessions");
   });
@@ -545,11 +548,13 @@ describe("table routing", () => {
     expect(sql).toContain("title");
     expect(sql).toContain("rationale");
     expect(sql).toContain("context");
+    expect(sql).toContain("namespace");
     expect(params![0]).toBe("Use Bun Runtime"); // title from frontmatter
     expect(params![1]).toBe(
       "We decided to use Bun because it is faster than Node for our workload.",
     ); // rationale = body
     expect(params![3]).toContain("Imported from:"); // context
+    expect(params![5]).toBe("shared-kb"); // namespace
   });
 
   it("importDecision falls back to first line of body for title when no frontmatter title", async () => {
@@ -604,6 +609,7 @@ describe("table routing", () => {
     ); // summary = body
     expect(params![2]).toEqual(["session"]); // tags
     expect(params![3]).toBe("bulk-import"); // created_by
+    expect(params![4]).toBe("shared-kb"); // namespace
   });
 
   it("importSession sets project to null when not in frontmatter", async () => {

@@ -90,8 +90,10 @@ describe("get_stats", () => {
       const parsed = JSON.parse((result.content as any)[0].text);
       expect(parsed.entry_counts).toBeDefined();
       expect(parsed.tier_distribution).toBeDefined();
+      // #167: collab is retired and no longer canonicalized to shared-kb, so
+      // stats surface the frozen collab namespace as-is.
       expect(parsed.namespaces).toEqual([
-        { table: "thoughts", namespace: "shared-kb", count: 50 },
+        { table: "thoughts", namespace: "collab", count: 50 },
       ]);
       expect(parsed.access_stats).toBeDefined();
       expect(parsed.graph_counts).toEqual({

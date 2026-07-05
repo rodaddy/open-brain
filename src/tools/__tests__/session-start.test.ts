@@ -454,7 +454,7 @@ describe("session_start", () => {
     }
   });
 
-  // ── AGENT AND N8N ROLES ALLOWED ──
+  // ── AGENT AND OB_ADMIN ROLES ALLOWED ──
 
   it("allows agent role", async () => {
     const mockPool = {
