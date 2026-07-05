@@ -180,12 +180,12 @@
       <summary>Metadata</summary>
       <dl>
         <dt>created</dt>      <dd>2026-07-05T00:39:00-08:00</dd>
-        <dt>modified</dt>     <dd>2026-07-05T00:39:00-08:00, 2026-07-05T01:55:00-08:00, 2026-07-05T12:55:00-04:00, 2026-07-05T13:42:05-04:00</dd>
+        <dt>modified</dt>     <dd>2026-07-05T00:39:00-08:00, 2026-07-05T01:55:00-08:00, 2026-07-05T12:55:00-04:00, 2026-07-05T13:42:05-04:00, 2026-07-05T14:20:00-04:00</dd>
         <dt>commits</dt>      <dd>b4a3020 (branch HEAD at authoring time)</dd>
         <dt>agent name</dt>        <dd>claude-fable-5 (Claude Code)</dd>
         <dt>session id</dt>      <dd>open-brain planf3 session 2026-07-05</dd>
         <dt>back refs</dt>    <dd>goal-run.md (memory-substrate goal run), docs/realtime-agent-memory-research.md (PR #225), docs/downstream-rollout.md, docs/memory-contract.md</dd>
-        <dt>forward refs</dt> <dd>PR #231 (fix-gh-reviewer, green), PR #233 (fix/193-rolling-log-cap), PR #239 (fix/236-ob-backfill-redaction, green), PR #240 (fix/optional-release-deploy, green, deploy skipped), issue #166 comment 2026-07-05, branches in flight: fix/165-ci-db-integration-tests, fix/168-rename-n8n-ob-admin, fix/167-retire-collab-namespace</dd>
+        <dt>forward refs</dt> <dd>PR #231 (fix-gh-reviewer, green), PR #233 (fix/193-rolling-log-cap), PR #239 (fix/236-ob-backfill-redaction, green), PR #240 (fix/optional-release-deploy, live status in PR checks and Project 8), issue #166 comment 2026-07-05, branches in flight: fix/165-ci-db-integration-tests, fix/168-rename-n8n-ob-admin, fix/167-retire-collab-namespace</dd>
       </dl>
     </details>
   </header>
@@ -199,7 +199,7 @@
   <!-- ===== PURPOSE / PROBLEM / SOLUTION ===== -->
   <section id="purpose">
     <h2>Purpose</h2>
-    <p><strong>Live correction:</strong> this roadmap was authored from an older snapshot. Current live state is 8 open PRs (#231, #233, #234, #235, #237, #238, #239, #240) and 17 open issues (#236 plus the roadmap issue set). PR #239 for #236 has passed the pre-merge gauntlet but is not merged, so #236 remains open. PR #240 makes deploy optional and adds the local release/deploy SOP; it is green, on Project 8, and still needs pre-merge-gauntlet before merge.</p>
+    <p><strong>Live correction:</strong> this roadmap was authored from an older snapshot. Current live state is 8 open PRs (#231, #233, #234, #235, #237, #238, #239, #240) and 17 open issues (#236 plus the roadmap issue set). PR #239 for #236 has passed the pre-merge gauntlet but is not merged, so #236 remains open. PR #240 makes deploy optional and adds the local release/deploy SOP; read its current checks and review gate from GitHub plus Project 8 before merge.</p>
     <p>Drive the open-brain repo to a clean board: every open PR merged or explicitly held, and all 17 open issues either closed with tested, rollout-gated changes or explicitly dispositioned as roadmap items with a documented decision. The plan sequences work so infrastructure fixes (review pipeline, CI Postgres) land first and protect everything after them, and groups issues into coherent PR-sized batches that respect the repo's pre-merge gauntlet, critical self-review gate, and downstream rollout gate.</p>
   </section>
 
