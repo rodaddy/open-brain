@@ -107,6 +107,29 @@ test("two workers sharing one configured LOG_FILE get divergent per-worker files
   }
 });
 
+test("LOG_MAX_BYTES=0 falls back to the 1MB default instead of a zero cap", async () => {
+  // A zero-byte cap is meaningless; it must fall back to the default rather
+  // than silently becoming something else deeper in the sink. These writes
+  // stay under the 1MB default, so exactly one file and no rotation.
+  const logPath = join(dir, "open-brain.log");
+  const proc = spawnLogger(
+    {
+      LOG_FILE: logPath,
+      LOG_MAX_BYTES: "0",
+      LOG_MAX_FILES: "3",
+      OPEN_BRAIN_WORKER_NAME: "",
+    },
+    loggerDriver(4000, 60),
+  );
+  expect(await proc.exited).toBe(0);
+
+  const files = readdirSync(dir);
+  expect(files).toEqual(["open-brain.log"]);
+  const size = statSync(logPath).size;
+  expect(size).toBeGreaterThan(100_000); // everything landed in one file
+  expect(size).toBeLessThanOrEqual(1_000_000); // still under the default cap
+});
+
 test("logger without LOG_FILE writes no log files", async () => {
   const proc = spawnLogger({ LOG_FILE: "" }, loggerDriver(1, 10));
   await proc.exited;

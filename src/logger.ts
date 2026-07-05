@@ -44,13 +44,20 @@ export function deriveWorkerLogPath(
   return `${dir}${file.slice(0, dot)}.${safe}${file.slice(dot)}`;
 }
 
-function resolvePositiveInt(
+/**
+ * Parse an integer env value, falling back when below `min` or non-numeric.
+ * LOG_MAX_BYTES requires min 1 (a zero-byte cap is meaningless and would
+ * otherwise be silently coerced to the default deeper in the sink), while
+ * LOG_MAX_FILES=0 is a real setting (keep only the active file).
+ */
+function resolveBoundedInt(
   raw: string | undefined,
+  min: number,
   fallback: number,
 ): number {
   if (raw === undefined) return fallback;
   const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed < 0) return fallback;
+  if (!Number.isFinite(parsed) || parsed < min) return fallback;
   return parsed;
 }
 
@@ -63,8 +70,8 @@ function resolveFileSink(): RotatingFileSink | undefined {
   );
   return createRotatingFileSink({
     path,
-    maxBytes: resolvePositiveInt(process.env.LOG_MAX_BYTES, 1_000_000),
-    maxFiles: resolvePositiveInt(process.env.LOG_MAX_FILES, 3),
+    maxBytes: resolveBoundedInt(process.env.LOG_MAX_BYTES, 1, 1_000_000),
+    maxFiles: resolveBoundedInt(process.env.LOG_MAX_FILES, 0, 3),
   });
 }
 

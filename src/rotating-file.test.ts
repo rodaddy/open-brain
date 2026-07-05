@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
+  chmodSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -207,5 +209,56 @@ describe("createRotatingFileSink", () => {
     sink.write("follow-up-line");
     expect(readFileSync(path, "utf8")).toContain("follow-up-line");
     expect(statSync(path).size).toBeLessThanOrEqual(maxBytes);
+  });
+
+  test("a failed rotation never zeroes the counter (read-only parent dir)", () => {
+    // Regression (review-swarm reproduction): rotate() used to swallow rename
+    // failures while the caller unconditionally reset size=0. With a
+    // read-only parent dir, renames fail but appends to the existing file
+    // still succeed, so the phantom-zero counter let the active file grow
+    // unbounded and rotation was never retried once perms recovered.
+    const sub = join(dir, "locked");
+    mkdirSync(sub, { recursive: true });
+    const path = join(sub, "app.log");
+    const maxBytes = 1024;
+    const sink = createRotatingFileSink({ path, maxBytes, maxFiles: 2 });
+
+    try {
+      sink.write("a".repeat(900)); // near cap, under it
+      chmodSync(sub, 0o500); // dir read-only: rename/create fail, append works
+
+      for (let i = 0; i < 5; i += 1) {
+        sink.write(`blocked-${i}-${"b".repeat(200)}`);
+      }
+      // Rotation could not happen; the writes had to land in the active file.
+      expect(existsSync(`${path}.1`)).toBe(false);
+      expect(statSync(path).size).toBeGreaterThan(maxBytes);
+
+      chmodSync(sub, 0o700);
+
+      // The very next write must rotate immediately. Under the old
+      // phantom-zero behavior the counter sat near one line's worth, so this
+      // write would NOT rotate and the over-cap file would keep growing.
+      sink.write("after-restore");
+      expect(existsSync(`${path}.1`)).toBe(true);
+      expect(statSync(path).size).toBeLessThanOrEqual(maxBytes);
+      expect(readFileSync(path, "utf8")).toContain("after-restore");
+    } finally {
+      chmodSync(sub, 0o700); // always restore so afterEach cleanup succeeds
+    }
+  });
+
+  test("created log files are 0o600 and created dirs are 0o700", () => {
+    const sub = join(dir, "made", "deep");
+    const path = join(sub, "app.log");
+    const sink = createRotatingFileSink({
+      path,
+      maxBytes: 4 * 1024,
+      maxFiles: 2,
+    });
+    sink.write("private-line");
+
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+    expect(statSync(sub).mode & 0o777).toBe(0o700);
   });
 });

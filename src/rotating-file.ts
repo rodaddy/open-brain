@@ -53,16 +53,23 @@ function currentSize(path: string): number {
  * Rotate `path` -> `path.1`, shifting existing `path.N` up by one and pruning
  * everything past `maxFiles`. Best-effort: filesystem errors on individual
  * rotation steps must never take down the writing process.
+ *
+ * Returns whether the active file at `path` was actually cleared (renamed
+ * away, removed, or already absent), verified against the filesystem. Callers
+ * must only reset their size accounting when this returns true; on false the
+ * over-cap active file is still in place and the next write must retry.
+ * Failures shifting intermediate `.N` files do not affect the result — they
+ * can at worst overwrite an older rotation, never unbound the active file.
  */
-function rotate(path: string, maxFiles: number): void {
+function rotate(path: string, maxFiles: number): boolean {
   if (maxFiles <= 0) {
     // No retention: just drop the active file so it restarts empty.
     try {
       rmSync(path, { force: true });
     } catch {
-      /* best-effort */
+      /* best-effort; verified below */
     }
-    return;
+    return !existsSync(path);
   }
 
   // Prune the oldest rotation that would fall off the end.
@@ -85,14 +92,17 @@ function rotate(path: string, maxFiles: number): void {
     }
   }
 
-  // Move the active file to .1.
+  // Move the active file to .1. This is the step that matters for the cap:
+  // if it fails (EACCES on the parent dir, EXDEV, ENOSPC, ...) the active
+  // file is still over cap and the caller must not zero its counter.
   if (existsSync(path)) {
     try {
       renameSync(path, `${path}.1`);
     } catch {
-      /* best-effort */
+      /* best-effort; verified below */
     }
   }
+  return !existsSync(path);
 }
 
 /**
@@ -113,7 +123,8 @@ export function createRotatingFileSink(
       : DEFAULT_MAX_FILES;
 
   try {
-    mkdirSync(dirname(path), { recursive: true });
+    // Logs are app-owned files now; keep them private to the service user.
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   } catch {
     /* best-effort; write() below will no-op on failure */
   }
@@ -128,14 +139,17 @@ export function createRotatingFileSink(
     const bytes = Buffer.byteLength(payload, "utf8");
 
     // Rotate before writing when this line would push us over the cap, so a
-    // normal write never mixes into an already-full file.
+    // normal write never mixes into an already-full file. Only zero the
+    // counter when rotation verifiably cleared the active file; otherwise
+    // re-sync from disk so the next write still sees over-cap and retries
+    // (a phantom-zero counter here would let the file grow unbounded while
+    // appends keep succeeding, e.g. read-only parent dir).
     if (size > 0 && size + bytes > maxBytes) {
-      rotate(path, maxFiles);
-      size = 0;
+      size = rotate(path, maxFiles) ? 0 : currentSize(path);
     }
 
     try {
-      appendFileSync(path, payload);
+      appendFileSync(path, payload, { mode: 0o600 });
       size += bytes;
     } catch {
       // Re-sync from disk in case another process rotated underneath us; the
@@ -147,10 +161,10 @@ export function createRotatingFileSink(
     // cap (e.g. a single oversized line as the very first write), so the
     // active file never sits above maxBytes waiting for the next write. The
     // oversized content is bounded to that one rotated file and pruned like
-    // any other rotation.
+    // any other rotation. Same rule: never zero the counter on a failed
+    // rotation.
     if (size > maxBytes) {
-      rotate(path, maxFiles);
-      size = 0;
+      size = rotate(path, maxFiles) ? 0 : currentSize(path);
     }
   }
 
