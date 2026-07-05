@@ -95,15 +95,20 @@ describe.skipIf(!canConnect)("001_init migration", () => {
   });
 
   describe("HNSW indexes", () => {
-    it("should have 5 HNSW indexes using halfvec_cosine_ops", async () => {
+    it("should have HNSW indexes on all 5 legacy data tables using halfvec_cosine_ops", async () => {
       const { rows } = await pool.query(`
-        SELECT indexname, indexdef
-        FROM pg_indexes
-        WHERE schemaname = 'public'
-          AND indexdef ILIKE '%hnsw%'
-        ORDER BY indexname
-      `);
-      expect(rows.length).toBe(5);
+        SELECT
+          ic.relname AS index_name,
+          tc.relname AS table_name,
+          pg_get_indexdef(ix.indexrelid) AS indexdef
+        FROM pg_index ix
+        JOIN pg_class ic ON ix.indexrelid = ic.oid
+        JOIN pg_class tc ON ix.indrelid = tc.oid
+        WHERE tc.relname = ANY($1::text[])
+          AND pg_get_indexdef(ix.indexrelid) ILIKE '%hnsw%'
+        ORDER BY tc.relname
+      `, [TABLES]);
+      expect(rows.map((r) => r.table_name).sort()).toEqual([...TABLES].sort());
       for (const row of rows) {
         expect(row.indexdef).toContain("halfvec_cosine_ops");
         expect(row.indexdef).not.toContain("vector_cosine_ops");
@@ -122,9 +127,10 @@ describe.skipIf(!canConnect)("001_init migration", () => {
         JOIN pg_class ic ON ix.indexrelid = ic.oid
         JOIN pg_class tc ON ix.indrelid = tc.oid
         WHERE ic.relname LIKE '%content_hash%'
+          AND tc.relname = ANY($1::text[])
         ORDER BY tc.relname
-      `);
-      expect(rows.length).toBe(5);
+      `, [TABLES]);
+      expect(rows.map((r) => r.table_name).sort()).toEqual([...TABLES].sort());
       for (const row of rows) {
         expect(row.indisunique).toBe(true);
       }
