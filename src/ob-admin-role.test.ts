@@ -276,11 +276,18 @@ async function restPost(
   path: string,
   body: unknown,
 ): Promise<{ status: number; json: any }> {
-  const port = 21000 + Math.floor(Math.random() * 1000);
   return new Promise((resolve, reject) => {
-    const server = app.listen(port, async () => {
+    // Port 0: OS-assigned ephemeral port, immune to EADDRINUSE flake under
+    // parallel test runs.
+    const server = app.listen(0, async () => {
+      const address = server.address();
+      if (address === null || typeof address === "string") {
+        server.close();
+        reject(new Error("Expected a TCP address from app.listen(0)"));
+        return;
+      }
       try {
-        const resp = await fetch(`http://localhost:${port}${path}`, {
+        const resp = await fetch(`http://localhost:${address.port}${path}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
