@@ -28,6 +28,9 @@ jobs:
         contains(github.event.comment.body, '/codex-deep')
       ))
     runs-on: [self-hosted, macOS, core01]
+    # A hung codex exec (stdin auth prompt, model/network stall) must not pin
+    # this production-host runner slot for GitHub's 6h default job timeout.
+    timeout-minutes: 15
     permissions:
       contents: read
       pull-requests: write
@@ -44,12 +47,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           COMMENT_BODY: ${{ github.event.comment.body }}
+          # Event data must reach the script via env, never raw ${{ }}
+          # interpolation into the run block (script-injection class).
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           set -euo pipefail
 
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             pr_number="${{ github.event.pull_request.number }}"
-            base_ref="${{ github.event.pull_request.base.ref }}"
+            base_ref="$BASE_REF"
           else
             pr_number="${{ github.event.issue.number }}"
             if ! gh api "repos/${{ github.repository }}/pulls/${pr_number}" >/dev/null; then
@@ -115,13 +121,22 @@ jobs:
           # closing the prompt-injection path from untrusted PR content on this
           # self-hosted runner. `codex exec review` runs read-only/sandboxed by
           # default (no --dangerously-bypass flag is passed).
-          codex exec review \
+          # Kill a hung CLI (stdin auth prompt, network stall) before the
+          # job-level timeout: use coreutils gtimeout when the runner has it
+          # (nonzero exit on timeout makes the fail-closed step turn the check
+          # red); otherwise rely on the job-level timeout-minutes alone.
+          timeout_cmd=()
+          if command -v gtimeout >/dev/null 2>&1; then
+            timeout_cmd=(gtimeout --kill-after=30s 12m)
+          fi
+          "${timeout_cmd[@]}" codex exec review \
             --ignore-rules \
             --ignore-user-config \
             --base "origin/${{ steps.review-context.outputs.base-ref }}" \
             -m "${{ steps.review-context.outputs.model }}" \
             -c "model_reasoning_effort=\"${{ steps.review-context.outputs.effort }}\"" \
-            --output-last-message codex-review.md
+            --output-last-message codex-review.md \
+            < /dev/null
           status=$?
           if [[ ! -s codex-review.md ]]; then
             echo "_Codex review produced no output (exit code ${status})._" > codex-review.md
