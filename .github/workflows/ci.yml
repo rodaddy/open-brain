@@ -51,15 +51,22 @@ jobs:
   #
   # The `check` job above runs against whatever Postgres happens to be reachable
   # at localhost on the runner. This job instead stands up an EPHEMERAL,
-  # ISOLATED pgvector Postgres as a service container (its own Docker network per
-  # run — parallel CI runs cannot collide, and the container is torn down
-  # automatically when the job ends). It then MIGRATES that DB, runs the full
-  # suite, and — critically — asserts via the anti-skip guard that the
+  # ISOLATED pgvector Postgres in Docker, MIGRATES it, runs the full suite, and
+  # — critically — asserts via the anti-skip guard that the
   # `dbDescribe`/live-Postgres suites actually EXECUTED. A silent skip fails the
   # job instead of going green with zero SQL-path coverage.
   #
-  # Pinned to the Linux self-hosted runner because service containers require
-  # Docker, which the macOS/core01 production runner must not run.
+  # Mechanism note: this uses an explicit `docker run --network host` on a
+  # dynamically-chosen free loopback port instead of a `services:` container.
+  # GitHub service containers rely on bridge-network port forwarding, which is
+  # BROKEN on runners ct106/ct107 (host cannot reach any bridge container;
+  # verified empirically — only ct108 forwards). Host networking bypasses the
+  # bridge entirely and works on all three runners. Isolation still holds: a
+  # unique container name + unique port per run, loopback-only listener, and an
+  # `if: always()` teardown.
+  #
+  # Pinned to the Linux self-hosted runners because this needs Docker, which
+  # the macOS/core01 production runner must not run.
   db-integration:
     runs-on: [self-hosted, Linux, rodaddy]
     # Docker-capable self-hosted runner: never execute untrusted fork code.
@@ -67,46 +74,28 @@ jobs:
     # re-pushes the branch to this repo to test). `push` keeps this job alive
     # on main so `deploy` (which needs it) still runs.
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
-    services:
-      postgres:
-        # Digest-pinned: this job gates deploy, so a mutable tag must not be
-        # able to change under us. Digest below is pgvector/pgvector:pg18
-        # (multi-arch index) as of 2026-07-05. To bump: run
-        #   docker buildx imagetools inspect pgvector/pgvector:pg18
-        # and replace the sha256 with the new index digest.
-        image: pgvector/pgvector:pg18@sha256:212765b63c1462883de295c4c415edcd22191b8d8d46853e86ad05d4b577a4cb
-        env:
-          POSTGRES_USER: ci
-          # Throwaway, CI-only credential for an ephemeral container that is
-          # destroyed at job end. Never a real Open Brain database.
-          POSTGRES_PASSWORD: ci
-          POSTGRES_DB: open_brain_ci
-        ports:
-          # No fixed host port: the runner host already has a Postgres bound to
-          # 5432 (used by the `check` job), and parallel runs would collide.
-          # Publish to a Docker-assigned ephemeral host port and read it back via
-          # job.services.postgres.ports['5432'].
-          - 5432
-        options: >-
-          --health-cmd "pg_isready -U ci -d open_brain_ci"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
     env:
-      # 127.0.0.1 (not localhost): the service port is published on IPv4 only,
-      # and `localhost` can resolve to ::1, yielding "server closed the
-      # connection unexpectedly".
+      # 127.0.0.1 (not localhost): the ephemeral Postgres listens on the IPv4
+      # loopback only; `localhost` can resolve to ::1.
       DB_HOST: 127.0.0.1
       DB_USER: ci
+      # Throwaway, CI-only credential for an ephemeral loopback-only container
+      # that is destroyed at job end. Never a real Open Brain database.
       DB_PASSWORD: ci
       # The dbDescribe suites write to DB_NAME; the destructive 001_init
       # migration test uses DB_NAME_TEST. Keep them on SEPARATE databases so the
       # migration test's DROP TABLE cannot clobber the live-Postgres suites.
       DB_NAME: open_brain_ci
       DB_NAME_TEST: open_brain_ci_migrations
-      # DB_PORT / OPENBRAIN_TEST_DATABASE_URL are set per-step below because they
-      # depend on the dynamically-assigned host port, which is only resolvable in
-      # step context (job.services.*).
+      OB_CI_PG_CONTAINER: obci-pg-${{ github.run_id }}-${{ github.run_attempt }}
+      # Digest-pinned image: this job gates deploy, so a mutable tag must not
+      # be able to change under us. Digest is pgvector/pgvector:pg18
+      # (multi-arch index) as of 2026-07-05. To bump: run
+      #   docker buildx imagetools inspect pgvector/pgvector:pg18
+      # and replace the sha256 with the new index digest.
+      OB_CI_PG_IMAGE: pgvector/pgvector:pg18@sha256:212765b63c1462883de295c4c415edcd22191b8d8d46853e86ad05d4b577a4cb
+      # DB_PORT is chosen at runtime (free loopback port) and exported via
+      # GITHUB_ENV by the start step below.
     steps:
       - uses: actions/checkout@v6
 
@@ -117,46 +106,63 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Wait for Postgres to accept real TCP connections
-        env:
-          PGPORT: ${{ job.services.postgres.ports['5432'] }}
-        # The service health-check can report "healthy" against the pg image's
-        # transient initdb server before the final server is listening on the
-        # published TCP port (symptom: "server closed the connection
-        # unexpectedly"). Poll a real query from the runner host before use.
+      - name: Start ephemeral pgvector Postgres (host network, loopback only)
         run: |
+          started=no
+          for _attempt in 1 2 3 4 5; do
+            PORT="$(shuf -i 20000-60000 -n 1)"
+            if ss -ltn "( sport = :${PORT} )" | grep -q LISTEN; then
+              echo "port ${PORT} busy, retrying..."
+              continue
+            fi
+            echo "starting ${OB_CI_PG_CONTAINER} on 127.0.0.1:${PORT}"
+            if docker run -d --name "${OB_CI_PG_CONTAINER}" \
+                --network host \
+                -e POSTGRES_USER=ci \
+                -e POSTGRES_PASSWORD=ci \
+                -e POSTGRES_DB=open_brain_ci \
+                "${OB_CI_PG_IMAGE}" \
+                -c "port=${PORT}" -c "listen_addresses=127.0.0.1"; then
+              started=yes
+              break
+            fi
+            docker rm -f "${OB_CI_PG_CONTAINER}" >/dev/null 2>&1 || true
+          done
+          if [ "${started}" != "yes" ]; then
+            echo "could not start ephemeral Postgres container" >&2
+            exit 1
+          fi
+          # Wait for a REAL host-side connection, not just in-container
+          # readiness: the pg image runs a transient initdb server first.
           for i in $(seq 1 30); do
-            if PGPASSWORD=ci psql -h 127.0.0.1 -p "${PGPORT}" -U ci \
+            if PGPASSWORD=ci psql -h 127.0.0.1 -p "${PORT}" -U ci \
                 -d open_brain_ci -tc "SELECT 1;" >/dev/null 2>&1; then
-              echo "Postgres reachable on 127.0.0.1:${PGPORT}"
+              echo "Postgres reachable on 127.0.0.1:${PORT}"
+              echo "DB_PORT=${PORT}" >> "${GITHUB_ENV}"
               exit 0
             fi
             echo "waiting for Postgres (attempt ${i})..."
             sleep 2
           done
-          echo "Postgres did not become reachable on 127.0.0.1:${PGPORT}" >&2
+          echo "Postgres did not become reachable on 127.0.0.1:${PORT}" >&2
+          docker logs "${OB_CI_PG_CONTAINER}" 2>&1 | tail -20 || true
           exit 1
 
       - name: Create isolated migration-test database
-        env:
-          PGPORT: ${{ job.services.postgres.ports['5432'] }}
         run: |
-          PGPASSWORD=ci psql -h 127.0.0.1 -p "${PGPORT}" -U ci -d open_brain_ci \
+          PGPASSWORD=ci psql -h 127.0.0.1 -p "${DB_PORT}" -U ci -d open_brain_ci \
             -v ON_ERROR_STOP=1 \
             -c "CREATE DATABASE ${DB_NAME_TEST};"
-          PGPASSWORD=ci psql -h 127.0.0.1 -p "${PGPORT}" -U ci -d "${DB_NAME_TEST}" \
+          PGPASSWORD=ci psql -h 127.0.0.1 -p "${DB_PORT}" -U ci -d "${DB_NAME_TEST}" \
             -v ON_ERROR_STOP=1 \
             -c "CREATE EXTENSION IF NOT EXISTS vector;"
 
       - name: Run migrations against ephemeral Postgres
-        env:
-          DB_PORT: ${{ job.services.postgres.ports['5432'] }}
         run: bun run migrate
 
       - name: Test (JUnit reporter for the anti-skip guard)
         env:
-          DB_PORT: ${{ job.services.postgres.ports['5432'] }}
-          OPENBRAIN_TEST_DATABASE_URL: postgres://ci:ci@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/open_brain_ci
+          OPENBRAIN_TEST_DATABASE_URL: postgres://ci:ci@127.0.0.1:${{ env.DB_PORT }}/open_brain_ci
         run: >-
           bun test
           --reporter=junit
@@ -164,6 +170,10 @@ jobs:
 
       - name: Assert DB-backed integration tests actually ran (anti-skip guard)
         run: bun run scripts/assert-db-tests-ran.ts ${{ runner.temp }}/junit-db.xml
+
+      - name: Tear down ephemeral Postgres
+        if: always()
+        run: docker rm -f "${OB_CI_PG_CONTAINER}" >/dev/null 2>&1 || true
 
   python-package:
     runs-on: [self-hosted, Linux, rodaddy]
