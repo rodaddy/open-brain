@@ -153,12 +153,18 @@ export function appendWriteNamespacePredicate(
 ): string {
   const namespaces = writableNamespaces(auth);
   if (namespaces === undefined) {
+    const excludedNamespaces = Array.from(FROZEN_NAMESPACES).filter(
+      (namespace) => isFrozenNamespaceWrite(namespace),
+    );
     if (
       (auth.role === "admin" || auth.role === "ob-admin") &&
       !isPromoterIdentity(auth)
     ) {
-      params.push(sharedNamespaceConfig().sharedNamespace);
-      return ` AND ${column} <> $${params.length}`;
+      excludedNamespaces.push(sharedNamespaceConfig().sharedNamespace);
+    }
+    if (excludedNamespaces.length > 0) {
+      params.push(excludedNamespaces);
+      return ` AND ${column} <> ALL($${params.length}::text[])`;
     }
     return "";
   }

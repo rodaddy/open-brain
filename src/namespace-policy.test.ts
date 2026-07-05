@@ -238,26 +238,51 @@ describe("writableNamespaces", () => {
 });
 
 describe("appendWriteNamespacePredicate", () => {
-  it("excludes shared-kb for token-sourced non-promoter admin", () => {
+  it("excludes shared-kb and frozen namespaces for token-sourced non-promoter admin", () => {
     const params: unknown[] = ["id"];
     const predicate = appendWriteNamespacePredicate(
       { role: "admin", clientId: "admin" },
       params,
     );
 
-    expect(predicate).toBe(" AND namespace <> $2");
-    expect(params).toEqual(["id", "shared-kb"]);
+    expect(predicate).toBe(" AND namespace <> ALL($2::text[])");
+    expect(params).toEqual(["id", ["collab", "shared-kb"]]);
   });
 
-  it("adds no predicate for token-sourced promoter identity", () => {
+  it("excludes frozen namespaces for token-sourced promoter identity", () => {
     const params: unknown[] = ["id"];
     const predicate = appendWriteNamespacePredicate(
       { role: "ob-admin", clientId: "openbrain-promoter" },
       params,
     );
 
-    expect(predicate).toBe("");
-    expect(params).toEqual(["id"]);
+    expect(predicate).toBe(" AND namespace <> ALL($2::text[])");
+    expect(params).toEqual(["id", ["collab"]]);
+  });
+
+  it("honors the explicit legacy-write escape hatch for frozen namespace predicates", () => {
+    const savedNs = process.env.SHARED_NAMESPACE_LEGACY;
+    const savedAllow = process.env.OPENBRAIN_ALLOW_LEGACY_SHARED_WRITES;
+    try {
+      process.env.SHARED_NAMESPACE_LEGACY = "collab";
+      process.env.OPENBRAIN_ALLOW_LEGACY_SHARED_WRITES = "1";
+      const params: unknown[] = ["id"];
+      const predicate = appendWriteNamespacePredicate(
+        { role: "ob-admin", clientId: "openbrain-promoter" },
+        params,
+      );
+
+      expect(predicate).toBe("");
+      expect(params).toEqual(["id"]);
+    } finally {
+      if (savedNs === undefined) delete process.env.SHARED_NAMESPACE_LEGACY;
+      else process.env.SHARED_NAMESPACE_LEGACY = savedNs;
+      if (savedAllow === undefined) {
+        delete process.env.OPENBRAIN_ALLOW_LEGACY_SHARED_WRITES;
+      } else {
+        process.env.OPENBRAIN_ALLOW_LEGACY_SHARED_WRITES = savedAllow;
+      }
+    }
   });
 
   it("adds a namespace predicate for scoped writers", () => {

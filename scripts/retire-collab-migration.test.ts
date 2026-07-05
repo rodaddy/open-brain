@@ -143,10 +143,11 @@ async function seedFixtures(pool: InstanceType<typeof Pool>): Promise<void> {
         'warm', NULL, 0, NULL, NULL, NULL)`,
   );
   await pool.query(
-    `INSERT INTO thoughts (content, created_by, content_hash, namespace)
+    `INSERT INTO thoughts (content, created_by, content_hash, namespace, archived_at)
      VALUES
-       ('mirrored one', 'rico', 'h-mirror-1', 'shared-kb'),
-       ('mirrored two', 'rico', 'h-mirror-2', 'shared-kb')`,
+       ('mirrored one', 'rico', 'h-mirror-1', 'shared-kb', NULL),
+       ('mirrored two', 'rico', 'h-mirror-2', 'shared-kb', NULL),
+       ('archived mirror only', 'rico', 'h-uniq-b', 'shared-kb', NOW())`,
   );
 
   // decisions: one live un-mirrored collab row -> audit out-of-scope.
@@ -267,7 +268,7 @@ dbDescribe("retire-collab-migration (scratch Postgres, real migrations)", () => 
     const sharedCount = await pool.query(
       `SELECT COUNT(*)::int AS c FROM thoughts WHERE namespace = 'shared-kb'`,
     );
-    expect(sharedCount.rows[0].c).toBe(2);
+    expect(sharedCount.rows[0].c).toBe(3);
   });
 
   it("refuses --execute while out-of-scope content exists and mutates nothing", async () => {
@@ -282,7 +283,7 @@ dbDescribe("retire-collab-migration (scratch Postgres, real migrations)", () => 
     const sharedCount = await pool.query(
       `SELECT COUNT(*)::int AS c FROM thoughts WHERE namespace = 'shared-kb'`,
     );
-    expect(sharedCount.rows[0].c).toBe(2);
+    expect(sharedCount.rows[0].c).toBe(3);
     const lanes = await pool.query(
       `SELECT COUNT(*)::int AS c FROM ob_session_lanes
         WHERE namespace = 'collab' AND status <> 'archived'`,
@@ -303,11 +304,19 @@ dbDescribe("retire-collab-migration (scratch Postgres, real migrations)", () => 
     expect(report.entities?.archived_conflicts).toBe(2);
     expect(report.lanes?.archived).toBe(2);
 
-    // shared-kb now has original 2 + 3 copied.
+    // shared-kb now has original 2 active mirrors + 1 reactivated archived mirror + 2 copied.
     const shared = await pool.query(
       `SELECT COUNT(*)::int AS c FROM thoughts WHERE namespace = 'shared-kb'`,
     );
     expect(shared.rows[0].c).toBe(5);
+
+    const activeUniqB = await pool.query(
+      `SELECT COUNT(*)::int AS c FROM thoughts
+        WHERE namespace = 'shared-kb'
+          AND content_hash = 'h-uniq-b'
+          AND archived_at IS NULL`,
+    );
+    expect(activeUniqB.rows[0].c).toBe(1);
 
     // Operational/audit columns preserved on the copied thought.
     const prov = await pool.query(

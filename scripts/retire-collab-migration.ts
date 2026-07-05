@@ -242,7 +242,9 @@ export async function auditOutOfScope(db: Queryable): Promise<AuditReport> {
             c.content_hash IS NULL
             OR NOT EXISTS (
               SELECT 1 FROM ${table} s
-               WHERE s.namespace = $2 AND s.content_hash = c.content_hash
+               WHERE s.namespace = $2
+                 AND s.content_hash = c.content_hash
+                 AND s.archived_at IS NULL
             )
           )`,
       [LEGACY_NAMESPACE, SHARED_NAMESPACE],
@@ -297,7 +299,9 @@ export async function migrateThoughts(
        AND c.content_hash IS NOT NULL
        AND NOT EXISTS (
          SELECT 1 FROM thoughts s
-          WHERE s.namespace = $2 AND s.content_hash = c.content_hash
+          WHERE s.namespace = $2
+            AND s.content_hash = c.content_hash
+            AND s.archived_at IS NULL
        )`;
   const unmirroredBefore = await countScalar(db, unmirroredSql, [
     LEGACY_NAMESPACE,
@@ -306,6 +310,24 @@ export async function migrateThoughts(
 
   let copied = 0;
   if (execute && unmirroredBefore > 0) {
+    const reactivated = await db.query(
+      `UPDATE thoughts s
+          SET archived_at = NULL,
+              updated_at = NOW()
+         FROM thoughts c
+        WHERE c.namespace = $1
+          AND c.content_hash IS NOT NULL
+          AND s.namespace = $2
+          AND s.content_hash = c.content_hash
+          AND s.archived_at IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM thoughts active
+             WHERE active.namespace = $2
+               AND active.content_hash = c.content_hash
+               AND active.archived_at IS NULL
+          )`,
+      [LEGACY_NAMESPACE, SHARED_NAMESPACE],
+    );
     const columnList = THOUGHT_COPY_COLUMNS.join(", ");
     const selectList = THOUGHT_COPY_COLUMNS.map((c) => `c.${c}`).join(", ");
     // namespace is set explicitly to shared-kb ($2); never rely on the table
@@ -320,13 +342,15 @@ export async function migrateThoughts(
           AND c.content_hash IS NOT NULL
           AND NOT EXISTS (
             SELECT 1 FROM thoughts s
-             WHERE s.namespace = $2 AND s.content_hash = c.content_hash
+             WHERE s.namespace = $2
+               AND s.content_hash = c.content_hash
+               AND s.archived_at IS NULL
           )
        ON CONFLICT (content_hash, namespace) WHERE content_hash IS NOT NULL
          DO NOTHING`,
       [LEGACY_NAMESPACE, SHARED_NAMESPACE],
     );
-    copied = rowCount ?? 0;
+    copied = (reactivated.rowCount ?? 0) + (rowCount ?? 0);
   }
 
   const unmirroredAfter = await countScalar(db, unmirroredSql, [
