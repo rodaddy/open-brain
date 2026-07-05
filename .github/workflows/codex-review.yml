@@ -19,7 +19,7 @@ jobs:
         contains(github.event.comment.body, '/codex-review') ||
         contains(github.event.comment.body, '/codex-deep')
       ))
-    runs-on: [self-hosted, Linux, rodaddy]
+    runs-on: [self-hosted, macOS, core01]
     permissions:
       contents: read
       pull-requests: write
@@ -81,21 +81,30 @@ jobs:
       - name: Run Codex review
         if: steps.review-context.outputs.skip != 'true'
         id: codex-review
+        env:
+          # ChatGPT-login auth is cached under CODEX_HOME; the Codex CLI is
+          # installed for the runner user, not on PATH by default.
+          CODEX_HOME: /Users/rico/.codex
+          PATH: /Users/rico/.npm-global/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin
         run: |
           set +e
-          codex e review \
+          # Force ChatGPT-login auth: if OPENAI_API_KEY / CODEX_API_KEY are
+          # present the CLI wrongly attempts API-key auth, which is not
+          # configured on this runner.
+          unset OPENAI_API_KEY CODEX_API_KEY
+          # `codex exec review --base` cannot be combined with a custom PROMPT,
+          # so scope the review to the PR diff via --base and let the built-in
+          # review instructions drive it. --output-last-message captures the
+          # clean review text without the CLI's progress/reasoning noise.
+          codex exec review \
             --base "origin/${{ steps.review-context.outputs.base-ref }}" \
             -m "${{ steps.review-context.outputs.model }}" \
             -c "model_reasoning_effort=\"${{ steps.review-context.outputs.effort }}\"" \
-            "Review this PR. Focus on:
-            1. Bugs and logic errors
-            2. Security issues (OWASP top 10, SQL injection via dynamic table names)
-            3. Performance concerns (N+1 queries, missing indexes, O(n^2) patterns)
-            4. Missing error handling at system boundaries
-            5. Embedding quality (correct text construction per table type)
-            6. If you find a recurring mistake pattern, suggest an AGENTS.md correction at the end of your review." \
-            > codex-review.md
+            --output-last-message codex-review.md
           status=$?
+          if [[ ! -s codex-review.md ]]; then
+            echo "_Codex review produced no output (exit code ${status})._" > codex-review.md
+          fi
           echo "exit-code=$status" >> "$GITHUB_OUTPUT"
           exit 0
 
