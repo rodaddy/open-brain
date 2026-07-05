@@ -66,7 +66,7 @@ const CONTENT_TABLES = [
  * purpose:
  * - `id` (new identity in shared-kb)
  * - `namespace` (explicitly overridden to shared-kb; never rely on the
- *   table default, which is 'collab')
+ *   table default, which is 'collab' until migration 019 drops it)
  * - `search_vector` (GENERATED ALWAYS ... STORED)
  * - `parent_id`, `consolidated_into`, `consolidated_from` (self-referencing
  *   thought-id pointers into the frozen collab namespace; copying them would
@@ -172,8 +172,9 @@ function usage(exitCode = 2): never {
       "If the pre-flight audit finds live collab content outside the migrated",
       "scope, --execute refuses to run unless --acknowledge-out-of-scope is",
       "also passed.",
-      "Requires DATABASE_URL. Never touches a live DB unless you point",
-      "DATABASE_URL at one.",
+      "Connects via the repo pool config: DB_HOST, DB_USER (required),",
+      "DB_NAME (default open_brain), DB_PORT, DB_PASSWORD. Never touches a",
+      "live DB unless you point those at one.",
     ].join("\n"),
   );
   process.exit(exitCode);
@@ -308,7 +309,7 @@ export async function migrateThoughts(
     const columnList = THOUGHT_COPY_COLUMNS.join(", ");
     const selectList = THOUGHT_COPY_COLUMNS.map((c) => `c.${c}`).join(", ");
     // namespace is set explicitly to shared-kb ($2); never rely on the table
-    // default (which is 'collab'). The ON CONFLICT target repeats the partial
+    // default ('collab' until migration 019 drops it; this script runs pre-deploy). The ON CONFLICT target repeats the partial
     // index predicate so Postgres can infer the (content_hash, namespace)
     // unique index — this is the idempotency guard.
     const { rowCount } = await db.query(
@@ -542,8 +543,12 @@ export async function runMigration(
 
 if (import.meta.main) {
   const args = parseArgs(Bun.argv.slice(2));
-  if (!process.env.DATABASE_URL) {
-    console.error("DATABASE_URL is required.");
+  // createPool connects via DB_HOST/DB_USER/DB_NAME (the repo's pool config),
+  // not DATABASE_URL. Fail fast with a clear message if they are unset.
+  if (!process.env.DB_HOST || !process.env.DB_USER) {
+    console.error(
+      "DB_HOST and DB_USER are required (DB_NAME defaults to open_brain).",
+    );
     process.exit(1);
   }
   const pool = createPool({

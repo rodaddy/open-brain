@@ -203,6 +203,32 @@ dbDescribe("retire-collab-migration (scratch Postgres, real migrations)", () => 
     await admin.end();
   });
 
+  it("migration 019 drops every 'collab' namespace column default (#167)", async () => {
+    // No namespace column anywhere may still default to the frozen namespace.
+    const { rows } = await pool.query(
+      `SELECT table_name, column_default
+         FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND column_name = 'namespace'
+          AND column_default IS NOT NULL`,
+    );
+    expect(rows).toEqual([]);
+
+    // With no default and NOT NULL, an INSERT omitting namespace fails loudly
+    // instead of silently landing in collab.
+    await expect(
+      pool.query(
+        `INSERT INTO thoughts (content, created_by) VALUES ('no ns', 'test')`,
+      ),
+    ).rejects.toThrow();
+    await expect(
+      pool.query(
+        `INSERT INTO ob_session_lanes (session_key, created_by)
+         VALUES ('no-ns-lane', 'test')`,
+      ),
+    ).rejects.toThrow();
+  });
+
   it("pre-flight audit counts out-of-scope collab content in every table", async () => {
     const audit = await auditOutOfScope(pool);
     expect(audit.thoughts_null_hash).toBe(1);

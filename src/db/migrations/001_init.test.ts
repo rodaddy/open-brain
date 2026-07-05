@@ -207,23 +207,23 @@ describe.skipIf(!canConnect)("001_init migration", () => {
       const [fromId, toId] = inserted.rows.map((r) => r.id as string);
 
       await pool.query(
-        `INSERT INTO ob_links (from_type, from_id, to_type, to_id, relation, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
+        `INSERT INTO ob_links (namespace, from_type, from_id, to_type, to_id, relation, created_by)
+         VALUES ('test', $1, $2, $3, $4, $5, $6)`,
         ["entity", fromId, "entity", toId, "depends_on", "test"],
       );
 
       await expect(
         pool.query(
-          `INSERT INTO ob_links (from_type, from_id, to_type, to_id, relation, created_by)
-           VALUES ($1, $2, $3, $4, $5, $6)`,
+          `INSERT INTO ob_links (namespace, from_type, from_id, to_type, to_id, relation, created_by)
+           VALUES ('test', $1, $2, $3, $4, $5, $6)`,
           ["entity", fromId, "entity", toId, "mystery_relation", "test"],
         ),
       ).rejects.toThrow();
 
       await expect(
         pool.query(
-          `INSERT INTO ob_links (from_type, from_id, to_type, to_id, relation, created_by)
-           VALUES ($1, $2, $3, $4, $5, $6)`,
+          `INSERT INTO ob_links (namespace, from_type, from_id, to_type, to_id, relation, created_by)
+           VALUES ('test', $1, $2, $3, $4, $5, $6)`,
           ["entity", fromId, "entity", fromId, "adjacent", "test"],
         ),
       ).rejects.toThrow();
@@ -265,10 +265,18 @@ describe.skipIf(!canConnect)("001_init migration", () => {
       const testHash = "test_roundtrip_" + Date.now();
 
       // Insert
+      // namespace explicit: migration 019 dropped the legacy 'collab' default
+      // (#167), so inserts that omit namespace fail by design.
       await pool.query(
-        `INSERT INTO thoughts (content, created_by, embedding, content_hash)
-         VALUES ($1, $2, $3, $4)`,
-        ["test round-trip", "test", JSON.stringify(testEmbedding), testHash],
+        `INSERT INTO thoughts (content, created_by, embedding, content_hash, namespace)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [
+          "test round-trip",
+          "test",
+          JSON.stringify(testEmbedding),
+          testHash,
+          "test",
+        ],
       );
 
       // Select
