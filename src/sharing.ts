@@ -105,6 +105,22 @@ export function containsSecret(text: string): boolean {
   return false;
 }
 
+/**
+ * Redact known secret material. Some label-aware and URL patterns intentionally
+ * over-redact surrounding context so callers do not keep misleading secret
+ * diagnostics. Uses the same SECRET_PATTERNS gate as shared-kb promotion so
+ * automated OB importers do not maintain their own weaker redaction fork.
+ */
+export function redactText(text: string): string {
+  if (!text) return text;
+  let redacted = text;
+  for (const pattern of SECRET_PATTERNS) {
+    const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
+    redacted = redacted.replace(new RegExp(pattern.source, flags), "[REDACTED]");
+  }
+  return redacted;
+}
+
 export type ShareDecision =
   | "share"
   | "reject-secret"
