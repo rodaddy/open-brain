@@ -1,0 +1,178 @@
+name: Codex Review
+
+on:
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: codex-review-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  codex-review:
+    # Trusted-comment gate: never let PR-authored workflow changes auto-execute
+    # on the persistent self-hosted runner that has cached Codex auth. The
+    # base-branch workflow runs only after an OWNER/MEMBER asks for review, then
+    # the review-context step verifies the commented issue is a same-repo PR.
+    if: |
+      contains(fromJSON('["OWNER", "MEMBER"]'), github.event.comment.author_association) && (
+        contains(github.event.comment.body, '@codex') ||
+        contains(github.event.comment.body, '/codex-review') ||
+        contains(github.event.comment.body, '/codex-deep')
+      )
+    runs-on: [self-hosted, macOS, core01]
+    # A hung codex exec (stdin auth prompt, model/network stall) must not pin
+    # this production-host runner slot for GitHub's 6h default job timeout.
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Resolve review context
+        id: review-context
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+
+          pr_number="${{ github.event.issue.number }}"
+          if ! gh api "repos/${{ github.repository }}/pulls/${pr_number}" >/dev/null; then
+            echo "Issue comment did not target a pull request; skipping Codex review."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          head_repo="$(gh api "repos/${{ github.repository }}/pulls/${pr_number}" --jq .head.repo.full_name)"
+          if [[ "$head_repo" != "${{ github.repository }}" ]]; then
+            echo "PR head repo '$head_repo' is a fork; skipping Codex review (same-repo gate)."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          base_ref="$(gh pr view "$pr_number" --json baseRefName --jq .baseRefName)"
+          gh pr checkout "$pr_number"
+
+          git fetch origin "$base_ref"
+
+          changed_files="$(gh pr diff "$pr_number" --name-only | sed '/^$/d' | wc -l | tr -d ' ')"
+          changed_lines="$(gh pr diff "$pr_number" --patch | awk '/^[+-][^+-]/ { count++ } END { print count + 0 }')"
+
+          model="gpt-5.5"
+          effort="low"
+          review_depth="normal"
+          if [[ "${COMMENT_BODY:-}" == *"/codex-deep"* || "${COMMENT_BODY:-}" == *"@codex-deep"* || "$changed_files" -ge 8 || "$changed_lines" -ge 400 ]]; then
+            model="gpt-5.4"
+            effort="medium"
+            review_depth="deep"
+          fi
+
+          {
+            echo "skip=false"
+            echo "pr-number=$pr_number"
+            echo "base-ref=$base_ref"
+            echo "changed-files=$changed_files"
+            echo "changed-lines=$changed_lines"
+            echo "model=$model"
+            echo "effort=$effort"
+            echo "review-depth=$review_depth"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Run Codex review
+        if: steps.review-context.outputs.skip != 'true'
+        id: codex-review
+        env:
+          # ChatGPT-login auth is cached under CODEX_HOME; the Codex CLI is
+          # installed for the runner user, not on PATH by default.
+          CODEX_HOME: /Users/rico/.codex
+          PATH: /Users/rico/.npm-global/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin
+        run: |
+          set +e
+          # Force ChatGPT-login auth: if OPENAI_API_KEY / CODEX_API_KEY are
+          # present the CLI wrongly attempts API-key auth, which is not
+          # configured on this runner.
+          unset OPENAI_API_KEY CODEX_API_KEY
+          # `codex exec review --base` cannot be combined with a custom PROMPT,
+          # so scope the review to the PR diff via --base and let the built-in
+          # review instructions drive it. --output-last-message captures the
+          # clean review text without the CLI's progress/reasoning noise.
+          # --ignore-rules/--ignore-user-config stop the CLI from loading
+          # PR-controlled execpolicy .rules or user config as instructions,
+          # closing the prompt-injection path from untrusted PR content on this
+          # self-hosted runner. --sandbox read-only makes the filesystem
+          # boundary explicit while using cached CODEX_HOME auth.
+          # Kill a hung CLI (stdin auth prompt, network stall) before the
+          # job-level timeout: use coreutils gtimeout when the runner has it
+          # (nonzero exit on timeout makes the fail-closed step turn the check
+          # red); otherwise rely on the job-level timeout-minutes alone.
+          timeout_cmd=()
+          if command -v gtimeout >/dev/null 2>&1; then
+            timeout_cmd=(gtimeout --kill-after=30s 12m)
+          fi
+          "${timeout_cmd[@]}" codex exec --sandbox read-only review \
+            --ignore-rules \
+            --ignore-user-config \
+            --base "origin/${{ steps.review-context.outputs.base-ref }}" \
+            -m "${{ steps.review-context.outputs.model }}" \
+            -c "model_reasoning_effort=\"${{ steps.review-context.outputs.effort }}\"" \
+            --output-last-message codex-review.md \
+            < /dev/null
+          status=$?
+          if [[ ! -s codex-review.md ]]; then
+            echo "_Codex review produced no output (exit code ${status})._" > codex-review.md
+          fi
+          echo "exit-code=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Post Codex review
+        if: steps.review-context.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Codex Review (${{ steps.review-context.outputs.review-depth }})"
+            echo
+            echo "- Model: \`${{ steps.review-context.outputs.model }}\`"
+            echo "- Reasoning effort: \`${{ steps.review-context.outputs.effort }}\`"
+            echo "- Changed files: \`${{ steps.review-context.outputs.changed-files }}\`"
+            echo "- Changed lines: \`${{ steps.review-context.outputs.changed-lines }}\`"
+            echo
+            cat codex-review.md
+          } > codex-review-comment.md
+          ruby <<'RUBY'
+          text = File.read("codex-review-comment.md")
+          limit = 57_000
+          chunks = [String.new]
+
+          text.each_char do |char|
+            if chunks[-1].bytesize + char.bytesize > limit
+              chunks << String.new
+            end
+            chunks[-1] << char
+          end
+
+          chunks.each_with_index do |chunk, index|
+            body = if chunks.length == 1
+              chunk
+            else
+              "_Codex review comment #{index + 1}/#{chunks.length}_\n\n#{chunk}"
+            end
+            File.write("codex-review-comment-#{index + 1}.md", body)
+          end
+
+          File.write("codex-review-comment-count.txt", chunks.length.to_s)
+          RUBY
+
+          count="$(cat codex-review-comment-count.txt)"
+          for index in $(seq 1 "$count"); do
+            gh pr comment "${{ steps.review-context.outputs.pr-number }}" --body-file "codex-review-comment-${index}.md"
+          done
+
+      - name: Fail on Codex review error
+        if: steps.review-context.outputs.skip != 'true' && steps.codex-review.outputs.exit-code != '0'
+        run: exit 1
