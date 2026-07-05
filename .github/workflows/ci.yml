@@ -68,7 +68,11 @@ jobs:
           POSTGRES_PASSWORD: ci
           POSTGRES_DB: open_brain_ci
         ports:
-          - 5432:5432
+          # No fixed host port: the runner host already has a Postgres bound to
+          # 5432 (used by the `check` job), and parallel runs would collide.
+          # Publish to a Docker-assigned ephemeral host port and read it back via
+          # job.services.postgres.ports['5432'].
+          - 5432
         options: >-
           --health-cmd "pg_isready -U ci -d open_brain_ci"
           --health-interval 5s
@@ -76,7 +80,6 @@ jobs:
           --health-retries 20
     env:
       DB_HOST: localhost
-      DB_PORT: 5432
       DB_USER: ci
       DB_PASSWORD: ci
       # The dbDescribe suites write to DB_NAME; the destructive 001_init
@@ -84,7 +87,9 @@ jobs:
       # migration test's DROP TABLE cannot clobber the live-Postgres suites.
       DB_NAME: open_brain_ci
       DB_NAME_TEST: open_brain_ci_migrations
-      OPENBRAIN_TEST_DATABASE_URL: postgres://ci:ci@localhost:5432/open_brain_ci
+      # DB_PORT / OPENBRAIN_TEST_DATABASE_URL are set per-step below because they
+      # depend on the dynamically-assigned host port, which is only resolvable in
+      # step context (job.services.*).
     steps:
       - uses: actions/checkout@v6
 
@@ -96,18 +101,25 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Create isolated migration-test database
+        env:
+          PGPORT: ${{ job.services.postgres.ports['5432'] }}
         run: |
-          PGPASSWORD=ci psql -h localhost -p 5432 -U ci -d open_brain_ci \
+          PGPASSWORD=ci psql -h localhost -p "${PGPORT}" -U ci -d open_brain_ci \
             -v ON_ERROR_STOP=1 \
             -c "CREATE DATABASE ${DB_NAME_TEST};"
-          PGPASSWORD=ci psql -h localhost -p 5432 -U ci -d "${DB_NAME_TEST}" \
+          PGPASSWORD=ci psql -h localhost -p "${PGPORT}" -U ci -d "${DB_NAME_TEST}" \
             -v ON_ERROR_STOP=1 \
             -c "CREATE EXTENSION IF NOT EXISTS vector;"
 
       - name: Run migrations against ephemeral Postgres
+        env:
+          DB_PORT: ${{ job.services.postgres.ports['5432'] }}
         run: bun run migrate
 
       - name: Test (JUnit reporter for the anti-skip guard)
+        env:
+          DB_PORT: ${{ job.services.postgres.ports['5432'] }}
+          OPENBRAIN_TEST_DATABASE_URL: postgres://ci:ci@localhost:${{ job.services.postgres.ports['5432'] }}/open_brain_ci
         run: >-
           bun test
           --reporter=junit
