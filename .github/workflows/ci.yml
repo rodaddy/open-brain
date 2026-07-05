@@ -18,7 +18,7 @@ jobs:
     # branch to this repo to test).
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     env:
-      DB_HOST: localhost
+      DB_HOST: 127.0.0.1
       DB_PORT: 5432
       DB_USER: test
       DB_PASSWORD: test
@@ -27,7 +27,7 @@ jobs:
       # Without this, every `dbDescribe`-gated suite (lane_upsert, the #161
       # cursor-stall promoter tests) silently SKIPs and the SQL write paths get
       # zero CI coverage — the exact gap that let the #162 lane_upsert bugs ship.
-      OPENBRAIN_TEST_DATABASE_URL: postgres://test:test@localhost:5432/open_brain_test
+      OPENBRAIN_TEST_DATABASE_URL: postgres://test:test@127.0.0.1:5432/open_brain_test
     steps:
       - uses: actions/checkout@v6
 
@@ -50,7 +50,7 @@ jobs:
   # Issue #165: authoritative DB-backed integration gate.
   #
   # The `check` job above runs against whatever Postgres happens to be reachable
-  # at localhost on the runner. This job instead stands up an EPHEMERAL,
+  # at 127.0.0.1 on the runner. This job instead stands up an EPHEMERAL,
   # ISOLATED pgvector Postgres in Docker, MIGRATES it, runs the full suite, and
   # — critically — asserts via the anti-skip guard that the
   # `dbDescribe`/live-Postgres suites actually EXECUTED. A silent skip fails the
