@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Plan: Open Brain — Work All Open Issues &amp; Complete All Open PRs</title>
+<style>
+  :root {
+    /* ── Synced visual identity (shared by CSS + generated images). DARK MODE IS THE ALWAYS-DEFAULT. ── */
+    --bg:        #0E1116;   /* deep slate, near-black            */
+    --surface:   #161B22;   /* raised panels                    */
+    --surface-2: #1C2230;   /* nested panels                    */
+    --border:    #2A3344;   /* hairline borders                 */
+    --text:      #E6EAF2;   /* primary text                     */
+    --muted:     #9AA7BD;   /* secondary text                   */
+    --dim:       #5C6B85;   /* tertiary text                    */
+    --violet:    #8B7FF7;   /* primary accent                   */
+    --cyan:      #2DD4BF;   /* secondary accent                 */
+    --amber:     #F5B547;   /* highlight / warnings             */
+    --green:     #4ADE80;   /* success / complete               */
+    --red:       #F87171;   /* failure                          */
+    --radius:    14px;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background:
+      radial-gradient(1200px 600px at 80% -10%, rgba(139,127,247,0.10), transparent 60%),
+      radial-gradient(1000px 500px at -10% 10%, rgba(45,212,191,0.07), transparent 55%),
+      var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    line-height: 1.65;
+    font-size: 16px;
+    -webkit-font-smoothing: antialiased;
+  }
+  main { max-width: 920px; margin: 0 auto; padding: 56px 24px 120px; }
+
+  header h1 {
+    font-size: clamp(1.9rem, 4vw, 2.7rem);
+    line-height: 1.12;
+    margin: 0 0 6px;
+    letter-spacing: -0.02em;
+    background: linear-gradient(100deg, var(--text) 30%, var(--violet) 70%, var(--cyan));
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .tagline { color: var(--muted); font-size: 1.05rem; margin: 0 0 18px; }
+
+  details.meta {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px 16px;
+    margin-bottom: 8px;
+    font-size: 0.86rem;
+  }
+  details.meta summary {
+    cursor: pointer; color: var(--violet); font-weight: 600;
+    font-family: var(--mono); letter-spacing: 0.02em;
+  }
+  details.meta dl {
+    display: grid; grid-template-columns: 130px 1fr;
+    gap: 4px 14px; margin: 12px 0 4px;
+  }
+  details.meta dt { color: var(--dim); font-family: var(--mono); font-size: 0.8rem; }
+  details.meta dd { margin: 0; color: var(--muted); font-family: var(--mono); font-size: 0.8rem; word-break: break-word; }
+
+  section { margin-top: 52px; scroll-margin-top: 24px; }
+  h2 {
+    font-size: 1.6rem; letter-spacing: -0.01em; margin: 0 0 14px;
+    padding-bottom: 8px; border-bottom: 1px solid var(--border);
+  }
+  h2::before { content: "▚ "; color: var(--violet); }
+  h3 { font-size: 1.18rem; margin: 26px 0 10px; color: var(--text); }
+  h4 { font-size: 1rem; margin: 20px 0 8px; color: var(--cyan); font-family: var(--mono); }
+  p { color: var(--text); }
+  a { color: var(--cyan); }
+
+  figure { margin: 22px 0; text-align: center; }
+  figure img {
+    max-width: 100%; height: auto; border-radius: var(--radius);
+    border: 1px solid var(--border);
+    box-shadow: 0 10px 40px rgba(0,0,0,0.45);
+  }
+  figcaption { color: var(--dim); font-size: 0.82rem; margin-top: 10px; font-style: italic; }
+  .img-placeholder {
+    border: 1px dashed var(--border); border-radius: var(--radius);
+    padding: 30px; color: var(--dim); font-family: var(--mono); font-size: 0.8rem;
+    background: var(--surface);
+  }
+
+  code {
+    font-family: var(--mono); font-size: 0.86em;
+    background: var(--surface-2); color: var(--cyan);
+    padding: 1px 6px; border-radius: 6px; border: 1px solid var(--border);
+  }
+  pre {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 16px 18px; overflow-x: auto;
+    font-size: 0.84rem; line-height: 1.55;
+  }
+  pre code { background: none; border: none; padding: 0; color: var(--text); }
+  .tok-k { color: var(--violet); }
+  .tok-s { color: var(--green); }
+  .tok-c { color: var(--dim); font-style: italic; }
+  .tok-f { color: var(--cyan); }
+
+  ul, ol { padding-left: 22px; }
+  li { margin: 5px 0; }
+  ul.checklist { list-style: none; padding-left: 4px; }
+  ul.checklist > li { margin: 7px 0; }
+
+  .tag {
+    font-family: var(--mono); font-size: 0.68rem; text-transform: uppercase;
+    letter-spacing: 0.06em; padding: 2px 8px; border-radius: 999px;
+    border: 1px solid var(--border); vertical-align: middle;
+  }
+  .tag.existing { color: var(--amber); border-color: rgba(245,181,71,0.4); background: rgba(245,181,71,0.08); }
+  .tag.new { color: var(--green); border-color: rgba(74,222,128,0.4); background: rgba(74,222,128,0.08); }
+
+  .status { font-weight: 700; color: var(--dim); }
+
+  .phase {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--violet);
+    border-radius: var(--radius);
+    padding: 4px 22px 22px;
+    margin: 22px 0;
+  }
+  .phase h3 { color: var(--text); }
+  .phase h3 .status { margin-right: 6px; }
+
+  .loop {
+    margin-top: 16px; padding: 12px 16px;
+    background: rgba(45,212,191,0.06);
+    border: 1px solid rgba(45,212,191,0.3);
+    border-radius: 10px; font-size: 0.9rem; color: var(--text);
+  }
+
+  .callout {
+    border-radius: var(--radius); padding: 14px 18px; margin: 18px 0;
+    border: 1px solid var(--border); background: var(--surface-2);
+  }
+  .callout.warn { border-color: rgba(245,181,71,0.4); background: rgba(245,181,71,0.06); }
+  .callout.key  { border-color: rgba(139,127,247,0.45); background: rgba(139,127,247,0.07); }
+  .callout .lbl { font-family: var(--mono); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--violet); display:block; margin-bottom: 4px; }
+  .callout.warn .lbl { color: var(--amber); }
+
+  table { width: 100%; border-collapse: collapse; margin: 18px 0; font-size: 0.88rem; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--violet); font-family: var(--mono); font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.04em; }
+  td code { font-size: 0.82em; }
+  .yes { color: var(--green); } .no { color: var(--red); } .chg { color: var(--amber); }
+
+  details.qa, details.amend {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 10px 16px; margin: 10px 0;
+  }
+  details.qa summary, details.amend summary { cursor: pointer; color: var(--cyan); font-weight: 600; }
+  .qa-answer { color: var(--muted); margin-top: 10px; }
+
+  hr.soft { border: none; border-top: 1px solid var(--border); margin: 34px 0; }
+  .pill { font-family: var(--mono); font-size: 0.72rem; color: var(--cyan); border: 1px solid var(--border); padding: 2px 8px; border-radius: 999px; }
+</style>
+</head>
+<body>
+<main>
+
+  <!-- ===== HEADER + UPDATABLE METADATA ===== -->
+  <header>
+    <h1>Plan: Open Brain — Work All Open Issues &amp; Complete All Open PRs</h1>
+    <p class="tagline">Six-phase execution roadmap: land PR #231, harden CI, retire legacy auth/namespace debt, ship the client contract batch, deliver the realtime memory epic, and disposition the roadmap backlog. Live correction: 8 open PRs · 17 open issues as of 2026-07-05 after PR #240 opened for optional release deploy.</p>
+    <details class="meta">
+      <summary>Metadata</summary>
+      <dl>
+        <dt>created</dt>      <dd>2026-07-05T00:39:00-08:00</dd>
+        <dt>modified</dt>     <dd>2026-07-05T00:39:00-08:00, 2026-07-05T01:55:00-08:00, 2026-07-05T12:55:00-04:00, 2026-07-05T13:42:05-04:00, 2026-07-05T14:20:00-04:00</dd>
+        <dt>commits</dt>      <dd>b4a3020 (branch HEAD at authoring time)</dd>
+        <dt>agent name</dt>        <dd>claude-fable-5 (Claude Code)</dd>
+        <dt>session id</dt>      <dd>open-brain planf3 session 2026-07-05</dd>
+        <dt>back refs</dt>    <dd>goal-run.md (memory-substrate goal run), docs/realtime-agent-memory-research.md (PR #225), docs/downstream-rollout.md, docs/memory-contract.md</dd>
+        <dt>forward refs</dt> <dd>PR #231 (fix-gh-reviewer, green), PR #233 (fix/193-rolling-log-cap), PR #239 (fix/236-ob-backfill-redaction, green), PR #240 (fix/optional-release-deploy, live status in PR checks and Project 8), issue #166 comment 2026-07-05, branches in flight: fix/165-ci-db-integration-tests, fix/168-rename-n8n-ob-admin, fix/167-retire-collab-namespace</dd>
+      </dl>
+    </details>
+  </header>
+
+  <!-- Hero image — synced to the :root visual identity. Replace with <img> once generated. -->
+  <figure>
+    <img src="open-issues-and-prs-completion-roadmap/hero.png" alt="Six-stage pipeline: PR #231 → CI → Cleanup → Contract → Realtime → Roadmap → 0 open">
+    <figcaption>The six-phase burn-down: each phase unblocks or de-risks the next.</figcaption>
+  </figure>
+
+  <!-- ===== PURPOSE / PROBLEM / SOLUTION ===== -->
+  <section id="purpose">
+    <h2>Purpose</h2>
+    <p><strong>Live correction:</strong> this roadmap was authored from an older snapshot. Current live state is 8 open PRs (#231, #233, #234, #235, #237, #238, #239, #240) and 17 open issues (#236 plus the roadmap issue set). PR #239 for #236 has passed the pre-merge gauntlet but is not merged, so #236 remains open. PR #240 makes deploy optional and adds the local release/deploy SOP; read its current checks and review gate from GitHub plus Project 8 before merge.</p>
+    <p>Drive the open-brain repo to a clean board: every open PR merged or explicitly held, and all 17 open issues either closed with tested, rollout-gated changes or explicitly dispositioned as roadmap items with a documented decision. The plan sequences work so infrastructure fixes (review pipeline, CI Postgres) land first and protect everything after them, and groups issues into coherent PR-sized batches that respect the repo's pre-merge gauntlet, critical self-review gate, and downstream rollout gate.</p>
+  </section>
+
+  <section id="problem">
+    <h2>Problem</h2>
+    <p>The backlog is heterogeneous and partially interdependent. PR #231 replaces the Claude review workflow with Codex but fails its own two new checks (<code>validate</code>/PR-Body and <code>codex-review</code>) — the PR body lacks the required critical self-review receipt and the new workflow fails on the PR that introduces it. Until it lands, every subsequent PR runs through a broken review pipeline. Separately, #165 documents that DB-backed integration tests silently skip in CI — the exact gap that shipped the #162 production bugs — so landing feature work before fixing CI repeats a known failure mode. The issue set spans five distinct kinds of work (CI/ops hygiene, auth/namespace retirement, client contract features, a five-issue realtime memory epic with strict internal ordering, and long-horizon roadmap items), several of which trigger the downstream rollout gate (mcp2cli, rtech-hermes, generated skills) where "local tests pass" is explicitly not the definition of done.</p>
+    <figure>
+      <!-- {{PROBLEM_IMAGE: dark tangle of 16 issue nodes and one red failing PR node, amber dependency edges crossing, labels "broken review CI", "silent test skip", "downstream gate"}} -->
+      <div class="img-placeholder">PROBLEM IMAGE PLACEHOLDER — tangled dependency graph, red failing PR gating the rest</div>
+      <figcaption>16 issues + 1 failing PR with cross-cutting dependencies and downstream rollout obligations.</figcaption>
+    </figure>
+  </section>
+
+  <section id="solution">
+    <h2>Solution</h2>
+    <p>Execute in six ordered phases. Phase 1 repairs and lands PR #231 so the review pipeline itself is trustworthy. Phase 2 closes the CI Postgres gap (#165) and the unbounded-logs bug (#193) so every later PR gets real DB-backed test coverage. Phase 3 retires legacy auth/namespace debt (#168 → #166 → #167) in dependency order. Phase 4 ships the client-facing contract batch (#177 installable package, #204 resolver tool, #176 structured rejection) — each triggering the downstream rollout gate. Phase 5 delivers the realtime memory epic (#223 → #222 → #221 → #224 → #229) in its research-mandated order: transport foundation first, then hot working set, recovery WAL, promotion lifecycle, and finally the operational hardening follow-up. Phase 6 dispositions the three long-horizon items (#192, #137, #118) — implement, defer with a dated decision, or convert to roadmap docs — so nothing is left silently open. One branch + one PR per issue or tightly-coupled pair; every non-trivial PR runs the critical self-review receipt and the pre-merge gauntlet.</p>
+    <figure>
+      <!-- {{SOLUTION_IMAGE: same graph untangled into six ordered vertical lanes, violet to cyan gradient left to right, green checkmarks accumulating}} -->
+      <div class="img-placeholder">SOLUTION IMAGE PLACEHOLDER — six ordered lanes, dependencies resolved top-to-bottom</div>
+      <figcaption>Same work, sequenced: foundations first, epic in mandated order, roadmap dispositioned last.</figcaption>
+    </figure>
+
+    <h3>Issue-to-phase map</h3>
+    <table>
+      <tr><th>Phase</th><th>Items</th><th>Theme</th><th>Downstream gate?</th></tr>
+      <tr><td>1</td><td>PR #231</td><td>Codex review workflow — fix &amp; merge</td><td class="no">No (CI-internal)</td></tr>
+      <tr><td>2</td><td>#165, #193</td><td>CI Postgres service · rolling log cap</td><td class="no">No</td></tr>
+      <tr><td>3</td><td>#168, #166, #167</td><td>n8n→ob-admin rename · stale collab docs · retire collab</td><td class="chg">Partial (#166 lives in mcp2cli skill refs; #167 touches read-fallback)</td></tr>
+      <tr><td>4</td><td>#177, #204, #176</td><td>Installable Python client · UUID resolver · structured share_candidate rejection</td><td class="yes">Yes — all three</td></tr>
+      <tr><td>5</td><td>#223, #222, #221, #224, #229</td><td>Realtime memory epic (#220 family), strict order</td><td class="yes">Yes — Hermes canary per slice</td></tr>
+      <tr><td>6</td><td>#192, #137, #118</td><td>Condensed retrieval · qmd deep-lookup · file refs roadmap</td><td class="chg">Decision-dependent</td></tr>
+    </table>
+  </section>
+
+  <!-- ===== RELEVANT FILES ===== -->
+  <section id="files" class="files">
+    <h2>Relevant Files</h2>
+
+    <h3>Existing Files</h3>
+    <ul>
+      <li><span class="tag existing">existing</span> <code>.github/workflows/codex-review.yml</code> — PR #231's new review workflow; currently fails on its own PR, must be fixed before merge.</li>
+      <li><span class="tag existing">existing</span> <code>.github/workflows/claude-code-review.yml</code> — removed by PR #231; confirm no other workflow references it.</li>
+      <li><span class="tag existing">existing</span> <code>.github/workflows/</code> (check/CI job) — #165 adds a pgvector Postgres service container + <code>OPENBRAIN_TEST_DATABASE_URL</code> so <code>dbDescribe</code> blocks stop skipping.</li>
+      <li><span class="tag existing">existing</span> <code>src/tools/__tests__/lane-upsert.test.ts</code> — the env-gated DB test that #165 makes run in CI.</li>
+      <li><span class="tag existing">existing</span> <code>src/tools/append-session-event.ts</code> — #229 F6 transaction fix (lane-create + event-insert atomicity); also the #176 share_candidate rejection path.</li>
+      <li><span class="tag existing">existing</span> <code>src/tools/get-entry.ts</code> + <code>src/table-projections.ts</code> — #192 Part A condensed-retrieval gap; #204 resolver reuses the table/projection knowledge here.</li>
+      <li><span class="tag existing">existing</span> <code>src/tools/brain-answer.ts</code> — #192 citation/excerpt behavior; contract-sensitive per docs/memory-contract.md.</li>
+      <li><span class="tag existing">existing</span> shared-namespace / read-policy config (<code>shared-namespace.ts</code>, <code>legacySharedNamespace</code>) — #167 removes the collab fallback once content is migrated.</li>
+      <li><span class="tag existing">existing</span> <code>PERMISSIONS</code> / auth role tables — #168 renames the unused full-power <code>n8n</code> role to <code>ob-admin</code>.</li>
+      <li><span class="tag existing">existing</span> <code>python/openbrain-memory/</code> — #177 packaging (build, publish target, canonical redaction export); mandatory gotcha-agent review lane.</li>
+      <li><span class="tag existing">existing</span> <code>docs/downstream-rollout.md</code> — the definition-of-done gate for Phases 3–5.</li>
+      <li><span class="tag existing">existing</span> <code>docs/memory-contract.md</code> — must be read before any Phase 4/5 change to session lifecycle tools or brain_answer.</li>
+      <li><span class="tag existing">existing</span> <code>docs/realtime-agent-memory-research.md</code> — PR #225 research receipt governing the Phase 5 epic design.</li>
+      <li><span class="tag existing">existing</span> <code>docs/sme/*.md</code> — SME lane files to inject into every review swarm; update after each cycle.</li>
+      <li><span class="tag existing">existing</span> <code>~/.config/mcp2cli/skills/open-brain/</code> (external repo) — #166 stale collab defaults in entry-ops.md, namespace-ops.md, general-ops.md, SKILL.md.</li>
+      <li><span class="tag existing">existing</span> app logger config (server bootstrap / logging module) — #193 adds 1MB rolling cap as an app-level standard.</li>
+    </ul>
+
+    <h3>New Files</h3>
+    <ul>
+      <li><span class="tag new">new</span> <code>src/tools/resolve-entry.ts</code> + tests — #204 read-only UUID→source_type/namespace/fetch_path resolver.</li>
+      <li><span class="tag new">new</span> NATS transport module (e.g. <code>src/transport/nats/</code>) + core01 JetStream config — #223 foundation carrying the <code>agent_context_pack</code> envelope.</li>
+      <li><span class="tag new">new</span> hot working-set store + scope-key model (e.g. <code>src/realtime/working-set.ts</code>) — #222.</li>
+      <li><span class="tag new">new</span> recovery WAL module + recovery-status metadata migration — #221.</li>
+      <li><span class="tag new">new</span> promotion/relegation lifecycle tools + contract doc section — #224.</li>
+      <li><span class="tag new">new</span> <code>python/openbrain-memory/dist/</code> build artifacts + publish workflow (index or git-installable tag) — #177.</li>
+      <li><span class="tag new">new</span> migration for the 69 un-mirrored collab thoughts + entity/lane re-tag — #167.</li>
+      <li><span class="tag new">new</span> roadmap decision docs for deferred items (e.g. <code>docs/roadmap/condensed-retrieval.md</code>, <code>file-references.md</code>) — Phase 6 disposition artifacts.</li>
+    </ul>
+  </section>
+
+  <!-- ===== IMPLEMENTATION PHASES ===== -->
+  <section id="phases">
+    <h2>Implementation Phases</h2>
+    <p><strong>IMPORTANT:</strong> Execute every phase and task step by step, in order, top to bottom.</p>
+    <p>Status markers: <code>[]</code> idle · <code>[wip]</code> in progress · <code>[x]</code> complete · <code>[f]</code> failed. All start as <code>[]</code>; the Build Plan workflow updates them as it works.</p>
+
+    <div class="callout key">
+      <span class="lbl">Standing rules for every phase</span>
+      Branch off clean <code>main</code> per issue (never code on main). Non-trivial PRs: critical self-review receipt in the PR body + <code>/pre-merge-gauntlet</code>. Inject matching <code>docs/sme/</code> lane files into review swarms; gotcha-agent lane is mandatory for anything touching <code>python/openbrain-memory/</code>. Security/isolation fixes get a regression test that fails on old behavior. Update SME files after each swarm cycle.
+    </div>
+
+    <!-- ============ PHASE 1 ============ -->
+    <div class="phase">
+      <h3><code class="status">[wip]</code> Phase 1: Land PR #231 — Codex review workflow</h3>
+      <p>The only open PR, and it gates review quality for every later PR. Two checks fail: <code>validate</code> (the PR-Body workflow — #231's body has no critical self-review receipt) and <code>codex-review</code> (the new workflow failing on the PR that introduces it). Fix the workflow, satisfy the body gate, merge.</p>
+
+      <figure>
+        <!-- {{PHASE_IMAGE: dark CI pipeline card, red X on "codex-review" and "validate" jobs turning green, minimal}} -->
+        <div class="img-placeholder">PHASE 1 IMAGE PLACEHOLDER — two red checks turning green on PR #231</div>
+        <figcaption>PR #231: fix the two failing jobs it ships with, then merge.</figcaption>
+      </figure>
+
+      <h4>1. Diagnose and fix the failing checks</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> Pull full failed-step logs for runs 28398911736 (<code>validate</code>) and 28398911733 (<code>codex-review</code>) and identify the exact failing step in each. <em>Found: validate = missing <code>## Critical Self-Review</code>/<code>## Review Gate</code> sections (scripts/validate-pr-body.ts); codex-review = <code>--base</code>+prompt CLI arg conflict AND job pinned to Linux runner lacking codex/auth.</em></li>
+        <li><code class="status">[x]</code> Fix <code>.github/workflows/codex-review.yml</code> — repinned to <code>[self-hosted, macOS, core01]</code>, dropped conflicting prompt, <code>--output-last-message</code> capture, CODEX_HOME + unset API keys for cached-login auth, added <code>--ignore-rules --ignore-user-config</code> (prompt-injection hardening).</li>
+        <li><code class="status">[x]</code> Add the required receipt sections to PR #231's body — validated locally against <code>scripts/validate-pr-body.ts</code>.</li>
+        <li><code class="status">[x]</code> Confirm removal of <code>claude-code-review.yml</code> leaves no dangling references — branch protection returns 404 (none configured), no required-check swap needed.</li>
+      </ul>
+
+      <h4>2. Verify the workflow does what it claims</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> Fix pushed (d379c92, then 73251b6); codex-review posted real review comments on #231 (4 runs, gpt-5.5 / low), including one after the fork gate proving no self-block.</li>
+        <li><code class="status">[]</code> Exercise the deep-review path once (<code>/codex-deep</code> comment or scope threshold) and confirm gpt-5.4 / medium is selected — deferred; threshold (≥8 files / ≥400 lines) untuned, will trigger naturally on a Phase 4/5 PR.</li>
+        <li><code class="status">[x]</code> Branch protection checked: main is not protected, nothing to swap.</li>
+        <li><code class="status">[x]</code> Fork-PR exposure closed (added after Codex flagged it twice): same-repo job gate + trusted-commenter gate + API head-repo check before checkout.</li>
+      </ul>
+
+      <h4>3. Testing Strategy</h4>
+      <p>Static workflow validation locally, then live verification on the PR itself — a CI workflow can only be truly validated by its own runs on both self-hosted runner types seen in the logs (macOS <code>/Users/rico/actions-runner</code> and Linux <code>/home/runner/actions-runner-open-brain</code>).</p>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> <code>ruby -e 'require "yaml"; YAML.load_file(".github/workflows/codex-review.yml")'</code> — workflow parses.</li>
+        <li><code class="status">[x]</code> <code>actionlint .github/workflows/codex-review.yml</code> — lints clean (self-hosted runner labels ignored per PR notes).</li>
+        <li><code class="status">[x]</code> <code>gh pr checks 231</code> — all checks green (deploy correctly skipping on PR events).</li>
+        <li><code class="status">[]</code> <code>gh pr merge 231 --squash</code> — HELD: push-to-main auto-deploys core01; awaiting Rico's batch merge/deploy approval.</li>
+      </ul>
+      <div class="loop">
+        🔁 <strong>Do not exit this phase until every box above is checked.</strong>
+        If any command fails, fix the cause and re-run — loop until all pass.
+      </div>
+    </div>
+
+    <!-- ============ PHASE 2 ============ -->
+    <div class="phase">
+      <h3><code class="status">[wip]</code> Phase 2: CI &amp; ops foundation — #165, #193</h3>
+      <p>Close the CI coverage gap before any feature work: #165 wires a pgvector Postgres service into CI so the env-gated <code>dbDescribe</code> integration tests actually run (the gap that shipped the #162 lane_upsert production bugs). #193 caps unbounded logs (16MB and growing on the live server) with a 1MB rolling standard in app config. Two small independent PRs; #165 first because it protects everything after it.</p>
+
+      <figure>
+        <!-- {{PHASE_IMAGE: dark diagram, CI box gaining a postgres+pgvector service container, tests flipping from "skipped" to "run", log file with rotation arrows capped at 1MB}} -->
+        <div class="img-placeholder">PHASE 2 IMAGE PLACEHOLDER — CI gains Postgres service; logs gain a 1MB rolling cap</div>
+        <figcaption>Foundation: real DB tests in CI, bounded logs by default.</figcaption>
+      </figure>
+
+      <h4>1. #165 — Postgres service in CI</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> New <code>db-integration</code> job with <code>pgvector/pgvector:pg18</code> service container, pinned to the Linux self-hosted runners (Docker verified on ct107/108; macOS runner excluded — it IS core01). Ephemeral port, per-run network, throwaway creds, auto teardown. PR #234.</li>
+        <li><code class="status">[x]</code> Migrations run against the service; <code>OPENBRAIN_TEST_DATABASE_URL</code> exported (secret-masked in logs).</li>
+        <li><code class="status">[x]</code> Anti-skip guard <code>scripts/assert-db-tests-ran.ts</code>: JUnit parse, per-suite expected counts, fails on missing/skipped suites — proven to fail on stripped-suite and all-skip fixtures. 17 live-Postgres tests executed in CI, 0 skipped.</li>
+        <li><code class="status">[x]</code> Gating: <code>deploy</code> now <code>needs: db-integration</code> (no branch protection exists to require checks; deploy dependency is the enforcement point).</li>
+      </ul>
+
+      <h4>2. #193 — 1MB rolling log cap as app standard</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> Add size-capped rotation (1MB per file, keep 3–5) — PR #233 green (opt-in <code>LOG_FILE</code> rotating sink; root cause was launchd StandardOutPath). Codex found 2 P2s → fixed (per-worker path derivation from <code>OPEN_BRAIN_WORKER_NAME</code>, post-write rotation) → Codex re-review confirms; accepted residual: manually forced duplicate worker names (documented). Awaiting merge batch.</li>
+        <li><code class="status">[x]</code> Cover the sibling OB logs — siblings share the single <code>src/logger.ts</code>, so they inherit the sink for free.</li>
+        <li><code class="status">[]</code> Verify on the live host after deploy — DEPLOY-GATED (env + plist change + kickstart documented in PR #233).</li>
+      </ul>
+
+      <h4>3. Testing Strategy</h4>
+      <p>CI proves itself by running; the log cap is verified by forced-rotation test (write &gt;1MB through the logger in a test or staging run) plus live-host observation post-deploy.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>bunx tsc --noEmit</code> — typecheck clean.</li>
+        <li><code class="status">[]</code> <code>bun test</code> — full suite green locally.</li>
+        <li><code class="status">[]</code> CI run on the #165 PR shows DB-backed tests <em>executed</em> (non-zero DB test count in output).</li>
+        <li><code class="status">[]</code> Rotation test: logger writes 3MB → newest file ≤1MB, ≤5 files retained.</li>
+      </ul>
+      <div class="loop">
+        🔁 <strong>Do not exit this phase until every box above is checked.</strong>
+        If any command fails, fix the cause and re-run — loop until all pass.
+      </div>
+    </div>
+
+    <!-- ============ PHASE 3 ============ -->
+    <div class="phase">
+      <h3><code class="status">[wip]</code> Phase 3: Auth &amp; namespace retirement — #168 → #166 → #167</h3>
+      <p>Retire legacy identity and namespace debt in dependency order. #168 renames the misnamed, 100%-unused full-power <code>n8n</code> role to <code>ob-admin</code> as the honest break-glass identity. #166 fixes stale <code>collab</code> defaults in the mcp2cli OB skill refs (external repo — promotions currently route to a frozen namespace). #167 then retires <code>collab</code> entirely: migrate the 69 un-mirrored thoughts, disposition the 12 entities + 4 lanes, and remove the <code>legacySharedNamespace</code> fallback code. #167 explicitly depends on #166 landing first so no client docs still point at collab when the fallback is removed.</p>
+
+      <figure>
+        <!-- {{PHASE_IMAGE: dark before/after panel, "n8n" token relabeled "ob-admin", "collab" namespace fading out with an arrow of 69 rows migrating into "shared-kb"}} -->
+        <div class="img-placeholder">PHASE 3 IMAGE PLACEHOLDER — n8n→ob-admin rename; collab's last 69 rows migrating to shared-kb</div>
+        <figcaption>Honest identities, one canonical shared namespace.</figcaption>
+      </figure>
+
+      <h4>1. #168 — Rename n8n role → ob-admin</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> Rename the role across all gates + token config — PR #235 green (clean break, no alias; 20+ files; <code>AUTH_TOKEN_OB_ADMIN</code>). Codex review caught demote-gate parity gap → fixed (both demote gates + a third audit-found gate in <code>promote-shared.ts</code>; all 15 remaining admin literals verified compound; 22-test parity suite) → re-review: mergeable, no findings.</li>
+        <li><code class="status">[]</code> Rotate/issue the ob-admin token on the live host — DEPLOY-GATED (vaultwarden rename + .env swap + restart documented in PR #235).</li>
+        <li><code class="status">[x]</code> Regression test: <code>src/ob-admin-role.test.ts</code> — 16 tests enumerating gate parity with admin, old-name rejection, non-admin unaffected. Suite 978 pass / 0 fail.</li>
+      </ul>
+
+      <h4>2. #166 — Fix stale collab defaults in mcp2cli skill refs</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> Skill refs fixed — files are AUTO-GENERATED local config; regenerated via <code>mcp2cli generate-skills open-brain</code> against the fresh schema cache; zero <code>collab</code> refs remain, <code>shared-kb</code> defaults present.</li>
+        <li><code class="status">[x]</code> Generator/source checked — generator and OB schemas were ALREADY correct; root cause was generation against a stale (pre-2026-07-04) schema cache with empty inputSchema properties. Durable fix tracked as mcp2cli#58.</li>
+        <li><code class="status">[x]</code> Server-side defaults verified correct in source (<code>promote-entry.ts:25</code>, <code>scan-namespace.ts:29</code> — both shared-kb). Issue held open pending deploy-gated hosted refresh (CT216); receipt comment posted 2026-07-05.</li>
+      </ul>
+
+      <h4>3. #167 — Retire the collab namespace</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Migrate the un-mirrored collab thoughts — DEPLOY-GATED. Tooling ready in PR #237: <code>scripts/retire-collab-migration.ts</code>, dry-run default, <code>--execute</code>, idempotent (run-twice proven on scratch Postgres), queries live counts (no hardcoded 69), no destructive deletes. Runbook in PR: backup → dry-run → execute → reconcile → deploy code.</li>
+        <li><code class="status">[]</code> Disposition entities + lanes — same script (<code>--entities</code> re-tag w/ conflict-archive, <code>--lanes</code> archive), same deploy gate.</li>
+        <li><code class="status">[x]</code> Legacy fallback retired in code — PR #237 green: empty-default legacy namespace, <code>legacyFallbackEnabled</code> false-default with <code>SHARED_NAMESPACE_LEGACY</code> escape hatch, <code>existing_collab_id</code> removed (verified not contract-visible, no version bump needed).</li>
+        <li><code class="status">[x]</code> Regression tests: retired-by-default contract across read/search/scan/promotion paths + 6/6 scratch-Postgres migration tests. Suite 970 pass / 0 fail. Codex review in progress.</li>
+      </ul>
+
+      <h4>4. Testing Strategy</h4>
+      <p>Auth changes get gate-by-gate permission tests (namespace isolation is a security boundary here). The collab migration is verified by row-count reconciliation queries before and after, with the CI DB suite (now live from Phase 2) exercising the fallback-removal paths.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>bun test</code> — including new role-gate and fallback-removal regression tests.</li>
+        <li><code class="status">[]</code> SQL reconciliation: collab un-mirrored count 69 → 0; shared-kb gains exactly the migrated set (content_hash match).</li>
+        <li><code class="status">[]</code> Live smoke on hosted OB: promote → lands in shared-kb; ob-admin token passes a privileged call; old n8n token rejected.</li>
+        <li><code class="status">[]</code> Downstream check per <code>docs/downstream-rollout.md</code> for the mcp2cli skill-ref change (#166) — schema cache refreshed, agent canary reads correct defaults.</li>
+      </ul>
+      <div class="loop">
+        🔁 <strong>Do not exit this phase until every box above is checked.</strong>
+        If any command fails, fix the cause and re-run — loop until all pass.
+      </div>
+    </div>
+
+    <!-- ============ PHASE 4 ============ -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 4: Client contract batch — #177, #204, #176</h3>
+      <p>Three client-facing contract changes, each individually triggering the downstream rollout gate. #177 makes <code>openbrain-memory</code> actually installable (built dist + reachable index or git-tag install) with canonical redaction exported, so rtech-hermes can drop its drifted fork — the fork already caused one production outage. #204 adds a read-only <code>resolve_entry</code> tool so agents stop brute-forcing five <code>get_entry</code> calls to answer "what is this UUID". #176 upgrades <code>share_candidate</code> rejection from a bare category to a structured, actionable reason with bounded resend, contract-driven so agents auto-pick-up. Order: #177 first (it's the vehicle downstream clients consume the other two through), then #204 and #176 (parallelizable).</p>
+
+      <figure>
+        <!-- {{PHASE_IMAGE: dark diagram, "openbrain-memory" package box shipping via pip/uv arrow to Hermes replacing a cracked "fork" box; small resolver and rejection-reason tool icons attached}} -->
+        <div class="img-placeholder">PHASE 4 IMAGE PLACEHOLDER — installable canonical client replacing the Hermes fork; resolver + structured rejection riding along</div>
+        <figcaption>One canonical client, richer contract: install it, resolve UUIDs natively, fix-and-resend rejected shares.</figcaption>
+      </figure>
+
+      <h4>1. #177 — Installable openbrain-memory package</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Add build + publish path (dist artifacts; pick the index/registry agent hosts can reach — or a versioned git tag installable via <code>uv add git+...</code>) and version discipline via the version-management standard.</li>
+        <li><code class="status">[]</code> Export canonical redaction as a public API surface (aligned with the b4a3020 superset-parity detectors) so clients stop re-implementing it.</li>
+        <li><code class="status">[]</code> Fake-transport tests for headers, session lifecycle, error redaction, wrapper call shapes (repo standard); <code>uv run mypy</code> + <code>ruff</code> zero errors.</li>
+        <li><code class="status">[]</code> Prove installability from a clean environment: <code>uv add openbrain-memory</code> (or git ref) in a scratch project → import → smoke call.</li>
+      </ul>
+
+      <h4>2. #204 — resolve_entry tool</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Implement read-only <code>resolve_entry(id, namespace?)</code> returning <code>resolved, id, source_type, namespace, fetch_path, checked_sources, status</code> — single query pass over the known tables via validated allowlist (no interpolated table names without Zod enum validation).</li>
+        <li><code class="status">[]</code> Enforce auth-derived namespace predicate on the lookup (namespace isolation is a security boundary; a resolver must not become a cross-namespace oracle).</li>
+        <li><code class="status">[]</code> Contract bump per <code>docs/memory-contract.md</code>; add to tool schema + eval fixtures.</li>
+        <li><code class="status">[]</code> Functional tests: known UUID in each table resolves; foreign-namespace UUID returns not_found_or_unreadable (regression test proving the predicate); garbage UUID handled.</li>
+      </ul>
+
+      <h4>3. #176 — Structured share_candidate rejection + bounded resend</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Design the rejection payload: category + actionable locator (e.g. redacted span/offset or detector name) that does NOT re-leak the secret content — this is the hard constraint.</li>
+        <li><code class="status">[]</code> Implement bounded resend (attempt counter / idempotency guard) so agents can submit a sanitized version without infinite retry loops.</li>
+        <li><code class="status">[]</code> Ship it contract-driven (schema/contract version) so downstream agents auto-pick-up without hand-rolled parsing.</li>
+        <li><code class="status">[]</code> Tests: secret-bearing candidate → structured rejection with locator, no secret echoed anywhere (response, logs, DB); sanitized resend accepted; resend bound enforced.</li>
+      </ul>
+
+      <h4>4. Testing Strategy</h4>
+      <p>Bun unit + CI DB-backed integration for server tools; fake-transport + mypy/ruff/pytest for the Python package; then the full downstream rollout ladder since all three are contract-changing.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>bunx tsc --noEmit &amp;&amp; bun test</code> — server side green, including DB-backed tests in CI.</li>
+        <li><code class="status">[]</code> <code>cd python/openbrain-memory &amp;&amp; uv run mypy src/openbrain_memory &amp;&amp; uv run ruff check src tests &amp;&amp; uv run pytest -q</code> — package quality bar.</li>
+        <li><code class="status">[]</code> Clean-env install proof for #177 (scratch project, import + smoke call).</li>
+        <li><code class="status">[]</code> Downstream rollout per <code>docs/downstream-rollout.md</code>: rtech-mcps / mcp2cli schema refresh, rtech-hermes runtime/plugin adoption step, live Hermes agent canary — each done or explicitly N/A'd in the closing comment.</li>
+      </ul>
+      <div class="loop">
+        🔁 <strong>Do not exit this phase until every box above is checked.</strong>
+        If any command fails, fix the cause and re-run — loop until all pass.
+      </div>
+    </div>
+
+    <!-- ============ PHASE 5 ============ -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 5: Realtime memory epic — #223 → #222 → #221 → #224 → #229</h3>
+      <p>The #220 epic family, executed in the order the research (PR #225) and the issues' own structure mandate: transport foundation first (#223 NATS + JetStream on core01, carrying the <code>agent_context_pack</code> envelope — not a faster pipe for fragmented calls), then the scoped hot working set (#222), the recovery WAL (#221, which needs JetStream configured from the start to avoid a painful refactor), the client-owned promotion/relegation lifecycle (#224, which gates what ever becomes durable), and finally the operational hardening follow-up (#229, including the F6 lane-create/event-insert transaction). Each slice: local-complete first, then hosted rollout + Hermes canary, mirroring the goal-run.md operating pattern.</p>
+
+      <figure>
+        <!-- {{PHASE_IMAGE: dark layered architecture, bottom-up: "NATS/JetStream", "hot working set", "recovery WAL", "promotion lifecycle", topped by "durable Open Brain", violet-cyan}} -->
+        <div class="img-placeholder">PHASE 5 IMAGE PLACEHOLDER — layered realtime stack: transport → working set → WAL → promotion → durable memory</div>
+        <figcaption>Strict build order: each layer is the substrate the next one stands on.</figcaption>
+      </figure>
+
+      <h4>1. #223 — NATS + JetStream transport foundation</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Stand up NATS on core01 (launchd service, loopback/LAN binding decision, auth) with JetStream enabled and configured from day one.</li>
+        <li><code class="status">[]</code> Implement core request/reply RPC for Open Brain memory calls carrying the <code>agent_context_pack</code> envelope (#226 contract); keep HTTP/MCP path fully intact as the compatibility layer.</li>
+        <li><code class="status">[]</code> Auth parity: NATS callers map to the same per-consumer token/role model — no side-door around namespace isolation.</li>
+        <li><code class="status">[]</code> Tests: envelope round-trip, authz rejection over NATS, HTTP/MCP parity for the same logical call.</li>
+      </ul>
+
+      <h4>2. #222 — Scoped hot working set</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Implement the RAM-first working set keyed by <code>namespace + agent + platform + server + channel + thread? + session key</code> — usable only by the exact active scope, explicitly not durable memory.</li>
+        <li><code class="status">[]</code> Rolling contents: recent events, distilled intent, active corrections, task state, linked durable refs; eviction/TTL policy.</li>
+        <li><code class="status">[]</code> Tests: exact-scope isolation (adjacent channel/session cannot read), rollover behavior, restart semantics (empty until WAL lands in #221).</li>
+      </ul>
+
+      <h4>3. #221 — Recovery WAL for interrupted sessions</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Server-side WAL/snapshot for active traces (JetStream-backed per #223 groundwork) + tiny DB metadata for recovery discovery — not normal searchable memory.</li>
+        <li><code class="status">[]</code> Implement the status lifecycle (active → wrapped / recovery_pending → reviewed / compacted / discarded / expired) and recovery actions.</li>
+        <li><code class="status">[]</code> Tests: kill-and-recover drill — populate working set, hard-stop, returning agent discovers recovery_pending trace and reviews/compacts it; expiry pruning works.</li>
+      </ul>
+
+      <h4>4. #224 — Client-owned promotion/relegation lifecycle</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Define + implement the lifecycle: client decides wrap/promote/relegate/discard/nominate; server validates scope, auth, safety, provenance, secret rejection (reuses #176's structured rejection).</li>
+        <li><code class="status">[]</code> Candidate types (user preference, process rule, channel/server rule, code fact, …) with explicit client action required — no automatic durable writes from traces.</li>
+        <li><code class="status">[]</code> Contract doc update (memory-contract.md + context-pack contract from #226) so Hermes/Codex adopt the same lifecycle verbs.</li>
+        <li><code class="status">[]</code> Tests: promotion requires explicit client call; secret-bearing candidate rejected with structured reason; relegation/discard leave no durable residue.</li>
+      </ul>
+
+      <h4>5. #229 — Operational hardening follow-up</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> F6: wrap lane-create + event-insert in a single pooled-client transaction in <code>ensureLaneForAppend</code> (<code>src/tools/append-session-event.ts</code>); DB-backed test proving a failed event insert rolls back the speculative lane.</li>
+        <li><code class="status">[]</code> Work the remaining #229 findings list (F-items beyond F6) — read the issue checklist at execution time and burn it down item by item.</li>
+      </ul>
+
+      <h4>6. Testing Strategy</h4>
+      <p>Per-slice: bun unit + CI DB-backed integration locally first (local-complete), then hosted deploy and a live Hermes canary per slice before starting the next — the downstream gate applies to every slice because Hermes consumes each layer as it lands.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>bunx tsc --noEmit &amp;&amp; bun test</code> after each slice — green before advancing.</li>
+        <li><code class="status">[]</code> Kill-and-recover integration drill (WAL) passes in CI's DB-backed job.</li>
+        <li><code class="status">[]</code> Hosted OB smoke + live Hermes canary per slice, per <code>docs/downstream-rollout.md</code>.</li>
+        <li><code class="status">[]</code> Epic close-out: #220 parent (if reopened/tracked) and all five children closed with rollout receipts.</li>
+      </ul>
+      <div class="loop">
+        🔁 <strong>Do not exit this phase until every box above is checked.</strong>
+        If any command fails, fix the cause and re-run — loop until all pass.
+      </div>
+    </div>
+
+    <!-- ============ PHASE 6 ============ -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 6: Roadmap disposition — #192, #137, #118</h3>
+      <p>Three long-horizon items that should not sit silently open. Each gets an explicit disposition: implement now, defer with a dated decision + roadmap doc, or close as superseded. Default recommendation: implement #192 Part A (condensed retrieval — it directly cheapens the Phase 5 working-set/promotion flows), defer #192 Part B (dream-driven decomposition) behind DreamEngine dry-run guarantees, defer #137 (qmd wrapper — explicitly optional by its own text) and keep #118 as a labeled roadmap issue with the design captured in a doc.</p>
+
+      <figure>
+        <!-- {{PHASE_IMAGE: dark triage board with three cards routing to lanes labeled "build", "defer + doc", "roadmap", amber accent}} -->
+        <div class="img-placeholder">PHASE 6 IMAGE PLACEHOLDER — triage board routing #192 / #137 / #118 to build, defer, roadmap lanes</div>
+        <figcaption>Nothing left silently open: every remaining issue gets an explicit, dated disposition.</figcaption>
+      </figure>
+
+      <h4>1. #192 — Condensed retrieval (Part A) + decomposition (Part B)</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Part A: add a compact-retrieval mode (stored condensed column or projection-level truncation contract) to <code>get_entry</code>/<code>brain_answer</code> so large entries can be recalled cheap; contract-doc the new knob.</li>
+        <li><code class="status">[]</code> Part B: write the design decision — dream-driven decomposition stays behind DreamEngine's dry-run-by-default rule; open a scoped follow-up issue or fold into a roadmap doc, then close #192 against Part A + the doc.</li>
+      </ul>
+
+      <h4>2. #137 — Controlled remote qmd deep-lookup wrapper</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Confirm the preconditions in the issue still hold (durable OB path working, qmd healthy on the GPU Mac) and decide: build the mcp2cli wrapper now or defer.</li>
+        <li><code class="status">[]</code> If deferred: date the decision in the issue, label roadmap/optional, and keep the non-goals (no Hermes dependency on qmd) recorded; close or keep open per Rico's call.</li>
+      </ul>
+
+      <h4>3. #118 — File references / closed-brain roadmap</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Capture the source-reference design (matter-scoped grounding, audit trail, ethical walls) into <code>docs/roadmap/file-references.md</code> so the thinking survives outside the issue.</li>
+        <li><code class="status">[]</code> Keep the issue open as a labeled roadmap epic or close it pointing at the doc — Rico's disposition call.</li>
+      </ul>
+
+      <h4>4. Testing Strategy</h4>
+      <p>Part A of #192 is real code and gets the full ladder (unit + DB-backed CI + contract fixtures + downstream gate since it changes retrieval payloads). Disposition items are validated by artifact existence and issue state.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>bun test</code> — condensed-retrieval tests: large entry stored → compact recall under the size bound → full recall still available.</li>
+        <li><code class="status">[]</code> Downstream check for the retrieval-contract change per <code>docs/downstream-rollout.md</code>.</li>
+        <li><code class="status">[]</code> <code>gh issue list --state open</code> — every remaining open issue carries a roadmap/deferred label and a dated disposition comment.</li>
+      </ul>
+      <div class="loop">
+        🔁 <strong>Do not exit this phase until every box above is checked.</strong>
+        If any command fails, fix the cause and re-run — loop until all pass.
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== GLOBAL VALIDATION ===== -->
+  <section id="validation">
+    <h2>Validation Commands</h2>
+    <p>Execute these commands to validate the entire plan is complete:</p>
+    <ul class="checklist">
+      <li><code class="status">[]</code> <code>gh pr list --state open</code> — returns zero rows (all PRs merged or closed with a stated reason).</li>
+      <li><code class="status">[]</code> <code>gh issue list --state open</code> — only explicitly-dispositioned roadmap items remain, each with a dated decision comment and label.</li>
+      <li><code class="status">[]</code> <code>bunx tsc --noEmit</code> — repo typechecks clean on main.</li>
+      <li><code class="status">[]</code> <code>bun test</code> — full suite green on main, including formerly-skipped DB-backed tests.</li>
+      <li><code class="status">[]</code> <code>cd python/openbrain-memory &amp;&amp; uv run mypy src/openbrain_memory &amp;&amp; uv run ruff check src tests &amp;&amp; uv run pytest -q</code> — package quality bar holds.</li>
+      <li><code class="status">[]</code> Downstream rollout receipts recorded on every contract-changing issue/PR per <code>docs/downstream-rollout.md</code> (or explicit N/A).</li>
+      <li><code class="status">[]</code> <code>docs/sme/</code> lane files updated with any MEDIUM+ findings from the review swarms run during this plan.</li>
+    </ul>
+    <div class="loop">
+      🔁 <strong>The plan is not complete until every box is checked and every command passes. If for some reason a step is not possible to complete, mark it with [f] and move on if possible.</strong>
+    </div>
+  </section>
+
+  <!-- ===== NOTES ===== -->
+  <section id="notes">
+    <h2>Notes</h2>
+
+    <h3>Sequencing rationale</h3>
+    <p>Phases 1–2 are pure leverage: a working review pipeline and real DB-backed CI make every later PR cheaper and safer, and #165 exists precisely because skipping it already shipped production bugs (#162). Phase 3 before Phase 4 because #167's fallback removal and #168's role rename change the auth/namespace substrate the contract batch builds on. Phase 5's internal order is not negotiable — #221 explicitly requires JetStream configured from the start (#223), #222's restart semantics depend on #221, and #224 governs what #222/#221 content may ever become durable. #229 last because its findings were classified non-blocking.</p>
+
+    <h3>Open loose ends found during recon</h3>
+    <ul>
+      <li><strong><code>goal-run.md</code> (untracked, repo root):</strong> a memory-substrate goal run for issues #207–#215 on branch <code>feat/memory-substrate-adapter-contract</code> — those issues are now closed and the file references a branch that isn't the current one. Decide: archive it to the temp workspace/_archive or commit it as a docs artifact. Don't let it leak into an unrelated commit.</li>
+      <li><strong>Current branch <code>fix/openbrain-memory-redaction-superset</code>:</strong> its commit (b4a3020, #92) is already on main's history — the branch appears fully merged. Start each phase from a fresh branch off clean <code>main</code>.</li>
+      <li><strong>Parent epic #220</strong> is not in the open-issue list; verify whether it's closed-as-tracking or should be reopened as the Phase 5 umbrella.</li>
+    </ul>
+
+    <h3>Batching &amp; effort shape</h3>
+    <table>
+      <tr><th>Phase</th><th>PR count (est.)</th><th>Relative size</th><th>Parallelizable?</th></tr>
+      <tr><td>1 — PR #231</td><td>0 (fix in place)</td><td>S</td><td>—</td></tr>
+      <tr><td>2 — CI/ops</td><td>2</td><td>S + S</td><td class="yes">Yes (independent)</td></tr>
+      <tr><td>3 — Auth/namespace</td><td>3</td><td>S + S + M</td><td class="chg">#168 ∥ #166, then #167</td></tr>
+      <tr><td>4 — Contract</td><td>3</td><td>M + M + M</td><td class="chg">#177 first, then #204 ∥ #176</td></tr>
+      <tr><td>5 — Realtime epic</td><td>5</td><td>L + L + L + M + S</td><td class="no">Strictly ordered</td></tr>
+      <tr><td>6 — Roadmap</td><td>1–2 + docs</td><td>M + docs</td><td class="yes">Yes</td></tr>
+    </table>
+
+    <h3>Risks &amp; guardrails</h3>
+    <ul>
+      <li><strong>Self-hosted runner heterogeneity:</strong> PR #231's logs show jobs landing on both a macOS and a Linux self-hosted runner. Workflow fixes (Phase 1) and the Postgres service container (#165) must work on — or be explicitly pinned to — the runner that supports them.</li>
+      <li><strong>Secret handling in #176:</strong> the rejection payload must guide the fix without echoing the secret. Treat every response field, log line, and DB row as a leak surface; the adversarial SME lane should attack exactly this.</li>
+      <li><strong>Collab retirement (#167) is destructive-adjacent:</strong> DB backup before migration, reconciliation counts as the acceptance test, and the read-fallback removal ships only after the data is confirmed mirrored.</li>
+      <li><strong>NATS is a second front door (#223):</strong> auth/namespace enforcement must be identical to HTTP/MCP. A transport that bypasses the per-consumer token model would invalidate the repo's core security boundary.</li>
+      <li><strong>Downstream gate discipline:</strong> Phases 3–5 each have steps where "local green" is not done. Close issues only with rollout receipts or explicit N/A, per <code>docs/downstream-rollout.md</code>.</li>
+    </ul>
+
+    <figure>
+      <!-- {{NOTES_IMAGE: dark risk-matrix card, four quadrants, dots for "runner heterogeneity", "secret echo", "collab migration", "NATS auth parity"}} -->
+      <div class="img-placeholder">NOTES IMAGE PLACEHOLDER — risk matrix: runner heterogeneity, secret echo, collab migration, NATS auth parity</div>
+      <figcaption>The four risks most likely to bite; each mapped to a named guardrail above.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ===== AMENDMENTS ===== -->
+  <section id="amendments">
+    <h2>Amendments</h2>
+    <!-- Append-only; populated by Update Plan / Update References workflows. -->
+    <details class="amend">
+      <summary>2026-07-05 — Execution progress: Phases 1–3 in flight under merge hold</summary>
+      <p>Orchestration live (Fable controller, Opus 4.8 workers, Codex gpt-5.5/medium as cross-model reviewer). Done: PR #231 green (review pipeline fixed: CLI arg conflict + wrong runner; hardened vs rule-injection; body gate satisfied); PR #233 green then Codex-reviewed NOT-mergeable (2 P2s: multi-worker LOG_FILE rotation race, oversized-first-write cap bypass) — fix loop running; PR #235 green (#168 rename, 16-test gate-parity suite); #166 fixed locally (regenerated stale generated skill files; schemas were already correct). In flight: #165 (CI Postgres), #167 (collab retirement tooling, dry-run-default). All merges + live-host steps (core01 env/plist, hosted CT216 refresh, collab DB migration, token swap) accumulate into one Rico approval batch. Open decision: gate codex-review workflow to same-repo PRs (fork credential risk).</p>
+    </details>
+    <details class="amend">
+      <summary>2026-07-05 — Merge/deploy hold: local-first verification mandated</summary>
+      <p>Rico directive: verify everything locally first; nothing reaches the live core01 runtime. Recon confirmed <code>ci.yml</code>'s <code>deploy</code> job auto-deploys to core01 on every push to main, and the macOS self-hosted runner IS core01. Consequences: (1) all PR merges are held until explicit deploy approval — phases deliver CI-green PR branches only; (2) no host-level installs/changes on any runner; (3) #165 may not use a host-installed Postgres. Every "merge" checkbox in Phases 1–6 is gated on this approval.</p>
+    </details>
+    <details class="amend">
+      <summary>2026-07-05 — Optional deploy PR and release SOP added</summary>
+      <p>PR #240 (<code>fix/optional-release-deploy</code>) is open. It changes <code>.github/workflows/ci.yml</code> so PRs and pushes validate but production deploy only runs from a <code>v*</code> tag whose target commit is reachable from <code>origin/main</code>, or manual <code>workflow_dispatch</code> from the current <code>origin/main</code> tip with <code>deploy_core01=true</code>. It adds <code>docs/local-release-deploy-sop.md</code> and updates <code>README.md</code> to require a local full-test release candidate before core01 deploy. The pre-merge-gauntlet has completed through initial swarm, Claude cross-review, fixes, and focused fix-verification with zero known material findings. Project 8 tracks #240 as Status <code>In Review</code>, Component/Surface <code>Deploy/Canary</code>, Phase <code>P6 Deploy/Canary Follow-On</code>, Owner <code>codex</code>; live Validation and Review Gate must be read from Project 8 for the current PR head. No merge or deploy has been performed.</p>
+    </details>
+  </section>
+
+</main>
+</body>
+</html>

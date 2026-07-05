@@ -168,10 +168,17 @@ Keep the boundaries explicit:
   `/Volumes/ThunderBolt/open-brain/backups`
 - qmd runtime/index/models: `/Volumes/ThunderBolt/qmd`
 
-Deploys should be owned by this repository, not by hand-copying files. To
-install a new Open Brain version on core01, merge the reviewed change to
-`main` and let the repo deploy job run, or run the same repo-owned deploy
-command on core01 from this checkout:
+Deploys should be owned by this repository, not by hand-copying files. Merging
+reviewed changes to `main` validates the repo, but production deploy is a
+separate release gate. Before installing a new Open Brain version on core01,
+follow [`docs/local-release-deploy-sop.md`](docs/local-release-deploy-sop.md):
+run the full local release-candidate test from a clean `main`, create a version
+tag whose commit is already reachable from `origin/main` or run a manual
+workflow dispatch from the current `origin/main` tip, and watch the deploy.
+
+The same repo-owned deploy command can be run on core01 only from the clean
+release-candidate worktree named in the SOP, after the same recorded release
+gate has passed:
 
 ```bash
 bun run deploy:core01
@@ -183,10 +190,15 @@ That command installs the checked-out repo version into
 runtime. Do not install qmd or Postgres data under the source checkout either.
 
 On GitHub, the `deploy` job targets a core01 macOS self-hosted runner with
-labels `[self-hosted, macOS, core01]`. The job rsyncs this checkout into the
-running app directory, installs runtime dependencies there, runs migrations,
-bootstraps the pinned qmd runtime, restarts `com.rico.open-brain`, and checks
-`/health`.
+labels `[self-hosted, macOS, core01]`. It runs only for a `v*` tag push whose
+commit is reachable from `origin/main`, or a manual workflow dispatch from
+the current `origin/main` tip with `deploy_core01=true`. The deploy script is
+the authoritative deploy-ref guard: tag deploys must be reachable from
+`origin/main`, and manual dispatches must match the current `origin/main` tip
+before staging files or restarting core01. The job stages the checked-out repo
+with `tar`, installs runtime dependencies there, bootstraps the pinned qmd
+runtime, runs migrations, swaps the staged directory into place, restarts
+`com.rico.open-brain`, and checks `/health`.
 
 macOS shell rule: never call `/bin/bash` or rely on the old Apple bash. Use the
 Homebrew bash path explicitly in automation:
