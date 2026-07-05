@@ -12,9 +12,17 @@ concurrency:
 
 jobs:
   codex-review:
+    # Same-repo gate: never run Codex (cached local auth on a persistent
+    # self-hosted runner) against fork-sourced code. pull_request events are
+    # gated on the PR head repo matching this repo; issue_comment events are
+    # gated on the commenter being OWNER/MEMBER, plus an API-side head-repo
+    # check in the review-context step (the comment payload has no PR head
+    # repo field).
     if: |
-      (github.event_name == 'pull_request') ||
-      (github.event_name == 'issue_comment' && (
+      (github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository) ||
+      (github.event_name == 'issue_comment' &&
+        contains(fromJSON('["OWNER", "MEMBER"]'), github.event.comment.author_association) && (
         contains(github.event.comment.body, '@codex') ||
         contains(github.event.comment.body, '/codex-review') ||
         contains(github.event.comment.body, '/codex-deep')
@@ -46,6 +54,12 @@ jobs:
             pr_number="${{ github.event.issue.number }}"
             if ! gh api "repos/${{ github.repository }}/pulls/${pr_number}" >/dev/null; then
               echo "Issue comment did not target a pull request; skipping Codex review."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            head_repo="$(gh api "repos/${{ github.repository }}/pulls/${pr_number}" --jq .head.repo.full_name)"
+            if [[ "$head_repo" != "${{ github.repository }}" ]]; then
+              echo "PR head repo '$head_repo' is a fork; skipping Codex review (same-repo gate)."
               echo "skip=true" >> "$GITHUB_OUTPUT"
               exit 0
             fi
