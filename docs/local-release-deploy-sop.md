@@ -9,7 +9,8 @@ deliberately.
 
 - Merging to `main` is not a deploy signal.
 - Production deploy is allowed only from:
-  - a manual CI workflow dispatch from `main` with `deploy_core01=true`; or
+  - a manual CI workflow dispatch from the current `origin/main` tip with
+    `deploy_core01=true`; or
   - a pushed version tag matching `v*` whose target commit is reachable from
     `origin/main`.
 - Never use production secrets in command logs, PR bodies, issues, or reports.
@@ -161,18 +162,24 @@ After the full local gate passes:
 ```zsh
 git status --short --branch
 git fetch origin main --tags
-git merge-base --is-ancestor HEAD origin/main
+test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" || {
+  echo "HEAD must equal the current origin/main tip before tagging"
+  exit 1
+}
 git tag -a v0.1.1-rc.1 -m "Open Brain v0.1.1-rc.1"
 git push origin v0.1.1-rc.1
 ```
 
 Pushing a `v*` tag runs CI and, once CI passes, the deploy job is eligible to
 run on core01 only if the tagged commit is reachable from `origin/main`. Watch
-the workflow. Do not leave a tag deploy unattended.
+the workflow. Do not leave a tag deploy unattended. Do not move or reuse a
+published `v*` tag after the local gate; cut a new version tag if the release
+candidate changes.
 
 For a manual deploy instead of a tag deploy, run the CI workflow from GitHub
-Actions on `main` with `deploy_core01=true` after the exact `main` commit passed
-the local gate.
+Actions on `main` with `deploy_core01=true` after the exact current `origin/main`
+tip passed the local gate. The deploy script refuses stale manual-dispatch
+commits that are only ancestors of `origin/main`.
 
 ## Core01 Deploy Verification
 
@@ -202,10 +209,12 @@ The deploy script keeps the prior runtime at:
 /Volumes/ThunderBolt/open-brain/app.previous
 ```
 
-If post-deploy health fails, the script restores the prior runtime and restarts
-launchd automatically. If a later manual rollback is needed, use the same
-runtime directories and restart `com.rico.open-brain`; record the rollback in
-the release notes and do not continue closing issues until the release is
+If post-deploy health fails, the script restores the prior runtime, restarts
+launchd, and runs the same local health loop against the restored runtime. If
+rollback health also fails, treat core01 as degraded and stop issue closure until
+the service is manually recovered. If a later manual rollback is needed, use the
+same runtime directories and restart `com.rico.open-brain`; record the rollback
+in the release notes and do not continue closing issues until the release is
 reconciled.
 
 ## Release Evidence Template

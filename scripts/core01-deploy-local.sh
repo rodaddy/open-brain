@@ -38,6 +38,7 @@ verify_github_deploy_ref() {
   local event_name="${GITHUB_EVENT_NAME:-}"
   local ref="${GITHUB_REF:-}"
   local head_sha
+  local main_sha
 
   case "$event_name:$ref" in
     workflow_dispatch:refs/heads/main)
@@ -50,13 +51,38 @@ verify_github_deploy_ref() {
       ;;
   esac
 
-  git -C "$REPO_DIR" fetch --no-tags origin main:refs/remotes/origin/main >/dev/null 2>&1
+  git -C "$REPO_DIR" fetch --no-tags origin main:refs/remotes/origin/main
   head_sha="$(git -C "$REPO_DIR" rev-parse HEAD)"
+  main_sha="$(git -C "$REPO_DIR" rev-parse origin/main)"
 
-  if ! git -C "$REPO_DIR" merge-base --is-ancestor "$head_sha" origin/main; then
-    echo "FATAL: refusing core01 deploy because HEAD is not reachable from origin/main: $head_sha" >&2
-    exit 1
-  fi
+  case "$event_name:$ref" in
+    workflow_dispatch:refs/heads/main)
+      if [[ "$head_sha" != "$main_sha" ]]; then
+        echo "FATAL: refusing manual core01 deploy because HEAD is not the current origin/main tip: head=$head_sha origin/main=$main_sha" >&2
+        exit 1
+      fi
+      ;;
+    push:refs/tags/v*)
+      if ! git -C "$REPO_DIR" merge-base --is-ancestor "$head_sha" origin/main; then
+        echo "FATAL: refusing tag core01 deploy because HEAD is not reachable from origin/main: $head_sha" >&2
+        exit 1
+      fi
+      ;;
+  esac
+}
+
+wait_for_health() {
+  local label="$1"
+
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    if curl -fsS --max-time 5 http://127.0.0.1:3100/health >/dev/null 2>&1; then
+      echo "$label health check passed"
+      return 0
+    fi
+    sleep 2
+  done
+
+  return 1
 }
 
 verify_github_deploy_ref
@@ -128,20 +154,24 @@ mv "$STAGING_DIR" "$RUNTIME_DIR"
 
 sudo launchctl kickstart -k "$SERVICE_LABEL"
 
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-  if curl -fsS --max-time 5 http://127.0.0.1:3100/health >/dev/null 2>&1; then
-    echo "Open Brain health check passed"
-    "$BUN_BIN" test src/tools/__tests__/search-all.test.ts
-    cleanup_previous_dir post-health
-    exit 0
-  fi
-  sleep 2
-done
+if wait_for_health "Open Brain"; then
+  "$BUN_BIN" test src/tools/__tests__/search-all.test.ts
+  cleanup_previous_dir post-health
+  exit 0
+fi
 
 if [[ -d "$PREVIOUS_DIR" ]]; then
   rm -rf "$RUNTIME_DIR"
   mv "$PREVIOUS_DIR" "$RUNTIME_DIR"
   sudo launchctl kickstart -k "$SERVICE_LABEL"
+
+  if wait_for_health "Open Brain rollback"; then
+    echo "FATAL: Open Brain health check failed after deploy; previous runtime restored and passed health" >&2
+    exit 1
+  fi
+
+  echo "FATAL: Open Brain health check failed after deploy; rollback was attempted but health did not recover" >&2
+  exit 1
 fi
 
 echo "FATAL: Open Brain health check failed after restart" >&2
