@@ -5,6 +5,7 @@ import {
   isPromoterIdentity,
   writableNamespaces,
 } from "./namespace-policy.ts";
+import { isLegacySharedNamespace } from "./shared-namespace.ts";
 import type { AuthInfo } from "./types.ts";
 
 describe("canWriteNamespace", () => {
@@ -80,12 +81,14 @@ describe("canWriteNamespace", () => {
     ).toBe(false);
   });
 
-  it("promoter is blocked from writing legacy collab (canonical shared-kb only)", () => {
-    // Pins the collab-vs-shared-kb boundary: promoter writes canonical
-    // shared-kb but must NOT write the legacy collab namespace. A refactor
-    // that adds promoter to shouldRejectLegacySharedWrite would break this.
+  it("shared-kb remains promoter-only after collab retirement (#167)", () => {
+    // Pins the shared-truth boundary: promoter writes canonical shared-kb.
+    // collab is retired (#167) as a legacy shared namespace, so it is no
+    // longer specially rejected here — it is just an ordinary (frozen)
+    // namespace name. The load-bearing invariant is that shared-kb still
+    // requires a promoter identity (asserted elsewhere) and that normal
+    // clients cannot write collab (asserted below).
     const auth: AuthInfo = { role: "promoter", clientId: "promoter" };
-    expect(canWriteNamespace(auth, "collab").allowed).toBe(false);
     expect(canWriteNamespace(auth, "shared-kb").allowed).toBe(true);
   });
 
@@ -126,11 +129,44 @@ describe("canWriteNamespace", () => {
     expect(canWriteNamespace(auth, "discord-bot").allowed).toBe(true);
   });
 
-  it("discord cannot write to collab", () => {
+  it("discord cannot write to collab (now via own-namespace boundary, #167)", () => {
+    // After collab retirement, collab is no longer a legacy shared namespace,
+    // so discord is denied by the ordinary own-namespace rule rather than the
+    // legacy-shared reject. The deny outcome is what matters and must not
+    // regress.
     const auth: AuthInfo = { role: "discord", clientId: "discord-bot" };
     const result = canWriteNamespace(auth, "collab");
     expect(result.allowed).toBe(false);
-    expect(result.reason).toContain("legacy shared namespace");
+    expect(result.reason).toContain("discord-bot");
+  });
+
+  it("collab is no longer a legacy shared namespace by default (#167)", () => {
+    // Regression guard for the retirement: no auth path may treat 'collab' as
+    // the legacy shared namespace with the default config. shouldRejectLegacy
+    // -SharedWrite must not fire for collab, and the deny for normal clients
+    // comes from ordinary namespace isolation instead.
+    expect(isLegacySharedNamespace("collab")).toBe(false);
+    const agent: AuthInfo = { role: "agent", clientId: "bilby" };
+    const agentResult = canWriteNamespace(agent, "collab");
+    expect(agentResult.allowed).toBe(false);
+    expect(agentResult.reason).not.toContain("legacy shared namespace");
+  });
+
+  it("supports re-enabling collab as legacy shared via env escape hatch", () => {
+    // The migration window escape hatch: an operator can still set
+    // SHARED_NAMESPACE_LEGACY=collab to restore the legacy reject transiently.
+    const saved = process.env.SHARED_NAMESPACE_LEGACY;
+    try {
+      process.env.SHARED_NAMESPACE_LEGACY = "collab";
+      expect(isLegacySharedNamespace("collab")).toBe(true);
+      const discord: AuthInfo = { role: "discord", clientId: "discord-bot" };
+      const result = canWriteNamespace(discord, "collab");
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain("legacy shared namespace");
+    } finally {
+      if (saved === undefined) delete process.env.SHARED_NAMESPACE_LEGACY;
+      else process.env.SHARED_NAMESPACE_LEGACY = saved;
+    }
   });
 
   it("readonly cannot write to any namespace", () => {

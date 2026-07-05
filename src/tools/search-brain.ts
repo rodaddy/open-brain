@@ -847,6 +847,7 @@ export async function executeSearchWithSharedFallback(
   const config = sharedNamespaceConfig();
   if (
     !config.legacyFallbackEnabled ||
+    config.legacySharedNamespace === "" ||
     offset !== 0 ||
     namespace !== config.sharedNamespace
   ) {
@@ -914,6 +915,7 @@ export async function executeSearchWithScopedSharedFallback(
   const scopedNamespaces = Array.isArray(namespace) ? namespace : [];
   if (
     !config.legacyFallbackEnabled ||
+    config.legacySharedNamespace === "" ||
     offset !== 0 ||
     !scopedNamespaces.includes(config.physicalSharedNamespace)
   ) {

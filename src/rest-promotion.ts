@@ -228,9 +228,6 @@ export function createPromotionRouter(deps: RestDeps): Router {
               existing_target_id: targetDupes[0].id,
               created_at: row.created_at,
             };
-            if (targetPhysicalNamespace === "collab") {
-              duplicate.existing_collab_id = targetDupes[0].id;
-            }
             duplicateEntries.push(duplicate);
             continue;
           }

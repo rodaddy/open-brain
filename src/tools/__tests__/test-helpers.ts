@@ -72,3 +72,26 @@ export function parseToolResult(result: any): any {
 export function getErrorText(result: any): string {
   return (result.content as any)[0].text;
 }
+
+/**
+ * #167: the legacy collab shared fallback is retired (disabled by default).
+ * This restores the operator escape-hatch env so tests can still exercise the
+ * fallback mechanism. Always call `.restore()` in a finally block.
+ */
+export function enableLegacyCollabFallback(): { restore: () => void } {
+  const savedFlag = process.env.OPENBRAIN_LEGACY_SHARED_FALLBACK;
+  const savedNs = process.env.SHARED_NAMESPACE_LEGACY;
+  process.env.OPENBRAIN_LEGACY_SHARED_FALLBACK = "1";
+  process.env.SHARED_NAMESPACE_LEGACY = "collab";
+  return {
+    restore() {
+      if (savedFlag === undefined) {
+        delete process.env.OPENBRAIN_LEGACY_SHARED_FALLBACK;
+      } else {
+        process.env.OPENBRAIN_LEGACY_SHARED_FALLBACK = savedFlag;
+      }
+      if (savedNs === undefined) delete process.env.SHARED_NAMESPACE_LEGACY;
+      else process.env.SHARED_NAMESPACE_LEGACY = savedNs;
+    },
+  };
+}

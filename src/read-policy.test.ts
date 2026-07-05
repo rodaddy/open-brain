@@ -52,11 +52,14 @@ describe("read-policy", () => {
     expect(readableNamespaces(auth)).toEqual(["bilby", "shared-kb"]);
     expect(canReadNamespace(auth, "bilby")).toBe(true);
     expect(canReadNamespace(auth, "shared-kb")).toBe(true);
+    // #167: collab is retired. A delegated header agent can no longer read it
+    // via any shared path; it is now just another agent namespace it lacks.
     expect(canReadNamespace(auth, "collab")).toBe(false);
     expect(namespaceFilterFor(auth)).toEqual(["bilby", "shared-kb"]);
+    // Legacy fallback no longer injects collab by default — the option is inert.
     expect(
       namespaceFilterFor(auth, undefined, { includeLegacySharedFallback: true }),
-    ).toEqual(["bilby", "shared-kb", "collab"]);
+    ).toEqual(["bilby", "shared-kb"]);
   });
 
   it("keeps delegated admin scoped when requesting namespace all", () => {
@@ -86,7 +89,9 @@ describe("read-policy", () => {
     expect(params).toEqual(["id", ["bilby", "shared-kb"]]);
   });
 
-  it("adds legacy collab only for explicit server fallback reads", () => {
+  it("does not add legacy collab to fallback reads by default (#167)", () => {
+    // Retirement regression: the legacy fallback option is inert with the
+    // default (empty) legacy namespace. No collab predicate is ever emitted.
     const auth: AuthInfo = {
       role: "admin",
       clientId: "bilby",
@@ -103,7 +108,32 @@ describe("read-policy", () => {
     );
 
     expect(predicate).toBe(" AND source.namespace = ANY($2::text[])");
-    expect(params).toEqual(["id", ["bilby", "shared-kb", "collab"]]);
+    expect(params).toEqual(["id", ["bilby", "shared-kb"]]);
+  });
+
+  it("re-adds a configured legacy namespace to explicit fallback reads (#167 escape hatch)", () => {
+    const saved = process.env.SHARED_NAMESPACE_LEGACY;
+    try {
+      process.env.SHARED_NAMESPACE_LEGACY = "collab";
+      const auth: AuthInfo = {
+        role: "admin",
+        clientId: "bilby",
+        tokenClientId: "admin",
+        namespaceSource: "header",
+      };
+      const params: unknown[] = ["id"];
+      const predicate = appendReadNamespacePredicate(
+        auth,
+        params,
+        "source.namespace",
+        { includeLegacySharedFallback: true },
+      );
+      expect(predicate).toBe(" AND source.namespace = ANY($2::text[])");
+      expect(params).toEqual(["id", ["bilby", "shared-kb", "collab"]]);
+    } finally {
+      if (saved === undefined) delete process.env.SHARED_NAMESPACE_LEGACY;
+      else process.env.SHARED_NAMESPACE_LEGACY = saved;
+    }
   });
 
   it("allows token-sourced admin to request namespace all", () => {

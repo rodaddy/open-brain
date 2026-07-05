@@ -59,8 +59,10 @@ Open Brain is the **durable operational memory** for PAI agents. It stores:
   include auth-derived namespace predicates unless a token-sourced global role
   is intentionally broad.
 - `shared-kb` namespace is for shared/cross-agent Open Brain knowledge. Agents should promote
-  into `shared-kb` through promotion flows rather than hard-coding legacy `collab` as a
-  destination.
+  into `shared-kb` through promotion flows. The legacy `collab` shared namespace is retired
+  (#167): it is no longer a default legacy shared namespace, is not canonicalized to
+  `shared-kb`, and has no default read fallback. It remains valid only as an explicit,
+  operator-configured migration source (`SHARED_NAMESPACE_LEGACY`).
 
 ## Tool Reference
 

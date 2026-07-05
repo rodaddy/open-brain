@@ -3,6 +3,7 @@ import { registerBrainAnswer } from "../brain-answer.ts";
 import type { AuthInfo } from "../../types.ts";
 import {
   createMockEmbed,
+  enableLegacyCollabFallback,
   setupMcpClient,
   parseToolResult,
   getErrorText,
@@ -113,6 +114,7 @@ describe("brain_answer", () => {
   });
 
   it("falls back from shared-kb to legacy collab and canonicalizes citations", async () => {
+    const fallbackEnv = enableLegacyCollabFallback();
     const queries: Array<{ sql: string; params: unknown[] }> = [];
     const pool = {
       query: async (sql: string, params: unknown[] = []) => {
@@ -157,6 +159,7 @@ describe("brain_answer", () => {
         "collab",
       ]);
     } finally {
+      fallbackEnv.restore();
       await cleanup();
     }
   });
