@@ -43,6 +43,79 @@ jobs:
       - name: Test
         run: bun test
 
+  # Issue #165: authoritative DB-backed integration gate.
+  #
+  # The `check` job above runs against whatever Postgres happens to be reachable
+  # at localhost on the runner. This job instead stands up an EPHEMERAL,
+  # ISOLATED pgvector Postgres as a service container (its own Docker network per
+  # run — parallel CI runs cannot collide, and the container is torn down
+  # automatically when the job ends). It then MIGRATES that DB, runs the full
+  # suite, and — critically — asserts via the anti-skip guard that the
+  # `dbDescribe`/live-Postgres suites actually EXECUTED. A silent skip fails the
+  # job instead of going green with zero SQL-path coverage.
+  #
+  # Pinned to the Linux self-hosted runner because service containers require
+  # Docker, which the macOS/core01 production runner must not run.
+  db-integration:
+    runs-on: [self-hosted, Linux, rodaddy]
+    services:
+      postgres:
+        image: pgvector/pgvector:pg18
+        env:
+          POSTGRES_USER: ci
+          # Throwaway, CI-only credential for an ephemeral container that is
+          # destroyed at job end. Never a real Open Brain database.
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: open_brain_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci -d open_brain_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DB_HOST: localhost
+      DB_PORT: 5432
+      DB_USER: ci
+      DB_PASSWORD: ci
+      # The dbDescribe suites write to DB_NAME; the destructive 001_init
+      # migration test uses DB_NAME_TEST. Keep them on SEPARATE databases so the
+      # migration test's DROP TABLE cannot clobber the live-Postgres suites.
+      DB_NAME: open_brain_ci
+      DB_NAME_TEST: open_brain_ci_migrations
+      OPENBRAIN_TEST_DATABASE_URL: postgres://ci:ci@localhost:5432/open_brain_ci
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Create isolated migration-test database
+        run: |
+          PGPASSWORD=ci psql -h localhost -p 5432 -U ci -d open_brain_ci \
+            -v ON_ERROR_STOP=1 \
+            -c "CREATE DATABASE ${DB_NAME_TEST};"
+          PGPASSWORD=ci psql -h localhost -p 5432 -U ci -d "${DB_NAME_TEST}" \
+            -v ON_ERROR_STOP=1 \
+            -c "CREATE EXTENSION IF NOT EXISTS vector;"
+
+      - name: Run migrations against ephemeral Postgres
+        run: bun run migrate
+
+      - name: Test (JUnit reporter for the anti-skip guard)
+        run: >-
+          bun test
+          --reporter=junit
+          --reporter-outfile=${{ runner.temp }}/junit-db.xml
+
+      - name: Assert DB-backed integration tests actually ran (anti-skip guard)
+        run: bun run scripts/assert-db-tests-ran.ts ${{ runner.temp }}/junit-db.xml
+
   python-package:
     runs-on: [self-hosted, Linux, rodaddy]
     defaults:
@@ -74,7 +147,7 @@ jobs:
         run: uv build
 
   deploy:
-    needs: [check, python-package]
+    needs: [check, db-integration, python-package]
     runs-on: [self-hosted, macOS, core01]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     concurrency:
