@@ -212,6 +212,148 @@ def test_redaction_keeps_benign_40_character_hex_ids_visible():
     assert "[REDACTED]" not in redacted
 
 
+def test_redaction_scrubs_bare_three_segment_non_jwt_token():
+    token = token_sample(
+        "AbCdEfGhIjKlMnOpQrStUv2",
+        ".abcD3f",
+        ".WxYzWxYzWxYzWxYzWxYz4",
+    )
+
+    redacted = redact_text(f"opaque token {token}")
+
+    assert token not in redacted
+    assert "[REDACTED]" in redacted
+
+
+def test_redaction_scrubs_dash_bounded_bare_three_segment_token():
+    token = token_sample(
+        "-AbCdEfGhIjKlMnOpQrStUv2",
+        ".abcD3f",
+        ".WxYzWxYzWxYzWxYzWxYz4-",
+    )
+
+    redacted = redact_text(f"opaque token {token}")
+
+    assert token not in redacted
+    assert "[REDACTED]" in redacted
+
+
+def test_redaction_keeps_unlabeled_dash_identifier_visible():
+    blob = token_sample("Aa1Bb2" * 4, "-", "Hh7Ii8" * 4)
+
+    redacted = redact_text(f"opaque {blob}")
+
+    assert blob in redacted
+    assert "[REDACTED]" not in redacted
+
+
+def test_redaction_keeps_unlabeled_underscore_identifier_visible():
+    blob = token_sample("Aa1Bb2" * 4, "_", "Hh7Ii8" * 4)
+
+    redacted = redact_text(f"opaque {blob}")
+
+    assert blob in redacted
+    assert "[REDACTED]" not in redacted
+
+
+def test_redaction_scrubs_unlabeled_high_entropy_blob_with_base64_symbols():
+    blob = token_sample("Aa1Bb2" * 4, "+=", "Hh7Ii8" * 4)
+
+    redacted = redact_text(f"opaque {blob}")
+
+    assert blob not in redacted
+    assert "[REDACTED]" in redacted
+
+
+def test_redaction_scrubs_unlabeled_high_entropy_blob_with_base64_slash():
+    blob = token_sample("Aa1/Bb2" * 4, "+=", "Hh7/Ii8" * 4)
+
+    redacted = redact_text(f"opaque {blob}")
+
+    assert blob not in redacted
+    assert "[REDACTED]" in redacted
+
+
+def test_redaction_keeps_benign_64_character_git_sha_visible():
+    sha = token_sample(
+        "68be7d3fa4",
+        "6ec75266ea",
+        "f407a4ed91",
+        "1ac046588e",
+        "a1148136a3",
+        "2a516aca79",
+        "6120",
+    )
+    assert len(sha) == 64
+
+    redacted = redact_text(f"schema_hash {sha}")
+
+    assert sha in redacted
+    assert "[REDACTED]" not in redacted
+
+
+def test_redaction_keeps_git_sha_visible_when_later_text_has_symbol():
+    sha = token_sample("0123456789", "abcdef0123", "456789abcd", "ef01234567")
+
+    redacted = redact_text(f"commit {sha} path python/openbrain_memory")
+
+    assert sha in redacted
+    assert "[REDACTED]" not in redacted
+
+
+@pytest.mark.parametrize(
+    ("text", "visible"),
+    [
+        (
+            "error at src/openbrain_memory/transport/"
+            "streaming_response_handler_impl.py:412",
+            "src/openbrain_memory/transport/streaming_response_handler_impl.py",
+        ),
+        (
+            "branch fix/177-openbrain-memory-package-heuristic-redaction-followups",
+            "fix/177-openbrain-memory-package-heuristic-redaction-followups",
+        ),
+        (
+            "branch fix/OB177-openbrain-Memory-Package-Heuristic-Redaction2",
+            "fix/OB177-openbrain-Memory-Package-Heuristic-Redaction2",
+        ),
+        (
+            "branch feature/OB-1234-Redaction-Heuristic-Followups-v2-Final",
+            "feature/OB-1234-Redaction-Heuristic-Followups-v2-Final",
+        ),
+        (
+            "describe v0.1.1-12-gAbC1234RedactionBuildSuffix",
+            "v0.1.1-12-gAbC1234RedactionBuildSuffix",
+        ),
+        (
+            "GET /api/v1/namespaces/shared-kb/session-events"
+            "?cursor=next_page_token_placeholder_here_xx",
+            "/api/v1/namespaces/shared-kb/session-events",
+        ),
+        (
+            "OB_LONG_ENVIRONMENT_VARIABLE_NAME_FOR_CONFIG_VALUE set",
+            "OB_LONG_ENVIRONMENT_VARIABLE_NAME_FOR_CONFIG_VALUE",
+        ),
+        (
+            "trace_id 7f3e-9a2b-4c1d-8e6f-longcorrelationidentifierstring",
+            "7f3e-9a2b-4c1d-8e6f-longcorrelationidentifierstring",
+        ),
+        (
+            "config openbrainmemorytransport.streaminghandler.configresolvermodule",
+            "openbrainmemorytransport.streaminghandler.configresolvermodule",
+        ),
+    ],
+)
+def test_redaction_keeps_benign_symbol_identifiers_visible(
+    text: str,
+    visible: str,
+):
+    redacted = redact_text(text)
+
+    assert visible in redacted
+    assert "[REDACTED]" not in redacted
+
+
 def test_redact_value_recurses_sensitive_keys():
     value = {
         "nested": {
