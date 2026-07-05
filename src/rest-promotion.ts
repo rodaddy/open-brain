@@ -102,8 +102,8 @@ export function createPromotionRouter(deps: RestDeps): Router {
 
   router.post("/demote", async (req: Request, res: Response) => {
     const auth = getAuth(req);
-    if (!auth || auth.role !== "admin") {
-      res.status(403).json({ error: "Permission denied: admin role required" });
+    if (!auth || (auth.role !== "admin" && auth.role !== "ob-admin")) {
+      res.status(403).json({ error: "Permission denied: admin or ob-admin role required" });
       return;
     }
 

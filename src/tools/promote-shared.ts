@@ -20,13 +20,13 @@ function shareContent(table: Table, row: Record<string, unknown>): string {
 }
 
 /**
- * On-demand shared-kb promotion (Issue #161). A promoter or admin identity
+ * On-demand shared-kb promotion (Issue #161). A promoter, admin, or ob-admin identity
  * promotes a single own-namespace thought/decision into shared truth, AFTER a
  * shared-worthiness classification that hard-refuses secrets and person-private
  * content even when a promoter explicitly asks.
  *
- * Defense in depth: the tool gates on isPromoterIdentity OR admin at the entry
- * point, then promoteEntry re-checks canWriteNamespace server-side.
+ * Defense in depth: the tool gates on isPromoterIdentity OR admin/ob-admin at
+ * the entry point, then promoteEntry re-checks canWriteNamespace server-side.
  */
 export function registerPromoteShared(server: McpServer, deps: ToolDeps): void {
   server.registerTool(
@@ -34,7 +34,7 @@ export function registerPromoteShared(server: McpServer, deps: ToolDeps): void {
     {
       description:
         "Promote a single own-namespace thought or decision into the shared-kb " +
-        "namespace (shared truth). Requires the promoter or admin identity. " +
+        "namespace (shared truth). Requires the promoter, admin, or ob-admin identity. " +
         "Classifies the entry first and REFUSES secrets or person-private " +
         "content. Dry-run by default.",
       inputSchema: {
@@ -62,10 +62,18 @@ export function registerPromoteShared(server: McpServer, deps: ToolDeps): void {
     },
     async (args, extra) => {
       const auth = extra.authInfo as AuthInfo | undefined;
-      // AUTH gate (defense in depth): only a promoter identity or admin may even
-      // attempt a shared-kb promotion. A normal agent token is refused here
-      // before any DB read, independent of promoteEntry's own re-check.
-      if (!auth || !(isPromoterIdentity(auth) || auth.role === "admin")) {
+      // AUTH gate (defense in depth): only a promoter identity or an admin-like
+      // role (admin/ob-admin) may even attempt a shared-kb promotion. A normal
+      // agent token is refused here before any DB read, independent of
+      // promoteEntry's own re-check.
+      if (
+        !auth ||
+        !(
+          isPromoterIdentity(auth) ||
+          auth.role === "admin" ||
+          auth.role === "ob-admin"
+        )
+      ) {
         logger.warn("promote_shared_denied", {
           role: auth?.role,
           clientId: auth?.clientId,
@@ -74,7 +82,7 @@ export function registerPromoteShared(server: McpServer, deps: ToolDeps): void {
           content: [
             {
               type: "text" as const,
-              text: "Permission denied: shared-kb promotion requires the promoter or admin identity",
+              text: "Permission denied: shared-kb promotion requires the promoter, admin, or ob-admin identity",
             },
           ],
           isError: true,
