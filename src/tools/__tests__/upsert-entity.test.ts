@@ -159,7 +159,7 @@ describe("upsert_entity", () => {
       true,
       "host",
       "ct235",
-      "collab",
+      "team-kb",
     );
     const auth: AuthInfo = { role: "admin", clientId: "skippy" };
     const { client, cleanup } = await setupToolClient(mockPool, auth);
@@ -170,7 +170,7 @@ describe("upsert_entity", () => {
         arguments: {
           entity_type: "host",
           name: "ct235",
-          namespace: "collab",
+          namespace: "team-kb",
           canonical_id: "host:ct235",
           metadata: { ip: "10.71.20.35" },
         },
@@ -181,7 +181,7 @@ describe("upsert_entity", () => {
       expect(parsed.id).toBe("entity-uuid-1");
       expect(parsed.entity_type).toBe("host");
       expect(parsed.name).toBe("ct235");
-      expect(parsed.namespace).toBe("collab");
+      expect(parsed.namespace).toBe("team-kb");
       expect(parsed.is_new).toBe(true);
       expect(parsed.created_at).toBe("2026-06-08T10:00:00Z");
     } finally {
@@ -195,7 +195,7 @@ describe("upsert_entity", () => {
       false,
       "service",
       "open-brain",
-      "collab",
+      "team-kb",
       "2026-06-01T10:00:00Z",
       "2026-06-08T12:00:00Z",
     );
@@ -208,7 +208,7 @@ describe("upsert_entity", () => {
         arguments: {
           entity_type: "service",
           name: "open-brain",
-          namespace: "collab",
+          namespace: "team-kb",
           metadata: { version: "2.0" },
         },
       });

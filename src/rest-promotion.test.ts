@@ -121,7 +121,7 @@ describe("promotion REST API", () => {
     const { status, json } = await req(app, "post", "/api/v1/promote", {
       table: "projects",
       id: sourceId,
-      target_namespace: "collab",
+      target_namespace: "team-kb",
     });
 
     expect(status).toBe(409);

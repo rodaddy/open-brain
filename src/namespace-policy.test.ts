@@ -129,27 +129,60 @@ describe("canWriteNamespace", () => {
     expect(canWriteNamespace(auth, "discord-bot").allowed).toBe(true);
   });
 
-  it("discord cannot write to collab (now via own-namespace boundary, #167)", () => {
-    // After collab retirement, collab is no longer a legacy shared namespace,
-    // so discord is denied by the ordinary own-namespace rule rather than the
-    // legacy-shared reject. The deny outcome is what matters and must not
-    // regress.
+  it("discord cannot write to collab (frozen snapshot, #167)", () => {
+    // After collab retirement, collab is a frozen snapshot namespace: writes
+    // are rejected for every role. The deny outcome must not regress.
     const auth: AuthInfo = { role: "discord", clientId: "discord-bot" };
     const result = canWriteNamespace(auth, "collab");
     expect(result.allowed).toBe(false);
-    expect(result.reason).toContain("discord-bot");
+    expect(result.reason).toContain("frozen snapshot");
   });
 
   it("collab is no longer a legacy shared namespace by default (#167)", () => {
     // Regression guard for the retirement: no auth path may treat 'collab' as
-    // the legacy shared namespace with the default config. shouldRejectLegacy
-    // -SharedWrite must not fire for collab, and the deny for normal clients
-    // comes from ordinary namespace isolation instead.
+    // the legacy shared namespace with the default config. The deny comes from
+    // the frozen-snapshot rejection instead.
     expect(isLegacySharedNamespace("collab")).toBe(false);
     const agent: AuthInfo = { role: "agent", clientId: "bilby" };
     const agentResult = canWriteNamespace(agent, "collab");
     expect(agentResult.allowed).toBe(false);
     expect(agentResult.reason).not.toContain("legacy shared namespace");
+    expect(agentResult.reason).toContain("frozen snapshot");
+  });
+
+  it("frozen collab rejects writes for admin, n8n, and promoter too (#167)", () => {
+    // Independent of the legacy mechanism: with collab retired, no role —
+    // including global writers — may create rows in the frozen snapshot.
+    // Prevents invisible orphans in a namespace nothing reads by default.
+    for (const role of ["admin", "n8n", "promoter"] as const) {
+      const result = canWriteNamespace(
+        { role, clientId: "global-writer" },
+        "collab",
+      );
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain("frozen snapshot");
+    }
+  });
+
+  it("frozen rejection has an explicit operator escape hatch for migration windows", () => {
+    // Only the combination SHARED_NAMESPACE_LEGACY=collab AND
+    // OPENBRAIN_ALLOW_LEGACY_SHARED_WRITES=1 bypasses the frozen rejection.
+    const savedNs = process.env.SHARED_NAMESPACE_LEGACY;
+    const savedAllow = process.env.OPENBRAIN_ALLOW_LEGACY_SHARED_WRITES;
+    try {
+      process.env.SHARED_NAMESPACE_LEGACY = "collab";
+      process.env.OPENBRAIN_ALLOW_LEGACY_SHARED_WRITES = "1";
+      const admin: AuthInfo = { role: "admin", clientId: "rico" };
+      expect(canWriteNamespace(admin, "collab").allowed).toBe(true);
+    } finally {
+      if (savedNs === undefined) delete process.env.SHARED_NAMESPACE_LEGACY;
+      else process.env.SHARED_NAMESPACE_LEGACY = savedNs;
+      if (savedAllow === undefined) {
+        delete process.env.OPENBRAIN_ALLOW_LEGACY_SHARED_WRITES;
+      } else {
+        process.env.OPENBRAIN_ALLOW_LEGACY_SHARED_WRITES = savedAllow;
+      }
+    }
   });
 
   it("supports re-enabling collab as legacy shared via env escape hatch", () => {

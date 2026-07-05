@@ -1,12 +1,16 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { Client, Pool } from "pg";
+import pg from "pg";
+import { runMigrations } from "../src/db/migrate.ts";
 import {
+  auditOutOfScope,
   migrateEntities,
   migrateLanes,
   migrateThoughts,
   parseArgs,
   runMigration,
 } from "./retire-collab-migration.ts";
+
+const { Client, Pool } = pg;
 
 // -----------------------------------------------------------------------------
 // Pure arg-parsing tests (always run).
@@ -15,12 +19,18 @@ describe("retire-collab-migration args", () => {
   it("defaults to dry-run and all steps", () => {
     const args = parseArgs([]);
     expect(args.execute).toBe(false);
+    expect(args.acknowledgeOutOfScope).toBe(false);
     expect([...args.steps].sort()).toEqual(["entities", "lanes", "thoughts"]);
   });
 
-  it("honors --execute and a scoped subset of steps", () => {
-    const args = parseArgs(["--execute", "--thoughts"]);
+  it("honors --execute, --acknowledge-out-of-scope, and step subsets", () => {
+    const args = parseArgs([
+      "--execute",
+      "--acknowledge-out-of-scope",
+      "--thoughts",
+    ]);
     expect(args.execute).toBe(true);
+    expect(args.acknowledgeOutOfScope).toBe(true);
     expect([...args.steps]).toEqual(["thoughts"]);
   });
 
@@ -41,9 +51,59 @@ describe("retire-collab-migration args", () => {
 });
 
 // -----------------------------------------------------------------------------
-// Scratch-DB integration tests. Gated on OPENBRAIN_SCRATCH_ADMIN_URL, a
-// superuser/owner connection string that can CREATE/DROP DATABASE (e.g.
-// postgres://localhost/postgres). Never point this at a live OB database.
+// Transaction behavior (mock pool; always runs). A failure in any step must
+// roll back the whole execute run.
+// -----------------------------------------------------------------------------
+describe("retire-collab-migration transaction", () => {
+  it("rolls back the transaction when a step fails mid-run", async () => {
+    const clientQueries: string[] = [];
+    let released = false;
+    const failingClient = {
+      query: async (sql: string, _params?: unknown[]) => {
+        clientQueries.push(sql.trim().split(/\s+/).slice(0, 3).join(" "));
+        if (
+          sql.includes("ob_session_lanes") &&
+          sql.trim().startsWith("UPDATE")
+        ) {
+          throw new Error("boom: simulated lane failure");
+        }
+        return { rows: [{ count: 0 }], rowCount: 0 };
+      },
+      release: () => {
+        released = true;
+      },
+    };
+    const pool = {
+      // audit + report scaffolding run on the pool
+      query: async (_sql: string, _params?: unknown[]) => ({
+        rows: [{ count: 0 }],
+        rowCount: 0,
+      }),
+      connect: async () => failingClient,
+    };
+
+    await expect(
+      runMigration(pool as any, {
+        execute: true,
+        acknowledgeOutOfScope: false,
+        steps: new Set(["lanes"]),
+      } as any),
+    ).rejects.toThrow("simulated lane failure");
+
+    expect(clientQueries[0]).toBe("BEGIN");
+    expect(clientQueries.at(-1)).toBe("ROLLBACK");
+    expect(clientQueries).not.toContain("COMMIT");
+    expect(released).toBe(true);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Scratch-DB integration tests built from the REAL repo migrations
+// (src/db/migrations/*.sql via runMigrations), so schema drift between the
+// script and production cannot hide behind an invented fixture schema.
+// Gated on OPENBRAIN_SCRATCH_ADMIN_URL — a superuser/owner connection string
+// that can CREATE/DROP DATABASE (e.g. postgres://localhost/postgres). Never
+// point this at a live OB database.
 // -----------------------------------------------------------------------------
 const ADMIN_URL =
   process.env.OPENBRAIN_SCRATCH_ADMIN_URL ??
@@ -58,63 +118,29 @@ function scratchUrl(adminUrl: string, dbName: string): string {
   return url.toString();
 }
 
-async function seedSchema(pool: Pool): Promise<void> {
-  // Minimal schema mirroring the columns the migration touches, including the
-  // per-namespace unique index that guarantees idempotency for thoughts.
-  await pool.query(`
-    CREATE TABLE thoughts (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      content TEXT NOT NULL,
-      tags TEXT[] DEFAULT '{}',
-      source TEXT DEFAULT 'manual',
-      created_by TEXT NOT NULL,
-      created_at TIMESTAMPTZ DEFAULT NOW(),
-      updated_at TIMESTAMPTZ DEFAULT NOW(),
-      content_hash TEXT,
-      namespace TEXT NOT NULL DEFAULT 'collab'
-    );
-    CREATE UNIQUE INDEX idx_thoughts_content_hash
-      ON thoughts (content_hash, namespace) WHERE content_hash IS NOT NULL;
-
-    CREATE TABLE ob_entities (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      entity_type TEXT NOT NULL,
-      name TEXT NOT NULL,
-      namespace TEXT NOT NULL DEFAULT 'collab',
-      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
-      created_by TEXT NOT NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      archived_at TIMESTAMPTZ
-    );
-    CREATE UNIQUE INDEX idx_ob_entities_lookup_unique
-      ON ob_entities (namespace, entity_type, lower(name))
-      WHERE archived_at IS NULL;
-
-    CREATE TABLE ob_session_lanes (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      session_key TEXT NOT NULL,
-      namespace TEXT NOT NULL DEFAULT 'collab',
-      status TEXT NOT NULL DEFAULT 'active',
-      created_by TEXT NOT NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      archived_at TIMESTAMPTZ,
-      UNIQUE(namespace, session_key)
-    );
-  `);
-}
-
-async function seedFixtures(pool: Pool): Promise<void> {
-  // thoughts: 2 already-mirrored (hash present in shared-kb), 3 un-mirrored.
+async function seedFixtures(pool: InstanceType<typeof Pool>): Promise<void> {
+  // thoughts: 2 mirrored (hash present in shared-kb), 3 un-mirrored with
+  // operational/audit columns set so preservation can be asserted, and 1
+  // null-hash live thought that the audit must flag as out-of-scope.
   await pool.query(
-    `INSERT INTO thoughts (content, created_by, content_hash, namespace, created_at)
+    `INSERT INTO thoughts
+       (content, created_by, content_hash, namespace, created_at, tier,
+        usefulness_score, access_count, promoted_from, extracted_metadata,
+        embedding_model)
      VALUES
-       ('mirrored one', 'rico', 'h-mirror-1', 'collab', '2026-01-01T00:00:00Z'),
-       ('mirrored two', 'rico', 'h-mirror-2', 'collab', '2026-01-02T00:00:00Z'),
-       ('unmirrored a', 'codex', 'h-uniq-a', 'collab', '2026-02-01T00:00:00Z'),
-       ('unmirrored b', 'codex', 'h-uniq-b', 'collab', '2026-02-02T00:00:00Z'),
-       ('unmirrored c', 'discord', 'h-uniq-c', 'collab', '2026-02-03T00:00:00Z')`,
+       ('mirrored one', 'rico', 'h-mirror-1', 'collab', '2026-01-01T00:00:00Z',
+        'warm', NULL, 0, NULL, NULL, NULL),
+       ('mirrored two', 'rico', 'h-mirror-2', 'collab', '2026-01-02T00:00:00Z',
+        'warm', NULL, 0, NULL, NULL, NULL),
+       ('unmirrored a', 'codex', 'h-uniq-a', 'collab', '2026-02-01T00:00:00Z',
+        'hot', 0.9, 7, '{"table":"thoughts","id":"src-1"}'::jsonb,
+        '{"topic":"infra"}'::jsonb, 'embeddinggemma-300m-8bit'),
+       ('unmirrored b', 'codex', 'h-uniq-b', 'collab', '2026-02-02T00:00:00Z',
+        'warm', NULL, 0, NULL, NULL, NULL),
+       ('unmirrored c', 'discord', 'h-uniq-c', 'collab', '2026-02-03T00:00:00Z',
+        'cold', NULL, 0, NULL, NULL, NULL),
+       ('no hash live', 'rico', NULL, 'collab', '2026-02-04T00:00:00Z',
+        'warm', NULL, 0, NULL, NULL, NULL)`,
   );
   await pool.query(
     `INSERT INTO thoughts (content, created_by, content_hash, namespace)
@@ -123,36 +149,49 @@ async function seedFixtures(pool: Pool): Promise<void> {
        ('mirrored two', 'rico', 'h-mirror-2', 'shared-kb')`,
   );
 
-  // entities: 1 collab repo_fact re-taggable, 1 collab repo_fact that conflicts
-  // with an existing active shared-kb repo_fact of the same name.
+  // decisions: one live un-mirrored collab row -> audit out-of-scope.
   await pool.query(
-    `INSERT INTO ob_entities (entity_type, name, namespace, created_by)
-     VALUES
-       ('repo_fact', 'king-core:unique', 'collab', 'rico'),
-       ('repo_fact', 'king-core:dupe', 'collab', 'rico'),
-       ('repo_fact', 'king-core:dupe', 'shared-kb', 'rico')`,
+    `INSERT INTO decisions (title, rationale, created_by, content_hash, namespace)
+     VALUES ('legacy decision', 'because', 'rico', 'h-dec-1', 'collab')`,
   );
 
-  // lanes: 2 active collab lanes to archive, 1 already-archived (skip).
+  // entities: re-taggable repo_fact, name-conflict repo_fact, canonical_id
+  // conflict repo_fact, and a non-repo_fact entity (audit out-of-scope).
   await pool.query(
-    `INSERT INTO ob_session_lanes (session_key, namespace, status, created_by, archived_at)
+    `INSERT INTO ob_entities (entity_type, name, canonical_id, namespace, created_by)
+     VALUES
+       ('repo_fact', 'king-core:unique', 'rf:king-core:unique', 'collab', 'rico'),
+       ('repo_fact', 'king-core:dupe', 'rf:king-core:dupe', 'collab', 'rico'),
+       ('repo_fact', 'king-core:dupe', 'rf:king-core:dupe-shared', 'shared-kb', 'rico'),
+       ('repo_fact', 'king-core:canon-collab-name', 'rf:king-core:canon', 'collab', 'rico'),
+       ('repo_fact', 'king-core:canon-shared-name', 'rf:king-core:canon', 'shared-kb', 'rico'),
+       ('project', 'legacy-project-node', NULL, 'collab', 'rico')`,
+  );
+
+  // lanes: 1 active + 1 wrapped to archive, 1 already archived (skip).
+  await pool.query(
+    `INSERT INTO ob_session_lanes (session_key, namespace, status, created_by, ended_at)
      VALUES
        ('lane-a', 'collab', 'active', 'rico', NULL),
-       ('lane-b', 'collab', 'active', 'rico', NULL),
+       ('lane-b', 'collab', 'wrapped', 'rico', NULL),
        ('lane-old', 'collab', 'archived', 'rico', NOW())`,
   );
 }
 
-dbDescribe("retire-collab-migration (scratch Postgres)", () => {
-  let pool: Pool;
+dbDescribe("retire-collab-migration (scratch Postgres, real migrations)", () => {
+  let pool: InstanceType<typeof Pool>;
 
   beforeAll(async () => {
     const admin = new Client({ connectionString: ADMIN_URL });
     await admin.connect();
     await admin.query(`CREATE DATABASE ${SCRATCH_DB}`);
     await admin.end();
-    pool = new Pool({ connectionString: scratchUrl(ADMIN_URL!, SCRATCH_DB), max: 2 });
-    await seedSchema(pool);
+    pool = new Pool({
+      connectionString: scratchUrl(ADMIN_URL!, SCRATCH_DB),
+      max: 2,
+    });
+    // THE REAL SCHEMA: run the repo's actual migrations, not a hand-built one.
+    await runMigrations(pool);
     await seedFixtures(pool);
   });
 
@@ -164,45 +203,79 @@ dbDescribe("retire-collab-migration (scratch Postgres)", () => {
     await admin.end();
   });
 
-  it("dry-run reports reconciliation without mutating", async () => {
+  it("pre-flight audit counts out-of-scope collab content in every table", async () => {
+    const audit = await auditOutOfScope(pool);
+    expect(audit.thoughts_null_hash).toBe(1);
+    expect(audit.unmirrored_by_table.decisions).toBe(1);
+    expect(audit.unmirrored_by_table.relationships).toBe(0);
+    expect(audit.unmirrored_by_table.projects).toBe(0);
+    expect(audit.unmirrored_by_table.sessions).toBe(0);
+    expect(audit.entities_non_repo_fact).toBe(1);
+    expect(audit.total_out_of_scope).toBe(3);
+  });
+
+  it("dry-run reports plan + audit without mutating", async () => {
     const report = await runMigration(pool, {
       execute: false,
+      acknowledgeOutOfScope: false,
       steps: new Set(["thoughts", "entities", "lanes"]),
-    });
+    } as any);
     expect(report.dry_run).toBe(true);
+    expect(report.audit.total_out_of_scope).toBe(3);
+
     expect(report.thoughts?.unmirrored_before).toBe(3);
     expect(report.thoughts?.would_copy).toBe(3);
     expect(report.thoughts?.copied).toBe(0);
-    // unchanged after dry-run
     expect(report.thoughts?.unmirrored_after).toBe(3);
 
-    expect(report.entities?.collab_repo_facts).toBe(2);
+    expect(report.entities?.collab_repo_facts).toBe(3);
     expect(report.entities?.would_retag).toBe(1);
-    expect(report.entities?.would_archive_conflicts).toBe(1);
+    // one lower(name) conflict + one canonical_id conflict
+    expect(report.entities?.would_archive_conflicts).toBe(2);
     expect(report.entities?.retagged).toBe(0);
 
-    expect(report.lanes?.collab_active_lanes).toBe(2);
+    expect(report.lanes?.collab_unarchived_lanes).toBe(2);
     expect(report.lanes?.would_archive).toBe(2);
     expect(report.lanes?.archived).toBe(0);
 
-    // Nothing actually mutated.
     const sharedCount = await pool.query(
       `SELECT COUNT(*)::int AS c FROM thoughts WHERE namespace = 'shared-kb'`,
     );
     expect(sharedCount.rows[0].c).toBe(2);
   });
 
-  it("execute copies un-mirrored thoughts, re-tags/archives entities, archives lanes", async () => {
-    const t = await migrateThoughts(pool, true);
-    expect(t.copied).toBe(3);
-    expect(t.unmirrored_after).toBe(0);
+  it("refuses --execute while out-of-scope content exists and mutates nothing", async () => {
+    await expect(
+      runMigration(pool, {
+        execute: true,
+        acknowledgeOutOfScope: false,
+        steps: new Set(["thoughts", "entities", "lanes"]),
+      } as any),
+    ).rejects.toThrow("OUTSIDE the migrated scope");
 
-    const e = await migrateEntities(pool, true);
-    expect(e.retagged).toBe(1);
-    expect(e.archived_conflicts).toBe(1);
+    const sharedCount = await pool.query(
+      `SELECT COUNT(*)::int AS c FROM thoughts WHERE namespace = 'shared-kb'`,
+    );
+    expect(sharedCount.rows[0].c).toBe(2);
+    const lanes = await pool.query(
+      `SELECT COUNT(*)::int AS c FROM ob_session_lanes
+        WHERE namespace = 'collab' AND status <> 'archived'`,
+    );
+    expect(lanes.rows[0].c).toBe(2);
+  });
 
-    const l = await migrateLanes(pool, true);
-    expect(l.archived).toBe(2);
+  it("executes with --acknowledge-out-of-scope: copies, re-tags, archives", async () => {
+    const report = await runMigration(pool, {
+      execute: true,
+      acknowledgeOutOfScope: true,
+      steps: new Set(["thoughts", "entities", "lanes"]),
+    } as any);
+
+    expect(report.thoughts?.copied).toBe(3);
+    expect(report.thoughts?.unmirrored_after).toBe(0);
+    expect(report.entities?.retagged).toBe(1);
+    expect(report.entities?.archived_conflicts).toBe(2);
+    expect(report.lanes?.archived).toBe(2);
 
     // shared-kb now has original 2 + 3 copied.
     const shared = await pool.query(
@@ -210,39 +283,66 @@ dbDescribe("retire-collab-migration (scratch Postgres)", () => {
     );
     expect(shared.rows[0].c).toBe(5);
 
-    // Provenance preserved on a copied thought.
+    // Operational/audit columns preserved on the copied thought.
     const prov = await pool.query(
-      `SELECT created_by, created_at FROM thoughts
+      `SELECT created_by, created_at, tier, usefulness_score, access_count,
+              promoted_from, extracted_metadata, embedding_model
+         FROM thoughts
         WHERE namespace = 'shared-kb' AND content_hash = 'h-uniq-a'`,
     );
     expect(prov.rows[0].created_by).toBe("codex");
     expect(new Date(prov.rows[0].created_at).toISOString()).toBe(
       "2026-02-01T00:00:00.000Z",
     );
+    expect(prov.rows[0].tier).toBe("hot");
+    expect(Number(prov.rows[0].usefulness_score)).toBe(0.9);
+    expect(Number(prov.rows[0].access_count)).toBe(7);
+    expect(prov.rows[0].promoted_from).toEqual({
+      table: "thoughts",
+      id: "src-1",
+    });
+    expect(prov.rows[0].extracted_metadata).toEqual({ topic: "infra" });
+    expect(prov.rows[0].embedding_model).toBe("embeddinggemma-300m-8bit");
 
-    // Collab rows are left in place (frozen snapshot) for thoughts.
+    // Collab thoughts left in place (frozen snapshot).
     const collab = await pool.query(
       `SELECT COUNT(*)::int AS c FROM thoughts WHERE namespace = 'collab'`,
     );
-    expect(collab.rows[0].c).toBe(5);
+    expect(collab.rows[0].c).toBe(6);
 
-    // Re-tagged entity moved to shared-kb; conflicting one archived in collab.
+    // Re-tagged entity moved to shared-kb.
     const retagged = await pool.query(
-      `SELECT namespace, archived_at FROM ob_entities WHERE name = 'king-core:unique'`,
+      `SELECT namespace FROM ob_entities WHERE name = 'king-core:unique'`,
     );
     expect(retagged.rows[0].namespace).toBe("shared-kb");
-    const conflict = await pool.query(
-      `SELECT namespace, archived_at FROM ob_entities
+
+    // Name-conflict entity archived in collab.
+    const nameConflict = await pool.query(
+      `SELECT archived_at FROM ob_entities
         WHERE name = 'king-core:dupe' AND namespace = 'collab'`,
     );
-    expect(conflict.rows[0].archived_at).not.toBeNull();
+    expect(nameConflict.rows[0].archived_at).not.toBeNull();
 
-    // Both active lanes archived; previously-archived one untouched.
-    const activeLanes = await pool.query(
-      `SELECT COUNT(*)::int AS c FROM ob_session_lanes
-        WHERE namespace = 'collab' AND archived_at IS NULL`,
+    // canonical_id-conflict entity (different name, same canonical_id as an
+    // active shared-kb row) archived in collab, NOT re-tagged.
+    const canonConflict = await pool.query(
+      `SELECT namespace, archived_at FROM ob_entities
+        WHERE name = 'king-core:canon-collab-name'`,
     );
-    expect(activeLanes.rows[0].c).toBe(0);
+    expect(canonConflict.rows[0].namespace).toBe("collab");
+    expect(canonConflict.rows[0].archived_at).not.toBeNull();
+
+    // Lanes archived via status + ended_at (real schema has no archived_at).
+    const unarchived = await pool.query(
+      `SELECT COUNT(*)::int AS c FROM ob_session_lanes
+        WHERE namespace = 'collab' AND status <> 'archived'`,
+    );
+    expect(unarchived.rows[0].c).toBe(0);
+    const endedStamped = await pool.query(
+      `SELECT COUNT(*)::int AS c FROM ob_session_lanes
+        WHERE namespace = 'collab' AND ended_at IS NULL`,
+    );
+    expect(endedStamped.rows[0].c).toBe(0);
   });
 
   it("is idempotent: a second execute copies/retags/archives nothing", async () => {
@@ -257,7 +357,6 @@ dbDescribe("retire-collab-migration (scratch Postgres)", () => {
     const l = await migrateLanes(pool, true);
     expect(l.archived).toBe(0);
 
-    // No duplicate shared-kb copies.
     const shared = await pool.query(
       `SELECT COUNT(*)::int AS c FROM thoughts WHERE namespace = 'shared-kb'`,
     );

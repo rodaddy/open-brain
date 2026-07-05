@@ -173,7 +173,7 @@ describe("link_entities", () => {
           to_type: "decision",
           to_id: TO_ID,
           relation: "depends_on",
-          namespace: "collab",
+          namespace: "team-kb",
           weight: 2.5,
           metadata: { reason: "causal" },
         },

@@ -63,13 +63,13 @@ describe("repo fact tools", () => {
     try {
       const result = await client.callTool({
         name: "upsert_repo_fact",
-        arguments: { namespace: "collab", metadata: repoFact },
+        arguments: { namespace: "team-kb", metadata: repoFact },
       });
 
       expect(result.isError).toBeFalsy();
       const parsed = parseToolResult(result);
       expect(parsed.entity_type).toBe("repo_fact");
-      expect(parsed.namespace).toBe("collab");
+      expect(parsed.namespace).toBe("team-kb");
       expect(parsed.canonical_id).toContain("repo_fact:qmd:king-core");
       expect(parsed.metadata.source_system).toBe("qmd");
       expect(parsed.metadata.source_commit).toBe(repoFact.source_commit);
@@ -481,7 +481,7 @@ describe("repo fact tools", () => {
     try {
       const result = await client.callTool({
         name: "upsert_repo_fact",
-        arguments: { namespace: "collab", metadata: repoFact },
+        arguments: { namespace: "team-kb", metadata: repoFact },
       });
 
       expect(result.isError).toBe(true);
