@@ -2,6 +2,44 @@
 
 Updated: 2026-07-05 by Codex after Fable handoff.
 
+## Current Controller State
+
+Updated after the 2026-07-05 PR merge batch and Project 8 sync.
+
+- Open PRs: 1
+  - #234 `ci(#165): ephemeral pgvector DB-integration job with anti-skip guard`
+    is merge-ready by code/review evidence: merge state `CLEAN`, pre-merge
+    gauntlet complete, GitHub checks green (`check`, `db-integration`,
+    `python-package`, `validate`, GitGuardian), and `deploy` skipped.
+  - Current blocker: local GitHub CLI token lacks the `workflow` OAuth scope
+    required to merge a PR that changes `.github/workflows/ci.yml`.
+    In-flight repair command: `gh auth refresh -h github.com -s workflow`.
+    After authorization: re-run `gh auth status`, then
+    `gh pr merge 234 --squash`.
+- Merged in this controller batch:
+  - #231 merged as `c9888cc584fe68b5ff91906d56ef26c7fb40afef`;
+    post-merge `/codex-deep` smoke on #234 succeeded.
+  - #233 merged as `9653cf86d0ff770eb929915c61d11ce5f0f499fc`.
+  - #235 merged as `2a8fd986154d7b5dc11fb0c2d690288d35530a50`.
+  - #237 merged as `fefb4659f8d181e465fac584d25a57e11e672ac2`.
+  - #238 merged as `ee0a7c8dc02313c4bc3bdf6a387742265a11f0a4`.
+  - #239 merged as `d6389962e5b2650d9e53dbdb7d75a30b004600fa`.
+- Prior deploy-control PR:
+  - #240 is merged. Production deploy is optional/deferred and only allowed via
+    the release SOP path, not automatic `main` pushes.
+- Open issues: 13
+  - #229, #224, #223, #222, #221, #204, #192, #176, #167, #166, #165, #137,
+    #118.
+  - #165 should close when #234 merges.
+  - #167 remains open after #237 because live backup/dry-run/execute/reconcile,
+    release deploy, and downstream canary are still gated.
+- Project 8 updated on 2026-07-05:
+  - PR items #233, #235, #237, #238, and #239 moved to `Done` with merge
+    commits in `Next Action`.
+  - PR #234 and issue #165 moved to `Blocked`, with the blocker recorded as the
+    missing local `workflow` OAuth scope.
+- No production deploy was performed during this batch.
+
 ## Live Inventory Correction
 
 Updated after Rico correction on 2026-07-05.
@@ -104,8 +142,8 @@ Active source plan:
 - Follow the roadmap as-is.
 - Keep Pony/minimal-correct mode active.
 - Use `pre-merge-gauntlet` for every non-trivial PR.
-- Do not merge to `main` or deploy hosted Open Brain without explicit Rico
-  approval.
+- Merge gauntlet-clean PRs through GitHub only; do not deploy hosted Open Brain
+  without explicit Rico approval and the release SOP gate.
 - Use `/Volumes/ThunderBolt/_tmp/open-brain` for temp worktrees and build/install
   proofs.
 - Current session is single-controller for implementation. Standard subagent
