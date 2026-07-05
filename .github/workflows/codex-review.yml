@@ -96,7 +96,14 @@ jobs:
           # so scope the review to the PR diff via --base and let the built-in
           # review instructions drive it. --output-last-message captures the
           # clean review text without the CLI's progress/reasoning noise.
+          # --ignore-rules/--ignore-user-config stop the CLI from loading
+          # PR-controlled execpolicy .rules or user config as instructions,
+          # closing the prompt-injection path from untrusted PR content on this
+          # self-hosted runner. `codex exec review` runs read-only/sandboxed by
+          # default (no --dangerously-bypass flag is passed).
           codex exec review \
+            --ignore-rules \
+            --ignore-user-config \
             --base "origin/${{ steps.review-context.outputs.base-ref }}" \
             -m "${{ steps.review-context.outputs.model }}" \
             -c "model_reasoning_effort=\"${{ steps.review-context.outputs.effort }}\"" \
