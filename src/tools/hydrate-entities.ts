@@ -41,7 +41,7 @@ export function registerHydrateEntities(
           .string()
           .max(500)
           .optional()
-          .describe("Namespace to hydrate (defaults to caller writable namespace; admin/n8n may omit for all)"),
+          .describe("Namespace to hydrate (defaults to caller writable namespace; admin/ob-admin may omit for all)"),
         only_missing_embedding: z
           .boolean()
           .optional()

@@ -447,7 +447,7 @@ describe("adjacent_context", () => {
     }
   });
 
-  // ── AGENT / N8N ROLES ──
+  // ── AGENT / OB_ADMIN ROLES ──
 
   it("allows agent role", async () => {
     const mockPool = { query: async () => ({ rows: [] }) };

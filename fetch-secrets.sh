@@ -19,8 +19,8 @@ case "$FIELD" in
   AUTH_TOKEN_DISCORD)
     mcp2cli vaultwarden-secrets get_secret_fields --params '{"name":"Open Brain - Auth Tokens"}' 2>/dev/null | jq -r '.result.AUTH_TOKEN_DISCORD // empty'
     ;;
-  AUTH_TOKEN_N8N)
-    mcp2cli vaultwarden-secrets get_secret_fields --params '{"name":"Open Brain - Auth Tokens"}' 2>/dev/null | jq -r '.result.AUTH_TOKEN_N8N // empty'
+  AUTH_TOKEN_OB_ADMIN)
+    mcp2cli vaultwarden-secrets get_secret_fields --params '{"name":"Open Brain - Auth Tokens"}' 2>/dev/null | jq -r '.result.AUTH_TOKEN_OB_ADMIN // empty'
     ;;
   AUTH_TOKEN_READONLY)
     mcp2cli vaultwarden-secrets get_secret_fields --params '{"name":"Open Brain - Auth Tokens"}' 2>/dev/null | jq -r '.result.AUTH_TOKEN_READONLY // empty'

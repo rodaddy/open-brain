@@ -12,8 +12,8 @@ write.
 | `kevin` | person | `readonly` or scoped user role | Kevin as a human collaborator, not an agent lane. |
 | `bilby` | agent | `agent` | Hermes agent lane identity. |
 | `skippy` | agent | `agent` | Hermes agent lane identity. |
-| `openbrain-promoter` | service | `n8n` or `admin` | Approved Open Brain promotion service for shared truth writes. |
-| `hermes-promoter` | service | `n8n` or `admin` | Approved Hermes-side promotion service for shared truth writes. |
+| `openbrain-promoter` | service | `promoter` (or legacy `admin`/`ob-admin` clientId path) | Approved Open Brain promotion service for shared truth writes. |
+| `hermes-promoter` | service | `promoter` (or legacy `admin`/`ob-admin` clientId path) | Approved Hermes-side promotion service for shared truth writes. |
 
 Environment-safe per-user token names use underscores and are normalized to
 hyphenated identities. For example, `AUTH_TOKEN_USER_OPENBRAIN_PROMOTER` maps
@@ -32,7 +32,7 @@ when known, authenticated promoter identity, reason, confidence when available,
 and timestamp. The authoritative `promoted_by` value is derived from the bearer
 token identity, not caller-supplied request text.
 
-`X-Namespace` is delegation context for trusted `admin` and `n8n` callers. It is
+`X-Namespace` is delegation context for trusted `admin` and `ob-admin` callers. It is
 not shared-write authority by itself. A non-promoter `admin` token delegated with
 `X-Namespace: shared-kb` still cannot write shared truth.
 

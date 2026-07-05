@@ -11,7 +11,7 @@ export function registerArchiveEntry(server: McpServer, deps: ToolDeps): void {
     "archive_entry",
     {
       description:
-        "Soft-delete a brain entry by setting archived_at. Only admin and n8n roles can archive.",
+        "Soft-delete a brain entry by setting archived_at. Only admin and ob-admin roles can archive.",
       inputSchema: {
         table: z
           .enum([

@@ -136,7 +136,7 @@ memory = AgentMemory(
 
 Normal agent-role tokens derive namespace authority server-side from the token.
 `OpenBrainClient` therefore does not send `X-Namespace` by default. Trusted
-admin or n8n callers that intentionally need namespace delegation can opt in
+admin or ob-admin callers that intentionally need namespace delegation can opt in
 with `delegate_namespace=True`; doing so sends `X-Namespace` and requires a
 server role that is allowed to delegate.
 
@@ -254,7 +254,7 @@ behavior. Read them with three boundaries in mind:
 - **The server owns namespace authority.** Normal agent-role tokens derive the
   caller namespace server-side, so `OpenBrainClient` omits `X-Namespace` by
   default. `delegate_namespace=True` is an explicit privileged delegation mode
-  for roles such as admin or n8n that are allowed to send `X-Namespace`.
+  for roles such as admin or ob-admin that are allowed to send `X-Namespace`.
   Passing `namespace` inside a wrapper's arguments does not create or override
   delegation.
 
@@ -305,7 +305,7 @@ are for diagnostics and display only; they do not mutate live writes.
 Namespace authority belongs to the configured `OpenBrainClient` and the Open
 Brain service. `OpenBrainClient` does not send `X-Namespace` for normal agent
 clients; the server derives the namespace from the bearer token. When a trusted
-admin/n8n-style caller passes `delegate_namespace=True`, the client sends its
+admin/ob-admin-style caller passes `delegate_namespace=True`, the client sends its
 configured namespace through `X-Namespace`, and the server validates that
 delegation against the bearer token role. `AgentMemory` never accepts
 `namespace` as facade metadata. Nested user-owned structures such as decision
@@ -344,7 +344,7 @@ client = OpenBrainClient(
     token="...",
     namespace="bilby",
     agent_id="bilby",
-    role="n8n",
+    role="ob-admin",
 )
 dreams = DreamEngine(client)
 
@@ -357,7 +357,7 @@ for action in plan.actions:
 dream cycle in bulk. When `namespace` is supplied it only plans namespace
 promotion actions because tier recommendations are not namespace-scoped by the
 Open Brain tool contract. Namespace promotion planning calls `scan_namespace`,
-which requires an admin or n8n-capable Open Brain role.
+which requires an admin or ob-admin-capable Open Brain role.
 
 Mutation is opt-in at the wrapper level. `set_tier()` and `promote_entry()` only
 write to Open Brain when called directly with `dry_run=False`. There is no

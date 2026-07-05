@@ -309,7 +309,7 @@ export async function runLegacyPromoter(args: Args): Promise<Receipt> {
   };
 
   const auth: AuthInfo = {
-    role: "n8n",
+    role: "ob-admin",
     clientId: "openbrain-promoter",
     tokenClientId: "openbrain-promoter",
     namespaceSource: "token",

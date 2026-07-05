@@ -12,7 +12,7 @@ export function registerDemoteEntry(server: McpServer, deps: ToolDeps): void {
     {
       description:
         "Archive a previously promoted entry, reversing a promotion. " +
-        "Only works on entries that have promoted_from provenance metadata. Admin only.",
+        "Only works on entries that have promoted_from provenance metadata. Admin and ob-admin only.",
       inputSchema: {
         table: z.enum(["thoughts", "decisions", "relationships", "projects", "sessions"]).describe("Table name"),
         id: z.string().uuid().describe("UUID of the promoted entry to demote"),
@@ -26,9 +26,9 @@ export function registerDemoteEntry(server: McpServer, deps: ToolDeps): void {
     },
     async (args, extra) => {
       const auth = extra.authInfo as AuthInfo | undefined;
-      if (!auth || auth.role !== "admin") {
+      if (!auth || (auth.role !== "admin" && auth.role !== "ob-admin")) {
         return {
-          content: [{ type: "text" as const, text: "Permission denied: admin role required" }],
+          content: [{ type: "text" as const, text: "Permission denied: admin or ob-admin role required" }],
           isError: true,
         };
       }

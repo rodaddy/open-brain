@@ -9,13 +9,17 @@
 #   ./scripts/generate-tokens.sh --verify  # Verify all tokens are present
 #   ./scripts/generate-tokens.sh --rotate  # Generate new tokens (destructive)
 #
-# Roles: admin, agent, discord, n8n, readonly
-# Server expects: AUTH_TOKEN_ADMIN, AUTH_TOKEN_AGENT, AUTH_TOKEN_DISCORD, AUTH_TOKEN_N8N, AUTH_TOKEN_READONLY
+# Roles: admin, agent, discord, ob-admin, readonly
+# Server expects: AUTH_TOKEN_ADMIN, AUTH_TOKEN_AGENT, AUTH_TOKEN_DISCORD, AUTH_TOKEN_OB_ADMIN, AUTH_TOKEN_READONLY
+#
+# #168: the vaultwarden secret field "Open Brain - Auth Tokens" -> AUTH_TOKEN_N8N
+# must be renamed to AUTH_TOKEN_OB_ADMIN as a deploy-time step (see PR body).
+# This script reads the new field name; run it only after the vault field rename.
 
 set -euo pipefail
 
 VAULT_NAME="Open Brain - Auth Tokens"
-ROLES=("ADMIN" "AGENT" "DISCORD" "N8N" "READONLY")
+ROLES=("ADMIN" "AGENT" "DISCORD" "OB_ADMIN" "READONLY")
 
 fetch_tokens() {
   mcp2cli vaultwarden-secrets get_secret_fields \

@@ -75,13 +75,13 @@ PORT=3100
 AUTH_TOKEN_ADMIN=
 AUTH_TOKEN_AGENT=
 AUTH_TOKEN_DISCORD=
-AUTH_TOKEN_N8N=
+AUTH_TOKEN_OB_ADMIN=
 AUTH_TOKEN_PROMOTER=
 AUTH_TOKEN_READONLY=
 ```
 
-A helper script is also available for the standard admin, agent, discord, n8n,
-and readonly token set. Manage `AUTH_TOKEN_PROMOTER` explicitly until the
+A helper script is also available for the standard admin, agent, discord,
+ob-admin, and readonly token set. Manage `AUTH_TOKEN_PROMOTER` explicitly until the
 helper supports promoter rotation:
 
 ```bash
@@ -292,15 +292,17 @@ Each consumer gets a scoped Bearer token. Roles control which tables are readabl
 | `admin` | All tables | All tables | All tables |
 | `agent` | All tables | thoughts, decisions, relationships, sessions | — |
 | `discord` | — | thoughts | — |
-| `n8n` | All tables | All tables | All tables |
+| `ob-admin` | All tables | All tables | All tables |
 | `promoter` | Shared promotion scope | Curated shared-kb promotions | — |
 | `readonly` | All tables | — | — |
 
 Set tokens via `AUTH_TOKEN_ADMIN`, `AUTH_TOKEN_AGENT`, `AUTH_TOKEN_DISCORD`,
-`AUTH_TOKEN_N8N`, `AUTH_TOKEN_PROMOTER`, and `AUTH_TOKEN_READONLY` in your
+`AUTH_TOKEN_OB_ADMIN`, `AUTH_TOKEN_PROMOTER`, and `AUTH_TOKEN_READONLY` in your
 `.env`. You can also add custom per-user tokens with the `AUTH_TOKEN_USER_*`
 pattern. `promoter` is for controlled shared-kb promotion flows, not normal
-agent identity.
+agent identity. `ob-admin` is a break-glass, full-RWD server-side admin identity
+for human operators (manual promotions, deletions) -- it is not for n8n.io
+automations (it was renamed from the misnamed, unused `n8n` role in #168).
 
 ## Database Schema
 

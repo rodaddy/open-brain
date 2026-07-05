@@ -111,7 +111,7 @@ export function registerCurateEntries(server: McpServer, deps: ToolDeps): void {
 
       // For dry_run=false, require admin/delete permission
       if (!dryRun) {
-        const hasAdmin = auth.role === "admin" || auth.role === "n8n";
+        const hasAdmin = auth.role === "admin" || auth.role === "ob-admin";
         if (!hasAdmin) {
           return {
             content: [
