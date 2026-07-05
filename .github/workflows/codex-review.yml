@@ -160,7 +160,34 @@ jobs:
             echo
             cat codex-review.md
           } > codex-review-comment.md
-          gh pr comment "${{ steps.review-context.outputs.pr-number }}" --body-file codex-review-comment.md
+          ruby <<'RUBY'
+          text = File.read("codex-review-comment.md")
+          limit = 57_000
+          chunks = [String.new]
+
+          text.each_char do |char|
+            if chunks[-1].bytesize + char.bytesize > limit
+              chunks << String.new
+            end
+            chunks[-1] << char
+          end
+
+          chunks.each_with_index do |chunk, index|
+            body = if chunks.length == 1
+              chunk
+            else
+              "_Codex review comment #{index + 1}/#{chunks.length}_\n\n#{chunk}"
+            end
+            File.write("codex-review-comment-#{index + 1}.md", body)
+          end
+
+          File.write("codex-review-comment-count.txt", chunks.length.to_s)
+          RUBY
+
+          count="$(cat codex-review-comment-count.txt)"
+          for index in $(seq 1 "$count"); do
+            gh pr comment "${{ steps.review-context.outputs.pr-number }}" --body-file "codex-review-comment-${index}.md"
+          done
 
       - name: Fail on Codex review error
         if: steps.review-context.outputs.skip != 'true' && steps.codex-review.outputs.exit-code != '0'
