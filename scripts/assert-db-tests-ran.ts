@@ -13,7 +13,7 @@
  *   - each required suite is present,
  *   - it ran at least its expected number of testcases,
  *   - none of its testcases were skipped,
- *   - none of its testcases failed.
+ *   - none of its testcases failed or errored.
  *
  * Usage:
  *   bun test --reporter=junit --reporter-outfile=junit.xml
@@ -25,25 +25,33 @@ import { readFileSync } from "node:fs";
 // Required live-Postgres suites and the minimum executed testcase count each
 // must contribute. Counts are lower bounds: adding tests must not require
 // touching this guard, but deleting/skipping them will trip it.
-const REQUIRED_SUITES: ReadonlyArray<{ name: string; minTests: number }> = [
-  { name: "lane_upsert (live Postgres)", minTests: 2 },
-  { name: "promote_shared (live Postgres)", minTests: 1 },
-  { name: "tier_lane (live Postgres)", minTests: 2 },
-  {
-    name: "append_session_event create_if_missing (live Postgres)",
-    minTests: 4,
-  },
-  { name: "runSharedPromoter cursor-stall fix (live Postgres)", minTests: 8 },
-];
+export const REQUIRED_SUITES: ReadonlyArray<{ name: string; minTests: number }> =
+  [
+    { name: "lane_upsert (live Postgres)", minTests: 2 },
+    { name: "promote_shared (live Postgres)", minTests: 1 },
+    { name: "tier_lane (live Postgres)", minTests: 2 },
+    {
+      name: "append_session_event create_if_missing (live Postgres)",
+      minTests: 4,
+    },
+    { name: "runSharedPromoter cursor-stall fix (live Postgres)", minTests: 8 },
+  ];
 
 // Absolute floor on total executed (non-skipped) live-Postgres testcases,
 // independent of the per-suite breakdown above.
-const MIN_TOTAL_LIVE_TESTCASES = 17;
+export const MIN_TOTAL_LIVE_TESTCASES = 17;
 
-interface SuiteStats {
+export interface SuiteStats {
   tests: number;
   failures: number;
+  errors: number;
   skipped: number;
+}
+
+export interface GuardResult {
+  errors: string[];
+  executedLiveTestcases: number;
+  suiteStats: Map<string, SuiteStats>;
 }
 
 function attr(tag: string, name: string): string | undefined {
@@ -51,41 +59,32 @@ function attr(tag: string, name: string): string | undefined {
   return m ? m[1] : undefined;
 }
 
-function main(): void {
-  const path = process.argv[2];
-  if (!path) {
-    console.error("usage: assert-db-tests-ran.ts <junit.xml>");
-    process.exit(2);
-  }
-
-  let xml: string;
-  try {
-    xml = readFileSync(path, "utf8");
-  } catch (err) {
-    console.error(
-      `anti-skip guard: could not read JUnit report at ${path}: ` +
-        (err instanceof Error ? err.message : String(err)),
-    );
-    process.exit(2);
-  }
-
+export function evaluateJunit(xml: string): GuardResult {
   // Collect per-suite stats from <testsuite ...> opening tags.
   const suiteStats = new Map<string, SuiteStats>();
   for (const tag of xml.match(/<testsuite\b[^>]*>/g) ?? []) {
     const name = attr(tag, "name");
     if (!name || !name.includes("(live Postgres)")) continue;
-    const prev = suiteStats.get(name) ?? { tests: 0, failures: 0, skipped: 0 };
+    const prev = suiteStats.get(name) ?? {
+      tests: 0,
+      failures: 0,
+      errors: 0,
+      skipped: 0,
+    };
     suiteStats.set(name, {
       tests: prev.tests + Number(attr(tag, "tests") ?? "0"),
       failures: prev.failures + Number(attr(tag, "failures") ?? "0"),
+      errors: prev.errors + Number(attr(tag, "errors") ?? "0"),
       skipped: prev.skipped + Number(attr(tag, "skipped") ?? "0"),
     });
   }
 
-  // Count executed (non-skipped) live-Postgres testcases directly, as an
-  // independent cross-check on the suite-level attributes. A skipped testcase
-  // carries a <skipped .../> child or a skipped="true" attribute.
+  // Inspect individual live-Postgres <testcase> blocks as an independent
+  // cross-check on the suite-level attributes. A skipped testcase carries a
+  // <skipped .../> child or skipped="true"; an errored one carries an
+  // <error .../> child.
   let executedLiveTestcases = 0;
+  let erroredLiveTestcases = 0;
   const testcaseRe = /<testcase\b[^>]*?(\/>|>[\s\S]*?<\/testcase>)/g;
   for (const block of xml.match(testcaseRe) ?? []) {
     const open = block.match(/<testcase\b[^>]*>/)?.[0] ?? block;
@@ -93,7 +92,9 @@ function main(): void {
     if (!classname.includes("(live Postgres)")) continue;
     const isSkipped =
       /<skipped\b/.test(block) || attr(open, "skipped") === "true";
-    if (!isSkipped) executedLiveTestcases += 1;
+    if (isSkipped) continue;
+    executedLiveTestcases += 1;
+    if (/<error\b/.test(block)) erroredLiveTestcases += 1;
   }
 
   const errors: string[] = [];
@@ -117,12 +118,22 @@ function main(): void {
     if (s.failures > 0) {
       errors.push(`FAILURES in "${req.name}": failures=${s.failures}.`);
     }
+    if (s.errors > 0) {
+      errors.push(`ERRORS in "${req.name}": errors=${s.errors}.`);
+    }
     if (s.tests < req.minTests) {
       errors.push(
         `"${req.name}" ran ${s.tests} tests, expected at least ` +
           `${req.minTests}.`,
       );
     }
+  }
+
+  if (erroredLiveTestcases > 0) {
+    errors.push(
+      `${erroredLiveTestcases} live-Postgres testcase(s) carry an <error> ` +
+        `element — errored tests are failures, not coverage.`,
+    );
   }
 
   if (executedLiveTestcases < MIN_TOTAL_LIVE_TESTCASES) {
@@ -133,9 +144,32 @@ function main(): void {
     );
   }
 
-  if (errors.length > 0) {
+  return { errors, executedLiveTestcases, suiteStats };
+}
+
+function main(): void {
+  const path = process.argv[2];
+  if (!path) {
+    console.error("usage: assert-db-tests-ran.ts <junit.xml>");
+    process.exit(2);
+  }
+
+  let xml: string;
+  try {
+    xml = readFileSync(path, "utf8");
+  } catch (err) {
+    console.error(
+      `anti-skip guard: could not read JUnit report at ${path}: ` +
+        (err instanceof Error ? err.message : String(err)),
+    );
+    process.exit(2);
+  }
+
+  const result = evaluateJunit(xml);
+
+  if (result.errors.length > 0) {
     console.error("anti-skip guard FAILED (issue #165):");
-    for (const e of errors) console.error(`  - ${e}`);
+    for (const e of result.errors) console.error(`  - ${e}`);
     console.error(
       "\nThe DB-backed integration tests must RUN against a real pgvector " +
         "Postgres in CI. A silent skip is a coverage regression, not a pass.",
@@ -144,14 +178,16 @@ function main(): void {
   }
 
   console.log(
-    `anti-skip guard PASSED: ${executedLiveTestcases} live-Postgres ` +
+    `anti-skip guard PASSED: ${result.executedLiveTestcases} live-Postgres ` +
       `testcases executed across ${REQUIRED_SUITES.length} required suites ` +
-      `(0 skipped, 0 failed).`,
+      `(0 skipped, 0 failed, 0 errored).`,
   );
   for (const req of REQUIRED_SUITES) {
-    const s = suiteStats.get(req.name)!;
+    const s = result.suiteStats.get(req.name)!;
     console.log(`  - ${req.name}: ${s.tests} tests`);
   }
 }
 
-main();
+if (import.meta.main) {
+  main();
+}

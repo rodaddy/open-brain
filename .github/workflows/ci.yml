@@ -13,6 +13,10 @@ env:
 jobs:
   check:
     runs-on: [self-hosted, Linux, rodaddy]
+    # Self-hosted runner: never execute untrusted fork code. Run on all pushes
+    # and on same-repo PRs only; fork PRs skip (a maintainer re-pushes the
+    # branch to this repo to test).
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     env:
       DB_HOST: localhost
       DB_PORT: 5432
@@ -58,9 +62,19 @@ jobs:
   # Docker, which the macOS/core01 production runner must not run.
   db-integration:
     runs-on: [self-hosted, Linux, rodaddy]
+    # Docker-capable self-hosted runner: never execute untrusted fork code.
+    # Run on all pushes and on same-repo PRs only; fork PRs skip (a maintainer
+    # re-pushes the branch to this repo to test). `push` keeps this job alive
+    # on main so `deploy` (which needs it) still runs.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     services:
       postgres:
-        image: pgvector/pgvector:pg18
+        # Digest-pinned: this job gates deploy, so a mutable tag must not be
+        # able to change under us. Digest below is pgvector/pgvector:pg18
+        # (multi-arch index) as of 2026-07-05. To bump: run
+        #   docker buildx imagetools inspect pgvector/pgvector:pg18
+        # and replace the sha256 with the new index digest.
+        image: pgvector/pgvector:pg18@sha256:212765b63c1462883de295c4c415edcd22191b8d8d46853e86ad05d4b577a4cb
         env:
           POSTGRES_USER: ci
           # Throwaway, CI-only credential for an ephemeral container that is
@@ -153,6 +167,8 @@ jobs:
 
   python-package:
     runs-on: [self-hosted, Linux, rodaddy]
+    # Self-hosted runner: same trusted-source gate as `check`/`db-integration`.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     defaults:
       run:
         working-directory: python/openbrain-memory
