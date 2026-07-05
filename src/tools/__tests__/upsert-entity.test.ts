@@ -313,7 +313,7 @@ describe("upsert_entity", () => {
     }
   });
 
-  // ── AGENT / N8N ROLES ──
+  // ── AGENT / OB_ADMIN ROLES ──
 
   it("allows agent role", async () => {
     const mockPool = createUpsertPool();
@@ -334,9 +334,9 @@ describe("upsert_entity", () => {
     }
   });
 
-  it("allows n8n role", async () => {
+  it("allows ob-admin role", async () => {
     const mockPool = createUpsertPool();
-    const auth: AuthInfo = { role: "n8n", clientId: "n8n-worker" };
+    const auth: AuthInfo = { role: "ob-admin", clientId: "ob-admin-worker" };
     const { client, cleanup } = await setupToolClient(mockPool, auth);
 
     try {

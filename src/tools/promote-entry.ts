@@ -40,14 +40,14 @@ export function registerPromoteEntry(server: McpServer, deps: ToolDeps): void {
       if (
         !auth ||
         (auth.role !== "admin" &&
-          auth.role !== "n8n" &&
+          auth.role !== "ob-admin" &&
           auth.role !== "promoter")
       ) {
         return {
           content: [
             {
               type: "text" as const,
-              text: "Permission denied: admin, n8n, or promoter role required",
+              text: "Permission denied: admin, ob-admin, or promoter role required",
             },
           ],
           isError: true,

@@ -58,11 +58,11 @@ export function createPromotionRouter(deps: RestDeps): Router {
     if (
       !auth ||
       (auth.role !== "admin" &&
-        auth.role !== "n8n" &&
+        auth.role !== "ob-admin" &&
         auth.role !== "promoter")
     ) {
       res.status(403).json({
-        error: "Permission denied: admin, n8n, or promoter role required",
+        error: "Permission denied: admin, ob-admin, or promoter role required",
       });
       return;
     }
@@ -155,11 +155,11 @@ export function createPromotionRouter(deps: RestDeps): Router {
     if (
       !auth ||
       (auth.role !== "admin" &&
-        auth.role !== "n8n" &&
+        auth.role !== "ob-admin" &&
         auth.role !== "promoter")
     ) {
       res.status(403).json({
-        error: "Permission denied: admin, n8n, or promoter role required",
+        error: "Permission denied: admin, ob-admin, or promoter role required",
       });
       return;
     }

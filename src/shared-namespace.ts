@@ -102,5 +102,5 @@ export function shouldRejectLegacySharedWrite(
   const config = sharedNamespaceConfig();
   if (config.allowLegacySharedWrites) return false;
   if (targetNamespace !== config.legacySharedNamespace) return false;
-  return auth.role !== "admin" && auth.role !== "n8n";
+  return auth.role !== "admin" && auth.role !== "ob-admin";
 }
