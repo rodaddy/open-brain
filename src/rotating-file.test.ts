@@ -22,7 +22,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  rmSync(dir, { recursive: true, force: true });
+  if (dir) rmSync(dir, { recursive: true, force: true });
 });
 
 function rotatedFiles(basePath: string): string[] {
@@ -170,9 +170,9 @@ describe("createRotatingFileSink", () => {
     sink.write(huge);
     sink.write("small-after");
 
-    // The oversized line rotated the small line out, landing alone, and the
-    // trailing small line rotated again — so no file mixes the huge line with
-    // unrelated bulk. The active file stays small.
+    // The oversized line rotated the small line out, landed alone, and was
+    // rotated out again immediately (post-write rotation) — so no file mixes
+    // the huge line with unrelated bulk. The active file stays small.
     expect(statSync(path).size).toBeLessThanOrEqual(maxBytes + 64);
     // The huge line is still recoverable somewhere.
     const base = "app.log";
@@ -182,5 +182,30 @@ describe("createRotatingFileSink", () => {
       if (readFileSync(join(dir, name), "utf8").includes(huge)) found = true;
     }
     expect(found).toBe(true);
+  });
+
+  test("an oversized very first write does not linger as the active file", () => {
+    const path = join(dir, "app.log");
+    const maxBytes = 1024;
+    const sink = createRotatingFileSink({ path, maxBytes, maxFiles: 3 });
+
+    // First-ever write is far over the cap (regression: pre-write-only
+    // rotation skipped this because size was 0, leaving a huge active file
+    // until the next write, which may never come).
+    const huge = "F".repeat(20 * 1024); // 20x the cap
+    sink.write(huge);
+
+    // Immediately after the write — no follow-up write — the active file must
+    // not hold the oversized payload.
+    const activeSize = existsSync(path) ? statSync(path).size : 0;
+    expect(activeSize).toBeLessThanOrEqual(maxBytes);
+
+    // The oversized content was rotated aside, not lost.
+    expect(readFileSync(`${path}.1`, "utf8")).toContain(huge);
+
+    // Subsequent normal writes land in a fresh, capped active file.
+    sink.write("follow-up-line");
+    expect(readFileSync(path, "utf8")).toContain("follow-up-line");
+    expect(statSync(path).size).toBeLessThanOrEqual(maxBytes);
   });
 });

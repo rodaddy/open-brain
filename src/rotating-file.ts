@@ -127,8 +127,8 @@ export function createRotatingFileSink(
     const payload = line.endsWith("\n") ? line : `${line}\n`;
     const bytes = Buffer.byteLength(payload, "utf8");
 
-    // Rotate before writing when this line would push us over the cap. A single
-    // oversized line still lands in a fresh file (bounded to that one line).
+    // Rotate before writing when this line would push us over the cap, so a
+    // normal write never mixes into an already-full file.
     if (size > 0 && size + bytes > maxBytes) {
       rotate(path, maxFiles);
       size = 0;
@@ -141,6 +141,16 @@ export function createRotatingFileSink(
       // Re-sync from disk in case another process rotated underneath us; the
       // next write retries. Never throw.
       size = currentSize(path);
+    }
+
+    // Rotate immediately after any write that leaves the active file over the
+    // cap (e.g. a single oversized line as the very first write), so the
+    // active file never sits above maxBytes waiting for the next write. The
+    // oversized content is bounded to that one rotated file and pruned like
+    // any other rotation.
+    if (size > maxBytes) {
+      rotate(path, maxFiles);
+      size = 0;
     }
   }
 

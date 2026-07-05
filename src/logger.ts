@@ -22,9 +22,28 @@ const MIN_LEVEL = resolveLevel();
  *   LOG_MAX_BYTES  rotate threshold in bytes (default 1_000_000 = 1MB)
  *   LOG_MAX_FILES  rotated files retained beyond the active file (default 3)
  *
- * Under multiple workers, give each worker a distinct LOG_FILE (e.g. include
- * OPEN_BRAIN_WORKER_NAME in the path) so rotation is single-writer safe.
+ * Rotation is only single-writer safe, so when OPEN_BRAIN_WORKER_NAME is set
+ * (the two-worker launcher sets a distinct name per child) the effective path
+ * is derived per worker automatically: `open-brain.log` becomes
+ * `open-brain.<worker-name>.log`. Two workers inheriting the same configured
+ * LOG_FILE therefore never share an active file or rotation chain.
  */
+export function deriveWorkerLogPath(
+  path: string,
+  workerName: string | undefined,
+): string {
+  const worker = workerName?.trim();
+  if (!worker) return path;
+  // Sanitize so the worker name can only alter the filename, never the dir.
+  const safe = worker.replace(/[^A-Za-z0-9._-]/g, "_");
+  const slash = path.lastIndexOf("/");
+  const dir = slash === -1 ? "" : path.slice(0, slash + 1);
+  const file = slash === -1 ? path : path.slice(slash + 1);
+  const dot = file.lastIndexOf(".");
+  if (dot <= 0) return `${dir}${file}.${safe}`;
+  return `${dir}${file.slice(0, dot)}.${safe}${file.slice(dot)}`;
+}
+
 function resolvePositiveInt(
   raw: string | undefined,
   fallback: number,
@@ -36,8 +55,12 @@ function resolvePositiveInt(
 }
 
 function resolveFileSink(): RotatingFileSink | undefined {
-  const path = process.env.LOG_FILE?.trim();
-  if (!path) return undefined;
+  const configured = process.env.LOG_FILE?.trim();
+  if (!configured) return undefined;
+  const path = deriveWorkerLogPath(
+    configured,
+    process.env.OPEN_BRAIN_WORKER_NAME,
+  );
   return createRotatingFileSink({
     path,
     maxBytes: resolvePositiveInt(process.env.LOG_MAX_BYTES, 1_000_000),
