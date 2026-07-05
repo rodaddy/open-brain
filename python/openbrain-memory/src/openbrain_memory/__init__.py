@@ -9,6 +9,7 @@ from .agent import (
 from .client import (
     CURRENT_CONTRACT_VERSION,
     CURRENT_TOOL_HELP,
+    PACKAGE_VERSION,
     REQUIRED_CONTRACT_TOOLS,
     OpenBrainClient,
     OpenBrainError,
@@ -49,6 +50,7 @@ __all__ = [
     "OpenBrainHTTPError",
     "OpenBrainProtocolError",
     "OpenBrainToolError",
+    "PACKAGE_VERSION",
     "CURRENT_CONTRACT_VERSION",
     "CURRENT_TOOL_HELP",
     "REQUIRED_CONTRACT_TOOLS",

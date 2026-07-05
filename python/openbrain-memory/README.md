@@ -233,6 +233,64 @@ facts = client.list_repo_facts(repo="rodaddy/open-brain", limit=10)
 client.upsert_repo_fact(metadata={...})
 ```
 
+### Stable Public API
+
+Downstream runtimes should import from the package root, not from private module
+paths. The supported public surface is:
+
+- `OpenBrainClient` and Open Brain errors.
+- `AgentMemory` facade types.
+- `JsonlSpool`, `SpoolRecord`, `SpoolStatus`, and `replay_records`.
+- `RetryPolicy` and `RetryExhaustedError`.
+- `redact_text()` and `redact_value()`.
+- `validate_required_memory_contract()` and `validate_contract_manifest()`.
+- `contract_field_to_json_schema()`, `contract_input_to_json_schema()`,
+  `tool_contract_to_input_schema()`, and `tool_contracts_to_tool_schemas()`.
+- `CURRENT_CONTRACT_VERSION`, `REQUIRED_CONTRACT_TOOLS`, `CURRENT_TOOL_HELP`, and
+  `PACKAGE_VERSION`.
+
+The wheel includes a `py.typed` marker so typed consumers can rely on the
+package's inline annotations.
+
+### Versioning and Contract Pinning
+
+`PACKAGE_VERSION` follows SemVer for the Python package API and installable
+artifact. While the package remains `0.x`, downstream production hosts should
+pin exact versions or reviewed wheel files because minor releases may still
+carry breaking API changes.
+
+`CURRENT_CONTRACT_VERSION` is separate. It identifies the Open Brain service
+tool contract snapshot expected by this package. The connected endpoint's
+`get_contract()` response is authoritative at runtime; consumers should validate
+that manifest with `validate_required_memory_contract()` before enabling
+required-memory mode. Pinning `openbrain-memory==<version>` is not a substitute
+for checking the live `contract_version`, `contract_scope`, `schema_hash`,
+minimum client ranges, and required tool names.
+
+### Canonical Redaction Policy
+
+`redact_text()` and `redact_value()` are the canonical client-side diagnostic
+redaction implementation for Open Brain consumers. Agent runtimes should import
+these helpers instead of maintaining a forked regular-expression list. The
+helpers are intentionally for logs, errors, display, and spooled diagnostic
+views; they do not mutate successful live writes.
+
+Heuristic-only shapes, such as bare three-segment opaque tokens and unlabeled
+base64-style blobs containing `+` or `=`, are display-redacted but are not
+fail-closed write rejections. Pure alphanumeric/base62 unlabeled blobs are left
+visible so benign identifiers, content hashes, and git SHAs are not silently
+destroyed; use context labels such as `access_token=` or `client_secret=` when a
+write path must reject a value.
+Unlabeled 40+ character base64 cursors, hashes, or request tokens that contain
+`+` or `=` may be over-scrubbed in diagnostics; label or truncate benign values
+before logging when operators need to inspect them.
+
+The redaction policy should grow here first and downstream forks should retire
+toward this implementation. If a consuming runtime needs a new secret shape, add
+it here with regression tests that prove both the secret is scrubbed and benign
+identifiers, such as git SHAs, file paths, branch names, URL paths, and
+environment variable names, remain visible.
+
 ### Authority boundaries
 
 These wrappers describe the *expected* contract; they are not proof of live

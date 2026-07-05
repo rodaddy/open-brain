@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import json
 import re
+import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass
+from importlib.metadata import PackageNotFoundError, version
 from itertools import count
+from pathlib import Path
 from typing import Any, Protocol, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlparse
@@ -15,6 +18,29 @@ from .policy import RetryPolicy, redact_text, with_retry
 JSON = dict[str, Any]
 MCP_PROTOCOL_VERSION = "2025-03-26"
 DEFAULT_MAX_RESPONSE_BYTES = 1_000_000
+
+
+def _resolve_package_version(pyproject: Path | None = None) -> str:
+    try:
+        return version("openbrain-memory")
+    except PackageNotFoundError:
+        source_pyproject = (
+            pyproject or Path(__file__).resolve().parents[2] / "pyproject.toml"
+        )
+        try:
+            parsed = tomllib.loads(source_pyproject.read_text(encoding="utf-8"))
+        except (OSError, tomllib.TOMLDecodeError):
+            return "0.0.0+unknown"
+        project = parsed.get("project")
+        if not isinstance(project, dict):
+            return "0.0.0+unknown"
+        source_version = project.get("version")
+        if not isinstance(source_version, str) or not source_version:
+            return "0.0.0+unknown"
+        return source_version
+
+
+PACKAGE_VERSION = _resolve_package_version()
 CURRENT_CONTRACT_VERSION = "2026-06-28.memory-tools.v11"
 REQUIRED_CONTRACT_TOOLS = (
     "append_session_event",
@@ -542,7 +568,7 @@ class OpenBrainClient:
             "params": {
                 "protocolVersion": MCP_PROTOCOL_VERSION,
                 "capabilities": {},
-                "clientInfo": {"name": "openbrain-memory", "version": "0.1.0"},
+                "clientInfo": {"name": "openbrain-memory", "version": PACKAGE_VERSION},
             },
         }
         response = self.transport.post(
