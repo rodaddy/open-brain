@@ -55,6 +55,31 @@ LABELED_LONG_SECRET_RE = (
     r"(?i)(client[_-]?secret|access[_-]?token|refresh[_-]?token|private[_-]?key)"
     r"\s*[:=]\s*[A-Za-z0-9._/+=-]{20,}"
 )
+# Superset-parity detectors ported from the rtech-hermes fork (#92) so this
+# package is a true SUPERSET of that fork's redaction and the fork can retire.
+# These catch UNLABELED high-entropy material that the labeled detectors above
+# miss (opaque bearer-less tokens, raw base64 secret bodies, session ids pasted
+# without a `key=` prefix).
+#
+# Bare 3-segment dotted token `x.y.z` -- the non-`eyJ` sibling of JWT_LIKE_RE.
+# JWTs are already caught by JWT_LIKE_RE; this covers opaque `token.a.sig`
+# shapes with no `eyJ` header.
+BARE_THREE_SEGMENT_TOKEN_RE = (
+    r"\b[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{20,}\b"
+)
+# Unlabeled 40+ char high-entropy blob that CONTAINS at least one of `- _ + / =`.
+# ANTI-SHA GUARD: the `(?=.*[+/=_-])` lookahead is load-bearing -- it requires a
+# symbol so a benign 40-hex git SHA / content hash (which is pure `[0-9a-f]`,
+# no symbol) is NOT redacted. This is exactly why the package originally
+# narrowed to LABELED_LONG_SECRET_RE; the symbol requirement restores the fork's
+# catch-all coverage without reintroducing SHA over-redaction. The negative
+# lookbehind/lookahead pin the run to a full token boundary.
+UNLABELED_HIGH_ENTROPY_BLOB_RE = (
+    r"(?<![A-Za-z0-9+/=_-])"
+    r"(?=[A-Za-z0-9+/=_-]{40,}(?![A-Za-z0-9+/=_-]))"
+    r"(?=.*[+/=_-])"
+    r"[A-Za-z0-9+/=_-]+"
+)
 
 SECRET_PATTERNS = [
     re.compile(r"(?i)authorization\s*[:=]\s*bearer\s+[^\s,;]+"),
@@ -76,6 +101,25 @@ SECRET_PATTERNS = [
     re.compile(URL_USERINFO_CRED_RE),
     re.compile(LABELED_LONG_SECRET_RE),
 ]
+# Heuristic catch-all detectors ported from the rtech-hermes fork (#92) to make
+# redaction a true SUPERSET of that fork. They are DELIBERATELY kept OUT of
+# ``SECRET_PATTERNS`` above because ``SECRET_PATTERNS`` also drives the
+# fail-closed receipt reject gate (``agent._reject_secret_payload``). These two
+# patterns are aggressive by design (any 40+ high-entropy run with a symbol; any
+# bare dotted 3-segment token) and WILL match benign material such as a 40+ char
+# slash/dash/underscore file path (e.g. ``python/openbrain-memory/tests/...``).
+# That aggressiveness is correct for cosmetic redaction of displayed recall
+# text (redact-if-in-doubt) but wrong for a fail-closed availability gate, where
+# it would reject legitimate receipts. So ``redact_text`` applies BOTH lists;
+# the reject gate keeps using only the high-confidence ``SECRET_PATTERNS``. The
+# fork itself only ever used these for redaction, so this preserves fork parity
+# where it matters (redaction) without importing false rejections.
+HEURISTIC_REDACTION_PATTERNS = [
+    re.compile(BARE_THREE_SEGMENT_TOKEN_RE),
+    re.compile(UNLABELED_HIGH_ENTROPY_BLOB_RE),
+]
+# All patterns applied by ``redact_text`` (high-confidence + heuristic catch-all).
+REDACTION_PATTERNS = SECRET_PATTERNS + HEURISTIC_REDACTION_PATTERNS
 SENSITIVE_KEY_RE = re.compile(
     r"(?i)(token|secret|password|api[_-]?key|credential|authorization|session[_-]?id)"
 )
@@ -109,7 +153,7 @@ def idempotency_key() -> str:
 
 def redact_text(text: str) -> str:
     redacted = text
-    for pattern in SECRET_PATTERNS:
+    for pattern in REDACTION_PATTERNS:
         redacted = pattern.sub("[REDACTED]", redacted)
     return redacted
 

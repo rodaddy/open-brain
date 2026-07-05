@@ -212,6 +212,81 @@ def test_redaction_keeps_benign_40_character_hex_ids_visible():
     assert "[REDACTED]" not in redacted
 
 
+def test_redaction_scrubs_bare_three_segment_non_jwt_token():
+    # Non-`eyJ` opaque `token.a.sig` shape (#92 superset parity with the
+    # rtech-hermes fork). JWTs are already covered; this is the bare sibling.
+    token = token_sample(
+        "AbCdEfGhIjKlMnOpQrStUv",  # 20+ head
+        ".abcdef",  # 6+ middle
+        ".WxYzWxYzWxYzWxYzWxYzWx",  # 20+ tail
+    )
+
+    redacted = redact_text(f"opaque token {token}")
+
+    assert token not in redacted
+    assert "[REDACTED]" in redacted
+
+
+def test_redaction_scrubs_unlabeled_high_entropy_blob_with_dash():
+    blob = token_sample("a" * 20, "-", "b" * 25)
+
+    redacted = redact_text(f"opaque {blob}")
+
+    assert blob not in redacted
+    assert "[REDACTED]" in redacted
+
+
+def test_redaction_scrubs_unlabeled_high_entropy_blob_with_underscore():
+    blob = token_sample("a" * 20, "_", "b" * 25)
+
+    redacted = redact_text(f"opaque {blob}")
+
+    assert blob not in redacted
+    assert "[REDACTED]" in redacted
+
+
+def test_redaction_scrubs_unlabeled_high_entropy_blob_with_base64_symbols():
+    blob = token_sample("a" * 20, "+/=", "b" * 25)
+
+    redacted = redact_text(f"opaque {blob}")
+
+    assert blob not in redacted
+    assert "[REDACTED]" in redacted
+
+
+def test_redaction_keeps_benign_64_character_git_sha_visible():
+    # ANTI-SHA GUARD regression: a full-length content hash / git object SHA is
+    # pure hex (no `- _ + / =` symbol), so the unlabeled high-entropy detector
+    # must leave it in the clear even though it is well over 40 chars.
+    sha = token_sample(
+        "68be7d3fa4",
+        "6ec75266ea",
+        "f407a4ed91",
+        "1ac046588e",
+        "a1148136a3",
+        "2a516aca79",
+        "6120",
+    )
+    assert len(sha) == 64
+
+    redacted = redact_text(f"schema_hash {sha}")
+
+    assert sha in redacted
+    assert "[REDACTED]" not in redacted
+
+
+def test_redaction_keeps_benign_40_character_hex_sha_visible():
+    # 40-char short git SHA -- exactly the length of the high-entropy blob
+    # trigger but with no symbol, so the anti-SHA guard keeps it visible.
+    sha = token_sample("0123456789", "abcdef0123", "456789abcd", "ef01234567")
+    assert len(sha) == 40
+
+    redacted = redact_text(f"commit {sha}")
+
+    assert sha in redacted
+    assert "[REDACTED]" not in redacted
+
+
 def test_redact_value_recurses_sensitive_keys():
     value = {
         "nested": {
