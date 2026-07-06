@@ -12,6 +12,9 @@ describe("Open Brain contract manifest", () => {
     expect(contract.contract_version).toContain("memory-tools");
     expect(contract.contract_scope).toBe("required_openbrain_memory_contract");
     expect(contract.schema_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(contract.schema_hash).toBe(
+      "ad89a4d253ec224bce1175cd0045b6da54de6837c3e4081304e25a5af9147873",
+    );
     expect(contract.min_client_versions.mcp2cli).toBe("0.3.6");
     expect(contract.transport.namespace_boundary).toBe("authorization");
     expect(contract.realtime_transport.nats_jetstream).toMatchObject({
@@ -289,7 +292,7 @@ describe("Open Brain contract manifest", () => {
     // contract so a future TS/Python divergence fails here, in lockstep with
     // python/openbrain-memory CURRENT_CONTRACT_VERSION.
     const contract = buildContract("2026-06-18T00:00:00.000Z");
-    expect(contract.contract_version).toBe("2026-07-06.memory-tools.v15");
+    expect(contract.contract_version).toBe("2026-07-06.memory-tools.v14");
 
     const appendEvent = contract.tool_contracts.append_session_event;
     expect(appendEvent).toBeDefined();
@@ -344,6 +347,36 @@ describe("Open Brain contract manifest", () => {
 
     expect(first.generated_at).not.toBe(second.generated_at);
     expect(first.schema_hash).toBe(second.schema_hash);
+  });
+
+  it("keeps planned realtime metadata outside the required schema hash", () => {
+    const base = buildContract("2026-06-18T00:00:00.000Z");
+    const changedPayload: ContractPayload = {
+      service: base.service,
+      contract_version: base.contract_version,
+      contract_scope: base.contract_scope,
+      schema_version: base.schema_version,
+      min_client_versions: base.min_client_versions,
+      compatible_client_ranges: base.compatible_client_ranges,
+      transport: base.transport,
+      realtime_transport: {
+        nats_jetstream: {
+          ...base.realtime_transport.nats_jetstream,
+          request_reply_subjects: [
+            ...base.realtime_transport.nats_jetstream.request_reply_subjects,
+            "ob.memory.experimental",
+          ] as unknown as typeof base.realtime_transport.nats_jetstream.request_reply_subjects,
+        },
+      },
+      interchange_profiles: base.interchange_profiles,
+      agent_memory_adapter: base.agent_memory_adapter,
+      agent_context_pack: base.agent_context_pack,
+      receipt_contract: base.receipt_contract,
+      capabilities: base.capabilities,
+      tool_contracts: base.tool_contracts,
+    };
+
+    expect(contractHash(changedPayload)).toBe(base.schema_hash);
   });
 
   it("changes the schema hash when public capabilities change", () => {

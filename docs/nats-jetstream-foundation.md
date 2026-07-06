@@ -71,22 +71,28 @@ jetstream {
   domain: open-brain
 }
 
-# Credentials are release-time material. Do not commit them here.
+# Credentials and exact permissions are release-time material. Do not commit
+# them here. This skeleton is illustrative only; the release branch must replace
+# it with the deployed nats-server version's least-privilege response model.
 authorization {
   users: [
     {
       user: "$OPENBRAIN_NATS_BRIDGE_USER"
       password: "$OPENBRAIN_NATS_BRIDGE_PASSWORD"
       permissions: {
-        # Bridge responder: receives memory requests, publishes only health,
-        # request replies, and minimized audit/trace metadata. It must not be
-        # reused by direct clients.
+        # Bridge responder: receives memory requests, publishes health, request
+        # replies, and minimized audit/trace metadata only. It must not be
+        # reused by direct clients. Release config must prefer NATS
+        # allow_responses or the deployed server's equivalent response-only
+        # permission instead of broad _INBOX.> publish access.
         subscribe: [
           "ob.memory.>",
           "ob.health"
         ]
         publish: [
-          "_INBOX.>",
+          # Placeholder for response-only reply subjects. Do not ship a blanket
+          # _INBOX.> grant unless the release review explicitly proves no safer
+          # response permission is available in the deployed NATS version.
           "ob.health",
           "ob.trace.>",
           "ob.context_pack.requests.>",
@@ -100,8 +106,9 @@ authorization {
 ```
 
 Release implementation must use `vaultwarden-secrets` or another approved
-secret path for credentials. Do not put bearer tokens or NATS passwords in git,
-PR bodies, logs, JetStream payloads, or stream metadata.
+secret path for credentials and must show the final permissions in the release
+PR. Do not put bearer tokens or NATS passwords in git, PR bodies, logs,
+JetStream payloads, or stream metadata.
 
 Direct client credentials are intentionally omitted from this foundation
 skeleton. If a later release allows direct NATS clients, it must add a separate

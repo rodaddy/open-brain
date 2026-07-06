@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { TOOL_CONTRACTS } from "./contract-schemas.ts";
 
-export const CONTRACT_VERSION = "2026-07-06.memory-tools.v15";
+export const CONTRACT_VERSION = "2026-07-06.memory-tools.v14";
 export const CONTRACT_SCHEMA_VERSION = 1;
 
 export interface ContractCapability {
@@ -341,10 +341,20 @@ export function stableJson(value: unknown): string {
   return JSON.stringify(sortValue(value));
 }
 
+function requiredContractHashPayload(
+  payload: Omit<OpenBrainContract, "generated_at" | "schema_hash">,
+): Omit<OpenBrainContract, "generated_at" | "schema_hash" | "realtime_transport"> {
+  const { realtime_transport: _advisoryRealtimeTransport, ...requiredPayload } =
+    payload;
+  return requiredPayload;
+}
+
 export function contractHash(
   payload: Omit<OpenBrainContract, "generated_at" | "schema_hash">,
 ): string {
-  return createHash("sha256").update(stableJson(payload)).digest("hex");
+  return createHash("sha256")
+    .update(stableJson(requiredContractHashPayload(payload)))
+    .digest("hex");
 }
 
 export function buildContract(

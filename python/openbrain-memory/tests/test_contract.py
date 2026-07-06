@@ -83,9 +83,15 @@ def test_validate_required_memory_contract_pins_package_contract_defaults():
     assert result.reasons == ()
 
 
-def test_validate_required_memory_contract_accepts_prior_planned_metadata_contract():
+def test_validate_required_memory_contract_accepts_planned_realtime_advisory_metadata():
     manifest = representative_contract_manifest()
-    manifest["contract_version"] = "2026-07-06.memory-tools.v14"
+    manifest["realtime_transport"] = {
+        "nats_jetstream": {
+            "status": "planned-transport-foundation",
+            "availability": "not_runtime_available",
+            "fallback_transport": "http_mcp",
+        },
+    }
 
     result = validate_required_memory_contract(
         manifest,
@@ -94,10 +100,7 @@ def test_validate_required_memory_contract_accepts_prior_planned_metadata_contra
 
     assert result.ok is True
     assert result.reasons == ()
-    assert COMPATIBLE_CONTRACT_VERSIONS == (
-        "2026-07-06.memory-tools.v14",
-        CURRENT_CONTRACT_VERSION,
-    )
+    assert COMPATIBLE_CONTRACT_VERSIONS == (CURRENT_CONTRACT_VERSION,)
 
 
 def test_validate_required_memory_contract_reports_package_required_tool_gap():

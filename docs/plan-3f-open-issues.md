@@ -57,7 +57,7 @@ splits into disjoint files or review lanes.
 | #221 recovery WAL | `feat/221-recovery-wal` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-221-recovery-wal` | 1 implementation + 1 adversarial/test sidecar | Quarantined recovery evidence contract, restart transitions, exclusion from normal recall | No | Close only with tests proving WAL evidence cannot leak into durable/search paths |
 | #224 promotion/relegation lifecycle | `feat/224-promotion-lifecycle` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-224-promotion-lifecycle` | 1 implementation + 1 domain/review sidecar | Explicit promote/relegate/discard/nominate workflow for candidate memory | No | Close only with tests proving no implicit durable/shared-kb promotion |
 | #247 DreamEngine decomposition | `feat/247-dream-decomposition` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-247-dream-decomposition` | 1 implementation + 1 dry-run/adversarial sidecar | Dry-run proposals for oversized entries with linked replacements | No | Close only with dry-run-by-default tests and no mutation without approval |
-| #137 optional qmd deep lookup | `feat/137-optional-qmd-lookup` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-137-optional-qmd-lookup` | 1 implementation/doc worker | Optional deep lookup wrapper or explicit no-op docs/tests proving no runtime dependency | No | Close only if qmd absence is non-fatal and documented/testable |
+| #137 optional qmd deep lookup | `feat/137-optional-qmd-lookup` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-137-optional-qmd-lookup` | 1 implementation/doc worker | Optional deep lookup wrapper or explicit no-op docs/tests proving qmd absence is non-fatal | No | Close only after Hermes/Open Brain recall paths are documented/tested to avoid a hard qmd dependency |
 | #118 Privilege Isolation source refs | `plan/118-privilege-isolation-split` or `feat/118-source-refs-slice` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-118-privilege-isolation` | 1 planning worker first, implementation workers only after split | Either split into child issues or implement one real tested source-ref slice | No | Do not close docs-only unless issue is converted to parent roadmap with child issues |
 | #167 legacy collab retirement | `release/167-retire-collab` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-167-retire-collab` | 1 release-planning worker only | Release/deploy checklist and preflight evidence, no mutation | Explicit approval required | Blocked for local-only; cannot close without live backup/migration/deploy/canary |
 
@@ -98,30 +98,32 @@ Current implementation branch:
 Local status:
 
 - In review via PR #250. Project 8 marks #223/PR #250 in review. CI passed on
-  head `a1798f9`, then Claude cross-review found a MEDIUM deploy-ordering hazard
-  in the Python exact-match contract validator. Local fix now allows the Python
-  package to validate both v14 and v15 required-memory manifests during the
-  no-deploy transition while keeping the server manifest versioned at v15.
-  Focused validation passed: `uv run pytest -q tests/test_contract.py
-  tests/test_client.py` (`70 pass`), `uv run mypy src/openbrain_memory`,
-  `uv run ruff check src tests`, and `git diff --check`.
-- Local-only slice adds `docs/nats-jetstream-foundation.md` and planned
+  head `dcef94d`, then Claude cross-review found that planned-only NATS
+  metadata should not churn the required fail-closed contract version/hash.
+  Local fix keeps the required Open Brain memory contract at v14, treats
+  `realtime_transport.nats_jetstream` as advisory planned metadata outside the
+  required schema hash, and keeps the Python package pinned to the same server
+  contract snapshot. Focused validation passed: `uv run pytest -q
+  tests/test_contract.py tests/test_client.py` (`70 pass`), `uv run mypy
+  src/openbrain_memory`, `uv run ruff check src tests`, and `git diff --check`.
+- Local-only slice adds `docs/nats-jetstream-foundation.md` and advisory planned
   `get_contract().realtime_transport.nats_jetstream` metadata. It does not
-  bump the package artifact version or required `openbrain-memory` minimum
-  compatibility because NATS is not runtime available in this slice.
+  bump the package artifact version, required contract version, schema hash, or
+  required `openbrain-memory` minimum compatibility because NATS is not runtime
+  available in this slice.
 - No core01 NATS install/config, live JetStream stream creation, launchd change,
   or Hermes runtime switch is in scope for this branch.
 - Local validation passed after the review-fix commit: `bun test
   src/contract.test.ts` (`6 pass`), `bunx tsc --noEmit`, full `bun test`
-  (`1072 pass, 50 skip, 0 fail`), focused Python contract/client pytest (`69
+  (`1072 pass, 50 skip, 0 fail`), focused Python contract/client pytest (`70
   pass`), full Python pytest (`193 pass, 5 skip`), `uv run mypy
   src/openbrain_memory`, `uv run ruff check src tests`, PR body validator, and
   `git diff --check`.
-- Downstream rollout classification: applies because `get_contract` changes
-  contract version/schema hash and advertises new planned transport metadata.
-  Hosted deploy, mcp2cli refresh, rtech-mcps handoff, rtech-hermes changes,
-  Hermes live rollout, and canaries are deferred to an approved release/deploy
-  phase.
+- Downstream rollout classification: no deploy in this PR. Required-memory
+  fail-closed version/hash remains v14; planned NATS metadata is advisory and
+  not runtime available. Hosted deploy, mcp2cli refresh, rtech-mcps handoff,
+  rtech-hermes changes, Hermes live rollout, and canaries remain deferred to an
+  approved release/deploy phase.
 - Initial review findings being fixed:
   HIGH: do not raise required Python client compatibility for a planned-only
   transport; MEDIUM: do not auto-close #223 without the runtime/client slice;
