@@ -135,8 +135,8 @@ Local status:
   awaiting PR comment/fix-verification.
 - Local-only slice adds `docs/nats-jetstream-foundation.md` and planned
   `get_contract().realtime_transport.nats_jetstream` metadata. It does not
-  bump required `openbrain-memory` compatibility because NATS is not runtime
-  available in this slice.
+  bump the package artifact version or required `openbrain-memory` minimum
+  compatibility because NATS is not runtime available in this slice.
 - No core01 NATS install/config, live JetStream stream creation, launchd change,
   or Hermes runtime switch is in scope for this branch.
 - Local validation passed after the review-fix commit: `bun test
@@ -145,10 +145,11 @@ Local status:
   pass`), full Python pytest (`193 pass, 5 skip`), `uv run mypy
   src/openbrain_memory`, `uv run ruff check src tests`, PR body validator, and
   `git diff --check`.
-- Downstream rollout classification: applies because `get_contract` advertises
-  new planned transport metadata. Hosted deploy, mcp2cli refresh, rtech-mcps
-  handoff, rtech-hermes changes, Hermes live rollout, and canaries are deferred
-  to an approved release/deploy phase.
+- Downstream rollout classification: applies because `get_contract` changes
+  contract version/schema hash and advertises new planned transport metadata.
+  Hosted deploy, mcp2cli refresh, rtech-mcps handoff, rtech-hermes changes,
+  Hermes live rollout, and canaries are deferred to an approved release/deploy
+  phase.
 - Initial review findings being fixed:
   HIGH: do not raise required Python client compatibility for a planned-only
   transport; MEDIUM: do not auto-close #223 without the runtime/client slice;
