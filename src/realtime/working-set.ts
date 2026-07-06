@@ -219,7 +219,11 @@ export class WorkingSetStore {
       return this.result(false, "content_too_large");
     }
     const metadata = input.metadata ?? {};
-    if (JSON.stringify(metadata).length > this.budget.max_metadata_chars) {
+    const metadataChars = serializedJsonLength(metadata);
+    if (
+      metadataChars === null ||
+      metadataChars > this.budget.max_metadata_chars
+    ) {
       this.counters.dropped += 1;
       return this.result(false, "metadata_too_large");
     }
@@ -395,4 +399,12 @@ function requireScopePart(value: string, field: string): string {
     throw new Error(`working set scope requires non-empty ${field}`);
   }
   return trimmed;
+}
+
+function serializedJsonLength(value: unknown): number | null {
+  try {
+    return JSON.stringify(value).length;
+  } catch {
+    return null;
+  }
 }

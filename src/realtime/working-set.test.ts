@@ -176,6 +176,42 @@ describe("WorkingSetStore", () => {
     expect(store.buildContextPackFragment(BASE_SCOPE, BASE_TIME).working_set.items).toEqual([]);
   });
 
+  it("drops unserializable metadata without throwing", () => {
+    const store = new WorkingSetStore();
+    const cyclicMetadata: Record<string, unknown> = {};
+    cyclicMetadata.self = cyclicMetadata;
+
+    const cyclic = store.append(
+      BASE_SCOPE,
+      {
+        kind: "recent_event",
+        content: "valid content",
+        metadata: cyclicMetadata,
+      },
+      BASE_TIME,
+    );
+    const bigint = store.append(
+      BASE_SCOPE,
+      {
+        kind: "recent_event",
+        content: "valid content",
+        metadata: { count: BigInt(1) },
+      },
+      BASE_TIME,
+    );
+
+    expect(cyclic).toMatchObject({
+      accepted: false,
+      reason: "metadata_too_large",
+    });
+    expect(bigint).toMatchObject({
+      accepted: false,
+      reason: "metadata_too_large",
+    });
+    expect(store.getCounters().dropped).toBe(2);
+    expect(store.buildContextPackFragment(BASE_SCOPE, BASE_TIME).working_set.items).toEqual([]);
+  });
+
   it("does not disclose cross-namespace working-set presence in scope denials", () => {
     const store = new WorkingSetStore();
     store.append(BASE_SCOPE, { kind: "task_state", content: "base" }, BASE_TIME);
