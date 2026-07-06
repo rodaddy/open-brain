@@ -118,6 +118,7 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
           type: "enum",
           values: [
             "working_set",
+            "recovery",
             "durable_lane_context",
             "durable_memory",
             "profile_guidance",
@@ -127,6 +128,14 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
             "candidate_memory",
           ],
         },
+      },
+      include_unreviewed_recovery: {
+        type: "boolean",
+        required: false,
+        default: false,
+        description:
+          "Explicit opt-in to include exact-scope quarantined recovery " +
+          "summary. Recovery records are not durable memory or searchable recall.",
       },
       budget: {
         type: "object",
@@ -148,7 +157,121 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
       },
     },
     output_shape:
-      "agent_context_pack envelope with exact-scope working_set section, warnings, budget, citations",
+      "agent_context_pack envelope with exact-scope working_set and explicit recovery sections, warnings, budget, citations",
+  },
+  recovery_wal_append: {
+    version: 1,
+    input_schema: {
+      namespace: {
+        type: "string",
+        required: false,
+        maxLength: 500,
+        description:
+          "Namespace for isolation. Defaults to auth-derived clientId; the " +
+          "server enforces write authority before accepting recovery WAL records.",
+      },
+      agent: { type: "string", required: true, minLength: 1, maxLength: 200 },
+      platform: { type: "string", required: true, minLength: 1, maxLength: 200 },
+      server_id: { type: "string", required: true, minLength: 1, maxLength: 500 },
+      channel_id: { type: "string", required: true, minLength: 1, maxLength: 500 },
+      thread_id: { type: "string", required: false, maxLength: 500 },
+      session_key: {
+        type: "string",
+        required: true,
+        minLength: 1,
+        maxLength: 500,
+      },
+      content: {
+        type: "string",
+        required: true,
+        minLength: 1,
+        maxLength: 8000,
+        description:
+          "Bounded quarantined recovery content. This does not create durable " +
+          "memory, shared-kb, or searchable recall rows.",
+      },
+      status: {
+        type: "enum",
+        required: false,
+        values: [
+          "active",
+          "wrapped",
+          "recovery_pending",
+          "reviewed",
+          "compacted",
+          "discarded",
+          "expired",
+        ],
+        default: "active",
+      },
+      trace_id: { type: "string", required: false, maxLength: 500 },
+      source_ref: { type: "string", required: false, maxLength: 1000 },
+      metadata: {
+        type: "object",
+        required: false,
+        maxSerializedChars: 2000,
+      },
+    },
+    output_shape:
+      "quarantined recovery WAL append receipt with accepted/reason/item/counters/not_durable_memory/not_searchable_recall",
+  },
+  recovery_wal_mark: {
+    version: 1,
+    input_schema: {
+      namespace: {
+        type: "string",
+        required: false,
+        maxLength: 500,
+        description:
+          "Namespace for isolation. Defaults to auth-derived clientId; the " +
+          "server enforces write authority before marking recovery WAL records.",
+      },
+      agent: { type: "string", required: true, minLength: 1, maxLength: 200 },
+      platform: { type: "string", required: true, minLength: 1, maxLength: 200 },
+      server_id: { type: "string", required: true, minLength: 1, maxLength: 500 },
+      channel_id: { type: "string", required: true, minLength: 1, maxLength: 500 },
+      thread_id: { type: "string", required: false, maxLength: 500 },
+      session_key: {
+        type: "string",
+        required: true,
+        minLength: 1,
+        maxLength: 500,
+      },
+      id: { type: "string", required: true, minLength: 1, maxLength: 200 },
+      action: {
+        type: "enum",
+        required: true,
+        values: [
+          "review",
+          "use_for_current_session",
+          "compact_to_wrap",
+          "promote_candidates",
+          "discard",
+          "defer",
+        ],
+      },
+      status: {
+        type: "enum",
+        required: true,
+        values: [
+          "active",
+          "wrapped",
+          "recovery_pending",
+          "reviewed",
+          "compacted",
+          "discarded",
+          "expired",
+        ],
+      },
+      purge: {
+        type: "boolean",
+        required: false,
+        default: false,
+        description: "Remove the exact recovery record after review.",
+      },
+    },
+    output_shape:
+      "quarantined recovery WAL mark receipt with accepted/reason/item/purged/counters/not_durable_memory/not_searchable_recall",
   },
   get_entry: {
     version: 2,

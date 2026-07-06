@@ -41,7 +41,7 @@ def _resolve_package_version(pyproject: Path | None = None) -> str:
 
 
 PACKAGE_VERSION = _resolve_package_version()
-CURRENT_CONTRACT_VERSION = "2026-07-06.memory-tools.v16"
+CURRENT_CONTRACT_VERSION = "2026-07-06.memory-tools.v17"
 COMPATIBLE_CONTRACT_VERSIONS = (CURRENT_CONTRACT_VERSION,)
 REQUIRED_CONTRACT_TOOLS = (
     "append_session_event",
@@ -53,6 +53,8 @@ REQUIRED_CONTRACT_TOOLS = (
     "lane_upsert",
     "list_repo_facts",
     "log_thought",
+    "recovery_wal_append",
+    "recovery_wal_mark",
     "search_all",
     "session_context",
     "session_start",
@@ -79,6 +81,12 @@ CURRENT_TOOL_HELP: Mapping[str, str] = {
     "list_entities": "List graph entities by type, name, or namespace.",
     "list_repo_facts": "Read curated qmd-derived repository facts.",
     "log_thought": "Write a durable thought or observation to Open Brain.",
+    "recovery_wal_append": (
+        "Append exact-scope quarantined recovery evidence, not durable memory."
+    ),
+    "recovery_wal_mark": (
+        "Review, mark, or purge exact-scope quarantined recovery evidence."
+    ),
     "search_all": "Search Open Brain memory and optional qmd-backed code context.",
     "search_brain": "Search Open Brain memory entries.",
     "session_context": "Read durable session lane state and recent events.",
@@ -450,6 +458,12 @@ class OpenBrainClient:
 
     def working_set_append(self, **arguments: Any) -> JSON:
         return self.call_tool("working_set_append", arguments)
+
+    def recovery_wal_append(self, **arguments: Any) -> JSON:
+        return self.call_tool("recovery_wal_append", arguments)
+
+    def recovery_wal_mark(self, **arguments: Any) -> JSON:
+        return self.call_tool("recovery_wal_mark", arguments)
 
     def append_session_event(self, **arguments: Any) -> JSON:
         return self.call_tool("append_session_event", arguments)

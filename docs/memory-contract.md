@@ -72,6 +72,8 @@ Open Brain is the **durable operational memory** for PAI agents. It stores:
 | session_context | Read lane + events | read |
 | session_wrap | Checkpoint summary to durable storage | write |
 | append_session_event | Log event to lane | write |
+| recovery_wal_append | Append exact-scope quarantined recovery evidence, not durable memory/search | write |
+| recovery_wal_mark | Review, mark, or purge exact-scope recovery WAL evidence | write |
 | lane_upsert | Update lane metadata/context | write |
 | lane_load | Query lanes by filters | read |
 | upsert_entity | Create/update graph entity | write |

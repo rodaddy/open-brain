@@ -13,7 +13,7 @@ describe("Open Brain contract manifest", () => {
     expect(contract.contract_scope).toBe("required_openbrain_memory_contract");
     expect(contract.schema_hash).toMatch(/^[0-9a-f]{64}$/);
     expect(contract.schema_hash).toBe(
-      "95b71133b604f37e3b94c4cbbfc9bccbca9c1dfd22fb7bec3a1f7e8969a2953f",
+      "2f88e455cd701764baa41e07fd5dadf74ef0a1a3fa8af78dc093d6650684586e",
     );
     expect(contract.min_client_versions.mcp2cli).toBe("0.3.6");
     expect(contract.transport.namespace_boundary).toBe("authorization");
@@ -146,6 +146,7 @@ describe("Open Brain contract manifest", () => {
     ]);
     expect(contract.agent_context_pack.sections).toEqual([
       "working_set",
+      "recovery",
       "durable_lane_context",
       "durable_memory",
       "profile_guidance",
@@ -185,6 +186,45 @@ describe("Open Brain contract manifest", () => {
         max_metadata_chars: 2000,
       },
       counters: ["dropped", "expired", "trimmed"],
+    });
+    expect(contract.agent_context_pack.recovery).toEqual({
+      status: "local-quarantine-boundary",
+      parent_issue: 221,
+      implementation: "src/realtime/recovery-wal.ts",
+      storage: "env_configured_file_wal_with_in_memory_fallback",
+      availability: "mcp_tool_available",
+      item_label: "quarantined_recovery",
+      not_durable_memory: true,
+      not_searchable_recall: true,
+      exact_scope_required: true,
+      explicit_include_required: true,
+      statuses: [
+        "active",
+        "wrapped",
+        "recovery_pending",
+        "reviewed",
+        "compacted",
+        "discarded",
+        "expired",
+      ],
+      actions: [
+        "review",
+        "use_for_current_session",
+        "compact_to_wrap",
+        "promote_candidates",
+        "discard",
+        "defer",
+      ],
+      budget_defaults: {
+        ttl_ms: 86400000,
+        max_sessions: 128,
+        max_items_per_session: 50,
+        max_global_items: 2048,
+        max_content_chars: 8000,
+        max_metadata_chars: 2000,
+        max_preview_chars: 1000,
+      },
+      counters: ["dropped", "expired", "trimmed", "marked", "purged"],
     });
     expect(contract.receipt_contract).toMatchObject({
       status: "lightweight-openbrain-receipts",
@@ -260,6 +300,8 @@ describe("Open Brain contract manifest", () => {
       "append_session_event",
       "session_wrap",
       "working_set_append",
+      "recovery_wal_append",
+      "recovery_wal_mark",
       "agent_context_pack",
       "list_repo_facts",
       "upsert_repo_fact",
@@ -267,14 +309,24 @@ describe("Open Brain contract manifest", () => {
       expect(contract.tool_contracts[tool]).toBeDefined();
     }
     const workingSetAppend = contract.tool_contracts.working_set_append;
+    const recoveryWalAppend = contract.tool_contracts.recovery_wal_append;
+    const recoveryWalMark = contract.tool_contracts.recovery_wal_mark;
     const agentContextPack = contract.tool_contracts.agent_context_pack;
     expect(workingSetAppend).toBeDefined();
+    expect(recoveryWalAppend).toBeDefined();
+    expect(recoveryWalMark).toBeDefined();
     expect(agentContextPack).toBeDefined();
     expect(workingSetAppend?.output_shape).toContain(
       "RAM-only",
     );
     expect(agentContextPack?.output_shape).toContain(
-      "exact-scope working_set",
+      "explicit recovery",
+    );
+    expect(recoveryWalAppend?.output_shape).toContain(
+      "not_searchable_recall",
+    );
+    expect(recoveryWalMark?.output_shape).toContain(
+      "not_searchable_recall",
     );
     expect((workingSetAppend?.input_schema as any).durable_ref).toEqual({
       type: "object",
@@ -394,7 +446,7 @@ describe("Open Brain contract manifest", () => {
     // contract so a future TS/Python divergence fails here, in lockstep with
     // python/openbrain-memory CURRENT_CONTRACT_VERSION.
     const contract = buildContract("2026-06-18T00:00:00.000Z");
-    expect(contract.contract_version).toBe("2026-07-06.memory-tools.v16");
+    expect(contract.contract_version).toBe("2026-07-06.memory-tools.v17");
 
     const appendEvent = contract.tool_contracts.append_session_event;
     expect(appendEvent).toBeDefined();
