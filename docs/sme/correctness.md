@@ -218,6 +218,8 @@ PR #228 made `scopeConflicts` treat a null/absent existing value as
 unconstrained (skip), so a non-null mismatch still conflicts and cross-scope
 spill protection is preserved. Doc field mapping aligned with the comparison
 axis. Regression tests: scoped append onto a `session_start`-shaped (null
+source) lane succeeds; non-null channel mismatch still denies; live-Postgres
+suite proves the real ON CONFLICT create/race + scope denial.
 
 ## [2026-07-06] Source SQL must match actual column types, not remembered shapes
 
@@ -243,8 +245,6 @@ would fail before planning.
   source tables, not just the happy-path table?
 - For SQL that reads multiple table families, has someone checked the migration
   source instead of relying on memory of sibling table shapes?
-source) lane succeeds; non-null channel mismatch still denies; live-Postgres
-suite proves the real ON CONFLICT create/race + scope denial.
 
 ## [2026-06-27] Disclosure exporters must accept server-shaped citation fields
 
