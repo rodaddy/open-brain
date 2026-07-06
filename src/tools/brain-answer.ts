@@ -15,7 +15,10 @@ import {
   type SourceRef,
 } from "./search-brain.ts";
 import { isSharedNamespace } from "../shared-namespace.ts";
-import { sourceScopeSchema } from "../source-refs.ts";
+import {
+  sourceScopeAuthorizationError,
+  sourceScopeSchema,
+} from "../source-refs.ts";
 
 type NamespaceFilter = string | string[];
 
@@ -210,6 +213,13 @@ export function registerBrainAnswer(server: McpServer, deps: ToolDeps): void {
       const mode = (args.search_mode as SearchMode) ?? "hybrid";
       const tier = args.tier as Tier | undefined;
       const sourceScope = args.source_scope as SourceScope | undefined;
+      const sourceScopeError = sourceScopeAuthorizationError(auth, sourceScope);
+      if (sourceScopeError) {
+        return {
+          content: [{ type: "text" as const, text: sourceScopeError }],
+          isError: true,
+        };
+      }
       const maxAgeDays = args.max_age_days ?? 180;
       const namespace = namespaceFilterFor(
         auth,

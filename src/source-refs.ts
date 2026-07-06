@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { AuthInfo } from "./types.ts";
 
 const isoDateTime = z.string().datetime();
 
@@ -76,6 +77,20 @@ export const sourceScopeSchema = z
 
 export type SourceScope = z.infer<typeof sourceScopeSchema>;
 
+export function sourceScopeAuthorizationError(
+  auth: AuthInfo,
+  sourceScope?: SourceScope,
+): string | undefined {
+  if (!sourceScope) return undefined;
+  if (auth.role !== "admin" && auth.role !== "ob-admin") {
+    return "Permission denied: source_scope requires token-sourced admin or ob-admin";
+  }
+  if (auth.namespaceSource === "header") {
+    return "Permission denied: delegated namespace sessions cannot use source_scope";
+  }
+  return undefined;
+}
+
 export function appendSourceScopeParam(
   params: unknown[],
   sourceScope?: SourceScope,
@@ -152,5 +167,7 @@ export const SOURCE_SCOPE_CONTRACT = {
   description:
     "Optional source-reference scope for closed-brain deployments. When set, " +
     "all supplied keys must match the same source_refs array element before " +
-    "source-scoped evidence or source_refs are returned.",
+    "source-scoped evidence or source_refs are returned. Until auth-bound " +
+    "source claims exist, source_scope is restricted to token-sourced admin " +
+    "or ob-admin callers.",
 } as const;

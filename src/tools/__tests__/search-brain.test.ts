@@ -206,6 +206,67 @@ describe("search_brain", () => {
       }
     });
 
+    it("denies source scope for non-admin callers before querying", async () => {
+      let queried = false;
+      const pool = {
+        query: async () => {
+          queried = true;
+          return { rows: [] };
+        },
+      };
+      const auth: AuthInfo = { role: "agent", clientId: "bilby" };
+      const { client, cleanup } = await setup(pool, auth);
+
+      try {
+        const result = await client.callTool({
+          name: "search_brain",
+          arguments: {
+            query: "matter scoped search",
+            source_scope: { client_id: "acme" },
+          },
+        });
+
+        expect(result.isError).toBe(true);
+        expect(getErrorText(result)).toContain("source_scope requires");
+        expect(queried).toBe(false);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("denies source scope for delegated admin sessions", async () => {
+      let queried = false;
+      const pool = {
+        query: async () => {
+          queried = true;
+          return { rows: [] };
+        },
+      };
+      const auth: AuthInfo = {
+        role: "admin",
+        clientId: "bilby",
+        tokenClientId: "admin",
+        namespaceSource: "header",
+      };
+      const { client, cleanup } = await setup(pool, auth);
+
+      try {
+        const result = await client.callTool({
+          name: "search_brain",
+          arguments: {
+            query: "matter scoped search",
+            source_scope: { client_id: "acme" },
+          },
+        });
+
+        expect(result.isError).toBe(true);
+        expect(getErrorText(result)).toContain("delegated namespace");
+        expect(queried).toBe(false);
+      } finally {
+        await cleanup();
+      }
+    });
+
     it("parameterizes namespace in default hybrid SQL", async () => {
       const maliciousNamespace = "' OR 1=1 --";
       const searchCalls: any[] = [];

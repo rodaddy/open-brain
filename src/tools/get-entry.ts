@@ -8,6 +8,7 @@ import { TABLE_COLUMNS } from "../table-projections.ts";
 import {
   appendSourceScopeParam,
   filterSourceRefsForScope,
+  sourceScopeAuthorizationError,
   sourceScopeFilterSql,
   sourceScopeSchema,
   type SourceScope,
@@ -95,6 +96,13 @@ export function registerGetEntry(server: McpServer, deps: ToolDeps): void {
 
       const render = args.render ?? "full";
       const sourceScope = args.source_scope as SourceScope | undefined;
+      const sourceScopeError = sourceScopeAuthorizationError(auth, sourceScope);
+      if (sourceScopeError) {
+        return {
+          content: [{ type: "text" as const, text: sourceScopeError }],
+          isError: true,
+        };
+      }
       if (render === "compact") {
         const maxChars = args.max_chars ?? DEFAULT_COMPACT_MAX_CHARS;
         const alias = TABLE_ALIAS[table];

@@ -10,6 +10,7 @@ import {
 } from "../shared-namespace.ts";
 import {
   appendSourceScopeParam,
+  sourceScopeAuthorizationError,
   sourceScopeFilterSql,
   sourceScopeSchema,
   type SourceScope,
@@ -1170,6 +1171,13 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
       const tier = args.tier as Tier | undefined;
       const requestedNamespace = args.namespace as string | undefined;
       const sourceScope = args.source_scope as SourceScope | undefined;
+      const sourceScopeError = sourceScopeAuthorizationError(auth, sourceScope);
+      if (sourceScopeError) {
+        return {
+          content: [{ type: "text" as const, text: sourceScopeError }],
+          isError: true,
+        };
+      }
       if (sourceScope) {
         accessibleTables = accessibleTables.filter((table) => table !== "entities");
       }

@@ -124,7 +124,11 @@ describe("get_entry", () => {
         };
       },
     };
-    const auth: AuthInfo = { role: "agent", clientId: "bilby" };
+    const auth: AuthInfo = {
+      role: "admin",
+      clientId: "admin",
+      namespaceSource: "token",
+    };
     const { client, cleanup } = await setupMcpClient(
       registerGetEntry,
       mockPool,
@@ -155,13 +159,46 @@ describe("get_entry", () => {
       );
       expect(queries[0]?.params).toEqual([
         "550e8400-e29b-41d4-a716-446655440021",
-        ["bilby", "shared-kb"],
         JSON.stringify({
           client_id: "acme",
           matter_id: "lit-1",
           document_id: "doc-1",
         }),
       ]);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("denies source scope for non-admin callers before querying", async () => {
+    let queried = false;
+    const mockPool = {
+      query: async () => {
+        queried = true;
+        return { rows: [] };
+      },
+    };
+    const auth: AuthInfo = { role: "agent", clientId: "bilby" };
+    const { client, cleanup } = await setupMcpClient(
+      registerGetEntry,
+      mockPool,
+      createMockEmbed(),
+      auth,
+    );
+
+    try {
+      const result = await client.callTool({
+        name: "get_entry",
+        arguments: {
+          table: "thoughts",
+          id: "550e8400-e29b-41d4-a716-446655440021",
+          source_scope: { client_id: "acme" },
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(getErrorText(result)).toContain("source_scope requires");
+      expect(queried).toBe(false);
     } finally {
       await cleanup();
     }

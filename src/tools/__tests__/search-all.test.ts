@@ -241,6 +241,35 @@ describe("search_all", () => {
       }
     });
 
+    it("denies source scope for non-admin callers before searching", async () => {
+      let queried = false;
+      mockBunSpawn(0, qmdJson([{ path: "/a.md", content: "hello" }]));
+      const pool = {
+        query: async () => {
+          queried = true;
+          return { rows: [] };
+        },
+      };
+      const auth: AuthInfo = { role: "agent", clientId: "bilby" };
+      const { client, cleanup } = await setupClient(pool, auth);
+      try {
+        const result = await client.callTool({
+          name: "search_all",
+          arguments: {
+            query: "scoped",
+            sources: "all",
+            source_scope: { client_id: "acme" },
+          },
+        });
+
+        expect(result.isError).toBe(true);
+        expect(getErrorText(result)).toContain("source_scope requires");
+        expect(queried).toBe(false);
+      } finally {
+        await cleanup();
+      }
+    });
+
     it("returns empty results when both sources return nothing", async () => {
       mockBunSpawn(0, qmdJson([]));
       const pool = { query: async () => ({ rows: [] }) };

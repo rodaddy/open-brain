@@ -18,7 +18,10 @@ import {
   type SourceRef,
 } from "./search-brain.ts";
 import { isSharedNamespace } from "../shared-namespace.ts";
-import { sourceScopeSchema } from "../source-refs.ts";
+import {
+  sourceScopeAuthorizationError,
+  sourceScopeSchema,
+} from "../source-refs.ts";
 
 type NamespaceFilter = string | string[];
 
@@ -221,6 +224,13 @@ export function registerSearchAll(server: McpServer, deps: ToolDeps): void {
       const sourceScope = args.source_scope as SourceScope | undefined;
       const collection = args.collection as string | undefined;
       const requestedNamespace = args.namespace as string | undefined;
+      const sourceScopeError = sourceScopeAuthorizationError(auth, sourceScope);
+      if (sourceScopeError) {
+        return {
+          content: [{ type: "text" as const, text: sourceScopeError }],
+          isError: true,
+        };
+      }
       if (sourceScope && sources === "qmd") {
         return {
           content: [
