@@ -51,6 +51,7 @@ import { registerListRepoFacts, registerUpsertRepoFact } from "./repo-facts.ts";
 export interface ToolDeps {
   pool: pg.Pool;
   embedFn: typeof generateEmbedding;
+  allowNonTransactionalAppendFallback?: boolean;
 }
 
 export function registerAllTools(server: McpServer, deps: ToolDeps): void {

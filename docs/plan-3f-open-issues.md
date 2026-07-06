@@ -58,8 +58,10 @@ Local status:
 - F6 implemented: `create_if_missing` append uses one pooled-client transaction
   for lane lookup/create plus event insert, with rollback coverage for an event
   insert failure after lane creation. Gauntlet fix: lane and event embedding
-  calls are prepared before `BEGIN` for first-write appends, so a slow or wedged
-  embedding provider cannot hold an open transaction or pooled DB client.
+  calls are filled after the accepted append commits for first-write appends, so
+  a slow or wedged embedding provider cannot hold an open transaction or pooled
+  DB client, and rejected scoped writes do not send denied content to the
+  embedding provider.
 - F8 implemented: first-write lanes embed from `topic` plus `project`, using
   the same lane content-hash shape as `lane_upsert`. Gauntlet fix: migration
   `020_session_lane_namespace_hash.sql` scopes `ob_session_lanes.content_hash`
@@ -72,15 +74,18 @@ Local status:
   execute step rechecks the same idle predicates in the `UPDATE` CTE, so lanes
   that receive a new event after candidate selection are not archived.
 - Local validation on this branch after gauntlet fixes: focused
-  append/lane/script tests pass (`88 pass, 10 skip, 0 fail`), `bunx tsc
+  append/lane/script tests pass (`90 pass, 10 skip, 0 fail`), `bunx tsc
   --noEmit` passes, `git diff --check` passes, and full `bun test` passes
-  (`1070 pass, 50 skip, 0 fail`). DB-backed suites remain skipped locally
+  (`1072 pass, 50 skip, 0 fail`). DB-backed suites remain skipped locally
   because `/Users/rico/.config/open-brain/env.release-test` is missing; CI
   `db-integration` must supply the live Postgres gate before merge.
 - Review gate status: initial swarm found three real blockers on PR #249
   (transaction-open embedding calls, stale archive execute update, and global
-  lane content-hash uniqueness). All three are fixed locally and awaiting
-  commit/push, CI, fix verification, and Claude cross-review.
+  lane content-hash uniqueness). Fix verification then found denied scoped
+  content could be embedded before rejection; Claude also flagged archive CTE
+  limit fragility, rollback-error masking, and silent non-transactional fallback.
+  All findings are fixed locally and awaiting commit/push, CI, final fix
+  verification, and repeat Claude cross-review.
 
 Required local work:
 

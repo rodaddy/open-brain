@@ -22,11 +22,13 @@ async function setupToolClient(
   mockPool: { query: (...args: any[]) => Promise<{ rows: any[] }> },
   auth: AuthInfo,
   embedFn?: (text: string) => Promise<number[] | null>,
+  allowNonTransactionalAppendFallback = true,
 ): Promise<{ client: Client; cleanup: () => Promise<void> }> {
   const server = new McpServer({ name: "test", version: "1.0.0" });
   const deps: ToolDeps = {
     pool: mockPool as any,
     embedFn: embedFn ?? createMockEmbed(),
+    allowNonTransactionalAppendFallback,
   };
   registerAppendSessionEvent(server, deps);
 
@@ -337,14 +339,14 @@ describe("append_session_event", () => {
         "Nagatha Discord scoped memory",
         JSON.stringify({ server_id: "guild-1" }),
       ]);
-      expect(captured.laneInsertParams?.[9]).not.toBeNull();
+      expect(captured.laneInsertParams?.[9]).toBeNull();
       expect(captured.laneInsertParams?.[10]).toBe(
         contentHash(
           "discord:guild-1:channel-1:thread-1:nagatha|Nagatha Discord scoped memory",
         ),
       );
-      expect(captured.laneInsertParams?.[11]).not.toBeNull();
-      expect(captured.laneInsertParams?.[12]).toBe(EMBEDDING_MODEL);
+      expect(captured.laneInsertParams?.[11]).toBeNull();
+      expect(captured.laneInsertParams?.[12]).toBeNull();
       expect(captured.laneInsertParams?.[13]).toBe("nagatha");
       expect(captured.embedInputs).toEqual([
         "Nagatha Discord scoped memory\nrtech-hermes",
@@ -378,6 +380,9 @@ describe("append_session_event", () => {
           return {
             rows: [{ id: "event-uuid-1", created_at: "2026-06-28T18:00:00Z" }],
           };
+        }
+        if (sql.includes("UPDATE ob_session_events")) {
+          return { rows: [] };
         }
         throw new Error(`unexpected query: ${sql}`);
       },
@@ -471,6 +476,7 @@ describe("append_session_event", () => {
 
   it("denies append when supplied exact scope conflicts with the existing lane", async () => {
     let eventInsertAttempted = false;
+    const embedInputs: string[] = [];
     const mockPool = {
       query: async (sql: string, _params?: any[]) => {
         if (sql.includes("FROM ob_session_lanes")) {
@@ -495,7 +501,14 @@ describe("append_session_event", () => {
       },
     };
     const auth: AuthInfo = { role: "agent", clientId: "nagatha" };
-    const { client, cleanup } = await setupToolClient(mockPool, auth);
+    const { client, cleanup } = await setupToolClient(
+      mockPool,
+      auth,
+      async (text) => {
+        embedInputs.push(text);
+        return Array(768).fill(0.1);
+      },
+    );
 
     try {
       const result = await client.callTool({
@@ -519,6 +532,7 @@ describe("append_session_event", () => {
       expect(parsed.retryable).toBe(false);
       expect(parsed.conflicts).toEqual(["channel_id"]);
       expect(eventInsertAttempted).toBe(false);
+      expect(embedInputs).toEqual([]);
     } finally {
       await cleanup();
     }
@@ -790,13 +804,113 @@ describe("append_session_event", () => {
       expect(calls).toContain("BEGIN");
       expect(calls).toContain("ROLLBACK");
       expect(calls).not.toContain("COMMIT");
-      expect(calls.indexOf("embed:Nagatha Discord scoped memory")).toBeLessThan(
-        calls.indexOf("BEGIN"),
-      );
-      expect(calls.indexOf("embed:This event insert fails.")).toBeLessThan(
-        calls.indexOf("BEGIN"),
-      );
+      expect(calls).not.toContain("embed:Nagatha Discord scoped memory");
+      expect(calls).not.toContain("embed:This event insert fails.");
       expect(released).toBe(true);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("preserves the original append error when rollback also fails", async () => {
+    const client = {
+      query: async (sql: string, _params?: any[]) => {
+        if (sql === "BEGIN") return { rows: [] };
+        if (sql === "ROLLBACK") throw new Error("rollback connection reset");
+        if (sql.includes("FROM ob_session_lanes")) {
+          return { rows: [] };
+        }
+        if (sql.includes("INSERT INTO ob_session_lanes")) {
+          return {
+            rows: [
+              {
+                id: "lane-uuid-new",
+                status: "active",
+                agent: "nagatha",
+                source: "discord",
+                channel_id: "channel-1",
+                thread_id: null,
+                metadata: { server_id: "guild-1" },
+              },
+            ],
+          };
+        }
+        if (sql.includes("INSERT INTO ob_session_events")) {
+          throw new Error("event insert failed");
+        }
+        return { rows: [] };
+      },
+      release: () => {},
+    };
+    const mockPool = {
+      connect: async () => client,
+      query: async () => {
+        throw new Error("pool.query should not be used inside transaction");
+      },
+    };
+    const auth: AuthInfo = { role: "agent", clientId: "nagatha" };
+    const { client: toolClient, cleanup } = await setupToolClient(
+      mockPool as any,
+      auth,
+      createMockEmbed(null),
+    );
+
+    try {
+      const result = await toolClient.callTool({
+        name: "append_session_event",
+        arguments: {
+          session_key: "discord:guild-1:channel-1:nagatha",
+          create_if_missing: true,
+          agent: "nagatha",
+          platform: "discord",
+          server_id: "guild-1",
+          channel_id: "channel-1",
+          event_type: "fact",
+          content: "This event insert fails before rollback also fails.",
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.error).toBe("retryable_outage");
+      expect(parsed.message).toContain("event insert failed");
+      expect(parsed.message).not.toContain("rollback connection reset");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("fails loud when create_if_missing cannot get a transactional pool", async () => {
+    const mockPool = {
+      query: async () => ({ rows: [] }),
+    };
+    const auth: AuthInfo = { role: "agent", clientId: "nagatha" };
+    const { client, cleanup } = await setupToolClient(
+      mockPool,
+      auth,
+      createMockEmbed(null),
+      false,
+    );
+
+    try {
+      const result = await client.callTool({
+        name: "append_session_event",
+        arguments: {
+          session_key: "discord:guild-1:channel-1:nagatha",
+          create_if_missing: true,
+          agent: "nagatha",
+          platform: "discord",
+          server_id: "guild-1",
+          channel_id: "channel-1",
+          event_type: "fact",
+          content: "This should not run non-atomically.",
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.error).toBe("retryable_outage");
+      expect(parsed.message).toContain("requires a transactional pg Pool");
     } finally {
       await cleanup();
     }

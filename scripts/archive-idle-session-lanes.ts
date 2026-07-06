@@ -164,7 +164,6 @@ export async function archiveIdleSessionLanes(
           WHERE ${whereSql}
             AND l.id = ANY($${idParam}::uuid[])
           ORDER BY COALESCE(last_event.last_event_at, l.created_at) ASC, l.id ASC
-          LIMIT $2
        )
        UPDATE ob_session_lanes l
           SET status = 'archived',

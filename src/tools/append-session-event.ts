@@ -64,7 +64,15 @@ async function withAppendDb<T>(
   transactional: boolean,
   fn: (db: Queryable) => Promise<T>,
 ): Promise<T> {
-  if (!transactional || typeof deps.pool.connect !== "function") {
+  if (!transactional) {
+    return fn(deps.pool);
+  }
+  if (typeof deps.pool.connect !== "function") {
+    if (!deps.allowNonTransactionalAppendFallback) {
+      throw new Error(
+        "append_session_event create_if_missing requires a transactional pg Pool",
+      );
+    }
     return fn(deps.pool);
   }
 
@@ -75,7 +83,16 @@ async function withAppendDb<T>(
     await client.query("COMMIT");
     return result;
   } catch (err) {
-    await client.query("ROLLBACK");
+    try {
+      await client.query("ROLLBACK");
+    } catch (rollbackErr) {
+      logger.warn("append_session_event_rollback_failed", {
+        error:
+          rollbackErr instanceof Error
+            ? rollbackErr.message
+            : String(rollbackErr),
+      });
+    }
     throw err;
   } finally {
     client.release();
@@ -96,9 +113,7 @@ async function firstWriteLaneEmbedding(
   model: string | null;
 }> {
   const contextText = args.topic || "";
-  const contentHashValue = contextText
-    ? contentHash(args.session_key + "|" + contextText)
-    : null;
+  const contentHashValue = firstWriteLaneContentHash(args);
 
   let embedding: number[] | null = null;
   if (contextText) {
@@ -122,6 +137,26 @@ async function firstWriteLaneEmbedding(
   };
 }
 
+function firstWriteLaneContentHash(args: {
+  session_key: string;
+  topic?: string;
+}): string | null {
+  const contextText = args.topic || "";
+  return contextText ? contentHash(args.session_key + "|" + contextText) : null;
+}
+
+function firstWriteLaneHashOnly(args: {
+  session_key: string;
+  topic?: string;
+}): PreparedLaneEmbedding {
+  return {
+    embeddingVal: null,
+    contentHashValue: firstWriteLaneContentHash(args),
+    embeddedAt: null,
+    model: null,
+  };
+}
+
 async function appendEventEmbedding(
   deps: ToolDeps,
   args: { session_key: string; content: string },
@@ -142,6 +177,73 @@ async function appendEventEmbedding(
     embeddedAt: embedding ? new Date().toISOString() : null,
     model: embedding ? EMBEDDING_MODEL : null,
   };
+}
+
+async function fillAcceptedLaneEmbedding(
+  deps: ToolDeps,
+  laneId: string,
+  args: {
+    session_key: string;
+    project?: string;
+    topic?: string;
+  },
+): Promise<void> {
+  const laneEmbedding = await firstWriteLaneEmbedding(deps, args);
+  if (!laneEmbedding.embeddingVal) return;
+
+  try {
+    await deps.pool.query(
+      `UPDATE ob_session_lanes
+          SET embedding = $1,
+              embedded_at = $2,
+              embedding_model = $3,
+              updated_at = NOW()
+        WHERE id = $4`,
+      [
+        laneEmbedding.embeddingVal,
+        laneEmbedding.embeddedAt,
+        laneEmbedding.model,
+        laneId,
+      ],
+    );
+  } catch (err) {
+    logger.warn("append_session_event_lane_embedding_update_error", {
+      session_key: args.session_key,
+      lane_id: laneId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+async function fillAcceptedEventEmbedding(
+  deps: ToolDeps,
+  eventId: string,
+  args: { session_key: string; content: string },
+): Promise<void> {
+  const eventEmbedding = await appendEventEmbedding(deps, args);
+  if (!eventEmbedding.embeddingVal) return;
+
+  try {
+    await deps.pool.query(
+      `UPDATE ob_session_events
+          SET embedding = $1,
+              embedded_at = $2,
+              embedding_model = $3
+        WHERE id = $4`,
+      [
+        eventEmbedding.embeddingVal,
+        eventEmbedding.embeddedAt,
+        eventEmbedding.model,
+        eventId,
+      ],
+    );
+  } catch (err) {
+    logger.warn("append_session_event_embedding_update_error", {
+      session_key: args.session_key,
+      event_id: eventId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 function scopeConflicts(
@@ -686,14 +788,10 @@ export function registerAppendSessionEvent(
 
       try {
         const transactionalAppend = args.create_if_missing === true;
-        const preparedLaneEmbedding = transactionalAppend
-          ? await firstWriteLaneEmbedding(deps, args)
-          : undefined;
-        const preparedEventEmbedding = transactionalAppend
-          ? await appendEventEmbedding(deps, args)
-          : undefined;
+        let acceptedLaneForEmbedding: string | null = null;
+        let acceptedEventForEmbedding: string | null = null;
 
-        return await withAppendDb(
+        const response = await withAppendDb(
           deps,
           transactionalAppend,
           async (db) => {
@@ -715,7 +813,9 @@ export function registerAppendSessionEvent(
                     : args.thread_id,
                 project: args.project,
                 topic: args.topic,
-                laneEmbedding: preparedLaneEmbedding,
+                laneEmbedding: transactionalAppend
+                  ? firstWriteLaneHashOnly(args)
+                  : undefined,
               },
               auth,
             );
@@ -733,6 +833,9 @@ export function registerAppendSessionEvent(
             }
 
             const laneId = String(laneResult.lane.id);
+            if (transactionalAppend && laneResult.created) {
+              acceptedLaneForEmbedding = laneId;
+            }
 
             // Hybrid sync gate: a share_candidate nomination carrying a secret or
             // person-private content is rejected inline (cheap, no embedding) and
@@ -772,8 +875,14 @@ export function registerAppendSessionEvent(
               });
             }
 
-            const eventEmbedding =
-              preparedEventEmbedding ?? (await appendEventEmbedding(deps, args));
+            const eventEmbedding: PreparedEventEmbedding = transactionalAppend
+              ? {
+                  embeddingVal: null,
+                  contentHashValue: contentHash(args.content),
+                  embeddedAt: null,
+                  model: null,
+                }
+              : await appendEventEmbedding(deps, args);
 
             const { rows } = await db.query(
               `INSERT INTO ob_session_events
@@ -839,6 +948,9 @@ export function registerAppendSessionEvent(
                   }
                 : {}),
             };
+            if (transactionalAppend) {
+              acceptedEventForEmbedding = String(result.event_id);
+            }
 
             logger.info("append_session_event_ok", {
               event_id: result.event_id,
@@ -857,6 +969,15 @@ export function registerAppendSessionEvent(
             };
           },
         );
+
+        if (acceptedLaneForEmbedding) {
+          await fillAcceptedLaneEmbedding(deps, acceptedLaneForEmbedding, args);
+        }
+        if (acceptedEventForEmbedding) {
+          await fillAcceptedEventEmbedding(deps, acceptedEventForEmbedding, args);
+        }
+
+        return response;
       } catch (err) {
         logger.error("append_session_event_db_error", {
           session_key: args.session_key,
