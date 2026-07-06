@@ -7,17 +7,13 @@ Updated: 2026-07-06.
 Live GitHub and Project 8 state are the source of truth. Older roadmap
 snapshots and untracked sidecar plans are historical evidence only.
 
-Current live state as of 2026-07-06 16:16 EDT during the #247 pre-merge
-gauntlet fix-verification phase:
+Current live state as of 2026-07-06 19:10 EDT after PR #257 and #137
+disposition:
 
-- Open PRs: 1.
-  - #254 `feat(#247): add DreamEngine entry decomposition`
-- Open issues: 5.
-  - #247 `Design DreamEngine decomposition for oversized Open Brain entries`
+- Open PRs: 0.
+- Open issues: 2.
   - #223 `Add NATS and JetStream foundation for realtime Open Brain transport`
   - #167 `Retire legacy collab namespace (99.4% mirrored to shared-kb, frozen)`
-  - #137 `Optional: controlled remote qmd deep-lookup wrapper`
-  - #118 `roadmap: file references for Privilege Isolation / closed-brain deployments`
 - #192 is closed by PR #246; its DreamEngine decomposition follow-up is #247.
 - #229 is closed by PR #249; merge commit
   `e4fc7def43735163e1e0d4997ace5ce510494f4d`. It is historical context only,
@@ -27,28 +23,16 @@ gauntlet fix-verification phase:
   #223 remains open for the later runtime/deploy slice.
 - #224 is closed by PR #251, #222 is closed by PR #252, and #221 is closed by
   PR #253. They are historical context only, not active Plan 3F work.
-- PR #254 is open for #247 on `feat/247-dreamengine-decomposition` at
-  `1736ce2af66875423cdd7b97d51d15db6c180728`. Initial pre-merge-gauntlet
-  findings are posted at
-  https://github.com/rodaddy/open-brain/pull/254#issuecomment-4896913956:
-  four MEDIUM findings covering explicit apply no-op status, atomic replacement
-  writes, decision JSONB source content, and Python wrapper bounds. Fixes are
-  pushed and summarized at
-  https://github.com/rodaddy/open-brain/pull/254#issuecomment-4896991728.
-  Focused fix verification is posted at
-  https://github.com/rodaddy/open-brain/pull/254#issuecomment-4897037515.
-  Claude/Opus cross-review findings were posted at
-  https://github.com/rodaddy/open-brain/pull/254#issuecomment-4897143700:
-  one HIGH, two MEDIUM, and two LOW findings. Fixes are pushed in `1736ce2`
-  and summarized at
-  https://github.com/rodaddy/open-brain/pull/254#issuecomment-4897214778.
-  Local validation is green; PR CI is pending on `1736ce2` and merge state is
-  temporarily unstable until checks finish. No core01 deploy has been performed
-  or authorized.
+- #247 is closed by PR #254 and is historical context only.
+- #118 is closed by PR #255 and is historical context only.
+- #137 is closed as a deferred/no-wrapper disposition after PR #257 merged as
+  `e3cf8e584f4ecb4950fcc2f6c84f604eb9727460`. This did not implement a remote
+  qmd wrapper or prove qmd-unavailable runtime fallback; that work remains a
+  future approved mcp2cli/qmd/host-routing issue if needed.
 - #204 is closed. Do not continue stale #204 worktrees for this run.
 
-Critical correction: the active Plan 3F surface is the 5 open issues above and
-1 open PR. Closed issues and merged PRs may explain predecessor state, but they
+Critical correction: the active Plan 3F surface is the 2 open issues above and
+0 open PRs. Closed issues and merged PRs may explain predecessor state, but they
 must not occupy worker lanes or be counted as remaining work.
 
 ## Operating Boundary
@@ -74,9 +58,6 @@ splits into disjoint files or review lanes.
 | Issue | Branch | Temp worktree | Workers | Local target | Deploy allowed | Closure rule |
 | --- | --- | --- | ---: | --- | --- | --- |
 | #223 NATS/JetStream runtime slice | `feat/223-nats-jetstream-runtime` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-223-nats-jetstream-runtime` | 1 implementation + 1 runtime/review sidecar | Later runtime implementation only after local-only #224/#222/#221 sequencing or explicit controller decision | No | Do not close #223 from the merged foundation PR; closing requires real runtime/deploy tests or explicit issue narrowing |
-| #247 DreamEngine decomposition | `feat/247-dreamengine-decomposition` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-247-dreamengine-decomposition` | 1 implementation + 1 dry-run/adversarial sidecar | Dry-run proposals for oversized entries with linked replacements | No | Close only with dry-run-by-default tests and no mutation without approval |
-| #137 optional qmd deep lookup | `docs/137-qmd-deep-lookup-disposition` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-137-qmd-deep-lookup-docs` | 1 docs/disposition worker plus controller validation | Explicit deferred docs/contract disposition; wrapper implementation and qmd-unavailable runtime canaries deferred to mcp2cli/qmd/host-routing | No | Close only as an explicit deferred/no-wrapper disposition, not as wrapper-complete; if runtime wrapper proof is still required, keep #137 open and split a future wrapper issue |
-| #118 Privilege Isolation source refs | `plan/118-privilege-isolation-split` or `feat/118-source-refs-slice` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-118-privilege-isolation` | 1 planning worker first, implementation workers only after split | Either split into child issues or implement one real tested source-ref slice | No | Do not close docs-only unless issue is converted to parent roadmap with child issues |
 | #167 legacy collab retirement | `release/167-retire-collab` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-167-retire-collab` | 1 release-planning worker only | Release/deploy checklist and preflight evidence, no mutation | Explicit approval required | Blocked for local-only; cannot close without live backup/migration/deploy/canary |
 
 ## Controller Execution Rules
@@ -136,13 +117,13 @@ Future runtime/deploy work:
 Deferred:
 core01 install/config, hosted canary, and making NATS the default Hermes path.
 
-### 2. #222 scoped hot working set
+### 2. #222 scoped hot working set -- closed historical
 
 Owning boundary:
 Exact-scope working-set contract and budget/TTL model, excluded from durable
 recall.
 
-Required local work:
+Completed local work:
 
 - Define exact scope key and `working_set` shape.
 - Include working-set items in `agent_context_pack` only on exact-scope match.
@@ -150,12 +131,12 @@ Required local work:
 - Add cross-scope denial tests.
 - Document or implement dropped/expired/trimmed counters.
 
-### 3. #221 recovery WAL
+### 3. #221 recovery WAL -- closed historical
 
 Owning boundary:
 Recovery evidence tier for interrupted sessions, separate from durable memory.
 
-Required local work:
+Completed local work:
 
 - Define WAL/index contract and recovery statuses/actions.
 - Keep recovery content out of ordinary `search_all`, `brain_answer`, and
@@ -163,7 +144,7 @@ Required local work:
 - Add contract-level restart/recovery transition tests.
 - Mark recovery content as unreviewed/quarantined in context-pack output.
 
-### 4. #224 promotion/relegation lifecycle
+### 4. #224 promotion/relegation lifecycle -- closed historical
 
 Owning boundary:
 Explicit client actions for moving candidate memory into durable memory or
@@ -204,17 +185,16 @@ Completed local work:
   instead of automatic durable/shared-kb writes.
 - Proved shared-kb nomination requires explicit nomination metadata.
 
-Next local work:
+Final state:
+Closed by PR #251; do not dispatch more local workers for this issue unless
+Rico explicitly reopens scope.
 
-- Complete critical self-review, commit/push, open PR, and run the
-  pre-merge-gauntlet before any merge decision.
-
-### 5. #247 DreamEngine decomposition
+### 5. #247 DreamEngine decomposition -- closed historical
 
 Owning boundary:
 DreamEngine dry-run proposal workflow for oversized entries.
 
-Required local work:
+Completed local work:
 
 - Detect oversized entries by source family.
 - Produce smaller linked replacement proposals in dry-run output.
@@ -223,7 +203,11 @@ Required local work:
 - Preserve namespace-safe provenance.
 - Add tests proving dry-run-by-default.
 
-### 6. #137 optional qmd deep lookup
+Final state:
+Closed by PR #254; do not dispatch more local workers for this issue unless
+Rico explicitly reopens scope.
+
+### 6. #137 optional qmd deep lookup -- closed deferred
 
 Owning boundary:
 Optional deep-lookup escape hatch, not the Open Brain/Hermes memory contract.
@@ -242,10 +226,14 @@ Local disposition work:
   or repo facts under qmd-unavailable runtime conditions; those canaries belong
   with the future approved wrapper implementation.
 
-### 7. #118 Privilege Isolation source refs
+Final state:
+Closed on 2026-07-06 as a deferred/no-wrapper disposition after PR #257 merged.
+Do not dispatch more local implementation workers for this docs slice.
+
+### 7. #118 Privilege Isolation source refs -- closed historical
 
 Critical correction:
-This issue is not closable with docs-only while its acceptance criteria require
+This issue was not closable with docs-only while its acceptance criteria require
 source-ref storage, retrieval filters, server-side matter isolation, answer
 citations, and leakage tests.
 
@@ -254,6 +242,10 @@ Allowed paths:
 - Implement a real first source-ref slice with tests; or
 - Convert #118 into a parent roadmap issue with child issues for schema,
   ingestion, retrieval filters, answer citations, and audit logs.
+
+Final state:
+Closed by PR #255; do not dispatch more local workers for this issue unless
+Rico explicitly reopens scope.
 
 ### 8. #167 legacy collab retirement
 
@@ -269,15 +261,13 @@ explicit release/deploy approval.
 
 - Controller lane: owns live issue/PR/board state, branch integration, PR body,
   review receipts, merge decisions, and this Plan 3F file.
-- #224 active lane: controller prepares PR from
-  `feat/224-promotion-lifecycle`, includes the critical self-review receipt,
-  pushes the branch, opens the PR, then runs the required pre-merge-gauntlet.
-- Parallel implementation lanes after #224 PR is opened or parked clean:
-  dispatch workers for #222, #221, and #247 first because they have local
-  testable owning boundaries and no live deploy requirement.
-- Planning/disposition lanes: dispatch #137 and #118 workers after the realtime
-  lanes are not blocked. #137 must prove qmd is optional; #118 must split or
-  implement a real source-ref slice.
+- #223 active lane: controller creates the NATS/JetStream foundation branch
+  from a clean worktree and splits transport/auth/Python/docs work only if the
+  implementation boundary is kept local and deploy remains off.
+- #167 active lane: planning/preflight only until Rico explicitly approves live
+  backup/migration/deploy/canary work.
+- Planning/disposition lanes: #137 and #118 are closed historical context. Do
+  not dispatch new workers for them unless Rico explicitly reopens scope.
 - Release-only lane: #167 is a planning/preflight worker only until Rico
   explicitly approves live backup/migration/deploy/canary work.
 
