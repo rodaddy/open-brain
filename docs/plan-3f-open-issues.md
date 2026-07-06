@@ -84,8 +84,12 @@ Local status:
   lane content-hash uniqueness). Fix verification then found denied scoped
   content could be embedded before rejection; Claude also flagged archive CTE
   limit fragility, rollback-error masking, and silent non-transactional fallback.
-  All findings are fixed locally and awaiting commit/push, CI, final fix
-  verification, and repeat Claude cross-review.
+  Follow-up Claude re-review found only LOW issues: the archive parameter
+  alignment is now commented, and post-commit embedding fill remains a known
+  residual risk if the process crashes or the embedding provider stays down
+  after commit. A future embedding backfill for `embedding IS NULL` lanes/events
+  can close that residual, but it is outside #229's local hardening scope. All
+  material findings are fixed locally and awaiting final commit/push/CI.
 
 Required local work:
 

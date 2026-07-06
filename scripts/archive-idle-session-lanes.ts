@@ -150,6 +150,9 @@ export async function archiveIdleSessionLanes(
   let archived = 0;
   if (args.execute && candidates.length > 0) {
     const ids = candidates.map((row) => row.id);
+    // Keep the original params so reused whereSql placeholders ($3+) stay
+    // aligned. $2 is the SELECT limit and is intentionally unused by UPDATE;
+    // selected ids already bound the execute set.
     const updateParams = [...params, ids];
     const idParam = updateParams.length;
     const result = await db.query(
