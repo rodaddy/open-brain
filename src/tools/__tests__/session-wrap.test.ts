@@ -574,6 +574,7 @@ describe("session_wrap", () => {
         arguments: {
           session_key: "ob-v2-dev",
           summary: "Already wrapped this.",
+          source_refs: [{ document_id: "new-doc" }],
         },
       });
 
@@ -583,6 +584,8 @@ describe("session_wrap", () => {
       expect(parsed.lane_id).toBe("lane-uuid-1");
       expect(parsed.lane_status).toBe("wrapped");
       expect(parsed.message).toContain("identical content");
+      expect(parsed.message).toContain("source_refs are not merged");
+      expect(parsed.source_refs).toBeUndefined();
     } finally {
       await cleanup();
     }

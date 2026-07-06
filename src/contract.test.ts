@@ -13,7 +13,7 @@ describe("Open Brain contract manifest", () => {
     expect(contract.contract_scope).toBe("required_openbrain_memory_contract");
     expect(contract.schema_hash).toMatch(/^[0-9a-f]{64}$/);
     expect(contract.schema_hash).toBe(
-      "c16c090d925c005bfecfe4f4dd76c7780d2a7cc8982e43ce748687f82613f554",
+      "45224e3f2ae54daf2c2c3706340e6610879f8a98fe29af77b5cf0b3e98ae48b9",
     );
     expect(contract.min_client_versions.mcp2cli).toBe("0.3.6");
     expect(contract.transport.namespace_boundary).toBe("authorization");
@@ -397,6 +397,9 @@ describe("Open Brain contract manifest", () => {
     });
     expect(getEntry?.output_shape).toContain("compact envelope");
     expect(getEntry?.output_shape).toContain("source_refs redacted");
+    expect(getEntry?.output_shape).toContain(
+      "compact source_scope filters visibility only",
+    );
     expect((getEntry?.input_schema as any).namespace).toBeUndefined();
     const logThought = contract.tool_contracts.log_thought;
     expect((logThought?.input_schema as any).source_refs).toMatchObject({
@@ -480,6 +483,9 @@ describe("Open Brain contract manifest", () => {
       maxItems: 25,
     });
     expect(sessionWrap?.output_shape).toContain("source_refs");
+    expect(sessionWrap?.output_shape).toContain(
+      "duplicate content_hash checkpoints are immutable no-ops",
+    );
   });
 
   it("pins the contract version and append_session_event nomination contract", () => {

@@ -110,7 +110,8 @@ export function sourceScopeFilterSql(
     AND EXISTS (
       SELECT 1
       FROM jsonb_array_elements(COALESCE(${alias}.source_refs, '[]'::jsonb)) AS source_ref(ref)
-      WHERE (NOT (${scopeRef}::jsonb ? 'client_id') OR source_ref.ref->>'client_id' = ${scopeRef}::jsonb->>'client_id')
+      WHERE (source_ref.ref ? 'document_id' OR source_ref.ref ? 'path' OR source_ref.ref ? 'dms_id')
+        AND (NOT (${scopeRef}::jsonb ? 'client_id') OR source_ref.ref->>'client_id' = ${scopeRef}::jsonb->>'client_id')
         AND (NOT (${scopeRef}::jsonb ? 'matter_id') OR source_ref.ref->>'matter_id' = ${scopeRef}::jsonb->>'matter_id')
         AND (NOT (${scopeRef}::jsonb ? 'document_id') OR source_ref.ref->>'document_id' = ${scopeRef}::jsonb->>'document_id')
         AND (NOT (${scopeRef}::jsonb ? 'path') OR source_ref.ref->>'path' = ${scopeRef}::jsonb->>'path')
@@ -138,9 +139,14 @@ export function filterSourceRefsForScope(
   sourceRefs: unknown,
   sourceScope: SourceScope,
 ): SourceReference[] {
-  const parsed = sourceRefsSchema.safeParse(sourceRefs);
-  if (!parsed.success) return [];
-  return parsed.data.filter((ref) => sourceRefMatchesScope(ref, sourceScope));
+  if (!Array.isArray(sourceRefs)) return [];
+  return sourceRefs
+    .slice(0, 25)
+    .flatMap((sourceRef) => {
+      const parsed = sourceRefSchema.safeParse(sourceRef);
+      return parsed.success ? [parsed.data] : [];
+    })
+    .filter((ref) => sourceRefMatchesScope(ref, sourceScope));
 }
 
 export const SOURCE_REFS_CONTRACT = {

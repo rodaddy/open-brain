@@ -318,7 +318,7 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
       source_scope: SOURCE_SCOPE_CONTRACT,
     },
     output_shape:
-      "full readable entry row JSON text payload with source_refs redacted unless source_scope is supplied, or compact envelope with content_preview/content_length/content_truncated/source_ref/fetch_path",
+      "full readable entry row JSON text payload with source_refs redacted unless source_scope is supplied, or compact envelope with content_preview/content_length/content_truncated/source_ref/fetch_path; compact source_scope filters visibility only and carries source_scope in fetch_path for full ref retrieval",
   },
   decompose_entry: {
     version: 1,
@@ -1154,7 +1154,8 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
       },
       source_refs: SOURCE_REFS_CONTRACT,
     },
-    output_shape: "session wrap checkpoint/source_refs JSON text payload",
+    output_shape:
+      "session wrap checkpoint/source_refs JSON text payload; duplicate content_hash checkpoints are immutable no-ops and do not merge later source_refs",
   },
   upsert_repo_fact: {
     version: 2,

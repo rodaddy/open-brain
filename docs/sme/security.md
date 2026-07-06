@@ -223,6 +223,11 @@ them through namespace-only reads unless every generic read surface redacts by
 default. Scope filters must also account for every identifier accepted on
 `source_refs`; accepting `path` or `dms_id` without allowing the same fields in
 `source_scope` creates write-only provenance that cannot be safely returned.
+The scope gate and the returned-source-ref filter must validate refs at the same
+granularity: all-or-nothing array validation can silently drop a valid matching
+ref when any sibling ref is malformed, and SQL gates that do not require a
+document identifier can let row content pass a scope that no returned citation
+can satisfy.
 
 ### Review Questions
 
@@ -240,3 +245,8 @@ default. Scope filters must also account for every identifier accepted on
   returning unscoped evidence?
 - Do regression tests cover parameterization, same-ref matching, scoped output
   filtering, and unscoped read redaction?
+- Does returned-source-ref filtering keep valid matching refs even when a
+  sibling ref is malformed, instead of dropping the whole array?
+- Does the SQL scope gate require the matched array element to be a real
+  citable ref (`document_id`, `path`, or `dms_id`) so row visibility and
+  returned citations agree?

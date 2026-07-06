@@ -100,6 +100,9 @@ describe("source refs", () => {
     expect(predicate).toContain(
       "source_ref.ref->>'dms_id' = $2::jsonb->>'dms_id'",
     );
+    expect(predicate).toContain("source_ref.ref ? 'document_id'");
+    expect(predicate).toContain("source_ref.ref ? 'path'");
+    expect(predicate).toContain("source_ref.ref ? 'dms_id'");
     expect(predicate).toContain("$2::jsonb");
     expect(predicate).not.toContain("@> jsonb_build_array");
     expect(predicate).not.toContain("acme");
@@ -144,5 +147,32 @@ describe("source refs", () => {
         path: "matters/acme/other.pdf",
       }),
     ).toEqual([{ ...refs[1]!, source_type: "file" }]);
+  });
+
+  it("keeps valid matching refs when sibling refs are invalid", () => {
+    const refs = [
+      {
+        document_id: "doc-1",
+        client_id: "acme",
+        matter_id: "lit-1",
+      },
+      {
+        source_type: "legacy-unknown",
+        document_id: "doc-2",
+        client_id: "acme",
+        matter_id: "lit-1",
+      },
+      {
+        client_id: "acme",
+        matter_id: "lit-1",
+      },
+    ];
+
+    expect(
+      filterSourceRefsForScope(refs, {
+        client_id: "acme",
+        matter_id: "lit-1",
+      }),
+    ).toEqual([{ ...refs[0]!, source_type: "file" }]);
   });
 });

@@ -194,7 +194,7 @@ RETURNING id, created_at, source_refs`,
                   lane_id: lane.id,
                   lane_status: lane.status,
                   message:
-                    "Session with identical content already checkpointed",
+                    "Session with identical content already checkpointed; duplicate source_refs are not merged",
                 }),
               },
             ],
