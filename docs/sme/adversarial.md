@@ -103,3 +103,69 @@ PR #171 advances the cursor for manual-review and for caught failures in both
 the thoughts/decisions and events loops; nomination flag left set + failure in
 `receipt.failures` for human follow-up. Regression tests use a test-managed
 `BEFORE INSERT` trigger to force a deterministic failure.
+
+## [2026-07-06] Retry bounds need a stable server-validated root
+
+**Severity:** HIGH
+**Source:** PR #244 initial swarm for Issue #176
+**Scope:** `src/tools/append-session-event.ts`, any bounded resend/retry chain
+stored in client-supplied metadata
+**Status:** fixed in PR #244
+
+### Pattern
+
+Bounded resend logic can look correct while still trusting client lineage. In
+PR #244, `reject_detail.resubmit_metadata.sanitized_resubmit_of` rotated to the
+newest rejected event id after each failed sanitized resend. A client that
+followed the returned metadata, or a malicious caller that supplied a later
+rejected event as the root, could start a fresh counter and bypass the intended
+bound.
+
+### Review Questions
+
+- Does the server keep a stable original/root id across the whole retry chain?
+- Is the supplied root validated against same-lane state, rather than trusted as
+  arbitrary metadata?
+- Does a later retry/rejection ever become the new root and reset the counter?
+- Is there a regression where a contract-following retry fails again and the
+  next `resubmit_metadata` still points to the original root?
+- Is there a regression where a rotated or invalid root is non-resubmittable
+  instead of starting a fresh counter?
+
+### Prior Fix
+
+PR #244 validates `sanitized_resubmit_of` as an original same-lane rejected
+event, keeps the original root in returned `resubmit_metadata`, and marks
+rotated/non-root attempts at the retry bound. Regression tests cover both a
+contract-following failed resend and an explicit rotated-root reset attempt.
+
+## [2026-07-06] Retry bounds must not require cooperative lineage metadata
+
+**Severity:** HIGH
+**Source:** PR #244 Phase 3 Claude cross-review for Issue #176
+**Scope:** `src/tools/append-session-event.ts`, bounded retry/resend responses
+that depend on client-supplied metadata
+**Status:** fixed in PR #244
+
+### Pattern
+
+A retry bound can still be bypassed after root validation if the bound only
+applies when the client supplies lineage metadata. In PR #244, a caller could
+omit `sanitized_resubmit_of` on repeated rejected nominations and continue
+receiving `resubmittable: true` because every request looked like a new root.
+
+### Review Questions
+
+- Does the server derive retry state from observed same-lane rejects even when
+  the client omits lineage?
+- Is client lineage treated as a hint that can raise the observed attempt, never
+  reset it?
+- Do blocked responses omit retry instructions such as `resubmit_metadata`?
+- Is an invalid root distinguishable from a genuine max-attempts result?
+
+### Prior Fix
+
+PR #244 derives no-lineage attempts from prior same-lane root rejections,
+keeps invalid roots non-resubmittable with `resubmit_blocked_reason:
+invalid_resubmit_root`, and omits `resubmit_metadata` when `resubmittable` is
+false. Regression tests cover omitted-lineage retry loops and invalid roots.

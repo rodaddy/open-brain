@@ -4,7 +4,12 @@ import { toSql } from "pgvector/pg";
 import { canWrite } from "../permissions.ts";
 import { canWriteNamespace } from "../namespace-policy.ts";
 import { contentHash, EMBEDDING_MODEL } from "../embedding.ts";
-import { classifyShareCandidate } from "../sharing.ts";
+import {
+  classifyShareCandidate,
+  SHARE_REJECTION_MAX_RESUBMIT_ATTEMPTS,
+  type ShareRejectionDetail,
+  shareRejectionDetail,
+} from "../sharing.ts";
 import type { AuthInfo } from "../types.ts";
 import { logger } from "../logger.ts";
 import type { ToolDeps } from "./index.ts";
@@ -227,9 +232,12 @@ function adjudicateNominationSync(
   importance: string,
   content: string,
   metadata: Record<string, unknown>,
+  resubmitAttempt?: number,
+  resubmitBlockedReason?: ShareRejectionDetail["resubmit_blocked_reason"],
 ): {
   metadata: Record<string, unknown>;
   rejected: "reject-secret" | "reject-private" | null;
+  rejectDetail: ShareRejectionDetail | null;
 } {
   // Match the async promoter's truthiness exactly: its SQL nominates on
   // `metadata->>'share_candidate' = 'true'`, which matches both a JSON boolean
@@ -239,8 +247,20 @@ function adjudicateNominationSync(
   const nominated =
     metadata.share_candidate === true || metadata.share_candidate === "true";
   if (!nominated) {
-    return { metadata, rejected: null };
+    return { metadata, rejected: null, rejectDetail: null };
   }
+  const rejectDetail = shareRejectionDetail(
+    {
+      event_type: eventType,
+      importance,
+      content,
+      metadata,
+    },
+    {
+      resubmit_attempt: resubmitAttempt,
+      resubmit_blocked_reason: resubmitBlockedReason,
+    },
+  );
   const decision = classifyShareCandidate({
     event_type: eventType,
     importance,
@@ -254,9 +274,114 @@ function adjudicateNominationSync(
     return {
       metadata: { ...rest, share_rejected_sync: decision },
       rejected: decision,
+      rejectDetail,
     };
   }
-  return { metadata, rejected: null };
+  return { metadata, rejected: null, rejectDetail: null };
+}
+
+function sanitizedResubmitOf(metadata: Record<string, unknown>): string | null {
+  const raw = metadata.sanitized_resubmit_of;
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function requestedResubmitAttempt(metadata: Record<string, unknown>): number {
+  const raw = metadata.sanitized_resubmit_attempt;
+  if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 0) return 0;
+  return raw;
+}
+
+async function effectiveResubmitState(
+  deps: ToolDeps,
+  laneId: string,
+  metadata: Record<string, unknown>,
+): Promise<{
+  attempt: number;
+  blockedReason?: ShareRejectionDetail["resubmit_blocked_reason"];
+}> {
+  const resubmitOf = sanitizedResubmitOf(metadata);
+  const requested = requestedResubmitAttempt(metadata);
+  if (!resubmitOf) {
+    const { rows } = await deps.pool.query(
+      `SELECT COUNT(*)::int AS rejected_count
+         FROM ob_session_events
+        WHERE lane_id = $1
+          AND metadata->>'sanitized_resubmit_of' IS NULL
+          AND metadata->>'share_rejected_sync' IN ('reject-secret', 'reject-private')`,
+      [laneId],
+    );
+    const rawCount = rows[0]?.rejected_count;
+    const priorRejected =
+      typeof rawCount === "number"
+        ? rawCount
+        : Number.parseInt(String(rawCount ?? "0"), 10);
+    const observedAttempt = Number.isFinite(priorRejected) ? priorRejected : 0;
+    return { attempt: Math.max(requested, observedAttempt) };
+  }
+
+  const { rows } = await deps.pool.query(
+    `SELECT
+        (
+          SELECT COUNT(*)::int
+            FROM ob_session_events
+           WHERE lane_id = $1
+             AND id::text = $2
+             AND metadata->>'sanitized_resubmit_of' IS NULL
+             AND metadata->>'share_rejected_sync' IN ('reject-secret', 'reject-private')
+        ) AS root_rejected_count,
+        (
+          SELECT COUNT(*)::int
+            FROM ob_session_events
+           WHERE lane_id = $1
+             AND metadata->>'sanitized_resubmit_of' = $2
+             AND metadata->>'share_rejected_sync' IN ('reject-secret', 'reject-private')
+        ) AS rejected_count`,
+    [laneId, resubmitOf],
+  );
+  const rawRootCount = rows[0]?.root_rejected_count;
+  const rootRejected =
+    typeof rawRootCount === "number"
+      ? rawRootCount
+      : Number.parseInt(String(rawRootCount ?? "0"), 10);
+  if (!Number.isFinite(rootRejected) || rootRejected < 1) {
+    return {
+      attempt: Math.max(requested, SHARE_REJECTION_MAX_RESUBMIT_ATTEMPTS),
+      blockedReason: "invalid_resubmit_root",
+    };
+  }
+  const rawCount = rows[0]?.rejected_count;
+  const priorRejected =
+    typeof rawCount === "number"
+      ? rawCount
+      : Number.parseInt(String(rawCount ?? "0"), 10);
+  const observedAttempt = Number.isFinite(priorRejected)
+    ? priorRejected + 1
+    : 1;
+  return { attempt: Math.max(requested, observedAttempt) };
+}
+
+function attachResubmitTarget(
+  detail: ShareRejectionDetail,
+  eventId: string,
+  metadata: Record<string, unknown>,
+): ShareRejectionDetail & {
+  resubmit_metadata?: {
+    sanitized_resubmit_of: string;
+    sanitized_resubmit_attempt: number;
+  };
+} {
+  if (!detail.resubmittable) {
+    return { ...detail };
+  }
+  return {
+    ...detail,
+    resubmit_metadata: {
+      sanitized_resubmit_of: sanitizedResubmitOf(metadata) ?? eventId,
+      sanitized_resubmit_attempt: detail.resubmit_attempt + 1,
+    },
+  };
 }
 
 function writerProvenance(auth: AuthInfo): {
@@ -483,24 +608,42 @@ export function registerAppendSessionEvent(
           );
         }
 
-        const laneId = laneResult.lane.id;
+        const laneId = String(laneResult.lane.id);
 
         // Hybrid sync gate: a share_candidate nomination carrying a secret or
         // person-private content is rejected inline (cheap, no embedding) and
         // its nomination stripped before persist, so the async promoter never
         // sees it. Worthiness/dedup/promote remain async.
-        const nomination = adjudicateNominationSync(
+        let nomination = adjudicateNominationSync(
           args.event_type,
           importance,
           args.content,
           args.metadata ?? {},
         );
+        if (nomination.rejected) {
+          const resubmit = await effectiveResubmitState(
+            deps,
+            laneId,
+            args.metadata ?? {},
+          );
+          nomination = adjudicateNominationSync(
+            args.event_type,
+            importance,
+            args.content,
+            args.metadata ?? {},
+            resubmit.attempt,
+            resubmit.blockedReason,
+          );
+        }
         const metadata = appendWriterProvenance(nomination.metadata, auth);
         if (nomination.rejected) {
           logger.warn("append_session_event_share_rejected", {
             session_key: args.session_key,
             namespace: ns,
             decision: nomination.rejected,
+            matched_kind: nomination.rejectDetail?.matched_kind,
+            span_count: nomination.rejectDetail?.span_count,
+            resubmittable: nomination.rejectDetail?.resubmittable,
             clientId: auth.clientId,
           });
         }
@@ -571,7 +714,18 @@ export function registerAppendSessionEvent(
           // Surface the sync nomination outcome so a contract-driven agent
           // learns its share_candidate was refused (and why) without polling.
           ...(nomination.rejected
-            ? { share_candidate_rejected: nomination.rejected }
+            ? {
+                share_candidate_rejected: nomination.rejected,
+                ...(nomination.rejectDetail
+                  ? {
+                      reject_detail: attachResubmitTarget(
+                        nomination.rejectDetail,
+                        rows[0].id,
+                        nomination.metadata,
+                      ),
+                    }
+                  : {}),
+              }
             : {}),
         };
 

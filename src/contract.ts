@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { TOOL_CONTRACTS } from "./contract-schemas.ts";
 
-export const CONTRACT_VERSION = "2026-07-05.memory-tools.v12";
+export const CONTRACT_VERSION = "2026-07-06.memory-tools.v13";
 export const CONTRACT_SCHEMA_VERSION = 1;
 
 export interface ContractCapability {
@@ -323,12 +323,12 @@ export function buildContract(
     contract_scope: "required_openbrain_memory_contract" as const,
     schema_version: CONTRACT_SCHEMA_VERSION,
     min_client_versions: {
-      "openbrain-memory": "0.1.2",
+      "openbrain-memory": "0.1.3",
       "rtech-hermes-runtime": "0.1.0",
       mcp2cli: "0.3.6",
     },
     compatible_client_ranges: {
-      "openbrain-memory": ">=0.1.2 <1.0.0",
+      "openbrain-memory": ">=0.1.3 <1.0.0",
       "rtech-hermes-runtime": ">=0.1.0 <1.0.0",
       mcp2cli: ">=0.3.6 <1.0.0",
     },

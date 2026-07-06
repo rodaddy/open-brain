@@ -1,37 +1,40 @@
 # Open Issues And PRs Roadmap Takeover
 
-Updated: 2026-07-05 by Codex after Fable handoff.
+Updated: 2026-07-06 by Codex after Fable handoff.
 
 ## Current Controller State
 
-Updated after the 2026-07-05 PR merge batch and Project 8 sync.
+Updated after PR #244 Phase 3 Claude cross-review findings were posted and
+local fixes were validated on 2026-07-06.
 
 - Open PRs: 1
-  - #234 `ci(#165): ephemeral pgvector DB-integration job with anti-skip guard`
-    is merge-ready by code/review evidence: merge state `CLEAN`, pre-merge
-    gauntlet complete, GitHub checks green (`check`, `db-integration`,
-    `python-package`, `validate`, GitGuardian), and `deploy` skipped.
-  - Current blocker: local GitHub CLI token lacks the `workflow` OAuth scope
-    required to merge a PR that changes `.github/workflows/ci.yml`.
-    Latest repair attempt timed out waiting for GitHub device-flow approval.
-    Rerun `gh auth refresh -h github.com -s workflow`; after authorization,
-    re-run `gh auth status`, then
-    `gh pr merge 234 --squash`.
+  - #244 `feat(#176): structure share_candidate rejection detail` is open.
+    Current pushed head `a9639d36844aeb6265a486675a3e9135a1126b8f` passed
+    `check`, `db-integration`, `python-package`, PR-body `validate`, and
+    GitGuardian; `deploy` skipped. Phase 2 initial swarm found and fixed the
+    resend root-rotation bug. Phase 3 Claude cross-review posted five findings
+    (one HIGH, two MEDIUM, two LOW); local fixes are validated but not yet
+    committed/pushed. Next gate: commit/push the Phase 3 fixes, run
+    fix-verification, then address/waive every PR finding before merge. No
+    core01 deploy.
 - Merged in this controller batch:
   - #231 merged as `c9888cc584fe68b5ff91906d56ef26c7fb40afef`;
     post-merge `/codex-deep` smoke on #234 succeeded.
   - #233 merged as `9653cf86d0ff770eb929915c61d11ce5f0f499fc`.
+  - #234 merged as `a16398c4d344f2c57ea0d508f998fcd05cbe8e07`;
+    issue #165 closed at `2026-07-06T00:47:00Z`.
   - #235 merged as `2a8fd986154d7b5dc11fb0c2d690288d35530a50`.
   - #237 merged as `fefb4659f8d181e465fac584d25a57e11e672ac2`.
   - #238 merged as `ee0a7c8dc02313c4bc3bdf6a387742265a11f0a4`.
   - #239 merged as `d6389962e5b2650d9e53dbdb7d75a30b004600fa`.
+  - #243 merged as `3b8e47ac5d4b3b614fdd26f5609242b73204f928`;
+    issue #204 closed at `2026-07-06T01:54:16Z`.
 - Prior deploy-control PR:
   - #240 is merged. Production deploy is optional/deferred and only allowed via
-    the release SOP path, not automatic `main` pushes.
-- Open issues: 13
-  - #229, #224, #223, #222, #221, #204, #192, #176, #167, #166, #165, #137,
-    #118.
-  - #165 should close when #234 merges.
+    the release SOP path, not automatic `main` pushes. Merge commit:
+    `b12e33e22b8b97c5322ef43ea3831752652c4eeb`.
+- Open issues: 11
+  - #229, #224, #223, #222, #221, #192, #176, #167, #166, #137, #118.
   - #167 remains open after #237 because live backup/dry-run/execute/reconcile,
     release deploy, and downstream canary are still gated.
 - Project 8 updated on 2026-07-05:
@@ -39,6 +42,14 @@ Updated after the 2026-07-05 PR merge batch and Project 8 sync.
     commits in `Next Action`.
   - PR #234 and issue #165 moved to `Blocked`, with the blocker recorded as the
     missing local `workflow` OAuth scope.
+- Project 8 updated on 2026-07-06:
+  - #234/#165 are merged/closed; #165 is no longer open.
+  - #204 moved to `Done` by merge/closure automation and `Next Action` records
+    PR #243 merge commit `3b8e47ac5d4b3b614fdd26f5609242b73204f928`.
+  - #176 and PR #244 are `In Review`. Validation was `CI Passed` at
+    `a9639d3`; local validation passed after the Phase 3 Claude fixes. Review
+    Gate is `Fixes In Progress` until the fix commit is pushed and
+    fix-verification runs.
 - No production deploy was performed during this batch.
 
 ## Live Inventory Correction
@@ -191,18 +202,21 @@ Status: verified locally and by PR checks, not merged.
 
 ### Phase 4: #177 installable package, #204 resolver, #176 structured rejection
 
-Status: #177 is done via merged PR #238. #204 is the active local-only slice.
+Status: #177 is done via merged PR #238. #204 is done via merged PR #243.
+#176 is the active local-only slice.
 
-Current worktree:
-`/Volumes/ThunderBolt/_tmp/open-brain/issue-204-source-type-resolver`
+Current #176 worktree:
+`/Volumes/ThunderBolt/_tmp/open-brain/issue-176-structured-rejection`
 
-Current branch:
-`feat/204-source-type-resolver` from `origin/main` at `90713f4`.
+Current #176 branch:
+`feat/176-structured-rejection` from `origin/main` at
+`3b8e47ac5d4b3b614fdd26f5609242b73204f928`.
 
 Owning boundary:
-MCP/tool contract for ID-based entry resolution, with server-side auth and
-namespace predicates plus the Python client snapshot as the downstream contract
-mirror.
+The share-candidate rejection classifier/result contract, with the public
+`get_contract` manifest and `python/openbrain-memory` snapshot as downstream
+contract mirrors. The response/log/DB safety invariant is that no offending
+secret or private content is echoed.
 
 Current #204 state:
 
@@ -262,11 +276,122 @@ Current #204 state:
     - `cd python/openbrain-memory && uv run pytest -q tests/test_client.py tests/test_contract.py`
       -> 69 pass.
     - `git diff --check` -> passed.
-14. Pending: amend/push cross-review fixes, wait for current-head CI, post the
-    cross-review/fixes receipt, then merge when the gauntlet gate is clean.
+14. Done: PR #243 merged as
+    `3b8e47ac5d4b3b614fdd26f5609242b73204f928`; issue #204 closed at
+    `2026-07-06T01:54:16Z`.
 15. Deferred by current local-only instruction: downstream rollout and any
    core01 deploy/live canary. This contract change still triggers
    `docs/downstream-rollout.md` before issue closure/release.
+
+Current #176 state:
+
+1. Done locally: structured non-leaking `reject_detail` for sync
+   `share_candidate` rejections with `category`, safe `matched_kind`,
+   `span_count`, `redaction_hint`, `resubmittable`,
+   `resubmit_attempt`, `max_resubmit_attempts`, and optional safe
+   `resubmit_blocked_reason`.
+2. Done locally: bounded sanitized resend metadata via
+   `reject_detail.resubmit_metadata.sanitized_resubmit_of` and
+   `sanitized_resubmit_attempt`, with max attempt 2. Blocked responses omit
+   `resubmit_metadata`.
+3. Done locally: contract bump to `2026-07-06.memory-tools.v13`;
+   `append_session_event` tool contract version 6; manifest floor/range and
+   `python/openbrain-memory` package version bumped to `0.1.3`.
+4. Done locally: rejection logs expose only safe classifier metadata
+   (`matched_kind`, `span_count`, `resubmittable`) and never the matched
+   content.
+5. Done locally: tests cover secret structured rejection, private structured
+   rejection, string `"true"` nomination parity, non-resubmittable repeated
+   sanitized rejection at the bound, server-enforced protection against a reset
+   `sanitized_resubmit_attempt`, invalid/rotated roots, omitted-lineage retry
+   loops, multi-detector `span_count`, and clean sanitized resend acceptance.
+6. Validation passed locally:
+   - `bun test src/sharing.test.ts src/tools/__tests__/append-session-event.test.ts src/contract.test.ts`
+     -> 90 pass, 5 skip, 0 fail.
+   - `bunx tsc --noEmit` -> passed.
+   - `bun test` -> 1055 pass, 46 skip, 0 fail.
+   - `cd python/openbrain-memory && uv run pytest -q tests/test_client.py tests/test_contract.py`
+     -> 69 pass.
+   - `cd python/openbrain-memory && uv run mypy src/openbrain_memory` ->
+     passed.
+   - `cd python/openbrain-memory && uv run ruff check src tests` -> passed.
+   - `git diff --check` -> passed.
+   - `ggshield secret scan path -y <changed files>` -> no secrets found.
+7. Phase 1 critical pass ran and found one material issue: the first
+   implementation trusted the client-supplied resend attempt too much. Fixed
+   before PR by counting prior rejected resubmits in the same lane and using
+   the larger of client-supplied and server-observed attempts.
+8. PR #244 is open. Implementation head
+   `d0c34f8ec5649e13135f9844adb01f0e879a7f3c` passed the corrected PR-body run
+   (`validate`), server CI (`check`, `db-integration`), Python package CI, and
+   GitGuardian; deploy skipped. Re-read live checks for the latest head after
+   this plan-only update.
+9. PR #244 plan/status head `e7ba6d9ac5de016b7aebc5979794620939d4c46a`
+   passed GitHub `check`, `db-integration`, `python-package`, PR-body
+   `validate`, and GitGuardian; deploy skipped.
+10. Phase 2 initial swarm ran with six lanes:
+   correctness, antagonist, security, backend/domain, quality, and gotcha.
+   Correctness/security/gotcha were clean. Antagonist, backend/domain, and
+   quality all found the same material issue: a rejected sanitized resend
+   returned a new `sanitized_resubmit_of` root, so a contract-following client
+   or rotated-root caller could reset the bound.
+11. Fixed locally: `effectiveResubmitAttempt` now validates the supplied root as
+   an original same-lane rejected event; invalid/rotated roots are treated as
+   already at `SHARE_REJECTION_MAX_RESUBMIT_ATTEMPTS`. `attachResubmitTarget`
+   now preserves an incoming original root instead of rotating to the latest
+   rejected event id.
+12. Local validation after the Phase 2 fix:
+   - `bun test src/tools/__tests__/append-session-event.test.ts` -> 46 pass,
+     5 skip, 0 fail.
+   - `bun test src/sharing.test.ts src/tools/__tests__/append-session-event.test.ts src/contract.test.ts`
+     -> 92 pass, 5 skip, 0 fail.
+   - `bunx tsc --noEmit` -> passed.
+   - `bun test` -> 1057 pass, 46 skip, 0 fail.
+   - `git diff --check` -> passed.
+   - `ggshield secret scan path -y src/tools/append-session-event.ts src/tools/__tests__/append-session-event.test.ts`
+     -> no secrets found.
+13. Phase 2 fix-verification passed and receipt was posted on PR #244:
+   `https://github.com/rodaddy/open-brain/pull/244#issuecomment-4888701176`.
+   Current pushed head `a9639d36844aeb6265a486675a3e9135a1126b8f` passed
+   GitHub `check`, `db-integration`, `python-package`, PR-body `validate`, and
+   GitGuardian; `deploy` skipped.
+14. Phase 3 opposite-runtime Claude cross-review ran on the pinned PR diff and
+   posted five findings to PR #244:
+   - HIGH: omitted `sanitized_resubmit_of` bypassed retry bounds.
+   - MEDIUM: invalid/cross-lane root was indistinguishable from max attempts.
+   - MEDIUM: clean sanitized resubmits paid an unnecessary retry-state DB query.
+   - LOW: `span_count` counted only the first detector kind.
+   - LOW: blocked rejections still emitted retry metadata.
+15. Local fixes for the Phase 3 findings:
+   - no-lineage retry state is derived from prior same-lane root rejections;
+   - invalid roots are blocked with `resubmit_blocked_reason:
+     invalid_resubmit_root`;
+   - retry-state DB lookup runs only after the pure sync gate rejects;
+   - blocked responses omit `resubmit_metadata`;
+   - secret `span_count` sums all firing detectors;
+   - `docs/sme/adversarial.md` and `docs/sme/quality.md` record the new
+     MEDIUM+ review patterns.
+16. Local validation after the Phase 3 fixes:
+   - `bun test src/tools/__tests__/append-session-event.test.ts` -> 47 pass,
+     5 skip, 0 fail.
+   - `bun test src/sharing.test.ts src/tools/__tests__/append-session-event.test.ts src/contract.test.ts`
+     -> 94 pass, 5 skip, 0 fail.
+   - `bunx tsc --noEmit` -> passed.
+   - `bun test` -> 1059 pass, 46 skip, 0 fail.
+   - `cd python/openbrain-memory && uv run pytest -q tests/test_client.py tests/test_contract.py`
+     -> 69 pass.
+   - `cd python/openbrain-memory && uv run mypy src/openbrain_memory` ->
+     passed.
+   - `cd python/openbrain-memory && uv run ruff check src tests` -> passed.
+   - `git diff --check` -> passed.
+   - `ggshield secret scan path -y <Phase 3 changed files>` -> no secrets found.
+17. Pending: commit/push the Phase 3 fixes, post the fixes receipt on PR #244,
+   run focused fix-verification, then Phase 4 reply to every finding with the
+   fixing commit/waiver and Phase 5 merge only after the gate is clean.
+18. Deferred by current local-only instruction: downstream rollout and any
+   core01 deploy/live canary. This contract change triggers
+   `docs/downstream-rollout.md`; downstream rollout waits for the later release
+   phase.
 
 ---
 

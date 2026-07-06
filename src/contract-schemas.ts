@@ -468,7 +468,7 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
     output_shape: "session lane array JSON text payload",
   },
   append_session_event: {
-    version: 5,
+    version: 6,
     input_schema: {
       session_key: {
         type: "string",
@@ -629,6 +629,26 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
               "de-duplicates against shared-kb, and promotes survivors. Do NOT set " +
               "true for secrets, credentials, or private/personal content.",
           },
+          sanitized_resubmit_of: {
+            type: "string",
+            required: false,
+            description:
+              "When resubmitting a sanitized replacement after a synchronous " +
+              "share_candidate rejection, set this to reject_detail.resubmit_metadata." +
+              "sanitized_resubmit_of from a resubmittable rejected event response.",
+          },
+          sanitized_resubmit_attempt: {
+            type: "integer",
+            required: false,
+            min: 1,
+            max: 2,
+            description:
+              "Bounded sanitized resend attempt count. Set this to " +
+              "reject_detail.resubmit_metadata.sanitized_resubmit_attempt when " +
+              "re-nominating a sanitized replacement. The server derives an " +
+              "observed attempt from prior same-lane rejections and marks further " +
+              "sync rejections non-resubmittable after the maximum attempt.",
+          },
           okf: {
             type: "object",
             required: false,
@@ -645,7 +665,11 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
     output_shape:
       "session event JSON text payload with lane_created, writer_identity, " +
       "token_identity, delegated_agent_id, and namespace_source provenance " +
-      "fields; error payloads use error classes retryable_outage, auth_denied, " +
+      "fields; sync share_candidate rejections include share_candidate_rejected " +
+      "and reject_detail {category, matched_kind, span_count, redaction_hint, " +
+      "resubmittable, resubmit_attempt, max_resubmit_attempts, optional " +
+      "resubmit_blocked_reason, and resubmit_metadata only when resubmittable}; " +
+      "reject_detail never echoes offending content; error payloads use error classes retryable_outage, auth_denied, " +
       "scope_validation, unsupported_operation, or conflict_retry",
   },
   session_wrap: {

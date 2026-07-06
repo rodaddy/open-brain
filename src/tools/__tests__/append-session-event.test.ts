@@ -949,19 +949,39 @@ describe("append_session_event", () => {
   // pool. The metadata is the 7th INSERT param ($7, index 6), JSON.stringify'd.
 
   /** Lane-found pool that captures the params of the events INSERT. */
-  function createCapturingPool() {
+  function createCapturingPool(
+    priorRejectedResubmits = 0,
+    rootRejectedCount = 1,
+    priorUnlineagedRejected = 0,
+  ) {
     const captured: {
       createdBy: string | null;
       metadata: Record<string, unknown> | null;
+      resubmitQueryCount: number;
     } = {
       createdBy: null,
       metadata: null,
+      resubmitQueryCount: 0,
     };
     const pool = {
       captured,
       query: async (sql: string, params?: any[]) => {
         if (sql.includes("ob_session_lanes")) {
           return { rows: [{ id: "lane-uuid-1", status: "active" }] };
+        }
+        if (sql.includes("AS rejected_count")) {
+          captured.resubmitQueryCount += 1;
+          if (!sql.includes("root_rejected_count")) {
+            return { rows: [{ rejected_count: priorUnlineagedRejected }] };
+          }
+          return {
+            rows: [
+              {
+                root_rejected_count: rootRejectedCount,
+                rejected_count: priorRejectedResubmits,
+              },
+            ],
+          };
         }
         // INSERT INTO ob_session_events — $7 (index 6) is the metadata JSON.
         if (params && typeof params[6] === "string") {
@@ -1164,6 +1184,22 @@ describe("append_session_event", () => {
       expect(result.isError).toBeFalsy();
       const parsed = JSON.parse((result.content as any)[0].text);
       expect(parsed.share_candidate_rejected).toBe("reject-secret");
+      expect(parsed.reject_detail).toMatchObject({
+        category: "reject-secret",
+        matched_kind: "openai_api_key",
+        span_count: 1,
+        resubmittable: true,
+        resubmit_attempt: 0,
+        max_resubmit_attempts: 2,
+        resubmit_metadata: {
+          sanitized_resubmit_of: "event-uuid-1",
+          sanitized_resubmit_attempt: 1,
+        },
+      });
+      expect(JSON.stringify(parsed.reject_detail)).not.toContain("sk-");
+      expect(parsed.reject_detail.redaction_hint).toContain(
+        "Remove the credential",
+      );
 
       // Persisted metadata: nomination stripped, audit marker stamped.
       expect(mockPool.captured.metadata).not.toBeNull();
@@ -1200,6 +1236,15 @@ describe("append_session_event", () => {
       expect(result.isError).toBeFalsy();
       const parsed = JSON.parse((result.content as any)[0].text);
       expect(parsed.share_candidate_rejected).toBe("reject-secret");
+      expect(parsed.reject_detail).toMatchObject({
+        category: "reject-secret",
+        matched_kind: "openai_api_key",
+        resubmittable: true,
+        resubmit_metadata: {
+          sanitized_resubmit_of: "event-uuid-1",
+          sanitized_resubmit_attempt: 1,
+        },
+      });
       expect(mockPool.captured.metadata!.share_candidate).toBeUndefined();
       expect(mockPool.captured.metadata!.share_rejected_sync).toBe(
         "reject-secret",
@@ -1229,6 +1274,16 @@ describe("append_session_event", () => {
       expect(result.isError).toBeFalsy();
       const parsed = JSON.parse((result.content as any)[0].text);
       expect(parsed.share_candidate_rejected).toBe("reject-private");
+      expect(parsed.reject_detail).toMatchObject({
+        category: "reject-private",
+        matched_kind: "private-flag",
+        span_count: 1,
+        resubmittable: true,
+        resubmit_metadata: {
+          sanitized_resubmit_of: "event-uuid-1",
+          sanitized_resubmit_attempt: 1,
+        },
+      });
 
       expect(mockPool.captured.metadata).not.toBeNull();
       expect(mockPool.captured.metadata!.share_candidate).toBeUndefined();
@@ -1237,6 +1292,202 @@ describe("append_session_event", () => {
       );
       // The original private marker is preserved (only share_candidate stripped).
       expect(mockPool.captured.metadata!.private).toBe(true);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("marks repeated rejected sanitized resubmits non-resubmittable at the bound", async () => {
+    const mockPool = createCapturingPool();
+    const auth: AuthInfo = { role: "admin", clientId: "skippy" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+    const fakeKey = "sk" + "-" + "a".repeat(20);
+
+    try {
+      const result = await client.callTool({
+        name: "append_session_event",
+        arguments: {
+          session_key: "test",
+          event_type: "fact",
+          content: `Sanitized resend still accidentally carries ${fakeKey}`,
+          metadata: {
+            share_candidate: true,
+            sanitized_resubmit_of: "event-original",
+            sanitized_resubmit_attempt: 2,
+          },
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.share_candidate_rejected).toBe("reject-secret");
+      expect(parsed.reject_detail).toMatchObject({
+        category: "reject-secret",
+        matched_kind: "openai_api_key",
+        resubmittable: false,
+        resubmit_attempt: 2,
+        max_resubmit_attempts: 2,
+        resubmit_blocked_reason: "max_attempts",
+      });
+      expect(parsed.reject_detail.resubmit_metadata).toBeUndefined();
+      expect(JSON.stringify(parsed.reject_detail)).not.toContain(fakeKey);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("does not trust a reset sanitized_resubmit_attempt when prior rejected resubmits exist", async () => {
+    const mockPool = createCapturingPool(1);
+    const auth: AuthInfo = { role: "admin", clientId: "skippy" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+    const fakeKey = "sk" + "-" + "a".repeat(20);
+
+    try {
+      const result = await client.callTool({
+        name: "append_session_event",
+        arguments: {
+          session_key: "test",
+          event_type: "fact",
+          content: `Reset resend still accidentally carries ${fakeKey}`,
+          metadata: {
+            share_candidate: true,
+            sanitized_resubmit_of: "event-original",
+            sanitized_resubmit_attempt: 0,
+          },
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.share_candidate_rejected).toBe("reject-secret");
+      expect(parsed.reject_detail).toMatchObject({
+        category: "reject-secret",
+        matched_kind: "openai_api_key",
+        resubmittable: false,
+        resubmit_attempt: 2,
+        max_resubmit_attempts: 2,
+        resubmit_blocked_reason: "max_attempts",
+      });
+      expect(parsed.reject_detail.resubmit_metadata).toBeUndefined();
+      expect(JSON.stringify(parsed.reject_detail)).not.toContain(fakeKey);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("keeps the original rejection root when a contract-following resubmit fails again", async () => {
+    const mockPool = createCapturingPool(0);
+    const auth: AuthInfo = { role: "admin", clientId: "skippy" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+    const fakeKey = "sk" + "-" + "a".repeat(20);
+
+    try {
+      const result = await client.callTool({
+        name: "append_session_event",
+        arguments: {
+          session_key: "test",
+          event_type: "fact",
+          content: `First sanitized retry still accidentally carries ${fakeKey}`,
+          metadata: {
+            share_candidate: true,
+            sanitized_resubmit_of: "event-original",
+            sanitized_resubmit_attempt: 1,
+          },
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.share_candidate_rejected).toBe("reject-secret");
+      expect(parsed.reject_detail).toMatchObject({
+        category: "reject-secret",
+        matched_kind: "openai_api_key",
+        resubmittable: true,
+        resubmit_attempt: 1,
+        max_resubmit_attempts: 2,
+        resubmit_metadata: {
+          sanitized_resubmit_of: "event-original",
+          sanitized_resubmit_attempt: 2,
+        },
+      });
+      expect(JSON.stringify(parsed.reject_detail)).not.toContain(fakeKey);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("does not let a rotated resubmit root reset the retry bound", async () => {
+    const mockPool = createCapturingPool(0, 0);
+    const auth: AuthInfo = { role: "admin", clientId: "skippy" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+    const fakeKey = "sk" + "-" + "a".repeat(20);
+
+    try {
+      const result = await client.callTool({
+        name: "append_session_event",
+        arguments: {
+          session_key: "test",
+          event_type: "fact",
+          content: `Rotated-root resend still accidentally carries ${fakeKey}`,
+          metadata: {
+            share_candidate: true,
+            sanitized_resubmit_of: "event-resubmit-1",
+            sanitized_resubmit_attempt: 0,
+          },
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.share_candidate_rejected).toBe("reject-secret");
+      expect(parsed.reject_detail).toMatchObject({
+        category: "reject-secret",
+        matched_kind: "openai_api_key",
+        resubmittable: false,
+        resubmit_attempt: 2,
+        max_resubmit_attempts: 2,
+        resubmit_blocked_reason: "invalid_resubmit_root",
+      });
+      expect(parsed.reject_detail.resubmit_metadata).toBeUndefined();
+      expect(parsed.reject_detail.redaction_hint).toContain(
+        "resend root was not recognized",
+      );
+      expect(JSON.stringify(parsed.reject_detail)).not.toContain(fakeKey);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("bounds repeated rejected nominations even when clients omit resubmit lineage", async () => {
+    const mockPool = createCapturingPool(0, 1, 2);
+    const auth: AuthInfo = { role: "admin", clientId: "skippy" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+    const fakeKey = "sk" + "-" + "a".repeat(20);
+
+    try {
+      const result = await client.callTool({
+        name: "append_session_event",
+        arguments: {
+          session_key: "test",
+          event_type: "fact",
+          content: `Unlineaged retry still accidentally carries ${fakeKey}`,
+          metadata: { share_candidate: true },
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.share_candidate_rejected).toBe("reject-secret");
+      expect(parsed.reject_detail).toMatchObject({
+        category: "reject-secret",
+        matched_kind: "openai_api_key",
+        resubmittable: false,
+        resubmit_attempt: 2,
+        max_resubmit_attempts: 2,
+        resubmit_blocked_reason: "max_attempts",
+      });
+      expect(parsed.reject_detail.resubmit_metadata).toBeUndefined();
+      expect(JSON.stringify(parsed.reject_detail)).not.toContain(fakeKey);
     } finally {
       await cleanup();
     }
@@ -1268,6 +1519,45 @@ describe("append_session_event", () => {
       expect(mockPool.captured.metadata).not.toBeNull();
       expect(mockPool.captured.metadata!.share_candidate).toBe(true);
       expect(mockPool.captured.metadata!.share_rejected_sync).toBeUndefined();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("accepts a clean sanitized resubmit without emitting rejection detail", async () => {
+    const mockPool = createCapturingPool();
+    const auth: AuthInfo = { role: "admin", clientId: "skippy" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "append_session_event",
+        arguments: {
+          session_key: "test",
+          event_type: "fact",
+          content:
+            "Replaced the credential-bearing deployment note with a sanitized operational summary.",
+          metadata: {
+            share_candidate: true,
+            sanitized_resubmit_of: "event-original",
+            sanitized_resubmit_attempt: 1,
+          },
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.share_candidate_rejected).toBeUndefined();
+      expect(parsed.reject_detail).toBeUndefined();
+
+      expect(mockPool.captured.metadata).not.toBeNull();
+      expect(mockPool.captured.metadata!.share_candidate).toBe(true);
+      expect(mockPool.captured.metadata!.sanitized_resubmit_of).toBe(
+        "event-original",
+      );
+      expect(mockPool.captured.metadata!.sanitized_resubmit_attempt).toBe(1);
+      expect(mockPool.captured.metadata!.share_rejected_sync).toBeUndefined();
+      expect(mockPool.captured.resubmitQueryCount).toBe(0);
     } finally {
       await cleanup();
     }

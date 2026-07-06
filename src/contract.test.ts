@@ -244,17 +244,20 @@ describe("Open Brain contract manifest", () => {
     // contract so a future TS/Python divergence fails here, in lockstep with
     // python/openbrain-memory CURRENT_CONTRACT_VERSION.
     const contract = buildContract("2026-06-18T00:00:00.000Z");
-    expect(contract.contract_version).toBe("2026-07-05.memory-tools.v12");
+    expect(contract.contract_version).toBe("2026-07-06.memory-tools.v13");
 
     const appendEvent = contract.tool_contracts.append_session_event;
     expect(appendEvent).toBeDefined();
-    expect(appendEvent?.version).toBe(5);
+    expect(appendEvent?.version).toBe(6);
     expect(appendEvent?.output_shape).toContain("writer_identity");
     expect(appendEvent?.output_shape).toContain("token_identity");
     expect(appendEvent?.output_shape).toContain("delegated_agent_id");
     expect(appendEvent?.output_shape).toContain("namespace_source");
     expect(appendEvent?.output_shape).toContain("lane_created");
     expect(appendEvent?.output_shape).toContain("retryable_outage");
+    expect(appendEvent?.output_shape).toContain("reject_detail");
+    expect(appendEvent?.output_shape).toContain("matched_kind");
+    expect(appendEvent?.output_shape).toContain("resubmit_metadata");
     const appendInput = appendEvent?.input_schema as any;
     expect(appendInput.create_if_missing.type).toBe("boolean");
     expect(appendInput.create_if_missing.description).toContain(
@@ -276,6 +279,14 @@ describe("Open Brain contract manifest", () => {
     // so a contract-driven agent learns the behavior, not just the type.
     expect(shareCandidate.description).toContain("share_candidate_rejected");
     expect(shareCandidate.description.toLowerCase()).toContain("secret");
+    expect(appendInput.metadata.fields.sanitized_resubmit_of.type).toBe("string");
+    expect(appendInput.metadata.fields.sanitized_resubmit_of.description).toContain(
+      "reject_detail.resubmit_metadata",
+    );
+    expect(appendInput.metadata.fields.sanitized_resubmit_attempt.type).toBe(
+      "integer",
+    );
+    expect(appendInput.metadata.fields.sanitized_resubmit_attempt.max).toBe(2);
     const okf = (appendEvent?.input_schema as any).metadata.fields.okf;
     expect(okf.type).toBe("object");
     expect(okf.description).toContain("edge export/import");
