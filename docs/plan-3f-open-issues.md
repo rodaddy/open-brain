@@ -88,8 +88,11 @@ Local status:
   alignment is now commented, and post-commit embedding fill remains a known
   residual risk if the process crashes or the embedding provider stays down
   after commit. A future embedding backfill for `embedding IS NULL` lanes/events
-  can close that residual, but it is outside #229's local hardening scope. All
-  material findings are fixed locally and awaiting final commit/push/CI.
+  can close that residual, but it is outside #229's local hardening scope.
+  PR #249 head `9de385d` passed the full local suite and GitHub checks after
+  rerunning the duplicate flaky `db-integration` failure; all material findings
+  are fixed or explicitly dispositioned. Next gate: merge PR #249 without
+  core01 deploy, then verify issue #229 closure and update Project 8.
 
 Required local work:
 
