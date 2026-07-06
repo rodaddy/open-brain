@@ -22,13 +22,13 @@ Current live state as of 2026-07-06 during the #223 review-fix phase:
   - #118 `roadmap: file references for Privilege Isolation / closed-brain deployments`
 - #192 is closed by PR #246; its DreamEngine decomposition follow-up is #247.
 - #229 is closed by PR #249; merge commit
-  `e4fc7def43735163e1e0d4997ace5ce510494f4d`.
+  `e4fc7def43735163e1e0d4997ace5ce510494f4d`. It is historical context only,
+  not active Plan 3F work.
 - #204 is closed. Do not continue stale #204 worktrees for this run.
 
-Critical correction: issue sequence and closure order are not identical. The
-realtime epic sequencing starts with #223, but the best local closure move is
-#229 first because it has concrete named defects, direct tests, and no required
-core01 deploy.
+Critical correction: the active Plan 3F surface is the 8 open issues above plus
+PR #250. Closed issues may explain predecessor state, but they must not occupy
+worker lanes or be counted as remaining work.
 
 ## Operating Boundary
 
@@ -44,81 +44,49 @@ core01 deploy.
 - Merge only after local validation, PR CI, critical self-review, downstream
   classification, review findings/fixes, and fix verification are complete.
 
-## Issue Order
+## Plan 3F Parallel Branch Matrix
 
-### 1. #229 first-write lane hardening
+This matrix is the controller plan for the remaining open issues. Every issue
+gets at least one worker/subagent. More workers are allowed only when the work
+splits into disjoint files or review lanes.
 
-Owning boundary:
-`append_session_event.create_if_missing` lane creation and lane lifecycle
-metadata.
+| Issue | Branch | Temp worktree | Workers | Local target | Deploy allowed | Closure rule |
+| --- | --- | --- | ---: | --- | --- | --- |
+| #223 NATS/JetStream foundation | `feat/223-nats-jetstream-foundation` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-223-nats-jetstream-foundation` | 1 controller + 2 review lanes | Finish PR #250 gauntlet and merge local foundation only | No | Do not close #223 unless issue is explicitly narrowed; current PR is `Refs #223` |
+| #222 scoped hot working set | `feat/222-scoped-hot-working-set` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-222-scoped-hot-working-set` | 1 implementation + 1 test/review sidecar | Exact-scope working-set contract, pack inclusion, denial tests | No | Close only with code/tests proving cross-scope isolation and TTL/budget behavior |
+| #221 recovery WAL | `feat/221-recovery-wal` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-221-recovery-wal` | 1 implementation + 1 adversarial/test sidecar | Quarantined recovery evidence contract, restart transitions, exclusion from normal recall | No | Close only with tests proving WAL evidence cannot leak into durable/search paths |
+| #224 promotion/relegation lifecycle | `feat/224-promotion-lifecycle` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-224-promotion-lifecycle` | 1 implementation + 1 domain/review sidecar | Explicit promote/relegate/discard/nominate workflow for candidate memory | No | Close only with tests proving no implicit durable/shared-kb promotion |
+| #247 DreamEngine decomposition | `feat/247-dream-decomposition` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-247-dream-decomposition` | 1 implementation + 1 dry-run/adversarial sidecar | Dry-run proposals for oversized entries with linked replacements | No | Close only with dry-run-by-default tests and no mutation without approval |
+| #137 optional qmd deep lookup | `feat/137-optional-qmd-lookup` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-137-optional-qmd-lookup` | 1 implementation/doc worker | Optional deep lookup wrapper or explicit no-op docs/tests proving no runtime dependency | No | Close only if qmd absence is non-fatal and documented/testable |
+| #118 Privilege Isolation source refs | `plan/118-privilege-isolation-split` or `feat/118-source-refs-slice` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-118-privilege-isolation` | 1 planning worker first, implementation workers only after split | Either split into child issues or implement one real tested source-ref slice | No | Do not close docs-only unless issue is converted to parent roadmap with child issues |
+| #167 legacy collab retirement | `release/167-retire-collab` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-167-retire-collab` | 1 release-planning worker only | Release/deploy checklist and preflight evidence, no mutation | Explicit approval required | Blocked for local-only; cannot close without live backup/migration/deploy/canary |
 
-Status:
-Closed by PR #249, merge commit
-`e4fc7def43735163e1e0d4997ace5ce510494f4d`. Project 8 marks #229 and PR #249
-Done with Review Gate `Zero Known Issues`, Validation `CI Passed`, and no
-core01 deploy.
+## Controller Execution Rules
 
-Current implementation branch:
-`fix/229-first-write-lane-hardening`.
+1. Finish or explicitly park #250 before merging other branches that depend on
+   its contract shape. It may remain open while workers start on independent
+   issue branches, but the controller must keep its dirty state isolated.
+2. Create each worktree from fresh `origin/main` unless the issue intentionally
+   builds on a merged predecessor. If a predecessor is not merged, the dependent
+   branch may only inspect it or stack with an explicit note in Plan 3F.
+3. Move Project 8 before dispatch: `Status: In Progress`, `Review Gate: Not
+   Started`, `Validation: Not Started`, and `Next Action` naming the worker and
+   branch.
+4. Workers may implement only their issue's owned boundary and must report
+   files changed, validation run, blockers, and whether downstream rollout
+   applies.
+5. Controller runs critical-mode on each branch before PR. A branch that cannot
+   state its owning boundary and tests is not PR-ready.
+6. Every non-trivial PR runs `pre-merge-gauntlet`: critical receipt, initial
+   swarm, cross-model review, all findings fixed or explicitly waived on the PR,
+   fix-verification, then merge. No auto-merge.
+7. Deploy remains optional and separate. Local completion can merge code/docs
+   that are explicitly inactive or gated, but live core01 changes require a
+   release plan and Rico approval.
 
-Local status:
+## Open Issue Execution Order
 
-- F6 implemented: `create_if_missing` append uses one pooled-client transaction
-  for lane lookup/create plus event insert, with rollback coverage for an event
-  insert failure after lane creation. Gauntlet fix: lane and event embedding
-  calls are filled after the accepted append commits for first-write appends, so
-  a slow or wedged embedding provider cannot hold an open transaction or pooled
-  DB client, and rejected scoped writes do not send denied content to the
-  embedding provider.
-- F8 implemented: first-write lanes embed from `topic` plus `project`, using
-  the same lane content-hash shape as `lane_upsert`. Gauntlet fix: migration
-  `020_session_lane_namespace_hash.sql` scopes `ob_session_lanes.content_hash`
-  uniqueness by `(content_hash, namespace)`, matching namespace isolation for
-  identical first-write lane context across tenants.
-- F7 implemented as a dry-run-by-default local maintenance script,
-  `scripts/archive-idle-session-lanes.ts`, rather than a scheduler or deploy
-  change. It defaults to Discord/realtime lanes, refuses a broad sweep unless
-  narrowed, and requires `--execute` to archive candidates. Gauntlet fix: the
-  execute step rechecks the same idle predicates in the `UPDATE` CTE, so lanes
-  that receive a new event after candidate selection are not archived.
-- Local validation on this branch after gauntlet fixes: focused
-  append/lane/script tests pass (`90 pass, 10 skip, 0 fail`), `bunx tsc
-  --noEmit` passes, `git diff --check` passes, and full `bun test` passes
-  (`1072 pass, 50 skip, 0 fail`). DB-backed suites remain skipped locally
-  because `/Users/rico/.config/open-brain/env.release-test` is missing; CI
-  `db-integration` must supply the live Postgres gate before merge.
-- Review gate status: initial swarm found three real blockers on PR #249
-  (transaction-open embedding calls, stale archive execute update, and global
-  lane content-hash uniqueness). Fix verification then found denied scoped
-  content could be embedded before rejection; Claude also flagged archive CTE
-  limit fragility, rollback-error masking, and silent non-transactional fallback.
-  Follow-up Claude re-review found only LOW issues: the archive parameter
-  alignment is now commented, and post-commit embedding fill remains a known
-  residual risk if the process crashes or the embedding provider stays down
-  after commit. A future embedding backfill for `embedding IS NULL` lanes/events
-  can close that residual, but it is outside #229's local hardening scope.
-  PR #249 merged without core01 deploy and issue #229 is closed. No active
-  #229 next action remains in Plan 3F.
-
-Required local work:
-
-- F6: make lane-create + event-insert atomic, or add the smallest helper needed
-  to make that boundary atomic.
-- F8: implement first-write lane embedding parity with `lane_upsert`, unless
-  source inspection proves non-embedding is intentional and tested.
-- F7: add idle-lane TTL/reaper only if it is small at the lane lifecycle
-  boundary. If it expands into scheduler/ops design, split it and do not close
-  #229 without narrowing the issue on GitHub.
-
-Verification:
-
-- Focused transaction rollback/no-orphan-lane test.
-- Focused embedding parity or documented divergence test.
-- Existing append-session-event/lane tests.
-- `bunx tsc --noEmit`.
-- Full `bun test` if shared DB/tool helpers are touched.
-
-### 2. #223 NATS/JetStream foundation
+### 1. #223 NATS/JetStream foundation
 
 Owning boundary:
 Local transport contract and bridge design for realtime Open Brain memory RPC,
@@ -129,10 +97,14 @@ Current implementation branch:
 
 Local status:
 
-- In review via PR #250 after the first review-fix commit. Project 8 marks
-  #223/PR #250 in review; CI passed for the initial head and must rerun on the
-  pushed review-fix head. Initial review-swarm findings are fixed locally and
-  awaiting PR comment/fix-verification.
+- In review via PR #250. Project 8 marks #223/PR #250 in review. CI passed on
+  head `a1798f9`, then Claude cross-review found a MEDIUM deploy-ordering hazard
+  in the Python exact-match contract validator. Local fix now allows the Python
+  package to validate both v14 and v15 required-memory manifests during the
+  no-deploy transition while keeping the server manifest versioned at v15.
+  Focused validation passed: `uv run pytest -q tests/test_contract.py
+  tests/test_client.py` (`70 pass`), `uv run mypy src/openbrain_memory`,
+  `uv run ruff check src tests`, and `git diff --check`.
 - Local-only slice adds `docs/nats-jetstream-foundation.md` and planned
   `get_contract().realtime_transport.nats_jetstream` metadata. It does not
   bump the package artifact version or required `openbrain-memory` minimum
@@ -173,7 +145,7 @@ Required local work:
 Deferred:
 core01 install/config, hosted canary, and making NATS the default Hermes path.
 
-### 3. #222 scoped hot working set
+### 2. #222 scoped hot working set
 
 Owning boundary:
 Exact-scope working-set contract and budget/TTL model, excluded from durable
@@ -187,7 +159,7 @@ Required local work:
 - Add cross-scope denial tests.
 - Document or implement dropped/expired/trimmed counters.
 
-### 4. #221 recovery WAL
+### 3. #221 recovery WAL
 
 Owning boundary:
 Recovery evidence tier for interrupted sessions, separate from durable memory.
@@ -200,7 +172,7 @@ Required local work:
 - Add contract-level restart/recovery transition tests.
 - Mark recovery content as unreviewed/quarantined in context-pack output.
 
-### 5. #224 promotion/relegation lifecycle
+### 4. #224 promotion/relegation lifecycle
 
 Owning boundary:
 Explicit client actions for moving candidate memory into durable memory or
@@ -215,7 +187,7 @@ Required local work:
   not an immediate durable rule.
 - Prove shared-kb nomination requires explicit promotion workflow.
 
-### 6. #247 DreamEngine decomposition
+### 5. #247 DreamEngine decomposition
 
 Owning boundary:
 DreamEngine dry-run proposal workflow for oversized entries.
@@ -229,7 +201,7 @@ Required local work:
 - Preserve namespace-safe provenance.
 - Add tests proving dry-run-by-default.
 
-### 7. #137 optional qmd deep lookup
+### 6. #137 optional qmd deep lookup
 
 Owning boundary:
 Optional deep-lookup escape hatch, not the Open Brain/Hermes memory contract.
@@ -241,7 +213,7 @@ Required local work:
 - Prove Hermes startup, recall, writes, current memory, and repo facts do not
   depend on qmd availability.
 
-### 8. #118 Privilege Isolation source refs
+### 7. #118 Privilege Isolation source refs
 
 Critical correction:
 This issue is not closable with docs-only while its acceptance criteria require
@@ -254,7 +226,7 @@ Allowed paths:
 - Convert #118 into a parent roadmap issue with child issues for schema,
   ingestion, retrieval filters, answer citations, and audit logs.
 
-### 9. #167 legacy collab retirement
+### 8. #167 legacy collab retirement
 
 Status:
 Blocked for local-only work.
@@ -263,6 +235,22 @@ Reason:
 Remaining work includes live DB backup, migration dry-run/execute/reconcile,
 release deploy, and downstream canary. Do not touch in the local run without
 explicit release/deploy approval.
+
+## Worker Dispatch Plan
+
+- Controller lane: owns live issue/PR/board state, branch integration, PR body,
+  review receipts, merge decisions, and this Plan 3F file.
+- #223 active lane: controller finishes the Python contract transition fix on
+  PR #250, reruns focused Python validation, reruns gauntlet fix-verification,
+  updates the PR, and only then considers merge.
+- Parallel implementation lanes after #250 is parked or clean: dispatch workers
+  for #222, #221, #224, and #247 first because they have local testable owning
+  boundaries and no live deploy requirement.
+- Planning/disposition lanes: dispatch #137 and #118 workers after the realtime
+  lanes are not blocked. #137 must prove qmd is optional; #118 must split or
+  implement a real source-ref slice.
+- Release-only lane: #167 is a planning/preflight worker only until Rico
+  explicitly approves live backup/migration/deploy/canary work.
 
 ## Per-Issue Loop
 

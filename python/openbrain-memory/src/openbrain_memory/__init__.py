@@ -7,6 +7,7 @@ from .agent import (
     MemorySpool,
 )
 from .client import (
+    COMPATIBLE_CONTRACT_VERSIONS,
     CURRENT_CONTRACT_VERSION,
     CURRENT_TOOL_HELP,
     PACKAGE_VERSION,
@@ -51,6 +52,7 @@ __all__ = [
     "OpenBrainProtocolError",
     "OpenBrainToolError",
     "PACKAGE_VERSION",
+    "COMPATIBLE_CONTRACT_VERSIONS",
     "CURRENT_CONTRACT_VERSION",
     "CURRENT_TOOL_HELP",
     "REQUIRED_CONTRACT_TOOLS",

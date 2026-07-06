@@ -4,6 +4,7 @@ from copy import deepcopy
 from hashlib import sha256
 
 from openbrain_memory import (
+    COMPATIBLE_CONTRACT_VERSIONS,
     CURRENT_CONTRACT_VERSION,
     REQUIRED_CONTRACT_TOOLS,
     validate_contract_manifest,
@@ -80,6 +81,23 @@ def test_validate_required_memory_contract_pins_package_contract_defaults():
 
     assert result.ok is True
     assert result.reasons == ()
+
+
+def test_validate_required_memory_contract_accepts_prior_planned_metadata_contract():
+    manifest = representative_contract_manifest()
+    manifest["contract_version"] = "2026-07-06.memory-tools.v14"
+
+    result = validate_required_memory_contract(
+        manifest,
+        client_version=CURRENT_CLIENT_VERSION,
+    )
+
+    assert result.ok is True
+    assert result.reasons == ()
+    assert COMPATIBLE_CONTRACT_VERSIONS == (
+        "2026-07-06.memory-tools.v14",
+        CURRENT_CONTRACT_VERSION,
+    )
 
 
 def test_validate_required_memory_contract_reports_package_required_tool_gap():
