@@ -215,7 +215,7 @@
 
   <section id="solution">
     <h2>Solution</h2>
-    <p>Execute in six ordered phases. Phase 1 repairs and lands PR #231 so the review pipeline itself is trustworthy. Phase 2 closes the CI Postgres gap (#165) and the unbounded-logs bug (#193) so every later PR gets real DB-backed test coverage. Phase 3 retires legacy auth/namespace debt (#168 → #166 → #167) in dependency order. Phase 4 ships the client-facing contract batch (#177 installable package, #204 resolver tool, #176 structured rejection) — each triggering the downstream rollout gate. Phase 5 delivers the realtime memory epic (#223 → #222 → #221 → #224 → #229) in its research-mandated order: transport foundation first, then hot working set, recovery WAL, promotion lifecycle, and finally the operational hardening follow-up. Phase 6 dispositioned #137 through PR #257; #118 was completed by PR #255 and closed. One branch + one PR per issue or tightly-coupled pair; every non-trivial PR runs the critical self-review receipt and the pre-merge gauntlet.</p>
+    <p>Execute in six ordered phases. Phase 1 repairs and lands PR #231 so the review pipeline itself is trustworthy. Phase 2 closes the CI Postgres gap (#165) and the unbounded-logs bug (#193) so every later PR gets real DB-backed test coverage. Phase 3 retires legacy auth/namespace debt (#168 → #166 → #167) in dependency order. Phase 4 ships the client-facing contract batch (#177 installable package, #204 resolver tool, #176 structured rejection) — each triggering the downstream rollout gate. Phase 5 now has #223 as the only open realtime item; #222, #221, #224, and #229 are closed historical slices. Phase 6 dispositioned #137 through PR #257; #118 was completed by PR #255 and closed. One branch + one PR per issue or tightly-coupled pair; every non-trivial PR runs the critical self-review receipt and the pre-merge gauntlet.</p>
     <figure>
       <!-- {{SOLUTION_IMAGE: same graph untangled into six ordered vertical lanes, violet to cyan gradient left to right, green checkmarks accumulating}} -->
       <div class="img-placeholder">SOLUTION IMAGE PLACEHOLDER — six ordered lanes, dependencies resolved top-to-bottom</div>
@@ -284,8 +284,8 @@
 
     <!-- ============ PHASE 1 ============ -->
     <div class="phase">
-      <h3><code class="status">[wip]</code> Phase 1: Land PR #231 — Codex review workflow</h3>
-      <p>The only open PR, and it gates review quality for every later PR. Two checks fail: <code>validate</code> (the PR-Body workflow — #231's body has no critical self-review receipt) and <code>codex-review</code> (the new workflow failing on the PR that introduces it). Fix the workflow, satisfy the body gate, merge.</p>
+      <h3><code class="status">[x]</code> Phase 1: Land PR #231 — Codex review workflow</h3>
+      <p>Historical phase complete. PR #231 is merged and is not an active open PR. The workflow/body-gate repair notes below are retained as provenance only; do not route current workers here.</p>
 
       <figure>
         <!-- {{PHASE_IMAGE: dark CI pipeline card, red X on "codex-review" and "validate" jobs turning green, minimal}} -->
@@ -315,7 +315,7 @@
         <li><code class="status">[x]</code> <code>ruby -e 'require "yaml"; YAML.load_file(".github/workflows/codex-review.yml")'</code> — workflow parses.</li>
         <li><code class="status">[x]</code> <code>actionlint .github/workflows/codex-review.yml</code> — lints clean (self-hosted runner labels ignored per PR notes).</li>
         <li><code class="status">[x]</code> <code>gh pr checks 231</code> — all checks green (deploy correctly skipping on PR events).</li>
-        <li><code class="status">[]</code> <code>gh pr merge 231 --squash</code> — HELD: push-to-main auto-deploys core01; awaiting Rico's batch merge/deploy approval.</li>
+        <li><code class="status">[x]</code> PR #231 merged in the historical phase; no current merge hold remains for this roadmap sync.</li>
       </ul>
       <div class="loop">
         🔁 <strong>Do not exit this phase until every box above is checked.</strong>
@@ -466,8 +466,8 @@
 
     <!-- ============ PHASE 5 ============ -->
     <div class="phase">
-      <h3><code class="status">[]</code> Phase 5: Realtime memory epic — #223 → #222 → #221 → #224 → #229</h3>
-      <p>The #220 epic family, executed in the order the research (PR #225) and the issues' own structure mandate: transport foundation first (#223 NATS + JetStream on core01, carrying the <code>agent_context_pack</code> envelope — not a faster pipe for fragmented calls), then the scoped hot working set (#222), the recovery WAL (#221, which needs JetStream configured from the start to avoid a painful refactor), the client-owned promotion/relegation lifecycle (#224, which gates what ever becomes durable), and finally the operational hardening follow-up (#229, including the F6 lane-create/event-insert transaction). Each slice: local-complete first, then hosted rollout + Hermes canary, mirroring the goal-run.md operating pattern.</p>
+      <h3><code class="status">[wip]</code> Phase 5: Realtime memory epic — active item #223 only</h3>
+      <p>Current phase state: #222, #221, #224, and #229 are closed historical slices. #223 remains open for the later NATS/JetStream runtime foundation. Under the current local-only instruction, do not stand up NATS on core01, run hosted deploys, or claim Hermes canary proof without explicit release/deploy approval.</p>
 
       <figure>
         <!-- {{PHASE_IMAGE: dark layered architecture, bottom-up: "NATS/JetStream", "hot working set", "recovery WAL", "promotion lifecycle", topped by "durable Open Brain", violet-cyan}} -->
@@ -477,47 +477,38 @@
 
       <h4>1. #223 — NATS + JetStream transport foundation</h4>
       <ul class="checklist">
-        <li><code class="status">[]</code> Stand up NATS on core01 (launchd service, loopback/LAN binding decision, auth) with JetStream enabled and configured from day one.</li>
-        <li><code class="status">[]</code> Implement core request/reply RPC for Open Brain memory calls carrying the <code>agent_context_pack</code> envelope (#226 contract); keep HTTP/MCP path fully intact as the compatibility layer.</li>
-        <li><code class="status">[]</code> Auth parity: NATS callers map to the same per-consumer token/role model — no side-door around namespace isolation.</li>
-        <li><code class="status">[]</code> Tests: envelope round-trip, authz rejection over NATS, HTTP/MCP parity for the same logical call.</li>
+        <li><code class="status">[]</code> Local next branch: create <code>feat/issue-223-nats-jetstream-foundation</code> from a clean worktree under <code>/Volumes/ThunderBolt/_tmp/open-brain/</code>.</li>
+        <li><code class="status">[]</code> Keep NATS disabled by default and preserve HTTP/MCP compatibility until explicit hosted rollout approval.</li>
+        <li><code class="status">[]</code> Define the request/reply envelope and auth/namespace parity locally without opening a side-door around namespace isolation.</li>
+        <li><code class="status">[]</code> Runtime install on core01, JetStream storage, hosted smoke, and Hermes canary remain deferred release/deploy work.</li>
       </ul>
 
-      <h4>2. #222 — Scoped hot working set</h4>
+      <h4>2. #222 — Scoped hot working set (closed historical)</h4>
       <ul class="checklist">
-        <li><code class="status">[]</code> Implement the RAM-first working set keyed by <code>namespace + agent + platform + server + channel + thread? + session key</code> — usable only by the exact active scope, explicitly not durable memory.</li>
-        <li><code class="status">[]</code> Rolling contents: recent events, distilled intent, active corrections, task state, linked durable refs; eviction/TTL policy.</li>
-        <li><code class="status">[]</code> Tests: exact-scope isolation (adjacent channel/session cannot read), rollover behavior, restart semantics (empty until WAL lands in #221).</li>
+        <li><code class="status">[x]</code> Closed historical slice; no active worker dispatch.</li>
       </ul>
 
-      <h4>3. #221 — Recovery WAL for interrupted sessions</h4>
+      <h4>3. #221 — Recovery WAL for interrupted sessions (closed historical)</h4>
       <ul class="checklist">
-        <li><code class="status">[]</code> Server-side WAL/snapshot for active traces (JetStream-backed per #223 groundwork) + tiny DB metadata for recovery discovery — not normal searchable memory.</li>
-        <li><code class="status">[]</code> Implement the status lifecycle (active → wrapped / recovery_pending → reviewed / compacted / discarded / expired) and recovery actions.</li>
-        <li><code class="status">[]</code> Tests: kill-and-recover drill — populate working set, hard-stop, returning agent discovers recovery_pending trace and reviews/compacts it; expiry pruning works.</li>
+        <li><code class="status">[x]</code> Closed historical slice; no active worker dispatch.</li>
       </ul>
 
-      <h4>4. #224 — Client-owned promotion/relegation lifecycle</h4>
+      <h4>4. #224 — Client-owned promotion/relegation lifecycle (closed historical)</h4>
       <ul class="checklist">
-        <li><code class="status">[]</code> Define + implement the lifecycle: client decides wrap/promote/relegate/discard/nominate; server validates scope, auth, safety, provenance, secret rejection (reuses #176's structured rejection).</li>
-        <li><code class="status">[]</code> Candidate types (user preference, process rule, channel/server rule, code fact, …) with explicit client action required — no automatic durable writes from traces.</li>
-        <li><code class="status">[]</code> Contract doc update (memory-contract.md + context-pack contract from #226) so Hermes/Codex adopt the same lifecycle verbs.</li>
-        <li><code class="status">[]</code> Tests: promotion requires explicit client call; secret-bearing candidate rejected with structured reason; relegation/discard leave no durable residue.</li>
+        <li><code class="status">[x]</code> Closed historical slice; no active worker dispatch.</li>
       </ul>
 
-      <h4>5. #229 — Operational hardening follow-up</h4>
+      <h4>5. #229 — Operational hardening follow-up (closed historical)</h4>
       <ul class="checklist">
-        <li><code class="status">[]</code> F6: wrap lane-create + event-insert in a single pooled-client transaction in <code>ensureLaneForAppend</code> (<code>src/tools/append-session-event.ts</code>); DB-backed test proving a failed event insert rolls back the speculative lane.</li>
-        <li><code class="status">[]</code> Work the remaining #229 findings list (F-items beyond F6) — read the issue checklist at execution time and burn it down item by item.</li>
+        <li><code class="status">[x]</code> Closed historical slice; no active worker dispatch.</li>
       </ul>
 
       <h4>6. Testing Strategy</h4>
-      <p>Per-slice: bun unit + CI DB-backed integration locally first (local-complete), then hosted deploy and a live Hermes canary per slice before starting the next — the downstream gate applies to every slice because Hermes consumes each layer as it lands.</p>
+      <p>For the remaining #223 work: run local unit/typecheck and DB-backed CI first. Hosted deploy and live Hermes canary remain deferred until explicit release/deploy approval.</p>
       <ul class="checklist">
-        <li><code class="status">[]</code> <code>bunx tsc --noEmit &amp;&amp; bun test</code> after each slice — green before advancing.</li>
-        <li><code class="status">[]</code> Kill-and-recover integration drill (WAL) passes in CI's DB-backed job.</li>
-        <li><code class="status">[]</code> Hosted OB smoke + live Hermes canary per slice, per <code>docs/downstream-rollout.md</code>.</li>
-        <li><code class="status">[]</code> Epic close-out: #220 parent (if reopened/tracked) and all five children closed with rollout receipts.</li>
+        <li><code class="status">[]</code> <code>bunx tsc --noEmit</code>, focused NATS/auth tests, and relevant <code>bun test</code> scope before PR.</li>
+        <li><code class="status">[]</code> CI <code>check</code> and <code>db-integration</code> pass before merge.</li>
+        <li><code class="status">[]</code> Hosted OB smoke + live Hermes canary only in a later approved release/deploy phase.</li>
       </ul>
       <div class="loop">
         🔁 <strong>Do not exit this phase until every box above is checked.</strong>
