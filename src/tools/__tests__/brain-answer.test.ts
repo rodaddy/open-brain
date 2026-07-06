@@ -198,6 +198,28 @@ describe("brain_answer", () => {
     }
   });
 
+  it("denies source scope for non-admin callers before retrieval", async () => {
+    const { setup, queries } = setupClient([row()], {
+      role: "agent",
+      clientId: "bilby",
+    });
+    const { client, cleanup } = await setup;
+    try {
+      const result = await client.callTool({
+        name: "brain_answer",
+        arguments: {
+          query: "memory",
+          source_scope: { client_id: "acme" },
+        },
+      });
+      expect(result.isError).toBe(true);
+      expect(getErrorText(result)).toContain("source_scope requires");
+      expect(queries).toHaveLength(0);
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("surfaces stale evidence as uncertainty", async () => {
     const { setup } = setupClient([
       row({

@@ -47,6 +47,163 @@ describe("get_entry", () => {
     }
   });
 
+  it("redacts source refs from full reads unless source scope is supplied", async () => {
+    const mockPool = {
+      query: async () => ({
+        rows: [
+          {
+            id: "550e8400-e29b-41d4-a716-446655440020",
+            namespace: "bilby",
+            content: "privileged summary",
+            source_refs: [
+              {
+                document_id: "doc-1",
+                client_id: "acme",
+                matter_id: "lit-1",
+                path: "matters/acme/strategy.pdf",
+              },
+            ],
+          },
+        ],
+      }),
+    };
+    const auth: AuthInfo = { role: "agent", clientId: "bilby" };
+    const { client, cleanup } = await setupMcpClient(
+      registerGetEntry,
+      mockPool,
+      createMockEmbed(),
+      auth,
+    );
+
+    try {
+      const result = await client.callTool({
+        name: "get_entry",
+        arguments: {
+          table: "thoughts",
+          id: "550e8400-e29b-41d4-a716-446655440020",
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const parsed = parseToolResult(result);
+      expect(parsed.content).toBe("privileged summary");
+      expect(parsed.source_refs).toBeUndefined();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("requires matching source scope before returning source refs", async () => {
+    const queries: Array<{ sql: string; params?: unknown[] }> = [];
+    const sourceRefs = [
+      {
+        document_id: "doc-1",
+        client_id: "acme",
+        matter_id: "lit-1",
+        path: "matters/acme/strategy.pdf",
+      },
+      {
+        document_id: "doc-2",
+        client_id: "acme",
+        matter_id: "lit-2",
+        path: "matters/acme/other.pdf",
+      },
+    ];
+    const mockPool = {
+      query: async (sql: string, params?: unknown[]) => {
+        queries.push({ sql, params });
+        return {
+          rows: [
+            {
+              id: params?.[0],
+              namespace: "bilby",
+              content: "scoped summary",
+              source_refs: sourceRefs,
+            },
+          ],
+        };
+      },
+    };
+    const auth: AuthInfo = {
+      role: "admin",
+      clientId: "admin",
+      namespaceSource: "token",
+    };
+    const { client, cleanup } = await setupMcpClient(
+      registerGetEntry,
+      mockPool,
+      createMockEmbed(),
+      auth,
+    );
+
+    try {
+      const result = await client.callTool({
+        name: "get_entry",
+        arguments: {
+          table: "thoughts",
+          id: "550e8400-e29b-41d4-a716-446655440021",
+          source_scope: {
+            client_id: "acme",
+            matter_id: "lit-1",
+            document_id: "doc-1",
+          },
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      expect(parseToolResult(result).source_refs).toEqual([
+        { ...sourceRefs[0], source_type: "file" },
+      ]);
+      expect(queries[0]?.sql).toContain(
+        "COALESCE(t.source_refs, '[]'::jsonb)",
+      );
+      expect(queries[0]?.params).toEqual([
+        "550e8400-e29b-41d4-a716-446655440021",
+        JSON.stringify({
+          client_id: "acme",
+          matter_id: "lit-1",
+          document_id: "doc-1",
+        }),
+      ]);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("denies source scope for non-admin callers before querying", async () => {
+    let queried = false;
+    const mockPool = {
+      query: async () => {
+        queried = true;
+        return { rows: [] };
+      },
+    };
+    const auth: AuthInfo = { role: "agent", clientId: "bilby" };
+    const { client, cleanup } = await setupMcpClient(
+      registerGetEntry,
+      mockPool,
+      createMockEmbed(),
+      auth,
+    );
+
+    try {
+      const result = await client.callTool({
+        name: "get_entry",
+        arguments: {
+          table: "thoughts",
+          id: "550e8400-e29b-41d4-a716-446655440021",
+          source_scope: { client_id: "acme" },
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(getErrorText(result)).toContain("source_scope requires");
+      expect(queried).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("returns not found when scoped namespace filter excludes the row", async () => {
     const mockPool = { query: async () => ({ rows: [] }) };
     const auth: AuthInfo = {

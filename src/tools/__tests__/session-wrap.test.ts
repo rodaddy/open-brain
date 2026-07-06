@@ -185,6 +185,65 @@ describe("session_wrap", () => {
     }
   });
 
+  it("stores structured source refs on session checkpoints", async () => {
+    let insertParams: unknown[] = [];
+      const sourceRefs = [
+        {
+          source_type: "file",
+          document_id: "doc-456",
+          dms_id: "iManage-456",
+        title: "Engagement Letter",
+        client_id: "acme",
+        matter_id: "onboarding-2026",
+        ethical_wall: true,
+        ingested_at: "2026-07-06T13:00:00.000Z",
+      },
+    ];
+    const mockPool = {
+      query: async (sql: string, params?: unknown[]) => {
+        if (sql.includes("FROM ob_session_lanes")) {
+          return { rows: [MOCK_LANE] };
+        }
+        if (sql.includes("count(*)")) {
+          return { rows: [{ cnt: 2 }] };
+        }
+        if (sql.includes("INSERT INTO sessions")) {
+          insertParams = params ?? [];
+          return {
+            rows: [
+              {
+                id: "session-source-ref",
+                created_at: "2026-07-06T13:10:00Z",
+                source_refs: sourceRefs,
+              },
+            ],
+          };
+        }
+        return { rows: [] };
+      },
+    };
+    const auth: AuthInfo = { role: "admin", clientId: "skippy" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "session_wrap",
+        arguments: {
+          session_key: "ob-v2-dev",
+          summary: "Closed-brain checkpoint with source grounding.",
+          source_refs: sourceRefs,
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      expect(JSON.parse(insertParams[10] as string)).toEqual(sourceRefs);
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.source_refs).toEqual(sourceRefs);
+    } finally {
+      await cleanup();
+    }
+  });
+
   // ── KEEP_ACTIVE ──
 
   it("checkpoint never changes lane status — lane stays active", async () => {
@@ -515,6 +574,7 @@ describe("session_wrap", () => {
         arguments: {
           session_key: "ob-v2-dev",
           summary: "Already wrapped this.",
+          source_refs: [{ document_id: "new-doc" }],
         },
       });
 
@@ -524,6 +584,8 @@ describe("session_wrap", () => {
       expect(parsed.lane_id).toBe("lane-uuid-1");
       expect(parsed.lane_status).toBe("wrapped");
       expect(parsed.message).toContain("identical content");
+      expect(parsed.message).toContain("source_refs are not merged");
+      expect(parsed.source_refs).toBeUndefined();
     } finally {
       await cleanup();
     }

@@ -11,9 +11,14 @@ import {
   executeSearchWithSharedFallback,
   type SearchMode,
   type SearchRow,
+  type SourceScope,
   type SourceRef,
 } from "./search-brain.ts";
 import { isSharedNamespace } from "../shared-namespace.ts";
+import {
+  sourceScopeAuthorizationError,
+  sourceScopeSchema,
+} from "../source-refs.ts";
 
 type NamespaceFilter = string | string[];
 
@@ -137,6 +142,11 @@ export function registerBrainAnswer(server: McpServer, deps: ToolDeps): void {
           .enum(["hot", "warm", "cold"])
           .optional()
           .describe("Optional cognitive tier filter"),
+        source_scope: sourceScopeSchema
+          .optional()
+          .describe(
+            "Optional: require matching source_refs client_id, matter_id, document_id, path, or dms_id before citing brain evidence",
+          ),
         max_age_days: z
           .number()
           .int()
@@ -202,6 +212,14 @@ export function registerBrainAnswer(server: McpServer, deps: ToolDeps): void {
       const limit = args.limit ?? 5;
       const mode = (args.search_mode as SearchMode) ?? "hybrid";
       const tier = args.tier as Tier | undefined;
+      const sourceScope = args.source_scope as SourceScope | undefined;
+      const sourceScopeError = sourceScopeAuthorizationError(auth, sourceScope);
+      if (sourceScopeError) {
+        return {
+          content: [{ type: "text" as const, text: sourceScopeError }],
+          isError: true,
+        };
+      }
       const maxAgeDays = args.max_age_days ?? 180;
       const namespace = namespaceFilterFor(
         auth,
@@ -222,6 +240,7 @@ export function registerBrainAnswer(server: McpServer, deps: ToolDeps): void {
                 0,
                 namespace,
                 false,
+                sourceScope,
               )
             : await executeSearchWithScopedSharedFallback(
                 deps,
@@ -233,6 +252,7 @@ export function registerBrainAnswer(server: McpServer, deps: ToolDeps): void {
                 0,
                 namespace,
                 false,
+                sourceScope,
               );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

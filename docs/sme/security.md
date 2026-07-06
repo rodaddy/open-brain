@@ -201,3 +201,52 @@ promotion -- the forward path and its reversal path diverged in authority.
   grant the same roles? Asymmetry is usually a bug.
 - Does the parity regression suite enumerate every gate (REST and MCP variants
   separately) rather than spot-checking one?
+
+## [2026-07-06] Privileged source-scope predicates must match one source reference
+
+**Severity:** HIGH
+**Source:** PR #255 pre-PR and initial swarm review for Issue #118
+**Scope:** `src/source-refs.ts`, `src/tools/get-entry.ts`,
+`src/tools/search-brain.ts`, `src/tools/search-all.ts`,
+`src/tools/brain-answer.ts`, generic full-row REST reads
+**Status:** fixed in PR #255; keep as active checklist
+
+### Pattern
+
+Structured source metadata is a privilege boundary for closed-brain deployments.
+A JSONB predicate that checks `client_id`, `matter_id`, and `document_id` with
+independent containment clauses can match those keys across separate
+`source_refs` objects on the same row. That lets one row satisfy a scoped query
+even though no single cited source belongs to the requested client/matter/doc.
+Adding privileged `source_refs` to shared full-row projections can also leak
+them through namespace-only reads unless every generic read surface redacts by
+default. Scope filters must also account for every identifier accepted on
+`source_refs`; accepting `path` or `dms_id` without allowing the same fields in
+`source_scope` creates write-only provenance that cannot be safely returned.
+The scope gate and the returned-source-ref filter must validate refs at the same
+granularity: all-or-nothing array validation can silently drop a valid matching
+ref when any sibling ref is malformed, and SQL gates that do not require a
+document identifier can let row content pass a scope that no returned citation
+can satisfy.
+
+### Review Questions
+
+- Do multi-key source-scope filters require all supplied keys to match the same
+  `source_refs` array element, for example through `jsonb_array_elements` and
+  one `EXISTS` predicate?
+- Are all accepted source-ref identifiers represented in `source_scope`
+  (`client_id`, `matter_id`, `document_id`, `path`, and `dms_id`)?
+- Are scoped filters parameterized and applied consistently to search,
+  answer/citation, compact fetch, and full fetch paths?
+- Do unscoped namespace-only reads redact privileged `source_refs` by default?
+- Does any generic shared projection include privileged source metadata without
+  a caller-specific redaction or scope gate?
+- Do scoped searches exclude result families without `source_refs` rather than
+  returning unscoped evidence?
+- Do regression tests cover parameterization, same-ref matching, scoped output
+  filtering, and unscoped read redaction?
+- Does returned-source-ref filtering keep valid matching refs even when a
+  sibling ref is malformed, instead of dropping the whole array?
+- Does the SQL scope gate require the matched array element to be a real
+  citable ref (`document_id`, `path`, or `dms_id`) so row visibility and
+  returned citations agree?

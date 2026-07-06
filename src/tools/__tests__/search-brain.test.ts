@@ -121,6 +121,152 @@ describe("search_brain", () => {
       }
     });
 
+    it("parameterizes source scope in keyword SQL", async () => {
+      const queryCalls: any[] = [];
+      const pool = {
+        query: async (...args: any[]) => {
+          queryCalls.push(args);
+          const [sql] = args;
+          if (String(sql).includes("FROM ob_links")) return { rows: [] };
+          return { rows: [] };
+        },
+      };
+      const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
+      const { client, cleanup } = await setup(pool, auth);
+
+      try {
+        const result = await client.callTool({
+          name: "search_brain",
+          arguments: {
+            query: "matter scoped search",
+            namespace: "team-kb",
+            search_mode: "keyword",
+            source_scope: {
+              client_id: "acme",
+              matter_id: "lit-1",
+              document_id: "doc-1",
+            },
+          },
+        });
+
+        expect(result.isError).toBeFalsy();
+        const [sql, params] = queryCalls[0];
+        const sourceScopeJson = JSON.stringify({
+          client_id: "acme",
+          matter_id: "lit-1",
+          document_id: "doc-1",
+        });
+        const sourceScopeParamIndex = (params as unknown[]).indexOf(
+          sourceScopeJson,
+        ) + 1;
+        expect(sourceScopeParamIndex).toBeGreaterThan(0);
+        expect(String(sql)).toContain(
+          `COALESCE(t.source_refs, '[]'::jsonb)`,
+        );
+        expect(String(sql)).toContain(`$${sourceScopeParamIndex}::jsonb`);
+        expect(String(sql)).not.toContain("acme");
+        expect(String(sql)).not.toContain("lit-1");
+        expect(String(sql)).not.toContain("doc-1");
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("excludes unscoped entity rows when source scope is supplied", async () => {
+      const queryCalls: any[] = [];
+      const pool = {
+        query: async (...args: any[]) => {
+          queryCalls.push(args);
+          const [sql] = args;
+          if (String(sql).includes("FROM ob_links")) return { rows: [] };
+          return { rows: [] };
+        },
+      };
+      const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
+      const { client, cleanup } = await setup(pool, auth);
+
+      try {
+        const result = await client.callTool({
+          name: "search_brain",
+          arguments: {
+            query: "matter scoped search",
+            search_mode: "keyword",
+            source_scope: {
+              client_id: "acme",
+            },
+          },
+        });
+
+        expect(result.isError).toBeFalsy();
+        const [sql] = queryCalls[0];
+        expect(String(sql)).not.toContain("entities_fts");
+        expect(String(sql)).not.toContain("FROM ob_entities");
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("denies source scope for non-admin callers before querying", async () => {
+      let queried = false;
+      const pool = {
+        query: async () => {
+          queried = true;
+          return { rows: [] };
+        },
+      };
+      const auth: AuthInfo = { role: "agent", clientId: "bilby" };
+      const { client, cleanup } = await setup(pool, auth);
+
+      try {
+        const result = await client.callTool({
+          name: "search_brain",
+          arguments: {
+            query: "matter scoped search",
+            source_scope: { client_id: "acme" },
+          },
+        });
+
+        expect(result.isError).toBe(true);
+        expect(getErrorText(result)).toContain("source_scope requires");
+        expect(queried).toBe(false);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("denies source scope for delegated admin sessions", async () => {
+      let queried = false;
+      const pool = {
+        query: async () => {
+          queried = true;
+          return { rows: [] };
+        },
+      };
+      const auth: AuthInfo = {
+        role: "admin",
+        clientId: "bilby",
+        tokenClientId: "admin",
+        namespaceSource: "header",
+      };
+      const { client, cleanup } = await setup(pool, auth);
+
+      try {
+        const result = await client.callTool({
+          name: "search_brain",
+          arguments: {
+            query: "matter scoped search",
+            source_scope: { client_id: "acme" },
+          },
+        });
+
+        expect(result.isError).toBe(true);
+        expect(getErrorText(result)).toContain("delegated namespace");
+        expect(queried).toBe(false);
+      } finally {
+        await cleanup();
+      }
+    });
+
     it("parameterizes namespace in default hybrid SQL", async () => {
       const maliciousNamespace = "' OR 1=1 --";
       const searchCalls: any[] = [];

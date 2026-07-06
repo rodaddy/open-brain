@@ -6,6 +6,14 @@ import type { AuthInfo, Table } from "../types.ts";
 import type { ToolDeps } from "./index.ts";
 import { TABLE_COLUMNS } from "../table-projections.ts";
 import {
+  appendSourceScopeParam,
+  filterSourceRefsForScope,
+  sourceScopeAuthorizationError,
+  sourceScopeFilterSql,
+  sourceScopeSchema,
+  type SourceScope,
+} from "../source-refs.ts";
+import {
   CONTENT_PREVIEW,
   SOURCE_LABELS,
   TABLE_ALIAS,
@@ -57,6 +65,11 @@ export function registerGetEntry(server: McpServer, deps: ToolDeps): void {
           .describe(
             "Maximum compact content_preview length in characters (default 500, max 2000). Ignored for full render.",
           ),
+        source_scope: sourceScopeSchema
+          .optional()
+          .describe(
+            "Optional: require matching source_refs client_id, matter_id, document_id, path, or dms_id before returning source_refs",
+          ),
       },
       annotations: {
         title: "Get Entry",
@@ -82,6 +95,14 @@ export function registerGetEntry(server: McpServer, deps: ToolDeps): void {
       }
 
       const render = args.render ?? "full";
+      const sourceScope = args.source_scope as SourceScope | undefined;
+      const sourceScopeError = sourceScopeAuthorizationError(auth, sourceScope);
+      if (sourceScopeError) {
+        return {
+          content: [{ type: "text" as const, text: sourceScopeError }],
+          isError: true,
+        };
+      }
       if (render === "compact") {
         const maxChars = args.max_chars ?? DEFAULT_COMPACT_MAX_CHARS;
         const alias = TABLE_ALIAS[table];
@@ -98,6 +119,14 @@ export function registerGetEntry(server: McpServer, deps: ToolDeps): void {
           params.push(readable);
           namespacePredicate = ` AND ${alias}.namespace = ANY($${params.length}::text[])`;
         }
+        const sourceScopeParamIndex = appendSourceScopeParam(
+          params,
+          sourceScope,
+        );
+        const sourceScopeFilter = sourceScopeFilterSql(
+          alias,
+          sourceScopeParamIndex,
+        );
         params.push(maxChars);
         const maxCharsParam = `$${params.length}`;
         const contentExpr = `regexp_replace(COALESCE((${compactContent})::text, ''), '[[:space:]]+', ' ', 'g')`;
@@ -110,7 +139,7 @@ export function registerGetEntry(server: McpServer, deps: ToolDeps): void {
              SELECT ${alias}.id, ${alias}.namespace, ${alias}.created_by, ${alias}.created_at, ${updatedAtExpr} AS updated_at, ${alias}.tier, ${alias}.tags,
                ${contentExpr} AS content_text
              FROM ${table} ${alias}
-             WHERE ${alias}.id = $1 AND ${alias}.archived_at IS NULL${namespacePredicate}
+             WHERE ${alias}.id = $1 AND ${alias}.archived_at IS NULL${namespacePredicate}${sourceScopeFilter}
            ) entry`,
           params,
         );
@@ -158,7 +187,9 @@ export function registerGetEntry(server: McpServer, deps: ToolDeps): void {
                 full_available: true,
                 fetch_path: {
                   tool: "get_entry",
-                  arguments: { table, id: row.id, render: "full" },
+                  arguments: sourceScope
+                    ? { table, id: row.id, render: "full", source_scope: sourceScope }
+                    : { table, id: row.id, render: "full" },
                 },
               }),
             },
@@ -167,13 +198,17 @@ export function registerGetEntry(server: McpServer, deps: ToolDeps): void {
       }
 
       const columns = TABLE_COLUMNS[table];
+      const alias = TABLE_ALIAS[table];
       const readable = readableNamespaces(auth);
+      const params: unknown[] = [args.id];
       const namespacePredicate = readable
-        ? " AND namespace = ANY($2::text[])"
+        ? ` AND ${alias}.namespace = ANY($${params.push(readable)}::text[])`
         : "";
+      const sourceScopeParamIndex = appendSourceScopeParam(params, sourceScope);
+      const sourceScopeFilter = sourceScopeFilterSql(alias, sourceScopeParamIndex);
       const { rows } = await deps.pool.query(
-        `SELECT ${columns} FROM ${table} WHERE id = $1 AND archived_at IS NULL${namespacePredicate}`,
-        readable ? [args.id, readable] : [args.id],
+        `SELECT ${columns} FROM ${table} ${alias} WHERE ${alias}.id = $1 AND ${alias}.archived_at IS NULL${namespacePredicate}${sourceScopeFilter}`,
+        params,
       );
 
       if (rows.length === 0) {
@@ -188,11 +223,18 @@ export function registerGetEntry(server: McpServer, deps: ToolDeps): void {
         };
       }
 
+      const row = { ...rows[0] };
+      if (sourceScope) {
+        row.source_refs = filterSourceRefsForScope(row.source_refs, sourceScope);
+      } else {
+        delete row.source_refs;
+      }
+
       return {
         content: [
           {
             type: "text" as const,
-            text: JSON.stringify(rows[0]),
+            text: JSON.stringify(row),
           },
         ],
       };

@@ -2,6 +2,10 @@ import {
   REPO_FACT_METADATA_CONTRACT,
   REPO_FACT_VALIDATION_CONTRACT,
 } from "./tools/repo-facts.ts";
+import {
+  SOURCE_REFS_CONTRACT,
+  SOURCE_SCOPE_CONTRACT,
+} from "./source-refs.ts";
 
 export interface ToolContract {
   version: number;
@@ -311,9 +315,10 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
           "Maximum compact content_preview length in characters. Applies only " +
           "when render is compact.",
       },
+      source_scope: SOURCE_SCOPE_CONTRACT,
     },
     output_shape:
-      "full readable entry row JSON text payload, or compact envelope with content_preview/content_length/content_truncated/source_ref/fetch_path",
+      "full readable entry row JSON text payload with source_refs redacted unless source_scope is supplied, or compact envelope with content_preview/content_length/content_truncated/source_ref/fetch_path; compact source_scope filters visibility only and carries source_scope in fetch_path for full ref retrieval",
   },
   decompose_entry: {
     version: 1,
@@ -423,8 +428,10 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
           "auth-derived namespace; leave unset unless a global/admin token " +
           "is intentionally writing into another namespace (e.g. shared-kb).",
       },
+      source_refs: SOURCE_REFS_CONTRACT,
     },
-    output_shape: "thought id/namespace/embedded/merged JSON text payload",
+    output_shape:
+      "thought id/namespace/embedded/merged/source_refs JSON text payload",
   },
   search_all: {
     version: 2,
@@ -501,8 +508,10 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
           "important), warm (mid), cold (archival). Omit to search all " +
           "tiers; set only when you want to restrict by significance.",
       },
+      source_scope: SOURCE_SCOPE_CONTRACT,
     },
-    output_shape: "unified search results JSON text payload",
+    output_shape:
+      "unified search results JSON text payload; source_scope filters Open Brain results and suppresses qmd results",
   },
   session_start: {
     version: 2,
@@ -1143,8 +1152,10 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
         description:
           "Project this wrap belongs to, for scoping and later filtering.",
       },
+      source_refs: SOURCE_REFS_CONTRACT,
     },
-    output_shape: "session wrap checkpoint JSON text payload",
+    output_shape:
+      "session wrap checkpoint/source_refs JSON text payload; duplicate content_hash checkpoints are immutable no-ops and do not merge later source_refs",
   },
   upsert_repo_fact: {
     version: 2,

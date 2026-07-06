@@ -8,6 +8,13 @@ import {
   isSharedNamespace,
   sharedNamespaceConfig,
 } from "../shared-namespace.ts";
+import {
+  appendSourceScopeParam,
+  sourceScopeAuthorizationError,
+  sourceScopeFilterSql,
+  sourceScopeSchema,
+  type SourceScope,
+} from "../source-refs.ts";
 import type { AuthInfo, LinkRelation, Table, Tier } from "../types.ts";
 import type { ToolDeps } from "./index.ts";
 import { logger } from "../logger.ts";
@@ -32,6 +39,7 @@ const LABEL_TO_TABLE: Record<string, Table> = Object.fromEntries(
 export type SearchMode = "hybrid" | "vector" | "keyword";
 type NamespaceFilter = string | string[];
 type SearchTable = Table | "entities";
+export type { SourceScope };
 
 /** RRF constant -- standard value from Cormack et al. 2009 */
 const RRF_K = 60;
@@ -404,6 +412,7 @@ function buildTableCTE(
   tier?: Tier,
   namespaceParamIndex?: number,
   namespaceIsArray = false,
+  sourceScopeParamIndex?: number,
 ): string {
   if (tier && !VALID_TIERS.has(tier)) throw new Error(`Invalid tier: ${tier}`);
   if (table === "entities") {
@@ -445,6 +454,7 @@ function buildTableCTE(
       ? ` AND ${alias}.namespace = ANY(${paramRef(namespaceParamIndex)}::text[])`
       : ` AND ${alias}.namespace = ${paramRef(namespaceParamIndex)}`
     : "";
+  const sourceScopeFilter = sourceScopeFilterSql(alias, sourceScopeParamIndex);
   const metaCol = HAS_EXTRACTED_METADATA.has(table)
     ? `${alias}.extracted_metadata`
     : "NULL::jsonb AS extracted_metadata";
@@ -465,7 +475,7 @@ function buildTableCTE(
     COALESCE(${alias}.access_count, 0) AS access_count,
     ${metaCol}
   FROM ${table} ${alias}
-  WHERE ${alias}.embedding IS NOT NULL AND ${alias}.archived_at IS NULL${tierFilter}${nsFilter}
+  WHERE ${alias}.embedding IS NOT NULL AND ${alias}.archived_at IS NULL${tierFilter}${nsFilter}${sourceScopeFilter}
   ORDER BY ${alias}.embedding <=> (SELECT emb FROM query_embedding) ASC
   LIMIT ${perTableLimit}
 )`;
@@ -477,6 +487,7 @@ function buildFtsCTE(
   tier?: Tier,
   namespaceParamIndex?: number,
   namespaceIsArray = false,
+  sourceScopeParamIndex?: number,
 ): string {
   if (tier && !VALID_TIERS.has(tier)) throw new Error(`Invalid tier: ${tier}`);
   if (table === "entities") {
@@ -524,6 +535,7 @@ function buildFtsCTE(
       ? ` AND ${alias}.namespace = ANY(${paramRef(namespaceParamIndex)}::text[])`
       : ` AND ${alias}.namespace = ${paramRef(namespaceParamIndex)}`
     : "";
+  const sourceScopeFilter = sourceScopeFilterSql(alias, sourceScopeParamIndex);
 
   const metaCol = HAS_EXTRACTED_METADATA.has(table)
     ? `${alias}.extracted_metadata`
@@ -546,7 +558,7 @@ function buildFtsCTE(
     ${metaCol}
   FROM ${table} ${alias}
   WHERE ${alias}.search_vector @@ plainto_tsquery('english', (SELECT q FROM fts_query))
-    AND ${alias}.archived_at IS NULL${tierFilter}${nsFilter}
+    AND ${alias}.archived_at IS NULL${tierFilter}${nsFilter}${sourceScopeFilter}
   ORDER BY fts_rank DESC
   LIMIT ${perTableLimit}
 )`;
@@ -560,13 +572,22 @@ async function vectorSearch(
   tier?: Tier,
   offset = 0,
   namespace?: NamespaceFilter,
+  sourceScope?: SourceScope,
 ): Promise<SearchRow[]> {
   const perTableLimit = fetchLimit;
   const params = [toSql(embedding), fetchLimit, offset];
   const namespaceParamIndex = appendNamespaceParam(params, namespace);
+  const sourceScopeParamIndex = appendSourceScopeParam(params, sourceScope);
   const namespaceIsArray = Array.isArray(namespace);
   const ctes = accessibleTables.map((t) =>
-    buildTableCTE(t, perTableLimit, tier, namespaceParamIndex, namespaceIsArray),
+    buildTableCTE(
+      t,
+      perTableLimit,
+      tier,
+      namespaceParamIndex,
+      namespaceIsArray,
+      sourceScopeParamIndex,
+    ),
   );
   const cteNames = accessibleTables.map((t) => `${t}_results`);
   const unionAll = cteNames
@@ -595,13 +616,22 @@ async function ftsSearch(
   tier?: Tier,
   offset = 0,
   namespace?: NamespaceFilter,
+  sourceScope?: SourceScope,
 ): Promise<SearchRow[]> {
   const perTableLimit = fetchLimit;
   const params = [query, fetchLimit, offset];
   const namespaceParamIndex = appendNamespaceParam(params, namespace);
+  const sourceScopeParamIndex = appendSourceScopeParam(params, sourceScope);
   const namespaceIsArray = Array.isArray(namespace);
   const ctes = accessibleTables.map((t) =>
-    buildFtsCTE(t, perTableLimit, tier, namespaceParamIndex, namespaceIsArray),
+    buildFtsCTE(
+      t,
+      perTableLimit,
+      tier,
+      namespaceParamIndex,
+      namespaceIsArray,
+      sourceScopeParamIndex,
+    ),
   );
   const cteNames = accessibleTables.map((t) => `${t}_fts`);
   const unionAll = cteNames
@@ -748,7 +778,12 @@ export async function executeSearch(
   offset = 0,
   namespace?: NamespaceFilter,
   includeLinks?: boolean,
+  sourceScope?: SourceScope,
 ): Promise<SearchRow[]> {
+  if (sourceScope) {
+    accessibleTables = accessibleTables.filter((table) => table !== "entities");
+    if (accessibleTables.length === 0) return [];
+  }
   let rows: SearchRow[];
   if (mode === "keyword") {
     rows = await ftsSearch(
@@ -759,6 +794,7 @@ export async function executeSearch(
       tier,
       offset,
       namespace,
+      sourceScope,
     );
     if (includeLinks !== false) {
       rows = await attachExplicitLinks(deps, rows, namespace);
@@ -782,6 +818,7 @@ export async function executeSearch(
         tier,
         offset,
         namespace,
+        sourceScope,
       );
       if (includeLinks !== false) {
         rows = await attachExplicitLinks(deps, rows, namespace);
@@ -801,6 +838,7 @@ export async function executeSearch(
       tier,
       offset,
       namespace,
+      sourceScope,
     );
     if (includeLinks !== false) {
       rows = await attachExplicitLinks(deps, rows, namespace);
@@ -821,8 +859,18 @@ export async function executeSearch(
       tier,
       0,
       namespace,
+      sourceScope,
     ),
-    ftsSearch(deps, accessibleTables, query, fetchLimit, tier, 0, namespace),
+    ftsSearch(
+      deps,
+      accessibleTables,
+      query,
+      fetchLimit,
+      tier,
+      0,
+      namespace,
+      sourceScope,
+    ),
   ]);
 
   const merged = rrfMerge(vectorRows, ftsRows, totalNeeded);
@@ -843,6 +891,7 @@ export async function executeSearchWithSharedFallback(
   offset: number,
   namespace: NamespaceFilter | undefined,
   includeLinks?: boolean,
+  sourceScope?: SourceScope,
 ): Promise<SearchRow[]> {
   const config = sharedNamespaceConfig();
   if (
@@ -862,6 +911,7 @@ export async function executeSearchWithSharedFallback(
         offset,
         namespace,
         includeLinks,
+        sourceScope,
       ),
     );
   }
@@ -876,6 +926,7 @@ export async function executeSearchWithSharedFallback(
     0,
     config.sharedNamespace,
     includeLinks,
+    sourceScope,
   );
   if (
     sharedRows.length >= limit ||
@@ -894,6 +945,7 @@ export async function executeSearchWithSharedFallback(
     0,
     config.legacySharedNamespace,
     includeLinks,
+    sourceScope,
   );
   return withCanonicalNamespaces(
     mergeFallbackSearchRows(sharedRows, legacyRows, limit),
@@ -910,6 +962,7 @@ export async function executeSearchWithScopedSharedFallback(
   offset: number,
   namespace: NamespaceFilter | undefined,
   includeLinks?: boolean,
+  sourceScope?: SourceScope,
 ): Promise<SearchRow[]> {
   const config = sharedNamespaceConfig();
   const scopedNamespaces = Array.isArray(namespace) ? namespace : [];
@@ -930,6 +983,7 @@ export async function executeSearchWithScopedSharedFallback(
         offset,
         namespace,
         includeLinks,
+        sourceScope,
       ),
     );
   }
@@ -945,6 +999,7 @@ export async function executeSearchWithScopedSharedFallback(
       0,
       namespace,
       includeLinks,
+      sourceScope,
     ),
     executeSearch(
       deps,
@@ -956,6 +1011,7 @@ export async function executeSearchWithScopedSharedFallback(
       0,
       config.physicalSharedNamespace,
       includeLinks,
+      sourceScope,
     ),
   ]);
   if (
@@ -975,6 +1031,7 @@ export async function executeSearchWithScopedSharedFallback(
     0,
     config.legacySharedNamespace,
     includeLinks,
+    sourceScope,
   );
   return withCanonicalNamespaces(
     mergeFallbackSearchRows(primaryRows, legacyRows, limit),
@@ -1032,6 +1089,11 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
           .enum(["hot", "warm", "cold"])
           .optional()
           .describe("Optional: filter results to a specific cognitive tier"),
+        source_scope: sourceScopeSchema
+          .optional()
+          .describe(
+            "Optional: require matching source reference client_id, matter_id, document_id, path, and/or dms_id.",
+          ),
       },
       annotations: {
         title: "Search Brain",
@@ -1108,6 +1170,27 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
       const mode = (args.search_mode as SearchMode) ?? "hybrid";
       const tier = args.tier as Tier | undefined;
       const requestedNamespace = args.namespace as string | undefined;
+      const sourceScope = args.source_scope as SourceScope | undefined;
+      const sourceScopeError = sourceScopeAuthorizationError(auth, sourceScope);
+      if (sourceScopeError) {
+        return {
+          content: [{ type: "text" as const, text: sourceScopeError }],
+          isError: true,
+        };
+      }
+      if (sourceScope) {
+        accessibleTables = accessibleTables.filter((table) => table !== "entities");
+      }
+      if (accessibleTables.length === 0) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "No source-scoped tables are readable",
+            },
+          ],
+        };
+      }
       if (requestedNamespace && !canReadNamespace(auth, requestedNamespace)) {
         return {
           content: [
@@ -1135,6 +1218,8 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
               tier,
               offset,
               namespace,
+              undefined,
+              sourceScope,
             )
           : await executeSearchWithScopedSharedFallback(
               deps,
@@ -1145,6 +1230,8 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
               tier,
               offset,
               namespace,
+              undefined,
+              sourceScope,
             );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
