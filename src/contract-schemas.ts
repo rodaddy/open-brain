@@ -15,6 +15,110 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
     input_schema: {},
     output_shape: "OpenBrainContract JSON text payload",
   },
+  working_set_append: {
+    version: 1,
+    input_schema: {
+      namespace: {
+        type: "string",
+        required: false,
+        maxLength: 500,
+        description:
+          "Namespace for isolation. Defaults to the auth-derived clientId; " +
+          "the server enforces write authority before accepting RAM working context.",
+      },
+      agent: { type: "string", required: true, minLength: 1, maxLength: 200 },
+      platform: { type: "string", required: true, minLength: 1, maxLength: 200 },
+      server_id: { type: "string", required: true, minLength: 1, maxLength: 500 },
+      channel_id: { type: "string", required: true, minLength: 1, maxLength: 500 },
+      thread_id: {
+        type: "string",
+        required: false,
+        maxLength: 500,
+        description: "Optional thread id. Missing means unthreaded scope only.",
+      },
+      session_key: {
+        type: "string",
+        required: true,
+        minLength: 1,
+        maxLength: 500,
+      },
+      kind: {
+        type: "enum",
+        required: true,
+        values: [
+          "recent_event",
+          "structured_event",
+          "current_intent",
+          "active_correction",
+          "task_state",
+          "linked_durable_ref",
+          "next_turn_guidance",
+        ],
+      },
+      content: {
+        type: "string",
+        required: true,
+        minLength: 1,
+        maxLength: 4000,
+        description:
+          "Bounded RAM-only working context. This does not create durable " +
+          "memory, shared-kb, or searchable recall rows.",
+      },
+      confidence: { type: "number", required: false, min: 0, max: 1 },
+      stale_at: { type: "string", required: false, maxLength: 100 },
+      trace_id: { type: "string", required: false, maxLength: 500 },
+      source_ref: { type: "string", required: false, maxLength: 1000 },
+      durable_ref: { type: "object", required: false },
+      metadata: { type: "object", required: false },
+    },
+    output_shape:
+      "RAM-only working-set append receipt with accepted/reason/item/counters/not_durable_memory",
+  },
+  agent_context_pack: {
+    version: 1,
+    input_schema: {
+      namespace: {
+        type: "string",
+        required: false,
+        maxLength: 500,
+        description:
+          "Namespace for isolation. Defaults to auth-derived clientId; the " +
+          "server enforces read authority before returning any scoped context.",
+      },
+      agent: { type: "string", required: true, minLength: 1, maxLength: 200 },
+      platform: { type: "string", required: true, minLength: 1, maxLength: 200 },
+      server_id: { type: "string", required: true, minLength: 1, maxLength: 500 },
+      channel_id: { type: "string", required: true, minLength: 1, maxLength: 500 },
+      thread_id: { type: "string", required: false, maxLength: 500 },
+      session_key: {
+        type: "string",
+        required: true,
+        minLength: 1,
+        maxLength: 500,
+      },
+      query: { type: "string", required: false, maxLength: 4000 },
+      requested_sections: {
+        type: "array",
+        required: false,
+        items: {
+          type: "enum",
+          values: [
+            "working_set",
+            "durable_lane_context",
+            "durable_memory",
+            "profile_guidance",
+            "process_guidance",
+            "repo_facts",
+            "pointers",
+            "candidate_memory",
+          ],
+        },
+      },
+      budget: { type: "object", required: false },
+    },
+    output_shape:
+      "agent_context_pack envelope with exact-scope working_set section, warnings, budget, citations",
+  },
   get_entry: {
     version: 2,
     input_schema: {

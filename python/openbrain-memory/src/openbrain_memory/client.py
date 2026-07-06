@@ -41,10 +41,11 @@ def _resolve_package_version(pyproject: Path | None = None) -> str:
 
 
 PACKAGE_VERSION = _resolve_package_version()
-CURRENT_CONTRACT_VERSION = "2026-07-06.memory-tools.v15"
+CURRENT_CONTRACT_VERSION = "2026-07-06.memory-tools.v16"
 COMPATIBLE_CONTRACT_VERSIONS = (CURRENT_CONTRACT_VERSION,)
 REQUIRED_CONTRACT_TOOLS = (
     "append_session_event",
+    "agent_context_pack",
     "get_contract",
     "get_entry",
     "resolve_entry",
@@ -57,9 +58,13 @@ REQUIRED_CONTRACT_TOOLS = (
     "session_start",
     "session_wrap",
     "upsert_repo_fact",
+    "working_set_append",
 )
 CURRENT_TOOL_HELP: Mapping[str, str] = {
     "append_session_event": "Append a durable event to a session lane journal.",
+    "agent_context_pack": (
+        "Build a scoped realtime context pack with exact-scope working context."
+    ),
     "brain_answer": "Return cited answer bullets from readable Open Brain evidence.",
     "get_entity": "Fetch a graph entity by ID.",
     "get_contract": "Read the canonical Open Brain public contract manifest.",
@@ -80,6 +85,7 @@ CURRENT_TOOL_HELP: Mapping[str, str] = {
     "session_start": "Find or create a durable session lane and return recent events.",
     "session_wrap": "Checkpoint a session lane with a durable summary.",
     "upsert_repo_fact": "Upsert a curated qmd-derived repository fact.",
+    "working_set_append": "Append RAM-only working context for one exact active scope.",
 }
 
 
@@ -438,6 +444,12 @@ class OpenBrainClient:
 
     def session_context(self, **arguments: Any) -> JSON:
         return self.call_tool("session_context", arguments)
+
+    def agent_context_pack(self, **arguments: Any) -> JSON:
+        return self.call_tool("agent_context_pack", arguments)
+
+    def working_set_append(self, **arguments: Any) -> JSON:
+        return self.call_tool("working_set_append", arguments)
 
     def append_session_event(self, **arguments: Any) -> JSON:
         return self.call_tool("append_session_event", arguments)

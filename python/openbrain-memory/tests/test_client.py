@@ -425,6 +425,23 @@ def test_thin_wrappers_cover_current_issue_scope():
     client = make_client(transport)
 
     client.session_context(session_key="s")
+    client.working_set_append(
+        agent="nagatha",
+        platform="discord",
+        server_id="guild",
+        channel_id="chan",
+        session_key="session",
+        kind="current_intent",
+        content="finish the local slice",
+    )
+    client.agent_context_pack(
+        agent="nagatha",
+        platform="discord",
+        server_id="guild",
+        channel_id="chan",
+        session_key="session",
+        requested_sections=["working_set"],
+    )
     client.session_wrap(session_key="s", summary="done")
     client.log_thought(content="fact")
     client.log_decision(title="decision", rationale="because")
@@ -432,6 +449,8 @@ def test_thin_wrappers_cover_current_issue_scope():
 
     assert [call["json"]["params"]["name"] for call in tool_requests(transport)] == [
         "session_context",
+        "working_set_append",
+        "agent_context_pack",
         "session_wrap",
         "log_thought",
         "log_decision",
@@ -446,6 +465,7 @@ def test_all_registered_tool_wrappers_call_matching_tool_names():
         "access_report",
         "adjacent_context",
         "append_session_event",
+        "agent_context_pack",
         "archive_entity",
         "archive_entry",
         "brain_answer",
@@ -477,6 +497,7 @@ def test_all_registered_tool_wrappers_call_matching_tool_names():
         "search_all",
         "search_brain",
         "session_context",
+        "working_set_append",
         "session_load",
         "session_save",
         "session_start",
@@ -499,7 +520,7 @@ def test_all_registered_tool_wrappers_call_matching_tool_names():
 
 
 def test_required_contract_tools_have_first_class_wrappers_and_help():
-    assert CURRENT_CONTRACT_VERSION == "2026-07-06.memory-tools.v15"
+    assert CURRENT_CONTRACT_VERSION == "2026-07-06.memory-tools.v16"
     assert set(REQUIRED_CONTRACT_TOOLS) <= set(CURRENT_TOOL_HELP)
 
     for tool_name in REQUIRED_CONTRACT_TOOLS:

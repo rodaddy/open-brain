@@ -13,7 +13,7 @@ describe("Open Brain contract manifest", () => {
     expect(contract.contract_scope).toBe("required_openbrain_memory_contract");
     expect(contract.schema_hash).toMatch(/^[0-9a-f]{64}$/);
     expect(contract.schema_hash).toBe(
-      "92872c8499f1e70608569fb32d00bc1c726e4e91ddf641551399f510573c3d44",
+      "820112d965cafc92c1574b8d30c741495b5f5e5f73aa2bf32860bda4c49e52e7",
     );
     expect(contract.min_client_versions.mcp2cli).toBe("0.3.6");
     expect(contract.transport.namespace_boundary).toBe("authorization");
@@ -129,8 +129,8 @@ describe("Open Brain contract manifest", () => {
       status: "client-wrapper",
     });
     expect(contract.agent_context_pack).toMatchObject({
-      status: "planned-contract",
-      availability: "not_runtime_available",
+      status: "runtime-available",
+      availability: "mcp_tool_available",
       contract_doc: "docs/agent-context-pack-contract.md",
       parent_issue: 220,
       exact_scope_required: true,
@@ -167,6 +167,24 @@ describe("Open Brain contract manifest", () => {
     expect(contract.agent_context_pack.warning_fields).toContain(
       "scope_denials",
     );
+    expect(contract.agent_context_pack.working_set).toEqual({
+      status: "local-runtime-boundary",
+      parent_issue: 222,
+      implementation: "src/realtime/working-set.ts",
+      storage: "ram_first_in_process",
+      availability: "mcp_tool_available",
+      item_label: "working_context",
+      not_durable_memory: true,
+      exact_scope_required: true,
+      budget_defaults: {
+        ttl_ms: 1800000,
+        max_sessions: 128,
+        max_items_per_session: 24,
+        max_global_items: 1024,
+        max_item_chars: 4000,
+      },
+      counters: ["dropped", "expired", "trimmed"],
+    });
     expect(contract.receipt_contract).toMatchObject({
       status: "lightweight-openbrain-receipts",
       event_type: "receipt",
@@ -240,12 +258,23 @@ describe("Open Brain contract manifest", () => {
       "lane_load",
       "append_session_event",
       "session_wrap",
+      "working_set_append",
+      "agent_context_pack",
       "list_repo_facts",
       "upsert_repo_fact",
     ]) {
       expect(contract.tool_contracts[tool]).toBeDefined();
     }
-    expect(contract.tool_contracts.agent_context_pack).toBeUndefined();
+    const workingSetAppend = contract.tool_contracts.working_set_append;
+    const agentContextPack = contract.tool_contracts.agent_context_pack;
+    expect(workingSetAppend).toBeDefined();
+    expect(agentContextPack).toBeDefined();
+    expect(workingSetAppend?.output_shape).toContain(
+      "RAM-only",
+    );
+    expect(agentContextPack?.output_shape).toContain(
+      "exact-scope working_set",
+    );
     const upsertRepoFact = contract.tool_contracts.upsert_repo_fact;
     expect(upsertRepoFact).toBeDefined();
     const getEntry = contract.tool_contracts.get_entry;
@@ -333,7 +362,7 @@ describe("Open Brain contract manifest", () => {
     // contract so a future TS/Python divergence fails here, in lockstep with
     // python/openbrain-memory CURRENT_CONTRACT_VERSION.
     const contract = buildContract("2026-06-18T00:00:00.000Z");
-    expect(contract.contract_version).toBe("2026-07-06.memory-tools.v15");
+    expect(contract.contract_version).toBe("2026-07-06.memory-tools.v16");
 
     const appendEvent = contract.tool_contracts.append_session_event;
     expect(appendEvent).toBeDefined();
