@@ -13,6 +13,16 @@ import {
 
 const DEFAULT_COMPACT_MAX_CHARS = 500;
 
+const COMPACT_CONTENT: Record<Table, string> = {
+  ...CONTENT_PREVIEW,
+  sessions:
+    "COALESCE(s.project || ': ', '') || COALESCE(s.summary, '')" +
+    " || CASE WHEN s.key_decisions IS NOT NULL AND array_length(s.key_decisions, 1) > 0" +
+    " THEN E'\\nDecisions: ' || immutable_array_to_string(s.key_decisions, '; ') ELSE '' END" +
+    " || CASE WHEN s.next_steps IS NOT NULL AND array_length(s.next_steps, 1) > 0" +
+    " THEN E'\\nNext: ' || immutable_array_to_string(s.next_steps, '; ') ELSE '' END",
+};
+
 export function registerGetEntry(server: McpServer, deps: ToolDeps): void {
   server.registerTool(
     "get_entry",
@@ -75,7 +85,7 @@ export function registerGetEntry(server: McpServer, deps: ToolDeps): void {
       if (render === "compact") {
         const maxChars = args.max_chars ?? DEFAULT_COMPACT_MAX_CHARS;
         const alias = TABLE_ALIAS[table];
-        const preview = CONTENT_PREVIEW[table];
+        const compactContent = COMPACT_CONTENT[table];
         const sourceType = SOURCE_LABELS[table];
         const updatedAtExpr =
           table === "relationships" || table === "projects"
@@ -90,14 +100,18 @@ export function registerGetEntry(server: McpServer, deps: ToolDeps): void {
         }
         params.push(maxChars);
         const maxCharsParam = `$${params.length}`;
-        const previewExpr = `regexp_replace(COALESCE((${preview})::text, ''), '[[:space:]]+', ' ', 'g')`;
+        const contentExpr = `regexp_replace(COALESCE((${compactContent})::text, ''), '[[:space:]]+', ' ', 'g')`;
         const { rows } = await deps.pool.query(
-          `SELECT ${alias}.id, ${alias}.namespace, ${alias}.created_by, ${alias}.created_at, ${updatedAtExpr} AS updated_at, ${alias}.tier, ${alias}.tags,
-            LEFT(${previewExpr}, ${maxCharsParam}) AS content_preview,
-            length(${previewExpr}) AS content_length,
-            length(${previewExpr}) > ${maxCharsParam} AS content_truncated
-           FROM ${table} ${alias}
-           WHERE ${alias}.id = $1 AND ${alias}.archived_at IS NULL${namespacePredicate}`,
+          `SELECT entry.id, entry.namespace, entry.created_by, entry.created_at, entry.updated_at, entry.tier, entry.tags,
+            LEFT(entry.content_text, ${maxCharsParam}) AS content_preview,
+            length(entry.content_text) AS content_length,
+            length(entry.content_text) > ${maxCharsParam} AS content_truncated
+           FROM (
+             SELECT ${alias}.id, ${alias}.namespace, ${alias}.created_by, ${alias}.created_at, ${updatedAtExpr} AS updated_at, ${alias}.tier, ${alias}.tags,
+               ${contentExpr} AS content_text
+             FROM ${table} ${alias}
+             WHERE ${alias}.id = $1 AND ${alias}.archived_at IS NULL${namespacePredicate}
+           ) entry`,
           params,
         );
 
