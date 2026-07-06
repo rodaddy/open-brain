@@ -38,5 +38,5 @@ DreamEngine dry-run-by-default rule has a scoped design and tests for:
   mutation;
 - namespace-safe provenance for every generated replacement.
 
-Track that as a separate DreamEngine/decomposition issue before implementing
-mutating behavior. Do not fold it into compact `get_entry` rendering.
+Track that in #247 before implementing mutating behavior. Do not fold it into
+compact `get_entry` rendering.

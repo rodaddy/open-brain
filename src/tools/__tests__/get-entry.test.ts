@@ -78,6 +78,79 @@ describe("get_entry", () => {
     }
   });
 
+  it("denies compact render before querying when the role cannot read the table", async () => {
+    let queried = false;
+    const mockPool = {
+      query: async () => {
+        queried = true;
+        return { rows: [] };
+      },
+    };
+    const auth: AuthInfo = { role: "discord", clientId: "discord" };
+    const { client, cleanup } = await setupMcpClient(
+      registerGetEntry,
+      mockPool,
+      createMockEmbed(),
+      auth,
+    );
+
+    try {
+      const result = await client.callTool({
+        name: "get_entry",
+        arguments: {
+          table: "thoughts",
+          id: "550e8400-e29b-41d4-a716-446655440012",
+          render: "compact",
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(getErrorText(result)).toContain("Permission denied");
+      expect(queried).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("returns not found for compact render when scoped namespace filter excludes the row", async () => {
+    const queries: Array<{ sql: string; params?: unknown[] }> = [];
+    const mockPool = {
+      query: async (sql: string, params?: unknown[]) => {
+        queries.push({ sql, params });
+        return { rows: [] };
+      },
+    };
+    const auth: AuthInfo = { role: "agent", clientId: "bilby" };
+    const { client, cleanup } = await setupMcpClient(
+      registerGetEntry,
+      mockPool,
+      createMockEmbed(),
+      auth,
+    );
+
+    try {
+      const result = await client.callTool({
+        name: "get_entry",
+        arguments: {
+          table: "thoughts",
+          id: "550e8400-e29b-41d4-a716-446655440013",
+          render: "compact",
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(getErrorText(result)).toContain("Entry not found");
+      expect(queries[0]?.sql).toContain("namespace = ANY($2::text[])");
+      expect(queries[0]?.params).toEqual([
+        "550e8400-e29b-41d4-a716-446655440013",
+        ["bilby", "shared-kb"],
+        500,
+      ]);
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("returns a bounded compact envelope without emitting the full row", async () => {
     const queries: Array<{ sql: string; params?: unknown[] }> = [];
     const mockPool = {

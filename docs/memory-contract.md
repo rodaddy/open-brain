@@ -211,7 +211,9 @@ entries, callers can pass `render: "compact"` and optional `max_chars`
 (80-2000, default 500) to receive a bounded envelope with `content_preview`,
 `content_length`, `content_truncated`, `source_ref`, and a `fetch_path` for the
 full row. The same server-side auth and namespace predicates apply to both
-renders.
+renders. `content_length` and `content_truncated` describe the readable compact
+projection used for `content_preview`; callers that need every raw stored column
+should follow `fetch_path` with `render: "full"`.
 
 ### OKF Compatibility Hooks
 
