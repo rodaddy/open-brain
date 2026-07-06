@@ -37,6 +37,30 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
     },
     output_shape: "full readable entry row JSON text payload",
   },
+  resolve_entry: {
+    version: 1,
+    input_schema: {
+      id: {
+        type: "string",
+        required: true,
+        format: "uuid",
+        description:
+          "Entry UUID to resolve across readable source families. The server " +
+          "applies auth-derived namespace predicates before disclosing source metadata.",
+      },
+      namespace: {
+        type: "string",
+        required: false,
+        minLength: 1,
+        maxLength: 500,
+        description:
+          "Optional namespace to constrain resolution. The server checks this " +
+          "against auth-derived read policy.",
+      },
+    },
+    output_shape:
+      "resolver JSON text payload with resolved/status/id/source_type/table/namespace/fetch_path/checked_sources/checked_tables",
+  },
   log_thought: {
     version: 2,
     input_schema: {

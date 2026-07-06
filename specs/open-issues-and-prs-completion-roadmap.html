@@ -430,11 +430,13 @@
       </ul>
 
       <h4>2. #204 — resolve_entry tool</h4>
+      <p><strong>Local status 2026-07-05:</strong> implementation exists on <code>feat/204-source-type-resolver</code> in <code>/Volumes/ThunderBolt/_tmp/open-brain/issue-204-source-type-resolver</code> and PR #243 is open. Full local validation after initial gauntlet fixes is green: focused resolver/contract tests, <code>bunx tsc --noEmit</code>, full <code>bun test</code> (1040 pass, 46 skip), Python pytest (193 pass, 5 skip), Python mypy, Python ruff, and <code>git diff --check</code>. CI passed on amended head <code>ddc8bb611979fd93e28d3e40989fab163e30589e</code>; <code>deploy</code> skipped as expected for local-only PR flow. Project 8 marks #204 <code>In Review</code>. Initial swarm findings were fixed and posted on PR #243; focused fix-verification passed. Opposite-runtime Claude cross-review found three LOW observations, addressed by promoter parity coverage, resolver comments, and explicit contract-diagnostic rationale. Current-head CI is rerunning after cross-review fixes. Downstream rollout/core01 deploy is deferred by the current local-only instruction.</p>
       <ul class="checklist">
-        <li><code class="status">[]</code> Implement read-only <code>resolve_entry(id, namespace?)</code> returning <code>resolved, id, source_type, namespace, fetch_path, checked_sources, status</code> — single query pass over the known tables via validated allowlist (no interpolated table names without Zod enum validation).</li>
-        <li><code class="status">[]</code> Enforce auth-derived namespace predicate on the lookup (namespace isolation is a security boundary; a resolver must not become a cross-namespace oracle).</li>
-        <li><code class="status">[]</code> Contract bump per <code>docs/memory-contract.md</code>; add to tool schema + eval fixtures.</li>
-        <li><code class="status">[]</code> Functional tests: known UUID in each table resolves; foreign-namespace UUID returns not_found_or_unreadable (regression test proving the predicate); garbage UUID handled.</li>
+        <li><code class="status">[x]</code> Implement read-only <code>resolve_entry(id, namespace?)</code> returning <code>resolved, id, source_type, namespace, fetch_path, checked_sources, checked_tables, status</code> via known source-table allowlist.</li>
+        <li><code class="status">[x]</code> Enforce auth-derived namespace predicate on the lookup, reusing repo read-policy helpers including canonical/physical shared namespace handling and global-admin <code>namespace: "all"</code>.</li>
+        <li><code class="status">[x]</code> Contract bump to <code>2026-07-05.memory-tools.v12</code>; add <code>resolve_entry</code> to the server contract, tool schema metadata, and Python client snapshot/wrapper.</li>
+        <li><code class="status">[x]</code> Functional tests cover readable found rows, admin-only archived rows, non-admin archived non-disclosure, no-readable-family roles, explicit unreadable namespaces, and admin <code>namespace: "all"</code>.</li>
+        <li><code class="status">[]</code> Push cross-review fixes, wait for current-head CI, post final gauntlet receipt, then merge; downstream rollout/core01 deploy remains deferred until release phase.</li>
       </ul>
 
       <h4>3. #176 — Structured share_candidate rejection + bounded resend</h4>

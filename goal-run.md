@@ -191,77 +191,82 @@ Status: verified locally and by PR checks, not merged.
 
 ### Phase 4: #177 installable package, #204 resolver, #176 structured rejection
 
-Status: PR #238 open; pre-merge-gauntlet findings addressed; waiting on live CI
-completion and explicit merge approval.
+Status: #177 is done via merged PR #238. #204 is the active local-only slice.
 
 Current worktree:
-`/Volumes/ThunderBolt/_tmp/open-brain/issue-177-openbrain-memory-package`
+`/Volumes/ThunderBolt/_tmp/open-brain/issue-204-source-type-resolver`
 
 Current branch:
-`fix/177-openbrain-memory-package` from `origin/main` at `5373c1b`.
+`feat/204-source-type-resolver` from `origin/main` at `90713f4`.
 
 Owning boundary:
-`python/openbrain-memory` package contract: installability, public API surface,
-canonical redaction policy, and package build/install proof.
+MCP/tool contract for ID-based entry resolution, with server-side auth and
+namespace predicates plus the Python client snapshot as the downstream contract
+mirror.
 
-Current findings:
+Current #204 state:
 
-- `pyproject.toml` already uses hatchling and supports `uv build`.
-- README already documents install methods, schema helpers, contract authority,
-  and canary expectations.
-- `schema.py` already implements contract DSL to JSON Schema helpers, so #177's
-  normalizer-home question is already mostly answered in package code.
-- Closed PR #232 / branch `fix/openbrain-memory-redaction-superset` is not on
-  `origin/main`; its redaction parity changes must be ported into #177.
-- `dist/` is gitignored, so package artifacts should be built and proven, not
-  committed.
-
-Next #177 checklist:
-
-1. Done: port redaction superset parity from
-   `fix/openbrain-memory-redaction-superset`.
-2. Done: add `py.typed` marker.
-3. Done: tighten README language for stable public API, SemVer/package version,
-   live contract version, and canonical redaction.
-4. Done: run Python package checks:
-   - `uv run mypy src/openbrain_memory` -> passed.
-   - `uv run ruff check src tests` -> passed.
-   - `uv run pytest -q` -> 193 passed, 5 skipped.
-   - source-tree import without installed metadata -> `0.1.1`.
-5. Done: build artifacts with `uv build`:
-   - `dist/openbrain_memory-0.1.1.tar.gz`
-   - `dist/openbrain_memory-0.1.1-py3-none-any.whl`
-6. Done: install wheel into temp venv:
-   `/Volumes/ThunderBolt/_tmp/open-brain/issue-177-wheel-smoke-6`.
-7. Done: import/API smoke from installed wheel:
-   `wheel smoke ok 0.1.1`.
-   First smoke attempt failed because the sample token was below the redaction
-   length threshold; rerun used a valid opaque token shape and passed.
-8. Done: opened PR #238:
-   https://github.com/rodaddy/open-brain/pull/238
-9. Done: ran review-swarm Phase 2 on pinned diff
-   `86d46614fb7c9914841d79d9715452235719b7a0524208536df3b4a9f4322527`.
-   Initial findings fixed:
-   - dash/underscore-bounded dotted token redaction;
-   - duplicate package version source;
-   - README redaction-superset wording.
-10. Done: fix-verification after amended head `310e955`:
-    - SME/gotcha: clean.
-    - Antagonist: found source-tree import regression from import-time
-      `importlib.metadata.version()`.
-    - Fix: `PACKAGE_VERSION` now uses installed metadata first, then falls back
-      to source `pyproject.toml`; regression test added.
-11. Done: Phase 3 cross-runtime review via local `claude -p --model opus`
-    because the GitHub `claude-review` workflow can produce false-positive
-    success around invalid-model output.
-    - Final reviewed diff SHA-256:
-      `b2d207bd380c6ad079edfa4b70cdaed192c2a6b40c15d53a81b91d85381f1d65`.
-    - Findings fixed/addressed: over-broad heuristic redaction of benign
-      identifiers, length-only dotted-token matching, slash-bearing base64
-      coverage, write-vs-display redaction boundary docs/tests, pure base62
-      false-negative docs, and 40-character heuristic floor docs.
-12. Pending: wait for final PR #238 CI on head `672b203`; do not merge without
-    explicit Rico approval.
+1. Done locally: implemented read-only `resolve_entry(id, namespace?)`.
+2. Done locally: registered the tool in `src/tools/index.ts`.
+3. Done locally: bumped the public contract to
+   `2026-07-05.memory-tools.v12` and added `resolve_entry` schema/capability
+   metadata.
+4. Done locally: updated `python/openbrain-memory` constants/help and added the
+   `OpenBrainClient.resolve_entry()` wrapper.
+5. Done locally: resolver tests cover readable found rows, admin-only archived
+   rows, non-admin archived non-disclosure, no-readable-family roles, explicit
+   unreadable namespaces, and `namespace: "all"` for global admin reads.
+6. Validation passed locally:
+   - `bun test src/tools/__tests__/resolve-entry.test.ts src/contract.test.ts`
+     -> 12 pass.
+   - `bunx tsc --noEmit` -> passed.
+   - `bun test` -> 1040 pass, 46 skip, 0 fail.
+   - `cd python/openbrain-memory && uv run pytest -q` -> 193 pass, 5 skip.
+   - `cd python/openbrain-memory && uv run mypy src/openbrain_memory` ->
+     passed.
+   - `cd python/openbrain-memory && uv run ruff check src tests` -> passed.
+   - `git diff --check` -> passed.
+7. PR #243 opened:
+   https://github.com/rodaddy/open-brain/pull/243
+8. Pre-merge-gauntlet Phase 2 initial swarm found and local fixes addressed:
+   - P2: non-admin archived UUID resolution disclosed source/namespace
+     metadata; fixed by limiting archived resolution to admin/ob-admin and
+     adding non-admin non-disclosure tests.
+   - P2: `openbrain-memory` min compatible version remained `0.1.0` after a
+     required wrapper/contract change; fixed by bumping package version and
+     manifest floor/range to `0.1.2`.
+   - P3: Python wrapper dispatch test omitted `resolve_entry`; fixed by adding
+     it to the wrapper-name dispatch regression.
+9. PR #243 fix receipt posted:
+   https://github.com/rodaddy/open-brain/pull/243#issuecomment-4888294598
+10. CI passed on amended head `ddc8bb611979fd93e28d3e40989fab163e30589e`:
+    `check`, `db-integration`, `python-package`, PR body `validate`, and
+    GitGuardian passed; `deploy` skipped as expected for local-only PR flow.
+11. Project 8 updated for #204: Status `In Review`, Validation `CI Passed`,
+    Review Gate `Fix Verification Running`, Next Action points to PR #243
+    fix-verification and no core01 deploy in this phase.
+12. Opposite-runtime Claude cross-review ran on PR #243 and found three LOW
+    observations:
+    - Promoter role resolves cross-namespace UUIDs. This is existing
+      get_entry/read-policy parity for promotion candidates and is now pinned by
+      resolver coverage.
+    - Negative responses expose `checked_sources`/`checked_tables`. This is
+      intentional contract diagnostics for the requested tool shape and does
+      not expose unreadable row metadata.
+    - Cross-table UUID collision behavior was undocumented. The resolver now
+      documents first-match `SOURCE_TABLES` order and the global UUID
+      uniqueness assumption.
+13. Focused validation after cross-review fixes:
+    - `bun test src/tools/__tests__/resolve-entry.test.ts src/contract.test.ts`
+      -> 13 pass.
+    - `cd python/openbrain-memory && uv run pytest -q tests/test_client.py tests/test_contract.py`
+      -> 69 pass.
+    - `git diff --check` -> passed.
+14. Pending: amend/push cross-review fixes, wait for current-head CI, post the
+    cross-review/fixes receipt, then merge when the gauntlet gate is clean.
+15. Deferred by current local-only instruction: downstream rollout and any
+   core01 deploy/live canary. This contract change still triggers
+   `docs/downstream-rollout.md` before issue closure/release.
 
 ---
 

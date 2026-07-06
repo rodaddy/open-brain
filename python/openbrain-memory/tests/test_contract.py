@@ -10,6 +10,8 @@ from openbrain_memory import (
     validate_required_memory_contract,
 )
 
+CURRENT_CLIENT_VERSION = "0.1.2"
+
 
 def safe_string_display(value: str) -> str:
     digest = sha256(value.encode("utf-8")).hexdigest()[:12]
@@ -25,11 +27,11 @@ def representative_contract_manifest() -> dict:
         "schema_hash": "abc123",
         "generated_at": "2026-06-19T00:00:00.000Z",
         "min_client_versions": {
-            "openbrain-memory": "0.1.0",
+            "openbrain-memory": CURRENT_CLIENT_VERSION,
             "rtech-hermes-runtime": "0.1.0",
         },
         "compatible_client_ranges": {
-            "openbrain-memory": ">=0.1.0 <1.0.0",
+            "openbrain-memory": ">=0.1.2 <1.0.0",
             "rtech-hermes-runtime": ">=0.1.0 <1.0.0",
         },
         "transport": {
@@ -61,7 +63,7 @@ def representative_contract_manifest() -> dict:
 def test_validate_contract_manifest_accepts_representative_contract_shape():
     result = validate_contract_manifest(
         representative_contract_manifest(),
-        client_version="0.1.0",
+        client_version=CURRENT_CLIENT_VERSION,
         required_tools=REQUIRED_CONTRACT_TOOLS,
         compatible_contract_versions=(CURRENT_CONTRACT_VERSION,),
     )
@@ -73,7 +75,7 @@ def test_validate_contract_manifest_accepts_representative_contract_shape():
 def test_validate_required_memory_contract_pins_package_contract_defaults():
     result = validate_required_memory_contract(
         representative_contract_manifest(),
-        client_version="0.1.0",
+        client_version=CURRENT_CLIENT_VERSION,
     )
 
     assert result.ok is True
@@ -103,7 +105,7 @@ def test_validate_contract_manifest_reports_missing_required_tool():
 
     result = validate_contract_manifest(
         manifest,
-        client_version="0.1.0",
+        client_version=CURRENT_CLIENT_VERSION,
         required_tools=REQUIRED_CONTRACT_TOOLS,
         compatible_contract_versions=(CURRENT_CONTRACT_VERSION,),
     )
@@ -121,7 +123,7 @@ def test_validate_contract_manifest_rejects_capability_only_required_tool():
 
     result = validate_contract_manifest(
         manifest,
-        client_version="0.1.0",
+        client_version=CURRENT_CLIENT_VERSION,
         required_tools=REQUIRED_CONTRACT_TOOLS,
         compatible_contract_versions=(CURRENT_CONTRACT_VERSION,),
     )
@@ -140,7 +142,7 @@ def test_validate_contract_manifest_rejects_tool_contract_only_required_tool():
 
     result = validate_contract_manifest(
         manifest,
-        client_version="0.1.0",
+        client_version=CURRENT_CLIENT_VERSION,
         required_tools=REQUIRED_CONTRACT_TOOLS,
         compatible_contract_versions=(CURRENT_CONTRACT_VERSION,),
     )
@@ -160,7 +162,7 @@ def test_validate_contract_manifest_rejects_malformed_required_tool_contract():
 
     result = validate_contract_manifest(
         manifest,
-        client_version="0.1.0",
+        client_version=CURRENT_CLIENT_VERSION,
         required_tools=REQUIRED_CONTRACT_TOOLS,
         compatible_contract_versions=(CURRENT_CONTRACT_VERSION,),
     )
@@ -180,7 +182,7 @@ def test_validate_contract_manifest_rejects_non_mapping_required_tool_contract()
 
     result = validate_contract_manifest(
         manifest,
-        client_version="0.1.0",
+        client_version=CURRENT_CLIENT_VERSION,
         required_tools=REQUIRED_CONTRACT_TOOLS,
         compatible_contract_versions=(CURRENT_CONTRACT_VERSION,),
     )
@@ -196,7 +198,7 @@ def test_validate_contract_manifest_reports_scope_and_contract_version_mismatch(
 
     result = validate_contract_manifest(
         manifest,
-        client_version="0.1.0",
+        client_version=CURRENT_CLIENT_VERSION,
         compatible_contract_versions=(CURRENT_CONTRACT_VERSION,),
     )
 
@@ -220,10 +222,10 @@ def test_validate_contract_manifest_reports_min_client_version_failure():
     assert result.reasons == (
         "openbrain-memory "
         f"{safe_string_display('0.0.9')} is below required minimum "
-        f"{safe_string_display('0.1.0')}",
+        f"{safe_string_display(CURRENT_CLIENT_VERSION)}",
         "openbrain-memory "
         f"{safe_string_display('0.0.9')} does not satisfy compatible range "
-        f"{safe_string_display('>=0.1.0 <1.0.0')}",
+        f"{safe_string_display('>=0.1.2 <1.0.0')}",
     )
 
 
@@ -236,7 +238,7 @@ def test_validate_contract_manifest_reports_compatible_range_failure():
     assert result.reasons == (
         "openbrain-memory "
         f"{safe_string_display('1.0.0')} does not satisfy compatible range "
-        f"{safe_string_display('>=0.1.0 <1.0.0')}",
+        f"{safe_string_display('>=0.1.2 <1.0.0')}",
     )
 
 
@@ -245,7 +247,7 @@ def test_validate_contract_manifest_reports_malformed_client_compatibility_field
     manifest["min_client_versions"]["openbrain-memory"] = 1
     manifest["compatible_client_ranges"]["openbrain-memory"] = []
 
-    result = validate_contract_manifest(manifest, client_version="0.1.0")
+    result = validate_contract_manifest(manifest, client_version=CURRENT_CLIENT_VERSION)
 
     assert result.ok is False
     assert result.reasons == (
@@ -258,12 +260,13 @@ def test_validate_contract_manifest_rejects_malformed_compatible_range_text():
     manifest = representative_contract_manifest()
     manifest["compatible_client_ranges"]["openbrain-memory"] = ">=0.1.0 <1.0.0 trailing"
 
-    result = validate_contract_manifest(manifest, client_version="0.1.0")
+    result = validate_contract_manifest(manifest, client_version=CURRENT_CLIENT_VERSION)
 
     assert result.ok is False
     assert result.reasons == (
         "openbrain-memory "
-        f"{safe_string_display('0.1.0')} does not satisfy compatible range "
+        f"{safe_string_display(CURRENT_CLIENT_VERSION)} does not satisfy "
+        "compatible range "
         f"{safe_string_display('>=0.1.0 <1.0.0 trailing')}",
     )
 
@@ -272,12 +275,13 @@ def test_validate_contract_manifest_rejects_unsupported_range_operator():
     manifest = representative_contract_manifest()
     manifest["compatible_client_ranges"]["openbrain-memory"] = "~>0.1.0"
 
-    result = validate_contract_manifest(manifest, client_version="0.1.0")
+    result = validate_contract_manifest(manifest, client_version=CURRENT_CLIENT_VERSION)
 
     assert result.ok is False
     assert result.reasons == (
         "openbrain-memory "
-        f"{safe_string_display('0.1.0')} does not satisfy compatible range "
+        f"{safe_string_display(CURRENT_CLIENT_VERSION)} does not satisfy "
+        "compatible range "
         f"{safe_string_display('~>0.1.0')}",
     )
 
@@ -285,11 +289,11 @@ def test_validate_contract_manifest_rejects_unsupported_range_operator():
 def test_validate_contract_manifest_rejects_prerelease_client_version():
     manifest = representative_contract_manifest()
 
-    result = validate_contract_manifest(manifest, client_version="0.1.0-alpha")
+    result = validate_contract_manifest(manifest, client_version="0.1.2-alpha")
 
     assert result.ok is False
     assert result.reasons == (
-        "client_version '0.1.0-alpha' is not a supported semver version",
+        "client_version '0.1.2-alpha' is not a supported semver version",
     )
 
 
@@ -299,7 +303,7 @@ def test_validate_contract_manifest_fails_closed_for_unknown_client_name():
     result = validate_contract_manifest(
         manifest,
         client_name="typoed-client",
-        client_version="0.1.0",
+        client_version=CURRENT_CLIENT_VERSION,
     )
 
     assert result.ok is False
@@ -314,7 +318,7 @@ def test_validate_contract_manifest_redacts_long_manifest_values_in_reasons():
     manifest["contract_scope"] = "evil-" + ("x" * 200)
     manifest["compatible_client_ranges"]["openbrain-memory"] = ">=0.1.0 " + ("x" * 200)
 
-    result = validate_contract_manifest(manifest, client_version="0.1.0")
+    result = validate_contract_manifest(manifest, client_version=CURRENT_CLIENT_VERSION)
 
     assert result.ok is False
     assert len(result.reasons) == 2
@@ -341,7 +345,7 @@ def test_validate_contract_manifest_redacts_token_like_manifest_values_in_reason
     manifest["contract_scope"] = token_body
     manifest["compatible_client_ranges"]["openbrain-memory"] = jwt_value
 
-    result = validate_contract_manifest(manifest, client_version="0.1.0")
+    result = validate_contract_manifest(manifest, client_version=CURRENT_CLIENT_VERSION)
     reason_text = "\n".join(result.reasons)
 
     assert result.ok is False
@@ -359,7 +363,7 @@ def test_validate_contract_manifest_does_not_require_snapshot_constants():
 
     result = validate_contract_manifest(
         manifest,
-        client_version="0.1.0",
+        client_version=CURRENT_CLIENT_VERSION,
         required_tools=REQUIRED_CONTRACT_TOOLS,
     )
 
