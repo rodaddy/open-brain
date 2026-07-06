@@ -233,12 +233,14 @@ Deferred on 2026-07-06. The local Open Brain slice records the non-goals and
 failure semantics in `docs/roadmap/optional-qmd-deep-lookup.md`; implementation
 belongs in a later approved mcp2cli/qmd/host-routing issue.
 
-Required local work:
+Local disposition work:
 
-- Keep qmd lookup optional and non-fatal.
-- Document trusted host and identity assumptions.
-- Prove Hermes startup, recall, writes, current memory, and repo facts do not
-  depend on qmd availability.
+- Document that qmd lookup remains optional and non-fatal.
+- Document that trusted host and identity assumptions are deferred to a future
+  wrapper issue in the owning mcp2cli/qmd/host-routing boundary.
+- Do not claim local proof for Hermes startup, recall, writes, current memory,
+  or repo facts under qmd-unavailable runtime conditions; those canaries belong
+  with the future approved wrapper implementation.
 
 ### 7. #118 Privilege Isolation source refs
 
