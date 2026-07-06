@@ -7,8 +7,8 @@ Updated: 2026-07-06.
 Live GitHub and Project 8 state are the source of truth. Older roadmap
 snapshots and untracked sidecar plans are historical evidence only.
 
-Current live state as of 2026-07-06 16:03 EDT during the #247 pre-merge
-gauntlet cross-review phase:
+Current live state as of 2026-07-06 16:16 EDT during the #247 pre-merge
+gauntlet fix-verification phase:
 
 - Open PRs: 1.
   - #254 `feat(#247): add DreamEngine entry decomposition`
@@ -28,7 +28,7 @@ gauntlet cross-review phase:
 - #224 is closed by PR #251, #222 is closed by PR #252, and #221 is closed by
   PR #253. They are historical context only, not active Plan 3F work.
 - PR #254 is open for #247 on `feat/247-dreamengine-decomposition` at
-  `a26399977b04dd1ed0098f9b651735e9cad427c2`. Initial pre-merge-gauntlet
+  `1736ce2af66875423cdd7b97d51d15db6c180728`. Initial pre-merge-gauntlet
   findings are posted at
   https://github.com/rodaddy/open-brain/pull/254#issuecomment-4896913956:
   four MEDIUM findings covering explicit apply no-op status, atomic replacement
@@ -37,9 +37,14 @@ gauntlet cross-review phase:
   https://github.com/rodaddy/open-brain/pull/254#issuecomment-4896991728.
   Focused fix verification is posted at
   https://github.com/rodaddy/open-brain/pull/254#issuecomment-4897037515.
-  PR CI is green and merge state is clean; Claude/Opus cross-review is running
-  for pre-merge-gauntlet Phase 3. No core01 deploy has been performed or
-  authorized.
+  Claude/Opus cross-review findings were posted at
+  https://github.com/rodaddy/open-brain/pull/254#issuecomment-4897143700:
+  one HIGH, two MEDIUM, and two LOW findings. Fixes are pushed in `1736ce2`
+  and summarized at
+  https://github.com/rodaddy/open-brain/pull/254#issuecomment-4897214778.
+  Local validation is green; PR CI is pending on `1736ce2` and merge state is
+  temporarily unstable until checks finish. No core01 deploy has been performed
+  or authorized.
 - #204 is closed. Do not continue stale #204 worktrees for this run.
 
 Critical correction: the active Plan 3F surface is the 5 open issues above and
