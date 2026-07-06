@@ -341,11 +341,11 @@ export class RecoveryWalStore {
     scope: WorkingSetScope,
     now: Date = new Date(),
   ): RecoveryWalContextPackFragment {
-    this.purgeExpired(now);
+    const nowMs = now.getTime();
     const normalizedScope = normalizeWorkingSetScope(scope);
     const key = workingSetScopeKey(normalizedScope);
     const items = (this.sessions.get(key)?.items ?? []).filter((item) =>
-      PENDING_STATUSES.has(item.status),
+      this.isPendingAt(item, nowMs),
     );
 
     return {
@@ -364,7 +364,7 @@ export class RecoveryWalStore {
         counters: this.getCounters(),
         wal_path_configured: this.walPath !== null,
       },
-      warnings: { scope_denials: this.scopeDenialsFor(normalizedScope) },
+      warnings: { scope_denials: this.scopeDenialsFor(normalizedScope, nowMs) },
       budget: { recovery: this.budget },
     };
   }
@@ -492,13 +492,14 @@ export class RecoveryWalStore {
 
   private scopeDenialsFor(
     requestedScope: NormalizedWorkingSetScope,
+    nowMs: number,
   ): WorkingSetScopeDenial[] {
     const requestedKey = workingSetScopeKey(requestedScope);
     const denials: WorkingSetScopeDenial[] = [];
     for (const [key, session] of this.sessions.entries()) {
       if (key === requestedKey) continue;
       if (session.scope.namespace !== requestedScope.namespace) continue;
-      if (!session.items.some((item) => PENDING_STATUSES.has(item.status))) {
+      if (!session.items.some((item) => this.isPendingAt(item, nowMs))) {
         continue;
       }
       const reasons = compareWorkingSetScope(requestedScope, session.scope);
@@ -510,6 +511,10 @@ export class RecoveryWalStore {
       }
     }
     return denials;
+  }
+
+  private isPendingAt(item: RecoveryWalItem, nowMs: number): boolean {
+    return PENDING_STATUSES.has(item.status) && Date.parse(item.expires_at) > nowMs;
   }
 
   private loadWal(): void {
@@ -528,6 +533,7 @@ export class RecoveryWalStore {
       }
     }
     this.enforceReplayBudgets();
+    this.compactWal();
   }
 
   private writeWal(record: RecoveryWalRecord): void {
@@ -539,6 +545,10 @@ export class RecoveryWalStore {
   private applyWalRecord(record: RecoveryWalRecord): void {
     const key = workingSetScopeKey(record.scope);
     if (record.op === "append") {
+      if (!this.isReplayItemWithinBudget(record.item)) {
+        this.counters.dropped += 1;
+        return;
+      }
       const session = this.sessions.get(key) ?? {
         scope: record.scope,
         items: [],
@@ -566,6 +576,15 @@ export class RecoveryWalStore {
     item.reviewed_at = record.reviewed_at;
     item.updated_at = record.updated_at;
     session.updated_at_ms = Date.parse(record.updated_at);
+  }
+
+  private isReplayItemWithinBudget(item: RecoveryWalItem): boolean {
+    const metadataChars = serializedJsonLength(item.metadata);
+    return (
+      item.content.length <= this.budget.max_content_chars &&
+      metadataChars !== null &&
+      metadataChars <= this.budget.max_metadata_chars
+    );
   }
 
   private enforceReplayBudgets(): void {

@@ -1,4 +1,4 @@
-import { appendFileSync, mkdtempSync } from "node:fs";
+import { appendFileSync, mkdtempSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "bun:test";
@@ -19,6 +19,10 @@ function appendOnlyWalRecord(
   id: string,
   content: string,
   updatedAt: string,
+  options: {
+    metadata?: Record<string, unknown>;
+    expiresAt?: string;
+  } = {},
 ): string {
   return `${JSON.stringify({
     op: "append",
@@ -30,10 +34,10 @@ function appendOnlyWalRecord(
       content,
       trace_id: null,
       source_ref: null,
-      metadata: {},
+      metadata: options.metadata ?? {},
       created_at: updatedAt,
       updated_at: updatedAt,
-      expires_at: "2099-01-01T00:00:00.000Z",
+      expires_at: options.expiresAt ?? "2099-01-01T00:00:00.000Z",
       reviewed_at: null,
       last_action: null,
     },
@@ -107,6 +111,19 @@ describe("RecoveryWalStore", () => {
     });
     expect(purged.accepted).toBe(true);
     expect(purged.purged).toBe(true);
+  });
+
+  it("keeps reviewed marks out of pending context after WAL replay", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ob-recovery-wal-"));
+    const walPath = join(dir, "recovery.jsonl");
+    const store = new RecoveryWalStore({ walPath });
+    const appended = store.append(SCOPE, { content: "review and restart" });
+    const id = appended.item!.id;
+    store.mark(SCOPE, id, "review", "reviewed");
+
+    const restarted = new RecoveryWalStore({ walPath });
+
+    expect(restarted.buildContextPackFragment(SCOPE).recovery.pending_count).toBe(0);
   });
 
   it("keeps per-session trims absent after WAL replay", () => {
@@ -267,6 +284,77 @@ describe("RecoveryWalStore", () => {
       restarted.buildContextPackFragment({ ...SCOPE, session_key: "session-222" })
         .recovery.items[0]?.content_preview,
     ).toBe("kept session append");
+  });
+
+  it("compacts append-only WAL rows after replay budget enforcement", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ob-recovery-wal-"));
+    const walPath = join(dir, "recovery.jsonl");
+    appendFileSync(
+      walPath,
+      appendOnlyWalRecord(SCOPE, "rw-1", "old compact append", "2026-07-06T01:00:00.000Z"),
+      "utf8",
+    );
+    appendFileSync(
+      walPath,
+      appendOnlyWalRecord(SCOPE, "rw-2", "kept compact append", "2026-07-06T02:00:00.000Z"),
+      "utf8",
+    );
+
+    new RecoveryWalStore({ walPath, budget: { max_items_per_session: 1 } });
+
+    const compactedRows = readFileSync(walPath, "utf8").trim().split("\n");
+    expect(compactedRows).toHaveLength(1);
+    expect(compactedRows[0]).toContain("kept compact append");
+  });
+
+  it("skips oversized replay rows before exposing recovery context", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ob-recovery-wal-"));
+    const walPath = join(dir, "recovery.jsonl");
+    appendFileSync(
+      walPath,
+      appendOnlyWalRecord(SCOPE, "rw-1", "content-too-large", "2026-07-06T01:00:00.000Z"),
+      "utf8",
+    );
+    appendFileSync(
+      walPath,
+      appendOnlyWalRecord(
+        SCOPE,
+        "rw-2",
+        "ok",
+        "2026-07-06T02:00:00.000Z",
+        { metadata: { big: "metadata-too-large" } },
+      ),
+      "utf8",
+    );
+
+    const restarted = new RecoveryWalStore({
+      walPath,
+      budget: { max_content_chars: 10, max_metadata_chars: 10 },
+    });
+
+    expect(restarted.buildContextPackFragment(SCOPE).recovery.pending_count).toBe(0);
+    expect(restarted.getCounters().dropped).toBe(2);
+  });
+
+  it("does not write WAL rows while reading expired recovery context", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ob-recovery-wal-"));
+    const walPath = join(dir, "recovery.jsonl");
+    const store = new RecoveryWalStore({ walPath });
+    store.append(
+      SCOPE,
+      { content: "expired read-only recovery" },
+      new Date("2026-07-06T01:00:00.000Z"),
+    );
+    const rowsBefore = readFileSync(walPath, "utf8").trim().split("\n");
+
+    const fragment = store.buildContextPackFragment(
+      SCOPE,
+      new Date("2026-07-08T01:00:00.000Z"),
+    );
+    const rowsAfter = readFileSync(walPath, "utf8").trim().split("\n");
+
+    expect(fragment.recovery.pending_count).toBe(0);
+    expect(rowsAfter).toEqual(rowsBefore);
   });
 
   it("skips malformed JSONL records without crashing restart", () => {
