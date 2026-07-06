@@ -175,17 +175,17 @@
   <!-- ===== HEADER + UPDATABLE METADATA ===== -->
   <header>
     <h1>Plan: Open Brain — Work All Open Issues &amp; Complete All Open PRs</h1>
-    <p class="tagline">Six-phase execution roadmap: land PR #231, harden CI, retire legacy auth/namespace debt, ship the client contract batch, deliver the realtime memory epic, and disposition the roadmap backlog. Current correction: PR #255 includes the Phase 3 source-scope fixes from <code>3e04d5a</code>; local validation passed, GitHub CI passed, deploy jobs skipped by design, Claude/Opus cross-review completed through a code-focused packet, Phase 3 findings were fixed, Phase 4 fix-verification is clean, and deploy remains deferred.</p>
+    <p class="tagline">Six-phase execution roadmap: land PR #231, harden CI, retire legacy auth/namespace debt, ship the client contract batch, deliver the realtime memory epic, and disposition the roadmap backlog. Current correction: PR #255 merged as <code>144e029</code> and #118 is closed; local validation passed, GitHub CI passed, deploy jobs skipped by design, Claude/Opus cross-review completed through a code-focused packet, Phase 3 findings were fixed, Phase 4 fix-verification is clean, and deploy remains deferred.</p>
     <details class="meta">
       <summary>Metadata</summary>
       <dl>
         <dt>created</dt>      <dd>2026-07-05T00:39:00-08:00</dd>
-        <dt>modified</dt>     <dd>2026-07-05T00:39:00-08:00, 2026-07-05T01:55:00-08:00, 2026-07-05T12:55:00-04:00, 2026-07-05T13:42:05-04:00, 2026-07-05T14:20:00-04:00, 2026-07-05T18:25:00-04:00, 2026-07-06T02:15:00-04:00, 2026-07-06T02:35:00-04:00, 2026-07-06T02:45:00-04:00, 2026-07-06T03:10:00-04:00, 2026-07-06T03:25:00-04:00, 2026-07-06T16:22:31-04:00, 2026-07-06T18:11:18-04:00</dd>
-        <dt>commits</dt>      <dd>3e04d5a (Phase 3 source-scope fixes), a859b89 (source-scope auth fix), 6b73431 (Python contract pin), 74f391d (initial swarm fixes)</dd>
+        <dt>modified</dt>     <dd>2026-07-05T00:39:00-08:00, 2026-07-05T01:55:00-08:00, 2026-07-05T12:55:00-04:00, 2026-07-05T13:42:05-04:00, 2026-07-05T14:20:00-04:00, 2026-07-05T18:25:00-04:00, 2026-07-06T02:15:00-04:00, 2026-07-06T02:35:00-04:00, 2026-07-06T02:45:00-04:00, 2026-07-06T03:10:00-04:00, 2026-07-06T03:25:00-04:00, 2026-07-06T16:22:31-04:00, 2026-07-06T18:11:18-04:00, 2026-07-06T18:20:15-04:00</dd>
+        <dt>commits</dt>      <dd>144e029 (PR #255 squash merge), 9fd6d4d (final roadmap sync), 3e04d5a (Phase 3 source-scope fixes), a859b89 (source-scope auth fix), 6b73431 (Python contract pin), 74f391d (initial swarm fixes)</dd>
         <dt>agent name</dt>        <dd>admin255-board-roadmap</dd>
         <dt>session id</dt>      <dd>open-brain plan3f session 2026-07-06</dd>
         <dt>back refs</dt>    <dd>goal-run.md (memory-substrate goal run), docs/realtime-agent-memory-research.md (PR #225), docs/downstream-rollout.md, docs/memory-contract.md</dd>
-        <dt>forward refs</dt> <dd>Merged PRs #231, #233, #234, #235, #237, #238, #239, #240, #243, #244; open PRs: #255 (CI passed, deploy skipped, Phase 3 Claude/Opus findings fixed, Phase 4 fix-verification clean). Remaining issues: #223, #167, #137, #118. #167 is live migration/release gated; #223 is the realtime transport foundation; #137 is optional qmd wrapper; #118 is represented by PR #255. Project 8 sync is in progress for the final PR #255 gate. No core01 deploy performed.</dd>
+        <dt>forward refs</dt> <dd>Merged PRs #231, #233, #234, #235, #237, #238, #239, #240, #243, #244, #255. Open PRs: none. Remaining issues: #223, #167, #137. #167 is live migration/release gated; #223 is the realtime transport foundation; #137 is optional qmd wrapper/design-gated. #118 closed after PR #255 merged. Project 8 marks #118 done. No core01 deploy performed.</dd>
       </dl>
     </details>
   </header>
@@ -199,7 +199,7 @@
   <!-- ===== PURPOSE / PROBLEM / SOLUTION ===== -->
   <section id="purpose">
     <h2>Purpose</h2>
-    <p><strong>Live correction:</strong> this roadmap was authored from an older snapshot. Current live state is PR #255 open with #118 actively in review on the board. Local validation has passed (focused tests, typecheck, diff-check, full bun test, Python ruff/mypy/pytest), and GitHub CI passed with deploy jobs skipped by design. The prior Python contract snapshot CI failure was fixed in <code>6b73431</code>; the antagonist/gotcha source-scope auth finding was fixed in <code>a859b89</code>; Claude/Opus Phase 3 cross-review completed through a code-focused diff packet and its findings were fixed in <code>3e04d5a</code>. Phase 4 fix-verification is clean. Deploy remains intentionally deferred. The remaining open issues are #223, #167, #137, and #118.</p>
+    <p><strong>Live correction:</strong> this roadmap was authored from an older snapshot. Current live state: PR #255 merged as <code>144e029</code>, issue #118 is closed, and Project 8 marks #118 done. Local validation passed (focused tests, typecheck, diff-check, full bun test, Python ruff/mypy/pytest), and GitHub CI passed with deploy jobs skipped by design. The prior Python contract snapshot CI failure was fixed in <code>6b73431</code>; the antagonist/gotcha source-scope auth finding was fixed in <code>a859b89</code>; Claude/Opus Phase 3 cross-review completed through a code-focused diff packet and its findings were fixed in <code>3e04d5a</code>. Phase 4 fix-verification is clean. Deploy remains intentionally deferred. The remaining open issues are #223, #167, and #137.</p>
     <p>Drive the open-brain repo to a clean board: every open PR merged or explicitly held, and all remaining open issues either closed with tested, rollout-gated changes or explicitly dispositioned as roadmap items with a documented decision. The plan sequences work so infrastructure fixes (review pipeline, CI Postgres) land first and protect everything after them, and groups issues into coherent PR-sized batches that respect the repo's pre-merge gauntlet, critical self-review gate, and downstream rollout gate.</p>
   </section>
 
@@ -215,7 +215,7 @@
 
   <section id="solution">
     <h2>Solution</h2>
-    <p>Execute in six ordered phases. Phase 1 repairs and lands PR #231 so the review pipeline itself is trustworthy. Phase 2 closes the CI Postgres gap (#165) and the unbounded-logs bug (#193) so every later PR gets real DB-backed test coverage. Phase 3 retires legacy auth/namespace debt (#168 → #166 → #167) in dependency order. Phase 4 ships the client-facing contract batch (#177 installable package, #204 resolver tool, #176 structured rejection) — each triggering the downstream rollout gate. Phase 5 delivers the realtime memory epic (#223 → #222 → #221 → #224 → #229) in its research-mandated order: transport foundation first, then hot working set, recovery WAL, promotion lifecycle, and finally the operational hardening follow-up. Phase 6 currently has two live roadmap/disposition items (#137, #118): #118 is covered by PR #255 and #137 is optional/design-gated. One branch + one PR per issue or tightly-coupled pair; every non-trivial PR runs the critical self-review receipt and the pre-merge gauntlet.</p>
+    <p>Execute in six ordered phases. Phase 1 repairs and lands PR #231 so the review pipeline itself is trustworthy. Phase 2 closes the CI Postgres gap (#165) and the unbounded-logs bug (#193) so every later PR gets real DB-backed test coverage. Phase 3 retires legacy auth/namespace debt (#168 → #166 → #167) in dependency order. Phase 4 ships the client-facing contract batch (#177 installable package, #204 resolver tool, #176 structured rejection) — each triggering the downstream rollout gate. Phase 5 delivers the realtime memory epic (#223 → #222 → #221 → #224 → #229) in its research-mandated order: transport foundation first, then hot working set, recovery WAL, promotion lifecycle, and finally the operational hardening follow-up. Phase 6 currently has one live roadmap/disposition item (#137); #118 was completed by PR #255 and closed. One branch + one PR per issue or tightly-coupled pair; every non-trivial PR runs the critical self-review receipt and the pre-merge gauntlet.</p>
     <figure>
       <!-- {{SOLUTION_IMAGE: same graph untangled into six ordered vertical lanes, violet to cyan gradient left to right, green checkmarks accumulating}} -->
       <div class="img-placeholder">SOLUTION IMAGE PLACEHOLDER — six ordered lanes, dependencies resolved top-to-bottom</div>
@@ -230,7 +230,7 @@
       <tr><td>3</td><td>#168, #166, #167</td><td>n8n→ob-admin rename · stale collab docs · retire collab</td><td class="chg">Partial (#166 lives in mcp2cli skill refs; #167 touches read-fallback)</td></tr>
       <tr><td>4</td><td>#177, #204, #176</td><td>Installable Python client · UUID resolver · structured share_candidate rejection</td><td class="yes">Yes — all three</td></tr>
       <tr><td>5</td><td>#223, #222, #221, #224, #229</td><td>Realtime memory epic (#220 family), strict order</td><td class="yes">Yes — Hermes canary per slice</td></tr>
-      <tr><td>6</td><td>#137, #118</td><td>qmd deep-lookup · file refs roadmap</td><td class="chg">#118 is covered by PR #255; #137 is optional/design-gated; deploy deferred</td></tr>
+      <tr><td>6</td><td>#137</td><td>qmd deep-lookup</td><td class="chg">#118 closed by PR #255; #137 is optional/design-gated; deploy deferred</td></tr>
     </table>
   </section>
 
@@ -527,12 +527,12 @@
 
     <!-- ============ PHASE 6 ============ -->
     <div class="phase">
-      <h3><code class="status">[]</code> Phase 6: Roadmap disposition — #137, #118</h3>
-      <p>Live Phase 6 state: #192 is no longer open. The remaining roadmap/disposition items are #137 and #118. #118 is covered by PR #255: local validation passed, GitHub CI passed, deploy jobs skipped by design, Phase 3 Claude/Opus cross-review completed through a code-focused packet, fixes landed in <code>3e04d5a</code>, and Phase 4 security + antagonist fix-verification returned clean. #137 remains optional/design-gated; the only safe local-only branch after #255 is a narrowed docs/contract decision slice, not an infra-building implementation. #167 and #223 remain release/deploy or design gated.</p>
+      <h3><code class="status">[]</code> Phase 6: Roadmap disposition — #137</h3>
+      <p>Live Phase 6 state: #192 is no longer open and #118 is closed. #118 was completed by PR #255: local validation passed, GitHub CI passed, deploy jobs skipped by design, Phase 3 Claude/Opus cross-review completed through a code-focused packet, fixes landed in <code>3e04d5a</code>, final roadmap sync landed in <code>9fd6d4d</code>, squash merge landed as <code>144e029</code>, and Phase 4 security + antagonist fix-verification returned clean. #137 remains optional/design-gated; the only safe local-only branch after #255 is a narrowed docs/contract decision slice, not an infra-building implementation. #167 and #223 remain release/deploy or design gated.</p>
 
       <figure>
         <!-- {{PHASE_IMAGE: dark triage board with three cards routing to lanes labeled "build", "defer + doc", "roadmap", amber accent}} -->
-        <div class="img-placeholder">PHASE 6 IMAGE PLACEHOLDER — triage board routing #137 / #118 to defer, document, or merge-ready lanes</div>
+        <div class="img-placeholder">PHASE 6 IMAGE PLACEHOLDER — triage board routing #137 to defer or document; #118 complete</div>
         <figcaption>Nothing left silently open: every remaining issue gets an explicit, dated disposition.</figcaption>
       </figure>
 
@@ -547,7 +547,7 @@
       <ul class="checklist">
         <li><code class="status">[x]</code> Capture the source-reference design and implementation into PR #255: structured <code>source_refs</code> storage, scoped read/search/answer filtering, privileged source-ref redaction, contract updates, and regression tests.</li>
         <li><code class="status">[x]</code> Complete pre-merge-gauntlet phases 1-4: critical self-review, initial swarm fixes, Claude/Opus cross-review, Phase 3 fixes, focused security + antagonist fix-verification, local validation, CI, and board sync.</li>
-        <li><code class="status">[]</code> Merge PR #255 after the controller's final PR-body/roadmap sync commit passes CI. No core01 deploy; normal squash merge to <code>main</code> does not trigger deploy under current remote workflow conditions.</li>
+        <li><code class="status">[x]</code> Merge PR #255 as <code>144e029</code> and close issue #118. No core01 deploy; normal squash merge to <code>main</code> did not trigger deploy under current remote workflow conditions.</li>
       </ul>
 
       <h4>3. Testing Strategy</h4>
@@ -556,7 +556,7 @@
         <li><code class="status">[x]</code> PR #255 focused and full local validation passed; Python package validation passed.</li>
         <li><code class="status">[x]</code> PR #255 GitHub checks passed; deploy skipped by design.</li>
         <li><code class="status">[]</code> For #137 docs/contract slice, run <code>git diff --check</code> and the smallest relevant doc/example validation before PR.</li>
-        <li><code class="status">[]</code> <code>gh issue list --state open</code> — every remaining open issue carries a roadmap/deferred label and a dated disposition comment.</li>
+        <li><code class="status">[x]</code> <code>gh issue list --state open</code> — live remaining open issues are #223, #167, and #137.</li>
       </ul>
       <div class="loop">
         🔁 <strong>Do not exit this phase until every box above is checked.</strong>
@@ -629,15 +629,15 @@
     <h2>Amendments</h2>
     <!-- Append-only; populated by Update Plan / Update References workflows. -->
     <details class="amend">
-      <summary>2026-07-06 — PR #255 gauntlet clean; merge path verified no-deploy</summary>
-      <p>PR #255 is the active #118 implementation PR. Phase 3 Claude/Opus cross-review initially stalled on the full diff, then completed against a code-focused diff packet. Findings were posted and fixed in <code>3e04d5a</code>: per-element source-ref filtering preserves valid matching refs beside malformed siblings, SQL/JS scope parity now requires a citable identifier, compact <code>get_entry</code> source-scope behavior is contract-documented, and duplicate <code>session_wrap</code> source-ref semantics are explicit.</p>
-      <p>Phase 4 fix-verification is clean. Worker receipts: security lane <code>open-brain-20260706T220625Z-65907-23031</code>; antagonist lane <code>open-brain-20260706T220637Z-72561-17542</code>. Admin sync posted final PR evidence in <code>issuecomment-4898069444</code>, set the #118 board item <code>PVTI_lAHOABBGmc4BbDBtzgx1NcQ</code> to Review Gate <code>Zero Known Issues</code> and Validation <code>CI Passed</code>, and recorded the next action as ready for controller merge/no deploy. A separate validation lane confirmed a normal squash merge to <code>main</code> does not deploy core01 under the current remote workflow; deploy only runs for a <code>v*</code> tag push or manual dispatch with <code>deploy_core01=true</code>.</p>
-      <p>Live open issues after recon are #223, #167, #137, and #118. After #255, none of the remaining issues is a full local-only implementation issue: #167 is release/deploy gated, #223 is deploy/design gated, and #137 is optional/design-gated. The only safe local-only follow-up is a narrowed #137 docs/contract disposition slice unless Rico approves release/deploy work.</p>
+      <summary>2026-07-06 — PR #255 merged, #118 closed, merge path verified no-deploy</summary>
+      <p>PR #255 completed #118 and merged as <code>144e029</code>. Phase 3 Claude/Opus cross-review initially stalled on the full diff, then completed against a code-focused diff packet. Findings were posted and fixed in <code>3e04d5a</code>: per-element source-ref filtering preserves valid matching refs beside malformed siblings, SQL/JS scope parity now requires a citable identifier, compact <code>get_entry</code> source-scope behavior is contract-documented, and duplicate <code>session_wrap</code> source-ref semantics are explicit.</p>
+      <p>Phase 4 fix-verification is clean. Worker receipts: security lane <code>open-brain-20260706T220625Z-65907-23031</code>; antagonist lane <code>open-brain-20260706T220637Z-72561-17542</code>. Admin sync posted final PR evidence in <code>issuecomment-4898069444</code>, final controller evidence in <code>issuecomment-4898115829</code>, and merge-guard evidence in <code>issuecomment-4898118701</code>. Project item <code>PVTI_lAHOABBGmc4BbDBtzgx1NcQ</code> now marks #118 Done with Review Gate <code>Zero Known Issues</code> and Validation <code>CI Passed</code>. A separate validation lane confirmed a normal squash merge to <code>main</code> does not deploy core01; deploy only runs for a <code>v*</code> tag push or manual dispatch with <code>deploy_core01=true</code>.</p>
+      <p>Live open issues after #118 closure are #223, #167, and #137. None is a full local-only implementation issue: #167 is release/deploy gated, #223 is deploy/design gated, and #137 is optional/design-gated. The only safe local-only follow-up is a narrowed #137 docs/contract disposition slice unless Rico approves release/deploy work.</p>
     </details>
     <details class="amend">
       <summary>2026-07-06 — #244 merged, #166 closed, local-only next slice selected</summary>
       <p>Controller merged PR #244 as <code>dcd5c6b743e8cf58395deacd17ec0a8f16184a26</code>; issue #176 closed at <code>2026-07-06T03:15:03Z</code>. Phase 4 fixes landed as <code>ad49c0b9b63782d3b5dbe0b9cae249c6600d1b66</code>, all posted PR findings were addressed, focused Claude/Opus fix-verification returned clean, and GitHub checks passed for <code>check</code>, <code>db-integration</code>, <code>python-package</code>, PR-body <code>validate</code>, and GitGuardian; <code>deploy</code> skipped. Project 8 marks #176 and PR #244 done with Review Gate <code>Zero Known Issues</code> and Validation <code>CI Passed</code>. No production deploy was performed.</p>
-      <p>Issue #166 was verified already fixed from a clean worktree: live generated mcp2cli Open Brain skill refs contain no stale collab defaults, server <code>promote_entry</code>/<code>scan_namespace</code> defaults resolve to <code>shared-kb</code>, and focused tests passed. Evidence was posted in issue comment <code>issuecomment-4888801608</code>; #166 is closed and Project 8 marks it done with Validation <code>Local Passed</code>. This snapshot is superseded by the PR #255 amendment above; live open issues are now #223, #167, #137, and #118.</p>
+      <p>Issue #166 was verified already fixed from a clean worktree: live generated mcp2cli Open Brain skill refs contain no stale collab defaults, server <code>promote_entry</code>/<code>scan_namespace</code> defaults resolve to <code>shared-kb</code>, and focused tests passed. Evidence was posted in issue comment <code>issuecomment-4888801608</code>; #166 is closed and Project 8 marks it done with Validation <code>Local Passed</code>. This snapshot is superseded by the PR #255 amendment above; live open issues are now #223, #167, and #137.</p>
       <p>#167 remains open by design because its remaining acceptance criteria require live backup, migration dry-run/execute, reconciliation, release deploy, and downstream canary. Under the current local-only instruction, do not work toward core01. Superseded next-slice decision: #192 is no longer open; after PR #255, the only safe local-only follow-up identified is a narrowed #137 docs/contract disposition slice unless Rico redirects.</p>
     </details>
     <details class="amend">
