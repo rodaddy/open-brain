@@ -50,6 +50,50 @@ Owning boundary:
 `append_session_event.create_if_missing` lane creation and lane lifecycle
 metadata.
 
+Current implementation branch:
+`fix/229-first-write-lane-hardening`.
+
+Local status:
+
+- F6 implemented: `create_if_missing` append uses one pooled-client transaction
+  for lane lookup/create plus event insert, with rollback coverage for an event
+  insert failure after lane creation. Gauntlet fix: lane and event embedding
+  calls are filled after the accepted append commits for first-write appends, so
+  a slow or wedged embedding provider cannot hold an open transaction or pooled
+  DB client, and rejected scoped writes do not send denied content to the
+  embedding provider.
+- F8 implemented: first-write lanes embed from `topic` plus `project`, using
+  the same lane content-hash shape as `lane_upsert`. Gauntlet fix: migration
+  `020_session_lane_namespace_hash.sql` scopes `ob_session_lanes.content_hash`
+  uniqueness by `(content_hash, namespace)`, matching namespace isolation for
+  identical first-write lane context across tenants.
+- F7 implemented as a dry-run-by-default local maintenance script,
+  `scripts/archive-idle-session-lanes.ts`, rather than a scheduler or deploy
+  change. It defaults to Discord/realtime lanes, refuses a broad sweep unless
+  narrowed, and requires `--execute` to archive candidates. Gauntlet fix: the
+  execute step rechecks the same idle predicates in the `UPDATE` CTE, so lanes
+  that receive a new event after candidate selection are not archived.
+- Local validation on this branch after gauntlet fixes: focused
+  append/lane/script tests pass (`90 pass, 10 skip, 0 fail`), `bunx tsc
+  --noEmit` passes, `git diff --check` passes, and full `bun test` passes
+  (`1072 pass, 50 skip, 0 fail`). DB-backed suites remain skipped locally
+  because `/Users/rico/.config/open-brain/env.release-test` is missing; CI
+  `db-integration` must supply the live Postgres gate before merge.
+- Review gate status: initial swarm found three real blockers on PR #249
+  (transaction-open embedding calls, stale archive execute update, and global
+  lane content-hash uniqueness). Fix verification then found denied scoped
+  content could be embedded before rejection; Claude also flagged archive CTE
+  limit fragility, rollback-error masking, and silent non-transactional fallback.
+  Follow-up Claude re-review found only LOW issues: the archive parameter
+  alignment is now commented, and post-commit embedding fill remains a known
+  residual risk if the process crashes or the embedding provider stays down
+  after commit. A future embedding backfill for `embedding IS NULL` lanes/events
+  can close that residual, but it is outside #229's local hardening scope.
+  PR #249 head `9de385d` passed the full local suite and GitHub checks after
+  rerunning the duplicate flaky `db-integration` failure; all material findings
+  are fixed or explicitly dispositioned. Next gate: merge PR #249 without
+  core01 deploy, then verify issue #229 closure and update Project 8.
+
 Required local work:
 
 - F6: make lane-create + event-insert atomic, or add the smallest helper needed
