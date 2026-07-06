@@ -192,6 +192,106 @@ def test_append_event_routes_to_session_event_wrapper():
     assert payload["session_key"] == "conversation"
 
 
+def test_candidate_memory_records_user_correction_as_candidate_only_negative_example():
+    client = FakeClient()
+    memory = AgentMemory(client, agent="bilby", project="open-brain")
+    memory.start_session("conversation")
+
+    memory.candidate_memory(
+        "user",
+        "Correction: do not promote share candidates without explicit nomination.",
+        event_type="correction",
+        candidate_type="negative_example",
+        reason="User corrected an unsafe promotion assumption.",
+        confidence=0.95,
+        scope={"repo": "rodaddy/open-brain"},
+        evidence_refs=[
+            {"kind": "issue", "url": "https://github.com/rodaddy/open-brain/issues/224"}
+        ],
+        staleness_policy="Revalidate when promotion lifecycle changes.",
+    )
+
+    name, payload = client.calls[-1]
+    assert name == "append_session_event"
+    assert payload["event_type"] == "correction"
+    assert payload["source"] == "user"
+    assert payload["metadata"]["memory_lifecycle_action"] == "candidate"
+    assert payload["metadata"]["candidate_type"] == "negative_example"
+    assert payload["metadata"]["candidate_reason"] == (
+        "User corrected an unsafe promotion assumption."
+    )
+    assert payload["metadata"]["candidate_confidence"] == 0.95
+    assert payload["metadata"]["candidate_scope"] == {"repo": "rodaddy/open-brain"}
+    assert payload["metadata"]["evidence_refs"] == [
+        {"kind": "issue", "url": "https://github.com/rodaddy/open-brain/issues/224"}
+    ]
+    assert payload["metadata"]["candidate_staleness_policy"] == (
+        "Revalidate when promotion lifecycle changes."
+    )
+    assert "share_candidate" not in payload["metadata"]
+
+
+def test_nominate_shared_requires_explicit_lifecycle_action():
+    client = FakeClient()
+    memory = AgentMemory(client, agent="bilby")
+    memory.start_session("conversation")
+
+    memory.nominate_shared(
+        "assistant",
+        "This reviewed fact is ready for shared nomination.",
+        event_type="fact",
+        candidate_type="shared_kb_nomination",
+        reason="Reviewed fact is suitable for shared-kb nomination.",
+    )
+
+    name, payload = client.calls[-1]
+    assert name == "append_session_event"
+    assert payload["metadata"]["share_candidate"] is True
+    assert payload["metadata"]["memory_lifecycle_action"] == "nominate_shared"
+    assert payload["metadata"]["candidate_type"] == "shared_kb_nomination"
+    assert (
+        payload["metadata"]["candidate_reason"]
+        == "Reviewed fact is suitable for shared-kb nomination."
+    )
+
+
+def test_lifecycle_helpers_record_promote_relegate_and_discard_actions():
+    client = FakeClient()
+    memory = AgentMemory(client, agent="bilby")
+    memory.start_session("conversation")
+
+    memory.promote_candidate(
+        "assistant",
+        "Promote reviewed process rule.",
+        candidate_type="process_rule",
+        reason="User explicitly said to remember this rule.",
+    )
+    memory.relegate_candidate(
+        "assistant",
+        "Keep repo fact local for now.",
+        candidate_type="code_repo_fact",
+        reason="Useful only in the current repo.",
+    )
+    memory.discard_candidate(
+        "assistant",
+        "Discard stale preference.",
+        candidate_type="user_preference",
+        reason="Superseded by later user correction.",
+    )
+
+    lifecycle_payloads = [
+        payload["metadata"]
+        for name, payload in client.calls
+        if name == "append_session_event"
+    ]
+    assert [item["memory_lifecycle_action"] for item in lifecycle_payloads] == [
+        "promote",
+        "relegate",
+        "discard",
+    ]
+    assert all("share_candidate" not in item for item in lifecycle_payloads)
+
+
 def test_remember_fact_routes_to_thought_memory_write_semantics():
     client = FakeClient()
     memory = AgentMemory(client, agent="bilby", project="open-brain")

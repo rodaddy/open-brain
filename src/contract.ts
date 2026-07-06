@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { TOOL_CONTRACTS } from "./contract-schemas.ts";
 
-export const CONTRACT_VERSION = "2026-07-06.memory-tools.v14";
+export const CONTRACT_VERSION = "2026-07-06.memory-tools.v15";
 export const CONTRACT_SCHEMA_VERSION = 1;
 
 export interface ContractCapability {
@@ -144,6 +144,35 @@ export interface OpenBrainContract {
     recommended_fields: readonly string[];
     closed_brain_strict_fields: readonly string[];
     secret_safe: true;
+  };
+  promotion_lifecycle: {
+    status: "explicit-client-owned-lifecycle";
+    parent_issue: 224;
+    contract_doc: "docs/agent-memory-adapter-contract.md";
+    candidate_types: readonly [
+      "user_preference",
+      "process_rule",
+      "channel_server_rule",
+      "code_repo_fact",
+      "positive_example",
+      "negative_example",
+      "durable_decision",
+      "shared_kb_nomination",
+    ];
+    actions: readonly [
+      "candidate",
+      "promote",
+      "relegate",
+      "discard",
+      "nominate_shared",
+    ];
+    candidate_presence_effect: "no_durable_write_no_shared_write";
+    shared_nomination_requires: readonly [
+      "explicit_client_action",
+      "share_candidate_true",
+      "memory_lifecycle_action_nominate_shared",
+      "server_auth_scope_safety_provenance_secret_checks",
+    ];
   };
   capabilities: ContractCapability[];
   tool_contracts: Record<
@@ -317,6 +346,15 @@ export const CONTRACT_CAPABILITIES: ContractCapability[] = [
       "session events, with stricter Closed Brain fields marked separately.",
   },
   {
+    name: "memory_promotion_lifecycle",
+    version: 1,
+    kind: "schema",
+    description:
+      "Explicit client-owned lifecycle for candidate memory, durable promotion, " +
+      "relegation/discard, and shared-kb nomination. Candidate presence alone " +
+      "does not write durable memory or shared-kb.",
+  },
+  {
     name: "streamable_http_auth",
     version: 1,
     kind: "transport",
@@ -480,9 +518,41 @@ export function buildContract(
           status: "client-wrapper" as const,
         },
         nominate_shared: {
-          maps_to: ["append_session_event:metadata.share_candidate"] as const,
+          maps_to: [
+            "append_session_event:metadata.share_candidate",
+            "append_session_event:metadata.memory_lifecycle_action=nominate_shared",
+          ] as const,
           owner: "client_and_server" as const,
           status: "available" as const,
+        },
+        candidate_memory: {
+          maps_to: [
+            "append_session_event:metadata.memory_lifecycle_action=candidate",
+          ] as const,
+          owner: "client" as const,
+          status: "client-wrapper" as const,
+        },
+        promote_candidate: {
+          maps_to: [
+            "append_session_event:metadata.memory_lifecycle_action=promote",
+            "log_thought/log_decision explicit durable write",
+          ] as const,
+          owner: "client" as const,
+          status: "client-wrapper" as const,
+        },
+        relegate_candidate: {
+          maps_to: [
+            "append_session_event:metadata.memory_lifecycle_action=relegate",
+          ] as const,
+          owner: "client" as const,
+          status: "client-wrapper" as const,
+        },
+        discard_candidate: {
+          maps_to: [
+            "append_session_event:metadata.memory_lifecycle_action=discard",
+          ] as const,
+          owner: "client" as const,
+          status: "client-wrapper" as const,
         },
         export_disclosure_bundle: {
           maps_to: ["interchange_profiles.okf"] as const,
@@ -558,6 +628,35 @@ export function buildContract(
         "redaction_policy",
       ] as const,
       secret_safe: true as const,
+    },
+    promotion_lifecycle: {
+      status: "explicit-client-owned-lifecycle" as const,
+      parent_issue: 224 as const,
+      contract_doc: "docs/agent-memory-adapter-contract.md" as const,
+      candidate_types: [
+        "user_preference",
+        "process_rule",
+        "channel_server_rule",
+        "code_repo_fact",
+        "positive_example",
+        "negative_example",
+        "durable_decision",
+        "shared_kb_nomination",
+      ] as const,
+      actions: [
+        "candidate",
+        "promote",
+        "relegate",
+        "discard",
+        "nominate_shared",
+      ] as const,
+      candidate_presence_effect: "no_durable_write_no_shared_write" as const,
+      shared_nomination_requires: [
+        "explicit_client_action",
+        "share_candidate_true",
+        "memory_lifecycle_action_nominate_shared",
+        "server_auth_scope_safety_provenance_secret_checks",
+      ] as const,
     },
     capabilities: [...CONTRACT_CAPABILITIES].sort((a, b) =>
       a.name.localeCompare(b.name),

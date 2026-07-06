@@ -97,8 +97,16 @@ export function registerScanNamespace(server: McpServer, deps: ToolDeps): void {
         const params: unknown[] = [args.namespace, limit];
         if (args.since) params.push(args.since);
 
+        const metadataSelect =
+          table === "thoughts" || table === "decisions"
+            ? "t.extracted_metadata"
+            : table === "relationships" || table === "projects"
+              ? "t.metadata"
+              : "NULL::jsonb";
+
         const { rows } = await deps.pool.query(
           `SELECT t.id, t.content_hash, t.namespace, t.created_at, t.promoted_from,
+                  ${metadataSelect} AS metadata,
                   '${table}' AS table_name
            FROM ${table} t
            WHERE t.namespace = $1 AND t.archived_at IS NULL${sinceFilter}
@@ -139,11 +147,18 @@ export function registerScanNamespace(server: McpServer, deps: ToolDeps): void {
             }
           }
 
-          candidates.push({
-            table: table,
-            id: row.id,
-            created_at: row.created_at,
-          });
+          const metadata = row.metadata as Record<string, unknown> | null;
+          if (
+            (metadata?.share_candidate === true ||
+              metadata?.share_candidate === "true") &&
+            metadata.memory_lifecycle_action === "nominate_shared"
+          ) {
+            candidates.push({
+              table: table,
+              id: row.id,
+              created_at: row.created_at,
+            });
+          }
         }
       }
 

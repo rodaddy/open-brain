@@ -1162,7 +1162,8 @@ describe("append_session_event", () => {
   // flag is STRIPPED before persist (so the async promoter never sweeps it), a
   // share_rejected_sync marker is stamped on the persisted metadata, and the
   // tool response surfaces share_candidate_rejected. Clean/absent nominations
-  // pass through untouched — worthiness stays for the async cron, NOT this gate.
+  // pass through untouched. The shared promoter only sweeps explicit
+  // memory_lifecycle_action=nominate_shared rows, not candidate presence alone.
   //
   // We assert the persisted metadata by capturing the INSERT params on the mock
   // pool. The metadata is the 7th INSERT param ($7, index 6), JSON.stringify'd.
@@ -1712,7 +1713,7 @@ describe("append_session_event", () => {
     }
   });
 
-  it("keeps share_candidate for clean substantive content — async cron owns worthiness", async () => {
+  it("keeps clean share_candidate metadata without making candidate presence a write", async () => {
     const mockPool = createCapturingPool();
     const auth: AuthInfo = { role: "admin", clientId: "skippy" };
     const { client, cleanup } = await setupToolClient(mockPool, auth);
@@ -1734,10 +1735,114 @@ describe("append_session_event", () => {
       // No sync rejection — the sync gate ONLY hard-rejects secret/private.
       expect(parsed.share_candidate_rejected).toBeUndefined();
 
-      // Nomination survives to persist; the async promoter decides worthiness.
+      // The marker survives as event metadata. Without the explicit
+      // memory_lifecycle_action=nominate_shared action, the shared promoter
+      // must treat this as inert candidate state.
       expect(mockPool.captured.metadata).not.toBeNull();
       expect(mockPool.captured.metadata!.share_candidate).toBe(true);
+      expect(mockPool.captured.metadata!.memory_lifecycle_action).toBeUndefined();
       expect(mockPool.captured.metadata!.share_rejected_sync).toBeUndefined();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("preserves an explicit shared nomination lifecycle action for the promoter", async () => {
+    const mockPool = createCapturingPool();
+    const auth: AuthInfo = { role: "admin", clientId: "skippy" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "append_session_event",
+        arguments: {
+          session_key: "test",
+          event_type: "fact",
+          content:
+            "Chose explicit nomination workflow before shared-kb promotion.",
+          metadata: {
+            share_candidate: true,
+            memory_lifecycle_action: "nominate_shared",
+            candidate_type: "shared_kb_nomination",
+            candidate_reason: "Reviewed fact is safe to nominate for shared-kb.",
+          },
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.share_candidate_rejected).toBeUndefined();
+      expect(mockPool.captured.metadata).not.toBeNull();
+      expect(mockPool.captured.metadata!.share_candidate).toBe(true);
+      expect(mockPool.captured.metadata!.memory_lifecycle_action).toBe(
+        "nominate_shared",
+      );
+      expect(mockPool.captured.metadata!.candidate_type).toBe(
+        "shared_kb_nomination",
+      );
+      expect(mockPool.captured.metadata!.candidate_reason).toBe(
+        "Reviewed fact is safe to nominate for shared-kb.",
+      );
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("rejects malformed lifecycle metadata before persistence", async () => {
+    const mockPool = createCapturingPool();
+    const auth: AuthInfo = { role: "admin", clientId: "skippy" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "append_session_event",
+        arguments: {
+          session_key: "test",
+          event_type: "fact",
+          content: "Malformed lifecycle candidate should not persist.",
+          metadata: {
+            memory_lifecycle_action: "candidate",
+            candidate_type: "negative_example",
+          },
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.error).toBe("scope_validation");
+      expect(parsed.message).toContain("candidate_reason");
+      expect(mockPool.captured.metadata).toBeNull();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("rejects share_candidate on non-nomination lifecycle actions", async () => {
+    const mockPool = createCapturingPool();
+    const auth: AuthInfo = { role: "admin", clientId: "skippy" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "append_session_event",
+        arguments: {
+          session_key: "test",
+          event_type: "fact",
+          content: "Candidate-only state must not also enter the shared queue.",
+          metadata: {
+            share_candidate: true,
+            memory_lifecycle_action: "candidate",
+            candidate_type: "negative_example",
+            candidate_reason: "Candidate-only correction.",
+          },
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.error).toBe("scope_validation");
+      expect(parsed.message).toContain("nominate_shared");
+      expect(mockPool.captured.metadata).toBeNull();
     } finally {
       await cleanup();
     }

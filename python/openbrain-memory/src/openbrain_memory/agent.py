@@ -28,6 +28,23 @@ EVENT_TYPES = {
     "handoff",
 }
 IMPORTANCE_LEVELS = {"hot", "warm", "cold"}
+CANDIDATE_TYPES = {
+    "user_preference",
+    "process_rule",
+    "channel_server_rule",
+    "code_repo_fact",
+    "positive_example",
+    "negative_example",
+    "durable_decision",
+    "shared_kb_nomination",
+}
+MEMORY_LIFECYCLE_ACTIONS = {
+    "candidate",
+    "promote",
+    "relegate",
+    "discard",
+    "nominate_shared",
+}
 PROTECTED_KEYS = {
     "agent",
     "authorization",
@@ -485,6 +502,216 @@ class AgentMemory:
             self.client.append_session_event,
             key=key,
         )
+
+    def candidate_memory(
+        self,
+        role: str,
+        content: str,
+        *,
+        candidate_type: str,
+        reason: str,
+        confidence: float | None = None,
+        scope: Mapping[str, Any] | None = None,
+        evidence_refs: list[Mapping[str, Any]] | None = None,
+        staleness_policy: str | None = None,
+        **metadata: Any,
+    ) -> JSON:
+        return self._lifecycle_candidate_event(
+            "candidate",
+            role,
+            content,
+            candidate_type=candidate_type,
+            reason=reason,
+            confidence=confidence,
+            scope=scope,
+            evidence_refs=evidence_refs,
+            staleness_policy=staleness_policy,
+            **metadata,
+        )
+
+    def promote_candidate(
+        self,
+        role: str,
+        content: str,
+        *,
+        candidate_type: str,
+        reason: str,
+        confidence: float | None = None,
+        scope: Mapping[str, Any] | None = None,
+        evidence_refs: list[Mapping[str, Any]] | None = None,
+        staleness_policy: str | None = None,
+        **metadata: Any,
+    ) -> JSON:
+        return self._lifecycle_candidate_event(
+            "promote",
+            role,
+            content,
+            candidate_type=candidate_type,
+            reason=reason,
+            confidence=confidence,
+            scope=scope,
+            evidence_refs=evidence_refs,
+            staleness_policy=staleness_policy,
+            **metadata,
+        )
+
+    def relegate_candidate(
+        self,
+        role: str,
+        content: str,
+        *,
+        candidate_type: str,
+        reason: str,
+        confidence: float | None = None,
+        scope: Mapping[str, Any] | None = None,
+        evidence_refs: list[Mapping[str, Any]] | None = None,
+        staleness_policy: str | None = None,
+        **metadata: Any,
+    ) -> JSON:
+        return self._lifecycle_candidate_event(
+            "relegate",
+            role,
+            content,
+            candidate_type=candidate_type,
+            reason=reason,
+            confidence=confidence,
+            scope=scope,
+            evidence_refs=evidence_refs,
+            staleness_policy=staleness_policy,
+            **metadata,
+        )
+
+    def discard_candidate(
+        self,
+        role: str,
+        content: str,
+        *,
+        candidate_type: str,
+        reason: str,
+        confidence: float | None = None,
+        scope: Mapping[str, Any] | None = None,
+        evidence_refs: list[Mapping[str, Any]] | None = None,
+        staleness_policy: str | None = None,
+        **metadata: Any,
+    ) -> JSON:
+        return self._lifecycle_candidate_event(
+            "discard",
+            role,
+            content,
+            candidate_type=candidate_type,
+            reason=reason,
+            confidence=confidence,
+            scope=scope,
+            evidence_refs=evidence_refs,
+            staleness_policy=staleness_policy,
+            **metadata,
+        )
+
+    def nominate_shared(
+        self,
+        role: str,
+        content: str,
+        *,
+        candidate_type: str,
+        reason: str,
+        confidence: float | None = None,
+        scope: Mapping[str, Any] | None = None,
+        evidence_refs: list[Mapping[str, Any]] | None = None,
+        staleness_policy: str | None = None,
+        **metadata: Any,
+    ) -> JSON:
+        lifecycle_metadata = self._lifecycle_candidate_metadata(
+            "nominate_shared",
+            candidate_type=candidate_type,
+            reason=reason,
+            confidence=confidence,
+            scope=scope,
+            evidence_refs=evidence_refs,
+            staleness_policy=staleness_policy,
+        )
+        return self.append_event(
+            role,
+            content,
+            share_candidate=True,
+            **{**metadata, **lifecycle_metadata},
+        )
+
+    def _lifecycle_candidate_event(
+        self,
+        action: str,
+        role: str,
+        content: str,
+        *,
+        candidate_type: str,
+        reason: str,
+        confidence: float | None,
+        scope: Mapping[str, Any] | None,
+        evidence_refs: list[Mapping[str, Any]] | None,
+        staleness_policy: str | None,
+        **metadata: Any,
+    ) -> JSON:
+        lifecycle_metadata = self._lifecycle_candidate_metadata(
+            action,
+            candidate_type=candidate_type,
+            reason=reason,
+            confidence=confidence,
+            scope=scope,
+            evidence_refs=evidence_refs,
+            staleness_policy=staleness_policy,
+        )
+        return self.append_event(
+            role,
+            content,
+            **{**metadata, **lifecycle_metadata},
+        )
+
+    def _lifecycle_candidate_metadata(
+        self,
+        action: str,
+        *,
+        candidate_type: str,
+        reason: str,
+        confidence: float | None,
+        scope: Mapping[str, Any] | None,
+        evidence_refs: list[Mapping[str, Any]] | None,
+        staleness_policy: str | None,
+    ) -> dict[str, Any]:
+        if action not in MEMORY_LIFECYCLE_ACTIONS:
+            raise ValueError(f"Unsupported memory lifecycle action: {action}")
+        lifecycle_metadata: dict[str, Any] = {
+            "memory_lifecycle_action": action,
+            "candidate_type": _enum_value(
+                candidate_type,
+                "candidate_type",
+                CANDIDATE_TYPES,
+            ),
+            "candidate_reason": _required_str(reason, "reason"),
+        }
+        if confidence is not None:
+            if (
+                isinstance(confidence, bool)
+                or not isinstance(confidence, int | float)
+                or confidence < 0
+                or confidence > 1
+            ):
+                raise ValueError("confidence must be a number from 0 to 1")
+            lifecycle_metadata["candidate_confidence"] = confidence
+        if scope is not None:
+            lifecycle_metadata["candidate_scope"] = _mapping_list(
+                [scope],
+                "scope",
+            )[0]
+        if evidence_refs is not None:
+            lifecycle_metadata["evidence_refs"] = _mapping_list(
+                evidence_refs,
+                "evidence_refs",
+            )
+        if staleness_policy is not None:
+            lifecycle_metadata["candidate_staleness_policy"] = _required_str(
+                staleness_policy,
+                "staleness_policy",
+            )
+        return lifecycle_metadata
 
     def remember_fact(self, text: str, **metadata: Any) -> JSON:
         self._reject_reserved_metadata(metadata)

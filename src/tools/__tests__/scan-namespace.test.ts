@@ -125,6 +125,70 @@ describe("scan_namespace", () => {
     }
   });
 
+  it("only returns explicit shared lifecycle nominations as promotion candidates", async () => {
+    const calls: Array<{ sql: string; params: unknown[] }> = [];
+    const mockPool = {
+      query: async (sql: string, params: unknown[]) => {
+        calls.push({ sql, params });
+        if (calls.length === 1) {
+          return {
+            rows: [
+              {
+                id: "ordinary",
+                namespace: "bilby",
+                content_hash: "hash-ordinary",
+                created_at: "2026-06-10T00:00:00.000Z",
+                promoted_from: null,
+                metadata: { share_candidate: true },
+              },
+              {
+                id: "explicit",
+                namespace: "bilby",
+                content_hash: "hash-explicit",
+                created_at: "2026-06-11T00:00:00.000Z",
+                promoted_from: null,
+                metadata: {
+                  share_candidate: true,
+                  memory_lifecycle_action: "nominate_shared",
+                },
+              },
+            ],
+          };
+        }
+        return { rows: [] };
+      },
+    };
+    const auth: AuthInfo = { role: "admin", clientId: "rico" };
+    const { client, cleanup } = await setupMcpClient(
+      registerScanNamespace,
+      mockPool,
+      createMockEmbed(),
+      auth,
+    );
+
+    try {
+      const result = await client.callTool({
+        name: "scan_namespace",
+        arguments: {
+          namespace: "bilby",
+          target_namespace: "shared-kb",
+          table: "thoughts",
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      expect(parseToolResult(result).candidates).toEqual([
+        {
+          table: "thoughts",
+          id: "explicit",
+          created_at: "2026-06-11T00:00:00.000Z",
+        },
+      ]);
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("denies delegated admin duplicate checks against unreadable target namespaces", async () => {
     const mockPool = { query: async () => ({ rows: [] }) };
     const auth: AuthInfo = {

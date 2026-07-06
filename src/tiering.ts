@@ -50,6 +50,7 @@ export interface ClassifiableEvent {
   event_type: EventType;
   content: string;
   importance: Importance;
+  metadata?: Record<string, unknown> | null;
 }
 
 /**
@@ -72,6 +73,10 @@ export function classifyLaneEvent(
   event: ClassifiableEvent,
   minContentLength: number = DEFAULT_MIN_CONTENT_LENGTH,
 ): Classification {
+  if (event.metadata?.memory_lifecycle_action !== undefined) {
+    return "keep";
+  }
+
   const isColdOrArchiveType =
     event.importance === "cold" || ARCHIVE_TYPES.has(event.event_type);
   if (isColdOrArchiveType) {
@@ -99,6 +104,7 @@ export interface LaneEventRow {
   importance: Importance;
   content_hash: string | null;
   created_at: string;
+  metadata: Record<string, unknown> | null;
 }
 
 export type DuplicateKind = "exact" | "near";

@@ -146,7 +146,9 @@ Known section names (the `sections` object members; this list is what
 - `pointers`: entities, repos, services, files, or receipts worth deliberate
   follow-up fetching.
 - `candidate_memory`: explicit candidates only; presence in the pack is not a
-  durable write or shared-kb promotion.
+  durable write, durable memory promotion, shared-kb nomination, or shared-kb
+  promotion. A client must record a separate lifecycle action before anything
+  moves.
 
 `warnings`, `budget`, and `citations` are always-present top-level envelope
 fields, not section members. They are mirrored by
@@ -233,6 +235,10 @@ from "Exact Scope Predicate"), not a subset:
   server auth predicates;
 - candidate memory is labeled as candidate-only and does not create a durable
   memory row or shared-kb nomination.
+- user correction candidate memory is labeled
+  `memory_lifecycle_action=candidate` and `candidate_type=negative_example`
+  until a client/user explicitly chooses promote, relegate, discard, or
+  nominate_shared.
 
 ## Contract Availability
 

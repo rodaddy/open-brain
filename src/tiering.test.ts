@@ -102,6 +102,23 @@ describe("classifyLaneEvent — graduate rule", () => {
   }
 });
 
+describe("classifyLaneEvent — memory lifecycle boundary", () => {
+  it("keeps candidate lifecycle facts instead of graduating them", () => {
+    expect(
+      classifyLaneEvent({
+        event_type: "fact",
+        importance: "hot",
+        content: LONG,
+        metadata: {
+          memory_lifecycle_action: "candidate",
+          candidate_type: "negative_example",
+          candidate_reason: "User correction requires review before durable memory.",
+        },
+      }),
+    ).toBe("keep");
+  });
+});
+
 describe("classifyLaneEvent — archive rule", () => {
   for (const type of ARCHIVE_TYPES) {
     for (const importance of IMPORTANCES) {

@@ -499,7 +499,7 @@ def test_all_registered_tool_wrappers_call_matching_tool_names():
 
 
 def test_required_contract_tools_have_first_class_wrappers_and_help():
-    assert CURRENT_CONTRACT_VERSION == "2026-07-06.memory-tools.v14"
+    assert CURRENT_CONTRACT_VERSION == "2026-07-06.memory-tools.v15"
     assert set(REQUIRED_CONTRACT_TOOLS) <= set(CURRENT_TOOL_HELP)
 
     for tool_name in REQUIRED_CONTRACT_TOOLS:
@@ -1515,10 +1515,11 @@ def test_urllib_transport_does_not_follow_redirects_with_auth_headers():
     assert response.status_code == 302
 
 
-def test_append_session_event_carries_share_candidate_nomination():
-    # Issue #161: an agent nominates a session event for sharing by setting
-    # metadata.share_candidate=true. The Python client must carry that
-    # nomination through to the server as a tools/call argument, untouched.
+def test_append_session_event_carries_explicit_share_candidate_nomination():
+    # Issue #224: an agent nominates a session event for sharing by setting
+    # metadata.share_candidate=true and memory_lifecycle_action=nominate_shared.
+    # The low-level Python client must carry that nomination through to the
+    # server as a tools/call argument, untouched.
     transport = FakeTransport()
     client = make_client(transport)
 
@@ -1526,7 +1527,11 @@ def test_append_session_event_carries_share_candidate_nomination():
         session_key="chan/thread",
         event_type="fact",
         content="Promotable knowledge.",
-        metadata={"share_candidate": True, "source": "agent"},
+        metadata={
+            "share_candidate": True,
+            "memory_lifecycle_action": "nominate_shared",
+            "source": "agent",
+        },
     )
 
     calls = tool_requests(transport)
@@ -1537,10 +1542,19 @@ def test_append_session_event_carries_share_candidate_nomination():
         "session_key": "chan/thread",
         "event_type": "fact",
         "content": "Promotable knowledge.",
-        "metadata": {"share_candidate": True, "source": "agent"},
+        "metadata": {
+            "share_candidate": True,
+            "memory_lifecycle_action": "nominate_shared",
+            "source": "agent",
+        },
     }
-    # The nomination flag must reach the server as a genuine boolean True.
+    # The nomination flag must reach the server as a genuine boolean True, and
+    # the explicit lifecycle action must remain attached.
     assert params["arguments"]["metadata"]["share_candidate"] is True
+    assert (
+        params["arguments"]["metadata"]["memory_lifecycle_action"]
+        == "nominate_shared"
+    )
 
 
 def test_append_session_event_surfaces_share_candidate_rejection():

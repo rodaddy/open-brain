@@ -13,7 +13,7 @@ describe("Open Brain contract manifest", () => {
     expect(contract.contract_scope).toBe("required_openbrain_memory_contract");
     expect(contract.schema_hash).toMatch(/^[0-9a-f]{64}$/);
     expect(contract.schema_hash).toBe(
-      "ad89a4d253ec224bce1175cd0045b6da54de6837c3e4081304e25a5af9147873",
+      "4b3b07665bcaa2087e8fd3e75dfda86974c047529f85b42c0a0b5631bc4fd994",
     );
     expect(contract.min_client_versions.mcp2cli).toBe("0.3.6");
     expect(contract.transport.namespace_boundary).toBe("authorization");
@@ -84,11 +84,15 @@ describe("Open Brain contract manifest", () => {
     );
     expect(Object.keys(contract.agent_memory_adapter.methods).sort()).toEqual([
       "append_event",
+      "candidate_memory",
       "compact",
+      "discard_candidate",
       "export_disclosure_bundle",
       "nominate_shared",
+      "promote_candidate",
       "recall",
       "record_receipt",
+      "relegate_candidate",
       "start",
       "wrap",
     ]);
@@ -103,7 +107,23 @@ describe("Open Brain contract manifest", () => {
     ]);
     expect(adapterMethods.nominate_shared!.maps_to).toEqual([
       "append_session_event:metadata.share_candidate",
+      "append_session_event:metadata.memory_lifecycle_action=nominate_shared",
     ]);
+    expect(adapterMethods.candidate_memory).toEqual({
+      maps_to: [
+        "append_session_event:metadata.memory_lifecycle_action=candidate",
+      ],
+      owner: "client",
+      status: "client-wrapper",
+    });
+    expect(adapterMethods.promote_candidate).toEqual({
+      maps_to: [
+        "append_session_event:metadata.memory_lifecycle_action=promote",
+        "log_thought/log_decision explicit durable write",
+      ],
+      owner: "client",
+      status: "client-wrapper",
+    });
     expect(adapterMethods.export_disclosure_bundle).toEqual({
       maps_to: ["interchange_profiles.okf"],
       owner: "client",
@@ -175,6 +195,25 @@ describe("Open Brain contract manifest", () => {
       "approval_chain",
       "redaction_policy",
     ]);
+    expect(contract.promotion_lifecycle).toMatchObject({
+      status: "explicit-client-owned-lifecycle",
+      parent_issue: 224,
+      contract_doc: "docs/agent-memory-adapter-contract.md",
+      candidate_presence_effect: "no_durable_write_no_shared_write",
+    });
+    expect(contract.promotion_lifecycle.candidate_types).toContain(
+      "negative_example",
+    );
+    expect(contract.promotion_lifecycle.actions).toEqual([
+      "candidate",
+      "promote",
+      "relegate",
+      "discard",
+      "nominate_shared",
+    ]);
+    expect(contract.promotion_lifecycle.shared_nomination_requires).toContain(
+      "memory_lifecycle_action_nominate_shared",
+    );
     expect(contract.capabilities.map((c) => c.name)).toContain(
       "upsert_repo_fact",
     );
@@ -186,6 +225,9 @@ describe("Open Brain contract manifest", () => {
     );
     expect(contract.capabilities.map((c) => c.name)).toContain(
       "receipt_contract",
+    );
+    expect(contract.capabilities.map((c) => c.name)).toContain(
+      "memory_promotion_lifecycle",
     );
     for (const tool of [
       "get_contract",
@@ -292,7 +334,7 @@ describe("Open Brain contract manifest", () => {
     // contract so a future TS/Python divergence fails here, in lockstep with
     // python/openbrain-memory CURRENT_CONTRACT_VERSION.
     const contract = buildContract("2026-06-18T00:00:00.000Z");
-    expect(contract.contract_version).toBe("2026-07-06.memory-tools.v14");
+    expect(contract.contract_version).toBe("2026-07-06.memory-tools.v15");
 
     const appendEvent = contract.tool_contracts.append_session_event;
     expect(appendEvent).toBeDefined();
@@ -323,9 +365,33 @@ describe("Open Brain contract manifest", () => {
     const shareCandidate = (appendEvent?.input_schema as any).metadata.fields
       .share_candidate;
     expect(shareCandidate.type).toBe("boolean");
-    // The help must document the two-stage (sync reject / async promote) model
-    // so a contract-driven agent learns the behavior, not just the type.
+    const lifecycleAction = (appendEvent?.input_schema as any).metadata.fields
+      .memory_lifecycle_action;
+    expect(lifecycleAction.values).toEqual([
+      "candidate",
+      "promote",
+      "relegate",
+      "discard",
+      "nominate_shared",
+    ]);
+    expect(lifecycleAction.description).toContain(
+      "only action eligible for the shared-kb promoter",
+    );
+    const candidateType = (appendEvent?.input_schema as any).metadata.fields
+      .candidate_type;
+    expect(candidateType.values).toContain("negative_example");
+    expect(
+      (appendEvent?.input_schema as any).metadata.fields.candidate_confidence,
+    ).toMatchObject({ type: "number", min: 0, max: 1 });
+    expect(
+      (appendEvent?.input_schema as any).metadata.fields.evidence_refs,
+    ).toMatchObject({ type: "array", maxItems: 20 });
+    // The help must document explicit nomination and sync rejection so a
+    // contract-driven agent learns the behavior, not just the type.
     expect(shareCandidate.description).toContain("share_candidate_rejected");
+    expect(shareCandidate.description).toContain(
+      "memory_lifecycle_action=nominate_shared",
+    );
     expect(shareCandidate.description.toLowerCase()).toContain("secret");
     expect(appendInput.metadata.fields.sanitized_resubmit_of.type).toBe("string");
     expect(appendInput.metadata.fields.sanitized_resubmit_of.description).toContain(
@@ -372,6 +438,7 @@ describe("Open Brain contract manifest", () => {
       agent_memory_adapter: base.agent_memory_adapter,
       agent_context_pack: base.agent_context_pack,
       receipt_contract: base.receipt_contract,
+      promotion_lifecycle: base.promotion_lifecycle,
       capabilities: base.capabilities,
       tool_contracts: base.tool_contracts,
     };
@@ -394,6 +461,7 @@ describe("Open Brain contract manifest", () => {
       agent_memory_adapter: base.agent_memory_adapter,
       agent_context_pack: base.agent_context_pack,
       receipt_contract: base.receipt_contract,
+      promotion_lifecycle: base.promotion_lifecycle,
       capabilities: [
         ...base.capabilities,
         {
@@ -427,6 +495,7 @@ describe("Open Brain contract manifest", () => {
       agent_memory_adapter: base.agent_memory_adapter,
       agent_context_pack: base.agent_context_pack,
       receipt_contract: base.receipt_contract,
+      promotion_lifecycle: base.promotion_lifecycle,
       capabilities: base.capabilities,
       tool_contracts: {
         ...base.tool_contracts,
@@ -464,6 +533,7 @@ describe("Open Brain contract manifest", () => {
       agent_memory_adapter: base.agent_memory_adapter,
       agent_context_pack: base.agent_context_pack,
       receipt_contract: base.receipt_contract,
+      promotion_lifecycle: base.promotion_lifecycle,
       capabilities: base.capabilities,
       tool_contracts: {
         ...base.tool_contracts,

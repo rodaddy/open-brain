@@ -21,8 +21,10 @@ import type { AuthInfo } from "../src/types.ts";
  * Mirrors scripts/promote-legacy-shared.ts and scripts/tier-lane-durable.ts
  * (cursor/state/receipt/args, dry-run default, resumable cursor, kill-switch).
  *
- * Runs as the PROMOTER identity and sweeps THREE sources for the nomination flag
- * `metadata->>'share_candidate' = 'true'`:
+ * Runs as the PROMOTER identity and sweeps THREE sources only when the client
+ * has explicitly nominated the candidate:
+ * `metadata->>'share_candidate' = 'true'` AND
+ * `metadata->>'memory_lifecycle_action' = 'nominate_shared'`:
  *   - thoughts   → classify → promoteEntry into shared-kb.
  *   - decisions  → classify → promoteEntry into shared-kb.
  *   - ob_session_events JOIN ob_session_lanes → classify → focused
@@ -105,7 +107,8 @@ function usage(exitCode = 2): never {
       "",
       "Dry-run is the default and does not advance the persistent cursor.",
       "Apply mode is bounded by --max-apply promotions, runs as the promoter",
-      "identity, and only promotes entries nominated via metadata share_candidate.",
+      "identity, and only promotes entries explicitly nominated via metadata ",
+      "share_candidate + memory_lifecycle_action=nominate_shared.",
     ].join("\n"),
   );
   process.exit(exitCode);
@@ -284,6 +287,7 @@ async function nominatedTableRows(
             extracted_metadata AS metadata
      FROM ${table}
      WHERE extracted_metadata->>'share_candidate' = 'true'
+       AND extracted_metadata->>'memory_lifecycle_action' = 'nominate_shared'
        AND archived_at IS NULL${cursorSql}
      ORDER BY created_at ASC, id ASC
      LIMIT $1`,
@@ -327,7 +331,8 @@ async function nominatedEventRows(
        l.metadata->>'repo' AS repo, l.project AS project
      FROM ob_session_events e
      JOIN ob_session_lanes l ON e.lane_id = l.id
-     WHERE e.metadata->>'share_candidate' = 'true'${cursorSql}
+     WHERE e.metadata->>'share_candidate' = 'true'
+       AND e.metadata->>'memory_lifecycle_action' = 'nominate_shared'${cursorSql}
      ORDER BY e.created_at ASC, e.id ASC
      LIMIT $1`,
     params,
@@ -407,9 +412,10 @@ export async function shareEventToSharedKb(
 }
 
 /**
- * Clear the share_candidate nomination from a source row so it is not re-swept.
- * Drops the flag and stamps a processed marker. Idempotent. `column` is the
- * metadata jsonb column for the table (extracted_metadata vs metadata).
+ * Clear the explicit shared nomination from a source row so it is not re-swept.
+ * Drops the share flag and lifecycle action, then stamps a processed marker.
+ * Idempotent. `column` is the metadata jsonb column for the table
+ * (extracted_metadata vs metadata).
  */
 async function clearNomination(
   pool: ReturnType<typeof createPool>,
@@ -420,7 +426,7 @@ async function clearNomination(
 ): Promise<void> {
   await pool.query(
     `UPDATE ${table}
-     SET ${column} = (${column} - 'share_candidate')
+     SET ${column} = (${column} - 'share_candidate' - 'memory_lifecycle_action')
        || jsonb_build_object('share_promoted_at', $2::text)
      WHERE id = $1`,
     [id, now],
