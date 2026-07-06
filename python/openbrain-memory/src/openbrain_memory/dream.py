@@ -249,6 +249,12 @@ class DreamEngine:
             arguments["overlap_chars"] = _bounded_int_between(
                 overlap_chars, "overlap_chars", 0, 1000
             )
+        if (
+            "max_chunk_chars" in arguments
+            and "overlap_chars" in arguments
+            and arguments["overlap_chars"] >= arguments["max_chunk_chars"]
+        ):
+            raise ValueError("overlap_chars must be less than max_chunk_chars")
         if dry_run:
             arguments["dry_run"] = True
             return self.client.decompose_entry(**arguments)

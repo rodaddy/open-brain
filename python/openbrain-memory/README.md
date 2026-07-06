@@ -456,9 +456,13 @@ dreams.decompose_entry(
 )
 ```
 
-If the source entry is not oversized, explicit apply returns the same
-`not_oversized` no-op plan with empty `written_ids` and `skipped_duplicates`;
-it does not report a write or mutate any rows.
+Apply results keep the source row unchanged and report completeness explicitly:
+`written_ids` for newly-created replacement thoughts, `skipped_duplicates` for
+pre-existing duplicate rows, `intra_batch_duplicates` for chunks collapsed inside
+the same apply batch, `fully_written`, and `apply_summary`. If the source entry
+is not oversized, explicit apply returns the same `not_oversized` no-op plan with
+empty replacement lists and `fully_written: true`; it does not report a write or
+mutate any rows.
 
 ## Test
 

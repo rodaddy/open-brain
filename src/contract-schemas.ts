@@ -339,6 +339,7 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
         min: 500,
         max: 8000,
         default: 2000,
+        description: "Must be greater than overlap_chars.",
       },
       overlap_chars: {
         type: "integer",
@@ -346,6 +347,7 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
         min: 0,
         max: 1000,
         default: 200,
+        description: "Must be less than max_chunk_chars.",
       },
       dry_run: {
         type: "boolean",
@@ -364,7 +366,7 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
       },
     },
     output_shape:
-      "dry-run decomposition plan with source_ref/proposed_replacements/proposed_links/would_write; explicit apply adds written_ids/skipped_duplicates without source-row mutation, and preserves not_oversized as a no-op when nothing would be written",
+      "dry-run decomposition plan with source_ref/proposed_replacements/proposed_links/would_write plus raw_source_text/source_length and trimmed_chunk_text/content_length bases; explicit apply adds written_ids/skipped_duplicates/intra_batch_duplicates/fully_written/apply_summary without source-row mutation, and preserves not_oversized as a no-op when nothing would be written",
   },
   resolve_entry: {
     version: 1,

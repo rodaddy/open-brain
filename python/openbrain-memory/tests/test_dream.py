@@ -405,6 +405,14 @@ def test_decompose_entry_bounds_match_server_schema():
     with pytest.raises(ValueError, match="overlap_chars"):
         engine.decompose_entry("thoughts", "large-1", overlap_chars=1001)
 
+    with pytest.raises(ValueError, match="overlap_chars must be less"):
+        engine.decompose_entry(
+            "thoughts",
+            "large-1",
+            max_chunk_chars=500,
+            overlap_chars=500,
+        )
+
     assert client.calls == []
 
     engine.decompose_entry(

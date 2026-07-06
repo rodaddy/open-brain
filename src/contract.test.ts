@@ -13,7 +13,7 @@ describe("Open Brain contract manifest", () => {
     expect(contract.contract_scope).toBe("required_openbrain_memory_contract");
     expect(contract.schema_hash).toMatch(/^[0-9a-f]{64}$/);
     expect(contract.schema_hash).toBe(
-      "5213fa06f8b075dd6e0d66e1b62fd30530af910c6c4629e9d922b1ce02576b2f",
+      "4e47700d6fabfc25a439aca9e78dd3e843758d22c488bb6e34119f485b68e553",
     );
     expect(contract.min_client_versions.mcp2cli).toBe("0.3.6");
     expect(contract.transport.namespace_boundary).toBe("authorization");

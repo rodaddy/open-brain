@@ -35,9 +35,11 @@ export interface DecompositionPlan {
   oversized: boolean;
   source_ref: SourceRef;
   source_length: number;
+  source_length_basis: "raw_source_text";
   threshold: number;
   max_chunk_chars: number;
   overlap_chars: number;
+  content_length_basis: "trimmed_chunk_text";
   proposed_replacements: ReplacementProposal[];
   proposed_links: ReplacementProposal["links"];
   would_write: number;
@@ -91,9 +93,11 @@ export function planEntryDecomposition(input: {
     oversized,
     source_ref: sourceRef,
     source_length: sourceLength,
+    source_length_basis: "raw_source_text",
     threshold,
     max_chunk_chars: maxChunkChars,
     overlap_chars: overlapChars,
+    content_length_basis: "trimmed_chunk_text",
     proposed_replacements: proposedReplacements,
     proposed_links: proposedReplacements.flatMap((proposal) => proposal.links),
     would_write: proposedReplacements.length,

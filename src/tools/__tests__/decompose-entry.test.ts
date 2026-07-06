@@ -77,6 +77,8 @@ describe("decompose_entry", () => {
         source_namespace: "bilby",
         chunk_index: 0,
       });
+      expect(parsed.source_length_basis).toBe("raw_source_text");
+      expect(parsed.content_length_basis).toBe("trimmed_chunk_text");
       expect(queries).toHaveLength(1);
       expect(queries[0]?.sql).toContain("namespace = ANY($2::text[])");
       expect(queries[0]?.params).toEqual([SOURCE_ID, ["bilby", "shared-kb"]]);
@@ -187,6 +189,20 @@ describe("decompose_entry", () => {
       expect(parsed.dry_run).toBe(false);
       expect(parsed.written_ids.length).toBeGreaterThan(1);
       expect(parsed.skipped_duplicates).toEqual([]);
+      expect(parsed.fully_written).toBe(true);
+      expect(parsed.apply_summary).toMatchObject({
+        requested_writes: parsed.would_write,
+        written_count: parsed.written_ids.length,
+        preexisting_duplicate_count: 0,
+        fully_written: true,
+        source_row_mutation: "unchanged",
+      });
+      expect(parsed.apply_summary.intra_batch_duplicate_count).toBe(
+        parsed.intra_batch_duplicates.length,
+      );
+      expect(
+        parsed.written_ids.length + parsed.intra_batch_duplicates.length,
+      ).toBe(parsed.would_write);
       expect(writes.map((call) => call.sql)).toContain("BEGIN");
       expect(writes.map((call) => call.sql)).toContain("COMMIT");
       const insertCalls = writes.filter((call) =>
@@ -195,7 +211,7 @@ describe("decompose_entry", () => {
       expect(insertCalls.length).toBe(parsed.written_ids.length);
       expect(insertCalls[0]?.params?.[2]).toBe("bilby");
       expect(insertCalls[0]?.params?.[3]).toBe("bilby");
-      expect(insertCalls[0]?.params?.[9]).toBe(SOURCE_ID);
+      expect(insertCalls[0]?.params?.[9]).toBeNull();
     } finally {
       await cleanup();
     }
@@ -247,6 +263,16 @@ describe("decompose_entry", () => {
       expect(parsed.would_write).toBe(0);
       expect(parsed.written_ids).toEqual([]);
       expect(parsed.skipped_duplicates).toEqual([]);
+      expect(parsed.intra_batch_duplicates).toEqual([]);
+      expect(parsed.fully_written).toBe(true);
+      expect(parsed.apply_summary).toMatchObject({
+        requested_writes: 0,
+        written_count: 0,
+        preexisting_duplicate_count: 0,
+        intra_batch_duplicate_count: 0,
+        fully_written: true,
+        source_row_mutation: "unchanged",
+      });
       expect(insertSeen).toBe(false);
     } finally {
       await cleanup();
@@ -349,6 +375,111 @@ describe("decompose_entry", () => {
       expect(sourceSql).toContain("jsonb_array_length(alternatives)");
       expect(sourceSql).toContain("jsonb_array_elements_text(alternatives)");
       expect(sourceSql).not.toContain("array_length(alternatives,");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("rejects overlap values that would advance chunking by one character", async () => {
+    let sourceReadSeen = false;
+    const mockPool = {
+      query: async () => {
+        sourceReadSeen = true;
+        return { rows: [] };
+      },
+    };
+    const auth: AuthInfo = { role: "agent", clientId: "bilby" };
+    const { client, cleanup } = await setupMcpClient(
+      registerDecomposeEntry,
+      mockPool,
+      createMockEmbed(),
+      auth,
+    );
+
+    try {
+      const result = await client.callTool({
+        name: "decompose_entry",
+        arguments: {
+          table: "thoughts",
+          id: SOURCE_ID,
+          max_chunk_chars: 500,
+          overlap_chars: 500,
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(getErrorText(result)).toContain(
+        "overlap_chars must be less than max_chunk_chars",
+      );
+      expect(sourceReadSeen).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("classifies duplicate chunks from the same apply batch separately", async () => {
+    const insertCalls: Array<{ sql: string; params?: unknown[] }> = [];
+    const mockPool = {
+      query: async () => ({
+        rows: [
+          {
+            id: SOURCE_ID,
+            namespace: "bilby",
+            content_text: "a".repeat(3500),
+          },
+        ],
+      }),
+      connect: async () => ({
+        query: async (sql: string, params?: unknown[]) => {
+          if (sql.includes("INSERT INTO thoughts")) {
+            insertCalls.push({ sql, params });
+            return { rows: [{ id: `new-${insertCalls.length}` }] };
+          }
+          return { rows: [] };
+        },
+        release: () => undefined,
+      }),
+    };
+    const auth: AuthInfo = { role: "agent", clientId: "bilby" };
+    const { client, cleanup } = await setupMcpClient(
+      registerDecomposeEntry,
+      mockPool,
+      createMockEmbed(),
+      auth,
+    );
+
+    try {
+      const result = await client.callTool({
+        name: "decompose_entry",
+        arguments: {
+          table: "thoughts",
+          id: SOURCE_ID,
+          max_chunk_chars: 500,
+          overlap_chars: 250,
+          dry_run: false,
+          apply_mode: "write_replacements",
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const parsed = parseToolResult(result);
+      expect(parsed.would_write).toBeGreaterThan(1);
+      expect(parsed.written_ids.length).toBeGreaterThan(0);
+      expect(parsed.written_ids.length).toBeLessThan(parsed.would_write);
+      expect(parsed.skipped_duplicates).toEqual([]);
+      expect(parsed.intra_batch_duplicates.length).toBeGreaterThan(0);
+      expect(parsed.intra_batch_duplicates.length).toBe(
+        parsed.would_write - parsed.written_ids.length,
+      );
+      expect(parsed.fully_written).toBe(true);
+      expect(parsed.apply_summary).toMatchObject({
+        requested_writes: parsed.would_write,
+        written_count: parsed.written_ids.length,
+        preexisting_duplicate_count: 0,
+        intra_batch_duplicate_count: parsed.intra_batch_duplicates.length,
+        fully_written: true,
+      });
+      expect(insertCalls).toHaveLength(parsed.written_ids.length);
     } finally {
       await cleanup();
     }

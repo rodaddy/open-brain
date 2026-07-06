@@ -94,6 +94,19 @@ export function registerDecomposeEntry(server: McpServer, deps: ToolDeps): void 
           isError: true,
         };
       }
+      const maxChunkChars = args.max_chunk_chars ?? DEFAULT_DECOMPOSITION_MAX_CHARS;
+      const overlapChars = args.overlap_chars ?? DEFAULT_DECOMPOSITION_OVERLAP_CHARS;
+      if (overlapChars >= maxChunkChars) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "overlap_chars must be less than max_chunk_chars",
+            },
+          ],
+          isError: true,
+        };
+      }
 
       const row = await fetchSourceEntry(deps, auth, table, args.id);
       if (!row) {
@@ -109,8 +122,8 @@ export function registerDecomposeEntry(server: McpServer, deps: ToolDeps): void 
         id: String(row.id),
         namespace: canonicalNamespace(namespace),
         content: String(row.content_text ?? ""),
-        maxChunkChars: args.max_chunk_chars ?? DEFAULT_DECOMPOSITION_MAX_CHARS,
-        overlapChars: args.overlap_chars ?? DEFAULT_DECOMPOSITION_OVERLAP_CHARS,
+        maxChunkChars,
+        overlapChars,
       });
 
       if (args.dry_run === false) {
@@ -131,12 +144,23 @@ export function registerDecomposeEntry(server: McpServer, deps: ToolDeps): void 
                   dry_run: false,
                   written_ids: [],
                   skipped_duplicates: [],
+                  intra_batch_duplicates: [],
+                  fully_written: true,
+                  apply_summary: {
+                    requested_writes: 0,
+                    written_count: 0,
+                    preexisting_duplicate_count: 0,
+                    intra_batch_duplicate_count: 0,
+                    fully_written: true,
+                    source_row_mutation: "unchanged",
+                  },
                 }),
               },
             ],
           };
         }
         const applied = await writeReplacementThoughts(deps, auth, namespace, plan);
+        const applySummary = buildApplySummary(plan, applied);
         return {
           content: [
             {
@@ -147,6 +171,9 @@ export function registerDecomposeEntry(server: McpServer, deps: ToolDeps): void 
                 dry_run: false,
                 written_ids: applied.writtenIds,
                 skipped_duplicates: applied.skippedDuplicates,
+                intra_batch_duplicates: applied.intraBatchDuplicates,
+                fully_written: applySummary.fully_written,
+                apply_summary: applySummary,
               }),
             },
           ],
@@ -191,21 +218,33 @@ function canApplyReplacements(
   return { allowed: true };
 }
 
+interface ReplacementWriteResult {
+  writtenIds: string[];
+  skippedDuplicates: string[];
+  intraBatchDuplicates: string[];
+}
+
 async function writeReplacementThoughts(
   deps: ToolDeps,
   auth: AuthInfo,
   namespace: string,
   plan: DecompositionPlan,
-): Promise<{ writtenIds: string[]; skippedDuplicates: string[] }> {
+): Promise<ReplacementWriteResult> {
   const client = await deps.pool.connect();
   const writtenIds: string[] = [];
   const skippedDuplicates: string[] = [];
+  const intraBatchDuplicates: string[] = [];
+  const writtenIdsByHash = new Map<string, string>();
   try {
     await client.query("BEGIN");
     for (const proposal of plan.proposed_replacements) {
       const hash = contentHash(proposal.content);
+      const alreadyWrittenId = writtenIdsByHash.get(hash);
+      if (alreadyWrittenId) {
+        intraBatchDuplicates.push(alreadyWrittenId);
+        continue;
+      }
       const embedding = await deps.embedFn(proposal.content);
-      const parentId = plan.source_ref.table === "thoughts" ? plan.source_ref.id : null;
       const { rows } = await client.query(
         `INSERT INTO thoughts
            (content, tags, source, created_by, namespace, embedding, content_hash,
@@ -223,13 +262,14 @@ async function writeReplacementThoughts(
           embedding ? new Date().toISOString() : null,
           embedding ? EMBEDDING_MODEL : null,
           JSON.stringify(proposal.provenance),
-          parentId,
+          null,
           proposal.chunk_index,
         ],
       );
       const insertedId = rows[0]?.id;
       if (typeof insertedId === "string") {
         writtenIds.push(insertedId);
+        writtenIdsByHash.set(hash, insertedId);
         continue;
       }
       const existing = await client.query(
@@ -242,13 +282,35 @@ async function writeReplacementThoughts(
       }
     }
     await client.query("COMMIT");
-    return { writtenIds, skippedDuplicates };
+    return { writtenIds, skippedDuplicates, intraBatchDuplicates };
   } catch (error) {
     await client.query("ROLLBACK").catch(() => {});
     throw error;
   } finally {
     client.release();
   }
+}
+
+function buildApplySummary(plan: DecompositionPlan, applied: ReplacementWriteResult): {
+  requested_writes: number;
+  written_count: number;
+  preexisting_duplicate_count: number;
+  intra_batch_duplicate_count: number;
+  fully_written: boolean;
+  source_row_mutation: "unchanged";
+} {
+  return {
+    requested_writes: plan.would_write,
+    written_count: applied.writtenIds.length,
+    preexisting_duplicate_count: applied.skippedDuplicates.length,
+    intra_batch_duplicate_count: applied.intraBatchDuplicates.length,
+    fully_written:
+      applied.writtenIds.length +
+        applied.skippedDuplicates.length +
+        applied.intraBatchDuplicates.length ===
+      plan.would_write,
+    source_row_mutation: "unchanged",
+  };
 }
 
 function replacementTags(proposal: ReplacementProposal): string[] {
