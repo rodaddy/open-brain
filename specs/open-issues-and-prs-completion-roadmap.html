@@ -175,7 +175,7 @@
   <!-- ===== HEADER + UPDATABLE METADATA ===== -->
   <header>
     <h1>Plan: Open Brain — Work All Open Issues &amp; Complete All Open PRs</h1>
-    <p class="tagline">Six-phase execution roadmap: land PR #231, harden CI, retire legacy auth/namespace debt, ship the client contract batch, deliver the realtime memory epic, and disposition the roadmap backlog. Current correction: PR #255 is open; the branch includes the antagonist source-scope auth fix from <code>a859b89</code>, local validation and CI pass for pushed head <code>107c173</code>, fix-verification is running, and deploy remains deferred.</p>
+    <p class="tagline">Six-phase execution roadmap: land PR #231, harden CI, retire legacy auth/namespace debt, ship the client contract batch, deliver the realtime memory epic, and disposition the roadmap backlog. Current correction: PR #255 is open; the branch includes the antagonist source-scope auth fix from <code>a859b89</code>, local validation and CI passed before the roadmap-only blocker update, fix-verification is clean, Phase 3 Claude cross-review is blocked, and deploy remains deferred.</p>
     <details class="meta">
       <summary>Metadata</summary>
       <dl>
@@ -185,7 +185,7 @@
         <dt>agent name</dt>        <dd>admin255-board-roadmap</dd>
         <dt>session id</dt>      <dd>open-brain plan3f session 2026-07-06</dd>
         <dt>back refs</dt>    <dd>goal-run.md (memory-substrate goal run), docs/realtime-agent-memory-research.md (PR #225), docs/downstream-rollout.md, docs/memory-contract.md</dd>
-        <dt>forward refs</dt> <dd>Merged PRs #231, #233, #234, #235, #237, #238, #239, #240, #243, #244; open PRs: #255 (CI passed for pushed head <code>107c173</code>; fix-verification running). Remaining issues include #229, #224, #223, #222, #221, #192, #167, #137, #118. #167 is live migration/release gated; #166 was verified already fixed and closed. Project 8 synced 2026-07-06. No core01 deploy performed.</dd>
+        <dt>forward refs</dt> <dd>Merged PRs #231, #233, #234, #235, #237, #238, #239, #240, #243, #244; open PRs: #255 (CI passed before roadmap-only blocker update; fix-verification clean; Phase 3 Claude cross-review blocked). Remaining issues include #229, #224, #223, #222, #221, #192, #167, #137, #118. #167 is live migration/release gated; #166 was verified already fixed and closed. Project 8 synced 2026-07-06. No core01 deploy performed.</dd>
       </dl>
     </details>
   </header>
@@ -199,7 +199,7 @@
   <!-- ===== PURPOSE / PROBLEM / SOLUTION ===== -->
   <section id="purpose">
     <h2>Purpose</h2>
-    <p><strong>Live correction:</strong> this roadmap was authored from an older snapshot. Current live state is PR #255 open with #118 actively in review on the board. Local validation has passed (focused tests, typecheck, diff-check, full bun test), and GitHub CI passed for pushed head <code>107c173</code> with deploy jobs skipped by design. The prior Python contract snapshot CI failure was fixed in <code>6b73431</code>; the antagonist/gotcha source-scope auth finding was fixed in <code>a859b89</code>. Fix-verification is running, and deploy remains intentionally deferred. The next local-only issue candidate is #192 Part A unless Rico redirects.</p>
+    <p><strong>Live correction:</strong> this roadmap was authored from an older snapshot. Current live state is PR #255 open with #118 actively in review on the board. Local validation has passed (focused tests, typecheck, diff-check, full bun test), and GitHub CI passed with deploy jobs skipped by design before this roadmap-only blocker update. The prior Python contract snapshot CI failure was fixed in <code>6b73431</code>; the antagonist/gotcha source-scope auth finding was fixed in <code>a859b89</code>. Fix-verification is clean, but Phase 3 Claude cross-review is blocked because <code>claude -p</code> produced no usable review output and bare mode could not use the active login. Deploy remains intentionally deferred. The next local-only issue candidate is #192 Part A unless Rico redirects.</p>
     <p>Drive the open-brain repo to a clean board: every open PR merged or explicitly held, and all remaining open issues either closed with tested, rollout-gated changes or explicitly dispositioned as roadmap items with a documented decision. The plan sequences work so infrastructure fixes (review pipeline, CI Postgres) land first and protect everything after them, and groups issues into coherent PR-sized batches that respect the repo's pre-merge gauntlet, critical self-review gate, and downstream rollout gate.</p>
   </section>
 
@@ -528,7 +528,7 @@
     <!-- ============ PHASE 6 ============ -->
     <div class="phase">
       <h3><code class="status">[]</code> Phase 6: Roadmap disposition — #192, #137, #118</h3>
-      <p>Three long-horizon items that should not sit silently open. Each gets an explicit disposition: implement now, defer with a dated decision + roadmap doc, or close as superseded. Default recommendation: implement #192 Part A (condensed retrieval — it directly cheapens the Phase 5 working-set/promotion flows), defer #192 Part B (dream-driven decomposition) behind DreamEngine dry-run guarantees, defer #137 (qmd wrapper — explicitly optional by its own text) and keep #118 as a labeled roadmap issue with the design captured in a doc. Current #118 state is PR #255 with CI passed for pushed head <code>107c173</code>, board status <code>In Review</code>, review gate <code>Fix Verification Running</code>, fix-verification running after the source-scope auth fix, with deploy deferred.</p>
+      <p>Three long-horizon items that should not sit silently open. Each gets an explicit disposition: implement now, defer with a dated decision + roadmap doc, or close as superseded. Default recommendation: implement #192 Part A (condensed retrieval — it directly cheapens the Phase 5 working-set/promotion flows), defer #192 Part B (dream-driven decomposition) behind DreamEngine dry-run guarantees, defer #137 (qmd wrapper — explicitly optional by its own text) and keep #118 as a labeled roadmap issue with the design captured in a doc. Current #118 state is PR #255 with CI passed before this roadmap-only blocker update, board status <code>In Review</code>, review gate blocked at Phase 3 Claude cross-review, fix-verification clean after the source-scope auth fix, with deploy deferred.</p>
 
       <figure>
         <!-- {{PHASE_IMAGE: dark triage board with three cards routing to lanes labeled "build", "defer + doc", "roadmap", amber accent}} -->
@@ -551,7 +551,7 @@
       <h4>3. #118 — File references / closed-brain roadmap</h4>
       <ul class="checklist">
         <li><code class="status">[]</code> Capture the source-reference design (matter-scoped grounding, audit trail, ethical walls) into <code>docs/roadmap/file-references.md</code> so the thinking survives outside the issue.</li>
-        <li><code class="status">[]</code> Keep the issue open as a labeled roadmap epic or close it pointing at the doc — Rico's disposition call. Current execution evidence: PR #255 pushed head <code>107c173</code>, local validation and CI passed, source-scope auth finding fixed, fix-verification running, deploy deferred.</li>
+        <li><code class="status">[]</code> Keep the issue open as a labeled roadmap epic or close it pointing at the doc — Rico's disposition call. Current execution evidence: PR #255 local validation passed, CI passed before the roadmap-only blocker update, source-scope auth finding fixed, fix-verification clean, Phase 3 Claude cross-review blocked, deploy deferred.</li>
       </ul>
 
       <h4>4. Testing Strategy</h4>
