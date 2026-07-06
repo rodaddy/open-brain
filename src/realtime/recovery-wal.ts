@@ -439,8 +439,11 @@ export class RecoveryWalStore {
   private trimSession(session: RecoveryWalSession): void {
     const overflow = session.items.length - this.budget.max_items_per_session;
     if (overflow > 0) {
-      session.items.splice(0, overflow);
+      const removed = session.items.splice(0, overflow);
       this.counters.trimmed += overflow;
+      for (const item of removed) {
+        this.writeWal({ op: "purge", scope: session.scope, id: item.id });
+      }
     }
   }
 
@@ -448,8 +451,11 @@ export class RecoveryWalStore {
     while (this.globalItemCount() > this.budget.max_global_items) {
       const oldest = this.oldestSession();
       if (!oldest) return;
-      oldest.items.shift();
-      this.counters.trimmed += 1;
+      const removed = oldest.items.shift();
+      if (removed) {
+        this.counters.trimmed += 1;
+        this.writeWal({ op: "purge", scope: oldest.scope, id: removed.id });
+      }
       if (oldest.items.length === 0) {
         this.sessions.delete(workingSetScopeKey(oldest.scope));
       }
@@ -461,6 +467,7 @@ export class RecoveryWalStore {
       const oldest = this.oldestSession();
       if (!oldest) return;
       this.counters.trimmed += oldest.items.length;
+      this.writeWal({ op: "purge", scope: oldest.scope });
       this.sessions.delete(workingSetScopeKey(oldest.scope));
     }
   }
@@ -514,8 +521,13 @@ export class RecoveryWalStore {
     for (const row of rows) {
       const record = parseWalRecord(row);
       if (!record) continue;
-      this.applyWalRecord(record);
+      try {
+        this.applyWalRecord(record);
+      } catch {
+        continue;
+      }
     }
+    this.enforceReplayBudgets();
   }
 
   private writeWal(record: RecoveryWalRecord): void {
@@ -556,6 +568,36 @@ export class RecoveryWalStore {
     session.updated_at_ms = Date.parse(record.updated_at);
   }
 
+  private enforceReplayBudgets(): void {
+    for (const [key, session] of this.sessions.entries()) {
+      const overflow = session.items.length - this.budget.max_items_per_session;
+      if (overflow > 0) {
+        session.items.splice(0, overflow);
+        this.counters.trimmed += overflow;
+      }
+      if (session.items.length === 0) {
+        this.sessions.delete(key);
+      }
+    }
+    while (this.globalItemCount() > this.budget.max_global_items) {
+      const oldest = this.oldestSession();
+      if (!oldest) return;
+      const removed = oldest.items.shift();
+      if (removed) {
+        this.counters.trimmed += 1;
+      }
+      if (oldest.items.length === 0) {
+        this.sessions.delete(workingSetScopeKey(oldest.scope));
+      }
+    }
+    while (this.sessions.size > this.budget.max_sessions) {
+      const oldest = this.oldestSession();
+      if (!oldest) return;
+      this.counters.trimmed += oldest.items.length;
+      this.sessions.delete(workingSetScopeKey(oldest.scope));
+    }
+  }
+
   private trackNextId(id: string): void {
     const match = /^rw-(\d+)$/.exec(id);
     if (!match) return;
@@ -583,16 +625,90 @@ export class RecoveryWalStore {
 function parseWalRecord(row: string): RecoveryWalRecord | null {
   try {
     const record = JSON.parse(row);
-    if (
-      record &&
-      (record.op === "append" || record.op === "mark" || record.op === "purge")
-    ) {
+    if (isRecoveryWalRecord(record)) {
       return record as RecoveryWalRecord;
     }
   } catch {
     return null;
   }
   return null;
+}
+
+function isRecoveryWalRecord(record: unknown): record is RecoveryWalRecord {
+  if (!isRecord(record)) return false;
+  if (!isNormalizedScope(record.scope)) return false;
+  if (record.op === "append") {
+    return isRecoveryWalItem(record.item);
+  }
+  if (record.op === "mark") {
+    return (
+      typeof record.id === "string" &&
+      typeof record.action === "string" &&
+      RECOVERY_WAL_ACTION_SET.has(record.action) &&
+      typeof record.status === "string" &&
+      RECOVERY_WAL_STATUS_SET.has(record.status) &&
+      (record.reviewed_at === null ||
+        (typeof record.reviewed_at === "string" &&
+          Number.isFinite(Date.parse(record.reviewed_at)))) &&
+      typeof record.updated_at === "string" &&
+      Number.isFinite(Date.parse(record.updated_at))
+    );
+  }
+  if (record.op === "purge") {
+    return record.id === undefined || typeof record.id === "string";
+  }
+  return false;
+}
+
+function isRecoveryWalItem(value: unknown): value is RecoveryWalItem {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    value.label === RECOVERY_WAL_LABEL &&
+    typeof value.status === "string" &&
+    RECOVERY_WAL_STATUS_SET.has(value.status) &&
+    typeof value.content === "string" &&
+    (value.trace_id === null || typeof value.trace_id === "string") &&
+    (value.source_ref === null || typeof value.source_ref === "string") &&
+    isRecord(value.metadata) &&
+    typeof value.created_at === "string" &&
+    Number.isFinite(Date.parse(value.created_at)) &&
+    typeof value.updated_at === "string" &&
+    Number.isFinite(Date.parse(value.updated_at)) &&
+    typeof value.expires_at === "string" &&
+    Number.isFinite(Date.parse(value.expires_at)) &&
+    (value.reviewed_at === null ||
+      (typeof value.reviewed_at === "string" &&
+        Number.isFinite(Date.parse(value.reviewed_at)))) &&
+    (value.last_action === null ||
+      (typeof value.last_action === "string" &&
+        RECOVERY_WAL_ACTION_SET.has(value.last_action)))
+  );
+}
+
+function isNormalizedScope(value: unknown): value is NormalizedWorkingSetScope {
+  return (
+    isRecord(value) &&
+    typeof value.namespace === "string" &&
+    value.namespace.trim().length > 0 &&
+    typeof value.agent === "string" &&
+    value.agent.trim().length > 0 &&
+    typeof value.platform === "string" &&
+    value.platform.trim().length > 0 &&
+    typeof value.server_id === "string" &&
+    value.server_id.trim().length > 0 &&
+    typeof value.channel_id === "string" &&
+    value.channel_id.trim().length > 0 &&
+    (value.thread_id === null ||
+      (typeof value.thread_id === "string" &&
+        value.thread_id.trim().length > 0)) &&
+    typeof value.session_key === "string" &&
+    value.session_key.trim().length > 0
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function serializedJsonLength(value: unknown): number | null {

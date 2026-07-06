@@ -360,7 +360,9 @@ export function registerAgentContextPack(
         (!args.requested_sections ||
           args.requested_sections.includes("recovery"));
       const workingSet = storeFor(deps).buildContextPackFragment(scope);
-      const recovery = recoveryStoreFor(deps).buildContextPackFragment(scope);
+      const recovery = includeRecovery
+        ? recoveryStoreFor(deps).buildContextPackFragment(scope)
+        : null;
 
       return {
         content: [
@@ -377,22 +379,20 @@ export function registerAgentContextPack(
                 ...(includeWorkingSet
                   ? { working_set: workingSet.working_set }
                   : {}),
-                ...(includeRecovery ? { recovery: recovery.recovery } : {}),
+                ...(recovery ? { recovery: recovery.recovery } : {}),
               },
               warnings: {
                 scope_denials: [
                   ...(includeWorkingSet
                     ? workingSet.warnings.scope_denials
                     : []),
-                  ...(includeRecovery
-                    ? recovery.warnings.scope_denials
-                    : []),
+                  ...(recovery ? recovery.warnings.scope_denials : []),
                 ],
               },
               budget: {
                 requested: args.budget ?? null,
                 ...(includeWorkingSet ? workingSet.budget : {}),
-                ...(includeRecovery ? recovery.budget : {}),
+                ...(recovery ? recovery.budget : {}),
               },
               citations: [],
               query: args.query ?? null,

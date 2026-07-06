@@ -383,8 +383,8 @@ export const CONTRACT_CAPABILITIES: ContractCapability[] = [
     kind: "tool",
     description:
       "First-class realtime context-pack tool for Hermes and future agents. " +
-      "It currently exposes the exact-scope RAM working_set section over MCP; " +
-      "NATS transport remains planned.",
+      "It currently exposes exact-scope RAM working_set plus explicitly " +
+      "opted-in quarantined recovery over MCP; NATS transport remains planned.",
   },
   {
     name: "working_set_append",

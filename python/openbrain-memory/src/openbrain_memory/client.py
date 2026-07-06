@@ -65,7 +65,8 @@ REQUIRED_CONTRACT_TOOLS = (
 CURRENT_TOOL_HELP: Mapping[str, str] = {
     "append_session_event": "Append a durable event to a session lane journal.",
     "agent_context_pack": (
-        "Build a scoped realtime context pack with exact-scope working context."
+        "Build a scoped context pack with working context and explicit "
+        "quarantined recovery."
     ),
     "brain_answer": "Return cited answer bullets from readable Open Brain evidence.",
     "get_entity": "Fetch a graph entity by ID.",
