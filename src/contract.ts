@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { TOOL_CONTRACTS } from "./contract-schemas.ts";
 
-export const CONTRACT_VERSION = "2026-07-06.memory-tools.v17";
+export const CONTRACT_VERSION = "2026-07-06.memory-tools.v18";
 export const CONTRACT_SCHEMA_VERSION = 1;
 
 export interface ContractCapability {
@@ -260,6 +260,15 @@ export const CONTRACT_CAPABILITIES: ContractCapability[] = [
       "output; compact render returns a bounded exact-UUID preview envelope. " +
       "Server-side auth and namespace predicates remain the security boundary " +
       "for ID reads.",
+  },
+  {
+    name: "decompose_entry",
+    version: 1,
+    kind: "tool",
+    description:
+      "Plan dry-run-first decomposition of an oversized readable entry into " +
+      "smaller linked replacement thoughts. No writes occur unless the caller " +
+      "explicitly sets dry_run=false with apply_mode=write_replacements.",
   },
   {
     name: "resolve_entry",

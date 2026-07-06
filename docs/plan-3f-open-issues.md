@@ -7,16 +7,14 @@ Updated: 2026-07-06.
 Live GitHub and Project 8 state are the source of truth. Older roadmap
 snapshots and untracked sidecar plans are historical evidence only.
 
-Current live state as of 2026-07-06 11:35 EDT during the #224 local-validation
-phase:
+Current live state as of 2026-07-06 16:16 EDT during the #247 pre-merge
+gauntlet fix-verification phase:
 
-- Open PRs: 0.
-- Open issues: 8.
+- Open PRs: 1.
+  - #254 `feat(#247): add DreamEngine entry decomposition`
+- Open issues: 5.
   - #247 `Design DreamEngine decomposition for oversized Open Brain entries`
-  - #224 `Define client-owned promotion and relegation lifecycle for realtime memory`
   - #223 `Add NATS and JetStream foundation for realtime Open Brain transport`
-  - #222 `Add scoped hot working set for realtime agent sessions`
-  - #221 `Add recovery WAL for interrupted realtime agent sessions`
   - #167 `Retire legacy collab namespace (99.4% mirrored to shared-kb, frozen)`
   - #137 `Optional: controlled remote qmd deep-lookup wrapper`
   - #118 `roadmap: file references for Privilege Isolation / closed-brain deployments`
@@ -27,10 +25,30 @@ phase:
 - PR #250 for the local-only #223 NATS/JetStream foundation is merged as
   `aba24c0beb1b6164dfe6270a535f3ed117646229`. It is historical context only.
   #223 remains open for the later runtime/deploy slice.
+- #224 is closed by PR #251, #222 is closed by PR #252, and #221 is closed by
+  PR #253. They are historical context only, not active Plan 3F work.
+- PR #254 is open for #247 on `feat/247-dreamengine-decomposition` at
+  `1736ce2af66875423cdd7b97d51d15db6c180728`. Initial pre-merge-gauntlet
+  findings are posted at
+  https://github.com/rodaddy/open-brain/pull/254#issuecomment-4896913956:
+  four MEDIUM findings covering explicit apply no-op status, atomic replacement
+  writes, decision JSONB source content, and Python wrapper bounds. Fixes are
+  pushed and summarized at
+  https://github.com/rodaddy/open-brain/pull/254#issuecomment-4896991728.
+  Focused fix verification is posted at
+  https://github.com/rodaddy/open-brain/pull/254#issuecomment-4897037515.
+  Claude/Opus cross-review findings were posted at
+  https://github.com/rodaddy/open-brain/pull/254#issuecomment-4897143700:
+  one HIGH, two MEDIUM, and two LOW findings. Fixes are pushed in `1736ce2`
+  and summarized at
+  https://github.com/rodaddy/open-brain/pull/254#issuecomment-4897214778.
+  Local validation is green; PR CI is pending on `1736ce2` and merge state is
+  temporarily unstable until checks finish. No core01 deploy has been performed
+  or authorized.
 - #204 is closed. Do not continue stale #204 worktrees for this run.
 
-Critical correction: the active Plan 3F surface is the 8 open issues above and
-0 open PRs. Closed issues and merged PRs may explain predecessor state, but they
+Critical correction: the active Plan 3F surface is the 5 open issues above and
+1 open PR. Closed issues and merged PRs may explain predecessor state, but they
 must not occupy worker lanes or be counted as remaining work.
 
 ## Operating Boundary
@@ -56,10 +74,7 @@ splits into disjoint files or review lanes.
 | Issue | Branch | Temp worktree | Workers | Local target | Deploy allowed | Closure rule |
 | --- | --- | --- | ---: | --- | --- | --- |
 | #223 NATS/JetStream runtime slice | `feat/223-nats-jetstream-runtime` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-223-nats-jetstream-runtime` | 1 implementation + 1 runtime/review sidecar | Later runtime implementation only after local-only #224/#222/#221 sequencing or explicit controller decision | No | Do not close #223 from the merged foundation PR; closing requires real runtime/deploy tests or explicit issue narrowing |
-| #222 scoped hot working set | `feat/222-scoped-hot-working-set` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-222-scoped-hot-working-set` | 1 implementation + 1 test/review sidecar | Exact-scope working-set contract, pack inclusion, denial tests | No | Close only with code/tests proving cross-scope isolation and TTL/budget behavior |
-| #221 recovery WAL | `feat/221-recovery-wal` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-221-recovery-wal` | 1 implementation + 1 adversarial/test sidecar | Quarantined recovery evidence contract, restart transitions, exclusion from normal recall | No | Close only with tests proving WAL evidence cannot leak into durable/search paths |
-| #224 promotion/relegation lifecycle | `feat/224-promotion-lifecycle` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-224-promotion-lifecycle` | 1 implementation + 1 domain/review sidecar | Explicit promote/relegate/discard/nominate workflow for candidate memory | No | Close only with tests proving no implicit durable/shared-kb promotion |
-| #247 DreamEngine decomposition | `feat/247-dream-decomposition` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-247-dream-decomposition` | 1 implementation + 1 dry-run/adversarial sidecar | Dry-run proposals for oversized entries with linked replacements | No | Close only with dry-run-by-default tests and no mutation without approval |
+| #247 DreamEngine decomposition | `feat/247-dreamengine-decomposition` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-247-dreamengine-decomposition` | 1 implementation + 1 dry-run/adversarial sidecar | Dry-run proposals for oversized entries with linked replacements | No | Close only with dry-run-by-default tests and no mutation without approval |
 | #137 optional qmd deep lookup | `feat/137-optional-qmd-lookup` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-137-optional-qmd-lookup` | 1 implementation/doc worker | Optional deep lookup wrapper or explicit no-op docs/tests proving qmd absence is non-fatal | No | Close only after Hermes/Open Brain recall paths are documented/tested to avoid a hard qmd dependency |
 | #118 Privilege Isolation source refs | `plan/118-privilege-isolation-split` or `feat/118-source-refs-slice` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-118-privilege-isolation` | 1 planning worker first, implementation workers only after split | Either split into child issues or implement one real tested source-ref slice | No | Do not close docs-only unless issue is converted to parent roadmap with child issues |
 | #167 legacy collab retirement | `release/167-retire-collab` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-167-retire-collab` | 1 release-planning worker only | Release/deploy checklist and preflight evidence, no mutation | Explicit approval required | Blocked for local-only; cannot close without live backup/migration/deploy/canary |

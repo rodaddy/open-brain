@@ -432,6 +432,38 @@ dreams.set_tier("thoughts", "<entry-id>", "hot", dry_run=False)
 dreams.promote_entry("thoughts", "<entry-id>", reason="useful", dry_run=False)
 ```
 
+Oversized-entry decomposition follows the same safety rule. The default
+`decompose_entry()` call asks Open Brain for a dry-run proposal containing
+smaller linked replacement thoughts and namespace-safe provenance. It does not
+archive, promote, demote, tier, or write replacements.
+
+```python
+proposal = dreams.decompose_entry(
+    "thoughts",
+    "<entry-id>",
+    max_chunk_chars=2000,
+)
+```
+
+Replacement writes require an explicit mutating wrapper call:
+
+```python
+dreams.decompose_entry(
+    "thoughts",
+    "<entry-id>",
+    dry_run=False,
+    apply_mode="write_replacements",
+)
+```
+
+Apply results keep the source row unchanged and report completeness explicitly:
+`written_ids` for newly-created replacement thoughts, `skipped_duplicates` for
+pre-existing duplicate rows, `intra_batch_duplicates` for chunks collapsed inside
+the same apply batch, `fully_written`, and `apply_summary`. If the source entry
+is not oversized, explicit apply returns the same `not_oversized` no-op plan with
+empty replacement lists and `fully_written: true`; it does not report a write or
+mutate any rows.
+
 ## Test
 
 ```bash

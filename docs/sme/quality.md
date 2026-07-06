@@ -144,3 +144,47 @@ and future reviewers reason about states the tool could no longer produce.
 
 PR #251 removed the unreachable `already_promoted` bucket and updated the tool
 description and tests to describe pending explicit shared-kb nominations only.
+
+## [2026-07-06] Mutating wrappers must distinguish no-op from successful writes
+
+**Severity:** MEDIUM
+**Source:** PR #254 initial swarm for Issue #247
+**Scope:** explicit apply/dry-run pairs such as `decompose_entry`
+**Status:** fixed in PR #254; keep as active checklist
+
+### Pattern
+
+`decompose_entry` originally overwrote every explicit apply response with
+`status: "applied"`, even when the source entry was not oversized and the plan
+had `would_write: 0`. That blurred "nothing eligible to write" and "writes
+succeeded", and the no-op output state was undocumented.
+
+### Review Questions
+
+- Does an explicit mutating wrapper preserve no-op states instead of claiming a
+  successful mutation?
+- Are output statuses all reachable, documented, and covered by tests?
+- Does the contract explain empty `written_ids` as no-op/skipped/duplicate
+  rather than leaving clients to infer success?
+
+## [2026-07-06] Apply responses need an explicit completeness summary when duplicates are possible
+
+**Severity:** MEDIUM
+**Source:** PR #254 Claude/Opus cross-review for Issue #247
+**Scope:** explicit apply tools that can skip or collapse requested writes
+**Status:** fixed in PR #254; keep as active checklist
+
+### Pattern
+
+`status: "applied"` is not enough when an apply request may skip pre-existing
+duplicates or collapse duplicates inside the same batch. Clients need a
+machine-readable answer for "were all requested replacements accounted for?" and
+whether the source row was mutated.
+
+### Review Questions
+
+- Does the response expose requested, written, skipped, and collapsed counts?
+- Is there an explicit boolean such as `fully_written` or an equivalent
+  completeness marker?
+- Does the response state whether the source row was archived, demoted, or left
+  unchanged?

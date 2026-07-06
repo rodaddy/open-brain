@@ -20,6 +20,8 @@ class DreamClient(Protocol):
 
     def promote_entry(self, **arguments: Any) -> JSON: ...
 
+    def decompose_entry(self, **arguments: Any) -> JSON: ...
+
     def find_duplicates(self, **arguments: Any) -> JSON: ...
 
 
@@ -228,6 +230,42 @@ class DreamEngine:
             return DreamAction("promote_entry", arguments, reason=reason).as_dict()
         return self.client.promote_entry(**arguments)
 
+    def decompose_entry(
+        self,
+        table: str,
+        entry_id: str,
+        *,
+        max_chunk_chars: int | None = None,
+        overlap_chars: int | None = None,
+        dry_run: bool = True,
+        apply_mode: str | None = None,
+    ) -> JSON:
+        arguments: dict[str, Any] = {"table": table, "id": entry_id}
+        if max_chunk_chars is not None:
+            arguments["max_chunk_chars"] = _bounded_int_between(
+                max_chunk_chars, "max_chunk_chars", 500, 8000
+            )
+        if overlap_chars is not None:
+            arguments["overlap_chars"] = _bounded_int_between(
+                overlap_chars, "overlap_chars", 0, 1000
+            )
+        if (
+            "max_chunk_chars" in arguments
+            and "overlap_chars" in arguments
+            and arguments["overlap_chars"] >= arguments["max_chunk_chars"]
+        ):
+            raise ValueError("overlap_chars must be less than max_chunk_chars")
+        if dry_run:
+            arguments["dry_run"] = True
+            return self.client.decompose_entry(**arguments)
+        if apply_mode != "write_replacements":
+            raise ValueError(
+                "decompose_entry dry_run=False requires apply_mode='write_replacements'"
+            )
+        arguments["dry_run"] = False
+        arguments["apply_mode"] = apply_mode
+        return self.client.decompose_entry(**arguments)
+
     def find_duplicates(self, **filters: Any) -> JSON:
         return self.client.find_duplicates(**filters)
 
@@ -300,6 +338,12 @@ def _bounded_int(value: Any, default: int, name: str, maximum: int) -> int:
         return default
     if type(value) is not int or not 1 <= value <= maximum:
         raise ValueError(f"{name} must be an integer between 1 and {maximum}")
+    return value
+
+
+def _bounded_int_between(value: Any, name: str, minimum: int, maximum: int) -> int:
+    if type(value) is not int or not minimum <= value <= maximum:
+        raise ValueError(f"{name} must be an integer between {minimum} and {maximum}")
     return value
 
 

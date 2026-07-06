@@ -529,6 +529,7 @@ def test_all_registered_tool_wrappers_call_matching_tool_names():
         "bulk_set_tier",
         "curate_entries",
         "demote_entry",
+        "decompose_entry",
         "find_duplicates",
         "find_person",
         "get_contract",
@@ -578,7 +579,7 @@ def test_all_registered_tool_wrappers_call_matching_tool_names():
 
 
 def test_required_contract_tools_have_first_class_wrappers_and_help():
-    assert CURRENT_CONTRACT_VERSION == "2026-07-06.memory-tools.v17"
+    assert CURRENT_CONTRACT_VERSION == "2026-07-06.memory-tools.v18"
     assert set(REQUIRED_CONTRACT_TOOLS) <= set(CURRENT_TOOL_HELP)
 
     for tool_name in REQUIRED_CONTRACT_TOOLS:
