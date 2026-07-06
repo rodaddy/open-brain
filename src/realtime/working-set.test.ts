@@ -60,7 +60,6 @@ describe("WorkingSetStore", () => {
   });
 
   it.each([
-    ["namespace", variant({ namespace: "other-ns" })],
     ["agent", variant({ agent: "skippy" })],
     ["platform", variant({ platform: "slack" })],
     ["server_id", variant({ server_id: "other-server" })],
@@ -156,6 +155,49 @@ describe("WorkingSetStore", () => {
     expect(store.getCounters().dropped).toBe(2);
   });
 
+  it("drops oversized metadata before retaining RAM working context", () => {
+    const store = new WorkingSetStore({ max_metadata_chars: 12 });
+
+    const result = store.append(
+      BASE_SCOPE,
+      {
+        kind: "recent_event",
+        content: "valid content",
+        metadata: { large: "x".repeat(20) },
+      },
+      BASE_TIME,
+    );
+
+    expect(result).toMatchObject({
+      accepted: false,
+      reason: "metadata_too_large",
+    });
+    expect(store.getCounters().dropped).toBe(1);
+    expect(store.buildContextPackFragment(BASE_SCOPE, BASE_TIME).working_set.items).toEqual([]);
+  });
+
+  it("does not disclose cross-namespace working-set presence in scope denials", () => {
+    const store = new WorkingSetStore();
+    store.append(BASE_SCOPE, { kind: "task_state", content: "base" }, BASE_TIME);
+    store.append(
+      variant({ namespace: "other-ns" }),
+      { kind: "task_state", content: "foreign" },
+      BASE_TIME,
+    );
+    store.append(
+      variant({ channel_id: "adjacent-channel" }),
+      { kind: "task_state", content: "same namespace adjacent" },
+      BASE_TIME,
+    );
+
+    const fragment = store.buildContextPackFragment(BASE_SCOPE, BASE_TIME);
+
+    expect(fragment.warnings.scope_denials).toHaveLength(1);
+    expect(fragment.warnings.scope_denials[0]?.reasons).toEqual([
+      "channel_id",
+    ]);
+  });
+
   it("trims per-session and global budgets and exposes trimmed counters", () => {
     const store = new WorkingSetStore({
       max_items_per_session: 2,
@@ -201,6 +243,7 @@ describe("WorkingSetStore", () => {
       max_sessions: 128,
       max_items_per_session: 24,
       max_global_items: 1024,
+      max_metadata_chars: 2000,
     });
   });
 });

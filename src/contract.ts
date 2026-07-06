@@ -150,6 +150,7 @@ export interface OpenBrainContract {
         max_items_per_session: 24;
         max_global_items: 1024;
         max_item_chars: 4000;
+        max_metadata_chars: 2000;
       };
       counters: readonly ["dropped", "expired", "trimmed"];
     };
@@ -636,6 +637,7 @@ export function buildContract(
           max_items_per_session: 24 as const,
           max_global_items: 1024 as const,
           max_item_chars: 4000 as const,
+          max_metadata_chars: 2000 as const,
         },
         counters: ["dropped", "expired", "trimmed"] as const,
       },

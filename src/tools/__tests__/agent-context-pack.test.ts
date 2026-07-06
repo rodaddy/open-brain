@@ -156,6 +156,73 @@ describe("agent_context_pack and working_set_append", () => {
     }
   });
 
+  it("does not disclose foreign-namespace working-set denials", async () => {
+    const adminAuth: AuthInfo = { role: "admin", clientId: "rico" };
+    const { client, cleanup } = await setupToolClient(adminAuth);
+
+    try {
+      await client.callTool({
+        name: "working_set_append",
+        arguments: {
+          ...SCOPE,
+          kind: "task_state",
+          content: "base task",
+        },
+      });
+      await client.callTool({
+        name: "working_set_append",
+        arguments: {
+          ...SCOPE,
+          namespace: "kevin",
+          kind: "task_state",
+          content: "foreign task",
+        },
+      });
+
+      const viewer = await client.callTool({
+        name: "agent_context_pack",
+        arguments: {
+          ...SCOPE,
+          requested_sections: ["working_set"],
+        },
+      });
+
+      const payload = JSON.parse((viewer.content as any)[0].text);
+      expect(payload.sections.working_set.items.map((item: any) => item.content)).toEqual([
+        "base task",
+      ]);
+      expect(payload.warnings.scope_denials).toEqual([]);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("rejects oversized metadata before retaining RAM context", async () => {
+    const auth: AuthInfo = { role: "admin", clientId: "rico" };
+    const { client, cleanup } = await setupToolClient(auth);
+
+    try {
+      const append = await client.callTool({
+        name: "working_set_append",
+        arguments: {
+          ...SCOPE,
+          kind: "current_intent",
+          content: "valid content",
+          metadata: { large: "x".repeat(3000) },
+        },
+      });
+
+      expect(append.isError).toBe(true);
+      const payload = JSON.parse((append.content as any)[0].text);
+      expect(payload).toMatchObject({
+        accepted: false,
+        reason: "metadata_too_large",
+      });
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("rejects RAM working-set writes for readonly auth", async () => {
     const auth: AuthInfo = { role: "readonly", clientId: "viewer" };
     const { client, cleanup } = await setupToolClient(auth);

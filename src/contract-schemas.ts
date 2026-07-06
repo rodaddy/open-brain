@@ -68,8 +68,22 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
       stale_at: { type: "string", required: false, maxLength: 100 },
       trace_id: { type: "string", required: false, maxLength: 500 },
       source_ref: { type: "string", required: false, maxLength: 1000 },
-      durable_ref: { type: "object", required: false },
-      metadata: { type: "object", required: false },
+      durable_ref: {
+        type: "object",
+        required: false,
+        fields: {
+          table: { type: "string", required: true, minLength: 1, maxLength: 100 },
+          id: { type: "string", required: true, minLength: 1, maxLength: 200 },
+        },
+      },
+      metadata: {
+        type: "object",
+        required: false,
+        maxSerializedChars: 2000,
+        description:
+          "Optional bounded JSON metadata. Serialized metadata larger than " +
+          "2000 characters is rejected before retention.",
+      },
     },
     output_shape:
       "RAM-only working-set append receipt with accepted/reason/item/counters/not_durable_memory",
@@ -114,7 +128,24 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
           ],
         },
       },
-      budget: { type: "object", required: false },
+      budget: {
+        type: "object",
+        required: false,
+        fields: {
+          max_tokens: {
+            type: "integer",
+            required: false,
+            min: 100,
+            max: 20000,
+          },
+          max_latency_ms: {
+            type: "integer",
+            required: false,
+            min: 1,
+            max: 10000,
+          },
+        },
+      },
     },
     output_shape:
       "agent_context_pack envelope with exact-scope working_set section, warnings, budget, citations",

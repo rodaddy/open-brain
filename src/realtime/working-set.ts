@@ -41,6 +41,7 @@ export interface WorkingSetBudget {
   max_items_per_session: number;
   max_global_items: number;
   max_item_chars: number;
+  max_metadata_chars: number;
 }
 
 export interface WorkingSetCounters {
@@ -78,7 +79,11 @@ export interface WorkingSetItem {
 
 export interface WorkingSetAppendResult {
   accepted: boolean;
-  reason?: "content_too_large" | "empty_content" | "invalid_kind";
+  reason?:
+    | "content_too_large"
+    | "empty_content"
+    | "invalid_kind"
+    | "metadata_too_large";
   item?: WorkingSetItem;
   counters: WorkingSetCounters;
 }
@@ -116,6 +121,7 @@ export const DEFAULT_WORKING_SET_BUDGET: WorkingSetBudget = {
   max_items_per_session: 24,
   max_global_items: 1024,
   max_item_chars: 4000,
+  max_metadata_chars: 2000,
 };
 
 const WORKING_SET_ITEM_KIND_SET = new Set<string>(WORKING_SET_ITEM_KINDS);
@@ -212,6 +218,11 @@ export class WorkingSetStore {
       this.counters.dropped += 1;
       return this.result(false, "content_too_large");
     }
+    const metadata = input.metadata ?? {};
+    if (JSON.stringify(metadata).length > this.budget.max_metadata_chars) {
+      this.counters.dropped += 1;
+      return this.result(false, "metadata_too_large");
+    }
 
     const normalizedScope = normalizeWorkingSetScope(scope);
     const key = workingSetScopeKey(normalizedScope);
@@ -232,7 +243,7 @@ export class WorkingSetStore {
       trace_id: input.trace_id ?? null,
       source_ref: input.source_ref ?? null,
       durable_ref: input.durable_ref ?? null,
-      metadata: input.metadata ?? {},
+      metadata,
       created_at: now.toISOString(),
       expires_at: new Date(nowMs + this.budget.ttl_ms).toISOString(),
     };
@@ -268,9 +279,7 @@ export class WorkingSetStore {
         budget: this.budget,
         counters: this.getCounters(),
       },
-      warnings: {
-        scope_denials: this.scopeDenialsFor(normalizedScope),
-      },
+      warnings: { scope_denials: this.scopeDenialsFor(normalizedScope) },
       budget: {
         working_set: this.budget,
       },
@@ -363,6 +372,9 @@ export class WorkingSetStore {
     const denials: WorkingSetScopeDenial[] = [];
     for (const [key, session] of this.sessions.entries()) {
       if (key === requestedKey) {
+        continue;
+      }
+      if (session.scope.namespace !== requestedScope.namespace) {
         continue;
       }
       const reasons = compareWorkingSetScope(requestedScope, session.scope);

@@ -172,7 +172,8 @@ Default RAM budget:
 - per-session cap: 24 items;
 - global in-process cap: 1024 items;
 - active-session cap: 128 sessions;
-- per-item content cap: 4000 characters.
+- per-item content cap: 4000 characters;
+- per-item metadata cap: 2000 serialized JSON characters.
 
 The working-set boundary exposes counters for dropped, expired, and trimmed
 items. Dropped items are rejected before inclusion, expired items leave RAM

@@ -447,7 +447,8 @@ def test_thin_wrappers_cover_current_issue_scope():
     client.log_decision(title="decision", rationale="because")
     client.search_brain(query="decision")
 
-    assert [call["json"]["params"]["name"] for call in tool_requests(transport)] == [
+    calls = tool_requests(transport)
+    assert [call["json"]["params"]["name"] for call in calls] == [
         "session_context",
         "working_set_append",
         "agent_context_pack",
@@ -456,6 +457,23 @@ def test_thin_wrappers_cover_current_issue_scope():
         "log_decision",
         "search_brain",
     ]
+    assert calls[1]["json"]["params"]["arguments"] == {
+        "agent": "nagatha",
+        "platform": "discord",
+        "server_id": "guild",
+        "channel_id": "chan",
+        "session_key": "session",
+        "kind": "current_intent",
+        "content": "finish the local slice",
+    }
+    assert calls[2]["json"]["params"]["arguments"] == {
+        "agent": "nagatha",
+        "platform": "discord",
+        "server_id": "guild",
+        "channel_id": "chan",
+        "session_key": "session",
+        "requested_sections": ["working_set"],
+    }
 
 
 def test_all_registered_tool_wrappers_call_matching_tool_names():

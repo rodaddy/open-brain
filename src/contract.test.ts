@@ -13,7 +13,7 @@ describe("Open Brain contract manifest", () => {
     expect(contract.contract_scope).toBe("required_openbrain_memory_contract");
     expect(contract.schema_hash).toMatch(/^[0-9a-f]{64}$/);
     expect(contract.schema_hash).toBe(
-      "820112d965cafc92c1574b8d30c741495b5f5e5f73aa2bf32860bda4c49e52e7",
+      "95b71133b604f37e3b94c4cbbfc9bccbca9c1dfd22fb7bec3a1f7e8969a2953f",
     );
     expect(contract.min_client_versions.mcp2cli).toBe("0.3.6");
     expect(contract.transport.namespace_boundary).toBe("authorization");
@@ -182,6 +182,7 @@ describe("Open Brain contract manifest", () => {
         max_items_per_session: 24,
         max_global_items: 1024,
         max_item_chars: 4000,
+        max_metadata_chars: 2000,
       },
       counters: ["dropped", "expired", "trimmed"],
     });
@@ -275,6 +276,37 @@ describe("Open Brain contract manifest", () => {
     expect(agentContextPack?.output_shape).toContain(
       "exact-scope working_set",
     );
+    expect((workingSetAppend?.input_schema as any).durable_ref).toEqual({
+      type: "object",
+      required: false,
+      fields: {
+        table: { type: "string", required: true, minLength: 1, maxLength: 100 },
+        id: { type: "string", required: true, minLength: 1, maxLength: 200 },
+      },
+    });
+    expect((workingSetAppend?.input_schema as any).metadata).toMatchObject({
+      type: "object",
+      required: false,
+      maxSerializedChars: 2000,
+    });
+    expect((agentContextPack?.input_schema as any).budget).toEqual({
+      type: "object",
+      required: false,
+      fields: {
+        max_tokens: {
+          type: "integer",
+          required: false,
+          min: 100,
+          max: 20000,
+        },
+        max_latency_ms: {
+          type: "integer",
+          required: false,
+          min: 1,
+          max: 10000,
+        },
+      },
+    });
     const upsertRepoFact = contract.tool_contracts.upsert_repo_fact;
     expect(upsertRepoFact).toBeDefined();
     const getEntry = contract.tool_contracts.get_entry;
