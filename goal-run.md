@@ -4,15 +4,20 @@ Updated: 2026-07-06 by Codex after Fable handoff.
 
 ## Current Controller State
 
-Updated after PR #244 opened for #176 and CI passed on 2026-07-06.
+Updated after PR #244 initial swarm found and local fixes addressed the resend
+root-rotation bug on 2026-07-06.
 
 - Open PRs: 1
   - #244 `feat(#176): structure share_candidate rejection detail` is open.
     Implementation head `d0c34f8ec5649e13135f9844adb01f0e879a7f3c` passed
     `check`, `db-integration`, `python-package`, PR-body `validate`, and
     GitGuardian; `deploy` skipped. Re-read live checks for the latest head after
-    any plan-only update. Next gate: pre-merge-gauntlet Phase 2 review swarm,
-    then Phase 3 opposite-runtime cross-review. No core01 deploy.
+    any follow-up fix. Phase 2 initial swarm found one material finding:
+    resend metadata rotated the root id after a rejected resubmit. Fixed
+    locally by preserving the original same-lane rejected root and treating
+    rotated/non-root ids as already at the retry bound. Next gate: commit/push
+    the fix, run fix-verification, then Phase 3 opposite-runtime cross-review.
+    No core01 deploy.
 - Merged in this controller batch:
   - #231 merged as `c9888cc584fe68b5ff91906d56ef26c7fb40afef`;
     post-merge `/codex-deep` smoke on #234 succeeded.
@@ -42,8 +47,10 @@ Updated after PR #244 opened for #176 and CI passed on 2026-07-06.
   - #234/#165 are merged/closed; #165 is no longer open.
   - #204 moved to `Done` by merge/closure automation and `Next Action` records
     PR #243 merge commit `3b8e47ac5d4b3b614fdd26f5609242b73204f928`.
-  - #176 and PR #244 are `In Review`, Validation `CI Passed`, and Review Gate
-    `Initial Swarm Pending`; next action is the pre-merge-gauntlet swarm.
+  - #176 and PR #244 are `In Review`. Validation was `CI Passed` at
+    `e7ba6d9`; local fix validation passed after the initial swarm finding.
+    Review Gate is `Fixes In Progress` until the fix commit is pushed and
+    fix-verification runs.
 - No production deploy was performed during this batch.
 
 ## Live Inventory Correction
@@ -317,9 +324,34 @@ Current #176 state:
    (`validate`), server CI (`check`, `db-integration`), Python package CI, and
    GitGuardian; deploy skipped. Re-read live checks for the latest head after
    this plan-only update.
-9. Pending: run Phase 2 swarm, Phase 3 opposite-runtime cross-review, Phase 4
-   fixes/waivers, and Phase 5 merge only after the gate is clean.
-10. Deferred by current local-only instruction: downstream rollout and any
+9. PR #244 plan/status head `e7ba6d9ac5de016b7aebc5979794620939d4c46a`
+   passed GitHub `check`, `db-integration`, `python-package`, PR-body
+   `validate`, and GitGuardian; deploy skipped.
+10. Phase 2 initial swarm ran with six lanes:
+   correctness, antagonist, security, backend/domain, quality, and gotcha.
+   Correctness/security/gotcha were clean. Antagonist, backend/domain, and
+   quality all found the same material issue: a rejected sanitized resend
+   returned a new `sanitized_resubmit_of` root, so a contract-following client
+   or rotated-root caller could reset the bound.
+11. Fixed locally: `effectiveResubmitAttempt` now validates the supplied root as
+   an original same-lane rejected event; invalid/rotated roots are treated as
+   already at `SHARE_REJECTION_MAX_RESUBMIT_ATTEMPTS`. `attachResubmitTarget`
+   now preserves an incoming original root instead of rotating to the latest
+   rejected event id.
+12. Local validation after the Phase 2 fix:
+   - `bun test src/tools/__tests__/append-session-event.test.ts` -> 46 pass,
+     5 skip, 0 fail.
+   - `bun test src/sharing.test.ts src/tools/__tests__/append-session-event.test.ts src/contract.test.ts`
+     -> 92 pass, 5 skip, 0 fail.
+   - `bunx tsc --noEmit` -> passed.
+   - `bun test` -> 1057 pass, 46 skip, 0 fail.
+   - `git diff --check` -> passed.
+   - `ggshield secret scan path -y src/tools/append-session-event.ts src/tools/__tests__/append-session-event.test.ts`
+     -> no secrets found.
+13. Pending: commit/push the Phase 2 fix, post the swarm/fix receipt on PR
+   #244, run fix-verification, then Phase 3 opposite-runtime cross-review,
+   Phase 4 fixes/waivers, and Phase 5 merge only after the gate is clean.
+14. Deferred by current local-only instruction: downstream rollout and any
    core01 deploy/live canary. This contract change triggers
    `docs/downstream-rollout.md`; downstream rollout waits for the later release
    phase.

@@ -6,6 +6,7 @@ import { canWriteNamespace } from "../namespace-policy.ts";
 import { contentHash, EMBEDDING_MODEL } from "../embedding.ts";
 import {
   classifyShareCandidate,
+  SHARE_REJECTION_MAX_RESUBMIT_ATTEMPTS,
   type ShareRejectionDetail,
   shareRejectionDetail,
 } from "../sharing.ts";
@@ -298,13 +299,32 @@ async function effectiveResubmitAttempt(
   if (!resubmitOf) return requested;
 
   const { rows } = await deps.pool.query(
-    `SELECT COUNT(*)::int AS rejected_count
-       FROM ob_session_events
-      WHERE lane_id = $1
-        AND metadata->>'sanitized_resubmit_of' = $2
-        AND metadata->>'share_rejected_sync' IN ('reject-secret', 'reject-private')`,
+    `SELECT
+        (
+          SELECT COUNT(*)::int
+            FROM ob_session_events
+           WHERE lane_id = $1
+             AND id::text = $2
+             AND metadata->>'sanitized_resubmit_of' IS NULL
+             AND metadata->>'share_rejected_sync' IN ('reject-secret', 'reject-private')
+        ) AS root_rejected_count,
+        (
+          SELECT COUNT(*)::int
+            FROM ob_session_events
+           WHERE lane_id = $1
+             AND metadata->>'sanitized_resubmit_of' = $2
+             AND metadata->>'share_rejected_sync' IN ('reject-secret', 'reject-private')
+        ) AS rejected_count`,
     [laneId, resubmitOf],
   );
+  const rawRootCount = rows[0]?.root_rejected_count;
+  const rootRejected =
+    typeof rawRootCount === "number"
+      ? rawRootCount
+      : Number.parseInt(String(rawRootCount ?? "0"), 10);
+  if (!Number.isFinite(rootRejected) || rootRejected < 1) {
+    return Math.max(requested, SHARE_REJECTION_MAX_RESUBMIT_ATTEMPTS);
+  }
   const rawCount = rows[0]?.rejected_count;
   const priorRejected =
     typeof rawCount === "number"
@@ -319,6 +339,7 @@ async function effectiveResubmitAttempt(
 function attachResubmitTarget(
   detail: ShareRejectionDetail,
   eventId: string,
+  metadata: Record<string, unknown>,
 ): ShareRejectionDetail & {
   resubmit_metadata: {
     sanitized_resubmit_of: string;
@@ -328,7 +349,7 @@ function attachResubmitTarget(
   return {
     ...detail,
     resubmit_metadata: {
-      sanitized_resubmit_of: eventId,
+      sanitized_resubmit_of: sanitizedResubmitOf(metadata) ?? eventId,
       sanitized_resubmit_attempt: Math.min(
         detail.resubmit_attempt + 1,
         detail.max_resubmit_attempts,
@@ -664,6 +685,7 @@ export function registerAppendSessionEvent(
                       reject_detail: attachResubmitTarget(
                         nomination.rejectDetail,
                         rows[0].id,
+                        nomination.metadata,
                       ),
                     }
                   : {}),
