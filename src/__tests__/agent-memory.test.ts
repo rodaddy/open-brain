@@ -156,7 +156,7 @@ describe("AgentMemory TypeScript wrapper", () => {
     });
   });
 
-  it("appends events and nominations without caller-controlled authority keys", async () => {
+  it("appends events, candidate-only corrections, and explicit nominations", async () => {
     const transport = new FakeTransport();
     const memory = new AgentMemory(transport, { agent: "codex", source: "codex" });
     await memory.start({ sessionKey: "open-brain/run" });
@@ -168,9 +168,29 @@ describe("AgentMemory TypeScript wrapper", () => {
       importance: "hot",
       metadata: { issue: 209 },
     });
+    await memory.candidateMemory({
+      eventType: "correction",
+      content:
+        "Correction: do not treat share_candidate as durable memory without explicit nomination.",
+      candidateType: "negative_example",
+      reason: "User corrected an unsafe promotion assumption.",
+      confidence: 0.9,
+      scope: { repo: "rodaddy/open-brain" },
+      evidenceRefs: [{ kind: "issue", url: "https://github.com/rodaddy/open-brain/issues/224" }],
+    });
+    await memory.promoteCandidate({
+      eventType: "decision",
+      content: "Client recorded promotion approval for the corrected process rule.",
+      candidateType: "process_rule",
+      reason: "The user correction was approved for a separate durable write.",
+      confidence: 1,
+      scope: { repo: "rodaddy/open-brain" },
+    });
     await memory.nominateShared({
       eventType: "decision",
       content: "Use a caller-provided transport for the TS memory wrapper.",
+      candidateType: "shared_kb_nomination",
+      reason: "Reviewed contract decision is suitable for shared-kb nomination.",
       metadata: { reason: "keeps server auth boundary owned by Open Brain" },
     });
 
@@ -185,10 +205,42 @@ describe("AgentMemory TypeScript wrapper", () => {
     });
     expect(transport.calls[2]!.args).toMatchObject({
       session_key: "open-brain/run",
+      event_type: "correction",
+      metadata: {
+        memory_lifecycle_action: "candidate",
+        candidate_type: "negative_example",
+        candidate_reason: "User corrected an unsafe promotion assumption.",
+        candidate_confidence: 0.9,
+        candidate_scope: { repo: "rodaddy/open-brain" },
+        evidence_refs: [
+          { kind: "issue", url: "https://github.com/rodaddy/open-brain/issues/224" },
+        ],
+      },
+    });
+    expect((transport.calls[2]!.args.metadata as JsonObject).share_candidate).toBeUndefined();
+    expect(transport.calls[3]!.args).toMatchObject({
+      session_key: "open-brain/run",
+      event_type: "decision",
+      metadata: {
+        memory_lifecycle_action: "promote",
+        candidate_type: "process_rule",
+        candidate_reason:
+          "The user correction was approved for a separate durable write.",
+        candidate_confidence: 1,
+        candidate_scope: { repo: "rodaddy/open-brain" },
+      },
+    });
+    expect((transport.calls[3]!.args.metadata as JsonObject).share_candidate).toBeUndefined();
+    expect(transport.calls[4]!.args).toMatchObject({
+      session_key: "open-brain/run",
       event_type: "decision",
       metadata: {
         reason: "keeps server auth boundary owned by Open Brain",
+        candidate_type: "shared_kb_nomination",
+        candidate_reason:
+          "Reviewed contract decision is suitable for shared-kb nomination.",
         share_candidate: true,
+        memory_lifecycle_action: "nominate_shared",
       },
     });
   });

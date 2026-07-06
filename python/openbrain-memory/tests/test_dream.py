@@ -45,7 +45,6 @@ class FakeDreamClient:
                     {"id": "promote-2", "table": "decisions"},
                 ],
                 "duplicates": [],
-                "already_promoted": [],
             },
         }
 

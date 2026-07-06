@@ -99,7 +99,8 @@ export function registerTierLane(server: McpServer, deps: ToolDeps): void {
         const { rows } = await deps.pool.query(
           `SELECT
              e.id, e.lane_id, l.namespace, l.agent, l.session_key,
-             e.event_type, e.content, e.importance, e.content_hash, e.created_at
+             e.event_type, e.content, e.importance, e.content_hash, e.created_at,
+             e.metadata
            FROM ob_session_events e
            JOIN ob_session_lanes l ON e.lane_id = l.id
            WHERE l.namespace = $1 AND l.session_key = $2

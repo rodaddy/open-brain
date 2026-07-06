@@ -275,3 +275,94 @@ PR #246 gave compact `get_entry` its own full-readable-content expression for
 `sessions`, computed normalized content once in a subquery, added a mock SQL
 shape guard, and added an `OPENBRAIN_TEST_DATABASE_URL`-gated live Postgres
 test for long session compact length/truncation.
+
+## [2026-07-06] Shared-kb nominations and own-durable graduation are orthogonal
+
+**Severity:** HIGH
+**Source:** PR #251 Claude cross-review for Issue #224
+**Scope:** `src/tiering.ts`, lifecycle metadata actions, any own-durable lane classifier
+**Status:** fixed in PR #251
+
+### Pattern
+
+Lifecycle metadata can be audit/control-plane intent without changing the
+memory's own-lane graduation semantics. In PR #251, `classifyLaneEvent`
+initially short-circuited every `memory_lifecycle_action`, including
+`nominate_shared`, into the own-durable lane. That meant an explicit shared-kb
+nomination could prevent otherwise hot/fact/long content from graduating by its
+normal own-durable rules.
+
+### Review Questions
+
+- Is the lifecycle action a durable-lane control action, or a shared-kb
+  nomination/audit marker that should remain orthogonal?
+- Does adding metadata to support one promotion path accidentally suppress a
+  sibling promotion/classification path?
+- Do tests cover the same event qualifying for shared-kb nomination and
+  own-durable graduation at the same time?
+
+### Prior Fix
+
+PR #251 restricted own-durable lifecycle short-circuiting to explicit
+`candidate`, `promote`, `relegate`, and `discard` actions. `nominate_shared`
+now follows normal graduation rules while still recording shared-kb intent.
+
+## [2026-07-06] Rejected nominations must strip all coupled lifecycle metadata
+
+**Severity:** MEDIUM
+**Source:** PR #251 Claude cross-review for Issue #224
+**Scope:** `src/tools/append-session-event.ts`, synchronous shared-kb nomination rejection
+**Status:** fixed in PR #251
+
+### Pattern
+
+Rejected shared nominations must not leave partial metadata that downstream
+tools interpret as intent. In PR #251, the sync rejection path stripped
+`share_candidate` for secret/private nominations but initially left
+`memory_lifecycle_action=nominate_shared` and candidate detail fields behind.
+That created an orphan lifecycle marker after the server had rejected the
+nomination.
+
+### Review Questions
+
+- When the server rejects a flag or lifecycle action, are all coupled metadata
+  fields stripped as one invariant-preserving group?
+- Can any downstream scanner, contract consumer, or audit path still read a
+  rejected event as pending nomination intent?
+- Do rejection tests assert absence of the entire metadata group, not only the
+  primary boolean flag?
+
+### Prior Fix
+
+PR #251 strips `share_candidate`, `memory_lifecycle_action`, candidate detail
+fields, and `evidence_refs` from rejected nominations before stamping the
+rejection marker. Regression tests cover secret/private rejected nominations.
+
+## [2026-07-06] REST and MCP promotion scanners must share nomination predicates
+
+**Severity:** MEDIUM
+**Source:** PR #251 focused fix-verification for Issue #224
+**Scope:** `src/rest-promotion.ts`, `src/tools/scan-namespace.ts`, shared promotion candidate selection
+**Status:** fixed in PR #251
+
+### Pattern
+
+Fixing only the MCP tool can leave sibling REST endpoints exposing the old
+contract. In PR #251, `scan_namespace` was tightened to explicit shared-kb
+nominations, but REST `/api/v1/scan/:namespace` still selected every
+non-archived row and returned ordinary memories as promotion candidates.
+
+### Review Questions
+
+- When a tool contract changes, do REST, MCP, Python facade fixtures, and docs
+  all use the same predicate and response shape?
+- Is the candidate predicate pushed into SQL before `ORDER BY` and `LIMIT` in
+  every scanner, or does one path still filter after the limit?
+- Does test coverage include sibling endpoints, not only the tool path that was
+  directly reported?
+
+### Prior Fix
+
+PR #251 moved explicit shared nomination selection into a shared helper used by
+both MCP and REST scanners, removed REST's stale `already_promoted` response
+bucket, and updated Python DreamEngine fixtures to match the current contract.

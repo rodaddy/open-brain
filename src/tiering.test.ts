@@ -102,6 +102,40 @@ describe("classifyLaneEvent — graduate rule", () => {
   }
 });
 
+describe("classifyLaneEvent — memory lifecycle boundary", () => {
+  it("keeps candidate lifecycle facts instead of graduating them", () => {
+    expect(
+      classifyLaneEvent({
+        event_type: "fact",
+        importance: "hot",
+        content: LONG,
+        metadata: {
+          memory_lifecycle_action: "candidate",
+          candidate_type: "negative_example",
+          candidate_reason: "User correction requires review before durable memory.",
+        },
+      }),
+    ).toBe("keep");
+  });
+
+  it("allows explicit shared nominations to use normal own-durable graduation", () => {
+    expect(
+      classifyLaneEvent({
+        event_type: "fact",
+        importance: "hot",
+        content: LONG,
+        metadata: {
+          share_candidate: true,
+          memory_lifecycle_action: "nominate_shared",
+          candidate_type: "shared_kb_nomination",
+          candidate_reason:
+            "Shared nomination should not block own-durable graduation.",
+        },
+      }),
+    ).toBe("graduate");
+  });
+});
+
 describe("classifyLaneEvent — archive rule", () => {
   for (const type of ARCHIVE_TYPES) {
     for (const importance of IMPORTANCES) {

@@ -633,21 +633,104 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
         maxJsonBytes: 100000,
         description:
           "Arbitrary structured key/value metadata for the event (max 50 " +
-          "keys, 100KB JSON), plus the recognized share_candidate flag below.",
+          "keys, 100KB JSON), plus the recognized explicit memory lifecycle " +
+          "fields below.",
         fields: {
+          memory_lifecycle_action: {
+            type: "enum",
+            required: false,
+            values: [
+              "candidate",
+              "promote",
+              "relegate",
+              "discard",
+              "nominate_shared",
+            ],
+            description:
+              "Client-owned lifecycle action for memory extracted from this " +
+              "event. candidate marks review-only material; promote/relegate/" +
+              "discard record explicit client handling; nominate_shared is the " +
+              "only action eligible for the shared-kb promoter, and still " +
+              "requires share_candidate=true plus server safety checks.",
+          },
+          candidate_type: {
+            type: "enum",
+            required: false,
+            values: [
+              "user_preference",
+              "process_rule",
+              "channel_server_rule",
+              "code_repo_fact",
+              "positive_example",
+              "negative_example",
+              "durable_decision",
+              "shared_kb_nomination",
+            ],
+            description:
+              "Candidate classification chosen by the client/runtime. User " +
+              "corrections that should teach future behavior without immediate " +
+              "durable promotion should use negative_example.",
+          },
+          candidate_reason: {
+            type: "string",
+            required: false,
+            maxLength: 2000,
+            description:
+              "Explicit client reason for creating, promoting, relegating, " +
+              "discarding, or nominating the candidate.",
+          },
+          candidate_confidence: {
+            type: "number",
+            required: false,
+            min: 0,
+            max: 1,
+            description:
+              "Client confidence that the candidate is useful and correctly " +
+              "scoped. This is advisory; Open Brain still enforces auth and " +
+              "safety.",
+          },
+          candidate_scope: {
+            type: "object",
+            required: false,
+            description:
+              "Client-declared scope for the candidate, such as repo, project, " +
+              "agent, server_id, channel_id, thread_id, or session_key. It is " +
+              "provenance, not an authorization override.",
+          },
+          candidate_staleness_policy: {
+            type: "string",
+            required: false,
+            maxLength: 1000,
+            description:
+              "When the candidate should expire, be revalidated, or be treated " +
+              "as historical context only.",
+          },
+          evidence_refs: {
+            type: "array",
+            required: false,
+            items: "object",
+            maxItems: 20,
+            maxItemJsonBytes: 2000,
+            maxTotalJsonBytes: 10000,
+            description:
+              "Citation-safe evidence references for the candidate, such as " +
+              "event ids, issue URLs, repo paths, commit SHAs, or source refs. " +
+              "The server bounds serialized evidence metadata and rejects " +
+              "secret-like evidence refs. Do not include raw private transcripts " +
+              "or secrets.",
+          },
           share_candidate: {
             type: "boolean",
             required: false,
             description:
-              "Nominate this event for shared-kb promotion (shared truth every " +
-              "agent reads). Set true on a substantive fact/decision/handoff worth " +
-              "sharing. Adjudication is two-stage: SYNCHRONOUSLY the server refuses " +
-              "and strips the nomination if the content looks like a secret or " +
-              "person-private data — when that happens the event still saves but the " +
-              "response carries share_candidate_rejected with the reason. " +
-              "ASYNCHRONOUSLY a promoter-gated sweep re-classifies worthiness, " +
-              "de-duplicates against shared-kb, and promotes survivors. Do NOT set " +
-              "true for secrets, credentials, or private/personal content.",
+              "Shared-kb nomination marker. By itself this is candidate " +
+              "metadata only and must not create a shared-kb write. The " +
+              "promoter only considers rows where share_candidate=true AND " +
+              "memory_lifecycle_action=nominate_shared. SYNCHRONOUSLY the " +
+              "server refuses and strips the nomination if content looks like " +
+              "a secret or person-private data; the event still saves and the " +
+              "response carries share_candidate_rejected with the reason. Do " +
+              "NOT set true for secrets, credentials, or private/personal content.",
           },
           sanitized_resubmit_of: {
             type: "string",

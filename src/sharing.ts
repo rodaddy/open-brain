@@ -2,7 +2,8 @@
  * Lane/own-durable → shared-kb shared-worthiness classifier (Issue #161).
  *
  * Pure, no DB, no I/O. Decides whether a nominated entry (a thought, decision,
- * or session event flagged `share_candidate`) is safe and worthwhile to promote
+ * or session event explicitly nominated with `share_candidate=true` and
+ * `memory_lifecycle_action=nominate_shared`) is safe and worthwhile to promote
  * into the shared-kb namespace — shared TRUTH that every agent reads.
  *
  * The highest-stakes rule is `reject-secret`: a secret reaching shared truth is

@@ -128,6 +128,13 @@ dbDescribe("runSharedPromoter cursor-stall fix (live Postgres)", () => {
     );
   }
 
+  function explicitNominationMetadata(): Record<string, unknown> {
+    return {
+      share_candidate: true,
+      memory_lifecycle_action: "nominate_shared",
+    };
+  }
+
   async function seedLane(): Promise<string> {
     const { rows } = await pool.query(
       `INSERT INTO ob_session_lanes (session_key, namespace, status, created_by)
@@ -152,7 +159,7 @@ dbDescribe("runSharedPromoter cursor-stall fix (live Postgres)", () => {
       [
         laneId,
         content,
-        JSON.stringify({ share_candidate: true }),
+        JSON.stringify(explicitNominationMetadata()),
         // unique-ish hash so ON CONFLICT (lane_id, content_hash) won't collide
         `hash-${content.length}-${createdAt}`,
         createdAt,
@@ -170,7 +177,7 @@ dbDescribe("runSharedPromoter cursor-stall fix (live Postgres)", () => {
          (content, namespace, extracted_metadata, created_by, created_at)
        VALUES ($1, $2, $3::jsonb, 'test', $4::timestamptz)
        RETURNING id`,
-      [content, ns, JSON.stringify({ share_candidate: true }), createdAt],
+      [content, ns, JSON.stringify(explicitNominationMetadata()), createdAt],
     );
     return rows[0].id as string;
   }
@@ -199,6 +206,54 @@ dbDescribe("runSharedPromoter cursor-stall fix (live Postgres)", () => {
   } {
     return JSON.parse(readFileSync(stateFile, "utf8"));
   }
+
+  test("candidate-only rows are not shared-kb nominations", async () => {
+    const laneId = await seedLane();
+    await pool.query(
+      `INSERT INTO ob_session_events
+         (lane_id, event_type, content, importance, metadata, content_hash, created_by, created_at)
+       VALUES ($1, 'correction', $2, 'warm', $3::jsonb, $4, 'test', $5::timestamptz)`,
+      [
+        laneId,
+        "User correction: treat share candidates as review-only unless explicitly nominated.",
+        JSON.stringify({
+          memory_lifecycle_action: "candidate",
+          candidate_type: "negative_example",
+          candidate_reason: "User corrected unsafe auto-promotion assumption.",
+          candidate_confidence: 0.95,
+        }),
+        "candidate-only-event-hash",
+        "2026-01-01T00:00:00Z",
+      ],
+    );
+    await pool.query(
+      `INSERT INTO thoughts
+         (content, namespace, extracted_metadata, created_by, created_at)
+       VALUES ($1, $2, $3::jsonb, 'test', $4::timestamptz)`,
+      [
+        "Candidate-only thought should not be promoted by presence alone.",
+        ns,
+        JSON.stringify({
+          share_candidate: true,
+          memory_lifecycle_action: "candidate",
+          candidate_type: "code_repo_fact",
+          candidate_reason: "Needs explicit nomination before sharing.",
+        }),
+        "2026-01-02T00:00:00Z",
+      ],
+    );
+
+    const receipt = await runSharedPromoter(makeArgs(true));
+    expect(receipt.scanned).toBe(0);
+
+    const { rows: sharedCopies } = await pool.query(
+      `SELECT id FROM thoughts
+        WHERE namespace = $1
+          AND content = 'Candidate-only thought should not be promoted by presence alone.'`,
+      [ns + "-shared"],
+    );
+    expect(sharedCopies.length).toBe(0);
+  });
 
   beforeEach(async () => {
     applyDbEnv(DB_URL as string);
@@ -267,7 +322,7 @@ dbDescribe("runSharedPromoter cursor-stall fix (live Postgres)", () => {
       [
         content,
         ns,
-        JSON.stringify({ share_candidate: true }),
+        JSON.stringify(explicitNominationMetadata()),
         createdAt,
         vecLiteral,
         `src-hash-${createdAt}`,

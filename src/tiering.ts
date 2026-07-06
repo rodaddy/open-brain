@@ -45,11 +45,20 @@ const ARCHIVE_TYPES: ReadonlySet<EventType> = new Set<EventType>([
   "action",
 ]);
 
+/** Lifecycle actions that explicitly keep a candidate out of automatic own-durable graduation. */
+const OWN_DURABLE_KEEP_LIFECYCLE_ACTIONS: ReadonlySet<string> = new Set([
+  "candidate",
+  "promote",
+  "relegate",
+  "discard",
+]);
+
 /** Minimal shape the classifier needs from a lane event. */
 export interface ClassifiableEvent {
   event_type: EventType;
   content: string;
   importance: Importance;
+  metadata?: Record<string, unknown> | null;
 }
 
 /**
@@ -72,6 +81,14 @@ export function classifyLaneEvent(
   event: ClassifiableEvent,
   minContentLength: number = DEFAULT_MIN_CONTENT_LENGTH,
 ): Classification {
+  const lifecycleAction = event.metadata?.memory_lifecycle_action;
+  if (
+    typeof lifecycleAction === "string" &&
+    OWN_DURABLE_KEEP_LIFECYCLE_ACTIONS.has(lifecycleAction)
+  ) {
+    return "keep";
+  }
+
   const isColdOrArchiveType =
     event.importance === "cold" || ARCHIVE_TYPES.has(event.event_type);
   if (isColdOrArchiveType) {
@@ -99,6 +116,7 @@ export interface LaneEventRow {
   importance: Importance;
   content_hash: string | null;
   created_at: string;
+  metadata: Record<string, unknown> | null;
 }
 
 export type DuplicateKind = "exact" | "near";

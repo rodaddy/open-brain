@@ -15,7 +15,8 @@ Server-owned behavior:
 - Bearer-token identity, role checks, and namespace predicates.
 - Session lane and session event storage.
 - Shared knowledge promotion policy, secret rejection, deduplication, and
-  provenance stamped from trusted auth context.
+  provenance stamped from trusted auth context after an explicit client
+  nomination action.
 - Public contract discovery through `get_contract`.
 
 Client-owned behavior:
@@ -25,9 +26,15 @@ Client-owned behavior:
 - Retry/spool behavior for unavailable memory service calls.
 - Receipt assembly from local file, command, artifact, and channel evidence.
 - OKF-like disclosure bundle export until a server exporter exists.
+- Memory lifecycle decisions: candidate extraction, candidate type, promote,
+  relegate, discard, and shared-kb nomination intent.
 
 Clients must not treat convenience checks as security controls. Any ID-based
 read or mutation still depends on server-side auth-derived namespace checks.
+Candidate presence is inert storage metadata: it does not create a durable
+thought/decision, and it does not create or queue a shared-kb write unless the
+client explicitly records `memory_lifecycle_action=nominate_shared` together
+with `share_candidate=true`.
 
 The TypeScript wrapper in `src/agent-memory.ts` uses a caller-provided
 `callTool(name, args)` transport and validates local call shape and metadata
@@ -50,8 +57,48 @@ adapter facade.
 | `compact` | client | `session_context`, caller-provided local distillation, `session_wrap` | client-wrapper | Read current context, distill it through caller policy or an explicit summary, then checkpoint via `session_wrap`. Open Brain does not store raw compaction transcripts. |
 | `wrap` | client + server | `session_wrap` | available | Checkpoint a completed work phase with summary, key decisions, next steps, and optional receipt references. Use `compact` when the adapter should read current session context before wrapping. |
 | `record_receipt` | client + server | `append_session_event` with `event_type=receipt` | client-wrapper | Assemble citation-safe receipt metadata locally and write it as a receipt event. |
-| `nominate_shared` | client + server | `append_session_event.metadata.share_candidate` | available | Nominate only non-private, durable facts or decisions for server-side shared-kb promotion. Server rejection and promoter adjudication remain authoritative. |
+| `candidate_memory` | client | `append_session_event.metadata.memory_lifecycle_action=candidate` | client-wrapper | Record review-only candidate memory with candidate type, scope, confidence, evidence refs, staleness policy, and reason. This is not a durable memory write or shared-kb nomination. |
+| `promote_candidate` | client | `append_session_event.metadata.memory_lifecycle_action=promote` | client-wrapper | Record the explicit client/user promotion decision with provenance. The durable write itself is a separate explicit client action such as `remember_fact`, `remember_decision`, or a repo-fact write. |
+| `relegate_candidate` | client | `append_session_event.metadata.memory_lifecycle_action=relegate` | client-wrapper | Record that a candidate was intentionally kept out of durable/shared promotion, with reason and evidence. |
+| `discard_candidate` | client | `append_session_event.metadata.memory_lifecycle_action=discard` | client-wrapper | Record that a candidate was intentionally discarded, with reason and evidence. |
+| `nominate_shared` | client + server | `append_session_event.metadata.share_candidate` + `append_session_event.metadata.memory_lifecycle_action=nominate_shared` | available | Explicitly nominate only non-private, durable facts or decisions for server-side shared-kb promotion. Server rejection and promoter adjudication remain authoritative. |
 | `export_disclosure_bundle` | client | `interchange_profiles.okf` | client-wrapper | Generate an OKF-like bundle from readable lane events, repo facts, citations, and receipt metadata without changing Open Brain storage. |
+
+## Candidate Promotion Lifecycle
+
+`append_session_event` is the lifecycle journal for candidate memory. The client
+must choose one of these explicit actions in `metadata.memory_lifecycle_action`:
+
+- `candidate`: review-only candidate; no durable memory or shared-kb write.
+- `promote`: explicit client/user promotion decision recorded in the lifecycle
+  journal. This marker does not itself create durable memory; the durable write
+  remains a separate explicit client action such as a reviewed `log_thought`,
+  `log_decision`, or repo fact write.
+- `relegate`: intentionally keep out of durable/shared promotion.
+- `discard`: intentionally drop as not useful or unsafe.
+- `nominate_shared`: explicit shared-kb nomination; the shared promoter may
+  consider it only when `share_candidate=true` is also present.
+
+Candidate metadata should include:
+
+- `candidate_type`: `user_preference`, `process_rule`, `channel_server_rule`,
+  `code_repo_fact`, `positive_example`, `negative_example`,
+  `durable_decision`, or `shared_kb_nomination`.
+- `candidate_scope`: citation-safe scope/provenance such as repo, project,
+  agent, server/channel/thread ids, or session key. It is never an auth
+  override.
+- `candidate_confidence`: client confidence from 0 to 1.
+- `evidence_refs`: citation-safe ids, issue URLs, repo paths, commits, or
+  source refs. The server bounds each reference and rejects secret-like
+  evidence metadata.
+- `candidate_staleness_policy`: expiry or revalidation policy.
+- `candidate_reason`: explicit reason for the action.
+
+A user correction that should teach future behavior starts as
+`memory_lifecycle_action=candidate` and `candidate_type=negative_example`.
+It must not also set `share_candidate=true` unless the client/user explicitly
+chooses the shared nomination workflow. A context pack may include candidate
+sections, but that presence alone remains read-only context.
 
 ## Payload Expectations
 

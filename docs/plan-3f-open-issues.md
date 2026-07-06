@@ -7,10 +7,10 @@ Updated: 2026-07-06.
 Live GitHub and Project 8 state are the source of truth. Older roadmap
 snapshots and untracked sidecar plans are historical evidence only.
 
-Current live state as of 2026-07-06 during the #223 review-fix phase:
+Current live state as of 2026-07-06 11:35 EDT during the #224 local-validation
+phase:
 
-- Open PRs: 1.
-  - #250 `feat(#223): define NATS JetStream foundation`
+- Open PRs: 0.
 - Open issues: 8.
   - #247 `Design DreamEngine decomposition for oversized Open Brain entries`
   - #224 `Define client-owned promotion and relegation lifecycle for realtime memory`
@@ -24,11 +24,14 @@ Current live state as of 2026-07-06 during the #223 review-fix phase:
 - #229 is closed by PR #249; merge commit
   `e4fc7def43735163e1e0d4997ace5ce510494f4d`. It is historical context only,
   not active Plan 3F work.
+- PR #250 for the local-only #223 NATS/JetStream foundation is merged as
+  `aba24c0beb1b6164dfe6270a535f3ed117646229`. It is historical context only.
+  #223 remains open for the later runtime/deploy slice.
 - #204 is closed. Do not continue stale #204 worktrees for this run.
 
-Critical correction: the active Plan 3F surface is the 8 open issues above plus
-PR #250. Closed issues may explain predecessor state, but they must not occupy
-worker lanes or be counted as remaining work.
+Critical correction: the active Plan 3F surface is the 8 open issues above and
+0 open PRs. Closed issues and merged PRs may explain predecessor state, but they
+must not occupy worker lanes or be counted as remaining work.
 
 ## Operating Boundary
 
@@ -52,7 +55,7 @@ splits into disjoint files or review lanes.
 
 | Issue | Branch | Temp worktree | Workers | Local target | Deploy allowed | Closure rule |
 | --- | --- | --- | ---: | --- | --- | --- |
-| #223 NATS/JetStream foundation | `feat/223-nats-jetstream-foundation` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-223-nats-jetstream-foundation` | 1 controller + 2 review lanes | Finish PR #250 gauntlet and merge local foundation only | No | Do not close #223 unless issue is explicitly narrowed; current PR is `Refs #223` |
+| #223 NATS/JetStream runtime slice | `feat/223-nats-jetstream-runtime` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-223-nats-jetstream-runtime` | 1 implementation + 1 runtime/review sidecar | Later runtime implementation only after local-only #224/#222/#221 sequencing or explicit controller decision | No | Do not close #223 from the merged foundation PR; closing requires real runtime/deploy tests or explicit issue narrowing |
 | #222 scoped hot working set | `feat/222-scoped-hot-working-set` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-222-scoped-hot-working-set` | 1 implementation + 1 test/review sidecar | Exact-scope working-set contract, pack inclusion, denial tests | No | Close only with code/tests proving cross-scope isolation and TTL/budget behavior |
 | #221 recovery WAL | `feat/221-recovery-wal` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-221-recovery-wal` | 1 implementation + 1 adversarial/test sidecar | Quarantined recovery evidence contract, restart transitions, exclusion from normal recall | No | Close only with tests proving WAL evidence cannot leak into durable/search paths |
 | #224 promotion/relegation lifecycle | `feat/224-promotion-lifecycle` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-224-promotion-lifecycle` | 1 implementation + 1 domain/review sidecar | Explicit promote/relegate/discard/nominate workflow for candidate memory | No | Close only with tests proving no implicit durable/shared-kb promotion |
@@ -63,9 +66,8 @@ splits into disjoint files or review lanes.
 
 ## Controller Execution Rules
 
-1. Finish or explicitly park #250 before merging other branches that depend on
-   its contract shape. It may remain open while workers start on independent
-   issue branches, but the controller must keep its dirty state isolated.
+1. Treat PR #250 as merged historical context. Do not reopen its branch as
+   active work. #223 remains open for a future runtime/deploy slice.
 2. Create each worktree from fresh `origin/main` unless the issue intentionally
    builds on a merged predecessor. If a predecessor is not merged, the dependent
    branch may only inspect it or stack with an explicit note in Plan 3F.
@@ -86,63 +88,35 @@ splits into disjoint files or review lanes.
 
 ## Open Issue Execution Order
 
-### 1. #223 NATS/JetStream foundation
+### 1. #223 NATS/JetStream runtime follow-up
 
 Owning boundary:
-Local transport contract and bridge design for realtime Open Brain memory RPC,
-with HTTP/MCP retained as fallback.
+Runtime transport implementation and release/deploy gate for realtime Open
+Brain memory RPC, with HTTP/MCP retained as fallback.
 
 Current implementation branch:
-`feat/223-nats-jetstream-foundation`.
+None active. The local-only foundation branch is merged.
 
 Local status:
 
-- In review via PR #250. Project 8 marks #223/PR #250 in review. CI passed on
-  head `dcef94d`, then Claude cross-review found that planned-only NATS
-  metadata should not churn the required fail-closed contract version/hash.
-  Local fix keeps the required Open Brain memory contract at v14, treats
-  `realtime_transport.nats_jetstream` as advisory planned metadata outside the
-  required schema hash, and keeps the Python package pinned to the same server
-  contract snapshot. Focused validation passed: `uv run pytest -q
-  tests/test_contract.py tests/test_client.py` (`70 pass`), `uv run mypy
-  src/openbrain_memory`, `uv run ruff check src tests`, and `git diff --check`.
-- Local-only slice adds `docs/nats-jetstream-foundation.md` and advisory planned
-  `get_contract().realtime_transport.nats_jetstream` metadata. It does not
-  bump the package artifact version, required contract version, schema hash, or
-  required `openbrain-memory` minimum compatibility because NATS is not runtime
-  available in this slice.
-- No core01 NATS install/config, live JetStream stream creation, launchd change,
-  or Hermes runtime switch is in scope for this branch.
-- Local validation passed after the review-fix commit: `bun test
-  src/contract.test.ts` (`6 pass`), `bunx tsc --noEmit`, full `bun test`
-  (`1072 pass, 50 skip, 0 fail`), focused Python contract/client pytest (`70
-  pass`), full Python pytest (`193 pass, 5 skip`), `uv run mypy
-  src/openbrain_memory`, `uv run ruff check src tests`, PR body validator, and
-  `git diff --check`.
-- Downstream rollout classification: no deploy in this PR. Required-memory
-  fail-closed version/hash remains v14; planned NATS metadata is advisory and
-  not runtime available. Hosted deploy, mcp2cli refresh, rtech-mcps handoff,
-  rtech-hermes changes, Hermes live rollout, and canaries remain deferred to an
-  approved release/deploy phase.
-- Initial review findings being fixed:
-  HIGH: do not raise required Python client compatibility for a planned-only
-  transport; MEDIUM: do not auto-close #223 without the runtime/client slice;
-  MEDIUM: split bridge/requester credential permissions and prevent broad NATS
-  credentials; MEDIUM: forbid raw request/query/context persistence in
-  JetStream; MEDIUM: define the future Python transport interface and fallback
-  gate; LOW: remove misleading runtime capability advertisement; LOW: add
-  rollback and clean stale plan wording.
+- PR #250 merged as `aba24c0beb1b6164dfe6270a535f3ed117646229` with gauntlet
+  clean, CI passed, and deploy skipped.
+- The merged local-only slice adds `docs/nats-jetstream-foundation.md` and
+  advisory planned `get_contract().realtime_transport.nats_jetstream` metadata.
+  It does not make NATS runtime-available.
+- #223 remains open for the later runtime/deploy slice. No core01 NATS
+  install/config, live JetStream stream creation, launchd change, or Hermes
+  runtime switch has been performed or authorized.
+- Downstream rollout classification: hosted deploy, mcp2cli refresh,
+  rtech-mcps handoff, rtech-hermes changes, Hermes live rollout, and canaries
+  remain deferred to an approved release/deploy phase.
 
-Required local work:
+Future runtime/deploy work:
 
-- Document core01 NATS/JetStream config plan: ports, monitoring, storage path,
-  auth boundary, streams, retention, and rollback.
-- Define request/reply subjects and envelope contract, starting with
-  `agent_context_pack`.
-- Add local TypeScript/Python contract metadata only where it is testable
-  without a live NATS server.
-- Document Hermes opt-in and HTTP fallback.
-- Add contract/fixture tests when code is introduced.
+- Implement and test an actual NATS transport when a runtime slice is approved.
+- Add live NATS parity tests and HTTP fallback tests.
+- Run the release/deploy gate before any core01 install/config, live stream
+  creation, launchd change, or Hermes runtime switch.
 
 Deferred:
 core01 install/config, hosted canary, and making NATS the default Hermes path.
@@ -180,14 +154,45 @@ Owning boundary:
 Explicit client actions for moving candidate memory into durable memory or
 shared-kb nomination.
 
-Required local work:
+Active branch:
+`feat/224-promotion-lifecycle` in
+`/Volumes/ThunderBolt/_tmp/open-brain/issue-224-promotion-lifecycle`.
 
-- Define promote/relegate/discard/nominate actions.
-- Distinguish working context, recovery evidence, candidate memory, durable
-  memory, and shared-kb nomination.
-- Add fixture showing a user correction becomes a candidate negative example,
-  not an immediate durable rule.
-- Prove shared-kb nomination requires explicit promotion workflow.
+Local status:
+
+- Pre-PR blocker fixes are applied for server-side lifecycle metadata
+  validation, candidate events not auto-tiering into durable thoughts,
+  `scan_namespace`/DreamEngine explicit nomination semantics, Python lifecycle
+  call-shape tests, and v15 contract/hash alignment.
+- Project 8 marks #224 `In Progress`, Review Gate `Zero Known Issues`, and
+  Validation `Local Passed` for the pre-PR blocker pass.
+- Local validation passed:
+  - `bunx tsc --noEmit`
+  - focused lifecycle/contract/tiering/scan/promoter tests: `210 pass`, `20`
+    DB-gated skips, `0 fail`
+  - full `bun test`: `1078 pass`, `51` DB/migration/live skips, `0 fail`
+  - focused Python tests: `120 passed`
+  - full Python pytest: `197 passed`, `5 skipped`
+  - `uv run mypy src/openbrain_memory`
+  - `uv run ruff check src tests`
+  - `git diff --check`
+- Residual local risk: DB-backed/live Postgres suites are still skipped without
+  `OPENBRAIN_TEST_DATABASE_URL`; CI `db-integration` must supply that gate after
+  PR. No core01 deploy is in scope.
+
+Completed local work:
+
+- Defined promote/relegate/discard/nominate actions.
+- Distinguished working context, recovery evidence, candidate memory, durable
+  memory, and shared-kb nomination in the contract/docs.
+- Added tests showing lifecycle candidates remain explicit candidate events
+  instead of automatic durable/shared-kb writes.
+- Proved shared-kb nomination requires explicit nomination metadata.
+
+Next local work:
+
+- Complete critical self-review, commit/push, open PR, and run the
+  pre-merge-gauntlet before any merge decision.
 
 ### 5. #247 DreamEngine decomposition
 
@@ -242,12 +247,12 @@ explicit release/deploy approval.
 
 - Controller lane: owns live issue/PR/board state, branch integration, PR body,
   review receipts, merge decisions, and this Plan 3F file.
-- #223 active lane: controller finishes the Python contract transition fix on
-  PR #250, reruns focused Python validation, reruns gauntlet fix-verification,
-  updates the PR, and only then considers merge.
-- Parallel implementation lanes after #250 is parked or clean: dispatch workers
-  for #222, #221, #224, and #247 first because they have local testable owning
-  boundaries and no live deploy requirement.
+- #224 active lane: controller prepares PR from
+  `feat/224-promotion-lifecycle`, includes the critical self-review receipt,
+  pushes the branch, opens the PR, then runs the required pre-merge-gauntlet.
+- Parallel implementation lanes after #224 PR is opened or parked clean:
+  dispatch workers for #222, #221, and #247 first because they have local
+  testable owning boundaries and no live deploy requirement.
 - Planning/disposition lanes: dispatch #137 and #118 workers after the realtime
   lanes are not blocked. #137 must prove qmd is optional; #118 must split or
   implement a real source-ref slice.

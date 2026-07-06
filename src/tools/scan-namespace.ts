@@ -6,6 +6,11 @@ import {
   physicalNamespace,
   sharedNamespaceConfig,
 } from "../shared-namespace.ts";
+import {
+  explicitSharedNominationSqlPredicate,
+  isExplicitSharedNomination,
+  promotionMetadataSelect,
+} from "../promotion-nomination.ts";
 import type { AuthInfo, Table } from "../types.ts";
 import { logger } from "../logger.ts";
 import type { ToolDeps } from "./index.ts";
@@ -16,8 +21,8 @@ export function registerScanNamespace(server: McpServer, deps: ToolDeps): void {
     "scan_namespace",
     {
       description:
-        "Scan an agent namespace for promotion candidates. Returns entries categorized as " +
-        "candidates, duplicates in the target namespace, or already_promoted.",
+        "Scan an agent namespace for pending explicit shared-kb nominations. " +
+        "Returns nominated candidates and duplicates in the target namespace.",
       inputSchema: {
         namespace: z.string().min(1).max(500).describe("Agent namespace to scan"),
         target_namespace: z
@@ -90,34 +95,27 @@ export function registerScanNamespace(server: McpServer, deps: ToolDeps): void {
       }
       const candidates: any[] = [];
       const duplicates: any[] = [];
-      const alreadyPromoted: any[] = [];
 
       for (const table of tables) {
         const sinceFilter = args.since ? ` AND t.created_at >= $3` : "";
         const params: unknown[] = [args.namespace, limit];
         if (args.since) params.push(args.since);
 
+        const metadataSelect = promotionMetadataSelect(table);
+        const nominationFilter = explicitSharedNominationSqlPredicate(table);
+
         const { rows } = await deps.pool.query(
-          `SELECT t.id, t.content_hash, t.namespace, t.created_at, t.promoted_from,
+          `SELECT t.id, t.content_hash, t.namespace, t.created_at,
+                  ${metadataSelect} AS metadata,
                   '${table}' AS table_name
            FROM ${table} t
-           WHERE t.namespace = $1 AND t.archived_at IS NULL${sinceFilter}
+           WHERE t.namespace = $1 AND t.archived_at IS NULL${nominationFilter}${sinceFilter}
            ORDER BY t.created_at DESC
            LIMIT $2`,
           params,
         );
 
         for (const row of rows) {
-          if (row.promoted_from) {
-            alreadyPromoted.push({
-              table: table,
-              id: row.id,
-              created_at: row.created_at,
-              promoted_to: row.promoted_from,
-            });
-            continue;
-          }
-
           if (row.content_hash) {
             const { rows: targetDupes } = await deps.pool.query(
               `SELECT id FROM ${table}
@@ -139,11 +137,14 @@ export function registerScanNamespace(server: McpServer, deps: ToolDeps): void {
             }
           }
 
-          candidates.push({
-            table: table,
-            id: row.id,
-            created_at: row.created_at,
-          });
+          const metadata = row.metadata as Record<string, unknown> | null;
+          if (isExplicitSharedNomination(metadata)) {
+            candidates.push({
+              table: table,
+              id: row.id,
+              created_at: row.created_at,
+            });
+          }
         }
       }
 
@@ -152,7 +153,6 @@ export function registerScanNamespace(server: McpServer, deps: ToolDeps): void {
         target_namespace: targetCanonicalNamespace,
         candidates: candidates.length,
         duplicates: duplicates.length,
-        already_promoted: alreadyPromoted.length,
       });
 
       return {
@@ -163,11 +163,9 @@ export function registerScanNamespace(server: McpServer, deps: ToolDeps): void {
             target_namespace: targetCanonicalNamespace,
             candidates,
             duplicates,
-            already_promoted: alreadyPromoted,
             summary: {
               candidates: candidates.length,
               duplicates: duplicates.length,
-              already_promoted: alreadyPromoted.length,
             },
           }),
         }],

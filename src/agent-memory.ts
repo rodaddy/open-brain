@@ -19,6 +19,21 @@ export type MemoryEventType =
   | "handoff";
 
 export type MemoryImportance = "hot" | "warm" | "cold";
+export type CandidateType =
+  | "user_preference"
+  | "process_rule"
+  | "channel_server_rule"
+  | "code_repo_fact"
+  | "positive_example"
+  | "negative_example"
+  | "durable_decision"
+  | "shared_kb_nomination";
+export type MemoryLifecycleAction =
+  | "candidate"
+  | "promote"
+  | "relegate"
+  | "discard"
+  | "nominate_shared";
 
 export interface OpenBrainToolTransport {
   callTool(name: string, args: JsonObject): Promise<unknown> | unknown;
@@ -64,6 +79,15 @@ export interface AppendEventOptions {
   artifactPath?: string;
   importance?: MemoryImportance;
   metadata?: JsonObject;
+}
+
+export interface CandidateMemoryOptions extends AppendEventOptions {
+  candidateType: CandidateType;
+  reason: string;
+  confidence?: number;
+  scope?: JsonObject;
+  evidenceRefs?: JsonObject[];
+  stalenessPolicy?: string;
 }
 
 export interface CompactOptions {
@@ -131,6 +155,16 @@ const EVENT_TYPES = new Set<MemoryEventType>([
 ]);
 
 const IMPORTANCE_LEVELS = new Set<MemoryImportance>(["hot", "warm", "cold"]);
+const CANDIDATE_TYPES = new Set<CandidateType>([
+  "user_preference",
+  "process_rule",
+  "channel_server_rule",
+  "code_repo_fact",
+  "positive_example",
+  "negative_example",
+  "durable_decision",
+  "shared_kb_nomination",
+]);
 const SEARCH_MODES = new Set(["hybrid", "vector", "keyword"]);
 const PROTECTED_KEYS = new Set([
   "agent",
@@ -365,14 +399,35 @@ export class AgentMemory {
     });
   }
 
-  async nominateShared(options: AppendEventOptions): Promise<unknown> {
+  async nominateShared(options: CandidateMemoryOptions): Promise<unknown> {
+    const lifecycleMetadata = lifecycleCandidateMetadata(
+      "nominate_shared",
+      options,
+    );
     return this.appendEvent({
       ...options,
       metadata: {
         ...(options.metadata ?? {}),
+        ...lifecycleMetadata,
         share_candidate: true,
       },
     });
+  }
+
+  async candidateMemory(options: CandidateMemoryOptions): Promise<unknown> {
+    return this.appendLifecycleEvent("candidate", options);
+  }
+
+  async promoteCandidate(options: CandidateMemoryOptions): Promise<unknown> {
+    return this.appendLifecycleEvent("promote", options);
+  }
+
+  async relegateCandidate(options: CandidateMemoryOptions): Promise<unknown> {
+    return this.appendLifecycleEvent("relegate", options);
+  }
+
+  async discardCandidate(options: CandidateMemoryOptions): Promise<unknown> {
+    return this.appendLifecycleEvent("discard", options);
   }
 
   exportDisclosureBundle(input: Omit<DisclosureBundleInput, "lane"> & {
@@ -414,6 +469,20 @@ export class AgentMemory {
       validation: safeMetadata(options.validation),
     };
     return this.transport.callTool("upsert_repo_fact", payload);
+  }
+
+  private async appendLifecycleEvent(
+    action: Exclude<MemoryLifecycleAction, "nominate_shared">,
+    options: CandidateMemoryOptions,
+  ): Promise<unknown> {
+    const lifecycleMetadata = lifecycleCandidateMetadata(action, options);
+    return this.appendEvent({
+      ...options,
+      metadata: {
+        ...(options.metadata ?? {}),
+        ...lifecycleMetadata,
+      },
+    });
   }
 
   private requireSession(method: string): asserts this is this & { sessionKey: string } {
@@ -469,6 +538,34 @@ function mappingList(values: JsonObject[], name: string): JsonObject[] {
     }
     return { ...(value as JsonObject) };
   });
+}
+
+function lifecycleCandidateMetadata(
+  action: MemoryLifecycleAction,
+  options: CandidateMemoryOptions,
+): JsonObject {
+  const metadata: JsonObject = {
+    memory_lifecycle_action: action,
+    candidate_type: enumValue(options.candidateType, "candidateType", CANDIDATE_TYPES),
+    candidate_reason: requiredString(options.reason, "reason"),
+  };
+  if (options.confidence !== undefined) {
+    if (
+      typeof options.confidence !== "number" ||
+      !Number.isFinite(options.confidence) ||
+      options.confidence < 0 ||
+      options.confidence > 1
+    ) {
+      throw new Error("confidence must be a number from 0 to 1");
+    }
+    metadata.candidate_confidence = options.confidence;
+  }
+  if (options.scope !== undefined) metadata.candidate_scope = safeMetadata(options.scope);
+  if (options.evidenceRefs !== undefined) {
+    metadata.evidence_refs = mappingList(options.evidenceRefs, "evidenceRefs");
+  }
+  setOptional(metadata, "candidate_staleness_policy", options.stalenessPolicy);
+  return metadata;
 }
 
 function validationList(values: ReceiptValidation[]): JsonObject[] {

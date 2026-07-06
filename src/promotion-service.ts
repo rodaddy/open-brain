@@ -34,6 +34,13 @@ const STRIPPED_PROMOTION_METADATA_KEYS = [
   "share_candidate",
   "share_rejected_sync",
   "share_promoted_at",
+  "memory_lifecycle_action",
+  "candidate_type",
+  "candidate_reason",
+  "candidate_confidence",
+  "candidate_scope",
+  "candidate_staleness_policy",
+  "evidence_refs",
 ] as const;
 
 /**

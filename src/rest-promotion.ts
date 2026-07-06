@@ -13,6 +13,11 @@ import {
   physicalNamespace,
   sharedNamespaceConfig,
 } from "./shared-namespace.ts";
+import {
+  explicitSharedNominationSqlPredicate,
+  isExplicitSharedNomination,
+  promotionMetadataSelect,
+} from "./promotion-nomination.ts";
 
 interface RestDeps {
   pool: pg.Pool;
@@ -193,31 +198,31 @@ export function createPromotionRouter(deps: RestDeps): Router {
     const tables = table ? [table] : ALL_TABLES;
     const candidates: any[] = [];
     const duplicateEntries: any[] = [];
-    const alreadyPromoted: any[] = [];
 
     for (const t of tables) {
       const sinceFilter = since ? ` AND t.created_at >= $3` : "";
       const params: unknown[] = [namespace.data, limit];
       if (since) params.push(since);
+      const metadataSelect = promotionMetadataSelect(t);
+      const nominationFilter = explicitSharedNominationSqlPredicate(t);
 
       const { rows } = await deps.pool.query(
-        `SELECT t.id, t.content_hash, t.namespace, t.created_at, t.promoted_from,
+        `SELECT t.id, t.content_hash, t.namespace, t.created_at,
+                ${metadataSelect} AS metadata,
                 '${t}' AS table_name
          FROM ${t} t
-         WHERE t.namespace = $1 AND t.archived_at IS NULL${sinceFilter}
+         WHERE t.namespace = $1 AND t.archived_at IS NULL${nominationFilter}${sinceFilter}
          ORDER BY t.created_at DESC
          LIMIT $2`,
         params,
       );
 
       for (const row of rows) {
-        if (row.promoted_from) {
-          alreadyPromoted.push({ table: t, id: row.id, created_at: row.created_at });
-          continue;
-        }
         if (row.content_hash) {
           const { rows: targetDupes } = await deps.pool.query(
-            `SELECT id FROM ${t} WHERE content_hash = $1 AND namespace = $2 LIMIT 1`,
+            `SELECT id FROM ${t}
+             WHERE content_hash = $1 AND namespace = $2 AND archived_at IS NULL
+             LIMIT 1`,
             [row.content_hash, targetPhysicalNamespace],
           );
           if (targetDupes.length > 0) {
@@ -232,7 +237,11 @@ export function createPromotionRouter(deps: RestDeps): Router {
             continue;
           }
         }
-        candidates.push({ table: t, id: row.id, created_at: row.created_at });
+
+        const metadata = row.metadata as Record<string, unknown> | null;
+        if (isExplicitSharedNomination(metadata)) {
+          candidates.push({ table: t, id: row.id, created_at: row.created_at });
+        }
       }
     }
 
@@ -241,11 +250,9 @@ export function createPromotionRouter(deps: RestDeps): Router {
       target_namespace: targetCanonicalNamespace,
       candidates,
       duplicates: duplicateEntries,
-      already_promoted: alreadyPromoted,
       summary: {
         candidates: candidates.length,
         duplicates: duplicateEntries.length,
-        already_promoted: alreadyPromoted.length,
       },
     });
   });

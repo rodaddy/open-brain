@@ -7,6 +7,7 @@ import { canWriteNamespace } from "../namespace-policy.ts";
 import { contentHash, EMBEDDING_MODEL } from "../embedding.ts";
 import {
   classifyShareCandidate,
+  containsSecret,
   SHARE_REJECTION_MAX_RESUBMIT_ATTEMPTS,
   type ShareRejectionDetail,
   shareRejectionDetail,
@@ -58,6 +59,23 @@ type PreparedEventEmbedding = {
   embeddedAt: string | null;
   model: string | null;
 };
+const MEMORY_LIFECYCLE_ACTIONS = new Set([
+  "candidate",
+  "promote",
+  "relegate",
+  "discard",
+  "nominate_shared",
+]);
+const CANDIDATE_TYPES = new Set([
+  "user_preference",
+  "process_rule",
+  "channel_server_rule",
+  "code_repo_fact",
+  "positive_example",
+  "negative_example",
+  "durable_decision",
+  "shared_kb_nomination",
+]);
 
 async function withAppendDb<T>(
   deps: ToolDeps,
@@ -479,9 +497,20 @@ function adjudicateNominationSync(
     metadata,
   });
   if (decision === "reject-secret" || decision === "reject-private") {
-    // Strip the nomination so the async promoter never sweeps it. Stamp a
+    // Strip nomination/candidate metadata so the async promoter never sweeps it
+    // and persisted metadata does not violate lifecycle invariants. Stamp a
     // marker for auditability; the event content itself is untouched.
-    const { share_candidate: _drop, ...rest } = metadata;
+    const {
+      share_candidate: _dropShareCandidate,
+      memory_lifecycle_action: _dropLifecycleAction,
+      candidate_type: _dropCandidateType,
+      candidate_reason: _dropCandidateReason,
+      candidate_confidence: _dropCandidateConfidence,
+      candidate_scope: _dropCandidateScope,
+      candidate_staleness_policy: _dropCandidateStalenessPolicy,
+      evidence_refs: _dropEvidenceRefs,
+      ...rest
+    } = metadata;
     return {
       metadata: { ...rest, share_rejected_sync: decision },
       rejected: decision,
@@ -489,6 +518,93 @@ function adjudicateNominationSync(
     };
   }
   return { metadata, rejected: null, rejectDetail: null };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasShareCandidate(metadata: Record<string, unknown>): boolean {
+  return metadata.share_candidate === true || metadata.share_candidate === "true";
+}
+
+function validateMemoryLifecycleMetadata(
+  metadata: Record<string, unknown>,
+): string | null {
+  const action = metadata.memory_lifecycle_action;
+  if (action === undefined) return null;
+  if (typeof action !== "string" || !MEMORY_LIFECYCLE_ACTIONS.has(action)) {
+    return "metadata.memory_lifecycle_action is not a supported lifecycle action";
+  }
+
+  const shareCandidate = hasShareCandidate(metadata);
+  if (shareCandidate && action !== "nominate_shared") {
+    return "metadata.share_candidate=true is only valid with memory_lifecycle_action=nominate_shared";
+  }
+  if (action === "nominate_shared" && !shareCandidate) {
+    return "metadata.memory_lifecycle_action=nominate_shared requires share_candidate=true";
+  }
+  if (
+    typeof metadata.candidate_type !== "string" ||
+    !CANDIDATE_TYPES.has(metadata.candidate_type)
+  ) {
+    return "metadata.candidate_type is required for memory lifecycle actions";
+  }
+  if (
+    typeof metadata.candidate_reason !== "string" ||
+    metadata.candidate_reason.trim().length === 0 ||
+    metadata.candidate_reason.length > 2000
+  ) {
+    return "metadata.candidate_reason is required for memory lifecycle actions";
+  }
+  if (
+    metadata.candidate_confidence !== undefined &&
+    (typeof metadata.candidate_confidence !== "number" ||
+      !Number.isFinite(metadata.candidate_confidence) ||
+      metadata.candidate_confidence < 0 ||
+      metadata.candidate_confidence > 1)
+  ) {
+    return "metadata.candidate_confidence must be a number from 0 to 1";
+  }
+  if (
+    metadata.candidate_scope !== undefined &&
+    !isRecord(metadata.candidate_scope)
+  ) {
+    return "metadata.candidate_scope must be an object";
+  }
+  if (
+    metadata.candidate_staleness_policy !== undefined &&
+    (typeof metadata.candidate_staleness_policy !== "string" ||
+      metadata.candidate_staleness_policy.length > 1000)
+  ) {
+    return "metadata.candidate_staleness_policy must be a string of at most 1000 characters";
+  }
+  if (metadata.evidence_refs !== undefined) {
+    if (!Array.isArray(metadata.evidence_refs)) {
+      return "metadata.evidence_refs must be an array";
+    }
+    if (metadata.evidence_refs.length > 20) {
+      return "metadata.evidence_refs must contain at most 20 items";
+    }
+    if (metadata.evidence_refs.some((item) => !isRecord(item))) {
+      return "metadata.evidence_refs items must be objects";
+    }
+    let totalEvidenceBytes = 0;
+    for (const item of metadata.evidence_refs) {
+      const serialized = JSON.stringify(item);
+      totalEvidenceBytes += Buffer.byteLength(serialized, "utf8");
+      if (Buffer.byteLength(serialized, "utf8") > 2000) {
+        return "metadata.evidence_refs items must be at most 2000 JSON bytes";
+      }
+      if (containsSecret(serialized)) {
+        return "metadata.evidence_refs must not contain secrets";
+      }
+    }
+    if (totalEvidenceBytes > 10000) {
+      return "metadata.evidence_refs must be at most 10000 total JSON bytes";
+    }
+  }
+  return null;
 }
 
 function sanitizedResubmitOf(metadata: Record<string, unknown>): string | null {
@@ -776,6 +892,15 @@ export function registerAppendSessionEvent(
       }
       const importance = args.importance ?? "warm";
       const provenance = writerProvenance(auth);
+      const lifecycleError = validateMemoryLifecycleMetadata(args.metadata ?? {});
+      if (lifecycleError) {
+        return appendSessionEventError(
+          "scope_validation",
+          lifecycleError,
+          false,
+          { session_key: args.session_key, namespace: ns },
+        );
+      }
 
       logger.debug("append_session_event_start", {
         session_key: args.session_key,
