@@ -57,13 +57,14 @@ splits into disjoint files or review lanes.
 
 | Issue | Branch | Temp worktree | Workers | Local target | Deploy allowed | Closure rule |
 | --- | --- | --- | ---: | --- | --- | --- |
-| #223 NATS/JetStream runtime slice | `feat/223-nats-jetstream-runtime` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-223-nats-jetstream-runtime` | 1 implementation + 1 runtime/review sidecar | Later runtime implementation only after local-only #224/#222/#221 sequencing or explicit controller decision | No | Do not close #223 from the merged foundation PR; closing requires real runtime/deploy tests or explicit issue narrowing |
+| #223 NATS/JetStream runtime slice | `feat/223-nats-jetstream-runtime` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-223-nats-jetstream-runtime` | 1 implementation + 1 runtime/review sidecar | Review merged local-only foundation and scope any remaining local prep; hosted runtime/deploy/canary stays release-gated | No | Do not close #223 from the merged foundation PR; closing requires real runtime/deploy tests or explicit issue narrowing |
 | #167 legacy collab retirement | `release/167-retire-collab` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-167-retire-collab` | 1 release-planning worker only | Release/deploy checklist and preflight evidence, no mutation | Explicit approval required | Blocked for local-only; cannot close without live backup/migration/deploy/canary |
 
 ## Controller Execution Rules
 
 1. Treat PR #250 as merged historical context. Do not reopen its branch as
-   active work. #223 remains open for a future runtime/deploy slice.
+   active work. #223 remains open for locally scoped follow-up only unless Rico
+   explicitly approves release/deploy/canary work.
 2. Create each worktree from fresh `origin/main` unless the issue intentionally
    builds on a merged predecessor. If a predecessor is not merged, the dependent
    branch may only inspect it or stack with an explicit note in Plan 3F.
@@ -264,9 +265,9 @@ explicit release/deploy approval.
 - Controller lane: owns live issue/PR/board state, branch integration, PR body,
   review receipts, merge decisions, and this Plan 3F file.
 - #223 active lane: controller reviews the merged local-only foundation state,
-  then opens any remaining #223 follow-up branch from a clean worktree. Keep the
-  implementation boundary local; hosted runtime/deploy/canary work remains off
-  without explicit release approval.
+  then scopes any remaining local-only #223 follow-up from a clean worktree.
+  Hosted runtime/deploy/canary work remains off without explicit release
+  approval.
 - #167 active lane: planning/preflight only until Rico explicitly approves live
   backup/migration/deploy/canary work.
 - Planning/disposition lanes: #137 and #118 are closed historical context. Do
