@@ -4,19 +4,10 @@ Updated: 2026-07-06 by Codex after Fable handoff.
 
 ## Current Controller State
 
-Updated after PR #244 Phase 3 Claude cross-review findings were posted and
-local fixes were validated on 2026-07-06.
+Updated after PR #244 merged, issue #176 closed, and issue #166 was verified
+already fixed on 2026-07-06.
 
-- Open PRs: 1
-  - #244 `feat(#176): structure share_candidate rejection detail` is open.
-    Current pushed head `a9639d36844aeb6265a486675a3e9135a1126b8f` passed
-    `check`, `db-integration`, `python-package`, PR-body `validate`, and
-    GitGuardian; `deploy` skipped. Phase 2 initial swarm found and fixed the
-    resend root-rotation bug. Phase 3 Claude cross-review posted five findings
-    (one HIGH, two MEDIUM, two LOW); local fixes are validated but not yet
-    committed/pushed. Next gate: commit/push the Phase 3 fixes, run
-    fix-verification, then address/waive every PR finding before merge. No
-    core01 deploy.
+- Open PRs: 0.
 - Merged in this controller batch:
   - #231 merged as `c9888cc584fe68b5ff91906d56ef26c7fb40afef`;
     post-merge `/codex-deep` smoke on #234 succeeded.
@@ -29,14 +20,18 @@ local fixes were validated on 2026-07-06.
   - #239 merged as `d6389962e5b2650d9e53dbdb7d75a30b004600fa`.
   - #243 merged as `3b8e47ac5d4b3b614fdd26f5609242b73204f928`;
     issue #204 closed at `2026-07-06T01:54:16Z`.
+  - #244 merged as `dcd5c6b743e8cf58395deacd17ec0a8f16184a26`;
+    issue #176 closed at `2026-07-06T03:15:03Z`.
 - Prior deploy-control PR:
   - #240 is merged. Production deploy is optional/deferred and only allowed via
     the release SOP path, not automatic `main` pushes. Merge commit:
     `b12e33e22b8b97c5322ef43ea3831752652c4eeb`.
-- Open issues: 11
-  - #229, #224, #223, #222, #221, #192, #176, #167, #166, #137, #118.
+- Open issues: 9
+  - #229, #224, #223, #222, #221, #192, #167, #137, #118.
   - #167 remains open after #237 because live backup/dry-run/execute/reconcile,
     release deploy, and downstream canary are still gated.
+  - #166 was verified from live generated mcp2cli skill refs and server defaults,
+    received a closure evidence comment, and is closed.
 - Project 8 updated on 2026-07-05:
   - PR items #233, #235, #237, #238, and #239 moved to `Done` with merge
     commits in `Next Action`.
@@ -46,10 +41,12 @@ local fixes were validated on 2026-07-06.
   - #234/#165 are merged/closed; #165 is no longer open.
   - #204 moved to `Done` by merge/closure automation and `Next Action` records
     PR #243 merge commit `3b8e47ac5d4b3b614fdd26f5609242b73204f928`.
-  - #176 and PR #244 are `In Review`. Validation was `CI Passed` at
-    `a9639d3`; local validation passed after the Phase 3 Claude fixes. Review
-    Gate is `Fixes In Progress` until the fix commit is pushed and
-    fix-verification runs.
+  - #176 and PR #244 moved to `Done`; Review Gate `Zero Known Issues`;
+    Validation `CI Passed`; `Next Action` records merge commit
+    `dcd5c6b743e8cf58395deacd17ec0a8f16184a26` and no core01 deploy.
+  - #166 was added to Project 8, marked `Done`, Review Gate
+    `Zero Known Issues`, Validation `Local Passed`, and `Next Action` records
+    the focused generated-skill/default verification.
 - No production deploy was performed during this batch.
 
 ## Live Inventory Correction
@@ -166,18 +163,18 @@ Active source plan:
 
 ### Phase 1: PR #231 review workflow
 
-Status: verified, not merged.
+Status: done via merged PR #231.
 
 - PR #231 checks are green.
 - Posted `/codex-deep` with `pre-merge-gauntlet` intent:
   https://github.com/rodaddy/open-brain/pull/231#issuecomment-4885081698
 - Limitation: `.github/workflows/codex-review.yml` is not on default `main`, so
   the issue-comment trigger cannot enqueue until the workflow exists on `main`.
-- Stop gate: do not merge without explicit approval.
+- Done: PR #231 merged as `c9888cc584fe68b5ff91906d56ef26c7fb40afef`.
 
 ### Phase 2: #165 CI DB integration, #193 rolling log cap
 
-Status: verified locally and by PR checks, not merged.
+Status: done via merged PRs #233 and #234.
 
 - PR #234 (#165) local checks passed:
   - `bun run typecheck`
@@ -187,10 +184,13 @@ Status: verified locally and by PR checks, not merged.
 - PR #233 (#193) local checks passed:
   - `bun run typecheck`
   - `bun test` -> 976 pass, 38 skip, 0 fail
+- Done: PR #233 merged as `9653cf86d0ff770eb929915c61d11ce5f0f499fc`.
+- Done: PR #234 merged as `a16398c4d344f2c57ea0d508f998fcd05cbe8e07`;
+  issue #165 closed.
 
 ### Phase 3: #168 -> #166 -> #167 namespace/auth cleanup
 
-Status: verified locally and by PR checks, not merged.
+Status: code PRs done; #167 remains live migration/release gated.
 
 - PR #235 (#168) local checks passed:
   - `bun run typecheck`
@@ -199,11 +199,18 @@ Status: verified locally and by PR checks, not merged.
   - `bun run typecheck`
   - `bun test` -> 973 pass, 46 skip, 0 fail
 - Deploy/migration gates remain documented on the PRs.
+- Done: PR #235 merged as `2a8fd986154d7b5dc11fb0c2d690288d35530a50`.
+- Done: PR #237 merged as `fefb4659f8d181e465fac584d25a57e11e672ac2`.
+- Done: #166 verified already fixed and closed without a code change.
+- Still open: #167 cannot be closed during the current local-only phase because
+  its remaining acceptance criteria require live backup, dry-run, execution,
+  reconciliation, release deploy, and downstream canary.
 
 ### Phase 4: #177 installable package, #204 resolver, #176 structured rejection
 
-Status: #177 is done via merged PR #238. #204 is done via merged PR #243.
-#176 is the active local-only slice.
+Status: done locally and merged. #177 is done via merged PR #238. #204 is done
+via merged PR #243. #176 is done via merged PR #244. Downstream rollout/core01
+deploy remains deferred to the later release phase for all contract changes.
 
 Current #176 worktree:
 `/Volumes/ThunderBolt/_tmp/open-brain/issue-176-structured-rejection`
@@ -283,7 +290,7 @@ Current #204 state:
    core01 deploy/live canary. This contract change still triggers
    `docs/downstream-rollout.md` before issue closure/release.
 
-Current #176 state:
+Final #176 state:
 
 1. Done locally: structured non-leaking `reject_detail` for sync
    `share_candidate` rejections with `category`, safe `matched_kind`,
@@ -321,7 +328,7 @@ Current #176 state:
    implementation trusted the client-supplied resend attempt too much. Fixed
    before PR by counting prior rejected resubmits in the same lane and using
    the larger of client-supplied and server-observed attempts.
-8. PR #244 is open. Implementation head
+8. PR #244 opened. Implementation head
    `d0c34f8ec5649e13135f9844adb01f0e879a7f3c` passed the corrected PR-body run
    (`validate`), server CI (`check`, `db-integration`), Python package CI, and
    GitGuardian; deploy skipped. Re-read live checks for the latest head after
@@ -385,13 +392,30 @@ Current #176 state:
    - `cd python/openbrain-memory && uv run ruff check src tests` -> passed.
    - `git diff --check` -> passed.
    - `ggshield secret scan path -y <Phase 3 changed files>` -> no secrets found.
-17. Pending: commit/push the Phase 3 fixes, post the fixes receipt on PR #244,
-   run focused fix-verification, then Phase 4 reply to every finding with the
-   fixing commit/waiver and Phase 5 merge only after the gate is clean.
-18. Deferred by current local-only instruction: downstream rollout and any
+17. Phase 3 fixes were committed and pushed as
+   `ad49c0b9b63782d3b5dbe0b9cae249c6600d1b66`. Fixes receipt and focused
+   fix-verification receipt were posted on PR #244; the focused Claude/Opus
+   verification returned clean.
+18. PR #244 merged as `dcd5c6b743e8cf58395deacd17ec0a8f16184a26`; issue #176
+   closed at `2026-07-06T03:15:03Z`; Project 8 marks #176 and PR #244 done.
+19. Deferred by current local-only instruction: downstream rollout and any
    core01 deploy/live canary. This contract change triggers
    `docs/downstream-rollout.md`; downstream rollout waits for the later release
    phase.
+
+### Next local-only slice
+
+The roadmap's next historical item is #167, but the remaining #167 work is
+live migration/release gated, not a safe local-only implementation slice:
+backup, migration dry-run/execute, reconciliation, hosted deploy, and downstream
+canary. Keep #167 open and explicitly gated until release approval.
+
+Proceed locally with the next implementable roadmap item, starting with issue
+#192 Part A unless Rico redirects: add a compact/condensed retrieval mode or
+document a deliberate "chunk small" stance, then run the full local test ladder
+and pre-merge-gauntlet before merge. The realtime epic #223 -> #222 -> #221 ->
+#224 -> #229 remains available after #192, but #223 has a NATS/core01 component
+that will need a local-only split or release approval before hosted work.
 
 ---
 

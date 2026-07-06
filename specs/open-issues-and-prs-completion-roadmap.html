@@ -180,12 +180,12 @@
       <summary>Metadata</summary>
       <dl>
         <dt>created</dt>      <dd>2026-07-05T00:39:00-08:00</dd>
-        <dt>modified</dt>     <dd>2026-07-05T00:39:00-08:00, 2026-07-05T01:55:00-08:00, 2026-07-05T12:55:00-04:00, 2026-07-05T13:42:05-04:00, 2026-07-05T14:20:00-04:00, 2026-07-05T18:25:00-04:00, 2026-07-06T02:15:00-04:00, 2026-07-06T02:35:00-04:00, 2026-07-06T02:45:00-04:00, 2026-07-06T03:10:00-04:00</dd>
+        <dt>modified</dt>     <dd>2026-07-05T00:39:00-08:00, 2026-07-05T01:55:00-08:00, 2026-07-05T12:55:00-04:00, 2026-07-05T13:42:05-04:00, 2026-07-05T14:20:00-04:00, 2026-07-05T18:25:00-04:00, 2026-07-06T02:15:00-04:00, 2026-07-06T02:35:00-04:00, 2026-07-06T02:45:00-04:00, 2026-07-06T03:10:00-04:00, 2026-07-06T03:25:00-04:00</dd>
         <dt>commits</dt>      <dd>b4a3020 (branch HEAD at authoring time)</dd>
         <dt>agent name</dt>        <dd>claude-fable-5 (Claude Code)</dd>
         <dt>session id</dt>      <dd>open-brain planf3 session 2026-07-05</dd>
         <dt>back refs</dt>    <dd>goal-run.md (memory-substrate goal run), docs/realtime-agent-memory-research.md (PR #225), docs/downstream-rollout.md, docs/memory-contract.md</dd>
-        <dt>forward refs</dt> <dd>Merged PRs #231, #233, #234, #235, #237, #238, #239, #240, #243; open PR #244; remaining issues are #229, #224, #223, #222, #221, #192, #176, #167, #166, #137, #118; #176/PR #244 has Phase 3 Claude findings fixed locally and is pending fix push, fix-verification, and PR finding replies; Project 8 synced 2026-07-06.</dd>
+        <dt>forward refs</dt> <dd>Merged PRs #231, #233, #234, #235, #237, #238, #239, #240, #243, #244; open PRs: none; remaining issues are #229, #224, #223, #222, #221, #192, #167, #137, #118. #167 is live migration/release gated; #166 was verified already fixed and closed. Project 8 synced 2026-07-06. No core01 deploy performed.</dd>
       </dl>
     </details>
   </header>
@@ -199,7 +199,7 @@
   <!-- ===== PURPOSE / PROBLEM / SOLUTION ===== -->
   <section id="purpose">
     <h2>Purpose</h2>
-    <p><strong>Live correction:</strong> this roadmap was authored from an older snapshot. Current live state is 1 open PR (#244) and 11 open issues (#229, #224, #223, #222, #221, #192, #176, #167, #166, #137, #118). PRs #231, #233, #234, #235, #237, #238, #239, #240, and #243 are merged; #165 and #204 are closed. PR #240 already made deploy optional through the release SOP; no production deploy has been performed. #176 is the active local-only contract slice, with PR #244 open, CI passed at pushed head <code>a9639d3</code>, deploy skipped, and the Phase 3 Claude findings fixed locally.</p>
+    <p><strong>Live correction:</strong> this roadmap was authored from an older snapshot. Current live state is 0 open PRs and 9 open issues (#229, #224, #223, #222, #221, #192, #167, #137, #118). PRs #231, #233, #234, #235, #237, #238, #239, #240, #243, and #244 are merged; #165, #204, #176, and #166 are closed. PR #240 made deploy optional through the release SOP; no production deploy has been performed. #167 remains open only for live migration/release-gated work. The next local-only issue candidate is #192 Part A unless Rico redirects.</p>
     <p>Drive the open-brain repo to a clean board: every open PR merged or explicitly held, and all remaining open issues either closed with tested, rollout-gated changes or explicitly dispositioned as roadmap items with a documented decision. The plan sequences work so infrastructure fixes (review pipeline, CI Postgres) land first and protect everything after them, and groups issues into coherent PR-sized batches that respect the repo's pre-merge gauntlet, critical self-review gate, and downstream rollout gate.</p>
   </section>
 
@@ -385,13 +385,13 @@
       <ul class="checklist">
         <li><code class="status">[x]</code> Skill refs fixed — files are AUTO-GENERATED local config; regenerated via <code>mcp2cli generate-skills open-brain</code> against the fresh schema cache; zero <code>collab</code> refs remain, <code>shared-kb</code> defaults present.</li>
         <li><code class="status">[x]</code> Generator/source checked — generator and OB schemas were ALREADY correct; root cause was generation against a stale (pre-2026-07-04) schema cache with empty inputSchema properties. Durable fix tracked as mcp2cli#58.</li>
-        <li><code class="status">[x]</code> Server-side defaults verified correct in source (<code>promote-entry.ts:25</code>, <code>scan-namespace.ts:29</code> — both shared-kb). Issue held open pending deploy-gated hosted refresh (CT216); receipt comment posted 2026-07-05.</li>
+        <li><code class="status">[x]</code> Server-side defaults verified correct in source (<code>promote-entry.ts:25</code>, <code>scan-namespace.ts:29</code> — both shared-kb). Issue #166 was verified from live generated mcp2cli skill refs and focused server tests, then closed on 2026-07-06 with evidence comment <code>issuecomment-4888801608</code>.</li>
       </ul>
 
       <h4>3. #167 — Retire the collab namespace</h4>
       <ul class="checklist">
-        <li><code class="status">[]</code> Migrate the un-mirrored collab thoughts — DEPLOY-GATED. Tooling ready in PR #237: <code>scripts/retire-collab-migration.ts</code>, dry-run default, <code>--execute</code>, idempotent (run-twice proven on scratch Postgres), queries live counts (no hardcoded 69), no destructive deletes. Runbook in PR: backup → dry-run → execute → reconcile → deploy code.</li>
-        <li><code class="status">[]</code> Disposition entities + lanes — same script (<code>--entities</code> re-tag w/ conflict-archive, <code>--lanes</code> archive), same deploy gate.</li>
+        <li><code class="status">[]</code> Migrate the un-mirrored collab thoughts — RELEASE/DEPLOY-GATED. Tooling ready in merged PR #237: <code>scripts/retire-collab-migration.ts</code>, dry-run default, <code>--execute</code>, idempotent (run-twice proven on scratch Postgres), queries live counts (no hardcoded 69), no destructive deletes. Runbook in PR: backup → dry-run → execute → reconcile → deploy code.</li>
+        <li><code class="status">[]</code> Disposition entities + lanes — same script (<code>--entities</code> re-tag w/ conflict-archive, <code>--lanes</code> archive), same release/deploy gate.</li>
         <li><code class="status">[x]</code> Legacy fallback retired in code — PR #237 green: empty-default legacy namespace, <code>legacyFallbackEnabled</code> false-default with <code>SHARED_NAMESPACE_LEGACY</code> escape hatch, <code>existing_collab_id</code> removed (verified not contract-visible, no version bump needed).</li>
         <li><code class="status">[x]</code> Regression tests: retired-by-default contract across read/search/scan/promotion paths + 6/6 scratch-Postgres migration tests. Suite 970 pass / 0 fail. Codex review in progress.</li>
       </ul>
@@ -412,7 +412,7 @@
 
     <!-- ============ PHASE 4 ============ -->
     <div class="phase">
-      <h3><code class="status">[]</code> Phase 4: Client contract batch — #177, #204, #176</h3>
+      <h3><code class="status">[x]</code> Phase 4: Client contract batch — #177, #204, #176</h3>
       <p>Three client-facing contract changes, each individually triggering the downstream rollout gate. #177 makes <code>openbrain-memory</code> actually installable (built dist + reachable index or git-tag install) with canonical redaction exported, so rtech-hermes can drop its drifted fork — the fork already caused one production outage. #204 adds a read-only <code>resolve_entry</code> tool so agents stop brute-forcing five <code>get_entry</code> calls to answer "what is this UUID". #176 upgrades <code>share_candidate</code> rejection from a bare category to a structured, actionable reason with bounded resend, contract-driven so agents auto-pick-up. Order: #177 first (it's the vehicle downstream clients consume the other two through), then #204 and #176 (parallelizable).</p>
 
       <figure>
@@ -422,11 +422,12 @@
       </figure>
 
       <h4>1. #177 — Installable openbrain-memory package</h4>
+      <p><strong>Status 2026-07-06:</strong> done. PR #238 merged as <code>ee0a7c8dc02313c4bc3bdf6a387742265a11f0a4</code> and issue #177 is closed. Package installability, public API/redaction documentation, clean-env wheel smoke, Python quality checks, and PR gauntlet evidence were recorded on PR #238. Downstream runtime adoption remains part of the release/downstream rollout phase.</p>
       <ul class="checklist">
-        <li><code class="status">[]</code> Add build + publish path (dist artifacts; pick the index/registry agent hosts can reach — or a versioned git tag installable via <code>uv add git+...</code>) and version discipline via the version-management standard.</li>
-        <li><code class="status">[]</code> Export canonical redaction as a public API surface (aligned with the b4a3020 superset-parity detectors) so clients stop re-implementing it.</li>
-        <li><code class="status">[]</code> Fake-transport tests for headers, session lifecycle, error redaction, wrapper call shapes (repo standard); <code>uv run mypy</code> + <code>ruff</code> zero errors.</li>
-        <li><code class="status">[]</code> Prove installability from a clean environment: <code>uv add openbrain-memory</code> (or git ref) in a scratch project → import → smoke call.</li>
+        <li><code class="status">[x]</code> Add build + publish path (dist artifacts; pick the index/registry agent hosts can reach — or a versioned git tag installable via <code>uv add git+...</code>) and version discipline via the version-management standard.</li>
+        <li><code class="status">[x]</code> Export canonical redaction as a public API surface (aligned with the b4a3020 superset-parity detectors) so clients stop re-implementing it.</li>
+        <li><code class="status">[x]</code> Fake-transport tests for headers, session lifecycle, error redaction, wrapper call shapes (repo standard); <code>uv run mypy</code> + <code>ruff</code> zero errors.</li>
+        <li><code class="status">[x]</code> Prove installability from a clean environment: <code>uv add openbrain-memory</code> (or git ref) in a scratch project → import → smoke call.</li>
       </ul>
 
       <h4>2. #204 — resolve_entry tool</h4>
@@ -440,22 +441,22 @@
       </ul>
 
       <h4>3. #176 — Structured share_candidate rejection + bounded resend</h4>
-      <p><strong>Local status 2026-07-06:</strong> implementation exists on <code>feat/176-structured-rejection</code> in <code>/Volumes/ThunderBolt/_tmp/open-brain/issue-176-structured-rejection</code>. It adds non-leaking <code>reject_detail</code> classifier metadata, bounded <code>reject_detail.resubmit_metadata</code> for sanitized resend, contract version <code>2026-07-06.memory-tools.v13</code>, <code>append_session_event</code> tool contract version 6, and <code>openbrain-memory</code> package version <code>0.1.3</code>. Phase 1 critical pass found and fixed one material issue: the server counts prior rejected resubmits in the same lane and does not trust a reset <code>sanitized_resubmit_attempt</code>. PR #244 is open; pushed head <code>a9639d36844aeb6265a486675a3e9135a1126b8f</code> passed <code>check</code>, <code>db-integration</code>, <code>python-package</code>, PR-body <code>validate</code>, and GitGuardian, with <code>deploy</code> skipped. Phase 2 initial swarm found the resend root-rotation bug and fix-verification passed. Phase 3 Claude cross-review posted five findings: omitted-lineage retry bound bypass, invalid-root diagnostics, clean-resubmit DB query cost, first-detector-only <code>span_count</code>, and retry metadata on blocked responses. Local fixes now derive no-lineage attempts from observed same-lane root rejections, distinguish invalid roots with <code>resubmit_blocked_reason</code>, query retry state only after rejection, sum secret spans across firing detectors, and omit <code>resubmit_metadata</code> when <code>resubmittable</code> is false. Local validation is green: focused append-session-event tests (47 pass, 5 skip), focused contract bundle (94 pass, 5 skip), <code>bunx tsc --noEmit</code>, full <code>bun test</code> (1059 pass, 46 skip), Python focused pytest (69 pass), Python mypy, Python ruff, <code>git diff --check</code>, and scoped GitGuardian path scan. Pending: fix push, fix-verification, finding replies, and final merge gate. No core01 deploy.</p>
+      <p><strong>Status 2026-07-06:</strong> done. PR #244 merged as <code>dcd5c6b743e8cf58395deacd17ec0a8f16184a26</code> and issue #176 closed at <code>2026-07-06T03:15:03Z</code>. It adds non-leaking <code>reject_detail</code> classifier metadata, bounded <code>reject_detail.resubmit_metadata</code> for sanitized resend, contract version <code>2026-07-06.memory-tools.v13</code>, <code>append_session_event</code> tool contract version 6, and <code>openbrain-memory</code> package version <code>0.1.3</code>. The pre-merge-gauntlet completed: Phase 1 critical pass fixed client-attempt trust, Phase 2 swarm fixed resend root rotation, Phase 3 Claude cross-review found five issues, Phase 4 fixes landed as <code>ad49c0b9b63782d3b5dbe0b9cae249c6600d1b66</code>, and focused fix-verification returned clean. Final validation covered focused append-session-event tests (47 pass, 5 skip), focused contract bundle (94 pass, 5 skip), <code>bunx tsc --noEmit</code>, full <code>bun test</code> (1059 pass, 46 skip), Python focused pytest (69 pass), Python mypy, Python ruff, <code>git diff --check</code>, scoped GitGuardian path scan, and GitHub checks <code>check</code>, <code>db-integration</code>, <code>python-package</code>, PR-body <code>validate</code>, and GitGuardian. No core01 deploy.</p>
       <ul class="checklist">
         <li><code class="status">[x]</code> Design the rejection payload: category + actionable locator (safe detector name and span count) that does NOT re-leak the secret content — this is the hard constraint.</li>
         <li><code class="status">[x]</code> Implement bounded resend (attempt counter / idempotency guard) so agents can submit a sanitized version without infinite retry loops.</li>
         <li><code class="status">[x]</code> Ship it contract-driven (schema/contract version) so downstream agents auto-pick-up without hand-rolled parsing.</li>
         <li><code class="status">[x]</code> Tests: secret-bearing candidate → structured rejection with locator, no secret echoed anywhere (response, logs, DB); sanitized resend accepted; resend bound enforced.</li>
-        <li><code class="status">[~]</code> Complete pre-merge-gauntlet phases 2-5 on PR #244; Phase 3 findings are fixed locally, downstream rollout/core01 deploy remains deferred until release phase.</li>
+        <li><code class="status">[x]</code> Complete pre-merge-gauntlet phases 2-5 on PR #244; downstream rollout/core01 deploy remains deferred until release phase.</li>
       </ul>
 
       <h4>4. Testing Strategy</h4>
       <p>Bun unit + CI DB-backed integration for server tools; fake-transport + mypy/ruff/pytest for the Python package; then the full downstream rollout ladder since all three are contract-changing.</p>
       <ul class="checklist">
-        <li><code class="status">[]</code> <code>bunx tsc --noEmit &amp;&amp; bun test</code> — server side green, including DB-backed tests in CI.</li>
-        <li><code class="status">[]</code> <code>cd python/openbrain-memory &amp;&amp; uv run mypy src/openbrain_memory &amp;&amp; uv run ruff check src tests &amp;&amp; uv run pytest -q</code> — package quality bar.</li>
+        <li><code class="status">[x]</code> <code>bunx tsc --noEmit &amp;&amp; bun test</code> — server side green, including DB-backed tests in CI.</li>
+        <li><code class="status">[x]</code> <code>cd python/openbrain-memory &amp;&amp; uv run mypy src/openbrain_memory &amp;&amp; uv run ruff check src tests &amp;&amp; uv run pytest -q</code> — package quality bar.</li>
         <li><code class="status">[]</code> Clean-env install proof for #177 (scratch project, import + smoke call).</li>
-        <li><code class="status">[]</code> Downstream rollout per <code>docs/downstream-rollout.md</code>: rtech-mcps / mcp2cli schema refresh, rtech-hermes runtime/plugin adoption step, live Hermes agent canary — each done or explicitly N/A'd in the closing comment.</li>
+        <li><code class="status">[]</code> Downstream rollout per <code>docs/downstream-rollout.md</code>: rtech-mcps / mcp2cli schema refresh, rtech-hermes runtime/plugin adoption step, live Hermes agent canary — deferred to the release phase by the current local-only instruction.</li>
       </ul>
       <div class="loop">
         🔁 <strong>Do not exit this phase until every box above is checked.</strong>
@@ -630,6 +631,12 @@
   <section id="amendments">
     <h2>Amendments</h2>
     <!-- Append-only; populated by Update Plan / Update References workflows. -->
+    <details class="amend">
+      <summary>2026-07-06 — #244 merged, #166 closed, local-only next slice selected</summary>
+      <p>Controller merged PR #244 as <code>dcd5c6b743e8cf58395deacd17ec0a8f16184a26</code>; issue #176 closed at <code>2026-07-06T03:15:03Z</code>. Phase 4 fixes landed as <code>ad49c0b9b63782d3b5dbe0b9cae249c6600d1b66</code>, all posted PR findings were addressed, focused Claude/Opus fix-verification returned clean, and GitHub checks passed for <code>check</code>, <code>db-integration</code>, <code>python-package</code>, PR-body <code>validate</code>, and GitGuardian; <code>deploy</code> skipped. Project 8 marks #176 and PR #244 done with Review Gate <code>Zero Known Issues</code> and Validation <code>CI Passed</code>. No production deploy was performed.</p>
+      <p>Issue #166 was verified already fixed from a clean worktree: live generated mcp2cli Open Brain skill refs contain no stale collab defaults, server <code>promote_entry</code>/<code>scan_namespace</code> defaults resolve to <code>shared-kb</code>, and focused tests passed. Evidence was posted in issue comment <code>issuecomment-4888801608</code>; #166 is closed and Project 8 marks it done with Validation <code>Local Passed</code>. Live state after these closures: 0 open PRs and 9 open issues (#229, #224, #223, #222, #221, #192, #167, #137, #118).</p>
+      <p>#167 remains open by design because its remaining acceptance criteria require live backup, migration dry-run/execute, reconciliation, release deploy, and downstream canary. Under the current local-only instruction, do not work toward core01. The next local-only roadmap candidate is #192 Part A unless Rico redirects; run a normal branch, local validation, critical self-review, and <code>pre-merge-gauntlet</code> before merge.</p>
+    </details>
     <details class="amend">
       <summary>2026-07-05 — Execution progress: Phases 1–3 in flight under merge hold</summary>
       <p>Orchestration live (Fable controller, Opus 4.8 workers, Codex gpt-5.5/medium as cross-model reviewer). Done: PR #231 green (review pipeline fixed: CLI arg conflict + wrong runner; hardened vs rule-injection; body gate satisfied); PR #233 green then Codex-reviewed NOT-mergeable (2 P2s: multi-worker LOG_FILE rotation race, oversized-first-write cap bypass) — fix loop running; PR #235 green (#168 rename, 16-test gate-parity suite); #166 fixed locally (regenerated stale generated skill files; schemas were already correct). In flight: #165 (CI Postgres), #167 (collab retirement tooling, dry-run-default). All merges + live-host steps (core01 env/plist, hosted CT216 refresh, collab DB migration, token swap) accumulate into one Rico approval batch. Open decision: gate codex-review workflow to same-repo PRs (fork credential risk).</p>
