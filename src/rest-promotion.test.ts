@@ -430,7 +430,10 @@ describe("promotion REST API", () => {
           namespace: "bilby",
           content_hash: "hash-1",
           created_at: "2026-06-10T00:00:00.000Z",
-          promoted_from: null,
+          metadata: {
+            share_candidate: true,
+            memory_lifecycle_action: "nominate_shared",
+          },
         },
       ],
       [{ id: "team-1" }],
@@ -458,6 +461,106 @@ describe("promotion REST API", () => {
         },
       ],
     });
+    expect(json.already_promoted).toBeUndefined();
+    expect(json.summary.already_promoted).toBeUndefined();
     expect(json.duplicates[0].existing_collab_id).toBeUndefined();
+  });
+
+  it("only returns explicit shared lifecycle nominations from REST scan", async () => {
+    const pool = createSequencePool([
+      [
+        {
+          id: "ordinary",
+          namespace: "bilby",
+          content_hash: null,
+          created_at: "2026-06-10T00:00:00.000Z",
+          metadata: { share_candidate: true },
+        },
+        {
+          id: "explicit-boolean",
+          namespace: "bilby",
+          content_hash: null,
+          created_at: "2026-06-11T00:00:00.000Z",
+          metadata: {
+            share_candidate: true,
+            memory_lifecycle_action: "nominate_shared",
+          },
+        },
+        {
+          id: "explicit-string",
+          namespace: "bilby",
+          content_hash: null,
+          created_at: "2026-06-12T00:00:00.000Z",
+          metadata: {
+            share_candidate: "true",
+            memory_lifecycle_action: "nominate_shared",
+          },
+        },
+      ],
+    ]);
+    const app = buildApp({ role: "admin", clientId: "rico" }, pool);
+
+    const { status, json } = await req(
+      app,
+      "get",
+      "/api/v1/scan/bilby?table=thoughts&target_namespace=shared-kb",
+    );
+
+    expect(status).toBe(200);
+    expect(json.candidates).toEqual([
+      {
+        table: "thoughts",
+        id: "explicit-boolean",
+        created_at: "2026-06-11T00:00:00.000Z",
+      },
+      {
+        table: "thoughts",
+        id: "explicit-string",
+        created_at: "2026-06-12T00:00:00.000Z",
+      },
+    ]);
+    expect(json.already_promoted).toBeUndefined();
+    expect(json.summary.already_promoted).toBeUndefined();
+  });
+
+  it("filters REST scan nominations in SQL before ordering and limit", async () => {
+    const pool = createSequencePool([
+      [
+        {
+          id: "older-explicit",
+          namespace: "bilby",
+          content_hash: null,
+          created_at: "2026-06-09T00:00:00.000Z",
+          metadata: {
+            share_candidate: true,
+            memory_lifecycle_action: "nominate_shared",
+          },
+        },
+      ],
+    ]);
+    const app = buildApp({ role: "admin", clientId: "rico" }, pool);
+
+    const { status, json } = await req(
+      app,
+      "get",
+      "/api/v1/scan/bilby?table=thoughts&limit=1",
+    );
+
+    expect(status).toBe(200);
+    const sql = pool.calls[0]!.sql;
+    const nominationIndex = sql.indexOf(
+      "t.extracted_metadata->>'memory_lifecycle_action' = 'nominate_shared'",
+    );
+    expect(nominationIndex).toBeGreaterThan(-1);
+    expect(nominationIndex).toBeLessThan(sql.indexOf("ORDER BY"));
+    expect(nominationIndex).toBeLessThan(sql.indexOf("LIMIT $2"));
+    expect(pool.calls[0]!.params).toEqual(["bilby", 1]);
+    expect(json.candidates).toEqual([
+      {
+        table: "thoughts",
+        id: "older-explicit",
+        created_at: "2026-06-09T00:00:00.000Z",
+      },
+    ]);
   });
 });

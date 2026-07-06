@@ -6,6 +6,11 @@ import {
   physicalNamespace,
   sharedNamespaceConfig,
 } from "../shared-namespace.ts";
+import {
+  explicitSharedNominationSqlPredicate,
+  isExplicitSharedNomination,
+  promotionMetadataSelect,
+} from "../promotion-nomination.ts";
 import type { AuthInfo, Table } from "../types.ts";
 import { logger } from "../logger.ts";
 import type { ToolDeps } from "./index.ts";
@@ -96,18 +101,8 @@ export function registerScanNamespace(server: McpServer, deps: ToolDeps): void {
         const params: unknown[] = [args.namespace, limit];
         if (args.since) params.push(args.since);
 
-        const metadataSelect =
-          table === "thoughts" || table === "decisions"
-            ? "t.extracted_metadata"
-            : table === "relationships" || table === "projects"
-              ? "t.metadata"
-              : "NULL::jsonb";
-        const nominationFilter =
-          table === "thoughts" || table === "decisions"
-            ? " AND t.extracted_metadata->>'share_candidate' = 'true' AND t.extracted_metadata->>'memory_lifecycle_action' = 'nominate_shared'"
-            : table === "relationships" || table === "projects"
-              ? " AND t.metadata->>'share_candidate' = 'true' AND t.metadata->>'memory_lifecycle_action' = 'nominate_shared'"
-              : " AND false";
+        const metadataSelect = promotionMetadataSelect(table);
+        const nominationFilter = explicitSharedNominationSqlPredicate(table);
 
         const { rows } = await deps.pool.query(
           `SELECT t.id, t.content_hash, t.namespace, t.created_at,
@@ -143,11 +138,7 @@ export function registerScanNamespace(server: McpServer, deps: ToolDeps): void {
           }
 
           const metadata = row.metadata as Record<string, unknown> | null;
-          if (
-            (metadata?.share_candidate === true ||
-              metadata?.share_candidate === "true") &&
-            metadata.memory_lifecycle_action === "nominate_shared"
-          ) {
+          if (isExplicitSharedNomination(metadata)) {
             candidates.push({
               table: table,
               id: row.id,
