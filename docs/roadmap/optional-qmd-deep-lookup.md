@@ -63,4 +63,7 @@ git diff --check
 bunx tsc --noEmit
 ```
 
+This validation does not prove a remote qmd-unavailable runtime fallback. That
+runtime canary belongs with a future approved wrapper implementation.
+
 No core01 deploy is required for this decision.

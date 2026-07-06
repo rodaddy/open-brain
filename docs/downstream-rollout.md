@@ -205,7 +205,10 @@ even if the Open Brain memory contract does not require qmd. That PR must
 document:
 
 - trusted host and caller identity;
-- whether the wrapper lives in mcp2cli, qmd, Open Brain, or host automation;
+- whether the wrapper lives in mcp2cli, qmd, or host automation;
+- proof that Open Brain remains a consumer of curated qmd-derived facts, not the
+  owner of raw remote qmd access, SSH/host routing, bridge credentials, or
+  operator identity policy;
 - non-fatal failure behavior for Hermes and other agents;
 - proof that required repo facts remain available through Open Brain when qmd
   is unavailable;
