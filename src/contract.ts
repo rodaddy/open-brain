@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { TOOL_CONTRACTS } from "./contract-schemas.ts";
 
-export const CONTRACT_VERSION = "2026-07-06.memory-tools.v15";
+export const CONTRACT_VERSION = "2026-07-06.memory-tools.v16";
 export const CONTRACT_SCHEMA_VERSION = 1;
 
 export interface ContractCapability {
@@ -102,8 +102,8 @@ export interface OpenBrainContract {
     >;
   };
   agent_context_pack: {
-    status: "planned-contract";
-    availability: "not_runtime_available";
+    status: "runtime-available";
+    availability: "mcp_tool_available";
     contract_doc: "docs/agent-context-pack-contract.md";
     parent_issue: 220;
     exact_scope_required: true;
@@ -135,6 +135,25 @@ export interface OpenBrainContract {
       "truncation",
       "uncertainty",
     ];
+    working_set: {
+      status: "local-runtime-boundary";
+      parent_issue: 222;
+      implementation: "src/realtime/working-set.ts";
+      storage: "ram_first_in_process";
+      availability: "mcp_tool_available";
+      item_label: "working_context";
+      not_durable_memory: true;
+      exact_scope_required: true;
+      budget_defaults: {
+        ttl_ms: 1800000;
+        max_sessions: 128;
+        max_items_per_session: 24;
+        max_global_items: 1024;
+        max_item_chars: 4000;
+        max_metadata_chars: 2000;
+      };
+      counters: readonly ["dropped", "expired", "trimmed"];
+    };
   };
   receipt_contract: {
     status: "lightweight-openbrain-receipts";
@@ -321,11 +340,20 @@ export const CONTRACT_CAPABILITIES: ContractCapability[] = [
   {
     name: "agent_context_pack",
     version: 1,
-    kind: "schema",
+    kind: "tool",
     description:
-      "Planned first-class realtime context-pack contract for Hermes and " +
-      "future agents. It is not an available runtime tool until a later " +
-      "implementation exposes it explicitly.",
+      "First-class realtime context-pack tool for Hermes and future agents. " +
+      "It currently exposes the exact-scope RAM working_set section over MCP; " +
+      "NATS transport remains planned.",
+  },
+  {
+    name: "working_set_append",
+    version: 1,
+    kind: "tool",
+    description:
+      "Append one RAM-only working-context item for an exact active " +
+      "namespace/agent/platform/server/channel/thread/session scope. This " +
+      "does not create durable memory or shared-kb rows.",
   },
   {
     name: "agent_memory_adapter",
@@ -561,8 +589,8 @@ export function buildContract(
       },
     },
     agent_context_pack: {
-      status: "planned-contract" as const,
-      availability: "not_runtime_available" as const,
+      status: "runtime-available" as const,
+      availability: "mcp_tool_available" as const,
       contract_doc: "docs/agent-context-pack-contract.md" as const,
       parent_issue: 220 as const,
       exact_scope_required: true as const,
@@ -594,6 +622,25 @@ export function buildContract(
         "truncation",
         "uncertainty",
       ] as const,
+      working_set: {
+        status: "local-runtime-boundary" as const,
+        parent_issue: 222 as const,
+        implementation: "src/realtime/working-set.ts" as const,
+        storage: "ram_first_in_process" as const,
+        availability: "mcp_tool_available" as const,
+        item_label: "working_context" as const,
+        not_durable_memory: true as const,
+        exact_scope_required: true as const,
+        budget_defaults: {
+          ttl_ms: 1800000 as const,
+          max_sessions: 128 as const,
+          max_items_per_session: 24 as const,
+          max_global_items: 1024 as const,
+          max_item_chars: 4000 as const,
+          max_metadata_chars: 2000 as const,
+        },
+        counters: ["dropped", "expired", "trimmed"] as const,
+      },
     },
     receipt_contract: {
       status: "lightweight-openbrain-receipts" as const,

@@ -1,6 +1,7 @@
 # Agent Context Pack Contract
 
-Status: planned contract, not runtime-available yet.
+Status: locally runtime-available over MCP for scoped working-set context; NATS
+transport and broader section assembly remain planned.
 Parent issue: #220.
 Research receipt: PR #225, `docs/realtime-agent-memory-research.md`.
 
@@ -12,9 +13,10 @@ context bundle so a runtime does not have to stitch together lane reads, broad
 semantic search, repo facts, profile guidance, and stale-evidence warnings on
 every turn.
 
-This contract defines the envelope and scope rules before transport or runtime
-implementation. It must not be advertised as an available tool until server
-code, tests, and downstream client support exist.
+This contract defines the envelope and scope rules. The MCP
+`agent_context_pack` tool currently exposes the exact-scope `working_set`
+section from RAM-first working context. NATS transport and broader durable
+section assembly remain planned until their owning issues land.
 
 ## Ownership Boundary
 
@@ -150,6 +152,34 @@ Known section names (the `sections` object members; this list is what
   promotion. A client must record a separate lifecycle action before anything
   moves.
 
+### Working Set Local Runtime Boundary
+
+#222 defines the first RAM-first working-set boundary in
+`src/realtime/working-set.ts`. The MCP `working_set_append` tool adds scoped
+RAM-only entries, and the MCP `agent_context_pack` tool returns them in the
+`working_set` section only on exact-scope match. This does not make NATS
+transport available.
+
+Working-set items are labeled `working_context` and set
+`not_durable_memory=true`. They must not be inserted into `thoughts`,
+`decisions`, `sessions`, shared-kb, search indexes, or normal durable recall
+unless a later explicit client-owned lifecycle action promotes or nominates
+separate candidate memory.
+
+Default RAM budget:
+
+- TTL: 30 minutes (`ttl_ms=1800000`);
+- per-session cap: 24 items;
+- global in-process cap: 1024 items;
+- active-session cap: 128 sessions;
+- per-item content cap: 4000 characters;
+- per-item metadata cap: 2000 serialized JSON characters.
+
+The working-set boundary exposes counters for dropped, expired, and trimmed
+items. Dropped items are rejected before inclusion, expired items leave RAM
+after TTL, and trimmed items are evicted by per-session/global/session-count
+budget pressure.
+
 `warnings`, `budget`, and `citations` are always-present top-level envelope
 fields, not section members. They are mirrored by
 `get_contract().agent_context_pack.envelope_fields` and cannot be toggled
@@ -209,7 +239,8 @@ The response must make the source boundary explicit:
 - No NATS/JetStream runtime implementation. #223 owns the planned transport
   foundation in `docs/nats-jetstream-foundation.md`.
 - No recovery WAL implementation. #221 owns recovery.
-- No RAM working-set implementation. #222 owns hot state.
+- No NATS `agent_context_pack` tool availability. #222 owns the local MCP
+  working-set append/read path; transport exposure remains planned under #223.
 - No promote/relegate implementation. #224 owns lifecycle actions.
 - No server-side auto-promotion from working trace, recovery evidence, or
   candidate memory.
@@ -250,12 +281,20 @@ authoritative shape):
 ```json
 {
   "agent_context_pack": {
-    "status": "planned-contract",
-    "availability": "not_runtime_available",
-    "contract_doc": "docs/agent-context-pack-contract.md"
+    "status": "runtime-available",
+    "availability": "mcp_tool_available",
+    "contract_doc": "docs/agent-context-pack-contract.md",
+    "working_set": {
+      "status": "local-runtime-boundary",
+      "availability": "mcp_tool_available",
+      "implementation": "src/realtime/working-set.ts",
+      "item_label": "working_context",
+      "not_durable_memory": true,
+      "counters": ["dropped", "expired", "trimmed"]
+    }
   }
 }
 ```
 
-It must not appear in `tool_contracts` or in required client tool lists until
-the runtime tool exists.
+It appears in `tool_contracts` for MCP clients once the runtime tool exists.
+NATS subjects and downstream rollout are still release-gated separately.

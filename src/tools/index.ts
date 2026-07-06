@@ -47,59 +47,72 @@ import { registerTierLane } from "./tier-lane.ts";
 import { registerPromoteShared } from "./promote-shared.ts";
 import { registerGetContract } from "./get-contract.ts";
 import { registerListRepoFacts, registerUpsertRepoFact } from "./repo-facts.ts";
+import {
+  registerAgentContextPack,
+  registerWorkingSetAppend,
+} from "./agent-context-pack.ts";
+import { WorkingSetStore } from "../realtime/working-set.ts";
 
 export interface ToolDeps {
   pool: pg.Pool;
   embedFn: typeof generateEmbedding;
   allowNonTransactionalAppendFallback?: boolean;
+  workingSetStore?: WorkingSetStore;
 }
 
 export function registerAllTools(server: McpServer, deps: ToolDeps): void {
-  registerLogThought(server, deps);
-  registerLogDecision(server, deps);
-  registerSearchBrain(server, deps);
-  registerFindPerson(server, deps);
-  registerSessionSave(server, deps);
-  registerSessionLoad(server, deps);
-  registerArchiveEntry(server, deps);
-  registerListRecent(server, deps);
-  registerListStale(server, deps);
-  registerUpdateEntry(server, deps);
-  registerRateEntry(server, deps);
-  registerSearchAll(server, deps);
-  registerBrainAnswer(server, deps);
-  registerUpsertPerson(server, deps);
-  registerSetTier(server, deps);
-  registerGetEntry(server, deps);
-  registerResolveEntry(server, deps);
-  registerGetStats(server, deps);
-  registerAccessReport(server, deps);
-  registerBulkSetTier(server, deps);
-  registerFindDuplicates(server, deps);
-  registerCurateEntries(server, deps);
-  registerBulkArchive(server, deps);
-  registerListNamespaces(server, deps);
-  registerTierRecommendations(server, deps);
-  registerLaneUpsert(server, deps);
-  registerLaneLoad(server, deps);
-  registerAppendSessionEvent(server, deps);
-  registerSessionContext(server, deps);
-  registerSessionStart(server, deps);
-  registerSessionWrap(server, deps);
-  registerUpsertEntity(server, deps);
-  registerArchiveEntity(server, deps);
-  registerGetEntity(server, deps);
-  registerHydrateEntities(server, deps);
-  registerListEntities(server, deps);
-  registerLinkEntities(server, deps);
-  registerUnlinkEntities(server, deps);
-  registerAdjacentContext(server, deps);
-  registerPromoteEntry(server, deps);
-  registerDemoteEntry(server, deps);
-  registerScanNamespace(server, deps);
-  registerTierLane(server, deps);
-  registerPromoteShared(server, deps);
-  registerGetContract(server, deps);
-  registerUpsertRepoFact(server, deps);
-  registerListRepoFacts(server, deps);
+  const toolDeps: ToolDeps = {
+    ...deps,
+    workingSetStore: deps.workingSetStore ?? new WorkingSetStore(),
+  };
+
+  registerLogThought(server, toolDeps);
+  registerLogDecision(server, toolDeps);
+  registerSearchBrain(server, toolDeps);
+  registerFindPerson(server, toolDeps);
+  registerSessionSave(server, toolDeps);
+  registerSessionLoad(server, toolDeps);
+  registerArchiveEntry(server, toolDeps);
+  registerListRecent(server, toolDeps);
+  registerListStale(server, toolDeps);
+  registerUpdateEntry(server, toolDeps);
+  registerRateEntry(server, toolDeps);
+  registerSearchAll(server, toolDeps);
+  registerBrainAnswer(server, toolDeps);
+  registerUpsertPerson(server, toolDeps);
+  registerSetTier(server, toolDeps);
+  registerGetEntry(server, toolDeps);
+  registerResolveEntry(server, toolDeps);
+  registerGetStats(server, toolDeps);
+  registerAccessReport(server, toolDeps);
+  registerBulkSetTier(server, toolDeps);
+  registerFindDuplicates(server, toolDeps);
+  registerCurateEntries(server, toolDeps);
+  registerBulkArchive(server, toolDeps);
+  registerListNamespaces(server, toolDeps);
+  registerTierRecommendations(server, toolDeps);
+  registerLaneUpsert(server, toolDeps);
+  registerLaneLoad(server, toolDeps);
+  registerAppendSessionEvent(server, toolDeps);
+  registerSessionContext(server, toolDeps);
+  registerSessionStart(server, toolDeps);
+  registerSessionWrap(server, toolDeps);
+  registerUpsertEntity(server, toolDeps);
+  registerArchiveEntity(server, toolDeps);
+  registerGetEntity(server, toolDeps);
+  registerHydrateEntities(server, toolDeps);
+  registerListEntities(server, toolDeps);
+  registerLinkEntities(server, toolDeps);
+  registerUnlinkEntities(server, toolDeps);
+  registerAdjacentContext(server, toolDeps);
+  registerPromoteEntry(server, toolDeps);
+  registerDemoteEntry(server, toolDeps);
+  registerScanNamespace(server, toolDeps);
+  registerTierLane(server, toolDeps);
+  registerPromoteShared(server, toolDeps);
+  registerWorkingSetAppend(server, toolDeps);
+  registerAgentContextPack(server, toolDeps);
+  registerGetContract(server, toolDeps);
+  registerUpsertRepoFact(server, toolDeps);
+  registerListRepoFacts(server, toolDeps);
 }
