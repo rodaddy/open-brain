@@ -75,7 +75,7 @@ splits into disjoint files or review lanes.
 | --- | --- | --- | ---: | --- | --- | --- |
 | #223 NATS/JetStream runtime slice | `feat/223-nats-jetstream-runtime` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-223-nats-jetstream-runtime` | 1 implementation + 1 runtime/review sidecar | Later runtime implementation only after local-only #224/#222/#221 sequencing or explicit controller decision | No | Do not close #223 from the merged foundation PR; closing requires real runtime/deploy tests or explicit issue narrowing |
 | #247 DreamEngine decomposition | `feat/247-dreamengine-decomposition` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-247-dreamengine-decomposition` | 1 implementation + 1 dry-run/adversarial sidecar | Dry-run proposals for oversized entries with linked replacements | No | Close only with dry-run-by-default tests and no mutation without approval |
-| #137 optional qmd deep lookup | `feat/137-optional-qmd-lookup` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-137-optional-qmd-lookup` | 1 implementation/doc worker | Optional deep lookup wrapper or explicit no-op docs/tests proving qmd absence is non-fatal | No | Close only after Hermes/Open Brain recall paths are documented/tested to avoid a hard qmd dependency |
+| #137 optional qmd deep lookup | `docs/137-qmd-deep-lookup-disposition` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-137-qmd-deep-lookup-docs` | 1 docs/disposition worker plus controller validation | Explicit no-op docs/tests proving qmd absence is non-fatal; wrapper implementation deferred to mcp2cli/qmd/host-routing | No | Close only after PR lands with dated deferred disposition and non-fatal qmd semantics documented |
 | #118 Privilege Isolation source refs | `plan/118-privilege-isolation-split` or `feat/118-source-refs-slice` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-118-privilege-isolation` | 1 planning worker first, implementation workers only after split | Either split into child issues or implement one real tested source-ref slice | No | Do not close docs-only unless issue is converted to parent roadmap with child issues |
 | #167 legacy collab retirement | `release/167-retire-collab` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-167-retire-collab` | 1 release-planning worker only | Release/deploy checklist and preflight evidence, no mutation | Explicit approval required | Blocked for local-only; cannot close without live backup/migration/deploy/canary |
 
@@ -227,6 +227,11 @@ Required local work:
 
 Owning boundary:
 Optional deep-lookup escape hatch, not the Open Brain/Hermes memory contract.
+
+Disposition:
+Deferred on 2026-07-06. The local Open Brain slice records the non-goals and
+failure semantics in `docs/roadmap/optional-qmd-deep-lookup.md`; implementation
+belongs in a later approved mcp2cli/qmd/host-routing issue.
 
 Required local work:
 

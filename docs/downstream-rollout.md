@@ -195,6 +195,22 @@ Promotion rule: if distributed agents are expected to rely on a qmd-derived repo
 fact during normal work, that fact must be present in Open Brain. Remote qmd can
 exist as a best-effort deep lookup path, but it is not the memory contract.
 
+## Optional Remote qmd Deep Lookup
+
+Issue #137 does not add a remote qmd wrapper in this repo. The local disposition
+is documented in `docs/roadmap/optional-qmd-deep-lookup.md`.
+
+If a future PR implements a remote qmd wrapper, treat it as downstream-applicable
+even if the Open Brain memory contract does not require qmd. That PR must
+document:
+
+- trusted host and caller identity;
+- whether the wrapper lives in mcp2cli, qmd, Open Brain, or host automation;
+- non-fatal failure behavior for Hermes and other agents;
+- proof that required repo facts remain available through Open Brain when qmd
+  is unavailable;
+- live canary evidence for both wrapper success and qmd-unavailable fallback.
+
 ## Memory Substrate Local Slice Classification
 
 Issues #207 and #210 add draft-local `agent_memory_adapter` and

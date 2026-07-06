@@ -538,9 +538,9 @@
 
       <h4>1. #137 — Controlled remote qmd deep-lookup wrapper</h4>
       <ul class="checklist">
-        <li><code class="status">[]</code> Confirm the preconditions in the issue still hold (durable OB path working, qmd healthy on the GPU Mac) and decide: build the mcp2cli wrapper now or defer.</li>
-        <li><code class="status">[]</code> Safe local-only slice: document the optional remote-qmd escape hatch and failure semantics without building infra. Likely files: <code>docs/downstream-rollout.md</code>, <code>docs/memory-contract.md</code>, <code>python/openbrain-memory/README.md</code>.</li>
-        <li><code class="status">[]</code> If deferred: date the decision in the issue, label roadmap/optional, and keep the non-goals (no Hermes dependency on qmd) recorded; close or keep open per Rico's call.</li>
+        <li><code class="status">[x]</code> Confirm the preconditions in the issue still hold: durable OB is the required path, qmd is optional, and remote wrapper implementation crosses into mcp2cli/qmd/host-routing ownership.</li>
+        <li><code class="status">[x]</code> Safe local-only slice: document the optional remote-qmd escape hatch and failure semantics without building infra in <code>docs/roadmap/optional-qmd-deep-lookup.md</code>, <code>docs/downstream-rollout.md</code>, <code>docs/memory-contract.md</code>, <code>README.md</code>, and <code>python/openbrain-memory/README.md</code>.</li>
+        <li><code class="status">[x]</code> Deferred on 2026-07-06: implementation requires a later approved wrapper issue in the owning mcp2cli/qmd/host-routing boundary; normal Hermes/Open Brain memory must not depend on qmd.</li>
       </ul>
 
       <h4>2. #118 — File references / closed-brain roadmap</h4>
@@ -555,7 +555,7 @@
       <ul class="checklist">
         <li><code class="status">[x]</code> PR #255 focused and full local validation passed; Python package validation passed.</li>
         <li><code class="status">[x]</code> PR #255 GitHub checks passed; deploy skipped by design.</li>
-        <li><code class="status">[]</code> For #137 docs/contract slice, run <code>git diff --check</code> and the smallest relevant doc/example validation before PR.</li>
+        <li><code class="status">[x]</code> For #137 docs/contract slice, <code>git diff --check</code> and <code>bunx tsc --noEmit</code> passed locally before PR.</li>
         <li><code class="status">[x]</code> <code>gh issue list --state open</code> — live remaining open issues are #223, #167, and #137.</li>
         <li><code class="status">[]</code> Confirm every remaining open issue carries a roadmap/deferred label and a dated disposition comment before declaring Phase 6 complete.</li>
       </ul>

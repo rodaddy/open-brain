@@ -222,6 +222,14 @@ Additional current read helpers:
 - `list_entities()`
 - `hydrate_entities()`
 
+### qmd availability
+
+`openbrain-memory` callers must not require qmd for normal memory behavior.
+Required qmd-derived repo knowledge should already be curated into Open Brain
+and read through `list_repo_facts()` or normal memory retrieval. Future remote
+qmd deep lookup is an optional escape hatch only; qmd failures must not block
+Hermes startup, recall, writes, current memory, or repo facts.
+
 The generic `call_tool(name, arguments)` method remains available for forward
 compatibility, but missing first-class wrappers for required contract tools are
 a package bug.
