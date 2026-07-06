@@ -7,6 +7,7 @@ import { canWriteNamespace } from "../namespace-policy.ts";
 import { contentHash, EMBEDDING_MODEL } from "../embedding.ts";
 import {
   classifyShareCandidate,
+  containsSecret,
   SHARE_REJECTION_MAX_RESUBMIT_ATTEMPTS,
   type ShareRejectionDetail,
   shareRejectionDetail,
@@ -496,9 +497,20 @@ function adjudicateNominationSync(
     metadata,
   });
   if (decision === "reject-secret" || decision === "reject-private") {
-    // Strip the nomination so the async promoter never sweeps it. Stamp a
+    // Strip nomination/candidate metadata so the async promoter never sweeps it
+    // and persisted metadata does not violate lifecycle invariants. Stamp a
     // marker for auditability; the event content itself is untouched.
-    const { share_candidate: _drop, ...rest } = metadata;
+    const {
+      share_candidate: _dropShareCandidate,
+      memory_lifecycle_action: _dropLifecycleAction,
+      candidate_type: _dropCandidateType,
+      candidate_reason: _dropCandidateReason,
+      candidate_confidence: _dropCandidateConfidence,
+      candidate_scope: _dropCandidateScope,
+      candidate_staleness_policy: _dropCandidateStalenessPolicy,
+      evidence_refs: _dropEvidenceRefs,
+      ...rest
+    } = metadata;
     return {
       metadata: { ...rest, share_rejected_sync: decision },
       rejected: decision,
@@ -576,6 +588,20 @@ function validateMemoryLifecycleMetadata(
     }
     if (metadata.evidence_refs.some((item) => !isRecord(item))) {
       return "metadata.evidence_refs items must be objects";
+    }
+    let totalEvidenceBytes = 0;
+    for (const item of metadata.evidence_refs) {
+      const serialized = JSON.stringify(item);
+      totalEvidenceBytes += Buffer.byteLength(serialized, "utf8");
+      if (Buffer.byteLength(serialized, "utf8") > 2000) {
+        return "metadata.evidence_refs items must be at most 2000 JSON bytes";
+      }
+      if (containsSecret(serialized)) {
+        return "metadata.evidence_refs must not contain secrets";
+      }
+    }
+    if (totalEvidenceBytes > 10000) {
+      return "metadata.evidence_refs must be at most 10000 total JSON bytes";
     }
   }
   return null;

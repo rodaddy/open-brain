@@ -126,6 +126,8 @@ describe("scan_namespace", () => {
           },
         ],
       });
+      expect(parseToolResult(result).already_promoted).toBeUndefined();
+      expect(parseToolResult(result).summary.already_promoted).toBeUndefined();
       expect(parseToolResult(result).duplicates[0].existing_collab_id).toBeUndefined();
     } finally {
       await cleanup();

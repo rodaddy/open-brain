@@ -710,10 +710,14 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
             required: false,
             items: "object",
             maxItems: 20,
+            maxItemJsonBytes: 2000,
+            maxTotalJsonBytes: 10000,
             description:
               "Citation-safe evidence references for the candidate, such as " +
               "event ids, issue URLs, repo paths, commit SHAs, or source refs. " +
-              "Do not include raw private transcripts or secrets.",
+              "The server bounds serialized evidence metadata and rejects " +
+              "secret-like evidence refs. Do not include raw private transcripts " +
+              "or secrets.",
           },
           share_candidate: {
             type: "boolean",

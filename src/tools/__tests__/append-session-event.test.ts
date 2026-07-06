@@ -1424,6 +1424,7 @@ describe("append_session_event", () => {
       // Persisted metadata: nomination stripped, audit marker stamped.
       expect(mockPool.captured.metadata).not.toBeNull();
       expect(mockPool.captured.metadata!.share_candidate).toBeUndefined();
+      expect(mockPool.captured.metadata!.memory_lifecycle_action).toBeUndefined();
       expect(mockPool.captured.metadata!.share_rejected_sync).toBe(
         "reject-secret",
       );
@@ -1466,6 +1467,7 @@ describe("append_session_event", () => {
         },
       });
       expect(mockPool.captured.metadata!.share_candidate).toBeUndefined();
+      expect(mockPool.captured.metadata!.memory_lifecycle_action).toBeUndefined();
       expect(mockPool.captured.metadata!.share_rejected_sync).toBe(
         "reject-secret",
       );
@@ -1507,6 +1509,7 @@ describe("append_session_event", () => {
 
       expect(mockPool.captured.metadata).not.toBeNull();
       expect(mockPool.captured.metadata!.share_candidate).toBeUndefined();
+      expect(mockPool.captured.metadata!.memory_lifecycle_action).toBeUndefined();
       expect(mockPool.captured.metadata!.share_rejected_sync).toBe(
         "reject-private",
       );
@@ -1788,6 +1791,54 @@ describe("append_session_event", () => {
     }
   });
 
+  it("strips lifecycle candidate metadata from rejected shared nominations", async () => {
+    const mockPool = createCapturingPool();
+    const auth: AuthInfo = { role: "admin", clientId: "skippy" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "append_session_event",
+        arguments: {
+          session_key: "test",
+          event_type: "fact",
+          content:
+            "Secret nomination contains key " + "sk-" + "b".repeat(20),
+          metadata: {
+            share_candidate: true,
+            memory_lifecycle_action: "nominate_shared",
+            candidate_type: "shared_kb_nomination",
+            candidate_reason: "Candidate must be rejected before promotion.",
+            candidate_confidence: 0.9,
+            candidate_scope: { repo: "rodaddy/open-brain" },
+            candidate_staleness_policy: "revalidate before sharing",
+            evidence_refs: [{ issue: 224 }],
+          },
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.share_candidate_rejected).toBe("reject-secret");
+      expect(mockPool.captured.metadata).not.toBeNull();
+      expect(mockPool.captured.metadata!.share_candidate).toBeUndefined();
+      expect(mockPool.captured.metadata!.memory_lifecycle_action).toBeUndefined();
+      expect(mockPool.captured.metadata!.candidate_type).toBeUndefined();
+      expect(mockPool.captured.metadata!.candidate_reason).toBeUndefined();
+      expect(mockPool.captured.metadata!.candidate_confidence).toBeUndefined();
+      expect(mockPool.captured.metadata!.candidate_scope).toBeUndefined();
+      expect(
+        mockPool.captured.metadata!.candidate_staleness_policy,
+      ).toBeUndefined();
+      expect(mockPool.captured.metadata!.evidence_refs).toBeUndefined();
+      expect(mockPool.captured.metadata!.share_rejected_sync).toBe(
+        "reject-secret",
+      );
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("rejects malformed lifecycle metadata before persistence", async () => {
     const mockPool = createCapturingPool();
     const auth: AuthInfo = { role: "admin", clientId: "skippy" };
@@ -1811,6 +1862,39 @@ describe("append_session_event", () => {
       const parsed = JSON.parse((result.content as any)[0].text);
       expect(parsed.error).toBe("scope_validation");
       expect(parsed.message).toContain("candidate_reason");
+      expect(mockPool.captured.metadata).toBeNull();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("rejects lifecycle evidence refs that contain secrets", async () => {
+    const mockPool = createCapturingPool();
+    const auth: AuthInfo = { role: "admin", clientId: "skippy" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "append_session_event",
+        arguments: {
+          session_key: "test",
+          event_type: "fact",
+          content: "Candidate metadata evidence must be citation-safe.",
+          metadata: {
+            memory_lifecycle_action: "candidate",
+            candidate_type: "negative_example",
+            candidate_reason: "Evidence refs should not persist secrets.",
+            evidence_refs: [
+              { note: "token=" + "sk-" + "c".repeat(20) },
+            ],
+          },
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.error).toBe("scope_validation");
+      expect(parsed.message).toContain("evidence_refs");
       expect(mockPool.captured.metadata).toBeNull();
     } finally {
       await cleanup();

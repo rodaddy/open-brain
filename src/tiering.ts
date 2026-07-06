@@ -45,6 +45,14 @@ const ARCHIVE_TYPES: ReadonlySet<EventType> = new Set<EventType>([
   "action",
 ]);
 
+/** Lifecycle actions that explicitly keep a candidate out of automatic own-durable graduation. */
+const OWN_DURABLE_KEEP_LIFECYCLE_ACTIONS: ReadonlySet<string> = new Set([
+  "candidate",
+  "promote",
+  "relegate",
+  "discard",
+]);
+
 /** Minimal shape the classifier needs from a lane event. */
 export interface ClassifiableEvent {
   event_type: EventType;
@@ -73,7 +81,11 @@ export function classifyLaneEvent(
   event: ClassifiableEvent,
   minContentLength: number = DEFAULT_MIN_CONTENT_LENGTH,
 ): Classification {
-  if (event.metadata?.memory_lifecycle_action !== undefined) {
+  const lifecycleAction = event.metadata?.memory_lifecycle_action;
+  if (
+    typeof lifecycleAction === "string" &&
+    OWN_DURABLE_KEEP_LIFECYCLE_ACTIONS.has(lifecycleAction)
+  ) {
     return "keep";
   }
 

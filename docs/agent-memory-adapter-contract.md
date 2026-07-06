@@ -89,7 +89,8 @@ Candidate metadata should include:
   override.
 - `candidate_confidence`: client confidence from 0 to 1.
 - `evidence_refs`: citation-safe ids, issue URLs, repo paths, commits, or
-  source refs.
+  source refs. The server bounds each reference and rejects secret-like
+  evidence metadata.
 - `candidate_staleness_policy`: expiry or revalidation policy.
 - `candidate_reason`: explicit reason for the action.
 
