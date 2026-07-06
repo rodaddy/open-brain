@@ -10,7 +10,7 @@ from openbrain_memory import (
     validate_required_memory_contract,
 )
 
-CURRENT_CLIENT_VERSION = "0.1.2"
+CURRENT_CLIENT_VERSION = "0.1.3"
 
 
 def safe_string_display(value: str) -> str:
@@ -31,7 +31,7 @@ def representative_contract_manifest() -> dict:
             "rtech-hermes-runtime": "0.1.0",
         },
         "compatible_client_ranges": {
-            "openbrain-memory": ">=0.1.2 <1.0.0",
+            "openbrain-memory": ">=0.1.3 <1.0.0",
             "rtech-hermes-runtime": ">=0.1.0 <1.0.0",
         },
         "transport": {
@@ -225,7 +225,7 @@ def test_validate_contract_manifest_reports_min_client_version_failure():
         f"{safe_string_display(CURRENT_CLIENT_VERSION)}",
         "openbrain-memory "
         f"{safe_string_display('0.0.9')} does not satisfy compatible range "
-        f"{safe_string_display('>=0.1.2 <1.0.0')}",
+        f"{safe_string_display('>=0.1.3 <1.0.0')}",
     )
 
 
@@ -238,7 +238,7 @@ def test_validate_contract_manifest_reports_compatible_range_failure():
     assert result.reasons == (
         "openbrain-memory "
         f"{safe_string_display('1.0.0')} does not satisfy compatible range "
-        f"{safe_string_display('>=0.1.2 <1.0.0')}",
+        f"{safe_string_display('>=0.1.3 <1.0.0')}",
     )
 
 
@@ -289,11 +289,11 @@ def test_validate_contract_manifest_rejects_unsupported_range_operator():
 def test_validate_contract_manifest_rejects_prerelease_client_version():
     manifest = representative_contract_manifest()
 
-    result = validate_contract_manifest(manifest, client_version="0.1.2-alpha")
+    result = validate_contract_manifest(manifest, client_version="0.1.3-alpha")
 
     assert result.ok is False
     assert result.reasons == (
-        "client_version '0.1.2-alpha' is not a supported semver version",
+        "client_version '0.1.3-alpha' is not a supported semver version",
     )
 
 

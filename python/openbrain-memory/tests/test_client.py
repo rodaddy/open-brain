@@ -499,7 +499,7 @@ def test_all_registered_tool_wrappers_call_matching_tool_names():
 
 
 def test_required_contract_tools_have_first_class_wrappers_and_help():
-    assert CURRENT_CONTRACT_VERSION == "2026-07-05.memory-tools.v12"
+    assert CURRENT_CONTRACT_VERSION == "2026-07-06.memory-tools.v13"
     assert set(REQUIRED_CONTRACT_TOOLS) <= set(CURRENT_TOOL_HELP)
 
     for tool_name in REQUIRED_CONTRACT_TOOLS:
@@ -1558,6 +1558,19 @@ def test_append_session_event_surfaces_share_candidate_rejection():
                         "ok": True,
                         "event_id": "evt-1",
                         "share_candidate_rejected": "reject-secret",
+                        "reject_detail": {
+                            "category": "reject-secret",
+                            "matched_kind": "openai_api_key",
+                            "span_count": 1,
+                            "redaction_hint": "Remove the credential and re-nominate.",
+                            "resubmittable": True,
+                            "resubmit_attempt": 0,
+                            "max_resubmit_attempts": 2,
+                            "resubmit_metadata": {
+                                "sanitized_resubmit_of": "evt-1",
+                                "sanitized_resubmit_attempt": 1,
+                            },
+                        },
                     }
                 ),
             }
@@ -1573,6 +1586,11 @@ def test_append_session_event_surfaces_share_candidate_rejection():
     )
 
     assert result["share_candidate_rejected"] == "reject-secret"
+    assert result["reject_detail"]["matched_kind"] == "openai_api_key"
+    assert result["reject_detail"]["resubmit_metadata"] == {
+        "sanitized_resubmit_of": "evt-1",
+        "sanitized_resubmit_attempt": 1,
+    }
     assert result["event_id"] == "evt-1"
 
 

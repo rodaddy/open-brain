@@ -65,31 +65,78 @@ const LABELED_LONG_SECRET_RE =
   "(client[_-]?secret|access[_-]?token|refresh[_-]?token|private[_-]?key)" +
   "\\s*[:=]\\s*[A-Za-z0-9._/+=-]{20,}";
 
+export interface SecretPatternDetector {
+  kind: string;
+  pattern: RegExp;
+}
+
 /**
  * Compiled secret detectors. `i` mirrors the Python `(?i)` inline flags; the
  * private-key block uses dot-all via the explicit `[\s\S]` class so no `s` flag
  * is required (keeps Bun/JS regex engine parity with the Python `re.S`).
+ *
+ * The `kind` labels are safe to return in structured rejection details. They
+ * identify the classifier, never the matched secret value.
  */
-export const SECRET_PATTERNS: readonly RegExp[] = [
-  /authorization\s*[:=]\s*bearer\s+[^\s,;]+/i,
-  /bearer\s+[A-Za-z0-9._~+/=-]{8,}/i,
-  /mcp-session-id\s*[:=]\s*[A-Za-z0-9._:-]+/i,
-  new RegExp(`\\b${SK_PREFIX}[A-Za-z0-9_-]{10,}\\b`),
-  new RegExp(`${GITHUB_PAT_PREFIX}[A-Za-z0-9_]+`, "i"),
-  new RegExp(`${GITHUB_PREFIX_RE}[A-Za-z0-9_]{20,}`, "i"),
-  new RegExp(`\\b${AWS_ACCESS_KEY_PREFIX_RE}\\b`),
-  new RegExp(AWS_SECRET_CONTEXT_RE, "i"),
-  new RegExp(AWS_SECRET_LIKE_RE),
-  new RegExp(`\\b${SLACK_TOKEN_RE}\\b`),
-  new RegExp(`\\b${GOOGLE_API_KEY_PREFIX}[A-Za-z0-9_-]{35}\\b`),
-  new RegExp(`\\b${JWT_LIKE_RE}\\b`),
-  /(api[_-]?key|token|password|secret)\s*[:=]\s*[^\s,;]+/i,
-  /"(api[_-]?key|token|password|secret)"\s*:\s*"[^"]+"/i,
-  new RegExp(PRIVATE_KEY_BLOCK_RE),
-  new RegExp(`\\b${STRIPE_KEY_RE}\\b`),
-  new RegExp(URL_USERINFO_CRED_RE, "i"),
-  new RegExp(LABELED_LONG_SECRET_RE, "i"),
+export const SECRET_DETECTORS: readonly SecretPatternDetector[] = [
+  { kind: "authorization_bearer_header", pattern: /authorization\s*[:=]\s*bearer\s+[^\s,;]+/i },
+  { kind: "bearer_token", pattern: /bearer\s+[A-Za-z0-9._~+/=-]{8,}/i },
+  { kind: "mcp_session_id", pattern: /mcp-session-id\s*[:=]\s*[A-Za-z0-9._:-]+/i },
+  { kind: "openai_api_key", pattern: new RegExp(`\\b${SK_PREFIX}[A-Za-z0-9_-]{10,}\\b`) },
+  { kind: "github_pat", pattern: new RegExp(`${GITHUB_PAT_PREFIX}[A-Za-z0-9_]+`, "i") },
+  { kind: "github_token", pattern: new RegExp(`${GITHUB_PREFIX_RE}[A-Za-z0-9_]{20,}`, "i") },
+  { kind: "aws_access_key_id", pattern: new RegExp(`\\b${AWS_ACCESS_KEY_PREFIX_RE}\\b`) },
+  { kind: "aws_secret_access_key", pattern: new RegExp(AWS_SECRET_CONTEXT_RE, "i") },
+  { kind: "aws_secret_like", pattern: new RegExp(AWS_SECRET_LIKE_RE) },
+  { kind: "slack_token", pattern: new RegExp(`\\b${SLACK_TOKEN_RE}\\b`) },
+  { kind: "google_api_key", pattern: new RegExp(`\\b${GOOGLE_API_KEY_PREFIX}[A-Za-z0-9_-]{35}\\b`) },
+  { kind: "jwt", pattern: new RegExp(`\\b${JWT_LIKE_RE}\\b`) },
+  { kind: "labeled_secret", pattern: /(api[_-]?key|token|password|secret)\s*[:=]\s*[^\s,;]+/i },
+  { kind: "json_labeled_secret", pattern: /"(api[_-]?key|token|password|secret)"\s*:\s*"[^"]+"/i },
+  { kind: "private_key_block", pattern: new RegExp(PRIVATE_KEY_BLOCK_RE) },
+  { kind: "stripe_key", pattern: new RegExp(`\\b${STRIPE_KEY_RE}\\b`) },
+  { kind: "url_userinfo_credential", pattern: new RegExp(URL_USERINFO_CRED_RE, "i") },
+  { kind: "labeled_long_secret", pattern: new RegExp(LABELED_LONG_SECRET_RE, "i") },
 ];
+
+export const SECRET_PATTERNS: readonly RegExp[] = SECRET_DETECTORS.map(
+  ({ pattern }) => pattern,
+);
+
+export const SHARE_REJECTION_MAX_RESUBMIT_ATTEMPTS = 2;
+
+export interface ShareRejectionDetail {
+  category: "reject-secret" | "reject-private";
+  matched_kind: string;
+  span_count: number;
+  redaction_hint: string;
+  resubmittable: boolean;
+  resubmit_attempt: number;
+  max_resubmit_attempts: number;
+}
+
+export interface ShareRejectionDetailOptions {
+  resubmit_attempt?: number;
+}
+
+function globalClone(pattern: RegExp): RegExp {
+  const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
+  return new RegExp(pattern.source, flags);
+}
+
+function countMatches(pattern: RegExp, text: string): number {
+  return Array.from(text.matchAll(globalClone(pattern))).length;
+}
+
+function detectSecret(text: string): { matched_kind: string; span_count: number } | null {
+  if (!text) return null;
+  for (const { kind, pattern } of SECRET_DETECTORS) {
+    if (pattern.test(text)) {
+      return { matched_kind: kind, span_count: countMatches(pattern, text) };
+    }
+  }
+  return null;
+}
 
 /**
  * True if `text` contains anything matching a known secret pattern. Conservative
@@ -97,12 +144,7 @@ export const SECRET_PATTERNS: readonly RegExp[] = [
  * `classifyShareCandidate` consults before anything else.
  */
 export function containsSecret(text: string): boolean {
-  if (!text) return false;
-  for (const pattern of SECRET_PATTERNS) {
-    // Patterns are stateless here (no global flag) so test() is safe to reuse.
-    if (pattern.test(text)) return true;
-  }
-  return false;
+  return detectSecret(text) !== null;
 }
 
 /**
@@ -162,18 +204,83 @@ const PRIVATE_TAGS: ReadonlySet<string> = new Set([
 ]);
 
 function isPrivate(input: ShareCandidateInput): boolean {
+  return detectPrivate(input) !== null;
+}
+
+function detectPrivate(input: ShareCandidateInput): {
+  matched_kind: string;
+  span_count: number;
+} | null {
   const metadata = input.metadata ?? {};
-  if (metadata.private === true || metadata.personal === true) return true;
+  if (metadata.private === true) {
+    return { matched_kind: "private-flag", span_count: 1 };
+  }
+  if (metadata.personal === true) {
+    return { matched_kind: "personal-flag", span_count: 1 };
+  }
   // Conservative namespace-personal markers an agent may stamp on a candidate.
   const visibility = metadata.visibility ?? metadata.scope;
   if (typeof visibility === "string") {
     const v = visibility.toLowerCase();
-    if (v === "private" || v === "personal") return true;
+    if (v === "private") {
+      return { matched_kind: "private-visibility", span_count: 1 };
+    }
+    if (v === "personal") {
+      return { matched_kind: "personal-visibility", span_count: 1 };
+    }
   }
-  for (const tag of input.tags ?? []) {
-    if (PRIVATE_TAGS.has(tag.trim().toLowerCase())) return true;
+  const privateTagCount = (input.tags ?? []).filter((tag) =>
+    PRIVATE_TAGS.has(tag.trim().toLowerCase()),
+  ).length;
+  if (privateTagCount > 0) {
+    return { matched_kind: "private-tag", span_count: privateTagCount };
   }
-  return false;
+  return null;
+}
+
+function resubmitAttempt(metadata: Record<string, unknown> | undefined): number {
+  const raw = metadata?.sanitized_resubmit_attempt;
+  if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 0) return 0;
+  return raw;
+}
+
+export function shareRejectionDetail(
+  input: ShareCandidateInput,
+  options: ShareRejectionDetailOptions = {},
+): ShareRejectionDetail | null {
+  const attempt =
+    typeof options.resubmit_attempt === "number" &&
+    Number.isInteger(options.resubmit_attempt) &&
+    options.resubmit_attempt >= 0
+      ? options.resubmit_attempt
+      : resubmitAttempt(input.metadata);
+  const secret = detectSecret(input.content);
+  if (secret) {
+    return {
+      category: "reject-secret",
+      matched_kind: secret.matched_kind,
+      span_count: secret.span_count,
+      redaction_hint:
+        "Remove the credential and re-nominate the sanitized fact; describe the action, not the secret.",
+      resubmittable: attempt < SHARE_REJECTION_MAX_RESUBMIT_ATTEMPTS,
+      resubmit_attempt: attempt,
+      max_resubmit_attempts: SHARE_REJECTION_MAX_RESUBMIT_ATTEMPTS,
+    };
+  }
+  const privateMatch = detectPrivate(input);
+  if (privateMatch) {
+    return {
+      category: "reject-private",
+      matched_kind: privateMatch.matched_kind,
+      span_count: privateMatch.span_count,
+      redaction_hint:
+        "Remove personal/private markers or rewrite without private details before re-nominating.",
+      resubmittable: attempt < SHARE_REJECTION_MAX_RESUBMIT_ATTEMPTS,
+      resubmit_attempt: attempt,
+      max_resubmit_attempts: SHARE_REJECTION_MAX_RESUBMIT_ATTEMPTS,
+    };
+  }
+  return null;
 }
 
 /**

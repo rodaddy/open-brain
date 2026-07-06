@@ -4,6 +4,7 @@ import {
   containsSecret,
   DEFAULT_MIN_SHARE_LENGTH,
   redactText,
+  shareRejectionDetail,
   SECRET_PATTERNS,
 } from "./sharing.ts";
 
@@ -181,6 +182,65 @@ describe("classifyShareCandidate — reject-secret", () => {
         content: `${LONG_FACT} session ${FAKE_JWT}`,
       }),
     ).toBe("reject-secret");
+  });
+});
+
+describe("shareRejectionDetail", () => {
+  it("returns a non-leaking secret classifier label and span count", () => {
+    const detail = shareRejectionDetail({
+      event_type: "fact",
+      importance: "hot",
+      content: `${LONG_FACT} ${FAKE_AWS_ACCESS_KEY} then ${FAKE_AWS_ACCESS_KEY}`,
+      metadata: { share_candidate: true },
+    });
+
+    expect(detail).toMatchObject({
+      category: "reject-secret",
+      matched_kind: "aws_access_key_id",
+      span_count: 2,
+      resubmittable: true,
+      resubmit_attempt: 0,
+      max_resubmit_attempts: 2,
+    });
+    expect(JSON.stringify(detail)).not.toContain(FAKE_AWS_ACCESS_KEY);
+    expect(detail?.redaction_hint).toContain("Remove the credential");
+  });
+
+  it("returns private marker detail without echoing private content", () => {
+    const detail = shareRejectionDetail({
+      content: LONG_FACT,
+      tags: ["work", "confidential", "secret"],
+      metadata: { share_candidate: true },
+    });
+
+    expect(detail).toMatchObject({
+      category: "reject-private",
+      matched_kind: "private-tag",
+      span_count: 2,
+      resubmittable: true,
+    });
+    expect(JSON.stringify(detail)).not.toContain("confidential");
+    expect(JSON.stringify(detail)).not.toContain("secret");
+  });
+
+  it("bounds repeated sanitized resubmission attempts", () => {
+    const detail = shareRejectionDetail({
+      content: `${LONG_FACT} ${FAKE_SK}`,
+      metadata: {
+        share_candidate: true,
+        sanitized_resubmit_of: "evt-1",
+        sanitized_resubmit_attempt: 2,
+      },
+    });
+
+    expect(detail).toMatchObject({
+      category: "reject-secret",
+      matched_kind: "openai_api_key",
+      resubmit_attempt: 2,
+      max_resubmit_attempts: 2,
+      resubmittable: false,
+    });
+    expect(JSON.stringify(detail)).not.toContain(FAKE_SK);
   });
 });
 
