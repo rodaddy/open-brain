@@ -6,6 +6,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { registerAppendSessionEvent } from "../append-session-event.ts";
 import type { ToolDeps } from "../index.ts";
 import type { AuthInfo } from "../../types.ts";
+import { EMBEDDING_MODEL, contentHash } from "../../embedding.ts";
 
 function createMockEmbed(result: number[] | null = Array(768).fill(0.1)) {
   return async (_text: string) => result;
@@ -263,7 +264,8 @@ describe("append_session_event", () => {
     const captured: {
       laneInsertParams?: any[];
       eventInsertParams?: any[];
-    } = {};
+      embedInputs: string[];
+    } = { embedInputs: [] };
     const mockPool = {
       query: async (sql: string, params?: any[]) => {
         if (sql.includes("INSERT INTO ob_session_lanes")) {
@@ -295,7 +297,10 @@ describe("append_session_event", () => {
       },
     };
     const auth: AuthInfo = { role: "agent", clientId: "nagatha" };
-    const { client, cleanup } = await setupToolClient(mockPool, auth);
+    const { client, cleanup } = await setupToolClient(mockPool, auth, async (text) => {
+      captured.embedInputs.push(text);
+      return Array(768).fill(0.1);
+    });
 
     try {
       const result = await client.callTool({
@@ -321,7 +326,7 @@ describe("append_session_event", () => {
       expect(parsed.event_id).toBe("event-uuid-1");
       expect(parsed.lane_id).toBe("lane-uuid-new");
       expect(parsed.lane_created).toBe(true);
-      expect(captured.laneInsertParams).toEqual([
+      expect(captured.laneInsertParams?.slice(0, 9)).toEqual([
         "discord:guild-1:channel-1:thread-1:nagatha",
         "nagatha",
         "nagatha",
@@ -331,7 +336,19 @@ describe("append_session_event", () => {
         "rtech-hermes",
         "Nagatha Discord scoped memory",
         JSON.stringify({ server_id: "guild-1" }),
-        "nagatha",
+      ]);
+      expect(captured.laneInsertParams?.[9]).not.toBeNull();
+      expect(captured.laneInsertParams?.[10]).toBe(
+        contentHash(
+          "discord:guild-1:channel-1:thread-1:nagatha|Nagatha Discord scoped memory",
+        ),
+      );
+      expect(captured.laneInsertParams?.[11]).not.toBeNull();
+      expect(captured.laneInsertParams?.[12]).toBe(EMBEDDING_MODEL);
+      expect(captured.laneInsertParams?.[13]).toBe("nagatha");
+      expect(captured.embedInputs).toEqual([
+        "Nagatha Discord scoped memory\nrtech-hermes",
+        "GitHub issue URLs must use live gh first.",
       ]);
       expect(captured.eventInsertParams?.[0]).toBe("lane-uuid-new");
     } finally {
@@ -692,6 +709,85 @@ describe("append_session_event", () => {
       expect(parsed.error).toBe("retryable_outage");
       expect(parsed.retryable).toBe(true);
       expect(parsed.message).toContain("connection timeout");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("rolls back a first-write lane when event insert fails after lane creation", async () => {
+    const calls: string[] = [];
+    let released = false;
+    const client = {
+      query: async (sql: string, _params?: any[]) => {
+        calls.push(sql);
+        if (sql === "BEGIN" || sql === "ROLLBACK" || sql === "COMMIT") {
+          return { rows: [] };
+        }
+        if (sql.includes("FROM ob_session_lanes")) {
+          return { rows: [] };
+        }
+        if (sql.includes("INSERT INTO ob_session_lanes")) {
+          return {
+            rows: [
+              {
+                id: "lane-uuid-new",
+                status: "active",
+                agent: "nagatha",
+                source: "discord",
+                channel_id: "channel-1",
+                thread_id: null,
+                metadata: { server_id: "guild-1" },
+              },
+            ],
+          };
+        }
+        if (sql.includes("INSERT INTO ob_session_events")) {
+          throw new Error("event insert failed");
+        }
+        return { rows: [] };
+      },
+      release: () => {
+        released = true;
+      },
+    };
+    const mockPool = {
+      connect: async () => client,
+      query: async () => {
+        throw new Error("pool.query should not be used inside transaction");
+      },
+    };
+    const auth: AuthInfo = { role: "agent", clientId: "nagatha" };
+    const { client: toolClient, cleanup } = await setupToolClient(
+      mockPool as any,
+      auth,
+      createMockEmbed(null),
+    );
+
+    try {
+      const result = await toolClient.callTool({
+        name: "append_session_event",
+        arguments: {
+          session_key: "discord:guild-1:channel-1:nagatha",
+          create_if_missing: true,
+          agent: "nagatha",
+          platform: "discord",
+          server_id: "guild-1",
+          channel_id: "channel-1",
+          topic: "Nagatha Discord scoped memory",
+          event_type: "fact",
+          content: "This event insert fails.",
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.error).toBe("retryable_outage");
+      expect(parsed.retryable).toBe(true);
+      expect(parsed.message).toContain("event insert failed");
+      expect(calls).toContain("BEGIN");
+      expect(calls).toContain("ROLLBACK");
+      expect(calls).not.toContain("COMMIT");
+      expect(released).toBe(true);
     } finally {
       await cleanup();
     }

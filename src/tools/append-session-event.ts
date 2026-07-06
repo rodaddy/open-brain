@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type pg from "pg";
 import { toSql } from "pgvector/pg";
 import { canWrite } from "../permissions.ts";
 import { canWriteNamespace } from "../namespace-policy.ts";
@@ -44,6 +45,71 @@ function appendSessionEventError(
   };
 }
 
+type Queryable = Pick<pg.Pool | pg.PoolClient, "query">;
+
+async function withAppendDb<T>(
+  deps: ToolDeps,
+  transactional: boolean,
+  fn: (db: Queryable) => Promise<T>,
+): Promise<T> {
+  if (!transactional || typeof deps.pool.connect !== "function") {
+    return fn(deps.pool);
+  }
+
+  const client = await deps.pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await fn(client);
+    await client.query("COMMIT");
+    return result;
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+async function firstWriteLaneEmbedding(
+  deps: ToolDeps,
+  args: {
+    session_key: string;
+    project?: string;
+    topic?: string;
+  },
+): Promise<{
+  embeddingVal: ReturnType<typeof toSql> | null;
+  contentHashValue: string | null;
+  embeddedAt: string | null;
+  model: string | null;
+}> {
+  const contextText = args.topic || "";
+  const contentHashValue = contextText
+    ? contentHash(args.session_key + "|" + contextText)
+    : null;
+
+  let embedding: number[] | null = null;
+  if (contextText) {
+    const embedParts = [contextText];
+    if (args.project) embedParts.push(args.project);
+    try {
+      embedding = await deps.embedFn(embedParts.join("\n"));
+    } catch (err) {
+      logger.warn("append_session_event_lane_embed_error", {
+        session_key: args.session_key,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  return {
+    embeddingVal: embedding ? toSql(embedding) : null,
+    contentHashValue,
+    embeddedAt: embedding ? new Date().toISOString() : null,
+    model: embedding ? EMBEDDING_MODEL : null,
+  };
+}
+
 function scopeConflicts(
   lane: Record<string, unknown>,
   args: {
@@ -83,6 +149,7 @@ function scopeConflicts(
 }
 
 async function ensureLaneForAppend(
+  db: Queryable,
   deps: ToolDeps,
   args: {
     session_key: string;
@@ -104,7 +171,7 @@ async function ensureLaneForAppend(
   const laneColumns =
     "id, status, agent, source, channel_id, thread_id, metadata";
   const laneParams = [args.namespace, args.session_key];
-  const { rows: laneRows } = await deps.pool.query(
+  const { rows: laneRows } = await db.query(
     `SELECT ${laneColumns}
 FROM ob_session_lanes
 WHERE namespace = $1 AND session_key = $2`,
@@ -119,11 +186,13 @@ WHERE namespace = $1 AND session_key = $2`,
     attemptedCreate = true;
     const metadata =
       args.server_id === undefined ? {} : { server_id: args.server_id };
-    const { rows: insertedRows } = await deps.pool.query(
+    const laneEmbedding = await firstWriteLaneEmbedding(deps, args);
+    const { rows: insertedRows } = await db.query(
       `INSERT INTO ob_session_lanes
   (session_key, namespace, status, agent, source, channel_id, thread_id,
-   project, topic, metadata, created_by)
-VALUES ($1, $2, 'active', $3, $4, $5, $6, $7, $8, $9, $10)
+   project, topic, metadata, embedding, content_hash, embedded_at,
+   embedding_model, created_by)
+VALUES ($1, $2, 'active', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 ON CONFLICT (namespace, session_key) DO NOTHING
 RETURNING ${laneColumns}`,
       [
@@ -136,6 +205,10 @@ RETURNING ${laneColumns}`,
         args.project ?? null,
         args.topic ?? null,
         JSON.stringify(metadata),
+        laneEmbedding.embeddingVal,
+        laneEmbedding.contentHashValue,
+        laneEmbedding.embeddedAt,
+        laneEmbedding.model,
         auth.clientId,
       ],
     );
@@ -143,7 +216,7 @@ RETURNING ${laneColumns}`,
       lane = insertedRows[0] as Record<string, unknown>;
       created = true;
     } else {
-      const { rows: racedRows } = await deps.pool.query(
+      const { rows: racedRows } = await db.query(
         `SELECT ${laneColumns}
 FROM ob_session_lanes
 WHERE namespace = $1 AND session_key = $2`,
@@ -294,7 +367,7 @@ function requestedResubmitAttempt(metadata: Record<string, unknown>): number {
 }
 
 async function effectiveResubmitState(
-  deps: ToolDeps,
+  db: Queryable,
   laneId: string,
   metadata: Record<string, unknown>,
 ): Promise<{
@@ -304,7 +377,7 @@ async function effectiveResubmitState(
   const resubmitOf = sanitizedResubmitOf(metadata);
   const requested = requestedResubmitAttempt(metadata);
   if (!resubmitOf) {
-    const { rows } = await deps.pool.query(
+    const { rows } = await db.query(
       `SELECT COUNT(*)::int AS rejected_count
          FROM ob_session_events
         WHERE lane_id = $1
@@ -321,7 +394,7 @@ async function effectiveResubmitState(
     return { attempt: Math.max(requested, observedAttempt) };
   }
 
-  const { rows } = await deps.pool.query(
+  const { rows } = await db.query(
     `SELECT
         (
           SELECT COUNT(*)::int
@@ -576,174 +649,182 @@ export function registerAppendSessionEvent(
       });
 
       try {
-        const laneResult = await ensureLaneForAppend(
+        return await withAppendDb(
           deps,
-          {
-            session_key: args.session_key,
-            namespace: ns,
-            create_if_missing: args.create_if_missing,
-            agent: args.agent,
-            platform: args.platform,
-            server_id: args.server_id,
-            channel_id: args.channel_id,
-            thread_id:
-              args.create_if_missing === true && args.channel_id !== undefined
-                ? (args.thread_id ?? null)
-                : args.thread_id,
-            project: args.project,
-            topic: args.topic,
-          },
-          auth,
-        );
-        if (!laneResult.ok) {
-          return laneResult.response;
-        }
+          args.create_if_missing === true,
+          async (db) => {
+            const laneResult = await ensureLaneForAppend(
+              db,
+              deps,
+              {
+                session_key: args.session_key,
+                namespace: ns,
+                create_if_missing: args.create_if_missing,
+                agent: args.agent,
+                platform: args.platform,
+                server_id: args.server_id,
+                channel_id: args.channel_id,
+                thread_id:
+                  args.create_if_missing === true &&
+                  args.channel_id !== undefined
+                    ? (args.thread_id ?? null)
+                    : args.thread_id,
+                project: args.project,
+                topic: args.topic,
+              },
+              auth,
+            );
+            if (!laneResult.ok) {
+              return laneResult.response;
+            }
 
-        if (laneResult.lane.status === "archived") {
-          return appendSessionEventError(
-            "unsupported_operation",
-            `Lane "${args.session_key}" is archived; reactivate before appending events`,
-            false,
-            { session_key: args.session_key, namespace: ns },
-          );
-        }
+            if (laneResult.lane.status === "archived") {
+              return appendSessionEventError(
+                "unsupported_operation",
+                `Lane "${args.session_key}" is archived; reactivate before appending events`,
+                false,
+                { session_key: args.session_key, namespace: ns },
+              );
+            }
 
-        const laneId = String(laneResult.lane.id);
+            const laneId = String(laneResult.lane.id);
 
-        // Hybrid sync gate: a share_candidate nomination carrying a secret or
-        // person-private content is rejected inline (cheap, no embedding) and
-        // its nomination stripped before persist, so the async promoter never
-        // sees it. Worthiness/dedup/promote remain async.
-        let nomination = adjudicateNominationSync(
-          args.event_type,
-          importance,
-          args.content,
-          args.metadata ?? {},
-        );
-        if (nomination.rejected) {
-          const resubmit = await effectiveResubmitState(
-            deps,
-            laneId,
-            args.metadata ?? {},
-          );
-          nomination = adjudicateNominationSync(
-            args.event_type,
-            importance,
-            args.content,
-            args.metadata ?? {},
-            resubmit.attempt,
-            resubmit.blockedReason,
-          );
-        }
-        const metadata = appendWriterProvenance(nomination.metadata, auth);
-        if (nomination.rejected) {
-          logger.warn("append_session_event_share_rejected", {
-            session_key: args.session_key,
-            namespace: ns,
-            decision: nomination.rejected,
-            matched_kind: nomination.rejectDetail?.matched_kind,
-            span_count: nomination.rejectDetail?.span_count,
-            resubmittable: nomination.rejectDetail?.resubmittable,
-            clientId: auth.clientId,
-          });
-        }
+            // Hybrid sync gate: a share_candidate nomination carrying a secret or
+            // person-private content is rejected inline (cheap, no embedding) and
+            // its nomination stripped before persist, so the async promoter never
+            // sees it. Worthiness/dedup/promote remain async.
+            let nomination = adjudicateNominationSync(
+              args.event_type,
+              importance,
+              args.content,
+              args.metadata ?? {},
+            );
+            if (nomination.rejected) {
+              const resubmit = await effectiveResubmitState(
+                db,
+                laneId,
+                args.metadata ?? {},
+              );
+              nomination = adjudicateNominationSync(
+                args.event_type,
+                importance,
+                args.content,
+                args.metadata ?? {},
+                resubmit.attempt,
+                resubmit.blockedReason,
+              );
+            }
+            const metadata = appendWriterProvenance(nomination.metadata, auth);
+            if (nomination.rejected) {
+              logger.warn("append_session_event_share_rejected", {
+                session_key: args.session_key,
+                namespace: ns,
+                decision: nomination.rejected,
+                matched_kind: nomination.rejectDetail?.matched_kind,
+                span_count: nomination.rejectDetail?.span_count,
+                resubmittable: nomination.rejectDetail?.resubmittable,
+                clientId: auth.clientId,
+              });
+            }
 
-        // Generate embedding (non-fatal)
-        let embedding: number[] | null = null;
-        try {
-          embedding = await deps.embedFn(args.content);
-        } catch (err) {
-          logger.warn("append_session_event_embed_error", {
-            session_key: args.session_key,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
+            // Generate embedding (non-fatal)
+            let embedding: number[] | null = null;
+            try {
+              embedding = await deps.embedFn(args.content);
+            } catch (err) {
+              logger.warn("append_session_event_embed_error", {
+                session_key: args.session_key,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            }
 
-        const hash = contentHash(args.content);
-        const embeddingVal = embedding ? toSql(embedding) : null;
-        const embeddedAt = embedding ? new Date().toISOString() : null;
-        const model = embedding ? EMBEDDING_MODEL : null;
+            const hash = contentHash(args.content);
+            const embeddingVal = embedding ? toSql(embedding) : null;
+            const embeddedAt = embedding ? new Date().toISOString() : null;
+            const model = embedding ? EMBEDDING_MODEL : null;
 
-        const { rows } = await deps.pool.query(
-          `INSERT INTO ob_session_events
+            const { rows } = await db.query(
+              `INSERT INTO ob_session_events
              (lane_id, event_type, content, source, artifact_path, importance,
               metadata, embedding, content_hash, embedded_at, embedding_model, created_by)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
            ON CONFLICT (lane_id, content_hash) WHERE content_hash IS NOT NULL DO NOTHING
            RETURNING id, created_at`,
-          [
-            laneId,
-            args.event_type,
-            args.content,
-            args.source ?? null,
-            args.artifact_path ?? null,
-            importance,
-            JSON.stringify(metadata),
-            embeddingVal,
-            hash,
-            embeddedAt,
-            model,
-            auth.clientId,
-          ],
+              [
+                laneId,
+                args.event_type,
+                args.content,
+                args.source ?? null,
+                args.artifact_path ?? null,
+                importance,
+                JSON.stringify(metadata),
+                embeddingVal,
+                hash,
+                embeddedAt,
+                model,
+                auth.clientId,
+              ],
+            );
+
+            if (rows.length === 0) {
+              return {
+                content: [
+                  {
+                    type: "text" as const,
+                    text: JSON.stringify({
+                      duplicate: true,
+                      message:
+                        "Event with identical content already exists in this lane",
+                      ...provenance,
+                    }),
+                  },
+                ],
+              };
+            }
+
+            const result = {
+              event_id: rows[0].id,
+              lane_id: laneId,
+              lane_created: laneResult.created,
+              event_type: args.event_type,
+              importance,
+              created_at: rows[0].created_at,
+              ...provenance,
+              // Surface the sync nomination outcome so a contract-driven agent
+              // learns its share_candidate was refused (and why) without polling.
+              ...(nomination.rejected
+                ? {
+                    share_candidate_rejected: nomination.rejected,
+                    ...(nomination.rejectDetail
+                      ? {
+                          reject_detail: attachResubmitTarget(
+                            nomination.rejectDetail,
+                            rows[0].id,
+                            nomination.metadata,
+                          ),
+                        }
+                      : {}),
+                  }
+                : {}),
+            };
+
+            logger.info("append_session_event_ok", {
+              event_id: result.event_id,
+              lane_id: result.lane_id,
+              event_type: result.event_type,
+              importance: result.importance,
+            });
+
+            return {
+              content: [
+                {
+                  type: "text" as const,
+                  text: JSON.stringify(result),
+                },
+              ],
+            };
+          },
         );
-
-        if (rows.length === 0) {
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: JSON.stringify({
-                  duplicate: true,
-                  message:
-                    "Event with identical content already exists in this lane",
-                  ...provenance,
-                }),
-              },
-            ],
-          };
-        }
-
-        const result = {
-          event_id: rows[0].id,
-          lane_id: laneId,
-          lane_created: laneResult.created,
-          event_type: args.event_type,
-          importance,
-          created_at: rows[0].created_at,
-          ...provenance,
-          // Surface the sync nomination outcome so a contract-driven agent
-          // learns its share_candidate was refused (and why) without polling.
-          ...(nomination.rejected
-            ? {
-                share_candidate_rejected: nomination.rejected,
-                ...(nomination.rejectDetail
-                  ? {
-                      reject_detail: attachResubmitTarget(
-                        nomination.rejectDetail,
-                        rows[0].id,
-                        nomination.metadata,
-                      ),
-                    }
-                  : {}),
-              }
-            : {}),
-        };
-
-        logger.info("append_session_event_ok", {
-          event_id: result.event_id,
-          lane_id: result.lane_id,
-          event_type: result.event_type,
-          importance: result.importance,
-        });
-
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify(result),
-            },
-          ],
-        };
       } catch (err) {
         logger.error("append_session_event_db_error", {
           session_key: args.session_key,

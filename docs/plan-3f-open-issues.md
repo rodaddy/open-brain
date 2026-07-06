@@ -50,6 +50,26 @@ Owning boundary:
 `append_session_event.create_if_missing` lane creation and lane lifecycle
 metadata.
 
+Current implementation branch:
+`fix/229-first-write-lane-hardening`.
+
+Local status:
+
+- F6 implemented: `create_if_missing` append uses one pooled-client transaction
+  for lane lookup/create plus event insert, with rollback coverage for an event
+  insert failure after lane creation.
+- F8 implemented: first-write lanes embed from `topic` plus `project`, using
+  the same lane content-hash shape as `lane_upsert`.
+- F7 implemented as a dry-run-by-default local maintenance script,
+  `scripts/archive-idle-session-lanes.ts`, rather than a scheduler or deploy
+  change. It defaults to Discord/realtime lanes, refuses a broad sweep unless
+  narrowed, and requires `--execute` to archive candidates.
+- Local validation on this branch: focused append/lane/script tests pass,
+  nearby lane/session tests pass, `bunx tsc --noEmit` passes, `git diff
+  --check` passes, and full `bun test` passes. DB-backed suites remain skipped
+  locally because `/Users/rico/.config/open-brain/env.release-test` is missing;
+  CI `db-integration` must supply the live Postgres gate before merge.
+
 Required local work:
 
 - F6: make lane-create + event-insert atomic, or add the smallest helper needed
