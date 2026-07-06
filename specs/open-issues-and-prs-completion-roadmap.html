@@ -229,7 +229,7 @@
       <tr><td>2</td><td>#165, #193</td><td>CI Postgres service · rolling log cap</td><td class="no">No</td></tr>
       <tr><td>3</td><td>#168, #166, #167</td><td>n8n→ob-admin rename · stale collab docs · retire collab</td><td class="chg">Partial (#166 lives in mcp2cli skill refs; #167 touches read-fallback)</td></tr>
       <tr><td>4</td><td>#177, #204, #176</td><td>Installable Python client · UUID resolver · structured share_candidate rejection</td><td class="yes">Yes — all three</td></tr>
-      <tr><td>5</td><td>#223, #222, #221, #224, #229</td><td>Realtime memory epic (#220 family), strict order</td><td class="yes">Yes — Hermes canary per slice</td></tr>
+      <tr><td>5</td><td>#223 open; #222/#221/#224/#229 closed historical</td><td>Realtime transport foundation; later runtime rollout gated</td><td class="chg">Yes for future #223 rollout; no deploy now</td></tr>
       <tr><td>6</td><td>#137</td><td>qmd deep-lookup</td><td class="chg">#118 closed by PR #255; #137 closed deferred/no-wrapper by PR #257; deploy deferred</td></tr>
     </table>
   </section>
@@ -244,7 +244,7 @@
       <li><span class="tag existing">existing</span> <code>.github/workflows/claude-code-review.yml</code> — removed by PR #231; confirm no other workflow references it.</li>
       <li><span class="tag existing">existing</span> <code>.github/workflows/</code> (check/CI job) — #165 adds a pgvector Postgres service container + <code>OPENBRAIN_TEST_DATABASE_URL</code> so <code>dbDescribe</code> blocks stop skipping.</li>
       <li><span class="tag existing">existing</span> <code>src/tools/__tests__/lane-upsert.test.ts</code> — the env-gated DB test that #165 makes run in CI.</li>
-      <li><span class="tag existing">existing</span> <code>src/tools/append-session-event.ts</code> — #229 F6 transaction fix (lane-create + event-insert atomicity); also the #176 share_candidate rejection path.</li>
+      <li><span class="tag existing">existing</span> <code>src/tools/append-session-event.ts</code> — historical #229 F6 transaction fix context; no active #229 worker dispatch.</li>
       <li><span class="tag existing">existing</span> <code>src/tools/get-entry.ts</code> + <code>src/table-projections.ts</code> — #192 Part A condensed-retrieval gap; #204 resolver reuses the table/projection knowledge here.</li>
       <li><span class="tag existing">existing</span> <code>src/tools/brain-answer.ts</code> — #192 citation/excerpt behavior; contract-sensitive per docs/memory-contract.md.</li>
       <li><span class="tag existing">existing</span> shared-namespace / read-policy config (<code>shared-namespace.ts</code>, <code>legacySharedNamespace</code>) — #167 removes the collab fallback once content is migrated.</li>
@@ -261,10 +261,8 @@
     <h3>New Files</h3>
     <ul>
       <li><span class="tag new">new</span> <code>src/tools/resolve-entry.ts</code> + tests — #204 read-only UUID→source_type/namespace/fetch_path resolver.</li>
-      <li><span class="tag new">new</span> NATS transport module (e.g. <code>src/transport/nats/</code>) + core01 JetStream config — #223 foundation carrying the <code>agent_context_pack</code> envelope.</li>
-      <li><span class="tag new">new</span> hot working-set store + scope-key model (e.g. <code>src/realtime/working-set.ts</code>) — #222.</li>
-      <li><span class="tag new">new</span> recovery WAL module + recovery-status metadata migration — #221.</li>
-      <li><span class="tag new">new</span> promotion/relegation lifecycle tools + contract doc section — #224.</li>
+      <li><span class="tag new">new</span> Optional NATS transport module or docs for #223 only; hosted JetStream configuration remains deferred release/deploy work.</li>
+      <li><span class="tag existing">existing</span> hot working-set / recovery WAL / promotion lifecycle material — #222, #221, and #224 are closed historical slices, not active file targets.</li>
       <li><span class="tag new">new</span> <code>python/openbrain-memory/dist/</code> build artifacts + publish workflow (index or git-installable tag) — #177.</li>
       <li><span class="tag new">new</span> migration for the 69 un-mirrored collab thoughts + entity/lane re-tag — #167.</li>
       <li><span class="tag new">new</span> roadmap decision docs for deferred items (e.g. <code>docs/roadmap/condensed-retrieval.md</code>, <code>file-references.md</code>) — Phase 6 disposition artifacts.</li>
@@ -580,7 +578,7 @@
     <h2>Notes</h2>
 
     <h3>Sequencing rationale</h3>
-    <p>Phases 1–2 are pure leverage: a working review pipeline and real DB-backed CI make every later PR cheaper and safer, and #165 exists precisely because skipping it already shipped production bugs (#162). Phase 3 before Phase 4 because #167's fallback removal and #168's role rename change the auth/namespace substrate the contract batch builds on. Phase 5's internal order is not negotiable — #221 explicitly requires JetStream configured from the start (#223), #222's restart semantics depend on #221, and #224 governs what #222/#221 content may ever become durable. #229 last because its findings were classified non-blocking.</p>
+    <p>Phases 1–2 were pure leverage: a working review pipeline and real DB-backed CI made later PRs cheaper and safer, and #165 existed because skipping it already shipped production bugs (#162). Phase 3 before Phase 4 because #167's fallback removal and #168's role rename change the auth/namespace substrate the contract batch builds on. Phase 5's historical order is preserved as context, but the only open Phase 5 issue now is #223; #222, #221, #224, and #229 are closed historical slices and must not receive active worker dispatch.</p>
 
     <h3>Open loose ends found during recon</h3>
     <ul>
