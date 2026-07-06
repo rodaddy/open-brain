@@ -262,9 +262,9 @@ def test_lifecycle_helpers_record_promote_relegate_and_discard_actions():
 
     memory.promote_candidate(
         "assistant",
-        "Promote reviewed process rule.",
+        "Record promotion approval for reviewed process rule.",
         candidate_type="process_rule",
-        reason="User explicitly said to remember this rule.",
+        reason="User approved this rule for a separate durable write.",
     )
     memory.relegate_candidate(
         "assistant",

@@ -58,7 +58,7 @@ adapter facade.
 | `wrap` | client + server | `session_wrap` | available | Checkpoint a completed work phase with summary, key decisions, next steps, and optional receipt references. Use `compact` when the adapter should read current session context before wrapping. |
 | `record_receipt` | client + server | `append_session_event` with `event_type=receipt` | client-wrapper | Assemble citation-safe receipt metadata locally and write it as a receipt event. |
 | `candidate_memory` | client | `append_session_event.metadata.memory_lifecycle_action=candidate` | client-wrapper | Record review-only candidate memory with candidate type, scope, confidence, evidence refs, staleness policy, and reason. This is not a durable memory write or shared-kb nomination. |
-| `promote_candidate` | client | explicit durable write via `remember_fact`/`remember_decision` plus `append_session_event.metadata.memory_lifecycle_action=promote` | client-wrapper | Implement the explicit "remember this" path. The client chooses what becomes durable, then records the lifecycle action with provenance. |
+| `promote_candidate` | client | `append_session_event.metadata.memory_lifecycle_action=promote` | client-wrapper | Record the explicit client/user promotion decision with provenance. The durable write itself is a separate explicit client action such as `remember_fact`, `remember_decision`, or a repo-fact write. |
 | `relegate_candidate` | client | `append_session_event.metadata.memory_lifecycle_action=relegate` | client-wrapper | Record that a candidate was intentionally kept out of durable/shared promotion, with reason and evidence. |
 | `discard_candidate` | client | `append_session_event.metadata.memory_lifecycle_action=discard` | client-wrapper | Record that a candidate was intentionally discarded, with reason and evidence. |
 | `nominate_shared` | client + server | `append_session_event.metadata.share_candidate` + `append_session_event.metadata.memory_lifecycle_action=nominate_shared` | available | Explicitly nominate only non-private, durable facts or decisions for server-side shared-kb promotion. Server rejection and promoter adjudication remain authoritative. |
@@ -70,8 +70,10 @@ adapter facade.
 must choose one of these explicit actions in `metadata.memory_lifecycle_action`:
 
 - `candidate`: review-only candidate; no durable memory or shared-kb write.
-- `promote`: explicit client promotion intent for a separate durable write
-  flow, such as a reviewed `log_thought`, `log_decision`, or repo fact write.
+- `promote`: explicit client/user promotion decision recorded in the lifecycle
+  journal. This marker does not itself create durable memory; the durable write
+  remains a separate explicit client action such as a reviewed `log_thought`,
+  `log_decision`, or repo fact write.
 - `relegate`: intentionally keep out of durable/shared promotion.
 - `discard`: intentionally drop as not useful or unsafe.
 - `nominate_shared`: explicit shared-kb nomination; the shared promoter may

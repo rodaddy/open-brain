@@ -103,13 +103,19 @@ export function registerScanNamespace(server: McpServer, deps: ToolDeps): void {
             : table === "relationships" || table === "projects"
               ? "t.metadata"
               : "NULL::jsonb";
+        const nominationFilter =
+          table === "thoughts" || table === "decisions"
+            ? " AND t.extracted_metadata->>'share_candidate' = 'true' AND t.extracted_metadata->>'memory_lifecycle_action' = 'nominate_shared'"
+            : table === "relationships" || table === "projects"
+              ? " AND t.metadata->>'share_candidate' = 'true' AND t.metadata->>'memory_lifecycle_action' = 'nominate_shared'"
+              : " AND false";
 
         const { rows } = await deps.pool.query(
           `SELECT t.id, t.content_hash, t.namespace, t.created_at, t.promoted_from,
                   ${metadataSelect} AS metadata,
                   '${table}' AS table_name
            FROM ${table} t
-           WHERE t.namespace = $1 AND t.archived_at IS NULL${sinceFilter}
+           WHERE t.namespace = $1 AND t.archived_at IS NULL${nominationFilter}${sinceFilter}
            ORDER BY t.created_at DESC
            LIMIT $2`,
           params,

@@ -180,9 +180,9 @@ describe("AgentMemory TypeScript wrapper", () => {
     });
     await memory.promoteCandidate({
       eventType: "decision",
-      content: "Client explicitly promoted the corrected process rule.",
+      content: "Client recorded promotion approval for the corrected process rule.",
       candidateType: "process_rule",
-      reason: "The user correction should become durable guidance.",
+      reason: "The user correction was approved for a separate durable write.",
       confidence: 1,
       scope: { repo: "rodaddy/open-brain" },
     });
@@ -224,7 +224,8 @@ describe("AgentMemory TypeScript wrapper", () => {
       metadata: {
         memory_lifecycle_action: "promote",
         candidate_type: "process_rule",
-        candidate_reason: "The user correction should become durable guidance.",
+        candidate_reason:
+          "The user correction was approved for a separate durable write.",
         candidate_confidence: 1,
         candidate_scope: { repo: "rodaddy/open-brain" },
       },

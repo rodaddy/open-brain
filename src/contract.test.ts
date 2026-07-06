@@ -13,7 +13,7 @@ describe("Open Brain contract manifest", () => {
     expect(contract.contract_scope).toBe("required_openbrain_memory_contract");
     expect(contract.schema_hash).toMatch(/^[0-9a-f]{64}$/);
     expect(contract.schema_hash).toBe(
-      "4b3b07665bcaa2087e8fd3e75dfda86974c047529f85b42c0a0b5631bc4fd994",
+      "4128fbca61acc40bf566a9fed3b6a7e31eb323c69206d21f829da0e9b08dc681",
     );
     expect(contract.min_client_versions.mcp2cli).toBe("0.3.6");
     expect(contract.transport.namespace_boundary).toBe("authorization");
@@ -119,7 +119,6 @@ describe("Open Brain contract manifest", () => {
     expect(adapterMethods.promote_candidate).toEqual({
       maps_to: [
         "append_session_event:metadata.memory_lifecycle_action=promote",
-        "log_thought/log_decision explicit durable write",
       ],
       owner: "client",
       status: "client-wrapper",

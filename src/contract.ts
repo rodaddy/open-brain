@@ -535,7 +535,6 @@ export function buildContract(
         promote_candidate: {
           maps_to: [
             "append_session_event:metadata.memory_lifecycle_action=promote",
-            "log_thought/log_decision explicit durable write",
           ] as const,
           owner: "client" as const,
           status: "client-wrapper" as const,
