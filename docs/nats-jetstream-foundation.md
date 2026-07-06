@@ -78,8 +78,21 @@ authorization {
       user: "$OPENBRAIN_NATS_BRIDGE_USER"
       password: "$OPENBRAIN_NATS_BRIDGE_PASSWORD"
       permissions: {
-        publish: ["ob.memory.>", "ob.health"]
-        subscribe: ["ob.memory.>", "ob.health", "_INBOX.>"]
+        # Bridge responder: receives memory requests, publishes only health,
+        # request replies, and minimized audit/trace metadata. It must not be
+        # reused by direct clients.
+        subscribe: [
+          "ob.memory.>",
+          "ob.health"
+        ]
+        publish: [
+          "_INBOX.>",
+          "ob.health",
+          "ob.trace.>",
+          "ob.context_pack.requests.>",
+          "ob.context_pack.audit.>",
+          "ob.promotion_candidates.>"
+        ]
       }
     }
   ]
@@ -89,6 +102,13 @@ authorization {
 Release implementation must use `vaultwarden-secrets` or another approved
 secret path for credentials. Do not put bearer tokens or NATS passwords in git,
 PR bodies, logs, JetStream payloads, or stream metadata.
+
+Direct client credentials are intentionally omitted from this foundation
+skeleton. If a later release allows direct NATS clients, it must add a separate
+requester credential with response-only inbox permissions (or the NATS
+equivalent supported by the deployed server version), no bridge subscription
+rights, and explicit Open Brain identity mapping. Do not use one shared
+credential for bridge and client roles.
 
 ## Subjects
 
@@ -139,7 +159,7 @@ request semantics.
   },
   "metadata": {
     "client": "openbrain-memory",
-    "client_version": "0.1.5",
+    "client_version": "<installed-package-version>",
     "transport": "nats"
   }
 }
@@ -180,7 +200,11 @@ Bearer tokens must not be persisted to JetStream streams. If a release later
 allows direct NATS clients, the bridge must map NATS credentials to an Open
 Brain server identity or pass short-lived auth through a non-persisted
 request/reply message only. Audit streams may record role, namespace, subject,
-operation, request id, latency, and outcome, never raw credentials.
+operation, request id, latency, outcome, truncation counts, denial counts, and
+degraded-source counts. They must not record raw credentials, headers, request
+bodies, user queries, prompt context, memory snippets, source bodies, or raw
+agent transcript text unless a later explicit debug mode is approved with
+redaction and retention tests.
 
 ## JetStream Streams
 
@@ -197,18 +221,37 @@ replay semantics are contract-shaped before live deployment.
 No stream is durable memory. PostgreSQL remains the memory authority. Stream
 consumers must treat trace/recovery material as quarantined evidence until a
 client explicitly wraps, promotes, relegates, discards, or nominates it.
+By default, these streams store minimized metadata only. The stream names reserve
+places for future diagnostics; they are not permission to persist raw
+`agent_context_pack` request/response bodies, queries, headers, or context.
 
 ## Python Client Plan
 
 `openbrain-memory` will keep HTTP as the default transport. A future
 `NatsTransport` must be opt-in and sit behind the same facade semantics:
 
-- same `OpenBrainClient`/`AgentMemory` call shapes where possible;
-- same contract-version validation before a client assumes NATS support;
-- same namespace/header/delegation policy;
-- HTTP fallback when NATS is unavailable or the server contract does not
-  advertise `realtime_transport.nats_jetstream.availability == "available"`;
-- fake-transport tests before any live canary.
+- Own the same `Transport` protocol shape as `UrllibTransport` where practical:
+  `get()`, `delete()`, and `post()` remain the package boundary until a tested
+  tool-call transport abstraction replaces it.
+- Constructor/config plan:
+  `NatsTransport(url, context_pack_subject="ob.memory.context_pack",
+  fallback_transport=UrllibTransport(...), timeout=...)`.
+- Env plan:
+  `OPENBRAIN_TRANSPORT=nats`, `OPENBRAIN_NATS_URL`,
+  `OPENBRAIN_NATS_CONTEXT_PACK_SUBJECT`, and
+  `OPENBRAIN_NATS_FALLBACK_HTTP=true`.
+- Request/reply mapping: only `agent_context_pack` is NATS-native in the first
+  bridge. Other Open Brain calls continue over HTTP/MCP unless a later PR adds
+  parity tests for their subjects.
+- Contract gate: before using NATS, the client must read `get_contract()` over
+  HTTP/MCP and require
+  `realtime_transport.nats_jetstream.availability == "available"`. Planned or
+  missing metadata falls back to HTTP.
+- Authority: namespace/header/delegation semantics remain the Open Brain server
+  policy. NATS credentials do not create namespace authority.
+- Tests before implementation: fake request/reply transport, no-responder
+  fallback, timeout fallback, contract-gated fallback, and HTTP-vs-NATS parity
+  fixtures for response/error envelopes.
 
 This PR does not implement `NatsTransport`.
 
@@ -244,3 +287,16 @@ Release validation, deferred until Rico approves deploy:
 - run HTTP-vs-NATS parity tests for `agent_context_pack`;
 - run Hermes canary with HTTP fallback enabled;
 - only then consider making NATS the default path.
+
+## Rollback Plan
+
+Before NATS becomes the default path, rollback is to keep or restore
+`OPENBRAIN_TRANSPORT=http` and stop using the NATS bridge. If a release deploys
+the service and needs rollback:
+
+1. Set Hermes/Open Brain clients back to HTTP and confirm `/mcp` reads/writes.
+2. Stop or unload `com.rico.open-brain-nats`.
+3. Preserve the JetStream store for inspection unless an explicit cleanup
+   decision says it contains only minimized metadata and can be deleted.
+4. Remove or rotate NATS credentials through the approved secret store.
+5. Leave PostgreSQL/Open Brain untouched; NATS streams are not memory authority.

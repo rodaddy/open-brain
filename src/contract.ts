@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { TOOL_CONTRACTS } from "./contract-schemas.ts";
 
-export const CONTRACT_VERSION = "2026-07-06.memory-tools.v15";
+export const CONTRACT_VERSION = "2026-07-06.memory-tools.v14";
 export const CONTRACT_SCHEMA_VERSION = 1;
 
 export interface ContractCapability {
@@ -323,15 +323,6 @@ export const CONTRACT_CAPABILITIES: ContractCapability[] = [
     description:
       "Bearer-token identity establishes namespace boundaries for MCP sessions.",
   },
-  {
-    name: "nats_jetstream_transport",
-    version: 1,
-    kind: "transport",
-    description:
-      "Planned NATS request/reply and JetStream foundation for realtime Open " +
-      "Brain calls. It is not runtime-available until a later release deploys " +
-      "and canaries the bridge.",
-  },
 ];
 
 function sortValue(value: unknown): unknown {
@@ -365,12 +356,12 @@ export function buildContract(
     contract_scope: "required_openbrain_memory_contract" as const,
     schema_version: CONTRACT_SCHEMA_VERSION,
     min_client_versions: {
-      "openbrain-memory": "0.1.5",
+      "openbrain-memory": "0.1.4",
       "rtech-hermes-runtime": "0.1.0",
       mcp2cli: "0.3.6",
     },
     compatible_client_ranges: {
-      "openbrain-memory": ">=0.1.5 <1.0.0",
+      "openbrain-memory": ">=0.1.4 <1.0.0",
       "rtech-hermes-runtime": ">=0.1.0 <1.0.0",
       mcp2cli: ">=0.3.6 <1.0.0",
     },

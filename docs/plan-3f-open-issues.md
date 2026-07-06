@@ -7,9 +7,10 @@ Updated: 2026-07-06.
 Live GitHub and Project 8 state are the source of truth. Older roadmap
 snapshots and untracked sidecar plans are historical evidence only.
 
-Confirmed live state when this plan was created:
+Current live state as of 2026-07-06 during the #223 review-fix phase:
 
-- Open PRs: 0.
+- Open PRs: 1.
+  - #250 `feat(#223): define NATS JetStream foundation`
 - Open issues: 8.
   - #247 `Design DreamEngine decomposition for oversized Open Brain entries`
   - #224 `Define client-owned promotion and relegation lifecycle for realtime memory`
@@ -96,10 +97,8 @@ Local status:
   residual risk if the process crashes or the embedding provider stays down
   after commit. A future embedding backfill for `embedding IS NULL` lanes/events
   can close that residual, but it is outside #229's local hardening scope.
-  PR #249 head `9de385d` passed the full local suite and GitHub checks after
-  rerunning the duplicate flaky `db-integration` failure; all material findings
-  are fixed or explicitly dispositioned. Next gate: merge PR #249 without
-  core01 deploy, then verify issue #229 closure and update Project 8.
+  PR #249 merged without core01 deploy and issue #229 is closed. No active
+  #229 next action remains in Plan 3F.
 
 Required local work:
 
@@ -130,23 +129,34 @@ Current implementation branch:
 
 Local status:
 
-- In progress. Project 8 marks #223 `In Progress`, Review Gate `Not Started`,
-  Validation `Not Started`; after local validation below, Project 8 should move
-  to `Local Passed` until PR CI runs.
-- Local-only slice adds `docs/nats-jetstream-foundation.md`, planned
-  `get_contract().realtime_transport.nats_jetstream` metadata, and
-  `openbrain-memory` contract pin updates.
+- In review via PR #250 after the first review-fix commit. Project 8 marks
+  #223/PR #250 in review; CI passed for the initial head and must rerun on the
+  pushed review-fix head. Initial review-swarm findings are fixed locally and
+  awaiting PR comment/fix-verification.
+- Local-only slice adds `docs/nats-jetstream-foundation.md` and planned
+  `get_contract().realtime_transport.nats_jetstream` metadata. It does not
+  bump required `openbrain-memory` compatibility because NATS is not runtime
+  available in this slice.
 - No core01 NATS install/config, live JetStream stream creation, launchd change,
   or Hermes runtime switch is in scope for this branch.
-- Local validation passed on this branch: `bun test src/contract.test.ts`,
-  `bunx tsc --noEmit`, full `bun test` (`1072 pass, 50 skip, 0 fail`),
-  focused Python contract/client pytest (`69 pass`), full Python pytest
-  (`193 pass, 5 skip`), `uv run mypy src/openbrain_memory`, `uv run ruff check
-  src tests`, and `git diff --check`.
-- Downstream rollout classification: applies because `get_contract` and
-  `python/openbrain-memory` contract pins changed. Hosted deploy, mcp2cli
-  refresh, rtech-mcps handoff, rtech-hermes changes, Hermes live rollout, and
-  canaries are deferred to an approved release/deploy phase.
+- Local validation passed after the review-fix commit: `bun test
+  src/contract.test.ts` (`6 pass`), `bunx tsc --noEmit`, full `bun test`
+  (`1072 pass, 50 skip, 0 fail`), focused Python contract/client pytest (`69
+  pass`), full Python pytest (`193 pass, 5 skip`), `uv run mypy
+  src/openbrain_memory`, `uv run ruff check src tests`, PR body validator, and
+  `git diff --check`.
+- Downstream rollout classification: applies because `get_contract` advertises
+  new planned transport metadata. Hosted deploy, mcp2cli refresh, rtech-mcps
+  handoff, rtech-hermes changes, Hermes live rollout, and canaries are deferred
+  to an approved release/deploy phase.
+- Initial review findings being fixed:
+  HIGH: do not raise required Python client compatibility for a planned-only
+  transport; MEDIUM: do not auto-close #223 without the runtime/client slice;
+  MEDIUM: split bridge/requester credential permissions and prevent broad NATS
+  credentials; MEDIUM: forbid raw request/query/context persistence in
+  JetStream; MEDIUM: define the future Python transport interface and fallback
+  gate; LOW: remove misleading runtime capability advertisement; LOW: add
+  rollback and clean stale plan wording.
 
 Required local work:
 
