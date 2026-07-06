@@ -172,6 +172,40 @@ describe("search_brain", () => {
       }
     });
 
+    it("excludes unscoped entity rows when source scope is supplied", async () => {
+      const queryCalls: any[] = [];
+      const pool = {
+        query: async (...args: any[]) => {
+          queryCalls.push(args);
+          const [sql] = args;
+          if (String(sql).includes("FROM ob_links")) return { rows: [] };
+          return { rows: [] };
+        },
+      };
+      const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
+      const { client, cleanup } = await setup(pool, auth);
+
+      try {
+        const result = await client.callTool({
+          name: "search_brain",
+          arguments: {
+            query: "matter scoped search",
+            search_mode: "keyword",
+            source_scope: {
+              client_id: "acme",
+            },
+          },
+        });
+
+        expect(result.isError).toBeFalsy();
+        const [sql] = queryCalls[0];
+        expect(String(sql)).not.toContain("entities_fts");
+        expect(String(sql)).not.toContain("FROM ob_entities");
+      } finally {
+        await cleanup();
+      }
+    });
+
     it("parameterizes namespace in default hybrid SQL", async () => {
       const maliciousNamespace = "' OR 1=1 --";
       const searchCalls: any[] = [];

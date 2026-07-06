@@ -13,7 +13,7 @@ describe("Open Brain contract manifest", () => {
     expect(contract.contract_scope).toBe("required_openbrain_memory_contract");
     expect(contract.schema_hash).toMatch(/^[0-9a-f]{64}$/);
     expect(contract.schema_hash).toBe(
-      "4e47700d6fabfc25a439aca9e78dd3e843758d22c488bb6e34119f485b68e553",
+      "12a802ff076c613f92122b599a43c758de632649429a87104c3d4e8e6fd08194",
     );
     expect(contract.min_client_versions.mcp2cli).toBe("0.3.6");
     expect(contract.transport.namespace_boundary).toBe("authorization");
@@ -388,8 +388,23 @@ describe("Open Brain contract manifest", () => {
       max: 2000,
       default: 500,
     });
+    expect((getEntry?.input_schema as any).source_scope.fields).toMatchObject({
+      client_id: { type: "string", required: false, minLength: 1, maxLength: 300 },
+      matter_id: { type: "string", required: false, minLength: 1, maxLength: 300 },
+      document_id: { type: "string", required: false, minLength: 1, maxLength: 500 },
+      path: { type: "string", required: false, minLength: 1, maxLength: 1000 },
+      dms_id: { type: "string", required: false, minLength: 1, maxLength: 500 },
+    });
     expect(getEntry?.output_shape).toContain("compact envelope");
+    expect(getEntry?.output_shape).toContain("source_refs redacted");
     expect((getEntry?.input_schema as any).namespace).toBeUndefined();
+    const logThought = contract.tool_contracts.log_thought;
+    expect((logThought?.input_schema as any).source_refs).toMatchObject({
+      type: "array",
+      required: false,
+      maxItems: 25,
+    });
+    expect(logThought?.output_shape).toContain("source_refs");
     const decomposeEntry = contract.tool_contracts.decompose_entry;
     expect(decomposeEntry).toBeDefined();
     expect(decomposeEntry?.version).toBe(1);
@@ -433,6 +448,13 @@ describe("Open Brain contract manifest", () => {
       "warm",
       "cold",
     ]);
+    expect((searchAll?.input_schema as any).source_scope.fields.path).toMatchObject({
+      type: "string",
+      required: false,
+      minLength: 1,
+      maxLength: 1000,
+    });
+    expect(searchAll?.output_shape).toContain("suppresses qmd");
     const laneUpsert = contract.tool_contracts.lane_upsert;
     expect(laneUpsert).toBeDefined();
     expect((laneUpsert?.input_schema as any).current_context_md.maxLength).toBe(
@@ -451,6 +473,13 @@ describe("Open Brain contract manifest", () => {
     expect(
       (upsertRepoFact?.input_schema as any).validation.source_url.repo_match,
     ).toContain("metadata.repo");
+    const sessionWrap = contract.tool_contracts.session_wrap;
+    expect((sessionWrap?.input_schema as any).source_refs).toMatchObject({
+      type: "array",
+      required: false,
+      maxItems: 25,
+    });
+    expect(sessionWrap?.output_shape).toContain("source_refs");
   });
 
   it("pins the contract version and append_session_event nomination contract", () => {
@@ -460,7 +489,7 @@ describe("Open Brain contract manifest", () => {
     // contract so a future TS/Python divergence fails here, in lockstep with
     // python/openbrain-memory CURRENT_CONTRACT_VERSION.
     const contract = buildContract("2026-06-18T00:00:00.000Z");
-    expect(contract.contract_version).toBe("2026-07-06.memory-tools.v18");
+    expect(contract.contract_version).toBe("2026-07-06.memory-tools.v19");
 
     const appendEvent = contract.tool_contracts.append_session_event;
     expect(appendEvent).toBeDefined();

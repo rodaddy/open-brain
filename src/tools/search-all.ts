@@ -189,7 +189,7 @@ export function registerSearchAll(server: McpServer, deps: ToolDeps): void {
         source_scope: sourceScopeSchema
           .optional()
           .describe(
-            "Optional: require matching source_refs client_id, matter_id, or document_id before returning brain results",
+            "Optional: require matching source_refs client_id, matter_id, document_id, path, or dms_id before returning brain results. QMD results are suppressed while this is set.",
           ),
       },
       annotations: {
@@ -221,6 +221,17 @@ export function registerSearchAll(server: McpServer, deps: ToolDeps): void {
       const sourceScope = args.source_scope as SourceScope | undefined;
       const collection = args.collection as string | undefined;
       const requestedNamespace = args.namespace as string | undefined;
+      if (sourceScope && sources === "qmd") {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "source_scope applies only to Open Brain source_refs; use sources='brain' or omit source_scope for qmd.",
+            },
+          ],
+          isError: true,
+        };
+      }
       if (requestedNamespace && !canReadNamespace(auth, requestedNamespace)) {
         return {
           content: [
@@ -234,7 +245,8 @@ export function registerSearchAll(server: McpServer, deps: ToolDeps): void {
       }
       const namespace = namespaceFilterFor(auth, requestedNamespace);
       const searchBrain = sources === "all" || sources === "brain";
-      const searchQmdSource = sources === "all" || sources === "qmd";
+      const searchQmdSource =
+        !sourceScope && (sources === "all" || sources === "qmd");
 
       // Over-fetch to cover offset + limit, then slice after merge
       const totalNeeded = offset + limit;

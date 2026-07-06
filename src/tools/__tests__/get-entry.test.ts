@@ -102,6 +102,12 @@ describe("get_entry", () => {
         matter_id: "lit-1",
         path: "matters/acme/strategy.pdf",
       },
+      {
+        document_id: "doc-2",
+        client_id: "acme",
+        matter_id: "lit-2",
+        path: "matters/acme/other.pdf",
+      },
     ];
     const mockPool = {
       query: async (sql: string, params?: unknown[]) => {
@@ -141,7 +147,9 @@ describe("get_entry", () => {
       });
 
       expect(result.isError).toBeFalsy();
-      expect(parseToolResult(result).source_refs).toEqual(sourceRefs);
+      expect(parseToolResult(result).source_refs).toEqual([
+        { ...sourceRefs[0], source_type: "file" },
+      ]);
       expect(queries[0]?.sql).toContain(
         "COALESCE(t.source_refs, '[]'::jsonb)",
       );

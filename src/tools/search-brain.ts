@@ -779,6 +779,10 @@ export async function executeSearch(
   includeLinks?: boolean,
   sourceScope?: SourceScope,
 ): Promise<SearchRow[]> {
+  if (sourceScope) {
+    accessibleTables = accessibleTables.filter((table) => table !== "entities");
+    if (accessibleTables.length === 0) return [];
+  }
   let rows: SearchRow[];
   if (mode === "keyword") {
     rows = await ftsSearch(
@@ -1087,7 +1091,7 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
         source_scope: sourceScopeSchema
           .optional()
           .describe(
-            "Optional: require matching source reference client_id, matter_id, and/or document_id.",
+            "Optional: require matching source reference client_id, matter_id, document_id, path, and/or dms_id.",
           ),
       },
       annotations: {
@@ -1166,6 +1170,19 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
       const tier = args.tier as Tier | undefined;
       const requestedNamespace = args.namespace as string | undefined;
       const sourceScope = args.source_scope as SourceScope | undefined;
+      if (sourceScope) {
+        accessibleTables = accessibleTables.filter((table) => table !== "entities");
+      }
+      if (accessibleTables.length === 0) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "No source-scoped tables are readable",
+            },
+          ],
+        };
+      }
       if (requestedNamespace && !canReadNamespace(auth, requestedNamespace)) {
         return {
           content: [

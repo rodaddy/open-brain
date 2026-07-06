@@ -7,6 +7,7 @@ import type { ToolDeps } from "./index.ts";
 import { TABLE_COLUMNS } from "../table-projections.ts";
 import {
   appendSourceScopeParam,
+  filterSourceRefsForScope,
   sourceScopeFilterSql,
   sourceScopeSchema,
   type SourceScope,
@@ -66,7 +67,7 @@ export function registerGetEntry(server: McpServer, deps: ToolDeps): void {
         source_scope: sourceScopeSchema
           .optional()
           .describe(
-            "Optional: require matching source_refs client_id, matter_id, or document_id before returning source_refs",
+            "Optional: require matching source_refs client_id, matter_id, document_id, path, or dms_id before returning source_refs",
           ),
       },
       annotations: {
@@ -215,7 +216,9 @@ export function registerGetEntry(server: McpServer, deps: ToolDeps): void {
       }
 
       const row = { ...rows[0] };
-      if (!sourceScope) {
+      if (sourceScope) {
+        row.source_refs = filterSourceRefsForScope(row.source_refs, sourceScope);
+      } else {
         delete row.source_refs;
       }
 

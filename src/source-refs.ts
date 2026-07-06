@@ -55,11 +55,21 @@ export const sourceScopeSchema = z
     client_id: z.string().trim().min(1).max(300).optional(),
     matter_id: z.string().trim().min(1).max(300).optional(),
     document_id: z.string().trim().min(1).max(500).optional(),
+    path: z.string().trim().min(1).max(1000).optional(),
+    dms_id: z.string().trim().min(1).max(500).optional(),
   })
   .refine(
-    (value) => Boolean(value.client_id ?? value.matter_id ?? value.document_id),
+    (value) =>
+      Boolean(
+        value.client_id ??
+          value.matter_id ??
+          value.document_id ??
+          value.path ??
+          value.dms_id,
+      ),
     {
-      message: "source_scope requires client_id, matter_id, or document_id",
+      message:
+        "source_scope requires client_id, matter_id, document_id, path, or dms_id",
       path: ["client_id"],
     },
   );
@@ -88,7 +98,34 @@ export function sourceScopeFilterSql(
       WHERE (NOT (${scopeRef}::jsonb ? 'client_id') OR source_ref.ref->>'client_id' = ${scopeRef}::jsonb->>'client_id')
         AND (NOT (${scopeRef}::jsonb ? 'matter_id') OR source_ref.ref->>'matter_id' = ${scopeRef}::jsonb->>'matter_id')
         AND (NOT (${scopeRef}::jsonb ? 'document_id') OR source_ref.ref->>'document_id' = ${scopeRef}::jsonb->>'document_id')
+        AND (NOT (${scopeRef}::jsonb ? 'path') OR source_ref.ref->>'path' = ${scopeRef}::jsonb->>'path')
+        AND (NOT (${scopeRef}::jsonb ? 'dms_id') OR source_ref.ref->>'dms_id' = ${scopeRef}::jsonb->>'dms_id')
     )`;
+}
+
+export function sourceRefMatchesScope(
+  ref: SourceReference,
+  sourceScope: SourceScope,
+): boolean {
+  return (
+    (sourceScope.client_id === undefined ||
+      ref.client_id === sourceScope.client_id) &&
+    (sourceScope.matter_id === undefined ||
+      ref.matter_id === sourceScope.matter_id) &&
+    (sourceScope.document_id === undefined ||
+      ref.document_id === sourceScope.document_id) &&
+    (sourceScope.path === undefined || ref.path === sourceScope.path) &&
+    (sourceScope.dms_id === undefined || ref.dms_id === sourceScope.dms_id)
+  );
+}
+
+export function filterSourceRefsForScope(
+  sourceRefs: unknown,
+  sourceScope: SourceScope,
+): SourceReference[] {
+  const parsed = sourceRefsSchema.safeParse(sourceRefs);
+  if (!parsed.success) return [];
+  return parsed.data.filter((ref) => sourceRefMatchesScope(ref, sourceScope));
 }
 
 export const SOURCE_REFS_CONTRACT = {
@@ -100,4 +137,20 @@ export const SOURCE_REFS_CONTRACT = {
     "Each ref must identify a document via document_id, path, or dms_id, " +
     "and may include client_id, matter_id, page/section/span locators, " +
     "source_hash, ingestion timestamp, and privilege/isolation metadata.",
+} as const;
+
+export const SOURCE_SCOPE_CONTRACT = {
+  type: "object",
+  required: false,
+  fields: {
+    client_id: { type: "string", required: false, minLength: 1, maxLength: 300 },
+    matter_id: { type: "string", required: false, minLength: 1, maxLength: 300 },
+    document_id: { type: "string", required: false, minLength: 1, maxLength: 500 },
+    path: { type: "string", required: false, minLength: 1, maxLength: 1000 },
+    dms_id: { type: "string", required: false, minLength: 1, maxLength: 500 },
+  },
+  description:
+    "Optional source-reference scope for closed-brain deployments. When set, " +
+    "all supplied keys must match the same source_refs array element before " +
+    "source-scoped evidence or source_refs are returned.",
 } as const;

@@ -190,6 +190,57 @@ describe("search_all", () => {
       }
     });
 
+    it("rejects qmd-only source scoped searches", async () => {
+      mockBunSpawn(0, qmdJson([{ path: "/a.md", content: "hello" }]));
+      const pool = { query: async () => ({ rows: [] }) };
+      const auth: AuthInfo = { role: "admin", clientId: "admin" };
+      const { client, cleanup } = await setupClient(pool, auth);
+      try {
+        const result = await client.callTool({
+          name: "search_all",
+          arguments: {
+            query: "qmd only",
+            sources: "qmd",
+            source_scope: { client_id: "acme" },
+          },
+        });
+
+        expect(result.isError).toBe(true);
+        expect(getErrorText(result)).toContain(
+          "source_scope applies only to Open Brain source_refs",
+        );
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("suppresses qmd hits when an all-source search is source scoped", async () => {
+      mockBunSpawn(0, qmdJson([{ path: "/a.md", content: "hello" }]));
+      const pool = { query: async () => ({ rows: makeMockRowsWithMeta(1) }) };
+      const auth: AuthInfo = { role: "admin", clientId: "admin" };
+      const { client, cleanup } = await setupClient(pool, auth);
+      try {
+        const result = await client.callTool({
+          name: "search_all",
+          arguments: {
+            query: "scoped",
+            sources: "all",
+            source_scope: { client_id: "acme" },
+          },
+        });
+
+        expect(result.isError).toBeFalsy();
+        const parsed = parseSearchAll(result);
+        expect(parsed.brain_hits).toBe(1);
+        expect(parsed.qmd_hits).toBe(0);
+        expect(parsed.results.every((r: any) => r.source === "brain")).toBe(
+          true,
+        );
+      } finally {
+        await cleanup();
+      }
+    });
+
     it("returns empty results when both sources return nothing", async () => {
       mockBunSpawn(0, qmdJson([]));
       const pool = { query: async () => ({ rows: [] }) };

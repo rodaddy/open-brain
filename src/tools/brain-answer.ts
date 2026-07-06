@@ -142,7 +142,7 @@ export function registerBrainAnswer(server: McpServer, deps: ToolDeps): void {
         source_scope: sourceScopeSchema
           .optional()
           .describe(
-            "Optional: require matching source_refs client_id, matter_id, or document_id before citing brain evidence",
+            "Optional: require matching source_refs client_id, matter_id, document_id, path, or dms_id before citing brain evidence",
           ),
         max_age_days: z
           .number()

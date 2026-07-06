@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import {
   appendSourceScopeParam,
+  filterSourceRefsForScope,
   sourceRefSchema,
   sourceRefsSchema,
   sourceScopeFilterSql,
@@ -77,6 +78,8 @@ describe("source refs", () => {
       client_id: "acme",
       matter_id: "lit-1",
       document_id: "doc-1",
+      path: "matters/acme/strategy.pdf",
+      dms_id: "imanage-1",
     });
     const predicate = sourceScopeFilterSql("t", index);
 
@@ -91,6 +94,12 @@ describe("source refs", () => {
     expect(predicate).toContain(
       "source_ref.ref->>'document_id' = $2::jsonb->>'document_id'",
     );
+    expect(predicate).toContain(
+      "source_ref.ref->>'path' = $2::jsonb->>'path'",
+    );
+    expect(predicate).toContain(
+      "source_ref.ref->>'dms_id' = $2::jsonb->>'dms_id'",
+    );
     expect(predicate).toContain("$2::jsonb");
     expect(predicate).not.toContain("@> jsonb_build_array");
     expect(predicate).not.toContain("acme");
@@ -102,7 +111,38 @@ describe("source refs", () => {
         client_id: "acme",
         matter_id: "lit-1",
         document_id: "doc-1",
+        path: "matters/acme/strategy.pdf",
+        dms_id: "imanage-1",
       }),
     ]);
+  });
+
+  it("filters returned refs to the same matching source-scope object", () => {
+    const refs = [
+      {
+        document_id: "doc-1",
+        client_id: "acme",
+        matter_id: "lit-1",
+        path: "matters/acme/strategy.pdf",
+      },
+      {
+        document_id: "doc-2",
+        client_id: "acme",
+        matter_id: "lit-2",
+        path: "matters/acme/other.pdf",
+      },
+    ];
+
+    expect(
+      filterSourceRefsForScope(refs, {
+        client_id: "acme",
+        matter_id: "lit-1",
+      }),
+    ).toEqual([{ ...refs[0]!, source_type: "file" }]);
+    expect(
+      filterSourceRefsForScope(refs, {
+        path: "matters/acme/other.pdf",
+      }),
+    ).toEqual([{ ...refs[1]!, source_type: "file" }]);
   });
 });

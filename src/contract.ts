@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { TOOL_CONTRACTS } from "./contract-schemas.ts";
 
-export const CONTRACT_VERSION = "2026-07-06.memory-tools.v18";
+export const CONTRACT_VERSION = "2026-07-06.memory-tools.v19";
 export const CONTRACT_SCHEMA_VERSION = 1;
 
 export interface ContractCapability {
