@@ -7,6 +7,7 @@ import { contentHash, EMBEDDING_MODEL } from "../embedding.ts";
 import { backgroundExtract } from "../extraction.ts";
 import type { AuthInfo } from "../types.ts";
 import { logger } from "../logger.ts";
+import { sourceRefsSchema } from "../source-refs.ts";
 import type { ToolDeps } from "./index.ts";
 
 export function registerLogDecision(server: McpServer, deps: ToolDeps): void {
@@ -30,6 +31,9 @@ export function registerLogDecision(server: McpServer, deps: ToolDeps): void {
           .max(500)
           .optional()
           .describe("Namespace to store in (defaults to caller's clientId)"),
+        source_refs: sourceRefsSchema
+          .optional()
+          .describe("Structured file/document refs for closed-brain provenance"),
       },
       annotations: {
         title: "Log Decision",
@@ -79,8 +83,8 @@ export function registerLogDecision(server: McpServer, deps: ToolDeps): void {
       });
 
       const { rows } = await deps.pool.query(
-        `INSERT INTO decisions (title, rationale, alternatives, tags, context, created_by, namespace, embedding, content_hash, embedded_at, embedding_model)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        `INSERT INTO decisions (title, rationale, alternatives, tags, context, created_by, namespace, embedding, content_hash, embedded_at, embedding_model, source_refs)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb)
          ON CONFLICT (content_hash, namespace) WHERE content_hash IS NOT NULL
          DO UPDATE SET
            tags = (
@@ -88,8 +92,12 @@ export function registerLogDecision(server: McpServer, deps: ToolDeps): void {
              FROM unnest(decisions.tags || EXCLUDED.tags) AS tag
              WHERE tag IS NOT NULL
            ),
+           source_refs = CASE
+             WHEN EXCLUDED.source_refs = '[]'::jsonb THEN decisions.source_refs
+             ELSE EXCLUDED.source_refs
+           END,
            updated_at = NOW()
-         RETURNING id, (xmax = 0) AS is_new`,
+         RETURNING id, (xmax = 0) AS is_new, source_refs`,
         [
           args.title,
           args.rationale,
@@ -104,6 +112,7 @@ export function registerLogDecision(server: McpServer, deps: ToolDeps): void {
           hash,
           embedding ? new Date().toISOString() : null,
           embedding ? EMBEDDING_MODEL : null,
+          JSON.stringify(args.source_refs ?? []),
         ],
       );
 
@@ -129,6 +138,7 @@ export function registerLogDecision(server: McpServer, deps: ToolDeps): void {
               namespace: ns,
               embedded: !!embedding,
               merged: !isNew,
+              source_refs: rows[0].source_refs,
             }),
           },
         ],

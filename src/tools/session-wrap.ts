@@ -6,6 +6,7 @@ import { canWriteNamespace } from "../namespace-policy.ts";
 import { contentHash, EMBEDDING_MODEL } from "../embedding.ts";
 import type { AuthInfo } from "../types.ts";
 import { logger } from "../logger.ts";
+import { sourceRefsSchema } from "../source-refs.ts";
 import type { ToolDeps } from "./index.ts";
 
 export function registerSessionWrap(server: McpServer, deps: ToolDeps): void {
@@ -46,6 +47,9 @@ export function registerSessionWrap(server: McpServer, deps: ToolDeps): void {
           .max(500)
           .optional()
           .describe("Project name for the session record"),
+        source_refs: sourceRefsSchema
+          .optional()
+          .describe("Structured file/document refs for closed-brain provenance"),
       },
       annotations: {
         title: "Session Wrap",
@@ -154,10 +158,10 @@ WHERE namespace = $1 AND session_key = $2`,
         // Step 4: Insert session record (ON CONFLICT handles double-wrap)
         const { rows: sessionRows } = await deps.pool.query(
           `INSERT INTO sessions
-  (summary, key_decisions, next_steps, project, namespace, embedding, content_hash, embedded_at, embedding_model, created_by)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+  (summary, key_decisions, next_steps, project, namespace, embedding, content_hash, embedded_at, embedding_model, created_by, source_refs)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
 ON CONFLICT (content_hash, namespace) WHERE content_hash IS NOT NULL DO NOTHING
-RETURNING id, created_at`,
+RETURNING id, created_at, source_refs`,
           [
             args.summary,
             args.key_decisions ?? [],
@@ -169,6 +173,7 @@ RETURNING id, created_at`,
             embeddedAt,
             model,
             auth.clientId,
+            JSON.stringify(args.source_refs ?? []),
           ],
         );
 
@@ -205,6 +210,7 @@ RETURNING id, created_at`,
           lane_status: lane.status,
           event_count: eventCount,
           created_at: createdAt,
+          source_refs: sessionRows[0].source_refs,
         };
 
         logger.info("session_wrap_ok", {

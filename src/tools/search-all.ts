@@ -14,9 +14,11 @@ import {
   TIER_BOOST,
   type SearchMode,
   type SearchRow,
+  type SourceScope,
   type SourceRef,
 } from "./search-brain.ts";
 import { isSharedNamespace } from "../shared-namespace.ts";
+import { sourceScopeSchema } from "../source-refs.ts";
 
 type NamespaceFilter = string | string[];
 
@@ -184,6 +186,11 @@ export function registerSearchAll(server: McpServer, deps: ToolDeps): void {
           .describe(
             "Optional: filter brain results to a specific cognitive tier",
           ),
+        source_scope: sourceScopeSchema
+          .optional()
+          .describe(
+            "Optional: require matching source_refs client_id, matter_id, or document_id before returning brain results",
+          ),
       },
       annotations: {
         title: "Search All",
@@ -211,6 +218,7 @@ export function registerSearchAll(server: McpServer, deps: ToolDeps): void {
       const sources = (args.sources as "all" | "brain" | "qmd") ?? "all";
       const mode = (args.search_mode as SearchMode) ?? "hybrid";
       const tier = args.tier as Tier | undefined;
+      const sourceScope = args.source_scope as SourceScope | undefined;
       const collection = args.collection as string | undefined;
       const requestedNamespace = args.namespace as string | undefined;
       if (requestedNamespace && !canReadNamespace(auth, requestedNamespace)) {
@@ -234,7 +242,16 @@ export function registerSearchAll(server: McpServer, deps: ToolDeps): void {
       // Launch both searches in parallel
       const [brainResults, qmdResults] = await Promise.all([
         searchBrain
-          ? searchOB(deps, auth, args.query, totalNeeded, mode, tier, namespace)
+          ? searchOB(
+              deps,
+              auth,
+              args.query,
+              totalNeeded,
+              mode,
+              tier,
+              namespace,
+              sourceScope,
+            )
           : Promise.resolve([]),
         searchQmdSource
           ? searchQmd(args.query, totalNeeded, collection)
@@ -288,6 +305,7 @@ async function searchOB(
   mode: SearchMode = "hybrid",
   tier?: Tier,
   namespace?: NamespaceFilter,
+  sourceScope?: SourceScope,
 ): Promise<UnifiedResult[]> {
   const accessibleTables = ALL_TABLES.filter((t) => canRead(auth.role, t));
   if (accessibleTables.length === 0) return [];
@@ -306,6 +324,7 @@ async function searchOB(
             0,
             namespace,
             false,
+            sourceScope,
           )
         : await executeSearchWithScopedSharedFallback(
             deps,
@@ -317,6 +336,7 @@ async function searchOB(
             0,
             namespace,
             false,
+            sourceScope,
           );
   } catch (err) {
     logger.warn("searchOB_failed", {

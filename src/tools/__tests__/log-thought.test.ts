@@ -76,6 +76,88 @@ describe("log_thought", () => {
         await cleanup();
       }
     });
+
+    it("stores structured source refs with thought entries", async () => {
+      let capturedSql = "";
+      let capturedParams: unknown[] = [];
+      const sourceRefs = [
+        {
+          source_type: "file",
+          document_id: "doc-123",
+          path: "matters/acme/complaint.pdf",
+          client_id: "acme",
+          matter_id: "lit-2026-001",
+          page: 4,
+          section: "Background",
+          source_hash: "sha256:testhash",
+          ingested_at: "2026-07-06T12:00:00.000Z",
+        },
+      ];
+      const mockPool = {
+        query: async (sql: string, params?: unknown[]) => {
+          capturedSql = sql;
+          capturedParams = params ?? [];
+          return {
+            rows: [{ id: "source-ref-uuid", is_new: true, source_refs: sourceRefs }],
+          };
+        },
+      };
+      const auth: AuthInfo = { role: "admin", clientId: "test-client" };
+      const { client, cleanup } = await setupToolClient(
+        mockPool,
+        createMockEmbed(),
+        auth,
+      );
+
+      try {
+        const result = await client.callTool({
+          name: "log_thought",
+          arguments: {
+            content: "Complaint states venue facts.",
+            source_refs: sourceRefs,
+          },
+        });
+
+        expect(result.isError).toBeFalsy();
+        expect(capturedSql).toContain("source_refs");
+        expect(JSON.parse(capturedParams[8] as string)).toEqual(sourceRefs);
+        const parsed = JSON.parse((result.content as any)[0].text);
+        expect(parsed.source_refs).toEqual(sourceRefs);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("rejects source refs without a document identifier", async () => {
+      let queried = false;
+      const mockPool = {
+        query: async () => {
+          queried = true;
+          return { rows: [] };
+        },
+      };
+      const auth: AuthInfo = { role: "admin", clientId: "test-client" };
+      const { client, cleanup } = await setupToolClient(
+        mockPool,
+        createMockEmbed(),
+        auth,
+      );
+
+      try {
+        const result = await client.callTool({
+          name: "log_thought",
+          arguments: {
+            content: "Bad source ref",
+            source_refs: [{ client_id: "acme", matter_id: "lit-1" }],
+          },
+        });
+
+        expect(result.isError).toBe(true);
+        expect(queried).toBe(false);
+      } finally {
+        await cleanup();
+      }
+    });
   });
 
   describe("embedding failure (graceful degradation)", () => {

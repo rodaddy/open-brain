@@ -563,7 +563,8 @@ export function createRestRouter(deps: RestDeps): Router {
       return;
     }
 
-    res.json(rows[0]);
+    const { source_refs: _sourceRefs, ...entry } = rows[0];
+    res.json(entry);
   }));
 
   // GET /api/v1/namespaces

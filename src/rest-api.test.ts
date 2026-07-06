@@ -216,6 +216,33 @@ describe("REST API", () => {
       expect(json.promoted_from).toEqual({ source_id: "source-uuid" });
     });
 
+    it("redacts source refs from generic entry reads", async () => {
+      const pool = createMockPool([
+        {
+          id: "123e4567-e89b-12d3-a456-426614174000",
+          content: "test thought",
+          namespace: "bilby",
+          source_refs: [
+            {
+              document_id: "doc-1",
+              client_id: "acme",
+              matter_id: "lit-1",
+            },
+          ],
+        },
+      ]);
+      const app = buildApp({ role: "admin", clientId: "rico" }, pool);
+
+      const { status, json } = await req(
+        app,
+        "get",
+        "/api/v1/entries/thoughts/123e4567-e89b-12d3-a456-426614174000",
+      );
+
+      expect(status).toBe(200);
+      expect(json.source_refs).toBeUndefined();
+    });
+
     it("adds namespace predicate for non-admin entry reads", async () => {
       const pool = createRecordingPool([
         {

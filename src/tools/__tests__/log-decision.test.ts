@@ -114,6 +114,98 @@ describe("log_decision", () => {
         await cleanup();
       }
     });
+
+    it("stores structured source refs with decision entries", async () => {
+      let capturedSql = "";
+      let capturedParams: unknown[] = [];
+      const sourceRefs = [
+        {
+          source_type: "file",
+          document_id: "decision-doc-1",
+          path: "matters/acme/strategy-memo.pdf",
+          client_id: "acme",
+          matter_id: "lit-2026-001",
+          page: 9,
+          paragraph: "12",
+          source_hash: "sha256:decisionhash",
+          ingested_at: "2026-07-06T14:00:00.000Z",
+        },
+      ];
+      const mockPool = {
+        query: async (sql: string, params?: unknown[]) => {
+          capturedSql = sql;
+          capturedParams = params ?? [];
+          return {
+            rows: [
+              {
+                id: "decision-source-ref-uuid",
+                is_new: true,
+                source_refs: sourceRefs,
+              },
+            ],
+          };
+        },
+      };
+      const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
+
+      const { client, cleanup } = await setupDecisionClient(
+        mockPool,
+        createMockEmbed(),
+        auth,
+      );
+
+      try {
+        const result = await client.callTool({
+          name: "log_decision",
+          arguments: {
+            title: "Use source-grounded answer",
+            rationale: "Legal workflow answers need matter-scoped citations.",
+            source_refs: sourceRefs,
+          },
+        });
+
+        expect(result.isError).toBeFalsy();
+        expect(capturedSql).toContain("source_refs");
+        expect(JSON.parse(capturedParams[11] as string)).toEqual(sourceRefs);
+        const parsed = JSON.parse((result.content as any)[0].text);
+        expect(parsed.source_refs).toEqual(sourceRefs);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("rejects invalid source refs before writing decisions", async () => {
+      let queried = false;
+      const mockPool = {
+        query: async () => {
+          queried = true;
+          return { rows: [] };
+        },
+      };
+      const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
+
+      const { client, cleanup } = await setupDecisionClient(
+        mockPool,
+        createMockEmbed(),
+        auth,
+      );
+
+      try {
+        const result = await client.callTool({
+          name: "log_decision",
+          arguments: {
+            title: "Bad source ref",
+            rationale: "Should fail validation.",
+            source_refs: [{ client_id: "acme", matter_id: "lit-1" }],
+          },
+        });
+
+        expect(result.isError).toBe(true);
+        expect(queried).toBe(false);
+      } finally {
+        await cleanup();
+      }
+    });
   });
 
   describe("embedding text construction", () => {
