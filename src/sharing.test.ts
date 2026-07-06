@@ -206,6 +206,23 @@ describe("shareRejectionDetail", () => {
     expect(detail?.redaction_hint).toContain("Remove the credential");
   });
 
+  it("counts spans across all matching secret detectors", () => {
+    const detail = shareRejectionDetail({
+      event_type: "fact",
+      importance: "hot",
+      content: `${LONG_FACT} ${FAKE_SK} plus ${FAKE_AWS_ACCESS_KEY}`,
+      metadata: { share_candidate: true },
+    });
+
+    expect(detail).toMatchObject({
+      category: "reject-secret",
+      matched_kind: "openai_api_key",
+      span_count: 2,
+    });
+    expect(JSON.stringify(detail)).not.toContain(FAKE_SK);
+    expect(JSON.stringify(detail)).not.toContain(FAKE_AWS_ACCESS_KEY);
+  });
+
   it("returns private marker detail without echoing private content", () => {
     const detail = shareRejectionDetail({
       content: LONG_FACT,

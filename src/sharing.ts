@@ -113,10 +113,12 @@ export interface ShareRejectionDetail {
   resubmittable: boolean;
   resubmit_attempt: number;
   max_resubmit_attempts: number;
+  resubmit_blocked_reason?: "max_attempts" | "invalid_resubmit_root";
 }
 
 export interface ShareRejectionDetailOptions {
   resubmit_attempt?: number;
+  resubmit_blocked_reason?: "max_attempts" | "invalid_resubmit_root";
 }
 
 function globalClone(pattern: RegExp): RegExp {
@@ -130,12 +132,15 @@ function countMatches(pattern: RegExp, text: string): number {
 
 function detectSecret(text: string): { matched_kind: string; span_count: number } | null {
   if (!text) return null;
+  let matchedKind: string | null = null;
+  let spanCount = 0;
   for (const { kind, pattern } of SECRET_DETECTORS) {
     if (pattern.test(text)) {
-      return { matched_kind: kind, span_count: countMatches(pattern, text) };
+      matchedKind ??= kind;
+      spanCount += countMatches(pattern, text);
     }
   }
-  return null;
+  return matchedKind ? { matched_kind: matchedKind, span_count: spanCount } : null;
 }
 
 /**
@@ -256,28 +261,46 @@ export function shareRejectionDetail(
       : resubmitAttempt(input.metadata);
   const secret = detectSecret(input.content);
   if (secret) {
+    const resubmittable = attempt < SHARE_REJECTION_MAX_RESUBMIT_ATTEMPTS;
+    const blockedReason = resubmittable
+      ? undefined
+      : (options.resubmit_blocked_reason ?? "max_attempts");
     return {
       category: "reject-secret",
       matched_kind: secret.matched_kind,
       span_count: secret.span_count,
       redaction_hint:
-        "Remove the credential and re-nominate the sanitized fact; describe the action, not the secret.",
-      resubmittable: attempt < SHARE_REJECTION_MAX_RESUBMIT_ATTEMPTS,
+        blockedReason === "invalid_resubmit_root"
+          ? "The resend root was not recognized; use the original rejection metadata before retrying."
+          : resubmittable
+            ? "Remove the credential and re-nominate the sanitized fact; describe the action, not the secret."
+            : "Maximum sanitized resend attempts reached; stop retrying this rejected share nomination.",
+      resubmittable,
       resubmit_attempt: attempt,
       max_resubmit_attempts: SHARE_REJECTION_MAX_RESUBMIT_ATTEMPTS,
+      ...(blockedReason ? { resubmit_blocked_reason: blockedReason } : {}),
     };
   }
   const privateMatch = detectPrivate(input);
   if (privateMatch) {
+    const resubmittable = attempt < SHARE_REJECTION_MAX_RESUBMIT_ATTEMPTS;
+    const blockedReason = resubmittable
+      ? undefined
+      : (options.resubmit_blocked_reason ?? "max_attempts");
     return {
       category: "reject-private",
       matched_kind: privateMatch.matched_kind,
       span_count: privateMatch.span_count,
       redaction_hint:
-        "Remove personal/private markers or rewrite without private details before re-nominating.",
-      resubmittable: attempt < SHARE_REJECTION_MAX_RESUBMIT_ATTEMPTS,
+        blockedReason === "invalid_resubmit_root"
+          ? "The resend root was not recognized; use the original rejection metadata before retrying."
+          : resubmittable
+            ? "Remove personal/private markers or rewrite without private details before re-nominating."
+            : "Maximum sanitized resend attempts reached; stop retrying this rejected share nomination.",
+      resubmittable,
       resubmit_attempt: attempt,
       max_resubmit_attempts: SHARE_REJECTION_MAX_RESUBMIT_ATTEMPTS,
+      ...(blockedReason ? { resubmit_blocked_reason: blockedReason } : {}),
     };
   }
   return null;

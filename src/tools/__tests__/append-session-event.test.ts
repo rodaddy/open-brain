@@ -952,13 +952,16 @@ describe("append_session_event", () => {
   function createCapturingPool(
     priorRejectedResubmits = 0,
     rootRejectedCount = 1,
+    priorUnlineagedRejected = 0,
   ) {
     const captured: {
       createdBy: string | null;
       metadata: Record<string, unknown> | null;
+      resubmitQueryCount: number;
     } = {
       createdBy: null,
       metadata: null,
+      resubmitQueryCount: 0,
     };
     const pool = {
       captured,
@@ -967,6 +970,10 @@ describe("append_session_event", () => {
           return { rows: [{ id: "lane-uuid-1", status: "active" }] };
         }
         if (sql.includes("AS rejected_count")) {
+          captured.resubmitQueryCount += 1;
+          if (!sql.includes("root_rejected_count")) {
+            return { rows: [{ rejected_count: priorUnlineagedRejected }] };
+          }
           return {
             rows: [
               {
@@ -1320,11 +1327,9 @@ describe("append_session_event", () => {
         resubmittable: false,
         resubmit_attempt: 2,
         max_resubmit_attempts: 2,
-        resubmit_metadata: {
-          sanitized_resubmit_of: "event-original",
-          sanitized_resubmit_attempt: 2,
-        },
+        resubmit_blocked_reason: "max_attempts",
       });
+      expect(parsed.reject_detail.resubmit_metadata).toBeUndefined();
       expect(JSON.stringify(parsed.reject_detail)).not.toContain(fakeKey);
     } finally {
       await cleanup();
@@ -1361,11 +1366,9 @@ describe("append_session_event", () => {
         resubmittable: false,
         resubmit_attempt: 2,
         max_resubmit_attempts: 2,
-        resubmit_metadata: {
-          sanitized_resubmit_of: "event-original",
-          sanitized_resubmit_attempt: 2,
-        },
+        resubmit_blocked_reason: "max_attempts",
       });
+      expect(parsed.reject_detail.resubmit_metadata).toBeUndefined();
       expect(JSON.stringify(parsed.reject_detail)).not.toContain(fakeKey);
     } finally {
       await cleanup();
@@ -1443,11 +1446,47 @@ describe("append_session_event", () => {
         resubmittable: false,
         resubmit_attempt: 2,
         max_resubmit_attempts: 2,
-        resubmit_metadata: {
-          sanitized_resubmit_of: "event-resubmit-1",
-          sanitized_resubmit_attempt: 2,
+        resubmit_blocked_reason: "invalid_resubmit_root",
+      });
+      expect(parsed.reject_detail.resubmit_metadata).toBeUndefined();
+      expect(parsed.reject_detail.redaction_hint).toContain(
+        "resend root was not recognized",
+      );
+      expect(JSON.stringify(parsed.reject_detail)).not.toContain(fakeKey);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("bounds repeated rejected nominations even when clients omit resubmit lineage", async () => {
+    const mockPool = createCapturingPool(0, 1, 2);
+    const auth: AuthInfo = { role: "admin", clientId: "skippy" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+    const fakeKey = "sk" + "-" + "a".repeat(20);
+
+    try {
+      const result = await client.callTool({
+        name: "append_session_event",
+        arguments: {
+          session_key: "test",
+          event_type: "fact",
+          content: `Unlineaged retry still accidentally carries ${fakeKey}`,
+          metadata: { share_candidate: true },
         },
       });
+
+      expect(result.isError).toBeFalsy();
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.share_candidate_rejected).toBe("reject-secret");
+      expect(parsed.reject_detail).toMatchObject({
+        category: "reject-secret",
+        matched_kind: "openai_api_key",
+        resubmittable: false,
+        resubmit_attempt: 2,
+        max_resubmit_attempts: 2,
+        resubmit_blocked_reason: "max_attempts",
+      });
+      expect(parsed.reject_detail.resubmit_metadata).toBeUndefined();
       expect(JSON.stringify(parsed.reject_detail)).not.toContain(fakeKey);
     } finally {
       await cleanup();
@@ -1518,6 +1557,7 @@ describe("append_session_event", () => {
       );
       expect(mockPool.captured.metadata!.sanitized_resubmit_attempt).toBe(1);
       expect(mockPool.captured.metadata!.share_rejected_sync).toBeUndefined();
+      expect(mockPool.captured.resubmitQueryCount).toBe(0);
     } finally {
       await cleanup();
     }

@@ -4,20 +4,19 @@ Updated: 2026-07-06 by Codex after Fable handoff.
 
 ## Current Controller State
 
-Updated after PR #244 initial swarm found and local fixes addressed the resend
-root-rotation bug on 2026-07-06.
+Updated after PR #244 Phase 3 Claude cross-review findings were posted and
+local fixes were validated on 2026-07-06.
 
 - Open PRs: 1
   - #244 `feat(#176): structure share_candidate rejection detail` is open.
-    Implementation head `d0c34f8ec5649e13135f9844adb01f0e879a7f3c` passed
+    Current pushed head `a9639d36844aeb6265a486675a3e9135a1126b8f` passed
     `check`, `db-integration`, `python-package`, PR-body `validate`, and
-    GitGuardian; `deploy` skipped. Re-read live checks for the latest head after
-    any follow-up fix. Phase 2 initial swarm found one material finding:
-    resend metadata rotated the root id after a rejected resubmit. Fixed
-    locally by preserving the original same-lane rejected root and treating
-    rotated/non-root ids as already at the retry bound. Next gate: commit/push
-    the fix, run fix-verification, then Phase 3 opposite-runtime cross-review.
-    No core01 deploy.
+    GitGuardian; `deploy` skipped. Phase 2 initial swarm found and fixed the
+    resend root-rotation bug. Phase 3 Claude cross-review posted five findings
+    (one HIGH, two MEDIUM, two LOW); local fixes are validated but not yet
+    committed/pushed. Next gate: commit/push the Phase 3 fixes, run
+    fix-verification, then address/waive every PR finding before merge. No
+    core01 deploy.
 - Merged in this controller batch:
   - #231 merged as `c9888cc584fe68b5ff91906d56ef26c7fb40afef`;
     post-merge `/codex-deep` smoke on #234 succeeded.
@@ -48,8 +47,8 @@ root-rotation bug on 2026-07-06.
   - #204 moved to `Done` by merge/closure automation and `Next Action` records
     PR #243 merge commit `3b8e47ac5d4b3b614fdd26f5609242b73204f928`.
   - #176 and PR #244 are `In Review`. Validation was `CI Passed` at
-    `e7ba6d9`; local fix validation passed after the initial swarm finding.
-    Review Gate is `Fixes In Progress` until the fix commit is pushed and
+    `a9639d3`; local validation passed after the Phase 3 Claude fixes. Review
+    Gate is `Fixes In Progress` until the fix commit is pushed and
     fix-verification runs.
 - No production deploy was performed during this batch.
 
@@ -289,10 +288,12 @@ Current #176 state:
 1. Done locally: structured non-leaking `reject_detail` for sync
    `share_candidate` rejections with `category`, safe `matched_kind`,
    `span_count`, `redaction_hint`, `resubmittable`,
-   `resubmit_attempt`, and `max_resubmit_attempts`.
+   `resubmit_attempt`, `max_resubmit_attempts`, and optional safe
+   `resubmit_blocked_reason`.
 2. Done locally: bounded sanitized resend metadata via
    `reject_detail.resubmit_metadata.sanitized_resubmit_of` and
-   `sanitized_resubmit_attempt`, with max attempt 2.
+   `sanitized_resubmit_attempt`, with max attempt 2. Blocked responses omit
+   `resubmit_metadata`.
 3. Done locally: contract bump to `2026-07-06.memory-tools.v13`;
    `append_session_event` tool contract version 6; manifest floor/range and
    `python/openbrain-memory` package version bumped to `0.1.3`.
@@ -302,7 +303,8 @@ Current #176 state:
 5. Done locally: tests cover secret structured rejection, private structured
    rejection, string `"true"` nomination parity, non-resubmittable repeated
    sanitized rejection at the bound, server-enforced protection against a reset
-   `sanitized_resubmit_attempt`, and clean sanitized resend acceptance.
+   `sanitized_resubmit_attempt`, invalid/rotated roots, omitted-lineage retry
+   loops, multi-detector `span_count`, and clean sanitized resend acceptance.
 6. Validation passed locally:
    - `bun test src/sharing.test.ts src/tools/__tests__/append-session-event.test.ts src/contract.test.ts`
      -> 90 pass, 5 skip, 0 fail.
@@ -348,10 +350,45 @@ Current #176 state:
    - `git diff --check` -> passed.
    - `ggshield secret scan path -y src/tools/append-session-event.ts src/tools/__tests__/append-session-event.test.ts`
      -> no secrets found.
-13. Pending: commit/push the Phase 2 fix, post the swarm/fix receipt on PR
-   #244, run fix-verification, then Phase 3 opposite-runtime cross-review,
-   Phase 4 fixes/waivers, and Phase 5 merge only after the gate is clean.
-14. Deferred by current local-only instruction: downstream rollout and any
+13. Phase 2 fix-verification passed and receipt was posted on PR #244:
+   `https://github.com/rodaddy/open-brain/pull/244#issuecomment-4888701176`.
+   Current pushed head `a9639d36844aeb6265a486675a3e9135a1126b8f` passed
+   GitHub `check`, `db-integration`, `python-package`, PR-body `validate`, and
+   GitGuardian; `deploy` skipped.
+14. Phase 3 opposite-runtime Claude cross-review ran on the pinned PR diff and
+   posted five findings to PR #244:
+   - HIGH: omitted `sanitized_resubmit_of` bypassed retry bounds.
+   - MEDIUM: invalid/cross-lane root was indistinguishable from max attempts.
+   - MEDIUM: clean sanitized resubmits paid an unnecessary retry-state DB query.
+   - LOW: `span_count` counted only the first detector kind.
+   - LOW: blocked rejections still emitted retry metadata.
+15. Local fixes for the Phase 3 findings:
+   - no-lineage retry state is derived from prior same-lane root rejections;
+   - invalid roots are blocked with `resubmit_blocked_reason:
+     invalid_resubmit_root`;
+   - retry-state DB lookup runs only after the pure sync gate rejects;
+   - blocked responses omit `resubmit_metadata`;
+   - secret `span_count` sums all firing detectors;
+   - `docs/sme/adversarial.md` and `docs/sme/quality.md` record the new
+     MEDIUM+ review patterns.
+16. Local validation after the Phase 3 fixes:
+   - `bun test src/tools/__tests__/append-session-event.test.ts` -> 47 pass,
+     5 skip, 0 fail.
+   - `bun test src/sharing.test.ts src/tools/__tests__/append-session-event.test.ts src/contract.test.ts`
+     -> 94 pass, 5 skip, 0 fail.
+   - `bunx tsc --noEmit` -> passed.
+   - `bun test` -> 1059 pass, 46 skip, 0 fail.
+   - `cd python/openbrain-memory && uv run pytest -q tests/test_client.py tests/test_contract.py`
+     -> 69 pass.
+   - `cd python/openbrain-memory && uv run mypy src/openbrain_memory` ->
+     passed.
+   - `cd python/openbrain-memory && uv run ruff check src tests` -> passed.
+   - `git diff --check` -> passed.
+   - `ggshield secret scan path -y <Phase 3 changed files>` -> no secrets found.
+17. Pending: commit/push the Phase 3 fixes, post the fixes receipt on PR #244,
+   run focused fix-verification, then Phase 4 reply to every finding with the
+   fixing commit/waiver and Phase 5 merge only after the gate is clean.
+18. Deferred by current local-only instruction: downstream rollout and any
    core01 deploy/live canary. This contract change triggers
    `docs/downstream-rollout.md`; downstream rollout waits for the later release
    phase.

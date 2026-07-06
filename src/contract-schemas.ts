@@ -635,7 +635,7 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
             description:
               "When resubmitting a sanitized replacement after a synchronous " +
               "share_candidate rejection, set this to reject_detail.resubmit_metadata." +
-              "sanitized_resubmit_of from the rejected event response.",
+              "sanitized_resubmit_of from a resubmittable rejected event response.",
           },
           sanitized_resubmit_attempt: {
             type: "integer",
@@ -645,7 +645,8 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
             description:
               "Bounded sanitized resend attempt count. Set this to " +
               "reject_detail.resubmit_metadata.sanitized_resubmit_attempt when " +
-              "re-nominating a sanitized replacement. The server marks further " +
+              "re-nominating a sanitized replacement. The server derives an " +
+              "observed attempt from prior same-lane rejections and marks further " +
               "sync rejections non-resubmittable after the maximum attempt.",
           },
           okf: {
@@ -666,7 +667,8 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
       "token_identity, delegated_agent_id, and namespace_source provenance " +
       "fields; sync share_candidate rejections include share_candidate_rejected " +
       "and reject_detail {category, matched_kind, span_count, redaction_hint, " +
-      "resubmittable, resubmit_attempt, max_resubmit_attempts, resubmit_metadata}; " +
+      "resubmittable, resubmit_attempt, max_resubmit_attempts, optional " +
+      "resubmit_blocked_reason, and resubmit_metadata only when resubmittable}; " +
       "reject_detail never echoes offending content; error payloads use error classes retryable_outage, auth_denied, " +
       "scope_validation, unsupported_operation, or conflict_retry",
   },
