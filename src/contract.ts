@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { TOOL_CONTRACTS } from "./contract-schemas.ts";
 
-export const CONTRACT_VERSION = "2026-07-06.memory-tools.v13";
+export const CONTRACT_VERSION = "2026-07-06.memory-tools.v14";
 export const CONTRACT_SCHEMA_VERSION = 1;
 
 export interface ContractCapability {
@@ -134,11 +134,13 @@ export const CONTRACT_CAPABILITIES: ContractCapability[] = [
   },
   {
     name: "get_entry",
-    version: 1,
+    version: 2,
     kind: "tool",
     description:
-      "Fetch one full readable memory row by table and UUID. Server-side auth " +
-      "and namespace predicates remain the security boundary for ID reads.",
+      "Fetch one readable memory row by table and UUID. Defaults to full row " +
+      "output; compact render returns a bounded exact-UUID preview envelope. " +
+      "Server-side auth and namespace predicates remain the security boundary " +
+      "for ID reads.",
   },
   {
     name: "resolve_entry",
@@ -323,12 +325,12 @@ export function buildContract(
     contract_scope: "required_openbrain_memory_contract" as const,
     schema_version: CONTRACT_SCHEMA_VERSION,
     min_client_versions: {
-      "openbrain-memory": "0.1.3",
+      "openbrain-memory": "0.1.4",
       "rtech-hermes-runtime": "0.1.0",
       mcp2cli: "0.3.6",
     },
     compatible_client_ranges: {
-      "openbrain-memory": ">=0.1.3 <1.0.0",
+      "openbrain-memory": ">=0.1.4 <1.0.0",
       "rtech-hermes-runtime": ">=0.1.0 <1.0.0",
       mcp2cli: ">=0.3.6 <1.0.0",
     },
