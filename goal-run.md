@@ -4,9 +4,15 @@ Updated: 2026-07-06 by Codex after Fable handoff.
 
 ## Current Controller State
 
-Updated after the 2026-07-06 #204 merge and #176 local implementation pass.
+Updated after PR #244 opened for #176 and CI passed on 2026-07-06.
 
-- Open PRs: 0
+- Open PRs: 1
+  - #244 `feat(#176): structure share_candidate rejection detail` is open.
+    Implementation head `d0c34f8ec5649e13135f9844adb01f0e879a7f3c` passed
+    `check`, `db-integration`, `python-package`, PR-body `validate`, and
+    GitGuardian; `deploy` skipped. Re-read live checks for the latest head after
+    any plan-only update. Next gate: pre-merge-gauntlet Phase 2 review swarm,
+    then Phase 3 opposite-runtime cross-review. No core01 deploy.
 - Merged in this controller batch:
   - #231 merged as `c9888cc584fe68b5ff91906d56ef26c7fb40afef`;
     post-merge `/codex-deep` smoke on #234 succeeded.
@@ -36,8 +42,8 @@ Updated after the 2026-07-06 #204 merge and #176 local implementation pass.
   - #234/#165 are merged/closed; #165 is no longer open.
   - #204 moved to `Done` by merge/closure automation and `Next Action` records
     PR #243 merge commit `3b8e47ac5d4b3b614fdd26f5609242b73204f928`.
-  - #176 is `In Progress`, Validation `Local Passed`, and Review Gate
-    `Not Started` until PR open.
+  - #176 and PR #244 are `In Review`, Validation `CI Passed`, and Review Gate
+    `Initial Swarm Pending`; next action is the pre-merge-gauntlet swarm.
 - No production deploy was performed during this batch.
 
 ## Live Inventory Correction
@@ -306,10 +312,14 @@ Current #176 state:
    implementation trusted the client-supplied resend attempt too much. Fixed
    before PR by counting prior rejected resubmits in the same lane and using
    the larger of client-supplied and server-observed attempts.
-8. Pending: commit/push, open PR, then run Phase 2 swarm, Phase 3
-   opposite-runtime cross-review, Phase 4 fixes/waivers, and Phase 5 merge only
-   after the gate is clean.
-9. Deferred by current local-only instruction: downstream rollout and any
+8. PR #244 is open. Implementation head
+   `d0c34f8ec5649e13135f9844adb01f0e879a7f3c` passed the corrected PR-body run
+   (`validate`), server CI (`check`, `db-integration`), Python package CI, and
+   GitGuardian; deploy skipped. Re-read live checks for the latest head after
+   this plan-only update.
+9. Pending: run Phase 2 swarm, Phase 3 opposite-runtime cross-review, Phase 4
+   fixes/waivers, and Phase 5 merge only after the gate is clean.
+10. Deferred by current local-only instruction: downstream rollout and any
    core01 deploy/live canary. This contract change triggers
    `docs/downstream-rollout.md`; downstream rollout waits for the later release
    phase.
