@@ -268,8 +268,6 @@ explicit release/deploy approval.
   backup/migration/deploy/canary work.
 - Planning/disposition lanes: #137 and #118 are closed historical context. Do
   not dispatch new workers for them unless Rico explicitly reopens scope.
-- Release-only lane: #167 is a planning/preflight worker only until Rico
-  explicitly approves live backup/migration/deploy/canary work.
 
 ## Per-Issue Loop
 
