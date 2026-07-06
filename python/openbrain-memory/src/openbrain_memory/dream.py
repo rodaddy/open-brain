@@ -20,6 +20,8 @@ class DreamClient(Protocol):
 
     def promote_entry(self, **arguments: Any) -> JSON: ...
 
+    def decompose_entry(self, **arguments: Any) -> JSON: ...
+
     def find_duplicates(self, **arguments: Any) -> JSON: ...
 
 
@@ -227,6 +229,36 @@ class DreamEngine:
         if dry_run:
             return DreamAction("promote_entry", arguments, reason=reason).as_dict()
         return self.client.promote_entry(**arguments)
+
+    def decompose_entry(
+        self,
+        table: str,
+        entry_id: str,
+        *,
+        max_chunk_chars: int | None = None,
+        overlap_chars: int | None = None,
+        dry_run: bool = True,
+        apply_mode: str | None = None,
+    ) -> JSON:
+        arguments: dict[str, Any] = {"table": table, "id": entry_id}
+        if max_chunk_chars is not None:
+            arguments["max_chunk_chars"] = _bounded_int(
+                max_chunk_chars, max_chunk_chars, "max_chunk_chars", 8000
+            )
+        if overlap_chars is not None:
+            arguments["overlap_chars"] = _bounded_int(
+                overlap_chars + 1, overlap_chars + 1, "overlap_chars", 1001
+            ) - 1
+        if dry_run:
+            arguments["dry_run"] = True
+            return self.client.decompose_entry(**arguments)
+        if apply_mode != "write_replacements":
+            raise ValueError(
+                "decompose_entry dry_run=False requires apply_mode='write_replacements'"
+            )
+        arguments["dry_run"] = False
+        arguments["apply_mode"] = apply_mode
+        return self.client.decompose_entry(**arguments)
 
     def find_duplicates(self, **filters: Any) -> JSON:
         return self.client.find_duplicates(**filters)

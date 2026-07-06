@@ -25,11 +25,12 @@ row remains the default for backward compatibility.
 - It gives clients an explicit full-fetch path when the compact preview is not
   enough.
 
-## Deferred Work
+## Follow-Up Work
 
 Dream-driven decomposition remains the preferred long-term way to keep Open
-Brain entries naturally small and linked. It should not mutate entries until the
-DreamEngine dry-run-by-default rule has a scoped design and tests for:
+Brain entries naturally small and linked. #247 owns the local implementation.
+It should not mutate entries until the DreamEngine dry-run-by-default rule has a
+scoped design and tests for:
 
 - oversized-entry detection;
 - proposed smaller replacement entries with links back to the source;
@@ -38,5 +39,6 @@ DreamEngine dry-run-by-default rule has a scoped design and tests for:
   mutation;
 - namespace-safe provenance for every generated replacement.
 
-Track that in #247 before implementing mutating behavior. Do not fold it into
-compact `get_entry` rendering.
+Track implementation in #247. Do not fold it into compact `get_entry`
+rendering, and do not include hosted deployment unless a later release issue
+explicitly opts in.

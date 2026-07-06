@@ -46,6 +46,33 @@ class FakeDreamClient:
                 ],
                 "duplicates": [],
             },
+            "decompose_entry": {
+                "dry_run": True,
+                "oversized": True,
+                "source_ref": {
+                    "source": "brain",
+                    "table": "thoughts",
+                    "id": "large-1",
+                    "namespace": "bilby",
+                },
+                "proposed_replacements": [
+                    {
+                        "content": "smaller chunk",
+                        "chunk_index": 0,
+                        "source_ref": {
+                            "source": "brain",
+                            "table": "thoughts",
+                            "id": "large-1",
+                            "namespace": "bilby",
+                        },
+                        "provenance": {
+                            "source_table": "thoughts",
+                            "source_id": "large-1",
+                            "source_namespace": "bilby",
+                        },
+                    }
+                ],
+            },
         }
 
     def _record(self, name, arguments):
@@ -69,6 +96,10 @@ class FakeDreamClient:
 
     def promote_entry(self, **arguments):
         return self._record("promote_entry", arguments)
+
+    def decompose_entry(self, **arguments):
+        self.calls.append(("decompose_entry", arguments))
+        return self.responses["decompose_entry"]
 
     def find_duplicates(self, **arguments):
         self.calls.append(("find_duplicates", arguments))
@@ -303,6 +334,62 @@ def test_mutating_wrappers_require_explicit_dry_run_false():
         "tool": "promote_entry",
         "arguments": {"table": "thoughts", "id": "id-2", "target_namespace": "shared"},
     }
+
+
+def test_decompose_entry_defaults_to_dry_run_client_call():
+    client = FakeDreamClient()
+    engine = DreamEngine(client)
+
+    result = engine.decompose_entry(
+        "thoughts",
+        "large-1",
+        max_chunk_chars=700,
+        overlap_chars=50,
+    )
+
+    assert result["dry_run"] is True
+    assert result["proposed_replacements"][0]["provenance"] == {
+        "source_table": "thoughts",
+        "source_id": "large-1",
+        "source_namespace": "bilby",
+    }
+    assert client.calls[-1] == (
+        "decompose_entry",
+        {
+            "table": "thoughts",
+            "id": "large-1",
+            "max_chunk_chars": 700,
+            "overlap_chars": 50,
+            "dry_run": True,
+        },
+    )
+
+
+def test_decompose_entry_apply_requires_explicit_apply_mode():
+    client = FakeDreamClient()
+    engine = DreamEngine(client)
+
+    with pytest.raises(ValueError, match="write_replacements"):
+        engine.decompose_entry("thoughts", "large-1", dry_run=False)
+
+    assert client.calls == []
+
+    engine.decompose_entry(
+        "thoughts",
+        "large-1",
+        dry_run=False,
+        apply_mode="write_replacements",
+    )
+
+    assert client.calls[-1] == (
+        "decompose_entry",
+        {
+            "table": "thoughts",
+            "id": "large-1",
+            "dry_run": False,
+            "apply_mode": "write_replacements",
+        },
+    )
 
 
 def test_dream_structures_can_render_to_dicts():

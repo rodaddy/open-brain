@@ -41,11 +41,12 @@ def _resolve_package_version(pyproject: Path | None = None) -> str:
 
 
 PACKAGE_VERSION = _resolve_package_version()
-CURRENT_CONTRACT_VERSION = "2026-07-06.memory-tools.v17"
+CURRENT_CONTRACT_VERSION = "2026-07-06.memory-tools.v18"
 COMPATIBLE_CONTRACT_VERSIONS = (CURRENT_CONTRACT_VERSION,)
 REQUIRED_CONTRACT_TOOLS = (
     "append_session_event",
     "agent_context_pack",
+    "decompose_entry",
     "get_contract",
     "get_entry",
     "resolve_entry",
@@ -69,6 +70,10 @@ CURRENT_TOOL_HELP: Mapping[str, str] = {
         "quarantined recovery."
     ),
     "brain_answer": "Return cited answer bullets from readable Open Brain evidence.",
+    "decompose_entry": (
+        "Plan dry-run-first oversized-entry decomposition; explicit apply can "
+        "write linked replacement thoughts."
+    ),
     "get_entity": "Fetch a graph entity by ID.",
     "get_contract": "Read the canonical Open Brain public contract manifest.",
     "get_entry": (
@@ -486,6 +491,9 @@ class OpenBrainClient:
 
     def demote_entry(self, **arguments: Any) -> JSON:
         return self.call_tool("demote_entry", arguments)
+
+    def decompose_entry(self, **arguments: Any) -> JSON:
+        return self.call_tool("decompose_entry", arguments)
 
     def find_duplicates(self, **arguments: Any) -> JSON:
         return self.call_tool("find_duplicates", arguments)

@@ -13,7 +13,7 @@ describe("Open Brain contract manifest", () => {
     expect(contract.contract_scope).toBe("required_openbrain_memory_contract");
     expect(contract.schema_hash).toMatch(/^[0-9a-f]{64}$/);
     expect(contract.schema_hash).toBe(
-      "64d86266c1c8a04aa947413e6fc00031cde830795dc6eb8f35536051dbdae07e",
+      "46a9fa3012e2f0a45b510c4dfec5e02859366fb6279f1db0460b66aafc56cefc",
     );
     expect(contract.min_client_versions.mcp2cli).toBe("0.3.6");
     expect(contract.transport.namespace_boundary).toBe("authorization");
@@ -390,6 +390,20 @@ describe("Open Brain contract manifest", () => {
     });
     expect(getEntry?.output_shape).toContain("compact envelope");
     expect((getEntry?.input_schema as any).namespace).toBeUndefined();
+    const decomposeEntry = contract.tool_contracts.decompose_entry;
+    expect(decomposeEntry).toBeDefined();
+    expect(decomposeEntry?.version).toBe(1);
+    expect((decomposeEntry?.input_schema as any).dry_run).toMatchObject({
+      type: "boolean",
+      required: false,
+      default: true,
+    });
+    expect((decomposeEntry?.input_schema as any).apply_mode).toMatchObject({
+      type: "enum",
+      required: false,
+      values: ["write_replacements"],
+    });
+    expect(decomposeEntry?.output_shape).toContain("without source-row mutation");
     const resolveEntry = contract.tool_contracts.resolve_entry;
     expect(resolveEntry).toBeDefined();
     expect(resolveEntry?.version).toBe(1);
@@ -446,7 +460,7 @@ describe("Open Brain contract manifest", () => {
     // contract so a future TS/Python divergence fails here, in lockstep with
     // python/openbrain-memory CURRENT_CONTRACT_VERSION.
     const contract = buildContract("2026-06-18T00:00:00.000Z");
-    expect(contract.contract_version).toBe("2026-07-06.memory-tools.v17");
+    expect(contract.contract_version).toBe("2026-07-06.memory-tools.v18");
 
     const appendEvent = contract.tool_contracts.append_session_event;
     expect(appendEvent).toBeDefined();

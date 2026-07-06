@@ -17,6 +17,7 @@ import { registerBrainAnswer } from "./brain-answer.ts";
 import { registerUpsertPerson } from "./upsert-person.ts";
 import { registerSetTier } from "./set-tier.ts";
 import { registerGetEntry } from "./get-entry.ts";
+import { registerDecomposeEntry } from "./decompose-entry.ts";
 import { registerResolveEntry } from "./resolve-entry.ts";
 import { registerGetStats } from "./get-stats.ts";
 import { registerAccessReport } from "./access-report.ts";
@@ -91,6 +92,7 @@ export function registerAllTools(server: McpServer, deps: ToolDeps): void {
   registerUpsertPerson(server, toolDeps);
   registerSetTier(server, toolDeps);
   registerGetEntry(server, toolDeps);
+  registerDecomposeEntry(server, toolDeps);
   registerResolveEntry(server, toolDeps);
   registerGetStats(server, toolDeps);
   registerAccessReport(server, toolDeps);

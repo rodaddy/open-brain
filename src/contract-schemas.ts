@@ -315,6 +315,57 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
     output_shape:
       "full readable entry row JSON text payload, or compact envelope with content_preview/content_length/content_truncated/source_ref/fetch_path",
   },
+  decompose_entry: {
+    version: 1,
+    input_schema: {
+      table: {
+        type: "enum",
+        required: true,
+        values: ["thoughts", "decisions", "relationships", "projects", "sessions"],
+        description:
+          "Readable source table containing the oversized row to decompose.",
+      },
+      id: {
+        type: "string",
+        required: true,
+        format: "uuid",
+        description:
+          "Source entry UUID. The server applies auth-derived namespace " +
+          "predicates before reading any row.",
+      },
+      max_chunk_chars: {
+        type: "integer",
+        required: false,
+        min: 500,
+        max: 8000,
+        default: 2000,
+      },
+      overlap_chars: {
+        type: "integer",
+        required: false,
+        min: 0,
+        max: 1000,
+        default: 200,
+      },
+      dry_run: {
+        type: "boolean",
+        required: false,
+        default: true,
+        description:
+          "Defaults true. false requires apply_mode=write_replacements.",
+      },
+      apply_mode: {
+        type: "enum",
+        required: false,
+        values: ["write_replacements"],
+        description:
+          "Required with dry_run=false to write replacement thoughts. Source " +
+          "rows are never archived, demoted, promoted, or tier-mutated.",
+      },
+    },
+    output_shape:
+      "dry-run decomposition plan with source_ref/proposed_replacements/proposed_links/would_write; explicit apply adds written_ids/skipped_duplicates without source-row mutation",
+  },
   resolve_entry: {
     version: 1,
     input_schema: {
