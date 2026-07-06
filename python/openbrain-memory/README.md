@@ -364,10 +364,15 @@ streamable JSON-RPC/MCP surface, but the host install should be described as
 "direct HTTP to Open Brain `/mcp`" rather than generic "MCP HTTP" so it is not
 confused with mcp2cli daemon routing or other MCP transports.
 
-NATS or another transport may be added later for agent-host routing, but it is
-not the current package transport. Until a future transport is implemented and
-documented, Hermes agents should configure `OPENBRAIN_BASE_URL`,
-`OPENBRAIN_TOKEN`, and namespace identity for direct HTTP access to Open Brain.
+NATS runtime transport is not available yet. Hermes agents should still configure
+`OPENBRAIN_BASE_URL`, `OPENBRAIN_TOKEN`, and namespace identity for direct HTTP
+access to Open Brain.
+
+The package exposes an opt-in `NatsTransport` stub behind the same `Transport`
+facade used by `OpenBrainClient`, but it is intentionally
+`not_runtime_available` by default. Without a supplied `fallback_transport`, it
+fails closed with `OpenBrainTransportUnavailableError`. With a fallback
+transport, calls delegate to the fallback so HTTP remains the default behavior.
 
 ## Safety and Spooling
 

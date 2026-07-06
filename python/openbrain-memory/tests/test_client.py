@@ -14,12 +14,16 @@ import pytest
 from openbrain_memory import (
     CURRENT_CONTRACT_VERSION,
     CURRENT_TOOL_HELP,
+    DEFAULT_NATS_CONTEXT_PACK_SUBJECT,
     PACKAGE_VERSION,
     REQUIRED_CONTRACT_TOOLS,
+    NatsTransport,
     OpenBrainClient,
     OpenBrainHTTPError,
     OpenBrainProtocolError,
     OpenBrainToolError,
+    OpenBrainTransportUnavailableError,
+    RealtimeTransportAvailability,
     RetryPolicy,
 )
 from openbrain_memory.client import (
@@ -225,6 +229,59 @@ def test_health_raises_for_unstructured_503_body():
 
     with pytest.raises(OpenBrainHTTPError, match="status=503"):
         client.health()
+
+
+def test_nats_transport_defaults_to_not_runtime_available_without_fallback():
+    transport = NatsTransport("nats://127.0.0.1:4222")
+
+    assert transport.url == "nats://127.0.0.1:4222"
+    assert transport.context_pack_subject == DEFAULT_NATS_CONTEXT_PACK_SUBJECT
+    assert (
+        transport.availability
+        == RealtimeTransportAvailability.NOT_RUNTIME_AVAILABLE
+    )
+
+    with pytest.raises(OpenBrainTransportUnavailableError) as exc_info:
+        transport.post(
+            "https://brain.example/mcp",
+            headers={"Authorization": "Bearer secret-token"},
+            json_body={"jsonrpc": "2.0", "id": 1, "method": "initialize"},
+            timeout=5.0,
+        )
+
+    exc = exc_info.value
+    assert exc.transport == "nats_jetstream"
+    assert exc.availability == RealtimeTransportAvailability.NOT_RUNTIME_AVAILABLE
+    assert exc.fallback_transport == "http_mcp"
+    assert '"availability": "not_runtime_available"' in str(exc)
+    assert "context=transport:nats_jetstream" in str(exc)
+
+
+def test_nats_transport_uses_fallback_transport_for_http_calls():
+    fallback = FakeTransport()
+    transport = NatsTransport(
+        "nats://127.0.0.1:4222",
+        context_pack_subject="ob.memory.context_pack",
+        fallback_transport=fallback,
+    )
+    client = OpenBrainClient(
+        "https://brain.example",
+        "secret-token",
+        "bilby",
+        agent_id="bilby-agent",
+        role="agent",
+        timeout=12.5,
+        transport=transport,
+    )
+
+    result = client.search_all(query="nats fallback")
+
+    assert result["tool"] == "search_all"
+    assert [request["json"].get("method") for request in post_requests(fallback)] == [
+        "initialize",
+        "notifications/initialized",
+        "tools/call",
+    ]
 
 
 def test_http_error_redacts_deep_json_without_recursion_error():
