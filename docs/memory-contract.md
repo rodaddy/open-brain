@@ -190,6 +190,20 @@ Do not mirror raw qmd chunks or full code excerpts into Open Brain by default.
 For volatile implementation details, store a stable fact plus a source pointer
 and verify the live source through `gh` or a checkout before editing.
 
+### Optional Remote qmd Deep Lookup
+
+Remote qmd lookup is optional and best-effort. It is not part of the required
+Open Brain/Hermes memory contract. Normal startup, recall, writes, current
+memory, session lanes, and repo facts must continue to work when qmd is
+unavailable.
+
+Issue #137 is dispositioned in
+`docs/roadmap/optional-qmd-deep-lookup.md`: implementation of a controlled
+remote qmd wrapper is deferred until the owning mcp2cli/qmd/host-routing
+boundary is explicitly approved. Until then, required qmd-derived knowledge must
+be promoted into Open Brain with `upsert_repo_fact`, and remote qmd may only be
+treated as a future deep-lookup escape hatch.
+
 ### Citation And Answering Rules
 
 Memory-derived facts should be cited with the returned source identity: for

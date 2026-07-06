@@ -222,6 +222,12 @@ QMD_PATH=/Volumes/ThunderBolt/qmd/open-brain-qmd.ts
 Do not put qmd indexes, qmd models, Postgres data, or required production
 `node_modules` under `/Volumes/ThunderBolt/Development`.
 
+qmd is a repo-knowledge compiler and optional deep lookup source. It is not a
+required distributed memory layer for Hermes or other agents. Required qmd-
+derived facts must be promoted into Open Brain; remote qmd access remains a
+future best-effort escape hatch unless a separate approved wrapper ships.
+See [`docs/roadmap/optional-qmd-deep-lookup.md`](docs/roadmap/optional-qmd-deep-lookup.md).
+
 Smoke after startup:
 
 ```bash
