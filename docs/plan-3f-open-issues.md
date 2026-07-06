@@ -7,10 +7,11 @@ Updated: 2026-07-06.
 Live GitHub and Project 8 state are the source of truth. Older roadmap
 snapshots and untracked sidecar plans are historical evidence only.
 
-Current live state as of 2026-07-06 15:25 EDT during the #247 local
-implementation phase:
+Current live state as of 2026-07-06 15:45 EDT during the #247 pre-merge
+gauntlet fix phase:
 
-- Open PRs: 0.
+- Open PRs: 1.
+  - #254 `feat(#247): add DreamEngine entry decomposition`
 - Open issues: 5.
   - #247 `Design DreamEngine decomposition for oversized Open Brain entries`
   - #223 `Add NATS and JetStream foundation for realtime Open Brain transport`
@@ -26,10 +27,18 @@ implementation phase:
   #223 remains open for the later runtime/deploy slice.
 - #224 is closed by PR #251, #222 is closed by PR #252, and #221 is closed by
   PR #253. They are historical context only, not active Plan 3F work.
+- PR #254 is open for #247 on `feat/247-dreamengine-decomposition` at
+  `0f8c62065458be9c415bb9795a7e6e1d9f61fa15`. Initial pre-merge-gauntlet
+  findings are posted at
+  https://github.com/rodaddy/open-brain/pull/254#issuecomment-4896913956:
+  four MEDIUM findings covering explicit apply no-op status, atomic replacement
+  writes, decision JSONB source content, and Python wrapper bounds. Fixes are
+  applied locally with focused and full validation green; next action is
+  commit/push, fixes summary, and fix verification.
 - #204 is closed. Do not continue stale #204 worktrees for this run.
 
 Critical correction: the active Plan 3F surface is the 5 open issues above and
-0 open PRs. Closed issues and merged PRs may explain predecessor state, but they
+1 open PR. Closed issues and merged PRs may explain predecessor state, but they
 must not occupy worker lanes or be counted as remaining work.
 
 ## Operating Boundary

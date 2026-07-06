@@ -20,7 +20,7 @@ const SOURCE_CONTENT_SQL: Record<Table, string> = {
   thoughts: "COALESCE(content, '')",
   decisions:
     "COALESCE(title, '') || CASE WHEN rationale IS NOT NULL AND rationale <> '' THEN E'\\n' || rationale ELSE '' END" +
-    " || CASE WHEN alternatives IS NOT NULL AND array_length(alternatives, 1) > 0 THEN E'\\nAlternatives: ' || immutable_array_to_string(alternatives, '; ') ELSE '' END" +
+    " || CASE WHEN jsonb_typeof(alternatives) = 'array' AND jsonb_array_length(alternatives) > 0 THEN E'\\nAlternatives: ' || (SELECT string_agg(value, '; ') FROM jsonb_array_elements_text(alternatives) AS alternative(value)) ELSE '' END" +
     " || CASE WHEN context IS NOT NULL AND context <> '' THEN E'\\nContext: ' || context ELSE '' END",
   relationships:
     "COALESCE(person_name, '') || CASE WHEN context IS NOT NULL AND context <> '' THEN E'\\n' || context ELSE '' END",
@@ -121,6 +121,21 @@ export function registerDecomposeEntry(server: McpServer, deps: ToolDeps): void 
             isError: true,
           };
         }
+        if (plan.proposed_replacements.length === 0) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: JSON.stringify({
+                  ...plan,
+                  dry_run: false,
+                  written_ids: [],
+                  skipped_duplicates: [],
+                }),
+              },
+            ],
+          };
+        }
         const applied = await writeReplacementThoughts(deps, auth, namespace, plan);
         return {
           content: [
@@ -182,48 +197,58 @@ async function writeReplacementThoughts(
   namespace: string,
   plan: DecompositionPlan,
 ): Promise<{ writtenIds: string[]; skippedDuplicates: string[] }> {
+  const client = await deps.pool.connect();
   const writtenIds: string[] = [];
   const skippedDuplicates: string[] = [];
-  for (const proposal of plan.proposed_replacements) {
-    const hash = contentHash(proposal.content);
-    const embedding = await deps.embedFn(proposal.content);
-    const parentId = plan.source_ref.table === "thoughts" ? plan.source_ref.id : null;
-    const { rows } = await deps.pool.query(
-      `INSERT INTO thoughts
-         (content, tags, source, created_by, namespace, embedding, content_hash,
-          embedded_at, embedding_model, promoted_from, parent_id, chunk_index)
-       VALUES ($1, $2, 'dreamengine-decomposition', $3, $4, $5, $6, $7, $8, $9, $10, $11)
-       ON CONFLICT (content_hash, namespace) WHERE content_hash IS NOT NULL DO NOTHING
-       RETURNING id`,
-      [
-        proposal.content,
-        replacementTags(proposal),
-        auth.clientId,
-        namespace,
-        embedding ? toSql(embedding) : null,
-        hash,
-        embedding ? new Date().toISOString() : null,
-        embedding ? EMBEDDING_MODEL : null,
-        JSON.stringify(proposal.provenance),
-        parentId,
-        proposal.chunk_index,
-      ],
-    );
-    const insertedId = rows[0]?.id;
-    if (typeof insertedId === "string") {
-      writtenIds.push(insertedId);
-      continue;
+  try {
+    await client.query("BEGIN");
+    for (const proposal of plan.proposed_replacements) {
+      const hash = contentHash(proposal.content);
+      const embedding = await deps.embedFn(proposal.content);
+      const parentId = plan.source_ref.table === "thoughts" ? plan.source_ref.id : null;
+      const { rows } = await client.query(
+        `INSERT INTO thoughts
+           (content, tags, source, created_by, namespace, embedding, content_hash,
+            embedded_at, embedding_model, promoted_from, parent_id, chunk_index)
+         VALUES ($1, $2, 'dreamengine-decomposition', $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         ON CONFLICT (content_hash, namespace) WHERE content_hash IS NOT NULL DO NOTHING
+         RETURNING id`,
+        [
+          proposal.content,
+          replacementTags(proposal),
+          auth.clientId,
+          namespace,
+          embedding ? toSql(embedding) : null,
+          hash,
+          embedding ? new Date().toISOString() : null,
+          embedding ? EMBEDDING_MODEL : null,
+          JSON.stringify(proposal.provenance),
+          parentId,
+          proposal.chunk_index,
+        ],
+      );
+      const insertedId = rows[0]?.id;
+      if (typeof insertedId === "string") {
+        writtenIds.push(insertedId);
+        continue;
+      }
+      const existing = await client.query(
+        `SELECT id FROM thoughts WHERE content_hash = $1 AND namespace = $2 AND archived_at IS NULL`,
+        [hash, namespace],
+      );
+      const existingId = existing.rows[0]?.id;
+      if (typeof existingId === "string") {
+        skippedDuplicates.push(existingId);
+      }
     }
-    const existing = await deps.pool.query(
-      `SELECT id FROM thoughts WHERE content_hash = $1 AND namespace = $2 AND archived_at IS NULL`,
-      [hash, namespace],
-    );
-    const existingId = existing.rows[0]?.id;
-    if (typeof existingId === "string") {
-      skippedDuplicates.push(existingId);
-    }
+    await client.query("COMMIT");
+    return { writtenIds, skippedDuplicates };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
   }
-  return { writtenIds, skippedDuplicates };
 }
 
 function replacementTags(proposal: ReplacementProposal): string[] {

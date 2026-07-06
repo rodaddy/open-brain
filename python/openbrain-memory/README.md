@@ -456,6 +456,10 @@ dreams.decompose_entry(
 )
 ```
 
+If the source entry is not oversized, explicit apply returns the same
+`not_oversized` no-op plan with empty `written_ids` and `skipped_duplicates`;
+it does not report a write or mutate any rows.
+
 ## Test
 
 ```bash

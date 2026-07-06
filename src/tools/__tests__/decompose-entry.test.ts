@@ -147,6 +147,18 @@ describe("decompose_entry", () => {
           ],
         };
       },
+      connect: async () => ({
+        query: async (sql: string, params?: unknown[]) => {
+          writes.push({ sql, params });
+          if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql)) return { rows: [] };
+          if (sql.includes("INSERT INTO thoughts")) {
+            inserted += 1;
+            return { rows: [{ id: `new-${inserted}` }] };
+          }
+          return { rows: [] };
+        },
+        release: () => undefined,
+      }),
     };
     const auth: AuthInfo = { role: "agent", clientId: "bilby" };
     const { client, cleanup } = await setupMcpClient(
@@ -175,6 +187,8 @@ describe("decompose_entry", () => {
       expect(parsed.dry_run).toBe(false);
       expect(parsed.written_ids.length).toBeGreaterThan(1);
       expect(parsed.skipped_duplicates).toEqual([]);
+      expect(writes.map((call) => call.sql)).toContain("BEGIN");
+      expect(writes.map((call) => call.sql)).toContain("COMMIT");
       const insertCalls = writes.filter((call) =>
         call.sql.includes("INSERT INTO thoughts"),
       );
@@ -182,6 +196,159 @@ describe("decompose_entry", () => {
       expect(insertCalls[0]?.params?.[2]).toBe("bilby");
       expect(insertCalls[0]?.params?.[3]).toBe("bilby");
       expect(insertCalls[0]?.params?.[9]).toBe(SOURCE_ID);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("keeps explicit apply on non-oversized entries as a no-op", async () => {
+    let insertSeen = false;
+    const mockPool = {
+      query: async () => ({
+        rows: [
+          {
+            id: SOURCE_ID,
+            namespace: "bilby",
+            content_text: "small enough",
+          },
+        ],
+      }),
+      connect: async () => ({
+        query: async (sql: string) => {
+          if (sql.includes("INSERT INTO thoughts")) insertSeen = true;
+          return { rows: [] };
+        },
+        release: () => undefined,
+      }),
+    };
+    const auth: AuthInfo = { role: "agent", clientId: "bilby" };
+    const { client, cleanup } = await setupMcpClient(
+      registerDecomposeEntry,
+      mockPool,
+      createMockEmbed(),
+      auth,
+    );
+
+    try {
+      const result = await client.callTool({
+        name: "decompose_entry",
+        arguments: {
+          table: "thoughts",
+          id: SOURCE_ID,
+          dry_run: false,
+          apply_mode: "write_replacements",
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const parsed = parseToolResult(result);
+      expect(parsed.status).toBe("not_oversized");
+      expect(parsed.dry_run).toBe(false);
+      expect(parsed.would_write).toBe(0);
+      expect(parsed.written_ids).toEqual([]);
+      expect(parsed.skipped_duplicates).toEqual([]);
+      expect(insertSeen).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("rolls back replacement writes when apply fails mid-batch", async () => {
+    const queries: string[] = [];
+    let embedCalls = 0;
+    const mockPool = {
+      query: async () => ({
+        rows: [
+          {
+            id: SOURCE_ID,
+            namespace: "bilby",
+            content_text: longContent(),
+          },
+        ],
+      }),
+      connect: async () => ({
+        query: async (sql: string) => {
+          queries.push(sql);
+          if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql)) return { rows: [] };
+          if (sql.includes("INSERT INTO thoughts")) return { rows: [{ id: "new-1" }] };
+          return { rows: [] };
+        },
+        release: () => undefined,
+      }),
+    };
+    const mockEmbed = async () => {
+      embedCalls += 1;
+      if (embedCalls > 1) throw new Error("embedding provider failed");
+      return Array(768).fill(0.1);
+    };
+    const auth: AuthInfo = { role: "agent", clientId: "bilby" };
+    const { client, cleanup } = await setupMcpClient(
+      registerDecomposeEntry,
+      mockPool,
+      mockEmbed,
+      auth,
+    );
+
+    try {
+      const result = await client.callTool({
+        name: "decompose_entry",
+        arguments: {
+          table: "thoughts",
+          id: SOURCE_ID,
+          max_chunk_chars: 700,
+          overlap_chars: 50,
+          dry_run: false,
+          apply_mode: "write_replacements",
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(getErrorText(result)).toContain("embedding provider failed");
+      expect(queries).toContain("BEGIN");
+      expect(queries).toContain("ROLLBACK");
+      expect(queries).not.toContain("COMMIT");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("uses JSONB-safe source SQL for decision alternatives", async () => {
+    let sourceSql = "";
+    const mockPool = {
+      query: async (sql: string) => {
+        sourceSql = sql;
+        return {
+          rows: [
+            {
+              id: SOURCE_ID,
+              namespace: "bilby",
+              content_text: longContent(),
+            },
+          ],
+        };
+      },
+    };
+    const auth: AuthInfo = { role: "agent", clientId: "bilby" };
+    const { client, cleanup } = await setupMcpClient(
+      registerDecomposeEntry,
+      mockPool,
+      createMockEmbed(),
+      auth,
+    );
+
+    try {
+      const result = await client.callTool({
+        name: "decompose_entry",
+        arguments: {
+          table: "decisions",
+          id: SOURCE_ID,
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      expect(sourceSql).toContain("jsonb_array_length(alternatives)");
+      expect(sourceSql).toContain("jsonb_array_elements_text(alternatives)");
+      expect(sourceSql).not.toContain("array_length(alternatives,");
     } finally {
       await cleanup();
     }

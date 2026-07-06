@@ -242,13 +242,13 @@ class DreamEngine:
     ) -> JSON:
         arguments: dict[str, Any] = {"table": table, "id": entry_id}
         if max_chunk_chars is not None:
-            arguments["max_chunk_chars"] = _bounded_int(
-                max_chunk_chars, max_chunk_chars, "max_chunk_chars", 8000
+            arguments["max_chunk_chars"] = _bounded_int_between(
+                max_chunk_chars, "max_chunk_chars", 500, 8000
             )
         if overlap_chars is not None:
-            arguments["overlap_chars"] = _bounded_int(
-                overlap_chars + 1, overlap_chars + 1, "overlap_chars", 1001
-            ) - 1
+            arguments["overlap_chars"] = _bounded_int_between(
+                overlap_chars, "overlap_chars", 0, 1000
+            )
         if dry_run:
             arguments["dry_run"] = True
             return self.client.decompose_entry(**arguments)
@@ -332,6 +332,12 @@ def _bounded_int(value: Any, default: int, name: str, maximum: int) -> int:
         return default
     if type(value) is not int or not 1 <= value <= maximum:
         raise ValueError(f"{name} must be an integer between 1 and {maximum}")
+    return value
+
+
+def _bounded_int_between(value: Any, name: str, minimum: int, maximum: int) -> int:
+    if type(value) is not int or not minimum <= value <= maximum:
+        raise ValueError(f"{name} must be an integer between {minimum} and {maximum}")
     return value
 
 

@@ -392,6 +392,39 @@ def test_decompose_entry_apply_requires_explicit_apply_mode():
     )
 
 
+def test_decompose_entry_bounds_match_server_schema():
+    client = FakeDreamClient()
+    engine = DreamEngine(client)
+
+    with pytest.raises(ValueError, match="max_chunk_chars"):
+        engine.decompose_entry("thoughts", "large-1", max_chunk_chars=499)
+
+    with pytest.raises(ValueError, match="overlap_chars"):
+        engine.decompose_entry("thoughts", "large-1", overlap_chars=-1)
+
+    with pytest.raises(ValueError, match="overlap_chars"):
+        engine.decompose_entry("thoughts", "large-1", overlap_chars=1001)
+
+    assert client.calls == []
+
+    engine.decompose_entry(
+        "thoughts",
+        "large-1",
+        max_chunk_chars=500,
+        overlap_chars=0,
+    )
+    assert client.calls[-1] == (
+        "decompose_entry",
+        {
+            "table": "thoughts",
+            "id": "large-1",
+            "max_chunk_chars": 500,
+            "overlap_chars": 0,
+            "dry_run": True,
+        },
+    )
+
+
 def test_dream_structures_can_render_to_dicts():
     action = DreamAction(
         "set_tier", {"table": "thoughts", "id": "id-1", "tier": "cold"}

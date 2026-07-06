@@ -364,7 +364,7 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
       },
     },
     output_shape:
-      "dry-run decomposition plan with source_ref/proposed_replacements/proposed_links/would_write; explicit apply adds written_ids/skipped_duplicates without source-row mutation",
+      "dry-run decomposition plan with source_ref/proposed_replacements/proposed_links/would_write; explicit apply adds written_ids/skipped_duplicates without source-row mutation, and preserves not_oversized as a no-op when nothing would be written",
   },
   resolve_entry: {
     version: 1,
