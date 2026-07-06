@@ -46,6 +46,18 @@ function appendSessionEventError(
 }
 
 type Queryable = Pick<pg.Pool | pg.PoolClient, "query">;
+type PreparedLaneEmbedding = {
+  embeddingVal: ReturnType<typeof toSql> | null;
+  contentHashValue: string | null;
+  embeddedAt: string | null;
+  model: string | null;
+};
+type PreparedEventEmbedding = {
+  embeddingVal: ReturnType<typeof toSql> | null;
+  contentHashValue: string;
+  embeddedAt: string | null;
+  model: string | null;
+};
 
 async function withAppendDb<T>(
   deps: ToolDeps,
@@ -110,6 +122,28 @@ async function firstWriteLaneEmbedding(
   };
 }
 
+async function appendEventEmbedding(
+  deps: ToolDeps,
+  args: { session_key: string; content: string },
+): Promise<PreparedEventEmbedding> {
+  let embedding: number[] | null = null;
+  try {
+    embedding = await deps.embedFn(args.content);
+  } catch (err) {
+    logger.warn("append_session_event_embed_error", {
+      session_key: args.session_key,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  return {
+    embeddingVal: embedding ? toSql(embedding) : null,
+    contentHashValue: contentHash(args.content),
+    embeddedAt: embedding ? new Date().toISOString() : null,
+    model: embedding ? EMBEDDING_MODEL : null,
+  };
+}
+
 function scopeConflicts(
   lane: Record<string, unknown>,
   args: {
@@ -162,6 +196,7 @@ async function ensureLaneForAppend(
     thread_id?: string | null;
     project?: string;
     topic?: string;
+    laneEmbedding?: PreparedLaneEmbedding;
   },
   auth: AuthInfo,
 ): Promise<
@@ -186,7 +221,8 @@ WHERE namespace = $1 AND session_key = $2`,
     attemptedCreate = true;
     const metadata =
       args.server_id === undefined ? {} : { server_id: args.server_id };
-    const laneEmbedding = await firstWriteLaneEmbedding(deps, args);
+    const laneEmbedding =
+      args.laneEmbedding ?? (await firstWriteLaneEmbedding(deps, args));
     const { rows: insertedRows } = await db.query(
       `INSERT INTO ob_session_lanes
   (session_key, namespace, status, agent, source, channel_id, thread_id,
@@ -649,9 +685,17 @@ export function registerAppendSessionEvent(
       });
 
       try {
+        const transactionalAppend = args.create_if_missing === true;
+        const preparedLaneEmbedding = transactionalAppend
+          ? await firstWriteLaneEmbedding(deps, args)
+          : undefined;
+        const preparedEventEmbedding = transactionalAppend
+          ? await appendEventEmbedding(deps, args)
+          : undefined;
+
         return await withAppendDb(
           deps,
-          args.create_if_missing === true,
+          transactionalAppend,
           async (db) => {
             const laneResult = await ensureLaneForAppend(
               db,
@@ -671,6 +715,7 @@ export function registerAppendSessionEvent(
                     : args.thread_id,
                 project: args.project,
                 topic: args.topic,
+                laneEmbedding: preparedLaneEmbedding,
               },
               auth,
             );
@@ -727,21 +772,8 @@ export function registerAppendSessionEvent(
               });
             }
 
-            // Generate embedding (non-fatal)
-            let embedding: number[] | null = null;
-            try {
-              embedding = await deps.embedFn(args.content);
-            } catch (err) {
-              logger.warn("append_session_event_embed_error", {
-                session_key: args.session_key,
-                error: err instanceof Error ? err.message : String(err),
-              });
-            }
-
-            const hash = contentHash(args.content);
-            const embeddingVal = embedding ? toSql(embedding) : null;
-            const embeddedAt = embedding ? new Date().toISOString() : null;
-            const model = embedding ? EMBEDDING_MODEL : null;
+            const eventEmbedding =
+              preparedEventEmbedding ?? (await appendEventEmbedding(deps, args));
 
             const { rows } = await db.query(
               `INSERT INTO ob_session_events
@@ -758,10 +790,10 @@ export function registerAppendSessionEvent(
                 args.artifact_path ?? null,
                 importance,
                 JSON.stringify(metadata),
-                embeddingVal,
-                hash,
-                embeddedAt,
-                model,
+                eventEmbedding.embeddingVal,
+                eventEmbedding.contentHashValue,
+                eventEmbedding.embeddedAt,
+                eventEmbedding.model,
                 auth.clientId,
               ],
             );

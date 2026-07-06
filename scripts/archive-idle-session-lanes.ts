@@ -150,15 +150,29 @@ export async function archiveIdleSessionLanes(
   let archived = 0;
   if (args.execute && candidates.length > 0) {
     const ids = candidates.map((row) => row.id);
+    const updateParams = [...params, ids];
+    const idParam = updateParams.length;
     const result = await db.query(
-      `UPDATE ob_session_lanes
+      `WITH eligible AS (
+         SELECT l.id
+           FROM ob_session_lanes l
+           LEFT JOIN LATERAL (
+             SELECT MAX(e.created_at) AS last_event_at
+               FROM ob_session_events e
+              WHERE e.lane_id = l.id
+           ) last_event ON TRUE
+          WHERE ${whereSql}
+            AND l.id = ANY($${idParam}::uuid[])
+          ORDER BY COALESCE(last_event.last_event_at, l.created_at) ASC, l.id ASC
+          LIMIT $2
+       )
+       UPDATE ob_session_lanes l
           SET status = 'archived',
-              ended_at = COALESCE(ended_at, NOW()),
+              ended_at = COALESCE(l.ended_at, NOW()),
               updated_at = NOW()
-        WHERE id = ANY($1::uuid[])
-          AND status = 'active'
-          AND ended_at IS NULL`,
-      [ids],
+         FROM eligible
+        WHERE l.id = eligible.id`,
+      updateParams,
     );
     archived = result.rowCount ?? 0;
   }
