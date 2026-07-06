@@ -150,9 +150,11 @@ Owning boundary:
 Explicit client actions for moving candidate memory into durable memory or
 shared-kb nomination.
 
-Active branch:
+Historical branch:
 `feat/224-promotion-lifecycle` in
-`/Volumes/ThunderBolt/_tmp/open-brain/issue-224-promotion-lifecycle`.
+`/Volumes/ThunderBolt/_tmp/open-brain/issue-224-promotion-lifecycle` was the
+closed local-work branch. Do not route new workers to this branch unless Rico
+explicitly reopens the issue.
 
 Local status:
 
@@ -160,8 +162,8 @@ Local status:
   validation, candidate events not auto-tiering into durable thoughts,
   `scan_namespace`/DreamEngine explicit nomination semantics, Python lifecycle
   call-shape tests, and v15 contract/hash alignment.
-- Project 8 marks #224 `In Progress`, Review Gate `Zero Known Issues`, and
-  Validation `Local Passed` for the pre-PR blocker pass.
+- Historical Project 8 state for #224 recorded the pre-PR blocker pass. Current
+  workers must treat #224 as closed historical context, not active board work.
 - Local validation passed:
   - `bunx tsc --noEmit`
   - focused lifecycle/contract/tiering/scan/promoter tests: `210 pass`, `20`
@@ -261,9 +263,10 @@ explicit release/deploy approval.
 
 - Controller lane: owns live issue/PR/board state, branch integration, PR body,
   review receipts, merge decisions, and this Plan 3F file.
-- #223 active lane: controller creates the NATS/JetStream foundation branch
-  from a clean worktree and splits transport/auth/Python/docs work only if the
-  implementation boundary is kept local and deploy remains off.
+- #223 active lane: controller reviews the merged local-only foundation state,
+  then opens any remaining #223 follow-up branch from a clean worktree. Keep the
+  implementation boundary local; hosted runtime/deploy/canary work remains off
+  without explicit release approval.
 - #167 active lane: planning/preflight only until Rico explicitly approves live
   backup/migration/deploy/canary work.
 - Planning/disposition lanes: #137 and #118 are closed historical context. Do

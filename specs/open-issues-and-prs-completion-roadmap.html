@@ -229,7 +229,7 @@
       <tr><td>2</td><td>#165, #193</td><td>CI Postgres service · rolling log cap</td><td class="no">No</td></tr>
       <tr><td>3</td><td>#168, #166, #167</td><td>n8n→ob-admin rename · stale collab docs · retire collab</td><td class="chg">Partial (#166 lives in mcp2cli skill refs; #167 touches read-fallback)</td></tr>
       <tr><td>4</td><td>#177, #204, #176</td><td>Installable Python client · UUID resolver · structured share_candidate rejection</td><td class="yes">Yes — all three</td></tr>
-      <tr><td>5</td><td>#223 open; #222/#221/#224/#229 closed historical</td><td>Realtime transport foundation; later runtime rollout gated</td><td class="chg">Yes for future #223 rollout; no deploy now</td></tr>
+      <tr><td>5</td><td>#223 open; #222/#221/#224/#229 closed historical</td><td>Realtime transport foundation; later runtime rollout gated</td><td class="chg">No deploy now; future #223 rollout requires explicit release approval</td></tr>
       <tr><td>6</td><td>#137</td><td>qmd deep-lookup</td><td class="chg">#118 closed by PR #255; #137 closed deferred/no-wrapper by PR #257; deploy deferred</td></tr>
     </table>
   </section>
@@ -464,7 +464,7 @@
 
     <!-- ============ PHASE 5 ============ -->
     <div class="phase">
-      <h3><code class="status">[wip]</code> Phase 5: Realtime memory epic — active item #223 only</h3>
+      <h3><code class="status">[]</code> Phase 5: Realtime memory epic — active item #223 only</h3>
       <p>Current phase state: #222, #221, #224, and #229 are closed historical slices. #223 remains open for the later NATS/JetStream runtime foundation. Under the current local-only instruction, do not stand up NATS on core01, run hosted deploys, or claim Hermes canary proof without explicit release/deploy approval.</p>
 
       <figure>
@@ -561,7 +561,7 @@
     <p>Execute these commands to validate the entire plan is complete:</p>
     <ul class="checklist">
       <li><code class="status">[]</code> <code>gh pr list --state open</code> — returns zero rows (all PRs merged or closed with a stated reason).</li>
-      <li><code class="status">[]</code> <code>gh issue list --state open</code> — only explicitly-dispositioned roadmap items remain, each with a dated decision comment and label.</li>
+      <li><code class="status">[]</code> <code>gh issue list --state open</code> — only #223 and #167 remain as active gated work; every other roadmap issue is closed or explicitly dispositioned with a dated decision comment.</li>
       <li><code class="status">[]</code> <code>bunx tsc --noEmit</code> — repo typechecks clean on main.</li>
       <li><code class="status">[]</code> <code>bun test</code> — full suite green on main, including formerly-skipped DB-backed tests.</li>
       <li><code class="status">[]</code> <code>cd python/openbrain-memory &amp;&amp; uv run mypy src/openbrain_memory &amp;&amp; uv run ruff check src tests &amp;&amp; uv run pytest -q</code> — package quality bar holds.</li>
