@@ -156,6 +156,7 @@ describe("Open Brain contract manifest", () => {
     for (const tool of [
       "get_contract",
       "get_entry",
+      "resolve_entry",
       "log_thought",
       "search_all",
       "session_start",
@@ -187,6 +188,15 @@ describe("Open Brain contract manifest", () => {
     expect((getEntry?.input_schema as any).id.required).toBe(true);
     expect((getEntry?.input_schema as any).id.format).toBe("uuid");
     expect((getEntry?.input_schema as any).namespace).toBeUndefined();
+    const resolveEntry = contract.tool_contracts.resolve_entry;
+    expect(resolveEntry).toBeDefined();
+    expect(resolveEntry?.version).toBe(1);
+    expect((resolveEntry?.input_schema as any).id.type).toBe("string");
+    expect((resolveEntry?.input_schema as any).id.required).toBe(true);
+    expect((resolveEntry?.input_schema as any).id.format).toBe("uuid");
+    expect((resolveEntry?.input_schema as any).namespace.type).toBe("string");
+    expect((resolveEntry?.input_schema as any).namespace.required).toBe(false);
+    expect(resolveEntry?.output_shape).toContain("fetch_path");
     const searchAll = contract.tool_contracts.search_all;
     expect(searchAll).toBeDefined();
     expect((searchAll?.input_schema as any).namespace.type).toBe("string");
@@ -234,7 +244,7 @@ describe("Open Brain contract manifest", () => {
     // contract so a future TS/Python divergence fails here, in lockstep with
     // python/openbrain-memory CURRENT_CONTRACT_VERSION.
     const contract = buildContract("2026-06-18T00:00:00.000Z");
-    expect(contract.contract_version).toBe("2026-06-28.memory-tools.v11");
+    expect(contract.contract_version).toBe("2026-07-05.memory-tools.v12");
 
     const appendEvent = contract.tool_contracts.append_session_event;
     expect(appendEvent).toBeDefined();

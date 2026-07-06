@@ -41,11 +41,12 @@ def _resolve_package_version(pyproject: Path | None = None) -> str:
 
 
 PACKAGE_VERSION = _resolve_package_version()
-CURRENT_CONTRACT_VERSION = "2026-06-28.memory-tools.v11"
+CURRENT_CONTRACT_VERSION = "2026-07-05.memory-tools.v12"
 REQUIRED_CONTRACT_TOOLS = (
     "append_session_event",
     "get_contract",
     "get_entry",
+    "resolve_entry",
     "lane_load",
     "lane_upsert",
     "list_repo_facts",
@@ -62,6 +63,7 @@ CURRENT_TOOL_HELP: Mapping[str, str] = {
     "get_entity": "Fetch a graph entity by ID.",
     "get_contract": "Read the canonical Open Brain public contract manifest.",
     "get_entry": "Fetch one full readable memory row by table and UUID.",
+    "resolve_entry": "Resolve a UUID to its readable source type and fetch path.",
     "hydrate_entities": "Refresh missing graph entity embeddings.",
     "lane_load": "Load durable session lanes by filters.",
     "lane_upsert": "Create or update durable session lane metadata.",
@@ -462,6 +464,9 @@ class OpenBrainClient:
 
     def get_entry(self, **arguments: Any) -> JSON:
         return self.call_tool("get_entry", arguments)
+
+    def resolve_entry(self, **arguments: Any) -> JSON:
+        return self.call_tool("resolve_entry", arguments)
 
     def get_entity(self, **arguments: Any) -> JSON:
         return self.call_tool("get_entity", arguments)

@@ -457,6 +457,7 @@ def test_all_registered_tool_wrappers_call_matching_tool_names():
         "find_person",
         "get_contract",
         "get_entry",
+        "resolve_entry",
         "get_entity",
         "get_stats",
         "hydrate_entities",
@@ -498,7 +499,7 @@ def test_all_registered_tool_wrappers_call_matching_tool_names():
 
 
 def test_required_contract_tools_have_first_class_wrappers_and_help():
-    assert CURRENT_CONTRACT_VERSION == "2026-06-28.memory-tools.v11"
+    assert CURRENT_CONTRACT_VERSION == "2026-07-05.memory-tools.v12"
     assert set(REQUIRED_CONTRACT_TOOLS) <= set(CURRENT_TOOL_HELP)
 
     for tool_name in REQUIRED_CONTRACT_TOOLS:
