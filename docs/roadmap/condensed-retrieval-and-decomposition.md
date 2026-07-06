@@ -18,7 +18,8 @@ row remains the default for backward compatibility.
 ## Why This Shape
 
 - It fixes the immediate token-cost problem without a schema migration.
-- It reuses the existing per-table preview expressions used by search results.
+- It reuses existing per-table readable-content projections where safe, with a
+  full-summary compact projection for sessions so length/truncation are exact.
 - It keeps server-side auth and namespace predicates as the exact same boundary
   as full `get_entry`.
 - It gives clients an explicit full-fetch path when the compact preview is not
