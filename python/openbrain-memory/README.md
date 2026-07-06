@@ -356,10 +356,19 @@ streamable JSON-RPC/MCP surface, but the host install should be described as
 "direct HTTP to Open Brain `/mcp`" rather than generic "MCP HTTP" so it is not
 confused with mcp2cli daemon routing or other MCP transports.
 
-NATS or another transport may be added later for agent-host routing, but it is
-not the current package transport. Until a future transport is implemented and
-documented, Hermes agents should configure `OPENBRAIN_BASE_URL`,
-`OPENBRAIN_TOKEN`, and namespace identity for direct HTTP access to Open Brain.
+NATS is now a planned transport foundation in the Open Brain contract manifest
+under `realtime_transport.nats_jetstream`, but it is not the current package
+transport and is not runtime-available until a later release deploys and
+canaries the bridge. Until a future `NatsTransport` is implemented, documented,
+and advertised as available by live `get_contract()`, Hermes agents should
+configure `OPENBRAIN_BASE_URL`, `OPENBRAIN_TOKEN`, and namespace identity for
+direct HTTP access to Open Brain.
+
+A future `NatsTransport` must stay behind the existing facade semantics: same
+required contract validation, same namespace/delegation policy, same error
+redaction posture, and HTTP fallback when NATS is unavailable or not advertised
+by the server contract. JetStream audit/trace streams must not persist bearer
+tokens or raw secrets.
 
 ## Safety and Spooling
 

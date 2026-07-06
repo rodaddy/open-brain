@@ -204,7 +204,8 @@ The response must make the source boundary explicit:
 
 ## Non-Goals For This Contract
 
-- No NATS/JetStream implementation. #223 owns transport.
+- No NATS/JetStream runtime implementation. #223 owns the planned transport
+  foundation in `docs/nats-jetstream-foundation.md`.
 - No recovery WAL implementation. #221 owns recovery.
 - No RAM working-set implementation. #222 owns hot state.
 - No promote/relegate implementation. #224 owns lifecycle actions.

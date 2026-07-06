@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { TOOL_CONTRACTS } from "./contract-schemas.ts";
 
-export const CONTRACT_VERSION = "2026-07-06.memory-tools.v14";
+export const CONTRACT_VERSION = "2026-07-06.memory-tools.v15";
 export const CONTRACT_SCHEMA_VERSION = 1;
 
 export interface ContractCapability {
@@ -25,6 +25,37 @@ export interface OpenBrainContract {
     auth: "bearer";
     namespace_boundary: "authorization";
     session_required: true;
+  };
+  realtime_transport: {
+    nats_jetstream: {
+      status: "planned-transport-foundation";
+      availability: "not_runtime_available";
+      parent_issue: 223;
+      contract_doc: "docs/nats-jetstream-foundation.md";
+      server: {
+        planned_host: "core01";
+        client_listen: "127.0.0.1:4222";
+        monitoring_listen: "127.0.0.1:8222";
+        jetstream_store_dir: "/Volumes/ThunderBolt/open-brain/nats/jetstream";
+      };
+      request_reply_subjects: readonly [
+        "ob.memory.context_pack",
+        "ob.memory.session_start",
+        "ob.memory.append_event",
+        "ob.memory.wrap",
+        "ob.memory.resolve",
+        "ob.health",
+      ];
+      jetstream_streams: readonly [
+        "OB_AGENT_TRACE",
+        "OB_CONTEXT_PACK_REQUESTS",
+        "OB_CONTEXT_PACK_AUDIT",
+        "OB_PROMOTION_CANDIDATES",
+      ];
+      fallback_transport: "http_mcp";
+      auth_boundary: "openbrain_server_authority";
+      runtime_default: "http_mcp";
+    };
   };
   interchange_profiles: {
     okf: {
@@ -292,6 +323,15 @@ export const CONTRACT_CAPABILITIES: ContractCapability[] = [
     description:
       "Bearer-token identity establishes namespace boundaries for MCP sessions.",
   },
+  {
+    name: "nats_jetstream_transport",
+    version: 1,
+    kind: "transport",
+    description:
+      "Planned NATS request/reply and JetStream foundation for realtime Open " +
+      "Brain calls. It is not runtime-available until a later release deploys " +
+      "and canaries the bridge.",
+  },
 ];
 
 function sortValue(value: unknown): unknown {
@@ -325,12 +365,12 @@ export function buildContract(
     contract_scope: "required_openbrain_memory_contract" as const,
     schema_version: CONTRACT_SCHEMA_VERSION,
     min_client_versions: {
-      "openbrain-memory": "0.1.4",
+      "openbrain-memory": "0.1.5",
       "rtech-hermes-runtime": "0.1.0",
       mcp2cli: "0.3.6",
     },
     compatible_client_ranges: {
-      "openbrain-memory": ">=0.1.4 <1.0.0",
+      "openbrain-memory": ">=0.1.5 <1.0.0",
       "rtech-hermes-runtime": ">=0.1.0 <1.0.0",
       mcp2cli: ">=0.3.6 <1.0.0",
     },
@@ -339,6 +379,38 @@ export function buildContract(
       auth: "bearer" as const,
       namespace_boundary: "authorization" as const,
       session_required: true as const,
+    },
+    realtime_transport: {
+      nats_jetstream: {
+        status: "planned-transport-foundation" as const,
+        availability: "not_runtime_available" as const,
+        parent_issue: 223 as const,
+        contract_doc: "docs/nats-jetstream-foundation.md" as const,
+        server: {
+          planned_host: "core01" as const,
+          client_listen: "127.0.0.1:4222" as const,
+          monitoring_listen: "127.0.0.1:8222" as const,
+          jetstream_store_dir:
+            "/Volumes/ThunderBolt/open-brain/nats/jetstream" as const,
+        },
+        request_reply_subjects: [
+          "ob.memory.context_pack",
+          "ob.memory.session_start",
+          "ob.memory.append_event",
+          "ob.memory.wrap",
+          "ob.memory.resolve",
+          "ob.health",
+        ] as const,
+        jetstream_streams: [
+          "OB_AGENT_TRACE",
+          "OB_CONTEXT_PACK_REQUESTS",
+          "OB_CONTEXT_PACK_AUDIT",
+          "OB_PROMOTION_CANDIDATES",
+        ] as const,
+        fallback_transport: "http_mcp" as const,
+        auth_boundary: "openbrain_server_authority" as const,
+        runtime_default: "http_mcp" as const,
+      },
     },
     interchange_profiles: {
       okf: {

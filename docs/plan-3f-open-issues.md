@@ -10,9 +10,8 @@ snapshots and untracked sidecar plans are historical evidence only.
 Confirmed live state when this plan was created:
 
 - Open PRs: 0.
-- Open issues: 9.
+- Open issues: 8.
   - #247 `Design DreamEngine decomposition for oversized Open Brain entries`
-  - #229 `Operational hardening for realtime first-write lanes (follow-up to #228)`
   - #224 `Define client-owned promotion and relegation lifecycle for realtime memory`
   - #223 `Add NATS and JetStream foundation for realtime Open Brain transport`
   - #222 `Add scoped hot working set for realtime agent sessions`
@@ -21,6 +20,8 @@ Confirmed live state when this plan was created:
   - #137 `Optional: controlled remote qmd deep-lookup wrapper`
   - #118 `roadmap: file references for Privilege Isolation / closed-brain deployments`
 - #192 is closed by PR #246; its DreamEngine decomposition follow-up is #247.
+- #229 is closed by PR #249; merge commit
+  `e4fc7def43735163e1e0d4997ace5ce510494f4d`.
 - #204 is closed. Do not continue stale #204 worktrees for this run.
 
 Critical correction: issue sequence and closure order are not identical. The
@@ -49,6 +50,12 @@ core01 deploy.
 Owning boundary:
 `append_session_event.create_if_missing` lane creation and lane lifecycle
 metadata.
+
+Status:
+Closed by PR #249, merge commit
+`e4fc7def43735163e1e0d4997ace5ce510494f4d`. Project 8 marks #229 and PR #249
+Done with Review Gate `Zero Known Issues`, Validation `CI Passed`, and no
+core01 deploy.
 
 Current implementation branch:
 `fix/229-first-write-lane-hardening`.
@@ -118,14 +125,37 @@ Owning boundary:
 Local transport contract and bridge design for realtime Open Brain memory RPC,
 with HTTP/MCP retained as fallback.
 
+Current implementation branch:
+`feat/223-nats-jetstream-foundation`.
+
+Local status:
+
+- In progress. Project 8 marks #223 `In Progress`, Review Gate `Not Started`,
+  Validation `Not Started`; after local validation below, Project 8 should move
+  to `Local Passed` until PR CI runs.
+- Local-only slice adds `docs/nats-jetstream-foundation.md`, planned
+  `get_contract().realtime_transport.nats_jetstream` metadata, and
+  `openbrain-memory` contract pin updates.
+- No core01 NATS install/config, live JetStream stream creation, launchd change,
+  or Hermes runtime switch is in scope for this branch.
+- Local validation passed on this branch: `bun test src/contract.test.ts`,
+  `bunx tsc --noEmit`, full `bun test` (`1072 pass, 50 skip, 0 fail`),
+  focused Python contract/client pytest (`69 pass`), full Python pytest
+  (`193 pass, 5 skip`), `uv run mypy src/openbrain_memory`, `uv run ruff check
+  src tests`, and `git diff --check`.
+- Downstream rollout classification: applies because `get_contract` and
+  `python/openbrain-memory` contract pins changed. Hosted deploy, mcp2cli
+  refresh, rtech-mcps handoff, rtech-hermes changes, Hermes live rollout, and
+  canaries are deferred to an approved release/deploy phase.
+
 Required local work:
 
 - Document core01 NATS/JetStream config plan: ports, monitoring, storage path,
   auth boundary, streams, retention, and rollback.
 - Define request/reply subjects and envelope contract, starting with
   `agent_context_pack`.
-- Add local TypeScript/Python stubs only if they are testable without a live
-  NATS server.
+- Add local TypeScript/Python contract metadata only where it is testable
+  without a live NATS server.
 - Document Hermes opt-in and HTTP fallback.
 - Add contract/fixture tests when code is introduced.
 

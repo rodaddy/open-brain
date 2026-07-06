@@ -14,6 +14,37 @@ describe("Open Brain contract manifest", () => {
     expect(contract.schema_hash).toMatch(/^[0-9a-f]{64}$/);
     expect(contract.min_client_versions.mcp2cli).toBe("0.3.6");
     expect(contract.transport.namespace_boundary).toBe("authorization");
+    expect(contract.realtime_transport.nats_jetstream).toMatchObject({
+      status: "planned-transport-foundation",
+      availability: "not_runtime_available",
+      parent_issue: 223,
+      contract_doc: "docs/nats-jetstream-foundation.md",
+      fallback_transport: "http_mcp",
+      auth_boundary: "openbrain_server_authority",
+      runtime_default: "http_mcp",
+    });
+    expect(
+      contract.realtime_transport.nats_jetstream.request_reply_subjects,
+    ).toEqual([
+      "ob.memory.context_pack",
+      "ob.memory.session_start",
+      "ob.memory.append_event",
+      "ob.memory.wrap",
+      "ob.memory.resolve",
+      "ob.health",
+    ]);
+    expect(contract.realtime_transport.nats_jetstream.jetstream_streams).toEqual([
+      "OB_AGENT_TRACE",
+      "OB_CONTEXT_PACK_REQUESTS",
+      "OB_CONTEXT_PACK_AUDIT",
+      "OB_PROMOTION_CANDIDATES",
+    ]);
+    expect(contract.realtime_transport.nats_jetstream.server).toMatchObject({
+      planned_host: "core01",
+      client_listen: "127.0.0.1:4222",
+      monitoring_listen: "127.0.0.1:8222",
+      jetstream_store_dir: "/Volumes/ThunderBolt/open-brain/nats/jetstream",
+    });
     expect(contract.interchange_profiles.okf.status).toBe(
       "compatibility-hooks",
     );
@@ -153,6 +184,9 @@ describe("Open Brain contract manifest", () => {
     expect(contract.capabilities.map((c) => c.name)).toContain(
       "receipt_contract",
     );
+    expect(contract.capabilities.map((c) => c.name)).toContain(
+      "nats_jetstream_transport",
+    );
     for (const tool of [
       "get_contract",
       "get_entry",
@@ -258,7 +292,7 @@ describe("Open Brain contract manifest", () => {
     // contract so a future TS/Python divergence fails here, in lockstep with
     // python/openbrain-memory CURRENT_CONTRACT_VERSION.
     const contract = buildContract("2026-06-18T00:00:00.000Z");
-    expect(contract.contract_version).toBe("2026-07-06.memory-tools.v14");
+    expect(contract.contract_version).toBe("2026-07-06.memory-tools.v15");
 
     const appendEvent = contract.tool_contracts.append_session_event;
     expect(appendEvent).toBeDefined();
@@ -325,6 +359,7 @@ describe("Open Brain contract manifest", () => {
       min_client_versions: base.min_client_versions,
       compatible_client_ranges: base.compatible_client_ranges,
       transport: base.transport,
+      realtime_transport: base.realtime_transport,
       interchange_profiles: base.interchange_profiles,
       agent_memory_adapter: base.agent_memory_adapter,
       agent_context_pack: base.agent_context_pack,
@@ -357,6 +392,7 @@ describe("Open Brain contract manifest", () => {
       min_client_versions: base.min_client_versions,
       compatible_client_ranges: base.compatible_client_ranges,
       transport: base.transport,
+      realtime_transport: base.realtime_transport,
       interchange_profiles: base.interchange_profiles,
       agent_memory_adapter: base.agent_memory_adapter,
       agent_context_pack: base.agent_context_pack,
@@ -393,6 +429,7 @@ describe("Open Brain contract manifest", () => {
       min_client_versions: base.min_client_versions,
       compatible_client_ranges: base.compatible_client_ranges,
       transport: base.transport,
+      realtime_transport: base.realtime_transport,
       interchange_profiles: base.interchange_profiles,
       agent_memory_adapter: base.agent_memory_adapter,
       agent_context_pack: base.agent_context_pack,
