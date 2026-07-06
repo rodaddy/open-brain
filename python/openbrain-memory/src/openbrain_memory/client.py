@@ -41,7 +41,7 @@ def _resolve_package_version(pyproject: Path | None = None) -> str:
 
 
 PACKAGE_VERSION = _resolve_package_version()
-CURRENT_CONTRACT_VERSION = "2026-07-06.memory-tools.v13"
+CURRENT_CONTRACT_VERSION = "2026-07-06.memory-tools.v14"
 REQUIRED_CONTRACT_TOOLS = (
     "append_session_event",
     "get_contract",
@@ -62,7 +62,10 @@ CURRENT_TOOL_HELP: Mapping[str, str] = {
     "brain_answer": "Return cited answer bullets from readable Open Brain evidence.",
     "get_entity": "Fetch a graph entity by ID.",
     "get_contract": "Read the canonical Open Brain public contract manifest.",
-    "get_entry": "Fetch one full readable memory row by table and UUID.",
+    "get_entry": (
+        "Fetch one readable memory row by table and UUID; render=compact "
+        "returns a bounded preview."
+    ),
     "resolve_entry": "Resolve a UUID to its readable source type and fetch path.",
     "hydrate_entities": "Refresh missing graph entity embeddings.",
     "lane_load": "Load durable session lanes by filters.",

@@ -16,7 +16,7 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
     output_shape: "OpenBrainContract JSON text payload",
   },
   get_entry: {
-    version: 1,
+    version: 2,
     input_schema: {
       table: {
         type: "enum",
@@ -34,8 +34,28 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
           "Entry UUID to fetch. The server applies auth-derived namespace " +
           "predicates before returning any row.",
       },
+      render: {
+        type: "enum",
+        required: false,
+        values: ["full", "compact"],
+        default: "full",
+        description:
+          "Response shape. full returns the complete readable row; compact " +
+          "returns a bounded exact-UUID preview envelope for cheap recall.",
+      },
+      max_chars: {
+        type: "integer",
+        required: false,
+        min: 80,
+        max: 2000,
+        default: 500,
+        description:
+          "Maximum compact content_preview length in characters. Applies only " +
+          "when render is compact.",
+      },
     },
-    output_shape: "full readable entry row JSON text payload",
+    output_shape:
+      "full readable entry row JSON text payload, or compact envelope with content_preview/content_length/content_truncated/source_ref/fetch_path",
   },
   resolve_entry: {
     version: 1,

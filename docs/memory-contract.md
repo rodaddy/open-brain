@@ -80,7 +80,7 @@ Open Brain is the **durable operational memory** for PAI agents. It stores:
 | link_entities | Create relationship between entries | write |
 | adjacent_context | Traverse link graph from a node | read |
 | get_contract | Read the public Open Brain contract manifest | read |
-| get_entry | Fetch a full readable memory row by table and ID | read |
+| get_entry | Fetch a readable memory row by table and ID; use `render: "compact"` for bounded exact-UUID recall | read |
 | upsert_repo_fact | Store curated qmd-derived repo fact metadata | write |
 | list_repo_facts | Read curated qmd-derived repo facts | read |
 | search_brain | Semantic search across all tables | read |
@@ -205,6 +205,13 @@ cites every bullet with a `source_ref`, and returns `known_gaps` / `uncertainty`
 when evidence is missing, stale, mixed, or unsafe to cite. When no readable or
 citable evidence is available, `answer` is `null`; the tool must not fabricate
 uncited facts.
+
+`get_entry` defaults to the full readable row for exact UUID fetches. For large
+entries, callers can pass `render: "compact"` and optional `max_chars`
+(80-2000, default 500) to receive a bounded envelope with `content_preview`,
+`content_length`, `content_truncated`, `source_ref`, and a `fetch_path` for the
+full row. The same server-side auth and namespace predicates apply to both
+renders.
 
 ### OKF Compatibility Hooks
 

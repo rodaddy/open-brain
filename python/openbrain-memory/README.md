@@ -229,6 +229,12 @@ a package bug.
 ```python
 contract = client.get_contract()
 answer = client.brain_answer(query="what did we decide?", limit=5)
+compact = client.get_entry(
+    table="thoughts",
+    id="<uuid>",
+    render="compact",
+    max_chars=500,
+)
 facts = client.list_repo_facts(repo="rodaddy/open-brain", limit=10)
 client.upsert_repo_fact(metadata={...})
 ```
