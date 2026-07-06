@@ -49,21 +49,30 @@ import { registerGetContract } from "./get-contract.ts";
 import { registerListRepoFacts, registerUpsertRepoFact } from "./repo-facts.ts";
 import {
   registerAgentContextPack,
+  registerRecoveryWalAppend,
+  registerRecoveryWalMark,
   registerWorkingSetAppend,
 } from "./agent-context-pack.ts";
 import { WorkingSetStore } from "../realtime/working-set.ts";
+import { RecoveryWalStore } from "../realtime/recovery-wal.ts";
 
 export interface ToolDeps {
   pool: pg.Pool;
   embedFn: typeof generateEmbedding;
   allowNonTransactionalAppendFallback?: boolean;
   workingSetStore?: WorkingSetStore;
+  recoveryWalStore?: RecoveryWalStore;
 }
 
 export function registerAllTools(server: McpServer, deps: ToolDeps): void {
   const toolDeps: ToolDeps = {
     ...deps,
     workingSetStore: deps.workingSetStore ?? new WorkingSetStore(),
+    recoveryWalStore:
+      deps.recoveryWalStore ??
+      new RecoveryWalStore({
+        walPath: process.env.OPENBRAIN_RECOVERY_WAL_PATH ?? null,
+      }),
   };
 
   registerLogThought(server, toolDeps);
@@ -111,6 +120,8 @@ export function registerAllTools(server: McpServer, deps: ToolDeps): void {
   registerTierLane(server, toolDeps);
   registerPromoteShared(server, toolDeps);
   registerWorkingSetAppend(server, toolDeps);
+  registerRecoveryWalAppend(server, toolDeps);
+  registerRecoveryWalMark(server, toolDeps);
   registerAgentContextPack(server, toolDeps);
   registerGetContract(server, toolDeps);
   registerUpsertRepoFact(server, toolDeps);

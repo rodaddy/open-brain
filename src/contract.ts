@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { TOOL_CONTRACTS } from "./contract-schemas.ts";
 
-export const CONTRACT_VERSION = "2026-07-06.memory-tools.v16";
+export const CONTRACT_VERSION = "2026-07-06.memory-tools.v17";
 export const CONTRACT_SCHEMA_VERSION = 1;
 
 export interface ContractCapability {
@@ -118,6 +118,7 @@ export interface OpenBrainContract {
     ];
     sections: readonly [
       "working_set",
+      "recovery",
       "durable_lane_context",
       "durable_memory",
       "profile_guidance",
@@ -153,6 +154,45 @@ export interface OpenBrainContract {
         max_metadata_chars: 2000;
       };
       counters: readonly ["dropped", "expired", "trimmed"];
+    };
+    recovery: {
+      status: "local-quarantine-boundary";
+      parent_issue: 221;
+      implementation: "src/realtime/recovery-wal.ts";
+      storage: "env_configured_file_wal_with_in_memory_fallback";
+      availability: "mcp_tool_available";
+      item_label: "quarantined_recovery";
+      not_durable_memory: true;
+      not_searchable_recall: true;
+      exact_scope_required: true;
+      explicit_include_required: true;
+      statuses: readonly [
+        "active",
+        "wrapped",
+        "recovery_pending",
+        "reviewed",
+        "compacted",
+        "discarded",
+        "expired",
+      ];
+      actions: readonly [
+        "review",
+        "use_for_current_session",
+        "compact_to_wrap",
+        "promote_candidates",
+        "discard",
+        "defer",
+      ];
+      budget_defaults: {
+        ttl_ms: 86400000;
+        max_sessions: 128;
+        max_items_per_session: 50;
+        max_global_items: 2048;
+        max_content_chars: 8000;
+        max_metadata_chars: 2000;
+        max_preview_chars: 1000;
+      };
+      counters: readonly ["dropped", "expired", "trimmed", "marked", "purged"];
     };
   };
   receipt_contract: {
@@ -343,8 +383,8 @@ export const CONTRACT_CAPABILITIES: ContractCapability[] = [
     kind: "tool",
     description:
       "First-class realtime context-pack tool for Hermes and future agents. " +
-      "It currently exposes the exact-scope RAM working_set section over MCP; " +
-      "NATS transport remains planned.",
+      "It currently exposes exact-scope RAM working_set plus explicitly " +
+      "opted-in quarantined recovery over MCP; NATS transport remains planned.",
   },
   {
     name: "working_set_append",
@@ -354,6 +394,23 @@ export const CONTRACT_CAPABILITIES: ContractCapability[] = [
       "Append one RAM-only working-context item for an exact active " +
       "namespace/agent/platform/server/channel/thread/session scope. This " +
       "does not create durable memory or shared-kb rows.",
+  },
+  {
+    name: "recovery_wal_append",
+    version: 1,
+    kind: "tool",
+    description:
+      "Append one exact-scope quarantined recovery WAL record for interrupted " +
+      "agent traces. Recovery WAL records are unreviewed, not durable memory, " +
+      "and not searchable recall.",
+  },
+  {
+    name: "recovery_wal_mark",
+    version: 1,
+    kind: "tool",
+    description:
+      "Mark or purge one exact-scope quarantined recovery WAL record after " +
+      "review without promoting it into durable memory.",
   },
   {
     name: "agent_memory_adapter",
@@ -605,6 +662,7 @@ export function buildContract(
       ] as const,
       sections: [
         "working_set",
+        "recovery",
         "durable_lane_context",
         "durable_memory",
         "profile_guidance",
@@ -640,6 +698,52 @@ export function buildContract(
           max_metadata_chars: 2000 as const,
         },
         counters: ["dropped", "expired", "trimmed"] as const,
+      },
+      recovery: {
+        status: "local-quarantine-boundary" as const,
+        parent_issue: 221 as const,
+        implementation: "src/realtime/recovery-wal.ts" as const,
+        storage:
+          "env_configured_file_wal_with_in_memory_fallback" as const,
+        availability: "mcp_tool_available" as const,
+        item_label: "quarantined_recovery" as const,
+        not_durable_memory: true as const,
+        not_searchable_recall: true as const,
+        exact_scope_required: true as const,
+        explicit_include_required: true as const,
+        statuses: [
+          "active",
+          "wrapped",
+          "recovery_pending",
+          "reviewed",
+          "compacted",
+          "discarded",
+          "expired",
+        ] as const,
+        actions: [
+          "review",
+          "use_for_current_session",
+          "compact_to_wrap",
+          "promote_candidates",
+          "discard",
+          "defer",
+        ] as const,
+        budget_defaults: {
+          ttl_ms: 86400000 as const,
+          max_sessions: 128 as const,
+          max_items_per_session: 50 as const,
+          max_global_items: 2048 as const,
+          max_content_chars: 8000 as const,
+          max_metadata_chars: 2000 as const,
+          max_preview_chars: 1000 as const,
+        },
+        counters: [
+          "dropped",
+          "expired",
+          "trimmed",
+          "marked",
+          "purged",
+        ] as const,
       },
     },
     receipt_contract: {

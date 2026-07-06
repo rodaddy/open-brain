@@ -4,11 +4,14 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import {
   registerAgentContextPack,
+  registerRecoveryWalAppend,
+  registerRecoveryWalMark,
   registerWorkingSetAppend,
 } from "../agent-context-pack.ts";
 import type { ToolDeps } from "../index.ts";
 import type { AuthInfo } from "../../types.ts";
 import { WorkingSetStore } from "../../realtime/working-set.ts";
+import { RecoveryWalStore } from "../../realtime/recovery-wal.ts";
 
 function createMockEmbed(result: number[] | null = Array(768).fill(0.1)) {
   return async (_text: string) => result;
@@ -22,8 +25,11 @@ async function setupToolClient(
     pool: { query: async () => ({ rows: [] }) } as any,
     embedFn: createMockEmbed(),
     workingSetStore: new WorkingSetStore(),
+    recoveryWalStore: new RecoveryWalStore(),
   };
   registerWorkingSetAppend(server, deps);
+  registerRecoveryWalAppend(server, deps);
+  registerRecoveryWalMark(server, deps);
   registerAgentContextPack(server, deps);
 
   const [clientTransport, serverTransport] =
@@ -240,6 +246,109 @@ describe("agent_context_pack and working_set_append", () => {
 
       expect(append.isError).toBe(true);
       expect((append.content as any)[0].text).toContain("Permission denied");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("returns recovery only through explicit unreviewed quarantine request", async () => {
+    const auth: AuthInfo = { role: "admin", clientId: "rico" };
+    const { client, cleanup } = await setupToolClient(auth);
+
+    try {
+      const append = await client.callTool({
+        name: "recovery_wal_append",
+        arguments: {
+          ...SCOPE,
+          content: "Recovered interrupted trace",
+          trace_id: "trace-221",
+        },
+      });
+
+      expect(append.isError).toBeFalsy();
+      const appendPayload = JSON.parse((append.content as any)[0].text);
+      expect(appendPayload).toMatchObject({
+        accepted: true,
+        not_durable_memory: true,
+        not_searchable_recall: true,
+        unreviewed_quarantine: true,
+      });
+
+      const hidden = await client.callTool({
+        name: "agent_context_pack",
+        arguments: {
+          ...SCOPE,
+          requested_sections: ["recovery"],
+        },
+      });
+      const hiddenPayload = JSON.parse((hidden.content as any)[0].text);
+      expect(hiddenPayload.sections.recovery).toBeUndefined();
+
+      const pack = await client.callTool({
+        name: "agent_context_pack",
+        arguments: {
+          ...SCOPE,
+          requested_sections: ["recovery"],
+          include_unreviewed_recovery: true,
+        },
+      });
+
+      expect(pack.isError).toBeFalsy();
+      const payload = JSON.parse((pack.content as any)[0].text);
+      expect(payload.sections.recovery).toMatchObject({
+        label: "quarantined_recovery",
+        exact_scope_required: true,
+        not_durable_memory: true,
+        not_searchable_recall: true,
+        unreviewed_quarantine: true,
+        pending_count: 1,
+      });
+      expect(payload.sections.recovery.items[0]).toMatchObject({
+        content_preview: "Recovered interrupted trace",
+        trace_id: "trace-221",
+        status: "active",
+      });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("marks recovery reviewed so it leaves pending context", async () => {
+    const auth: AuthInfo = { role: "admin", clientId: "rico" };
+    const { client, cleanup } = await setupToolClient(auth);
+
+    try {
+      const append = await client.callTool({
+        name: "recovery_wal_append",
+        arguments: {
+          ...SCOPE,
+          content: "Recovered interrupted trace",
+        },
+      });
+      const id = JSON.parse((append.content as any)[0].text).item.id;
+
+      const mark = await client.callTool({
+        name: "recovery_wal_mark",
+        arguments: {
+          ...SCOPE,
+          id,
+          action: "review",
+          status: "reviewed",
+        },
+      });
+
+      expect(mark.isError).toBeFalsy();
+      const pack = await client.callTool({
+        name: "agent_context_pack",
+        arguments: {
+          ...SCOPE,
+          requested_sections: ["recovery"],
+          include_unreviewed_recovery: true,
+        },
+      });
+
+      const payload = JSON.parse((pack.content as any)[0].text);
+      expect(payload.sections.recovery.pending_count).toBe(0);
     } finally {
       await cleanup();
     }

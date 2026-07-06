@@ -1,7 +1,8 @@
 # Agent Context Pack Contract
 
-Status: locally runtime-available over MCP for scoped working-set context; NATS
-transport and broader section assembly remain planned.
+Status: locally runtime-available over MCP for scoped working-set context and
+explicit quarantined recovery summaries; NATS transport and broader section
+assembly remain planned.
 Parent issue: #220.
 Research receipt: PR #225, `docs/realtime-agent-memory-research.md`.
 
@@ -15,8 +16,10 @@ every turn.
 
 This contract defines the envelope and scope rules. The MCP
 `agent_context_pack` tool currently exposes the exact-scope `working_set`
-section from RAM-first working context. NATS transport and broader durable
-section assembly remain planned until their owning issues land.
+section from RAM-first working context and, only when explicitly requested,
+the exact-scope `recovery` section from the quarantined recovery WAL. NATS
+transport and broader durable section assembly remain planned until their
+owning issues land.
 
 ## Ownership Boundary
 
@@ -136,6 +139,7 @@ Known section names (the `sections` object members; this list is what
 
 - `working_set`: exact-scope hot state only; labeled working context, not
   durable memory.
+- `recovery`: explicit unreviewed recovery summary from the quarantined WAL.
 - `durable_lane_context`: lane metadata, current context, and selected recent
   events for the scoped lane.
 - `durable_memory`: cited thoughts, decisions, session wraps, and shared facts
@@ -179,6 +183,45 @@ The working-set boundary exposes counters for dropped, expired, and trimmed
 items. Dropped items are rejected before inclusion, expired items leave RAM
 after TTL, and trimmed items are evicted by per-session/global/session-count
 budget pressure.
+
+### Recovery WAL Quarantine Boundary
+
+#221 defines the quarantined recovery WAL in
+`src/realtime/recovery-wal.ts`. The MCP `recovery_wal_append` tool records a
+bounded interrupted-session trace for the exact active scope, and
+`recovery_wal_mark` records review actions or purges exact records after review.
+The MCP `agent_context_pack` tool returns recovery only when
+`include_unreviewed_recovery=true` and the requested sections include
+`recovery` or omit `requested_sections`.
+
+Recovery items are labeled `quarantined_recovery` and set
+`not_durable_memory=true` and `not_searchable_recall=true`. They must not be
+inserted into `thoughts`, `decisions`, `sessions`, shared-kb, search indexes,
+`search_all`, `brain_answer`, or normal session-context event reads. A recovery
+record can inform the current local session only after explicit review, and any
+durable memory promotion still requires a separate client-owned lifecycle action.
+
+Recovery status values: `active`, `wrapped`, `recovery_pending`, `reviewed`,
+`compacted`, `discarded`, and `expired`.
+
+Recovery review actions: `review`, `use_for_current_session`,
+`compact_to_wrap`, `promote_candidates`, `discard`, and `defer`.
+
+Default recovery budget:
+
+- TTL: 24 hours (`ttl_ms=86400000`);
+- per-session cap: 50 items;
+- global in-process cap: 2048 items;
+- active-session cap: 128 sessions;
+- per-item content cap: 8000 characters;
+- per-item metadata cap: 2000 serialized JSON characters;
+- context-pack preview cap: 1000 characters.
+
+The store writes an append-only JSONL WAL when
+`OPENBRAIN_RECOVERY_WAL_PATH` is configured. Without that env var it remains
+in-memory for local tests and no hidden repo state is created. Hosted/core01
+deployment of this WAL path is release-gated separately and must not happen
+until deploy is explicitly approved.
 
 `warnings`, `budget`, and `citations` are always-present top-level envelope
 fields, not section members. They are mirrored by
@@ -238,7 +281,6 @@ The response must make the source boundary explicit:
 
 - No NATS/JetStream runtime implementation. #223 owns the planned transport
   foundation in `docs/nats-jetstream-foundation.md`.
-- No recovery WAL implementation. #221 owns recovery.
 - No NATS `agent_context_pack` tool availability. #222 owns the local MCP
   working-set append/read path; transport exposure remains planned under #223.
 - No promote/relegate implementation. #224 owns lifecycle actions.

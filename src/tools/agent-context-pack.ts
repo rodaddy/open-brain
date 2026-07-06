@@ -10,10 +10,16 @@ import {
   normalizeWorkingSetScope,
   type WorkingSetScope,
 } from "../realtime/working-set.ts";
+import {
+  RECOVERY_WAL_ACTIONS,
+  RECOVERY_WAL_STATUSES,
+  RecoveryWalStore,
+} from "../realtime/recovery-wal.ts";
 import type { ToolDeps } from "./index.ts";
 
 const SECTION_NAMES = [
   "working_set",
+  "recovery",
   "durable_lane_context",
   "durable_memory",
   "profile_guidance",
@@ -137,6 +143,161 @@ export function registerWorkingSetAppend(
   );
 }
 
+export function registerRecoveryWalAppend(
+  server: McpServer,
+  deps: ToolDeps,
+): void {
+  server.registerTool(
+    "recovery_wal_append",
+    {
+      description:
+        "Append one quarantined recovery WAL record for the exact active " +
+        "namespace/agent/platform/server/channel/thread/session. Recovery " +
+        "records are unreviewed, not durable memory, and not searchable recall.",
+      inputSchema: {
+        ...scopeInputSchema,
+        content: z
+          .string()
+          .min(1)
+          .max(8000)
+          .describe("Bounded quarantined recovery content, not durable memory"),
+        status: z.enum(RECOVERY_WAL_STATUSES).optional(),
+        trace_id: z.string().max(500).optional(),
+        source_ref: z.string().max(1000).optional(),
+        metadata: z.record(z.string(), z.unknown()).optional(),
+      },
+      annotations: {
+        title: "Recovery WAL Append",
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+      },
+    },
+    async (args, extra) => {
+      const auth = extra.authInfo as AuthInfo | undefined;
+      if (!auth || !canWrite(auth.role, "sessions")) {
+        return textError("Permission denied: cannot write recovery WAL");
+      }
+
+      const ns = args.namespace ?? auth.clientId;
+      const nsCheck = canWriteNamespace(auth, ns);
+      if (!nsCheck.allowed) {
+        return textError(nsCheck.reason ?? `Permission denied: cannot write namespace '${ns}'`);
+      }
+
+      const result = recoveryStoreFor(deps).append({
+        namespace: ns,
+        agent: args.agent,
+        platform: args.platform,
+        server_id: args.server_id,
+        channel_id: args.channel_id,
+        thread_id: args.thread_id ?? null,
+        session_key: args.session_key,
+      }, {
+        content: args.content,
+        status: args.status,
+        trace_id: args.trace_id ?? null,
+        source_ref: args.source_ref ?? null,
+        metadata: args.metadata,
+      });
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({
+              accepted: result.accepted,
+              reason: result.reason ?? null,
+              item: result.item ?? null,
+              counters: result.counters,
+              not_durable_memory: true,
+              not_searchable_recall: true,
+              unreviewed_quarantine: true,
+            }),
+          },
+        ],
+        isError: !result.accepted,
+      };
+    },
+  );
+}
+
+export function registerRecoveryWalMark(
+  server: McpServer,
+  deps: ToolDeps,
+): void {
+  server.registerTool(
+    "recovery_wal_mark",
+    {
+      description:
+        "Mark or purge one exact-scope quarantined recovery WAL record after " +
+        "review. This never promotes recovery content into durable memory.",
+      inputSchema: {
+        ...scopeInputSchema,
+        id: z.string().min(1).max(200),
+        action: z.enum(RECOVERY_WAL_ACTIONS),
+        status: z.enum(RECOVERY_WAL_STATUSES),
+        purge: z
+          .boolean()
+          .optional()
+          .describe("When true, remove the exact recovery record after review"),
+      },
+      annotations: {
+        title: "Recovery WAL Mark",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+      },
+    },
+    async (args, extra) => {
+      const auth = extra.authInfo as AuthInfo | undefined;
+      if (!auth || !canWrite(auth.role, "sessions")) {
+        return textError("Permission denied: cannot mark recovery WAL");
+      }
+
+      const ns = args.namespace ?? auth.clientId;
+      const nsCheck = canWriteNamespace(auth, ns);
+      if (!nsCheck.allowed) {
+        return textError(nsCheck.reason ?? `Permission denied: cannot write namespace '${ns}'`);
+      }
+
+      const result = recoveryStoreFor(deps).mark(
+        {
+          namespace: ns,
+          agent: args.agent,
+          platform: args.platform,
+          server_id: args.server_id,
+          channel_id: args.channel_id,
+          thread_id: args.thread_id ?? null,
+          session_key: args.session_key,
+        },
+        args.id,
+        args.action,
+        args.status,
+        { purge: args.purge ?? false },
+      );
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({
+              accepted: result.accepted,
+              reason: result.reason ?? null,
+              item: result.item ?? null,
+              purged: result.purged ?? false,
+              counters: result.counters,
+              not_durable_memory: true,
+              not_searchable_recall: true,
+            }),
+          },
+        ],
+        isError: !result.accepted,
+      };
+    },
+  );
+}
+
 export function registerAgentContextPack(
   server: McpServer,
   deps: ToolDeps,
@@ -152,6 +313,10 @@ export function registerAgentContextPack(
         ...scopeInputSchema,
         query: z.string().max(4000).optional(),
         requested_sections: z.array(z.enum(SECTION_NAMES)).optional(),
+        include_unreviewed_recovery: z
+          .boolean()
+          .optional()
+          .describe("Explicitly include exact-scope quarantined recovery summary"),
         budget: z
           .object({
             max_tokens: z.number().int().min(100).max(20000).optional(),
@@ -190,7 +355,14 @@ export function registerAgentContextPack(
       const includeWorkingSet =
         !args.requested_sections ||
         args.requested_sections.includes("working_set");
+      const includeRecovery =
+        args.include_unreviewed_recovery === true &&
+        (!args.requested_sections ||
+          args.requested_sections.includes("recovery"));
       const workingSet = storeFor(deps).buildContextPackFragment(scope);
+      const recovery = includeRecovery
+        ? recoveryStoreFor(deps).buildContextPackFragment(scope)
+        : null;
 
       return {
         content: [
@@ -203,15 +375,24 @@ export function registerAgentContextPack(
                 namespace_source: "authorization",
                 ...normalizedScope,
               },
-              sections: includeWorkingSet
-                ? { working_set: workingSet.working_set }
-                : {},
-              warnings: includeWorkingSet
-                ? workingSet.warnings
-                : { scope_denials: [] },
+              sections: {
+                ...(includeWorkingSet
+                  ? { working_set: workingSet.working_set }
+                  : {}),
+                ...(recovery ? { recovery: recovery.recovery } : {}),
+              },
+              warnings: {
+                scope_denials: [
+                  ...(includeWorkingSet
+                    ? workingSet.warnings.scope_denials
+                    : []),
+                  ...(recovery ? recovery.warnings.scope_denials : []),
+                ],
+              },
               budget: {
                 requested: args.budget ?? null,
-                ...workingSet.budget,
+                ...(includeWorkingSet ? workingSet.budget : {}),
+                ...(recovery ? recovery.budget : {}),
               },
               citations: [],
               query: args.query ?? null,
@@ -226,6 +407,13 @@ export function registerAgentContextPack(
 function storeFor(deps: ToolDeps): WorkingSetStore {
   deps.workingSetStore ??= new WorkingSetStore();
   return deps.workingSetStore;
+}
+
+function recoveryStoreFor(deps: ToolDeps): RecoveryWalStore {
+  deps.recoveryWalStore ??= new RecoveryWalStore({
+    walPath: process.env.OPENBRAIN_RECOVERY_WAL_PATH ?? null,
+  });
+  return deps.recoveryWalStore;
 }
 
 function textError(text: string): {
