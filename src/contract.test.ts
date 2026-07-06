@@ -12,8 +12,42 @@ describe("Open Brain contract manifest", () => {
     expect(contract.contract_version).toContain("memory-tools");
     expect(contract.contract_scope).toBe("required_openbrain_memory_contract");
     expect(contract.schema_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(contract.schema_hash).toBe(
+      "ad89a4d253ec224bce1175cd0045b6da54de6837c3e4081304e25a5af9147873",
+    );
     expect(contract.min_client_versions.mcp2cli).toBe("0.3.6");
     expect(contract.transport.namespace_boundary).toBe("authorization");
+    expect(contract.realtime_transport.nats_jetstream).toMatchObject({
+      status: "planned-transport-foundation",
+      availability: "not_runtime_available",
+      parent_issue: 223,
+      contract_doc: "docs/nats-jetstream-foundation.md",
+      fallback_transport: "http_mcp",
+      auth_boundary: "openbrain_server_authority",
+      runtime_default: "http_mcp",
+    });
+    expect(
+      contract.realtime_transport.nats_jetstream.request_reply_subjects,
+    ).toEqual([
+      "ob.memory.context_pack",
+      "ob.memory.session_start",
+      "ob.memory.append_event",
+      "ob.memory.wrap",
+      "ob.memory.resolve",
+      "ob.health",
+    ]);
+    expect(contract.realtime_transport.nats_jetstream.jetstream_streams).toEqual([
+      "OB_AGENT_TRACE",
+      "OB_CONTEXT_PACK_REQUESTS",
+      "OB_CONTEXT_PACK_AUDIT",
+      "OB_PROMOTION_CANDIDATES",
+    ]);
+    expect(contract.realtime_transport.nats_jetstream.server).toMatchObject({
+      planned_host: "core01",
+      client_listen: "127.0.0.1:4222",
+      monitoring_listen: "127.0.0.1:8222",
+      jetstream_store_dir: "/Volumes/ThunderBolt/open-brain/nats/jetstream",
+    });
     expect(contract.interchange_profiles.okf.status).toBe(
       "compatibility-hooks",
     );
@@ -315,6 +349,36 @@ describe("Open Brain contract manifest", () => {
     expect(first.schema_hash).toBe(second.schema_hash);
   });
 
+  it("keeps planned realtime metadata outside the required schema hash", () => {
+    const base = buildContract("2026-06-18T00:00:00.000Z");
+    const changedPayload: ContractPayload = {
+      service: base.service,
+      contract_version: base.contract_version,
+      contract_scope: base.contract_scope,
+      schema_version: base.schema_version,
+      min_client_versions: base.min_client_versions,
+      compatible_client_ranges: base.compatible_client_ranges,
+      transport: base.transport,
+      realtime_transport: {
+        nats_jetstream: {
+          ...base.realtime_transport.nats_jetstream,
+          request_reply_subjects: [
+            ...base.realtime_transport.nats_jetstream.request_reply_subjects,
+            "ob.memory.experimental",
+          ] as unknown as typeof base.realtime_transport.nats_jetstream.request_reply_subjects,
+        },
+      },
+      interchange_profiles: base.interchange_profiles,
+      agent_memory_adapter: base.agent_memory_adapter,
+      agent_context_pack: base.agent_context_pack,
+      receipt_contract: base.receipt_contract,
+      capabilities: base.capabilities,
+      tool_contracts: base.tool_contracts,
+    };
+
+    expect(contractHash(changedPayload)).toBe(base.schema_hash);
+  });
+
   it("changes the schema hash when public capabilities change", () => {
     const base = buildContract("2026-06-18T00:00:00.000Z");
     const changedPayload: ContractPayload = {
@@ -325,6 +389,7 @@ describe("Open Brain contract manifest", () => {
       min_client_versions: base.min_client_versions,
       compatible_client_ranges: base.compatible_client_ranges,
       transport: base.transport,
+      realtime_transport: base.realtime_transport,
       interchange_profiles: base.interchange_profiles,
       agent_memory_adapter: base.agent_memory_adapter,
       agent_context_pack: base.agent_context_pack,
@@ -357,6 +422,7 @@ describe("Open Brain contract manifest", () => {
       min_client_versions: base.min_client_versions,
       compatible_client_ranges: base.compatible_client_ranges,
       transport: base.transport,
+      realtime_transport: base.realtime_transport,
       interchange_profiles: base.interchange_profiles,
       agent_memory_adapter: base.agent_memory_adapter,
       agent_context_pack: base.agent_context_pack,
@@ -393,6 +459,7 @@ describe("Open Brain contract manifest", () => {
       min_client_versions: base.min_client_versions,
       compatible_client_ranges: base.compatible_client_ranges,
       transport: base.transport,
+      realtime_transport: base.realtime_transport,
       interchange_profiles: base.interchange_profiles,
       agent_memory_adapter: base.agent_memory_adapter,
       agent_context_pack: base.agent_context_pack,

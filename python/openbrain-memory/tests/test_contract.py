@@ -4,6 +4,7 @@ from copy import deepcopy
 from hashlib import sha256
 
 from openbrain_memory import (
+    COMPATIBLE_CONTRACT_VERSIONS,
     CURRENT_CONTRACT_VERSION,
     REQUIRED_CONTRACT_TOOLS,
     validate_contract_manifest,
@@ -80,6 +81,26 @@ def test_validate_required_memory_contract_pins_package_contract_defaults():
 
     assert result.ok is True
     assert result.reasons == ()
+
+
+def test_validate_required_memory_contract_accepts_planned_realtime_advisory_metadata():
+    manifest = representative_contract_manifest()
+    manifest["realtime_transport"] = {
+        "nats_jetstream": {
+            "status": "planned-transport-foundation",
+            "availability": "not_runtime_available",
+            "fallback_transport": "http_mcp",
+        },
+    }
+
+    result = validate_required_memory_contract(
+        manifest,
+        client_version=CURRENT_CLIENT_VERSION,
+    )
+
+    assert result.ok is True
+    assert result.reasons == ()
+    assert COMPATIBLE_CONTRACT_VERSIONS == (CURRENT_CONTRACT_VERSION,)
 
 
 def test_validate_required_memory_contract_reports_package_required_tool_gap():

@@ -42,6 +42,7 @@ def _resolve_package_version(pyproject: Path | None = None) -> str:
 
 PACKAGE_VERSION = _resolve_package_version()
 CURRENT_CONTRACT_VERSION = "2026-07-06.memory-tools.v14"
+COMPATIBLE_CONTRACT_VERSIONS = (CURRENT_CONTRACT_VERSION,)
 REQUIRED_CONTRACT_TOOLS = (
     "append_session_event",
     "get_contract",

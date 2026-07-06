@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 from typing import Any
 
-from .client import CURRENT_CONTRACT_VERSION, REQUIRED_CONTRACT_TOOLS
+from .client import COMPATIBLE_CONTRACT_VERSIONS, REQUIRED_CONTRACT_TOOLS
 
 EXPECTED_CONTRACT_SCOPE = "required_openbrain_memory_contract"
 DEFAULT_CLIENT_NAME = "openbrain-memory"
@@ -89,7 +89,7 @@ def validate_required_memory_contract(
         client_name=client_name,
         client_version=client_version,
         required_tools=REQUIRED_CONTRACT_TOOLS,
-        compatible_contract_versions=(CURRENT_CONTRACT_VERSION,),
+        compatible_contract_versions=COMPATIBLE_CONTRACT_VERSIONS,
     )
 
 
