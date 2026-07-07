@@ -36,7 +36,8 @@ sentinel in the approved shell:
 export OPENBRAIN_COLLAB_RETIRE_RELEASE_APPROVED=core01-live-db-after-backup
 ```
 
-All live command blocks below include a shell guard for that sentinel. If the
+All live command blocks below include a shell guard for that sentinel, and the
+script itself refuses `--execute` unless the same sentinel is present. If the
 guard fails, stop; do not delete the guard or rerun from a different shell to get
 past it.
 
