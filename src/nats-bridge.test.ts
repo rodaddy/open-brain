@@ -278,6 +278,32 @@ describe("startNatsContextPackBridge", () => {
     await runtime?.close();
   });
 
+  it("attempts driver close when subscription close fails", async () => {
+    const subscriptionClose = mock(async () => {
+      throw new Error("subscription close failed");
+    });
+    const driverClose = mock(async () => {});
+    const driver: NatsBridgeDriver = {
+      subscribe: async () => ({ close: subscriptionClose }),
+      close: driverClose,
+    };
+
+    const runtime = await startNatsContextPackBridge({
+      boundary: readNatsRuntimeBoundary({
+        OPENBRAIN_TRANSPORT: "nats",
+        OPENBRAIN_NATS_ENABLE_BRIDGE: "true",
+        OPENBRAIN_NATS_URL: "nats://127.0.0.1:4222",
+      }),
+      tokenMap: new Map([["secret-token", { role: "admin", clientId: "rico" }]]),
+      deps: depsWithWorkingSet(),
+      driver,
+    });
+
+    await expect(runtime?.close()).rejects.toThrow("subscription close failed");
+    expect(subscriptionClose).toHaveBeenCalled();
+    expect(driverClose).toHaveBeenCalled();
+  });
+
   it("resubscribes the real NATS subscription loop after handler and iterator failures", async () => {
     const responses: Array<{ request_id?: string; status?: string }> = [];
     const loggedErrors: string[] = [];
@@ -393,6 +419,73 @@ describe("startNatsContextPackBridge", () => {
 
       await runtime?.close();
       expect(secondSubscription.unsubscribe).toHaveBeenCalled();
+      expect(connection.drain).toHaveBeenCalled();
+    } finally {
+      logger.error = originalError;
+      mock.restore();
+    }
+  });
+
+  it("backs off when resubscribe succeeds but replacement iterators keep failing", async () => {
+    const loggedErrors: string[] = [];
+    const originalError = logger.error;
+    logger.error = (message, extra) => {
+      loggedErrors.push(`${message}:${String(extra?.error ?? "")}`);
+    };
+
+    try {
+      const subscriptions: Array<{ unsubscribe: ReturnType<typeof mock> }> = [];
+      let subscribeCalls = 0;
+      const connection = {
+        subscribe: mock(() => {
+          subscribeCalls += 1;
+          const error = new Error(`iterator failed ${subscribeCalls}`);
+          const subscription = {
+            unsubscribe: mock(() => {}),
+            async *[Symbol.asyncIterator]() {
+              throw error;
+            },
+          };
+          subscriptions.push(subscription);
+          return subscription;
+        }),
+        drain: mock(async () => {}),
+      };
+      mock.module("nats", () => ({
+        connect: mock(async () => connection),
+      }));
+      const health = createNatsBridgeHealth("available");
+
+      const runtime = await startNatsContextPackBridge({
+        boundary: readNatsRuntimeBoundary({
+          OPENBRAIN_TRANSPORT: "nats",
+          OPENBRAIN_NATS_ENABLE_BRIDGE: "true",
+          OPENBRAIN_NATS_URL: "nats://127.0.0.1:4222",
+        }),
+        tokenMap: new Map([["secret-token", { role: "admin", clientId: "rico" }]]),
+        deps: depsWithWorkingSet(),
+        health,
+      });
+
+      await waitFor(
+        () => subscribeCalls >= 2,
+        "NATS bridge to resubscribe after an iterator failure",
+      );
+      const callsAfterSecondFailure = subscribeCalls;
+      await new Promise((resolve) => setTimeout(resolve, 80));
+
+      expect(health.availability).toBe("not_runtime_available");
+      expect(health.lastError).toMatch(/^iterator failed /);
+      expect(subscribeCalls - callsAfterSecondFailure).toBeLessThanOrEqual(1);
+      expect(loggedErrors).toContain(
+        "NATS context-pack bridge subscription failed:iterator failed 1",
+      );
+      expect(loggedErrors).toContain(
+        "NATS context-pack bridge subscription failed:iterator failed 2",
+      );
+
+      await runtime?.close();
+      expect(subscriptions.at(-1)?.unsubscribe).toHaveBeenCalled();
       expect(connection.drain).toHaveBeenCalled();
     } finally {
       logger.error = originalError;

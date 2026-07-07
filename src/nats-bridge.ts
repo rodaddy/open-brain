@@ -118,8 +118,21 @@ export async function startNatsContextPackBridge(
     health,
     close: async () => {
       markNatsBridgeUnavailable(health, "NATS bridge closed");
-      await subscription.close();
-      await driver.close();
+      const closeErrors: unknown[] = [];
+      try {
+        await subscription.close();
+      } catch (err) {
+        closeErrors.push(err);
+      }
+      try {
+        await driver.close();
+      } catch (err) {
+        closeErrors.push(err);
+      }
+      if (closeErrors.length === 1) throw closeErrors[0];
+      if (closeErrors.length > 1) {
+        throw new AggregateError(closeErrors, "NATS bridge close failed");
+      }
     },
   };
 }
@@ -243,8 +256,6 @@ async function createNatsJsDriver(
           if (needsSubscription) {
             try {
               subscription = connection.subscribe(subject);
-              markNatsBridgeAvailable(health);
-              resubscribeDelayMs = NATS_RESUBSCRIBE_INITIAL_DELAY_MS;
               needsSubscription = false;
             } catch (err) {
               markNatsBridgeUnavailable(health, errorMessage(err));
@@ -255,9 +266,13 @@ async function createNatsJsDriver(
             }
           }
 
+          let processedMessage = false;
           try {
             for await (const message of subscription) {
               if (closed) break;
+              processedMessage = true;
+              markNatsBridgeAvailable(health);
+              resubscribeDelayMs = NATS_RESUBSCRIBE_INITIAL_DELAY_MS;
               await processNatsSubscriptionMessage(message, handler);
             }
             if (!closed) {
@@ -270,6 +285,9 @@ async function createNatsJsDriver(
             }
           }
           needsSubscription = true;
+          if (!closed && !processedMessage) {
+            resubscribeDelayMs = nextNatsResubscribeDelay(resubscribeDelayMs);
+          }
 
           if (!closed) {
             await delay(resubscribeDelayMs);
