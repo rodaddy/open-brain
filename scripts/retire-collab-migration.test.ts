@@ -2,7 +2,11 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import pg from "pg";
 import { runMigrations } from "../src/db/migrate.ts";
 import {
+  COLLAB_RETIRE_APPROVAL_ENV,
+  COLLAB_RETIRE_APPROVAL_VALUE,
+  assertExecuteApproval,
   auditOutOfScope,
+  dbHostRequiresReleaseApproval,
   migrateEntities,
   migrateLanes,
   migrateThoughts,
@@ -11,6 +15,10 @@ import {
 } from "./retire-collab-migration.ts";
 
 const { Client, Pool } = pg;
+
+const approvedReleaseEnv = {
+  [COLLAB_RETIRE_APPROVAL_ENV]: COLLAB_RETIRE_APPROVAL_VALUE,
+};
 
 // -----------------------------------------------------------------------------
 // Pure arg-parsing tests (always run).
@@ -55,6 +63,58 @@ describe("retire-collab-migration args", () => {
 // roll back the whole execute run.
 // -----------------------------------------------------------------------------
 describe("retire-collab-migration transaction", () => {
+  it("refuses --execute without explicit release approval before DB access", async () => {
+    expect(() => assertExecuteApproval({})).toThrow(COLLAB_RETIRE_APPROVAL_ENV);
+
+    const pool = {
+      query: async () => {
+        throw new Error("db should not be touched without execute approval");
+      },
+      connect: async () => {
+        throw new Error("connect should not be touched without execute approval");
+      },
+    };
+
+    await expect(
+      runMigration(
+        pool as any,
+        {
+          execute: true,
+          acknowledgeOutOfScope: false,
+          steps: new Set(["lanes"]),
+        } as any,
+        {},
+      ),
+    ).rejects.toThrow(COLLAB_RETIRE_APPROVAL_ENV);
+  });
+
+  it("refuses live dry-runs without explicit release approval before DB access", async () => {
+    expect(
+      dbHostRequiresReleaseApproval({ DB_HOST: "10.71.1.21" }),
+    ).toBe(true);
+    expect(dbHostRequiresReleaseApproval({ DB_HOST: "127.0.0.1" })).toBe(
+      false,
+    );
+
+    const pool = {
+      query: async () => {
+        throw new Error("db should not be touched without release approval");
+      },
+    };
+
+    await expect(
+      runMigration(
+        pool as any,
+        {
+          execute: false,
+          acknowledgeOutOfScope: false,
+          steps: new Set(["lanes"]),
+        } as any,
+        { DB_HOST: "core01" },
+      ),
+    ).rejects.toThrow(COLLAB_RETIRE_APPROVAL_ENV);
+  });
+
   it("rolls back the transaction when a step fails mid-run", async () => {
     const clientQueries: string[] = [];
     let released = false;
@@ -83,11 +143,15 @@ describe("retire-collab-migration transaction", () => {
     };
 
     await expect(
-      runMigration(pool as any, {
-        execute: true,
-        acknowledgeOutOfScope: false,
-        steps: new Set(["lanes"]),
-      } as any),
+      runMigration(
+        pool as any,
+        {
+          execute: true,
+          acknowledgeOutOfScope: false,
+          steps: new Set(["lanes"]),
+        } as any,
+        approvedReleaseEnv,
+      ),
     ).rejects.toThrow("simulated lane failure");
 
     expect(clientQueries[0]).toBe("BEGIN");
@@ -273,11 +337,15 @@ dbDescribe("retire-collab-migration (scratch Postgres, real migrations)", () => 
 
   it("refuses --execute while out-of-scope content exists and mutates nothing", async () => {
     await expect(
-      runMigration(pool, {
-        execute: true,
-        acknowledgeOutOfScope: false,
-        steps: new Set(["thoughts", "entities", "lanes"]),
-      } as any),
+      runMigration(
+        pool,
+        {
+          execute: true,
+          acknowledgeOutOfScope: false,
+          steps: new Set(["thoughts", "entities", "lanes"]),
+        } as any,
+        approvedReleaseEnv,
+      ),
     ).rejects.toThrow("OUTSIDE the migrated scope");
 
     const sharedCount = await pool.query(
@@ -292,11 +360,15 @@ dbDescribe("retire-collab-migration (scratch Postgres, real migrations)", () => 
   });
 
   it("executes with --acknowledge-out-of-scope: copies, re-tags, archives", async () => {
-    const report = await runMigration(pool, {
-      execute: true,
-      acknowledgeOutOfScope: true,
-      steps: new Set(["thoughts", "entities", "lanes"]),
-    } as any);
+    const report = await runMigration(
+      pool,
+      {
+        execute: true,
+        acknowledgeOutOfScope: true,
+        steps: new Set(["thoughts", "entities", "lanes"]),
+      } as any,
+      approvedReleaseEnv,
+    );
 
     expect(report.thoughts?.copied).toBe(3);
     expect(report.thoughts?.unmirrored_after).toBe(0);
