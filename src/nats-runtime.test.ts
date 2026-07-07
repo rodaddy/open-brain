@@ -79,6 +79,39 @@ describe("readNatsRuntimeBoundary", () => {
       context_pack_subject: "ob.memory.context_pack",
     });
   });
+
+  it("does not mark NATS available when bridge env is set but HTTP remains requested", () => {
+    const boundary = readNatsRuntimeBoundary({
+      OPENBRAIN_NATS_ENABLE_BRIDGE: "true",
+      OPENBRAIN_NATS_URL: "nats://127.0.0.1:4222",
+    });
+
+    expect(boundary).toMatchObject({
+      requested_transport: "http",
+      nats: { availability: "not_runtime_available" },
+    });
+  });
+
+  it("does not mark remote plaintext NATS available without an explicit lab override", () => {
+    const boundary = readNatsRuntimeBoundary({
+      OPENBRAIN_TRANSPORT: "nats",
+      OPENBRAIN_NATS_ENABLE_BRIDGE: "true",
+      OPENBRAIN_NATS_URL: "nats://10.71.1.21:4222",
+    });
+
+    expect(boundary.nats.availability).toBe("not_runtime_available");
+  });
+
+  it("allows remote plaintext NATS only with an explicit lab override", () => {
+    const boundary = readNatsRuntimeBoundary({
+      OPENBRAIN_TRANSPORT: "nats",
+      OPENBRAIN_NATS_ENABLE_BRIDGE: "true",
+      OPENBRAIN_NATS_URL: "nats://10.71.1.21:4222",
+      OPENBRAIN_NATS_ALLOW_INSECURE_REMOTE: "true",
+    });
+
+    expect(boundary.nats.availability).toBe("available");
+  });
 });
 
 describe("summarizeNatsUrlForLog", () => {
@@ -87,6 +120,7 @@ describe("summarizeNatsUrlForLog", () => {
       configured: true,
       protocol: "nats",
       contains_credentials: true,
+      local: false,
     });
   });
 });
@@ -159,6 +193,26 @@ describe("planNatsContextPackBridge", () => {
         (key) => !(key in agentContextPackInputSchema),
       ),
     ).toEqual([]);
+  });
+
+  it("allows query to be omitted like the MCP agent_context_pack tool", () => {
+    const boundary = readNatsRuntimeBoundary({
+      OPENBRAIN_TRANSPORT: "nats",
+    });
+    const { body: _body, ...rest } = baseEnvelope;
+
+    const plan = planNatsContextPackBridge(boundary, {
+      subject: "ob.memory.context_pack",
+      envelope: {
+        ...rest,
+        body: {
+          requested_sections: ["working_set"],
+        },
+      },
+      bearerToken: "token",
+    });
+
+    expect(plan.mcpToolCall.arguments).not.toHaveProperty("query");
   });
 
   it("preserves optional thread_id when the caller scoped the request to a thread", () => {

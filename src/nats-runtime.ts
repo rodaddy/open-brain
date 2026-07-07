@@ -4,6 +4,7 @@ import { SECTION_NAMES } from "./tools/agent-context-pack.ts";
 const NATS_CONTEXT_PACK_OPERATION = "agent_context_pack";
 const DEFAULT_NATS_SUBJECT = "ob.memory.context_pack";
 const MAX_CONTEXT_PACK_QUERY_CHARS = 4000;
+const LOCAL_NATS_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 
 const requestedSectionsSchema = z.array(z.enum(SECTION_NAMES));
 
@@ -24,7 +25,7 @@ export const contextPackEnvelopeSchema = z.object({
   identity: identitySchema,
   body: z
     .object({
-      query: z.string().min(1).max(MAX_CONTEXT_PACK_QUERY_CHARS),
+      query: z.string().max(MAX_CONTEXT_PACK_QUERY_CHARS).optional(),
       requested_sections: requestedSectionsSchema.optional(),
       include_unreviewed_recovery: z.boolean().optional(),
       budget: z
@@ -61,6 +62,7 @@ export interface NatsUrlLogSummary {
   configured: boolean;
   protocol: string | null;
   contains_credentials: boolean;
+  local: boolean | null;
 }
 
 export interface NatsBridgePlanInput {
@@ -84,7 +86,7 @@ export interface NatsBridgePlan {
       channel_id: string;
       thread_id?: string;
       session_key: string;
-      query: string;
+      query?: string;
       requested_sections?: string[];
       include_unreviewed_recovery?: boolean;
       budget?: {
@@ -104,9 +106,11 @@ export function mapNatsEnvelopeToToolArgs(
     server_id: envelope.identity.server_id,
     channel_id: envelope.identity.channel_id,
     session_key: envelope.identity.session_key,
-    query: envelope.body.query,
   };
 
+  if (envelope.body.query !== undefined) {
+    toolArgs.query = envelope.body.query;
+  }
   if (
     envelope.identity.thread_id !== null &&
     envelope.identity.thread_id !== undefined
@@ -136,6 +140,7 @@ export function summarizeNatsUrlForLog(url: string | null): NatsUrlLogSummary {
       configured: false,
       protocol: null,
       contains_credentials: false,
+      local: null,
     };
   }
 
@@ -145,13 +150,29 @@ export function summarizeNatsUrlForLog(url: string | null): NatsUrlLogSummary {
       configured: true,
       protocol: parsed.protocol.replace(/:$/, "") || null,
       contains_credentials: Boolean(parsed.username || parsed.password),
+      local: LOCAL_NATS_HOSTS.has(parsed.hostname),
     };
   } catch {
     return {
       configured: true,
       protocol: null,
       contains_credentials: url.includes("@"),
+      local: null,
     };
+  }
+}
+
+function isNatsUrlAllowedForRuntime(
+  url: string | null,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  if (!url) return false;
+  try {
+    const parsed = new URL(url);
+    if (LOCAL_NATS_HOSTS.has(parsed.hostname)) return true;
+    return env.OPENBRAIN_NATS_ALLOW_INSECURE_REMOTE?.trim().toLowerCase() === "true";
+  } catch {
+    return false;
   }
 }
 
@@ -165,12 +186,16 @@ export function readNatsRuntimeBoundary(
   const url = trimEnv(env.OPENBRAIN_NATS_URL);
   const bridgeEnabled =
     env.OPENBRAIN_NATS_ENABLE_BRIDGE?.trim().toLowerCase() === "true";
+  const runtimeAvailable =
+    requestedTransport === "nats" &&
+    bridgeEnabled &&
+    isNatsUrlAllowedForRuntime(url, env);
 
   return {
     requested_transport: requestedTransport,
     fallback_transport: "http_mcp",
     nats: {
-      availability: bridgeEnabled && url ? "available" : "not_runtime_available",
+      availability: runtimeAvailable ? "available" : "not_runtime_available",
       url,
       context_pack_subject:
         trimEnv(env.OPENBRAIN_NATS_CONTEXT_PACK_SUBJECT) ?? DEFAULT_NATS_SUBJECT,

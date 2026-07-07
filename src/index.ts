@@ -238,7 +238,7 @@ if (import.meta.main) {
       process.exit(1);
     }
   } else if (natsRuntimeBoundary.requested_transport === "nats") {
-    logger.warn("OPENBRAIN_TRANSPORT=nats requested before local bridge exists", {
+    logger.warn("OPENBRAIN_TRANSPORT=nats requested but bridge is not available", {
       availability: natsRuntimeBoundary.nats.availability,
       fallback_transport: natsRuntimeBoundary.fallback_transport,
       fallback_http: natsRuntimeBoundary.nats.fallback_http,
@@ -262,9 +262,29 @@ if (import.meta.main) {
   const shutdown = async () => {
     logger.info("Shutting down...");
     server.close();
-    await natsBridge?.close();
-    await pool.end();
-    process.exit(0);
+    if (natsBridge) {
+      try {
+        await Promise.race([
+          natsBridge.close(),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("NATS bridge close timed out")), 5000),
+          ),
+        ]);
+      } catch (err) {
+        logger.error("NATS context-pack bridge failed to close during shutdown", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    try {
+      await pool.end();
+    } catch (err) {
+      logger.error("Database pool failed to close during shutdown", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      process.exit(0);
+    }
   };
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);

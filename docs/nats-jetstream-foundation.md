@@ -126,7 +126,7 @@ Core request/reply subjects:
 
 | Subject | Purpose | Runtime status |
 | --- | --- | --- |
-| `ob.memory.context_pack` | Build `agent_context_pack` for one active scope. | planned |
+| `ob.memory.context_pack` | Build `agent_context_pack` for one active scope. | available only when the server bridge is explicitly enabled |
 | `ob.memory.session_start` | Optional bridge to existing `session_start`. | planned |
 | `ob.memory.append_event` | Optional bridge to existing `append_session_event`. | planned |
 | `ob.memory.wrap` | Optional bridge to existing `session_wrap`. | planned |
@@ -140,7 +140,8 @@ audit once clients depend on them.
 ## Request Envelope
 
 The request body is JSON and must be compatible with `agent_context_pack`
-request semantics.
+request semantics. `query` is optional and bounded like the MCP tool input; the
+bridge must not require fields the MCP tool accepts as omitted.
 
 ```json
 {
@@ -250,6 +251,10 @@ availability only when explicitly enabled.
   `OPENBRAIN_TRANSPORT=nats`, `OPENBRAIN_NATS_ENABLE_BRIDGE=true`,
   `OPENBRAIN_NATS_URL`, `OPENBRAIN_NATS_CONTEXT_PACK_SUBJECT`, and
   `OPENBRAIN_NATS_FALLBACK_HTTP=true`.
+- Remote plaintext `nats://` broker URLs are not runtime-available by default.
+  Use loopback/local NATS for local rollout, or set
+  `OPENBRAIN_NATS_ALLOW_INSECURE_REMOTE=true` only for an explicitly approved
+  trusted lab override.
 - Request/reply mapping: only `agent_context_pack` is NATS-native in the first
   bridge. Other Open Brain calls continue over HTTP/MCP unless a later PR adds
   parity tests for their subjects.
@@ -286,9 +291,10 @@ Local-only validation for #223:
 
 - contract tests prove `get_contract` advertises NATS as planned, not runtime
   available by default, and as available only when the bridge is explicitly
-  enabled;
+  enabled for requested NATS transport with an allowed URL;
 - server tests prove authorized NATS request/reply maps to the same
-  `agent_context_pack` payload and rejects missing bearer auth;
+  `agent_context_pack` payload, rejects missing bearer auth before parsing,
+  bounds request size, and hides raw parser/schema errors from callers;
 - docs make core01 deployment optional/deferred;
 - Python tests prove package contract pins match the server contract version.
 

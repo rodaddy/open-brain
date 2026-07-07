@@ -21,7 +21,8 @@ section from RAM-first working context and, only when explicitly requested,
 the exact-scope `recovery` section from the quarantined recovery WAL. The NATS
 bridge maps `ob.memory.context_pack` request/reply traffic to that same
 server-authoritative pack path only when `OPENBRAIN_TRANSPORT=nats`,
-`OPENBRAIN_NATS_ENABLE_BRIDGE=true`, and `OPENBRAIN_NATS_URL` are configured.
+`OPENBRAIN_NATS_ENABLE_BRIDGE=true`, and an allowed `OPENBRAIN_NATS_URL` are
+configured.
 Broader durable section assembly remains planned until its owning issues land.
 
 ## Ownership Boundary

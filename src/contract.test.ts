@@ -28,14 +28,16 @@ describe("Open Brain contract manifest", () => {
     });
     expect(
       contract.realtime_transport.nats_jetstream.request_reply_subjects,
-    ).toEqual([
-      "ob.memory.context_pack",
-      "ob.memory.session_start",
-      "ob.memory.append_event",
-      "ob.memory.wrap",
-      "ob.memory.resolve",
-      "ob.health",
-    ]);
+    ).toEqual({
+      available: [],
+      planned: [
+        "ob.memory.session_start",
+        "ob.memory.append_event",
+        "ob.memory.wrap",
+        "ob.memory.resolve",
+        "ob.health",
+      ],
+    });
     expect(contract.realtime_transport.nats_jetstream.jetstream_streams).toEqual([
       "OB_AGENT_TRACE",
       "OB_CONTEXT_PACK_REQUESTS",
@@ -589,10 +591,13 @@ describe("Open Brain contract manifest", () => {
       realtime_transport: {
         nats_jetstream: {
           ...base.realtime_transport.nats_jetstream,
-          request_reply_subjects: [
+          request_reply_subjects: {
             ...base.realtime_transport.nats_jetstream.request_reply_subjects,
-            "ob.memory.experimental",
-          ] as unknown as typeof base.realtime_transport.nats_jetstream.request_reply_subjects,
+            planned: [
+              ...base.realtime_transport.nats_jetstream.request_reply_subjects.planned,
+              "ob.memory.experimental",
+            ],
+          } as unknown as typeof base.realtime_transport.nats_jetstream.request_reply_subjects,
         },
       },
       interchange_profiles: base.interchange_profiles,
@@ -616,6 +621,16 @@ describe("Open Brain contract manifest", () => {
     expect(available.realtime_transport.nats_jetstream).toMatchObject({
       status: "runtime-available",
       availability: "available",
+      request_reply_subjects: {
+        available: ["ob.memory.context_pack"],
+        planned: [
+          "ob.memory.session_start",
+          "ob.memory.append_event",
+          "ob.memory.wrap",
+          "ob.memory.resolve",
+          "ob.health",
+        ],
+      },
     });
     expect(available.schema_hash).toBe(base.schema_hash);
   });

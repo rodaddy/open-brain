@@ -110,7 +110,7 @@ describe("handleNatsContextPackMessage", () => {
     const response = handleNatsContextPackMessage({
       message: {
         subject: "ob.memory.context_pack",
-        data: data(baseEnvelope),
+        data: data({ not: "valid-json-envelope" }),
         headers: {},
       },
       boundary,
@@ -119,9 +119,62 @@ describe("handleNatsContextPackMessage", () => {
     }) as any;
 
     expect(response).toMatchObject({
-      request_id: "req-123",
+      request_id: null,
       status: "error",
       error: { code: "permission_denied" },
+    });
+  });
+
+  it("rejects oversized bodies before parsing", () => {
+    const boundary = readNatsRuntimeBoundary({
+      OPENBRAIN_TRANSPORT: "nats",
+      OPENBRAIN_NATS_ENABLE_BRIDGE: "true",
+      OPENBRAIN_NATS_URL: "nats://127.0.0.1:4222",
+    });
+
+    const response = handleNatsContextPackMessage({
+      message: {
+        subject: "ob.memory.context_pack",
+        data: encoder.encode("x".repeat(65 * 1024)),
+        headers: { Authorization: "Bearer secret-token" },
+      },
+      boundary,
+      tokenMap: new Map([["secret-token", { role: "admin", clientId: "rico" }]]),
+      deps: depsWithWorkingSet(),
+    }) as any;
+
+    expect(response).toMatchObject({
+      request_id: null,
+      status: "error",
+      error: { code: "payload_too_large" },
+    });
+  });
+
+  it("does not expose raw parser or schema errors to NATS callers", () => {
+    const boundary = readNatsRuntimeBoundary({
+      OPENBRAIN_TRANSPORT: "nats",
+      OPENBRAIN_NATS_ENABLE_BRIDGE: "true",
+      OPENBRAIN_NATS_URL: "nats://127.0.0.1:4222",
+    });
+
+    const response = handleNatsContextPackMessage({
+      message: {
+        subject: "ob.memory.context_pack",
+        data: encoder.encode("{bad json"),
+        headers: { Authorization: "Bearer secret-token" },
+      },
+      boundary,
+      tokenMap: new Map([["secret-token", { role: "admin", clientId: "rico" }]]),
+      deps: depsWithWorkingSet(),
+    }) as any;
+
+    expect(response).toMatchObject({
+      request_id: null,
+      status: "error",
+      error: {
+        code: "bad_request",
+        message: "Invalid NATS context pack request",
+      },
     });
   });
 });
@@ -176,5 +229,35 @@ describe("startNatsContextPackBridge", () => {
     });
 
     expect(runtime).toBeNull();
+  });
+
+  it("surfaces reply failures from request messages", async () => {
+    const driver: NatsBridgeDriver = {
+      subscribe: async (subject, handler) => {
+        await expect(
+          handler({
+            subject,
+            data: data(baseEnvelope),
+            headers: { authorization: "Bearer secret-token" },
+            respond: () => false,
+          } satisfies NatsRequestMessage),
+        ).rejects.toThrow("NATS request did not include a reply inbox");
+        return { close: () => undefined };
+      },
+      close: () => undefined,
+    };
+
+    const runtime = await startNatsContextPackBridge({
+      boundary: readNatsRuntimeBoundary({
+        OPENBRAIN_TRANSPORT: "nats",
+        OPENBRAIN_NATS_ENABLE_BRIDGE: "true",
+        OPENBRAIN_NATS_URL: "nats://127.0.0.1:4222",
+      }),
+      tokenMap: new Map([["secret-token", { role: "admin", clientId: "rico" }]]),
+      deps: depsWithWorkingSet(),
+      driver,
+    });
+
+    await runtime?.close();
   });
 });

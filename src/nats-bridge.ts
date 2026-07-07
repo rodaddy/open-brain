@@ -18,7 +18,7 @@ export interface NatsRequestMessage {
   subject: string;
   data: Uint8Array;
   headers?: Record<string, string | undefined>;
-  respond(data: Uint8Array): void | Promise<void>;
+  respond(data: Uint8Array): boolean | void | Promise<boolean | void>;
 }
 
 export interface NatsSubscriptionHandle {
@@ -48,6 +48,7 @@ export interface StartNatsContextPackBridgeOptions {
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
+const MAX_NATS_REQUEST_BYTES = 64 * 1024;
 
 export async function startNatsContextPackBridge(
   options: StartNatsContextPackBridgeOptions,
@@ -70,7 +71,10 @@ export async function startNatsContextPackBridge(
       tokenMap: options.tokenMap,
       deps: options.deps,
     });
-    await message.respond(encoder.encode(JSON.stringify(response)));
+    const responded = await message.respond(encoder.encode(JSON.stringify(response)));
+    if (responded === false) {
+      throw new Error("NATS request did not include a reply inbox");
+    }
   });
 
   return {
@@ -98,12 +102,16 @@ export function handleNatsContextPackMessage(input: {
       );
     }
 
-    const envelope = parseEnvelope(input.message.data);
-    requestId = envelope.request_id;
     const auth = authFromHeaders(input.message.headers, input.tokenMap);
     if (!auth) {
       return natsError(requestId, "permission_denied", "Bearer token is required");
     }
+    if (input.message.data.byteLength > MAX_NATS_REQUEST_BYTES) {
+      return natsError(requestId, "payload_too_large", "NATS request body is too large");
+    }
+
+    const envelope = parseEnvelope(input.message.data);
+    requestId = envelope.request_id;
 
     const result = buildAgentContextPackPayload(
       parseAgentContextPackArgs(mapNatsEnvelopeToToolArgs(envelope)),
@@ -127,11 +135,7 @@ export function handleNatsContextPackMessage(input: {
       body: result.payload,
     };
   } catch (err) {
-    return natsError(
-      requestId,
-      "bad_request",
-      err instanceof Error ? err.message : String(err),
-    );
+    return natsError(requestId, "bad_request", "Invalid NATS context pack request");
   }
 }
 
@@ -200,7 +204,7 @@ async function createNatsJsDriver(url: string | null): Promise<NatsBridgeDriver>
             data: message.data,
             headers: headersToRecord(message.headers),
             respond: (data) => {
-              void message.respond(data);
+              return message.respond(data);
             },
           });
         }

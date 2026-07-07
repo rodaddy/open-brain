@@ -238,6 +238,30 @@ can satisfy.
   (`client_id`, `matter_id`, `document_id`, `path`, and `dms_id`)?
 - Are scoped filters parameterized and applied consistently to search,
   answer/citation, compact fetch, and full fetch paths?
+
+## [2026-07-07] Secondary transports must not weaken auth-bearing plaintext or parse-order gates
+
+**Severity:** HIGH
+**Source:** PR #262 initial swarm for Issue #223
+**Scope:** `src/nats-runtime.ts`, `src/nats-bridge.ts`, NATS or other bearer-token transport bridges
+**Status:** fixed in PR #262; keep as active checklist
+
+### Pattern
+
+Auth-bearing secondary transports can accidentally create a weaker side door
+than HTTP/MCP. In PR #262, the first NATS bridge pass accepted any non-empty
+`nats://` URL for runtime availability, including remote plaintext brokers, and
+parsed/schema-validated the request body before bearer-token auth or request
+size checks. Parser/schema details were also returned to callers.
+
+### Review Questions
+
+- Does an auth-bearing plaintext transport allow only local/trusted endpoints by
+  default, with any remote plaintext override explicitly named and documented?
+- Does the bridge authenticate cheap headers before parsing untrusted bodies?
+- Is request size bounded before decode/schema validation?
+- Do bad request responses avoid leaking raw parser or schema diagnostics across
+  the transport boundary?
 - Do unscoped namespace-only reads redact privileged `source_refs` by default?
 - Does any generic shared projection include privileged source metadata without
   a caller-specific redaction or scope gate?

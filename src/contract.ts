@@ -38,14 +38,16 @@ export interface OpenBrainContract {
         monitoring_listen: "127.0.0.1:8222";
         jetstream_store_dir: "/Volumes/ThunderBolt/open-brain/nats/jetstream";
       };
-      request_reply_subjects: readonly [
-        "ob.memory.context_pack",
-        "ob.memory.session_start",
-        "ob.memory.append_event",
-        "ob.memory.wrap",
-        "ob.memory.resolve",
-        "ob.health",
-      ];
+      request_reply_subjects: {
+        available: readonly ["ob.memory.context_pack"] | readonly [];
+        planned: readonly [
+          "ob.memory.session_start",
+          "ob.memory.append_event",
+          "ob.memory.wrap",
+          "ob.memory.resolve",
+          "ob.health",
+        ];
+      };
       jetstream_streams: readonly [
         "OB_AGENT_TRACE",
         "OB_CONTEXT_PACK_REQUESTS",
@@ -532,14 +534,18 @@ export function buildContract(
           jetstream_store_dir:
             "/Volumes/ThunderBolt/open-brain/nats/jetstream" as const,
         },
-        request_reply_subjects: [
-          "ob.memory.context_pack",
-          "ob.memory.session_start",
-          "ob.memory.append_event",
-          "ob.memory.wrap",
-          "ob.memory.resolve",
-          "ob.health",
-        ] as const,
+        request_reply_subjects: {
+          available: natsAvailability === "available"
+            ? ["ob.memory.context_pack"] as const
+            : [] as const,
+          planned: [
+            "ob.memory.session_start",
+            "ob.memory.append_event",
+            "ob.memory.wrap",
+            "ob.memory.resolve",
+            "ob.health",
+          ] as const,
+        },
         jetstream_streams: [
           "OB_AGENT_TRACE",
           "OB_CONTEXT_PACK_REQUESTS",
