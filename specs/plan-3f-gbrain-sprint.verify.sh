@@ -54,6 +54,13 @@ check "hero is referenced from plan" grep -q 'src="plan-3f-gbrain-sprint/hero.pn
 check "finished site html exists" test -f "$site_plan"
 check "finished hero exists" test -f "${site_asset_dir}/hero.png"
 check "finished favicon source exists" test -f "${site_asset_dir}/favicon.png"
+check "finished favicon 64 exists" test -f "${site_asset_dir}/favicon-64.png"
+check "finished apple touch icon exists" test -f "${site_asset_dir}/apple-touch-icon.png"
+check "finished site html matches repo source" cmp -s "$plan" "$site_plan"
+check "finished hero matches repo source" cmp -s "${asset_dir}/hero.png" "${site_asset_dir}/hero.png"
+check "finished favicon source matches repo source" cmp -s "${asset_dir}/favicon.png" "${site_asset_dir}/favicon.png"
+check "finished favicon 64 matches repo source" cmp -s "${asset_dir}/favicon-64.png" "${site_asset_dir}/favicon-64.png"
+check "finished apple touch icon matches repo source" cmp -s "${asset_dir}/apple-touch-icon.png" "${site_asset_dir}/apple-touch-icon.png"
 check_absent "no unexpanded template tokens in html" "{{" "$plan"
 check_absent "no favicon placeholder remains" "__FAVICON_DATA_URI__" "$plan"
 
