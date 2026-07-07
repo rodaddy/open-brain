@@ -1,5 +1,6 @@
 import type { AuthInfo } from "./types.ts";
 import type { ToolDeps } from "./tools/index.ts";
+import { logger } from "./logger.ts";
 import {
   buildAgentContextPackPayload,
   parseAgentContextPackArgs,
@@ -37,6 +38,18 @@ export interface NatsBridgeRuntime {
   subject: string;
   availability: "available";
   close(): Promise<void>;
+}
+
+interface NatsSubscriptionHeaders {
+  keys(): string[];
+  get(key: string): string;
+}
+
+export interface NatsSubscriptionMessage {
+  subject: string;
+  data: Uint8Array;
+  headers?: NatsSubscriptionHeaders;
+  respond(data: Uint8Array): boolean | void | Promise<boolean | void>;
 }
 
 export interface StartNatsContextPackBridgeOptions {
@@ -199,14 +212,7 @@ async function createNatsJsDriver(url: string | null): Promise<NatsBridgeDriver>
       void (async () => {
         for await (const message of subscription) {
           if (closed) break;
-          await handler({
-            subject: message.subject,
-            data: message.data,
-            headers: headersToRecord(message.headers),
-            respond: (data) => {
-              return message.respond(data);
-            },
-          });
+          await processNatsSubscriptionMessage(message, handler);
         }
       })();
 
@@ -223,8 +229,34 @@ async function createNatsJsDriver(url: string | null): Promise<NatsBridgeDriver>
   };
 }
 
+export async function processNatsSubscriptionMessage(
+  message: NatsSubscriptionMessage,
+  handler: (message: NatsRequestMessage) => Promise<void>,
+  onError: (err: unknown, subject: string) => void = logNatsHandlerError,
+): Promise<void> {
+  try {
+    await handler({
+      subject: message.subject,
+      data: message.data,
+      headers: headersToRecord(message.headers),
+      respond: (data) => {
+        return message.respond(data);
+      },
+    });
+  } catch (err) {
+    onError(err, message.subject);
+  }
+}
+
+function logNatsHandlerError(err: unknown, subject: string): void {
+  logger.error("NATS context-pack bridge request failed", {
+    subject,
+    error: err instanceof Error ? err.message : String(err),
+  });
+}
+
 function headersToRecord(
-  headers: { keys(): string[]; get(key: string): string } | undefined,
+  headers: NatsSubscriptionHeaders | undefined,
 ): Record<string, string> | undefined {
   if (!headers) return undefined;
   const record: Record<string, string> = {};

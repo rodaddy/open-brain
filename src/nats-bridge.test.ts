@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import {
   handleNatsContextPackMessage,
+  processNatsSubscriptionMessage,
   startNatsContextPackBridge,
   type NatsBridgeDriver,
   type NatsRequestMessage,
@@ -259,5 +260,44 @@ describe("startNatsContextPackBridge", () => {
     });
 
     await runtime?.close();
+  });
+
+  it("isolates per-message reply failures in the subscription driver boundary", async () => {
+    const handled: string[] = [];
+    const errors: string[] = [];
+    const handler = async (message: NatsRequestMessage) => {
+      handled.push(message.subject);
+      const responded = await message.respond(data({ ok: true }));
+      if (responded === false) {
+        throw new Error("NATS request did not include a reply inbox");
+      }
+    };
+    const onError = (err: unknown, subject: string) => {
+      errors.push(`${subject}:${err instanceof Error ? err.message : String(err)}`);
+    };
+
+    await processNatsSubscriptionMessage(
+      {
+        subject: "ob.memory.context_pack",
+        data: data(baseEnvelope),
+        respond: () => false,
+      },
+      handler,
+      onError,
+    );
+    await processNatsSubscriptionMessage(
+      {
+        subject: "ob.memory.context_pack",
+        data: data(baseEnvelope),
+        respond: () => true,
+      },
+      handler,
+      onError,
+    );
+
+    expect(handled).toEqual(["ob.memory.context_pack", "ob.memory.context_pack"]);
+    expect(errors).toEqual([
+      "ob.memory.context_pack:NATS request did not include a reply inbox",
+    ]);
   });
 });
