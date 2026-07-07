@@ -27,8 +27,11 @@ from openbrain_memory import (
     RetryPolicy,
 )
 from openbrain_memory.client import (
+    DEFAULT_NATS_MAX_REQUEST_BYTES,
     TransportResponse,
     UrllibTransport,
+    _nats_context_pack_envelope,
+    _nats_envelope_size_bytes,
     _resolve_package_version,
 )
 
@@ -130,6 +133,37 @@ class FakeTransport:
         raise AssertionError(f"Unexpected JSON-RPC method: {method}")
 
 
+class FakeNatsRequestReplyDriver:
+    def __init__(self) -> None:
+        self.requests = []
+        self.next_response = {
+            "schema": "openbrain.nats.response.v1",
+            "request_id": "3",
+            "status": "ok",
+            "operation": "agent_context_pack",
+            "body": {
+                "sections": {
+                    "working_set": {"items": [{"content": "from nats"}]},
+                },
+                "warnings": {"scope_denials": []},
+            },
+        }
+        self.raise_next: Exception | None = None
+
+    def request(self, subject, payload, *, headers, timeout):
+        self.requests.append(
+            {
+                "subject": subject,
+                "payload": payload,
+                "headers": dict(headers),
+                "timeout": timeout,
+            }
+        )
+        if self.raise_next is not None:
+            raise self.raise_next
+        return dict(self.next_response)
+
+
 def make_client(transport: FakeTransport) -> OpenBrainClient:
     return OpenBrainClient(
         "https://brain.example",
@@ -190,6 +224,26 @@ def header_value(headers: dict[str, str], name: str) -> str | None:
         if key.lower() == wanted:
             return value
     return None
+
+
+def contract_tool_result(availability: str):
+    return {
+        "content": [
+            {
+                "type": "text",
+                "text": json.dumps(
+                    {
+                        "realtime_transport": {
+                            "nats_jetstream": {
+                                "availability": availability,
+                                "fallback_transport": "http_mcp",
+                            }
+                        }
+                    }
+                ),
+            }
+        ]
+    }
 
 
 def test_health_check_uses_public_health_endpoint_without_credentials():
@@ -259,7 +313,7 @@ def test_nats_transport_defaults_to_not_runtime_available_without_fallback():
 
 
 def test_nats_transport_rejects_available_state_until_runtime_exists():
-    with pytest.raises(ValueError, match="not runtime available yet"):
+    with pytest.raises(ValueError, match="availability is derived from get_contract"):
         NatsTransport(
             "nats://127.0.0.1:4222",
             availability="available",
@@ -329,6 +383,707 @@ def test_nats_transport_uses_fallback_transport_for_http_calls():
         "name": "search_all",
         "arguments": {"query": "nats fallback"},
     }
+
+
+def test_nats_transport_uses_request_reply_after_available_contract():
+    fallback = FakeTransport()
+    fallback.tool_results["get_contract"] = contract_tool_result("available")
+    nats = FakeNatsRequestReplyDriver()
+    transport = NatsTransport(
+        "nats://127.0.0.1:4222",
+        context_pack_subject="ob.memory.context_pack",
+        fallback_transport=fallback,
+        request_reply_driver=nats,
+    )
+    client = OpenBrainClient(
+        "https://brain.example",
+        "secret-token",
+        "bilby",
+        agent_id="bilby-agent",
+        role="agent",
+        timeout=12.5,
+        transport=transport,
+    )
+
+    client.get_contract()
+    result = client.agent_context_pack(
+        agent="nagatha",
+        platform="discord",
+        server_id="guild",
+        channel_id="chan",
+        thread_id="thread",
+        session_key="guild/chan/thread/nagatha",
+        query="current task",
+        requested_sections=["working_set"],
+        include_unreviewed_recovery=True,
+        budget={"max_tokens": 1000, "max_latency_ms": 250},
+    )
+
+    assert result == {
+        "sections": {
+            "working_set": {"items": [{"content": "from nats"}]},
+        },
+        "warnings": {"scope_denials": []},
+    }
+    assert transport.availability is RealtimeTransportAvailability.AVAILABLE
+    assert len(nats.requests) == 1
+    request = nats.requests[0]
+    assert request["subject"] == "ob.memory.context_pack"
+    assert request["headers"] == {"Authorization": "Bearer secret-token"}
+    assert request["timeout"] == 12.5
+    assert request["payload"] == {
+        "schema": "openbrain.nats.request.v1",
+        "operation": "agent_context_pack",
+        "request_id": "3",
+        "identity": {
+            "namespace_source": "authorization",
+            "agent": "nagatha",
+            "platform": "discord",
+            "server_id": "guild",
+            "channel_id": "chan",
+            "thread_id": "thread",
+            "session_key": "guild/chan/thread/nagatha",
+        },
+        "body": {
+            "query": "current task",
+            "requested_sections": ["working_set"],
+            "include_unreviewed_recovery": True,
+            "budget": {"max_tokens": 1000, "max_latency_ms": 250},
+        },
+        "metadata": {
+            "client": "openbrain-memory",
+            "client_version": PACKAGE_VERSION,
+            "transport": "nats",
+        },
+    }
+    assert [call["json"]["params"]["name"] for call in tool_requests(fallback)] == [
+        "get_contract",
+    ]
+
+
+def test_nats_transport_falls_back_until_contract_reports_available():
+    fallback = FakeTransport()
+    fallback.tool_results["get_contract"] = contract_tool_result(
+        "not_runtime_available"
+    )
+    nats = FakeNatsRequestReplyDriver()
+    transport = NatsTransport(
+        "nats://127.0.0.1:4222",
+        fallback_transport=fallback,
+        request_reply_driver=nats,
+    )
+    client = OpenBrainClient(
+        "https://brain.example",
+        "secret-token",
+        "bilby",
+        agent_id="bilby-agent",
+        role="agent",
+        timeout=12.5,
+        transport=transport,
+    )
+
+    client.get_contract()
+    result = client.agent_context_pack(
+        agent="nagatha",
+        platform="discord",
+        server_id="guild",
+        channel_id="chan",
+        session_key="guild/chan/nagatha",
+    )
+
+    assert result["tool"] == "agent_context_pack"
+    assert transport.availability is RealtimeTransportAvailability.NOT_RUNTIME_AVAILABLE
+    assert nats.requests == []
+    assert [call["json"]["params"]["name"] for call in tool_requests(fallback)] == [
+        "get_contract",
+        "agent_context_pack",
+    ]
+
+
+def test_nats_transport_requires_driver_even_when_contract_reports_available():
+    fallback = FakeTransport()
+    fallback.tool_results["get_contract"] = contract_tool_result("available")
+    transport = NatsTransport(
+        "nats://127.0.0.1:4222",
+        fallback_transport=fallback,
+    )
+    client = OpenBrainClient(
+        "https://brain.example",
+        "secret-token",
+        "bilby",
+        agent_id="bilby-agent",
+        role="agent",
+        timeout=12.5,
+        transport=transport,
+    )
+
+    client.get_contract()
+    result = client.agent_context_pack(
+        agent="nagatha",
+        platform="discord",
+        server_id="guild",
+        channel_id="chan",
+        session_key="guild/chan/nagatha",
+    )
+
+    assert result["tool"] == "agent_context_pack"
+    assert transport.availability is RealtimeTransportAvailability.NOT_RUNTIME_AVAILABLE
+    assert [call["json"]["params"]["name"] for call in tool_requests(fallback)] == [
+        "get_contract",
+        "agent_context_pack",
+    ]
+
+
+def test_nats_transport_keeps_non_context_pack_calls_on_http_when_available():
+    fallback = FakeTransport()
+    fallback.tool_results["get_contract"] = contract_tool_result("available")
+    nats = FakeNatsRequestReplyDriver()
+    transport = NatsTransport(
+        "nats://127.0.0.1:4222",
+        fallback_transport=fallback,
+        request_reply_driver=nats,
+    )
+    client = OpenBrainClient(
+        "https://brain.example",
+        "secret-token",
+        "bilby",
+        agent_id="bilby-agent",
+        role="agent",
+        timeout=12.5,
+        transport=transport,
+    )
+
+    client.get_contract()
+    client.search_all(query="still http")
+
+    assert nats.requests == []
+    assert [call["json"]["params"]["name"] for call in tool_requests(fallback)] == [
+        "get_contract",
+        "search_all",
+    ]
+
+
+def test_nats_transport_falls_back_when_request_reply_fails():
+    fallback = FakeTransport()
+    fallback.tool_results["get_contract"] = contract_tool_result("available")
+    fallback.tool_results["agent_context_pack"] = {
+        "content": [
+            {"type": "text", "text": json.dumps({"source": "http-fallback"})}
+        ]
+    }
+    nats = FakeNatsRequestReplyDriver()
+    nats.raise_next = RuntimeError("nats://user:pass@broker.internal exploded")
+    transport = NatsTransport(
+        "nats://127.0.0.1:4222",
+        fallback_transport=fallback,
+        request_reply_driver=nats,
+    )
+    client = OpenBrainClient(
+        "https://brain.example",
+        "secret-token",
+        "bilby",
+        agent_id="bilby-agent",
+        role="agent",
+        timeout=12.5,
+        transport=transport,
+    )
+
+    client.get_contract()
+    result = client.agent_context_pack(
+        agent="nagatha",
+        platform="discord",
+        server_id="guild",
+        channel_id="chan",
+        session_key="guild/chan/nagatha",
+    )
+
+    assert result == {"source": "http-fallback"}
+    assert len(nats.requests) == 1
+    assert [call["json"]["params"]["name"] for call in tool_requests(fallback)] == [
+        "get_contract",
+        "agent_context_pack",
+    ]
+
+
+def test_nats_transport_falls_back_for_delegated_namespace():
+    fallback = FakeTransport()
+    fallback.tool_results["get_contract"] = contract_tool_result("available")
+    fallback.tool_results["agent_context_pack"] = {
+        "content": [
+            {"type": "text", "text": json.dumps({"source": "http-fallback"})}
+        ]
+    }
+    nats = FakeNatsRequestReplyDriver()
+    transport = NatsTransport(
+        "nats://127.0.0.1:4222",
+        fallback_transport=fallback,
+        request_reply_driver=nats,
+    )
+    client = OpenBrainClient(
+        "https://brain.example",
+        "secret-token",
+        "bilby",
+        agent_id="bilby-agent",
+        role="admin",
+        timeout=12.5,
+        transport=transport,
+        delegate_namespace=True,
+    )
+
+    client.get_contract()
+    result = client.agent_context_pack(
+        agent="nagatha",
+        platform="discord",
+        server_id="guild",
+        channel_id="chan",
+        session_key="guild/chan/nagatha",
+    )
+
+    assert result == {"source": "http-fallback"}
+    assert nats.requests == []
+    calls = tool_requests(fallback)
+    assert [call["json"]["params"]["name"] for call in calls] == [
+        "get_contract",
+        "agent_context_pack",
+    ]
+    assert calls[-1]["headers"]["X-Namespace"] == "bilby"
+
+
+def test_nats_transport_falls_back_for_unsupported_context_pack_arguments():
+    fallback = FakeTransport()
+    fallback.tool_results["get_contract"] = contract_tool_result("available")
+    fallback.tool_results["agent_context_pack"] = {
+        "content": [
+            {"type": "text", "text": json.dumps({"source": "http-fallback"})}
+        ]
+    }
+    nats = FakeNatsRequestReplyDriver()
+    transport = NatsTransport(
+        "nats://127.0.0.1:4222",
+        fallback_transport=fallback,
+        request_reply_driver=nats,
+    )
+    client = OpenBrainClient(
+        "https://brain.example",
+        "secret-token",
+        "bilby",
+        agent_id="bilby-agent",
+        role="agent",
+        timeout=12.5,
+        transport=transport,
+    )
+
+    client.get_contract()
+    result = client.agent_context_pack(
+        agent="nagatha",
+        platform="discord",
+        server_id="guild",
+        channel_id="chan",
+        session_key="guild/chan/nagatha",
+        max_age_ms=500,
+    )
+
+    assert result == {"source": "http-fallback"}
+    assert nats.requests == []
+    calls = tool_requests(fallback)
+    assert [call["json"]["params"]["name"] for call in calls] == [
+        "get_contract",
+        "agent_context_pack",
+    ]
+    assert calls[-1]["json"]["params"]["arguments"]["max_age_ms"] == 500
+
+
+@pytest.mark.parametrize(
+    ("response_update", "match"),
+    [
+        ({"schema": "unexpected"}, "unexpected schema"),
+        ({"request_id": "other"}, "response id did not match"),
+        ({"operation": "search_all"}, "unexpected operation"),
+        ({"status": "confused"}, "unexpected status"),
+    ],
+)
+def test_nats_transport_protocol_errors_do_not_fallback(
+    response_update,
+    match,
+):
+    fallback = FakeTransport()
+    fallback.tool_results["get_contract"] = contract_tool_result("available")
+    fallback.tool_results["agent_context_pack"] = {
+        "content": [
+            {"type": "text", "text": json.dumps({"source": "http-fallback"})}
+        ]
+    }
+    nats = FakeNatsRequestReplyDriver()
+    nats.next_response.update(response_update)
+    transport = NatsTransport(
+        "nats://127.0.0.1:4222",
+        fallback_transport=fallback,
+        request_reply_driver=nats,
+    )
+    client = OpenBrainClient(
+        "https://brain.example",
+        "secret-token",
+        "bilby",
+        agent_id="bilby-agent",
+        role="agent",
+        timeout=12.5,
+        transport=transport,
+    )
+
+    client.get_contract()
+    with pytest.raises(OpenBrainProtocolError, match=match):
+        client.agent_context_pack(
+            agent="nagatha",
+            platform="discord",
+            server_id="guild",
+            channel_id="chan",
+            session_key="guild/chan/nagatha",
+        )
+
+    assert len(nats.requests) == 1
+    assert [call["json"]["params"]["name"] for call in tool_requests(fallback)] == [
+        "get_contract",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("response_update", "match"),
+    [
+        ({"status": "error", "schema": "unexpected"}, "unexpected schema"),
+        ({"status": "error", "request_id": "other"}, "response id did not match"),
+        ({"status": "error", "operation": "search_all"}, "unexpected operation"),
+    ],
+)
+def test_nats_transport_error_envelope_protocol_errors_do_not_fallback(
+    response_update,
+    match,
+):
+    fallback = FakeTransport()
+    fallback.tool_results["get_contract"] = contract_tool_result("available")
+    fallback.tool_results["agent_context_pack"] = {
+        "content": [
+            {"type": "text", "text": json.dumps({"source": "http-fallback"})}
+        ]
+    }
+    nats = FakeNatsRequestReplyDriver()
+    nats.next_response.update(response_update)
+    transport = NatsTransport(
+        "nats://127.0.0.1:4222",
+        fallback_transport=fallback,
+        request_reply_driver=nats,
+    )
+    client = OpenBrainClient(
+        "https://brain.example",
+        "secret-token",
+        "bilby",
+        agent_id="bilby-agent",
+        role="agent",
+        timeout=12.5,
+        transport=transport,
+    )
+
+    client.get_contract()
+    with pytest.raises(OpenBrainProtocolError, match=match):
+        client.agent_context_pack(
+            agent="nagatha",
+            platform="discord",
+            server_id="guild",
+            channel_id="chan",
+            session_key="guild/chan/nagatha",
+        )
+
+    assert len(nats.requests) == 1
+    assert [call["json"]["params"]["name"] for call in tool_requests(fallback)] == [
+        "get_contract",
+    ]
+
+
+def test_nats_transport_envelope_validation_does_not_fallback():
+    fallback = FakeTransport()
+    fallback.tool_results["get_contract"] = contract_tool_result("available")
+    nats = FakeNatsRequestReplyDriver()
+    transport = NatsTransport(
+        "nats://127.0.0.1:4222",
+        fallback_transport=fallback,
+        request_reply_driver=nats,
+    )
+    client = OpenBrainClient(
+        "https://brain.example",
+        "secret-token",
+        "bilby",
+        agent_id="bilby-agent",
+        role="agent",
+        timeout=12.5,
+        transport=transport,
+    )
+
+    client.get_contract()
+    with pytest.raises(ValueError, match="agent_context_pack.agent is required"):
+        client.agent_context_pack(
+            platform="discord",
+            server_id="guild",
+            channel_id="chan",
+            session_key="guild/chan/nagatha",
+        )
+
+    assert nats.requests == []
+    assert [call["json"]["params"]["name"] for call in tool_requests(fallback)] == [
+        "get_contract",
+    ]
+
+
+def test_nats_transport_wraps_driver_failure_when_fallback_disabled():
+    fallback = FakeTransport()
+    fallback.tool_results["get_contract"] = contract_tool_result("available")
+    nats = FakeNatsRequestReplyDriver()
+    nats.raise_next = RuntimeError("nats://user:pass@broker.internal exploded")
+    transport = NatsTransport(
+        "nats://127.0.0.1:4222",
+        fallback_transport=fallback,
+        request_reply_driver=nats,
+        fallback_on_nats_error=False,
+    )
+    client = OpenBrainClient(
+        "https://brain.example",
+        "secret-token",
+        "bilby",
+        agent_id="bilby-agent",
+        role="agent",
+        timeout=12.5,
+        transport=transport,
+    )
+
+    client.get_contract()
+    with pytest.raises(OpenBrainTransportUnavailableError) as exc_info:
+        client.agent_context_pack(
+            agent="nagatha",
+            platform="discord",
+            server_id="guild",
+            channel_id="chan",
+            session_key="guild/chan/nagatha",
+        )
+
+    message = str(exc_info.value)
+    assert "request failed" in message
+    assert "nats://user:pass@broker.internal" not in message
+    assert "exploded" not in message
+
+
+def test_nats_transport_falls_back_without_sending_oversized_request():
+    fallback = FakeTransport()
+    fallback.tool_results["get_contract"] = contract_tool_result("available")
+    fallback.tool_results["agent_context_pack"] = {
+        "content": [
+            {"type": "text", "text": json.dumps({"source": "http-fallback"})}
+        ]
+    }
+    nats = FakeNatsRequestReplyDriver()
+    transport = NatsTransport(
+        "nats://127.0.0.1:4222",
+        fallback_transport=fallback,
+        request_reply_driver=nats,
+    )
+    client = OpenBrainClient(
+        "https://brain.example",
+        "secret-token",
+        "bilby",
+        agent_id="bilby-agent",
+        role="agent",
+        timeout=12.5,
+        transport=transport,
+    )
+
+    client.get_contract()
+    result = client.agent_context_pack(
+        agent="nagatha",
+        platform="discord",
+        server_id="guild",
+        channel_id="chan",
+        session_key="guild/chan/nagatha",
+        query="x" * DEFAULT_NATS_MAX_REQUEST_BYTES,
+    )
+
+    assert result == {"source": "http-fallback"}
+    assert nats.requests == []
+    assert [call["json"]["params"]["name"] for call in tool_requests(fallback)] == [
+        "get_contract",
+        "agent_context_pack",
+    ]
+
+
+def test_nats_transport_size_guard_uses_default_json_boundary():
+    fallback = FakeTransport()
+    fallback.tool_results["get_contract"] = contract_tool_result("available")
+    fallback.tool_results["agent_context_pack"] = {
+        "content": [
+            {"type": "text", "text": json.dumps({"source": "http-fallback"})}
+        ]
+    }
+    nats = FakeNatsRequestReplyDriver()
+    transport = NatsTransport(
+        "nats://127.0.0.1:4222",
+        fallback_transport=fallback,
+        request_reply_driver=nats,
+    )
+    client = OpenBrainClient(
+        "https://brain.example",
+        "secret-token",
+        "bilby",
+        agent_id="bilby-agent",
+        role="agent",
+        timeout=12.5,
+        transport=transport,
+    )
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {
+            "name": "agent_context_pack",
+            "arguments": {
+                "agent": "nagatha",
+                "platform": "discord",
+                "server_id": "guild",
+                "channel_id": "chan",
+                "session_key": "guild/chan/nagatha",
+                "query": "",
+            },
+        },
+    }
+    base_envelope = _nats_context_pack_envelope(payload)
+    base_default_size = _nats_envelope_size_bytes(base_envelope)
+    base_compact_size = len(
+        json.dumps(
+            base_envelope,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
+    assert base_default_size > base_compact_size
+    query_length = DEFAULT_NATS_MAX_REQUEST_BYTES - base_default_size + 1
+    assert query_length > 0
+    payload["params"]["arguments"]["query"] = "x" * query_length
+    envelope = _nats_context_pack_envelope(payload)
+    compact_size = len(
+        json.dumps(envelope, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    )
+    assert compact_size <= DEFAULT_NATS_MAX_REQUEST_BYTES
+    assert _nats_envelope_size_bytes(envelope) > DEFAULT_NATS_MAX_REQUEST_BYTES
+
+    client.get_contract()
+    result = client.agent_context_pack(
+        agent="nagatha",
+        platform="discord",
+        server_id="guild",
+        channel_id="chan",
+        session_key="guild/chan/nagatha",
+        query="x" * query_length,
+    )
+
+    assert result == {"source": "http-fallback"}
+    assert nats.requests == []
+    assert [call["json"]["params"]["name"] for call in tool_requests(fallback)] == [
+        "get_contract",
+        "agent_context_pack",
+    ]
+
+
+def test_nats_transport_resets_availability_when_contract_stops_advertising_nats():
+    fallback = FakeTransport()
+    fallback.tool_results["get_contract"] = contract_tool_result("available")
+    nats = FakeNatsRequestReplyDriver()
+    transport = NatsTransport(
+        "nats://127.0.0.1:4222",
+        fallback_transport=fallback,
+        request_reply_driver=nats,
+    )
+    client = OpenBrainClient(
+        "https://brain.example",
+        "secret-token",
+        "bilby",
+        agent_id="bilby-agent",
+        role="agent",
+        timeout=12.5,
+        transport=transport,
+    )
+
+    client.get_contract()
+    assert transport.availability is RealtimeTransportAvailability.AVAILABLE
+    fallback.tool_results["get_contract"] = {
+        "content": [
+            {
+                "type": "text",
+                "text": json.dumps({"realtime_transport": {"nats_jetstream": {}}}),
+            }
+        ]
+    }
+    client.get_contract()
+    client.agent_context_pack(
+        agent="nagatha",
+        platform="discord",
+        server_id="guild",
+        channel_id="chan",
+        session_key="guild/chan/nagatha",
+    )
+
+    assert transport.availability is RealtimeTransportAvailability.NOT_RUNTIME_AVAILABLE
+    assert nats.requests == []
+    assert [call["json"]["params"]["name"] for call in tool_requests(fallback)] == [
+        "get_contract",
+        "get_contract",
+        "agent_context_pack",
+    ]
+
+
+def test_nats_transport_resets_availability_when_contract_check_errors():
+    fallback = FakeTransport()
+    fallback.tool_results["get_contract"] = contract_tool_result("available")
+    fallback.tool_results["agent_context_pack"] = {
+        "content": [
+            {"type": "text", "text": json.dumps({"source": "http-fallback"})}
+        ]
+    }
+    nats = FakeNatsRequestReplyDriver()
+    transport = NatsTransport(
+        "nats://127.0.0.1:4222",
+        fallback_transport=fallback,
+        request_reply_driver=nats,
+    )
+    client = OpenBrainClient(
+        "https://brain.example",
+        "secret-token",
+        "bilby",
+        agent_id="bilby-agent",
+        role="agent",
+        timeout=12.5,
+        transport=transport,
+    )
+
+    client.get_contract()
+    assert transport.availability is RealtimeTransportAvailability.AVAILABLE
+    fallback.next_status = 503
+    fallback.next_text = json.dumps({"error": "contract unavailable"})
+    with pytest.raises(OpenBrainHTTPError):
+        client.get_contract()
+
+    assert transport.availability is RealtimeTransportAvailability.NOT_RUNTIME_AVAILABLE
+    fallback.next_status = 200
+    fallback.next_text = ""
+    result = client.agent_context_pack(
+        agent="nagatha",
+        platform="discord",
+        server_id="guild",
+        channel_id="chan",
+        session_key="guild/chan/nagatha",
+    )
+
+    assert result == {"source": "http-fallback"}
+    assert nats.requests == []
+    assert [call["json"]["params"]["name"] for call in tool_requests(fallback)] == [
+        "get_contract",
+        "get_contract",
+        "agent_context_pack",
+    ]
 
 
 def test_nats_transport_post_guard_raises_value_error_for_missing_body():

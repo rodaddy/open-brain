@@ -371,11 +371,24 @@ should still configure `OPENBRAIN_BASE_URL`, `OPENBRAIN_TOKEN`, and namespace
 identity for direct HTTP access unless their runtime has an approved Python NATS
 transport implementation and fallback plan.
 
-The package exposes an opt-in `NatsTransport` stub behind the same `Transport`
-facade used by `OpenBrainClient`, but it is intentionally
-`not_runtime_available` by default. Without a supplied `fallback_transport`, it
-fails closed with `OpenBrainTransportUnavailableError`. With a fallback
-transport, calls delegate to the fallback so HTTP remains the default behavior.
+The package exposes an opt-in `NatsTransport` behind the same `Transport` facade
+used by `OpenBrainClient`. It starts as `not_runtime_available` and only uses
+NATS after a live `get_contract()` call advertises
+`realtime_transport.nats_jetstream.availability == "available"` and the caller
+has supplied a `NatsRequestReplyDriver`. The current NATS path is intentionally
+narrow: only `agent_context_pack` request/reply is routed over NATS, and all
+other tools continue through direct HTTP `/mcp`.
+
+Without a supplied `fallback_transport`, unavailable NATS fails closed with
+`OpenBrainTransportUnavailableError`. With a fallback transport, calls delegate
+to the fallback until the contract gate opens; NATS request failures fall back to
+HTTP by default. Set `fallback_on_nats_error=False` only for canary/debug paths
+that need to surface sanitized NATS transport failures directly. Oversized NATS
+request envelopes over 64 KiB are not sent to the request/reply driver; they
+fall back to HTTP when fallback is configured. This package does not vendor a
+Python NATS client yet. Runtime adapters that opt in own the concrete driver
+wrapper and must keep HTTP fallback configured until live parity and Hermes
+canary evidence exists.
 
 ## Safety and Spooling
 
