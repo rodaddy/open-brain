@@ -1,6 +1,6 @@
 # Plan 3F: gbrain-Informed Graph Retrieval Sprint
 
-Updated: 2026-07-08T00:12Z.
+Updated: 2026-07-07T23:55Z.
 
 ## Critical Read
 
@@ -26,12 +26,12 @@ Confirmed live state when this plan was created:
   - PR #264 was checked after the sprint was created and is not part of this
     sprint.
 
-Current execution update, 2026-07-08T00:12Z:
+Current execution update, 2026-07-07T23:55Z:
 
 - Planning PR #272 merged as `a838735`.
-- Project #8 has #266 in review/fix loop for the relational retrieval eval gate
-  on PR #273.
-- #267 remains Todo and must not be marked ready until #266 proof exists.
+- #266 merged via PR #273 as `7cb7712` and is closed Done on Project #8.
+- Project #8 has #267 In Progress for the graph-powered `search_brain` retrieval
+  arm, starting from `origin/main` at `7cb7712`.
 - #223 remains open and Blocked.
 
 Critical correction:
