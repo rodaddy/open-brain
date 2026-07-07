@@ -55,6 +55,17 @@ export function createApp(
   deps?: ToolDeps,
 ): express.Express {
   const app = express();
+  const natsRuntimeBoundary =
+    deps?.natsRuntimeBoundary ?? readNatsRuntimeBoundary(process.env);
+  const natsBridgeHealth =
+    deps?.natsBridgeHealth ?? createNatsBridgeHealth("not_runtime_available");
+  const toolDeps: ToolDeps = {
+    pool,
+    embedFn: generateEmbedding,
+    ...deps,
+    natsRuntimeBoundary,
+    natsBridgeHealth,
+  };
 
   app.use(
     cors({
@@ -85,14 +96,29 @@ export function createApp(
     ]);
 
     const ips = serverIps();
+    const natsAvailability =
+      toolDeps.natsBridgeHealth?.availability ??
+      natsRuntimeBoundary.nats.availability;
+    const natsDegraded =
+      natsRuntimeBoundary.requested_transport === "nats" &&
+      natsAvailability !== "available";
     const status: HealthStatus = {
-      status: dbHealth.connected ? "healthy" : "degraded",
+      status: dbHealth.connected && !natsDegraded ? "healthy" : "degraded",
       server_ip: ips[0] ?? "unknown",
       server_ips: ips,
       database: dbHealth,
       embedding: {
         configured: Boolean(EMBEDDING_BASE_URL),
         connected: embeddingConnected,
+      },
+      nats: {
+        requested_transport: natsRuntimeBoundary.requested_transport,
+        availability: natsAvailability,
+        context_pack_subject: natsRuntimeBoundary.nats.context_pack_subject,
+        fallback_http: natsRuntimeBoundary.nats.fallback_http,
+        consecutive_failures:
+          toolDeps.natsBridgeHealth?.consecutiveFailures ?? 0,
+        last_error: toolDeps.natsBridgeHealth?.lastError ?? null,
       },
       timestamp: new Date().toISOString(),
     };
@@ -102,15 +128,6 @@ export function createApp(
 
   // Auth middleware
   const auth = authMiddleware(tokenMap);
-
-  // Shared deps for both MCP tools and REST API
-  const natsRuntimeBoundary = readNatsRuntimeBoundary(process.env);
-  const toolDeps: ToolDeps = deps ?? {
-    pool,
-    embedFn: generateEmbedding,
-    natsRuntimeBoundary,
-    natsBridgeHealth: createNatsBridgeHealth("not_runtime_available"),
-  };
 
   // REST API -- no MCP handshake required
   app.use("/api/v1", auth, createRestRouter(toolDeps));

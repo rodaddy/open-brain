@@ -9,6 +9,8 @@ import {
 } from "bun:test";
 import { createApp } from "./index.ts";
 import { getSessionCount } from "./transport.ts";
+import { createNatsBridgeHealth } from "./nats-bridge.ts";
+import { readNatsRuntimeBoundary } from "./nats-runtime.ts";
 import type { AuthInfo, HealthStatus } from "./types.ts";
 import type { Server } from "node:http";
 
@@ -150,6 +152,7 @@ describe("GET /health", () => {
       expect(body.status).toBe("healthy");
       expect(body.embedding.connected).toBe(false);
       expect(body.database.connected).toBe(true);
+      expect(body.nats.requested_transport).toBe("http");
       expect(typeof body.timestamp).toBe("string");
     } finally {
       if (originalEmbeddingBaseUrl === undefined) {
@@ -174,6 +177,55 @@ describe("GET /health", () => {
     const body = (await res.json()) as HealthStatus;
     expect(body.status).toBe("degraded");
     expect(body.database.connected).toBe(false);
+  });
+
+  it("returns 503 when requested NATS bridge health degrades after startup", async () => {
+    const natsBoundary = readNatsRuntimeBoundary({
+      OPENBRAIN_TRANSPORT: "nats",
+      OPENBRAIN_NATS_ENABLE_BRIDGE: "true",
+      OPENBRAIN_NATS_URL: "nats://127.0.0.1:4222",
+    });
+    const natsBridgeHealth = createNatsBridgeHealth("available");
+    const app = createApp(mockPool, testTokenMap, {
+      pool: mockPool,
+      embedFn: async () => null,
+      natsRuntimeBoundary: natsBoundary,
+      natsBridgeHealth,
+    });
+    let isolatedServer: Server | null = null;
+
+    try {
+      const isolatedBaseUrl = await new Promise<string>((resolve) => {
+        isolatedServer = app.listen(0, () => {
+          const addr = isolatedServer?.address();
+          const port = typeof addr === "object" && addr ? addr.port : 0;
+          resolve(`http://127.0.0.1:${port}`);
+        });
+      });
+
+      natsBridgeHealth.availability = "not_runtime_available";
+      natsBridgeHealth.consecutiveFailures = 2;
+      natsBridgeHealth.lastError = "iterator failed";
+
+      const res = await fetch(`${isolatedBaseUrl}/health`);
+      expect(res.status).toBe(503);
+
+      const body = (await res.json()) as HealthStatus;
+      expect(body.status).toBe("degraded");
+      expect(body.database.connected).toBe(true);
+      expect(body.nats).toMatchObject({
+        requested_transport: "nats",
+        availability: "not_runtime_available",
+        consecutive_failures: 2,
+        last_error: "iterator failed",
+      });
+    } finally {
+      if (isolatedServer) {
+        await new Promise<void>((resolve, reject) => {
+          isolatedServer?.close((err) => (err ? reject(err) : resolve()));
+        });
+      }
+    }
   });
 
   it("is accessible without Authorization header", async () => {
