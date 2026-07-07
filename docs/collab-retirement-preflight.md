@@ -19,6 +19,27 @@ justify live mutation from an unapproved planning lane.
   reconcile remaining live-unique rows into `shared-kb`, then remove the legacy
   fallback only after reconciliation is proven complete.
 
+## Approved Release/Runtime Environment
+
+For this preflight, an approved release/runtime environment means a release
+operator is running the script from the approved live Open Brain runtime checkout
+for the current deployed code, with the live DB environment intentionally loaded,
+after the backup receipt has been recorded and execute approval has been granted
+for this release window.
+
+It does not mean this PR worktree, a local planning checkout, a scratch shell, or
+any shell that merely has production credentials available. Before running any
+live dry-run or execute command, the release operator must set this explicit
+sentinel in the approved shell:
+
+```zsh
+export OPENBRAIN_COLLAB_RETIRE_RELEASE_APPROVED=core01-live-db-after-backup
+```
+
+All live command blocks below include a shell guard for that sentinel. If the
+guard fails, stop; do not delete the guard or rerun from a different shell to get
+past it.
+
 ## Why This Is Still Blocked
 
 Local code and tests already cover the retirement mechanics:
@@ -118,14 +139,20 @@ new fallback behavior first.
 Use the full script first:
 
 ```zsh
-# Approved release/runtime environment only.
+[ "$OPENBRAIN_COLLAB_RETIRE_RELEASE_APPROVED" = "core01-live-db-after-backup" ] || {
+  echo "Blocked: not in the approved collab-retirement release/runtime environment" >&2
+  exit 1
+}
 bun run scripts/retire-collab-migration.ts
 ```
 
 Then capture the per-step view if the full report needs operator review:
 
 ```zsh
-# Approved release/runtime environment only.
+[ "$OPENBRAIN_COLLAB_RETIRE_RELEASE_APPROVED" = "core01-live-db-after-backup" ] || {
+  echo "Blocked: not in the approved collab-retirement release/runtime environment" >&2
+  exit 1
+}
 bun run scripts/retire-collab-migration.ts --thoughts
 bun run scripts/retire-collab-migration.ts --entities
 bun run scripts/retire-collab-migration.ts --lanes
@@ -196,7 +223,10 @@ If any item above is missing, the issue stays blocked.
 Execute command after explicit release approval:
 
 ```zsh
-# Approved release/runtime environment only.
+[ "$OPENBRAIN_COLLAB_RETIRE_RELEASE_APPROVED" = "core01-live-db-after-backup" ] || {
+  echo "Blocked: not in the approved collab-retirement release/runtime environment" >&2
+  exit 1
+}
 bun run scripts/retire-collab-migration.ts --execute
 ```
 
@@ -204,7 +234,10 @@ If the audit still reports intentional out-of-scope rows and the release owner
 explicitly accepts them, the receipt must say why before using:
 
 ```zsh
-# Approved release/runtime environment only.
+[ "$OPENBRAIN_COLLAB_RETIRE_RELEASE_APPROVED" = "core01-live-db-after-backup" ] || {
+  echo "Blocked: not in the approved collab-retirement release/runtime environment" >&2
+  exit 1
+}
 bun run scripts/retire-collab-migration.ts \
   --execute \
   --acknowledge-out-of-scope
