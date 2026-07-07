@@ -363,16 +363,23 @@ class NatsTransport:
         *,
         context_pack_subject: str = DEFAULT_NATS_CONTEXT_PACK_SUBJECT,
         fallback_transport: Transport | None = None,
-        availability: RealtimeTransportAvailability = (
+        availability: RealtimeTransportAvailability | str = (
             RealtimeTransportAvailability.NOT_RUNTIME_AVAILABLE
         ),
     ) -> None:
-        if availability is not RealtimeTransportAvailability.NOT_RUNTIME_AVAILABLE:
+        try:
+            normalized_availability = RealtimeTransportAvailability(availability)
+        except ValueError as exc:
+            raise ValueError("NatsTransport is not runtime available yet") from exc
+        if (
+            normalized_availability
+            is not RealtimeTransportAvailability.NOT_RUNTIME_AVAILABLE
+        ):
             raise ValueError("NatsTransport is not runtime available yet")
         self.url = url
         self.context_pack_subject = context_pack_subject
         self.fallback_transport = fallback_transport
-        self.availability = availability
+        self.availability = normalized_availability
 
     def get(
         self,
@@ -441,7 +448,7 @@ class NatsTransport:
                     timeout=timeout,
                 )
             if json_body is None:
-                raise AssertionError("json_body is required for POST")
+                raise ValueError("json_body is required for POST")
             return self.fallback_transport.post(
                 url,
                 headers=headers,

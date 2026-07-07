@@ -262,8 +262,17 @@ def test_nats_transport_rejects_available_state_until_runtime_exists():
     with pytest.raises(ValueError, match="not runtime available yet"):
         NatsTransport(
             "nats://127.0.0.1:4222",
-            availability="available",  # type: ignore[arg-type]
+            availability="available",
         )
+
+
+def test_nats_transport_accepts_serialized_not_available_state():
+    transport = NatsTransport(
+        "nats://127.0.0.1:4222",
+        availability="not_runtime_available",
+    )
+
+    assert transport.availability is RealtimeTransportAvailability.NOT_RUNTIME_AVAILABLE
 
 
 def test_nats_transport_uses_fallback_transport_for_http_calls():
@@ -320,6 +329,21 @@ def test_nats_transport_uses_fallback_transport_for_http_calls():
         "name": "search_all",
         "arguments": {"query": "nats fallback"},
     }
+
+
+def test_nats_transport_post_guard_raises_value_error_for_missing_body():
+    transport = NatsTransport(
+        "nats://127.0.0.1:4222",
+        fallback_transport=FakeTransport(),
+    )
+
+    with pytest.raises(ValueError, match="json_body is required for POST"):
+        transport._delegate_or_raise(
+            "POST",
+            "https://brain.example/mcp",
+            headers={},
+            timeout=5.0,
+        )
 
 
 def test_http_error_redacts_deep_json_without_recursion_error():
