@@ -33,6 +33,7 @@
     "@modelcontextprotocol/sdk": "^1.27.1",
     "cors": "^2.8.6",
     "express": "^5.2.1",
+    "nats": "^2.29.3",
     "pg": "^8.20.0",
     "pgvector": "^0.2.1",
     "zod": "^4.3.6"

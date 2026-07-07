@@ -4,6 +4,7 @@ import { SECTION_NAMES } from "./tools/agent-context-pack.ts";
 const NATS_CONTEXT_PACK_OPERATION = "agent_context_pack";
 const DEFAULT_NATS_SUBJECT = "ob.memory.context_pack";
 const MAX_CONTEXT_PACK_QUERY_CHARS = 4000;
+const LOCAL_NATS_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 
 const requestedSectionsSchema = z.array(z.enum(SECTION_NAMES));
 
@@ -17,14 +18,14 @@ const identitySchema = z.object({
   session_key: z.string().min(1).max(500),
 });
 
-const requestEnvelopeSchema = z.object({
+export const contextPackEnvelopeSchema = z.object({
   schema: z.literal("openbrain.nats.request.v1"),
   operation: z.literal(NATS_CONTEXT_PACK_OPERATION),
   request_id: z.string().min(1).max(500),
   identity: identitySchema,
   body: z
     .object({
-      query: z.string().min(1).max(MAX_CONTEXT_PACK_QUERY_CHARS),
+      query: z.string().max(MAX_CONTEXT_PACK_QUERY_CHARS).optional(),
       requested_sections: requestedSectionsSchema.optional(),
       include_unreviewed_recovery: z.boolean().optional(),
       budget: z
@@ -44,13 +45,13 @@ const requestEnvelopeSchema = z.object({
   }),
 });
 
-export type NatsContextPackEnvelope = z.infer<typeof requestEnvelopeSchema>;
+export type NatsContextPackEnvelope = z.infer<typeof contextPackEnvelopeSchema>;
 
 export interface NatsRuntimeBoundary {
   requested_transport: "http" | "nats";
   fallback_transport: "http_mcp";
   nats: {
-    availability: "not_runtime_available";
+    availability: "available" | "not_runtime_available";
     url: string | null;
     context_pack_subject: string;
     fallback_http: boolean;
@@ -61,6 +62,7 @@ export interface NatsUrlLogSummary {
   configured: boolean;
   protocol: string | null;
   contains_credentials: boolean;
+  local: boolean | null;
 }
 
 export interface NatsBridgePlanInput {
@@ -84,7 +86,7 @@ export interface NatsBridgePlan {
       channel_id: string;
       thread_id?: string;
       session_key: string;
-      query: string;
+      query?: string;
       requested_sections?: string[];
       include_unreviewed_recovery?: boolean;
       budget?: {
@@ -93,6 +95,38 @@ export interface NatsBridgePlan {
       };
     };
   };
+}
+
+export function mapNatsEnvelopeToToolArgs(
+  envelope: NatsContextPackEnvelope,
+): NatsBridgePlan["mcpToolCall"]["arguments"] {
+  const toolArgs: NatsBridgePlan["mcpToolCall"]["arguments"] = {
+    agent: envelope.identity.agent,
+    platform: envelope.identity.platform,
+    server_id: envelope.identity.server_id,
+    channel_id: envelope.identity.channel_id,
+    session_key: envelope.identity.session_key,
+  };
+
+  if (envelope.body.query !== undefined) {
+    toolArgs.query = envelope.body.query;
+  }
+  if (
+    envelope.identity.thread_id !== null &&
+    envelope.identity.thread_id !== undefined
+  ) {
+    toolArgs.thread_id = envelope.identity.thread_id;
+  }
+  if (envelope.body.requested_sections) {
+    toolArgs.requested_sections = envelope.body.requested_sections;
+  }
+  if (envelope.body.include_unreviewed_recovery !== undefined) {
+    toolArgs.include_unreviewed_recovery =
+      envelope.body.include_unreviewed_recovery;
+  }
+  if (envelope.body.budget) toolArgs.budget = envelope.body.budget;
+
+  return toolArgs;
 }
 
 function trimEnv(value: string | undefined): string | null {
@@ -106,6 +140,7 @@ export function summarizeNatsUrlForLog(url: string | null): NatsUrlLogSummary {
       configured: false,
       protocol: null,
       contains_credentials: false,
+      local: null,
     };
   }
 
@@ -115,14 +150,34 @@ export function summarizeNatsUrlForLog(url: string | null): NatsUrlLogSummary {
       configured: true,
       protocol: parsed.protocol.replace(/:$/, "") || null,
       contains_credentials: Boolean(parsed.username || parsed.password),
+      local: LOCAL_NATS_HOSTS.has(normalizeNatsHostname(parsed.hostname)),
     };
   } catch {
     return {
       configured: true,
       protocol: null,
       contains_credentials: url.includes("@"),
+      local: null,
     };
   }
+}
+
+function isNatsUrlAllowedForRuntime(
+  url: string | null,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  if (!url) return false;
+  try {
+    const parsed = new URL(url);
+    if (LOCAL_NATS_HOSTS.has(normalizeNatsHostname(parsed.hostname))) return true;
+    return env.OPENBRAIN_NATS_ALLOW_INSECURE_REMOTE?.trim().toLowerCase() === "true";
+  } catch {
+    return false;
+  }
+}
+
+function normalizeNatsHostname(hostname: string): string {
+  return hostname.toLowerCase();
 }
 
 export function readNatsRuntimeBoundary(
@@ -132,13 +187,20 @@ export function readNatsRuntimeBoundary(
     env.OPENBRAIN_TRANSPORT?.trim().toLowerCase() === "nats"
       ? "nats"
       : "http";
+  const url = trimEnv(env.OPENBRAIN_NATS_URL);
+  const bridgeEnabled =
+    env.OPENBRAIN_NATS_ENABLE_BRIDGE?.trim().toLowerCase() === "true";
+  const runtimeAvailable =
+    requestedTransport === "nats" &&
+    bridgeEnabled &&
+    isNatsUrlAllowedForRuntime(url, env);
 
   return {
     requested_transport: requestedTransport,
     fallback_transport: "http_mcp",
     nats: {
-      availability: "not_runtime_available",
-      url: trimEnv(env.OPENBRAIN_NATS_URL),
+      availability: runtimeAvailable ? "available" : "not_runtime_available",
+      url,
       context_pack_subject:
         trimEnv(env.OPENBRAIN_NATS_CONTEXT_PACK_SUBJECT) ?? DEFAULT_NATS_SUBJECT,
       fallback_http: env.OPENBRAIN_NATS_FALLBACK_HTTP?.trim().toLowerCase() !== "false",
@@ -151,7 +213,7 @@ export function planNatsContextPackBridge(
   input: NatsBridgePlanInput,
 ): NatsBridgePlan {
   if (boundary.nats.availability !== "not_runtime_available") {
-    throw new Error("Unexpected runtime availability state");
+    throw new Error("NATS runtime is available; HTTP/MCP fallback plan is not used");
   }
 
   if (!boundary.nats.fallback_http) {
@@ -169,30 +231,8 @@ export function planNatsContextPackBridge(
     throw new Error("Bearer token is required for NATS bridge fallback");
   }
 
-  const envelope = requestEnvelopeSchema.parse(input.envelope);
-  const toolArgs: NatsBridgePlan["mcpToolCall"]["arguments"] = {
-    agent: envelope.identity.agent,
-    platform: envelope.identity.platform,
-    server_id: envelope.identity.server_id,
-    channel_id: envelope.identity.channel_id,
-    session_key: envelope.identity.session_key,
-    query: envelope.body.query,
-  };
-
-  if (
-    envelope.identity.thread_id !== null &&
-    envelope.identity.thread_id !== undefined
-  ) {
-    toolArgs.thread_id = envelope.identity.thread_id;
-  }
-  if (envelope.body.requested_sections) {
-    toolArgs.requested_sections = envelope.body.requested_sections;
-  }
-  if (envelope.body.include_unreviewed_recovery !== undefined) {
-    toolArgs.include_unreviewed_recovery =
-      envelope.body.include_unreviewed_recovery;
-  }
-  if (envelope.body.budget) toolArgs.budget = envelope.body.budget;
+  const envelope = contextPackEnvelopeSchema.parse(input.envelope);
+  const toolArgs = mapNatsEnvelopeToToolArgs(envelope);
 
   return {
     status: "http_mcp_fallback",

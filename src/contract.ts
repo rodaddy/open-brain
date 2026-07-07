@@ -28,8 +28,8 @@ export interface OpenBrainContract {
   };
   realtime_transport: {
     nats_jetstream: {
-      status: "planned-transport-foundation";
-      availability: "not_runtime_available";
+      status: "planned-transport-foundation" | "runtime-available";
+      availability: "available" | "not_runtime_available";
       parent_issue: 223;
       contract_doc: "docs/nats-jetstream-foundation.md";
       server: {
@@ -38,14 +38,16 @@ export interface OpenBrainContract {
         monitoring_listen: "127.0.0.1:8222";
         jetstream_store_dir: "/Volumes/ThunderBolt/open-brain/nats/jetstream";
       };
-      request_reply_subjects: readonly [
-        "ob.memory.context_pack",
-        "ob.memory.session_start",
-        "ob.memory.append_event",
-        "ob.memory.wrap",
-        "ob.memory.resolve",
-        "ob.health",
-      ];
+      request_reply_subjects: {
+        available: readonly ["ob.memory.context_pack"] | readonly [];
+        planned: readonly [
+          "ob.memory.session_start",
+          "ob.memory.append_event",
+          "ob.memory.wrap",
+          "ob.memory.resolve",
+          "ob.health",
+        ];
+      };
       jetstream_streams: readonly [
         "OB_AGENT_TRACE",
         "OB_CONTEXT_PACK_REQUESTS",
@@ -491,7 +493,11 @@ export function contractHash(
 
 export function buildContract(
   generatedAt = new Date().toISOString(),
+  options: {
+    natsAvailability?: "available" | "not_runtime_available";
+  } = {},
 ): OpenBrainContract {
+  const natsAvailability = options.natsAvailability ?? "not_runtime_available";
   const payload = {
     service: "open-brain" as const,
     contract_version: CONTRACT_VERSION,
@@ -515,8 +521,10 @@ export function buildContract(
     },
     realtime_transport: {
       nats_jetstream: {
-        status: "planned-transport-foundation" as const,
-        availability: "not_runtime_available" as const,
+        status: natsAvailability === "available"
+          ? "runtime-available" as const
+          : "planned-transport-foundation" as const,
+        availability: natsAvailability,
         parent_issue: 223 as const,
         contract_doc: "docs/nats-jetstream-foundation.md" as const,
         server: {
@@ -526,14 +534,18 @@ export function buildContract(
           jetstream_store_dir:
             "/Volumes/ThunderBolt/open-brain/nats/jetstream" as const,
         },
-        request_reply_subjects: [
-          "ob.memory.context_pack",
-          "ob.memory.session_start",
-          "ob.memory.append_event",
-          "ob.memory.wrap",
-          "ob.memory.resolve",
-          "ob.health",
-        ] as const,
+        request_reply_subjects: {
+          available: natsAvailability === "available"
+            ? ["ob.memory.context_pack"] as const
+            : [] as const,
+          planned: [
+            "ob.memory.session_start",
+            "ob.memory.append_event",
+            "ob.memory.wrap",
+            "ob.memory.resolve",
+            "ob.health",
+          ] as const,
+        },
         jetstream_streams: [
           "OB_AGENT_TRACE",
           "OB_CONTEXT_PACK_REQUESTS",

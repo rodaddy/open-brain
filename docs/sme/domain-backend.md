@@ -257,3 +257,54 @@ unsupported planned fields fail before fallback planning.
   planning instead of being stripped silently?
 - Are query and budget limits no looser than the primary tool schema?
 - Do tests cover drift cases, not only the happy-path envelope?
+
+## [2026-07-07] Runtime availability must distinguish active transport from configured fallback
+
+**Severity:** HIGH
+**Source:** PR #262 initial swarm for Issue #223
+**Scope:** `src/nats-runtime.ts`, `src/contract.ts`, `src/index.ts`, optional second-transport metadata
+**Status:** fixed in PR #262; keep as active checklist
+
+### Pattern
+
+Optional second transports can over-advertise readiness when configuration is
+present but the runtime path is not active. In PR #262, setting NATS bridge env
+and a URL could make `get_contract()` advertise NATS availability while the
+server was still running the default HTTP transport. The contract also listed
+planned request/reply subjects in the same bucket as the one implemented
+subject.
+
+### Review Questions
+
+- Does runtime availability require the transport to be requested and actually
+  started, not merely configured?
+- Are available subjects separated from planned/not-yet-implemented subjects in
+  machine-readable contract metadata?
+- Do fallback/client paths continue to fail closed when the second transport is
+  configured but not active?
+- Do docs and tests cover default HTTP behavior, active second-transport
+  behavior, and configured-but-inactive behavior?
+
+## [2026-07-07] Subscription liveness must not stay green on empty iterator churn
+
+**Severity:** MEDIUM
+**Source:** PR #262 Claude/Opus cross-review for Issue #223
+**Scope:** `src/nats-bridge.ts`, streaming/subscription loops, runtime health
+**Status:** fixed in PR #262; keep as active checklist
+
+### Pattern
+
+A clean iterator completion is not always healthy. If a broker or driver returns
+empty subscriptions repeatedly, the bridge can resubscribe forever without ever
+processing a request while `/health` and `get_contract()` still advertise the
+transport as available. One clean completion can be a normal recycle; repeated
+zero-message completions need a bounded degradation rule.
+
+### Review Questions
+
+- Does the subscription loop distinguish a single clean recycle from repeated
+  empty completions?
+- Is health degraded after a bounded number or duration of no-message
+  completions?
+- Do tests cover both a successful resubscribe after one clean completion and
+  repeated empty completions that must not stay healthy?

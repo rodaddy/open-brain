@@ -4,7 +4,7 @@ import type { AuthInfo } from "../types.ts";
 import { buildContract } from "../contract.ts";
 import type { ToolDeps } from "./index.ts";
 
-export function registerGetContract(server: McpServer, _deps: ToolDeps): void {
+export function registerGetContract(server: McpServer, deps: ToolDeps): void {
   server.registerTool(
     "get_contract",
     {
@@ -36,7 +36,11 @@ export function registerGetContract(server: McpServer, _deps: ToolDeps): void {
         content: [
           {
             type: "text" as const,
-            text: JSON.stringify(buildContract()),
+            text: JSON.stringify(buildContract(undefined, {
+              natsAvailability:
+                deps.natsBridgeHealth?.availability ??
+                deps.natsRuntimeBoundary?.nats.availability,
+            })),
           },
         ],
       };

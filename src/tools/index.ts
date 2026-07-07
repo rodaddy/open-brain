@@ -1,6 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type pg from "pg";
 import type { generateEmbedding } from "../embedding.ts";
+import type { NatsBridgeHealth } from "../nats-bridge.ts";
+import type { NatsRuntimeBoundary } from "../nats-runtime.ts";
 import { registerLogThought } from "./log-thought.ts";
 import { registerLogDecision } from "./log-decision.ts";
 import { registerSearchBrain } from "./search-brain.ts";
@@ -63,6 +65,8 @@ export interface ToolDeps {
   allowNonTransactionalAppendFallback?: boolean;
   workingSetStore?: WorkingSetStore;
   recoveryWalStore?: RecoveryWalStore;
+  natsRuntimeBoundary?: NatsRuntimeBoundary;
+  natsBridgeHealth?: NatsBridgeHealth;
 }
 
 export function registerAllTools(server: McpServer, deps: ToolDeps): void {

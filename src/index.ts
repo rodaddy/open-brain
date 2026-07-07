@@ -17,6 +17,12 @@ import {
   readNatsRuntimeBoundary,
   summarizeNatsUrlForLog,
 } from "./nats-runtime.ts";
+import {
+  createNatsBridgeHealth,
+  startNatsContextPackBridge,
+  type NatsBridgeRuntime,
+} from "./nats-bridge.ts";
+import type { ToolDeps } from "./tools/index.ts";
 import type { AuthInfo, HealthStatus } from "./types.ts";
 
 const EMBEDDING_BASE_URL = process.env.EMBEDDING_BASE_URL;
@@ -46,8 +52,20 @@ async function probeUrl(
 export function createApp(
   pool: pg.Pool,
   tokenMap: Map<string, AuthInfo>,
+  deps?: ToolDeps,
 ): express.Express {
   const app = express();
+  const natsRuntimeBoundary =
+    deps?.natsRuntimeBoundary ?? readNatsRuntimeBoundary(process.env);
+  const natsBridgeHealth =
+    deps?.natsBridgeHealth ?? createNatsBridgeHealth("not_runtime_available");
+  const toolDeps: ToolDeps = {
+    pool,
+    embedFn: generateEmbedding,
+    ...deps,
+    natsRuntimeBoundary,
+    natsBridgeHealth,
+  };
 
   app.use(
     cors({
@@ -78,14 +96,29 @@ export function createApp(
     ]);
 
     const ips = serverIps();
+    const natsAvailability =
+      toolDeps.natsBridgeHealth?.availability ??
+      natsRuntimeBoundary.nats.availability;
+    const natsDegraded =
+      natsRuntimeBoundary.requested_transport === "nats" &&
+      natsAvailability !== "available";
     const status: HealthStatus = {
-      status: dbHealth.connected ? "healthy" : "degraded",
+      status: dbHealth.connected && !natsDegraded ? "healthy" : "degraded",
       server_ip: ips[0] ?? "unknown",
       server_ips: ips,
       database: dbHealth,
       embedding: {
         configured: Boolean(EMBEDDING_BASE_URL),
         connected: embeddingConnected,
+      },
+      nats: {
+        requested_transport: natsRuntimeBoundary.requested_transport,
+        availability: natsAvailability,
+        context_pack_subject: natsRuntimeBoundary.nats.context_pack_subject,
+        fallback_http: natsRuntimeBoundary.nats.fallback_http,
+        consecutive_failures:
+          toolDeps.natsBridgeHealth?.consecutiveFailures ?? 0,
+        last_error: toolDeps.natsBridgeHealth?.lastError ? "redacted" : null,
       },
       timestamp: new Date().toISOString(),
     };
@@ -95,9 +128,6 @@ export function createApp(
 
   // Auth middleware
   const auth = authMiddleware(tokenMap);
-
-  // Shared deps for both MCP tools and REST API
-  const toolDeps = { pool, embedFn: generateEmbedding };
 
   // REST API -- no MCP handshake required
   app.use("/api/v1", auth, createRestRouter(toolDeps));
@@ -199,8 +229,45 @@ if (import.meta.main) {
   );
 
   const natsRuntimeBoundary = readNatsRuntimeBoundary(process.env);
-  if (natsRuntimeBoundary.requested_transport === "nats") {
-    logger.warn("OPENBRAIN_TRANSPORT=nats requested before local bridge exists", {
+  const natsBridgeHealth = createNatsBridgeHealth(
+    natsRuntimeBoundary.nats.availability,
+  );
+  const toolDeps: ToolDeps = {
+    pool,
+    embedFn: generateEmbedding,
+    natsRuntimeBoundary,
+    natsBridgeHealth,
+  };
+  let natsBridge: NatsBridgeRuntime | null = null;
+  if (
+    natsRuntimeBoundary.requested_transport === "nats" &&
+    natsRuntimeBoundary.nats.availability === "available"
+  ) {
+    try {
+      natsBridge = await startNatsContextPackBridge({
+        boundary: natsRuntimeBoundary,
+        tokenMap,
+        deps: toolDeps,
+        health: natsBridgeHealth,
+      });
+      logger.info("NATS context-pack bridge started", {
+        subject: natsBridge?.subject,
+        availability: natsBridge?.availability,
+        nats_url: summarizeNatsUrlForLog(natsRuntimeBoundary.nats.url),
+      });
+    } catch (err) {
+      natsBridgeHealth.availability = "not_runtime_available";
+      natsBridgeHealth.consecutiveFailures += 1;
+      natsBridgeHealth.lastError =
+        err instanceof Error ? err.message : String(err);
+      logger.error("NATS context-pack bridge failed to start", {
+        error: err instanceof Error ? err.message : String(err),
+        nats_url: summarizeNatsUrlForLog(natsRuntimeBoundary.nats.url),
+      });
+      process.exit(1);
+    }
+  } else if (natsRuntimeBoundary.requested_transport === "nats") {
+    logger.warn("OPENBRAIN_TRANSPORT=nats requested but bridge is not available", {
       availability: natsRuntimeBoundary.nats.availability,
       fallback_transport: natsRuntimeBoundary.fallback_transport,
       fallback_http: natsRuntimeBoundary.nats.fallback_http,
@@ -214,7 +281,7 @@ if (import.meta.main) {
     process.exit(1);
   }
 
-  const app = createApp(pool, tokenMap);
+  const app = createApp(pool, tokenMap, toolDeps);
   const port = parseInt(process.env.PORT || "3100", 10);
 
   const server = app.listen(port, () => {
@@ -224,8 +291,29 @@ if (import.meta.main) {
   const shutdown = async () => {
     logger.info("Shutting down...");
     server.close();
-    await pool.end();
-    process.exit(0);
+    if (natsBridge) {
+      try {
+        await Promise.race([
+          natsBridge.close(),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("NATS bridge close timed out")), 5000),
+          ),
+        ]);
+      } catch (err) {
+        logger.error("NATS context-pack bridge failed to close during shutdown", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    try {
+      await pool.end();
+    } catch (err) {
+      logger.error("Database pool failed to close during shutdown", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      process.exit(0);
+    }
   };
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);

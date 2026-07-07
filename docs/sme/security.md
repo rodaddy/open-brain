@@ -238,6 +238,30 @@ can satisfy.
   (`client_id`, `matter_id`, `document_id`, `path`, and `dms_id`)?
 - Are scoped filters parameterized and applied consistently to search,
   answer/citation, compact fetch, and full fetch paths?
+
+## [2026-07-07] Secondary transports must not weaken auth-bearing plaintext or parse-order gates
+
+**Severity:** HIGH
+**Source:** PR #262 initial swarm for Issue #223
+**Scope:** `src/nats-runtime.ts`, `src/nats-bridge.ts`, NATS or other bearer-token transport bridges
+**Status:** fixed in PR #262; keep as active checklist
+
+### Pattern
+
+Auth-bearing secondary transports can accidentally create a weaker side door
+than HTTP/MCP. In PR #262, the first NATS bridge pass accepted any non-empty
+`nats://` URL for runtime availability, including remote plaintext brokers, and
+parsed/schema-validated the request body before bearer-token auth or request
+size checks. Parser/schema details were also returned to callers.
+
+### Review Questions
+
+- Does an auth-bearing plaintext transport allow only local/trusted endpoints by
+  default, with any remote plaintext override explicitly named and documented?
+- Does the bridge authenticate cheap headers before parsing untrusted bodies?
+- Is request size bounded before decode/schema validation?
+- Do bad request responses avoid leaking raw parser or schema diagnostics across
+  the transport boundary?
 - Do unscoped namespace-only reads redact privileged `source_refs` by default?
 - Does any generic shared projection include privileged source metadata without
   a caller-specific redaction or scope gate?
@@ -260,11 +284,10 @@ can satisfy.
 
 ### Pattern
 
-Transport configuration often arrives as a URL. A URL such as
-`nats://user:pass@host:4222` carries credentials in `username/password`, and
-even host/IP fields can be sensitive in durable logs. Startup warnings and
-diagnostics should record only safe facts: configured/not configured, protocol,
-and whether credentials were present.
+Transport configuration often arrives as a URL. A NATS URL with userinfo carries
+credentials in `username/password`, and even host/IP fields can be sensitive in
+durable logs. Startup warnings and diagnostics should record only safe facts:
+configured/not configured, protocol, and whether credentials were present.
 
 ### Review Questions
 
@@ -272,3 +295,27 @@ and whether credentials were present.
 - If a URL may contain userinfo, tokens, hosts, or internal IPs, is the log
   reduced to safe booleans/enums rather than redacted text with residual shape?
 - Do tests prove credential-bearing URLs do not appear in log helper output?
+
+## [2026-07-07] Transport error logs must not copy raw dependency messages
+
+**Severity:** MEDIUM
+**Source:** PR #262 Claude/Opus cross-review for Issue #223
+**Scope:** `src/nats-bridge.ts`, secondary transport request handlers, subscription loops
+**Status:** fixed in PR #262; keep as active checklist
+
+### Pattern
+
+Dependency error messages can embed user content, tokens, broker URLs, internal
+hosts, or headers. Returning generic errors to callers is not enough if
+server-side logs still write `err.message` verbatim. Transport diagnostics
+should log stable classes/codes and safe context such as subject or operation,
+not raw dependency messages.
+
+### Review Questions
+
+- Do request, handler, and subscription error logs avoid raw `err.message`?
+- Are diagnostics limited to safe error type/code plus safe routing metadata?
+- If an error type is logged, is it derived from allowlisted instance checks
+  rather than mutable `Error.name`?
+- Do tests throw sensitive-looking dependency errors and prove logs omit the
+  sensitive fragments?

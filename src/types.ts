@@ -51,5 +51,13 @@ export interface HealthStatus {
   server_ips: string[];
   database: PoolHealth;
   embedding: { configured: boolean; connected: boolean };
+  nats: {
+    requested_transport: "http" | "nats";
+    availability: "available" | "not_runtime_available";
+    context_pack_subject: string;
+    fallback_http: boolean;
+    consecutive_failures: number;
+    last_error: string | null;
+  };
   timestamp: string;
 }

@@ -364,9 +364,12 @@ streamable JSON-RPC/MCP surface, but the host install should be described as
 "direct HTTP to Open Brain `/mcp`" rather than generic "MCP HTTP" so it is not
 confused with mcp2cli daemon routing or other MCP transports.
 
-NATS runtime transport is not available yet. Hermes agents should still configure
-`OPENBRAIN_BASE_URL`, `OPENBRAIN_TOKEN`, and namespace identity for direct HTTP
-access to Open Brain.
+The server can expose an opt-in NATS request/reply bridge for
+`agent_context_pack` when the connected Open Brain endpoint advertises
+`realtime_transport.nats_jetstream.availability == "available"`. Hermes agents
+should still configure `OPENBRAIN_BASE_URL`, `OPENBRAIN_TOKEN`, and namespace
+identity for direct HTTP access unless their runtime has an approved Python NATS
+transport implementation and fallback plan.
 
 The package exposes an opt-in `NatsTransport` stub behind the same `Transport`
 facade used by `OpenBrainClient`, but it is intentionally
