@@ -67,6 +67,20 @@ function data(payload: unknown): Uint8Array {
   return encoder.encode(JSON.stringify(payload));
 }
 
+async function waitFor(
+  condition: () => boolean,
+  description: string,
+  timeoutMs = 500,
+): Promise<void> {
+  const started = Date.now();
+  while (!condition()) {
+    if (Date.now() - started > timeoutMs) {
+      throw new Error(`Timed out waiting for ${description}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
 describe("handleNatsContextPackMessage", () => {
   it("returns the same agent_context_pack payload over an authorized NATS request", () => {
     const tokenMap = new Map<string, AuthInfo>([
@@ -263,8 +277,8 @@ describe("startNatsContextPackBridge", () => {
     await runtime?.close();
   });
 
-  it("continues the real NATS subscription loop after per-message reply failure", async () => {
-    const responses: unknown[] = [];
+  it("resubscribes the real NATS subscription loop after handler and iterator failures", async () => {
+    const responses: Array<{ request_id?: string; status?: string }> = [];
     const loggedErrors: string[] = [];
     const originalError = logger.error;
     logger.error = (message, extra) => {
@@ -276,18 +290,22 @@ describe("startNatsContextPackBridge", () => {
         keys: () => ["authorization"],
         get: () => "Bearer secret-token",
       };
-      const subscription = {
+      const envelope = (requestId: string) => ({
+        ...baseEnvelope,
+        request_id: requestId,
+      });
+      const firstSubscription = {
         unsubscribe: mock(() => {}),
         async *[Symbol.asyncIterator]() {
           yield {
             subject: "ob.memory.context_pack",
-            data: data(baseEnvelope),
+            data: data(envelope("req-no-reply")),
             headers,
             respond: () => false,
           };
           yield {
             subject: "ob.memory.context_pack",
-            data: data(baseEnvelope),
+            data: data(envelope("req-before-resubscribe")),
             headers,
             respond: (payload: Uint8Array) => {
               responses.push(JSON.parse(decoder.decode(payload)));
@@ -297,8 +315,36 @@ describe("startNatsContextPackBridge", () => {
           throw new Error("subscription iterator failed");
         },
       };
+      const secondSubscription = {
+        unsubscribe: mock(() => {}),
+        async *[Symbol.asyncIterator]() {
+          yield {
+            subject: "ob.memory.context_pack",
+            data: data(envelope("req-after-resubscribe")),
+            headers,
+            respond: (payload: Uint8Array) => {
+              responses.push(JSON.parse(decoder.decode(payload)));
+              return true;
+            },
+          };
+        },
+      };
+      const fallbackSubscription = {
+        unsubscribe: mock(() => {}),
+        async *[Symbol.asyncIterator]() {},
+      };
+      let subscribeCalls = 0;
       const connection = {
-        subscribe: mock(() => subscription),
+        subscribe: mock(() => {
+          subscribeCalls += 1;
+          if (subscribeCalls === 1) {
+            return firstSubscription;
+          }
+          if (subscribeCalls === 2) {
+            return secondSubscription;
+          }
+          return fallbackSubscription;
+        }),
         drain: mock(async () => {}),
       };
       mock.module("nats", () => ({
@@ -315,11 +361,28 @@ describe("startNatsContextPackBridge", () => {
         deps: depsWithWorkingSet(),
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await waitFor(
+        () =>
+          responses.some(
+            (response) => response.request_id === "req-after-resubscribe",
+          ),
+        "NATS bridge to process a message after resubscribe",
+      );
 
       expect(connection.subscribe).toHaveBeenCalledWith("ob.memory.context_pack");
-      expect(responses).toHaveLength(1);
-      expect((responses[0] as { status?: string }).status).toBe("ok");
+      expect(connection.subscribe.mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(responses).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            request_id: "req-before-resubscribe",
+            status: "ok",
+          }),
+          expect.objectContaining({
+            request_id: "req-after-resubscribe",
+            status: "ok",
+          }),
+        ]),
+      );
       expect(loggedErrors).toContain(
         "NATS context-pack bridge request failed:NATS request did not include a reply inbox",
       );
@@ -328,10 +391,11 @@ describe("startNatsContextPackBridge", () => {
       );
 
       await runtime?.close();
-      expect(subscription.unsubscribe).toHaveBeenCalled();
+      expect(secondSubscription.unsubscribe).toHaveBeenCalled();
       expect(connection.drain).toHaveBeenCalled();
     } finally {
       logger.error = originalError;
+      mock.restore();
     }
   });
 });

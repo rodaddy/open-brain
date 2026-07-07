@@ -62,6 +62,7 @@ export interface StartNatsContextPackBridgeOptions {
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const MAX_NATS_REQUEST_BYTES = 64 * 1024;
+const NATS_RESUBSCRIBE_DELAY_MS = 25;
 
 export async function startNatsContextPackBridge(
   options: StartNatsContextPackBridgeOptions,
@@ -206,18 +207,33 @@ async function createNatsJsDriver(url: string | null): Promise<NatsBridgeDriver>
 
   return {
     subscribe: async (subject, handler) => {
-      const subscription = connection.subscribe(subject);
+      let subscription = connection.subscribe(subject);
       let closed = false;
 
       void (async () => {
-        try {
-          for await (const message of subscription) {
-            if (closed) break;
-            await processNatsSubscriptionMessage(message, handler);
+        while (!closed) {
+          try {
+            for await (const message of subscription) {
+              if (closed) break;
+              await processNatsSubscriptionMessage(message, handler);
+            }
+          } catch (err) {
+            if (!closed) {
+              logNatsSubscriptionError(err, subject);
+            }
           }
-        } catch (err) {
+
           if (!closed) {
-            logNatsSubscriptionError(err, subject);
+            await delay(NATS_RESUBSCRIBE_DELAY_MS);
+          }
+
+          if (!closed) {
+            try {
+              subscription = connection.subscribe(subject);
+            } catch (err) {
+              logNatsSubscriptionError(err, subject);
+              await delay(NATS_RESUBSCRIBE_DELAY_MS);
+            }
           }
         }
       })();
@@ -233,6 +249,10 @@ async function createNatsJsDriver(url: string | null): Promise<NatsBridgeDriver>
       await connection.drain();
     },
   };
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function processNatsSubscriptionMessage(
