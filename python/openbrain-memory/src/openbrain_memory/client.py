@@ -563,6 +563,10 @@ class NatsTransport:
             and self.fallback_transport is not None
             and self.fallback_on_nats_error
         ):
+            _validate_nats_context_pack_response_envelope(
+                response,
+                expected_request_id=envelope["request_id"],
+            )
             raise OpenBrainTransportUnavailableError(
                 "Open Brain realtime transport returned an error",
                 transport="nats_jetstream",
@@ -670,9 +674,7 @@ def _nats_headers(headers: Mapping[str, str]) -> dict[str, str]:
 
 
 def _nats_envelope_size_bytes(envelope: Mapping[str, Any]) -> int:
-    return len(
-        json.dumps(envelope, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    )
+    return len(json.dumps(envelope, sort_keys=True).encode("utf-8"))
 
 
 def _nats_response_status(response: object) -> str | None:
@@ -693,22 +695,10 @@ def _nats_context_pack_response_to_transport_response(
             "NATS context pack response was not a JSON object",
             context="transport:nats_jetstream",
         )
-    if response.get("schema") != "openbrain.nats.response.v1":
-        raise OpenBrainProtocolError(
-            "NATS context pack response had an unexpected schema",
-            context="transport:nats_jetstream",
-        )
-    if response.get("request_id") != expected_request_id:
-        raise OpenBrainProtocolError(
-            "NATS context pack response id did not match request",
-            context="transport:nats_jetstream",
-        )
-    if response.get("operation") != "agent_context_pack":
-        raise OpenBrainProtocolError(
-            "NATS context pack response had an unexpected operation",
-            context="transport:nats_jetstream",
-        )
-
+    _validate_nats_context_pack_response_envelope(
+        response,
+        expected_request_id=expected_request_id,
+    )
     status = response.get("status")
     if status == "ok":
         result = {
@@ -742,6 +732,28 @@ def _nats_context_pack_response_to_transport_response(
         "NATS context pack response had an unexpected status",
         context="transport:nats_jetstream",
     )
+
+
+def _validate_nats_context_pack_response_envelope(
+    response: Mapping[str, Any],
+    *,
+    expected_request_id: str,
+) -> None:
+    if response.get("schema") != "openbrain.nats.response.v1":
+        raise OpenBrainProtocolError(
+            "NATS context pack response had an unexpected schema",
+            context="transport:nats_jetstream",
+        )
+    if response.get("request_id") != expected_request_id:
+        raise OpenBrainProtocolError(
+            "NATS context pack response id did not match request",
+            context="transport:nats_jetstream",
+        )
+    if response.get("operation") != "agent_context_pack":
+        raise OpenBrainProtocolError(
+            "NATS context pack response had an unexpected operation",
+            context="transport:nats_jetstream",
+        )
 
 
 def _nats_availability_from_contract_response(

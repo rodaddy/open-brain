@@ -30,6 +30,8 @@ from openbrain_memory.client import (
     DEFAULT_NATS_MAX_REQUEST_BYTES,
     TransportResponse,
     UrllibTransport,
+    _nats_context_pack_envelope,
+    _nats_envelope_size_bytes,
     _resolve_package_version,
 )
 
@@ -656,6 +658,58 @@ def test_nats_transport_protocol_errors_do_not_fallback(
     ]
 
 
+@pytest.mark.parametrize(
+    ("response_update", "match"),
+    [
+        ({"status": "error", "schema": "unexpected"}, "unexpected schema"),
+        ({"status": "error", "request_id": "other"}, "response id did not match"),
+        ({"status": "error", "operation": "search_all"}, "unexpected operation"),
+    ],
+)
+def test_nats_transport_error_envelope_protocol_errors_do_not_fallback(
+    response_update,
+    match,
+):
+    fallback = FakeTransport()
+    fallback.tool_results["get_contract"] = contract_tool_result("available")
+    fallback.tool_results["agent_context_pack"] = {
+        "content": [
+            {"type": "text", "text": json.dumps({"source": "http-fallback"})}
+        ]
+    }
+    nats = FakeNatsRequestReplyDriver()
+    nats.next_response.update(response_update)
+    transport = NatsTransport(
+        "nats://127.0.0.1:4222",
+        fallback_transport=fallback,
+        request_reply_driver=nats,
+    )
+    client = OpenBrainClient(
+        "https://brain.example",
+        "secret-token",
+        "bilby",
+        agent_id="bilby-agent",
+        role="agent",
+        timeout=12.5,
+        transport=transport,
+    )
+
+    client.get_contract()
+    with pytest.raises(OpenBrainProtocolError, match=match):
+        client.agent_context_pack(
+            agent="nagatha",
+            platform="discord",
+            server_id="guild",
+            channel_id="chan",
+            session_key="guild/chan/nagatha",
+        )
+
+    assert len(nats.requests) == 1
+    assert [call["json"]["params"]["name"] for call in tool_requests(fallback)] == [
+        "get_contract",
+    ]
+
+
 def test_nats_transport_envelope_validation_does_not_fallback():
     fallback = FakeTransport()
     fallback.tool_results["get_contract"] = contract_tool_result("available")
@@ -759,6 +813,83 @@ def test_nats_transport_falls_back_without_sending_oversized_request():
         channel_id="chan",
         session_key="guild/chan/nagatha",
         query="x" * DEFAULT_NATS_MAX_REQUEST_BYTES,
+    )
+
+    assert result == {"source": "http-fallback"}
+    assert nats.requests == []
+    assert [call["json"]["params"]["name"] for call in tool_requests(fallback)] == [
+        "get_contract",
+        "agent_context_pack",
+    ]
+
+
+def test_nats_transport_size_guard_uses_default_json_boundary():
+    fallback = FakeTransport()
+    fallback.tool_results["get_contract"] = contract_tool_result("available")
+    fallback.tool_results["agent_context_pack"] = {
+        "content": [
+            {"type": "text", "text": json.dumps({"source": "http-fallback"})}
+        ]
+    }
+    nats = FakeNatsRequestReplyDriver()
+    transport = NatsTransport(
+        "nats://127.0.0.1:4222",
+        fallback_transport=fallback,
+        request_reply_driver=nats,
+    )
+    client = OpenBrainClient(
+        "https://brain.example",
+        "secret-token",
+        "bilby",
+        agent_id="bilby-agent",
+        role="agent",
+        timeout=12.5,
+        transport=transport,
+    )
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {
+            "name": "agent_context_pack",
+            "arguments": {
+                "agent": "nagatha",
+                "platform": "discord",
+                "server_id": "guild",
+                "channel_id": "chan",
+                "session_key": "guild/chan/nagatha",
+                "query": "",
+            },
+        },
+    }
+    base_envelope = _nats_context_pack_envelope(payload)
+    base_default_size = _nats_envelope_size_bytes(base_envelope)
+    base_compact_size = len(
+        json.dumps(
+            base_envelope,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
+    assert base_default_size > base_compact_size
+    query_length = DEFAULT_NATS_MAX_REQUEST_BYTES - base_default_size + 1
+    assert query_length > 0
+    payload["params"]["arguments"]["query"] = "x" * query_length
+    envelope = _nats_context_pack_envelope(payload)
+    compact_size = len(
+        json.dumps(envelope, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    )
+    assert compact_size <= DEFAULT_NATS_MAX_REQUEST_BYTES
+    assert _nats_envelope_size_bytes(envelope) > DEFAULT_NATS_MAX_REQUEST_BYTES
+
+    client.get_contract()
+    result = client.agent_context_pack(
+        agent="nagatha",
+        platform="discord",
+        server_id="guild",
+        channel_id="chan",
+        session_key="guild/chan/nagatha",
+        query="x" * query_length,
     )
 
     assert result == {"source": "http-fallback"}
