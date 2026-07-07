@@ -110,18 +110,22 @@ No backup receipt means no execute approval.
 
 ## Step 2: Approved Live Dry-Run Inventory
 
-Run the script in dry-run mode against the current deployed code and live DB.
-Do not deploy new fallback behavior first.
+Run the script in dry-run mode against the current deployed code and live DB
+from the approved release/runtime environment only. Do not run this local PR
+checkout or a scratch shell against production credentials, and do not deploy
+new fallback behavior first.
 
 Use the full script first:
 
 ```zsh
+# Approved release/runtime environment only.
 bun run scripts/retire-collab-migration.ts
 ```
 
 Then capture the per-step view if the full report needs operator review:
 
 ```zsh
+# Approved release/runtime environment only.
 bun run scripts/retire-collab-migration.ts --thoughts
 bun run scripts/retire-collab-migration.ts --entities
 bun run scripts/retire-collab-migration.ts --lanes
@@ -183,12 +187,16 @@ If the live lane count is not `4`, stop and explain why before execute.
   release owner
 - operator confirms the execute run will target the current deployed code, not
   the post-fallback-removal deploy
+- operator confirms the execute run is being launched from the approved
+  release/runtime environment, not from this local PR checkout or a scratch shell
+  with production credentials
 
 If any item above is missing, the issue stays blocked.
 
-Approved execute command:
+Execute command after explicit release approval:
 
 ```zsh
+# Approved release/runtime environment only.
 bun run scripts/retire-collab-migration.ts --execute
 ```
 
@@ -196,6 +204,7 @@ If the audit still reports intentional out-of-scope rows and the release owner
 explicitly accepts them, the receipt must say why before using:
 
 ```zsh
+# Approved release/runtime environment only.
 bun run scripts/retire-collab-migration.ts \
   --execute \
   --acknowledge-out-of-scope

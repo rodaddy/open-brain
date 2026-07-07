@@ -215,3 +215,26 @@ send a payload the server rejects.
   making a client call?
 - Does contract/help text name the cross-field invariant so generated clients
   can mirror it?
+
+## [2026-07-07] Release docs must not read as local live-execute approval
+
+**Severity:** MEDIUM
+**Source:** PR #259 initial swarm for Issue #167
+**Scope:** release preflight docs, migration runbooks, any live DB command block
+**Status:** fixed in PR #259; keep as active checklist
+
+### Pattern
+
+A runbook can correctly say "dry-run first" but still create operational risk if
+it labels a destructive command as approved before the release gate is complete.
+For live DB migrations, command blocks must say the approved release/runtime
+environment is required and that local PR checkouts or scratch shells must not
+be pointed at production credentials.
+
+### Review Questions
+
+- Does any command block with `--execute` look pre-approved rather than
+  approval-gated?
+- Does the doc name where the command is allowed to run?
+- Does it explicitly forbid local PR checkouts or scratch shells with
+  production credentials when that boundary matters?
