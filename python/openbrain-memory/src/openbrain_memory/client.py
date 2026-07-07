@@ -20,6 +20,7 @@ JSON = dict[str, Any]
 MCP_PROTOCOL_VERSION = "2025-03-26"
 DEFAULT_MAX_RESPONSE_BYTES = 1_000_000
 DEFAULT_NATS_CONTEXT_PACK_SUBJECT = "ob.memory.context_pack"
+DEFAULT_NATS_MAX_REQUEST_BYTES = 64 * 1024
 
 
 def _resolve_package_version(pyproject: Path | None = None) -> str:
@@ -439,7 +440,7 @@ class NatsTransport:
                     json_body=json_body,
                     timeout=timeout,
                 )
-            except Exception:
+            except OpenBrainTransportUnavailableError:
                 if self.fallback_transport is not None and self.fallback_on_nats_error:
                     return self.fallback_transport.post(
                         url,
@@ -530,16 +531,35 @@ class NatsTransport:
                 fallback_transport=(
                     "http_mcp" if self.fallback_transport is not None else None
                 ),
-            )
+                )
         envelope = _nats_context_pack_envelope(json_body)
-        response = self.request_reply_driver.request(
-            self.context_pack_subject,
-            envelope,
-            headers=_nats_headers(headers),
-            timeout=timeout,
-        )
+        if _nats_envelope_size_bytes(envelope) > DEFAULT_NATS_MAX_REQUEST_BYTES:
+            raise OpenBrainTransportUnavailableError(
+                "Open Brain realtime transport request exceeded max_request_bytes",
+                transport="nats_jetstream",
+                availability=self.availability,
+                fallback_transport=(
+                    "http_mcp" if self.fallback_transport is not None else None
+                ),
+            )
+        try:
+            response = self.request_reply_driver.request(
+                self.context_pack_subject,
+                envelope,
+                headers=_nats_headers(headers),
+                timeout=timeout,
+            )
+        except Exception:
+            raise OpenBrainTransportUnavailableError(
+                "Open Brain realtime transport request failed",
+                transport="nats_jetstream",
+                availability=self.availability,
+                fallback_transport=(
+                    "http_mcp" if self.fallback_transport is not None else None
+                ),
+            ) from None
         if (
-            response.get("status") == "error"
+            _nats_response_status(response) == "error"
             and self.fallback_transport is not None
             and self.fallback_on_nats_error
         ):
@@ -561,6 +581,10 @@ class NatsTransport:
     ) -> None:
         availability = _nats_availability_from_contract_response(response)
         if availability is None:
+            if 200 <= response.status_code < 300:
+                self.availability = (
+                    RealtimeTransportAvailability.NOT_RUNTIME_AVAILABLE
+                )
             return
         if (
             availability is RealtimeTransportAvailability.AVAILABLE
@@ -645,12 +669,30 @@ def _nats_headers(headers: Mapping[str, str]) -> dict[str, str]:
     return {"Authorization": authorization} if authorization else {}
 
 
+def _nats_envelope_size_bytes(envelope: Mapping[str, Any]) -> int:
+    return len(
+        json.dumps(envelope, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    )
+
+
+def _nats_response_status(response: object) -> str | None:
+    if not isinstance(response, Mapping):
+        return None
+    status = response.get("status")
+    return status if isinstance(status, str) else None
+
+
 def _nats_context_pack_response_to_transport_response(
     response: Mapping[str, Any],
     *,
     expected_request_id: str,
     json_rpc_id: Any,
 ) -> TransportResponse:
+    if not isinstance(response, Mapping):
+        raise OpenBrainProtocolError(
+            "NATS context pack response was not a JSON object",
+            context="transport:nats_jetstream",
+        )
     if response.get("schema") != "openbrain.nats.response.v1":
         raise OpenBrainProtocolError(
             "NATS context pack response had an unexpected schema",

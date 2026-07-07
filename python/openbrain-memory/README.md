@@ -382,9 +382,13 @@ other tools continue through direct HTTP `/mcp`.
 Without a supplied `fallback_transport`, unavailable NATS fails closed with
 `OpenBrainTransportUnavailableError`. With a fallback transport, calls delegate
 to the fallback until the contract gate opens; NATS request failures fall back to
-HTTP by default. This package does not vendor a Python NATS client yet. Runtime
-adapters that opt in own the concrete driver wrapper and must keep HTTP fallback
-configured until live parity and Hermes canary evidence exists.
+HTTP by default. Set `fallback_on_nats_error=False` only for canary/debug paths
+that need to surface sanitized NATS transport failures directly. Oversized NATS
+request envelopes over 64 KiB are not sent to the request/reply driver; they
+fall back to HTTP when fallback is configured. This package does not vendor a
+Python NATS client yet. Runtime adapters that opt in own the concrete driver
+wrapper and must keep HTTP fallback configured until live parity and Hermes
+canary evidence exists.
 
 ## Safety and Spooling
 
