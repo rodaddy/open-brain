@@ -209,8 +209,8 @@
       <summary>Metadata</summary>
       <dl>
         <dt>created</dt><dd>2026-07-07T22:19:50Z</dd>
-        <dt>modified</dt><dd>2026-07-07T22:19:50Z, 2026-07-07T22:45:00Z</dd>
-        <dt>commits</dt><dd>base 80450e3, branch docs/plan3f-gbrain-sprint pending</dd>
+        <dt>modified</dt><dd>2026-07-07T22:19:50Z, 2026-07-07T22:45:00Z, 2026-07-07T23:20:00Z, 2026-07-08T00:12:00Z</dd>
+        <dt>commits</dt><dd>base a838735, branch feat/266-relational-retrieval-eval active</dd>
         <dt>agent name</dt><dd>codex</dd>
         <dt>session id</dt><dd>019f30e7-61d0-7d52-a491-1699760f2cea</dd>
         <dt>back refs</dt><dd>GitHub issue #265, child issues #266 #267 #268 #269 #270 #271, issue #223 non-closure gate, gbrain audit thread</dd>
@@ -229,6 +229,9 @@
     <p>This plan turns the gbrain audit into a sprint that Open Brain can actually land. The useful idea is not a new graph database or a visual graph UI. It is retrieval-time typed-edge recall: parse relational questions, resolve seed entities, traverse existing Open Brain links, hydrate graph evidence into normal search rows, and prove the change with no-regression tests.</p>
     <div class="callout">
       <strong>Board snapshot at plan creation:</strong> #265 is In Progress; #266, #267, #269, and #270 are Todo; #268 and #271 are Backlog; #223 is Blocked and must stay open until the separate fleet-bus/NATS rollout has parity and canary proof. Verify Project #8 live before acting; the board is the current source of truth.
+    </div>
+    <div class="callout">
+      <strong>Current execution update, 2026-07-08T00:12Z:</strong> planning PR #272 merged as a838735. Project #8 now has #266 in review/fix loop for PR #273, the relational retrieval eval gate; #267 remains Todo and is not ready until #266 proof exists. #223 is still open and Blocked.
     </div>
   </section>
 
@@ -259,7 +262,7 @@
         </tr>
         <tr>
           <td><a href="https://github.com/rodaddy/open-brain/issues/266">#266</a></td>
-          <td>Todo</td>
+          <td>In Review / Fixes In Progress</td>
           <td>Relational retrieval eval and no-regression fixtures</td>
           <td>Must pass before #267 readiness</td>
         </tr>
@@ -356,7 +359,7 @@
       </ul>
       <h4>2.2 Testing Strategy</h4>
       <ul class="checklist">
-        <li><code class="status">[]</code><code>bun test tests/search-brain-relational-retrieval.test.ts</code> - proves relational lift and normal-query no-regression via the #266 fixture file.</li>
+        <li><code class="status">[]</code><code>bun test src/tools/__tests__/search-brain-relational-retrieval.test.ts</code> - proves relational lift and normal-query no-regression via the #266 fixture file.</li>
         <li><code class="status">[]</code><code>bun test tests/search-brain-namespace.test.ts</code> - proves namespace/read-policy denial via search namespace regression tests.</li>
         <li><code class="status">[]</code><code>bunx tsc --noEmit</code> - proves TypeScript contracts still compile via the repo compiler.</li>
       </ul>
@@ -377,7 +380,7 @@
       <h4>3.2 Testing Strategy</h4>
       <ul class="checklist">
         <li><code class="status">[]</code><code>bun test tests/search-brain-graph-arm.test.ts</code> - proves parser, seed resolution, traversal, hydration, fusion, and fail-open behavior via focused graph-arm tests.</li>
-        <li><code class="status">[]</code><code>bun test tests/search-brain-relational-retrieval.test.ts</code> - proves #267 passes the #266 eval gate via graph-on fixture results.</li>
+        <li><code class="status">[]</code><code>bun test src/tools/__tests__/search-brain-relational-retrieval.test.ts</code> - proves #267 passes the #266 eval gate via graph-on fixture results.</li>
         <li><code class="status">[]</code><code>bun test</code> - proves no shared retrieval regression via the full Bun suite.</li>
       </ul>
       <div class="loop">If #267 is split from #266, #267 stays blocked until #266 is merged and passing.</div>

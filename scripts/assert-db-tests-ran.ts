@@ -35,11 +35,15 @@ export const REQUIRED_SUITES: ReadonlyArray<{ name: string; minTests: number }> 
       minTests: 4,
     },
     { name: "runSharedPromoter cursor-stall fix (live Postgres)", minTests: 8 },
+    {
+      name: "search_brain relational retrieval eval fixture (live Postgres)",
+      minTests: 1,
+    },
   ];
 
 // Absolute floor on total executed (non-skipped) live-Postgres testcases,
 // independent of the per-suite breakdown above.
-export const MIN_TOTAL_LIVE_TESTCASES = 17;
+export const MIN_TOTAL_LIVE_TESTCASES = 18;
 
 export interface SuiteStats {
   tests: number;

@@ -75,7 +75,7 @@ fi
 
 check "#223 remains open" zsh -c 'test "$(gh issue view 223 --repo rodaddy/open-brain --json state --jq .state)" = "OPEN"'
 check "#265 remains open while sprint runs" zsh -c 'test "$(gh issue view 265 --repo rodaddy/open-brain --json state --jq .state)" = "OPEN"'
-check "#266 relational retrieval eval tests pass" bun test tests/search-brain-relational-retrieval.test.ts
+check "#266 relational retrieval eval tests pass" bun test src/tools/__tests__/search-brain-relational-retrieval.test.ts
 check "#267 graph arm tests pass" bun test tests/search-brain-graph-arm.test.ts
 check "#269 audit log tests pass" bun test tests/tool-audit-log.test.ts
 check "#270 doctor status tests pass" bun test tests/doctor-status.test.ts
