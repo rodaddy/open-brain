@@ -29,7 +29,8 @@ Dependency direction is one-way:
 ## Install
 
 Install this package into the host Python environment that runs the agent
-runtime or adapter. The Open Brain service stays remote.
+runtime or adapter. The Open Brain service stays remote. Requires Python 3.13
+or newer.
 
 Preferred options, in order:
 
