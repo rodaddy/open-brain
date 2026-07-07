@@ -6,6 +6,7 @@ import {
   COLLAB_RETIRE_APPROVAL_VALUE,
   assertExecuteApproval,
   auditOutOfScope,
+  dbHostRequiresReleaseApproval,
   migrateEntities,
   migrateLanes,
   migrateThoughts,
@@ -83,6 +84,33 @@ describe("retire-collab-migration transaction", () => {
           steps: new Set(["lanes"]),
         } as any,
         {},
+      ),
+    ).rejects.toThrow(COLLAB_RETIRE_APPROVAL_ENV);
+  });
+
+  it("refuses live dry-runs without explicit release approval before DB access", async () => {
+    expect(
+      dbHostRequiresReleaseApproval({ DB_HOST: "10.71.1.21" }),
+    ).toBe(true);
+    expect(dbHostRequiresReleaseApproval({ DB_HOST: "127.0.0.1" })).toBe(
+      false,
+    );
+
+    const pool = {
+      query: async () => {
+        throw new Error("db should not be touched without release approval");
+      },
+    };
+
+    await expect(
+      runMigration(
+        pool as any,
+        {
+          execute: false,
+          acknowledgeOutOfScope: false,
+          steps: new Set(["lanes"]),
+        } as any,
+        { DB_HOST: "core01" },
       ),
     ).rejects.toThrow(COLLAB_RETIRE_APPROVAL_ENV);
   });

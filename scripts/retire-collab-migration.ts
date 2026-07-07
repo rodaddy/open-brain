@@ -53,6 +53,7 @@ const REPO_FACT_ENTITY_TYPE = "repo_fact";
 export const COLLAB_RETIRE_APPROVAL_ENV =
   "OPENBRAIN_COLLAB_RETIRE_RELEASE_APPROVED";
 export const COLLAB_RETIRE_APPROVAL_VALUE = "core01-live-db-after-backup";
+const LOCAL_DB_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 
 /** Content tables affected by the legacy fallback removal (allowlist). */
 const CONTENT_TABLES = [
@@ -519,6 +520,14 @@ async function runSteps(
   }
 }
 
+export function dbHostRequiresReleaseApproval(
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  const host = env.DB_HOST?.trim().toLowerCase();
+  if (!host) return false;
+  return !LOCAL_DB_HOSTS.has(host);
+}
+
 /**
  * Runs the pre-flight audit and the requested steps. In execute mode the audit
  * gate is enforced first, then every step runs inside ONE transaction so a
@@ -534,7 +543,7 @@ export async function runMigration(
   args: Args,
   env: Record<string, string | undefined> = process.env,
 ): Promise<Report> {
-  if (args.execute) {
+  if (args.execute || dbHostRequiresReleaseApproval(env)) {
     assertExecuteApproval(env);
   }
 

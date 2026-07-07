@@ -216,7 +216,7 @@ send a payload the server rejects.
 - Does contract/help text name the cross-field invariant so generated clients
   can mirror it?
 
-## [2026-07-07] Release docs must not read as local live-execute approval
+## [2026-07-06] Release docs must not read as local live-execute approval
 
 **Severity:** MEDIUM
 **Source:** PR #259 initial and fix-verification swarms for Issue #167

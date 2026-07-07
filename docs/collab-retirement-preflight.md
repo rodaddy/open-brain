@@ -135,7 +135,9 @@ No backup receipt means no execute approval.
 Run the script in dry-run mode against the current deployed code and live DB
 from the approved release/runtime environment only. Do not run this local PR
 checkout or a scratch shell against production credentials, and do not deploy
-new fallback behavior first.
+new fallback behavior first. The script also fails closed before any DB query
+when `DB_HOST` is non-local unless the release approval sentinel is present; the
+shell guard below is operator feedback, not the only enforcement layer.
 
 Use the full script first:
 
@@ -250,7 +252,16 @@ Do not use `--acknowledge-out-of-scope` as a convenience flag.
 
 After execute and before deploy:
 
-- rerun the dry-run report
+- rerun the dry-run report from the approved release/runtime environment:
+
+```zsh
+[ "$OPENBRAIN_COLLAB_RETIRE_RELEASE_APPROVED" = "core01-live-db-after-backup" ] || {
+  echo "Blocked: not in the approved collab-retirement release/runtime environment" >&2
+  exit 1
+}
+bun run scripts/retire-collab-migration.ts
+```
+
 - prove the migrated scope is now reconciled
 - prove the audit state matches the approved classification
 
@@ -259,7 +270,10 @@ Minimum success conditions:
 - `thoughts.unmirrored_after = 0` for scripted thought scope
 - `entities.would_retag = 0`
 - `lanes.would_archive = 0`
-- no newly introduced out-of-scope rows
+- `audit.total_out_of_scope` is `0` or exactly matches the release-owner-approved
+  acknowledged classification, with each surviving row enumerated in the release
+  record before fallback removal
+- no newly introduced out-of-scope rows beyond that approved classification
 
 If any success condition fails, stop and rollback using the backup/snapshot
 plan before any fallback-removal deploy proceeds.
