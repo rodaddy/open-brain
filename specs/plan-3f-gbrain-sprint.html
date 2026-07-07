@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Plan: Open Brain gbrain-Informed Graph Retrieval Sprint</title>
+<meta name="description" content="Plan 3F controller for the Open Brain gbrain-informed graph retrieval and operator hardening sprint.">
+<link rel="icon" href="data:image/png;base64,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">
+<link rel="apple-touch-icon" href="plan-3f-gbrain-sprint/apple-touch-icon.png">
+<style>
+  :root {
+    --bg: #0E1116;
+    --surface: #161B22;
+    --surface-2: #1C2230;
+    --border: #2A3344;
+    --text: #E6EAF2;
+    --muted: #9AA7BD;
+    --dim: #5C6B85;
+    --violet: #8B7FF7;
+    --cyan: #2DD4BF;
+    --amber: #F5B547;
+    --green: #4ADE80;
+    --red: #F87171;
+    --radius: 8px;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background:
+      radial-gradient(900px 360px at 80% -10%, rgba(139,127,247,0.10), transparent 60%),
+      radial-gradient(760px 320px at -10% 8%, rgba(45,212,191,0.08), transparent 55%),
+      var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    line-height: 1.6;
+    font-size: 16px;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  main { max-width: 980px; margin: 0 auto; padding: 48px 24px 96px; }
+  header { margin-bottom: 28px; }
+  h1 {
+    color: var(--text);
+    font-size: 42px;
+    line-height: 1.12;
+    margin: 0 0 10px;
+    letter-spacing: 0;
+  }
+  .tagline { color: var(--muted); font-size: 18px; margin: 0 0 18px; }
+  .metadata {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px 16px;
+  }
+  .metadata summary {
+    cursor: pointer;
+    color: var(--cyan);
+    font-family: var(--mono);
+    font-weight: 700;
+  }
+  .metadata dl {
+    display: grid;
+    grid-template-columns: 140px 1fr;
+    gap: 5px 14px;
+    margin: 12px 0 0;
+  }
+  .metadata dt { color: var(--dim); font-family: var(--mono); font-size: 13px; }
+  .metadata dd { color: var(--muted); font-family: var(--mono); font-size: 13px; margin: 0; word-break: break-word; }
+
+  section { margin-top: 44px; scroll-margin-top: 24px; }
+  h2 {
+    color: var(--text);
+    font-size: 27px;
+    line-height: 1.18;
+    letter-spacing: 0;
+    margin: 0 0 14px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  h2::before { content: "# "; color: var(--violet); }
+  h3 { color: var(--text); font-size: 21px; margin: 24px 0 10px; }
+  h4 { color: var(--cyan); font-family: var(--mono); font-size: 15px; margin: 18px 0 8px; }
+  p { color: var(--text); margin: 10px 0; }
+  a { color: var(--cyan); text-decoration-thickness: 1px; }
+
+  figure { margin: 22px 0; text-align: center; }
+  figure img {
+    width: 100%;
+    max-width: 100%;
+    height: auto;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    box-shadow: 0 10px 36px rgba(0,0,0,0.42);
+  }
+  figcaption { color: var(--dim); font-size: 13px; margin-top: 8px; }
+
+  code {
+    font-family: var(--mono);
+    font-size: 0.88em;
+    color: var(--cyan);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1px 6px;
+  }
+  pre {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    overflow-x: auto;
+    line-height: 1.5;
+  }
+  pre code { background: transparent; border: 0; padding: 0; color: var(--text); }
+
+  ul, ol { padding-left: 22px; }
+  li { margin: 6px 0; }
+  .checklist { list-style: none; padding-left: 0; }
+  .checklist li { padding-left: 0; }
+
+  .callout {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface-2);
+    padding: 14px 16px;
+    margin: 18px 0;
+  }
+  .callout strong { color: var(--cyan); }
+  .callout.warn { border-color: rgba(245,181,71,0.45); background: rgba(245,181,71,0.07); }
+  .callout.warn strong { color: var(--amber); }
+  .callout.danger { border-color: rgba(248,113,113,0.45); background: rgba(248,113,113,0.07); }
+  .callout.danger strong { color: var(--red); }
+
+  .phase {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--violet);
+    border-radius: var(--radius);
+    padding: 16px 18px 18px;
+    margin: 20px 0;
+  }
+  .phase h3 { margin-top: 0; }
+  .status { color: var(--dim); font-weight: 700; margin-right: 6px; }
+  .loop {
+    margin-top: 14px;
+    padding: 12px 14px;
+    background: rgba(45,212,191,0.06);
+    border: 1px solid rgba(45,212,191,0.28);
+    border-radius: var(--radius);
+  }
+
+  table { width: 100%; border-collapse: collapse; margin: 18px 0; font-size: 14px; }
+  th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th {
+    color: var(--violet);
+    font-family: var(--mono);
+    font-size: 12px;
+    text-transform: uppercase;
+  }
+  .pill {
+    display: inline-block;
+    color: var(--cyan);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 2px 8px;
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+  .tag {
+    font-family: var(--mono);
+    font-size: 11px;
+    text-transform: uppercase;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 2px 7px;
+    margin-right: 6px;
+  }
+  .existing { color: var(--amber); border-color: rgba(245,181,71,0.45); }
+  .new { color: var(--green); border-color: rgba(74,222,128,0.45); }
+  details.qa, details.amend {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px 14px;
+    margin: 10px 0;
+  }
+  details.qa summary, details.amend summary { cursor: pointer; color: var(--cyan); font-weight: 700; }
+  .qa-answer { color: var(--muted); }
+
+  @media (max-width: 720px) {
+    main { padding: 28px 16px 72px; }
+    h1 { font-size: 32px; }
+    .metadata dl { grid-template-columns: 1fr; }
+    table { display: block; overflow-x: auto; white-space: nowrap; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Plan: Open Brain gbrain-Informed Graph Retrieval Sprint</h1>
+    <p class="tagline">A Plan 3F controller for issues #265-#271: prove relational graph retrieval first, then expose evidence and harden operator surfaces without importing gbrain wholesale.</p>
+    <details class="metadata" open>
+      <summary>Metadata</summary>
+      <dl>
+        <dt>created</dt><dd>2026-07-07T22:19:50Z</dd>
+        <dt>modified</dt><dd>2026-07-07T22:19:50Z, 2026-07-07T22:45:00Z</dd>
+        <dt>commits</dt><dd>base 80450e3, branch docs/plan3f-gbrain-sprint pending</dd>
+        <dt>agent name</dt><dd>codex</dd>
+        <dt>session id</dt><dd>019f30e7-61d0-7d52-a491-1699760f2cea</dd>
+        <dt>back refs</dt><dd>GitHub issue #265, child issues #266 #267 #268 #269 #270 #271, issue #223 non-closure gate, gbrain audit thread</dd>
+        <dt>forward refs</dt><dd>docs/plan-3f-gbrain-sprint.md, specs/plan-3f-gbrain-sprint.verify.sh, finished site /Volumes/collab/sites/open-brain/plans/plan-3f-gbrain-sprint.html</dd>
+      </dl>
+    </details>
+  </header>
+
+  <figure>
+    <img src="plan-3f-gbrain-sprint/hero.png" alt="Dark operator dashboard showing graph retrieval flowing into ranked Open Brain evidence and validation panels.">
+    <figcaption>Graph links become a bounded retrieval signal only after eval proof and namespace-safe hydration.</figcaption>
+  </figure>
+
+  <section id="purpose">
+    <h2>Purpose</h2>
+    <p>This plan turns the gbrain audit into a sprint that Open Brain can actually land. The useful idea is not a new graph database or a visual graph UI. It is retrieval-time typed-edge recall: parse relational questions, resolve seed entities, traverse existing Open Brain links, hydrate graph evidence into normal search rows, and prove the change with no-regression tests.</p>
+    <div class="callout">
+      <strong>Board snapshot at plan creation:</strong> #265 is In Progress; #266, #267, #269, and #270 are Todo; #268 and #271 are Backlog; #223 is Blocked and must stay open until the separate fleet-bus/NATS rollout has parity and canary proof. Verify Project #8 live before acting; the board is the current source of truth.
+    </div>
+  </section>
+
+  <section id="problem">
+    <h2>Problem</h2>
+    <p>Open Brain already stores entities and typed links, but current search ranking is still mostly vector/keyword first. The link graph is attached as context after retrieval rather than used as a candidate source. That means questions whose answer lives in a relation can miss even when the relation is already in the database.</p>
+    <p>The risk is over-correction. A broad graph rewrite would add a second substrate, expand the privacy blast radius, and muddy existing namespace guarantees. The sprint has to keep the graph arm optional, bounded, and test-proven.</p>
+  </section>
+
+  <section id="solution">
+    <h2>Solution</h2>
+    <p>Run the sprint as paired issues. Pair A is mandatory: #266 builds the eval gate and #267 implements graph-powered retrieval. Pair B exposes graph-expanded evidence only after Pair A works. Pair C hardens operator visibility and can run in parallel when it does not block Pair A.</p>
+    <table>
+      <thead>
+        <tr>
+          <th>Issue</th>
+          <th>Board State</th>
+          <th>Role In Sprint</th>
+          <th>Hard Gate</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><a href="https://github.com/rodaddy/open-brain/issues/265">#265</a></td>
+          <td>In Progress</td>
+          <td>Sprint umbrella and board/controller anchor</td>
+          <td>Do not close until child issue disposition is verified</td>
+        </tr>
+        <tr>
+          <td><a href="https://github.com/rodaddy/open-brain/issues/266">#266</a></td>
+          <td>Todo</td>
+          <td>Relational retrieval eval and no-regression fixtures</td>
+          <td>Must pass before #267 readiness</td>
+        </tr>
+        <tr>
+          <td><a href="https://github.com/rodaddy/open-brain/issues/267">#267</a></td>
+          <td>Todo</td>
+          <td>Graph-powered retrieval arm in search_brain</td>
+          <td>No merge without #266 proof</td>
+        </tr>
+        <tr>
+          <td><a href="https://github.com/rodaddy/open-brain/issues/269">#269</a></td>
+          <td>Todo</td>
+          <td>Privacy-safe MCP/tool request audit logging</td>
+          <td>No raw payload persistence</td>
+        </tr>
+        <tr>
+          <td><a href="https://github.com/rodaddy/open-brain/issues/270">#270</a></td>
+          <td>Todo</td>
+          <td>Operator doctor/status surface</td>
+          <td>Privileged details stay behind auth/local boundary</td>
+        </tr>
+        <tr>
+          <td><a href="https://github.com/rodaddy/open-brain/issues/268">#268</a></td>
+          <td>Backlog</td>
+          <td>Graph-expanded evidence in brain_answer/search_all</td>
+          <td>Starts after #267 exists</td>
+        </tr>
+        <tr>
+          <td><a href="https://github.com/rodaddy/open-brain/issues/271">#271</a></td>
+          <td>Backlog</td>
+          <td>Hot-memory boundary evaluation</td>
+          <td>No prompt placement without exact-scope tests</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section id="files">
+    <h2>Relevant Files</h2>
+    <h3>Existing Files</h3>
+    <ul>
+      <li><span class="tag existing">existing</span><code>src/server.ts</code> - MCP/HTTP entrypoint and request handling surface for search, answer, audit, and doctor/status changes.</li>
+      <li><span class="tag existing">existing</span><code>src/tools/search-brain.ts</code> - Expected owner for retrieval parser, traversal, hydration, and fusion work if local structure matches this path.</li>
+      <li><span class="tag existing">existing</span><code>src/tools/adjacent-context.ts</code> - Existing graph adjacency behavior and namespace checks that #267 must preserve.</li>
+      <li><span class="tag existing">existing</span><code>docs/agent-context-pack-contract.md</code> - Required read before #271 chooses the hot-memory boundary.</li>
+      <li><span class="tag existing">existing</span><code>docs/downstream-rollout.md</code> - Required classification for MCP, Python client, and agent-facing changes.</li>
+      <li><span class="tag existing">existing</span><code>docs/sme/</code> - Review swarm knowledge base; gotcha-agent lane is mandatory for Python package touches.</li>
+      <li><span class="tag existing">existing</span><code>AGENTS.md</code> and <code>_AGENTS.md</code> - Repo law for branch, review, deploy, and Open Brain operating memory.</li>
+    </ul>
+
+    <h3>New Files</h3>
+    <ul>
+      <li><span class="tag new">new</span><code>specs/plan-3f-gbrain-sprint.html</code> - HTML-first Plan 3F source artifact tracked on the planning branch.</li>
+      <li><span class="tag new">new</span><code>specs/plan-3f-gbrain-sprint/hero.png</code> - Generated bitmap hero image synced to the plan palette.</li>
+      <li><span class="tag new">new</span><code>specs/plan-3f-gbrain-sprint/favicon.png</code> - Generated favicon source image for future edits.</li>
+      <li><span class="tag new">new</span><code>specs/plan-3f-gbrain-sprint/favicon-64.png</code> - Inline favicon source baked into this HTML as a data URI.</li>
+      <li><span class="tag new">new</span><code>specs/plan-3f-gbrain-sprint/apple-touch-icon.png</code> - Browser/platform icon for the finished site copy.</li>
+      <li><span class="tag new">new</span><code>specs/plan-3f-gbrain-sprint.verify.sh</code> - Plan checker for artifact verification now and full sprint verification later.</li>
+      <li><span class="tag new">new</span><code>/Volumes/collab/sites/open-brain/plans/plan-3f-gbrain-sprint.html</code> - Finished clickable site copy, copied from repo source after validation.</li>
+    </ul>
+  </section>
+
+  <section id="phases">
+    <h2>Implementation Phases</h2>
+    <p>Status markers are intentionally not hand-completed. The checker and issue/PR evidence determine completion.</p>
+
+    <div class="phase" id="phase-1">
+      <h3><code class="status">[]</code>Phase 1: Sprint Controller And Board Fidelity</h3>
+      <p>Keep #265 as the controller item, keep Project #8 live, and preserve the #223 non-closure boundary while implementation branches move.</p>
+      <h4>1.1 Actions</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code>Refresh Project #8 before dispatching each issue branch.</li>
+        <li><code class="status">[]</code>Set active child issues to In Progress before implementation and update validation/review fields as evidence changes.</li>
+        <li><code class="status">[]</code>Leave #223 open/blocked unless fleet-bus/live NATS parity and canary evidence exists in that issue.</li>
+        <li><code class="status">[]</code>Keep source plan in <code>specs/</code> and finished HTML in <code>/Volumes/collab/sites/open-brain</code>.</li>
+      </ul>
+      <h4>1.2 Testing Strategy</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code><code>specs/plan-3f-gbrain-sprint.verify.sh --artifact-only</code> - proves the Plan 3F HTML, generated images, favicon, and finished-site copy are present via repo and collab site files.</li>
+        <li><code class="status">[]</code><code>test "$(gh issue view 223 --repo rodaddy/open-brain --json state --jq .state)" = "OPEN"</code> - proves the NATS issue was not accidentally closed via GitHub issue state.</li>
+      </ul>
+      <div class="loop">Do not dispatch issue workers from stale board state. If board tooling burns more than two rounds, record the blocker and move to the next safe local implementation step.</div>
+    </div>
+
+    <div class="phase" id="phase-2">
+      <h3><code class="status">[]</code>Phase 2: #266 Relational Retrieval Eval Gate</h3>
+      <p>Build the proof harness before the retrieval implementation is allowed to claim success.</p>
+      <h4>2.1 Actions</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code>Create deterministic local fixtures with at least 20 Open Brain-native relational questions.</li>
+        <li><code class="status">[]</code>Include cases where the answer is only recoverable through <code>ob_links</code>, not text body match.</li>
+        <li><code class="status">[]</code>Include graph-off vs graph-on comparisons, normal-query no-regression checks, namespace leak checks, and archived entity/link exclusions.</li>
+        <li><code class="status">[]</code>Keep fixtures CI-runnable without live Open Brain, external embeddings, or core01.</li>
+      </ul>
+      <h4>2.2 Testing Strategy</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code><code>bun test tests/search-brain-relational-retrieval.test.ts</code> - proves relational lift and normal-query no-regression via the #266 fixture file.</li>
+        <li><code class="status">[]</code><code>bun test tests/search-brain-namespace.test.ts</code> - proves namespace/read-policy denial via search namespace regression tests.</li>
+        <li><code class="status">[]</code><code>bunx tsc --noEmit</code> - proves TypeScript contracts still compile via the repo compiler.</li>
+      </ul>
+      <div class="loop">#266 is the gate. If the eval cannot prove no-regression, do not merge #267.</div>
+    </div>
+
+    <div class="phase" id="phase-3">
+      <h3><code class="status">[]</code>Phase 3: #267 Graph-Powered Retrieval Arm</h3>
+      <p>Add a precision-first graph arm to <code>search_brain</code> that only fires when relational parsing and readable seed resolution succeed.</p>
+      <h4>3.1 Actions</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code>Add the smallest deterministic relational parser for Open Brain-native relation vocabulary.</li>
+        <li><code class="status">[]</code>Resolve seed entities under readable namespaces only.</li>
+        <li><code class="status">[]</code>Traverse <code>ob_links</code> with bounded depth, limit, lifecycle filters, and fail-open telemetry.</li>
+        <li><code class="status">[]</code>Hydrate graph candidates into normal search rows with source refs and RRF/fusion metadata.</li>
+        <li><code class="status">[]</code>Leave vector/keyword behavior unchanged for non-relational queries.</li>
+      </ul>
+      <h4>3.2 Testing Strategy</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code><code>bun test tests/search-brain-graph-arm.test.ts</code> - proves parser, seed resolution, traversal, hydration, fusion, and fail-open behavior via focused graph-arm tests.</li>
+        <li><code class="status">[]</code><code>bun test tests/search-brain-relational-retrieval.test.ts</code> - proves #267 passes the #266 eval gate via graph-on fixture results.</li>
+        <li><code class="status">[]</code><code>bun test</code> - proves no shared retrieval regression via the full Bun suite.</li>
+      </ul>
+      <div class="loop">If #267 is split from #266, #267 stays blocked until #266 is merged and passing.</div>
+    </div>
+
+    <div class="phase" id="phase-4">
+      <h3><code class="status">[]</code>Phase 4: #269 Privacy-Safe Audit Logging</h3>
+      <p>Add operator observability for MCP/tool calls without persisting raw payloads, secrets, prompt text, file paths, or unknown attacker-controlled key names.</p>
+      <h4>4.1 Actions</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code>Record operation name, status, latency, caller identity, namespace source, declared parameter keys, unknown key count, and coarse payload size.</li>
+        <li><code class="status">[]</code>Bucket byte counts and redact unknown names/values by default.</li>
+        <li><code class="status">[]</code>Add disable and retention controls.</li>
+        <li><code class="status">[]</code>Make audit writes fail-open for user-facing operations.</li>
+      </ul>
+      <h4>4.2 Testing Strategy</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code><code>bun test tests/tool-audit-log.test.ts</code> - proves redaction, declared-key capture, unknown-key counting, byte bucketing, disable/retention, and fail-open behavior via audit logger tests.</li>
+        <li><code class="status">[]</code><code>bunx tsc --noEmit</code> - proves audit types compile via TypeScript.</li>
+      </ul>
+      <div class="loop">No raw payload storage. A test that inspects persisted audit rows for secret-shaped values is required before PR readiness.</div>
+    </div>
+
+    <div class="phase" id="phase-5">
+      <h3><code class="status">[]</code>Phase 5: #270 Operator Doctor/Status Surface</h3>
+      <p>Add stable JSON diagnostics for operators before any human UI, while keeping public health minimal.</p>
+      <h4>5.1 Actions</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code>Report runtime version, contract version, DB connectivity, migration status, embedding provider health, qmd health when configured, transport mode/availability, degraded provider failures, and audit/log health when available.</li>
+        <li><code class="status">[]</code>Keep secrets and raw env values out of the output.</li>
+        <li><code class="status">[]</code>Require auth or local command boundary for privileged detail.</li>
+        <li><code class="status">[]</code>Classify downstream impact before exposing any MCP contract change.</li>
+      </ul>
+      <h4>5.2 Testing Strategy</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code><code>bun test tests/doctor-status.test.ts</code> - proves JSON status shape, degraded states, and secret omission via focused doctor/status tests.</li>
+        <li><code class="status">[]</code><code>bun test tests/auth-permissions.test.ts</code> - proves privileged detail is gated via auth/permission regression tests if the surface is exposed over MCP/HTTP.</li>
+        <li><code class="status">[]</code><code>bunx tsc --noEmit</code> - proves status contracts compile via TypeScript.</li>
+      </ul>
+      <div class="loop">Do not turn public health into an operator dump. Privileged detail must have a boundary.</div>
+    </div>
+
+    <div class="phase" id="phase-6">
+      <h3><code class="status">[]</code>Phase 6: #268 Graph Evidence In brain_answer/search_all</h3>
+      <p>Expose graph-expanded rows safely to answer/search consumers only after #266/#267 are merged or available in the same branch.</p>
+      <h4>6.1 Actions</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code>Decide whether graph-expanded rows are default, opt-in, or inherited through <code>search_brain</code>.</li>
+        <li><code class="status">[]</code>Preserve extractive/cited answer behavior.</li>
+        <li><code class="status">[]</code>Keep qmd federation separate and fail-open.</li>
+        <li><code class="status">[]</code>Bound and redact relation/path metadata before it reaches answer output.</li>
+      </ul>
+      <h4>6.2 Testing Strategy</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code><code>bun test tests/brain-answer-graph-evidence.test.ts tests/search-all-graph-evidence.test.ts</code> - proves graph evidence is cited, bounded, and redacted via answer/search tests.</li>
+        <li><code class="status">[]</code><code>bun test tests/search-brain-namespace.test.ts</code> - proves namespace denial still applies at consumer surfaces.</li>
+        <li><code class="status">[]</code><code>bunx tsc --noEmit</code> - proves consumer contract types compile.</li>
+      </ul>
+      <div class="loop">Do not advertise new contract capability through get_contract until server, tests, and downstream support are ready or deliberately scoped.</div>
+    </div>
+
+    <div class="phase" id="phase-7">
+      <h3><code class="status">[]</code>Phase 7: #271 Hot-Memory Boundary Decision</h3>
+      <p>Evaluate whether hot working memory belongs in <code>agent_context_pack</code>, MCP <code>_meta</code>, or remains deferred. This is a boundary decision first and an implementation second.</p>
+      <h4>7.1 Actions</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code>Re-read <code>docs/agent-context-pack-contract.md</code>.</li>
+        <li><code class="status">[]</code>Choose the owning boundary and document the rejected alternatives.</li>
+        <li><code class="status">[]</code>If implemented, run exact-scope filters before ranking/truncation across namespace, agent, platform, server, channel, thread, and session.</li>
+        <li><code class="status">[]</code>Label working state as unpromoted working context and preserve citations/source refs.</li>
+      </ul>
+      <h4>7.2 Testing Strategy</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code><code>bun test tests/agent-context-pack-hot-memory.test.ts</code> - proves boundary behavior, truncation, citations, and unpromoted labeling via context-pack contract tests.</li>
+        <li><code class="status">[]</code><code>bun test tests/agent-context-pack-scope.test.ts</code> - proves exact-scope denial for every scope key via scope regression tests.</li>
+        <li><code class="status">[]</code><code>grep -R "Downstream rollout" -n docs specs</code> - proves downstream classification is documented via a committed doc/spec reference.</li>
+      </ul>
+      <div class="loop">If the boundary is still ambiguous, close #271 only with a documented defer decision approved by Rico.</div>
+    </div>
+  </section>
+
+  <section id="validation">
+    <h2>Validation Commands</h2>
+    <p>The artifact checker passes now for the Plan 3F deliverable. Full sprint checks are expected to fail until the implementation issues land.</p>
+    <ul class="checklist">
+      <li><code class="status">[]</code><code>specs/plan-3f-gbrain-sprint.verify.sh --artifact-only</code> - proves this plan's HTML, generated bitmap assets, data-URI favicon, and finished-site copy via filesystem checks.</li>
+      <li><code class="status">[]</code><code>specs/plan-3f-gbrain-sprint.verify.sh --full</code> - proves all sprint gates after implementation via the issue/test commands embedded in the checker.</li>
+      <li><code class="status">[]</code><code>git diff --check</code> - proves the planning branch has no whitespace errors via Git diff validation.</li>
+      <li><code class="status">[]</code><code>test "$(gh issue view 223 --repo rodaddy/open-brain --json state --jq .state)" = "OPEN"</code> - proves #223 stayed open via GitHub issue state.</li>
+    </ul>
+    <div class="loop">The sprint is done only when the full checker exits 0 and Project #8 reflects the verified issue states.</div>
+  </section>
+
+  <section id="questionables">
+    <h2>Questionables</h2>
+    <details class="qa" open>
+      <summary>Should #266 and #267 be one PR or two?</summary>
+      <p class="qa-answer">Default to two if the eval harness is useful independently and can merge first. Use one combined PR only if the eval fixtures need the graph arm to compile cleanly. In either shape, #267 cannot be ready without #266 evidence.</p>
+    </details>
+    <details class="qa">
+      <summary>Should graph-expanded evidence be default?</summary>
+      <p class="qa-answer">Default to inherited through search_brain after #267. Make brain_answer/search_all opt-in only if cited answer behavior or downstream contracts would otherwise change silently.</p>
+    </details>
+    <details class="qa">
+      <summary>Should #271 implement hot memory now?</summary>
+      <p class="qa-answer">Not until graph retrieval quality is proven and exact-scope filters are tested. The acceptable output for #271 can be a documented defer decision if implementation would blur the agent_context_pack boundary.</p>
+    </details>
+    <details class="qa">
+      <summary>Where does finished Plan 3F HTML go?</summary>
+      <p class="qa-answer">Repo source stays in <code>specs/</code>. Finished clickable output for Open Brain belongs under <code>/Volumes/collab/sites/open-brain</code>, currently <code>/Volumes/collab/sites/open-brain/plans/plan-3f-gbrain-sprint.html</code>.</p>
+    </details>
+  </section>
+
+  <section id="notes">
+    <h2>Notes</h2>
+    <div class="callout danger">
+      <strong>Non-goal:</strong> this sprint does not close #223. NATS/fleet-bus parity and canary proof remain separate work.
+    </div>
+    <div class="callout warn">
+      <strong>Loop rule:</strong> if board, roadmap, policy, or status tooling takes more than two rounds without implementation progress, stop the loop. Move to the next safe step or call a real blocker.
+    </div>
+    <h3>Execution Order</h3>
+    <ol>
+      <li>Branch and implement #266 eval fixtures.</li>
+      <li>Branch and implement #267 graph retrieval arm, gated by #266.</li>
+      <li>Run #269 and #270 in parallel when controller capacity exists.</li>
+      <li>Start #268 only when graph retrieval exists and its output contract is clear.</li>
+      <li>Resolve #271 as a boundary decision after graph quality proof.</li>
+      <li>Close #265 only after child issue disposition and board state are verified.</li>
+    </ol>
+  </section>
+
+  <section id="amendments">
+    <h2>Amendments</h2>
+    <details class="amend" open>
+      <summary>2026-07-07 - Finished-site path correction</summary>
+      <p>Rico clarified that finished Open Brain plan artifacts go under <code>/Volumes/collab/sites/open-brain</code>. The branch keeps the repo source under <code>specs/</code> per Plan F3, and the validated finished copy is published to the collab site path.</p>
+    </details>
+  </section>
+</main>
+</body>
+</html>
