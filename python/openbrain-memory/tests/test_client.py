@@ -252,9 +252,18 @@ def test_nats_transport_defaults_to_not_runtime_available_without_fallback():
     exc = exc_info.value
     assert exc.transport == "nats_jetstream"
     assert exc.availability == RealtimeTransportAvailability.NOT_RUNTIME_AVAILABLE
-    assert exc.fallback_transport == "http_mcp"
+    assert exc.fallback_transport is None
     assert '"availability": "not_runtime_available"' in str(exc)
+    assert '"fallback_transport": null' in str(exc)
     assert "context=transport:nats_jetstream" in str(exc)
+
+
+def test_nats_transport_rejects_available_state_until_runtime_exists():
+    with pytest.raises(ValueError, match="not runtime available yet"):
+        NatsTransport(
+            "nats://127.0.0.1:4222",
+            availability="available",  # type: ignore[arg-type]
+        )
 
 
 def test_nats_transport_uses_fallback_transport_for_http_calls():
@@ -277,11 +286,40 @@ def test_nats_transport_uses_fallback_transport_for_http_calls():
     result = client.search_all(query="nats fallback")
 
     assert result["tool"] == "search_all"
-    assert [request["json"].get("method") for request in post_requests(fallback)] == [
-        "initialize",
-        "notifications/initialized",
-        "tools/call",
-    ]
+    initialize, initialized, call = post_requests(fallback)
+    assert initialize["url"] == "https://brain.example/mcp"
+    assert initialized["url"] == "https://brain.example/mcp"
+    assert call["url"] == "https://brain.example/mcp"
+    assert initialize["timeout"] == 12.5
+    assert initialized["timeout"] == 12.5
+    assert call["timeout"] == 12.5
+    assert initialize["headers"]["Authorization"] == "Bearer secret-token"
+    assert initialize["headers"]["Accept"] == "application/json, text/event-stream"
+    assert initialize["headers"]["Content-Type"] == "application/json"
+    assert "Mcp-Session-Id" not in initialize["headers"]
+    assert initialize["json"]["jsonrpc"] == "2.0"
+    assert initialize["json"]["id"] == 1
+    assert initialize["json"]["method"] == "initialize"
+    assert initialize["json"]["params"]["protocolVersion"] == "2025-03-26"
+    assert initialize["json"]["params"]["clientInfo"] == {
+        "name": "openbrain-memory",
+        "version": PACKAGE_VERSION,
+    }
+    assert initialized["headers"]["Mcp-Session-Id"] == "session-123"
+    assert initialized["headers"]["MCP-Protocol-Version"] == "2025-03-26"
+    assert initialized["json"] == {
+        "jsonrpc": "2.0",
+        "method": "notifications/initialized",
+    }
+    assert call["headers"]["Mcp-Session-Id"] == "session-123"
+    assert call["headers"]["MCP-Protocol-Version"] == "2025-03-26"
+    assert call["json"]["jsonrpc"] == "2.0"
+    assert call["json"]["id"] == 2
+    assert call["json"]["method"] == "tools/call"
+    assert call["json"]["params"] == {
+        "name": "search_all",
+        "arguments": {"query": "nats fallback"},
+    }
 
 
 def test_http_error_redacts_deep_json_without_recursion_error():

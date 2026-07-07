@@ -326,7 +326,6 @@ class OpenBrainToolError(OpenBrainError):
 
 
 class RealtimeTransportAvailability(StrEnum):
-    AVAILABLE = "available"
     NOT_RUNTIME_AVAILABLE = "not_runtime_available"
 
 
@@ -368,6 +367,8 @@ class NatsTransport:
             RealtimeTransportAvailability.NOT_RUNTIME_AVAILABLE
         ),
     ) -> None:
+        if availability is not RealtimeTransportAvailability.NOT_RUNTIME_AVAILABLE:
+            raise ValueError("NatsTransport is not runtime available yet")
         self.url = url
         self.context_pack_subject = context_pack_subject
         self.fallback_transport = fallback_transport
@@ -451,7 +452,7 @@ class NatsTransport:
             "Open Brain realtime transport is not runtime available",
             transport="nats_jetstream",
             availability=self.availability,
-            fallback_transport="http_mcp",
+            fallback_transport=None,
         )
 
 
