@@ -35,9 +35,14 @@ export async function setupMcpClient(
   mockPool: MockPool,
   mockEmbed: ReturnType<typeof createMockEmbed>,
   auth: AuthInfo | null,
+  extraDeps: Partial<ToolDeps> = {},
 ): Promise<{ client: Client; cleanup: () => Promise<void> }> {
   const server = new McpServer({ name: "test", version: "1.0.0" });
-  const deps: ToolDeps = { pool: mockPool as any, embedFn: mockEmbed };
+  const deps: ToolDeps = {
+    pool: mockPool as any,
+    embedFn: mockEmbed,
+    ...extraDeps,
+  };
   registerFn(server, deps);
 
   const [clientTransport, serverTransport] =

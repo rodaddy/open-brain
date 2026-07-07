@@ -37,7 +37,14 @@ export interface NatsBridgeDriver {
 export interface NatsBridgeRuntime {
   subject: string;
   availability: "available";
+  health: NatsBridgeHealth;
   close(): Promise<void>;
+}
+
+export interface NatsBridgeHealth {
+  availability: "available" | "not_runtime_available";
+  consecutiveFailures: number;
+  lastError: string | null;
 }
 
 interface NatsSubscriptionHeaders {
@@ -57,12 +64,24 @@ export interface StartNatsContextPackBridgeOptions {
   tokenMap: Map<string, AuthInfo>;
   deps: ToolDeps;
   driver?: NatsBridgeDriver;
+  health?: NatsBridgeHealth;
 }
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const MAX_NATS_REQUEST_BYTES = 64 * 1024;
-const NATS_RESUBSCRIBE_DELAY_MS = 25;
+const NATS_RESUBSCRIBE_INITIAL_DELAY_MS = 25;
+const NATS_RESUBSCRIBE_MAX_DELAY_MS = 1_000;
+
+export function createNatsBridgeHealth(
+  availability: NatsBridgeHealth["availability"] = "not_runtime_available",
+): NatsBridgeHealth {
+  return {
+    availability,
+    consecutiveFailures: 0,
+    lastError: null,
+  };
+}
 
 export async function startNatsContextPackBridge(
   options: StartNatsContextPackBridgeOptions,
@@ -74,9 +93,11 @@ export async function startNatsContextPackBridge(
     return null;
   }
 
+  const health = options.health ?? createNatsBridgeHealth("available");
   const driver =
     options.driver ??
-    (await createNatsJsDriver(options.boundary.nats.url));
+    (await createNatsJsDriver(options.boundary.nats.url, health));
+  markNatsBridgeAvailable(health);
   const subject = options.boundary.nats.context_pack_subject;
   const subscription = await driver.subscribe(subject, async (message) => {
     const response = handleNatsContextPackMessage({
@@ -94,7 +115,9 @@ export async function startNatsContextPackBridge(
   return {
     subject,
     availability: "available",
+    health,
     close: async () => {
+      markNatsBridgeUnavailable(health, "NATS bridge closed");
       await subscription.close();
       await driver.close();
     },
@@ -197,7 +220,10 @@ function natsError(
   };
 }
 
-async function createNatsJsDriver(url: string | null): Promise<NatsBridgeDriver> {
+async function createNatsJsDriver(
+  url: string | null,
+  health: NatsBridgeHealth,
+): Promise<NatsBridgeDriver> {
   if (!url) {
     throw new Error("OPENBRAIN_NATS_URL is required when NATS bridge is enabled");
   }
@@ -209,31 +235,44 @@ async function createNatsJsDriver(url: string | null): Promise<NatsBridgeDriver>
     subscribe: async (subject, handler) => {
       let subscription = connection.subscribe(subject);
       let closed = false;
+      let resubscribeDelayMs = NATS_RESUBSCRIBE_INITIAL_DELAY_MS;
+      let needsSubscription = false;
 
       void (async () => {
         while (!closed) {
+          if (needsSubscription) {
+            try {
+              subscription = connection.subscribe(subject);
+              markNatsBridgeAvailable(health);
+              resubscribeDelayMs = NATS_RESUBSCRIBE_INITIAL_DELAY_MS;
+              needsSubscription = false;
+            } catch (err) {
+              markNatsBridgeUnavailable(health, errorMessage(err));
+              logNatsSubscriptionError(err, subject);
+              resubscribeDelayMs = nextNatsResubscribeDelay(resubscribeDelayMs);
+              await delay(resubscribeDelayMs);
+              continue;
+            }
+          }
+
           try {
             for await (const message of subscription) {
               if (closed) break;
               await processNatsSubscriptionMessage(message, handler);
             }
+            if (!closed) {
+              markNatsBridgeUnavailable(health, "NATS subscription ended");
+            }
           } catch (err) {
             if (!closed) {
+              markNatsBridgeUnavailable(health, errorMessage(err));
               logNatsSubscriptionError(err, subject);
             }
           }
+          needsSubscription = true;
 
           if (!closed) {
-            await delay(NATS_RESUBSCRIBE_DELAY_MS);
-          }
-
-          if (!closed) {
-            try {
-              subscription = connection.subscribe(subject);
-            } catch (err) {
-              logNatsSubscriptionError(err, subject);
-              await delay(NATS_RESUBSCRIBE_DELAY_MS);
-            }
+            await delay(resubscribeDelayMs);
           }
         }
       })();
@@ -241,6 +280,7 @@ async function createNatsJsDriver(url: string | null): Promise<NatsBridgeDriver>
       return {
         close: () => {
           closed = true;
+          markNatsBridgeUnavailable(health, "NATS bridge closed");
           subscription.unsubscribe();
         },
       };
@@ -249,6 +289,29 @@ async function createNatsJsDriver(url: string | null): Promise<NatsBridgeDriver>
       await connection.drain();
     },
   };
+}
+
+function nextNatsResubscribeDelay(currentMs: number): number {
+  return Math.min(currentMs * 2, NATS_RESUBSCRIBE_MAX_DELAY_MS);
+}
+
+function markNatsBridgeAvailable(health: NatsBridgeHealth): void {
+  health.availability = "available";
+  health.consecutiveFailures = 0;
+  health.lastError = null;
+}
+
+function markNatsBridgeUnavailable(
+  health: NatsBridgeHealth,
+  message: string,
+): void {
+  health.availability = "not_runtime_available";
+  health.consecutiveFailures += 1;
+  health.lastError = message;
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 function delay(ms: number): Promise<void> {

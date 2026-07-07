@@ -1,5 +1,6 @@
 import { describe, expect, it, mock } from "bun:test";
 import {
+  createNatsBridgeHealth,
   handleNatsContextPackMessage,
   startNatsContextPackBridge,
   type NatsBridgeDriver,
@@ -392,6 +393,78 @@ describe("startNatsContextPackBridge", () => {
 
       await runtime?.close();
       expect(secondSubscription.unsubscribe).toHaveBeenCalled();
+      expect(connection.drain).toHaveBeenCalled();
+    } finally {
+      logger.error = originalError;
+      mock.restore();
+    }
+  });
+
+  it("marks live NATS health unavailable and backs off when resubscribe repeatedly fails", async () => {
+    const loggedErrors: string[] = [];
+    const originalError = logger.error;
+    logger.error = (message, extra) => {
+      loggedErrors.push(`${message}:${String(extra?.error ?? "")}`);
+    };
+
+    try {
+      const firstSubscription = {
+        unsubscribe: mock(() => {}),
+        async *[Symbol.asyncIterator]() {
+          throw new Error("subscription iterator failed");
+        },
+      };
+      let subscribeCalls = 0;
+      const connection = {
+        subscribe: mock(() => {
+          subscribeCalls += 1;
+          if (subscribeCalls === 1) {
+            return firstSubscription;
+          }
+          throw new Error("connection closed");
+        }),
+        drain: mock(async () => {}),
+      };
+      mock.module("nats", () => ({
+        connect: mock(async () => connection),
+      }));
+      const health = createNatsBridgeHealth("available");
+
+      const runtime = await startNatsContextPackBridge({
+        boundary: readNatsRuntimeBoundary({
+          OPENBRAIN_TRANSPORT: "nats",
+          OPENBRAIN_NATS_ENABLE_BRIDGE: "true",
+          OPENBRAIN_NATS_URL: "nats://127.0.0.1:4222",
+        }),
+        tokenMap: new Map([["secret-token", { role: "admin", clientId: "rico" }]]),
+        deps: depsWithWorkingSet(),
+        health,
+      });
+
+      await waitFor(
+        () =>
+          health.availability === "not_runtime_available" &&
+          health.lastError === "connection closed",
+        "NATS bridge health to degrade after repeated resubscribe failure",
+      );
+      const callsAfterFailure = subscribeCalls;
+      await new Promise((resolve) => setTimeout(resolve, 80));
+
+      expect(health).toMatchObject({
+        availability: "not_runtime_available",
+        lastError: "connection closed",
+      });
+      expect(callsAfterFailure).toBeGreaterThanOrEqual(2);
+      expect(subscribeCalls - callsAfterFailure).toBeLessThanOrEqual(2);
+      expect(loggedErrors).toContain(
+        "NATS context-pack bridge subscription failed:subscription iterator failed",
+      );
+      expect(loggedErrors).toContain(
+        "NATS context-pack bridge subscription failed:connection closed",
+      );
+
+      await runtime?.close();
+      expect(firstSubscription.unsubscribe).toHaveBeenCalled();
       expect(connection.drain).toHaveBeenCalled();
     } finally {
       logger.error = originalError;

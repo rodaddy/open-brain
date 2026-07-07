@@ -37,7 +37,9 @@ export function registerGetContract(server: McpServer, deps: ToolDeps): void {
           {
             type: "text" as const,
             text: JSON.stringify(buildContract(undefined, {
-              natsAvailability: deps.natsRuntimeBoundary?.nats.availability,
+              natsAvailability:
+                deps.natsBridgeHealth?.availability ??
+                deps.natsRuntimeBoundary?.nats.availability,
             })),
           },
         ],

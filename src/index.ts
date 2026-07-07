@@ -18,6 +18,7 @@ import {
   summarizeNatsUrlForLog,
 } from "./nats-runtime.ts";
 import {
+  createNatsBridgeHealth,
   startNatsContextPackBridge,
   type NatsBridgeRuntime,
 } from "./nats-bridge.ts";
@@ -103,10 +104,12 @@ export function createApp(
   const auth = authMiddleware(tokenMap);
 
   // Shared deps for both MCP tools and REST API
+  const natsRuntimeBoundary = readNatsRuntimeBoundary(process.env);
   const toolDeps: ToolDeps = deps ?? {
     pool,
     embedFn: generateEmbedding,
-    natsRuntimeBoundary: readNatsRuntimeBoundary(process.env),
+    natsRuntimeBoundary,
+    natsBridgeHealth: createNatsBridgeHealth("not_runtime_available"),
   };
 
   // REST API -- no MCP handshake required
@@ -209,10 +212,14 @@ if (import.meta.main) {
   );
 
   const natsRuntimeBoundary = readNatsRuntimeBoundary(process.env);
+  const natsBridgeHealth = createNatsBridgeHealth(
+    natsRuntimeBoundary.nats.availability,
+  );
   const toolDeps: ToolDeps = {
     pool,
     embedFn: generateEmbedding,
     natsRuntimeBoundary,
+    natsBridgeHealth,
   };
   let natsBridge: NatsBridgeRuntime | null = null;
   if (
@@ -224,6 +231,7 @@ if (import.meta.main) {
         boundary: natsRuntimeBoundary,
         tokenMap,
         deps: toolDeps,
+        health: natsBridgeHealth,
       });
       logger.info("NATS context-pack bridge started", {
         subject: natsBridge?.subject,
@@ -231,6 +239,10 @@ if (import.meta.main) {
         nats_url: summarizeNatsUrlForLog(natsRuntimeBoundary.nats.url),
       });
     } catch (err) {
+      natsBridgeHealth.availability = "not_runtime_available";
+      natsBridgeHealth.consecutiveFailures += 1;
+      natsBridgeHealth.lastError =
+        err instanceof Error ? err.message : String(err);
       logger.error("NATS context-pack bridge failed to start", {
         error: err instanceof Error ? err.message : String(err),
         nats_url: summarizeNatsUrlForLog(natsRuntimeBoundary.nats.url),
