@@ -1,11 +1,11 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, mock } from "bun:test";
 import {
   handleNatsContextPackMessage,
-  processNatsSubscriptionMessage,
   startNatsContextPackBridge,
   type NatsBridgeDriver,
   type NatsRequestMessage,
 } from "./nats-bridge.ts";
+import { logger } from "./logger.ts";
 import { readNatsRuntimeBoundary } from "./nats-runtime.ts";
 import { WorkingSetStore } from "./realtime/working-set.ts";
 import { RecoveryWalStore } from "./realtime/recovery-wal.ts";
@@ -13,6 +13,7 @@ import type { ToolDeps } from "./tools/index.ts";
 import type { AuthInfo } from "./types.ts";
 
 const encoder = new TextEncoder();
+const decoder = new TextDecoder();
 
 const scope = {
   namespace: "rico",
@@ -262,42 +263,75 @@ describe("startNatsContextPackBridge", () => {
     await runtime?.close();
   });
 
-  it("isolates per-message reply failures in the subscription driver boundary", async () => {
-    const handled: string[] = [];
-    const errors: string[] = [];
-    const handler = async (message: NatsRequestMessage) => {
-      handled.push(message.subject);
-      const responded = await message.respond(data({ ok: true }));
-      if (responded === false) {
-        throw new Error("NATS request did not include a reply inbox");
-      }
-    };
-    const onError = (err: unknown, subject: string) => {
-      errors.push(`${subject}:${err instanceof Error ? err.message : String(err)}`);
+  it("continues the real NATS subscription loop after per-message reply failure", async () => {
+    const responses: unknown[] = [];
+    const loggedErrors: string[] = [];
+    const originalError = logger.error;
+    logger.error = (message, extra) => {
+      loggedErrors.push(`${message}:${String(extra?.error ?? "")}`);
     };
 
-    await processNatsSubscriptionMessage(
-      {
-        subject: "ob.memory.context_pack",
-        data: data(baseEnvelope),
-        respond: () => false,
-      },
-      handler,
-      onError,
-    );
-    await processNatsSubscriptionMessage(
-      {
-        subject: "ob.memory.context_pack",
-        data: data(baseEnvelope),
-        respond: () => true,
-      },
-      handler,
-      onError,
-    );
+    try {
+      const headers = {
+        keys: () => ["authorization"],
+        get: () => "Bearer secret-token",
+      };
+      const subscription = {
+        unsubscribe: mock(() => {}),
+        async *[Symbol.asyncIterator]() {
+          yield {
+            subject: "ob.memory.context_pack",
+            data: data(baseEnvelope),
+            headers,
+            respond: () => false,
+          };
+          yield {
+            subject: "ob.memory.context_pack",
+            data: data(baseEnvelope),
+            headers,
+            respond: (payload: Uint8Array) => {
+              responses.push(JSON.parse(decoder.decode(payload)));
+              return true;
+            },
+          };
+          throw new Error("subscription iterator failed");
+        },
+      };
+      const connection = {
+        subscribe: mock(() => subscription),
+        drain: mock(async () => {}),
+      };
+      mock.module("nats", () => ({
+        connect: mock(async () => connection),
+      }));
 
-    expect(handled).toEqual(["ob.memory.context_pack", "ob.memory.context_pack"]);
-    expect(errors).toEqual([
-      "ob.memory.context_pack:NATS request did not include a reply inbox",
-    ]);
+      const runtime = await startNatsContextPackBridge({
+        boundary: readNatsRuntimeBoundary({
+          OPENBRAIN_TRANSPORT: "nats",
+          OPENBRAIN_NATS_ENABLE_BRIDGE: "true",
+          OPENBRAIN_NATS_URL: "nats://127.0.0.1:4222",
+        }),
+        tokenMap: new Map([["secret-token", { role: "admin", clientId: "rico" }]]),
+        deps: depsWithWorkingSet(),
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      expect(connection.subscribe).toHaveBeenCalledWith("ob.memory.context_pack");
+      expect(responses).toHaveLength(1);
+      expect((responses[0] as { status?: string }).status).toBe("ok");
+      expect(loggedErrors).toContain(
+        "NATS context-pack bridge request failed:NATS request did not include a reply inbox",
+      );
+      expect(loggedErrors).toContain(
+        "NATS context-pack bridge subscription failed:subscription iterator failed",
+      );
+
+      await runtime?.close();
+      expect(subscription.unsubscribe).toHaveBeenCalled();
+      expect(connection.drain).toHaveBeenCalled();
+    } finally {
+      logger.error = originalError;
+    }
   });
 });

@@ -212,6 +212,8 @@ not stop future request processing.
   response promises to the bridge handler?
 - Are per-message handler failures caught/logged inside background subscription
   loops so the bridge continues processing later requests?
+- Are top-level subscription iterator failures caught/logged so background task
+  failures are observable instead of becoming unhandled rejections?
 - Do tests cover reply failure rather than only the happy-path response?
 - Does server shutdown isolate optional transport close failures from database
   and process cleanup?

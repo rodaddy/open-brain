@@ -45,7 +45,7 @@ interface NatsSubscriptionHeaders {
   get(key: string): string;
 }
 
-export interface NatsSubscriptionMessage {
+interface NatsSubscriptionMessage {
   subject: string;
   data: Uint8Array;
   headers?: NatsSubscriptionHeaders;
@@ -210,9 +210,15 @@ async function createNatsJsDriver(url: string | null): Promise<NatsBridgeDriver>
       let closed = false;
 
       void (async () => {
-        for await (const message of subscription) {
-          if (closed) break;
-          await processNatsSubscriptionMessage(message, handler);
+        try {
+          for await (const message of subscription) {
+            if (closed) break;
+            await processNatsSubscriptionMessage(message, handler);
+          }
+        } catch (err) {
+          if (!closed) {
+            logNatsSubscriptionError(err, subject);
+          }
         }
       })();
 
@@ -229,7 +235,7 @@ async function createNatsJsDriver(url: string | null): Promise<NatsBridgeDriver>
   };
 }
 
-export async function processNatsSubscriptionMessage(
+async function processNatsSubscriptionMessage(
   message: NatsSubscriptionMessage,
   handler: (message: NatsRequestMessage) => Promise<void>,
   onError: (err: unknown, subject: string) => void = logNatsHandlerError,
@@ -250,6 +256,13 @@ export async function processNatsSubscriptionMessage(
 
 function logNatsHandlerError(err: unknown, subject: string): void {
   logger.error("NATS context-pack bridge request failed", {
+    subject,
+    error: err instanceof Error ? err.message : String(err),
+  });
+}
+
+function logNatsSubscriptionError(err: unknown, subject: string): void {
+  logger.error("NATS context-pack bridge subscription failed", {
     subject,
     error: err instanceof Error ? err.message : String(err),
   });
