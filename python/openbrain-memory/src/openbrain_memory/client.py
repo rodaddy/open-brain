@@ -531,7 +531,27 @@ class NatsTransport:
                 fallback_transport=(
                     "http_mcp" if self.fallback_transport is not None else None
                 ),
-                )
+            )
+        if _header(headers, "x-namespace"):
+            raise OpenBrainTransportUnavailableError(
+                "Open Brain realtime transport does not support delegated namespace",
+                transport="nats_jetstream",
+                availability=self.availability,
+                fallback_transport=(
+                    "http_mcp" if self.fallback_transport is not None else None
+                ),
+            )
+        unsupported_arguments = _unsupported_nats_context_pack_arguments(json_body)
+        if unsupported_arguments:
+            raise OpenBrainTransportUnavailableError(
+                "Open Brain realtime transport does not support all "
+                "agent_context_pack arguments",
+                transport="nats_jetstream",
+                availability=self.availability,
+                fallback_transport=(
+                    "http_mcp" if self.fallback_transport is not None else None
+                ),
+            )
         envelope = _nats_context_pack_envelope(json_body)
         if _nats_envelope_size_bytes(envelope) > DEFAULT_NATS_MAX_REQUEST_BYTES:
             raise OpenBrainTransportUnavailableError(
@@ -585,10 +605,7 @@ class NatsTransport:
     ) -> None:
         availability = _nats_availability_from_contract_response(response)
         if availability is None:
-            if 200 <= response.status_code < 300:
-                self.availability = (
-                    RealtimeTransportAvailability.NOT_RUNTIME_AVAILABLE
-                )
+            self.availability = RealtimeTransportAvailability.NOT_RUNTIME_AVAILABLE
             return
         if (
             availability is RealtimeTransportAvailability.AVAILABLE
@@ -613,6 +630,42 @@ def _tool_call_arguments(json_body: Mapping[str, Any]) -> Mapping[str, Any]:
         return {}
     arguments = params.get("arguments")
     return arguments if isinstance(arguments, Mapping) else {}
+
+
+_NATS_CONTEXT_PACK_IDENTITY_ARGUMENTS = frozenset(
+    {
+        "agent",
+        "platform",
+        "server_id",
+        "channel_id",
+        "thread_id",
+        "session_key",
+    },
+)
+_NATS_CONTEXT_PACK_BODY_ARGUMENTS = frozenset(
+    {
+        "query",
+        "requested_sections",
+        "include_unreviewed_recovery",
+        "budget",
+    },
+)
+_NATS_CONTEXT_PACK_SUPPORTED_ARGUMENTS = (
+    _NATS_CONTEXT_PACK_IDENTITY_ARGUMENTS | _NATS_CONTEXT_PACK_BODY_ARGUMENTS
+)
+
+
+def _unsupported_nats_context_pack_arguments(
+    json_body: Mapping[str, Any],
+) -> tuple[str, ...]:
+    arguments = _tool_call_arguments(json_body)
+    return tuple(
+        sorted(
+            str(key)
+            for key in arguments
+            if key not in _NATS_CONTEXT_PACK_SUPPORTED_ARGUMENTS
+        ),
+    )
 
 
 def _required_context_pack_string(
