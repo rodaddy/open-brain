@@ -194,6 +194,95 @@ describe("handleNatsContextPackMessage", () => {
       },
     });
   });
+
+  it("returns unavailable when live bridge health is degraded", () => {
+    const boundary = readNatsRuntimeBoundary({
+      OPENBRAIN_TRANSPORT: "nats",
+      OPENBRAIN_NATS_ENABLE_BRIDGE: "true",
+      OPENBRAIN_NATS_URL: "nats://127.0.0.1:4222",
+    });
+    const health = createNatsBridgeHealth("not_runtime_available");
+    health.lastError = "connection closed";
+
+    const response = handleNatsContextPackMessage({
+      message: {
+        subject: "ob.memory.context_pack",
+        data: data(baseEnvelope),
+        headers: { Authorization: "Bearer secret-token" },
+      },
+      boundary,
+      tokenMap: new Map([["secret-token", { role: "admin", clientId: "rico" }]]),
+      deps: depsWithWorkingSet(),
+      health,
+    }) as any;
+
+    expect(response).toMatchObject({
+      request_id: null,
+      status: "error",
+      error: {
+        code: "temporarily_unavailable",
+        message: "NATS bridge is not available",
+      },
+    });
+  });
+
+  it("logs internal handler failures without reporting them as bad requests", () => {
+    const loggedErrors: string[] = [];
+    const originalError = logger.error;
+    logger.error = (message, extra) => {
+      loggedErrors.push(JSON.stringify({ message, ...extra }));
+    };
+
+    try {
+      const sensitiveToken = ["user", ":", "pass"].join("");
+      const sensitiveHost = ["broker", "internal"].join(".");
+      const brokenWorkingSetStore = {
+        buildContextPackFragment: () => {
+          const err = new Error(
+            ["working set exploded for nats://", sensitiveToken, "@", sensitiveHost].join(
+              "",
+            ),
+          );
+          err.name = ["NatsError nats://", sensitiveToken, "@", sensitiveHost].join(
+            "",
+          );
+          throw err;
+        },
+      } as unknown as WorkingSetStore;
+      const response = handleNatsContextPackMessage({
+        message: {
+          subject: "ob.memory.context_pack",
+          data: data(baseEnvelope),
+          headers: { Authorization: "Bearer secret-token" },
+        },
+        boundary: readNatsRuntimeBoundary({
+          OPENBRAIN_TRANSPORT: "nats",
+          OPENBRAIN_NATS_ENABLE_BRIDGE: "true",
+          OPENBRAIN_NATS_URL: "nats://127.0.0.1:4222",
+        }),
+        tokenMap: new Map([["secret-token", { role: "admin", clientId: "rico" }]]),
+        deps: { ...depsWithWorkingSet(), workingSetStore: brokenWorkingSetStore },
+      }) as any;
+
+      expect(response).toMatchObject({
+        request_id: "req-123",
+        status: "error",
+        error: {
+          code: "internal_error",
+          message: "NATS context pack request failed",
+        },
+      });
+      const joinedLogs = loggedErrors.join("\n");
+      expect(joinedLogs).toContain(
+        '"message":"NATS context-pack bridge request failed"',
+      );
+      expect(joinedLogs).toContain('"error_type":"Error"');
+      expect(joinedLogs).not.toContain(sensitiveToken);
+      expect(joinedLogs).not.toContain(sensitiveHost);
+    } finally {
+      logger.error = originalError;
+    }
+  });
 });
 
 describe("startNatsContextPackBridge", () => {
@@ -309,7 +398,7 @@ describe("startNatsContextPackBridge", () => {
     const loggedErrors: string[] = [];
     const originalError = logger.error;
     logger.error = (message, extra) => {
-      loggedErrors.push(`${message}:${String(extra?.error ?? "")}`);
+      loggedErrors.push(`${message}:${String(extra?.error_type ?? "")}`);
     };
 
     try {
@@ -411,10 +500,10 @@ describe("startNatsContextPackBridge", () => {
         ]),
       );
       expect(loggedErrors).toContain(
-        "NATS context-pack bridge request failed:NATS request did not include a reply inbox",
+        "NATS context-pack bridge request failed:Error",
       );
       expect(loggedErrors).toContain(
-        "NATS context-pack bridge subscription failed:subscription iterator failed",
+        "NATS context-pack bridge subscription failed:Error",
       );
 
       await runtime?.close();
@@ -426,11 +515,134 @@ describe("startNatsContextPackBridge", () => {
     }
   });
 
+  it("resubscribes after clean iterator completion without degrading health", async () => {
+    const responses: Array<{ request_id?: string; status?: string }> = [];
+    const headers = {
+      keys: () => ["authorization"],
+      get: () => "Bearer secret-token",
+    };
+    const firstSubscription = {
+      unsubscribe: mock(() => {}),
+      async *[Symbol.asyncIterator]() {},
+    };
+    const secondSubscription = {
+      unsubscribe: mock(() => {}),
+      async *[Symbol.asyncIterator]() {
+        yield {
+          subject: "ob.memory.context_pack",
+          data: data({ ...baseEnvelope, request_id: "req-after-clean-end" }),
+          headers,
+          respond: (payload: Uint8Array) => {
+            responses.push(JSON.parse(decoder.decode(payload)));
+            return true;
+          },
+        };
+      },
+    };
+    const fallbackSubscription = {
+      unsubscribe: mock(() => {}),
+      async *[Symbol.asyncIterator]() {},
+    };
+    let subscribeCalls = 0;
+    const connection = {
+      subscribe: mock(() => {
+        subscribeCalls += 1;
+        if (subscribeCalls === 1) return firstSubscription;
+        if (subscribeCalls === 2) return secondSubscription;
+        return fallbackSubscription;
+      }),
+      drain: mock(async () => {}),
+    };
+    mock.module("nats", () => ({
+      connect: mock(async () => connection),
+    }));
+    const health = createNatsBridgeHealth("available");
+
+    try {
+      const runtime = await startNatsContextPackBridge({
+        boundary: readNatsRuntimeBoundary({
+          OPENBRAIN_TRANSPORT: "nats",
+          OPENBRAIN_NATS_ENABLE_BRIDGE: "true",
+          OPENBRAIN_NATS_URL: "nats://127.0.0.1:4222",
+        }),
+        tokenMap: new Map([["secret-token", { role: "admin", clientId: "rico" }]]),
+        deps: depsWithWorkingSet(),
+        health,
+      });
+
+      await waitFor(
+        () =>
+          responses.some(
+            (response) => response.request_id === "req-after-clean-end",
+          ),
+        "NATS bridge to resubscribe after clean iterator completion",
+      );
+      expect(health).toMatchObject({
+        availability: "available",
+        consecutiveFailures: 0,
+        lastError: null,
+      });
+      expect(connection.subscribe.mock.calls.length).toBeGreaterThanOrEqual(2);
+
+      await runtime?.close();
+    } finally {
+      mock.restore();
+    }
+  });
+
+  it("marks health unavailable after repeated clean empty subscription completions", async () => {
+    const emptySubscription = () => ({
+      unsubscribe: mock(() => {}),
+      async *[Symbol.asyncIterator]() {},
+    });
+    const subscriptions: Array<ReturnType<typeof emptySubscription>> = [];
+    const connection = {
+      subscribe: mock(() => {
+        const subscription = emptySubscription();
+        subscriptions.push(subscription);
+        return subscription;
+      }),
+      drain: mock(async () => {}),
+    };
+    mock.module("nats", () => ({
+      connect: mock(async () => connection),
+    }));
+    const health = createNatsBridgeHealth("available");
+
+    try {
+      const runtime = await startNatsContextPackBridge({
+        boundary: readNatsRuntimeBoundary({
+          OPENBRAIN_TRANSPORT: "nats",
+          OPENBRAIN_NATS_ENABLE_BRIDGE: "true",
+          OPENBRAIN_NATS_URL: "nats://127.0.0.1:4222",
+        }),
+        tokenMap: new Map([["secret-token", { role: "admin", clientId: "rico" }]]),
+        deps: depsWithWorkingSet(),
+        health,
+      });
+
+      await waitFor(
+        () =>
+          health.availability === "not_runtime_available" &&
+          health.lastError === "NATS subscription ended without messages",
+        "NATS bridge health to degrade after repeated clean empty subscriptions",
+      );
+      expect(connection.subscribe.mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(health.consecutiveFailures).toBe(1);
+
+      await runtime?.close();
+      expect(subscriptions.at(-1)?.unsubscribe).toHaveBeenCalled();
+      expect(connection.drain).toHaveBeenCalled();
+    } finally {
+      mock.restore();
+    }
+  });
+
   it("backs off when resubscribe succeeds but replacement iterators keep failing", async () => {
     const loggedErrors: string[] = [];
     const originalError = logger.error;
     logger.error = (message, extra) => {
-      loggedErrors.push(`${message}:${String(extra?.error ?? "")}`);
+      loggedErrors.push(`${message}:${String(extra?.error_type ?? "")}`);
     };
 
     try {
@@ -478,10 +690,10 @@ describe("startNatsContextPackBridge", () => {
       expect(health.lastError).toMatch(/^iterator failed /);
       expect(subscribeCalls - callsAfterSecondFailure).toBeLessThanOrEqual(1);
       expect(loggedErrors).toContain(
-        "NATS context-pack bridge subscription failed:iterator failed 1",
+        "NATS context-pack bridge subscription failed:Error",
       );
       expect(loggedErrors).toContain(
-        "NATS context-pack bridge subscription failed:iterator failed 2",
+        "NATS context-pack bridge subscription failed:Error",
       );
 
       await runtime?.close();
@@ -497,7 +709,7 @@ describe("startNatsContextPackBridge", () => {
     const loggedErrors: string[] = [];
     const originalError = logger.error;
     logger.error = (message, extra) => {
-      loggedErrors.push(`${message}:${String(extra?.error ?? "")}`);
+      loggedErrors.push(`${message}:${String(extra?.error_type ?? "")}`);
     };
 
     try {
@@ -550,10 +762,10 @@ describe("startNatsContextPackBridge", () => {
       expect(callsAfterFailure).toBeGreaterThanOrEqual(2);
       expect(subscribeCalls - callsAfterFailure).toBeLessThanOrEqual(2);
       expect(loggedErrors).toContain(
-        "NATS context-pack bridge subscription failed:subscription iterator failed",
+        "NATS context-pack bridge subscription failed:Error",
       );
       expect(loggedErrors).toContain(
-        "NATS context-pack bridge subscription failed:connection closed",
+        "NATS context-pack bridge subscription failed:Error",
       );
 
       await runtime?.close();

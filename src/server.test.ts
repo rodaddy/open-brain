@@ -205,7 +205,15 @@ describe("GET /health", () => {
 
       natsBridgeHealth.availability = "not_runtime_available";
       natsBridgeHealth.consecutiveFailures = 2;
-      natsBridgeHealth.lastError = "iterator failed";
+      const sensitiveToken = ["sec", "ret"].join("");
+      const brokerHost = ["broker", "internal"].join(".");
+      natsBridgeHealth.lastError = [
+        "iterator failed against nats://user:",
+        sensitiveToken,
+        "@",
+        brokerHost,
+        ":4222",
+      ].join("");
 
       const res = await fetch(`${isolatedBaseUrl}/health`);
       expect(res.status).toBe(503);
@@ -217,8 +225,10 @@ describe("GET /health", () => {
         requested_transport: "nats",
         availability: "not_runtime_available",
         consecutive_failures: 2,
-        last_error: "iterator failed",
+        last_error: "redacted",
       });
+      expect(JSON.stringify(body)).not.toContain(sensitiveToken);
+      expect(JSON.stringify(body)).not.toContain(brokerHost);
     } finally {
       if (isolatedServer) {
         await new Promise<void>((resolve, reject) => {

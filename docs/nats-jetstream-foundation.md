@@ -142,6 +142,10 @@ audit once clients depend on them.
 The request body is JSON and must be compatible with `agent_context_pack`
 request semantics. `query` is optional and bounded like the MCP tool input; the
 bridge must not require fields the MCP tool accepts as omitted.
+The first NATS request/reply bridge also rejects request envelopes over 64 KiB.
+That cap is intentionally stricter than the HTTP JSON body limit so transient
+realtime messages stay small; clients should fall back to HTTP/MCP for larger
+payloads until a later release explicitly raises the NATS envelope limit.
 
 ```json
 {

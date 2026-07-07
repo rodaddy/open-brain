@@ -118,7 +118,7 @@ export function createApp(
         fallback_http: natsRuntimeBoundary.nats.fallback_http,
         consecutive_failures:
           toolDeps.natsBridgeHealth?.consecutiveFailures ?? 0,
-        last_error: toolDeps.natsBridgeHealth?.lastError ?? null,
+        last_error: toolDeps.natsBridgeHealth?.lastError ? "redacted" : null,
       },
       timestamp: new Date().toISOString(),
     };

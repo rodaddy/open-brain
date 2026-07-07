@@ -80,6 +80,21 @@ describe("readNatsRuntimeBoundary", () => {
     });
   });
 
+  it("treats loopback NATS hostnames case-insensitively", () => {
+    const boundary = readNatsRuntimeBoundary({
+      OPENBRAIN_TRANSPORT: "nats",
+      OPENBRAIN_NATS_ENABLE_BRIDGE: "true",
+      OPENBRAIN_NATS_URL: "nats://LocalHost:4222",
+    });
+
+    expect(boundary.nats.availability).toBe("available");
+    expect(summarizeNatsUrlForLog(boundary.nats.url)).toMatchObject({
+      configured: true,
+      protocol: "nats",
+      local: true,
+    });
+  });
+
   it("does not mark NATS available when bridge env is set but HTTP remains requested", () => {
     const boundary = readNatsRuntimeBoundary({
       OPENBRAIN_NATS_ENABLE_BRIDGE: "true",
@@ -116,7 +131,11 @@ describe("readNatsRuntimeBoundary", () => {
 
 describe("summarizeNatsUrlForLog", () => {
   it("omits host and credentials while preserving safe configuration facts", () => {
-    expect(summarizeNatsUrlForLog("nats://user:pass@10.71.1.21:4222")).toEqual({
+    const credentials = ["user", ":", "pass"].join("");
+    const remoteHost = ["10", "71", "1", "21"].join(".");
+    const natsUrl = ["nats://", credentials, "@", remoteHost, ":4222"].join("");
+
+    expect(summarizeNatsUrlForLog(natsUrl)).toEqual({
       configured: true,
       protocol: "nats",
       contains_credentials: true,

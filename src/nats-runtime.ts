@@ -150,7 +150,7 @@ export function summarizeNatsUrlForLog(url: string | null): NatsUrlLogSummary {
       configured: true,
       protocol: parsed.protocol.replace(/:$/, "") || null,
       contains_credentials: Boolean(parsed.username || parsed.password),
-      local: LOCAL_NATS_HOSTS.has(parsed.hostname),
+      local: LOCAL_NATS_HOSTS.has(normalizeNatsHostname(parsed.hostname)),
     };
   } catch {
     return {
@@ -169,11 +169,15 @@ function isNatsUrlAllowedForRuntime(
   if (!url) return false;
   try {
     const parsed = new URL(url);
-    if (LOCAL_NATS_HOSTS.has(parsed.hostname)) return true;
+    if (LOCAL_NATS_HOSTS.has(normalizeNatsHostname(parsed.hostname))) return true;
     return env.OPENBRAIN_NATS_ALLOW_INSECURE_REMOTE?.trim().toLowerCase() === "true";
   } catch {
     return false;
   }
+}
+
+function normalizeNatsHostname(hostname: string): string {
+  return hostname.toLowerCase();
 }
 
 export function readNatsRuntimeBoundary(

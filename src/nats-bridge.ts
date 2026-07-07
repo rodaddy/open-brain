@@ -1,5 +1,6 @@
 import type { AuthInfo } from "./types.ts";
 import type { ToolDeps } from "./tools/index.ts";
+import { z } from "zod";
 import { logger } from "./logger.ts";
 import {
   buildAgentContextPackPayload,
@@ -72,6 +73,7 @@ const decoder = new TextDecoder();
 const MAX_NATS_REQUEST_BYTES = 64 * 1024;
 const NATS_RESUBSCRIBE_INITIAL_DELAY_MS = 25;
 const NATS_RESUBSCRIBE_MAX_DELAY_MS = 1_000;
+const NATS_EMPTY_SUBSCRIPTION_DEGRADE_THRESHOLD = 2;
 
 export function createNatsBridgeHealth(
   availability: NatsBridgeHealth["availability"] = "not_runtime_available",
@@ -105,6 +107,7 @@ export async function startNatsContextPackBridge(
       boundary: options.boundary,
       tokenMap: options.tokenMap,
       deps: options.deps,
+      health,
     });
     const responded = await message.respond(encoder.encode(JSON.stringify(response)));
     if (responded === false) {
@@ -142,6 +145,7 @@ export function handleNatsContextPackMessage(input: {
   boundary: NatsRuntimeBoundary;
   tokenMap: Map<string, AuthInfo>;
   deps: ToolDeps;
+  health?: NatsBridgeHealth;
 }): unknown {
   let requestId: string | null = null;
 
@@ -158,6 +162,13 @@ export function handleNatsContextPackMessage(input: {
     }
     if (input.message.data.byteLength > MAX_NATS_REQUEST_BYTES) {
       return natsError(requestId, "payload_too_large", "NATS request body is too large");
+    }
+    if (input.health && input.health.availability !== "available") {
+      return natsError(
+        requestId,
+        "temporarily_unavailable",
+        "NATS bridge is not available",
+      );
     }
 
     const envelope = parseEnvelope(input.message.data);
@@ -185,6 +196,14 @@ export function handleNatsContextPackMessage(input: {
       body: result.payload,
     };
   } catch (err) {
+    if (!isNatsRequestValidationError(err)) {
+      logNatsRequestError(err, input.message.subject);
+      return natsError(
+        requestId,
+        "internal_error",
+        "NATS context pack request failed",
+      );
+    }
     return natsError(requestId, "bad_request", "Invalid NATS context pack request");
   }
 }
@@ -250,6 +269,7 @@ async function createNatsJsDriver(
       let closed = false;
       let resubscribeDelayMs = NATS_RESUBSCRIBE_INITIAL_DELAY_MS;
       let needsSubscription = false;
+      let consecutiveEmptySubscriptions = 0;
 
       void (async () => {
         while (!closed) {
@@ -271,15 +291,26 @@ async function createNatsJsDriver(
             for await (const message of subscription) {
               if (closed) break;
               processedMessage = true;
+              consecutiveEmptySubscriptions = 0;
               markNatsBridgeAvailable(health);
               resubscribeDelayMs = NATS_RESUBSCRIBE_INITIAL_DELAY_MS;
               await processNatsSubscriptionMessage(message, handler);
             }
-            if (!closed) {
-              markNatsBridgeUnavailable(health, "NATS subscription ended");
+            if (!closed && !processedMessage) {
+              consecutiveEmptySubscriptions += 1;
+              if (
+                consecutiveEmptySubscriptions >=
+                NATS_EMPTY_SUBSCRIPTION_DEGRADE_THRESHOLD
+              ) {
+                markNatsBridgeUnavailable(
+                  health,
+                  "NATS subscription ended without messages",
+                );
+              }
             }
           } catch (err) {
             if (!closed) {
+              consecutiveEmptySubscriptions = 0;
               markNatsBridgeUnavailable(health, errorMessage(err));
               logNatsSubscriptionError(err, subject);
             }
@@ -332,6 +363,17 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+function safeErrorType(err: unknown): string {
+  if (err instanceof SyntaxError) return "SyntaxError";
+  if (err instanceof z.ZodError) return "ZodError";
+  if (err instanceof Error) return "Error";
+  return typeof err;
+}
+
+function isNatsRequestValidationError(err: unknown): boolean {
+  return err instanceof SyntaxError || err instanceof z.ZodError;
+}
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -358,14 +400,21 @@ async function processNatsSubscriptionMessage(
 function logNatsHandlerError(err: unknown, subject: string): void {
   logger.error("NATS context-pack bridge request failed", {
     subject,
-    error: err instanceof Error ? err.message : String(err),
+    error_type: safeErrorType(err),
+  });
+}
+
+function logNatsRequestError(err: unknown, subject: string): void {
+  logger.error("NATS context-pack bridge request failed", {
+    subject,
+    error_type: safeErrorType(err),
   });
 }
 
 function logNatsSubscriptionError(err: unknown, subject: string): void {
   logger.error("NATS context-pack bridge subscription failed", {
     subject,
-    error: err instanceof Error ? err.message : String(err),
+    error_type: safeErrorType(err),
   });
 }
 
