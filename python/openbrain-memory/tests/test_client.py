@@ -14,12 +14,16 @@ import pytest
 from openbrain_memory import (
     CURRENT_CONTRACT_VERSION,
     CURRENT_TOOL_HELP,
+    DEFAULT_NATS_CONTEXT_PACK_SUBJECT,
     PACKAGE_VERSION,
     REQUIRED_CONTRACT_TOOLS,
+    NatsTransport,
     OpenBrainClient,
     OpenBrainHTTPError,
     OpenBrainProtocolError,
     OpenBrainToolError,
+    OpenBrainTransportUnavailableError,
+    RealtimeTransportAvailability,
     RetryPolicy,
 )
 from openbrain_memory.client import (
@@ -225,6 +229,121 @@ def test_health_raises_for_unstructured_503_body():
 
     with pytest.raises(OpenBrainHTTPError, match="status=503"):
         client.health()
+
+
+def test_nats_transport_defaults_to_not_runtime_available_without_fallback():
+    transport = NatsTransport("nats://127.0.0.1:4222")
+
+    assert transport.url == "nats://127.0.0.1:4222"
+    assert transport.context_pack_subject == DEFAULT_NATS_CONTEXT_PACK_SUBJECT
+    assert (
+        transport.availability
+        == RealtimeTransportAvailability.NOT_RUNTIME_AVAILABLE
+    )
+
+    with pytest.raises(OpenBrainTransportUnavailableError) as exc_info:
+        transport.post(
+            "https://brain.example/mcp",
+            headers={"Authorization": "Bearer secret-token"},
+            json_body={"jsonrpc": "2.0", "id": 1, "method": "initialize"},
+            timeout=5.0,
+        )
+
+    exc = exc_info.value
+    assert exc.transport == "nats_jetstream"
+    assert exc.availability == RealtimeTransportAvailability.NOT_RUNTIME_AVAILABLE
+    assert exc.fallback_transport is None
+    assert '"availability": "not_runtime_available"' in str(exc)
+    assert '"fallback_transport": null' in str(exc)
+    assert "context=transport:nats_jetstream" in str(exc)
+
+
+def test_nats_transport_rejects_available_state_until_runtime_exists():
+    with pytest.raises(ValueError, match="not runtime available yet"):
+        NatsTransport(
+            "nats://127.0.0.1:4222",
+            availability="available",
+        )
+
+
+def test_nats_transport_accepts_serialized_not_available_state():
+    transport = NatsTransport(
+        "nats://127.0.0.1:4222",
+        availability="not_runtime_available",
+    )
+
+    assert transport.availability is RealtimeTransportAvailability.NOT_RUNTIME_AVAILABLE
+
+
+def test_nats_transport_uses_fallback_transport_for_http_calls():
+    fallback = FakeTransport()
+    transport = NatsTransport(
+        "nats://127.0.0.1:4222",
+        context_pack_subject="ob.memory.context_pack",
+        fallback_transport=fallback,
+    )
+    client = OpenBrainClient(
+        "https://brain.example",
+        "secret-token",
+        "bilby",
+        agent_id="bilby-agent",
+        role="agent",
+        timeout=12.5,
+        transport=transport,
+    )
+
+    result = client.search_all(query="nats fallback")
+
+    assert result["tool"] == "search_all"
+    initialize, initialized, call = post_requests(fallback)
+    assert initialize["url"] == "https://brain.example/mcp"
+    assert initialized["url"] == "https://brain.example/mcp"
+    assert call["url"] == "https://brain.example/mcp"
+    assert initialize["timeout"] == 12.5
+    assert initialized["timeout"] == 12.5
+    assert call["timeout"] == 12.5
+    assert initialize["headers"]["Authorization"] == "Bearer secret-token"
+    assert initialize["headers"]["Accept"] == "application/json, text/event-stream"
+    assert initialize["headers"]["Content-Type"] == "application/json"
+    assert "Mcp-Session-Id" not in initialize["headers"]
+    assert initialize["json"]["jsonrpc"] == "2.0"
+    assert initialize["json"]["id"] == 1
+    assert initialize["json"]["method"] == "initialize"
+    assert initialize["json"]["params"]["protocolVersion"] == "2025-03-26"
+    assert initialize["json"]["params"]["clientInfo"] == {
+        "name": "openbrain-memory",
+        "version": PACKAGE_VERSION,
+    }
+    assert initialized["headers"]["Mcp-Session-Id"] == "session-123"
+    assert initialized["headers"]["MCP-Protocol-Version"] == "2025-03-26"
+    assert initialized["json"] == {
+        "jsonrpc": "2.0",
+        "method": "notifications/initialized",
+    }
+    assert call["headers"]["Mcp-Session-Id"] == "session-123"
+    assert call["headers"]["MCP-Protocol-Version"] == "2025-03-26"
+    assert call["json"]["jsonrpc"] == "2.0"
+    assert call["json"]["id"] == 2
+    assert call["json"]["method"] == "tools/call"
+    assert call["json"]["params"] == {
+        "name": "search_all",
+        "arguments": {"query": "nats fallback"},
+    }
+
+
+def test_nats_transport_post_guard_raises_value_error_for_missing_body():
+    transport = NatsTransport(
+        "nats://127.0.0.1:4222",
+        fallback_transport=FakeTransport(),
+    )
+
+    with pytest.raises(ValueError, match="json_body is required for POST"):
+        transport._delegate_or_raise(
+            "POST",
+            "https://brain.example/mcp",
+            headers={},
+            timeout=5.0,
+        )
 
 
 def test_http_error_redacts_deep_json_without_recursion_error():

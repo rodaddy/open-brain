@@ -5,6 +5,7 @@ import re
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 from importlib.metadata import PackageNotFoundError, version
 from itertools import count
 from pathlib import Path
@@ -18,6 +19,7 @@ from .policy import RetryPolicy, redact_text, with_retry
 JSON = dict[str, Any]
 MCP_PROTOCOL_VERSION = "2025-03-26"
 DEFAULT_MAX_RESPONSE_BYTES = 1_000_000
+DEFAULT_NATS_CONTEXT_PACK_SUBJECT = "ob.memory.context_pack"
 
 
 def _resolve_package_version(pyproject: Path | None = None) -> str:
@@ -321,6 +323,144 @@ class OpenBrainProtocolError(OpenBrainError):
 
 class OpenBrainToolError(OpenBrainError):
     pass
+
+
+class RealtimeTransportAvailability(StrEnum):
+    NOT_RUNTIME_AVAILABLE = "not_runtime_available"
+
+
+class OpenBrainTransportUnavailableError(OpenBrainError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        transport: str,
+        availability: RealtimeTransportAvailability,
+        fallback_transport: str | None = None,
+    ) -> None:
+        self.transport = transport
+        self.availability = availability
+        self.fallback_transport = fallback_transport
+        body = json.dumps(
+            {
+                "transport": transport,
+                "availability": availability.value,
+                "fallback_transport": fallback_transport,
+            },
+            sort_keys=True,
+        )
+        super().__init__(
+            message,
+            context=f"transport:{transport}",
+            body=body,
+        )
+
+
+class NatsTransport:
+    def __init__(
+        self,
+        url: str,
+        *,
+        context_pack_subject: str = DEFAULT_NATS_CONTEXT_PACK_SUBJECT,
+        fallback_transport: Transport | None = None,
+        availability: RealtimeTransportAvailability | str = (
+            RealtimeTransportAvailability.NOT_RUNTIME_AVAILABLE
+        ),
+    ) -> None:
+        try:
+            normalized_availability = RealtimeTransportAvailability(availability)
+        except ValueError as exc:
+            raise ValueError("NatsTransport is not runtime available yet") from exc
+        if (
+            normalized_availability
+            is not RealtimeTransportAvailability.NOT_RUNTIME_AVAILABLE
+        ):
+            raise ValueError("NatsTransport is not runtime available yet")
+        self.url = url
+        self.context_pack_subject = context_pack_subject
+        self.fallback_transport = fallback_transport
+        self.availability = normalized_availability
+
+    def get(
+        self,
+        url: str,
+        *,
+        headers: Mapping[str, str],
+        timeout: float,
+    ) -> TransportResponse:
+        return self._delegate_or_raise(
+            "GET",
+            url,
+            headers=headers,
+            timeout=timeout,
+        )
+
+    def delete(
+        self,
+        url: str,
+        *,
+        headers: Mapping[str, str],
+        timeout: float,
+    ) -> TransportResponse:
+        return self._delegate_or_raise(
+            "DELETE",
+            url,
+            headers=headers,
+            timeout=timeout,
+        )
+
+    def post(
+        self,
+        url: str,
+        *,
+        headers: Mapping[str, str],
+        json_body: JSON,
+        timeout: float,
+    ) -> TransportResponse:
+        return self._delegate_or_raise(
+            "POST",
+            url,
+            headers=headers,
+            timeout=timeout,
+            json_body=json_body,
+        )
+
+    def _delegate_or_raise(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: Mapping[str, str],
+        timeout: float,
+        json_body: JSON | None = None,
+    ) -> TransportResponse:
+        if self.fallback_transport is not None:
+            if method == "GET":
+                return self.fallback_transport.get(
+                    url,
+                    headers=headers,
+                    timeout=timeout,
+                )
+            if method == "DELETE":
+                return self.fallback_transport.delete(
+                    url,
+                    headers=headers,
+                    timeout=timeout,
+                )
+            if json_body is None:
+                raise ValueError("json_body is required for POST")
+            return self.fallback_transport.post(
+                url,
+                headers=headers,
+                json_body=json_body,
+                timeout=timeout,
+            )
+        raise OpenBrainTransportUnavailableError(
+            "Open Brain realtime transport is not runtime available",
+            transport="nats_jetstream",
+            availability=self.availability,
+            fallback_transport=None,
+        )
 
 
 class OpenBrainClient:
