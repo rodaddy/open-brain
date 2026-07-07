@@ -71,6 +71,95 @@ export const agentContextPackInputSchema = {
     .optional(),
 };
 
+const agentContextPackArgsSchema = z.object(agentContextPackInputSchema);
+
+export type AgentContextPackArgs = z.infer<typeof agentContextPackArgsSchema>;
+
+export interface AgentContextPackBuildResult {
+  payload: unknown;
+  isError: boolean;
+}
+
+export function parseAgentContextPackArgs(args: unknown): AgentContextPackArgs {
+  return agentContextPackArgsSchema.parse(args);
+}
+
+export function buildAgentContextPackPayload(
+  args: AgentContextPackArgs,
+  auth: AuthInfo | undefined,
+  deps: ToolDeps,
+): AgentContextPackBuildResult {
+  if (!auth || !canRead(auth.role, "sessions")) {
+    return {
+      payload: { error: "Permission denied: cannot read agent context pack" },
+      isError: true,
+    };
+  }
+
+  const ns = args.namespace ?? auth.clientId;
+  if (!canReadNamespace(auth, ns)) {
+    return {
+      payload: { error: `Permission denied: cannot read namespace '${ns}'` },
+      isError: true,
+    };
+  }
+
+  const scope: WorkingSetScope = {
+    namespace: ns,
+    agent: args.agent,
+    platform: args.platform,
+    server_id: args.server_id,
+    channel_id: args.channel_id,
+    thread_id: args.thread_id ?? null,
+    session_key: args.session_key,
+  };
+  const normalizedScope = normalizeWorkingSetScope(scope);
+  const includeWorkingSet =
+    !args.requested_sections ||
+    args.requested_sections.includes("working_set");
+  const includeRecovery =
+    args.include_unreviewed_recovery === true &&
+    (!args.requested_sections ||
+      args.requested_sections.includes("recovery"));
+  const workingSet = storeFor(deps).buildContextPackFragment(scope);
+  const recovery = includeRecovery
+    ? recoveryStoreFor(deps).buildContextPackFragment(scope)
+    : null;
+
+  return {
+    payload: {
+      schema: "openbrain.agent_context_pack.v1",
+      status: "ok",
+      scope: {
+        namespace_source: "authorization",
+        ...normalizedScope,
+      },
+      sections: {
+        ...(includeWorkingSet
+          ? { working_set: workingSet.working_set }
+          : {}),
+        ...(recovery ? { recovery: recovery.recovery } : {}),
+      },
+      warnings: {
+        scope_denials: [
+          ...(includeWorkingSet
+            ? workingSet.warnings.scope_denials
+            : []),
+          ...(recovery ? recovery.warnings.scope_denials : []),
+        ],
+      },
+      budget: {
+        requested: args.budget ?? null,
+        ...(includeWorkingSet ? workingSet.budget : {}),
+        ...(recovery ? recovery.budget : {}),
+      },
+      citations: [],
+      query: args.query ?? null,
+    },
+    isError: false,
+  };
+}
+
 export function registerWorkingSetAppend(
   server: McpServer,
   deps: ToolDeps,
@@ -334,73 +423,20 @@ export function registerAgentContextPack(
       },
     },
     async (args, extra) => {
-      const auth = extra.authInfo as AuthInfo | undefined;
-      if (!auth || !canRead(auth.role, "sessions")) {
-        return textError("Permission denied: cannot read agent context pack");
-      }
-
-      const ns = args.namespace ?? auth.clientId;
-      if (!canReadNamespace(auth, ns)) {
-        return textError(`Permission denied: cannot read namespace '${ns}'`);
-      }
-
-      const scope: WorkingSetScope = {
-        namespace: ns,
-        agent: args.agent,
-        platform: args.platform,
-        server_id: args.server_id,
-        channel_id: args.channel_id,
-        thread_id: args.thread_id ?? null,
-        session_key: args.session_key,
-      };
-      const normalizedScope = normalizeWorkingSetScope(scope);
-      const includeWorkingSet =
-        !args.requested_sections ||
-        args.requested_sections.includes("working_set");
-      const includeRecovery =
-        args.include_unreviewed_recovery === true &&
-        (!args.requested_sections ||
-          args.requested_sections.includes("recovery"));
-      const workingSet = storeFor(deps).buildContextPackFragment(scope);
-      const recovery = includeRecovery
-        ? recoveryStoreFor(deps).buildContextPackFragment(scope)
-        : null;
+      const result = buildAgentContextPackPayload(
+        parseAgentContextPackArgs(args),
+        extra.authInfo as AuthInfo | undefined,
+        deps,
+      );
 
       return {
         content: [
           {
             type: "text" as const,
-            text: JSON.stringify({
-              schema: "openbrain.agent_context_pack.v1",
-              status: "ok",
-              scope: {
-                namespace_source: "authorization",
-                ...normalizedScope,
-              },
-              sections: {
-                ...(includeWorkingSet
-                  ? { working_set: workingSet.working_set }
-                  : {}),
-                ...(recovery ? { recovery: recovery.recovery } : {}),
-              },
-              warnings: {
-                scope_denials: [
-                  ...(includeWorkingSet
-                    ? workingSet.warnings.scope_denials
-                    : []),
-                  ...(recovery ? recovery.warnings.scope_denials : []),
-                ],
-              },
-              budget: {
-                requested: args.budget ?? null,
-                ...(includeWorkingSet ? workingSet.budget : {}),
-                ...(recovery ? recovery.budget : {}),
-              },
-              citations: [],
-              query: args.query ?? null,
-            }),
+            text: JSON.stringify(result.payload),
           },
         ],
+        isError: result.isError,
       };
     },
   );

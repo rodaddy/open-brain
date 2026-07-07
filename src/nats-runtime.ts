@@ -17,7 +17,7 @@ const identitySchema = z.object({
   session_key: z.string().min(1).max(500),
 });
 
-const requestEnvelopeSchema = z.object({
+export const contextPackEnvelopeSchema = z.object({
   schema: z.literal("openbrain.nats.request.v1"),
   operation: z.literal(NATS_CONTEXT_PACK_OPERATION),
   request_id: z.string().min(1).max(500),
@@ -44,13 +44,13 @@ const requestEnvelopeSchema = z.object({
   }),
 });
 
-export type NatsContextPackEnvelope = z.infer<typeof requestEnvelopeSchema>;
+export type NatsContextPackEnvelope = z.infer<typeof contextPackEnvelopeSchema>;
 
 export interface NatsRuntimeBoundary {
   requested_transport: "http" | "nats";
   fallback_transport: "http_mcp";
   nats: {
-    availability: "not_runtime_available";
+    availability: "available" | "not_runtime_available";
     url: string | null;
     context_pack_subject: string;
     fallback_http: boolean;
@@ -95,6 +95,36 @@ export interface NatsBridgePlan {
   };
 }
 
+export function mapNatsEnvelopeToToolArgs(
+  envelope: NatsContextPackEnvelope,
+): NatsBridgePlan["mcpToolCall"]["arguments"] {
+  const toolArgs: NatsBridgePlan["mcpToolCall"]["arguments"] = {
+    agent: envelope.identity.agent,
+    platform: envelope.identity.platform,
+    server_id: envelope.identity.server_id,
+    channel_id: envelope.identity.channel_id,
+    session_key: envelope.identity.session_key,
+    query: envelope.body.query,
+  };
+
+  if (
+    envelope.identity.thread_id !== null &&
+    envelope.identity.thread_id !== undefined
+  ) {
+    toolArgs.thread_id = envelope.identity.thread_id;
+  }
+  if (envelope.body.requested_sections) {
+    toolArgs.requested_sections = envelope.body.requested_sections;
+  }
+  if (envelope.body.include_unreviewed_recovery !== undefined) {
+    toolArgs.include_unreviewed_recovery =
+      envelope.body.include_unreviewed_recovery;
+  }
+  if (envelope.body.budget) toolArgs.budget = envelope.body.budget;
+
+  return toolArgs;
+}
+
 function trimEnv(value: string | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
@@ -132,13 +162,16 @@ export function readNatsRuntimeBoundary(
     env.OPENBRAIN_TRANSPORT?.trim().toLowerCase() === "nats"
       ? "nats"
       : "http";
+  const url = trimEnv(env.OPENBRAIN_NATS_URL);
+  const bridgeEnabled =
+    env.OPENBRAIN_NATS_ENABLE_BRIDGE?.trim().toLowerCase() === "true";
 
   return {
     requested_transport: requestedTransport,
     fallback_transport: "http_mcp",
     nats: {
-      availability: "not_runtime_available",
-      url: trimEnv(env.OPENBRAIN_NATS_URL),
+      availability: bridgeEnabled && url ? "available" : "not_runtime_available",
+      url,
       context_pack_subject:
         trimEnv(env.OPENBRAIN_NATS_CONTEXT_PACK_SUBJECT) ?? DEFAULT_NATS_SUBJECT,
       fallback_http: env.OPENBRAIN_NATS_FALLBACK_HTTP?.trim().toLowerCase() !== "false",
@@ -151,7 +184,7 @@ export function planNatsContextPackBridge(
   input: NatsBridgePlanInput,
 ): NatsBridgePlan {
   if (boundary.nats.availability !== "not_runtime_available") {
-    throw new Error("Unexpected runtime availability state");
+    throw new Error("NATS runtime is available; HTTP/MCP fallback plan is not used");
   }
 
   if (!boundary.nats.fallback_http) {
@@ -169,30 +202,8 @@ export function planNatsContextPackBridge(
     throw new Error("Bearer token is required for NATS bridge fallback");
   }
 
-  const envelope = requestEnvelopeSchema.parse(input.envelope);
-  const toolArgs: NatsBridgePlan["mcpToolCall"]["arguments"] = {
-    agent: envelope.identity.agent,
-    platform: envelope.identity.platform,
-    server_id: envelope.identity.server_id,
-    channel_id: envelope.identity.channel_id,
-    session_key: envelope.identity.session_key,
-    query: envelope.body.query,
-  };
-
-  if (
-    envelope.identity.thread_id !== null &&
-    envelope.identity.thread_id !== undefined
-  ) {
-    toolArgs.thread_id = envelope.identity.thread_id;
-  }
-  if (envelope.body.requested_sections) {
-    toolArgs.requested_sections = envelope.body.requested_sections;
-  }
-  if (envelope.body.include_unreviewed_recovery !== undefined) {
-    toolArgs.include_unreviewed_recovery =
-      envelope.body.include_unreviewed_recovery;
-  }
-  if (envelope.body.budget) toolArgs.budget = envelope.body.budget;
+  const envelope = contextPackEnvelopeSchema.parse(input.envelope);
+  const toolArgs = mapNatsEnvelopeToToolArgs(envelope);
 
   return {
     status: "http_mcp_fallback",

@@ -28,8 +28,8 @@ export interface OpenBrainContract {
   };
   realtime_transport: {
     nats_jetstream: {
-      status: "planned-transport-foundation";
-      availability: "not_runtime_available";
+      status: "planned-transport-foundation" | "runtime-available";
+      availability: "available" | "not_runtime_available";
       parent_issue: 223;
       contract_doc: "docs/nats-jetstream-foundation.md";
       server: {
@@ -491,7 +491,11 @@ export function contractHash(
 
 export function buildContract(
   generatedAt = new Date().toISOString(),
+  options: {
+    natsAvailability?: "available" | "not_runtime_available";
+  } = {},
 ): OpenBrainContract {
+  const natsAvailability = options.natsAvailability ?? "not_runtime_available";
   const payload = {
     service: "open-brain" as const,
     contract_version: CONTRACT_VERSION,
@@ -515,8 +519,10 @@ export function buildContract(
     },
     realtime_transport: {
       nats_jetstream: {
-        status: "planned-transport-foundation" as const,
-        availability: "not_runtime_available" as const,
+        status: natsAvailability === "available"
+          ? "runtime-available" as const
+          : "planned-transport-foundation" as const,
+        availability: natsAvailability,
         parent_issue: 223 as const,
         contract_doc: "docs/nats-jetstream-foundation.md" as const,
         server: {

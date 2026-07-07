@@ -64,6 +64,21 @@ describe("readNatsRuntimeBoundary", () => {
       fallback_http: true,
     });
   });
+
+  it("marks NATS available only when the bridge is explicitly enabled with a URL", () => {
+    const boundary = readNatsRuntimeBoundary({
+      OPENBRAIN_TRANSPORT: "nats",
+      OPENBRAIN_NATS_ENABLE_BRIDGE: "true",
+      OPENBRAIN_NATS_URL: "nats://127.0.0.1:4222",
+    });
+
+    expect(boundary.requested_transport).toBe("nats");
+    expect(boundary.nats).toMatchObject({
+      availability: "available",
+      url: "nats://127.0.0.1:4222",
+      context_pack_subject: "ob.memory.context_pack",
+    });
+  });
 });
 
 describe("summarizeNatsUrlForLog", () => {
@@ -110,6 +125,22 @@ describe("planNatsContextPackBridge", () => {
         },
       },
     });
+  });
+
+  it("does not build a fallback plan after the NATS bridge is available", () => {
+    const boundary = readNatsRuntimeBoundary({
+      OPENBRAIN_TRANSPORT: "nats",
+      OPENBRAIN_NATS_ENABLE_BRIDGE: "true",
+      OPENBRAIN_NATS_URL: "nats://127.0.0.1:4222",
+    });
+
+    expect(() =>
+      planNatsContextPackBridge(boundary, {
+        subject: "ob.memory.context_pack",
+        envelope: baseEnvelope,
+        bearerToken: "token",
+      }),
+    ).toThrow("NATS runtime is available; HTTP/MCP fallback plan is not used");
   });
 
   it("keeps fallback tool arguments within the implemented agent_context_pack schema", () => {

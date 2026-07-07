@@ -1,8 +1,9 @@
 # Agent Context Pack Contract
 
 Status: locally runtime-available over MCP for scoped working-set context and
-explicit quarantined recovery summaries; NATS transport and broader section
-assembly remain planned.
+explicit quarantined recovery summaries; an opt-in server-side NATS
+request/reply bridge can expose the same pack when explicitly enabled. Broader
+section assembly remains planned.
 Parent issue: #220.
 Research receipt: PR #225, `docs/realtime-agent-memory-research.md`.
 
@@ -17,9 +18,11 @@ every turn.
 This contract defines the envelope and scope rules. The MCP
 `agent_context_pack` tool currently exposes the exact-scope `working_set`
 section from RAM-first working context and, only when explicitly requested,
-the exact-scope `recovery` section from the quarantined recovery WAL. NATS
-transport and broader durable section assembly remain planned until their
-owning issues land.
+the exact-scope `recovery` section from the quarantined recovery WAL. The NATS
+bridge maps `ob.memory.context_pack` request/reply traffic to that same
+server-authoritative pack path only when `OPENBRAIN_TRANSPORT=nats`,
+`OPENBRAIN_NATS_ENABLE_BRIDGE=true`, and `OPENBRAIN_NATS_URL` are configured.
+Broader durable section assembly remains planned until its owning issues land.
 
 ## Ownership Boundary
 

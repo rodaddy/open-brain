@@ -232,20 +232,23 @@ By default, these streams store minimized metadata only. The stream names reserv
 places for future diagnostics; they are not permission to persist raw
 `agent_context_pack` request/response bodies, queries, headers, or context.
 
-## Python Client Plan
+## Python Client Status
 
-`openbrain-memory` will keep HTTP as the default transport. A future
-`NatsTransport` must be opt-in and sit behind the same facade semantics:
+`openbrain-memory` keeps HTTP as the default transport. The package now exposes
+an opt-in `NatsTransport` boundary, but the Python client still fails closed or
+delegates to HTTP fallback until a Python-native request/reply implementation is
+approved. The server-side bridge is independently opt-in and advertises
+availability only when explicitly enabled.
 
 - Own the same `Transport` protocol shape as `UrllibTransport` where practical:
   `get()`, `delete()`, and `post()` remain the package boundary until a tested
   tool-call transport abstraction replaces it.
-- Constructor/config plan:
+- Constructor/config:
   `NatsTransport(url, context_pack_subject="ob.memory.context_pack",
   fallback_transport=UrllibTransport(...), timeout=...)`.
-- Env plan:
-  `OPENBRAIN_TRANSPORT=nats`, `OPENBRAIN_NATS_URL`,
-  `OPENBRAIN_NATS_CONTEXT_PACK_SUBJECT`, and
+- Server env:
+  `OPENBRAIN_TRANSPORT=nats`, `OPENBRAIN_NATS_ENABLE_BRIDGE=true`,
+  `OPENBRAIN_NATS_URL`, `OPENBRAIN_NATS_CONTEXT_PACK_SUBJECT`, and
   `OPENBRAIN_NATS_FALLBACK_HTTP=true`.
 - Request/reply mapping: only `agent_context_pack` is NATS-native in the first
   bridge. Other Open Brain calls continue over HTTP/MCP unless a later PR adds
@@ -256,11 +259,10 @@ places for future diagnostics; they are not permission to persist raw
   missing metadata falls back to HTTP.
 - Authority: namespace/header/delegation semantics remain the Open Brain server
   policy. NATS credentials do not create namespace authority.
-- Tests before implementation: fake request/reply transport, no-responder
-  fallback, timeout fallback, contract-gated fallback, and HTTP-vs-NATS parity
-  fixtures for response/error envelopes.
-
-This PR does not implement `NatsTransport`.
+- Server tests cover fake request/reply transport, bearer-token rejection,
+  contract-gated availability, HTTP fallback planning, and matching
+  `agent_context_pack` response envelopes. Python-native request/reply tests
+  remain future work.
 
 ## Hermes Opt-In Plan
 
@@ -269,6 +271,7 @@ Initial config should be explicit:
 
 ```text
 OPENBRAIN_TRANSPORT=http
+OPENBRAIN_NATS_ENABLE_BRIDGE=false
 OPENBRAIN_NATS_URL=nats://127.0.0.1:4222
 OPENBRAIN_NATS_CONTEXT_PACK_SUBJECT=ob.memory.context_pack
 OPENBRAIN_NATS_FALLBACK_HTTP=true
@@ -282,7 +285,10 @@ NATS availability, Hermes must use HTTP/MCP.
 Local-only validation for #223:
 
 - contract tests prove `get_contract` advertises NATS as planned, not runtime
-  available;
+  available by default, and as available only when the bridge is explicitly
+  enabled;
+- server tests prove authorized NATS request/reply maps to the same
+  `agent_context_pack` payload and rejects missing bearer auth;
 - docs make core01 deployment optional/deferred;
 - Python tests prove package contract pins match the server contract version.
 

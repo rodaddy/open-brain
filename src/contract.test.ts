@@ -607,6 +607,19 @@ describe("Open Brain contract manifest", () => {
     expect(contractHash(changedPayload)).toBe(base.schema_hash);
   });
 
+  it("can advertise NATS runtime availability without changing the required schema hash", () => {
+    const base = buildContract("2026-06-18T00:00:00.000Z");
+    const available = buildContract("2026-06-18T00:00:00.000Z", {
+      natsAvailability: "available",
+    });
+
+    expect(available.realtime_transport.nats_jetstream).toMatchObject({
+      status: "runtime-available",
+      availability: "available",
+    });
+    expect(available.schema_hash).toBe(base.schema_hash);
+  });
+
   it("changes the schema hash when public capabilities change", () => {
     const base = buildContract("2026-06-18T00:00:00.000Z");
     const changedPayload: ContractPayload = {
