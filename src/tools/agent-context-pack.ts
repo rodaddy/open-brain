@@ -29,7 +29,7 @@ export const SECTION_NAMES = [
   "candidate_memory",
 ] as const;
 
-const scopeInputSchema = {
+export const scopeInputSchema = {
   namespace: z
     .string()
     .max(500)
@@ -53,6 +53,22 @@ const scopeInputSchema = {
     .min(1)
     .max(500)
     .describe("Stable active-session key"),
+};
+
+export const agentContextPackInputSchema = {
+  ...scopeInputSchema,
+  query: z.string().max(4000).optional(),
+  requested_sections: z.array(z.enum(SECTION_NAMES)).optional(),
+  include_unreviewed_recovery: z
+    .boolean()
+    .optional()
+    .describe("Explicitly include exact-scope quarantined recovery summary"),
+  budget: z
+    .object({
+      max_tokens: z.number().int().min(100).max(20000).optional(),
+      max_latency_ms: z.number().int().min(1).max(10000).optional(),
+    })
+    .optional(),
 };
 
 export function registerWorkingSetAppend(
@@ -309,21 +325,7 @@ export function registerAgentContextPack(
         "Build a scoped realtime agent context pack. The working_set section " +
         "is included only for the exact namespace/agent/platform/server/" +
         "channel/thread/session scope.",
-      inputSchema: {
-        ...scopeInputSchema,
-        query: z.string().max(4000).optional(),
-        requested_sections: z.array(z.enum(SECTION_NAMES)).optional(),
-        include_unreviewed_recovery: z
-          .boolean()
-          .optional()
-          .describe("Explicitly include exact-scope quarantined recovery summary"),
-        budget: z
-          .object({
-            max_tokens: z.number().int().min(100).max(20000).optional(),
-            max_latency_ms: z.number().int().min(1).max(10000).optional(),
-          })
-          .optional(),
-      },
+      inputSchema: agentContextPackInputSchema,
       annotations: {
         title: "Agent Context Pack",
         readOnlyHint: true,

@@ -243,17 +243,17 @@ row just to preserve lineage.
 ### Pattern
 
 A first-class second transport can still drift if its planning envelope accepts
-fields, section names, budgets, or metadata shapes that the authoritative
-HTTP/MCP tool would reject. Planned-only bridge code is contract surface area:
-callers can build against it before runtime rollout. NATS `agent_context_pack`
-must use the same section enum and comparable bounds for query, budget, client
-context refs, and metadata.
+fields, section names, or budgets that the authoritative HTTP/MCP tool would
+reject. Planned-only bridge code is contract surface area: callers can build
+against it before runtime rollout. NATS `agent_context_pack` must use the same
+section enum, comparable bounds for query/budget, and a strict body schema so
+unsupported planned fields fail before fallback planning.
 
 ### Review Questions
 
 - Does the secondary transport import or mirror the same enum/bounds as the
   authoritative tool or manifest?
-- Are unknown section names and oversized metadata rejected before bridge
-  planning?
+- Are unknown section names and unsupported body fields rejected before bridge
+  planning instead of being stripped silently?
 - Are query and budget limits no looser than the primary tool schema?
 - Do tests cover drift cases, not only the happy-path envelope?

@@ -4,6 +4,7 @@ import {
   readNatsRuntimeBoundary,
   summarizeNatsUrlForLog,
 } from "./nats-runtime.ts";
+import { agentContextPackInputSchema } from "./tools/agent-context-pack.ts";
 
 const baseEnvelope = {
   schema: "openbrain.nats.request.v1",
@@ -22,13 +23,6 @@ const baseEnvelope = {
     query: "what is the current task state?",
     requested_sections: ["working_set", "durable_memory"],
     include_unreviewed_recovery: true,
-    user_id: "user-1",
-    repo: "rodaddy/open-brain",
-    task: "issue-223",
-    client_context_refs: [
-      { kind: "repo_path", path: "docs/nats-jetstream-foundation.md" },
-    ],
-    metadata: { route_name: "discord_reply" },
     budget: { max_tokens: 3500, max_latency_ms: 750 },
   },
   metadata: {
@@ -112,17 +106,28 @@ describe("planNatsContextPackBridge", () => {
           query: "what is the current task state?",
           requested_sections: ["working_set", "durable_memory"],
           include_unreviewed_recovery: true,
-          user_id: "user-1",
-          repo: "rodaddy/open-brain",
-          task: "issue-223",
-          client_context_refs: [
-            { kind: "repo_path", path: "docs/nats-jetstream-foundation.md" },
-          ],
-          metadata: { route_name: "discord_reply" },
           budget: { max_tokens: 3500, max_latency_ms: 750 },
         },
       },
     });
+  });
+
+  it("keeps fallback tool arguments within the implemented agent_context_pack schema", () => {
+    const boundary = readNatsRuntimeBoundary({
+      OPENBRAIN_TRANSPORT: "nats",
+    });
+
+    const plan = planNatsContextPackBridge(boundary, {
+      subject: "ob.memory.context_pack",
+      envelope: baseEnvelope,
+      bearerToken: "token",
+    });
+
+    expect(
+      Object.keys(plan.mcpToolCall.arguments).filter(
+        (key) => !(key in agentContextPackInputSchema),
+      ),
+    ).toEqual([]);
   });
 
   it("preserves optional thread_id when the caller scoped the request to a thread", () => {
@@ -227,7 +232,7 @@ describe("planNatsContextPackBridge", () => {
     ).toThrow();
   });
 
-  it("rejects unbounded metadata and context references before fallback planning", () => {
+  it("rejects unsupported body fields before fallback planning", () => {
     const boundary = readNatsRuntimeBoundary({
       OPENBRAIN_TRANSPORT: "nats",
     });
@@ -239,7 +244,7 @@ describe("planNatsContextPackBridge", () => {
           ...baseEnvelope,
           body: {
             ...baseEnvelope.body,
-            metadata: { large: "x".repeat(3000) },
+            metadata: { route_name: "discord_reply" },
           },
         },
         bearerToken: "token",
