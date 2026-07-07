@@ -50,6 +50,10 @@ import { createPool } from "../src/db/pool.ts";
 const LEGACY_NAMESPACE = "collab";
 const SHARED_NAMESPACE = "shared-kb";
 const REPO_FACT_ENTITY_TYPE = "repo_fact";
+export const COLLAB_RETIRE_APPROVAL_ENV =
+  "OPENBRAIN_COLLAB_RETIRE_RELEASE_APPROVED";
+export const COLLAB_RETIRE_APPROVAL_VALUE = "core01-live-db-after-backup";
+const LOCAL_DB_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 
 /** Content tables affected by the legacy fallback removal (allowlist). */
 const CONTENT_TABLES = [
@@ -168,6 +172,7 @@ function usage(exitCode = 2): never {
       "       [--acknowledge-out-of-scope] [--thoughts] [--entities] [--lanes]",
       "",
       "Dry-run is the DEFAULT. Pass --execute to mutate.",
+      `--execute also requires ${COLLAB_RETIRE_APPROVAL_ENV}=${COLLAB_RETIRE_APPROVAL_VALUE} in the approved release shell.`,
       "With no step flags all steps run; pass a subset to scope the run.",
       "If the pre-flight audit finds live collab content outside the migrated",
       "scope, --execute refuses to run unless --acknowledge-out-of-scope is",
@@ -201,6 +206,23 @@ export function parseArgs(argv: string[]): Args {
       ? requested
       : new Set<StepName>(["thoughts", "entities", "lanes"]);
   return { execute, acknowledgeOutOfScope, steps };
+}
+
+export function assertExecuteApproval(
+  env: Record<string, string | undefined> = process.env,
+): void {
+  if (env[COLLAB_RETIRE_APPROVAL_ENV] === COLLAB_RETIRE_APPROVAL_VALUE) {
+    return;
+  }
+  throw new Error(
+    [
+      `--execute requires ${COLLAB_RETIRE_APPROVAL_ENV}=`,
+      COLLAB_RETIRE_APPROVAL_VALUE,
+      ` in the approved release/runtime environment after backup and explicit`,
+      ` release approval. Do not run live mutation from a PR worktree, local`,
+      ` planning checkout, scratch shell, or credential-only shell.`,
+    ].join(""),
+  );
 }
 
 async function countScalar(
@@ -498,6 +520,14 @@ async function runSteps(
   }
 }
 
+export function dbHostRequiresReleaseApproval(
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  const host = env.DB_HOST?.trim().toLowerCase();
+  if (!host) return false;
+  return !LOCAL_DB_HOSTS.has(host);
+}
+
 /**
  * Runs the pre-flight audit and the requested steps. In execute mode the audit
  * gate is enforced first, then every step runs inside ONE transaction so a
@@ -511,7 +541,12 @@ export async function runMigration(
     connect?: () => Promise<Queryable & { release: () => void }>;
   },
   args: Args,
+  env: Record<string, string | undefined> = process.env,
 ): Promise<Report> {
+  if (args.execute || dbHostRequiresReleaseApproval(env)) {
+    assertExecuteApproval(env);
+  }
+
   const report: Report = {
     dry_run: !args.execute,
     legacy_namespace: LEGACY_NAMESPACE,
