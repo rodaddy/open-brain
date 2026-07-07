@@ -44,7 +44,7 @@ describe("assert-db-tests-ran anti-skip guard", () => {
   it("passes when every required live-Postgres suite executed cleanly", () => {
     const result = evaluateJunit(wrap(allSuitesGreen()));
     expect(result.errors).toEqual([]);
-    expect(result.executedLiveTestcases).toBe(17);
+    expect(result.executedLiveTestcases).toBe(18);
   });
 
   it("fails when a required suite is missing entirely", () => {
@@ -181,7 +181,7 @@ describe("assert-db-tests-ran anti-skip guard", () => {
     }).join("\n");
 
     const result = evaluateJunit(wrap(suites));
-    expect(result.executedLiveTestcases).toBe(17);
+    expect(result.executedLiveTestcases).toBe(18);
     expect(
       result.errors.some((e) =>
         e.includes(
