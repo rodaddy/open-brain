@@ -13,7 +13,10 @@ import { logger } from "./logger.ts";
 import { requestLogger } from "./middleware/request-logger.ts";
 import { createRestRouter } from "./rest-api.ts";
 import { createPromotionRouter } from "./rest-promotion.ts";
-import { readNatsRuntimeBoundary } from "./nats-runtime.ts";
+import {
+  readNatsRuntimeBoundary,
+  summarizeNatsUrlForLog,
+} from "./nats-runtime.ts";
 import type { AuthInfo, HealthStatus } from "./types.ts";
 
 const EMBEDDING_BASE_URL = process.env.EMBEDDING_BASE_URL;
@@ -202,7 +205,7 @@ if (import.meta.main) {
       fallback_transport: natsRuntimeBoundary.fallback_transport,
       fallback_http: natsRuntimeBoundary.nats.fallback_http,
       context_pack_subject: natsRuntimeBoundary.nats.context_pack_subject,
-      nats_url: natsRuntimeBoundary.nats.url,
+      nats_url: summarizeNatsUrlForLog(natsRuntimeBoundary.nats.url),
     });
   }
 

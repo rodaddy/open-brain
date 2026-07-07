@@ -17,7 +17,7 @@ import {
 } from "../realtime/recovery-wal.ts";
 import type { ToolDeps } from "./index.ts";
 
-const SECTION_NAMES = [
+export const SECTION_NAMES = [
   "working_set",
   "recovery",
   "durable_lane_context",

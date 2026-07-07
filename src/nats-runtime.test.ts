@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
   planNatsContextPackBridge,
   readNatsRuntimeBoundary,
+  summarizeNatsUrlForLog,
 } from "./nats-runtime.ts";
 
 const baseEnvelope = {
@@ -67,6 +68,16 @@ describe("readNatsRuntimeBoundary", () => {
       url: "nats://127.0.0.1:4222",
       context_pack_subject: "ob.memory.context_pack",
       fallback_http: true,
+    });
+  });
+});
+
+describe("summarizeNatsUrlForLog", () => {
+  it("omits host and credentials while preserving safe configuration facts", () => {
+    expect(summarizeNatsUrlForLog("nats://user:pass@10.71.1.21:4222")).toEqual({
+      configured: true,
+      protocol: "nats",
+      contains_credentials: true,
     });
   });
 });
@@ -190,6 +201,46 @@ describe("planNatsContextPackBridge", () => {
         envelope: {
           ...baseEnvelope,
           operation: "session_wrap",
+        },
+        bearerToken: "token",
+      }),
+    ).toThrow();
+  });
+
+  it("rejects requested sections outside the current agent_context_pack contract", () => {
+    const boundary = readNatsRuntimeBoundary({
+      OPENBRAIN_TRANSPORT: "nats",
+    });
+
+    expect(() =>
+      planNatsContextPackBridge(boundary, {
+        subject: "ob.memory.context_pack",
+        envelope: {
+          ...baseEnvelope,
+          body: {
+            ...baseEnvelope.body,
+            requested_sections: ["working_set", "unknown_section"],
+          },
+        },
+        bearerToken: "token",
+      }),
+    ).toThrow();
+  });
+
+  it("rejects unbounded metadata and context references before fallback planning", () => {
+    const boundary = readNatsRuntimeBoundary({
+      OPENBRAIN_TRANSPORT: "nats",
+    });
+
+    expect(() =>
+      planNatsContextPackBridge(boundary, {
+        subject: "ob.memory.context_pack",
+        envelope: {
+          ...baseEnvelope,
+          body: {
+            ...baseEnvelope.body,
+            metadata: { large: "x".repeat(3000) },
+          },
         },
         bearerToken: "token",
       }),

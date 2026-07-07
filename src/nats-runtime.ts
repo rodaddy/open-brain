@@ -1,9 +1,44 @@
 import { z } from "zod";
+import { SECTION_NAMES } from "./tools/agent-context-pack.ts";
 
 const NATS_CONTEXT_PACK_OPERATION = "agent_context_pack";
 const DEFAULT_NATS_SUBJECT = "ob.memory.context_pack";
+const MAX_CONTEXT_PACK_QUERY_CHARS = 4000;
+const MAX_METADATA_KEYS = 50;
+const MAX_METADATA_JSON_CHARS = 2000;
+const MAX_CLIENT_CONTEXT_REFS = 20;
 
-const requestedSectionsSchema = z.array(z.string().min(1).max(200)).max(32);
+const requestedSectionsSchema = z.array(z.enum(SECTION_NAMES)).max(32);
+
+const boundedJsonRecordSchema = z
+  .record(z.string(), z.unknown())
+  .superRefine((value, ctx) => {
+    if (Object.keys(value).length > MAX_METADATA_KEYS) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `metadata exceeds ${MAX_METADATA_KEYS} keys`,
+      });
+      return;
+    }
+
+    let serialized: string;
+    try {
+      serialized = JSON.stringify(value);
+    } catch {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "metadata must be JSON-serializable",
+      });
+      return;
+    }
+
+    if (serialized.length > MAX_METADATA_JSON_CHARS) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `metadata exceeds ${MAX_METADATA_JSON_CHARS} serialized characters`,
+      });
+    }
+  });
 
 const identitySchema = z.object({
   namespace_source: z.literal("authorization"),
@@ -21,24 +56,31 @@ const requestEnvelopeSchema = z.object({
   request_id: z.string().min(1).max(500),
   identity: identitySchema,
   body: z.object({
-    query: z.string().min(1).max(20_000),
+    query: z.string().min(1).max(MAX_CONTEXT_PACK_QUERY_CHARS),
     requested_sections: requestedSectionsSchema.optional(),
     include_unreviewed_recovery: z.boolean().optional(),
     user_id: z.string().max(500).optional(),
     repo: z.string().max(500).optional(),
     task: z.string().max(500).optional(),
-    client_context_refs: z.array(z.record(z.string(), z.unknown())).max(64).optional(),
-    metadata: z.record(z.string(), z.unknown()).optional(),
-    budget: z.object({
-      max_tokens: z.number().int().positive().max(200_000).optional(),
-      max_latency_ms: z.number().int().positive().max(120_000).optional(),
-    }).optional(),
+    client_context_refs: z
+      .array(boundedJsonRecordSchema)
+      .max(MAX_CLIENT_CONTEXT_REFS)
+      .optional(),
+    metadata: boundedJsonRecordSchema.optional(),
+    budget: z
+      .object({
+        max_tokens: z.number().int().min(100).max(20_000).optional(),
+        max_latency_ms: z.number().int().min(1).max(10_000).optional(),
+      })
+      .optional(),
   }),
   metadata: z.object({
     client: z.string().min(1).max(200),
     client_version: z.string().min(1).max(200),
     transport: z.literal("nats"),
-  }).passthrough(),
+    trace_id: z.string().max(500).optional(),
+    route_name: z.string().max(200).optional(),
+  }),
 });
 
 export type NatsContextPackEnvelope = z.infer<typeof requestEnvelopeSchema>;
@@ -52,6 +94,12 @@ export interface NatsRuntimeBoundary {
     context_pack_subject: string;
     fallback_http: boolean;
   };
+}
+
+export interface NatsUrlLogSummary {
+  configured: boolean;
+  protocol: string | null;
+  contains_credentials: boolean;
 }
 
 export interface NatsBridgePlanInput {
@@ -94,6 +142,31 @@ export interface NatsBridgePlan {
 function trimEnv(value: string | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
+}
+
+export function summarizeNatsUrlForLog(url: string | null): NatsUrlLogSummary {
+  if (!url) {
+    return {
+      configured: false,
+      protocol: null,
+      contains_credentials: false,
+    };
+  }
+
+  try {
+    const parsed = new URL(url);
+    return {
+      configured: true,
+      protocol: parsed.protocol.replace(/:$/, "") || null,
+      contains_credentials: Boolean(parsed.username || parsed.password),
+    };
+  } catch {
+    return {
+      configured: true,
+      protocol: null,
+      contains_credentials: url.includes("@"),
+    };
+  }
 }
 
 export function readNatsRuntimeBoundary(
