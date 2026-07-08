@@ -145,6 +145,15 @@ audit once clients depend on them.
 
 ## Request Envelope
 
+> **Superseded wire shape.** The `openbrain.nats.request/response.v1` envelopes
+> shown in this section are the ORIGINAL #223 design shape. The shipped wire has
+> since been reconciled to the shared fleet-bus `Envelope` (compact JSON, wire
+> key `from`, `kind` = `context_pack_request` / `context_pack_response`,
+> top-level `payload.namespace`, subject `{env}.ob.memory.context_pack`). The
+> authoritative wire contract is `docs/fleet-nats-integration.md` and
+> `src/__fixtures__/nats-context-pack-wire.json`. The blocks below are retained
+> only for design history; do not implement against them.
+
 The request body is JSON and must be compatible with `agent_context_pack`
 request semantics. `query` is optional and bounded like the MCP tool input; the
 bridge must not require fields the MCP tool accepts as omitted.
@@ -291,7 +300,11 @@ Initial config should be explicit:
 OPENBRAIN_TRANSPORT=http
 OPENBRAIN_NATS_ENABLE_BRIDGE=false
 OPENBRAIN_NATS_URL=nats://127.0.0.1:4222
-OPENBRAIN_NATS_CONTEXT_PACK_SUBJECT=ob.memory.context_pack
+# Subjects are env-prefixed via the fleet-bus builder
+# ({env}.ob.memory.context_pack). Set the env, NOT a hand-pinned subject —
+# pinning the legacy flat `ob.memory.context_pack` makes the worker subscribe to
+# a subject clients no longer publish, and request/reply hangs.
+OPENBRAIN_NATS_ENV=dev
 OPENBRAIN_NATS_FALLBACK_HTTP=true
 ```
 

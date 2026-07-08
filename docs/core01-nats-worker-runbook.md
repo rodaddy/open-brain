@@ -8,8 +8,10 @@ that has passed the validation gate below.
 
 The NATS bridge must run as a separate launchd service from the HTTP workers.
 HTTP workers stay in `OPENBRAIN_TRANSPORT=http` mode and keep serving `/health`
-on `3100`, `3101`, and `3102`. The NATS worker subscribes to
-`ob.memory.context_pack` and may fail or restart without taking HTTP health down.
+on `3100`, `3101`, and `3102`. The NATS worker subscribes to the env-prefixed
+subject `{env}.ob.memory.context_pack` (e.g. `dev.ob.memory.context_pack`; env
+from `OPENBRAIN_NATS_ENV`) and may fail or restart without taking HTTP health
+down.
 
 The broker and worker are separate services:
 
@@ -17,11 +19,31 @@ The broker and worker are separate services:
 | --- | --- | --- |
 | HTTP Open Brain | `com.rico.open-brain` | HTTP/MCP entrypoint and two HTTP workers. |
 | NATS broker | `com.rico.open-brain-nats` | Local NATS/JetStream server on `127.0.0.1:4222`. |
-| NATS Open Brain worker | `com.rico.open-brain-nats-worker` | Request/reply bridge for `ob.memory.context_pack`. |
+| NATS Open Brain worker | `com.rico.open-brain-nats-worker` | Request/reply bridge for `{env}.ob.memory.context_pack`. |
 
 Do not put the NATS subscription path back into the HTTP launchd service. Broker
 restart, subscription failure, malformed NATS envelopes, or worker crash loops
 must be visible in NATS worker logs without degrading HTTP `/health`.
+
+## DEPLOYMENT PRECONDITION — message auth (READ BEFORE ENABLING)
+
+Enabling this worker with `OPENBRAIN_NATS_REQUIRE_AUTH` unset or `false` on any
+NATS bus reachable by untrusted publishers is a **cross-tenant read hole**: a
+publisher can forge `payload.namespace` or the envelope `from` and read **any**
+namespace. Auth-off is ONLY safe on a **fully-trusted local loopback bus**
+(`nats://127.0.0.1:4222`, no untrusted publishers).
+
+- **Local core01 broker (v1):** auth-off is acceptable because the bus is
+  loopback-only and no untrusted publisher can reach it.
+- **Fleet bus (CT274, `nats://10.71.20.74:4222`) or any shared/remote broker:**
+  you MUST set `OPENBRAIN_NATS_REQUIRE_AUTH=true` before enabling the worker.
+  With `REQUIRE_AUTH=true` the per-request bearer gate is on and the
+  `payload.namespace` override is force-disabled (mutually exclusive), so a
+  client can no longer forge a lane; the namespace is derived from the token.
+
+Treat this as a hard gate, not a footnote: do not point the worker at a
+non-loopback broker until `OPENBRAIN_NATS_REQUIRE_AUTH=true` is set in the worker
+env. namespace is an Open Brain security boundary.
 
 ## Files
 
@@ -49,7 +71,11 @@ source /Users/rico/.config/open-brain/env
 OPENBRAIN_TRANSPORT=nats
 OPENBRAIN_NATS_ENABLE_BRIDGE=true
 OPENBRAIN_NATS_URL=nats://127.0.0.1:4222
-OPENBRAIN_NATS_CONTEXT_PACK_SUBJECT=ob.memory.context_pack
+# Subject is built env-prefixed: {env}.ob.memory.context_pack. Set the env, not
+# a hand-pinned subject. Do NOT set OPENBRAIN_NATS_CONTEXT_PACK_SUBJECT to the
+# legacy flat `ob.memory.context_pack` — clients publish the env-prefixed
+# subject and request/reply would hang.
+OPENBRAIN_NATS_ENV=dev
 OPENBRAIN_NATS_FALLBACK_HTTP=true
 OPEN_BRAIN_NATS_WORKER_HEALTH_PORT=3110
 OPEN_BRAIN_RUN_MIGRATIONS=0
@@ -69,7 +95,7 @@ OPENBRAIN_NATS_ENABLE_BRIDGE=false
 Install the worker only after a release includes `scripts/run-nats-worker.ts`
 and evidence for:
 
-- automated bridge tests for successful `ob.memory.context_pack` request/reply,
+- automated bridge tests for successful `{env}.ob.memory.context_pack` request/reply,
   missing or invalid bearer auth, malformed NATS envelopes, oversized payloads,
   and degraded bridge health;
 - automated worker tests for dedicated-worker boundary forcing, missing broker
@@ -149,26 +175,45 @@ curl -fsS http://127.0.0.1:3102/health
 ```
 
 Confirm NATS request/reply with the release-owned smoke tool or approved client.
-The expected response envelope is:
+Responses are fleet envelopes (compact UTF-8 JSON, wire key `from`, not `sender`)
+with `kind="context_pack_response"`, `from="open-brain"`, and `correlation_id`
+echoing the request `id`. The success reply is:
 
 ```json
 {
-  "schema": "openbrain.nats.response.v1",
-  "status": "ok"
+  "id": "<request id>",
+  "ts": "<ISO-8601 UTC>",
+  "from": "open-brain",
+  "kind": "context_pack_response",
+  "correlation_id": "<request id>",
+  "version": 1,
+  "payload": {
+    "status": "ok",
+    "operation": "agent_context_pack",
+    "namespace_source": "token|override|declared",
+    "body": { "...": "context pack" }
+  }
 }
 ```
 
-Expected error responses use the same response schema with `status: "error"`:
+Error replies use the same envelope with an error payload:
 
 ```json
 {
-  "schema": "openbrain.nats.response.v1",
-  "request_id": "uuid-or-null",
-  "status": "error",
-  "operation": "agent_context_pack",
-  "error": {
-    "code": "permission_denied|bad_request|payload_too_large|temporarily_unavailable|tool_error|internal_error",
-    "message": "redacted failure summary"
+  "id": "<request id or 'unknown'>",
+  "ts": "<ISO-8601 UTC>",
+  "from": "open-brain",
+  "kind": "context_pack_response",
+  "correlation_id": "<request id or null>",
+  "version": 1,
+  "payload": {
+    "status": "error",
+    "operation": "agent_context_pack",
+    "namespace_source": "token|override|declared|rejected|null",
+    "error": {
+      "code": "permission_denied|unroutable|bad_request|payload_too_large|temporarily_unavailable|tool_error|internal_error",
+      "message": "redacted failure summary"
+    }
   }
 }
 ```

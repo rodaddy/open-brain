@@ -28,8 +28,13 @@
     <string>true</string>
     <key>OPENBRAIN_NATS_URL</key>
     <string>nats://127.0.0.1:4222</string>
-    <key>OPENBRAIN_NATS_CONTEXT_PACK_SUBJECT</key>
-    <string>ob.memory.context_pack</string>
+    <!-- Subjects are env-prefixed via the fleet-bus builder:
+         {env}.ob.memory.context_pack. Set the env, NOT a hand-pinned subject.
+         Pinning OPENBRAIN_NATS_CONTEXT_PACK_SUBJECT=ob.memory.context_pack here
+         makes the worker subscribe to the legacy flat subject while clients now
+         publish dev.ob.memory.context_pack -> request/reply hangs. -->
+    <key>OPENBRAIN_NATS_ENV</key>
+    <string>dev</string>
     <key>OPENBRAIN_NATS_FALLBACK_HTTP</key>
     <string>true</string>
     <key>QMD_PATH</key>
