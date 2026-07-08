@@ -43,7 +43,7 @@ describe("readNatsWorkerBoundary", () => {
       nats: {
         availability: "available",
         url: "nats://127.0.0.1:4222",
-        context_pack_subject: "ob.memory.context_pack",
+        context_pack_subject: "dev.ob.memory.context_pack",
       },
     });
   });
@@ -75,8 +75,8 @@ describe("startNatsWorker", () => {
       driver,
     });
 
-    expect(runtime.subject).toBe("ob.memory.context_pack");
-    expect(state.subscribedSubject).toBe("ob.memory.context_pack");
+    expect(runtime.subject).toBe("dev.ob.memory.context_pack");
+    expect(state.subscribedSubject).toBe("dev.ob.memory.context_pack");
     expect(runtime.health.availability).toBe("available");
 
     await runtime.close();
