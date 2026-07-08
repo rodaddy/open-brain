@@ -1,0 +1,59 @@
+{
+  "_comment": "SHARED cross-language wire fixture for the Open Brain NATS context-pack transport. TS (src/nats-runtime.ts) and Python (openbrain-memory nats_wire) MUST both round-trip against this file so the wire cannot drift. `wire` holds the EXACT canonical compact UTF-8 JSON bytes produced by the envelope serializer (fleet Envelope field order: id, ts, from, kind, payload, to, task_id, channel, topic, correlation_id, version). `envelope` is the same message as a structured object for constructing it. Do not reformat `wire`: it is a byte-for-byte contract.",
+  "envelope_field_order": ["id", "ts", "from", "kind", "payload", "to", "task_id", "channel", "topic", "correlation_id", "version"],
+  "request": {
+    "wire": "{\"id\":\"018f8b2c-0000-7000-8000-000000000abc\",\"ts\":\"2026-07-08T00:00:00.000Z\",\"from\":\"nagatha\",\"kind\":\"context_pack_request\",\"payload\":{\"operation\":\"agent_context_pack\",\"identity\":{\"agent\":\"nagatha\",\"platform\":\"discord\",\"server_id\":\"rodaddy-live\",\"channel_id\":\"open-brain\",\"thread_id\":null,\"session_key\":\"discord:rodaddy-live:open-brain:nagatha\"},\"body\":{\"query\":\"what is the current task state?\",\"requested_sections\":[\"working_set\"]},\"namespace\":\"rico\"},\"to\":null,\"task_id\":null,\"channel\":null,\"topic\":null,\"correlation_id\":\"018f8b2c-0000-7000-8000-000000000abc\",\"version\":1}",
+    "envelope": {
+      "id": "018f8b2c-0000-7000-8000-000000000abc",
+      "ts": "2026-07-08T00:00:00.000Z",
+      "from": "nagatha",
+      "kind": "context_pack_request",
+      "payload": {
+        "operation": "agent_context_pack",
+        "identity": {
+          "agent": "nagatha",
+          "platform": "discord",
+          "server_id": "rodaddy-live",
+          "channel_id": "open-brain",
+          "thread_id": null,
+          "session_key": "discord:rodaddy-live:open-brain:nagatha"
+        },
+        "body": {
+          "query": "what is the current task state?",
+          "requested_sections": ["working_set"]
+        },
+        "namespace": "rico"
+      },
+      "to": null,
+      "task_id": null,
+      "channel": null,
+      "topic": null,
+      "correlation_id": "018f8b2c-0000-7000-8000-000000000abc",
+      "version": 1
+    }
+  },
+  "response": {
+    "wire": "{\"id\":\"018f8b2c-0000-7000-8000-000000000abc\",\"ts\":\"2026-07-08T00:00:00.500Z\",\"from\":\"open-brain\",\"kind\":\"context_pack_response\",\"payload\":{\"status\":\"ok\",\"operation\":\"agent_context_pack\",\"namespace_source\":\"override\",\"body\":{\"schema\":\"openbrain.agent_context_pack.v1\",\"status\":\"ok\"}},\"to\":null,\"task_id\":null,\"channel\":null,\"topic\":null,\"correlation_id\":\"018f8b2c-0000-7000-8000-000000000abc\",\"version\":1}",
+    "envelope": {
+      "id": "018f8b2c-0000-7000-8000-000000000abc",
+      "ts": "2026-07-08T00:00:00.500Z",
+      "from": "open-brain",
+      "kind": "context_pack_response",
+      "payload": {
+        "status": "ok",
+        "operation": "agent_context_pack",
+        "namespace_source": "override",
+        "body": {
+          "schema": "openbrain.agent_context_pack.v1",
+          "status": "ok"
+        }
+      },
+      "to": null,
+      "task_id": null,
+      "channel": null,
+      "topic": null,
+      "correlation_id": "018f8b2c-0000-7000-8000-000000000abc",
+      "version": 1
+    }
+  }
+}

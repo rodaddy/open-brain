@@ -132,6 +132,21 @@ def build_request_envelope(
     )
 
 
+def envelope_to_wire_bytes(envelope: dict[str, Any]) -> bytes:
+    """Serialise a fleet Envelope wire dict to canonical compact UTF-8 JSON bytes.
+
+    Mirrors ``fleet_nats.Envelope.to_bytes`` (probed 2026-07-08): compact
+    separators (``,``/``:``, no spaces) and NO key sorting, so the dict's
+    insertion order (fleet field order: id, ts, from, kind, payload, to,
+    task_id, channel, topic, correlation_id, version) is preserved. Optional
+    envelope fields are emitted explicitly as ``null`` because
+    :func:`build_request_envelope` already sets them to ``None``. This is the
+    byte-for-byte contract the shared cross-language wire fixture locks; TS and
+    Python must produce identical bytes for the same envelope.
+    """
+    return json.dumps(envelope, separators=(",", ":")).encode("utf-8")
+
+
 def _local_envelope_wire(
     *,
     msg_id: str,

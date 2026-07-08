@@ -838,9 +838,18 @@ def _nats_context_pack_envelope(
     stays import-side-effect-free and deterministic under test. When ``ts`` is
     omitted it falls back to the request id (still no clock call here).
 
-    Namespace/lane binding: DECLARED identity by default (the ``agent`` +
-    ``session_key`` the caller passed become the envelope's namespace source);
-    an explicit ``namespace`` argument OVERRIDES it when present.
+    Namespace/lane binding: DECLARED identity by default. The declared lane is
+    derived server-side from the envelope ``from``/``identity.agent`` +
+    ``session_key`` the caller passed. An explicit ``namespace`` argument is
+    emitted as a TOP-LEVEL ``payload.namespace`` hint (matching the canonical
+    cross-language wire the TS side conforms to; TS reads ``payload.namespace``,
+    NOT ``identity.namespace``).
+
+    Server-authority contract: ``payload.namespace`` is ADVISORY. The server is
+    authoritative and re-derives/re-authorizes the namespace from the request's
+    auth. On the auth-off local bus this is a trusted-bus convenience; it grants
+    NO cross-namespace access the server would not already grant. ``namespace_source``
+    is a RESPONSE-ONLY field and is intentionally NOT stamped on the request wire.
     """
     arguments = _tool_call_arguments(json_body)
     body: JSON = {}
@@ -868,18 +877,20 @@ def _nats_context_pack_envelope(
             )
         identity["thread_id"] = thread_id
 
-    # Lane/namespace binding: declared-by-default, explicit-override.
+    # Lane/namespace binding: declared-by-default, explicit-override. The
+    # override rides TOP-LEVEL payload.namespace (canonical wire; TS reads it
+    # there). namespace_source is response-only and is NOT stamped on the
+    # request. There is intentionally NO client-side namespace allowlist here:
+    # the server is the authority and re-authorizes the requested namespace
+    # against the request's auth; a client-asserted value is only a wire hint.
     namespace_override = arguments.get("namespace")
-    if namespace_override is not None:
-        if not isinstance(namespace_override, str) or not namespace_override:
-            raise ValueError(
-                "agent_context_pack.namespace must be a non-empty string "
-                "for NATS transport",
-            )
-        identity["namespace"] = namespace_override
-        identity["namespace_source"] = "override"
-    else:
-        identity["namespace_source"] = "declared"
+    if namespace_override is not None and (
+        not isinstance(namespace_override, str) or not namespace_override
+    ):
+        raise ValueError(
+            "agent_context_pack.namespace must be a non-empty string "
+            "for NATS transport",
+        )
 
     request_id = str(json_body.get("id"))
     ts_str = ts if ts else request_id
@@ -893,6 +904,8 @@ def _nats_context_pack_envelope(
             "transport": "nats",
         },
     }
+    if namespace_override is not None:
+        payload["namespace"] = namespace_override
     return build_request_envelope(
         msg_id=request_id,
         ts=ts_str,
@@ -932,7 +945,8 @@ def _nats_envelope_size_bytes(envelope: Mapping[str, Any]) -> int:
 
 # Fleet Envelope kind for the context-pack reply. The reply mirrors the request
 # as a fleet Envelope; OB's status/body/error live in the Envelope payload.
-CONTEXT_PACK_REPLY_KIND = "context_pack_reply"
+# Canonical cross-language wire kind — the TS side emits exactly this.
+CONTEXT_PACK_REPLY_KIND = "context_pack_response"
 
 
 def _nats_reply_payload(response: object) -> Mapping[str, Any] | None:

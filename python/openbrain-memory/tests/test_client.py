@@ -139,7 +139,7 @@ def fleet_reply_envelope(
     status: str = "ok",
     body: dict | None = None,
     error: dict | None = None,
-    kind: str = "context_pack_reply",
+    kind: str = "context_pack_response",
     operation: str = "agent_context_pack",
 ) -> dict:
     payload: dict = {"operation": operation, "status": status}
@@ -469,7 +469,6 @@ def test_nats_transport_uses_request_reply_after_available_contract():
     assert envelope["payload"] == {
         "operation": "agent_context_pack",
         "identity": {
-            "namespace_source": "declared",
             "agent": "nagatha",
             "platform": "discord",
             "server_id": "guild",
@@ -1196,8 +1195,13 @@ def test_nats_namespace_binding_declared_by_default():
         session_key="guild/chan/nagatha",
     )
 
-    identity = nats.requests[0]["payload"]["payload"]["identity"]
-    assert identity["namespace_source"] == "declared"
+    request_payload = nats.requests[0]["payload"]["payload"]
+    # Declared-by-default: no explicit namespace on the wire and no response-only
+    # namespace_source stamped on the request. The server derives the declared
+    # lane from identity.agent/session_key + the envelope `from`.
+    assert "namespace" not in request_payload
+    identity = request_payload["identity"]
+    assert "namespace_source" not in identity
     assert "namespace" not in identity
 
 
@@ -1220,9 +1224,62 @@ def test_nats_namespace_binding_explicit_override():
         namespace="shared-kb",
     )
 
-    identity = nats.requests[0]["payload"]["payload"]["identity"]
-    assert identity["namespace_source"] == "override"
-    assert identity["namespace"] == "shared-kb"
+    request_payload = nats.requests[0]["payload"]["payload"]
+    # Canonical wire: the override rides TOP-LEVEL payload.namespace (the field
+    # the TS side reads), NOT identity.namespace. namespace_source is a
+    # response-only field and must not appear on the request.
+    assert request_payload["namespace"] == "shared-kb"
+    identity = request_payload["identity"]
+    assert "namespace" not in identity
+    assert "namespace_source" not in identity
+
+
+def test_nats_namespace_override_is_advisory_not_a_grant():
+    """A normal client emitting namespace="other-tenant" gets no grant by itself.
+
+    Server-authority contract: payload.namespace is an ADVISORY wire hint. The
+    override changes only the requested-namespace HINT on the wire; it carries
+    no client-side authority (no allowlist, no privileged delegation header) and
+    the declared identity is unchanged. The server is authoritative and
+    re-authorizes the requested namespace against the request's auth — so this
+    override alone cannot grant cross-namespace access. Mirrors the TS
+    reject/re-auth intent at the contract level (the live server re-auth path is
+    not exercisable here).
+    """
+    fallback = FakeTransport()
+    nats = FakeNatsRequestReplyDriver()
+    transport = NatsTransport(
+        "nats://127.0.0.1:4222",
+        fallback_transport=fallback,
+        request_reply_driver=nats,
+    )
+    client = _available_nats_client(nats, transport, fallback)
+
+    client.agent_context_pack(
+        agent="nagatha",
+        platform="discord",
+        server_id="guild",
+        channel_id="chan",
+        session_key="guild/chan/nagatha",
+        namespace="other-tenant",
+    )
+
+    envelope = nats.requests[0]["payload"]
+    request_payload = envelope["payload"]
+    # The override is present ONLY as the advisory wire hint...
+    assert request_payload["namespace"] == "other-tenant"
+    # ...and nothing else in the envelope asserts authority for that namespace:
+    # the declared identity (from/agent/session_key) is untouched, so the server
+    # has no client-supplied grant to trust and must re-authorize.
+    assert envelope["from"] == "openbrain-memory"
+    identity = request_payload["identity"]
+    assert identity["agent"] == "nagatha"
+    assert identity["session_key"] == "guild/chan/nagatha"
+    assert "namespace" not in identity
+    assert "namespace_source" not in identity
+    # No privileged namespace-delegation header rides the trusted bus.
+    assert "X-Namespace" not in nats.requests[0]["headers"]
+    assert "x-namespace" not in nats.requests[0]["headers"]
 
 
 def test_nats_empty_namespace_override_rejected_before_send():
