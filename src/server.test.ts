@@ -10,6 +10,10 @@ import {
 import { createApp } from "./index.ts";
 import { getSessionCount } from "./transport.ts";
 import { createNatsBridgeHealth } from "./nats-bridge.ts";
+import { resetOperatorDoctorCache } from "./operator-doctor.ts";
+import { readdir } from "node:fs/promises";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { readNatsRuntimeBoundary } from "./nats-runtime.ts";
 import type { AuthInfo, HealthStatus } from "./types.ts";
 import type { Server } from "node:http";
@@ -242,6 +246,174 @@ describe("GET /health", () => {
     const res = await fetch(`${baseUrl}/health`);
     // Should NOT be 401 -- health is public
     expect(res.status).not.toBe(401);
+  });
+});
+
+describe("GET /api/v1/operator/doctor", () => {
+  beforeEach(() => {
+    resetOperatorDoctorCache();
+  });
+  afterEach(() => {
+    resetOperatorDoctorCache();
+  });
+
+  it("requires auth", async () => {
+    const res = await fetch(`${baseUrl}/api/v1/operator/doctor`);
+    expect(res.status).toBe(401);
+  });
+
+  it("requires admin or ob-admin auth", async () => {
+    const res = await fetch(`${baseUrl}/api/v1/operator/doctor`, {
+      headers: { Authorization: "Bearer agent-token-123" },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it("returns privileged doctor JSON without secret or path disclosure", async () => {
+    const originalEmbeddingBaseUrl = process.env.EMBEDDING_BASE_URL;
+    const originalEmbeddingApiKey = process.env.EMBEDDING_API_KEY;
+    const originalLogFile = process.env.LOG_FILE;
+    const secret = "doctor-rest-secret";
+    const embeddingHost = "doctor-provider.internal";
+    const logPath = "/sensitive/open-brain.log";
+    process.env.EMBEDDING_BASE_URL = `http://${embeddingHost}:8791/v1`;
+    process.env.EMBEDDING_API_KEY = secret;
+    process.env.LOG_FILE = logPath;
+    // All on-disk migrations applied: migrations "current" keeps the doctor
+    // healthy so this test can pin the 200 path; the degraded/unhealthy 503
+    // paths are pinned below.
+    const migrationsDir = join(
+      dirname(fileURLToPath(import.meta.url)),
+      "db",
+      "migrations",
+    );
+    const allMigrations = (await readdir(migrationsDir)).filter((f) =>
+      f.endsWith(".sql"),
+    );
+    mockPool.query = async (sql: string) => {
+      if (sql.trim() === "SELECT 1") return { rows: [{ ok: 1 }] };
+      if (sql.includes("FROM _migrations")) {
+        return { rows: allMigrations.map((filename) => ({ filename })) };
+      }
+      return { rows: [] };
+    };
+    (globalThis as Record<string, unknown>).fetch = (
+      input: string | URL | globalThis.Request,
+      init?: RequestInit,
+    ) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/models") && !url.includes("127.0.0.1")) {
+        expect(init?.headers).toMatchObject({
+          Authorization: `Bearer ${secret}`,
+        });
+        return Promise.resolve(new Response("{}", { status: 200 }));
+      }
+      return originalFetch(input, init);
+    };
+
+    try {
+      const res = await fetch(`${baseUrl}/api/v1/operator/doctor`, {
+        headers: { Authorization: "Bearer test-token-123" },
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        status: string;
+        contract_version: string;
+        runtime: { contract_version: string };
+        embedding_provider: { available: boolean };
+      };
+      const serialized = JSON.stringify(body);
+      expect(body.status).toBe("healthy");
+      expect(body.contract_version).toBe("2026-07-08.operator-doctor.v2");
+      expect(body.runtime.contract_version).toBe("2026-07-08.memory-tools.v20");
+      expect(body.embedding_provider.available).toBe(true);
+      expect(serialized).not.toContain(secret);
+      expect(serialized).not.toContain(embeddingHost);
+      expect(serialized).not.toContain(logPath);
+    } finally {
+      if (originalEmbeddingBaseUrl === undefined) delete process.env.EMBEDDING_BASE_URL;
+      else process.env.EMBEDDING_BASE_URL = originalEmbeddingBaseUrl;
+      if (originalEmbeddingApiKey === undefined) delete process.env.EMBEDDING_API_KEY;
+      else process.env.EMBEDDING_API_KEY = originalEmbeddingApiKey;
+      if (originalLogFile === undefined) delete process.env.LOG_FILE;
+      else process.env.LOG_FILE = originalLogFile;
+    }
+  });
+
+  it("returns 503 when the doctor reports degraded (pending migrations)", async () => {
+    const originalEmbeddingBaseUrl = process.env.EMBEDDING_BASE_URL;
+    delete process.env.EMBEDDING_BASE_URL;
+    mockPool.query = async (sql: string) => {
+      if (sql.trim() === "SELECT 1") return { rows: [{ ok: 1 }] };
+      // No migrations applied: everything on disk is pending.
+      if (sql.includes("FROM _migrations")) return { rows: [] };
+      return { rows: [] };
+    };
+
+    try {
+      const res = await fetch(`${baseUrl}/api/v1/operator/doctor`, {
+        headers: { Authorization: "Bearer test-token-123" },
+      });
+      expect(res.status).toBe(503);
+      const body = (await res.json()) as { status: string };
+      expect(body.status).toBe("degraded");
+    } finally {
+      if (originalEmbeddingBaseUrl === undefined) delete process.env.EMBEDDING_BASE_URL;
+      else process.env.EMBEDDING_BASE_URL = originalEmbeddingBaseUrl;
+    }
+  });
+
+  it("returns 503 when the DB is connected but migration state is unknown", async () => {
+    const originalEmbeddingBaseUrl = process.env.EMBEDDING_BASE_URL;
+    delete process.env.EMBEDDING_BASE_URL;
+    mockPool.query = async (sql: string) => {
+      if (sql.trim() === "SELECT 1") return { rows: [{ ok: 1 }] };
+      // Connected DB, but the _migrations ledger is missing/unreadable.
+      if (sql.includes("FROM _migrations")) throw new Error("not available");
+      return { rows: [] };
+    };
+
+    try {
+      const res = await fetch(`${baseUrl}/api/v1/operator/doctor`, {
+        headers: { Authorization: "Bearer test-token-123" },
+      });
+      expect(res.status).toBe(503);
+      const body = (await res.json()) as {
+        status: string;
+        database: { connected: boolean };
+        migrations: { status: string };
+      };
+      expect(body.status).toBe("degraded");
+      expect(body.database.connected).toBe(true);
+      expect(body.migrations.status).toBe("unknown");
+    } finally {
+      if (originalEmbeddingBaseUrl === undefined) delete process.env.EMBEDDING_BASE_URL;
+      else process.env.EMBEDDING_BASE_URL = originalEmbeddingBaseUrl;
+    }
+  });
+
+  it("returns 503 when the doctor reports unhealthy (database down)", async () => {
+    const originalEmbeddingBaseUrl = process.env.EMBEDDING_BASE_URL;
+    delete process.env.EMBEDDING_BASE_URL;
+    mockPool.query = async () => {
+      throw new Error("connection refused");
+    };
+
+    try {
+      const res = await fetch(`${baseUrl}/api/v1/operator/doctor`, {
+        headers: { Authorization: "Bearer test-token-123" },
+      });
+      expect(res.status).toBe(503);
+      const body = (await res.json()) as {
+        status: string;
+        database: { connected: boolean };
+      };
+      expect(body.status).toBe("unhealthy");
+      expect(body.database.connected).toBe(false);
+    } finally {
+      if (originalEmbeddingBaseUrl === undefined) delete process.env.EMBEDDING_BASE_URL;
+      else process.env.EMBEDDING_BASE_URL = originalEmbeddingBaseUrl;
+    }
   });
 });
 

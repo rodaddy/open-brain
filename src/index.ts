@@ -14,6 +14,7 @@ import { requestLogger } from "./middleware/request-logger.ts";
 import { createRestRouter } from "./rest-api.ts";
 import { createPromotionRouter } from "./rest-promotion.ts";
 import {
+  isRequestedTransportDegraded,
   readNatsRuntimeBoundary,
   summarizeNatsUrlForLog,
 } from "./nats-runtime.ts";
@@ -24,6 +25,7 @@ import {
 } from "./nats-bridge.ts";
 import type { ToolDeps } from "./tools/index.ts";
 import type { AuthInfo, HealthStatus } from "./types.ts";
+import { canReadDoctor, getOperatorDoctorStatus } from "./operator-doctor.ts";
 
 const EMBEDDING_BASE_URL = process.env.EMBEDDING_BASE_URL;
 
@@ -99,9 +101,10 @@ export function createApp(
     const natsAvailability =
       toolDeps.natsBridgeHealth?.availability ??
       natsRuntimeBoundary.nats.availability;
-    const natsDegraded =
-      natsRuntimeBoundary.requested_transport === "nats" &&
-      natsAvailability !== "available";
+    const natsDegraded = isRequestedTransportDegraded(
+      natsRuntimeBoundary,
+      natsAvailability,
+    );
     const status: HealthStatus = {
       status: dbHealth.connected && !natsDegraded ? "healthy" : "degraded",
       server_ip: ips[0] ?? "unknown",
@@ -130,6 +133,33 @@ export function createApp(
   const auth = authMiddleware(tokenMap);
 
   // REST API -- no MCP handshake required
+  app.get(
+    "/api/v1/operator/doctor",
+    auth,
+    async (req: Request, res: Response) => {
+      const authInfo = (req as Request & { auth?: AuthInfo }).auth;
+      if (!canReadDoctor(authInfo)) {
+        res
+          .status(403)
+          .json({ error: "Permission denied: admin or ob-admin role required" });
+        return;
+      }
+      try {
+        const status = await getOperatorDoctorStatus(
+          pool,
+          natsRuntimeBoundary,
+          toolDeps.natsBridgeHealth,
+        );
+        // Mirror /health: monitoring that alarms on status code must see a
+        // non-200 whenever the body is not fully healthy.
+        res.status(status.status === "healthy" ? 200 : 503).json(status);
+      } catch {
+        // Never surface raw error messages (they can carry paths or env
+        // detail); the doctor payload itself is the diagnostic surface.
+        res.status(500).json({ error: "operator doctor status unavailable" });
+      }
+    },
+  );
   app.use("/api/v1", auth, createRestRouter(toolDeps));
   app.use("/api/v1", auth, createPromotionRouter(toolDeps));
   app.use(

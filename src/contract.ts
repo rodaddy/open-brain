@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { TOOL_CONTRACTS } from "./contract-schemas.ts";
 
-export const CONTRACT_VERSION = "2026-07-06.memory-tools.v19";
+export const CONTRACT_VERSION = "2026-07-08.memory-tools.v20";
 export const CONTRACT_SCHEMA_VERSION = 1;
 
 export interface ContractCapability {
@@ -254,6 +254,15 @@ export const CONTRACT_CAPABILITIES: ContractCapability[] = [
     description: "Read the canonical Open Brain public contract manifest.",
   },
   {
+    name: "operator_doctor",
+    version: 1,
+    kind: "tool",
+    description:
+      "Read privileged operator doctor/status JSON for runtime, database, " +
+      "migrations, optional providers, transport, and log/audit health. " +
+      "Requires admin or ob-admin auth and never returns secrets or raw paths.",
+  },
+  {
     name: "get_entry",
     version: 2,
     kind: "tool",
@@ -504,12 +513,12 @@ export function buildContract(
     contract_scope: "required_openbrain_memory_contract" as const,
     schema_version: CONTRACT_SCHEMA_VERSION,
     min_client_versions: {
-      "openbrain-memory": "0.1.4",
+      "openbrain-memory": "0.1.6",
       "rtech-hermes-runtime": "0.1.0",
       mcp2cli: "0.3.6",
     },
     compatible_client_ranges: {
-      "openbrain-memory": ">=0.1.4 <1.0.0",
+      "openbrain-memory": ">=0.1.6 <1.0.0",
       "rtech-hermes-runtime": ">=0.1.0 <1.0.0",
       mcp2cli: ">=0.3.6 <1.0.0",
     },

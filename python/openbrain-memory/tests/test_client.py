@@ -1407,6 +1407,7 @@ def test_all_registered_tool_wrappers_call_matching_tool_names():
         "find_duplicates",
         "find_person",
         "get_contract",
+        "operator_doctor",
         "get_entry",
         "resolve_entry",
         "get_entity",
@@ -1453,7 +1454,7 @@ def test_all_registered_tool_wrappers_call_matching_tool_names():
 
 
 def test_required_contract_tools_have_first_class_wrappers_and_help():
-    assert CURRENT_CONTRACT_VERSION == "2026-07-06.memory-tools.v19"
+    assert CURRENT_CONTRACT_VERSION == "2026-07-08.memory-tools.v20"
     assert set(REQUIRED_CONTRACT_TOOLS) <= set(CURRENT_TOOL_HELP)
 
     for tool_name in REQUIRED_CONTRACT_TOOLS:

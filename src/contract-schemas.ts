@@ -19,6 +19,14 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
     input_schema: {},
     output_shape: "OpenBrainContract JSON text payload",
   },
+  operator_doctor: {
+    version: 1,
+    input_schema: {},
+    output_shape:
+      "privileged operator doctor/status JSON text payload with stable " +
+      "runtime, database, migrations, optional provider, transport, and " +
+      "log/audit health fields; secrets and raw paths are redacted/omitted",
+  },
   working_set_append: {
     version: 1,
     input_schema: {

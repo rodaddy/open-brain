@@ -49,6 +49,7 @@ import { registerScanNamespace } from "./scan-namespace.ts";
 import { registerTierLane } from "./tier-lane.ts";
 import { registerPromoteShared } from "./promote-shared.ts";
 import { registerGetContract } from "./get-contract.ts";
+import { registerOperatorDoctor } from "./operator-doctor.ts";
 import { registerListRepoFacts, registerUpsertRepoFact } from "./repo-facts.ts";
 import {
   registerAgentContextPack,
@@ -137,6 +138,7 @@ export function registerAllTools(server: McpServer, deps: ToolDeps): void {
   registerRecoveryWalMark(server, toolDeps);
   registerAgentContextPack(server, toolDeps);
   registerGetContract(server, toolDeps);
+  registerOperatorDoctor(server, toolDeps);
   registerUpsertRepoFact(server, toolDeps);
   registerListRepoFacts(server, toolDeps);
 }
