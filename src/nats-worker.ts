@@ -1,6 +1,6 @@
 import type pg from "pg";
 import { generateEmbedding } from "./embedding.ts";
-import { createNatsBridgeHealth, startNatsContextPackBridge, type NatsBridgeDriver, type NatsBridgeHealth, type NatsBridgeRuntime } from "./nats-bridge.ts";
+import { createNatsBridgeHealth, startNatsContextPackBridge, type NatsBridgeDriver, type NatsBridgeHealth } from "./nats-bridge.ts";
 import { readNatsRuntimeBoundary, summarizeNatsUrlForLog, type NatsRuntimeBoundary } from "./nats-runtime.ts";
 import type { ToolDeps } from "./tools/index.ts";
 import type { AuthInfo } from "./types.ts";

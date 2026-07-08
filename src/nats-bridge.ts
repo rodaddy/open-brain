@@ -1,6 +1,7 @@
 import type { AuthInfo } from "./types.ts";
 import type { ToolDeps } from "./tools/index.ts";
 import { z } from "zod";
+import { findAuthInfoForToken } from "./auth.ts";
 import { logger } from "./logger.ts";
 import {
   buildAgentContextPackPayload,
@@ -223,7 +224,7 @@ function authFromHeaders(
     null;
   const match = /^Bearer\s+(.+)$/i.exec(raw ?? "");
   const token = match?.[1]?.trim();
-  return token ? tokenMap.get(token) ?? null : null;
+  return token ? findAuthInfoForToken(token, tokenMap) : null;
 }
 
 function errorMessageFromPayload(payload: unknown): string {

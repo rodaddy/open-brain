@@ -142,6 +142,38 @@ describe("handleNatsContextPackMessage", () => {
     });
   });
 
+  it("uses constant-time token matching instead of direct map lookup", () => {
+    class NoDirectLookupTokenMap extends Map<string, AuthInfo> {
+      override get(_key: string): AuthInfo | undefined {
+        throw new Error("direct token lookup should not be used");
+      }
+    }
+
+    const boundary = readNatsRuntimeBoundary({
+      OPENBRAIN_TRANSPORT: "nats",
+      OPENBRAIN_NATS_ENABLE_BRIDGE: "true",
+      OPENBRAIN_NATS_URL: "nats://127.0.0.1:4222",
+    });
+
+    const response = handleNatsContextPackMessage({
+      message: {
+        subject: "ob.memory.context_pack",
+        data: data(baseEnvelope),
+        headers: { Authorization: "Bearer secret-token" },
+      },
+      boundary,
+      tokenMap: new NoDirectLookupTokenMap([
+        ["secret-token", { role: "admin", clientId: "rico" }],
+      ]),
+      deps: depsWithWorkingSet(),
+    }) as any;
+
+    expect(response).toMatchObject({
+      request_id: "req-123",
+      status: "ok",
+    });
+  });
+
   it("rejects oversized bodies before parsing", () => {
     const boundary = readNatsRuntimeBoundary({
       OPENBRAIN_TRANSPORT: "nats",

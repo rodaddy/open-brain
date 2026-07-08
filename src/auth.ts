@@ -79,6 +79,20 @@ export function verifyToken(provided: string, expected: string): boolean {
   return timingSafeEqual(a, b);
 }
 
+export function findAuthInfoForToken(
+  provided: string,
+  tokenMap: Map<string, AuthInfo>,
+): AuthInfo | null {
+  let matched: AuthInfo | null = null;
+  for (const [storedToken, authInfo] of tokenMap) {
+    if (verifyToken(provided, storedToken)) {
+      matched = authInfo;
+      // Don't break — iterate all tokens for constant-time behavior.
+    }
+  }
+  return matched;
+}
+
 export function authMiddleware(
   tokenMap: Map<string, AuthInfo>,
 ): (req: Request, res: Response, next: NextFunction) => void {
@@ -92,15 +106,7 @@ export function authMiddleware(
 
     const provided = authHeader.slice("Bearer ".length);
 
-    // Always iterate ALL tokens to avoid timing side-channel leaking
-    // which token (or whether any token) matched early vs late.
-    let matched: AuthInfo | null = null;
-    for (const [storedToken, authInfo] of tokenMap) {
-      if (verifyToken(provided, storedToken)) {
-        matched = authInfo;
-        // Don't break — iterate all tokens for constant-time
-      }
-    }
+    const matched = findAuthInfoForToken(provided, tokenMap);
 
     if (matched) {
       const namespace = headerValue(req.headers["x-namespace"]);
