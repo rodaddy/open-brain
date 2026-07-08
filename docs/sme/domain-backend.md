@@ -332,3 +332,52 @@ the direct tool path.
 - Is new behavior opt-in when the issue/PR claims a narrower tool scope?
 - Are sibling callers covered by graph-off or no-behavior-change regression
   tests, not only by PR-body wording?
+
+## [2026-07-08] Streamable-HTTP builds a fresh McpServer per session -- "once per process" state resets
+
+**Severity:** HIGH
+**Source:** PR #275 pre-merge gauntlet for Issue #269
+**Scope:** `src/index.ts` serverFactory, install/register functions for tools
+and wrappers, any state initialized inside MCP server construction
+**Status:** fixed in PR #275
+
+### Pattern
+
+The streamable-HTTP transport constructs a fresh `McpServer` per session via
+`serverFactory`. Any "once per process" state initialized inside an
+install/register function -- retention sweep timers, warn-once flags, counters,
+caches -- silently resets on every new session. In PR #275 this would have
+respawned per-session state the audit feature assumed was process-wide.
+
+### Review Questions
+
+- Is any state declared inside an install/register/tool-setup function assumed
+  to be process-wide? It is actually per-session under serverFactory.
+- Is process-wide state module-scoped or keyed by the shared pool/config object
+  instead?
+- Do tests create two sessions (two factory invocations) and prove the state is
+  shared or reset as intended?
+
+## [2026-07-08] Python client changes move the version and min_client_versions floor together
+
+**Severity:** MEDIUM
+**Source:** PR #277 pre-merge gauntlet for Issue #270
+**Scope:** `python/openbrain-memory/pyproject.toml`, `src/contract.ts`
+`min_client_versions`, downstream rollout classification
+**Status:** fixed in PR #277
+
+### Pattern
+
+Behavior changes in `python/openbrain-memory` require a package version bump
+(0.1.6 set the precedent), and the server's advertised `min_client_versions`
+floor must move in lockstep with the exact-version contract. Shipping client
+behavior under an unchanged version, or bumping the package without moving the
+advertised floor, breaks the contract downstream consumers pin against.
+
+### Review Questions
+
+- Does any change under `python/openbrain-memory/` ship without a version bump?
+- Does the server's `min_client_versions` advertisement match the new exact
+  version when the contract requires lockstep?
+- Is the bump classified in `docs/downstream-rollout.md` terms before the PR is
+  called complete?

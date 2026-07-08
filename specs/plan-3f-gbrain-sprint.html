@@ -209,7 +209,7 @@
       <summary>Metadata</summary>
       <dl>
         <dt>created</dt><dd>2026-07-07T22:19:50Z</dd>
-        <dt>modified</dt><dd>2026-07-07T22:19:50Z, 2026-07-07T22:45:00Z, 2026-07-07T23:20:00Z, 2026-07-07T23:55:00Z, 2026-07-08T00:10:00Z, 2026-07-08T00:15:00Z, 2026-07-08T00:20:00Z</dd>
+        <dt>modified</dt><dd>2026-07-07T22:19:50Z, 2026-07-07T22:45:00Z, 2026-07-07T23:20:00Z, 2026-07-07T23:55:00Z, 2026-07-08T00:10:00Z, 2026-07-08T00:15:00Z, 2026-07-08T00:20:00Z, 2026-07-08T05:30:00Z</dd>
         <dt>commits</dt><dd>base 7cb7712, branch feat/267-graph-relational-search; implementation commit 5fd66ed plus plan-sync commits</dd>
         <dt>agent name</dt><dd>codex</dd>
         <dt>session id</dt><dd>019f30e7-61d0-7d52-a491-1699760f2cea</dd>
@@ -232,6 +232,9 @@
     </div>
     <div class="callout">
       <strong>Current execution update, 2026-07-08T01:15Z:</strong> planning PR #272 merged as a838735. #266 merged via PR #273 as 7cb7712 and is closed Done on Project #8. #267 PR <a href="https://github.com/rodaddy/open-brain/pull/274">#274</a> is open and mergeable from feat/267-graph-relational-search; gate-verified implementation head is 4c4d3e2. Project #8 and the PR check rollup are the source of truth for the newest docs/status-sync head. Initial review found material issues in relation direction semantics, hybrid embedding-failure fallback, and unintended graph enablement through shared helpers used by search_all and brain_answer. Fixes are complete: direct search_brain opts into graph retrieval, shared helpers stay graph-off by default, incoming/outgoing semantics are covered, graph retrieval still runs when embeddings fail, and SME review memory has been updated. Local validation passed: focused relational plus anti-skip tests, broader search_brain/search_all/brain_answer tests, TypeScript, diff check, Plan verifier, repo/collab HTML cmp, and full bun test. PR #274 CI passed for 4c4d3e2; deploy skipped as expected for a PR. Status-only plan sync commits may advance the PR head after 4c4d3e2; verify live Project #8 and the PR check rollup before merge/closure. Current origin/main and PR workflow rules deploy core01 only on a v* tag push or explicit workflow_dispatch with deploy_core01, not from the merge commit itself. Focused SME/correctness and antagonist/adversarial fix verification are clean for P0/P1/P2; remaining risk is P3 local live-Postgres skip only while CI db-integration passed. #223 is still open and Blocked.
+    </div>
+    <div class="callout">
+      <strong>Current visible-site update, 2026-07-08:</strong> the remaining sprint issues landed. PR <a href="https://github.com/rodaddy/open-brain/pull/275">#275</a> merged as 1ba0875 and #269 is closed. PR <a href="https://github.com/rodaddy/open-brain/pull/277">#277</a> merged as 5e4e2bc and #270 is closed. PR <a href="https://github.com/rodaddy/open-brain/pull/278">#278</a> merged as 686ef54 and #268 is closed. PR <a href="https://github.com/rodaddy/open-brain/pull/276">#276</a> merged as c0ec058 recording the #271 hot-memory boundary decision; closure awaited Rico approval, and Rico approved and closed #271 as completed on 2026-07-08T02:47Z. All four PRs passed the full pre-merge gauntlet: review swarm, codex cross-model review, and fix verification. The sprint remains local-first; core01 release still happens only via a v* tag push or explicit workflow_dispatch, not from merge commits. #223 is still open and Blocked. The plan checker's <code>--full</code> test paths were corrected from the placeholder <code>tests/</code> filenames to the real merged test locations under <code>src/</code> and <code>src/tools/__tests__/</code> so the full gate runs against the code that actually shipped. #265 stays In Progress until sprint close-out is verified.
     </div>
   </section>
 
@@ -256,9 +259,9 @@
       <tbody>
         <tr>
           <td><a href="https://github.com/rodaddy/open-brain/issues/265">#265</a></td>
-          <td>In Progress</td>
+          <td>In Progress (close-out pending)</td>
           <td>Sprint umbrella and board/controller anchor</td>
-          <td>Do not close until child issue disposition is verified</td>
+          <td>Do not close until child issue disposition is verified; #271 disposition now recorded and closed, final close-out verification pending</td>
         </tr>
         <tr>
           <td><a href="https://github.com/rodaddy/open-brain/issues/266">#266</a></td>
@@ -268,33 +271,33 @@
         </tr>
         <tr>
           <td><a href="https://github.com/rodaddy/open-brain/issues/267">#267</a></td>
-          <td>In Review / CI Passed</td>
+          <td>Done / closed</td>
           <td>Graph-powered retrieval arm in search_brain</td>
-          <td>PR #274 open, mergeable, CI passed, review/fix verification clean</td>
+          <td>PR #274 merged; CI, review, and fix verification clean</td>
         </tr>
         <tr>
           <td><a href="https://github.com/rodaddy/open-brain/issues/269">#269</a></td>
-          <td>Todo</td>
+          <td>Done / closed (PR #275, 1ba0875)</td>
           <td>Privacy-safe MCP/tool request audit logging</td>
           <td>No raw payload persistence</td>
         </tr>
         <tr>
           <td><a href="https://github.com/rodaddy/open-brain/issues/270">#270</a></td>
-          <td>Todo</td>
+          <td>Done / closed (PR #277, 5e4e2bc)</td>
           <td>Operator doctor/status surface</td>
           <td>Privileged details stay behind auth/local boundary</td>
         </tr>
         <tr>
           <td><a href="https://github.com/rodaddy/open-brain/issues/268">#268</a></td>
-          <td>Backlog</td>
+          <td>Done / closed (PR #278, 686ef54)</td>
           <td>Graph-expanded evidence in brain_answer/search_all</td>
           <td>Starts after #267 exists</td>
         </tr>
         <tr>
           <td><a href="https://github.com/rodaddy/open-brain/issues/271">#271</a></td>
-          <td>Backlog</td>
+          <td>Done / closed (PR #276, c0ec058; Rico-approved closure 2026-07-08)</td>
           <td>Hot-memory boundary evaluation</td>
-          <td>No prompt placement without exact-scope tests</td>
+          <td>Boundary decision recorded in PR #276; no prompt placement without exact-scope tests</td>
         </tr>
       </tbody>
     </table>
@@ -367,7 +370,7 @@
     </div>
 
     <div class="phase" id="phase-3">
-      <h3><code class="status">[~]</code>Phase 3: #267 Graph-Powered Retrieval Arm</h3>
+      <h3><code class="status">[x]</code>Phase 3: #267 Graph-Powered Retrieval Arm</h3>
       <p>Add a precision-first graph arm to <code>search_brain</code> that only fires when relational parsing and readable seed resolution succeed.</p>
       <h4>3.1 Actions</h4>
       <ul class="checklist">
@@ -384,82 +387,82 @@
         <li><code class="status">[x]</code><code>bunx tsc --noEmit</code> and <code>git diff --check</code> - prove TypeScript and whitespace validity.</li>
         <li><code class="status">[x]</code><code>bun test</code> - proves no shared retrieval regression via the full Bun suite.</li>
       </ul>
-      <div class="loop">#267 is validated in PR #274 at head 4c4d3e2; merge/closure remain pending controller action.</div>
+      <div class="loop">#267 is complete: PR #274 merged and the issue is closed. Gate evidence lives in the merged tests referenced above.</div>
     </div>
 
     <div class="phase" id="phase-4">
-      <h3><code class="status">[]</code>Phase 4: #269 Privacy-Safe Audit Logging</h3>
+      <h3><code class="status">[x]</code>Phase 4: #269 Privacy-Safe Audit Logging</h3>
       <p>Add operator observability for MCP/tool calls without persisting raw payloads, secrets, prompt text, file paths, or unknown attacker-controlled key names.</p>
       <h4>4.1 Actions</h4>
       <ul class="checklist">
-        <li><code class="status">[]</code>Record operation name, status, latency, caller identity, namespace source, declared parameter keys, unknown key count, and coarse payload size.</li>
-        <li><code class="status">[]</code>Bucket byte counts and redact unknown names/values by default.</li>
-        <li><code class="status">[]</code>Add disable and retention controls.</li>
-        <li><code class="status">[]</code>Make audit writes fail-open for user-facing operations.</li>
+        <li><code class="status">[x]</code>Record operation name, status, latency, caller identity, namespace source, declared parameter keys, unknown key count, and coarse payload size.</li>
+        <li><code class="status">[x]</code>Bucket byte counts and redact unknown names/values by default.</li>
+        <li><code class="status">[x]</code>Add disable and retention controls.</li>
+        <li><code class="status">[x]</code>Make audit writes fail-open for user-facing operations.</li>
       </ul>
       <h4>4.2 Testing Strategy</h4>
       <ul class="checklist">
-        <li><code class="status">[]</code><code>bun test tests/tool-audit-log.test.ts</code> - proves redaction, declared-key capture, unknown-key counting, byte bucketing, disable/retention, and fail-open behavior via audit logger tests.</li>
-        <li><code class="status">[]</code><code>bunx tsc --noEmit</code> - proves audit types compile via TypeScript.</li>
+        <li><code class="status">[x]</code><code>bun test src/audit-log.test.ts src/tools/__tests__/mcp-audit-log.test.ts</code> - proves redaction, declared-key capture, unknown-key counting, byte bucketing, disable/retention, and fail-open behavior via the merged audit logger and MCP dispatch-path tests.</li>
+        <li><code class="status">[x]</code><code>bunx tsc --noEmit</code> - proves audit types compile via TypeScript.</li>
       </ul>
       <div class="loop">No raw payload storage. A test that inspects persisted audit rows for secret-shaped values is required before PR readiness.</div>
     </div>
 
     <div class="phase" id="phase-5">
-      <h3><code class="status">[]</code>Phase 5: #270 Operator Doctor/Status Surface</h3>
+      <h3><code class="status">[x]</code>Phase 5: #270 Operator Doctor/Status Surface</h3>
       <p>Add stable JSON diagnostics for operators before any human UI, while keeping public health minimal.</p>
       <h4>5.1 Actions</h4>
       <ul class="checklist">
-        <li><code class="status">[]</code>Report runtime version, contract version, DB connectivity, migration status, embedding provider health, qmd health when configured, transport mode/availability, degraded provider failures, and audit/log health when available.</li>
-        <li><code class="status">[]</code>Keep secrets and raw env values out of the output.</li>
-        <li><code class="status">[]</code>Require auth or local command boundary for privileged detail.</li>
-        <li><code class="status">[]</code>Classify downstream impact before exposing any MCP contract change.</li>
+        <li><code class="status">[x]</code>Report runtime version, contract version, DB connectivity, migration status, embedding provider health, qmd health when configured, transport mode/availability, degraded provider failures, and audit/log health when available.</li>
+        <li><code class="status">[x]</code>Keep secrets and raw env values out of the output.</li>
+        <li><code class="status">[x]</code>Require auth or local command boundary for privileged detail.</li>
+        <li><code class="status">[x]</code>Classify downstream impact before exposing any MCP contract change.</li>
       </ul>
       <h4>5.2 Testing Strategy</h4>
       <ul class="checklist">
-        <li><code class="status">[]</code><code>bun test tests/doctor-status.test.ts</code> - proves JSON status shape, degraded states, and secret omission via focused doctor/status tests.</li>
-        <li><code class="status">[]</code><code>bun test tests/auth-permissions.test.ts</code> - proves privileged detail is gated via auth/permission regression tests if the surface is exposed over MCP/HTTP.</li>
-        <li><code class="status">[]</code><code>bunx tsc --noEmit</code> - proves status contracts compile via TypeScript.</li>
+        <li><code class="status">[x]</code><code>bun test src/operator-doctor.test.ts src/tools/__tests__/operator-doctor.test.ts src/server.test.ts</code> - proves JSON status shape, degraded/tri-state handling, secret omission, and REST 200/503 status-code mirroring via the merged doctor/status and server route tests.</li>
+        <li><code class="status">[x]</code><code>bun test src/tools/__tests__/operator-doctor.test.ts</code> - proves privileged detail is gated at the MCP tool boundary via the merged auth-scoped doctor tests.</li>
+        <li><code class="status">[x]</code><code>bunx tsc --noEmit</code> - proves status contracts compile via TypeScript.</li>
       </ul>
       <div class="loop">Do not turn public health into an operator dump. Privileged detail must have a boundary.</div>
     </div>
 
     <div class="phase" id="phase-6">
-      <h3><code class="status">[]</code>Phase 6: #268 Graph Evidence In brain_answer/search_all</h3>
+      <h3><code class="status">[x]</code>Phase 6: #268 Graph Evidence In brain_answer/search_all</h3>
       <p>Expose graph-expanded rows safely to answer/search consumers only after #266/#267 are merged or available in the same branch.</p>
       <h4>6.1 Actions</h4>
       <ul class="checklist">
-        <li><code class="status">[]</code>Decide whether graph-expanded rows are default, opt-in, or inherited through <code>search_brain</code>.</li>
-        <li><code class="status">[]</code>Preserve extractive/cited answer behavior.</li>
-        <li><code class="status">[]</code>Keep qmd federation separate and fail-open.</li>
-        <li><code class="status">[]</code>Bound and redact relation/path metadata before it reaches answer output.</li>
+        <li><code class="status">[x]</code>Decide whether graph-expanded rows are default, opt-in, or inherited through <code>search_brain</code>.</li>
+        <li><code class="status">[x]</code>Preserve extractive/cited answer behavior.</li>
+        <li><code class="status">[x]</code>Keep qmd federation separate and fail-open.</li>
+        <li><code class="status">[x]</code>Bound and redact relation/path metadata before it reaches answer output.</li>
       </ul>
       <h4>6.2 Testing Strategy</h4>
       <ul class="checklist">
-        <li><code class="status">[]</code><code>bun test tests/brain-answer-graph-evidence.test.ts tests/search-all-graph-evidence.test.ts</code> - proves graph evidence is cited, bounded, and redacted via answer/search tests.</li>
-        <li><code class="status">[]</code><code>bun test tests/search-brain-namespace.test.ts</code> - proves namespace denial still applies at consumer surfaces.</li>
-        <li><code class="status">[]</code><code>bunx tsc --noEmit</code> - proves consumer contract types compile.</li>
+        <li><code class="status">[x]</code><code>bun test src/tools/__tests__/graph-evidence-consumers.test.ts</code> - proves graph evidence is cited, bounded, and redacted via the merged answer/search consumer tests.</li>
+        <li><code class="status">[x]</code><code>bun test src/tools/__tests__/graph-evidence-consumers.test.ts</code> - proves namespace denial still applies at consumer surfaces via the same merged suite's namespace cases.</li>
+        <li><code class="status">[x]</code><code>bunx tsc --noEmit</code> - proves consumer contract types compile.</li>
       </ul>
       <div class="loop">Do not advertise new contract capability through get_contract until server, tests, and downstream support are ready or deliberately scoped.</div>
     </div>
 
     <div class="phase" id="phase-7">
-      <h3><code class="status">[]</code>Phase 7: #271 Hot-Memory Boundary Decision</h3>
+      <h3><code class="status">[x]</code>Phase 7: #271 Hot-Memory Boundary Decision</h3>
       <p>Evaluate whether hot working memory belongs in <code>agent_context_pack</code>, MCP <code>_meta</code>, or remains deferred. This is a boundary decision first and an implementation second.</p>
       <h4>7.1 Actions</h4>
       <ul class="checklist">
-        <li><code class="status">[]</code>Re-read <code>docs/agent-context-pack-contract.md</code>.</li>
-        <li><code class="status">[]</code>Choose the owning boundary and document the rejected alternatives.</li>
-        <li><code class="status">[]</code>If implemented, run exact-scope filters before ranking/truncation across namespace, agent, platform, server, channel, thread, and session.</li>
-        <li><code class="status">[]</code>Label working state as unpromoted working context and preserve citations/source refs.</li>
+        <li><code class="status">[x]</code>Re-read <code>docs/agent-context-pack-contract.md</code>.</li>
+        <li><code class="status">[x]</code>Choose the owning boundary and document the rejected alternatives.</li>
+        <li><code class="status">[x]</code>If implemented, run exact-scope filters before ranking/truncation across namespace, agent, platform, server, channel, thread, and session.</li>
+        <li><code class="status">[x]</code>Label working state as unpromoted working context and preserve citations/source refs.</li>
       </ul>
       <h4>7.2 Testing Strategy</h4>
       <ul class="checklist">
-        <li><code class="status">[]</code><code>bun test tests/agent-context-pack-hot-memory.test.ts</code> - proves boundary behavior, truncation, citations, and unpromoted labeling via context-pack contract tests.</li>
-        <li><code class="status">[]</code><code>bun test tests/agent-context-pack-scope.test.ts</code> - proves exact-scope denial for every scope key via scope regression tests.</li>
-        <li><code class="status">[]</code><code>grep -R "Downstream rollout" -n docs specs</code> - proves downstream classification is documented via a committed doc/spec reference.</li>
+        <li><code class="status">[x]</code><code>bun test src/tools/__tests__/agent-context-pack.test.ts</code> - proves boundary behavior, truncation, citations, and unpromoted labeling via the merged context-pack contract tests.</li>
+        <li><code class="status">[x]</code><code>bun test src/tools/__tests__/get-contract.test.ts src/tools/__tests__/agent-context-pack.test.ts</code> - proves exact-scope denial and advertised-contract alignment via the merged scope and contract tests.</li>
+        <li><code class="status">[x]</code><code>grep -R "Downstream rollout" -n docs specs</code> - proves downstream classification is documented via a committed doc/spec reference.</li>
       </ul>
-      <div class="loop">If the boundary is still ambiguous, close #271 only with a documented defer decision approved by Rico.</div>
+      <div class="loop">Resolved: PR #276 merged as c0ec058 recording the boundary decision (agent_context_pack owns hot memory via the existing exact-scope pull path). Rico approved and closed #271 on 2026-07-08.</div>
     </div>
   </section>
 

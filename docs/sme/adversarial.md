@@ -193,3 +193,55 @@ provider outages.
   returning degraded results?
 - Is there a regression test with `embedFn` returning `null` that still proves
   graph or other non-vector evidence is recovered?
+
+## [2026-07-08] Promise.race timeouts leave detached DB writes holding pool connections
+
+**Severity:** HIGH
+**Source:** PR #275 pre-merge gauntlet for Issue #269
+**Scope:** `src/audit-log.ts`, any fail-open/fire-and-forget DB write wrapped in
+a timeout race
+**Status:** fixed in PR #275
+
+### Pattern
+
+Racing a DB write against a timeout does not cancel the write: the losing
+`pool.query` keeps running detached and holds its pool connection until the
+server responds. Under a slow or wedged database, fail-open audit writes can
+accumulate detached queries until user-facing operations starve on the shared
+pool. Write concurrency caps must sit below the pool size, and new fail-open
+writes must skip when `pool.waitingCount > 0` so background telemetry never
+outbids foreground work.
+
+### Review Questions
+
+- Does any timeout race assume the losing promise stops consuming resources?
+- Is the background write concurrency cap strictly below the pool size?
+- Does the write path skip (not queue) when the pool already has waiters?
+- Do tests wedge the fake pool and prove foreground queries still get
+  connections while audit writes shed load?
+
+## [2026-07-08] Reusing an output field with a new value distribution is a contract change
+
+**Severity:** MEDIUM
+**Source:** PR #278 pre-merge gauntlet for Issue #268
+**Scope:** `search_all`/`brain_answer` graph evidence rows, any consumer-visible
+field whose value range changes without a schema change
+**Status:** fixed in PR #278
+
+### Pattern
+
+Emitting an existing output field with a new value distribution -- `score` set
+to a raw link weight instead of the established [0,1] relevance range -- is a
+value-level contract change hiding under "no schema change." Downstream ranking,
+thresholds, and display logic built for the old distribution silently misbehave.
+Clamp/normalize at the consumer boundary and classify the change in the
+downstream rollout gate even though the schema is untouched.
+
+### Review Questions
+
+- Does a new evidence source write into a pre-existing field? What distribution
+  do current consumers assume for it?
+- Is the new value clamped/normalized to the established range at the boundary?
+- Was the change classified under `docs/downstream-rollout.md` as
+  client-visible despite having no schema diff?
+- Do tests assert the emitted values stay inside the documented range?
