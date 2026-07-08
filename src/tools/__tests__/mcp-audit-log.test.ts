@@ -135,11 +135,50 @@ describe("MCP tool audit logging", () => {
       "worker-269",
       "header",
       JSON.stringify(["content", "namespace", "source_refs", "tags"]),
+      // All argument keys are declared, so the RAW-args unknown count is 0.
       0,
-      expect.stringMatching(/^le_|^gt_|^0b$/),
+      // Bucket of the RAW request arguments (~100 bytes of JSON).
+      "le_128b",
     ]);
     expect(JSON.stringify(insert?.params)).not.toContain("raw prompt text");
     expect(JSON.stringify(insert?.params)).not.toContain("token-shaped-secret");
+  });
+
+  test("counts undeclared keys and buckets raw payload size before Zod stripping", async () => {
+    const store = auditPool();
+    const { client, cleanup } = await setupClient({
+      pool: store.pool,
+      auth: { role: "agent", clientId: "rico" },
+    });
+
+    try {
+      const result = await client.callTool({
+        name: "log_thought",
+        arguments: {
+          content: "small declared value",
+          // Undeclared key with a large value: Zod strips it before the tool
+          // handler runs, so only the raw-args capture can see it.
+          undeclared_probe_key: "x".repeat(5000),
+        },
+      });
+      expect(result.isError).toBeFalsy();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    } finally {
+      await cleanup();
+    }
+
+    const insert = store.calls.find((call) =>
+      call.sql.includes("INSERT INTO mcp_tool_audit_log"),
+    );
+    expect(insert).toBeDefined();
+    // unknown_parameter_count reflects the RAW request arguments.
+    expect(insert?.params[9]).toBe(1);
+    // payload_size_bucket reflects the RAW ~5KB payload, not the post-strip
+    // ~50-byte parsed args (which would bucket as le_128b).
+    expect(insert?.params[10]).toBe("le_16kb");
+    expect(JSON.stringify(insert?.params)).not.toContain(
+      "undeclared_probe_key",
+    );
   });
 
   test("audit write failures fail open for user-facing tool calls", async () => {
@@ -183,6 +222,77 @@ describe("MCP tool audit logging", () => {
       call.sql.includes("INSERT INTO mcp_tool_audit_log"),
     );
     expect(inserts).toHaveLength(1);
+  });
+
+  test("shares the retention cleanup clock across sessions on one pool", async () => {
+    const store = auditPool();
+    const auth: AuthInfo = { role: "admin", clientId: "rico" };
+    // Two installMcpAudit calls on two separate server instances (fresh
+    // server per MCP session, as in src/index.ts serverFactory) sharing one
+    // pool must share one cleanup interval clock.
+    const sessionOne = await setupClient({ pool: store.pool, auth });
+    const sessionTwo = await setupClient({ pool: store.pool, auth });
+
+    const countDeletes = () =>
+      store.calls.filter((call) =>
+        call.sql.trimStart().startsWith("DELETE FROM mcp_tool_audit_log"),
+      ).length;
+
+    try {
+      const first = await sessionOne.client.callTool({
+        name: "log_thought",
+        arguments: { content: "session one call" },
+      });
+      expect(first.isError).toBeFalsy();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(countDeletes()).toBe(1);
+
+      const second = await sessionTwo.client.callTool({
+        name: "log_thought",
+        arguments: { content: "session two call" },
+      });
+      expect(second.isError).toBeFalsy();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      // Second session's first call must NOT re-trigger the retention DELETE
+      // within the cleanup interval.
+      expect(countDeletes()).toBe(1);
+    } finally {
+      await sessionOne.cleanup();
+      await sessionTwo.cleanup();
+    }
+  });
+
+  test("skips audit writes above the in-flight cap instead of queueing", async () => {
+    const insert = deferred<{ rows: unknown[] }>();
+    const store = auditPool({ deferAuditInsert: insert.promise });
+    const { client, cleanup } = await setupClient({
+      pool: store.pool,
+      writeTimeoutMs: 50,
+      auth: { role: "admin", clientId: "rico" },
+    });
+
+    try {
+      // Audit INSERTs never resolve, so in-flight writes accumulate until the
+      // cap (16); the remaining calls must skip their audit write entirely
+      // while still succeeding for the caller.
+      const results = await Promise.all(
+        Array.from({ length: 20 }, (_, index) =>
+          client.callTool({
+            name: "log_thought",
+            arguments: { content: `call ${index}` },
+          }),
+        ),
+      );
+      for (const result of results) expect(result.isError).toBeFalsy();
+    } finally {
+      insert.resolve({ rows: [] });
+      await cleanup();
+    }
+
+    const inserts = store.calls.filter((call) =>
+      call.sql.includes("INSERT INTO mcp_tool_audit_log"),
+    );
+    expect(inserts).toHaveLength(16);
   });
 
   test("slow audit writes are bounded by the write timeout", async () => {

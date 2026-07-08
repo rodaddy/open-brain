@@ -1,8 +1,11 @@
 # MCP Tool Audit Log (Operator Guide)
 
-Open Brain records a privacy-safe audit row for every MCP tool call handled by
-the server (issue #269). The log answers "who called which tool, when, with
-what outcome and rough payload shape" without ever persisting request content.
+Open Brain records a privacy-safe audit row for every tool call dispatched
+through the MCP server, i.e. tools registered via `registerTool` and reached
+over the HTTP `/mcp` transport (issue #269). Calls that bypass the MCP server
+-- notably the NATS-bridge runtime paths -- are **not** covered by this log.
+The log answers "who called which tool, when, with what outcome and rough
+payload shape" without ever persisting request content.
 
 Implementation: `src/audit-log.ts`. Schema:
 `src/db/migrations/022_mcp_tool_audit_log.sql`.
@@ -22,8 +25,8 @@ Implementation: `src/audit-log.ts`. Schema:
 | `caller_agent_id` | `TEXT` | Agent id from auth context. |
 | `namespace_source` | `TEXT` | How the namespace was resolved (e.g. `header`). |
 | `declared_parameter_keys` | `JSONB` | Sorted, de-duplicated key names from the tool's **declared** input schema only. |
-| `unknown_parameter_count` | `INTEGER` | Count of argument keys not in the declared schema. The unknown key names themselves are never stored. |
-| `payload_size_bucket` | `TEXT` | Coarse size bucket of the JSON-serialized arguments (`0b`, `le_128b`, `le_512b`, `le_1kb`, `le_4kb`, `le_16kb`, `le_64kb`, `le_256kb`, `le_1mb`, `gt_1mb`). |
+| `unknown_parameter_count` | `INTEGER` | Count of **raw** request argument keys not in the declared schema, measured before Zod validation strips undeclared keys. The unknown key names themselves are never stored. If a request carries more than 256 argument keys, per-key comparison is skipped and the total raw key count is recorded instead. |
+| `payload_size_bucket` | `TEXT` | Coarse size bucket of the JSON-serialized **raw** request arguments, measured before Zod validation strips undeclared keys (`0b`, `le_128b`, `le_512b`, `le_1kb`, `le_4kb`, `le_16kb`, `le_64kb`, `le_256kb`, `le_1mb`, `gt_1mb`). The sentinel `unknown` is recorded when the arguments cannot be JSON-serialized (never conflated with `0b`). |
 
 ## Privacy Guarantees
 
@@ -59,9 +62,19 @@ Audit logging never blocks or fails user-facing tool calls:
   tool result (or original exception) is returned to the caller unchanged.
 - Slow inserts are bounded by `OPENBRAIN_MCP_AUDIT_WRITE_TIMEOUT_MS`
   (`mcp_tool_audit_write_timeout` warning on breach).
-- Retention cleanup failures are caught and logged as
-  `mcp_tool_audit_cleanup_failed` and retried on a later write.
+- At most 16 audit inserts may be in flight against the pool at once. Beyond
+  that (for example under sustained database slowness), further audit writes
+  are skipped entirely and logged as `mcp_tool_audit_write_skipped`, so
+  detached audit writes can never hold every pool connection and starve real
+  tool queries.
+- Retention cleanup fires detached after a successful insert and never runs
+  inside the request-latency window. Failures are caught and logged as
+  `mcp_tool_audit_cleanup_failed` and retried on a later write. The cleanup
+  clock is process-scoped per pool, so per-session MCP server construction
+  does not re-trigger the retention DELETE.
+- Audit warning log lines carry only the error `code`/`name` (for example the
+  Postgres error code), never the raw error message.
 
 The trade-off is deliberate: availability of the memory tools wins over audit
-completeness. Watch the three warning events above if you need to detect audit
+completeness. Watch the four warning events above if you need to detect audit
 gaps.
