@@ -52,6 +52,7 @@ function envelope(
   overrides: {
     id?: string;
     from?: string;
+    kind?: string;
     payload?: Record<string, unknown>;
     version?: number;
   } = {},
@@ -60,7 +61,7 @@ function envelope(
     id: overrides.id ?? "req-123",
     ts: "2026-07-08T00:00:00.000Z",
     from: overrides.from ?? scope.namespace,
-    kind: REQUEST_KIND,
+    kind: overrides.kind ?? REQUEST_KIND,
     payload: overrides.payload ?? requestPayload,
     version: overrides.version ?? 1,
   };
@@ -133,6 +134,48 @@ describe("handleNatsContextPackMessage — response envelope", () => {
       content: "Finish #223 over NATS without changing HTTP default.",
       label: "working_context",
     });
+  });
+});
+
+describe("handleNatsContextPackMessage — inbound kind validation (codex-C5)", () => {
+  function expectBadRequestForKind(kind: string) {
+    const response = handleNatsContextPackMessage({
+      // A valid agent_context_pack payload on the subject, but the WRONG kind:
+      // must be rejected as bad_request before payload handling, so a reply or
+      // unrelated fleet message is never processed as a real request.
+      message: { subject: SUBJECT, data: data(envelope({ kind, from: "rico" })), headers: {} },
+      boundary: localBoundary(),
+      tokenMap: new Map(),
+      deps: depsWithWorkingSet("rico"),
+    });
+    const payload = response.payload as Record<string, any>;
+    expect(payload.status).toBe("error");
+    expect(payload.error.code).toBe("bad_request");
+    // requestId is still echoed even though the kind was wrong.
+    expect(response.id).toBe("req-123");
+    expect(response.correlation_id).toBe("req-123");
+    return payload;
+  }
+
+  it("rejects a response-kind envelope replayed onto the request subject", () => {
+    expectBadRequestForKind(RESPONSE_KIND);
+  });
+
+  it("rejects an empty kind", () => {
+    // Empty kind is rejected by the envelope required-field guard (also bad_request).
+    const response = handleNatsContextPackMessage({
+      message: { subject: SUBJECT, data: data(envelope({ kind: "", from: "rico" })), headers: {} },
+      boundary: localBoundary(),
+      tokenMap: new Map(),
+      deps: depsWithWorkingSet("rico"),
+    });
+    const payload = response.payload as Record<string, any>;
+    expect(payload.status).toBe("error");
+    expect(payload.error.code).toBe("bad_request");
+  });
+
+  it("rejects an unrelated kind", () => {
+    expectBadRequestForKind("dispatch");
   });
 });
 
@@ -269,7 +312,9 @@ describe("handleNatsContextPackMessage — REQUIRE_AUTH interlock", () => {
 
     const payload = response.payload as Record<string, any>;
     expect(payload.status).toBe("ok");
-    expect(payload.namespace_source).toBe("declared");
+    // Token-derived binding is stamped "token" — distinct from wire-derived
+    // "declared" (S2). A caller can tell auth was enforced.
+    expect(payload.namespace_source).toBe("token");
     // Token namespace "rico" selected the working set, not "victim".
     expect(payload.body.sections.working_set.items[0].content).toContain(
       "Finish #223",

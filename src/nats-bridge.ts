@@ -9,6 +9,7 @@ import {
 } from "./tools/agent-context-pack.ts";
 import type {
   FleetEnvelope,
+  NamespaceSource,
   NatsContextPackRequestPayload,
   NatsRuntimeBoundary,
 } from "./nats-runtime.ts";
@@ -18,6 +19,7 @@ import {
   envelopeToBytes,
   EnvelopeError,
   mapRequestPayloadToToolArgs,
+  REQUEST_KIND,
   requestPayloadSchema,
   RESPONSE_FROM,
   RESPONSE_KIND,
@@ -86,8 +88,9 @@ const NATS_EMPTY_SUBSCRIPTION_DEGRADE_THRESHOLD = 2;
 // namespace and cannot reach "all" or another tenant's data.
 const LOCAL_BUS_ROLE = "agent" as const;
 
-/** How the request's namespace was bound, stamped on the response and logs. */
-export type NamespaceSource = "override" | "declared" | "rejected";
+// NamespaceSource (the response-contract type) is owned by nats-runtime.ts; keep
+// a re-export so existing importers of it from this module still resolve.
+export type { NamespaceSource } from "./nats-runtime.ts";
 
 // A namespace produced by a wire-declared identity/override must be a plausible
 // namespace token, not arbitrary text. Mirrors the delegated-id shape used by
@@ -175,8 +178,8 @@ interface LaneBinding {
  *
  * Resolution order:
  *   (a) require_auth=true  -> a valid bearer is mandatory; the token's AuthInfo
- *       governs; wire namespace is ignored. namespace_source is reported from
- *       the token perspective as "declared" (token-derived).
+ *       governs; wire namespace is ignored. namespace_source is "token" so a
+ *       token-derived binding is distinguishable from a wire-derived one.
  *   (b) explicit payload.namespace AND override allowed -> use it ("override").
  *   (c) else derive namespace from the declared identity -> "declared".
  *   (d) else unroutable -> reject ("rejected"); NEVER fall through to a global
@@ -194,7 +197,7 @@ function resolveLaneBinding(
     // Auth ON: the bearer-derived identity is authoritative. Override is already
     // force-disabled at the boundary; we defensively ignore payload.namespace.
     if (!auth) return { rejected: true };
-    return { auth, namespaceSource: "declared" };
+    return { auth, namespaceSource: "token" };
   }
 
   // Auth OFF (trusted local bus). Bind a synthetic non-privileged identity to
@@ -269,6 +272,19 @@ export function handleNatsContextPackMessage(input: {
 
     const envelope = parseEnvelope(input.message.data);
     requestId = envelope.id;
+
+    // Reject any inbound envelope that is not a context_pack_request BEFORE we
+    // touch the payload. Without this, a reply envelope (context_pack_response)
+    // or an unrelated fleet message that happens to carry an agent_context_pack
+    // payload on this subject would be processed as a real request — a
+    // request/reply loop poisoning and scope hazard. EnvelopeError classifies as
+    // bad_request via isNatsRequestValidationError.
+    if (envelope.kind !== REQUEST_KIND) {
+      throw new EnvelopeError(
+        `NATS envelope kind '${envelope.kind}' is not '${REQUEST_KIND}'`,
+      );
+    }
+
     const payload = requestPayloadSchema.parse(envelope.payload);
 
     const auth = authFromHeaders(input.message.headers, input.tokenMap);

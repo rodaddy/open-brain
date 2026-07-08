@@ -19,7 +19,11 @@ import { obContextPackSubject } from "./nats-subjects.ts";
 //                               is "from" (NOT "sender"). Requests: the caller's
 //                               agent/client id. Responses: "open-brain".
 //     "kind":           string  (required, non-empty) — dispatch discriminator.
-//                               Requests:  "context_pack_request"
+//                               Requests:  "context_pack_request"  — the bridge
+//                               REJECTS any inbound envelope whose kind is not
+//                               "context_pack_request" as bad_request, before it
+//                               inspects the payload (so a reply or unrelated
+//                               fleet message on the subject is never processed).
 //                               Responses: "context_pack_response"
 //     "payload":        object  (required to be a JSON object; missing => {})
 //     "to":             string | null  (optional)
@@ -44,14 +48,22 @@ import { obContextPackSubject } from "./nats-subjects.ts";
 //                     (never overrides the token-derived namespace) once
 //                     OPENBRAIN_NATS_REQUIRE_AUTH=true. namespace IS a security
 //                     boundary — see nats-bridge.ts lane binding.
+//                     namespace_source is a RESPONSE-ONLY stamp; it MUST NOT
+//                     appear in the request wire.
 //   }
 //
 // RESPONSE payload:
 //   ok:    { "status": "ok",    "operation": "agent_context_pack",
-//            "namespace_source": "override"|"declared", "body": <context pack> }
+//            "namespace_source": "token"|"override"|"declared", "body": <pack> }
 //   error: { "status": "error", "operation": "agent_context_pack",
-//            "namespace_source": "override"|"declared"|"rejected"|null,
+//            "namespace_source": "token"|"override"|"declared"|"rejected"|null,
 //            "error": { "code": string, "message": string } }
+//   namespace_source values:
+//     "token"    — REQUIRE_AUTH=true: namespace derived from the bearer token.
+//     "override" — auth off: explicit payload.namespace override was used.
+//     "declared" — auth off: namespace derived from declared identity (from /
+//                  payload.identity.agent).
+//     "rejected" — request could not be bound to a namespace (or auth missing).
 //
 // SUBJECT: `{env}.ob.memory.context_pack`, built by obContextPackSubject(env)
 //   with env from OPENBRAIN_NATS_ENV (default "dev"). Env token is slugged
@@ -64,6 +76,16 @@ export const ENVELOPE_VERSION = 1;
 export const REQUEST_KIND = "context_pack_request";
 export const RESPONSE_KIND = "context_pack_response";
 export const RESPONSE_FROM = "open-brain";
+
+/**
+ * How the response's namespace was bound. RESPONSE-ONLY stamp — never present in
+ * the request wire.
+ *   "token"    — REQUIRE_AUTH=true: namespace derived from the bearer token.
+ *   "override" — auth off: explicit payload.namespace override was used.
+ *   "declared" — auth off: namespace derived from the declared identity.
+ *   "rejected" — request could not be bound to a namespace (or auth missing).
+ */
+export type NamespaceSource = "token" | "override" | "declared" | "rejected";
 
 const NATS_CONTEXT_PACK_OPERATION = "agent_context_pack";
 const DEFAULT_NATS_ENV = "dev";
