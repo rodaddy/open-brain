@@ -133,21 +133,46 @@ class FakeTransport:
         raise AssertionError(f"Unexpected JSON-RPC method: {method}")
 
 
+def fleet_reply_envelope(
+    *,
+    correlation_id: str = "3",
+    status: str = "ok",
+    body: dict | None = None,
+    error: dict | None = None,
+    kind: str = "context_pack_response",
+    operation: str = "agent_context_pack",
+) -> dict:
+    payload: dict = {"operation": operation, "status": status}
+    if body is not None:
+        payload["body"] = body
+    if error is not None:
+        payload["error"] = error
+    return {
+        "id": correlation_id,
+        "ts": "2026-07-08T00:00:00+00:00",
+        "from": "open-brain",
+        "kind": kind,
+        "payload": payload,
+        "to": None,
+        "task_id": None,
+        "channel": None,
+        "topic": None,
+        "correlation_id": correlation_id,
+        "version": 1,
+    }
+
+
 class FakeNatsRequestReplyDriver:
     def __init__(self) -> None:
         self.requests = []
-        self.next_response = {
-            "schema": "openbrain.nats.response.v1",
-            "request_id": "3",
-            "status": "ok",
-            "operation": "agent_context_pack",
-            "body": {
+        self.next_response = fleet_reply_envelope(
+            body={
                 "sections": {
                     "working_set": {"items": [{"content": "from nats"}]},
                 },
                 "warnings": {"scope_denials": []},
             },
-        }
+        )
         self.raise_next: Exception | None = None
 
     def request(self, subject, payload, *, headers, timeout):
@@ -394,6 +419,7 @@ def test_nats_transport_uses_request_reply_after_available_contract():
         context_pack_subject="ob.memory.context_pack",
         fallback_transport=fallback,
         request_reply_driver=nats,
+        clock=lambda: "2026-07-08T12:00:00+00:00",
     )
     client = OpenBrainClient(
         "https://brain.example",
@@ -431,12 +457,18 @@ def test_nats_transport_uses_request_reply_after_available_contract():
     assert request["subject"] == "ob.memory.context_pack"
     assert request["headers"] == {"Authorization": "Bearer secret-token"}
     assert request["timeout"] == 12.5
-    assert request["payload"] == {
-        "schema": "openbrain.nats.request.v1",
+    envelope = request["payload"]
+    # Fleet Envelope wire fields.
+    assert envelope["kind"] == "context_pack_request"
+    assert envelope["id"] == "3"
+    assert envelope["correlation_id"] == "3"
+    assert envelope["ts"] == "2026-07-08T12:00:00+00:00"
+    assert envelope["from"] == "openbrain-memory"
+    assert envelope["version"] == 1
+    assert envelope["to"] is None
+    assert envelope["payload"] == {
         "operation": "agent_context_pack",
-        "request_id": "3",
         "identity": {
-            "namespace_source": "authorization",
             "agent": "nagatha",
             "platform": "discord",
             "server_id": "guild",
@@ -694,16 +726,22 @@ def test_nats_transport_falls_back_for_unsupported_context_pack_arguments():
 
 
 @pytest.mark.parametrize(
-    ("response_update", "match"),
+    ("response", "match"),
     [
-        ({"schema": "unexpected"}, "unexpected schema"),
-        ({"request_id": "other"}, "response id did not match"),
-        ({"operation": "search_all"}, "unexpected operation"),
-        ({"status": "confused"}, "unexpected status"),
+        (fleet_reply_envelope(kind="unexpected", body={}), "unexpected kind"),
+        (
+            fleet_reply_envelope(correlation_id="other", body={}),
+            "response id did not match",
+        ),
+        (
+            fleet_reply_envelope(operation="search_all", body={}),
+            "unexpected operation",
+        ),
+        (fleet_reply_envelope(status="confused", body={}), "unexpected status"),
     ],
 )
 def test_nats_transport_protocol_errors_do_not_fallback(
-    response_update,
+    response,
     match,
 ):
     fallback = FakeTransport()
@@ -714,7 +752,7 @@ def test_nats_transport_protocol_errors_do_not_fallback(
         ]
     }
     nats = FakeNatsRequestReplyDriver()
-    nats.next_response.update(response_update)
+    nats.next_response = response
     transport = NatsTransport(
         "nats://127.0.0.1:4222",
         fallback_transport=fallback,
@@ -747,15 +785,24 @@ def test_nats_transport_protocol_errors_do_not_fallback(
 
 
 @pytest.mark.parametrize(
-    ("response_update", "match"),
+    ("response", "match"),
     [
-        ({"status": "error", "schema": "unexpected"}, "unexpected schema"),
-        ({"status": "error", "request_id": "other"}, "response id did not match"),
-        ({"status": "error", "operation": "search_all"}, "unexpected operation"),
+        (
+            fleet_reply_envelope(status="error", kind="unexpected", error={}),
+            "unexpected kind",
+        ),
+        (
+            fleet_reply_envelope(status="error", correlation_id="other", error={}),
+            "response id did not match",
+        ),
+        (
+            fleet_reply_envelope(status="error", operation="search_all", error={}),
+            "unexpected operation",
+        ),
     ],
 )
 def test_nats_transport_error_envelope_protocol_errors_do_not_fallback(
-    response_update,
+    response,
     match,
 ):
     fallback = FakeTransport()
@@ -766,7 +813,7 @@ def test_nats_transport_error_envelope_protocol_errors_do_not_fallback(
         ]
     }
     nats = FakeNatsRequestReplyDriver()
-    nats.next_response.update(response_update)
+    nats.next_response = response
     transport = NatsTransport(
         "nats://127.0.0.1:4222",
         fallback_transport=fallback,
@@ -1084,6 +1131,345 @@ def test_nats_transport_resets_availability_when_contract_check_errors():
         "get_contract",
         "agent_context_pack",
     ]
+
+
+def _available_nats_client(nats, transport, fallback):
+    fallback.tool_results["get_contract"] = contract_tool_result("available")
+    client = OpenBrainClient(
+        "https://brain.example",
+        "secret-token",
+        "bilby",
+        agent_id="bilby-agent",
+        role="agent",
+        timeout=12.5,
+        transport=transport,
+    )
+    client.get_contract()
+    return client
+
+
+def test_nats_default_subject_is_env_prefixed():
+    transport = NatsTransport("nats://127.0.0.1:4222", env="prod")
+
+    assert DEFAULT_NATS_CONTEXT_PACK_SUBJECT == "dev.ob.memory.context_pack"
+    assert transport.context_pack_subject == "prod.ob.memory.context_pack"
+
+
+def test_nats_subject_built_from_env_reaches_driver():
+    fallback = FakeTransport()
+    nats = FakeNatsRequestReplyDriver()
+    transport = NatsTransport(
+        "nats://127.0.0.1:4222",
+        env="prod",
+        fallback_transport=fallback,
+        request_reply_driver=nats,
+    )
+    client = _available_nats_client(nats, transport, fallback)
+
+    client.agent_context_pack(
+        agent="nagatha",
+        platform="discord",
+        server_id="guild",
+        channel_id="chan",
+        session_key="guild/chan/nagatha",
+    )
+
+    assert nats.requests[0]["subject"] == "prod.ob.memory.context_pack"
+
+
+def test_nats_namespace_binding_declared_by_default():
+    fallback = FakeTransport()
+    nats = FakeNatsRequestReplyDriver()
+    transport = NatsTransport(
+        "nats://127.0.0.1:4222",
+        fallback_transport=fallback,
+        request_reply_driver=nats,
+    )
+    client = _available_nats_client(nats, transport, fallback)
+
+    client.agent_context_pack(
+        agent="nagatha",
+        platform="discord",
+        server_id="guild",
+        channel_id="chan",
+        session_key="guild/chan/nagatha",
+    )
+
+    request_payload = nats.requests[0]["payload"]["payload"]
+    # Declared-by-default: no explicit namespace on the wire and no response-only
+    # namespace_source stamped on the request. The server derives the declared
+    # lane from identity.agent/session_key + the envelope `from`.
+    assert "namespace" not in request_payload
+    identity = request_payload["identity"]
+    assert "namespace_source" not in identity
+    assert "namespace" not in identity
+
+
+def test_nats_namespace_binding_explicit_override():
+    fallback = FakeTransport()
+    nats = FakeNatsRequestReplyDriver()
+    transport = NatsTransport(
+        "nats://127.0.0.1:4222",
+        fallback_transport=fallback,
+        request_reply_driver=nats,
+    )
+    client = _available_nats_client(nats, transport, fallback)
+
+    client.agent_context_pack(
+        agent="nagatha",
+        platform="discord",
+        server_id="guild",
+        channel_id="chan",
+        session_key="guild/chan/nagatha",
+        namespace="shared-kb",
+    )
+
+    request_payload = nats.requests[0]["payload"]["payload"]
+    # Canonical wire: the override rides TOP-LEVEL payload.namespace (the field
+    # the TS side reads), NOT identity.namespace. namespace_source is a
+    # response-only field and must not appear on the request.
+    assert request_payload["namespace"] == "shared-kb"
+    identity = request_payload["identity"]
+    assert "namespace" not in identity
+    assert "namespace_source" not in identity
+
+
+def test_nats_namespace_override_is_advisory_not_a_grant():
+    """A normal client emitting namespace="other-tenant" gets no grant by itself.
+
+    Server-authority contract: payload.namespace is an ADVISORY wire hint. The
+    override changes only the requested-namespace HINT on the wire; it carries
+    no client-side authority (no allowlist, no privileged delegation header) and
+    the declared identity is unchanged. The server is authoritative and
+    re-authorizes the requested namespace against the request's auth — so this
+    override alone cannot grant cross-namespace access. Mirrors the TS
+    reject/re-auth intent at the contract level (the live server re-auth path is
+    not exercisable here).
+    """
+    fallback = FakeTransport()
+    nats = FakeNatsRequestReplyDriver()
+    transport = NatsTransport(
+        "nats://127.0.0.1:4222",
+        fallback_transport=fallback,
+        request_reply_driver=nats,
+    )
+    client = _available_nats_client(nats, transport, fallback)
+
+    client.agent_context_pack(
+        agent="nagatha",
+        platform="discord",
+        server_id="guild",
+        channel_id="chan",
+        session_key="guild/chan/nagatha",
+        namespace="other-tenant",
+    )
+
+    envelope = nats.requests[0]["payload"]
+    request_payload = envelope["payload"]
+    # The override is present ONLY as the advisory wire hint...
+    assert request_payload["namespace"] == "other-tenant"
+    # ...and nothing else in the envelope asserts authority for that namespace:
+    # the declared identity (from/agent/session_key) is untouched, so the server
+    # has no client-supplied grant to trust and must re-authorize.
+    assert envelope["from"] == "openbrain-memory"
+    identity = request_payload["identity"]
+    assert identity["agent"] == "nagatha"
+    assert identity["session_key"] == "guild/chan/nagatha"
+    assert "namespace" not in identity
+    assert "namespace_source" not in identity
+    # No privileged namespace-delegation header rides the trusted bus.
+    assert "X-Namespace" not in nats.requests[0]["headers"]
+    assert "x-namespace" not in nats.requests[0]["headers"]
+
+
+def test_nats_empty_namespace_override_rejected_before_send():
+    fallback = FakeTransport()
+    nats = FakeNatsRequestReplyDriver()
+    transport = NatsTransport(
+        "nats://127.0.0.1:4222",
+        fallback_transport=fallback,
+        request_reply_driver=nats,
+    )
+    client = _available_nats_client(nats, transport, fallback)
+
+    with pytest.raises(ValueError, match="namespace must be a non-empty string"):
+        client.agent_context_pack(
+            agent="nagatha",
+            platform="discord",
+            server_id="guild",
+            channel_id="chan",
+            session_key="guild/chan/nagatha",
+            namespace="",
+        )
+    assert nats.requests == []
+
+
+def test_nats_reply_correlation_id_links_to_request():
+    fallback = FakeTransport()
+    nats = FakeNatsRequestReplyDriver()
+    transport = NatsTransport(
+        "nats://127.0.0.1:4222",
+        fallback_transport=fallback,
+        request_reply_driver=nats,
+    )
+    client = _available_nats_client(nats, transport, fallback)
+
+    result = client.agent_context_pack(
+        agent="nagatha",
+        platform="discord",
+        server_id="guild",
+        channel_id="chan",
+        session_key="guild/chan/nagatha",
+    )
+
+    request_envelope = nats.requests[0]["payload"]
+    # Request and matching reply share the same correlation id (jsonrpc id "3").
+    assert request_envelope["correlation_id"] == "3"
+    assert nats.next_response["correlation_id"] == "3"
+    assert result["sections"]["working_set"]["items"][0]["content"] == "from nats"
+
+
+def test_nats_reply_correlation_mismatch_raises_protocol_error():
+    fallback = FakeTransport()
+    nats = FakeNatsRequestReplyDriver()
+    nats.next_response = fleet_reply_envelope(correlation_id="99", body={})
+    transport = NatsTransport(
+        "nats://127.0.0.1:4222",
+        fallback_transport=fallback,
+        request_reply_driver=nats,
+    )
+    client = _available_nats_client(nats, transport, fallback)
+
+    with pytest.raises(OpenBrainProtocolError, match="response id did not match"):
+        client.agent_context_pack(
+            agent="nagatha",
+            platform="discord",
+            server_id="guild",
+            channel_id="chan",
+            session_key="guild/chan/nagatha",
+        )
+
+
+def _available_nats_transport(nats, *, require_message_auth=False, fallback=None):
+    transport = NatsTransport(
+        "nats://127.0.0.1:4222",
+        request_reply_driver=nats,
+        require_message_auth=require_message_auth,
+        fallback_transport=fallback,
+    )
+    # Drive availability to AVAILABLE the way the client would after a contract
+    # that advertises nats_jetstream.available.
+    transport.availability = RealtimeTransportAvailability.AVAILABLE
+    return transport
+
+
+def _context_pack_post_body(request_id=3):
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": "tools/call",
+        "params": {
+            "name": "agent_context_pack",
+            "arguments": {
+                "agent": "nagatha",
+                "platform": "discord",
+                "server_id": "guild",
+                "channel_id": "chan",
+                "session_key": "guild/chan/nagatha",
+            },
+        },
+    }
+
+
+def test_nats_auth_gate_off_by_default_sends_over_bus():
+    nats = FakeNatsRequestReplyDriver()
+    transport = _available_nats_transport(nats)
+
+    # No Authorization header at all; v1 gate is OFF so the request still goes.
+    transport.post(
+        "https://brain.example/mcp",
+        headers={},
+        json_body=_context_pack_post_body(),
+        timeout=5.0,
+    )
+
+    assert len(nats.requests) == 1
+    assert nats.requests[0]["headers"] == {}
+
+
+def test_nats_auth_gate_on_refuses_request_without_authorization():
+    fallback = FakeTransport()
+    fallback.tool_results["agent_context_pack"] = {
+        "content": [{"type": "text", "text": json.dumps({"source": "http-fallback"})}]
+    }
+    nats = FakeNatsRequestReplyDriver()
+    transport = _available_nats_transport(
+        nats,
+        require_message_auth=True,
+        fallback=fallback,
+    )
+
+    # Gate ON + no Authorization -> refuse NATS, fall back to HTTP.
+    response = transport.post(
+        "https://brain.example/mcp",
+        headers={},
+        json_body=_context_pack_post_body(),
+        timeout=5.0,
+    )
+
+    assert nats.requests == []
+    # Fallback path was taken: the original tool call was posted over HTTP.
+    assert [request.get("json", {}).get("method") for request in fallback.requests] == [
+        "tools/call"
+    ]
+    assert fallback.requests[0]["json"]["params"]["name"] == "agent_context_pack"
+    assert response.status_code == 200
+
+
+def test_nats_driver_failure_error_redacts_credentials():
+    fallback = FakeTransport()
+    nats = FakeNatsRequestReplyDriver()
+    nats.raise_next = RuntimeError(
+        "nats://admin:hunter2@broker.internal token=sk-livesecretvalue123456 blew up"
+    )
+    transport = NatsTransport(
+        "nats://127.0.0.1:4222",
+        fallback_transport=fallback,
+        request_reply_driver=nats,
+        fallback_on_nats_error=False,
+    )
+    client = _available_nats_client(nats, transport, fallback)
+
+    with pytest.raises(OpenBrainTransportUnavailableError) as exc_info:
+        client.agent_context_pack(
+            agent="nagatha",
+            platform="discord",
+            server_id="guild",
+            channel_id="chan",
+            session_key="guild/chan/nagatha",
+        )
+
+    message = str(exc_info.value)
+    # The wrapped error never leaks the driver's credential-bearing detail.
+    assert "hunter2" not in message
+    assert "sk-livesecretvalue123456" not in message
+    assert "admin:hunter2@broker.internal" not in message
+    assert "request failed" in message
+
+
+def test_fleet_nats_driver_requires_fleet_nats_installed():
+    from openbrain_memory import FleetNatsDriver
+
+    # fleet-nats is not installed in the test env; construction must fail with a
+    # clear transport-unavailable error rather than an obscure ImportError deep
+    # in a request.
+    with pytest.raises(OpenBrainTransportUnavailableError, match="fleet-nats"):
+        FleetNatsDriver()
+
+
+def test_nats_transport_rejects_empty_identity():
+    with pytest.raises(ValueError, match="identity must be non-empty"):
+        NatsTransport("nats://127.0.0.1:4222", identity="")
 
 
 def test_nats_transport_post_guard_raises_value_error_for_missing_body():

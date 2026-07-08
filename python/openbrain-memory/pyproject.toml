@@ -6,6 +6,19 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = []
 
+[project.optional-dependencies]
+# Realtime NATS transport (fleet-bus). nats-py is the wire client. The fleet
+# Envelope/subjects contract comes from `fleet-nats`, which is NOT published on
+# PyPI (it lives in the private monorepo git@github.com:rodaddy/fleet-bus.git
+# under packages/fleet-nats). The transport optional-imports fleet-nats and
+# mirrors its Envelope/subjects shape locally when it is absent, so this extra
+# stays pip-installable without a private git dependency. Add fleet-nats here
+# once it is published or vendored, e.g.:
+#   fleet-nats @ git+ssh://git@github.com/rodaddy/fleet-bus.git#subdirectory=packages/fleet-nats
+nats = [
+    "nats-py>=2.15",
+]
+
 [dependency-groups]
 dev = [
     "mypy>=1.10",
