@@ -78,7 +78,7 @@ check "#265 remains open while sprint runs" zsh -c 'test "$(gh issue view 265 --
 check "#266 relational retrieval eval tests pass" bun test src/tools/__tests__/search-brain-relational-retrieval.test.ts
 check "#267 graph arm tests pass" bun test src/tools/__tests__/search-brain.test.ts src/tools/__tests__/search-brain-relational-retrieval.test.ts
 check "#269 audit log tests pass" bun test src/audit-log.test.ts src/tools/__tests__/mcp-audit-log.test.ts
-check "#270 doctor status tests pass" bun test src/operator-doctor.test.ts src/tools/__tests__/operator-doctor.test.ts
+check "#270 doctor status tests pass" bun test src/operator-doctor.test.ts src/tools/__tests__/operator-doctor.test.ts src/server.test.ts
 check "#268 answer/search evidence tests pass" bun test src/tools/__tests__/graph-evidence-consumers.test.ts
 check "#271 context pack hot memory tests pass" bun test src/tools/__tests__/get-contract.test.ts src/tools/__tests__/agent-context-pack.test.ts
 check "typescript compiles" bunx tsc --noEmit

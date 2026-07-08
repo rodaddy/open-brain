@@ -420,7 +420,7 @@
       </ul>
       <h4>5.2 Testing Strategy</h4>
       <ul class="checklist">
-        <li><code class="status">[x]</code><code>bun test src/operator-doctor.test.ts src/tools/__tests__/operator-doctor.test.ts</code> - proves JSON status shape, degraded/tri-state handling, and secret omission via the merged doctor/status tests.</li>
+        <li><code class="status">[x]</code><code>bun test src/operator-doctor.test.ts src/tools/__tests__/operator-doctor.test.ts src/server.test.ts</code> - proves JSON status shape, degraded/tri-state handling, secret omission, and REST 200/503 status-code mirroring via the merged doctor/status and server route tests.</li>
         <li><code class="status">[x]</code><code>bun test src/tools/__tests__/operator-doctor.test.ts</code> - proves privileged detail is gated at the MCP tool boundary via the merged auth-scoped doctor tests.</li>
         <li><code class="status">[x]</code><code>bunx tsc --noEmit</code> - proves status contracts compile via TypeScript.</li>
       </ul>
