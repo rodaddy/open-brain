@@ -228,6 +228,10 @@ export function registerBrainAnswer(server: McpServer, deps: ToolDeps): void {
 
       let rows: SearchRow[];
       try {
+        // #268: inherit search_brain's graph-expanded retrieval arm. Graph
+        // candidates hydrate into normal SearchRows with standard source_refs,
+        // so extractive/cited answer behavior is unchanged; namespace and
+        // archived predicates are enforced inside the shared arm (#267).
         rows =
           typeof namespace === "string" && isSharedNamespace(namespace)
             ? await executeSearchWithSharedFallback(
@@ -241,6 +245,7 @@ export function registerBrainAnswer(server: McpServer, deps: ToolDeps): void {
                 namespace,
                 false,
                 sourceScope,
+                { enableGraph: true },
               )
             : await executeSearchWithScopedSharedFallback(
                 deps,
@@ -253,6 +258,7 @@ export function registerBrainAnswer(server: McpServer, deps: ToolDeps): void {
                 namespace,
                 false,
                 sourceScope,
+                { enableGraph: true },
               );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
