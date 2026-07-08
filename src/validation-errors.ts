@@ -5,6 +5,7 @@ import {
   safeParseAsync,
 } from "@modelcontextprotocol/sdk/server/zod-compat.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
+import { captureRawArgsForAudit } from "./audit-log.ts";
 
 export interface ValidationFieldIssue {
   field: string;
@@ -115,5 +116,10 @@ export async function validateToolInputWithSummary(
       formatValidationSummary(summary),
     );
   }
+  // This hook is the only repo-owned layer that still sees the RAW
+  // request.params.arguments (Zod strips undeclared keys from parsed data).
+  // Capture raw-args audit facts keyed by the parsed-data object, which the
+  // SDK hands unchanged to the tool handler where the audit wrapper runs.
+  captureRawArgsForAudit(args, parseResult.data);
   return parseResult.data;
 }

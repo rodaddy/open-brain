@@ -320,7 +320,7 @@ Five core tables, all with 768-dimensional halfvec embeddings and HNSW indexes:
 - **projects** — named projects with status and metadata
 - **sessions** — session summaries with blockers, next steps, and key decisions
 
-Supporting tables: `entry_access_log` (usage tracking), `discarded_entries` (archive staging), `_migrations`.
+Supporting tables: `entry_access_log` (usage tracking), `discarded_entries` (archive staging), `mcp_tool_audit_log` (privacy-safe MCP tool audit — see [docs/operator-audit-log.md](docs/operator-audit-log.md)), `_migrations`.
 
 ## Search
 
@@ -448,6 +448,7 @@ lab HTTP endpoints such as `http://10.71.1.21:3100`.
 
 - [CONTRIBUTING.md](CONTRIBUTING.md) — coding standards, development workflow, and infrastructure rules
 - [GLOSSARY.md](GLOSSARY.md) — domain terminology (tiers, warmth, dream cycles, etc.)
+- [docs/operator-audit-log.md](docs/operator-audit-log.md) — MCP tool audit log schema, env controls, privacy guarantees, fail-open behavior
 
 ## License
 
