@@ -210,6 +210,9 @@ type GraphPoolStats = {
 function graphAwarePool(options?: {
   /** fts_rank stamped on graph-hydrated rows (raw link weight in prod). */
   graphFtsRank?: number;
+  /** Rows returned by the ordinary (non-graph) retrieval arms, with a
+   * caller-controlled cosine distance (may exceed 1 or be non-finite). */
+  vectorRows?: Array<{ entry: FixtureEntry; distance: number }>;
 }): { pool: { query: (...args: any[]) => Promise<{ rows: any[] }> }; stats: GraphPoolStats } {
   const stats: GraphPoolStats = {
     graphCalls: 0,
@@ -237,8 +240,19 @@ function graphAwarePool(options?: {
           ).map((entry) => searchRow(entry, options?.graphFtsRank ?? 1)),
         };
       }
-      // vector, fts, and explicit-link lookups return nothing so every hit
-      // below is attributable to the graph arm alone.
+      // Unless vectorRows is provided, vector, fts, and explicit-link
+      // lookups return nothing so every hit below is attributable to the
+      // graph arm alone. (executeSearch dedupes by source_type:id, so
+      // returning the same rows from multiple arms is safe.)
+      if (options?.vectorRows?.length) {
+        return {
+          rows: options.vectorRows.map(({ entry, distance }) => ({
+            ...searchRow(entry),
+            fts_rank: null,
+            distance,
+          })),
+        };
+      }
       return { rows: [] };
     },
   };
@@ -528,6 +542,65 @@ describe("brain_answer graph-expanded evidence (#268)", () => {
     }
   });
 
+  it("clamps vector-row scores when cosine distance exceeds 1 and guards non-finite (codex finding 1)", async () => {
+    const { pool, stats } = graphAwarePool({
+      vectorRows: [
+        {
+          entry: {
+            id: "vector-far",
+            source_type: "thought",
+            namespace: READER_NS,
+            text: "Vector row beyond unit cosine distance.",
+            created_at: "2026-06-01T00:00:00Z",
+          },
+          distance: 1.3,
+        },
+        {
+          entry: {
+            id: "vector-nan",
+            source_type: "thought",
+            namespace: READER_NS,
+            text: "Vector row with a non-finite distance.",
+            created_at: "2026-06-01T00:00:00Z",
+          },
+          distance: Number.NaN,
+        },
+      ],
+    });
+    const { client, cleanup } = await setupMcpClient(
+      registerBrainAnswer,
+      pool,
+      createMockEmbed(),
+      readerAuth,
+    );
+    try {
+      const result = await client.callTool({
+        name: "brain_answer",
+        arguments: { query: "deploy readiness notes", namespace: READER_NS },
+      });
+      expect(result.isError).toBeFalsy();
+      const parsed = parseToolResult(result);
+      expect(stats.graphCalls).toBe(0);
+      expect(parsed.citations.length).toBeGreaterThan(0);
+      for (const citation of parsed.citations as Array<{ score: number }>) {
+        expect(Number.isFinite(citation.score)).toBe(true);
+        expect(citation.score).toBeGreaterThanOrEqual(0);
+        expect(citation.score).toBeLessThanOrEqual(1);
+      }
+      const far = (
+        parsed.citations as Array<{
+          score: number;
+          source_ref: { id: string };
+        }>
+      ).find((citation) => citation.source_ref.id === "vector-far");
+      expect(far).toBeDefined();
+      // 1 - 1.3 = -0.3 without the clamp.
+      expect(far!.score).toBe(0);
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("still cites graph evidence when the embedding provider is down (finding 2)", async () => {
     const { pool, stats } = graphAwarePool();
     const { client, cleanup } = await setupMcpClient(
@@ -797,7 +870,7 @@ describe("search_all graph-expanded evidence (#268)", () => {
     }
   });
 
-  it("clamps graph-row scores derived from link weight > 1 into [0,1] (finding 1)", async () => {
+  it("emits the [0,1] RRF-derived score, never raw link weight > 1 (findings 1-2)", async () => {
     mockBunSpawn(1, "");
     const { pool, stats } = graphAwarePool({ graphFtsRank: 2.5 });
     const { client, cleanup } = await setupMcpClient(
@@ -820,8 +893,13 @@ describe("search_all graph-expanded evidence (#268)", () => {
       expect(stats.graphCalls).toBe(1);
       expect(parsed.brain_hits).toBe(1);
       expect(parsed.results[0].id).toBe("graph-target");
-      expect(parsed.results[0].score).toBeLessThanOrEqual(1);
+      // search_all's operative [0,1] mechanism is the RRF overwrite at the
+      // tool boundary: a rank-1 warm brain row emits exactly
+      // 1/(RRF_K + 1) = 1/61 (tier boost 0), NOT the raw 2.5 link weight.
+      // If the overwrite is ever removed and raw scores leak, this fails.
+      expect(parsed.results[0].score).toBeCloseTo(1 / 61, 10);
       expect(parsed.results[0].score).toBeGreaterThanOrEqual(0);
+      expect(parsed.results[0].score).toBeLessThanOrEqual(1);
     } finally {
       await cleanup();
     }

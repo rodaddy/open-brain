@@ -380,13 +380,13 @@ async function searchOB(
       source: "brain" as const,
       type: row.source_type,
       content: preview.slice(0, 300),
-      // fts_rank is not guaranteed to be [0,1]: graph-hydrated rows carry
-      // raw link weight (unbounded above). Clamp so the emitted score stays
-      // a [0,1] relevance value (#268 review finding 1).
-      score:
-        row.distance != null
-          ? 1 - row.distance
-          : Math.min(1, Math.max(0, row.fts_rank ?? 0.5)),
+      // Pre-RRF score only: the tool handler always overwrites `score` with
+      // the RRF value before emitting (see the final `.map` in the handler),
+      // which is structurally finite and within [0,1] (Math.max(0, ...)
+      // lower bound; upper bound 1/(RRF_K+1) + max tier boost 0.3). Raw
+      // distance/fts_rank (including graph link weight > 1) therefore never
+      // reaches the tool output (#268 review findings).
+      score: row.distance != null ? 1 - row.distance : (row.fts_rank ?? 0.5),
       source_ref: row.source_ref ?? {
         source: "brain" as const,
         type: row.source_type,

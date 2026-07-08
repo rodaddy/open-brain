@@ -36,14 +36,20 @@ interface Evidence {
   source_ref: SourceRef;
 }
 
+// Neither raw input is guaranteed to be [0,1]: graph-hydrated rows carry raw
+// link weight (GREATEST(l.weight, 0), unbounded above) as fts_rank, ts_rank_cd
+// is only typically <1, and cosine distance can exceed 1 (making 1 - distance
+// negative). Clamp the final computed score at the consumer boundary so the
+// emitted score stays a finite [0,1] relevance value (#268 review findings).
+function clampScore(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(1, Math.max(0, value));
+}
+
 function scoreFor(row: SearchRow): number {
-  // fts_rank is not guaranteed to be [0,1]: graph-hydrated rows carry raw
-  // link weight (GREATEST(l.weight, 0), unbounded above) and ts_rank_cd is
-  // only typically <1. Clamp at the consumer boundary so the emitted score
-  // stays a [0,1] relevance value (#268 review finding 1).
-  return row.distance != null
-    ? 1 - row.distance
-    : Math.min(1, Math.max(0, row.fts_rank ?? 0.5));
+  return clampScore(
+    row.distance != null ? 1 - row.distance : (row.fts_rank ?? 0.5),
+  );
 }
 
 function excerptFor(row: SearchRow): string | null {
