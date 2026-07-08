@@ -57,8 +57,11 @@ export function canReadDoctor(auth: AuthInfo | undefined): boolean {
 
 export interface OperatorDoctorStatus {
   // unhealthy: the database is unreachable (hard failure).
-  // degraded: pending migrations, or the requested transport is unavailable.
-  // Optional dependencies (embedding provider, qmd) affect neither tier.
+  // degraded: DB is connected but migrations are not verified current
+  //   (pending OR unknown), the requested transport is unavailable, or a
+  //   CONFIGURED embedding provider is unavailable.
+  // Neutral: an unconfigured embedding provider and qmd availability never
+  //   affect the tier (issue #270 optional-dep rule).
   status: "healthy" | "degraded" | "unhealthy";
   contract_version: string;
   generated_at: string;
@@ -249,9 +252,16 @@ export async function buildOperatorDoctorStatus(
     natsRuntimeBoundary,
     transportAvailability,
   );
+  // Migrations not verified current (pending OR unknown) with a connected
+  // DB means an unverified or broken schema: degraded, never silently
+  // healthy. A configured-but-unavailable embedding provider hard-fails
+  // vector search: degraded. An unconfigured provider and qmd stay neutral.
+  const migrationsDegraded = migrations.status !== "current";
+  const embeddingDegraded =
+    embeddingDiagnostics.configured && !embeddingAvailable;
   const status: OperatorDoctorStatus["status"] = !database.connected
     ? "unhealthy"
-    : migrations.status === "pending" || transportDegraded
+    : migrationsDegraded || transportDegraded || embeddingDegraded
       ? "degraded"
       : "healthy";
   const fileLogConfigured = Boolean(process.env.LOG_FILE?.trim());

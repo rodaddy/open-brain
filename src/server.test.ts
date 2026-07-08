@@ -11,6 +11,9 @@ import { createApp } from "./index.ts";
 import { getSessionCount } from "./transport.ts";
 import { createNatsBridgeHealth } from "./nats-bridge.ts";
 import { resetOperatorDoctorCache } from "./operator-doctor.ts";
+import { readdir } from "node:fs/promises";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { readNatsRuntimeBoundary } from "./nats-runtime.ts";
 import type { AuthInfo, HealthStatus } from "./types.ts";
 import type { Server } from "node:http";
@@ -276,11 +279,22 @@ describe("GET /api/v1/operator/doctor", () => {
     process.env.EMBEDDING_BASE_URL = `http://${embeddingHost}:8791/v1`;
     process.env.EMBEDDING_API_KEY = secret;
     process.env.LOG_FILE = logPath;
+    // All on-disk migrations applied: migrations "current" keeps the doctor
+    // healthy so this test can pin the 200 path; the degraded/unhealthy 503
+    // paths are pinned below.
+    const migrationsDir = join(
+      dirname(fileURLToPath(import.meta.url)),
+      "db",
+      "migrations",
+    );
+    const allMigrations = (await readdir(migrationsDir)).filter((f) =>
+      f.endsWith(".sql"),
+    );
     mockPool.query = async (sql: string) => {
       if (sql.trim() === "SELECT 1") return { rows: [{ ok: 1 }] };
-      // Unknown migration state keeps the doctor healthy so this test can
-      // pin the 200 path; the degraded/unhealthy 503 paths are pinned below.
-      if (sql.includes("FROM _migrations")) throw new Error("not available");
+      if (sql.includes("FROM _migrations")) {
+        return { rows: allMigrations.map((filename) => ({ filename })) };
+      }
       return { rows: [] };
     };
     (globalThis as Record<string, unknown>).fetch = (
@@ -343,6 +357,35 @@ describe("GET /api/v1/operator/doctor", () => {
       expect(res.status).toBe(503);
       const body = (await res.json()) as { status: string };
       expect(body.status).toBe("degraded");
+    } finally {
+      if (originalEmbeddingBaseUrl === undefined) delete process.env.EMBEDDING_BASE_URL;
+      else process.env.EMBEDDING_BASE_URL = originalEmbeddingBaseUrl;
+    }
+  });
+
+  it("returns 503 when the DB is connected but migration state is unknown", async () => {
+    const originalEmbeddingBaseUrl = process.env.EMBEDDING_BASE_URL;
+    delete process.env.EMBEDDING_BASE_URL;
+    mockPool.query = async (sql: string) => {
+      if (sql.trim() === "SELECT 1") return { rows: [{ ok: 1 }] };
+      // Connected DB, but the _migrations ledger is missing/unreadable.
+      if (sql.includes("FROM _migrations")) throw new Error("not available");
+      return { rows: [] };
+    };
+
+    try {
+      const res = await fetch(`${baseUrl}/api/v1/operator/doctor`, {
+        headers: { Authorization: "Bearer test-token-123" },
+      });
+      expect(res.status).toBe(503);
+      const body = (await res.json()) as {
+        status: string;
+        database: { connected: boolean };
+        migrations: { status: string };
+      };
+      expect(body.status).toBe("degraded");
+      expect(body.database.connected).toBe(true);
+      expect(body.migrations.status).toBe("unknown");
     } finally {
       if (originalEmbeddingBaseUrl === undefined) delete process.env.EMBEDDING_BASE_URL;
       else process.env.EMBEDDING_BASE_URL = originalEmbeddingBaseUrl;

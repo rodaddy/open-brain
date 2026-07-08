@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import { readdir } from "node:fs/promises";
+import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   DOCTOR_CONTRACT_VERSION,
@@ -38,6 +40,13 @@ function makePoolWithUnknownMigrations() {
       return { rows: [] };
     },
   } as any;
+}
+
+// Pool that reports every on-disk migration as applied: migrations "current".
+async function makeCurrentPool() {
+  const migrationsDir = join(dirname(THIS_FILE), "db", "migrations");
+  const files = (await readdir(migrationsDir)).filter((f) => f.endsWith(".sql"));
+  return makePool(files);
 }
 
 function makeDownPool() {
@@ -117,10 +126,11 @@ describe("operator doctor status", () => {
   });
 
   it("resolves qmd via the same search_all resolution and reports missing binaries as unavailable", async () => {
+    delete process.env.EMBEDDING_BASE_URL;
     process.env.QMD_PATH = "/nonexistent/qmd-entrypoint.ts";
 
     const status = await buildOperatorDoctorStatus(
-      makePoolWithUnknownMigrations(),
+      await makeCurrentPool(),
       readNatsRuntimeBoundary({}),
     );
 
@@ -152,20 +162,51 @@ describe("operator doctor status", () => {
     );
   });
 
-  it("bounds optional dependency failures without making the service unhealthy", async () => {
+  it("degrades (never unhealthy) when a configured embedding provider is unavailable", async () => {
     process.env.EMBEDDING_BASE_URL = "http://embedding.internal:8791/v1";
     (globalThis as Record<string, unknown>).fetch = () =>
       Promise.reject(new Error("connection refused"));
+
+    const status = await buildOperatorDoctorStatus(
+      await makeCurrentPool(),
+      readNatsRuntimeBoundary({}),
+    );
+
+    // Configured-but-down embedding hard-fails vector search: degraded,
+    // but never unhealthy -- that tier is reserved for DB failure.
+    expect(status.status).toBe("degraded");
+    expect(status.database.connected).toBe(true);
+    expect(status.migrations.status).toBe("current");
+    expect(status.embedding_provider.available).toBe(false);
+    expect(status.optional_dependencies.embedding_provider).toBe("unavailable");
+  });
+
+  it("stays healthy when the embedding provider is simply not configured", async () => {
+    delete process.env.EMBEDDING_BASE_URL;
+
+    const status = await buildOperatorDoctorStatus(
+      await makeCurrentPool(),
+      readNatsRuntimeBoundary({}),
+    );
+
+    expect(status.status).toBe("healthy");
+    expect(status.embedding_provider.configured).toBe(false);
+    expect(status.optional_dependencies.embedding_provider).toBe("not_configured");
+  });
+
+  it("degrades when the DB is connected but migration state is unknown", async () => {
+    delete process.env.EMBEDDING_BASE_URL;
 
     const status = await buildOperatorDoctorStatus(
       makePoolWithUnknownMigrations(),
       readNatsRuntimeBoundary({}),
     );
 
-    expect(status.status).toBe("healthy");
+    // Unknown migration state on a connected DB is an unverified or broken
+    // schema, not a healthy service.
+    expect(status.status).toBe("degraded");
+    expect(status.database.connected).toBe(true);
     expect(status.migrations.status).toBe("unknown");
-    expect(status.embedding_provider.available).toBe(false);
-    expect(status.optional_dependencies.embedding_provider).toBe("unavailable");
   });
 
   it("reports pending migrations as degraded operator status", async () => {
