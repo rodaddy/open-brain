@@ -31,8 +31,8 @@ Current execution update, 2026-07-08T01:15Z:
 - Planning PR #272 merged as `a838735`.
 - #266 merged via PR #273 as `7cb7712` and is closed Done on Project #8.
 - #267 PR #274 is open and mergeable from `feat/267-graph-relational-search`;
-  the gate-verified implementation head is `4c4d3e2`. Project #8 has #267 In
-  Review, Review Gate Zero Known Issues, and Validation CI Passed.
+  the gate-verified implementation head is `4c4d3e2`. Project #8 and the PR
+  check rollup are the source of truth for the newest docs/status-sync head.
 - Initial review swarm found material issues in relation direction semantics,
   hybrid embedding-failure fallback, and unintended graph enablement through
   shared search helpers used by `search_all` and `brain_answer`.
@@ -52,11 +52,11 @@ Current execution update, 2026-07-08T01:15Z:
   antagonist/adversarial lanes; PR comment `issuecomment-4910349974` records
   the receipt. Remaining risk is P3 only: local live-Postgres relational tests
   skip without `OPENBRAIN_TEST_DATABASE_URL`, while CI `db-integration` passed.
-- PR #274 current checks are green: PR Body validate, CI check, db-integration,
-  python-package, and GitGuardian passed; deploy skipped as expected for PR.
-  Current `origin/main` and PR workflow rules deploy core01 only on a `v*` tag
-  push or explicit `workflow_dispatch` with `deploy_core01`, not from the merge
-  commit itself.
+- Status-only plan sync commits may advance the PR head after `4c4d3e2`; verify
+  live Project #8 and the PR check rollup before merge/closure. Current
+  `origin/main` and PR workflow rules deploy core01 only on a `v*` tag push or
+  explicit `workflow_dispatch` with `deploy_core01`, not from the merge commit
+  itself.
 - #223 remains open and Blocked.
 
 Critical correction:
