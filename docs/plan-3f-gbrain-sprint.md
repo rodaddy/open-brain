@@ -30,7 +30,8 @@ Current execution update, 2026-07-08T00:15Z:
 
 - Planning PR #272 merged as `a838735`.
 - #266 merged via PR #273 as `7cb7712` and is closed Done on Project #8.
-- #267 PR #274 is open from `feat/267-graph-relational-search` at `5fd66ed`.
+- #267 PR #274 is open from `feat/267-graph-relational-search`; implementation
+  commit `5fd66ed` is followed by plan-sync commits as board/HTML state changes.
   Project #8 has #267 In Review, Review Gate Initial Swarm Pending, and
   Validation CI Pending.
 - #267 implementation adds the bounded relational parser, graph hydration, and
