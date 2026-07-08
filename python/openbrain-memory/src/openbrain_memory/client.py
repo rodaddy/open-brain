@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 import re
 import tomllib
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import StrEnum
 from importlib.metadata import PackageNotFoundError, version
 from itertools import count
@@ -14,12 +15,19 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from .nats_wire import (
+    build_context_pack_subject,
+    build_request_envelope,
+)
 from .policy import RetryPolicy, redact_text, with_retry
 
 JSON = dict[str, Any]
 MCP_PROTOCOL_VERSION = "2025-03-26"
 DEFAULT_MAX_RESPONSE_BYTES = 1_000_000
-DEFAULT_NATS_CONTEXT_PACK_SUBJECT = "ob.memory.context_pack"
+# Default fleet environment prefix for the context-pack subject
+# ({env}.ob.memory.context_pack). Local/trusted bus defaults to "dev".
+DEFAULT_NATS_ENV = "dev"
+DEFAULT_NATS_CONTEXT_PACK_SUBJECT = build_context_pack_subject(DEFAULT_NATS_ENV)
 DEFAULT_NATS_MAX_REQUEST_BYTES = 64 * 1024
 
 
@@ -376,10 +384,14 @@ class NatsTransport:
         self,
         url: str,
         *,
-        context_pack_subject: str = DEFAULT_NATS_CONTEXT_PACK_SUBJECT,
+        env: str = DEFAULT_NATS_ENV,
+        context_pack_subject: str | None = None,
+        identity: str = "openbrain-memory",
         fallback_transport: Transport | None = None,
         request_reply_driver: NatsRequestReplyDriver | None = None,
         fallback_on_nats_error: bool = True,
+        require_message_auth: bool = False,
+        clock: Callable[[], str] | None = None,
         availability: RealtimeTransportAvailability | str = (
             RealtimeTransportAvailability.NOT_RUNTIME_AVAILABLE
         ),
@@ -392,12 +404,34 @@ class NatsTransport:
             normalized_availability is RealtimeTransportAvailability.AVAILABLE
         ):
             raise ValueError("NatsTransport availability is derived from get_contract")
+        if not identity:
+            raise ValueError("NatsTransport identity must be non-empty")
         self.url = url
-        self.context_pack_subject = context_pack_subject
+        self.env = env
+        # Subject is env-prefixed ({env}.ob.memory.context_pack) built through
+        # the fleet-nats convention. An explicit override is honoured verbatim
+        # (e.g. a caller that already resolved the full subject).
+        self.context_pack_subject = (
+            context_pack_subject
+            if context_pack_subject is not None
+            else build_context_pack_subject(env)
+        )
+        # Fleet Envelope `from`/sender for outbound requests: the DECLARED
+        # identity of this client. Lane/namespace binding uses this declared
+        # identity by default; an explicit per-request namespace overrides it.
+        self.identity = identity
         self.fallback_transport = fallback_transport
         self.availability: RealtimeTransportAvailability = normalized_availability
         self.request_reply_driver = request_reply_driver
         self.fallback_on_nats_error = fallback_on_nats_error
+        # v1 trusted local bus: NO message-auth gate. The config exists so a
+        # hardened deployment can flip it on, but it defaults OFF locally. When
+        # ON, an outbound request without an Authorization header is refused
+        # before it reaches the bus.
+        self.require_message_auth = require_message_auth
+        # Clock for the fleet Envelope ``ts``. Caller-injectable for
+        # determinism; the default reads UTC now at CALL time (never import).
+        self.clock = clock if clock is not None else _default_iso_clock
 
     def get(
         self,
@@ -543,6 +577,18 @@ class NatsTransport:
                     "http_mcp" if self.fallback_transport is not None else None
                 ),
             )
+        # Auth-gate (v1: OFF by default on the trusted local bus). When enabled,
+        # refuse to publish a request that carries no Authorization header
+        # rather than emit an unauthenticated message onto a hardened bus.
+        if self.require_message_auth and not _header(headers, "authorization"):
+            raise OpenBrainTransportUnavailableError(
+                "Open Brain realtime transport requires message auth",
+                transport="nats_jetstream",
+                availability=self.availability,
+                fallback_transport=(
+                    "http_mcp" if self.fallback_transport is not None else None
+                ),
+            )
         unsupported_arguments = _unsupported_nats_context_pack_arguments(json_body)
         if unsupported_arguments:
             raise OpenBrainTransportUnavailableError(
@@ -554,7 +600,12 @@ class NatsTransport:
                     "http_mcp" if self.fallback_transport is not None else None
                 ),
             )
-        envelope = _nats_context_pack_envelope(json_body)
+        envelope = _nats_context_pack_envelope(
+            json_body,
+            sender=self.identity,
+            ts=self.clock(),
+        )
+        correlation_id = _envelope_correlation_id(envelope)
         if _nats_envelope_size_bytes(envelope) > DEFAULT_NATS_MAX_REQUEST_BYTES:
             raise OpenBrainTransportUnavailableError(
                 "Open Brain realtime transport request exceeded max_request_bytes",
@@ -587,7 +638,7 @@ class NatsTransport:
         ):
             _validate_nats_context_pack_response_envelope(
                 response,
-                expected_request_id=envelope["request_id"],
+                expected_correlation_id=correlation_id,
             )
             raise OpenBrainTransportUnavailableError(
                 "Open Brain realtime transport returned an error",
@@ -597,7 +648,7 @@ class NatsTransport:
             )
         return _nats_context_pack_response_to_transport_response(
             response,
-            expected_request_id=envelope["request_id"],
+            expected_correlation_id=correlation_id,
             json_rpc_id=json_body.get("id"),
         )
 
@@ -616,6 +667,92 @@ class NatsTransport:
             self.availability = RealtimeTransportAvailability.NOT_RUNTIME_AVAILABLE
             return
         self.availability = availability
+
+
+class FleetNatsDriver:
+    """Concrete :class:`NatsRequestReplyDriver` backed by fleet-nats.
+
+    A thin adapter: it takes the already-built fleet Envelope wire dict from
+    :class:`NatsTransport`, publishes it over ``fleet_nats.FleetBus`` as a NATS
+    core request, and returns the reply Envelope's wire dict. The transport owns
+    the OB wire contract (subject, envelope shape, validation, redaction); this
+    driver owns only the NATS I/O.
+
+    Both ``nats-py`` and ``fleet-nats`` are OPTIONAL imports (see
+    ``pyproject.toml`` extra ``nats`` and ``nats_wire`` for the fleet-nats
+    situation). Construction raises a clear error if either is missing rather
+    than failing deep inside a request.
+
+    The :class:`NatsRequestReplyDriver` protocol is synchronous; fleet-nats is
+    async. Each request runs on a short-lived event loop via ``asyncio.run`` —
+    correct and simple for v1 request/reply. A persistent-connection driver can
+    replace this later without changing the transport.
+    """
+
+    def __init__(
+        self,
+        *,
+        agent_id: str = "openbrain-memory",
+        url: str | None = None,
+        env: str = DEFAULT_NATS_ENV,
+    ) -> None:
+        try:
+            import fleet_nats  # type: ignore[import-not-found] # noqa: F401
+        except Exception as exc:  # pragma: no cover - optional dep
+            raise OpenBrainTransportUnavailableError(
+                "fleet-nats is not installed; NATS transport requires the "
+                "'nats' extra and the fleet-nats library",
+                transport="nats_jetstream",
+                availability=RealtimeTransportAvailability.NOT_RUNTIME_AVAILABLE,
+            ) from exc
+        self.agent_id = agent_id
+        self.url = url
+        self.env = env
+
+    def request(
+        self,
+        subject: str,
+        payload: JSON,
+        *,
+        headers: Mapping[str, str],
+        timeout: float,
+    ) -> JSON:  # pragma: no cover - requires a live broker
+        import asyncio
+
+        from fleet_nats import (  # type: ignore[import-not-found]
+            BusConfig,
+            Envelope,
+            FleetBus,
+        )
+
+        async def _run() -> JSON:
+            config_kwargs: dict[str, Any] = {"agent_id": self.agent_id, "env": self.env}
+            if self.url is not None:
+                config_kwargs["url"] = self.url
+            bus = FleetBus(BusConfig(**config_kwargs))
+            await bus.connect()
+            try:
+                envelope = Envelope.from_bytes(
+                    json.dumps(payload).encode("utf-8"),
+                )
+                reply = await bus.request(subject, envelope, timeout_s=timeout)
+            finally:
+                await bus.close()
+            if reply is None:
+                raise OpenBrainTransportUnavailableError(
+                    "NATS request received no reply",
+                    transport="nats_jetstream",
+                    availability=RealtimeTransportAvailability.AVAILABLE,
+                )
+            wire = json.loads(reply.to_bytes())
+            if not isinstance(wire, dict):
+                raise OpenBrainProtocolError(
+                    "NATS reply envelope was not a JSON object",
+                    context="transport:nats_jetstream",
+                )
+            return wire
+
+        return asyncio.run(_run())
 
 
 def _tool_call_name(json_body: Mapping[str, Any]) -> str | None:
@@ -642,6 +779,9 @@ _NATS_CONTEXT_PACK_IDENTITY_ARGUMENTS = frozenset(
         "channel_id",
         "thread_id",
         "session_key",
+        # Optional explicit namespace override for lane/namespace binding. When
+        # absent, the declared identity binds the namespace.
+        "namespace",
     },
 )
 _NATS_CONTEXT_PACK_BODY_ARGUMENTS = frozenset(
@@ -680,7 +820,28 @@ def _required_context_pack_string(
     return value
 
 
-def _nats_context_pack_envelope(json_body: Mapping[str, Any]) -> JSON:
+def _nats_context_pack_envelope(
+    json_body: Mapping[str, Any],
+    *,
+    sender: str = "openbrain-memory",
+    ts: str | None = None,
+) -> JSON:
+    """Build the fleet ``Envelope`` wire dict for an agent_context_pack request.
+
+    The wire request is a fleet-nats :class:`Envelope`:
+    ``kind="context_pack_request"``, a caller-supplied ``id``/``ts``, a
+    ``correlation_id`` for reply linkage, ``from`` = this client's declared
+    identity, and OB's identity + request body carried in ``payload``.
+
+    The ``id`` is the jsonrpc request id; the ``ts`` is supplied by the caller
+    (the transport's clock) — never generated in this module — so the module
+    stays import-side-effect-free and deterministic under test. When ``ts`` is
+    omitted it falls back to the request id (still no clock call here).
+
+    Namespace/lane binding: DECLARED identity by default (the ``agent`` +
+    ``session_key`` the caller passed become the envelope's namespace source);
+    an explicit ``namespace`` argument OVERRIDES it when present.
+    """
     arguments = _tool_call_arguments(json_body)
     body: JSON = {}
     for key in (
@@ -694,7 +855,6 @@ def _nats_context_pack_envelope(json_body: Mapping[str, Any]) -> JSON:
 
     thread_id = arguments.get("thread_id")
     identity: JSON = {
-        "namespace_source": "authorization",
         "agent": _required_context_pack_string(arguments, "agent"),
         "platform": _required_context_pack_string(arguments, "platform"),
         "server_id": _required_context_pack_string(arguments, "server_id"),
@@ -708,11 +868,23 @@ def _nats_context_pack_envelope(json_body: Mapping[str, Any]) -> JSON:
             )
         identity["thread_id"] = thread_id
 
-    request_id = json_body.get("id")
-    return {
-        "schema": "openbrain.nats.request.v1",
+    # Lane/namespace binding: declared-by-default, explicit-override.
+    namespace_override = arguments.get("namespace")
+    if namespace_override is not None:
+        if not isinstance(namespace_override, str) or not namespace_override:
+            raise ValueError(
+                "agent_context_pack.namespace must be a non-empty string "
+                "for NATS transport",
+            )
+        identity["namespace"] = namespace_override
+        identity["namespace_source"] = "override"
+    else:
+        identity["namespace_source"] = "declared"
+
+    request_id = str(json_body.get("id"))
+    ts_str = ts if ts else request_id
+    payload: JSON = {
         "operation": "agent_context_pack",
-        "request_id": str(request_id),
         "identity": identity,
         "body": body,
         "metadata": {
@@ -721,6 +893,32 @@ def _nats_context_pack_envelope(json_body: Mapping[str, Any]) -> JSON:
             "transport": "nats",
         },
     }
+    return build_request_envelope(
+        msg_id=request_id,
+        ts=ts_str,
+        sender=sender,
+        correlation_id=request_id,
+        payload=payload,
+    )
+
+
+def _default_iso_clock() -> str:
+    """Return the current UTC time as an ISO-8601 string.
+
+    Called only at request time (never at import), so the module has no
+    import-side clock read and stays deterministic under an injected clock.
+    """
+    return datetime.now(UTC).isoformat()
+
+
+def _envelope_correlation_id(envelope: Mapping[str, Any]) -> str:
+    correlation_id = envelope.get("correlation_id")
+    if not isinstance(correlation_id, str) or not correlation_id:
+        raise OpenBrainProtocolError(
+            "NATS request envelope missing correlation_id",
+            context="transport:nats_jetstream",
+        )
+    return correlation_id
 
 
 def _nats_headers(headers: Mapping[str, str]) -> dict[str, str]:
@@ -732,17 +930,30 @@ def _nats_envelope_size_bytes(envelope: Mapping[str, Any]) -> int:
     return len(json.dumps(envelope, sort_keys=True).encode("utf-8"))
 
 
-def _nats_response_status(response: object) -> str | None:
+# Fleet Envelope kind for the context-pack reply. The reply mirrors the request
+# as a fleet Envelope; OB's status/body/error live in the Envelope payload.
+CONTEXT_PACK_REPLY_KIND = "context_pack_reply"
+
+
+def _nats_reply_payload(response: object) -> Mapping[str, Any] | None:
     if not isinstance(response, Mapping):
         return None
-    status = response.get("status")
+    payload = response.get("payload")
+    return payload if isinstance(payload, Mapping) else None
+
+
+def _nats_response_status(response: object) -> str | None:
+    payload = _nats_reply_payload(response)
+    if payload is None:
+        return None
+    status = payload.get("status")
     return status if isinstance(status, str) else None
 
 
 def _nats_context_pack_response_to_transport_response(
     response: Mapping[str, Any],
     *,
-    expected_request_id: str,
+    expected_correlation_id: str,
     json_rpc_id: Any,
 ) -> TransportResponse:
     if not isinstance(response, Mapping):
@@ -752,15 +963,16 @@ def _nats_context_pack_response_to_transport_response(
         )
     _validate_nats_context_pack_response_envelope(
         response,
-        expected_request_id=expected_request_id,
+        expected_correlation_id=expected_correlation_id,
     )
-    status = response.get("status")
+    reply_payload = _nats_reply_payload(response) or {}
+    status = reply_payload.get("status")
     if status == "ok":
         result = {
             "content": [
                 {
                     "type": "text",
-                    "text": json.dumps(response.get("body"), sort_keys=True),
+                    "text": json.dumps(reply_payload.get("body"), sort_keys=True),
                 }
             ]
         }
@@ -772,9 +984,10 @@ def _nats_context_pack_response_to_transport_response(
         )
 
     if status == "error":
+        error = reply_payload.get("error")
         payload = {
-            "error": response.get("error")
-            if isinstance(response.get("error"), Mapping)
+            "error": error
+            if isinstance(error, Mapping)
             else {"message": "NATS context pack request failed"},
         }
         return TransportResponse(
@@ -792,19 +1005,20 @@ def _nats_context_pack_response_to_transport_response(
 def _validate_nats_context_pack_response_envelope(
     response: Mapping[str, Any],
     *,
-    expected_request_id: str,
+    expected_correlation_id: str,
 ) -> None:
-    if response.get("schema") != "openbrain.nats.response.v1":
+    if response.get("kind") != CONTEXT_PACK_REPLY_KIND:
         raise OpenBrainProtocolError(
-            "NATS context pack response had an unexpected schema",
+            "NATS context pack response had an unexpected kind",
             context="transport:nats_jetstream",
         )
-    if response.get("request_id") != expected_request_id:
+    if response.get("correlation_id") != expected_correlation_id:
         raise OpenBrainProtocolError(
             "NATS context pack response id did not match request",
             context="transport:nats_jetstream",
         )
-    if response.get("operation") != "agent_context_pack":
+    payload = _nats_reply_payload(response)
+    if payload is None or payload.get("operation") != "agent_context_pack":
         raise OpenBrainProtocolError(
             "NATS context pack response had an unexpected operation",
             context="transport:nats_jetstream",
