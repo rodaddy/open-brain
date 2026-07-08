@@ -24,6 +24,7 @@ import {
 } from "./nats-bridge.ts";
 import type { ToolDeps } from "./tools/index.ts";
 import type { AuthInfo, HealthStatus } from "./types.ts";
+import { buildOperatorDoctorStatus } from "./operator-doctor.ts";
 
 const EMBEDDING_BASE_URL = process.env.EMBEDDING_BASE_URL;
 
@@ -130,6 +131,31 @@ export function createApp(
   const auth = authMiddleware(tokenMap);
 
   // REST API -- no MCP handshake required
+  app.get(
+    "/api/v1/operator/doctor",
+    auth,
+    async (req: Request, res: Response) => {
+      const authInfo = (req as Request & { auth?: AuthInfo }).auth;
+      if (authInfo?.role !== "admin" && authInfo?.role !== "ob-admin") {
+        res
+          .status(403)
+          .json({ error: "Permission denied: admin or ob-admin role required" });
+        return;
+      }
+      try {
+        const status = await buildOperatorDoctorStatus(
+          pool,
+          natsRuntimeBoundary,
+          toolDeps.natsBridgeHealth,
+        );
+        res.status(200).json(status);
+      } catch {
+        // Never surface raw error messages (they can carry paths or env
+        // detail); the doctor payload itself is the diagnostic surface.
+        res.status(500).json({ error: "operator doctor status unavailable" });
+      }
+    },
+  );
   app.use("/api/v1", auth, createRestRouter(toolDeps));
   app.use("/api/v1", auth, createPromotionRouter(toolDeps));
   app.use(

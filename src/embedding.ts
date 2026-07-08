@@ -218,6 +218,31 @@ export function __setEmbeddingWatchdogRestartSpawnerForTests(
   restartProcessSpawner = spawner;
 }
 
+export function getEmbeddingProviderDiagnostics(): {
+  configured: boolean;
+  model: string;
+  dimensions: number;
+  last_failure_code: EmbeddingError["code"] | null;
+  consecutive_restartable_failures: number;
+  restart_configured: boolean;
+  restart_in_flight: boolean;
+  last_restart_at: string | null;
+} {
+  return {
+    configured: Boolean(embeddingBaseUrl()),
+    model: EMBEDDING_MODEL,
+    dimensions: EMBEDDING_DIMENSIONS,
+    last_failure_code: lastFailureCode,
+    consecutive_restartable_failures: consecutiveRestartableFailures,
+    restart_configured: Boolean(process.env.EMBEDDING_WATCHDOG_RESTART_SCRIPT),
+    restart_in_flight: watchdogRestartInFlight,
+    last_restart_at:
+      lastWatchdogRestartAt > 0
+        ? new Date(lastWatchdogRestartAt).toISOString()
+        : null,
+  };
+}
+
 function embeddingFailure(error: EmbeddingError): EmbeddingResult {
   recordWatchdogFailure(error);
   return { embedding: null, error };

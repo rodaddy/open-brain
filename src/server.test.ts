@@ -245,6 +245,78 @@ describe("GET /health", () => {
   });
 });
 
+describe("GET /api/v1/operator/doctor", () => {
+  it("requires auth", async () => {
+    const res = await fetch(`${baseUrl}/api/v1/operator/doctor`);
+    expect(res.status).toBe(401);
+  });
+
+  it("requires admin or ob-admin auth", async () => {
+    const res = await fetch(`${baseUrl}/api/v1/operator/doctor`, {
+      headers: { Authorization: "Bearer agent-token-123" },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it("returns privileged doctor JSON without secret or path disclosure", async () => {
+    const originalEmbeddingBaseUrl = process.env.EMBEDDING_BASE_URL;
+    const originalEmbeddingApiKey = process.env.EMBEDDING_API_KEY;
+    const originalLogFile = process.env.LOG_FILE;
+    const secret = "doctor-rest-secret";
+    const embeddingHost = "doctor-provider.internal";
+    const logPath = "/sensitive/open-brain.log";
+    process.env.EMBEDDING_BASE_URL = `http://${embeddingHost}:8791/v1`;
+    process.env.EMBEDDING_API_KEY = secret;
+    process.env.LOG_FILE = logPath;
+    mockPool.query = async (sql: string) => {
+      if (sql.trim() === "SELECT 1") return { rows: [{ ok: 1 }] };
+      if (sql.includes("FROM _migrations")) {
+        return { rows: [{ filename: "001_init.sql" }] };
+      }
+      return { rows: [] };
+    };
+    (globalThis as Record<string, unknown>).fetch = (
+      input: string | URL | globalThis.Request,
+      init?: RequestInit,
+    ) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/models") && !url.includes("127.0.0.1")) {
+        expect(init?.headers).toMatchObject({
+          Authorization: `Bearer ${secret}`,
+        });
+        return Promise.resolve(new Response("{}", { status: 200 }));
+      }
+      return originalFetch(input, init);
+    };
+
+    try {
+      const res = await fetch(`${baseUrl}/api/v1/operator/doctor`, {
+        headers: { Authorization: "Bearer test-token-123" },
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        contract_version: string;
+        runtime: { contract_version: string };
+        embedding_provider: { available: boolean };
+      };
+      const serialized = JSON.stringify(body);
+      expect(body.contract_version).toBe("2026-07-08.operator-doctor.v1");
+      expect(body.runtime.contract_version).toBe("2026-07-08.memory-tools.v20");
+      expect(body.embedding_provider.available).toBe(true);
+      expect(serialized).not.toContain(secret);
+      expect(serialized).not.toContain(embeddingHost);
+      expect(serialized).not.toContain(logPath);
+    } finally {
+      if (originalEmbeddingBaseUrl === undefined) delete process.env.EMBEDDING_BASE_URL;
+      else process.env.EMBEDDING_BASE_URL = originalEmbeddingBaseUrl;
+      if (originalEmbeddingApiKey === undefined) delete process.env.EMBEDDING_API_KEY;
+      else process.env.EMBEDDING_API_KEY = originalEmbeddingApiKey;
+      if (originalLogFile === undefined) delete process.env.LOG_FILE;
+      else process.env.LOG_FILE = originalLogFile;
+    }
+  });
+});
+
 describe("POST /mcp", () => {
   it("returns 401 without Authorization header", async () => {
     const res = await fetch(`${baseUrl}/mcp`, {

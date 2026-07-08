@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { TOOL_CONTRACTS } from "./contract-schemas.ts";
 
-export const CONTRACT_VERSION = "2026-07-06.memory-tools.v19";
+export const CONTRACT_VERSION = "2026-07-08.memory-tools.v20";
 export const CONTRACT_SCHEMA_VERSION = 1;
 
 export interface ContractCapability {
@@ -252,6 +252,15 @@ export const CONTRACT_CAPABILITIES: ContractCapability[] = [
     version: 1,
     kind: "tool",
     description: "Read the canonical Open Brain public contract manifest.",
+  },
+  {
+    name: "operator_doctor",
+    version: 1,
+    kind: "tool",
+    description:
+      "Read privileged operator doctor/status JSON for runtime, database, " +
+      "migrations, optional providers, transport, and log/audit health. " +
+      "Requires admin or ob-admin auth and never returns secrets or raw paths.",
   },
   {
     name: "get_entry",

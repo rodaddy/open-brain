@@ -44,7 +44,7 @@ def _resolve_package_version(pyproject: Path | None = None) -> str:
 
 
 PACKAGE_VERSION = _resolve_package_version()
-CURRENT_CONTRACT_VERSION = "2026-07-06.memory-tools.v19"
+CURRENT_CONTRACT_VERSION = "2026-07-08.memory-tools.v20"
 COMPATIBLE_CONTRACT_VERSIONS = (CURRENT_CONTRACT_VERSION,)
 REQUIRED_CONTRACT_TOOLS = (
     "append_session_event",
@@ -57,6 +57,7 @@ REQUIRED_CONTRACT_TOOLS = (
     "lane_upsert",
     "list_repo_facts",
     "log_thought",
+    "operator_doctor",
     "recovery_wal_append",
     "recovery_wal_mark",
     "search_all",
@@ -90,6 +91,7 @@ CURRENT_TOOL_HELP: Mapping[str, str] = {
     "list_entities": "List graph entities by type, name, or namespace.",
     "list_repo_facts": "Read curated qmd-derived repository facts.",
     "log_thought": "Write a durable thought or observation to Open Brain.",
+    "operator_doctor": "Read privileged Open Brain operator doctor/status JSON.",
     "recovery_wal_append": (
         "Append exact-scope quarantined recovery evidence, not durable memory."
     ),
@@ -1027,6 +1029,9 @@ class OpenBrainClient:
 
     def get_contract(self, **arguments: Any) -> JSON:
         return self.call_tool("get_contract", arguments)
+
+    def operator_doctor(self, **arguments: Any) -> JSON:
+        return self.call_tool("operator_doctor", arguments)
 
     def get_stats(self, **arguments: Any) -> JSON:
         return self.call_tool("get_stats", arguments)
