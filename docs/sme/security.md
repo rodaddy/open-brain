@@ -319,3 +319,30 @@ not raw dependency messages.
   rather than mutable `Error.name`?
 - Do tests throw sensitive-looking dependency errors and prove logs omit the
   sensitive fragments?
+
+## [2026-07-08] Validation failures are the security-relevant audit events
+
+**Severity:** HIGH
+**Source:** PR #275 pre-merge gauntlet for Issue #269
+**Scope:** `src/audit-log.ts`, MCP validation hooks, audit-path error logging
+**Status:** fixed in PR #275 via a scoped mechanic; unknown-tool limitation documented
+
+### Pattern
+
+An audit trail that only records successful tool dispatches misses the calls a
+security review actually wants: malformed and rejected requests. PR #275 fixed
+this by auditing at the repo-owned validation hook so schema rejections are
+recorded with a `validation_error` status. The residual, documented limitation:
+calls to unknown tool names are rejected by SDK layers above any repo-owned
+hook and remain unauditable there. Separately, audit-path failure logs must
+record `err.code`/`err.name` only -- never raw pg `err.message`, which can embed
+query fragments or user content.
+
+### Review Questions
+
+- Are validation failures audited with a distinct status at the repo-owned
+  validation hook, not only successful dispatches?
+- Is the unknown-tool blind spot (rejected above repo hooks) documented rather
+  than silently assumed covered?
+- Do audit-path error logs restrict themselves to `err.code`/`err.name`, with a
+  test throwing a sensitive-looking pg error and proving the message is absent?
