@@ -3,6 +3,7 @@ import {
   declaredParameterKeys,
   payloadSizeBucket,
   readMcpAuditConfig,
+  recordMcpAudit,
   summarizeMcpAudit,
 } from "./audit-log.ts";
 
@@ -74,6 +75,61 @@ describe("MCP audit log privacy helpers", () => {
       enabled: false,
       retentionDays: 14,
       cleanupIntervalMs: 60000,
+      writeTimeoutMs: 1000,
     });
+  });
+
+  test("retries retention cleanup after a failed cleanup attempt", async () => {
+    const calls: Array<{ sql: string; params: unknown[] }> = [];
+    let deleteAttempts = 0;
+    const pool = {
+      query: async (sql: string, params: unknown[] = []) => {
+        calls.push({ sql, params });
+        if (sql.trimStart().startsWith("DELETE FROM mcp_tool_audit_log")) {
+          deleteAttempts += 1;
+          if (deleteAttempts === 1) {
+            throw new Error("temporary cleanup outage");
+          }
+        }
+        return { rows: [] };
+      },
+    };
+    const config = {
+      enabled: true,
+      retentionDays: 30,
+      cleanupIntervalMs: 0,
+      writeTimeoutMs: 1000,
+    };
+    const state = { lastCleanupAt: 0 };
+    const summary = summarizeMcpAudit({
+      operation: "log_thought",
+      status: "success",
+      durationMs: 1,
+      declaredKeys: ["content"],
+      args: { content: "private text" },
+    });
+
+    await recordMcpAudit(
+      { pool: pool as never, now: () => new Date(1000) },
+      config,
+      state,
+      summary,
+    );
+    expect(deleteAttempts).toBe(1);
+    expect(state.lastCleanupAt).toBe(0);
+
+    await recordMcpAudit(
+      { pool: pool as never, now: () => new Date(2000) },
+      config,
+      state,
+      summary,
+    );
+    expect(deleteAttempts).toBe(2);
+    expect(state.lastCleanupAt).toBe(2000);
+    expect(
+      calls.filter((call) =>
+        call.sql.trimStart().startsWith("INSERT INTO mcp_tool_audit_log"),
+      ),
+    ).toHaveLength(2);
   });
 });

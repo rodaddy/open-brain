@@ -5,12 +5,17 @@ import { logger } from "./logger.ts";
 
 const DEFAULT_RETENTION_DAYS = 30;
 const DEFAULT_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
+const DEFAULT_WRITE_TIMEOUT_MS = 1000;
 const MAX_RETENTION_DAYS = 366;
+const MIN_WRITE_TIMEOUT_MS = 50;
+const MAX_WRITE_TIMEOUT_MS = 5000;
+const auditInstalledServers = new WeakSet<McpServer>();
 
 export interface McpAuditConfig {
   enabled: boolean;
   retentionDays: number;
   cleanupIntervalMs: number;
+  writeTimeoutMs: number;
 }
 
 export interface McpAuditDeps {
@@ -33,9 +38,11 @@ export interface McpAuditSummary {
   payloadSizeBucket: string;
 }
 
-type RegisterTool = McpServer["registerTool"];
+export interface McpAuditState {
+  lastCleanupAt: number;
+}
 
-let lastCleanupAt = 0;
+type RegisterTool = McpServer["registerTool"];
 
 export function readMcpAuditConfig(
   env: Record<string, string | undefined> = process.env,
@@ -53,6 +60,12 @@ export function readMcpAuditConfig(
       60_000,
       24 * 60 * 60 * 1000,
       DEFAULT_CLEANUP_INTERVAL_MS,
+    ),
+    writeTimeoutMs: readBoundedInt(
+      env.OPENBRAIN_MCP_AUDIT_WRITE_TIMEOUT_MS,
+      MIN_WRITE_TIMEOUT_MS,
+      MAX_WRITE_TIMEOUT_MS,
+      DEFAULT_WRITE_TIMEOUT_MS,
     ),
   };
 }
@@ -136,7 +149,10 @@ export function summarizeMcpAudit(input: {
 export function installMcpAudit(server: McpServer, deps: McpAuditDeps): void {
   const config = deps.config ?? readMcpAuditConfig();
   if (!config.enabled) return;
+  if (auditInstalledServers.has(server)) return;
+  auditInstalledServers.add(server);
 
+  const state: McpAuditState = { lastCleanupAt: 0 };
   const original = server.registerTool.bind(server) as RegisterTool;
   server.registerTool = ((name: string, configOrDescription: unknown, cb?: unknown) => {
     if (typeof cb !== "function") {
@@ -158,7 +174,7 @@ export function installMcpAudit(server: McpServer, deps: McpAuditDeps): void {
       try {
         const result = await callback(args, extra);
         const status = isToolError(result) ? "error" : "success";
-        void writeMcpAudit(deps, config, summarizeMcpAudit({
+        await writeMcpAuditWithTimeout(deps, config, state, summarizeMcpAudit({
           operation: name,
           status,
           durationMs: Date.now() - started,
@@ -168,7 +184,7 @@ export function installMcpAudit(server: McpServer, deps: McpAuditDeps): void {
         }));
         return result;
       } catch (err) {
-        void writeMcpAudit(deps, config, summarizeMcpAudit({
+        await writeMcpAuditWithTimeout(deps, config, state, summarizeMcpAudit({
           operation: name,
           status: "exception",
           durationMs: Date.now() - started,
@@ -196,13 +212,38 @@ function isToolError(result: unknown): boolean {
   );
 }
 
-async function writeMcpAudit(
+async function writeMcpAuditWithTimeout(
   deps: McpAuditDeps,
   config: McpAuditConfig,
+  state: McpAuditState,
+  summary: McpAuditSummary,
+): Promise<void> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const write = recordMcpAudit(deps, config, state, summary);
+  const timed = new Promise<"timeout">((resolve) => {
+    timeout = setTimeout(() => resolve("timeout"), config.writeTimeoutMs);
+  });
+  const outcome = await Promise.race([
+    write.then(() => "written" as const),
+    timed,
+  ]);
+  if (timeout) clearTimeout(timeout);
+  if (outcome === "timeout") {
+    logger.warn("mcp_tool_audit_write_timeout", {
+      operation: summary.operation,
+      status: summary.status,
+      timeoutMs: config.writeTimeoutMs,
+    });
+  }
+}
+
+export async function recordMcpAudit(
+  deps: McpAuditDeps,
+  config: McpAuditConfig,
+  state: McpAuditState,
   summary: McpAuditSummary,
 ): Promise<void> {
   try {
-    maybeCleanupAuditLog(deps, config);
     await deps.pool.query(
       `INSERT INTO mcp_tool_audit_log (
         operation,
@@ -231,6 +272,7 @@ async function writeMcpAudit(
         summary.payloadSizeBucket,
       ],
     );
+    await maybeCleanupAuditLog(deps, config, state);
   } catch (err) {
     logger.warn("mcp_tool_audit_write_failed", {
       operation: summary.operation,
@@ -243,16 +285,19 @@ async function writeMcpAudit(
 function maybeCleanupAuditLog(
   deps: McpAuditDeps,
   config: McpAuditConfig,
-): void {
+  state: McpAuditState,
+): Promise<void> {
   const now = (deps.now ?? (() => new Date()))().getTime();
-  if (now - lastCleanupAt < config.cleanupIntervalMs) return;
-  lastCleanupAt = now;
-  void deps.pool
+  if (now - state.lastCleanupAt < config.cleanupIntervalMs) return Promise.resolve();
+  return deps.pool
     .query(
       `DELETE FROM mcp_tool_audit_log
        WHERE created_at < NOW() - ($1::int * INTERVAL '1 day')`,
       [config.retentionDays],
     )
+    .then(() => {
+      state.lastCleanupAt = now;
+    })
     .catch((err: unknown) => {
       logger.warn("mcp_tool_audit_cleanup_failed", {
         error: err instanceof Error ? err.message : String(err),
