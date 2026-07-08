@@ -20,7 +20,6 @@ import type { ToolDeps } from "./tools/index.ts";
 import type { AuthInfo } from "./types.ts";
 
 const encoder = new TextEncoder();
-const decoder = new TextDecoder();
 
 const SUBJECT = "dev.ob.memory.context_pack";
 
@@ -87,23 +86,6 @@ function depsWithWorkingSet(namespace = scope.namespace): ToolDeps {
 
 function data(payload: unknown): Uint8Array {
   return encoder.encode(JSON.stringify(payload));
-}
-
-function decodeResponse(raw: Uint8Array): {
-  id: string;
-  from: string;
-  kind: string;
-  correlation_id: string | null;
-  payload: Record<string, any>;
-} {
-  const parsed = envelopeFromBytes(raw);
-  return {
-    id: parsed.id,
-    from: parsed.from,
-    kind: parsed.kind,
-    correlation_id: parsed.correlation_id,
-    payload: parsed.payload as Record<string, any>,
-  };
 }
 
 function localBoundary(extra: Record<string, string> = {}) {

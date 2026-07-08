@@ -35,11 +35,11 @@ describe("Open Brain contract manifest", () => {
     ).toEqual({
       available: [],
       planned: [
-        "ob.memory.session_start",
-        "ob.memory.append_event",
-        "ob.memory.wrap",
-        "ob.memory.resolve",
-        "ob.health",
+        "{env}.ob.memory.session_start",
+        "{env}.ob.memory.append_event",
+        "{env}.ob.memory.wrap",
+        "{env}.ob.memory.resolve",
+        "{env}.ob.health",
       ],
     });
     expect(contract.realtime_transport.nats_jetstream.jetstream_streams).toEqual([
@@ -626,13 +626,13 @@ describe("Open Brain contract manifest", () => {
       status: "runtime-available",
       availability: "available",
       request_reply_subjects: {
-        available: ["ob.memory.context_pack"],
+        available: ["{env}.ob.memory.context_pack"],
         planned: [
-          "ob.memory.session_start",
-          "ob.memory.append_event",
-          "ob.memory.wrap",
-          "ob.memory.resolve",
-          "ob.health",
+          "{env}.ob.memory.session_start",
+          "{env}.ob.memory.append_event",
+          "{env}.ob.memory.wrap",
+          "{env}.ob.memory.resolve",
+          "{env}.ob.health",
         ],
       },
     });

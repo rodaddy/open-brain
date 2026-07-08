@@ -38,14 +38,19 @@ export interface OpenBrainContract {
         monitoring_listen: "127.0.0.1:8222";
         jetstream_store_dir: "/Volumes/ThunderBolt/open-brain/nats/jetstream";
       };
+      // Subjects are env-prefixed via the fleet-bus builder convention
+      // (src/nats-subjects.ts obContextPackSubject). The `{env}.` template below
+      // is a documentation placeholder; the live subject substitutes the slugged
+      // OPENBRAIN_NATS_ENV value (default "dev"), e.g. dev.ob.memory.context_pack.
+      subject_convention: "env_prefixed_fleet_bus";
       request_reply_subjects: {
-        available: readonly ["ob.memory.context_pack"] | readonly [];
+        available: readonly ["{env}.ob.memory.context_pack"] | readonly [];
         planned: readonly [
-          "ob.memory.session_start",
-          "ob.memory.append_event",
-          "ob.memory.wrap",
-          "ob.memory.resolve",
-          "ob.health",
+          "{env}.ob.memory.session_start",
+          "{env}.ob.memory.append_event",
+          "{env}.ob.memory.wrap",
+          "{env}.ob.memory.resolve",
+          "{env}.ob.health",
         ];
       };
       jetstream_streams: readonly [
@@ -528,6 +533,11 @@ export function buildContract(
       namespace_boundary: "authorization" as const,
       session_required: true as const,
     },
+    // ADVISORY: realtime_transport is EXCLUDED from schema_hash
+    // (see requiredContractHashPayload — it destructures realtime_transport out
+    // before hashing). It is documentation of the NATS foundation, so its
+    // contents (subject shape, availability, streams) can change without a
+    // schema_hash bump or a contract-version break.
     realtime_transport: {
       nats_jetstream: {
         status: natsAvailability === "available"
@@ -543,16 +553,20 @@ export function buildContract(
           jetstream_store_dir:
             "/Volumes/ThunderBolt/open-brain/nats/jetstream" as const,
         },
+        // Env-prefixed subjects (fleet-bus convention). The advertised strings
+        // carry a `{env}.` template placeholder; the runtime substitutes the
+        // slugged OPENBRAIN_NATS_ENV value via obContextPackSubject(env).
+        subject_convention: "env_prefixed_fleet_bus" as const,
         request_reply_subjects: {
           available: natsAvailability === "available"
-            ? ["ob.memory.context_pack"] as const
+            ? ["{env}.ob.memory.context_pack"] as const
             : [] as const,
           planned: [
-            "ob.memory.session_start",
-            "ob.memory.append_event",
-            "ob.memory.wrap",
-            "ob.memory.resolve",
-            "ob.health",
+            "{env}.ob.memory.session_start",
+            "{env}.ob.memory.append_event",
+            "{env}.ob.memory.wrap",
+            "{env}.ob.memory.resolve",
+            "{env}.ob.health",
           ] as const,
         },
         jetstream_streams: [
