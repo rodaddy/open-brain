@@ -45,6 +45,32 @@ function healthPortFromEnv(env: NodeJS.ProcessEnv): number | null {
   return Number.isFinite(healthPort) && healthPort > 0 ? healthPort : null;
 }
 
+function shutdownTimeoutMsFromEnv(env: NodeJS.ProcessEnv): number {
+  const timeoutMs = Number.parseInt(
+    env.OPEN_BRAIN_NATS_WORKER_SHUTDOWN_TIMEOUT_MS ?? "5000",
+    10,
+  );
+  return Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 5000;
+}
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
 function startHealthServer(input: {
   env: NodeJS.ProcessEnv;
   runtime: NatsWorkerRuntime;
@@ -81,10 +107,15 @@ function startHealthServer(input: {
 async function closeRuntime(
   runtime: NatsWorkerRuntime | undefined,
   log: LoggerLike,
+  timeoutMs: number,
 ): Promise<void> {
   if (!runtime) return;
   try {
-    await runtime.close();
+    await withTimeout(
+      runtime.close(),
+      timeoutMs,
+      "Open Brain NATS worker bridge close timed out",
+    );
   } catch (err) {
     log.error("Open Brain NATS worker bridge close failed", safeWorkerError(err));
   }
@@ -130,6 +161,7 @@ export async function startNatsWorkerProcess(
   let pool: pg.Pool | undefined;
   let runtime: NatsWorkerRuntime | undefined;
   let healthServer: HealthServer | null = null;
+  const shutdownTimeoutMs = shutdownTimeoutMsFromEnv(env);
 
   try {
     const tokenMap = buildTokens(env as Record<string, string | undefined>);
@@ -156,7 +188,7 @@ export async function startNatsWorkerProcess(
       shutdown: async () => {
         log.info("Shutting down Open Brain NATS worker");
         closeHealthServer(healthServer, log);
-        await closeRuntime(runtime, log);
+        await closeRuntime(runtime, log, shutdownTimeoutMs);
         await closePool(pool, log);
       },
     };
@@ -166,7 +198,7 @@ export async function startNatsWorkerProcess(
       ...natsWorkerLogSummary(readNatsWorkerBoundary(env)),
     });
     closeHealthServer(healthServer, log);
-    await closeRuntime(runtime, log);
+    await closeRuntime(runtime, log, shutdownTimeoutMs);
     await closePool(pool, log);
     throw err;
   }

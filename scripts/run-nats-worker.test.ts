@@ -54,6 +54,51 @@ describe("startNatsWorkerProcess", () => {
     expect(errorLogs.join("\n")).not.toContain("user:pass");
     expect(errorLogs.join("\n")).not.toContain("broker.internal");
   });
+
+  it("continues pool shutdown when bridge close times out", async () => {
+    const env = {
+      OPENBRAIN_NATS_URL: "nats://127.0.0.1:4222",
+      OPEN_BRAIN_NATS_WORKER_HEALTH_PORT: "0",
+      OPEN_BRAIN_NATS_WORKER_SHUTDOWN_TIMEOUT_MS: "1",
+    };
+    let poolEnded = false;
+    const errorLogs: string[] = [];
+    const runtime: NatsWorkerRuntime = {
+      boundary: readNatsWorkerBoundary(env),
+      health: createNatsBridgeHealth("available"),
+      subject: "ob.memory.context_pack",
+      close: async () => {
+        await new Promise(() => undefined);
+      },
+    };
+
+    const processRuntime = await startNatsWorkerProcess({
+      env,
+      log: {
+        info: () => undefined,
+        error: (message, extra) => {
+          errorLogs.push(JSON.stringify({ message, extra }));
+        },
+      },
+      buildTokens: () =>
+        new Map([["secret-token", { role: "admin", clientId: "rico" }]]),
+      createDbPool: () =>
+        ({
+          end: async () => {
+            poolEnded = true;
+          },
+        }) as any,
+      startWorker: async () => runtime,
+    });
+
+    await processRuntime.shutdown();
+
+    expect(poolEnded).toBe(true);
+    expect(errorLogs.join("\n")).toContain(
+      "Open Brain NATS worker bridge close failed",
+    );
+    expect(errorLogs.join("\n")).not.toContain("timed out");
+  });
 });
 
 describe("safeWorkerError", () => {
