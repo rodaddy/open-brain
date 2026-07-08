@@ -13,10 +13,14 @@ const MAX_WRITE_TIMEOUT_MS = 5000;
 // payloads. Above this, every raw key is counted as unknown without any
 // per-key set membership work.
 const MAX_UNKNOWN_KEY_SCAN = 256;
-// Cap on detached audit INSERTs still running against the pool. Beyond it,
-// audit writes are skipped (fail open) so a slow database cannot let audit
-// writes hold every pool connection and starve real tool queries.
-const MAX_IN_FLIGHT_AUDIT_WRITES = 16;
+// Cap on detached audit INSERTs still running against the pool. Kept well
+// below the default pool size (10) so hung audit writes can never occupy the
+// whole shared pool; beyond it audit writes are skipped (fail open) so a slow
+// database cannot let audit writes starve real tool queries.
+const MAX_IN_FLIGHT_AUDIT_WRITES = 4;
+// Early-exit boundary for the payload size estimator: once the running
+// estimate passes the top bucket boundary there is nothing left to learn.
+const SIZE_ESTIMATE_EARLY_EXIT_BYTES = 1024 * 1024;
 const auditInstalledServers = new WeakSet<McpServer>();
 
 export interface McpAuditConfig {
@@ -34,7 +38,7 @@ export interface McpAuditDeps {
 
 export interface McpAuditSummary {
   operation: string;
-  status: "success" | "error" | "exception";
+  status: "success" | "error" | "exception" | "validation_error";
   durationMs: number;
   callerRole: string | null;
   callerClientId: string | null;
@@ -121,6 +125,12 @@ function takeRawArgsAuditCapture(
 
 type RegisterTool = McpServer["registerTool"];
 
+type ToolInputValidator = (
+  tool: unknown,
+  args: unknown,
+  toolName: string,
+) => Promise<unknown>;
+
 export function readMcpAuditConfig(
   env: Record<string, string | undefined> = process.env,
 ): McpAuditConfig {
@@ -154,6 +164,9 @@ function readBoundedInt(
   fallback: number,
 ): number {
   if (raw === undefined) return fallback;
+  // Strict base-10 digits only: parseInt would silently accept "1.5" (-> 1)
+  // and "1000ms" (-> 1000), contradicting the documented fallback behavior.
+  if (!/^[0-9]+$/.test(raw)) return fallback;
   const parsed = Number.parseInt(raw, 10);
   if (!Number.isFinite(parsed) || parsed < min || parsed > max) {
     return fallback;
@@ -172,11 +185,10 @@ function ownKeys(value: unknown): string[] {
 }
 
 export function payloadSizeBucket(input: unknown): string {
-  const json = safeStringify(input);
-  // Un-serializable payloads get a distinct sentinel so "couldn't measure"
+  const bytes = estimateJsonBytes(input);
+  // Un-measurable payloads get a distinct sentinel so "couldn't measure"
   // is never conflated with "empty".
-  if (json === null) return "unknown";
-  const bytes = Buffer.byteLength(json, "utf8");
+  if (bytes === null) return "unknown";
   if (bytes === 0) return "0b";
   if (bytes <= 128) return "le_128b";
   if (bytes <= 512) return "le_512b";
@@ -189,14 +201,71 @@ export function payloadSizeBucket(input: unknown): string {
   return "gt_1mb";
 }
 
-function safeStringify(input: unknown): string | null {
-  try {
-    const json = JSON.stringify(input ?? null);
-    // JSON.stringify returns undefined for lone unserializable values.
-    return json === undefined ? null : json;
-  } catch {
-    return null;
+// Approximates the JSON-serialized byte size of a value WITHOUT materializing
+// the JSON string, so the request path never builds a full copy of an
+// unbounded content string just to bucket it. String cost is code-unit length
+// plus quotes plus a ~6% escaping/multi-byte fudge; containers add structural
+// overhead. Traversal exits early once the running total passes the top
+// bucket boundary. Returns null for values JSON.stringify could not serialize
+// (a cycle, a BigInt anywhere, or a lone non-JSON value), which buckets as
+// "unknown". Buckets are coarse by design; the estimate only needs to land in
+// the right order of magnitude.
+function estimateJsonBytes(input: unknown): number | null {
+  const top = input ?? null;
+  if (typeof top === "function" || typeof top === "symbol") return null;
+  // Raw MCP arguments are transport-parsed JSON (always trees), so an object
+  // seen twice can only mean a cycle in practice.
+  const seen = new Set<object>();
+  const stack: unknown[] = [top];
+  let total = 0;
+  while (stack.length > 0) {
+    if (total > SIZE_ESTIMATE_EARLY_EXIT_BYTES) return total;
+    const value = stack.pop();
+    if (value === null || value === undefined) {
+      total += 4;
+      continue;
+    }
+    switch (typeof value) {
+      case "string":
+        total += value.length + 2 + (value.length >> 4);
+        break;
+      case "number":
+        total += Number.isFinite(value) ? String(value).length : 4;
+        break;
+      case "boolean":
+        total += value ? 4 : 5;
+        break;
+      case "bigint":
+        // JSON.stringify throws on BigInt anywhere in the value.
+        return null;
+      case "object": {
+        if (seen.has(value as object)) return null;
+        seen.add(value as object);
+        if (Array.isArray(value)) {
+          // Brackets plus one comma per element; element bytes are counted
+          // up front so an adversarially long array trips the early exit
+          // before its members are pushed.
+          total += 2 + value.length;
+          if (total > SIZE_ESTIMATE_EARLY_EXIT_BYTES) return total;
+          for (const item of value) stack.push(item);
+        } else {
+          const entries = Object.entries(value as Record<string, unknown>);
+          total += 2 + entries.length;
+          if (total > SIZE_ESTIMATE_EARLY_EXIT_BYTES) return total;
+          for (const [key, item] of entries) {
+            total += key.length + 3;
+            stack.push(item);
+          }
+        }
+        break;
+      }
+      default:
+        // Nested function/symbol: JSON omits the member (object) or emits
+        // null (array); either way the contribution is negligible.
+        break;
+    }
   }
+  return total;
 }
 
 export function summarizeMcpAudit(input: {
@@ -245,6 +314,44 @@ export function installMcpAudit(server: McpServer, deps: McpAuditDeps): void {
   rawArgsCaptureEnabled = true;
 
   const state = sharedAuditState(deps.pool);
+  // Declared keys per tool name, populated by the registerTool wrapper below
+  // and reused by the validation-failure audit path (which only has the tool
+  // name and the SDK's compiled schema object).
+  const declaredKeysByTool = new Map<string, string[]>();
+
+  // Validation failures never reach the tool handler, so the most
+  // security-relevant probes (undeclared keys plus an invalid payload) would
+  // otherwise leave no audit row. Wrap the server's validateToolInput hook to
+  // record them with status "validation_error". The SDK invokes this hook as
+  // validateToolInput(tool, request.params.arguments, toolName) with no
+  // request extra, so no auth context exists at this layer: caller fields
+  // stay null by construction. Unknown-tool-name calls are rejected above any
+  // repo-owned hook and remain unaudited (documented limitation).
+  const validatorHost = server as unknown as {
+    validateToolInput?: ToolInputValidator;
+  };
+  if (typeof validatorHost.validateToolInput === "function") {
+    const originalValidate = validatorHost.validateToolInput.bind(
+      server,
+    ) as ToolInputValidator;
+    validatorHost.validateToolInput = async (tool, args, toolName) => {
+      const started = Date.now();
+      try {
+        return await originalValidate(tool, args, toolName);
+      } catch (err) {
+        await writeMcpAuditWithTimeout(deps, config, state, summarizeMcpAudit({
+          operation: toolName,
+          status: "validation_error",
+          durationMs: Date.now() - started,
+          declaredKeys: declaredKeysByTool.get(toolName) ?? [],
+          args,
+          rawArgs: captureArgsFacts(args),
+        }));
+        throw err;
+      }
+    };
+  }
+
   const original = server.registerTool.bind(server) as RegisterTool;
   server.registerTool = ((name: string, configOrDescription: unknown, cb?: unknown) => {
     if (typeof cb !== "function") {
@@ -259,6 +366,7 @@ export function installMcpAudit(server: McpServer, deps: McpAuditDeps): void {
       (configOrDescription as { inputSchema?: unknown } | undefined)
         ?.inputSchema,
     );
+    declaredKeysByTool.set(name, declaredKeys);
     const callback = cb as (args: unknown, extra: unknown) => unknown;
     const wrapped = async (args: unknown, extra: unknown) => {
       const started = Date.now();
@@ -313,11 +421,19 @@ async function writeMcpAuditWithTimeout(
   state: SharedMcpAuditState,
   summary: McpAuditSummary,
 ): Promise<void> {
-  if (state.inFlightWrites >= MAX_IN_FLIGHT_AUDIT_WRITES) {
+  // Never compete with real tool queries for connections: skip when the pool
+  // already has waiters, or when too many audit writes are still in flight.
+  const waitingCount =
+    (deps.pool as { waitingCount?: number }).waitingCount ?? 0;
+  if (
+    state.inFlightWrites >= MAX_IN_FLIGHT_AUDIT_WRITES ||
+    waitingCount > 0
+  ) {
     logger.warn("mcp_tool_audit_write_skipped", {
       operation: summary.operation,
       status: summary.status,
       inFlightWrites: state.inFlightWrites,
+      waitingCount,
     });
     return;
   }

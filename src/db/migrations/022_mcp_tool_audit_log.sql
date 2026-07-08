@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS mcp_tool_audit_log (
   id BIGSERIAL PRIMARY KEY,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   operation TEXT NOT NULL,
-  status TEXT NOT NULL CHECK (status IN ('success', 'error', 'exception')),
+  status TEXT NOT NULL CHECK (status IN ('success', 'error', 'exception', 'validation_error')),
   duration_ms INTEGER NOT NULL CHECK (duration_ms >= 0),
   caller_role TEXT,
   caller_client_id TEXT,

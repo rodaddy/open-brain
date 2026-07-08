@@ -273,8 +273,8 @@ describe("MCP tool audit logging", () => {
 
     try {
       // Audit INSERTs never resolve, so in-flight writes accumulate until the
-      // cap (16); the remaining calls must skip their audit write entirely
-      // while still succeeding for the caller.
+      // cap (4, kept below the pool size); the remaining calls must skip
+      // their audit write entirely while still succeeding for the caller.
       const results = await Promise.all(
         Array.from({ length: 20 }, (_, index) =>
           client.callTool({
@@ -292,7 +292,88 @@ describe("MCP tool audit logging", () => {
     const inserts = store.calls.filter((call) =>
       call.sql.includes("INSERT INTO mcp_tool_audit_log"),
     );
-    expect(inserts).toHaveLength(16);
+    expect(inserts).toHaveLength(4);
+  });
+
+  test("skips audit writes while the pool has waiting clients", async () => {
+    const store = auditPool();
+    (store.pool as { waitingCount?: number }).waitingCount = 2;
+    const { client, cleanup } = await setupClient({
+      pool: store.pool,
+      auth: { role: "admin", clientId: "rico" },
+    });
+
+    try {
+      const result = await client.callTool({
+        name: "log_thought",
+        arguments: { content: "pool is saturated" },
+      });
+      expect(result.isError).toBeFalsy();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    } finally {
+      await cleanup();
+    }
+
+    expect(
+      store.calls.some((call) =>
+        call.sql.includes("INSERT INTO mcp_tool_audit_log"),
+      ),
+    ).toBe(false);
+  });
+
+  test("audits Zod validation failures as validation_error without raw values", async () => {
+    const store = auditPool();
+    const { client, cleanup } = await setupClient({
+      pool: store.pool,
+      auth: {
+        role: "admin",
+        clientId: "delegated",
+        tokenClientId: "rico",
+        agentId: "worker-269",
+        namespaceSource: "header",
+      },
+    });
+
+    try {
+      const result = await client.callTool({
+        name: "log_thought",
+        arguments: {
+          // Invalid type for a declared key plus an undeclared probe key:
+          // this call fails Zod validation and never reaches the handler.
+          content: 987654,
+          undeclared_probe_key: "secret-shaped-value",
+        },
+      });
+      // The caller still gets the normal validation error result.
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result.content)).toContain(
+        "Input validation error",
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    } finally {
+      await cleanup();
+    }
+
+    const insert = store.calls.find((call) =>
+      call.sql.includes("INSERT INTO mcp_tool_audit_log"),
+    );
+    expect(insert).toBeDefined();
+    expect(insert?.params[0]).toBe("log_thought");
+    expect(insert?.params[1]).toBe("validation_error");
+    // No auth context exists at the validation hook layer (the SDK calls it
+    // without request extra), so caller fields are null even though the
+    // transport carried authInfo.
+    expect(insert?.params[3]).toBeNull();
+    expect(insert?.params[4]).toBeNull();
+    expect(insert?.params[5]).toBeNull();
+    expect(insert?.params[6]).toBeNull();
+    expect(insert?.params[7]).toBeNull();
+    // Raw-args facts: the undeclared probe key is counted, never named.
+    expect(insert?.params[9]).toBe(1);
+    const persisted = JSON.stringify(insert?.params);
+    expect(persisted).not.toContain("undeclared_probe_key");
+    expect(persisted).not.toContain("secret-shaped-value");
+    expect(persisted).not.toContain("987654");
   });
 
   test("slow audit writes are bounded by the write timeout", async () => {

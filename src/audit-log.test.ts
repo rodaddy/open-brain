@@ -142,6 +142,32 @@ describe("MCP audit log privacy helpers", () => {
     });
   });
 
+  test("non-integer env values fall back instead of being coerced", () => {
+    // parseInt would accept "1.5" (-> 1) and "60000ms" (-> 60000); the strict
+    // digits-only rule must reject both and use the defaults.
+    expect(
+      readMcpAuditConfig({
+        OPENBRAIN_MCP_AUDIT_RETENTION_DAYS: "1.5",
+        OPENBRAIN_MCP_AUDIT_CLEANUP_INTERVAL_MS: "60000ms",
+        OPENBRAIN_MCP_AUDIT_WRITE_TIMEOUT_MS: " 500 ",
+      }),
+    ).toEqual({
+      enabled: true,
+      retentionDays: 30,
+      cleanupIntervalMs: 3600000,
+      writeTimeoutMs: 1000,
+    });
+  });
+
+  test("large payloads hit the top bucket via early exit, without full serialization", () => {
+    expect(
+      payloadSizeBucket({ content: "x".repeat(2 * 1024 * 1024) }),
+    ).toBe("gt_1mb");
+    expect(
+      payloadSizeBucket({ items: Array.from({ length: 3_000_000 }, () => 1) }),
+    ).toBe("gt_1mb");
+  });
+
   test("retries retention cleanup after a failed cleanup attempt", async () => {
     const calls: Array<{ sql: string; params: unknown[] }> = [];
     let deleteAttempts = 0;
