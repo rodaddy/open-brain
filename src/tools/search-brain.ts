@@ -42,6 +42,10 @@ type NamespaceFilter = string | string[];
 type SearchTable = Table | "entities";
 export type { SourceScope };
 
+type ExecuteSearchOptions = {
+  enableGraph?: boolean;
+};
+
 /** RRF constant -- standard value from Cormack et al. 2009 */
 const RRF_K = 60;
 
@@ -72,8 +76,16 @@ const TABLE_WEIGHT: Record<string, number> = {
   entity: 1.0,
 };
 
-const RELATIONAL_QUERY_PATTERN =
+type RelationalDirection = "incoming" | "outgoing";
+
+const RELATIONAL_INCOMING_QUERY_PATTERN =
   /^what\s+(?:is\s+)?(?:was\s+)?(?<relation>depends on|blocked by|implemented by|decided by|supersedes|duplicates|contradicts|mentions|relates to)\s+(?<seed>[^?]{1,160})\??$/iu;
+
+const RELATIONAL_OUTGOING_DEPENDS_PATTERN =
+  /^what\s+does\s+(?<seed>[^?]{1,160})\s+depend\s+on\??$/iu;
+
+const RELATIONAL_OUTGOING_BLOCKED_PATTERN =
+  /^what\s+(?:is\s+)?(?<seed>[^?]{1,160})\s+blocked\s+by\??$/iu;
 
 const RELATION_ALIASES: Record<string, LinkRelation> = {
   "depends on": "depends_on",
@@ -90,15 +102,38 @@ const RELATION_ALIASES: Record<string, LinkRelation> = {
 type RelationalQuery = {
   relation: LinkRelation;
   seed: string;
+  direction: RelationalDirection;
 };
 
 function parseRelationalQuery(query: string): RelationalQuery | undefined {
-  const groups = RELATIONAL_QUERY_PATTERN.exec(query.trim())?.groups;
+  const trimmed = query.trim();
+  const outgoingDepends = RELATIONAL_OUTGOING_DEPENDS_PATTERN.exec(trimmed)?.groups;
+  if (outgoingDepends?.seed) {
+    const seed = outgoingDepends.seed.trim().replace(/\s+/g, " ");
+    if (!seed) return undefined;
+    return {
+      relation: "depends_on",
+      seed,
+      direction: "outgoing",
+    };
+  }
+  const outgoingBlocked = RELATIONAL_OUTGOING_BLOCKED_PATTERN.exec(trimmed)?.groups;
+  if (outgoingBlocked?.seed) {
+    const seed = outgoingBlocked.seed.trim().replace(/\s+/g, " ");
+    if (!seed) return undefined;
+    return {
+      relation: "blocked_by",
+      seed,
+      direction: "outgoing",
+    };
+  }
+
+  const groups = RELATIONAL_INCOMING_QUERY_PATTERN.exec(trimmed)?.groups;
   if (!groups?.relation || !groups.seed) return undefined;
   const relation = RELATION_ALIASES[groups.relation.toLowerCase()];
   const seed = groups.seed.trim().replace(/\s+/g, " ");
   if (!relation || !seed || !LINK_RELATIONS.includes(relation)) return undefined;
-  return { relation, seed };
+  return { relation, seed, direction: "incoming" };
 }
 
 function searchEmbeddingTimeoutMs(): number {
@@ -595,7 +630,11 @@ function buildFtsCTE(
 )`;
 }
 
-function buildRelationalHydrationSelect(table: Table, tier?: Tier): string {
+function buildRelationalHydrationSelect(
+  table: Table,
+  direction: RelationalDirection,
+  tier?: Tier,
+): string {
   if (tier && !VALID_TIERS.has(tier)) throw new Error(`Invalid tier: ${tier}`);
   const alias = TABLE_ALIAS[table];
   const label = SOURCE_LABELS[table];
@@ -604,6 +643,18 @@ function buildRelationalHydrationSelect(table: Table, tier?: Tier): string {
   const metaCol = HAS_EXTRACTED_METADATA.has(table)
     ? `${alias}.extracted_metadata`
     : "NULL::jsonb AS extracted_metadata";
+  const linkJoin =
+    direction === "incoming"
+      ? `l.to_type = 'entity'
+   AND l.to_id = seed.id`
+      : `l.from_type = 'entity'
+   AND l.from_id = seed.id`;
+  const targetJoin =
+    direction === "incoming"
+      ? `l.from_type = '${label}'
+   AND ${alias}.id = l.from_id`
+      : `l.to_type = '${label}'
+   AND ${alias}.id = l.to_id`;
 
   return `SELECT
     '${label}' AS source_type,
@@ -622,14 +673,12 @@ function buildRelationalHydrationSelect(table: Table, tier?: Tier): string {
     ${metaCol}
   FROM relational_graph_seed seed
   JOIN ob_links l
-    ON l.from_type = 'entity'
-   AND l.from_id = seed.id
+    ON ${linkJoin}
    AND l.namespace = seed.namespace
    AND l.relation = $2
    AND l.archived_at IS NULL
   JOIN ${table} ${alias}
-    ON l.to_type = '${label}'
-   AND ${alias}.id = l.to_id
+    ON ${targetJoin}
    AND ${alias}.namespace = l.namespace
    AND ${alias}.archived_at IS NULL${tierFilter}`;
 }
@@ -658,7 +707,7 @@ async function relationalGraphSearch(
       : ` AND e.namespace = ${paramRef(namespaceParamIndex)}`
     : "";
   const hydrationSql = targetTables
-    .map((table) => buildRelationalHydrationSelect(table, tier))
+    .map((table) => buildRelationalHydrationSelect(table, parsed.direction, tier))
     .join("\nUNION ALL\n");
 
   try {
@@ -684,6 +733,7 @@ ${hydrationSql}
     );
     logger.info("search_relational_graph", {
       relation: parsed.relation,
+      direction: parsed.direction,
       seed_length: parsed.seed.length,
       target_tables: targetTables,
       candidate_count: rows.length,
@@ -692,6 +742,7 @@ ${hydrationSql}
   } catch (err) {
     logger.warn("search_relational_graph_failed", {
       relation: parsed.relation,
+      direction: parsed.direction,
       seed_length: parsed.seed.length,
       error: err instanceof Error ? err.message : String(err),
     });
@@ -928,7 +979,9 @@ export async function executeSearch(
   namespace?: NamespaceFilter,
   includeLinks?: boolean,
   sourceScope?: SourceScope,
+  options: ExecuteSearchOptions = {},
 ): Promise<SearchRow[]> {
+  const enableGraph = options.enableGraph === true;
   if (sourceScope) {
     accessibleTables = accessibleTables.filter((table) => table !== "entities");
     if (accessibleTables.length === 0) return [];
@@ -959,16 +1012,43 @@ export async function executeSearch(
       logger.warn("embedding_failed_fallback_fts", {
         queryLength: query.length,
       });
-      rows = await ftsSearch(
-        deps,
-        accessibleTables,
-        query,
-        limit,
-        tier,
-        offset,
-        namespace,
-        sourceScope,
-      );
+      const totalNeeded = offset + limit;
+      const fetchLimit = totalNeeded * HYBRID_FETCH_MULTIPLIER;
+      const graphRows =
+        enableGraph && sourceScope === undefined
+          ? await relationalGraphSearch(
+              deps,
+              accessibleTables,
+              query,
+              Math.min(fetchLimit, RELATIONAL_GRAPH_FETCH_LIMIT),
+              tier,
+              namespace,
+            )
+          : [];
+      if (graphRows.length > 0) {
+        const ftsRows = await ftsSearch(
+          deps,
+          accessibleTables,
+          query,
+          fetchLimit,
+          tier,
+          0,
+          namespace,
+          sourceScope,
+        );
+        rows = rrfMerge([], ftsRows, totalNeeded, graphRows).slice(offset);
+      } else {
+        rows = await ftsSearch(
+          deps,
+          accessibleTables,
+          query,
+          limit,
+          tier,
+          offset,
+          namespace,
+          sourceScope,
+        );
+      }
       if (includeLinks !== false) {
         rows = await attachExplicitLinks(deps, rows, namespace);
       }
@@ -1022,7 +1102,7 @@ export async function executeSearch(
     ),
   ]);
   const graphRows =
-    sourceScope === undefined
+    enableGraph && sourceScope === undefined
       ? await relationalGraphSearch(
           deps,
           accessibleTables,
@@ -1052,6 +1132,7 @@ export async function executeSearchWithSharedFallback(
   namespace: NamespaceFilter | undefined,
   includeLinks?: boolean,
   sourceScope?: SourceScope,
+  options: ExecuteSearchOptions = {},
 ): Promise<SearchRow[]> {
   const config = sharedNamespaceConfig();
   if (
@@ -1072,6 +1153,7 @@ export async function executeSearchWithSharedFallback(
         namespace,
         includeLinks,
         sourceScope,
+        options,
       ),
     );
   }
@@ -1087,6 +1169,7 @@ export async function executeSearchWithSharedFallback(
     config.sharedNamespace,
     includeLinks,
     sourceScope,
+    options,
   );
   if (
     sharedRows.length >= limit ||
@@ -1106,6 +1189,7 @@ export async function executeSearchWithSharedFallback(
     config.legacySharedNamespace,
     includeLinks,
     sourceScope,
+    options,
   );
   return withCanonicalNamespaces(
     mergeFallbackSearchRows(sharedRows, legacyRows, limit),
@@ -1123,6 +1207,7 @@ export async function executeSearchWithScopedSharedFallback(
   namespace: NamespaceFilter | undefined,
   includeLinks?: boolean,
   sourceScope?: SourceScope,
+  options: ExecuteSearchOptions = {},
 ): Promise<SearchRow[]> {
   const config = sharedNamespaceConfig();
   const scopedNamespaces = Array.isArray(namespace) ? namespace : [];
@@ -1144,6 +1229,7 @@ export async function executeSearchWithScopedSharedFallback(
         namespace,
         includeLinks,
         sourceScope,
+        options,
       ),
     );
   }
@@ -1160,6 +1246,7 @@ export async function executeSearchWithScopedSharedFallback(
       namespace,
       includeLinks,
       sourceScope,
+      options,
     ),
     executeSearch(
       deps,
@@ -1172,6 +1259,7 @@ export async function executeSearchWithScopedSharedFallback(
       config.physicalSharedNamespace,
       includeLinks,
       sourceScope,
+      options,
     ),
   ]);
   if (
@@ -1192,6 +1280,7 @@ export async function executeSearchWithScopedSharedFallback(
     config.legacySharedNamespace,
     includeLinks,
     sourceScope,
+    options,
   );
   return withCanonicalNamespaces(
     mergeFallbackSearchRows(primaryRows, legacyRows, limit),
@@ -1380,6 +1469,7 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
               namespace,
               undefined,
               sourceScope,
+              { enableGraph: true },
             )
           : await executeSearchWithScopedSharedFallback(
               deps,
@@ -1392,6 +1482,7 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
               namespace,
               undefined,
               sourceScope,
+              { enableGraph: true },
             );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

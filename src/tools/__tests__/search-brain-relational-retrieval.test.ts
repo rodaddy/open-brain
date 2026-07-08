@@ -1,6 +1,10 @@
 import { afterAll, describe, expect, it } from "bun:test";
 import { Pool } from "pg";
-import { registerSearchBrain } from "../search-brain.ts";
+import {
+  ALL_TABLES,
+  executeSearchWithScopedSharedFallback,
+  registerSearchBrain,
+} from "../search-brain.ts";
 import { LINK_RELATIONS } from "../table-constants.ts";
 import type { AuthInfo } from "../../types.ts";
 import {
@@ -44,6 +48,7 @@ type RelationalQuestion = {
   namespace: string;
   seed: string;
   relation: string;
+  direction: "incoming" | "outgoing";
   expected_id: string;
   expected_type: SourceType;
 };
@@ -245,58 +250,72 @@ const relationalQuestionRows = [
 
 const relationalQuestions: RelationalQuestion[] = relationalQuestionRows.map(
   ([id, question, seed, relation, expected_id, expected_type]) => ({
-  id,
-  question,
-  namespace: "shared-kb",
-  seed,
-  relation,
-  expected_id,
-  expected_type,
-}),
+    id,
+    question,
+    namespace: "shared-kb",
+    seed,
+    relation,
+    direction: "incoming",
+    expected_id,
+    expected_type,
+  }),
 );
 
 const links: FixtureLink[] = [
   ...relationalQuestions.map((question, index) => ({
     id: `link-${index + 1}`,
     namespace: question.namespace,
-    from_type: "entity" as const,
-    from_id: `entity-${question.seed.toLowerCase()}`,
-    to_type: question.expected_type,
-    to_id: question.expected_id,
+    from_type: question.expected_type,
+    from_id: question.expected_id,
+    to_type: "entity" as const,
+    to_id: `entity-${question.seed.toLowerCase()}`,
     relation: question.relation,
   })),
   {
+    id: "link-outgoing-alpha",
+    namespace: "shared-kb",
+    from_type: "entity",
+    from_id: "entity-alpha",
+    to_type: "decision",
+    to_id: "decision-qmd-fallback",
+    relation: "depends_on",
+  },
+  {
     id: "link-private-leak",
     namespace: "private-agent",
-    from_type: "entity",
-    from_id: "entity-private",
-    to_type: "thought",
-    to_id: "private-leak-target",
+    from_type: "thought",
+    from_id: "private-leak-target",
+    to_type: "entity",
+    to_id: "entity-private",
     relation: "mentions",
   },
   {
     id: "link-archived-link",
     namespace: "shared-kb",
-    from_type: "entity",
-    from_id: "entity-alpha",
-    to_type: "thought",
-    to_id: "archived-link-target",
+    from_type: "thought",
+    from_id: "archived-link-target",
+    to_type: "entity",
+    to_id: "entity-alpha",
     relation: "mentions",
     archived_at: "2026-07-01T00:00:00Z",
   },
   {
     id: "link-archived-entity",
     namespace: "shared-kb",
-    from_type: "entity",
-    from_id: "entity-archived",
-    to_type: "thought",
-    to_id: "archived-entity-target",
+    from_type: "thought",
+    from_id: "archived-entity-target",
+    to_type: "entity",
+    to_id: "entity-archived",
     relation: "mentions",
   },
 ];
 
-const RELATION_PATTERN =
-  /what\s+(?:is\s+)?(?:was\s+)?(?<relation>depends on|blocked by|implemented by|decided by|supersedes|duplicates|contradicts|mentions|relates to)\s+(?<seed>[a-z]+)\??/i;
+const INCOMING_RELATION_PATTERN =
+  /what\s+(?:is\s+)?(?:was\s+)?(?<relation>depends on|blocked by|implemented by|decided by|supersedes|duplicates|contradicts|mentions|relates to)\s+(?<seed>[^?]{1,160})\??$/i;
+const OUTGOING_DEPENDS_PATTERN =
+  /what\s+does\s+(?<seed>[^?]{1,160})\s+depend\s+on\??$/i;
+const OUTGOING_BLOCKED_PATTERN =
+  /what\s+(?:is\s+)?(?<seed>[^?]{1,160})\s+blocked\s+by\??$/i;
 
 const relationAliases: Record<string, string> = {
   "depends on": "depends_on",
@@ -309,6 +328,38 @@ const relationAliases: Record<string, string> = {
   mentions: "mentions",
   "relates to": "relates_to",
 };
+
+type ParsedFixtureQuery = {
+  relation: string;
+  seed: string;
+  direction: "incoming" | "outgoing";
+};
+
+function parseFixtureQuery(query: string): ParsedFixtureQuery | undefined {
+  const outgoingDepends = OUTGOING_DEPENDS_PATTERN.exec(query)?.groups;
+  if (outgoingDepends?.seed) {
+    return {
+      relation: "depends_on",
+      seed: outgoingDepends.seed,
+      direction: "outgoing",
+    };
+  }
+
+  const outgoingBlocked = OUTGOING_BLOCKED_PATTERN.exec(query)?.groups;
+  if (outgoingBlocked?.seed) {
+    return {
+      relation: "blocked_by",
+      seed: outgoingBlocked.seed,
+      direction: "outgoing",
+    };
+  }
+
+  const incoming = INCOMING_RELATION_PATTERN.exec(query)?.groups;
+  if (!incoming?.relation || !incoming.seed) return undefined;
+  const relation = relationAliases[incoming.relation.toLowerCase()];
+  if (!relation) return undefined;
+  return { relation, seed: incoming.seed, direction: "incoming" };
+}
 
 const BASELINE_STOPWORDS = new Set([
   "what",
@@ -343,10 +394,8 @@ function keywordBaseline(query: string, readableNamespaces = ["shared-kb"]): Fix
 }
 
 function graphOracle(query: string, readableNamespaces = ["shared-kb"]): FixtureEntry[] {
-  const parsed = RELATION_PATTERN.exec(query)?.groups;
+  const parsed = parseFixtureQuery(query);
   if (!parsed) return keywordBaseline(query, readableNamespaces);
-  if (!parsed.relation || !parsed.seed) return [];
-  const relation = relationAliases[parsed.relation.toLowerCase()];
   const seedName = parsed.seed.toLowerCase();
   const seed = entities.find(
     (entity) =>
@@ -354,18 +403,23 @@ function graphOracle(query: string, readableNamespaces = ["shared-kb"]): Fixture
       readableNamespaces.includes(entity.namespace) &&
       entity.name.toLowerCase() === seedName,
   );
-  if (!seed || !relation) return [];
+  if (!seed) return [];
   const linkedIds = links
     .filter(
       (link) =>
         !link.archived_at &&
         link.namespace === seed.namespace &&
         readableNamespaces.includes(link.namespace) &&
-        link.from_type === "entity" &&
-        link.from_id === seed.id &&
-        link.relation === relation,
+        link.relation === parsed.relation &&
+        (parsed.direction === "incoming"
+          ? link.to_type === "entity" && link.to_id === seed.id
+          : link.from_type === "entity" && link.from_id === seed.id),
     )
-    .map((link) => `${link.to_type}:${link.to_id}`);
+    .map((link) =>
+      parsed.direction === "incoming"
+        ? `${link.from_type}:${link.from_id}`
+        : `${link.to_type}:${link.to_id}`,
+    );
   return entries.filter(
     (entry) =>
       !entry.archived_at &&
@@ -377,6 +431,7 @@ function graphOracle(query: string, readableNamespaces = ["shared-kb"]): Fixture
 function graphEntriesFor(
   seedName: string,
   relation: string,
+  direction: "incoming" | "outgoing",
   readableNamespaces = ["shared-kb"],
 ): FixtureEntry[] {
   const seed = entities.find(
@@ -392,11 +447,16 @@ function graphEntriesFor(
         !link.archived_at &&
         link.namespace === seed.namespace &&
         readableNamespaces.includes(link.namespace) &&
-        link.from_type === "entity" &&
-        link.from_id === seed.id &&
+        (direction === "incoming"
+          ? link.to_type === "entity" && link.to_id === seed.id
+          : link.from_type === "entity" && link.from_id === seed.id) &&
         link.relation === relation,
     )
-    .map((link) => `${link.to_type}:${link.to_id}`);
+    .map((link) =>
+      direction === "incoming"
+        ? `${link.from_type}:${link.from_id}`
+        : `${link.to_type}:${link.to_id}`,
+    );
   return entries.filter(
     (entry) =>
       !entry.archived_at &&
@@ -435,11 +495,15 @@ function graphAwareSearchPool(stats: { graphCalls: number }) {
       const text = String(sql);
       if (text.includes("relational_graph_seed")) {
         stats.graphCalls += 1;
+        const direction = text.includes("l.to_type = 'entity'")
+          ? "incoming"
+          : "outgoing";
         const readableNamespaces = namespaceList(params[3]);
         return {
           rows: graphEntriesFor(
             String(params[0] ?? ""),
             String(params[1] ?? ""),
+            direction,
             readableNamespaces,
           ).map(searchRow),
         };
@@ -584,6 +648,92 @@ describe("search_brain relational retrieval eval fixture", () => {
     } finally {
       await cleanup();
     }
+  });
+
+  it("supports explicit outgoing dependency wording through the real tool", async () => {
+    const stats = { graphCalls: 0 };
+    const pool = graphAwareSearchPool(stats);
+    const auth: AuthInfo = { role: "agent", clientId: "shared-kb" };
+    const { client, cleanup } = await setupMcpClient(
+      registerSearchBrain,
+      pool,
+      createMockEmbed(),
+      auth,
+    );
+    try {
+      const result = await client.callTool({
+        name: "search_brain",
+        arguments: {
+          query: "What does Alpha depend on?",
+          namespace: "shared-kb",
+          limit: 10,
+        },
+      });
+      expect(result.isError).toBeFalsy();
+      expect(
+        parseToolResult(result).map(
+          (entry: { source_type: string; id: string }) =>
+            `${entry.source_type}:${entry.id}`,
+        ),
+      ).toContain("decision:decision-qmd-fallback");
+      expect(stats.graphCalls).toBe(1);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("runs graph retrieval when hybrid embeddings fail", async () => {
+    const stats = { graphCalls: 0 };
+    const pool = graphAwareSearchPool(stats);
+    const auth: AuthInfo = { role: "agent", clientId: "shared-kb" };
+    const { client, cleanup } = await setupMcpClient(
+      registerSearchBrain,
+      pool,
+      createMockEmbed(null),
+      auth,
+    );
+    try {
+      const result = await client.callTool({
+        name: "search_brain",
+        arguments: {
+          query: "What depends on Alpha?",
+          namespace: "shared-kb",
+          limit: 10,
+        },
+      });
+      expect(result.isError).toBeFalsy();
+      expect(
+        parseToolResult(result).map(
+          (entry: { source_type: string; id: string }) =>
+            `${entry.source_type}:${entry.id}`,
+        ),
+      ).toContain("thought:thought-deploy-readiness");
+      expect(stats.graphCalls).toBe(1);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("keeps shared fallback helpers graph-off unless the direct tool opts in", async () => {
+    const stats = { graphCalls: 0 };
+    const pool = graphAwareSearchPool(stats);
+    const rows = await executeSearchWithScopedSharedFallback(
+      {
+        pool: pool as unknown as Pool,
+        embedFn: createMockEmbed(),
+      },
+      [...ALL_TABLES, "entities"],
+      "What depends on Alpha?",
+      10,
+      "hybrid",
+      undefined,
+      0,
+      ["shared-kb"],
+      false,
+    );
+
+    expect(rows).toEqual([]);
+    expect(stats.graphCalls).toBe(0);
   });
 
   it("keeps non-relational query behavior unchanged", () => {
@@ -757,13 +907,14 @@ dbDescribe("search_brain relational retrieval eval fixture (live Postgres)", () 
       `INSERT INTO ob_links
          (id, from_type, from_id, to_type, to_id, relation, namespace, created_by, archived_at)
        VALUES
-         ('30000000-0000-4000-8000-000000000001', 'entity', '20000000-0000-4000-8000-000000000001', 'thought', '10000000-0000-4000-8000-000000000001', 'depends_on', $1, 'test', NULL),
-         ('30000000-0000-4000-8000-000000000002', 'entity', '20000000-0000-4000-8000-000000000002', 'thought', '10000000-0000-4000-8000-000000000002', 'depends_on', $2, 'test', NULL),
-         ('30000000-0000-4000-8000-000000000003', 'entity', '20000000-0000-4000-8000-000000000001', 'thought', '10000000-0000-4000-8000-000000000003', 'mentions', $1, 'test', '2026-07-01T00:00:00Z'::timestamptz),
-         ('30000000-0000-4000-8000-000000000004', 'entity', '20000000-0000-4000-8000-000000000003', 'thought', '10000000-0000-4000-8000-000000000004', 'mentions', $1, 'test', NULL),
-         ('30000000-0000-4000-8000-000000000005', 'entity', '20000000-0000-4000-8000-000000000001', 'decision', '11000000-0000-4000-8000-000000000001', 'decided_by', $1, 'test', NULL),
-         ('30000000-0000-4000-8000-000000000006', 'entity', '20000000-0000-4000-8000-000000000001', 'project', '12000000-0000-4000-8000-000000000001', 'implemented_by', $1, 'test', NULL),
-         ('30000000-0000-4000-8000-000000000007', 'entity', '20000000-0000-4000-8000-000000000001', 'session', '13000000-0000-4000-8000-000000000001', 'blocked_by', $1, 'test', NULL)`,
+         ('30000000-0000-4000-8000-000000000001', 'thought', '10000000-0000-4000-8000-000000000001', 'entity', '20000000-0000-4000-8000-000000000001', 'depends_on', $1, 'test', NULL),
+         ('30000000-0000-4000-8000-000000000002', 'thought', '10000000-0000-4000-8000-000000000002', 'entity', '20000000-0000-4000-8000-000000000002', 'depends_on', $2, 'test', NULL),
+         ('30000000-0000-4000-8000-000000000003', 'thought', '10000000-0000-4000-8000-000000000003', 'entity', '20000000-0000-4000-8000-000000000001', 'mentions', $1, 'test', '2026-07-01T00:00:00Z'::timestamptz),
+         ('30000000-0000-4000-8000-000000000004', 'thought', '10000000-0000-4000-8000-000000000004', 'entity', '20000000-0000-4000-8000-000000000003', 'mentions', $1, 'test', NULL),
+         ('30000000-0000-4000-8000-000000000005', 'decision', '11000000-0000-4000-8000-000000000001', 'entity', '20000000-0000-4000-8000-000000000001', 'decided_by', $1, 'test', NULL),
+         ('30000000-0000-4000-8000-000000000006', 'project', '12000000-0000-4000-8000-000000000001', 'entity', '20000000-0000-4000-8000-000000000001', 'implemented_by', $1, 'test', NULL),
+         ('30000000-0000-4000-8000-000000000007', 'session', '13000000-0000-4000-8000-000000000001', 'entity', '20000000-0000-4000-8000-000000000001', 'blocked_by', $1, 'test', NULL),
+         ('30000000-0000-4000-8000-000000000008', 'entity', '20000000-0000-4000-8000-000000000001', 'decision', '11000000-0000-4000-8000-000000000001', 'depends_on', $1, 'test', NULL)`,
       [ns, privateNs],
     );
   }
@@ -772,7 +923,38 @@ dbDescribe("search_brain relational retrieval eval fixture (live Postgres)", () 
     seedName: string,
     relation: string,
     readableNamespaces: string[],
+    direction: "incoming" | "outgoing" = "incoming",
   ): Promise<Array<{ source_type: string; id: string }>> {
+    const linkJoin =
+      direction === "incoming"
+        ? `l.to_type = 'entity'
+          AND l.to_id = s.id`
+        : `l.from_type = 'entity'
+          AND l.from_id = s.id`;
+    const thoughtJoin =
+      direction === "incoming"
+        ? `l.from_type = 'thought'
+          AND t.id = l.from_id`
+        : `l.to_type = 'thought'
+          AND t.id = l.to_id`;
+    const decisionJoin =
+      direction === "incoming"
+        ? `l.from_type = 'decision'
+          AND d.id = l.from_id`
+        : `l.to_type = 'decision'
+          AND d.id = l.to_id`;
+    const projectJoin =
+      direction === "incoming"
+        ? `l.from_type = 'project'
+          AND p.id = l.from_id`
+        : `l.to_type = 'project'
+          AND p.id = l.to_id`;
+    const sessionJoin =
+      direction === "incoming"
+        ? `l.from_type = 'session'
+          AND se.id = l.from_id`
+        : `l.to_type = 'session'
+          AND se.id = l.to_id`;
     const { rows } = await pool.query<{ source_type: string; id: string }>(
       `WITH seed AS (
          SELECT id, namespace
@@ -786,14 +968,12 @@ dbDescribe("search_brain relational retrieval eval fixture (live Postgres)", () 
          SELECT 'thought' AS source_type, t.id::text AS id
          FROM seed s
          JOIN ob_links l
-           ON l.from_type = 'entity'
-          AND l.from_id = s.id
+           ON ${linkJoin}
           AND l.namespace = s.namespace
           AND l.relation = $2
           AND l.archived_at IS NULL
          JOIN thoughts t
-           ON l.to_type = 'thought'
-          AND t.id = l.to_id
+           ON ${thoughtJoin}
           AND t.namespace = l.namespace
           AND t.archived_at IS NULL
          WHERE l.namespace = ANY($3::text[])
@@ -801,14 +981,12 @@ dbDescribe("search_brain relational retrieval eval fixture (live Postgres)", () 
          SELECT 'decision' AS source_type, d.id::text AS id
          FROM seed s
          JOIN ob_links l
-           ON l.from_type = 'entity'
-          AND l.from_id = s.id
+           ON ${linkJoin}
           AND l.namespace = s.namespace
           AND l.relation = $2
           AND l.archived_at IS NULL
          JOIN decisions d
-           ON l.to_type = 'decision'
-          AND d.id = l.to_id
+           ON ${decisionJoin}
           AND d.namespace = l.namespace
           AND d.archived_at IS NULL
          WHERE l.namespace = ANY($3::text[])
@@ -816,14 +994,12 @@ dbDescribe("search_brain relational retrieval eval fixture (live Postgres)", () 
          SELECT 'project' AS source_type, p.id::text AS id
          FROM seed s
          JOIN ob_links l
-           ON l.from_type = 'entity'
-          AND l.from_id = s.id
+           ON ${linkJoin}
           AND l.namespace = s.namespace
           AND l.relation = $2
           AND l.archived_at IS NULL
          JOIN projects p
-           ON l.to_type = 'project'
-          AND p.id = l.to_id
+           ON ${projectJoin}
           AND p.namespace = l.namespace
           AND p.archived_at IS NULL
          WHERE l.namespace = ANY($3::text[])
@@ -831,14 +1007,12 @@ dbDescribe("search_brain relational retrieval eval fixture (live Postgres)", () 
          SELECT 'session' AS source_type, se.id::text AS id
          FROM seed s
          JOIN ob_links l
-           ON l.from_type = 'entity'
-          AND l.from_id = s.id
+           ON ${linkJoin}
           AND l.namespace = s.namespace
           AND l.relation = $2
           AND l.archived_at IS NULL
          JOIN sessions se
-           ON l.to_type = 'session'
-          AND se.id = l.to_id
+           ON ${sessionJoin}
           AND se.namespace = l.namespace
           AND se.archived_at IS NULL
          WHERE l.namespace = ANY($3::text[])
@@ -878,6 +1052,11 @@ dbDescribe("search_brain relational retrieval eval fixture (live Postgres)", () 
         .resolves.toEqual([
           { source_type: "session", id: "13000000-0000-4000-8000-000000000001" },
         ]);
+      await expect(
+        relationalDbCandidates("VisibleSeed", "depends_on", [ns], "outgoing"),
+      ).resolves.toEqual([
+        { source_type: "decision", id: "11000000-0000-4000-8000-000000000001" },
+      ]);
     } finally {
       await cleanupDbFixture();
     }

@@ -26,23 +26,27 @@ Confirmed live state when this plan was created:
   - PR #264 was checked after the sprint was created and is not part of this
     sprint.
 
-Current execution update, 2026-07-08T00:20Z:
+Current execution update, 2026-07-08T00:38Z:
 
 - Planning PR #272 merged as `a838735`.
 - #266 merged via PR #273 as `7cb7712` and is closed Done on Project #8.
 - #267 PR #274 is open from `feat/267-graph-relational-search`; implementation
   commit `5fd66ed` is followed by plan-sync commits as board/HTML state changes.
-  Project #8 has #267 In Review, Review Gate Initial Swarm Pending, and
-  Validation CI Passed.
-- #267 implementation adds the bounded relational parser, graph hydration, and
-  RRF fusion path in `src/tools/search-brain.ts`.
-- #267 local validation passed:
-  `bun test src/tools/__tests__/search-brain-relational-retrieval.test.ts scripts/assert-db-tests-ran.test.ts`,
-  `bun test src/tools/__tests__/search-brain.test.ts src/tools/__tests__/search-brain-relational-retrieval.test.ts`,
-  `bunx tsc --noEmit`, `git diff --check`, and full `bun test`.
-- Live-Postgres relational `search_brain` cases are present but local-skipped
-  without `OPENBRAIN_TEST_DATABASE_URL`; the anti-skip guard now requires two
-  relational live-Postgres testcases in CI.
+  Project #8 has #267 In Review, Review Gate Fixes In Progress, and Validation
+  CI Passed from the previous PR head; the local fix commit is ready to push
+  and refresh CI.
+- Initial review swarm found material issues in relation direction semantics,
+  hybrid embedding-failure fallback, and unintended graph enablement through
+  shared search helpers used by `search_all` and `brain_answer`.
+- Fixes are complete locally: direct `search_brain` opts into graph
+  retrieval, shared helpers stay graph-off by default, incoming/outgoing
+  relation semantics are covered, graph retrieval still runs when embeddings
+  fail, and SME review memory has been updated.
+- Local validation passes: focused relational + anti-skip tests (20 pass / 3
+  local live-Postgres skips), broader `search_brain` / `search_all` /
+  `brain_answer` tests (102 pass / 3 skips), `bunx tsc --noEmit`,
+  `git diff --check`, Plan artifact verification, repo/collab HTML `cmp`, and
+  full `bun test` (1205 pass / 54 skip).
 - PR #274 current checks are green: PR Body validate, CI check, db-integration,
   python-package, and GitGuardian passed; deploy skipped as expected for PR.
 - #223 remains open and Blocked.
