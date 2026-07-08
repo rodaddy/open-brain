@@ -1,6 +1,6 @@
 # Plan 3F: gbrain-Informed Graph Retrieval Sprint
 
-Updated: 2026-07-07T23:55Z.
+Updated: 2026-07-08T00:10Z.
 
 ## Critical Read
 
@@ -26,12 +26,21 @@ Confirmed live state when this plan was created:
   - PR #264 was checked after the sprint was created and is not part of this
     sprint.
 
-Current execution update, 2026-07-07T23:55Z:
+Current execution update, 2026-07-08T00:10Z:
 
 - Planning PR #272 merged as `a838735`.
 - #266 merged via PR #273 as `7cb7712` and is closed Done on Project #8.
 - Project #8 has #267 In Progress for the graph-powered `search_brain` retrieval
   arm, starting from `origin/main` at `7cb7712`.
+- #267 local implementation now adds the bounded relational parser, graph
+  hydration, and RRF fusion path in `src/tools/search-brain.ts`.
+- #267 local validation passed:
+  `bun test src/tools/__tests__/search-brain-relational-retrieval.test.ts scripts/assert-db-tests-ran.test.ts`,
+  `bun test src/tools/__tests__/search-brain.test.ts src/tools/__tests__/search-brain-relational-retrieval.test.ts`,
+  `bunx tsc --noEmit`, `git diff --check`, and full `bun test`.
+- Live-Postgres relational `search_brain` cases are present but local-skipped
+  without `OPENBRAIN_TEST_DATABASE_URL`; the anti-skip guard now requires two
+  relational live-Postgres testcases in CI.
 - #223 remains open and Blocked.
 
 Critical correction:

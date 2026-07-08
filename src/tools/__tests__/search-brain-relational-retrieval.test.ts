@@ -374,6 +374,89 @@ function graphOracle(query: string, readableNamespaces = ["shared-kb"]): Fixture
   );
 }
 
+function graphEntriesFor(
+  seedName: string,
+  relation: string,
+  readableNamespaces = ["shared-kb"],
+): FixtureEntry[] {
+  const seed = entities.find(
+    (entity) =>
+      !entity.archived_at &&
+      readableNamespaces.includes(entity.namespace) &&
+      entity.name.toLowerCase() === seedName.toLowerCase(),
+  );
+  if (!seed) return [];
+  const linkedIds = links
+    .filter(
+      (link) =>
+        !link.archived_at &&
+        link.namespace === seed.namespace &&
+        readableNamespaces.includes(link.namespace) &&
+        link.from_type === "entity" &&
+        link.from_id === seed.id &&
+        link.relation === relation,
+    )
+    .map((link) => `${link.to_type}:${link.to_id}`);
+  return entries.filter(
+    (entry) =>
+      !entry.archived_at &&
+      readableNamespaces.includes(entry.namespace) &&
+      linkedIds.includes(`${entry.source_type}:${entry.id}`),
+  );
+}
+
+function searchRow(entry: FixtureEntry) {
+  return {
+    source_type: entry.source_type,
+    id: entry.id,
+    namespace: entry.namespace,
+    content_preview: entry.text,
+    tags: [],
+    created_by: "test",
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    tier: "warm",
+    usefulness: 0.5,
+    access_count: 0,
+    fts_rank: 1,
+    distance: null,
+  };
+}
+
+function namespaceList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.filter((item) => typeof item === "string");
+  return typeof value === "string" ? [value] : ["shared-kb"];
+}
+
+function graphAwareSearchPool(stats: { graphCalls: number }) {
+  return {
+    query: async (...args: any[]) => {
+      const [sql, params = []] = args;
+      const text = String(sql);
+      if (text.includes("relational_graph_seed")) {
+        stats.graphCalls += 1;
+        const readableNamespaces = namespaceList(params[3]);
+        return {
+          rows: graphEntriesFor(
+            String(params[0] ?? ""),
+            String(params[1] ?? ""),
+            readableNamespaces,
+          ).map(searchRow),
+        };
+      }
+      if (text.includes("FROM ob_links")) return { rows: [] };
+      if (text.includes("fts_query")) {
+        return {
+          rows: keywordBaseline(String(params[0] ?? ""), namespaceList(params[3])).map(
+            searchRow,
+          ),
+        };
+      }
+      return { rows: [] };
+    },
+  };
+}
+
 function recall(
   questions: RelationalQuestion[],
   search: (query: string, readableNamespaces?: string[]) => FixtureEntry[],
@@ -466,16 +549,108 @@ describe("search_brain relational retrieval eval fixture", () => {
     }
   });
 
-  it.todo(
-    "search_brain graph arm returns relational fixture answers through the real tool",
-    () => {},
-  );
+  it("search_brain graph arm returns relational fixture answers through the real tool", async () => {
+    const stats = { graphCalls: 0 };
+    const pool = graphAwareSearchPool(stats);
+    const auth: AuthInfo = { role: "agent", clientId: "shared-kb" };
+    const { client, cleanup } = await setupMcpClient(
+      registerSearchBrain,
+      pool,
+      createMockEmbed(),
+      auth,
+    );
+    try {
+      const recovered = [];
+      for (const question of relationalQuestions) {
+        const result = await client.callTool({
+          name: "search_brain",
+          arguments: {
+            query: question.question,
+            namespace: question.namespace,
+            limit: 10,
+          },
+        });
+        expect(result.isError).toBeFalsy();
+        recovered.push(
+          parseToolResult(result).some(
+            (entry: { id: string; source_type: string }) =>
+              entry.id === question.expected_id &&
+              entry.source_type === question.expected_type,
+          ),
+        );
+      }
+      expect(recovered.every(Boolean)).toBe(true);
+      expect(stats.graphCalls).toBe(relationalQuestions.length);
+    } finally {
+      await cleanup();
+    }
+  });
 
   it("keeps non-relational query behavior unchanged", () => {
     const query = "schema v11 downstream review";
     expect(graphOracle(query).map((entry) => entry.id)).toEqual(
       keywordBaseline(query).map((entry) => entry.id),
     );
+  });
+
+  it("does not run graph SQL for non-relational queries through the real tool", async () => {
+    const stats = { graphCalls: 0 };
+    const pool = graphAwareSearchPool(stats);
+    const auth: AuthInfo = { role: "agent", clientId: "shared-kb" };
+    const { client, cleanup } = await setupMcpClient(
+      registerSearchBrain,
+      pool,
+      createMockEmbed(),
+      auth,
+    );
+    try {
+      const result = await client.callTool({
+        name: "search_brain",
+        arguments: {
+          query: "schema v11 downstream review",
+          namespace: "shared-kb",
+          limit: 10,
+        },
+      });
+      expect(result.isError).toBeFalsy();
+      const expectedIds = keywordBaseline("schema v11 downstream review").map(
+        (entry) => entry.id,
+      );
+      expect(
+        new Set(parseToolResult(result).map((entry: { id: string }) => entry.id)),
+      ).toEqual(new Set(expectedIds));
+      expect(stats.graphCalls).toBe(0);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("does not run graph SQL for source-scoped searches", async () => {
+    const stats = { graphCalls: 0 };
+    const pool = graphAwareSearchPool(stats);
+    const auth: AuthInfo = { role: "admin", clientId: "admin" };
+    const { client, cleanup } = await setupMcpClient(
+      registerSearchBrain,
+      pool,
+      createMockEmbed(),
+      auth,
+    );
+    try {
+      const result = await client.callTool({
+        name: "search_brain",
+        arguments: {
+          query: "What depends on Alpha?",
+          namespace: "shared-kb",
+          source_scope: { client_id: "matter-client" },
+          limit: 10,
+        },
+      });
+      expect(result.isError).toBeFalsy();
+      expect(parseToolResult(result)).toEqual([]);
+      expect(stats.graphCalls).toBe(0);
+    } finally {
+      await cleanup();
+    }
   });
 
   it("excludes unreadable namespaces from graph hydration", () => {
@@ -509,6 +684,21 @@ dbDescribe("search_brain relational retrieval eval fixture (live Postgres)", () 
   });
 
   async function cleanupDbFixture(): Promise<void> {
+    await pool.query(
+      `DELETE FROM entry_access_log
+       WHERE entry_id = ANY($1::uuid[])`,
+      [
+        [
+          "10000000-0000-4000-8000-000000000001",
+          "10000000-0000-4000-8000-000000000002",
+          "10000000-0000-4000-8000-000000000003",
+          "10000000-0000-4000-8000-000000000004",
+          "11000000-0000-4000-8000-000000000001",
+          "12000000-0000-4000-8000-000000000001",
+          "13000000-0000-4000-8000-000000000001",
+        ],
+      ],
+    );
     await pool.query("DELETE FROM ob_links WHERE namespace = ANY($1::text[])", [
       [ns, privateNs],
     ]);
@@ -689,6 +879,37 @@ dbDescribe("search_brain relational retrieval eval fixture (live Postgres)", () 
           { source_type: "session", id: "13000000-0000-4000-8000-000000000001" },
         ]);
     } finally {
+      await cleanupDbFixture();
+    }
+  });
+
+  it("returns graph-hydrated answers through the real search_brain tool", async () => {
+    await seedDbFixture();
+    const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
+    const { client, cleanup } = await setupMcpClient(
+      registerSearchBrain,
+      pool,
+      createMockEmbed(),
+      auth,
+    );
+    try {
+      const result = await client.callTool({
+        name: "search_brain",
+        arguments: {
+          query: "What depends on VisibleSeed?",
+          namespace: ns,
+          limit: 10,
+        },
+      });
+      expect(result.isError).toBeFalsy();
+      expect(
+        parseToolResult(result).map(
+          (entry: { source_type: string; id: string }) =>
+            `${entry.source_type}:${entry.id}`,
+        ),
+      ).toContain("thought:10000000-0000-4000-8000-000000000001");
+    } finally {
+      await cleanup();
       await cleanupDbFixture();
     }
   });

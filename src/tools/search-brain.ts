@@ -22,6 +22,7 @@ import {
   ALL_TABLES,
   SOURCE_LABELS,
   CONTENT_PREVIEW,
+  LINK_RELATIONS,
   TABLE_ALIAS,
   VALID_TIERS,
 } from "./table-constants.ts";
@@ -47,6 +48,7 @@ const RRF_K = 60;
 /** Over-fetch multiplier for hybrid mode (fetch N*3 from each path, merge to N) */
 const HYBRID_FETCH_MULTIPLIER = 3;
 const DEFAULT_SEARCH_EMBEDDING_TIMEOUT_MS = 3000;
+const RELATIONAL_GRAPH_FETCH_LIMIT = 50;
 
 /** Tier-based RRF score adjustments for cognitive tiering */
 export const TIER_BOOST: Record<Tier, number> = {
@@ -69,6 +71,35 @@ const TABLE_WEIGHT: Record<string, number> = {
   session: 0.8,
   entity: 1.0,
 };
+
+const RELATIONAL_QUERY_PATTERN =
+  /^what\s+(?:is\s+)?(?:was\s+)?(?<relation>depends on|blocked by|implemented by|decided by|supersedes|duplicates|contradicts|mentions|relates to)\s+(?<seed>[^?]{1,160})\??$/iu;
+
+const RELATION_ALIASES: Record<string, LinkRelation> = {
+  "depends on": "depends_on",
+  "blocked by": "blocked_by",
+  "implemented by": "implemented_by",
+  "decided by": "decided_by",
+  supersedes: "supersedes",
+  duplicates: "duplicates",
+  contradicts: "contradicts",
+  mentions: "mentions",
+  "relates to": "relates_to",
+};
+
+type RelationalQuery = {
+  relation: LinkRelation;
+  seed: string;
+};
+
+function parseRelationalQuery(query: string): RelationalQuery | undefined {
+  const groups = RELATIONAL_QUERY_PATTERN.exec(query.trim())?.groups;
+  if (!groups?.relation || !groups.seed) return undefined;
+  const relation = RELATION_ALIASES[groups.relation.toLowerCase()];
+  const seed = groups.seed.trim().replace(/\s+/g, " ");
+  if (!relation || !seed || !LINK_RELATIONS.includes(relation)) return undefined;
+  return { relation, seed };
+}
 
 function searchEmbeddingTimeoutMs(): number {
   const raw =
@@ -564,6 +595,110 @@ function buildFtsCTE(
 )`;
 }
 
+function buildRelationalHydrationSelect(table: Table, tier?: Tier): string {
+  if (tier && !VALID_TIERS.has(tier)) throw new Error(`Invalid tier: ${tier}`);
+  const alias = TABLE_ALIAS[table];
+  const label = SOURCE_LABELS[table];
+  const preview = CONTENT_PREVIEW[table];
+  const tierFilter = tier ? ` AND ${alias}.tier = '${tier}'` : "";
+  const metaCol = HAS_EXTRACTED_METADATA.has(table)
+    ? `${alias}.extracted_metadata`
+    : "NULL::jsonb AS extracted_metadata";
+
+  return `SELECT
+    '${label}' AS source_type,
+    ${alias}.id,
+    ${alias}.namespace,
+    ${preview} AS content_preview,
+    ${alias}.tags,
+    ${alias}.created_by,
+    ${alias}.created_at,
+    ${alias}.updated_at,
+    ${alias}.tier,
+    NULL::double precision AS distance,
+    GREATEST(l.weight, 0)::double precision AS fts_rank,
+    COALESCE(${alias}.usefulness_score, 0.5) AS usefulness,
+    COALESCE(${alias}.access_count, 0) AS access_count,
+    ${metaCol}
+  FROM relational_graph_seed seed
+  JOIN ob_links l
+    ON l.from_type = 'entity'
+   AND l.from_id = seed.id
+   AND l.namespace = seed.namespace
+   AND l.relation = $2
+   AND l.archived_at IS NULL
+  JOIN ${table} ${alias}
+    ON l.to_type = '${label}'
+   AND ${alias}.id = l.to_id
+   AND ${alias}.namespace = l.namespace
+   AND ${alias}.archived_at IS NULL${tierFilter}`;
+}
+
+async function relationalGraphSearch(
+  deps: ToolDeps,
+  accessibleTables: SearchTable[],
+  query: string,
+  fetchLimit: number,
+  tier?: Tier,
+  namespace?: NamespaceFilter,
+): Promise<SearchRow[]> {
+  const parsed = parseRelationalQuery(query);
+  if (!parsed) return [];
+  const targetTables = accessibleTables.filter(
+    (table): table is Table => table !== "entities",
+  );
+  if (targetTables.length === 0) return [];
+
+  const params: unknown[] = [parsed.seed, parsed.relation, fetchLimit];
+  const namespaceParamIndex = appendNamespaceParam(params, namespace);
+  const namespaceIsArray = Array.isArray(namespace);
+  const namespaceFilter = namespaceParamIndex
+    ? namespaceIsArray
+      ? ` AND e.namespace = ANY(${paramRef(namespaceParamIndex)}::text[])`
+      : ` AND e.namespace = ${paramRef(namespaceParamIndex)}`
+    : "";
+  const hydrationSql = targetTables
+    .map((table) => buildRelationalHydrationSelect(table, tier))
+    .join("\nUNION ALL\n");
+
+  try {
+    const { rows } = await deps.pool.query<SearchRow>(
+      `WITH relational_graph_seed AS (
+         SELECT e.id, e.namespace
+         FROM ob_entities e
+         WHERE (
+             lower(e.name) = lower($1)
+             OR lower(COALESCE(e.canonical_id, '')) = lower($1)
+           )
+           AND e.archived_at IS NULL${namespaceFilter}
+         ORDER BY e.updated_at DESC
+         LIMIT 5
+       )
+       SELECT *
+       FROM (
+${hydrationSql}
+       ) relational_graph_rows
+       ORDER BY fts_rank DESC, created_at DESC
+       LIMIT $3`,
+      params,
+    );
+    logger.info("search_relational_graph", {
+      relation: parsed.relation,
+      seed_length: parsed.seed.length,
+      target_tables: targetTables,
+      candidate_count: rows.length,
+    });
+    return withSourceRefs(rows);
+  } catch (err) {
+    logger.warn("search_relational_graph_failed", {
+      relation: parsed.relation,
+      seed_length: parsed.seed.length,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return [];
+  }
+}
+
 async function vectorSearch(
   deps: ToolDeps,
   accessibleTables: SearchTable[],
@@ -662,6 +797,7 @@ function rrfMerge(
   vectorRows: SearchRow[],
   ftsRows: SearchRow[],
   limit: number,
+  graphRows: SearchRow[] = [],
 ): SearchRow[] {
   const scoreMap = new Map<string, { row: SearchRow; rrf: number }>();
 
@@ -679,6 +815,19 @@ function rrfMerge(
       existing.rrf += 1 / (RRF_K + i + 1);
     } else {
       scoreMap.set(key, { row, rrf: 1 / (RRF_K + i + 1) });
+    }
+  }
+
+  for (let i = 0; i < graphRows.length; i++) {
+    const row = graphRows[i]!;
+    const key = `${row.source_type}:${row.id}`;
+    const existing = scoreMap.get(key);
+    const graphRrf = 3 / (RRF_K + i + 1);
+    if (existing) {
+      existing.rrf += graphRrf;
+      existing.row = { ...existing.row, explicit_links: row.explicit_links };
+    } else {
+      scoreMap.set(key, { row, rrf: graphRrf });
     }
   }
 
@@ -872,8 +1021,19 @@ export async function executeSearch(
       sourceScope,
     ),
   ]);
+  const graphRows =
+    sourceScope === undefined
+      ? await relationalGraphSearch(
+          deps,
+          accessibleTables,
+          query,
+          Math.min(fetchLimit, RELATIONAL_GRAPH_FETCH_LIMIT),
+          tier,
+          namespace,
+        )
+      : [];
 
-  const merged = rrfMerge(vectorRows, ftsRows, totalNeeded);
+  const merged = rrfMerge(vectorRows, ftsRows, totalNeeded, graphRows);
   rows = merged.slice(offset);
   if (includeLinks !== false) {
     rows = await attachExplicitLinks(deps, rows, namespace);
