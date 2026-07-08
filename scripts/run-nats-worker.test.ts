@@ -16,7 +16,7 @@ describe("startNatsWorkerProcess", () => {
     const runtime: NatsWorkerRuntime = {
       boundary: readNatsWorkerBoundary(env),
       health: createNatsBridgeHealth("available"),
-      subject: "ob.memory.context_pack",
+      subject: "dev.ob.memory.context_pack",
       close: async () => {
         runtimeClosed = true;
       },
@@ -66,7 +66,7 @@ describe("startNatsWorkerProcess", () => {
     const runtime: NatsWorkerRuntime = {
       boundary: readNatsWorkerBoundary(env),
       health: createNatsBridgeHealth("available"),
-      subject: "ob.memory.context_pack",
+      subject: "dev.ob.memory.context_pack",
       close: async () => {
         await new Promise(() => undefined);
       },
@@ -106,5 +106,30 @@ describe("safeWorkerError", () => {
     expect(
       safeWorkerError(new Error("nats://user:pass@broker.internal failed")),
     ).toEqual({ error_type: "Error" });
+  });
+
+  it("classifies by an instanceof allowlist, not the mutable err.name (#283)", () => {
+    // A hostile/mutable name that embeds a secret must NOT be surfaced.
+    const err = new Error("boom");
+    err.name = "NatsError nats://user:pass@broker.internal";
+    expect(safeWorkerError(err)).toEqual({ error_type: "Error" });
+
+    expect(safeWorkerError(new SyntaxError("x"))).toEqual({
+      error_type: "SyntaxError",
+    });
+    expect(safeWorkerError(new TypeError("x"))).toEqual({
+      error_type: "TypeError",
+    });
+    expect(safeWorkerError(new RangeError("x"))).toEqual({
+      error_type: "RangeError",
+    });
+    expect(
+      safeWorkerError(new AggregateError([new Error("a")], "agg")),
+    ).toEqual({ error_type: "AggregateError" });
+  });
+
+  it("reports typeof for non-Error throws", () => {
+    expect(safeWorkerError("just a string")).toEqual({ error_type: "string" });
+    expect(safeWorkerError(42)).toEqual({ error_type: "number" });
   });
 });

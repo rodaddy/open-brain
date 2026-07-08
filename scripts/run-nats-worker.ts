@@ -32,8 +32,16 @@ export interface StartNatsWorkerProcessOptions {
   serve?: ServeFn;
 }
 
+// Redaction: classify by an instanceof-allowlist returning STATIC strings,
+// matching safeErrorType in nats-bridge.ts. err.name is mutable/attacker-
+// influenced and err.message can embed a NATS url with credentials, so neither
+// is ever surfaced. (#283 low finding.)
 export function safeWorkerError(err: unknown): { error_type: string } {
-  if (err instanceof Error) return { error_type: err.name || "Error" };
+  if (err instanceof SyntaxError) return { error_type: "SyntaxError" };
+  if (err instanceof AggregateError) return { error_type: "AggregateError" };
+  if (err instanceof TypeError) return { error_type: "TypeError" };
+  if (err instanceof RangeError) return { error_type: "RangeError" };
+  if (err instanceof Error) return { error_type: "Error" };
   return { error_type: typeof err };
 }
 
