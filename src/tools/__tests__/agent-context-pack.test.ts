@@ -162,6 +162,48 @@ describe("agent_context_pack and working_set_append", () => {
     }
   });
 
+  it("does not include threaded working context in unthreaded scope and reports thread_id denial", async () => {
+    const auth: AuthInfo = { role: "admin", clientId: "rico" };
+    const { client, cleanup } = await setupToolClient(auth);
+
+    try {
+      await client.callTool({
+        name: "working_set_append",
+        arguments: {
+          ...SCOPE,
+          kind: "task_state",
+          content: "base task",
+        },
+      });
+      await client.callTool({
+        name: "working_set_append",
+        arguments: {
+          ...SCOPE,
+          thread_id: "adjacent-thread",
+          kind: "task_state",
+          content: "threaded task",
+        },
+      });
+
+      const pack = await client.callTool({
+        name: "agent_context_pack",
+        arguments: {
+          ...SCOPE,
+          requested_sections: ["working_set"],
+        },
+      });
+
+      const payload = JSON.parse((pack.content as any)[0].text);
+      expect(payload.sections.working_set.items.map((item: any) => item.content)).toEqual([
+        "base task",
+      ]);
+      expect(payload.warnings.scope_denials).toHaveLength(1);
+      expect(payload.warnings.scope_denials[0].reasons).toContain("thread_id");
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("does not disclose foreign-namespace working-set denials", async () => {
     const adminAuth: AuthInfo = { role: "admin", clientId: "rico" };
     const { client, cleanup } = await setupToolClient(adminAuth);

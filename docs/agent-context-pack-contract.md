@@ -364,8 +364,12 @@ tool responses, and #271 ships no new prompt-placement runtime behavior. The
 already-runtime-available exact-scope pull path (#221/#222) is the lightweight
 hot-memory path; any expansion beyond it (durable section assembly, transport
 exposure, push-style delivery) stays deferred behind the preconditions below.
+This PR itself ships no runtime change: it assigns ownership of hot memory to
+`agent_context_pack` and gates all future hot-memory work behind those
+preconditions.
 
-Re-reading this contract after graph retrieval merged (#266/#267, PR #274)
+Re-reading this contract after graph retrieval merged (#266 PR #273, #267
+PR #274)
 does not change the boundary. The relational graph arm lives inside
 `search_brain` retrieval fusion (`relationalGraphSearch` in
 `src/tools/search-brain.ts`) behind namespace/read-policy predicates. It
@@ -403,9 +407,15 @@ surfaces is owned by #268, not by hot memory.
 
 - The exact-scope RAM-first `working_set` boundary (#222) and quarantined
   `recovery` boundary (#221) already exist, are runtime-available over MCP,
-  and carry per-scope-key denial tests. Declaring "no server-side hot memory"
-  would misstate shipped reality and would push clients back to stitching lane
-  reads plus broad semantic search per turn.
+  and carry scope-key denial tests: the working-set store covers all seven
+  scope keys per key (`src/realtime/working-set.test.ts`), and the MCP pack
+  tool exercises namespace, channel, and thread denial
+  (`src/tools/__tests__/agent-context-pack.test.ts`). Recovery denial
+  coverage is currently a single adjacent-scope case
+  (`src/realtime/recovery-wal.test.ts`); the preconditions below require full
+  per-key coverage before any new hot-memory behavior lands. Declaring "no
+  server-side hot memory" would misstate shipped reality and would push
+  clients back to stitching lane reads plus broad semantic search per turn.
 - Leaving hot memory without a named owner invites exactly the `_meta`-style
   drift this decision rejects; naming `agent_context_pack` as owner keeps
   future work inside one contract with one scope predicate.
@@ -436,7 +446,12 @@ advertise any `_meta` injection or hot-memory push capability, and must not
 until the preconditions above are met and downstream rollout is explicitly
 scoped (per the plan-3f merge gate: no new contract capability advertisement
 before server code, tests, and downstream client support are ready).
-`src/tools/__tests__/get-contract.test.ts` locks this in.
+`src/tools/__tests__/get-contract.test.ts` guards this with positive-shape
+assertions — it pins the exact top-level contract key set and asserts
+`agent_context_pack` is the only advertised context-bundle surface — plus a
+negative substring scan over the serialized contract. The substring scan is a
+tripwire for the known injection names, not enforcement; enforcement is the
+preconditions above plus human review of any contract-surface change.
 
 ### Downstream Rollout Classification
 

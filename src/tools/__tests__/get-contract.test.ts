@@ -95,9 +95,57 @@ describe("get_contract", () => {
       expect(pack.working_set.not_durable_memory).toBe(true);
       expect(pack.working_set.exact_scope_required).toBe(true);
 
-      // No gbrain-style server-side response-injection capability is
-      // advertised anywhere in the contract (docs/agent-context-pack-contract.md,
-      // "Hot Memory Boundary Decision (#271)").
+      // Positive shape: the top-level contract surface is exactly this key
+      // set (buildContract in src/contract.ts). Any new top-level capability
+      // trips this test loudly and must be consciously acknowledged against
+      // the #271 boundary decision before landing.
+      expect(Object.keys(parsed).sort()).toEqual([
+        "agent_context_pack",
+        "agent_memory_adapter",
+        "capabilities",
+        "compatible_client_ranges",
+        "contract_scope",
+        "contract_version",
+        "generated_at",
+        "interchange_profiles",
+        "min_client_versions",
+        "promotion_lifecycle",
+        "realtime_transport",
+        "receipt_contract",
+        "schema_hash",
+        "schema_version",
+        "service",
+        "tool_contracts",
+        "transport",
+      ]);
+
+      // Positive shape: the only advertised context-bundle surface is the
+      // client-pulled agent_context_pack, and it is runtime-available. No
+      // other top-level key names a push/injection/hot-memory/context-bundle
+      // capability.
+      const contextBundleLikeKeys = Object.keys(parsed).filter((key) =>
+        /(hot|inject|push|context|bundle|_meta)/i.test(key),
+      );
+      expect(contextBundleLikeKeys).toEqual(["agent_context_pack"]);
+      expect(pack.status).toBe("runtime-available");
+      expect(pack.availability).toBe("mcp_tool_available");
+
+      // No advertised capability or tool contract names a push/injection
+      // channel either.
+      const advertisedNames = [
+        ...parsed.capabilities.map((c: { name: string }) => c.name),
+        ...Object.keys(parsed.tool_contracts),
+      ];
+      expect(
+        advertisedNames.filter((name) =>
+          /(hot_memory|inject|push|_meta)/i.test(name),
+        ),
+      ).toEqual([]);
+
+      // Tripwire only -- enforcement is the #271 preconditions plus human
+      // review (docs/agent-context-pack-contract.md, "get_contract
+      // Advertisement"): no gbrain-style server-side response-injection
+      // capability appears in the serialized contract under its known names.
       const serialized = JSON.stringify(parsed);
       expect(serialized).not.toContain("hot_memory");
       expect(serialized).not.toContain("brain_hot_memory");
