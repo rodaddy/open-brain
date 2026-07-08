@@ -59,6 +59,54 @@ describe("get_contract", () => {
     }
   });
 
+  it("advertises hot memory only through the agent_context_pack pull boundary (#271)", async () => {
+    const auth: AuthInfo = { role: "readonly", clientId: "viewer" };
+    const { client, cleanup } = await setupMcpClient(
+      registerGetContract,
+      { query: async () => ({ rows: [] }) },
+      createMockEmbed(),
+      auth,
+    );
+
+    try {
+      const result = await client.callTool({
+        name: "get_contract",
+        arguments: {},
+      });
+
+      expect(result.isError).toBeFalsy();
+      const parsed = parseToolResult(result);
+
+      // The pack keeps the exact-scope, budget/citation-bearing pull envelope.
+      const pack = parsed.agent_context_pack;
+      expect(pack.exact_scope_required).toBe(true);
+      expect(pack.scope_keys).toEqual([
+        "namespace",
+        "agent",
+        "platform",
+        "server_id",
+        "channel_id",
+        "thread_id",
+        "session_key",
+      ]);
+      expect(pack.envelope_fields).toEqual(["warnings", "budget", "citations"]);
+      expect(pack.warning_fields).toContain("scope_denials");
+      expect(pack.warning_fields).toContain("truncation");
+      expect(pack.working_set.not_durable_memory).toBe(true);
+      expect(pack.working_set.exact_scope_required).toBe(true);
+
+      // No gbrain-style server-side response-injection capability is
+      // advertised anywhere in the contract (docs/agent-context-pack-contract.md,
+      // "Hot Memory Boundary Decision (#271)").
+      const serialized = JSON.stringify(parsed);
+      expect(serialized).not.toContain("hot_memory");
+      expect(serialized).not.toContain("brain_hot_memory");
+      expect(serialized).not.toContain("meta_injection");
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("uses live NATS bridge health instead of static startup availability", async () => {
     const auth: AuthInfo = { role: "readonly", clientId: "viewer" };
     const { client, cleanup } = await setupMcpClient(
