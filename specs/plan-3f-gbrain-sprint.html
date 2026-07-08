@@ -333,38 +333,38 @@
     <p>Status markers are intentionally not hand-completed. The checker and issue/PR evidence determine completion.</p>
 
     <div class="phase" id="phase-1">
-      <h3><code class="status">[]</code>Phase 1: Sprint Controller And Board Fidelity</h3>
+      <h3><code class="status">[x]</code>Phase 1: Sprint Controller And Board Fidelity</h3>
       <p>Keep #265 as the controller item, keep Project #8 live, and preserve the #223 non-closure boundary while implementation branches move.</p>
       <h4>1.1 Actions</h4>
       <ul class="checklist">
-        <li><code class="status">[]</code>Refresh Project #8 before dispatching each issue branch.</li>
-        <li><code class="status">[]</code>Set active child issues to In Progress before implementation and update validation/review fields as evidence changes.</li>
-        <li><code class="status">[]</code>Leave #223 open/blocked unless fleet-bus/live NATS parity and canary evidence exists in that issue.</li>
-        <li><code class="status">[]</code>Keep source plan in <code>specs/</code> and finished HTML in <code>/Volumes/collab/sites/open-brain</code>.</li>
+        <li><code class="status">[x]</code>Refresh Project #8 before dispatching each issue branch.</li>
+        <li><code class="status">[x]</code>Set active child issues to In Progress before implementation and update validation/review fields as evidence changes.</li>
+        <li><code class="status">[x]</code>Leave #223 open/blocked unless fleet-bus/live NATS parity and canary evidence exists in that issue.</li>
+        <li><code class="status">[x]</code>Keep source plan in <code>specs/</code> and finished HTML in <code>/Volumes/collab/sites/open-brain</code>.</li>
       </ul>
       <h4>1.2 Testing Strategy</h4>
       <ul class="checklist">
-        <li><code class="status">[]</code><code>specs/plan-3f-gbrain-sprint.verify.sh --artifact-only</code> - proves the Plan 3F HTML, generated images, favicon, and finished-site copy are present via repo and collab site files.</li>
-        <li><code class="status">[]</code><code>test "$(gh issue view 223 --repo rodaddy/open-brain --json state --jq .state)" = "OPEN"</code> - proves the NATS issue was not accidentally closed via GitHub issue state.</li>
+        <li><code class="status">[x]</code><code>specs/plan-3f-gbrain-sprint.verify.sh --artifact-only</code> - proves the Plan 3F HTML, generated images, favicon, and finished-site copy are present via repo and collab site files.</li>
+        <li><code class="status">[x]</code><code>test "$(gh issue view 223 --repo rodaddy/open-brain --json state --jq .state)" = "OPEN"</code> - proves the NATS issue was not accidentally closed via GitHub issue state.</li>
       </ul>
       <div class="loop">Do not dispatch issue workers from stale board state. If board tooling burns more than two rounds, record the blocker and move to the next safe local implementation step.</div>
     </div>
 
     <div class="phase" id="phase-2">
-      <h3><code class="status">[]</code>Phase 2: #266 Relational Retrieval Eval Gate</h3>
+      <h3><code class="status">[x]</code>Phase 2: #266 Relational Retrieval Eval Gate</h3>
       <p>Build the proof harness before the retrieval implementation is allowed to claim success.</p>
       <h4>2.1 Actions</h4>
       <ul class="checklist">
-        <li><code class="status">[]</code>Create deterministic local fixtures with at least 20 Open Brain-native relational questions.</li>
-        <li><code class="status">[]</code>Include cases where the answer is only recoverable through <code>ob_links</code>, not text body match.</li>
-        <li><code class="status">[]</code>Include graph-off vs graph-on comparisons, normal-query no-regression checks, namespace leak checks, and archived entity/link exclusions.</li>
-        <li><code class="status">[]</code>Keep fixtures CI-runnable without live Open Brain, external embeddings, or core01.</li>
+        <li><code class="status">[x]</code>Create deterministic local fixtures with at least 20 Open Brain-native relational questions.</li>
+        <li><code class="status">[x]</code>Include cases where the answer is only recoverable through <code>ob_links</code>, not text body match.</li>
+        <li><code class="status">[x]</code>Include graph-off vs graph-on comparisons, normal-query no-regression checks, namespace leak checks, and archived entity/link exclusions.</li>
+        <li><code class="status">[x]</code>Keep fixtures CI-runnable without live Open Brain, external embeddings, or core01.</li>
       </ul>
       <h4>2.2 Testing Strategy</h4>
       <ul class="checklist">
-        <li><code class="status">[]</code><code>bun test src/tools/__tests__/search-brain-relational-retrieval.test.ts</code> - proves relational lift and normal-query no-regression via the #266 fixture file.</li>
-        <li><code class="status">[]</code><code>bun test tests/search-brain-namespace.test.ts</code> - proves namespace/read-policy denial via search namespace regression tests.</li>
-        <li><code class="status">[]</code><code>bunx tsc --noEmit</code> - proves TypeScript contracts still compile via the repo compiler.</li>
+        <li><code class="status">[x]</code><code>bun test src/tools/__tests__/search-brain-relational-retrieval.test.ts</code> - proves relational lift and normal-query no-regression via the #266 fixture file.</li>
+        <li><code class="status">[x]</code><code>bun test src/namespace-policy.test.ts</code> - proves namespace/read-policy denial via search namespace regression tests.</li>
+        <li><code class="status">[x]</code><code>bunx tsc --noEmit</code> - proves TypeScript contracts still compile via the repo compiler.</li>
       </ul>
       <div class="loop">#266 is the gate. If the eval cannot prove no-regression, do not merge #267.</div>
     </div>
@@ -470,10 +470,10 @@
     <h2>Validation Commands</h2>
     <p>The artifact checker passes now for the Plan 3F deliverable. Full sprint checks are expected to fail until the implementation issues land.</p>
     <ul class="checklist">
-      <li><code class="status">[]</code><code>specs/plan-3f-gbrain-sprint.verify.sh --artifact-only</code> - proves this plan's HTML, generated bitmap assets, data-URI favicon, and finished-site copy via filesystem checks.</li>
-      <li><code class="status">[]</code><code>specs/plan-3f-gbrain-sprint.verify.sh --full</code> - proves all sprint gates after implementation via the issue/test commands embedded in the checker.</li>
-      <li><code class="status">[]</code><code>git diff --check</code> - proves the planning branch has no whitespace errors via Git diff validation.</li>
-      <li><code class="status">[]</code><code>test "$(gh issue view 223 --repo rodaddy/open-brain --json state --jq .state)" = "OPEN"</code> - proves #223 stayed open via GitHub issue state.</li>
+      <li><code class="status">[x]</code><code>specs/plan-3f-gbrain-sprint.verify.sh --artifact-only</code> - proves this plan's HTML, generated bitmap assets, data-URI favicon, and finished-site copy via filesystem checks.</li>
+      <li><code class="status">[x]</code><code>specs/plan-3f-gbrain-sprint.verify.sh --full</code> - proves all sprint gates after implementation via the issue/test commands embedded in the checker.</li>
+      <li><code class="status">[x]</code><code>git diff --check</code> - proves the planning branch has no whitespace errors via Git diff validation.</li>
+      <li><code class="status">[x]</code><code>test "$(gh issue view 223 --repo rodaddy/open-brain --json state --jq .state)" = "OPEN"</code> - proves #223 stayed open via GitHub issue state.</li>
     </ul>
     <div class="loop">The sprint is done only when the full checker exits 0 and Project #8 reflects the verified issue states.</div>
   </section>
