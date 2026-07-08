@@ -59,6 +59,7 @@ import {
 } from "./agent-context-pack.ts";
 import { WorkingSetStore } from "../realtime/working-set.ts";
 import { RecoveryWalStore } from "../realtime/recovery-wal.ts";
+import { installMcpAudit, type McpAuditConfig } from "../audit-log.ts";
 
 export interface ToolDeps {
   pool: pg.Pool;
@@ -68,6 +69,7 @@ export interface ToolDeps {
   recoveryWalStore?: RecoveryWalStore;
   natsRuntimeBoundary?: NatsRuntimeBoundary;
   natsBridgeHealth?: NatsBridgeHealth;
+  mcpAuditConfig?: McpAuditConfig;
 }
 
 export function registerAllTools(server: McpServer, deps: ToolDeps): void {
@@ -80,6 +82,11 @@ export function registerAllTools(server: McpServer, deps: ToolDeps): void {
         walPath: process.env.OPENBRAIN_RECOVERY_WAL_PATH ?? null,
       }),
   };
+
+  installMcpAudit(server, {
+    pool: toolDeps.pool,
+    config: toolDeps.mcpAuditConfig,
+  });
 
   registerLogThought(server, toolDeps);
   registerLogDecision(server, toolDeps);

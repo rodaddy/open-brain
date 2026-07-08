@@ -283,6 +283,8 @@ The response must make the source boundary explicit:
 
 ## Non-Goals For This Contract
 
+- No MCP `_meta` hot-memory response injection. #271 decided the owning
+  boundary; see "Hot Memory Boundary Decision (#271)" below.
 - No NATS/JetStream runtime implementation. #223 owns the planned transport
   foundation in `docs/nats-jetstream-foundation.md`.
 - No NATS `agent_context_pack` tool availability. #222 owns the local MCP
@@ -344,3 +346,132 @@ authoritative shape):
 
 It appears in `tool_contracts` for MCP clients once the runtime tool exists.
 NATS subjects and downstream rollout are still release-gated separately.
+
+## Hot Memory Boundary Decision (#271)
+
+Decision date: 2026-07-07. Refs #271 (sprint #265,
+`docs/plan-3f-gbrain-sprint.md`). Closing #271 on this decision requires
+explicit Rico approval because the outcome is a documented boundary plus
+deferred implementation, not shipped runtime behavior.
+
+### Decision
+
+`agent_context_pack` is the owning boundary for hot memory. Hot memory stays a
+client-pulled, exact-scope `working_set` section (plus explicit opt-in
+`recovery`) inside the pack envelope. Open Brain does not implement
+gbrain-style server-side `_meta.brain_hot_memory` injection into ordinary MCP
+tool responses, and #271 ships no new prompt-placement runtime behavior. The
+already-runtime-available exact-scope pull path (#221/#222) is the lightweight
+hot-memory path; any pack-owned expansion beyond it (durable section assembly,
+transport exposure, explicit pull surfaces) stays deferred behind the
+preconditions below, while `_meta` response injection is rejected outright and
+is not gated by them.
+This PR itself ships no runtime change: it assigns ownership of hot memory to
+`agent_context_pack` and gates all future hot-memory work behind those
+preconditions.
+
+Re-reading this contract after graph retrieval merged (#266 PR #273, #267
+PR #274)
+does not change the boundary. The relational graph arm lives inside
+`search_brain` retrieval fusion (`relationalGraphSearch` in
+`src/tools/search-brain.ts`) behind namespace/read-policy predicates. It
+strengthens the future `durable_memory` section's evidence quality; it creates
+no need for response-level injection. Graph-expanded evidence on answer/search
+surfaces is owned by #268, not by hot memory.
+
+### Rejected Alternative: MCP `_meta` Response Injection
+
+This rejection is permanent, not deferred. The preconditions below gate only
+pack-owned expansion; they do not apply to `_meta` response injection and do
+not convert it into a future option.
+
+- Privacy blast radius: `_meta` piggybacks memory onto every tool response, so
+  a single scope bug leaks working context to every caller of every tool
+  across namespaces, agents, platforms, servers, channels, threads, and
+  sessions. The pack path exposes hot state only to a caller that explicitly
+  requested one exact scope.
+- Exact-scope filtering before ranking: response middleware sits outside the
+  pack path, so the "exact-scope filters run before semantic search, ranking,
+  or truncation" invariant would need a second parallel enforcement point that
+  can silently drift from the pack implementation.
+- Citations and source refs: `_meta` payloads have no contract-pinned
+  envelope, so citation/source-ref preservation and `warnings.scope_denials`
+  reporting would be ad hoc per response instead of the pack's always-present
+  envelope fields.
+- Fail-open requirement: ordinary tool calls must never fail because context
+  injection failed. A response-mutation layer puts injection in the critical
+  path of every tool call and inverts that guarantee.
+- Contract advertisement: `get_contract` advertises tools and the pack
+  envelope. A side-channel `_meta` capability is invisible to schema-driven
+  clients (mcp2cli, generated skills, Hermes runtimes) and bypasses
+  `requested_sections`/budget negotiation.
+- Downstream client impact: every downstream runtime would need `_meta`
+  parsing changes with no schema to validate against. The pack path requires
+  zero downstream changes because nothing new is advertised.
+
+### Rejected Alternative: Defer Server-Side Hot Memory Entirely
+
+- The exact-scope RAM-first `working_set` boundary (#222) and quarantined
+  `recovery` boundary (#221) already exist, are runtime-available over MCP,
+  and carry scope-key denial tests: the working-set store covers all seven
+  scope keys per key (`src/realtime/working-set.test.ts`), and the MCP pack
+  tool exercises namespace, channel, and thread denial
+  (`src/tools/__tests__/agent-context-pack.test.ts`). Recovery denial
+  coverage is currently a single adjacent-scope case
+  (`src/realtime/recovery-wal.test.ts`); the preconditions below require full
+  per-key coverage before any new hot-memory behavior lands. Declaring "no
+  server-side hot memory" would misstate shipped reality and would push
+  clients back to stitching lane reads plus broad semantic search per turn.
+- Leaving hot memory without a named owner invites exactly the `_meta`-style
+  drift this decision rejects; naming `agent_context_pack` as owner keeps
+  future work inside one contract with one scope predicate.
+
+### Preconditions For Any Future Hot-Memory Implementation
+
+These preconditions gate pack-owned expansion only (new sections, transport
+exposure, explicit pull surfaces). They are not a path to the rejected `_meta`
+response injection, which stays out of bounds regardless of whether every
+precondition is met. Any new pack-owned hot-memory behavior (new sections,
+transport exposure, or any prompt-placement change) must land with all of the
+following, per the Acceptance Fixtures section:
+
+- Exact-scope denial tests for every scope key named in this contract —
+  `namespace`, `agent`, `platform`, `server_id`, `channel_id`, `thread_id`,
+  `session_key` — one explicit denial case per key, not a subset, with denials
+  reported in `warnings.scope_denials`.
+- Budget bounding: payload bounded by the requested `budget`
+  (`max_tokens`/`max_latency_ms`), with truncation decisions reported in
+  `warnings.truncation` and budget metadata.
+- Citations: every durable item carries a citation/source ref; working context
+  cites trace/event ids and stays labeled as unpromoted `working_context`.
+- Fail-open: hot-memory assembly failure degrades to pack-level warnings or a
+  pack error; it never fails, blocks, or mutates ordinary tool calls.
+
+### `get_contract` Advertisement
+
+`get_contract` continues to advertise `agent_context_pack` with the
+`working_set` and `recovery` boundaries exactly as shipped. It does not
+advertise any `_meta` injection capability, and never will: `_meta` response
+injection is permanently out of bounds, and no precondition or rollout step
+converts it into an advertisable capability. New pack-owned hot-memory
+advertisement (sections, transport exposure, explicit pull surfaces) requires
+the preconditions above plus explicitly scoped downstream rollout (per the
+plan-3f merge gate: no new contract capability advertisement before server
+code, tests, and downstream client support are ready).
+`src/tools/__tests__/get-contract.test.ts` guards this with positive-shape
+assertions — it pins the exact top-level contract key set and asserts
+`agent_context_pack` is the only advertised context-bundle surface — plus a
+recursive tripwire walk over every contract key and string value using
+normalized case-insensitive injection patterns with an exact-match allowlist
+for legitimate terms, and a response-level regression test asserting ordinary
+MCP tool results carry no `_meta` hot-memory injection payload. The walk and
+the response test are tripwires, not enforcement; enforcement is the
+permanent `_meta` rejection above, the pack-owned preconditions, and human
+review of any contract-surface change.
+
+### Downstream Rollout Classification
+
+Downstream rollout classification: not applicable — docs plus contract-level
+tests only; no MCP tool, schema, output envelope, transport, or client-facing
+behavior change, so no mcp2cli, rtech-mcps, rtech-hermes, or Hermes canary
+steps are required.
