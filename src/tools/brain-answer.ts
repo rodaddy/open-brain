@@ -36,8 +36,20 @@ interface Evidence {
   source_ref: SourceRef;
 }
 
+// Neither raw input is guaranteed to be [0,1]: graph-hydrated rows carry raw
+// link weight (GREATEST(l.weight, 0), unbounded above) as fts_rank, ts_rank_cd
+// is only typically <1, and cosine distance can exceed 1 (making 1 - distance
+// negative). Clamp the final computed score at the consumer boundary so the
+// emitted score stays a finite [0,1] relevance value (#268 review findings).
+function clampScore(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(1, Math.max(0, value));
+}
+
 function scoreFor(row: SearchRow): number {
-  return row.distance != null ? 1 - row.distance : (row.fts_rank ?? 0.5);
+  return clampScore(
+    row.distance != null ? 1 - row.distance : (row.fts_rank ?? 0.5),
+  );
 }
 
 function excerptFor(row: SearchRow): string | null {
@@ -228,6 +240,10 @@ export function registerBrainAnswer(server: McpServer, deps: ToolDeps): void {
 
       let rows: SearchRow[];
       try {
+        // #268: inherit search_brain's graph-expanded retrieval arm. Graph
+        // candidates hydrate into normal SearchRows with standard source_refs,
+        // so extractive/cited answer behavior is unchanged; namespace and
+        // archived predicates are enforced inside the shared arm (#267).
         rows =
           typeof namespace === "string" && isSharedNamespace(namespace)
             ? await executeSearchWithSharedFallback(
@@ -241,6 +257,7 @@ export function registerBrainAnswer(server: McpServer, deps: ToolDeps): void {
                 namespace,
                 false,
                 sourceScope,
+                { enableGraph: true },
               )
             : await executeSearchWithScopedSharedFallback(
                 deps,
@@ -253,6 +270,7 @@ export function registerBrainAnswer(server: McpServer, deps: ToolDeps): void {
                 namespace,
                 false,
                 sourceScope,
+                { enableGraph: true },
               );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

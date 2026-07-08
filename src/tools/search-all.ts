@@ -334,6 +334,9 @@ async function searchOB(
 
   let rows: SearchRow[];
   try {
+    // #268: inherit search_brain's graph-expanded retrieval arm on the brain
+    // side only. qmd federation stays separate and fail-open; the graph arm
+    // never runs on qmd paths and is skipped entirely under source_scope.
     rows =
       typeof namespace === "string" && isSharedNamespace(namespace)
         ? await executeSearchWithSharedFallback(
@@ -347,6 +350,7 @@ async function searchOB(
             namespace,
             false,
             sourceScope,
+            { enableGraph: true },
           )
         : await executeSearchWithScopedSharedFallback(
             deps,
@@ -359,6 +363,7 @@ async function searchOB(
             namespace,
             false,
             sourceScope,
+            { enableGraph: true },
           );
   } catch (err) {
     logger.warn("searchOB_failed", {
@@ -375,6 +380,12 @@ async function searchOB(
       source: "brain" as const,
       type: row.source_type,
       content: preview.slice(0, 300),
+      // Pre-RRF score only: the tool handler always overwrites `score` with
+      // the RRF value before emitting (see the final `.map` in the handler),
+      // which is structurally finite and within [0,1] (Math.max(0, ...)
+      // lower bound; upper bound 1/(RRF_K+1) + max tier boost 0.3). Raw
+      // distance/fts_rank (including graph link weight > 1) therefore never
+      // reaches the tool output (#268 review findings).
       score: row.distance != null ? 1 - row.distance : (row.fts_rank ?? 0.5),
       source_ref: row.source_ref ?? {
         source: "brain" as const,
