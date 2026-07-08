@@ -1,5 +1,7 @@
 #!/usr/bin/env bun
 
+import { buildHttpWorkerEnv } from "./worker-env.ts";
+
 type WorkerConfig = {
   name: string;
   port: number;
@@ -44,13 +46,13 @@ const workers: WorkerConfig[] = Array.from({ length: workerCount }, (_, index) =
 
 const children = workers.map((worker) => {
   const child = Bun.spawn(["bun", "run", "src/index.ts"], {
-    env: {
-      ...process.env,
-      PORT: String(worker.port),
-      DB_POOL_MAX: poolMax,
-      OPEN_BRAIN_RUN_MIGRATIONS: worker.runMigrations ? "1" : "0",
-      OPEN_BRAIN_WORKER_NAME: worker.name,
-    },
+    env: buildHttpWorkerEnv({
+      baseEnv: process.env,
+      port: worker.port,
+      poolMax,
+      runMigrations: worker.runMigrations,
+      workerName: worker.name,
+    }),
     stdout: "inherit",
     stderr: "inherit",
   });

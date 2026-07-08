@@ -222,6 +222,12 @@ QMD_PATH=/Volumes/ThunderBolt/qmd/open-brain-qmd.ts
 Do not put qmd indexes, qmd models, Postgres data, or required production
 `node_modules` under `/Volumes/ThunderBolt/Development`.
 
+NATS transport rollout is separate from the HTTP deploy. The broker label is
+`com.rico.open-brain-nats`; the Open Brain NATS request/reply worker label is
+`com.rico.open-brain-nats-worker`. Keep HTTP workers in HTTP mode and follow
+[`docs/core01-nats-worker-runbook.md`](docs/core01-nats-worker-runbook.md)
+before installing or restarting the dedicated NATS worker service.
+
 qmd is a repo-knowledge compiler and optional deep lookup source. It is not a
 required distributed memory layer for Hermes or other agents. Required qmd-
 derived facts must be promoted into Open Brain; remote qmd access remains a

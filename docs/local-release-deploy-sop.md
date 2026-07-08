@@ -205,6 +205,14 @@ mcp2cli open-brain search_all --params '{"query":"release smoke"}'
 For contract-changing releases, complete the downstream steps in
 `docs/downstream-rollout.md` before closing linked issues.
 
+For releases that enable the dedicated NATS worker from issue #282, also follow
+`docs/core01-nats-worker-runbook.md`. The release is not complete until HTTP
+health is recorded before and after `com.rico.open-brain-nats-worker` restart,
+and a hosted NATS request/reply smoke returns an
+`openbrain.nats.response.v1` envelope. If the release does not include the NATS
+worker runtime entrypoint, leave the launchd template uninstalled and record the
+worker rollout as deferred.
+
 ## Rollback
 
 The deploy script keeps the prior runtime at:
