@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -5,13 +6,17 @@ import type pg from "pg";
 import { CONTRACT_VERSION, CONTRACT_SCHEMA_VERSION } from "./contract.ts";
 import {
   getEmbeddingProviderDiagnostics,
+  embeddingBaseUrl,
+  embeddingApiKey,
   EMBEDDING_DIMENSIONS,
   EMBEDDING_MODEL,
 } from "./embedding.ts";
 import { checkPoolHealth } from "./db/pool.ts";
+import { resolveQmdPath } from "./qmd-path.ts";
 import type { NatsBridgeHealth } from "./nats-bridge.ts";
 import type { NatsRuntimeBoundary } from "./nats-runtime.ts";
-import type { PoolHealth } from "./types.ts";
+import { isRequestedTransportDegraded } from "./nats-runtime.ts";
+import type { AuthInfo, PoolHealth } from "./types.ts";
 
 const MIGRATIONS_DIR = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -19,8 +24,11 @@ const MIGRATIONS_DIR = join(
   "migrations",
 );
 
-const DOCTOR_CONTRACT_VERSION = "2026-07-08.operator-doctor.v1";
+// Any field addition/removal in OperatorDoctorStatus requires bumping this
+// version. src/operator-doctor.test.ts locks the exact payload shape.
+export const DOCTOR_CONTRACT_VERSION = "2026-07-08.operator-doctor.v2";
 const OPTIONAL_TIMEOUT_MS = 2_000;
+const DOCTOR_CACHE_TTL_MS = 5_000;
 
 let cachedServiceVersion: string | null = null;
 
@@ -40,8 +48,18 @@ async function readServiceVersion(): Promise<string> {
   return cachedServiceVersion;
 }
 
+// Shared privileged-read predicate for the doctor surface. Consumed by both
+// the MCP tool (src/tools/operator-doctor.ts) and the REST route
+// (src/index.ts) so the gates cannot diverge.
+export function canReadDoctor(auth: AuthInfo | undefined): boolean {
+  return auth?.role === "admin" || auth?.role === "ob-admin";
+}
+
 export interface OperatorDoctorStatus {
-  status: "healthy" | "degraded";
+  // unhealthy: the database is unreachable (hard failure).
+  // degraded: pending migrations, or the requested transport is unavailable.
+  // Optional dependencies (embedding provider, qmd) affect neither tier.
+  status: "healthy" | "degraded" | "unhealthy";
   contract_version: string;
   generated_at: string;
   runtime: {
@@ -74,9 +92,16 @@ export interface OperatorDoctorStatus {
     };
   };
   qmd: {
+    // The qmd path always resolves (QMD_PATH env override or the built-in
+    // default used by search_all), so configured is true whenever a path
+    // resolution source exists.
     configured: boolean;
-    available: boolean | null;
-    status: "available" | "unavailable" | "not_configured";
+    path_source: "env" | "default";
+    // available means the qmd entrypoint file exists at the resolved path --
+    // binary presence only, NOT qmd search health. The raw path is never
+    // included in the payload.
+    available: boolean;
+    status: "available" | "unavailable";
   };
   transport: {
     mode: "http" | "nats";
@@ -93,7 +118,7 @@ export interface OperatorDoctorStatus {
   };
   optional_dependencies: {
     embedding_provider: "available" | "unavailable" | "not_configured";
-    qmd: "available" | "unavailable" | "not_configured";
+    qmd: "available" | "unavailable";
   };
 }
 
@@ -102,6 +127,10 @@ async function withTimeout<T>(
   fallback: T,
   timeoutMs = OPTIONAL_TIMEOUT_MS,
 ): Promise<T> {
+  // Absorb late rejections: if the timeout wins the race, a subsequent
+  // rejection of the abandoned task must not surface as an unhandled
+  // rejection.
+  task.catch(() => {});
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
@@ -172,40 +201,31 @@ async function readMigrationStatus(pool: pg.Pool): Promise<OperatorDoctorStatus[
 }
 
 async function checkEmbeddingAvailability(): Promise<boolean> {
-  const baseUrl = process.env.EMBEDDING_BASE_URL?.replace(/\/+$/, "");
+  const baseUrl = embeddingBaseUrl();
   if (!baseUrl) return false;
   const headers: Record<string, string> = {};
-  if (process.env.EMBEDDING_API_KEY) {
-    headers.Authorization = `Bearer ${process.env.EMBEDDING_API_KEY}`;
-  }
+  const apiKey = embeddingApiKey();
+  if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
   return withTimeout(probeUrl(`${baseUrl}/models`, headers), false);
 }
 
-async function checkQmdAvailability(): Promise<boolean | null> {
-  if (!process.env.QMD_PATH) return null;
+// Availability = the qmd entrypoint file exists at the same resolved path
+// search_all executes (src/qmd-path.ts). This proves binary presence only;
+// it does not exercise qmd search health.
+function checkQmdBinaryPresence(): OperatorDoctorStatus["qmd"] {
+  const resolved = resolveQmdPath();
+  let available = false;
   try {
-    const proc = Bun.spawn(["bun", process.env.QMD_PATH, "--help"], {
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const result = await withTimeout(
-      (async () => {
-        await new Response(proc.stdout).text();
-        await new Response(proc.stderr).text();
-        return (await proc.exited) === 0;
-      })(),
-      false,
-    );
-    if (!result) proc.kill();
-    return result;
+    available = existsSync(resolved.path);
   } catch {
-    return false;
+    available = false;
   }
-}
-
-function qmdStatus(available: boolean | null): "available" | "unavailable" | "not_configured" {
-  if (available === null) return "not_configured";
-  return available ? "available" : "unavailable";
+  return {
+    configured: true,
+    path_source: resolved.source,
+    available,
+    status: available ? "available" : "unavailable",
+  };
 }
 
 export async function buildOperatorDoctorStatus(
@@ -213,25 +233,27 @@ export async function buildOperatorDoctorStatus(
   natsRuntimeBoundary: NatsRuntimeBoundary,
   natsBridgeHealth?: NatsBridgeHealth,
 ): Promise<OperatorDoctorStatus> {
-  const [database, migrations, embeddingAvailable, qmdAvailable, serviceVersion] =
+  const [database, migrations, embeddingAvailable, serviceVersion] =
     await Promise.all([
       checkPoolHealth(pool),
       readMigrationStatus(pool),
       checkEmbeddingAvailability(),
-      checkQmdAvailability(),
       readServiceVersion(),
     ]);
+  const qmd = checkQmdBinaryPresence();
 
   const embeddingDiagnostics = getEmbeddingProviderDiagnostics();
   const transportAvailability =
     natsBridgeHealth?.availability ?? natsRuntimeBoundary.nats.availability;
-  const transportDegraded =
-    natsRuntimeBoundary.requested_transport === "nats" &&
-    transportAvailability !== "available";
-  const status =
-    database.connected && migrations.status !== "pending" && !transportDegraded
-      ? "healthy"
-      : "degraded";
+  const transportDegraded = isRequestedTransportDegraded(
+    natsRuntimeBoundary,
+    transportAvailability,
+  );
+  const status: OperatorDoctorStatus["status"] = !database.connected
+    ? "unhealthy"
+    : migrations.status === "pending" || transportDegraded
+      ? "degraded"
+      : "healthy";
   const fileLogConfigured = Boolean(process.env.LOG_FILE?.trim());
 
   return {
@@ -266,11 +288,7 @@ export async function buildOperatorDoctorStatus(
         last_restart_at: embeddingDiagnostics.last_restart_at,
       },
     },
-    qmd: {
-      configured: qmdAvailable !== null,
-      available: qmdAvailable,
-      status: qmdStatus(qmdAvailable),
-    },
+    qmd,
     transport: {
       mode: natsRuntimeBoundary.requested_transport,
       availability: transportAvailability,
@@ -292,7 +310,61 @@ export async function buildOperatorDoctorStatus(
           ? "available"
           : "unavailable"
         : "not_configured",
-      qmd: qmdStatus(qmdAvailable),
+      qmd: qmd.status,
     },
   };
+}
+
+// --- Single-flight + short-TTL cache -----------------------------------
+//
+// Every doctor build fans out DB scans and an outbound embedding probe;
+// without a cache, a polling dashboard or looping token amplifies probes
+// during the exact incident being diagnosed. All callers (REST route and
+// MCP tool) go through getOperatorDoctorStatus: concurrent callers share
+// one in-flight build, and results are served from cache within the TTL.
+
+interface DoctorCacheEntry {
+  value: OperatorDoctorStatus;
+  expiresAt: number;
+}
+
+export interface OperatorDoctorCacheOptions {
+  ttlMs?: number;
+  now?: () => number;
+}
+
+let doctorCache: DoctorCacheEntry | null = null;
+let doctorInFlight: Promise<OperatorDoctorStatus> | null = null;
+
+export function resetOperatorDoctorCache(): void {
+  doctorCache = null;
+  doctorInFlight = null;
+}
+
+export async function getOperatorDoctorStatus(
+  pool: pg.Pool,
+  natsRuntimeBoundary: NatsRuntimeBoundary,
+  natsBridgeHealth?: NatsBridgeHealth,
+  options: OperatorDoctorCacheOptions = {},
+): Promise<OperatorDoctorStatus> {
+  const now = options.now ?? Date.now;
+  const ttlMs = options.ttlMs ?? DOCTOR_CACHE_TTL_MS;
+  if (doctorCache && now() < doctorCache.expiresAt) {
+    return doctorCache.value;
+  }
+  if (doctorInFlight) return doctorInFlight;
+  const build = buildOperatorDoctorStatus(
+    pool,
+    natsRuntimeBoundary,
+    natsBridgeHealth,
+  )
+    .then((value) => {
+      doctorCache = { value, expiresAt: now() + ttlMs };
+      return value;
+    })
+    .finally(() => {
+      doctorInFlight = null;
+    });
+  doctorInFlight = build;
+  return build;
 }

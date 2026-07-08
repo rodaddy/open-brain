@@ -18,6 +18,7 @@ import {
   type SourceRef,
 } from "./search-brain.ts";
 import { isSharedNamespace } from "../shared-namespace.ts";
+import { resolveQmdPath } from "../qmd-path.ts";
 import {
   sourceScopeAuthorizationError,
   sourceScopeSchema,
@@ -59,8 +60,6 @@ interface QmdDocument {
   collection?: string;
 }
 
-const QMD_PATH = process.env.QMD_PATH ?? "/opt/qmd/src/qmd.ts";
-
 const QMD_TIMEOUT_MS = 10_000;
 
 async function searchQmd(
@@ -69,9 +68,11 @@ async function searchQmd(
   collection?: string,
 ): Promise<UnifiedResult[]> {
   try {
+    // Shared resolution with the operator doctor (src/qmd-path.ts) so the
+    // doctor's availability report can never diverge from the real caller.
     const qmdArgs = [
       "bun",
-      QMD_PATH,
+      resolveQmdPath().path,
       "search",
       query,
       "--json",

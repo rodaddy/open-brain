@@ -13,9 +13,13 @@ describe("Open Brain contract manifest", () => {
     expect(contract.contract_scope).toBe("required_openbrain_memory_contract");
     expect(contract.schema_hash).toMatch(/^[0-9a-f]{64}$/);
     expect(contract.schema_hash).toBe(
-      "240112d2dbe4d203731a2889c56f089f279963e6b1cf08cc7a1881c2368345a7",
+      "4df9c742add84e2bbc3495a9baad8f103ee191a82518ea43c754a7fbb961bb48",
     );
     expect(contract.min_client_versions.mcp2cli).toBe("0.3.6");
+    expect(contract.min_client_versions["openbrain-memory"]).toBe("0.1.6");
+    expect(contract.compatible_client_ranges["openbrain-memory"]).toBe(
+      ">=0.1.6 <1.0.0",
+    );
     expect(contract.transport.namespace_boundary).toBe("authorization");
     expect(contract.realtime_transport.nats_jetstream).toMatchObject({
       status: "planned-transport-foundation",

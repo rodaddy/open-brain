@@ -10,6 +10,7 @@ import {
 import { createApp } from "./index.ts";
 import { getSessionCount } from "./transport.ts";
 import { createNatsBridgeHealth } from "./nats-bridge.ts";
+import { resetOperatorDoctorCache } from "./operator-doctor.ts";
 import { readNatsRuntimeBoundary } from "./nats-runtime.ts";
 import type { AuthInfo, HealthStatus } from "./types.ts";
 import type { Server } from "node:http";
@@ -246,6 +247,13 @@ describe("GET /health", () => {
 });
 
 describe("GET /api/v1/operator/doctor", () => {
+  beforeEach(() => {
+    resetOperatorDoctorCache();
+  });
+  afterEach(() => {
+    resetOperatorDoctorCache();
+  });
+
   it("requires auth", async () => {
     const res = await fetch(`${baseUrl}/api/v1/operator/doctor`);
     expect(res.status).toBe(401);
@@ -270,9 +278,9 @@ describe("GET /api/v1/operator/doctor", () => {
     process.env.LOG_FILE = logPath;
     mockPool.query = async (sql: string) => {
       if (sql.trim() === "SELECT 1") return { rows: [{ ok: 1 }] };
-      if (sql.includes("FROM _migrations")) {
-        return { rows: [{ filename: "001_init.sql" }] };
-      }
+      // Unknown migration state keeps the doctor healthy so this test can
+      // pin the 200 path; the degraded/unhealthy 503 paths are pinned below.
+      if (sql.includes("FROM _migrations")) throw new Error("not available");
       return { rows: [] };
     };
     (globalThis as Record<string, unknown>).fetch = (
@@ -295,12 +303,14 @@ describe("GET /api/v1/operator/doctor", () => {
       });
       expect(res.status).toBe(200);
       const body = (await res.json()) as {
+        status: string;
         contract_version: string;
         runtime: { contract_version: string };
         embedding_provider: { available: boolean };
       };
       const serialized = JSON.stringify(body);
-      expect(body.contract_version).toBe("2026-07-08.operator-doctor.v1");
+      expect(body.status).toBe("healthy");
+      expect(body.contract_version).toBe("2026-07-08.operator-doctor.v2");
       expect(body.runtime.contract_version).toBe("2026-07-08.memory-tools.v20");
       expect(body.embedding_provider.available).toBe(true);
       expect(serialized).not.toContain(secret);
@@ -313,6 +323,53 @@ describe("GET /api/v1/operator/doctor", () => {
       else process.env.EMBEDDING_API_KEY = originalEmbeddingApiKey;
       if (originalLogFile === undefined) delete process.env.LOG_FILE;
       else process.env.LOG_FILE = originalLogFile;
+    }
+  });
+
+  it("returns 503 when the doctor reports degraded (pending migrations)", async () => {
+    const originalEmbeddingBaseUrl = process.env.EMBEDDING_BASE_URL;
+    delete process.env.EMBEDDING_BASE_URL;
+    mockPool.query = async (sql: string) => {
+      if (sql.trim() === "SELECT 1") return { rows: [{ ok: 1 }] };
+      // No migrations applied: everything on disk is pending.
+      if (sql.includes("FROM _migrations")) return { rows: [] };
+      return { rows: [] };
+    };
+
+    try {
+      const res = await fetch(`${baseUrl}/api/v1/operator/doctor`, {
+        headers: { Authorization: "Bearer test-token-123" },
+      });
+      expect(res.status).toBe(503);
+      const body = (await res.json()) as { status: string };
+      expect(body.status).toBe("degraded");
+    } finally {
+      if (originalEmbeddingBaseUrl === undefined) delete process.env.EMBEDDING_BASE_URL;
+      else process.env.EMBEDDING_BASE_URL = originalEmbeddingBaseUrl;
+    }
+  });
+
+  it("returns 503 when the doctor reports unhealthy (database down)", async () => {
+    const originalEmbeddingBaseUrl = process.env.EMBEDDING_BASE_URL;
+    delete process.env.EMBEDDING_BASE_URL;
+    mockPool.query = async () => {
+      throw new Error("connection refused");
+    };
+
+    try {
+      const res = await fetch(`${baseUrl}/api/v1/operator/doctor`, {
+        headers: { Authorization: "Bearer test-token-123" },
+      });
+      expect(res.status).toBe(503);
+      const body = (await res.json()) as {
+        status: string;
+        database: { connected: boolean };
+      };
+      expect(body.status).toBe("unhealthy");
+      expect(body.database.connected).toBe(false);
+    } finally {
+      if (originalEmbeddingBaseUrl === undefined) delete process.env.EMBEDDING_BASE_URL;
+      else process.env.EMBEDDING_BASE_URL = originalEmbeddingBaseUrl;
     }
   });
 });

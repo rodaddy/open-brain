@@ -513,12 +513,12 @@ export function buildContract(
     contract_scope: "required_openbrain_memory_contract" as const,
     schema_version: CONTRACT_SCHEMA_VERSION,
     min_client_versions: {
-      "openbrain-memory": "0.1.4",
+      "openbrain-memory": "0.1.6",
       "rtech-hermes-runtime": "0.1.0",
       mcp2cli: "0.3.6",
     },
     compatible_client_ranges: {
-      "openbrain-memory": ">=0.1.4 <1.0.0",
+      "openbrain-memory": ">=0.1.6 <1.0.0",
       "rtech-hermes-runtime": ">=0.1.0 <1.0.0",
       mcp2cli: ">=0.3.6 <1.0.0",
     },

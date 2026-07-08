@@ -180,6 +180,19 @@ function normalizeNatsHostname(hostname: string): string {
   return hostname.toLowerCase();
 }
 
+// Shared "requested transport is degraded" predicate. Consumed by both
+// GET /health and the operator doctor so their degradation logic cannot
+// diverge: degraded means NATS was explicitly requested but the runtime
+// bridge is not available.
+export function isRequestedTransportDegraded(
+  boundary: NatsRuntimeBoundary,
+  availability: NatsRuntimeBoundary["nats"]["availability"],
+): boolean {
+  return (
+    boundary.requested_transport === "nats" && availability !== "available"
+  );
+}
+
 export function readNatsRuntimeBoundary(
   env: NodeJS.ProcessEnv,
 ): NatsRuntimeBoundary {

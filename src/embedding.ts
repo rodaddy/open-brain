@@ -248,12 +248,12 @@ function embeddingFailure(error: EmbeddingError): EmbeddingResult {
   return { embedding: null, error };
 }
 
-function embeddingBaseUrl(explicitUrl?: string): string | undefined {
+export function embeddingBaseUrl(explicitUrl?: string): string | undefined {
   const raw = explicitUrl ?? process.env.EMBEDDING_BASE_URL;
   return raw?.replace(/\/+$/, "");
 }
 
-function embeddingApiKey(): string | undefined {
+export function embeddingApiKey(): string | undefined {
   return process.env.EMBEDDING_API_KEY;
 }
 

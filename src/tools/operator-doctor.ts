@@ -1,12 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AuthInfo } from "../types.ts";
-import { buildOperatorDoctorStatus } from "../operator-doctor.ts";
+import { canReadDoctor, getOperatorDoctorStatus } from "../operator-doctor.ts";
 import { readNatsRuntimeBoundary } from "../nats-runtime.ts";
 import type { ToolDeps } from "./index.ts";
-
-function canReadDoctor(auth: AuthInfo | undefined): boolean {
-  return auth?.role === "admin" || auth?.role === "ob-admin";
-}
 
 export function registerOperatorDoctor(server: McpServer, deps: ToolDeps): void {
   server.registerTool(
@@ -37,7 +33,7 @@ export function registerOperatorDoctor(server: McpServer, deps: ToolDeps): void 
       }
 
       try {
-        const status = await buildOperatorDoctorStatus(
+        const status = await getOperatorDoctorStatus(
           deps.pool,
           deps.natsRuntimeBoundary ?? readNatsRuntimeBoundary(process.env),
           deps.natsBridgeHealth,

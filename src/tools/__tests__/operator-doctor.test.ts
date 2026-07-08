@@ -1,5 +1,6 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { registerOperatorDoctor } from "../operator-doctor.ts";
+import { resetOperatorDoctorCache } from "../../operator-doctor.ts";
 import type { AuthInfo } from "../../types.ts";
 import {
   createMockEmbed,
@@ -21,6 +22,13 @@ function makePool() {
 }
 
 describe("operator_doctor", () => {
+  beforeEach(() => {
+    resetOperatorDoctorCache();
+  });
+  afterEach(() => {
+    resetOperatorDoctorCache();
+  });
+
   it("allows admin clients to read doctor status", async () => {
     const auth: AuthInfo = { role: "admin", clientId: "operator" };
     const { client, cleanup } = await setupMcpClient(
@@ -37,7 +45,7 @@ describe("operator_doctor", () => {
       });
       expect(result.isError).toBeFalsy();
       const parsed = parseToolResult(result);
-      expect(parsed.contract_version).toBe("2026-07-08.operator-doctor.v1");
+      expect(parsed.contract_version).toBe("2026-07-08.operator-doctor.v2");
       expect(parsed.runtime.service).toBe("open-brain");
       expect(parsed.database.connected).toBe(true);
     } finally {
