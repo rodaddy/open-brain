@@ -362,8 +362,10 @@ client-pulled, exact-scope `working_set` section (plus explicit opt-in
 gbrain-style server-side `_meta.brain_hot_memory` injection into ordinary MCP
 tool responses, and #271 ships no new prompt-placement runtime behavior. The
 already-runtime-available exact-scope pull path (#221/#222) is the lightweight
-hot-memory path; any expansion beyond it (durable section assembly, transport
-exposure, push-style delivery) stays deferred behind the preconditions below.
+hot-memory path; any pack-owned expansion beyond it (durable section assembly,
+transport exposure, explicit pull surfaces) stays deferred behind the
+preconditions below, while `_meta` response injection is rejected outright and
+is not gated by them.
 This PR itself ships no runtime change: it assigns ownership of hot memory to
 `agent_context_pack` and gates all future hot-memory work behind those
 preconditions.
@@ -378,6 +380,10 @@ no need for response-level injection. Graph-expanded evidence on answer/search
 surfaces is owned by #268, not by hot memory.
 
 ### Rejected Alternative: MCP `_meta` Response Injection
+
+This rejection is permanent, not deferred. The preconditions below gate only
+pack-owned expansion; they do not apply to `_meta` response injection and do
+not convert it into a future option.
 
 - Privacy blast radius: `_meta` piggybacks memory onto every tool response, so
   a single scope bug leaks working context to every caller of every tool
@@ -422,9 +428,12 @@ surfaces is owned by #268, not by hot memory.
 
 ### Preconditions For Any Future Hot-Memory Implementation
 
-Any new hot-memory behavior (new sections, transport exposure, or any
-prompt-placement change) must land with all of the following, per the
-Acceptance Fixtures section:
+These preconditions gate pack-owned expansion only (new sections, transport
+exposure, explicit pull surfaces). They are not a path to the rejected `_meta`
+response injection, which stays out of bounds regardless of whether every
+precondition is met. Any new pack-owned hot-memory behavior (new sections,
+transport exposure, or any prompt-placement change) must land with all of the
+following, per the Acceptance Fixtures section:
 
 - Exact-scope denial tests for every scope key named in this contract —
   `namespace`, `agent`, `platform`, `server_id`, `channel_id`, `thread_id`,
@@ -442,16 +451,23 @@ Acceptance Fixtures section:
 
 `get_contract` continues to advertise `agent_context_pack` with the
 `working_set` and `recovery` boundaries exactly as shipped. It does not
-advertise any `_meta` injection or hot-memory push capability, and must not
-until the preconditions above are met and downstream rollout is explicitly
-scoped (per the plan-3f merge gate: no new contract capability advertisement
-before server code, tests, and downstream client support are ready).
+advertise any `_meta` injection capability, and never will: `_meta` response
+injection is permanently out of bounds, and no precondition or rollout step
+converts it into an advertisable capability. New pack-owned hot-memory
+advertisement (sections, transport exposure, explicit pull surfaces) requires
+the preconditions above plus explicitly scoped downstream rollout (per the
+plan-3f merge gate: no new contract capability advertisement before server
+code, tests, and downstream client support are ready).
 `src/tools/__tests__/get-contract.test.ts` guards this with positive-shape
 assertions — it pins the exact top-level contract key set and asserts
 `agent_context_pack` is the only advertised context-bundle surface — plus a
-negative substring scan over the serialized contract. The substring scan is a
-tripwire for the known injection names, not enforcement; enforcement is the
-preconditions above plus human review of any contract-surface change.
+recursive tripwire walk over every contract key and string value using
+normalized case-insensitive injection patterns with an exact-match allowlist
+for legitimate terms, and a response-level regression test asserting ordinary
+MCP tool results carry no `_meta` hot-memory injection payload. The walk and
+the response test are tripwires, not enforcement; enforcement is the
+permanent `_meta` rejection above, the pack-owned preconditions, and human
+review of any contract-surface change.
 
 ### Downstream Rollout Classification
 
