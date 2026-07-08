@@ -209,8 +209,8 @@
       <summary>Metadata</summary>
       <dl>
         <dt>created</dt><dd>2026-07-07T22:19:50Z</dd>
-        <dt>modified</dt><dd>2026-07-07T22:19:50Z, 2026-07-07T22:45:00Z, 2026-07-07T23:20:00Z, 2026-07-08T00:12:00Z</dd>
-        <dt>commits</dt><dd>base a838735, branch feat/266-relational-retrieval-eval active</dd>
+        <dt>modified</dt><dd>2026-07-07T22:19:50Z, 2026-07-07T22:45:00Z, 2026-07-07T23:20:00Z, 2026-07-07T23:55:00Z, 2026-07-08T00:10:00Z, 2026-07-08T00:15:00Z, 2026-07-08T00:20:00Z</dd>
+        <dt>commits</dt><dd>base 7cb7712, branch feat/267-graph-relational-search; implementation commit 5fd66ed plus plan-sync commits</dd>
         <dt>agent name</dt><dd>codex</dd>
         <dt>session id</dt><dd>019f30e7-61d0-7d52-a491-1699760f2cea</dd>
         <dt>back refs</dt><dd>GitHub issue #265, child issues #266 #267 #268 #269 #270 #271, issue #223 non-closure gate, gbrain audit thread</dd>
@@ -231,7 +231,7 @@
       <strong>Board snapshot at plan creation:</strong> #265 is In Progress; #266, #267, #269, and #270 are Todo; #268 and #271 are Backlog; #223 is Blocked and must stay open until the separate fleet-bus/NATS rollout has parity and canary proof. Verify Project #8 live before acting; the board is the current source of truth.
     </div>
     <div class="callout">
-      <strong>Current execution update, 2026-07-08T00:12Z:</strong> planning PR #272 merged as a838735. Project #8 now has #266 in review/fix loop for PR #273, the relational retrieval eval gate; #267 remains Todo and is not ready until #266 proof exists. #223 is still open and Blocked.
+      <strong>Current execution update, 2026-07-08T01:15Z:</strong> planning PR #272 merged as a838735. #266 merged via PR #273 as 7cb7712 and is closed Done on Project #8. #267 PR <a href="https://github.com/rodaddy/open-brain/pull/274">#274</a> is open and mergeable from feat/267-graph-relational-search; gate-verified implementation head is 4c4d3e2. Project #8 and the PR check rollup are the source of truth for the newest docs/status-sync head. Initial review found material issues in relation direction semantics, hybrid embedding-failure fallback, and unintended graph enablement through shared helpers used by search_all and brain_answer. Fixes are complete: direct search_brain opts into graph retrieval, shared helpers stay graph-off by default, incoming/outgoing semantics are covered, graph retrieval still runs when embeddings fail, and SME review memory has been updated. Local validation passed: focused relational plus anti-skip tests, broader search_brain/search_all/brain_answer tests, TypeScript, diff check, Plan verifier, repo/collab HTML cmp, and full bun test. PR #274 CI passed for 4c4d3e2; deploy skipped as expected for a PR. Status-only plan sync commits may advance the PR head after 4c4d3e2; verify live Project #8 and the PR check rollup before merge/closure. Current origin/main and PR workflow rules deploy core01 only on a v* tag push or explicit workflow_dispatch with deploy_core01, not from the merge commit itself. Focused SME/correctness and antagonist/adversarial fix verification are clean for P0/P1/P2; remaining risk is P3 local live-Postgres skip only while CI db-integration passed. #223 is still open and Blocked.
     </div>
   </section>
 
@@ -262,15 +262,15 @@
         </tr>
         <tr>
           <td><a href="https://github.com/rodaddy/open-brain/issues/266">#266</a></td>
-          <td>In Review / Fixes In Progress</td>
+          <td>Done</td>
           <td>Relational retrieval eval and no-regression fixtures</td>
           <td>Must pass before #267 readiness</td>
         </tr>
         <tr>
           <td><a href="https://github.com/rodaddy/open-brain/issues/267">#267</a></td>
-          <td>Todo</td>
+          <td>In Review / CI Passed</td>
           <td>Graph-powered retrieval arm in search_brain</td>
-          <td>No merge without #266 proof</td>
+          <td>PR #274 open, mergeable, CI passed, review/fix verification clean</td>
         </tr>
         <tr>
           <td><a href="https://github.com/rodaddy/open-brain/issues/269">#269</a></td>
@@ -367,23 +367,24 @@
     </div>
 
     <div class="phase" id="phase-3">
-      <h3><code class="status">[]</code>Phase 3: #267 Graph-Powered Retrieval Arm</h3>
+      <h3><code class="status">[~]</code>Phase 3: #267 Graph-Powered Retrieval Arm</h3>
       <p>Add a precision-first graph arm to <code>search_brain</code> that only fires when relational parsing and readable seed resolution succeed.</p>
       <h4>3.1 Actions</h4>
       <ul class="checklist">
-        <li><code class="status">[]</code>Add the smallest deterministic relational parser for Open Brain-native relation vocabulary.</li>
-        <li><code class="status">[]</code>Resolve seed entities under readable namespaces only.</li>
-        <li><code class="status">[]</code>Traverse <code>ob_links</code> with bounded depth, limit, lifecycle filters, and fail-open telemetry.</li>
-        <li><code class="status">[]</code>Hydrate graph candidates into normal search rows with source refs and RRF/fusion metadata.</li>
-        <li><code class="status">[]</code>Leave vector/keyword behavior unchanged for non-relational queries.</li>
+        <li><code class="status">[x]</code>Add the smallest deterministic relational parser for Open Brain-native relation vocabulary.</li>
+        <li><code class="status">[x]</code>Resolve seed entities under readable namespaces only.</li>
+        <li><code class="status">[x]</code>Traverse <code>ob_links</code> with bounded depth, limit, lifecycle filters, and fail-open telemetry.</li>
+        <li><code class="status">[x]</code>Hydrate graph candidates into normal search rows with source refs and RRF/fusion metadata.</li>
+        <li><code class="status">[x]</code>Leave vector/keyword behavior unchanged for non-relational queries.</li>
       </ul>
       <h4>3.2 Testing Strategy</h4>
       <ul class="checklist">
-        <li><code class="status">[]</code><code>bun test tests/search-brain-graph-arm.test.ts</code> - proves parser, seed resolution, traversal, hydration, fusion, and fail-open behavior via focused graph-arm tests.</li>
-        <li><code class="status">[]</code><code>bun test src/tools/__tests__/search-brain-relational-retrieval.test.ts</code> - proves #267 passes the #266 eval gate via graph-on fixture results.</li>
-        <li><code class="status">[]</code><code>bun test</code> - proves no shared retrieval regression via the full Bun suite.</li>
+        <li><code class="status">[x]</code><code>bun test src/tools/__tests__/search-brain-relational-retrieval.test.ts scripts/assert-db-tests-ran.test.ts</code> - proves parser, graph hydration through the real MCP tool path, no-regression guards, and CI anti-skip guard counts.</li>
+        <li><code class="status">[x]</code><code>bun test src/tools/__tests__/search-brain.test.ts src/tools/__tests__/search-brain-relational-retrieval.test.ts</code> - proves #267 passes the #266 eval gate and existing search behavior still passes.</li>
+        <li><code class="status">[x]</code><code>bunx tsc --noEmit</code> and <code>git diff --check</code> - prove TypeScript and whitespace validity.</li>
+        <li><code class="status">[x]</code><code>bun test</code> - proves no shared retrieval regression via the full Bun suite.</li>
       </ul>
-      <div class="loop">If #267 is split from #266, #267 stays blocked until #266 is merged and passing.</div>
+      <div class="loop">#267 is validated in PR #274 at head 4c4d3e2; merge/closure remain pending controller action.</div>
     </div>
 
     <div class="phase" id="phase-4">

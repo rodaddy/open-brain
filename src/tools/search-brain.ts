@@ -22,6 +22,7 @@ import {
   ALL_TABLES,
   SOURCE_LABELS,
   CONTENT_PREVIEW,
+  LINK_RELATIONS,
   TABLE_ALIAS,
   VALID_TIERS,
 } from "./table-constants.ts";
@@ -41,12 +42,17 @@ type NamespaceFilter = string | string[];
 type SearchTable = Table | "entities";
 export type { SourceScope };
 
+type ExecuteSearchOptions = {
+  enableGraph?: boolean;
+};
+
 /** RRF constant -- standard value from Cormack et al. 2009 */
 const RRF_K = 60;
 
 /** Over-fetch multiplier for hybrid mode (fetch N*3 from each path, merge to N) */
 const HYBRID_FETCH_MULTIPLIER = 3;
 const DEFAULT_SEARCH_EMBEDDING_TIMEOUT_MS = 3000;
+const RELATIONAL_GRAPH_FETCH_LIMIT = 50;
 
 /** Tier-based RRF score adjustments for cognitive tiering */
 export const TIER_BOOST: Record<Tier, number> = {
@@ -69,6 +75,66 @@ const TABLE_WEIGHT: Record<string, number> = {
   session: 0.8,
   entity: 1.0,
 };
+
+type RelationalDirection = "incoming" | "outgoing";
+
+const RELATIONAL_INCOMING_QUERY_PATTERN =
+  /^what\s+(?:is\s+)?(?:was\s+)?(?<relation>depends on|blocked by|implemented by|decided by|supersedes|duplicates|contradicts|mentions|relates to)\s+(?<seed>[^?]{1,160})\??$/iu;
+
+const RELATIONAL_OUTGOING_DEPENDS_PATTERN =
+  /^what\s+does\s+(?<seed>[^?]{1,160})\s+depend\s+on\??$/iu;
+
+const RELATIONAL_OUTGOING_BLOCKED_PATTERN =
+  /^what\s+(?:is\s+)?(?<seed>[^?]{1,160})\s+blocked\s+by\??$/iu;
+
+const RELATION_ALIASES: Record<string, LinkRelation> = {
+  "depends on": "depends_on",
+  "blocked by": "blocked_by",
+  "implemented by": "implemented_by",
+  "decided by": "decided_by",
+  supersedes: "supersedes",
+  duplicates: "duplicates",
+  contradicts: "contradicts",
+  mentions: "mentions",
+  "relates to": "relates_to",
+};
+
+type RelationalQuery = {
+  relation: LinkRelation;
+  seed: string;
+  direction: RelationalDirection;
+};
+
+function parseRelationalQuery(query: string): RelationalQuery | undefined {
+  const trimmed = query.trim();
+  const outgoingDepends = RELATIONAL_OUTGOING_DEPENDS_PATTERN.exec(trimmed)?.groups;
+  if (outgoingDepends?.seed) {
+    const seed = outgoingDepends.seed.trim().replace(/\s+/g, " ");
+    if (!seed) return undefined;
+    return {
+      relation: "depends_on",
+      seed,
+      direction: "outgoing",
+    };
+  }
+  const outgoingBlocked = RELATIONAL_OUTGOING_BLOCKED_PATTERN.exec(trimmed)?.groups;
+  if (outgoingBlocked?.seed) {
+    const seed = outgoingBlocked.seed.trim().replace(/\s+/g, " ");
+    if (!seed) return undefined;
+    return {
+      relation: "blocked_by",
+      seed,
+      direction: "outgoing",
+    };
+  }
+
+  const groups = RELATIONAL_INCOMING_QUERY_PATTERN.exec(trimmed)?.groups;
+  if (!groups?.relation || !groups.seed) return undefined;
+  const relation = RELATION_ALIASES[groups.relation.toLowerCase()];
+  const seed = groups.seed.trim().replace(/\s+/g, " ");
+  if (!relation || !seed || !LINK_RELATIONS.includes(relation)) return undefined;
+  return { relation, seed, direction: "incoming" };
+}
 
 function searchEmbeddingTimeoutMs(): number {
   const raw =
@@ -564,6 +630,126 @@ function buildFtsCTE(
 )`;
 }
 
+function buildRelationalHydrationSelect(
+  table: Table,
+  direction: RelationalDirection,
+  tier?: Tier,
+): string {
+  if (tier && !VALID_TIERS.has(tier)) throw new Error(`Invalid tier: ${tier}`);
+  const alias = TABLE_ALIAS[table];
+  const label = SOURCE_LABELS[table];
+  const preview = CONTENT_PREVIEW[table];
+  const tierFilter = tier ? ` AND ${alias}.tier = '${tier}'` : "";
+  const metaCol = HAS_EXTRACTED_METADATA.has(table)
+    ? `${alias}.extracted_metadata`
+    : "NULL::jsonb AS extracted_metadata";
+  const linkJoin =
+    direction === "incoming"
+      ? `l.to_type = 'entity'
+   AND l.to_id = seed.id`
+      : `l.from_type = 'entity'
+   AND l.from_id = seed.id`;
+  const targetJoin =
+    direction === "incoming"
+      ? `l.from_type = '${label}'
+   AND ${alias}.id = l.from_id`
+      : `l.to_type = '${label}'
+   AND ${alias}.id = l.to_id`;
+
+  return `SELECT
+    '${label}' AS source_type,
+    ${alias}.id,
+    ${alias}.namespace,
+    ${preview} AS content_preview,
+    ${alias}.tags,
+    ${alias}.created_by,
+    ${alias}.created_at,
+    ${alias}.updated_at,
+    ${alias}.tier,
+    NULL::double precision AS distance,
+    GREATEST(l.weight, 0)::double precision AS fts_rank,
+    COALESCE(${alias}.usefulness_score, 0.5) AS usefulness,
+    COALESCE(${alias}.access_count, 0) AS access_count,
+    ${metaCol}
+  FROM relational_graph_seed seed
+  JOIN ob_links l
+    ON ${linkJoin}
+   AND l.namespace = seed.namespace
+   AND l.relation = $2
+   AND l.archived_at IS NULL
+  JOIN ${table} ${alias}
+    ON ${targetJoin}
+   AND ${alias}.namespace = l.namespace
+   AND ${alias}.archived_at IS NULL${tierFilter}`;
+}
+
+async function relationalGraphSearch(
+  deps: ToolDeps,
+  accessibleTables: SearchTable[],
+  query: string,
+  fetchLimit: number,
+  tier?: Tier,
+  namespace?: NamespaceFilter,
+): Promise<SearchRow[]> {
+  const parsed = parseRelationalQuery(query);
+  if (!parsed) return [];
+  const targetTables = accessibleTables.filter(
+    (table): table is Table => table !== "entities",
+  );
+  if (targetTables.length === 0) return [];
+
+  const params: unknown[] = [parsed.seed, parsed.relation, fetchLimit];
+  const namespaceParamIndex = appendNamespaceParam(params, namespace);
+  const namespaceIsArray = Array.isArray(namespace);
+  const namespaceFilter = namespaceParamIndex
+    ? namespaceIsArray
+      ? ` AND e.namespace = ANY(${paramRef(namespaceParamIndex)}::text[])`
+      : ` AND e.namespace = ${paramRef(namespaceParamIndex)}`
+    : "";
+  const hydrationSql = targetTables
+    .map((table) => buildRelationalHydrationSelect(table, parsed.direction, tier))
+    .join("\nUNION ALL\n");
+
+  try {
+    const { rows } = await deps.pool.query<SearchRow>(
+      `WITH relational_graph_seed AS (
+         SELECT e.id, e.namespace
+         FROM ob_entities e
+         WHERE (
+             lower(e.name) = lower($1)
+             OR lower(COALESCE(e.canonical_id, '')) = lower($1)
+           )
+           AND e.archived_at IS NULL${namespaceFilter}
+         ORDER BY e.updated_at DESC
+         LIMIT 5
+       )
+       SELECT *
+       FROM (
+${hydrationSql}
+       ) relational_graph_rows
+       ORDER BY fts_rank DESC, created_at DESC
+       LIMIT $3`,
+      params,
+    );
+    logger.info("search_relational_graph", {
+      relation: parsed.relation,
+      direction: parsed.direction,
+      seed_length: parsed.seed.length,
+      target_tables: targetTables,
+      candidate_count: rows.length,
+    });
+    return withSourceRefs(rows);
+  } catch (err) {
+    logger.warn("search_relational_graph_failed", {
+      relation: parsed.relation,
+      direction: parsed.direction,
+      seed_length: parsed.seed.length,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return [];
+  }
+}
+
 async function vectorSearch(
   deps: ToolDeps,
   accessibleTables: SearchTable[],
@@ -662,6 +848,7 @@ function rrfMerge(
   vectorRows: SearchRow[],
   ftsRows: SearchRow[],
   limit: number,
+  graphRows: SearchRow[] = [],
 ): SearchRow[] {
   const scoreMap = new Map<string, { row: SearchRow; rrf: number }>();
 
@@ -679,6 +866,19 @@ function rrfMerge(
       existing.rrf += 1 / (RRF_K + i + 1);
     } else {
       scoreMap.set(key, { row, rrf: 1 / (RRF_K + i + 1) });
+    }
+  }
+
+  for (let i = 0; i < graphRows.length; i++) {
+    const row = graphRows[i]!;
+    const key = `${row.source_type}:${row.id}`;
+    const existing = scoreMap.get(key);
+    const graphRrf = 3 / (RRF_K + i + 1);
+    if (existing) {
+      existing.rrf += graphRrf;
+      existing.row = { ...existing.row, explicit_links: row.explicit_links };
+    } else {
+      scoreMap.set(key, { row, rrf: graphRrf });
     }
   }
 
@@ -779,7 +979,9 @@ export async function executeSearch(
   namespace?: NamespaceFilter,
   includeLinks?: boolean,
   sourceScope?: SourceScope,
+  options: ExecuteSearchOptions = {},
 ): Promise<SearchRow[]> {
+  const enableGraph = options.enableGraph === true;
   if (sourceScope) {
     accessibleTables = accessibleTables.filter((table) => table !== "entities");
     if (accessibleTables.length === 0) return [];
@@ -810,16 +1012,43 @@ export async function executeSearch(
       logger.warn("embedding_failed_fallback_fts", {
         queryLength: query.length,
       });
-      rows = await ftsSearch(
-        deps,
-        accessibleTables,
-        query,
-        limit,
-        tier,
-        offset,
-        namespace,
-        sourceScope,
-      );
+      const totalNeeded = offset + limit;
+      const fetchLimit = totalNeeded * HYBRID_FETCH_MULTIPLIER;
+      const graphRows =
+        enableGraph && sourceScope === undefined
+          ? await relationalGraphSearch(
+              deps,
+              accessibleTables,
+              query,
+              Math.min(fetchLimit, RELATIONAL_GRAPH_FETCH_LIMIT),
+              tier,
+              namespace,
+            )
+          : [];
+      if (graphRows.length > 0) {
+        const ftsRows = await ftsSearch(
+          deps,
+          accessibleTables,
+          query,
+          fetchLimit,
+          tier,
+          0,
+          namespace,
+          sourceScope,
+        );
+        rows = rrfMerge([], ftsRows, totalNeeded, graphRows).slice(offset);
+      } else {
+        rows = await ftsSearch(
+          deps,
+          accessibleTables,
+          query,
+          limit,
+          tier,
+          offset,
+          namespace,
+          sourceScope,
+        );
+      }
       if (includeLinks !== false) {
         rows = await attachExplicitLinks(deps, rows, namespace);
       }
@@ -872,8 +1101,19 @@ export async function executeSearch(
       sourceScope,
     ),
   ]);
+  const graphRows =
+    enableGraph && sourceScope === undefined
+      ? await relationalGraphSearch(
+          deps,
+          accessibleTables,
+          query,
+          Math.min(fetchLimit, RELATIONAL_GRAPH_FETCH_LIMIT),
+          tier,
+          namespace,
+        )
+      : [];
 
-  const merged = rrfMerge(vectorRows, ftsRows, totalNeeded);
+  const merged = rrfMerge(vectorRows, ftsRows, totalNeeded, graphRows);
   rows = merged.slice(offset);
   if (includeLinks !== false) {
     rows = await attachExplicitLinks(deps, rows, namespace);
@@ -892,6 +1132,7 @@ export async function executeSearchWithSharedFallback(
   namespace: NamespaceFilter | undefined,
   includeLinks?: boolean,
   sourceScope?: SourceScope,
+  options: ExecuteSearchOptions = {},
 ): Promise<SearchRow[]> {
   const config = sharedNamespaceConfig();
   if (
@@ -912,6 +1153,7 @@ export async function executeSearchWithSharedFallback(
         namespace,
         includeLinks,
         sourceScope,
+        options,
       ),
     );
   }
@@ -927,6 +1169,7 @@ export async function executeSearchWithSharedFallback(
     config.sharedNamespace,
     includeLinks,
     sourceScope,
+    options,
   );
   if (
     sharedRows.length >= limit ||
@@ -946,6 +1189,7 @@ export async function executeSearchWithSharedFallback(
     config.legacySharedNamespace,
     includeLinks,
     sourceScope,
+    options,
   );
   return withCanonicalNamespaces(
     mergeFallbackSearchRows(sharedRows, legacyRows, limit),
@@ -963,6 +1207,7 @@ export async function executeSearchWithScopedSharedFallback(
   namespace: NamespaceFilter | undefined,
   includeLinks?: boolean,
   sourceScope?: SourceScope,
+  options: ExecuteSearchOptions = {},
 ): Promise<SearchRow[]> {
   const config = sharedNamespaceConfig();
   const scopedNamespaces = Array.isArray(namespace) ? namespace : [];
@@ -984,6 +1229,7 @@ export async function executeSearchWithScopedSharedFallback(
         namespace,
         includeLinks,
         sourceScope,
+        options,
       ),
     );
   }
@@ -1000,6 +1246,7 @@ export async function executeSearchWithScopedSharedFallback(
       namespace,
       includeLinks,
       sourceScope,
+      options,
     ),
     executeSearch(
       deps,
@@ -1012,6 +1259,7 @@ export async function executeSearchWithScopedSharedFallback(
       config.physicalSharedNamespace,
       includeLinks,
       sourceScope,
+      options,
     ),
   ]);
   if (
@@ -1032,6 +1280,7 @@ export async function executeSearchWithScopedSharedFallback(
     config.legacySharedNamespace,
     includeLinks,
     sourceScope,
+    options,
   );
   return withCanonicalNamespaces(
     mergeFallbackSearchRows(primaryRows, legacyRows, limit),
@@ -1220,6 +1469,7 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
               namespace,
               undefined,
               sourceScope,
+              { enableGraph: true },
             )
           : await executeSearchWithScopedSharedFallback(
               deps,
@@ -1232,6 +1482,7 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
               namespace,
               undefined,
               sourceScope,
+              { enableGraph: true },
             );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
