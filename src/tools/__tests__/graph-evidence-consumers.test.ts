@@ -182,7 +182,7 @@ function graphEntriesFor(
   );
 }
 
-function searchRow(entry: FixtureEntry) {
+function searchRow(entry: FixtureEntry, ftsRank = 1) {
   return {
     source_type: entry.source_type,
     id: entry.id,
@@ -195,7 +195,7 @@ function searchRow(entry: FixtureEntry) {
     tier: "warm",
     usefulness: 0.5,
     access_count: 0,
-    fts_rank: 1,
+    fts_rank: ftsRank,
     distance: null,
   };
 }
@@ -207,7 +207,10 @@ type GraphPoolStats = {
   totalQueries: number;
 };
 
-function graphAwarePool(): { pool: { query: (...args: any[]) => Promise<{ rows: any[] }> }; stats: GraphPoolStats } {
+function graphAwarePool(options?: {
+  /** fts_rank stamped on graph-hydrated rows (raw link weight in prod). */
+  graphFtsRank?: number;
+}): { pool: { query: (...args: any[]) => Promise<{ rows: any[] }> }; stats: GraphPoolStats } {
   const stats: GraphPoolStats = {
     graphCalls: 0,
     graphNamespaceParams: [],
@@ -231,7 +234,7 @@ function graphAwarePool(): { pool: { query: (...args: any[]) => Promise<{ rows: 
             String(params[0] ?? ""),
             String(params[1] ?? ""),
             namespaceList(params[3]),
-          ).map(searchRow),
+          ).map((entry) => searchRow(entry, options?.graphFtsRank ?? 1)),
         };
       }
       // vector, fts, and explicit-link lookups return nothing so every hit
@@ -500,6 +503,75 @@ describe("brain_answer graph-expanded evidence (#268)", () => {
       await cleanup();
     }
   });
+
+  it("clamps graph-row scores derived from link weight > 1 into [0,1] (finding 1)", async () => {
+    const { pool, stats } = graphAwarePool({ graphFtsRank: 2.5 });
+    const { client, cleanup } = await setupMcpClient(
+      registerBrainAnswer,
+      pool,
+      createMockEmbed(),
+      readerAuth,
+    );
+    try {
+      const parsed = parseToolResult(
+        await client.callTool({
+          name: "brain_answer",
+          arguments: { query: "What depends on Alpha?", namespace: READER_NS },
+        }),
+      );
+      expect(stats.graphCalls).toBe(1);
+      expect(parsed.citations).toHaveLength(1);
+      expect(parsed.citations[0].score).toBeLessThanOrEqual(1);
+      expect(parsed.citations[0].score).toBeGreaterThanOrEqual(0);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("still cites graph evidence when the embedding provider is down (finding 2)", async () => {
+    const { pool, stats } = graphAwarePool();
+    const { client, cleanup } = await setupMcpClient(
+      registerBrainAnswer,
+      pool,
+      createMockEmbed(null),
+      readerAuth,
+    );
+    try {
+      const result = await client.callTool({
+        name: "brain_answer",
+        arguments: { query: "What depends on Alpha?", namespace: READER_NS },
+      });
+      expect(result.isError).toBeFalsy();
+      const parsed = parseToolResult(result);
+      expect(stats.graphCalls).toBe(1);
+      expect(parsed.citations).toHaveLength(1);
+      expect(parsed.citations[0].source_ref.id).toBe("graph-target");
+      expect(parsed.answer).toContain("schema freeze decision");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("keeps the graph arm dark for non-relational queries (finding 3)", async () => {
+    const { pool, stats } = graphAwarePool();
+    const { client, cleanup } = await setupMcpClient(
+      registerBrainAnswer,
+      pool,
+      createMockEmbed(),
+      readerAuth,
+    );
+    try {
+      const result = await client.callTool({
+        name: "brain_answer",
+        arguments: { query: "deploy readiness notes", namespace: READER_NS },
+      });
+      expect(result.isError).toBeFalsy();
+      expect(stats.graphCalls).toBe(0);
+      expect(stats.totalQueries).toBeGreaterThan(0);
+    } finally {
+      await cleanup();
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -720,6 +792,90 @@ describe("search_all graph-expanded evidence (#268)", () => {
       const parsed = parseToolResult(result);
       expect(parsed.brain_hits).toBe(0);
       expect(stats.graphCalls).toBe(0);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("clamps graph-row scores derived from link weight > 1 into [0,1] (finding 1)", async () => {
+    mockBunSpawn(1, "");
+    const { pool, stats } = graphAwarePool({ graphFtsRank: 2.5 });
+    const { client, cleanup } = await setupMcpClient(
+      registerSearchAll,
+      pool,
+      createMockEmbed(),
+      readerAuth,
+    );
+    try {
+      const parsed = parseToolResult(
+        await client.callTool({
+          name: "search_all",
+          arguments: {
+            query: "What depends on Alpha?",
+            namespace: READER_NS,
+            sources: "brain",
+          },
+        }),
+      );
+      expect(stats.graphCalls).toBe(1);
+      expect(parsed.brain_hits).toBe(1);
+      expect(parsed.results[0].id).toBe("graph-target");
+      expect(parsed.results[0].score).toBeLessThanOrEqual(1);
+      expect(parsed.results[0].score).toBeGreaterThanOrEqual(0);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("still surfaces graph evidence when the embedding provider is down (finding 2)", async () => {
+    mockBunSpawn(1, "");
+    const { pool, stats } = graphAwarePool();
+    const { client, cleanup } = await setupMcpClient(
+      registerSearchAll,
+      pool,
+      createMockEmbed(null),
+      readerAuth,
+    );
+    try {
+      const result = await client.callTool({
+        name: "search_all",
+        arguments: {
+          query: "What depends on Alpha?",
+          namespace: READER_NS,
+          sources: "brain",
+        },
+      });
+      expect(result.isError).toBeFalsy();
+      const parsed = parseToolResult(result);
+      expect(stats.graphCalls).toBe(1);
+      expect(parsed.brain_hits).toBe(1);
+      expect(parsed.results[0].id).toBe("graph-target");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("keeps the graph arm dark for non-relational queries (finding 3)", async () => {
+    mockBunSpawn(1, "");
+    const { pool, stats } = graphAwarePool();
+    const { client, cleanup } = await setupMcpClient(
+      registerSearchAll,
+      pool,
+      createMockEmbed(),
+      readerAuth,
+    );
+    try {
+      const result = await client.callTool({
+        name: "search_all",
+        arguments: {
+          query: "deploy readiness notes",
+          namespace: READER_NS,
+          sources: "brain",
+        },
+      });
+      expect(result.isError).toBeFalsy();
+      expect(stats.graphCalls).toBe(0);
+      expect(stats.totalQueries).toBeGreaterThan(0);
     } finally {
       await cleanup();
     }

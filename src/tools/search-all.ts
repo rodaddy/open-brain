@@ -380,7 +380,13 @@ async function searchOB(
       source: "brain" as const,
       type: row.source_type,
       content: preview.slice(0, 300),
-      score: row.distance != null ? 1 - row.distance : (row.fts_rank ?? 0.5),
+      // fts_rank is not guaranteed to be [0,1]: graph-hydrated rows carry
+      // raw link weight (unbounded above). Clamp so the emitted score stays
+      // a [0,1] relevance value (#268 review finding 1).
+      score:
+        row.distance != null
+          ? 1 - row.distance
+          : Math.min(1, Math.max(0, row.fts_rank ?? 0.5)),
       source_ref: row.source_ref ?? {
         source: "brain" as const,
         type: row.source_type,

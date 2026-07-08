@@ -37,7 +37,13 @@ interface Evidence {
 }
 
 function scoreFor(row: SearchRow): number {
-  return row.distance != null ? 1 - row.distance : (row.fts_rank ?? 0.5);
+  // fts_rank is not guaranteed to be [0,1]: graph-hydrated rows carry raw
+  // link weight (GREATEST(l.weight, 0), unbounded above) and ts_rank_cd is
+  // only typically <1. Clamp at the consumer boundary so the emitted score
+  // stays a [0,1] relevance value (#268 review finding 1).
+  return row.distance != null
+    ? 1 - row.distance
+    : Math.min(1, Math.max(0, row.fts_rank ?? 0.5));
 }
 
 function excerptFor(row: SearchRow): string | null {
