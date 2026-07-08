@@ -42,7 +42,13 @@ Planned host:
 core01 Mac Mini, co-located with hosted Open Brain.
 
 Planned service:
-`com.rico.open-brain-nats` launchd service.
+`com.rico.open-brain-nats` launchd service for the broker.
+
+Dedicated Open Brain worker service:
+`com.rico.open-brain-nats-worker`, documented in
+`docs/core01-nats-worker-runbook.md`. This worker is separate from the HTTP
+launchd service and subscribes to NATS request/reply subjects without making
+HTTP `/health` depend on broker or subscription health.
 
 Planned config path:
 `/Volumes/ThunderBolt/open-brain/nats/nats-server.conf`.
@@ -138,6 +144,15 @@ measured routing need exists. Fine-grained subjects are easy to add and hard to
 audit once clients depend on them.
 
 ## Request Envelope
+
+> **Superseded wire shape.** The `openbrain.nats.request/response.v1` envelopes
+> shown in this section are the ORIGINAL #223 design shape. The shipped wire has
+> since been reconciled to the shared fleet-bus `Envelope` (compact JSON, wire
+> key `from`, `kind` = `context_pack_request` / `context_pack_response`,
+> top-level `payload.namespace`, subject `{env}.ob.memory.context_pack`). The
+> authoritative wire contract is `docs/fleet-nats-integration.md` and
+> `src/__fixtures__/nats-context-pack-wire.json`. The blocks below are retained
+> only for design history; do not implement against them.
 
 The request body is JSON and must be compatible with `agent_context_pack`
 request semantics. `query` is optional and bounded like the MCP tool input; the
@@ -251,10 +266,13 @@ availability only when explicitly enabled.
 - Constructor/config:
   `NatsTransport(url, context_pack_subject="ob.memory.context_pack",
   fallback_transport=UrllibTransport(...), timeout=...)`.
-- Server env:
+- Dedicated NATS worker env, not the HTTP worker env:
   `OPENBRAIN_TRANSPORT=nats`, `OPENBRAIN_NATS_ENABLE_BRIDGE=true`,
   `OPENBRAIN_NATS_URL`, `OPENBRAIN_NATS_CONTEXT_PACK_SUBJECT`, and
   `OPENBRAIN_NATS_FALLBACK_HTTP=true`.
+- HTTP Open Brain workers must keep `OPENBRAIN_TRANSPORT=http` and
+  `OPENBRAIN_NATS_ENABLE_BRIDGE=false`, even when the same host has a local
+  broker and NATS worker.
 - Remote plaintext `nats://` broker URLs are not runtime-available by default.
   Use loopback/local NATS for local rollout, or set
   `OPENBRAIN_NATS_ALLOW_INSECURE_REMOTE=true` only for an explicitly approved
@@ -282,7 +300,11 @@ Initial config should be explicit:
 OPENBRAIN_TRANSPORT=http
 OPENBRAIN_NATS_ENABLE_BRIDGE=false
 OPENBRAIN_NATS_URL=nats://127.0.0.1:4222
-OPENBRAIN_NATS_CONTEXT_PACK_SUBJECT=ob.memory.context_pack
+# Subjects are env-prefixed via the fleet-bus builder
+# ({env}.ob.memory.context_pack). Set the env, NOT a hand-pinned subject —
+# pinning the legacy flat `ob.memory.context_pack` makes the worker subscribe to
+# a subject clients no longer publish, and request/reply hangs.
+OPENBRAIN_NATS_ENV=dev
 OPENBRAIN_NATS_FALLBACK_HTTP=true
 ```
 
@@ -305,7 +327,11 @@ Local-only validation for #223:
 Release validation, deferred until Rico approves deploy:
 
 - install NATS on core01 through the release SOP;
+- install or update `com.rico.open-brain-nats-worker` only after the runtime
+  entrypoint exists and the worker tests pass;
 - prove `/health` and monitoring endpoint locally on core01;
+- prove HTTP `/health` remains healthy while the NATS worker is started,
+  stopped, and restarted;
 - create streams with the documented limits;
 - run HTTP-vs-NATS parity tests for `agent_context_pack`;
 - run Hermes canary with HTTP fallback enabled;
@@ -318,8 +344,9 @@ Before NATS becomes the default path, rollback is to keep or restore
 the service and needs rollback:
 
 1. Set Hermes/Open Brain clients back to HTTP and confirm `/mcp` reads/writes.
-2. Stop or unload `com.rico.open-brain-nats`.
-3. Preserve the JetStream store for inspection unless an explicit cleanup
+2. Stop or unload `com.rico.open-brain-nats-worker`.
+3. Stop or unload `com.rico.open-brain-nats` if the broker itself is unsafe.
+4. Preserve the JetStream store for inspection unless an explicit cleanup
    decision says it contains only minimized metadata and can be deleted.
-4. Remove or rotate NATS credentials through the approved secret store.
-5. Leave PostgreSQL/Open Brain untouched; NATS streams are not memory authority.
+5. Remove or rotate NATS credentials through the approved secret store.
+6. Leave PostgreSQL/Open Brain untouched; NATS streams are not memory authority.

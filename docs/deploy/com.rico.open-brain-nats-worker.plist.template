@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.rico.open-brain-nats-worker</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/bash</string>
+    <string>-lc</string>
+    <string>set -euo pipefail; ENV_FILE=/Users/rico/.config/open-brain/env.nats-worker; test -r "$ENV_FILE"; set -a; source "$ENV_FILE"; set +a; cd /Volumes/ThunderBolt/open-brain/app; exec "${BUN_BIN:-bun}" run scripts/run-nats-worker.ts</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Volumes/ThunderBolt/open-brain/app</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>OPEN_BRAIN_WORKER_NAME</key>
+    <string>open-brain-nats-worker</string>
+    <key>OPEN_BRAIN_RUN_MIGRATIONS</key>
+    <string>0</string>
+    <key>OPENBRAIN_TRANSPORT</key>
+    <string>nats</string>
+    <key>OPENBRAIN_NATS_ENABLE_BRIDGE</key>
+    <string>true</string>
+    <key>OPENBRAIN_NATS_URL</key>
+    <string>nats://127.0.0.1:4222</string>
+    <!-- Subjects are env-prefixed via the fleet-bus builder:
+         {env}.ob.memory.context_pack. Set the env, NOT a hand-pinned subject.
+         Pinning OPENBRAIN_NATS_CONTEXT_PACK_SUBJECT=ob.memory.context_pack here
+         makes the worker subscribe to the legacy flat subject while clients now
+         publish dev.ob.memory.context_pack -> request/reply hangs. -->
+    <key>OPENBRAIN_NATS_ENV</key>
+    <string>dev</string>
+    <key>OPENBRAIN_NATS_FALLBACK_HTTP</key>
+    <string>true</string>
+    <key>QMD_PATH</key>
+    <string>/Volumes/ThunderBolt/qmd/open-brain-qmd.ts</string>
+  </dict>
+
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/Volumes/ThunderBolt/open-brain/logs/nats-worker.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Volumes/ThunderBolt/open-brain/logs/nats-worker.err.log</string>
+
+  <key>SoftResourceLimits</key>
+  <dict>
+    <key>NumberOfFiles</key>
+    <integer>4096</integer>
+  </dict>
+</dict>
+</plist>
