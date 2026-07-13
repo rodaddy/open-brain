@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { TOOL_CONTRACTS } from "./contract-schemas.ts";
 
-export const CONTRACT_VERSION = "2026-07-08.memory-tools.v20";
+export const CONTRACT_VERSION = "2026-07-13.memory-tools.v21";
 export const CONTRACT_SCHEMA_VERSION = 1;
 
 export interface ContractCapability {
@@ -79,7 +79,13 @@ export interface OpenBrainContract {
         "tags",
         "timestamp",
       ];
-      export_surfaces: readonly ["concept", "index", "log", "citations", "receipts"];
+      export_surfaces: readonly [
+        "concept",
+        "index",
+        "log",
+        "citations",
+        "receipts",
+      ];
     };
   };
   agent_memory_adapter: {
@@ -344,7 +350,7 @@ export const CONTRACT_CAPABILITIES: ContractCapability[] = [
   },
   {
     name: "session_context",
-    version: 2,
+    version: 3,
     kind: "tool",
     description:
       "Read a session lane's current state and recent events without creating " +
@@ -372,13 +378,22 @@ export const CONTRACT_CAPABILITIES: ContractCapability[] = [
   },
   {
     name: "append_session_event",
-    version: 5,
+    version: 6,
     kind: "tool",
     description:
       "Append one durable, typed event (fact, decision, blocker, action, etc.) " +
       "to a session lane's journal. This is the main way to record what happened " +
       "during a session so it survives and can be recalled later. Supports " +
       "first-write lane creation with create_if_missing for realtime agents.",
+  },
+  {
+    name: "citation_recall",
+    version: 1,
+    kind: "tool",
+    description:
+      "Read a session event's stored host-neutral transcript citation and " +
+      "bounded neighboring exchanges, or explicitly report source_not_stored " +
+      "for legacy evidence-less events.",
   },
   {
     name: "session_wrap",
@@ -398,9 +413,10 @@ export const CONTRACT_CAPABILITIES: ContractCapability[] = [
   },
   {
     name: "session_lanes",
-    version: 1,
+    version: 2,
     kind: "schema",
-    description: "Durable session lanes, events, context, and wraps.",
+    description:
+      "Durable session lanes, events, context, wraps, and host-neutral transcript citations.",
   },
   {
     name: "agent_context_pack",
@@ -491,7 +507,10 @@ export function stableJson(value: unknown): string {
 
 function requiredContractHashPayload(
   payload: Omit<OpenBrainContract, "generated_at" | "schema_hash">,
-): Omit<OpenBrainContract, "generated_at" | "schema_hash" | "realtime_transport"> {
+): Omit<
+  OpenBrainContract,
+  "generated_at" | "schema_hash" | "realtime_transport"
+> {
   const { realtime_transport: _advisoryRealtimeTransport, ...requiredPayload } =
     payload;
   return requiredPayload;
@@ -518,12 +537,12 @@ export function buildContract(
     contract_scope: "required_openbrain_memory_contract" as const,
     schema_version: CONTRACT_SCHEMA_VERSION,
     min_client_versions: {
-      "openbrain-memory": "0.1.6",
+      "openbrain-memory": "0.1.7",
       "rtech-hermes-runtime": "0.1.0",
       mcp2cli: "0.3.6",
     },
     compatible_client_ranges: {
-      "openbrain-memory": ">=0.1.6 <1.0.0",
+      "openbrain-memory": ">=0.1.7 <1.0.0",
       "rtech-hermes-runtime": ">=0.1.0 <1.0.0",
       mcp2cli: ">=0.3.6 <1.0.0",
     },
@@ -540,9 +559,10 @@ export function buildContract(
     // schema_hash bump or a contract-version break.
     realtime_transport: {
       nats_jetstream: {
-        status: natsAvailability === "available"
-          ? "runtime-available" as const
-          : "planned-transport-foundation" as const,
+        status:
+          natsAvailability === "available"
+            ? ("runtime-available" as const)
+            : ("planned-transport-foundation" as const),
         availability: natsAvailability,
         parent_issue: 223 as const,
         contract_doc: "docs/nats-jetstream-foundation.md" as const,
@@ -558,9 +578,10 @@ export function buildContract(
         // slugged OPENBRAIN_NATS_ENV value via obContextPackSubject(env).
         subject_convention: "env_prefixed_fleet_bus" as const,
         request_reply_subjects: {
-          available: natsAvailability === "available"
-            ? ["{env}.ob.memory.context_pack"] as const
-            : [] as const,
+          available:
+            natsAvailability === "available"
+              ? (["{env}.ob.memory.context_pack"] as const)
+              : ([] as const),
           planned: [
             "{env}.ob.memory.session_start",
             "{env}.ob.memory.append_event",
@@ -595,7 +616,13 @@ export function buildContract(
           "tags",
           "timestamp",
         ] as const,
-        export_surfaces: ["concept", "index", "log", "citations", "receipts"] as const,
+        export_surfaces: [
+          "concept",
+          "index",
+          "log",
+          "citations",
+          "receipts",
+        ] as const,
       },
     },
     agent_memory_adapter: {
@@ -747,8 +774,7 @@ export function buildContract(
         status: "local-quarantine-boundary" as const,
         parent_issue: 221 as const,
         implementation: "src/realtime/recovery-wal.ts" as const,
-        storage:
-          "env_configured_file_wal_with_in_memory_fallback" as const,
+        storage: "env_configured_file_wal_with_in_memory_fallback" as const,
         availability: "mcp_tool_available" as const,
         item_label: "quarantined_recovery" as const,
         not_durable_memory: true as const,

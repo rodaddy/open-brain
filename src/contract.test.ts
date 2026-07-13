@@ -13,12 +13,12 @@ describe("Open Brain contract manifest", () => {
     expect(contract.contract_scope).toBe("required_openbrain_memory_contract");
     expect(contract.schema_hash).toMatch(/^[0-9a-f]{64}$/);
     expect(contract.schema_hash).toBe(
-      "4df9c742add84e2bbc3495a9baad8f103ee191a82518ea43c754a7fbb961bb48",
+      "a744dddbbe4ea3f3330f5ce23c7178cd66cedd0dbb25d1a809f0cbbbd8d403d1",
     );
     expect(contract.min_client_versions.mcp2cli).toBe("0.3.6");
-    expect(contract.min_client_versions["openbrain-memory"]).toBe("0.1.6");
+    expect(contract.min_client_versions["openbrain-memory"]).toBe("0.1.7");
     expect(contract.compatible_client_ranges["openbrain-memory"]).toBe(
-      ">=0.1.6 <1.0.0",
+      ">=0.1.7 <1.0.0",
     );
     expect(contract.transport.namespace_boundary).toBe("authorization");
     expect(contract.realtime_transport.nats_jetstream).toMatchObject({
@@ -42,7 +42,9 @@ describe("Open Brain contract manifest", () => {
         "{env}.ob.health",
       ],
     });
-    expect(contract.realtime_transport.nats_jetstream.jetstream_streams).toEqual([
+    expect(
+      contract.realtime_transport.nats_jetstream.jetstream_streams,
+    ).toEqual([
       "OB_AGENT_TRACE",
       "OB_CONTEXT_PACK_REQUESTS",
       "OB_CONTEXT_PACK_AUDIT",
@@ -322,18 +324,10 @@ describe("Open Brain contract manifest", () => {
     expect(recoveryWalAppend).toBeDefined();
     expect(recoveryWalMark).toBeDefined();
     expect(agentContextPack).toBeDefined();
-    expect(workingSetAppend?.output_shape).toContain(
-      "RAM-only",
-    );
-    expect(agentContextPack?.output_shape).toContain(
-      "explicit recovery",
-    );
-    expect(recoveryWalAppend?.output_shape).toContain(
-      "not_searchable_recall",
-    );
-    expect(recoveryWalMark?.output_shape).toContain(
-      "not_searchable_recall",
-    );
+    expect(workingSetAppend?.output_shape).toContain("RAM-only");
+    expect(agentContextPack?.output_shape).toContain("explicit recovery");
+    expect(recoveryWalAppend?.output_shape).toContain("not_searchable_recall");
+    expect(recoveryWalMark?.output_shape).toContain("not_searchable_recall");
     expect((workingSetAppend?.input_schema as any).durable_ref).toEqual({
       type: "object",
       required: false,
@@ -373,7 +367,13 @@ describe("Open Brain contract manifest", () => {
     expect((getEntry?.input_schema as any).table).toEqual({
       type: "enum",
       required: true,
-      values: ["thoughts", "decisions", "relationships", "projects", "sessions"],
+      values: [
+        "thoughts",
+        "decisions",
+        "relationships",
+        "projects",
+        "sessions",
+      ],
       description:
         "Readable table containing the target row. Use the plural table " +
         "name derived from search result source_type.",
@@ -395,9 +395,24 @@ describe("Open Brain contract manifest", () => {
       default: 500,
     });
     expect((getEntry?.input_schema as any).source_scope.fields).toMatchObject({
-      client_id: { type: "string", required: false, minLength: 1, maxLength: 300 },
-      matter_id: { type: "string", required: false, minLength: 1, maxLength: 300 },
-      document_id: { type: "string", required: false, minLength: 1, maxLength: 500 },
+      client_id: {
+        type: "string",
+        required: false,
+        minLength: 1,
+        maxLength: 300,
+      },
+      matter_id: {
+        type: "string",
+        required: false,
+        minLength: 1,
+        maxLength: 300,
+      },
+      document_id: {
+        type: "string",
+        required: false,
+        minLength: 1,
+        maxLength: 500,
+      },
       path: { type: "string", required: false, minLength: 1, maxLength: 1000 },
       dms_id: { type: "string", required: false, minLength: 1, maxLength: 500 },
     });
@@ -427,7 +442,9 @@ describe("Open Brain contract manifest", () => {
       required: false,
       values: ["write_replacements"],
     });
-    expect(decomposeEntry?.output_shape).toContain("without source-row mutation");
+    expect(decomposeEntry?.output_shape).toContain(
+      "without source-row mutation",
+    );
     const resolveEntry = contract.tool_contracts.resolve_entry;
     expect(resolveEntry).toBeDefined();
     expect(resolveEntry?.version).toBe(1);
@@ -457,7 +474,9 @@ describe("Open Brain contract manifest", () => {
       "warm",
       "cold",
     ]);
-    expect((searchAll?.input_schema as any).source_scope.fields.path).toMatchObject({
+    expect(
+      (searchAll?.input_schema as any).source_scope.fields.path,
+    ).toMatchObject({
       type: "string",
       required: false,
       minLength: 1,
@@ -469,9 +488,9 @@ describe("Open Brain contract manifest", () => {
     expect((laneUpsert?.input_schema as any).current_context_md.maxLength).toBe(
       100000,
     );
-    expect((laneUpsert?.input_schema as any).metadata.propertyNames.maxLength).toBe(
-      100,
-    );
+    expect(
+      (laneUpsert?.input_schema as any).metadata.propertyNames.maxLength,
+    ).toBe(100);
     const laneLoad = contract.tool_contracts.lane_load;
     expect(laneLoad).toBeDefined();
     expect((laneLoad?.input_schema as any).status.default).toBe("active");
@@ -501,11 +520,11 @@ describe("Open Brain contract manifest", () => {
     // contract so a future TS/Python divergence fails here, in lockstep with
     // python/openbrain-memory CURRENT_CONTRACT_VERSION.
     const contract = buildContract("2026-06-18T00:00:00.000Z");
-    expect(contract.contract_version).toBe("2026-07-08.memory-tools.v20");
+    expect(contract.contract_version).toBe("2026-07-13.memory-tools.v21");
 
     const appendEvent = contract.tool_contracts.append_session_event;
     expect(appendEvent).toBeDefined();
-    expect(appendEvent?.version).toBe(6);
+    expect(appendEvent?.version).toBe(7);
     expect(appendEvent?.output_shape).toContain("writer_identity");
     expect(appendEvent?.output_shape).toContain("token_identity");
     expect(appendEvent?.output_shape).toContain("delegated_agent_id");
@@ -520,8 +539,12 @@ describe("Open Brain contract manifest", () => {
     expect(appendInput.create_if_missing.description).toContain(
       "first-write realtime agent scopes",
     );
-    expect(appendInput.agent.description).toContain("validate against an existing lane");
-    expect(appendInput.platform.description).toContain("Stored as the lane source");
+    expect(appendInput.agent.description).toContain(
+      "validate against an existing lane",
+    );
+    expect(appendInput.platform.description).toContain(
+      "Stored as the lane source",
+    );
     expect(appendInput.server_id.description).toContain("exact realtime scope");
     expect(appendInput.channel_id.description).toContain(
       "validate against an existing lane",
@@ -560,10 +583,12 @@ describe("Open Brain contract manifest", () => {
       "memory_lifecycle_action=nominate_shared",
     );
     expect(shareCandidate.description.toLowerCase()).toContain("secret");
-    expect(appendInput.metadata.fields.sanitized_resubmit_of.type).toBe("string");
-    expect(appendInput.metadata.fields.sanitized_resubmit_of.description).toContain(
-      "reject_detail.resubmit_metadata",
+    expect(appendInput.metadata.fields.sanitized_resubmit_of.type).toBe(
+      "string",
     );
+    expect(
+      appendInput.metadata.fields.sanitized_resubmit_of.description,
+    ).toContain("reject_detail.resubmit_metadata");
     expect(appendInput.metadata.fields.sanitized_resubmit_attempt.type).toBe(
       "integer",
     );
@@ -598,7 +623,8 @@ describe("Open Brain contract manifest", () => {
           request_reply_subjects: {
             ...base.realtime_transport.nats_jetstream.request_reply_subjects,
             planned: [
-              ...base.realtime_transport.nats_jetstream.request_reply_subjects.planned,
+              ...base.realtime_transport.nats_jetstream.request_reply_subjects
+                .planned,
               "ob.memory.experimental",
             ],
           } as unknown as typeof base.realtime_transport.nats_jetstream.request_reply_subjects,

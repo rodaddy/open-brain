@@ -52,7 +52,7 @@ def _resolve_package_version(pyproject: Path | None = None) -> str:
 
 
 PACKAGE_VERSION = _resolve_package_version()
-CURRENT_CONTRACT_VERSION = "2026-07-08.memory-tools.v20"
+CURRENT_CONTRACT_VERSION = "2026-07-13.memory-tools.v21"
 COMPATIBLE_CONTRACT_VERSIONS = (CURRENT_CONTRACT_VERSION,)
 REQUIRED_CONTRACT_TOOLS = (
     "append_session_event",
@@ -74,9 +74,13 @@ REQUIRED_CONTRACT_TOOLS = (
     "session_wrap",
     "upsert_repo_fact",
     "working_set_append",
+    "citation_recall",
 )
 CURRENT_TOOL_HELP: Mapping[str, str] = {
     "append_session_event": "Append a durable event to a session lane journal.",
+    "citation_recall": (
+        "Return stored transcript citation evidence for a session event."
+    ),
     "agent_context_pack": (
         "Build a scoped context pack with working context and explicit "
         "quarantined recovery."
@@ -1218,6 +1222,9 @@ class OpenBrainClient:
 
     def append_session_event(self, **arguments: Any) -> JSON:
         return self.call_tool("append_session_event", arguments)
+
+    def citation_recall(self, **arguments: Any) -> JSON:
+        return self.call_tool("citation_recall", arguments)
 
     def archive_entry(self, **arguments: Any) -> JSON:
         return self.call_tool("archive_entry", arguments)

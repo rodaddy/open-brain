@@ -22,7 +22,8 @@ type AppendErrorClass =
   | "auth_denied"
   | "scope_validation"
   | "unsupported_operation"
-  | "conflict_retry";
+  | "conflict_retry"
+  | "citation_not_stored";
 
 function appendSessionEventError(
   errorClass: AppendErrorClass,
@@ -411,7 +412,8 @@ WHERE namespace = $1 AND session_key = $2`,
         {
           session_key: args.session_key,
           namespace: args.namespace,
-          remedy: "Call session_start first or retry append_session_event with create_if_missing=true.",
+          remedy:
+            "Call session_start first or retry append_session_event with create_if_missing=true.",
         },
       ),
     };
@@ -525,7 +527,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function hasShareCandidate(metadata: Record<string, unknown>): boolean {
-  return metadata.share_candidate === true || metadata.share_candidate === "true";
+  return (
+    metadata.share_candidate === true || metadata.share_candidate === "true"
+  );
 }
 
 function validateMemoryLifecycleMetadata(
@@ -721,7 +725,8 @@ function writerProvenance(auth: AuthInfo): {
   return {
     writer_identity: auth.clientId,
     token_identity: auth.tokenClientId ?? auth.clientId,
-    delegated_agent_id: namespaceSource === "header" ? (auth.agentId ?? null) : null,
+    delegated_agent_id:
+      namespaceSource === "header" ? (auth.agentId ?? null) : null,
     namespace_source: namespaceSource,
   };
 }
@@ -749,6 +754,27 @@ function appendWriterProvenance(
       },
     },
   };
+}
+
+function transcriptCitationValidationError(args: {
+  transcript_ref?: string;
+  transcript?: string;
+  occurred_at?: string;
+}): string | undefined {
+  const citationPayloadSupplied =
+    args.transcript !== undefined || args.occurred_at !== undefined;
+  if (!args.transcript_ref && citationPayloadSupplied) {
+    return "transcript_ref is required when transcript or occurred_at is supplied";
+  }
+  if (!args.transcript_ref) return undefined;
+  if (
+    !/^collab\/[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)*$/.test(
+      args.transcript_ref,
+    )
+  ) {
+    return "transcript_ref must use canonical host-neutral collab/... path segments";
+  }
+  return undefined;
 }
 
 export function registerAppendSessionEvent(
@@ -787,7 +813,9 @@ export function registerAppendSessionEvent(
           .string()
           .max(500)
           .optional()
-          .describe("Agent identity for first-write lane creation and scope checks"),
+          .describe(
+            "Agent identity for first-write lane creation and scope checks",
+          ),
         platform: z
           .string()
           .max(500)
@@ -819,7 +847,9 @@ export function registerAppendSessionEvent(
           .string()
           .max(500)
           .optional()
-          .describe("Human-readable lane topic to set when first-write creates the lane"),
+          .describe(
+            "Human-readable lane topic to set when first-write creates the lane",
+          ),
         event_type: z
           .enum(EVENT_TYPES)
           .describe(
@@ -840,6 +870,27 @@ export function registerAppendSessionEvent(
           .max(2000)
           .optional()
           .describe("Path to related artifact (file, URL, etc.)"),
+        transcript_ref: z
+          .string()
+          .trim()
+          .min(1)
+          .max(2000)
+          .optional()
+          .describe(
+            "Host-neutral source conversation reference (collab/...); never use /Volumes or /mnt paths",
+          ),
+        transcript: z
+          .string()
+          .max(50_000)
+          .optional()
+          .describe("Optional inline source exchange captured with the event"),
+        occurred_at: z
+          .string()
+          .datetime({ offset: true })
+          .optional()
+          .describe(
+            "When the cited exchange occurred (ISO 8601 with timezone)",
+          ),
         importance: z
           .enum(IMPORTANCE_LEVELS)
           .optional()
@@ -892,11 +943,33 @@ export function registerAppendSessionEvent(
       }
       const importance = args.importance ?? "warm";
       const provenance = writerProvenance(auth);
-      const lifecycleError = validateMemoryLifecycleMetadata(args.metadata ?? {});
+      const lifecycleError = validateMemoryLifecycleMetadata(
+        args.metadata ?? {},
+      );
       if (lifecycleError) {
         return appendSessionEventError(
           "scope_validation",
           lifecycleError,
+          false,
+          { session_key: args.session_key, namespace: ns },
+        );
+      }
+      const citationError = transcriptCitationValidationError(args);
+      if (citationError) {
+        return appendSessionEventError(
+          "scope_validation",
+          citationError,
+          false,
+          {
+            session_key: args.session_key,
+            namespace: ns,
+          },
+        );
+      }
+      if (args.transcript !== undefined && containsSecret(args.transcript)) {
+        return appendSessionEventError(
+          "scope_validation",
+          "transcript must not contain credential-like material",
           false,
           { session_key: args.session_key, namespace: ns },
         );
@@ -1011,9 +1084,10 @@ export function registerAppendSessionEvent(
 
             const { rows } = await db.query(
               `INSERT INTO ob_session_events
-             (lane_id, event_type, content, source, artifact_path, importance,
-              metadata, embedding, content_hash, embedded_at, embedding_model, created_by)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+             (lane_id, event_type, content, source, artifact_path, transcript_ref,
+              transcript, occurred_at, importance, metadata, embedding, content_hash,
+              embedded_at, embedding_model, created_by)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
            ON CONFLICT (lane_id, content_hash) WHERE content_hash IS NOT NULL DO NOTHING
            RETURNING id, created_at`,
               [
@@ -1022,6 +1096,9 @@ export function registerAppendSessionEvent(
                 args.content,
                 args.source ?? null,
                 args.artifact_path ?? null,
+                args.transcript_ref ?? null,
+                args.transcript ?? null,
+                args.occurred_at ?? null,
                 importance,
                 JSON.stringify(metadata),
                 eventEmbedding.embeddingVal,
@@ -1033,6 +1110,44 @@ export function registerAppendSessionEvent(
             );
 
             if (rows.length === 0) {
+              const citationSupplied =
+                args.transcript_ref !== undefined ||
+                args.transcript !== undefined ||
+                args.occurred_at !== undefined;
+              if (citationSupplied) {
+                const { rows: existingRows } = await db.query<{
+                  id: string;
+                  citation_matches: boolean;
+                }>(
+                  `SELECT id,
+                    transcript_ref IS NOT DISTINCT FROM $3::text
+                    AND transcript IS NOT DISTINCT FROM $4::text
+                    AND occurred_at IS NOT DISTINCT FROM $5::timestamptz
+                      AS citation_matches
+FROM ob_session_events
+WHERE lane_id = $1 AND content_hash = $2`,
+                  [
+                    laneId,
+                    eventEmbedding.contentHashValue,
+                    args.transcript_ref ?? null,
+                    args.transcript ?? null,
+                    args.occurred_at ?? null,
+                  ],
+                );
+                const existing = existingRows[0];
+                if (!existing || !existing.citation_matches) {
+                  return appendSessionEventError(
+                    "citation_not_stored",
+                    "Duplicate content exists but the supplied citation was not stored",
+                    false,
+                    {
+                      duplicate: true,
+                      existing_event_id: existing?.id ?? null,
+                      ...provenance,
+                    },
+                  );
+                }
+              }
               return {
                 content: [
                   {
@@ -1055,6 +1170,7 @@ export function registerAppendSessionEvent(
               event_type: args.event_type,
               importance,
               created_at: rows[0].created_at,
+              transcript_ref: args.transcript_ref ?? null,
               ...provenance,
               // Surface the sync nomination outcome so a contract-driven agent
               // learns its share_candidate was refused (and why) without polling.
@@ -1099,7 +1215,11 @@ export function registerAppendSessionEvent(
           await fillAcceptedLaneEmbedding(deps, acceptedLaneForEmbedding, args);
         }
         if (acceptedEventForEmbedding) {
-          await fillAcceptedEventEmbedding(deps, acceptedEventForEmbedding, args);
+          await fillAcceptedEventEmbedding(
+            deps,
+            acceptedEventForEmbedding,
+            args,
+          );
         }
 
         return response;

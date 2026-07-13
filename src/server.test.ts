@@ -325,15 +325,17 @@ describe("GET /api/v1/operator/doctor", () => {
       const serialized = JSON.stringify(body);
       expect(body.status).toBe("healthy");
       expect(body.contract_version).toBe("2026-07-08.operator-doctor.v2");
-      expect(body.runtime.contract_version).toBe("2026-07-08.memory-tools.v20");
+      expect(body.runtime.contract_version).toBe("2026-07-13.memory-tools.v21");
       expect(body.embedding_provider.available).toBe(true);
       expect(serialized).not.toContain(secret);
       expect(serialized).not.toContain(embeddingHost);
       expect(serialized).not.toContain(logPath);
     } finally {
-      if (originalEmbeddingBaseUrl === undefined) delete process.env.EMBEDDING_BASE_URL;
+      if (originalEmbeddingBaseUrl === undefined)
+        delete process.env.EMBEDDING_BASE_URL;
       else process.env.EMBEDDING_BASE_URL = originalEmbeddingBaseUrl;
-      if (originalEmbeddingApiKey === undefined) delete process.env.EMBEDDING_API_KEY;
+      if (originalEmbeddingApiKey === undefined)
+        delete process.env.EMBEDDING_API_KEY;
       else process.env.EMBEDDING_API_KEY = originalEmbeddingApiKey;
       if (originalLogFile === undefined) delete process.env.LOG_FILE;
       else process.env.LOG_FILE = originalLogFile;
@@ -358,7 +360,8 @@ describe("GET /api/v1/operator/doctor", () => {
       const body = (await res.json()) as { status: string };
       expect(body.status).toBe("degraded");
     } finally {
-      if (originalEmbeddingBaseUrl === undefined) delete process.env.EMBEDDING_BASE_URL;
+      if (originalEmbeddingBaseUrl === undefined)
+        delete process.env.EMBEDDING_BASE_URL;
       else process.env.EMBEDDING_BASE_URL = originalEmbeddingBaseUrl;
     }
   });
@@ -387,7 +390,8 @@ describe("GET /api/v1/operator/doctor", () => {
       expect(body.database.connected).toBe(true);
       expect(body.migrations.status).toBe("unknown");
     } finally {
-      if (originalEmbeddingBaseUrl === undefined) delete process.env.EMBEDDING_BASE_URL;
+      if (originalEmbeddingBaseUrl === undefined)
+        delete process.env.EMBEDDING_BASE_URL;
       else process.env.EMBEDDING_BASE_URL = originalEmbeddingBaseUrl;
     }
   });
@@ -411,7 +415,8 @@ describe("GET /api/v1/operator/doctor", () => {
       expect(body.status).toBe("unhealthy");
       expect(body.database.connected).toBe(false);
     } finally {
-      if (originalEmbeddingBaseUrl === undefined) delete process.env.EMBEDDING_BASE_URL;
+      if (originalEmbeddingBaseUrl === undefined)
+        delete process.env.EMBEDDING_BASE_URL;
       else process.env.EMBEDDING_BASE_URL = originalEmbeddingBaseUrl;
     }
   });
@@ -469,7 +474,8 @@ describe("POST /mcp", () => {
 
   it("returns retryable session-cap diagnostics when initialize is over cap", async () => {
     const originalMax = process.env.OPEN_BRAIN_MAX_SESSIONS;
-    const originalRetryAfter = process.env.OPEN_BRAIN_SESSION_RETRY_AFTER_SECONDS;
+    const originalRetryAfter =
+      process.env.OPEN_BRAIN_SESSION_RETRY_AFTER_SECONDS;
     const seed = await fetch(`${baseUrl}/mcp`, {
       method: "POST",
       headers: {

@@ -193,7 +193,7 @@ LIMIT 1`;
           eventParams.push(eventLimit);
 
           const eventSql = `SELECT id, event_type, content, source, artifact_path,
-  importance, metadata, created_at, created_by
+  transcript_ref, transcript, occurred_at, importance, metadata, created_at, created_by
 FROM ob_session_events
 WHERE ${eventConditions.join(" AND ")}
 ORDER BY created_at DESC
