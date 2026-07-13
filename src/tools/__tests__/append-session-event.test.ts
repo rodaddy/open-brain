@@ -2502,7 +2502,19 @@ dbDescribe("append_session_event create_if_missing (live Postgres)", () => {
         [ns, ["dev:rTech-audit", "dev:rtech-audit"]],
       );
       expect(rows).toHaveLength(2);
-      expect(rows[0].content_hash).toBe(rows[1].content_hash);
+      const expectedHash = contentHash(
+        "dev:rTech-audit|Shared development session memory",
+      );
+      expect(expectedHash).toBe(
+        contentHash("dev:rtech-audit|Shared development session memory"),
+      );
+      expect(rows.map((row) => row.session_key).sort()).toEqual(
+        ["dev:rTech-audit", "dev:rtech-audit"].sort(),
+      );
+      expect(rows.map((row) => row.content_hash)).toEqual([
+        expectedHash,
+        expectedHash,
+      ]);
     } finally {
       await cleanupNs();
     }
