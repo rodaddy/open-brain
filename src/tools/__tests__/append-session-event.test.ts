@@ -2469,6 +2469,45 @@ dbDescribe("append_session_event create_if_missing (live Postgres)", () => {
     }
   });
 
+  it("allows case-distinct session keys with the same normalized lane hash", async () => {
+    await cleanupNs();
+    try {
+      const base = {
+        create_if_missing: true,
+        agent: "shared-session-finalizer",
+        platform: "local-runtime",
+        project: "rtech-audit",
+        topic: "Shared development session memory",
+        event_type: "handoff",
+      };
+      const first = await callAppend({
+        ...base,
+        session_key: "dev:rTech-audit",
+        content: "mixed-case project session",
+      });
+      expect(first.isError).toBeFalsy();
+
+      const second = await callAppend({
+        ...base,
+        session_key: "dev:rtech-audit",
+        content: "lower-case project session",
+      });
+      expect(second.isError).toBeFalsy();
+
+      const { rows } = await pool.query(
+        `SELECT session_key, content_hash
+           FROM ob_session_lanes
+          WHERE namespace=$1 AND session_key = ANY($2::text[])
+          ORDER BY session_key`,
+        [ns, ["dev:rTech-audit", "dev:rtech-audit"]],
+      );
+      expect(rows).toHaveLength(2);
+      expect(rows[0].content_hash).toBe(rows[1].content_hash);
+    } finally {
+      await cleanupNs();
+    }
+  });
+
   it("denies a scoped append that conflicts with the real stored lane scope", async () => {
     await cleanupNs();
     try {
