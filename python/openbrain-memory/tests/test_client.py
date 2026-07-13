@@ -1781,6 +1781,7 @@ def test_all_registered_tool_wrappers_call_matching_tool_names():
         "access_report",
         "adjacent_context",
         "append_session_event",
+        "citation_recall",
         "agent_context_pack",
         "archive_entity",
         "archive_entry",
@@ -1840,7 +1841,7 @@ def test_all_registered_tool_wrappers_call_matching_tool_names():
 
 
 def test_required_contract_tools_have_first_class_wrappers_and_help():
-    assert CURRENT_CONTRACT_VERSION == "2026-07-08.memory-tools.v20"
+    assert CURRENT_CONTRACT_VERSION == "2026-07-13.memory-tools.v21"
     assert set(REQUIRED_CONTRACT_TOOLS) <= set(CURRENT_TOOL_HELP)
 
     for tool_name in REQUIRED_CONTRACT_TOOLS:

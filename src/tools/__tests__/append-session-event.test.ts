@@ -299,10 +299,14 @@ describe("append_session_event", () => {
       },
     };
     const auth: AuthInfo = { role: "agent", clientId: "nagatha" };
-    const { client, cleanup } = await setupToolClient(mockPool, auth, async (text) => {
-      captured.embedInputs.push(text);
-      return Array(768).fill(0.1);
-    });
+    const { client, cleanup } = await setupToolClient(
+      mockPool,
+      auth,
+      async (text) => {
+        captured.embedInputs.push(text);
+        return Array(768).fill(0.1);
+      },
+    );
 
     try {
       const result = await client.callTool({
@@ -1203,12 +1207,14 @@ describe("append_session_event", () => {
             ],
           };
         }
-        // INSERT INTO ob_session_events — $7 (index 6) is the metadata JSON.
-        if (params && typeof params[6] === "string") {
-          captured.metadata = JSON.parse(params[6]);
-          captured.createdBy = params[11] ?? null;
+        // INSERT INTO ob_session_events — $10 (index 9) is the metadata JSON.
+        if (params && typeof params[9] === "string") {
+          captured.metadata = JSON.parse(params[9]);
+          captured.createdBy = params[14] ?? null;
         }
-        return { rows: [{ id: "event-uuid-1", created_at: "2026-06-08T10:00:00Z" }] };
+        return {
+          rows: [{ id: "event-uuid-1", created_at: "2026-06-08T10:00:00Z" }],
+        };
       },
     };
     return pool;
@@ -1424,7 +1430,9 @@ describe("append_session_event", () => {
       // Persisted metadata: nomination stripped, audit marker stamped.
       expect(mockPool.captured.metadata).not.toBeNull();
       expect(mockPool.captured.metadata!.share_candidate).toBeUndefined();
-      expect(mockPool.captured.metadata!.memory_lifecycle_action).toBeUndefined();
+      expect(
+        mockPool.captured.metadata!.memory_lifecycle_action,
+      ).toBeUndefined();
       expect(mockPool.captured.metadata!.share_rejected_sync).toBe(
         "reject-secret",
       );
@@ -1433,7 +1441,7 @@ describe("append_session_event", () => {
     }
   });
 
-  it("treats string \"true\" nomination like boolean true (matches async SQL truthiness)", async () => {
+  it('treats string "true" nomination like boolean true (matches async SQL truthiness)', async () => {
     // The async promoter nominates on `metadata->>'share_candidate' = 'true'`,
     // which matches a JSON string "true". If the sync gate only accepted boolean
     // true, a mistyped nomination would skip the inline secret check yet still
@@ -1467,7 +1475,9 @@ describe("append_session_event", () => {
         },
       });
       expect(mockPool.captured.metadata!.share_candidate).toBeUndefined();
-      expect(mockPool.captured.metadata!.memory_lifecycle_action).toBeUndefined();
+      expect(
+        mockPool.captured.metadata!.memory_lifecycle_action,
+      ).toBeUndefined();
       expect(mockPool.captured.metadata!.share_rejected_sync).toBe(
         "reject-secret",
       );
@@ -1509,7 +1519,9 @@ describe("append_session_event", () => {
 
       expect(mockPool.captured.metadata).not.toBeNull();
       expect(mockPool.captured.metadata!.share_candidate).toBeUndefined();
-      expect(mockPool.captured.metadata!.memory_lifecycle_action).toBeUndefined();
+      expect(
+        mockPool.captured.metadata!.memory_lifecycle_action,
+      ).toBeUndefined();
       expect(mockPool.captured.metadata!.share_rejected_sync).toBe(
         "reject-private",
       );
@@ -1743,7 +1755,9 @@ describe("append_session_event", () => {
       // must treat this as inert candidate state.
       expect(mockPool.captured.metadata).not.toBeNull();
       expect(mockPool.captured.metadata!.share_candidate).toBe(true);
-      expect(mockPool.captured.metadata!.memory_lifecycle_action).toBeUndefined();
+      expect(
+        mockPool.captured.metadata!.memory_lifecycle_action,
+      ).toBeUndefined();
       expect(mockPool.captured.metadata!.share_rejected_sync).toBeUndefined();
     } finally {
       await cleanup();
@@ -1767,7 +1781,8 @@ describe("append_session_event", () => {
             share_candidate: true,
             memory_lifecycle_action: "nominate_shared",
             candidate_type: "shared_kb_nomination",
-            candidate_reason: "Reviewed fact is safe to nominate for shared-kb.",
+            candidate_reason:
+              "Reviewed fact is safe to nominate for shared-kb.",
           },
         },
       });
@@ -1802,8 +1817,7 @@ describe("append_session_event", () => {
         arguments: {
           session_key: "test",
           event_type: "fact",
-          content:
-            "Secret nomination contains key " + "sk-" + "b".repeat(20),
+          content: "Secret nomination contains key " + "sk-" + "b".repeat(20),
           metadata: {
             share_candidate: true,
             memory_lifecycle_action: "nominate_shared",
@@ -1822,7 +1836,9 @@ describe("append_session_event", () => {
       expect(parsed.share_candidate_rejected).toBe("reject-secret");
       expect(mockPool.captured.metadata).not.toBeNull();
       expect(mockPool.captured.metadata!.share_candidate).toBeUndefined();
-      expect(mockPool.captured.metadata!.memory_lifecycle_action).toBeUndefined();
+      expect(
+        mockPool.captured.metadata!.memory_lifecycle_action,
+      ).toBeUndefined();
       expect(mockPool.captured.metadata!.candidate_type).toBeUndefined();
       expect(mockPool.captured.metadata!.candidate_reason).toBeUndefined();
       expect(mockPool.captured.metadata!.candidate_confidence).toBeUndefined();
@@ -1884,9 +1900,7 @@ describe("append_session_event", () => {
             memory_lifecycle_action: "candidate",
             candidate_type: "negative_example",
             candidate_reason: "Evidence refs should not persist secrets.",
-            evidence_refs: [
-              { note: "token=" + "sk-" + "c".repeat(20) },
-            ],
+            evidence_refs: [{ note: "token=" + "sk-" + "c".repeat(20) }],
           },
         },
       });
@@ -2026,6 +2040,202 @@ describe("append_session_event", () => {
       expect(result.isError).toBe(true);
       expect((result.content as any)[0].text).toContain("connection refused");
       expect((result.content as any)[0].text).toContain("Database error");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("persists a host-neutral transcript citation with the event", async () => {
+    let insertParams: unknown[] | undefined;
+    const mockPool = {
+      query: async (sql: string, params?: unknown[]) => {
+        if (sql.includes("ob_session_lanes")) {
+          return { rows: [{ id: "lane-uuid-1", status: "active" }] };
+        }
+        insertParams = params;
+        return {
+          rows: [{ id: "event-uuid-1", created_at: "2026-07-13T12:00:00Z" }],
+        };
+      },
+    };
+    const auth: AuthInfo = { role: "admin", clientId: "skippy" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "append_session_event",
+        arguments: {
+          session_key: "capture:288",
+          event_type: "decision",
+          content: "Use durable transcript citations.",
+          source: "rico",
+          transcript_ref: "collab/open-brain/conversations/288",
+          transcript:
+            "Rico: preserve the source conversation with the decision.",
+          occurred_at: "2026-07-13T11:59:00Z",
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      expect(JSON.parse((result.content as any)[0].text).transcript_ref).toBe(
+        "collab/open-brain/conversations/288",
+      );
+      expect(insertParams?.slice(5, 8)).toEqual([
+        "collab/open-brain/conversations/288",
+        "Rico: preserve the source conversation with the decision.",
+        "2026-07-13T11:59:00Z",
+      ]);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("rejects host-specific transcript references before any database write", async () => {
+    let queryCount = 0;
+    const mockPool = {
+      query: async () => {
+        queryCount += 1;
+        return { rows: [] };
+      },
+    };
+    const auth: AuthInfo = { role: "admin", clientId: "skippy" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "append_session_event",
+        arguments: {
+          session_key: "capture:288",
+          event_type: "decision",
+          content: "This must not write.",
+          transcript_ref: "/Volumes/ThunderBolt/transcripts/288.jsonl",
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.error).toBe("scope_validation");
+      expect(parsed.message).toContain("canonical host-neutral collab");
+      expect(queryCount).toBe(0);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("requires transcript_ref for an empty transcript and rejects noncanonical segments", async () => {
+    let queryCount = 0;
+    const mockPool = {
+      query: async () => {
+        queryCount += 1;
+        return { rows: [] };
+      },
+    };
+    const auth: AuthInfo = { role: "admin", clientId: "skippy" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const emptyTranscript = await client.callTool({
+        name: "append_session_event",
+        arguments: {
+          session_key: "capture:288",
+          event_type: "decision",
+          content: "This must not write.",
+          transcript: "",
+        },
+      });
+      const noncanonicalRef = await client.callTool({
+        name: "append_session_event",
+        arguments: {
+          session_key: "capture:288",
+          event_type: "decision",
+          content: "This also must not write.",
+          transcript_ref: "collab/open-brain/../conversations",
+        },
+      });
+
+      expect(
+        JSON.parse((emptyTranscript.content as any)[0].text).message,
+      ).toContain("transcript_ref is required");
+      expect(
+        JSON.parse((noncanonicalRef.content as any)[0].text).message,
+      ).toContain("canonical host-neutral");
+      expect(emptyTranscript.isError).toBe(true);
+      expect(noncanonicalRef.isError).toBe(true);
+      expect(queryCount).toBe(0);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("rejects credential-like transcript material before any database write", async () => {
+    let queryCount = 0;
+    const mockPool = {
+      query: async () => {
+        queryCount += 1;
+        return { rows: [] };
+      },
+    };
+    const auth: AuthInfo = { role: "admin", clientId: "skippy" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+    const syntheticCredential = ["api", "key"].join("_") + ": synthetic-value";
+
+    try {
+      const result = await client.callTool({
+        name: "append_session_event",
+        arguments: {
+          session_key: "capture:288",
+          event_type: "decision",
+          content: "This fact is safe, but its source exchange is not.",
+          transcript_ref: "collab/open-brain/conversations/288",
+          transcript: `Rico: ${syntheticCredential}`,
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(JSON.parse((result.content as any)[0].text).message).toContain(
+        "credential-like material",
+      );
+      expect(queryCount).toBe(0);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("reports when a duplicate cannot retain newly supplied citation fields", async () => {
+    const mockPool = {
+      query: async (sql: string) => {
+        if (sql.includes("ob_session_lanes")) {
+          return { rows: [{ id: "lane-uuid-1", status: "active" }] };
+        }
+        if (sql.includes("citation_matches")) {
+          return {
+            rows: [{ id: "existing-event-uuid", citation_matches: false }],
+          };
+        }
+        return { rows: [] };
+      },
+    };
+    const auth: AuthInfo = { role: "admin", clientId: "skippy" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "append_session_event",
+        arguments: {
+          session_key: "capture:288",
+          event_type: "decision",
+          content: "A deduplicated fact.",
+          transcript_ref: "collab/open-brain/conversations/288",
+          transcript: "Rico: cite this exchange.",
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(JSON.parse((result.content as any)[0].text)).toMatchObject({
+        error: "citation_not_stored",
+        duplicate: true,
+        existing_event_id: "existing-event-uuid",
+      });
     } finally {
       await cleanup();
     }

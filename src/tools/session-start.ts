@@ -10,7 +10,7 @@ const LANE_COLUMNS = `id, session_key, namespace, status, agent, project, topic,
   current_context_md, metadata, created_at, updated_at, ended_at`;
 
 const EVENT_COLUMNS = `id, event_type, content, source, artifact_path,
-  importance, metadata, created_at, created_by`;
+  transcript_ref, transcript, occurred_at, importance, metadata, created_at, created_by`;
 
 export function registerSessionStart(server: McpServer, deps: ToolDeps): void {
   server.registerTool(

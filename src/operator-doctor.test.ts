@@ -45,7 +45,9 @@ function makePoolWithUnknownMigrations() {
 // Pool that reports every on-disk migration as applied: migrations "current".
 async function makeCurrentPool() {
   const migrationsDir = join(dirname(THIS_FILE), "db", "migrations");
-  const files = (await readdir(migrationsDir)).filter((f) => f.endsWith(".sql"));
+  const files = (await readdir(migrationsDir)).filter((f) =>
+    f.endsWith(".sql"),
+  );
   return makePool(files);
 }
 
@@ -88,7 +90,9 @@ describe("operator doctor status", () => {
     ) => {
       const url = typeof input === "string" ? input : input.toString();
       expect(url).toContain("/models");
-      expect(init?.headers).toMatchObject({ Authorization: `Bearer ${secret}` });
+      expect(init?.headers).toMatchObject({
+        Authorization: `Bearer ${secret}`,
+      });
       return Promise.resolve(new Response("{}", { status: 200 }));
     };
 
@@ -99,7 +103,7 @@ describe("operator doctor status", () => {
     const serialized = JSON.stringify(status);
 
     expect(status.contract_version).toBe("2026-07-08.operator-doctor.v2");
-    expect(status.runtime.contract_version).toBe("2026-07-08.memory-tools.v20");
+    expect(status.runtime.contract_version).toBe("2026-07-13.memory-tools.v21");
     expect(status.database.connected).toBe(true);
     expect(status.embedding_provider).toMatchObject({
       configured: true,
@@ -143,7 +147,9 @@ describe("operator doctor status", () => {
     expect(status.optional_dependencies.qmd).toBe("unavailable");
     // qmd is an optional dependency: presence/absence never changes the tier.
     expect(status.status).toBe("healthy");
-    expect(JSON.stringify(status)).not.toContain("/nonexistent/qmd-entrypoint.ts");
+    expect(JSON.stringify(status)).not.toContain(
+      "/nonexistent/qmd-entrypoint.ts",
+    );
   });
 
   it("falls back to the shared default qmd path when QMD_PATH is unset", async () => {
@@ -191,7 +197,9 @@ describe("operator doctor status", () => {
 
     expect(status.status).toBe("healthy");
     expect(status.embedding_provider.configured).toBe(false);
-    expect(status.optional_dependencies.embedding_provider).toBe("not_configured");
+    expect(status.optional_dependencies.embedding_provider).toBe(
+      "not_configured",
+    );
   });
 
   it("degrades when the DB is connected but migration state is unknown", async () => {
@@ -284,7 +292,9 @@ describe("operator doctor status", () => {
       "model",
       "recent_failures",
     ]);
-    expect(Object.keys(status.embedding_provider.recent_failures).sort()).toEqual([
+    expect(
+      Object.keys(status.embedding_provider.recent_failures).sort(),
+    ).toEqual([
       "consecutive_restartable_failures",
       "last_failure_code",
       "last_restart_at",
@@ -369,14 +379,29 @@ describe("operator doctor cache", () => {
     let clock = 0;
     const options = { ttlMs: 5_000, now: () => clock };
 
-    const first = await getOperatorDoctorStatus(pool, boundary, undefined, options);
+    const first = await getOperatorDoctorStatus(
+      pool,
+      boundary,
+      undefined,
+      options,
+    );
     clock = 4_999;
-    const cached = await getOperatorDoctorStatus(pool, boundary, undefined, options);
+    const cached = await getOperatorDoctorStatus(
+      pool,
+      boundary,
+      undefined,
+      options,
+    );
     expect(probeCycles).toBe(1);
     expect(cached).toBe(first);
 
     clock = 5_001;
-    const rebuilt = await getOperatorDoctorStatus(pool, boundary, undefined, options);
+    const rebuilt = await getOperatorDoctorStatus(
+      pool,
+      boundary,
+      undefined,
+      options,
+    );
     expect(probeCycles).toBe(2);
     expect(rebuilt).not.toBe(first);
   });
@@ -384,7 +409,10 @@ describe("operator doctor cache", () => {
   it("rebuilds immediately after resetOperatorDoctorCache", async () => {
     resetOperatorDoctorCache();
     const boundary = readNatsRuntimeBoundary({});
-    const first = await getOperatorDoctorStatus(makePool(["001_init.sql"]), boundary);
+    const first = await getOperatorDoctorStatus(
+      makePool(["001_init.sql"]),
+      boundary,
+    );
     resetOperatorDoctorCache();
     const second = await getOperatorDoctorStatus(makeDownPool(), boundary);
 
@@ -397,9 +425,13 @@ describe("operator doctor cache", () => {
 describe("canReadDoctor", () => {
   it("permits only admin and ob-admin roles", () => {
     expect(canReadDoctor({ role: "admin", clientId: "a" } as any)).toBe(true);
-    expect(canReadDoctor({ role: "ob-admin", clientId: "b" } as any)).toBe(true);
+    expect(canReadDoctor({ role: "ob-admin", clientId: "b" } as any)).toBe(
+      true,
+    );
     expect(canReadDoctor({ role: "agent", clientId: "c" } as any)).toBe(false);
-    expect(canReadDoctor({ role: "readonly", clientId: "d" } as any)).toBe(false);
+    expect(canReadDoctor({ role: "readonly", clientId: "d" } as any)).toBe(
+      false,
+    );
     expect(canReadDoctor(undefined)).toBe(false);
   });
 });

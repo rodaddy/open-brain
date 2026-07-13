@@ -231,6 +231,24 @@ renders. `content_length` and `content_truncated` describe the readable compact
 projection used for `content_preview`; callers that need every raw stored column
 should follow `fetch_path` with `render: "full"`.
 
+### Transcript Citation Contract
+
+`append_session_event` may store a memory/summary with `transcript_ref`, an
+optional inline `transcript`, and optional `occurred_at`. A supplied transcript
+(including an empty transcript) or occurred time requires `transcript_ref`.
+`transcript_ref` is a durable host-neutral `collab/...` path with canonical
+alphanumeric-starting segments containing only alphanumerics, `.`, `_`, and
+`-`; absolute, host, backslash, colon, empty, `.` and `..` segments are
+rejected. The event's `source` is the cited speaker/agent.
+
+Use `citation_recall` with the readable session-event UUID to return the fact,
+conversation ref, speaker, date, and the stored exchange. Its bounded
+`before`/`after` context comes from neighboring transcript-bearing events in
+the same lane and conversation ref; callers may explicitly raise
+`context_limit` or `max_transcript_chars` within the server bounds. Existing
+events without a transcript ref remain readable and return
+`citation.status: "source_not_stored"`; callers must not infer a source.
+
 ### OKF Compatibility Hooks
 
 Open Brain does not implement OKF as its storage model. Treat OKF as an edge

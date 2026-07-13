@@ -2,10 +2,7 @@ import {
   REPO_FACT_METADATA_CONTRACT,
   REPO_FACT_VALIDATION_CONTRACT,
 } from "./tools/repo-facts.ts";
-import {
-  SOURCE_REFS_CONTRACT,
-  SOURCE_SCOPE_CONTRACT,
-} from "./source-refs.ts";
+import { SOURCE_REFS_CONTRACT, SOURCE_SCOPE_CONTRACT } from "./source-refs.ts";
 
 export interface ToolContract {
   version: number;
@@ -39,9 +36,24 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
           "the server enforces write authority before accepting RAM working context.",
       },
       agent: { type: "string", required: true, minLength: 1, maxLength: 200 },
-      platform: { type: "string", required: true, minLength: 1, maxLength: 200 },
-      server_id: { type: "string", required: true, minLength: 1, maxLength: 500 },
-      channel_id: { type: "string", required: true, minLength: 1, maxLength: 500 },
+      platform: {
+        type: "string",
+        required: true,
+        minLength: 1,
+        maxLength: 200,
+      },
+      server_id: {
+        type: "string",
+        required: true,
+        minLength: 1,
+        maxLength: 500,
+      },
+      channel_id: {
+        type: "string",
+        required: true,
+        minLength: 1,
+        maxLength: 500,
+      },
       thread_id: {
         type: "string",
         required: false,
@@ -84,7 +96,12 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
         type: "object",
         required: false,
         fields: {
-          table: { type: "string", required: true, minLength: 1, maxLength: 100 },
+          table: {
+            type: "string",
+            required: true,
+            minLength: 1,
+            maxLength: 100,
+          },
           id: { type: "string", required: true, minLength: 1, maxLength: 200 },
         },
       },
@@ -112,9 +129,24 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
           "server enforces read authority before returning any scoped context.",
       },
       agent: { type: "string", required: true, minLength: 1, maxLength: 200 },
-      platform: { type: "string", required: true, minLength: 1, maxLength: 200 },
-      server_id: { type: "string", required: true, minLength: 1, maxLength: 500 },
-      channel_id: { type: "string", required: true, minLength: 1, maxLength: 500 },
+      platform: {
+        type: "string",
+        required: true,
+        minLength: 1,
+        maxLength: 200,
+      },
+      server_id: {
+        type: "string",
+        required: true,
+        minLength: 1,
+        maxLength: 500,
+      },
+      channel_id: {
+        type: "string",
+        required: true,
+        minLength: 1,
+        maxLength: 500,
+      },
       thread_id: { type: "string", required: false, maxLength: 500 },
       session_key: {
         type: "string",
@@ -183,9 +215,24 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
           "server enforces write authority before accepting recovery WAL records.",
       },
       agent: { type: "string", required: true, minLength: 1, maxLength: 200 },
-      platform: { type: "string", required: true, minLength: 1, maxLength: 200 },
-      server_id: { type: "string", required: true, minLength: 1, maxLength: 500 },
-      channel_id: { type: "string", required: true, minLength: 1, maxLength: 500 },
+      platform: {
+        type: "string",
+        required: true,
+        minLength: 1,
+        maxLength: 200,
+      },
+      server_id: {
+        type: "string",
+        required: true,
+        minLength: 1,
+        maxLength: 500,
+      },
+      channel_id: {
+        type: "string",
+        required: true,
+        minLength: 1,
+        maxLength: 500,
+      },
       thread_id: { type: "string", required: false, maxLength: 500 },
       session_key: {
         type: "string",
@@ -239,9 +286,24 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
           "server enforces write authority before marking recovery WAL records.",
       },
       agent: { type: "string", required: true, minLength: 1, maxLength: 200 },
-      platform: { type: "string", required: true, minLength: 1, maxLength: 200 },
-      server_id: { type: "string", required: true, minLength: 1, maxLength: 500 },
-      channel_id: { type: "string", required: true, minLength: 1, maxLength: 500 },
+      platform: {
+        type: "string",
+        required: true,
+        minLength: 1,
+        maxLength: 200,
+      },
+      server_id: {
+        type: "string",
+        required: true,
+        minLength: 1,
+        maxLength: 500,
+      },
+      channel_id: {
+        type: "string",
+        required: true,
+        minLength: 1,
+        maxLength: 500,
+      },
       thread_id: { type: "string", required: false, maxLength: 500 },
       session_key: {
         type: "string",
@@ -291,7 +353,13 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
       table: {
         type: "enum",
         required: true,
-        values: ["thoughts", "decisions", "relationships", "projects", "sessions"],
+        values: [
+          "thoughts",
+          "decisions",
+          "relationships",
+          "projects",
+          "sessions",
+        ],
         description:
           "Readable table containing the target row. Use the plural table " +
           "name derived from search result source_type.",
@@ -334,7 +402,13 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
       table: {
         type: "enum",
         required: true,
-        values: ["thoughts", "decisions", "relationships", "projects", "sessions"],
+        values: [
+          "thoughts",
+          "decisions",
+          "relationships",
+          "projects",
+          "sessions",
+        ],
         description:
           "Readable source table containing the oversized row to decompose.",
       },
@@ -587,7 +661,7 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
     output_shape: "session lane plus recent events JSON text payload",
   },
   session_context: {
-    version: 2,
+    version: 3,
     input_schema: {
       session_key: {
         type: "string",
@@ -658,7 +732,49 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
           "warm, cold. Omit to include all tiers.",
       },
     },
-    output_shape: "session lane plus recent events JSON text payload",
+    output_shape:
+      "session lane plus recent events JSON text payload; events may include " +
+      "transcript_ref, transcript, and occurred_at citation fields",
+  },
+  citation_recall: {
+    version: 1,
+    input_schema: {
+      event_id: {
+        type: "string",
+        required: true,
+        format: "uuid",
+        description: "Readable session event UUID to cite.",
+      },
+      namespace: {
+        type: "string",
+        required: false,
+        maxLength: 500,
+        description:
+          "Memory partition to read. Defaults to the auth-derived namespace and is enforced server-side.",
+      },
+      context_limit: {
+        type: "integer",
+        required: false,
+        min: 0,
+        max: 10,
+        default: 2,
+        description:
+          "Neighboring transcript exchanges returned before and after the cited event.",
+      },
+      max_transcript_chars: {
+        type: "integer",
+        required: false,
+        min: 100,
+        max: 50000,
+        default: 2000,
+        description:
+          "Maximum characters from each returned source exchange; raise explicitly to expand context.",
+      },
+    },
+    output_shape:
+      "citation JSON text payload with fact and either citation.status=stored " +
+      "(host-neutral conversation_ref, speaker, date, optional transcript, bounded before/after context) " +
+      "or citation.status=source_not_stored for legacy evidence-less events",
   },
   lane_upsert: {
     version: 2,
@@ -717,22 +833,19 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
         type: "string",
         required: false,
         maxLength: 500,
-        description:
-          "Originating thread id within the channel, when threaded.",
+        description: "Originating thread id within the channel, when threaded.",
       },
       project: {
         type: "string",
         required: false,
         maxLength: 500,
-        description:
-          "Project the lane belongs to, for scoping and filtering.",
+        description: "Project the lane belongs to, for scoping and filtering.",
       },
       topic: {
         type: "string",
         required: false,
         maxLength: 500,
-        description:
-          "Short human-readable subject for the lane.",
+        description: "Short human-readable subject for the lane.",
       },
       current_context_md: {
         type: "string",
@@ -791,8 +904,7 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
       channel_id: {
         type: "string",
         required: false,
-        description:
-          "Filter to lanes from this originating chat channel.",
+        description: "Filter to lanes from this originating chat channel.",
       },
       status: {
         type: "enum",
@@ -816,7 +928,7 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
     output_shape: "session lane array JSON text payload",
   },
   append_session_event: {
-    version: 6,
+    version: 7,
     input_schema: {
       session_key: {
         type: "string",
@@ -944,6 +1056,28 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
         description:
           "Path or URI to a produced/referenced artifact (file, doc, URL). " +
           "Set especially for artifact events so the output can be located.",
+      },
+      transcript_ref: {
+        type: "string",
+        required: false,
+        minLength: 1,
+        maxLength: 2000,
+        description:
+          "Host-neutral source conversation reference. Must use collab/... and must not contain /Volumes/ or /mnt/ host paths.",
+      },
+      transcript: {
+        type: "string",
+        required: false,
+        maxLength: 50000,
+        description:
+          "Optional inline exchange from transcript_ref. transcript_ref is required when this is supplied.",
+      },
+      occurred_at: {
+        type: "string",
+        required: false,
+        format: "date-time",
+        description:
+          "ISO 8601 timestamp with timezone for the cited exchange. transcript_ref is required when this is supplied.",
       },
       importance: {
         type: "enum",
@@ -1094,8 +1228,8 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
       },
     },
     output_shape:
-      "session event JSON text payload with lane_created, writer_identity, " +
-      "token_identity, delegated_agent_id, and namespace_source provenance " +
+      "session event JSON text payload with lane_created, transcript_ref when supplied, " +
+      "writer_identity, token_identity, delegated_agent_id, and namespace_source provenance " +
       "fields; sync share_candidate rejections include share_candidate_rejected " +
       "and reject_detail {category, matched_kind, span_count, redaction_hint, " +
       "resubmittable, resubmit_attempt, max_resubmit_attempts, optional " +
@@ -1204,29 +1338,25 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
         type: "string",
         required: false,
         maxLength: 300,
-        description:
-          "Filter to facts derived from this qmd collection.",
+        description: "Filter to facts derived from this qmd collection.",
       },
       path: {
         type: "string",
         required: false,
         maxLength: 1000,
-        description:
-          "Filter to facts about this repo-relative file path.",
+        description: "Filter to facts about this repo-relative file path.",
       },
       fact_type: {
         type: "enum",
         required: false,
         values: REPO_FACT_METADATA_CONTRACT.fact_type.values,
-        description:
-          "Filter to one fact category. Omit to return all types.",
+        description: "Filter to one fact category. Omit to return all types.",
       },
       subject: {
         type: "string",
         required: false,
         maxLength: 500,
-        description:
-          "Filter to facts whose subject/symbol matches this value.",
+        description: "Filter to facts whose subject/symbol matches this value.",
       },
       limit: {
         type: "integer",

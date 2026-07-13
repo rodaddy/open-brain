@@ -405,3 +405,12 @@ live launchd state still differs from the repo template.
 - Does the launch command fail fast when its env file is missing or unreadable?
 - Does the runbook validate the env file before installing/restarting the
   service, especially when the worker env sources a shared production env?
+
+## [2026-07-13] Joined event chronology must stay database-owned and fully ordered
+
+**Severity:** HIGH
+**Source:** Issue #288 Full-tier review and focused verification
+**Scope:** transcript citation migration and neighbor SQL
+**Status:** fixed in issue #288 implementation
+
+Do not round-trip PostgreSQL timestamps through millisecond JS dates for tuple boundaries. Compare against the target row in SQL, qualify every projected column, apply direction to every ORDER BY term, and make constraint creation retry-idempotent.
