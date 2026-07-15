@@ -1,12 +1,16 @@
-q# Glossary
+# Glossary
 
 Project-specific terminology for Open Brain. All agents and contributors use these definitions.
+
+The cross-repo transport terms **envelope** and **contract** are canonical in `_DOCS/GLOSSARY.md`; the rows below are Open Brain's view of them.
 
 ## Domain Terms
 
 | Term | Definition | NOT This |
 |------|-----------|----------|
 | **Brain** | The collective knowledge store -- all five domain tables (thoughts, decisions, relationships, projects, sessions) accessed as a unified system. | A single table or the database host. |
+| **contract** | **What OB and its callers agree to exchange.** OB's message format -- the `agent_context_pack` request/response semantics (scope, `requested_sections`, the returned sections/pointers/warnings). It rides *inside* the fleet-bus envelope's `data` slot; OB owns and enforces it on both sides (in OB's own runtime), independent of how the bytes travel. | The fleet-bus envelope/transport (that's fleet-bus's job, not OB's); the NATS connection; the four-slot `Payload` shape (that carries the contract, it is not the contract). |
+| **envelope** | **fleet-bus transport.** The wire frame the bus uses to route/dedupe/auth/deliver a message; its body is four slots (`header · data · extras · footer`) and the bus treats that body as opaque. OB's **contract** rides in the `data` slot. Owned by fleet-bus, not OB. See `_DOCS/GLOSSARY.md` and `fleet-bus/docs/contracts/C6-envelope-vs-message-body.md`. | OB's message semantics; the memory payload itself; something OB defines. |
 | **Curation** | The automated process of detecting and handling duplicates, stale entries, and vague content via LLM-as-judge; runs via `scripts/curate.ts`. | Manual review or deletion of records. |
 | **Decision** | A recorded choice with a required `title` and `rationale`, plus optional `alternatives` and `context`; stored in the `decisions` table. | Any loosely noted choice; decisions must capture why and what alternatives were considered. |
 | **Entry** | Any single row in any of the five brain tables; the generic term used in tools like `archive_entry`, `update_entry`, and `rate_entry`. | A specific table record; use the table name when precision matters. |
