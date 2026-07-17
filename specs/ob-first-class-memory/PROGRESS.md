@@ -35,7 +35,7 @@ Changed paths remain inside `python/openbrain-memory/**` and `specs/ob-first-cla
 - `uv run ruff check src tests` — passed.
 - `uv run mypy src/openbrain_memory` — passed; 12 source files.
 - `uv run pytest -q tests/test_runtime.py` — passed; 30 tests.
-- `uv run pytest -q` — passed; 283 passed, 5 skipped.
+- `uv run pytest -q` — passed; 284 passed, 5 skipped.
 - `uv build` — passed; built 0.1.8 sdist and wheel.
 - Installed-environment import smoke — passed for root API, `.cli`, and `.__main__`.
 - `uv run pyright src tests/test_runtime.py` — passed; 0 errors.
@@ -68,13 +68,16 @@ Changed paths remain inside `python/openbrain-memory/**` and `specs/ob-first-cla
   while successful earlier records are removed normally.
 - Malformed partial group metadata is counted and skipped as corruption; legacy
   ungrouped records remain readable and replayable.
+- The module CLI now selects its exit code from the bounded JSON actually emitted,
+  so an oversized successful response replaced by a failed output receipt exits
+  nonzero instead of contradicting stdout.
 - `uv run pytest -q tests/test_runtime.py tests/test_safety.py tests/test_agent.py`
   — passed; 122 tests.
 - `uv run ruff format --check src tests` — passed; 23 files already formatted.
 - `uv run ruff check src tests` — passed; all checks passed.
 - `uv run mypy src/openbrain_memory` — passed; 14 source files.
 - `uv run pyright src tests/test_runtime.py` — passed; 0 errors, 0 warnings.
-- `uv run pytest -q` — passed; 283 passed, 5 skipped.
+- `uv run pytest -q` — passed; 284 passed, 5 skipped.
 - `uv build` — passed; built the 0.1.8 sdist and wheel.
 - Public import smoke and malformed-JSON module CLI smoke — passed; the CLI
   returned a structured failed receipt and exit code 2.

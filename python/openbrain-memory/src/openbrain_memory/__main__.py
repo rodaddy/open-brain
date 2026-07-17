@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from collections.abc import Sequence
 
@@ -29,12 +30,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         payload = parse_json_input(data)
         output = execute_json(payload)
-        status = output["receipt"]["status"]
-        exit_code = 1 if status in {ReceiptStatus.FAILED, ReceiptStatus.LOST} else 0
+        exit_code: int | None = None
     except Exception as error:
         output = failure_output("input", error)
         exit_code = 2
-    sys.stdout.buffer.write(encode_json_output(output))
+    encoded = encode_json_output(output)
+    if exit_code is None:
+        emitted = json.loads(encoded)
+        status = emitted["receipt"]["status"]
+        exit_code = 1 if status in {ReceiptStatus.FAILED, ReceiptStatus.LOST} else 0
+    sys.stdout.buffer.write(encoded)
     return exit_code
 
 

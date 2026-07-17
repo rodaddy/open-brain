@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import subprocess
 import sys
@@ -9,9 +10,11 @@ from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
+import openbrain_memory.__main__ as main_module
 import openbrain_memory.runtime as runtime_module
 from openbrain_memory import (
     FirstClassMemoryRuntime,
@@ -988,6 +991,28 @@ def test_json_input_and_output_are_bounded() -> None:
     decoded = json.loads(encoded)
     assert decoded["receipt"]["status"] == "failed"
     assert "context" not in decoded
+
+
+def test_main_returns_nonzero_when_output_bound_replaces_success() -> None:
+    stdout_buffer = io.BytesIO()
+    oversized_output = {
+        "receipt": {"status": ReceiptStatus.DIRECT},
+        "context": "x" * 1_000_001,
+    }
+
+    with (
+        patch.object(main_module, "execute_json", return_value=oversized_output),
+        patch.object(
+            main_module.sys, "stdin", SimpleNamespace(buffer=io.BytesIO(b"{}"))
+        ),
+        patch.object(main_module.sys, "stdout", SimpleNamespace(buffer=stdout_buffer)),
+    ):
+        exit_code = main_module.main([])
+
+    assert exit_code == 1
+    emitted = json.loads(stdout_buffer.getvalue())
+    assert emitted["receipt"]["status"] == "failed"
+    assert emitted["receipt"]["operation"] == "output"
 
 
 def test_module_entry_point_emits_json_for_malformed_input() -> None:
