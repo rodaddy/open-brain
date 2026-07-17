@@ -52,8 +52,12 @@ def _resolve_package_version(pyproject: Path | None = None) -> str:
 
 
 PACKAGE_VERSION = _resolve_package_version()
-CURRENT_CONTRACT_VERSION = "2026-07-13.memory-tools.v21"
-COMPATIBLE_CONTRACT_VERSIONS = (CURRENT_CONTRACT_VERSION,)
+LEGACY_COMPATIBLE_CONTRACT_VERSION = "2026-07-13.memory-tools.v21"
+CURRENT_CONTRACT_VERSION = "2026-07-17.memory-tools.v22"
+COMPATIBLE_CONTRACT_VERSIONS = (
+    LEGACY_COMPATIBLE_CONTRACT_VERSION,
+    CURRENT_CONTRACT_VERSION,
+)
 REQUIRED_CONTRACT_TOOLS = (
     "append_session_event",
     "agent_context_pack",
@@ -77,13 +81,16 @@ REQUIRED_CONTRACT_TOOLS = (
     "citation_recall",
 )
 CURRENT_TOOL_HELP: Mapping[str, str] = {
-    "append_session_event": "Append a durable event to a session lane journal.",
+    "append_session_event": (
+        "Append a durable event, creating a lane or atomically attaching "
+        "previously unasserted exact scope when requested."
+    ),
     "citation_recall": (
         "Return stored transcript citation evidence for a session event."
     ),
     "agent_context_pack": (
-        "Build a scoped context pack with working context and explicit "
-        "quarantined recovery."
+        "Build an exact-scope context pack with working context, explicit "
+        "quarantined recovery, and opt-in bounded durable lane context."
     ),
     "brain_answer": "Return cited answer bullets from readable Open Brain evidence.",
     "decompose_entry": (

@@ -1822,7 +1822,7 @@ def test_all_registered_tool_wrappers_call_matching_tool_names():
 
 
 def test_required_contract_tools_have_first_class_wrappers_and_help():
-    assert CURRENT_CONTRACT_VERSION == "2026-07-13.memory-tools.v21"
+    assert CURRENT_CONTRACT_VERSION == "2026-07-17.memory-tools.v22"
     assert set(REQUIRED_CONTRACT_TOOLS) <= set(CURRENT_TOOL_HELP)
 
     for tool_name in REQUIRED_CONTRACT_TOOLS:
@@ -2584,7 +2584,7 @@ def test_openbrain_client_streams_until_matching_sse_jsonrpc_response():
             self.send_response(400)
             self.end_headers()
 
-        def log_message(self, _format, *args):
+        def log_message(self, format, *args):
             return
 
     server = HTTPServer(("127.0.0.1", 0), StreamingMcpHandler)
@@ -2672,7 +2672,7 @@ def test_urllib_transport_sends_namespace_when_delegation_is_enabled():
             self.send_response(400)
             self.end_headers()
 
-        def log_message(self, _format, *args):
+        def log_message(self, format, *args):
             return
 
     server = HTTPServer(("127.0.0.1", 0), DelegatingMcpHandler)
@@ -2712,7 +2712,7 @@ def test_urllib_transport_bounds_json_response_size():
             self.end_headers()
             self.wfile.write(b"x" * 16)
 
-        def log_message(self, _format, *args):
+        def log_message(self, format, *args):
             return
 
     server = HTTPServer(("127.0.0.1", 0), OversizedHandler)
@@ -2738,7 +2738,7 @@ def test_urllib_transport_bounds_sse_response_size():
             self.end_headers()
             self.wfile.write(b"data: " + (b"x" * 32) + b"\n\n")
 
-        def log_message(self, _format, *args):
+        def log_message(self, format, *args):
             return
 
     server = HTTPServer(("127.0.0.1", 0), OversizedSseHandler)
@@ -2769,7 +2769,7 @@ def test_urllib_transport_returns_after_first_sse_event_without_waiting_for_eof(
             self.wfile.flush()
             time.sleep(1.5)
 
-        def log_message(self, _format, *args):
+        def log_message(self, format, *args):
             return
 
     server = HTTPServer(("127.0.0.1", 0), StreamingSseHandler)
@@ -2815,7 +2815,7 @@ def test_urllib_transport_does_not_follow_redirects_with_auth_headers():
             self.send_header("Location", "https://evil.example/mcp")
             self.end_headers()
 
-        def log_message(self, _format, *args):
+        def log_message(self, format, *args):
             return
 
     server = HTTPServer(("127.0.0.1", 0), RedirectHandler)

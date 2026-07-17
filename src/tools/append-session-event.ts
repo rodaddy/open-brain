@@ -89,7 +89,7 @@ async function withAppendDb<T>(
   if (typeof deps.pool.connect !== "function") {
     if (!deps.allowNonTransactionalAppendFallback) {
       throw new Error(
-        "append_session_event create_if_missing requires a transactional pg Pool",
+        "append_session_event create_if_missing or exact-scope attachment requires a transactional pg Pool",
       );
     }
     return fn(deps.pool);
@@ -265,21 +265,36 @@ async function fillAcceptedEventEmbedding(
   }
 }
 
+type ExactLaneScope = {
+  agent?: string;
+  platform?: string;
+  server_id?: string;
+  channel_id?: string;
+  thread_id?: string | null;
+};
+
+function hasAssertedExactScope(
+  lane: Record<string, unknown>,
+  metadata: Record<string, unknown>,
+): boolean {
+  return (
+    lane.agent != null &&
+    lane.source != null &&
+    metadata.server_id != null &&
+    lane.channel_id != null
+  );
+}
+
 function scopeConflicts(
   lane: Record<string, unknown>,
-  args: {
-    agent?: string;
-    platform?: string;
-    server_id?: string;
-    channel_id?: string;
-    thread_id?: string | null;
-  },
+  args: ExactLaneScope,
 ): string[] {
   const conflicts: string[] = [];
   const metadata =
     lane.metadata && typeof lane.metadata === "object"
       ? (lane.metadata as Record<string, unknown>)
       : {};
+  const exactScopeAsserted = hasAssertedExactScope(lane, metadata);
 
   const checks: Array<[string, unknown, unknown]> = [
     ["agent", lane.agent, args.agent],
@@ -291,16 +306,93 @@ function scopeConflicts(
 
   for (const [field, existing, requested] of checks) {
     if (requested === undefined) continue;
-    // A null/absent existing value means this lane never asserted that scope
-    // dimension (e.g. a lane created by session_start/lane_upsert, which do not
-    // write `source` or `metadata.server_id`). Treat it as unconstrained so a
-    // first scoped append attaches instead of falsely failing scope_validation.
-    // Only a non-null mismatch is a real cross-scope spill.
-    if (existing === null || existing === undefined) continue;
+    // A null/absent value on a legacy lane is attachable only until the four
+    // non-thread exact-scope coordinates are all asserted. Once they are, a
+    // null thread is an explicit unthreaded scope, not a wildcard that a later
+    // threaded append may claim.
+    if (existing === null || existing === undefined) {
+      if (field === "thread_id" && exactScopeAsserted && requested !== null) {
+        conflicts.push(field);
+      }
+      continue;
+    }
     if (existing !== requested) conflicts.push(field);
   }
 
   return conflicts;
+}
+
+function hasUnassertedScope(
+  lane: Record<string, unknown>,
+  args: ExactLaneScope,
+): boolean {
+  const metadata =
+    lane.metadata && typeof lane.metadata === "object"
+      ? (lane.metadata as Record<string, unknown>)
+      : {};
+  const exactScopeAsserted = hasAssertedExactScope(lane, metadata);
+  return (
+    (args.agent !== undefined && lane.agent == null) ||
+    (args.platform !== undefined && lane.source == null) ||
+    (args.server_id !== undefined && metadata.server_id == null) ||
+    (args.channel_id !== undefined && lane.channel_id == null) ||
+    (args.thread_id !== undefined &&
+      args.thread_id !== null &&
+      lane.thread_id == null &&
+      !exactScopeAsserted)
+  );
+}
+
+async function attachUnassertedScope(
+  db: Queryable,
+  lane: Record<string, unknown>,
+  args: {
+    namespace: string;
+    session_key: string;
+  } & ExactLaneScope,
+  laneColumns: string,
+): Promise<Record<string, unknown> | null> {
+  const { rows } = await db.query(
+    `UPDATE ob_session_lanes
+        SET agent = COALESCE(agent, $4),
+            source = COALESCE(source, $5),
+            metadata = CASE
+              WHEN $6::text IS NULL OR metadata->>'server_id' IS NOT NULL THEN metadata
+              ELSE jsonb_set(metadata, '{server_id}', to_jsonb($6::text), true)
+            END,
+            channel_id = COALESCE(channel_id, $7),
+            thread_id = COALESCE(thread_id, $8)
+      WHERE id = $1
+        AND namespace = $2
+        AND session_key = $3
+        AND ($4::text IS NULL OR agent IS NULL OR agent = $4)
+        AND ($5::text IS NULL OR source IS NULL OR source = $5)
+        AND ($6::text IS NULL OR metadata->>'server_id' IS NULL OR metadata->>'server_id' = $6)
+        AND ($7::text IS NULL OR channel_id IS NULL OR channel_id = $7)
+        AND (
+          $9::boolean = false
+          OR thread_id IS NOT DISTINCT FROM $8::text
+          OR NOT (
+            agent IS NOT NULL
+            AND source IS NOT NULL
+            AND metadata->>'server_id' IS NOT NULL
+            AND channel_id IS NOT NULL
+          )
+        )
+    RETURNING ${laneColumns}`,
+    [
+      lane.id,
+      args.namespace,
+      args.session_key,
+      args.agent ?? null,
+      args.platform ?? null,
+      args.server_id ?? null,
+      args.channel_id ?? null,
+      args.thread_id ?? null,
+      args.thread_id !== undefined,
+    ],
+  );
+  return (rows[0] as Record<string, unknown> | undefined) ?? null;
 }
 
 async function ensureLaneForAppend(
@@ -419,7 +511,7 @@ WHERE namespace = $1 AND session_key = $2`,
     };
   }
 
-  const conflicts = scopeConflicts(lane, args);
+  let conflicts = scopeConflicts(lane, args);
   if (conflicts.length > 0) {
     return {
       ok: false,
@@ -434,6 +526,43 @@ WHERE namespace = $1 AND session_key = $2`,
         },
       ),
     };
+  }
+
+  if (!created && hasUnassertedScope(lane, args)) {
+    const attached = await attachUnassertedScope(
+      db,
+      lane,
+      args,
+      laneColumns,
+    );
+    if (attached) {
+      lane = attached;
+    } else {
+      const { rows: currentRows } = await db.query(
+        `SELECT ${laneColumns}
+FROM ob_session_lanes
+WHERE namespace = $1 AND session_key = $2`,
+        laneParams,
+      );
+      const current = currentRows[0] as Record<string, unknown> | undefined;
+      conflicts = current ? scopeConflicts(current, args) : [];
+      if (!current || conflicts.length > 0) {
+        return {
+          ok: false,
+          response: appendSessionEventError(
+            "scope_validation",
+            "Existing lane scope changed before requested append scope could attach",
+            false,
+            {
+              session_key: args.session_key,
+              namespace: args.namespace,
+              conflicts,
+            },
+          ),
+        };
+      }
+      lane = current;
+    }
   }
 
   return { ok: true, lane, created };
@@ -787,8 +916,9 @@ export function registerAppendSessionEvent(
       description:
         "Append an event to a session lane's journal. Events are append-only " +
         "and capture discrete facts, decisions, blockers, actions, etc. " +
-        "For realtime agents, create_if_missing can create the scoped lane on " +
-        "first write instead of requiring manual pre-provisioning.",
+        "create_if_missing can create the scoped lane on first write. For an " +
+        "existing legacy lane, supplied exact-scope coordinates atomically fill " +
+        "only previously unasserted values; asserted conflicts fail closed.",
       inputSchema: {
         session_key: z
           .string()
@@ -985,7 +1115,15 @@ export function registerAppendSessionEvent(
       });
 
       try {
-        const transactionalAppend = args.create_if_missing === true;
+        const requestedThreadId =
+          args.channel_id !== undefined ? (args.thread_id ?? null) : args.thread_id;
+        const transactionalAppend =
+          args.create_if_missing === true ||
+          args.agent !== undefined ||
+          args.platform !== undefined ||
+          args.server_id !== undefined ||
+          args.channel_id !== undefined ||
+          requestedThreadId !== undefined;
         let acceptedLaneForEmbedding: string | null = null;
         let acceptedEventForEmbedding: string | null = null;
 
@@ -1004,11 +1142,7 @@ export function registerAppendSessionEvent(
                 platform: args.platform,
                 server_id: args.server_id,
                 channel_id: args.channel_id,
-                thread_id:
-                  args.create_if_missing === true &&
-                  args.channel_id !== undefined
-                    ? (args.thread_id ?? null)
-                    : args.thread_id,
+                thread_id: requestedThreadId,
                 project: args.project,
                 topic: args.topic,
                 laneEmbedding: transactionalAppend

@@ -28,6 +28,8 @@ The explicit task acceptance criteria, issue #293, existing `python/openbrain-me
 - Bounded JSON module/console entry point
 - Optional injectable `mcp2cli` fallback
 - Existing package redaction and size enforcement
+- Server-owned exact-scope durable lane hydration and atomic legacy-lane attachment required by the package runtime
+- Public contract/tool declarations and TypeScript/Python contract fixtures
 - Fake transport/subprocess tests
 - Required package exports, version, and package docs
 
@@ -41,13 +43,17 @@ The explicit task acceptance criteria, issue #293, existing `python/openbrain-me
 - Public runtime API/types remain in `runtime.py`; fixed mcp2cli routing and
   ordered-spool internals live in focused private modules. `runtime.py` is below
   the repository's 750-line hard warning.
-- Package version remains `0.1.8`; this hardening slice does not change the public
-  package contract or require a version bump.
+- Package version remains `0.1.8` and accepts both server contracts v21 and v22
+  for rollout-order compatibility. The changed hashed public contract is v22;
+  its manifest minimum is `openbrain-memory` `0.1.8` with range
+  `>=0.1.8 <1.0.0`. Package `0.1.7` pins only v21, so listing it as v22-compatible
+  would be inaccurate even though legacy wire call shapes remain additive.
 
 ## Out of scope
 
 - Runtime-home files or hooks
-- Server TypeScript or protocol changes
+- Unrelated server TypeScript or protocol changes
+- Provider implementation/configuration, which is owned by the separate Development branch
 - Lockfiles outside `python/openbrain-memory`
 - GitHub mutations
 - Raw transcript ingestion or storage

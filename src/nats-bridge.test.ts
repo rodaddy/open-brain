@@ -113,8 +113,8 @@ async function waitFor(
 }
 
 describe("handleNatsContextPackMessage — response envelope", () => {
-  it("wraps the reply in a fleet context_pack_response envelope echoing the request id", () => {
-    const response = handleNatsContextPackMessage({
+  it("wraps the reply in a fleet context_pack_response envelope echoing the request id", async () => {
+    const response = await handleNatsContextPackMessage({
       message: { subject: SUBJECT, data: data(envelope()), headers: {} },
       boundary: localBoundary(),
       tokenMap: new Map(),
@@ -138,8 +138,8 @@ describe("handleNatsContextPackMessage — response envelope", () => {
 });
 
 describe("handleNatsContextPackMessage — inbound kind validation (codex-C5)", () => {
-  function expectBadRequestForKind(kind: string) {
-    const response = handleNatsContextPackMessage({
+  async function expectBadRequestForKind(kind: string) {
+    const response = await handleNatsContextPackMessage({
       // A valid agent_context_pack payload on the subject, but the WRONG kind:
       // must be rejected as bad_request before payload handling, so a reply or
       // unrelated fleet message is never processed as a real request.
@@ -157,13 +157,13 @@ describe("handleNatsContextPackMessage — inbound kind validation (codex-C5)", 
     return payload;
   }
 
-  it("rejects a response-kind envelope replayed onto the request subject", () => {
-    expectBadRequestForKind(RESPONSE_KIND);
+  it("rejects a response-kind envelope replayed onto the request subject", async () => {
+    await expectBadRequestForKind(RESPONSE_KIND);
   });
 
-  it("rejects an empty kind", () => {
+  it("rejects an empty kind", async () => {
     // Empty kind is rejected by the envelope required-field guard (also bad_request).
-    const response = handleNatsContextPackMessage({
+    const response = await handleNatsContextPackMessage({
       message: { subject: SUBJECT, data: data(envelope({ kind: "", from: "rico" })), headers: {} },
       boundary: localBoundary(),
       tokenMap: new Map(),
@@ -174,14 +174,14 @@ describe("handleNatsContextPackMessage — inbound kind validation (codex-C5)", 
     expect(payload.error.code).toBe("bad_request");
   });
 
-  it("rejects an unrelated kind", () => {
-    expectBadRequestForKind("dispatch");
+  it("rejects an unrelated kind", async () => {
+    await expectBadRequestForKind("dispatch");
   });
 });
 
 describe("handleNatsContextPackMessage — lane binding (auth off, local bus)", () => {
-  it("binds via explicit payload.namespace override when override is allowed", () => {
-    const response = handleNatsContextPackMessage({
+  it("binds via explicit payload.namespace override when override is allowed", async () => {
+    const response = await handleNatsContextPackMessage({
       message: {
         subject: SUBJECT,
         data: data(
@@ -207,8 +207,8 @@ describe("handleNatsContextPackMessage — lane binding (auth off, local bus)", 
     );
   });
 
-  it("binds via the declared identity (envelope from) when no override is given", () => {
-    const response = handleNatsContextPackMessage({
+  it("binds via the declared identity (envelope from) when no override is given", async () => {
+    const response = await handleNatsContextPackMessage({
       message: {
         subject: SUBJECT,
         data: data(envelope({ from: "rico" })),
@@ -224,11 +224,11 @@ describe("handleNatsContextPackMessage — lane binding (auth off, local bus)", 
     expect(payload.namespace_source).toBe("declared");
   });
 
-  it("rejects as unroutable when no namespace can be derived", () => {
+  it("rejects as unroutable when no namespace can be derived", async () => {
     // Both the envelope from AND the identity agent must fail to normalise to a
     // valid namespace token so nothing is routable. "@@@@" starts with a
     // disallowed char, so it fails NAMESPACE_TOKEN_RE.
-    const response = handleNatsContextPackMessage({
+    const response = await handleNatsContextPackMessage({
       message: {
         subject: SUBJECT,
         data: data(
@@ -253,9 +253,9 @@ describe("handleNatsContextPackMessage — lane binding (auth off, local bus)", 
     expect(payload.namespace_source).toBe("rejected");
   });
 
-  it("ignores payload.namespace override when the override is disabled", () => {
+  it("ignores payload.namespace override when the override is disabled", async () => {
     // override disabled but auth still off -> falls to declared identity binding.
-    const response = handleNatsContextPackMessage({
+    const response = await handleNatsContextPackMessage({
       message: {
         subject: SUBJECT,
         data: data(
@@ -280,8 +280,8 @@ describe("handleNatsContextPackMessage — lane binding (auth off, local bus)", 
 describe("handleNatsContextPackMessage — REQUIRE_AUTH interlock", () => {
   const authBoundary = () => localBoundary({ OPENBRAIN_NATS_REQUIRE_AUTH: "true" });
 
-  it("requires a bearer token when REQUIRE_AUTH=true", () => {
-    const response = handleNatsContextPackMessage({
+  it("requires a bearer token when REQUIRE_AUTH=true", async () => {
+    const response = await handleNatsContextPackMessage({
       message: { subject: SUBJECT, data: data(envelope()), headers: {} },
       boundary: authBoundary(),
       tokenMap: new Map([["secret-token", { role: "admin", clientId: "rico" }]]),
@@ -294,8 +294,8 @@ describe("handleNatsContextPackMessage — REQUIRE_AUTH interlock", () => {
     expect(payload.namespace_source).toBe("rejected");
   });
 
-  it("uses the token-derived namespace and ignores a wire override when REQUIRE_AUTH=true", () => {
-    const response = handleNatsContextPackMessage({
+  it("uses the token-derived namespace and ignores a wire override when REQUIRE_AUTH=true", async () => {
+    const response = await handleNatsContextPackMessage({
       message: {
         subject: SUBJECT,
         data: data(
@@ -321,14 +321,14 @@ describe("handleNatsContextPackMessage — REQUIRE_AUTH interlock", () => {
     );
   });
 
-  it("uses constant-time token matching instead of direct map lookup", () => {
+  it("uses constant-time token matching instead of direct map lookup", async () => {
     class NoDirectLookupTokenMap extends Map<string, AuthInfo> {
       override get(_key: string): AuthInfo | undefined {
         throw new Error("direct token lookup should not be used");
       }
     }
 
-    const response = handleNatsContextPackMessage({
+    const response = await handleNatsContextPackMessage({
       message: {
         subject: SUBJECT,
         data: data(envelope({ from: "rico" })),
@@ -346,8 +346,8 @@ describe("handleNatsContextPackMessage — REQUIRE_AUTH interlock", () => {
 });
 
 describe("handleNatsContextPackMessage — guards and redaction", () => {
-  it("rejects oversized bodies before parsing", () => {
-    const response = handleNatsContextPackMessage({
+  it("rejects oversized bodies before parsing", async () => {
+    const response = await handleNatsContextPackMessage({
       message: {
         subject: SUBJECT,
         data: encoder.encode("x".repeat(65 * 1024)),
@@ -363,8 +363,8 @@ describe("handleNatsContextPackMessage — guards and redaction", () => {
     expect(payload.error.code).toBe("payload_too_large");
   });
 
-  it("does not expose raw parser or schema errors to NATS callers", () => {
-    const response = handleNatsContextPackMessage({
+  it("does not expose raw parser or schema errors to NATS callers", async () => {
+    const response = await handleNatsContextPackMessage({
       message: { subject: SUBJECT, data: encoder.encode("{bad json"), headers: {} },
       boundary: localBoundary(),
       tokenMap: new Map(),
@@ -378,11 +378,11 @@ describe("handleNatsContextPackMessage — guards and redaction", () => {
     });
   });
 
-  it("returns unavailable when live bridge health is degraded", () => {
+  it("returns unavailable when live bridge health is degraded", async () => {
     const health = createNatsBridgeHealth("not_runtime_available");
     health.lastError = "connection closed";
 
-    const response = handleNatsContextPackMessage({
+    const response = await handleNatsContextPackMessage({
       message: { subject: SUBJECT, data: data(envelope()), headers: {} },
       boundary: localBoundary(),
       tokenMap: new Map(),
@@ -397,7 +397,7 @@ describe("handleNatsContextPackMessage — guards and redaction", () => {
     });
   });
 
-  it("logs internal handler failures without leaking token/PII", () => {
+  it("logs internal handler failures without leaking token/PII", async () => {
     const loggedErrors: string[] = [];
     const originalError = logger.error;
     logger.error = (message, extra) => {
@@ -419,7 +419,7 @@ describe("handleNatsContextPackMessage — guards and redaction", () => {
         },
       } as unknown as WorkingSetStore;
 
-      const response = handleNatsContextPackMessage({
+      const response = await handleNatsContextPackMessage({
         message: { subject: SUBJECT, data: data(envelope({ from: "rico" })), headers: {} },
         boundary: localBoundary(),
         tokenMap: new Map(),

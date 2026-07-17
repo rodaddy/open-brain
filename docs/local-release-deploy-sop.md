@@ -187,6 +187,13 @@ commits that are only ancestors of `origin/main`.
 
 ## Core01 Deploy Verification
 
+The workflow's deploy script proves only the primary loopback
+`http://127.0.0.1:3100/health` endpoint, then runs
+`bun test src/tools/__tests__/search-all.test.ts`. That test is local regression
+coverage, not a live MCP or changed-tool canary. The operator verification below
+is therefore a separate required post-workflow gate, not a duplicate of what CI
+already proved.
+
 After the deploy workflow finishes:
 
 ```zsh

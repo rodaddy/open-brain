@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { TOOL_CONTRACTS } from "./contract-schemas.ts";
 
-export const CONTRACT_VERSION = "2026-07-13.memory-tools.v21";
+export const CONTRACT_VERSION = "2026-07-17.memory-tools.v22";
 export const CONTRACT_SCHEMA_VERSION = 1;
 
 export interface ContractCapability {
@@ -207,6 +207,22 @@ export interface OpenBrainContract {
       };
       counters: readonly ["dropped", "expired", "trimmed", "marked", "purged"];
     };
+    durable_lane_context: {
+      status: "runtime-available";
+      implementation: "src/tools/agent-context-pack.ts";
+      storage: "ob_session_lanes_and_events";
+      availability: "mcp_tool_available";
+      item_label: "durable_memory";
+      exact_scope_required: true;
+      explicit_include_required: true;
+      scope_mismatch_behavior: "generic_scope_denial";
+      budget_defaults: {
+        max_content_chars: 12000;
+        max_context_chars: 6000;
+        max_events: 8;
+        max_event_chars: 1000;
+      };
+    };
   };
   receipt_contract: {
     status: "lightweight-openbrain-receipts";
@@ -378,13 +394,13 @@ export const CONTRACT_CAPABILITIES: ContractCapability[] = [
   },
   {
     name: "append_session_event",
-    version: 6,
+    version: 8,
     kind: "tool",
     description:
       "Append one durable, typed event (fact, decision, blocker, action, etc.) " +
-      "to a session lane's journal. This is the main way to record what happened " +
-      "during a session so it survives and can be recalled later. Supports " +
-      "first-write lane creation with create_if_missing for realtime agents.",
+      "to a session lane's journal. Supports first-write lane creation and " +
+      "atomically attaches supplied exact-scope coordinates to legacy lanes only " +
+      "where those coordinates were previously unasserted; conflicts fail closed.",
   },
   {
     name: "citation_recall",
@@ -420,12 +436,13 @@ export const CONTRACT_CAPABILITIES: ContractCapability[] = [
   },
   {
     name: "agent_context_pack",
-    version: 1,
+    version: 2,
     kind: "tool",
     description:
       "First-class realtime context-pack tool for Hermes and future agents. " +
-      "It currently exposes exact-scope RAM working_set plus explicitly " +
-      "opted-in quarantined recovery over MCP; NATS transport remains planned.",
+      "It exposes exact-scope RAM working_set, explicitly opted-in quarantined " +
+      "recovery, and explicitly requested bounded durable_lane_context over MCP; " +
+      "the optional NATS bridge returns the same server-authoritative pack.",
   },
   {
     name: "working_set_append",
@@ -537,12 +554,12 @@ export function buildContract(
     contract_scope: "required_openbrain_memory_contract" as const,
     schema_version: CONTRACT_SCHEMA_VERSION,
     min_client_versions: {
-      "openbrain-memory": "0.1.7",
+      "openbrain-memory": "0.1.8",
       "rtech-hermes-runtime": "0.1.0",
       mcp2cli: "0.3.6",
     },
     compatible_client_ranges: {
-      "openbrain-memory": ">=0.1.7 <1.0.0",
+      "openbrain-memory": ">=0.1.8 <1.0.0",
       "rtech-hermes-runtime": ">=0.1.0 <1.0.0",
       mcp2cli: ">=0.3.6 <1.0.0",
     },
@@ -814,6 +831,22 @@ export function buildContract(
           "marked",
           "purged",
         ] as const,
+      },
+      durable_lane_context: {
+        status: "runtime-available" as const,
+        implementation: "src/tools/agent-context-pack.ts" as const,
+        storage: "ob_session_lanes_and_events" as const,
+        availability: "mcp_tool_available" as const,
+        item_label: "durable_memory" as const,
+        exact_scope_required: true as const,
+        explicit_include_required: true as const,
+        scope_mismatch_behavior: "generic_scope_denial" as const,
+        budget_defaults: {
+          max_content_chars: 12000 as const,
+          max_context_chars: 6000 as const,
+          max_events: 8 as const,
+          max_event_chars: 1000 as const,
+        },
       },
     },
     receipt_contract: {

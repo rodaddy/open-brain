@@ -1,9 +1,9 @@
 # Agent Context Pack Contract
 
-Status: locally runtime-available over MCP for scoped working-set context and
-explicit quarantined recovery summaries; an opt-in server-side NATS
-request/reply bridge can expose the same pack when explicitly enabled. Broader
-section assembly remains planned.
+Status: locally runtime-available over MCP for scoped working-set context,
+explicit quarantined recovery summaries, and explicitly requested exact-scope
+durable lane context; an opt-in server-side NATS request/reply bridge can expose
+the same pack when explicitly enabled. Broader section assembly remains planned.
 Parent issue: #220.
 Research receipt: PR #225, `docs/realtime-agent-memory-research.md`.
 
@@ -17,13 +17,14 @@ every turn.
 
 This contract defines the envelope and scope rules. The MCP
 `agent_context_pack` tool currently exposes the exact-scope `working_set`
-section from RAM-first working context and, only when explicitly requested,
-the exact-scope `recovery` section from the quarantined recovery WAL. The NATS
+section from RAM-first working context; the exact-scope `recovery` section only
+for explicit unreviewed-recovery requests; and bounded exact-scope
+`durable_lane_context` only when that section is explicitly requested. The NATS
 bridge maps `ob.memory.context_pack` request/reply traffic to that same
 server-authoritative pack path only when `OPENBRAIN_TRANSPORT=nats`,
 `OPENBRAIN_NATS_ENABLE_BRIDGE=true`, and an allowed `OPENBRAIN_NATS_URL` are
 configured.
-Broader durable section assembly remains planned until its owning issues land.
+Broader durable-memory and guidance section assembly remains planned until its owning issues land.
 
 ## Ownership Boundary
 
@@ -131,7 +132,11 @@ Top-level fields:
     "session_key": "stable-session-key"
   },
   "sections": {},
-  "warnings": [],
+  "warnings": {
+    "scope_denials": [],
+    "degraded_sources": [],
+    "truncation": []
+  },
   "budget": {},
   "citations": []
 }
@@ -226,6 +231,30 @@ The store writes an append-only JSONL WAL when
 in-memory for local tests and no hidden repo state is created. Hosted/core01
 deployment of this WAL path is release-gated separately and must not happen
 until deploy is explicitly approved.
+
+### Durable Lane Context Boundary
+
+`durable_lane_context` is opt-in: the server does not query durable lane tables
+unless `requested_sections` explicitly includes it. The lane lookup requires an
+exact match on namespace, session key, agent, platform/source, server id,
+channel id, and thread id. Missing `thread_id` is an asserted unthreaded scope
+once the other exact coordinates are present; it is not a wildcard for a later
+threaded caller. A mismatch returns one generic `exact_scope` denial and does
+not query lane events.
+
+The section may contain bounded lane metadata, `current_context_md`, and up to
+eight recent durable events. Content defaults are capped at 12,000 total
+characters, 6,000 checkpoint characters, and 1,000 characters per event.
+Truncation is declared in `warnings.truncation`; database failure degrades to a
+redacted `warnings.degraded_sources` entry. Returned lane/event references are
+listed in `citations`.
+
+A scoped `append_session_event` may attach previously null legacy-lane
+agent/platform/server/channel/thread coordinates before inserting the event.
+The attachment and insert share one database transaction. The update is
+predicate-bound to lane id, auth-derived namespace, session key, and conditional
+equality, so it never overwrites an asserted coordinate; a concurrent conflict
+fails closed. Fully asserted null thread remains unthreaded.
 
 `warnings`, `budget`, and `citations` are always-present top-level envelope
 fields, not section members. They are mirrored by
@@ -357,18 +386,16 @@ deferred implementation, not shipped runtime behavior.
 ### Decision
 
 `agent_context_pack` is the owning boundary for hot memory. Hot memory stays a
-client-pulled, exact-scope `working_set` section (plus explicit opt-in
-`recovery`) inside the pack envelope. Open Brain does not implement
-gbrain-style server-side `_meta.brain_hot_memory` injection into ordinary MCP
-tool responses, and #271 ships no new prompt-placement runtime behavior. The
-already-runtime-available exact-scope pull path (#221/#222) is the lightweight
-hot-memory path; any pack-owned expansion beyond it (durable section assembly,
-transport exposure, explicit pull surfaces) stays deferred behind the
-preconditions below, while `_meta` response injection is rejected outright and
-is not gated by them.
-This PR itself ships no runtime change: it assigns ownership of hot memory to
-`agent_context_pack` and gates all future hot-memory work behind those
-preconditions.
+client-pulled, exact-scope `working_set` section with explicit opt-in `recovery`
+and, as added by issue #293, explicitly requested bounded
+`durable_lane_context` inside the same pack envelope. Open Brain does not
+implement gbrain-style server-side `_meta.brain_hot_memory` injection into
+ordinary MCP tool responses or any implicit prompt-placement behavior.
+
+The original #271 decision shipped no runtime change and deferred pack-owned
+expansion behind the preconditions below. Issue #293 is a later, separately
+validated expansion of that pull boundary; it does not reopen the rejected
+`_meta` alternative.
 
 Re-reading this contract after graph retrieval merged (#266 PR #273, #267
 PR #274)
@@ -406,8 +433,11 @@ not convert it into a future option.
   clients (mcp2cli, generated skills, Hermes runtimes) and bypasses
   `requested_sections`/budget negotiation.
 - Downstream client impact: every downstream runtime would need `_meta`
-  parsing changes with no schema to validate against. The pack path requires
-  zero downstream changes because nothing new is advertised.
+  parsing changes with no schema to validate against. The pack path keeps the
+  integration explicit and schema-driven, but pack expansion is still a public
+  downstream change when advertised. Issue #293 advances the required contract
+  to v22, advertises `agent_context_pack` v2 with `durable_lane_context`, and
+  therefore requires the rollout classified below.
 
 ### Rejected Alternative: Defer Server-Side Hot Memory Entirely
 
@@ -449,15 +479,14 @@ following, per the Acceptance Fixtures section:
 
 ### `get_contract` Advertisement
 
-`get_contract` continues to advertise `agent_context_pack` with the
-`working_set` and `recovery` boundaries exactly as shipped. It does not
-advertise any `_meta` injection capability, and never will: `_meta` response
-injection is permanently out of bounds, and no precondition or rollout step
-converts it into an advertisable capability. New pack-owned hot-memory
-advertisement (sections, transport exposure, explicit pull surfaces) requires
-the preconditions above plus explicitly scoped downstream rollout (per the
-plan-3f merge gate: no new contract capability advertisement before server
-code, tests, and downstream client support are ready).
+`get_contract` advertises `agent_context_pack` v2 with the exact-scope
+`working_set`, explicit `recovery`, and opt-in bounded `durable_lane_context`
+boundaries. It does not advertise any `_meta` injection capability, and never
+will: `_meta` response injection is permanently out of bounds, and no
+precondition or rollout step converts it into an advertisable capability. Any
+further pack-owned advertisement (sections, transport exposure, explicit pull
+surfaces) requires the preconditions above plus explicitly scoped downstream
+rollout.
 `src/tools/__tests__/get-contract.test.ts` guards this with positive-shape
 assertions — it pins the exact top-level contract key set and asserts
 `agent_context_pack` is the only advertised context-bundle surface — plus a
@@ -471,7 +500,15 @@ review of any contract-surface change.
 
 ### Downstream Rollout Classification
 
-Downstream rollout classification: not applicable — docs plus contract-level
-tests only; no MCP tool, schema, output envelope, transport, or client-facing
-behavior change, so no mcp2cli, rtech-mcps, rtech-hermes, or Hermes canary
-steps are required.
+Downstream rollout classification for issue #293: applicable. The required
+contract advances to `2026-07-17.memory-tools.v22`, `agent_context_pack` advances
+to v2, `append_session_event` advances to v8, and the shared HTTP/NATS pack
+behavior changes. The post-merge sequence in `docs/downstream-rollout.md`
+therefore applies: deploy through the current gated core01 workflow, verify the
+hosted v22 manifest and changed operations, complete the authoritative rtech-mcps
+handoff, then refresh and verify mcp2cli through the documented local-direct and
+daemon-credential paths, regenerate skills when agent guidance changes, and
+complete applicable rtech-hermes and Hermes canaries. Daemon-routed `mcp2cli cache warm open-brain --force` remains a
+known-broken path under `rodaddy/mcp2cli#60` and is not a required command while
+that issue is open. Those live mutations are intentionally deferred from this
+local candidate.

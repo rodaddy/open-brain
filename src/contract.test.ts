@@ -13,12 +13,12 @@ describe("Open Brain contract manifest", () => {
     expect(contract.contract_scope).toBe("required_openbrain_memory_contract");
     expect(contract.schema_hash).toMatch(/^[0-9a-f]{64}$/);
     expect(contract.schema_hash).toBe(
-      "a744dddbbe4ea3f3330f5ce23c7178cd66cedd0dbb25d1a809f0cbbbd8d403d1",
+      "3f0ce606fe1fe6df02a36ab696011abca1cf08f1342045f9a6cd57c52dbb864d",
     );
     expect(contract.min_client_versions.mcp2cli).toBe("0.3.6");
-    expect(contract.min_client_versions["openbrain-memory"]).toBe("0.1.7");
+    expect(contract.min_client_versions["openbrain-memory"]).toBe("0.1.8");
     expect(contract.compatible_client_ranges["openbrain-memory"]).toBe(
-      ">=0.1.7 <1.0.0",
+      ">=0.1.8 <1.0.0",
     );
     expect(contract.transport.namespace_boundary).toBe("authorization");
     expect(contract.realtime_transport.nats_jetstream).toMatchObject({
@@ -234,6 +234,22 @@ describe("Open Brain contract manifest", () => {
       },
       counters: ["dropped", "expired", "trimmed", "marked", "purged"],
     });
+    expect(contract.agent_context_pack.durable_lane_context).toEqual({
+      status: "runtime-available",
+      implementation: "src/tools/agent-context-pack.ts",
+      storage: "ob_session_lanes_and_events",
+      availability: "mcp_tool_available",
+      item_label: "durable_memory",
+      exact_scope_required: true,
+      explicit_include_required: true,
+      scope_mismatch_behavior: "generic_scope_denial",
+      budget_defaults: {
+        max_content_chars: 12000,
+        max_context_chars: 6000,
+        max_events: 8,
+        max_event_chars: 1000,
+      },
+    });
     expect(contract.receipt_contract).toMatchObject({
       status: "lightweight-openbrain-receipts",
       event_type: "receipt",
@@ -295,6 +311,14 @@ describe("Open Brain contract manifest", () => {
     expect(contract.capabilities.map((c) => c.name)).toContain(
       "memory_promotion_lifecycle",
     );
+    expect(
+      contract.capabilities.find((item) => item.name === "agent_context_pack")
+        ?.version,
+    ).toBe(2);
+    expect(
+      contract.capabilities.find((item) => item.name === "append_session_event")
+        ?.version,
+    ).toBe(8);
     for (const tool of [
       "get_contract",
       "get_entry",
@@ -325,7 +349,9 @@ describe("Open Brain contract manifest", () => {
     expect(recoveryWalMark).toBeDefined();
     expect(agentContextPack).toBeDefined();
     expect(workingSetAppend?.output_shape).toContain("RAM-only");
-    expect(agentContextPack?.output_shape).toContain("explicit recovery");
+    expect(agentContextPack?.version).toBe(2);
+    expect(agentContextPack?.output_shape).toContain("durable_lane_context");
+    expect(agentContextPack?.output_shape).toContain("exact-scope denials");
     expect(recoveryWalAppend?.output_shape).toContain("not_searchable_recall");
     expect(recoveryWalMark?.output_shape).toContain("not_searchable_recall");
     expect((workingSetAppend?.input_schema as any).durable_ref).toEqual({
@@ -520,11 +546,11 @@ describe("Open Brain contract manifest", () => {
     // contract so a future TS/Python divergence fails here, in lockstep with
     // python/openbrain-memory CURRENT_CONTRACT_VERSION.
     const contract = buildContract("2026-06-18T00:00:00.000Z");
-    expect(contract.contract_version).toBe("2026-07-13.memory-tools.v21");
+    expect(contract.contract_version).toBe("2026-07-17.memory-tools.v22");
 
     const appendEvent = contract.tool_contracts.append_session_event;
     expect(appendEvent).toBeDefined();
-    expect(appendEvent?.version).toBe(7);
+    expect(appendEvent?.version).toBe(8);
     expect(appendEvent?.output_shape).toContain("writer_identity");
     expect(appendEvent?.output_shape).toContain("token_identity");
     expect(appendEvent?.output_shape).toContain("delegated_agent_id");
@@ -539,19 +565,13 @@ describe("Open Brain contract manifest", () => {
     expect(appendInput.create_if_missing.description).toContain(
       "first-write realtime agent scopes",
     );
-    expect(appendInput.agent.description).toContain(
-      "validate against an existing lane",
-    );
-    expect(appendInput.platform.description).toContain(
-      "Stored as the lane source",
-    );
-    expect(appendInput.server_id.description).toContain("exact realtime scope");
-    expect(appendInput.channel_id.description).toContain(
-      "validate against an existing lane",
-    );
-    expect(appendInput.thread_id.description).toContain(
-      "validate against an existing lane",
-    );
+    expect(appendInput.agent.description).toContain("atomically attached");
+    expect(appendInput.platform.description).toContain("atomically attached");
+    expect(appendInput.server_id.description).toContain("atomically attached");
+    expect(appendInput.channel_id.description).toContain("atomically attached");
+    expect(appendInput.thread_id.description).toContain("atomically");
+    expect(appendEvent?.output_shape).toContain("legacy lane");
+    expect(appendEvent?.output_shape).toContain("asserted scope conflict");
     const shareCandidate = (appendEvent?.input_schema as any).metadata.fields
       .share_candidate;
     expect(shareCandidate.type).toBe("boolean");

@@ -6,12 +6,15 @@ from hashlib import sha256
 from openbrain_memory import (
     COMPATIBLE_CONTRACT_VERSIONS,
     CURRENT_CONTRACT_VERSION,
+    PACKAGE_VERSION,
     REQUIRED_CONTRACT_TOOLS,
     validate_contract_manifest,
     validate_required_memory_contract,
 )
 
-CURRENT_CLIENT_VERSION = "0.1.7"
+CURRENT_CLIENT_VERSION = PACKAGE_VERSION
+PREVIOUS_CLIENT_VERSION = "0.1.7"
+PREVIOUS_CONTRACT_VERSION = "2026-07-13.memory-tools.v21"
 
 
 def safe_string_display(value: str) -> str:
@@ -32,7 +35,7 @@ def representative_contract_manifest() -> dict:
             "rtech-hermes-runtime": "0.1.0",
         },
         "compatible_client_ranges": {
-            "openbrain-memory": ">=0.1.7 <1.0.0",
+            "openbrain-memory": ">=0.1.8 <1.0.0",
             "rtech-hermes-runtime": ">=0.1.0 <1.0.0",
         },
         "transport": {
@@ -83,6 +86,43 @@ def test_validate_required_memory_contract_pins_package_contract_defaults():
     assert result.reasons == ()
 
 
+def test_manifest_requires_current_package_without_overstating_legacy_compatibility():
+    manifest = representative_contract_manifest()
+
+    current = validate_required_memory_contract(
+        manifest,
+        client_version=CURRENT_CLIENT_VERSION,
+    )
+    previous_client = validate_required_memory_contract(
+        manifest,
+        client_version=PREVIOUS_CLIENT_VERSION,
+    )
+
+    assert CURRENT_CLIENT_VERSION == "0.1.8"
+    assert manifest["min_client_versions"]["openbrain-memory"] == "0.1.8"
+    assert manifest["compatible_client_ranges"]["openbrain-memory"] == (
+        ">=0.1.8 <1.0.0"
+    )
+    assert current.ok is True
+    assert previous_client.ok is False
+
+
+def test_current_package_accepts_previous_additive_server_contract():
+    manifest = representative_contract_manifest()
+    manifest["contract_version"] = PREVIOUS_CONTRACT_VERSION
+
+    result = validate_required_memory_contract(
+        manifest,
+        client_version=CURRENT_CLIENT_VERSION,
+    )
+
+    assert result.ok is True
+    assert COMPATIBLE_CONTRACT_VERSIONS == (
+        PREVIOUS_CONTRACT_VERSION,
+        CURRENT_CONTRACT_VERSION,
+    )
+
+
 def test_validate_required_memory_contract_accepts_planned_realtime_advisory_metadata():
     manifest = representative_contract_manifest()
     manifest["realtime_transport"] = {
@@ -100,7 +140,10 @@ def test_validate_required_memory_contract_accepts_planned_realtime_advisory_met
 
     assert result.ok is True
     assert result.reasons == ()
-    assert COMPATIBLE_CONTRACT_VERSIONS == (CURRENT_CONTRACT_VERSION,)
+    assert COMPATIBLE_CONTRACT_VERSIONS == (
+        PREVIOUS_CONTRACT_VERSION,
+        CURRENT_CONTRACT_VERSION,
+    )
 
 
 def test_validate_required_memory_contract_reports_package_required_tool_gap():
@@ -246,7 +289,7 @@ def test_validate_contract_manifest_reports_min_client_version_failure():
         f"{safe_string_display(CURRENT_CLIENT_VERSION)}",
         "openbrain-memory "
         f"{safe_string_display('0.0.9')} does not satisfy compatible range "
-        f"{safe_string_display('>=0.1.7 <1.0.0')}",
+        f"{safe_string_display('>=0.1.8 <1.0.0')}",
     )
 
 
@@ -259,7 +302,7 @@ def test_validate_contract_manifest_reports_compatible_range_failure():
     assert result.reasons == (
         "openbrain-memory "
         f"{safe_string_display('1.0.0')} does not satisfy compatible range "
-        f"{safe_string_display('>=0.1.7 <1.0.0')}",
+        f"{safe_string_display('>=0.1.8 <1.0.0')}",
     )
 
 

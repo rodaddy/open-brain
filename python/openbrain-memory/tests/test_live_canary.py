@@ -130,7 +130,10 @@ def test_live_lane_session_append_read_and_wrap_helpers(
         )
     )
     assert isinstance(started, dict)
-    assert started.get("session_key") == session_key
+    started_lane = started.get("lane")
+    assert isinstance(started_lane, dict)
+    assert started_lane.get("session_key") == session_key
+    assert started.get("is_new") is True
 
     upserted = _tool_payload(
         live_client.lane_upsert(
@@ -156,7 +159,8 @@ def test_live_lane_session_append_read_and_wrap_helpers(
         )
     )
     assert isinstance(appended, dict)
-    assert appended.get("session_key") == session_key
+    assert isinstance(appended.get("event_id"), str)
+    assert appended.get("lane_id") == started_lane.get("id")
 
     context = _tool_payload(
         live_client.session_context(
@@ -184,14 +188,19 @@ def test_live_lane_session_append_read_and_wrap_helpers(
     wrapped = _tool_payload(
         live_client.session_wrap(
             session_key=session_key,
-            summary="openbrain-memory live canary verified helper readiness.",
+            summary=(
+                "openbrain-memory live canary verified helper readiness for "
+                f"{session_key}."
+            ),
             key_decisions=[],
             next_steps=[],
             project=project,
         )
     )
     assert isinstance(wrapped, dict)
-    assert wrapped.get("session_key") == session_key
+    assert isinstance(wrapped.get("session_id"), str)
+    assert wrapped.get("lane_status") == "active"
+    assert wrapped.get("event_count") == 1
 
 
 def test_live_optional_repo_fact_write_canary(live_client: OpenBrainClient):
