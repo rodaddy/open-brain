@@ -979,10 +979,10 @@ def test_export_disclosure_bundle_matches_ts_feature_shape():
         "citations.md",
         "receipts.md",
     ]
-    assert "session_key: \"conversation\"" in files["index.md"]
-    assert "agent: \"bilby\"" in files["index.md"]
-    assert "project: \"open-brain\"" in files["index.md"]
-    assert "okf: {\"mode\":\"edge\"}" in files["index.md"]
+    assert 'session_key: "conversation"' in files["index.md"]
+    assert 'agent: "bilby"' in files["index.md"]
+    assert 'project: "open-brain"' in files["index.md"]
+    assert 'okf: {"mode":"edge"}' in files["index.md"]
     assert files["log.md"].find("Hermes uses Python.") < files["log.md"].find(
         "Use Open Brain memory."
     )

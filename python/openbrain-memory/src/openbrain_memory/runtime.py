@@ -1,0 +1,736 @@
+"""First-class local runtime facade for Open Brain memory lifecycle calls."""
+
+from __future__ import annotations
+
+import json
+import os
+import threading
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
+from enum import StrEnum
+from pathlib import Path
+from typing import Any, cast
+from urllib.parse import urlparse
+
+from ._runtime_router import (
+    DirectClient,
+    FallbackRunner,
+    Mcp2CliFallback,
+    RuntimeClientRouter,
+    run_subprocess,
+    safe_error,
+    safe_text,
+)
+from ._runtime_spool import TrackingSpool
+from .agent import (
+    EVENT_TYPES,
+    AgentMemory,
+    MemoryClient,
+    MemorySpool,
+    _reject_secret_payload,
+)
+from .client import JSON, OpenBrainClient, Transport
+from .policy import redact_value
+from .spool import JsonlSpool
+
+MAX_DISTILLED_CONTENT_BYTES = 16 * 1024
+_CONFIG_KEYS = {
+    "allow_insecure_http",
+    "base_url",
+    "fallback_enabled",
+    "namespace",
+    "project",
+    "role",
+    "spool_path",
+    "timeout",
+    "token",
+}
+_SCOPE_KEYS = {
+    "agent",
+    "channel_id",
+    "platform",
+    "server_id",
+    "session_key",
+    "thread_id",
+}
+_CONTEXT_PACK_SECTIONS = {
+    "candidate_memory",
+    "durable_lane_context",
+    "durable_memory",
+    "pointers",
+    "process_guidance",
+    "profile_guidance",
+    "recovery",
+    "repo_facts",
+    "working_set",
+}
+
+
+class ReceiptStatus(StrEnum):
+    """Observable outcome of one runtime lifecycle operation."""
+
+    DIRECT = "direct"
+    SAVED = "saved"
+    SPOOLED = "spooled"
+    FALLBACK = "fallback"
+    FAILED = "failed"
+    LOST = "lost"
+
+
+@dataclass(frozen=True)
+class RuntimeScope:
+    """Exact runtime identity used for context-pack recall and lane writes."""
+
+    agent: str
+    platform: str
+    server_id: str
+    channel_id: str
+    session_key: str
+    thread_id: str | None = None
+
+    def __post_init__(self) -> None:
+        for name in ("agent", "platform", "server_id", "channel_id", "session_key"):
+            object.__setattr__(
+                self,
+                name,
+                _persisted_text(getattr(self, name), name),
+            )
+        if self.thread_id is not None:
+            object.__setattr__(
+                self,
+                "thread_id",
+                _persisted_text(self.thread_id, "thread_id"),
+            )
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any]) -> RuntimeScope:
+        """Build a validated scope from untrusted JSON-like input."""
+        _reject_unknown_keys(value, _SCOPE_KEYS, "scope")
+        return cls(
+            agent=_mapping_text(value, "agent"),
+            platform=_mapping_text(value, "platform"),
+            server_id=_mapping_text(value, "server_id"),
+            channel_id=_mapping_text(value, "channel_id"),
+            session_key=_mapping_text(value, "session_key"),
+            thread_id=_mapping_optional_text(value, "thread_id"),
+        )
+
+    def context_pack_arguments(self, query: str) -> dict[str, Any]:
+        """Return the server contract's exact-scope context-pack fields."""
+        arguments: dict[str, Any] = {
+            "agent": self.agent,
+            "platform": self.platform,
+            "server_id": self.server_id,
+            "channel_id": self.channel_id,
+            "session_key": self.session_key,
+            "query": _require_text(query, "query"),
+        }
+        if self.thread_id is not None:
+            arguments["thread_id"] = self.thread_id
+        return arguments
+
+    def start_metadata(self) -> dict[str, str]:
+        """Return scope-owned lane coordinates supported by ``session_start``."""
+        metadata = {"channel_id": self.channel_id}
+        if self.thread_id is not None:
+            metadata["thread_id"] = self.thread_id
+        return metadata
+
+
+@dataclass(frozen=True)
+class RuntimeConfig:
+    """Direct-client and fallback configuration loaded from args and environment."""
+
+    base_url: str
+    token: str = field(repr=False)
+    namespace: str
+    project: str | None = None
+    role: str | None = None
+    allow_insecure_http: bool = False
+    timeout: float = 30.0
+    fallback_enabled: bool = False
+    spool_path: Path | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "base_url", _require_text(self.base_url, "base_url"))
+        object.__setattr__(self, "token", _require_text(self.token, "token"))
+        object.__setattr__(
+            self,
+            "namespace",
+            _require_text(self.namespace, "namespace"),
+        )
+        if self.project is not None:
+            object.__setattr__(
+                self,
+                "project",
+                _persisted_text(self.project, "project"),
+            )
+        if self.role is not None:
+            object.__setattr__(self, "role", _require_text(self.role, "role"))
+        parsed = urlparse(self.base_url)
+        if parsed.hostname in {"127.0.0.1", "localhost"} and parsed.port == 8317:
+            raise ValueError("127.0.0.1:8317 is not an Open Brain endpoint")
+        if self.timeout <= 0:
+            raise ValueError("timeout must be > 0")
+
+    @classmethod
+    def from_sources(
+        cls,
+        explicit: Mapping[str, Any] | None = None,
+        *,
+        environ: Mapping[str, str] | None = None,
+    ) -> RuntimeConfig:
+        """Load config with explicit values taking precedence over environment."""
+        values = dict(explicit or {})
+        _reject_unknown_keys(values, _CONFIG_KEYS, "config")
+        env = os.environ if environ is None else environ
+
+        def source(name: str, env_name: str) -> Any:
+            value = values.get(name)
+            return value if value is not None else env.get(env_name)
+
+        spool_value = source("spool_path", "OPENBRAIN_SPOOL_PATH")
+        timeout_value = source("timeout", "OPENBRAIN_TIMEOUT")
+        token_value = values.get("token")
+        if token_value is None:
+            token_value = env.get("OPENBRAIN_TOKEN") or env.get("OPEN_BRAIN_TOKEN")
+        return cls(
+            base_url=_require_text(
+                source("base_url", "OPENBRAIN_BASE_URL"), "base_url"
+            ),
+            token=_require_text(token_value, "token"),
+            namespace=_require_text(
+                source("namespace", "OPENBRAIN_NAMESPACE"),
+                "namespace",
+            ),
+            project=_optional_text(source("project", "OPENBRAIN_PROJECT"), "project"),
+            role=_optional_text(source("role", "OPENBRAIN_ROLE"), "role"),
+            allow_insecure_http=_source_bool(
+                values,
+                "allow_insecure_http",
+                env,
+                "OPENBRAIN_ALLOW_INSECURE_HTTP",
+            ),
+            timeout=_source_float(timeout_value, "timeout", default=30.0),
+            fallback_enabled=_source_bool(
+                values,
+                "fallback_enabled",
+                env,
+                "OPENBRAIN_MCP2CLI_FALLBACK",
+            ),
+            spool_path=Path(str(spool_value)) if spool_value is not None else None,
+        )
+
+    @classmethod
+    def from_env(
+        cls,
+        *,
+        environ: Mapping[str, str] | None = None,
+        **explicit: Any,
+    ) -> RuntimeConfig:
+        """Load canonical environment names with optional explicit overrides."""
+        return cls.from_sources(explicit, environ=environ)
+
+
+@dataclass(frozen=True)
+class RuntimeReceipt:
+    """Truthful, JSON-ready evidence for a lifecycle operation."""
+
+    operation: str
+    status: ReceiptStatus
+    durable: bool
+    direct_attempted: bool
+    fallback_attempted: bool
+    spool_key: str | None = None
+    error: str | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return a safe JSON representation."""
+        value: dict[str, Any] = {
+            "schema": "openbrain.runtime_receipt.v1",
+            "operation": self.operation,
+            "status": self.status.value,
+            "durable": self.durable,
+            "direct_attempted": self.direct_attempted,
+            "fallback_attempted": self.fallback_attempted,
+        }
+        if self.spool_key is not None:
+            value["spool_key"] = self.spool_key
+        if self.error is not None:
+            value["error"] = self.error
+        return value
+
+
+@dataclass(frozen=True)
+class RuntimeOutput:
+    """One context or write result with its receipt."""
+
+    receipt: RuntimeReceipt
+    context: Mapping[str, Any] | None = None
+    result: Mapping[str, Any] | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return redacted JSON output for visible runtime adapters."""
+        output: dict[str, Any] = {"receipt": self.receipt.as_dict()}
+        if self.context is not None:
+            output["context"] = dict(self.context)
+        if self.result is not None:
+            output["result"] = redact_value(dict(self.result))
+        return output
+
+
+class FirstClassMemoryRuntime:
+    """Primary local memory path for thin runtime adapters."""
+
+    def __init__(
+        self,
+        config: RuntimeConfig,
+        scope: RuntimeScope,
+        *,
+        transport: Transport | None = None,
+        client: DirectClient | None = None,
+        client_factory: Callable[..., DirectClient] = OpenBrainClient,
+        fallback_runner: FallbackRunner | None = None,
+        spool: MemorySpool | None = None,
+    ) -> None:
+        self.config = config
+        self.scope = scope
+        self._owns_client = client is None
+        self._operation_lock = threading.RLock()
+        direct = client
+        setup_error: BaseException | None = None
+        if direct is None:
+            try:
+                direct = client_factory(
+                    config.base_url,
+                    token=config.token,
+                    namespace=config.namespace,
+                    agent_id=scope.agent,
+                    role=config.role,
+                    timeout=config.timeout,
+                    transport=transport,
+                    allow_insecure_http=config.allow_insecure_http,
+                    delegate_namespace=False,
+                )
+            except Exception as error:
+                setup_error = error
+        fallback = None
+        if config.fallback_enabled:
+            fallback = Mcp2CliFallback(
+                fallback_runner or run_subprocess,
+                namespace=config.namespace,
+                scope=scope,
+                timeout=config.timeout,
+            )
+        self._router = RuntimeClientRouter(direct, fallback, setup_error=setup_error)
+        configured_spool = spool
+        if configured_spool is None and config.spool_path is not None:
+            configured_spool = JsonlSpool(config.spool_path)
+        self._spool = TrackingSpool(configured_spool) if configured_spool else None
+        self._memory = AgentMemory(
+            cast(MemoryClient, self._router),
+            agent=scope.agent,
+            project=config.project,
+            source=scope.agent,
+            spool=cast(MemorySpool | None, self._spool),
+        )
+
+    def close(self) -> None:
+        """Close only a direct MCP client constructed by this runtime."""
+        if not self._owns_client:
+            return
+        with self._operation_lock:
+            self._router.close()
+
+    def recall_context(
+        self,
+        query: str,
+        *,
+        max_tokens: int | None = None,
+        max_latency_ms: int | None = None,
+        requested_sections: Sequence[str] | None = None,
+    ) -> RuntimeOutput:
+        """Fail open while recalling the exact-scope server context pack."""
+        with self._operation_lock:
+            return self._recall_context(
+                query,
+                max_tokens=max_tokens,
+                max_latency_ms=max_latency_ms,
+                requested_sections=requested_sections,
+            )
+
+    def _recall_context(
+        self,
+        query: str,
+        *,
+        max_tokens: int | None,
+        max_latency_ms: int | None,
+        requested_sections: Sequence[str] | None,
+    ) -> RuntimeOutput:
+        self._router.reset()
+        try:
+            arguments = self.scope.context_pack_arguments(query)
+            budget: dict[str, int] = {}
+            if max_tokens is not None:
+                budget["max_tokens"] = _bounded_int(
+                    max_tokens,
+                    "max_tokens",
+                    minimum=100,
+                    maximum=20_000,
+                )
+            if max_latency_ms is not None:
+                budget["max_latency_ms"] = _bounded_int(
+                    max_latency_ms,
+                    "max_latency_ms",
+                    minimum=1,
+                    maximum=10_000,
+                )
+            if budget:
+                arguments["budget"] = budget
+            if requested_sections is not None:
+                sections = [
+                    _require_text(section, "requested_sections")
+                    for section in requested_sections
+                ]
+                unsupported = set(sections).difference(_CONTEXT_PACK_SECTIONS)
+                if unsupported:
+                    raise ValueError(
+                        "requested_sections contains unsupported values: "
+                        f"{', '.join(sorted(unsupported))}"
+                    )
+                arguments["requested_sections"] = sections
+            local_timeout = (
+                max_latency_ms / 1000 if max_latency_ms is not None else None
+            )
+            result = self._router.agent_context_pack(
+                timeout=local_timeout,
+                **arguments,
+            )
+            status = (
+                ReceiptStatus(self._router.state.path)
+                if self._router.state.path is not None
+                else ReceiptStatus.FAILED
+            )
+            return RuntimeOutput(
+                receipt=self._receipt("recall", status, durable=False),
+                context=result,
+            )
+        except Exception as error:
+            return RuntimeOutput(
+                receipt=self._receipt(
+                    "recall",
+                    ReceiptStatus.FAILED,
+                    durable=False,
+                    error=error,
+                ),
+                context={},
+            )
+
+    def capture_distilled(
+        self,
+        content: str,
+        *,
+        event_type: str = "fact",
+    ) -> RuntimeOutput:
+        """Capture one already-distilled event; raw transcript APIs are absent."""
+        try:
+            safe_content = _distilled_content(content, "content")
+            safe_event_type = _require_text(event_type, "event_type")
+            if safe_event_type not in EVENT_TYPES:
+                raise ValueError(f"Unsupported event_type: {safe_event_type}")
+        except ValueError as error:
+            return _failed_write("capture", error)
+        return self._write(
+            "capture",
+            lambda: self._memory.append_scoped_event(
+                self.scope.agent,
+                safe_content,
+                platform=self.scope.platform,
+                server_id=self.scope.server_id,
+                channel_id=self.scope.channel_id,
+                thread_id=self.scope.thread_id,
+                event_type=safe_event_type,
+            ),
+        )
+
+    def checkpoint(
+        self,
+        summary: str,
+        *,
+        key_decisions: Sequence[str] | None = None,
+        next_steps: Sequence[str] | None = None,
+        receipt_refs: Sequence[str] | None = None,
+    ) -> RuntimeOutput:
+        """Persist a distilled checkpoint through ``AgentMemory.checkpoint``."""
+        try:
+            safe_summary = _distilled_content(summary, "summary")
+            metadata = _wrap_metadata(key_decisions, next_steps, receipt_refs)
+        except ValueError as error:
+            return _failed_write("checkpoint", error)
+        return self._write(
+            "checkpoint",
+            lambda: self._memory.checkpoint(safe_summary, **metadata),
+        )
+
+    def wrap(
+        self,
+        summary: str,
+        *,
+        key_decisions: Sequence[str] | None = None,
+        next_steps: Sequence[str] | None = None,
+        receipt_refs: Sequence[str] | None = None,
+    ) -> RuntimeOutput:
+        """Persist a distilled session wrap through ``AgentMemory.wrap_session``."""
+        try:
+            safe_summary = _distilled_content(summary, "summary")
+            metadata = _wrap_metadata(key_decisions, next_steps, receipt_refs)
+        except ValueError as error:
+            return _failed_write("wrap", error)
+        return self._write(
+            "wrap",
+            lambda: self._memory.wrap_session(safe_summary, **metadata),
+        )
+
+    def _write(self, operation: str, call: Callable[[], JSON]) -> RuntimeOutput:
+        with self._operation_lock:
+            return self._write_locked(operation, call)
+
+    def _write_locked(
+        self,
+        operation: str,
+        call: Callable[[], JSON],
+    ) -> RuntimeOutput:
+        self._router.reset()
+        if self._spool is not None:
+            self._spool.reset()
+        try:
+            self._ensure_lane()
+            result = call()
+            receipt_status = (
+                ReceiptStatus.FALLBACK
+                if self._router.state.path == ReceiptStatus.FALLBACK.value
+                else ReceiptStatus.SAVED
+            )
+            return RuntimeOutput(
+                receipt=self._receipt(operation, receipt_status, durable=True),
+                result=result,
+            )
+        except ValueError as error:
+            return RuntimeOutput(
+                receipt=self._receipt(
+                    operation,
+                    ReceiptStatus.FAILED,
+                    durable=False,
+                    error=error,
+                )
+            )
+        except Exception as error:
+            queue_error: BaseException | None = None
+            if self._spool is not None and self._spool.pending_start is not None:
+                queue_error = self._queue_requested_write(call)
+            if (
+                self._spool is not None
+                and self._spool.last_key is not None
+                and self._spool.last_operation != "session_start"
+            ):
+                return RuntimeOutput(
+                    receipt=self._receipt(
+                        operation,
+                        ReceiptStatus.SPOOLED,
+                        durable=True,
+                        spool_key=self._spool.last_key,
+                        error=error,
+                    )
+                )
+            lost_error = safe_error(error)
+            if self._spool is not None and self._spool.last_error is not None:
+                lost_error = safe_text(
+                    f"{lost_error}; spool failed: {self._spool.last_error}"
+                )
+            elif queue_error is not None:
+                lost_error = safe_text(
+                    f"{lost_error}; requested write was not queued: "
+                    f"{safe_error(queue_error)}"
+                )
+            return RuntimeOutput(
+                receipt=self._receipt(
+                    operation,
+                    ReceiptStatus.LOST,
+                    durable=False,
+                    error=lost_error,
+                )
+            )
+
+    def _queue_requested_write(self, call: Callable[[], JSON]) -> BaseException:
+        previous_key = self._memory.conversation_key
+        self._memory.conversation_key = self.scope.session_key
+        try:
+            with self._router.queue_only():
+                call()
+        except Exception as error:
+            return error
+        finally:
+            self._memory.conversation_key = previous_key
+        return RuntimeError("requested write did not enter the ordered spool")
+
+    def _ensure_lane(self) -> None:
+        if self._memory.conversation_key is not None:
+            return
+        self._memory.start_session(
+            self.scope.session_key,
+            **self.scope.start_metadata(),
+        )
+
+    def _receipt(
+        self,
+        operation: str,
+        status: ReceiptStatus,
+        *,
+        durable: bool,
+        spool_key: str | None = None,
+        error: BaseException | str | None = None,
+    ) -> RuntimeReceipt:
+        error_text = None
+        if error is not None:
+            error_text = (
+                safe_error(error)
+                if isinstance(error, BaseException)
+                else safe_text(error)
+            )
+        return RuntimeReceipt(
+            operation=operation,
+            status=status,
+            durable=durable,
+            direct_attempted=self._router.state.direct_attempted,
+            fallback_attempted=self._router.state.fallback_attempted,
+            spool_key=spool_key,
+            error=error_text,
+        )
+
+
+def _failed_write(operation: str, error: BaseException) -> RuntimeOutput:
+    return RuntimeOutput(
+        receipt=RuntimeReceipt(
+            operation=operation,
+            status=ReceiptStatus.FAILED,
+            durable=False,
+            direct_attempted=False,
+            fallback_attempted=False,
+            error=safe_error(error),
+        )
+    )
+
+
+def _distilled_content(value: str, name: str) -> str:
+    text = _persisted_text(value, name)
+    return text
+
+
+def _persisted_text(value: Any, name: str) -> str:
+    text = _require_text(value, name)
+    if len(text.encode("utf-8")) > MAX_DISTILLED_CONTENT_BYTES:
+        raise ValueError(f"{name} exceeds {MAX_DISTILLED_CONTENT_BYTES} UTF-8 bytes")
+    _reject_secret_payload(text, name)
+    return text
+
+
+def _wrap_metadata(
+    key_decisions: Sequence[str] | None,
+    next_steps: Sequence[str] | None,
+    receipt_refs: Sequence[str] | None,
+) -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
+    for name, values in (
+        ("key_decisions", key_decisions),
+        ("next_steps", next_steps),
+        ("receipt_refs", receipt_refs),
+    ):
+        if values is None:
+            continue
+        if isinstance(values, str):
+            raise ValueError(f"{name} must be a sequence of strings")
+        distilled = [_distilled_content(value, name) for value in values]
+        if len(distilled) > 20:
+            raise ValueError(f"{name} must contain at most 20 items")
+        encoded = json.dumps(distilled, separators=(",", ":")).encode("utf-8")
+        if len(encoded) > MAX_DISTILLED_CONTENT_BYTES:
+            raise ValueError(
+                f"{name} exceeds {MAX_DISTILLED_CONTENT_BYTES} UTF-8 bytes"
+            )
+        metadata[name] = distilled
+    return metadata
+
+
+def _source_bool(
+    explicit: Mapping[str, Any],
+    name: str,
+    environ: Mapping[str, str],
+    env_name: str,
+) -> bool:
+    value = explicit.get(name)
+    if value is None:
+        value = environ.get(env_name)
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off", ""}:
+        return False
+    raise ValueError(f"{name} must be a boolean")
+
+
+def _source_float(value: Any, name: str, *, default: float) -> float:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be a number")
+    try:
+        result = float(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{name} must be a number") from error
+    if result <= 0:
+        raise ValueError(f"{name} must be > 0")
+    return result
+
+
+def _mapping_text(value: Mapping[str, Any], name: str) -> str:
+    return _require_text(value.get(name), name)
+
+
+def _mapping_optional_text(value: Mapping[str, Any], name: str) -> str | None:
+    return _optional_text(value.get(name), name)
+
+
+def _optional_text(value: Any, name: str) -> str | None:
+    if value is None:
+        return None
+    return _require_text(value, name)
+
+
+def _require_text(value: Any, name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{name} must be a non-empty string")
+    return value.strip()
+
+
+def _bounded_int(value: int, name: str, *, minimum: int, maximum: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{name} must be an integer")
+    if value < minimum or value > maximum:
+        raise ValueError(f"{name} must be between {minimum} and {maximum}")
+    return value
+
+
+def _reject_unknown_keys(
+    value: Mapping[str, Any],
+    allowed: set[str],
+    name: str,
+) -> None:
+    unknown = {str(key) for key in value if key not in allowed}
+    if unknown:
+        raise ValueError(
+            f"{name} contains unsupported keys: {', '.join(sorted(unknown))}"
+        )

@@ -1,3 +1,7 @@
+"""Public API for the Open Brain memory client package."""
+
+from __future__ import annotations
+
 from .agent import (
     AgentMemory,
     MemoryClient,
@@ -32,6 +36,14 @@ from .contract import (
 )
 from .dream import DreamAction, DreamClient, DreamEngine, DreamPolicy, DreamRun
 from .policy import RetryExhaustedError, RetryPolicy, redact_text, redact_value
+from .runtime import (
+    FirstClassMemoryRuntime,
+    ReceiptStatus,
+    RuntimeConfig,
+    RuntimeOutput,
+    RuntimeReceipt,
+    RuntimeScope,
+)
 from .schema import (
     ContractSchemaError,
     contract_field_to_json_schema,
@@ -67,13 +79,19 @@ __all__ = [
     "REQUIRED_CONTRACT_TOOLS",
     "ContractValidationResult",
     "ContractSchemaError",
+    "FirstClassMemoryRuntime",
     "FleetNatsDriver",
     "JsonlSpool",
     "NatsRequestReplyDriver",
     "NatsTransport",
+    "ReceiptStatus",
     "RetryExhaustedError",
     "RetryPolicy",
     "RealtimeTransportAvailability",
+    "RuntimeConfig",
+    "RuntimeOutput",
+    "RuntimeReceipt",
+    "RuntimeScope",
     "SpoolRecord",
     "SpoolStatus",
     "contract_field_to_json_schema",

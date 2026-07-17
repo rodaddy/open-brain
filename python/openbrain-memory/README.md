@@ -116,24 +116,16 @@ export OPENBRAIN_ALLOW_INSECURE_HTTP="1"
 ```
 
 ```python
-import os
+from openbrain_memory import RuntimeConfig
 
-from openbrain_memory import AgentMemory, OpenBrainClient
-
-client = OpenBrainClient(
-    os.environ["OPENBRAIN_BASE_URL"],
-    token=os.environ["OPENBRAIN_TOKEN"],
-    namespace=os.environ["OPENBRAIN_NAMESPACE"],
-    agent_id=os.environ.get("OPENBRAIN_AGENT_ID"),
-    role="agent",
-    allow_insecure_http=os.environ.get("OPENBRAIN_ALLOW_INSECURE_HTTP") == "1",
-)
-memory = AgentMemory(
-    client,
-    agent=os.environ.get("OPENBRAIN_AGENT_ID", "agent"),
-    project=os.environ.get("OPENBRAIN_PROJECT"),
-)
+config = RuntimeConfig.from_env()
 ```
+
+Explicit keyword overrides may be supplied to `RuntimeConfig.from_env()` or as a
+mapping to `RuntimeConfig.from_sources()`. Explicit values win over environment.
+The documented token name is `OPENBRAIN_TOKEN`; the existing secure-shell alias
+`OPEN_BRAIN_TOKEN` is accepted only when `OPENBRAIN_TOKEN` is absent. The package
+does not read mcp2cli credential files or runtime-home configuration.
 
 Normal agent-role tokens derive namespace authority server-side from the token.
 `OpenBrainClient` therefore does not send `X-Namespace` by default. Trusted
@@ -193,6 +185,79 @@ memory.wrap_session("Ready for PR review.")
 
 prompt_context = context.as_prompt_text()
 ```
+
+## First-Class Runtime Adapter
+
+Thin visible hooks can use `FirstClassMemoryRuntime` directly. Scope is explicit
+and exact for `agent_context_pack`; the required `namespace` config value is a
+local expected-scope label for receipts and fallback verification, while actual
+authority remains server-derived from the bearer token. It is not sent as
+`X-Namespace`. `agent_id` and `role` are attribution headers only. This runtime
+never enables namespace delegation.
+
+```python
+from openbrain_memory import FirstClassMemoryRuntime, RuntimeConfig, RuntimeScope
+
+runtime = FirstClassMemoryRuntime(
+    RuntimeConfig.from_env(),
+    RuntimeScope(
+        agent="bilby",
+        platform="discord",
+        server_id="guild-id",
+        channel_id="channel-id",
+        thread_id="thread-id",
+        session_key="stable-session-key",
+    ),
+)
+
+context = runtime.recall_context("current task", max_tokens=2000)
+receipt = runtime.capture_distilled(
+    "Distilled implementation decision; no raw transcript.",
+    event_type="decision",
+)
+checkpoint = runtime.checkpoint("Distilled checkpoint summary.")
+wrapped = runtime.wrap("Distilled final session summary.")
+```
+
+Receipts use `direct` for direct recall, `saved` only after a successful direct
+write, `fallback` after a successful secondary write, `spooled` only when the
+requested write and any required lane start are durably queued in replay order,
+`lost` when the requested write reached no durable destination, and `failed` for
+read/input failures. A queued prerequisite alone is never reported as durable
+capture, checkpoint, or wrap.
+
+The stable `openbrain-memory` console script and `python -m openbrain_memory`
+read one JSON object from stdin and emit one JSON object to stdout. Input is
+capped at 64 KiB, output at 1 MB, and distilled lifecycle content at 16 KiB.
+Capture, checkpoint, and wrap requests must include `"distilled": true`.
+
+Optional mcp2cli fallback is disabled by default. Enable it with
+`OPENBRAIN_MCP2CLI_FALLBACK=1` or explicit config. Calls use an argv sequence,
+never a shell, with this contract:
+
+```text
+mcp2cli open-brain <tool> --params <single-json-object>
+```
+
+Remote-daemon routing remains owned by mcp2cli through
+`MCP2CLI_DAEMON_URL` and `MCP2CLI_AUTH_TOKEN`; the package does not inspect
+`~/.config/mcp2cli/credentials.json`. Fallback therefore uses ambient mcp2cli
+per-identity authentication, not the direct client's bearer token. Captured
+stdout and stderr are rejected above 1 MB; the trusted local command can still
+allocate output before `subprocess.run` returns. The adapter requires the real
+mcp2cli envelope shape, `{"success":true,"result":{...}}`, and returns only the
+inner tool result. `session_start` must prove the public lane authority fields
+it returns: namespace, session key, and agent (plus project when returned).
+`agent_context_pack` must prove every coordinate in
+its inner result's top-level `scope`. Append and wrap fallback are accepted only
+after the same
+fallback instance verified its lane initialization. Unverified responses are
+reported as lost rather than durable success. The local LLM endpoint on
+`127.0.0.1:8317` is not an Open Brain endpoint or fallback.
+
+For the shared host install, use a Python 3.13 environment at
+`/Users/rico/.local/share/openbrain-memory/.venv`; do not bind the package to a
+runtime-specific home directory.
 
 ## Current Open Brain Tools
 
@@ -255,6 +320,8 @@ paths. The supported public surface is:
 
 - `OpenBrainClient` and Open Brain errors.
 - `AgentMemory` facade types.
+- `FirstClassMemoryRuntime`, `RuntimeConfig`, `RuntimeScope`, `RuntimeOutput`,
+  `RuntimeReceipt`, and `ReceiptStatus`.
 - `JsonlSpool`, `SpoolRecord`, `SpoolStatus`, and `replay_records`.
 - `RetryPolicy` and `RetryExhaustedError`.
 - `redact_text()` and `redact_value()`.
@@ -418,10 +485,14 @@ surface does not expose an explicit remote session termination method, so
 server-side session cleanup remains TTL-based.
 
 `JsonlSpool` stores exact failed-write payloads so replay can faithfully rebuild
-the original client call. Spool and lock files are created with `0600`
-permissions and should be treated as trusted local recovery storage. Use
-`SpoolRecord.redacted_payload()` or `JsonlSpool.redacted_records()` before
-showing spool contents in logs, UIs, or debug output.
+the original client call. `append_batch()` atomically preserves ordered groups;
+the first-class runtime uses it to queue `session_start` immediately before a
+requested capture/checkpoint/wrap when lane setup fails. If the pair cannot be
+queued intact, the write is reported lost and no orphan prerequisite is added.
+Spool and lock files are created with `0600` permissions and should be treated as
+trusted local recovery storage. Use `SpoolRecord.redacted_payload()` or
+`JsonlSpool.redacted_records()` before showing spool contents in logs, UIs, or
+debug output.
 
 ## DreamEngine
 

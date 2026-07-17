@@ -657,6 +657,142 @@ def test_spool_replay_allows_appends_during_dispatch(tmp_path):
     assert [record.idempotency_key for record in spool.records()] == ["new-key"]
 
 
+def test_spool_batch_is_atomic_and_preserves_order(tmp_path):
+    spool = JsonlSpool(tmp_path / "spool.jsonl")
+
+    keys = spool.append_batch(
+        [
+            ("session_start", {"session_key": "lane"}, "start-key"),
+            ("session_wrap", {"session_key": "lane"}, "write-key"),
+        ]
+    )
+
+    assert keys == ["start-key", "write-key"]
+    records = spool.records()
+    assert [record.operation for record in records] == [
+        "session_start",
+        "session_wrap",
+    ]
+    assert records[0].group_id
+    assert [record.group_id for record in records] == [
+        records[0].group_id,
+        records[0].group_id,
+    ]
+    assert [record.group_index for record in records] == [0, 1]
+    assert [record.group_size for record in records] == [2, 2]
+
+
+def test_spool_later_append_evicts_whole_existing_batch(tmp_path):
+    spool = JsonlSpool(tmp_path / "spool.jsonl", max_lines=2)
+    spool.append_batch(
+        [
+            ("session_start", {"session_key": "lane"}, "start-key"),
+            ("session_wrap", {"session_key": "lane"}, "write-key"),
+        ]
+    )
+
+    spool.append("new", {"content": "safe"}, key="new-key")
+
+    assert [record.idempotency_key for record in spool.records()] == ["new-key"]
+
+
+def test_spool_replay_preserves_batch_for_later_group_eviction(tmp_path):
+    spool = JsonlSpool(tmp_path / "spool.jsonl", max_lines=3)
+    spool.append("old", {"content": "safe"}, key="old-key")
+    spool.append_batch(
+        [
+            ("session_start", {"session_key": "lane"}, "start-key"),
+            ("session_wrap", {"session_key": "lane"}, "write-key"),
+        ]
+    )
+    seen = []
+
+    def dispatch(record: SpoolRecord):
+        seen.append(record.operation)
+        if record.operation == "session_start":
+            raise ConnectionError("still down")
+        return {"ok": True}
+
+    assert spool.replay(dispatch) == [{"ok": True}]
+    assert seen == ["old", "session_start"]
+    remaining = spool.records()
+    assert [record.idempotency_key for record in remaining] == [
+        "start-key",
+        "write-key",
+    ]
+    assert remaining[0].group_id
+    assert [record.group_id for record in remaining] == [
+        remaining[0].group_id,
+        remaining[0].group_id,
+    ]
+
+    spool.append("new-one", {"content": "1"}, key="new-one-key")
+    spool.append("new-two", {"content": "2"}, key="new-two-key")
+
+    assert [record.idempotency_key for record in spool.records()] == [
+        "new-one-key",
+        "new-two-key",
+    ]
+
+
+def test_spool_records_reject_malformed_group_metadata(tmp_path, caplog):
+    spool = JsonlSpool(tmp_path / "spool.jsonl")
+    spool.path.write_text(
+        '{"created_at":1,"group_id":"group","idempotency_key":"bad",'
+        '"operation":"op","payload":{}}\n',
+        encoding="utf-8",
+    )
+
+    assert spool.records() == []
+    assert "Skipping corrupted spool record" in caplog.text
+    status = spool.status()
+    assert status.pending_count == 0
+    assert status.corrupted_line_count == 1
+
+
+def test_spool_replay_keeps_legacy_ungrouped_records_compatible(tmp_path):
+    spool = JsonlSpool(tmp_path / "spool.jsonl")
+    spool.path.write_text(
+        '{"created_at":1,"idempotency_key":"legacy-key",'
+        '"operation":"legacy","payload":{"content":"safe"}}\n',
+        encoding="utf-8",
+    )
+
+    record = spool.records()[0]
+    assert (record.group_id, record.group_index, record.group_size) == (
+        None,
+        None,
+        None,
+    )
+
+    def fail_dispatch(_: SpoolRecord):
+        raise ConnectionError("down")
+
+    assert spool.replay(fail_dispatch) == []
+    rewritten = spool.records()[0]
+    assert (rewritten.group_id, rewritten.group_index, rewritten.group_size) == (
+        None,
+        None,
+        None,
+    )
+
+
+def test_spool_batch_limit_failure_leaves_existing_records_unchanged(tmp_path):
+    spool = JsonlSpool(tmp_path / "spool.jsonl", max_lines=2)
+    spool.append("existing", {"content": "safe"}, key="existing-key")
+
+    with pytest.raises(ValueError, match="batch"):
+        spool.append_batch(
+            [
+                ("session_start", {"session_key": "lane"}, "start-key"),
+                ("session_wrap", {"session_key": "lane"}, "write-key"),
+                ("extra", {"session_key": "lane"}, "extra-key"),
+            ]
+        )
+
+    assert [record.idempotency_key for record in spool.records()] == ["existing-key"]
+
+
 def test_spool_rejects_oversized_record_before_success(tmp_path):
     spool = JsonlSpool(tmp_path / "spool.jsonl", max_bytes=120)
 

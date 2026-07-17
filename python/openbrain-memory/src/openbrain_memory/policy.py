@@ -188,9 +188,7 @@ def with_retry[T](
                 raise
             delay = retry_policy.backoff_seconds * attempt
             retry_after = getattr(exc, "retry_after_seconds", None)
-            if retry_policy.honor_retry_after and isinstance(
-                retry_after, (int, float)
-            ):
+            if retry_policy.honor_retry_after and isinstance(retry_after, (int, float)):
                 delay = max(delay, float(retry_after))
             if retry_policy.max_backoff_seconds > 0:
                 delay = min(delay, retry_policy.max_backoff_seconds)

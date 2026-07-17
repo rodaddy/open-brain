@@ -315,10 +315,7 @@ def test_nats_transport_defaults_to_not_runtime_available_without_fallback():
 
     assert transport.url == "nats://127.0.0.1:4222"
     assert transport.context_pack_subject == DEFAULT_NATS_CONTEXT_PACK_SUBJECT
-    assert (
-        transport.availability
-        == RealtimeTransportAvailability.NOT_RUNTIME_AVAILABLE
-    )
+    assert transport.availability == RealtimeTransportAvailability.NOT_RUNTIME_AVAILABLE
 
     with pytest.raises(OpenBrainTransportUnavailableError) as exc_info:
         transport.post(
@@ -599,9 +596,7 @@ def test_nats_transport_falls_back_when_request_reply_fails():
     fallback = FakeTransport()
     fallback.tool_results["get_contract"] = contract_tool_result("available")
     fallback.tool_results["agent_context_pack"] = {
-        "content": [
-            {"type": "text", "text": json.dumps({"source": "http-fallback"})}
-        ]
+        "content": [{"type": "text", "text": json.dumps({"source": "http-fallback"})}]
     }
     nats = FakeNatsRequestReplyDriver()
     nats.raise_next = RuntimeError("nats://user:pass@broker.internal exploded")
@@ -641,9 +636,7 @@ def test_nats_transport_falls_back_for_delegated_namespace():
     fallback = FakeTransport()
     fallback.tool_results["get_contract"] = contract_tool_result("available")
     fallback.tool_results["agent_context_pack"] = {
-        "content": [
-            {"type": "text", "text": json.dumps({"source": "http-fallback"})}
-        ]
+        "content": [{"type": "text", "text": json.dumps({"source": "http-fallback"})}]
     }
     nats = FakeNatsRequestReplyDriver()
     transport = NatsTransport(
@@ -685,9 +678,7 @@ def test_nats_transport_falls_back_for_unsupported_context_pack_arguments():
     fallback = FakeTransport()
     fallback.tool_results["get_contract"] = contract_tool_result("available")
     fallback.tool_results["agent_context_pack"] = {
-        "content": [
-            {"type": "text", "text": json.dumps({"source": "http-fallback"})}
-        ]
+        "content": [{"type": "text", "text": json.dumps({"source": "http-fallback"})}]
     }
     nats = FakeNatsRequestReplyDriver()
     transport = NatsTransport(
@@ -747,9 +738,7 @@ def test_nats_transport_protocol_errors_do_not_fallback(
     fallback = FakeTransport()
     fallback.tool_results["get_contract"] = contract_tool_result("available")
     fallback.tool_results["agent_context_pack"] = {
-        "content": [
-            {"type": "text", "text": json.dumps({"source": "http-fallback"})}
-        ]
+        "content": [{"type": "text", "text": json.dumps({"source": "http-fallback"})}]
     }
     nats = FakeNatsRequestReplyDriver()
     nats.next_response = response
@@ -808,9 +797,7 @@ def test_nats_transport_error_envelope_protocol_errors_do_not_fallback(
     fallback = FakeTransport()
     fallback.tool_results["get_contract"] = contract_tool_result("available")
     fallback.tool_results["agent_context_pack"] = {
-        "content": [
-            {"type": "text", "text": json.dumps({"source": "http-fallback"})}
-        ]
+        "content": [{"type": "text", "text": json.dumps({"source": "http-fallback"})}]
     }
     nats = FakeNatsRequestReplyDriver()
     nats.next_response = response
@@ -920,9 +907,7 @@ def test_nats_transport_falls_back_without_sending_oversized_request():
     fallback = FakeTransport()
     fallback.tool_results["get_contract"] = contract_tool_result("available")
     fallback.tool_results["agent_context_pack"] = {
-        "content": [
-            {"type": "text", "text": json.dumps({"source": "http-fallback"})}
-        ]
+        "content": [{"type": "text", "text": json.dumps({"source": "http-fallback"})}]
     }
     nats = FakeNatsRequestReplyDriver()
     transport = NatsTransport(
@@ -962,9 +947,7 @@ def test_nats_transport_size_guard_uses_default_json_boundary():
     fallback = FakeTransport()
     fallback.tool_results["get_contract"] = contract_tool_result("available")
     fallback.tool_results["agent_context_pack"] = {
-        "content": [
-            {"type": "text", "text": json.dumps({"source": "http-fallback"})}
-        ]
+        "content": [{"type": "text", "text": json.dumps({"source": "http-fallback"})}]
     }
     nats = FakeNatsRequestReplyDriver()
     transport = NatsTransport(
@@ -1086,9 +1069,7 @@ def test_nats_transport_resets_availability_when_contract_check_errors():
     fallback = FakeTransport()
     fallback.tool_results["get_contract"] = contract_tool_result("available")
     fallback.tool_results["agent_context_pack"] = {
-        "content": [
-            {"type": "text", "text": json.dumps({"source": "http-fallback"})}
-        ]
+        "content": [{"type": "text", "text": json.dumps({"source": "http-fallback"})}]
     }
     nats = FakeNatsRequestReplyDriver()
     transport = NatsTransport(
@@ -2084,10 +2065,7 @@ def test_initialize_rate_limit_retries_with_retry_after_metadata():
             self.rate_limited_once = False
 
         def post(self, url, *, headers, json_body, timeout):
-            if (
-                json_body.get("method") == "initialize"
-                and not self.rate_limited_once
-            ):
+            if json_body.get("method") == "initialize" and not self.rate_limited_once:
                 self.rate_limited_once = True
                 self.requests.append(
                     {
@@ -2894,8 +2872,7 @@ def test_append_session_event_carries_explicit_share_candidate_nomination():
     # the explicit lifecycle action must remain attached.
     assert params["arguments"]["metadata"]["share_candidate"] is True
     assert (
-        params["arguments"]["metadata"]["memory_lifecycle_action"]
-        == "nominate_shared"
+        params["arguments"]["metadata"]["memory_lifecycle_action"] == "nominate_shared"
     )
 
 

@@ -404,9 +404,7 @@ class NatsTransport:
             normalized_availability = RealtimeTransportAvailability(availability)
         except ValueError as exc:
             raise ValueError("NatsTransport is not runtime available yet") from exc
-        if (
-            normalized_availability is RealtimeTransportAvailability.AVAILABLE
-        ):
+        if normalized_availability is RealtimeTransportAvailability.AVAILABLE:
             raise ValueError("NatsTransport availability is derived from get_contract")
         if not identity:
             raise ValueError("NatsTransport identity must be non-empty")
