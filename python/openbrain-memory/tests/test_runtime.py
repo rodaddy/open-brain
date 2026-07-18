@@ -473,7 +473,10 @@ def test_authorized_recall_context_is_not_mutated_by_diagnostic_redaction() -> N
 
     output = runtime.recall_context("authorized context").as_dict()
 
-    assert output["context"] == {"authorized_memory": "token=historical-value"}
+    expected = ContextClient().agent_context_pack(
+        **runtime_scope().context_pack_arguments("authorized context")
+    )
+    assert output["context"] == expected
 
 
 def test_recall_latency_budget_clamps_local_direct_timeout_and_restores_it() -> None:

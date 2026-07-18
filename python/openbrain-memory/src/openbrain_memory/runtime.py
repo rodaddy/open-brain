@@ -54,6 +54,9 @@ from ._runtime_validation import (
     source_float as _source_float,
 )
 from ._runtime_validation import (
+    validate_context_pack_scope as _validate_context_pack_scope,
+)
+from ._runtime_validation import (
     validate_started_lane as _validate_started_lane,
 )
 from ._runtime_validation import (
@@ -632,10 +635,11 @@ class FirstClassMemoryRuntime:
         return RuntimeError("requested write did not enter the ordered spool")
 
     def _validate_direct_result(self, tool: str, result: Any) -> None:
-        if tool != "session_start":
-            return
         try:
-            _validate_started_lane(result, self.config.namespace, self.scope)
+            if tool == "session_start":
+                _validate_started_lane(result, self.config.namespace, self.scope)
+            elif tool == "agent_context_pack":
+                _validate_context_pack_scope(result, self.config.namespace, self.scope)
         except ValueError as error:
             raise RuntimeCallError(str(error)) from error
 

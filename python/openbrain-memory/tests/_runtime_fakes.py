@@ -194,6 +194,15 @@ class LaneAwareTransport:
             body = {
                 "tool": tool,
                 "arguments": arguments,
+                "scope": {
+                    "namespace": "bilby",
+                    "session_key": arguments["session_key"],
+                    "agent": arguments["agent"],
+                    "platform": arguments["platform"],
+                    "server_id": arguments["server_id"],
+                    "channel_id": arguments["channel_id"],
+                    "thread_id": arguments.get("thread_id"),
+                },
                 "sections": (
                     {"durable_lane_context": durable} if durable is not None else {}
                 ),
@@ -310,7 +319,18 @@ class ContextClient(StartThenFailClient):
 
     def agent_context_pack(self, **arguments: Any) -> dict[str, Any]:
         self.observed_timeouts.append(self.timeout)
-        return {"authorized_memory": "token=historical-value"}
+        return {
+            "authorized_memory": "token=historical-value",
+            "scope": {
+                "namespace": "bilby",
+                "session_key": arguments["session_key"],
+                "agent": arguments["agent"],
+                "platform": arguments["platform"],
+                "server_id": arguments["server_id"],
+                "channel_id": arguments["channel_id"],
+                "thread_id": arguments.get("thread_id"),
+            },
+        }
 
 
 class FakeSpool:

@@ -12,6 +12,11 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
+from ._runtime_validation import (
+    validate_context_pack_scope,
+    validate_exact_fields,
+    validate_started_lane,
+)
 from .client import (
     COMPATIBLE_CONTRACT_VERSIONS,
     FIRST_CLASS_RUNTIME_TOOL_VERSIONS,
@@ -503,35 +508,13 @@ def _verify_fallback_lane(
     *,
     project: Any,
 ) -> None:
-    lane = result.get("lane")
-    if not isinstance(lane, Mapping):
-        raise RuntimeCallError("mcp2cli session_start result missing lane object")
-    metadata = lane.get("metadata")
-    actual = {
-        "namespace": lane.get("namespace"),
-        "session_key": lane.get("session_key"),
-        "agent": lane.get("agent"),
-        "platform": lane.get("source"),
-        "server_id": (
-            metadata.get("server_id") if isinstance(metadata, Mapping) else None
-        ),
-        "channel_id": lane.get("channel_id"),
-    }
-    if "thread_id" in lane:
-        actual["thread_id"] = lane.get("thread_id")
-    expected: dict[str, Any] = {
-        "namespace": namespace,
-        "session_key": scope.session_key,
-        "agent": scope.agent,
-        "platform": scope.platform,
-        "server_id": scope.server_id,
-        "channel_id": scope.channel_id,
-        "thread_id": scope.thread_id,
-    }
-    if isinstance(project, str) and project and "project" in lane:
-        expected["project"] = project
-        actual["project"] = lane.get("project")
-    _verify_exact_fields(actual, expected, "session_start lane")
+    try:
+        validate_started_lane(result, namespace, scope)
+        lane = cast(Mapping[str, Any], result["lane"])
+        if isinstance(project, str) and project and "project" in lane:
+            validate_exact_fields(lane, {"project": project}, "session_start result")
+    except ValueError as error:
+        raise RuntimeCallError(f"mcp2cli {error}") from error
 
 
 def _verify_fallback_context_pack(
@@ -539,36 +522,7 @@ def _verify_fallback_context_pack(
     namespace: str,
     scope: FallbackScope,
 ) -> None:
-    candidate = result.get("scope")
-    if not isinstance(candidate, Mapping):
-        payload = result.get("payload")
-        candidate = payload.get("scope") if isinstance(payload, Mapping) else None
-    if not isinstance(candidate, Mapping):
-        raise RuntimeCallError("mcp2cli agent_context_pack result missing scope")
-    expected: dict[str, Any] = {
-        "namespace": namespace,
-        "session_key": scope.session_key,
-        "agent": scope.agent,
-        "platform": scope.platform,
-        "server_id": scope.server_id,
-        "channel_id": scope.channel_id,
-        "thread_id": scope.thread_id,
-    }
-    _verify_exact_fields(candidate, expected, "agent_context_pack scope")
-
-
-def _verify_exact_fields(
-    candidate: Mapping[str, Any],
-    expected: Mapping[str, Any],
-    label: str,
-) -> None:
-    mismatches = [
-        name
-        for name, value in expected.items()
-        if name not in candidate or candidate[name] != value
-    ]
-    if mismatches:
-        raise RuntimeCallError(
-            f"mcp2cli {label} did not prove exact Open Brain scope: "
-            f"{', '.join(sorted(mismatches))}"
-        )
+    try:
+        validate_context_pack_scope(result, namespace, scope)
+    except ValueError as error:
+        raise RuntimeCallError(f"mcp2cli {error}") from error

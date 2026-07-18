@@ -46,41 +46,87 @@ def distilled_content(
 
 
 def validate_started_lane(
-    result: Mapping[str, Any],
+    result: Any,
     namespace: str,
     scope: RuntimeScopeCoordinates,
 ) -> None:
     """Require a session-start result to prove the requested exact scope."""
+    if not isinstance(result, Mapping):
+        raise ValueError("session_start result missing lane object")
     lane = result.get("lane")
     if not isinstance(lane, Mapping):
         raise ValueError("session_start result missing lane object")
     metadata = lane.get("metadata")
-    server_id = metadata.get("server_id") if isinstance(metadata, Mapping) else None
-    expected: dict[str, Any] = {
+    candidate = {
+        name: lane[name]
+        for name in (
+            "namespace",
+            "session_key",
+            "agent",
+            "source",
+            "channel_id",
+            "thread_id",
+        )
+        if name in lane
+    }
+    if isinstance(metadata, Mapping) and "server_id" in metadata:
+        candidate["server_id"] = metadata["server_id"]
+    expected = exact_scope_fields(namespace, scope)
+    expected["source"] = expected.pop("platform")
+    validate_exact_fields(candidate, expected, "session_start result")
+
+
+def validate_context_pack_scope(
+    result: Any,
+    namespace: str,
+    scope: RuntimeScopeCoordinates,
+) -> None:
+    """Require a context-pack result to prove the requested exact scope."""
+    if not isinstance(result, Mapping):
+        raise ValueError("agent_context_pack result missing scope")
+    candidate = result.get("scope")
+    if not isinstance(candidate, Mapping):
+        payload = result.get("payload")
+        candidate = payload.get("scope") if isinstance(payload, Mapping) else None
+    if not isinstance(candidate, Mapping):
+        raise ValueError("agent_context_pack result missing scope")
+    validate_exact_fields(
+        candidate,
+        exact_scope_fields(namespace, scope),
+        "agent_context_pack result",
+    )
+
+
+def exact_scope_fields(
+    namespace: str,
+    scope: RuntimeScopeCoordinates,
+) -> dict[str, Any]:
+    """Return the exact scope fields a server response must prove."""
+    return {
         "namespace": namespace,
         "session_key": scope.session_key,
         "agent": scope.agent,
-        "source": scope.platform,
+        "platform": scope.platform,
         "server_id": scope.server_id,
         "channel_id": scope.channel_id,
         "thread_id": scope.thread_id,
     }
-    actual = {
-        "namespace": lane.get("namespace"),
-        "session_key": lane.get("session_key"),
-        "agent": lane.get("agent"),
-        "source": lane.get("source"),
-        "server_id": server_id,
-        "channel_id": lane.get("channel_id"),
-        "thread_id": lane.get("thread_id"),
-    }
+
+
+def validate_exact_fields(
+    candidate: Mapping[str, Any],
+    expected: Mapping[str, Any],
+    label: str,
+) -> None:
+    """Require every expected field to be present with its exact value."""
     mismatches = sorted(
-        name for name, value in expected.items() if actual.get(name) != value
+        name
+        for name, value in expected.items()
+        if name not in candidate or candidate[name] != value
     )
     if mismatches:
         raise ValueError(
-            "session_start result did not prove exact Open Brain scope: "
-            + ", ".join(mismatches)
+            f"{label} did not prove exact Open Brain scope: {', '.join(mismatches)}"
         )
 
 
