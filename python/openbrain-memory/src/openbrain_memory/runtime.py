@@ -16,6 +16,7 @@ from ._runtime_router import (
     DirectClient,
     FallbackRunner,
     Mcp2CliFallback,
+    RuntimeCallError,
     RuntimeClientRouter,
     run_subprocess,
     safe_error,
@@ -366,7 +367,12 @@ class FirstClassMemoryRuntime:
                 scope=scope,
                 timeout=config.timeout,
             )
-        self._router = RuntimeClientRouter(direct, fallback, setup_error=setup_error)
+        self._router = RuntimeClientRouter(
+            direct,
+            fallback,
+            setup_error=setup_error,
+            direct_result_validator=self._validate_direct_result,
+        )
         configured_spool = spool
         if configured_spool is None and config.spool_path is not None:
             configured_spool = JsonlSpool(config.spool_path)
@@ -625,18 +631,21 @@ class FirstClassMemoryRuntime:
             self._memory.conversation_key = previous_key
         return RuntimeError("requested write did not enter the ordered spool")
 
+    def _validate_direct_result(self, tool: str, result: Any) -> None:
+        if tool != "session_start":
+            return
+        try:
+            _validate_started_lane(result, self.config.namespace, self.scope)
+        except ValueError as error:
+            raise RuntimeCallError(str(error)) from error
+
     def _ensure_lane(self) -> None:
         if self._memory.conversation_key is not None:
             return
-        result = self._memory.start_session(
+        self._memory.start_session(
             self.scope.session_key,
             **self.scope.start_metadata(),
         )
-        try:
-            _validate_started_lane(result, self.config.namespace, self.scope)
-        except ValueError:
-            self._memory.conversation_key = None
-            raise
 
     def _receipt(
         self,

@@ -16,6 +16,8 @@ CURRENT_CLIENT_VERSION = PACKAGE_VERSION
 PREVIOUS_CLIENT_VERSION = "0.1.7"
 PREVIOUS_CONTRACT_VERSION = "2026-07-13.memory-tools.v21"
 CURRENT_REQUIRED_TOOL_VERSIONS = {
+    "session_start": 2,
+    "session_wrap": 2,
     "agent_context_pack": 2,
     "append_session_event": 8,
 }

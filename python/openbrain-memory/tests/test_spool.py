@@ -505,6 +505,46 @@ def test_spool_replay_retains_malformed_ordered_group_without_dispatch(tmp_path)
     assert spool.status().corrupted_line_count == 1
 
 
+@pytest.mark.parametrize(
+    ("field", "malformed_value"),
+    [
+        ("operation", 7),
+        ("operation", ""),
+        ("operation", "  "),
+        ("idempotency_key", 7),
+        ("idempotency_key", ""),
+        ("idempotency_key", "  "),
+    ],
+)
+def test_spool_replay_rejects_raw_identity_coercion_and_retains_group(
+    tmp_path,
+    field,
+    malformed_value,
+):
+    spool = JsonlSpool(tmp_path / "spool.jsonl")
+    spool.append_batch(
+        [
+            ("session_start", {"session_key": "lane"}, "start-key"),
+            ("session_wrap", {"session_key": "lane"}, "write-key"),
+        ]
+    )
+    lines = spool.path.read_text(encoding="utf-8").splitlines()
+    malformed = json.loads(lines[1])
+    malformed[field] = malformed_value
+    lines[1] = json.dumps(malformed, separators=(",", ":"), sort_keys=True)
+    spool.path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    original = spool.path.read_bytes()
+    seen = []
+
+    assert (
+        spool.replay(lambda record: seen.append(record.operation) or {"ok": True}) == []
+    )
+    assert seen == []
+    assert spool.path.read_bytes() == original
+    assert spool.records() == []
+    assert spool.status().corrupted_line_count == 1
+
+
 def test_spool_replay_retains_incomplete_ordered_group_without_dispatch(tmp_path):
     spool = JsonlSpool(tmp_path / "spool.jsonl")
     spool.append_batch(

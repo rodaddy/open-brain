@@ -112,8 +112,11 @@ def test_recall_uses_exact_scope_context_pack_and_validated_budget() -> None:
 
     assert output.receipt.status is ReceiptStatus.DIRECT
     calls = tool_calls(transport)
-    assert len(calls) == 1
-    assert calls[0]["params"] == {
+    assert [call["params"]["name"] for call in calls] == [
+        "get_contract",
+        "agent_context_pack",
+    ]
+    assert calls[1]["params"] == {
         "name": "agent_context_pack",
         "arguments": {
             "agent": "bilby",
@@ -167,10 +170,11 @@ def test_first_capture_establishes_lane_before_append() -> None:
     assert output.receipt.status is ReceiptStatus.SAVED
     calls = tool_calls(transport)
     assert [call["params"]["name"] for call in calls] == [
+        "get_contract",
         "session_start",
         "append_session_event",
     ]
-    start = calls[0]["params"]["arguments"]
+    start = calls[1]["params"]["arguments"]
     assert start == {
         "session_key": "repo/session-4",
         "agent": "bilby",
@@ -180,7 +184,7 @@ def test_first_capture_establishes_lane_before_append() -> None:
         "channel_id": "channel-2",
         "thread_id": "thread-3",
     }
-    event = calls[1]["params"]["arguments"]
+    event = calls[2]["params"]["arguments"]
     assert event["session_key"] == "repo/session-4"
     assert event["event_type"] == "action"
     assert event["agent"] == "bilby"
@@ -336,7 +340,8 @@ def test_lane_creation_failure_does_not_attempt_unscoped_append() -> None:
 
     assert output.receipt.status is ReceiptStatus.LOST
     assert [call["params"]["name"] for call in tool_calls(transport)] == [
-        "session_start"
+        "get_contract",
+        "session_start",
     ]
 
 

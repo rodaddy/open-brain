@@ -7,12 +7,19 @@ import os
 import selectors
 import subprocess
 import time
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
-from .client import JSON
+from .client import (
+    COMPATIBLE_CONTRACT_VERSIONS,
+    FIRST_CLASS_RUNTIME_TOOL_VERSIONS,
+    FIRST_CLASS_RUNTIME_TOOLS,
+    JSON,
+    PACKAGE_VERSION,
+)
+from .contract import validate_contract_manifest
 from .policy import redact_text
 
 MAX_ERROR_CHARS = 500
@@ -41,6 +48,8 @@ class DirectClient(Protocol):
 
     timeout: float
 
+    def get_contract(self, **arguments: Any) -> JSON: ...
+
     def session_start(self, **arguments: Any) -> JSON: ...
 
     def append_session_event(self, **arguments: Any) -> JSON: ...
@@ -50,6 +59,9 @@ class DirectClient(Protocol):
     def agent_context_pack(self, **arguments: Any) -> JSON: ...
 
     def close(self) -> None: ...
+
+
+DirectResultValidator = Callable[[str, Any], None]
 
 
 class FallbackScope(Protocol):
@@ -99,6 +111,7 @@ class Mcp2CliFallback:
         self.namespace = namespace
         self.scope = scope
         self.timeout = timeout
+        self._contract_validated = False
         self._lane_verified = False
 
     def call(
@@ -109,6 +122,8 @@ class Mcp2CliFallback:
         timeout: float | None = None,
     ) -> JSON:
         """Invoke one supported tool and verify its success evidence."""
+        if tool != "get_contract" and not self._contract_validated:
+            self.call("get_contract", {}, timeout=timeout)
         if tool in {"append_session_event", "session_wrap"} and not self._lane_verified:
             self.call(
                 "session_start",
@@ -148,6 +163,10 @@ class Mcp2CliFallback:
         result: Mapping[str, Any],
         arguments: Mapping[str, Any],
     ) -> None:
+        if tool == "get_contract":
+            _validate_first_class_contract(result, "mcp2cli")
+            self._contract_validated = True
+            return
         if tool == "session_start":
             _verify_fallback_lane(
                 result,
@@ -178,11 +197,15 @@ class RuntimeClientRouter:
         fallback: Mcp2CliFallback | None,
         *,
         setup_error: BaseException | None = None,
+        direct_result_validator: DirectResultValidator | None = None,
     ) -> None:
         self.direct = direct
         self.fallback = fallback
         self.setup_error = setup_error
+        self.direct_result_validator = direct_result_validator
         self.state = CallState()
+        self._direct_contract_validated = False
+        self._direct_contract_error: BaseException | None = None
         self._queue_only = False
 
     def reset(self) -> None:
@@ -220,6 +243,24 @@ class RuntimeClientRouter:
         if self.direct is not None:
             self.direct.close()
 
+    def _ensure_direct_contract(self, *, timeout: float | None) -> None:
+        if self._direct_contract_validated:
+            return
+        if self.direct is None:
+            raise RuntimeCallError("direct client unavailable")
+        original_timeout = self.direct.timeout
+        if timeout is not None:
+            self.direct.timeout = min(original_timeout, timeout)
+        try:
+            get_contract = getattr(self.direct, "get_contract", None)
+            if not callable(get_contract):
+                raise RuntimeCallError("direct client does not implement get_contract")
+            manifest = get_contract()
+            _validate_first_class_contract(manifest, "direct")
+        finally:
+            self.direct.timeout = original_timeout
+        self._direct_contract_validated = True
+
     def _call(
         self,
         tool: str,
@@ -237,6 +278,7 @@ class RuntimeClientRouter:
         )
         if self.direct is not None:
             try:
+                self._ensure_direct_contract(timeout=timeout)
                 method = {
                     "session_start": self.direct.session_start,
                     "append_session_event": self.direct.append_session_event,
@@ -251,6 +293,8 @@ class RuntimeClientRouter:
                 finally:
                     self.direct.timeout = original_timeout
                 _verify_direct_result(tool, result)
+                if self.direct_result_validator is not None:
+                    self.direct_result_validator(tool, result)
                 if self.state.path is None:
                     self.state.path = "direct"
                 return result
@@ -269,6 +313,23 @@ class RuntimeClientRouter:
             direct_error or RuntimeError("direct client unavailable")
         )
         raise RuntimeCallError(self.state.error) from direct_error
+
+
+def _validate_first_class_contract(manifest: Any, path: str) -> None:
+    if not isinstance(manifest, Mapping):
+        raise RuntimeCallError(f"{path} get_contract returned a non-object result")
+    validation = validate_contract_manifest(
+        manifest,
+        client_version=PACKAGE_VERSION,
+        required_tools=FIRST_CLASS_RUNTIME_TOOLS,
+        required_tool_versions=FIRST_CLASS_RUNTIME_TOOL_VERSIONS,
+        compatible_contract_versions=COMPATIBLE_CONTRACT_VERSIONS,
+    )
+    if not validation.ok:
+        raise RuntimeCallError(
+            f"{path} get_contract did not prove the first-class runtime contract: "
+            + "; ".join(validation.reasons)
+        )
 
 
 def _verify_direct_result(tool: str, result: Any) -> None:
@@ -455,8 +516,9 @@ def _verify_fallback_lane(
             metadata.get("server_id") if isinstance(metadata, Mapping) else None
         ),
         "channel_id": lane.get("channel_id"),
-        "thread_id": lane.get("thread_id"),
     }
+    if "thread_id" in lane:
+        actual["thread_id"] = lane.get("thread_id")
     expected: dict[str, Any] = {
         "namespace": namespace,
         "session_key": scope.session_key,
@@ -501,7 +563,9 @@ def _verify_exact_fields(
     label: str,
 ) -> None:
     mismatches = [
-        name for name, value in expected.items() if candidate.get(name) != value
+        name
+        for name, value in expected.items()
+        if name not in candidate or candidate[name] != value
     ]
     if mismatches:
         raise RuntimeCallError(

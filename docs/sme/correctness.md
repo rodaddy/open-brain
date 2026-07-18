@@ -483,7 +483,7 @@ A bounded citation response must not hardcode `expandable`. Query one extra neig
 **Scope:** `session_start`, scoped `append_session_event`, `session_checkpoint`, `session_wrap`, and their Python wrappers
 **Status:** fixed in PR #294
 
-Every lifecycle writer must establish the complete exact-scope coordinate set before persisting, including asserted nullable coordinates. Checkpoint and wrap cannot silently drop those coordinates or send a sibling tool's payload shape; tests must start a scoped lane, checkpoint it, wrap it, and prove the same exact scope is recovered end to end.
+Every lifecycle writer must establish the complete exact-scope coordinate set before persisting, including asserted nullable coordinates. Exact nullable scope is presence-sensitive: an explicitly asserted `null` key is not equivalent to an omitted key, so validators must check key presence before comparing values. Checkpoint and wrap cannot silently drop those coordinates or send a sibling tool's payload shape; tests must start a scoped lane, checkpoint it, wrap it, and prove the same exact scope is recovered end to end.
 
 ## [2026-07-17] Contract compatibility must compare semantic tool versions
 
@@ -493,3 +493,12 @@ Every lifecycle writer must establish the complete exact-scope coordinate set be
 **Status:** fixed in PR #294
 
 Required-tool presence is insufficient when the tool contract itself evolves. Compatibility must parse and compare each required tool's semantic version against the supported range, fail closed on malformed or incompatible versions, and test older, newer, malformed, and missing version declarations.
+
+## [2026-07-17] First-class lifecycle runtimes must gate on the live manifest
+
+**Severity:** HIGH
+**Source:** PR #294 focused verification
+**Scope:** `python/openbrain-memory` lifecycle routers and compatibility caching
+**Status:** fixed in PR #294
+
+Before start, append, checkpoint, or wrap, a first-class runtime must validate the current live contract manifest rather than trust construction-time or stale cached compatibility. Tests must mutate the advertised manifest between lifecycle calls and prove an incompatible runtime is rejected before the operation.

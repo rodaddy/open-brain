@@ -8,7 +8,34 @@ from dataclasses import dataclass
 from typing import Any
 
 from openbrain_memory import RuntimeConfig, RuntimeScope
-from openbrain_memory.client import TransportResponse
+from openbrain_memory.client import (
+    CURRENT_CONTRACT_VERSION,
+    FIRST_CLASS_RUNTIME_TOOL_VERSIONS,
+    PACKAGE_VERSION,
+    TransportResponse,
+)
+
+
+def runtime_contract_manifest() -> dict[str, Any]:
+    """Return the source-versioned contract required by the runtime fakes."""
+    return {
+        "contract_scope": "required_openbrain_memory_contract",
+        "contract_version": CURRENT_CONTRACT_VERSION,
+        "min_client_versions": {"openbrain-memory": PACKAGE_VERSION},
+        "compatible_client_ranges": {"openbrain-memory": ">=0.1.8 <1.0.0"},
+        "capabilities": [
+            {"kind": "tool", "name": name, "version": version}
+            for name, version in FIRST_CLASS_RUNTIME_TOOL_VERSIONS.items()
+        ],
+        "tool_contracts": {
+            name: {
+                "version": version,
+                "input_schema": {},
+                "output_shape": "object",
+            }
+            for name, version in FIRST_CLASS_RUNTIME_TOOL_VERSIONS.items()
+        },
+    }
 
 
 class LaneAwareTransport:
@@ -73,6 +100,8 @@ class LaneAwareTransport:
         params = json_body["params"]
         tool = params["name"]
         arguments = params["arguments"]
+        if tool == "get_contract":
+            return self._tool_result(json_body["id"], runtime_contract_manifest())
         if tool == "session_start":
             if self.fail_session_start:
                 return self._tool_error(json_body["id"], "lane creation failed")
@@ -216,6 +245,9 @@ class StartThenFailClient:
         self.started = False
         self.closed = False
 
+    def get_contract(self, **arguments: Any) -> dict[str, Any]:
+        return runtime_contract_manifest()
+
     def session_start(self, **arguments: Any) -> dict[str, Any]:
         if self.fail_start:
             raise ConnectionError("session start failed with token=secret-value")
@@ -337,6 +369,8 @@ class FakeRunner:
 
     @staticmethod
     def _response(tool: str) -> dict[str, Any]:
+        if tool == "get_contract":
+            return {"success": True, "result": runtime_contract_manifest()}
         scope = {
             "namespace": "bilby",
             "session_key": "repo/session-4",
@@ -386,6 +420,29 @@ class FakeRunner:
                 },
             }
         raise AssertionError(f"unexpected fallback tool: {tool}")
+
+
+class ToolResultRunner(FakeRunner):
+    def __init__(self, tool: str, result: Mapping[str, Any]) -> None:
+        super().__init__()
+        self.tool = tool
+        self.tool_result = dict(result)
+
+    def __call__(
+        self,
+        argv: Sequence[str],
+        *,
+        timeout: float,
+    ) -> RunnerResult:
+        call = tuple(argv)
+        self.calls.append((call, timeout))
+        tool = call[2]
+        response = (
+            {"success": True, "result": self.tool_result}
+            if tool == self.tool
+            else self._response(tool)
+        )
+        return RunnerResult(stdout=json.dumps(response))
 
 
 class WriteResultRunner(FakeRunner):

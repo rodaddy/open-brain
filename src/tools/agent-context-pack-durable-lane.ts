@@ -228,15 +228,7 @@ export async function loadDurableLaneContext(
         eventsTruncated = true;
       }
     }
-    events.sort((left, right) => {
-      const createdAtDifference =
-        new Date(String(left.created_at)).getTime() -
-        new Date(String(right.created_at)).getTime();
-      if (createdAtDifference) return createdAtDifference;
-      const leftId = String(left.id);
-      const rightId = String(right.id);
-      return leftId < rightId ? -1 : leftId > rightId ? 1 : 0;
-    });
+    events.reverse();
 
     const truncation: Array<Record<string, unknown>> = [];
     if (context.truncated) {

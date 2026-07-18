@@ -211,6 +211,80 @@ describe("agent_context_pack durable lane context", () => {
     }
   });
 
+  it("preserves sub-millisecond database ordering in chronological output", async () => {
+    const lane = {
+      id: "lane-sub-millisecond-events",
+      session_key: SCOPE.session_key,
+      status: "active",
+      agent: SCOPE.agent,
+      source: SCOPE.platform,
+      channel_id: SCOPE.channel_id,
+      thread_id: null,
+      project: "open-brain",
+      topic: "precision-preserving event order",
+      current_context_md: "checkpoint",
+      updated_at: "2026-07-17T18:00:00Z",
+    };
+    const newerId = "00000000-0000-4000-8000-000000000001";
+    const olderId = "ffffffff-ffff-4fff-bfff-ffffffffffff";
+    const events = [
+      {
+        id: newerId,
+        event_type: "fact",
+        content: "newer event",
+        source: "shared",
+        importance: "warm",
+        artifact_path: null,
+        transcript_ref: null,
+        occurred_at: null,
+        created_at: "2026-07-17T17:00:00.123900Z",
+      },
+      {
+        id: olderId,
+        event_type: "fact",
+        content: "older event",
+        source: "shared",
+        importance: "warm",
+        artifact_path: null,
+        transcript_ref: null,
+        occurred_at: null,
+        created_at: "2026-07-17T17:00:00.123100Z",
+      },
+    ];
+    const auth: AuthInfo = { role: "admin", clientId: "rico" };
+    const { client, cleanup } = await setupToolClient(auth, {
+      query: async (sql: string) => {
+        if (sql.includes("FROM ob_session_lanes") && !sql.includes("JOIN")) {
+          return { rows: [lane] };
+        }
+        if (sql.includes("FROM ob_session_events")) {
+          return { rows: events };
+        }
+        return { rows: [] };
+      },
+    });
+
+    try {
+      const pack = await client.callTool({
+        name: "agent_context_pack",
+        arguments: {
+          ...SCOPE,
+          requested_sections: ["durable_lane_context"],
+        },
+      });
+
+      expect(pack.isError).toBeFalsy();
+      const payload = JSON.parse((pack.content as any)[0].text);
+      expect(
+        payload.sections.durable_lane_context.events.map(
+          (event: any) => event.id,
+        ),
+      ).toEqual([olderId, newerId]);
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("fails closed without event reads when the exact durable lane does not match", async () => {
     const queries: string[] = [];
     const auth: AuthInfo = { role: "admin", clientId: "rico" };

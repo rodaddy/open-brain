@@ -284,8 +284,12 @@ class JsonlSpool:
                 self._warn_corrupted_record(line_number)
             return None
         try:
-            idempotency = str(payload["idempotency_key"])
-            operation = str(payload["operation"])
+            idempotency = payload["idempotency_key"]
+            operation = payload["operation"]
+            if not isinstance(idempotency, str) or not idempotency.strip():
+                raise ValueError("idempotency_key must be a non-empty string")
+            if not isinstance(operation, str) or not operation.strip():
+                raise ValueError("operation must be a non-empty string")
             record_payload = payload.get("payload", {})
             created_at = float(payload.get("created_at", 0))
             group_id, group_index, group_size = self._group_metadata(payload)

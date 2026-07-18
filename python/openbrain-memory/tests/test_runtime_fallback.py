@@ -15,6 +15,7 @@ from ._runtime_fakes import (
     FakeRunner,
     RunnerResult,
     StartThenFailClient,
+    ToolResultRunner,
     WriteResultRunner,
     runtime_config,
     runtime_scope,
@@ -70,11 +71,11 @@ def test_fallback_capture_accepts_live_lane_shape_without_channel_thread() -> No
         "lane_id": "lane-1",
         "lane_created": False,
     }
-    assert len(runner.calls) == 2
+    assert len(runner.calls) == 3
     tools = []
     for (argv, timeout), expected_tool in zip(
         runner.calls,
-        ("session_start", "append_session_event"),
+        ("get_contract", "session_start", "append_session_event"),
         strict=True,
     ):
         assert argv[:4] == ("mcp2cli", "open-brain", expected_tool, "--params")
@@ -82,8 +83,8 @@ def test_fallback_capture_accepts_live_lane_shape_without_channel_thread() -> No
         assert isinstance(json.loads(argv[4]), dict)
         assert timeout == 30.0
         tools.append(expected_tool)
-    assert tools == ["session_start", "append_session_event"]
-    assert json.loads(runner.calls[1][0][4])["content"] == distilled
+    assert tools == ["get_contract", "session_start", "append_session_event"]
+    assert json.loads(runner.calls[2][0][4])["content"] == distilled
 
 
 def test_mcp2cli_wrapper_supports_checkpoint_and_wrap_after_verified_lane() -> None:
@@ -105,6 +106,7 @@ def test_mcp2cli_wrapper_supports_checkpoint_and_wrap_after_verified_lane() -> N
             "context_updated": True,
         }
         assert [call[0][2] for call in runner.calls] == [
+            "get_contract",
             "session_start",
             "session_wrap",
         ]
@@ -128,6 +130,7 @@ def test_direct_lane_then_failed_write_starts_fallback_lane_before_write() -> No
         assert output.receipt.status is ReceiptStatus.FALLBACK
         assert output.receipt.durable is True
         assert [call[0][2] for call in runner.calls] == [
+            "get_contract",
             "session_start",
             expected_tool,
         ]
@@ -150,9 +153,7 @@ def test_fallback_write_rejects_empty_success_result() -> None:
 
 
 def test_fallback_without_scope_proof_cannot_claim_durable_success() -> None:
-    runner = FakeRunner(
-        RunnerResult(stdout='{"success":true,"result":{"is_new":true}}')
-    )
+    runner = ToolResultRunner("session_start", {"is_new": True})
     runtime = FirstClassMemoryRuntime(
         runtime_config(fallback_enabled=True),
         runtime_scope(),
@@ -206,6 +207,55 @@ def test_unthreaded_fallback_rejects_threaded_scope_responses() -> None:
         scope,
         client=StartThenFailClient(fail_start=True),
         fallback_runner=FakeRunner(),
+    ).capture_distilled("unthreaded capture")
+
+    assert recall.receipt.status is ReceiptStatus.FAILED
+    assert capture.receipt.status is ReceiptStatus.LOST
+    assert "thread_id" in (recall.receipt.error or "")
+    assert "thread_id" in (capture.receipt.error or "")
+
+
+def test_unthreaded_fallback_requires_explicit_null_scope_key() -> None:
+    scope = RuntimeScope(
+        agent="bilby",
+        platform="discord",
+        server_id="guild-1",
+        channel_id="channel-2",
+        session_key="repo/session-4",
+    )
+    omitted_thread_scope = {
+        "namespace": "bilby",
+        "session_key": "repo/session-4",
+        "agent": "bilby",
+        "platform": "discord",
+        "server_id": "guild-1",
+        "channel_id": "channel-2",
+    }
+    recall_runner = ToolResultRunner(
+        "agent_context_pack",
+        {"scope": omitted_thread_scope, "sections": {}},
+    )
+    lane = {
+        "namespace": "bilby",
+        "session_key": "repo/session-4",
+        "agent": "bilby",
+        "source": "discord",
+        "channel_id": "channel-2",
+        "metadata": {"server_id": "guild-1"},
+    }
+    capture_runner = ToolResultRunner("session_start", {"lane": lane, "is_new": True})
+
+    recall = FirstClassMemoryRuntime(
+        runtime_config(fallback_enabled=True),
+        scope,
+        client=StartThenFailClient(),
+        fallback_runner=recall_runner,
+    ).recall_context("unthreaded recall")
+    capture = FirstClassMemoryRuntime(
+        runtime_config(fallback_enabled=True),
+        scope,
+        client=StartThenFailClient(fail_start=True),
+        fallback_runner=capture_runner,
     ).capture_distilled("unthreaded capture")
 
     assert recall.receipt.status is ReceiptStatus.FAILED
