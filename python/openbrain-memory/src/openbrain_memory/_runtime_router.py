@@ -19,6 +19,8 @@ from ._runtime_validation import (
 )
 from .client import (
     COMPATIBLE_CONTRACT_VERSIONS,
+    CURRENT_CONTRACT_SCHEMA_HASH,
+    CURRENT_CONTRACT_SCHEMA_VERSION,
     FIRST_CLASS_RUNTIME_TOOL_VERSIONS,
     FIRST_CLASS_RUNTIME_TOOLS,
     JSON,
@@ -116,7 +118,6 @@ class Mcp2CliFallback:
         self.namespace = namespace
         self.scope = scope
         self.timeout = timeout
-        self._contract_validated = False
         self._lane_verified = False
 
     def call(
@@ -127,14 +128,14 @@ class Mcp2CliFallback:
         timeout: float | None = None,
     ) -> JSON:
         """Invoke one supported tool and verify its success evidence."""
-        if tool != "get_contract" and not self._contract_validated:
-            self.call("get_contract", {}, timeout=timeout)
         if tool in {"append_session_event", "session_wrap"} and not self._lane_verified:
             self.call(
                 "session_start",
                 _fallback_lane_arguments(arguments),
                 timeout=timeout,
             )
+        if tool != "get_contract":
+            self.call("get_contract", {}, timeout=timeout)
         params = json.dumps(dict(arguments), separators=(",", ":"), sort_keys=True)
         argv = (*_FALLBACK_COMMAND, tool, "--params", params)
         try:
@@ -170,7 +171,6 @@ class Mcp2CliFallback:
     ) -> None:
         if tool == "get_contract":
             _validate_first_class_contract(result, "mcp2cli")
-            self._contract_validated = True
             return
         if tool == "session_start":
             _verify_fallback_lane(
@@ -209,8 +209,6 @@ class RuntimeClientRouter:
         self.setup_error = setup_error
         self.direct_result_validator = direct_result_validator
         self.state = CallState()
-        self._direct_contract_validated = False
-        self._direct_contract_error: BaseException | None = None
         self._queue_only = False
 
     def reset(self) -> None:
@@ -249,8 +247,6 @@ class RuntimeClientRouter:
             self.direct.close()
 
     def _ensure_direct_contract(self, *, timeout: float | None) -> None:
-        if self._direct_contract_validated:
-            return
         if self.direct is None:
             raise RuntimeCallError("direct client unavailable")
         original_timeout = self.direct.timeout
@@ -264,7 +260,6 @@ class RuntimeClientRouter:
             _validate_first_class_contract(manifest, "direct")
         finally:
             self.direct.timeout = original_timeout
-        self._direct_contract_validated = True
 
     def _call(
         self,
@@ -329,6 +324,8 @@ def _validate_first_class_contract(manifest: Any, path: str) -> None:
         required_tools=FIRST_CLASS_RUNTIME_TOOLS,
         required_tool_versions=FIRST_CLASS_RUNTIME_TOOL_VERSIONS,
         compatible_contract_versions=COMPATIBLE_CONTRACT_VERSIONS,
+        expected_schema_version=CURRENT_CONTRACT_SCHEMA_VERSION,
+        expected_schema_hash=CURRENT_CONTRACT_SCHEMA_HASH,
     )
     if not validation.ok:
         raise RuntimeCallError(

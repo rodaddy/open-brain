@@ -9,6 +9,8 @@ from typing import Any
 
 from openbrain_memory import RuntimeConfig, RuntimeScope
 from openbrain_memory.client import (
+    CURRENT_CONTRACT_SCHEMA_HASH,
+    CURRENT_CONTRACT_SCHEMA_VERSION,
     CURRENT_CONTRACT_VERSION,
     FIRST_CLASS_RUNTIME_TOOL_VERSIONS,
     PACKAGE_VERSION,
@@ -21,6 +23,8 @@ def runtime_contract_manifest() -> dict[str, Any]:
     return {
         "contract_scope": "required_openbrain_memory_contract",
         "contract_version": CURRENT_CONTRACT_VERSION,
+        "schema_version": CURRENT_CONTRACT_SCHEMA_VERSION,
+        "schema_hash": CURRENT_CONTRACT_SCHEMA_HASH,
         "min_client_versions": {"openbrain-memory": PACKAGE_VERSION},
         "compatible_client_ranges": {"openbrain-memory": ">=0.1.8 <1.0.0"},
         "capabilities": [

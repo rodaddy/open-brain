@@ -3,8 +3,12 @@ from __future__ import annotations
 from copy import deepcopy
 from hashlib import sha256
 
+import pytest
+
 from openbrain_memory import (
     COMPATIBLE_CONTRACT_VERSIONS,
+    CURRENT_CONTRACT_SCHEMA_HASH,
+    CURRENT_CONTRACT_SCHEMA_VERSION,
     CURRENT_CONTRACT_VERSION,
     PACKAGE_VERSION,
     REQUIRED_CONTRACT_TOOLS,
@@ -33,8 +37,8 @@ def representative_contract_manifest() -> dict:
         "service": "open-brain",
         "contract_version": CURRENT_CONTRACT_VERSION,
         "contract_scope": "required_openbrain_memory_contract",
-        "schema_version": 1,
-        "schema_hash": "abc123",
+        "schema_version": CURRENT_CONTRACT_SCHEMA_VERSION,
+        "schema_hash": CURRENT_CONTRACT_SCHEMA_HASH,
         "generated_at": "2026-06-19T00:00:00.000Z",
         "min_client_versions": {
             "openbrain-memory": CURRENT_CLIENT_VERSION,
@@ -82,6 +86,14 @@ def test_validate_contract_manifest_accepts_representative_contract_shape():
     assert result.reasons == ()
 
 
+def test_package_pins_reviewed_v22_schema_snapshot() -> None:
+    assert CURRENT_CONTRACT_VERSION == "2026-07-17.memory-tools.v22"
+    assert CURRENT_CONTRACT_SCHEMA_VERSION == 1
+    assert CURRENT_CONTRACT_SCHEMA_HASH == (
+        "51bd6bd9901b88d1f7ae71b95c34a374cbfa4488f706134334aa839bb7cb7c66"
+    )
+
+
 def test_validate_required_memory_contract_pins_package_contract_defaults():
     result = validate_required_memory_contract(
         representative_contract_manifest(),
@@ -90,6 +102,50 @@ def test_validate_required_memory_contract_pins_package_contract_defaults():
 
     assert result.ok is True
     assert result.reasons == ()
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected_reason"),
+    [
+        ("schema_version", None, "schema_version is missing or not an integer"),
+        ("schema_version", "1", "schema_version is missing or not an integer"),
+        ("schema_version", 2, "schema_version mismatch"),
+        (
+            "schema_hash",
+            None,
+            "schema_hash is missing or not a non-empty string",
+        ),
+        (
+            "schema_hash",
+            51,
+            "schema_hash is missing or not a non-empty string",
+        ),
+        ("schema_hash", "0" * 64, "schema_hash mismatch"),
+    ],
+)
+def test_required_contract_rejects_unreviewed_schema_snapshot(
+    field: str,
+    value: object,
+    expected_reason: str,
+) -> None:
+    manifest = representative_contract_manifest()
+    if value is None:
+        del manifest[field]
+    else:
+        manifest[field] = value
+
+    result = validate_required_memory_contract(
+        manifest,
+        client_version=CURRENT_CLIENT_VERSION,
+    )
+
+    assert result.ok is False
+    assert any(expected_reason in reason for reason in result.reasons)
+    assert manifest["contract_version"] == CURRENT_CONTRACT_VERSION
+    assert all(
+        capability["name"] in REQUIRED_CONTRACT_TOOLS
+        for capability in manifest["capabilities"]
+    )
 
 
 def test_manifest_requires_current_package_without_overstating_legacy_compatibility():

@@ -1,3 +1,4 @@
+import type { PoolClient } from "pg";
 import type { ToolDeps } from "./index.ts";
 import type { AgentContextPackArgs } from "./agent-context-pack.ts";
 
@@ -28,6 +29,53 @@ type DurableLaneReader = {
   release: () => void;
 };
 
+function remainingLatencyMs(startedAt: number, maxLatencyMs: number): number {
+  const remainingMs = Math.floor(
+    maxLatencyMs - (performance.now() - startedAt),
+  );
+  if (remainingMs < 1) {
+    throw new Error("durable lane context latency budget exhausted");
+  }
+  return remainingMs;
+}
+
+async function acquirePoolClient(
+  deps: ToolDeps,
+  startedAt: number,
+  maxLatencyMs: number,
+): Promise<PoolClient> {
+  const remainingMs = remainingLatencyMs(startedAt, maxLatencyMs);
+  const connectPromise = deps.pool.connect();
+
+  return await new Promise<PoolClient>((resolve, reject) => {
+    let settled = false;
+    const timeout = setTimeout(() => {
+      settled = true;
+      reject(new Error("durable lane context latency budget exhausted"));
+    }, remainingMs);
+
+    void connectPromise
+      .then(
+        (client) => {
+          if (settled) {
+            client.release();
+            return;
+          }
+          settled = true;
+          clearTimeout(timeout);
+          resolve(client);
+        },
+        (error: unknown) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          reject(error);
+        },
+      )
+      .catch(() => undefined);
+  });
+}
+
 async function openDurableLaneReader(
   deps: ToolDeps,
   maxLatencyMs: number | undefined,
@@ -45,9 +93,10 @@ async function openDurableLaneReader(
   }
 
   const startedAt = performance.now();
-  const client = await deps.pool.connect();
+  const client = await acquirePoolClient(deps, startedAt, maxLatencyMs);
   let transactionOpen = false;
   try {
+    remainingLatencyMs(startedAt, maxLatencyMs);
     await client.query("BEGIN READ ONLY");
     transactionOpen = true;
   } catch (error) {
@@ -57,12 +106,7 @@ async function openDurableLaneReader(
 
   return {
     query: async (sql, params) => {
-      const remainingMs = Math.floor(
-        maxLatencyMs - (performance.now() - startedAt),
-      );
-      if (remainingMs < 1) {
-        throw new Error("durable lane context latency budget exhausted");
-      }
+      const remainingMs = remainingLatencyMs(startedAt, maxLatencyMs);
       await client.query(
         "SELECT set_config('statement_timeout', $1, true)",
         [`${remainingMs}ms`],

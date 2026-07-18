@@ -248,12 +248,14 @@ allocate output before `subprocess.run` returns. The adapter requires the real
 mcp2cli envelope shape, `{"success":true,"result":{...}}`, and returns only the
 inner tool result. `session_start` must prove the public lane authority fields
 it returns: namespace, session key, and agent (plus project when returned).
-`agent_context_pack` must prove every coordinate in
-its inner result's top-level `scope`. Append and wrap fallback are accepted only
-after the same
-fallback instance verified its lane initialization. Unverified responses are
-reported as lost rather than durable success. The local LLM endpoint on
-`127.0.0.1:8317` is not an Open Brain endpoint or fallback.
+`agent_context_pack` must prove every coordinate in its inner result's top-level
+`scope`. Every direct or fallback semantic operation first validates a fresh live
+`get_contract` result against the reviewed v22 contract, schema version, schema
+hash, and tool versions; compatibility success is never cached across operations
+or from `session_start` into a later write. Append and wrap fallback are accepted
+only after the same fallback instance verified its lane initialization. Unverified
+responses are reported as lost rather than durable success. The local LLM
+endpoint on `127.0.0.1:8317` is not an Open Brain endpoint or fallback.
 
 For the shared host install, use a Python 3.13 environment at
 `/Users/rico/.local/share/openbrain-memory/.venv`; do not bind the package to a
@@ -328,8 +330,9 @@ paths. The supported public surface is:
 - `validate_required_memory_contract()` and `validate_contract_manifest()`.
 - `contract_field_to_json_schema()`, `contract_input_to_json_schema()`,
   `tool_contract_to_input_schema()`, and `tool_contracts_to_tool_schemas()`.
-- `CURRENT_CONTRACT_VERSION`, `REQUIRED_CONTRACT_TOOLS`, `CURRENT_TOOL_HELP`, and
-  `PACKAGE_VERSION`.
+- `CURRENT_CONTRACT_VERSION`, `CURRENT_CONTRACT_SCHEMA_VERSION`,
+  `CURRENT_CONTRACT_SCHEMA_HASH`, `REQUIRED_CONTRACT_TOOLS`, `CURRENT_TOOL_HELP`,
+  and `PACKAGE_VERSION`.
 
 The wheel includes a `py.typed` marker so typed consumers can rely on the
 package's inline annotations.
@@ -341,13 +344,14 @@ artifact. While the package remains `0.x`, downstream production hosts should
 pin exact versions or reviewed wheel files because minor releases may still
 carry breaking API changes.
 
-`CURRENT_CONTRACT_VERSION` is separate. It identifies the Open Brain service
-tool contract snapshot expected by this package. The connected endpoint's
-`get_contract()` response is authoritative at runtime; consumers should validate
-that manifest with `validate_required_memory_contract()` before enabling
-required-memory mode. Pinning `openbrain-memory==<version>` is not a substitute
-for checking the live `contract_version`, `contract_scope`, `schema_hash`,
-minimum client ranges, and required tool names.
+`CURRENT_CONTRACT_VERSION`, `CURRENT_CONTRACT_SCHEMA_VERSION`, and
+`CURRENT_CONTRACT_SCHEMA_HASH` identify the reviewed Open Brain service contract
+snapshot expected by this package. The connected endpoint's `get_contract()`
+response is authoritative at runtime; consumers should validate that manifest
+with `validate_required_memory_contract()` before enabling required-memory mode.
+Pinning `openbrain-memory==<version>` is not a substitute for checking the live
+`contract_version`, `contract_scope`, exact schema metadata, minimum client
+ranges, and required tool names.
 
 ### Canonical Redaction Policy
 

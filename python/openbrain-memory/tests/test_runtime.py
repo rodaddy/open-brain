@@ -172,6 +172,7 @@ def test_first_capture_establishes_lane_before_append() -> None:
     assert [call["params"]["name"] for call in calls] == [
         "get_contract",
         "session_start",
+        "get_contract",
         "append_session_event",
     ]
     start = calls[1]["params"]["arguments"]
@@ -184,7 +185,7 @@ def test_first_capture_establishes_lane_before_append() -> None:
         "channel_id": "channel-2",
         "thread_id": "thread-3",
     }
-    event = calls[2]["params"]["arguments"]
+    event = calls[3]["params"]["arguments"]
     assert event["session_key"] == "repo/session-4"
     assert event["event_type"] == "action"
     assert event["agent"] == "bilby"

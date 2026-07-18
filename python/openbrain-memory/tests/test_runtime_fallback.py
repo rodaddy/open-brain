@@ -71,11 +71,17 @@ def test_fallback_capture_accepts_live_lane_shape_without_channel_thread() -> No
         "lane_id": "lane-1",
         "lane_created": False,
     }
-    assert len(runner.calls) == 3
+    assert len(runner.calls) == 4
     tools = []
+    expected_tools = (
+        "get_contract",
+        "session_start",
+        "get_contract",
+        "append_session_event",
+    )
     for (argv, timeout), expected_tool in zip(
         runner.calls,
-        ("get_contract", "session_start", "append_session_event"),
+        expected_tools,
         strict=True,
     ):
         assert argv[:4] == ("mcp2cli", "open-brain", expected_tool, "--params")
@@ -83,8 +89,8 @@ def test_fallback_capture_accepts_live_lane_shape_without_channel_thread() -> No
         assert isinstance(json.loads(argv[4]), dict)
         assert timeout == 30.0
         tools.append(expected_tool)
-    assert tools == ["get_contract", "session_start", "append_session_event"]
-    assert json.loads(runner.calls[2][0][4])["content"] == distilled
+    assert tools == list(expected_tools)
+    assert json.loads(runner.calls[3][0][4])["content"] == distilled
 
 
 def test_mcp2cli_wrapper_supports_checkpoint_and_wrap_after_verified_lane() -> None:
@@ -108,6 +114,7 @@ def test_mcp2cli_wrapper_supports_checkpoint_and_wrap_after_verified_lane() -> N
         assert [call[0][2] for call in runner.calls] == [
             "get_contract",
             "session_start",
+            "get_contract",
             "session_wrap",
         ]
 
@@ -132,6 +139,7 @@ def test_direct_lane_then_failed_write_starts_fallback_lane_before_write() -> No
         assert [call[0][2] for call in runner.calls] == [
             "get_contract",
             "session_start",
+            "get_contract",
             expected_tool,
         ]
 

@@ -8,6 +8,8 @@ from typing import Any
 
 from .client import (
     COMPATIBLE_CONTRACT_VERSIONS,
+    CURRENT_CONTRACT_SCHEMA_HASH,
+    CURRENT_CONTRACT_SCHEMA_VERSION,
     REQUIRED_CONTRACT_TOOL_VERSIONS,
     REQUIRED_CONTRACT_TOOLS,
 )
@@ -35,6 +37,8 @@ def validate_contract_manifest(
     required_tool_versions: Mapping[str, int] | None = None,
     expected_scope: str = EXPECTED_CONTRACT_SCOPE,
     compatible_contract_versions: Iterable[str] = (),
+    expected_schema_version: int | None = None,
+    expected_schema_hash: str | None = None,
 ) -> ContractValidationResult:
     """Validate a live Open Brain contract manifest without network access."""
 
@@ -65,6 +69,12 @@ def validate_contract_manifest(
                 f"expected one of: {expected}",
             )
 
+    _validate_schema_snapshot(
+        manifest,
+        expected_version=expected_schema_version,
+        expected_hash=expected_schema_hash,
+        reasons=reasons,
+    )
     _validate_required_tools(
         manifest,
         required_tools=tuple(required_tools),
@@ -97,7 +107,37 @@ def validate_required_memory_contract(
         required_tools=REQUIRED_CONTRACT_TOOLS,
         required_tool_versions=REQUIRED_CONTRACT_TOOL_VERSIONS,
         compatible_contract_versions=COMPATIBLE_CONTRACT_VERSIONS,
+        expected_schema_version=CURRENT_CONTRACT_SCHEMA_VERSION,
+        expected_schema_hash=CURRENT_CONTRACT_SCHEMA_HASH,
     )
+
+
+def _validate_schema_snapshot(
+    manifest: Mapping[str, Any],
+    *,
+    expected_version: int | None,
+    expected_hash: str | None,
+    reasons: list[str],
+) -> None:
+    if expected_version is not None:
+        version = manifest.get("schema_version")
+        if isinstance(version, bool) or not isinstance(version, int):
+            reasons.append("schema_version is missing or not an integer")
+        elif version != expected_version:
+            reasons.append(
+                f"schema_version mismatch: expected {expected_version}, got {version}"
+            )
+
+    if expected_hash is not None:
+        schema_hash = manifest.get("schema_hash")
+        if not isinstance(schema_hash, str) or not schema_hash:
+            reasons.append("schema_hash is missing or not a non-empty string")
+        elif schema_hash != expected_hash:
+            reasons.append(
+                "schema_hash mismatch: "
+                f"expected {_display_value(expected_hash)}, "
+                f"got {_display_value(schema_hash)}"
+            )
 
 
 def _validate_required_tools(

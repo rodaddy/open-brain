@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -22,7 +24,7 @@ from openbrain_memory.agent import _reject_secret_payload
 class FakeClient:
     def __init__(self) -> None:
         self.calls = []
-        self.search_payload = {
+        self.search_payload: dict[str, Any] | None = {
             "results": [
                 {
                     "text": "First useful fact about the project.",
@@ -53,9 +55,9 @@ class FakeClient:
     def append_session_event(self, **arguments):
         return self._record("append_session_event", arguments)
 
-    def search_all(self, **arguments):
+    def search_all(self, **arguments) -> dict[str, Any]:
         self.calls.append(("search_all", arguments))
-        return self.search_payload
+        return cast(dict[str, Any], self.search_payload)
 
     def brain_answer(self, **arguments):
         return self._record("brain_answer", arguments)
@@ -568,7 +570,7 @@ def test_record_receipt_validates_shape_and_reserved_metadata():
     with pytest.raises(ValueError, match="sources"):
         memory.record_receipt(
             "bad",
-            sources=["not a mapping"],
+            sources=cast(list[Mapping[str, Any]], ["not a mapping"]),
             outputs=[],
             validations=[],
         )

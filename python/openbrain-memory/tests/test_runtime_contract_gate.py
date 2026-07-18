@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import re
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -13,12 +15,12 @@ from ._runtime_fakes import (
     ContextClient,
     FakeRunner,
     FakeSpool,
-    LaneAwareTransport,
+    RunnerResult,
     StartThenFailClient,
+    WriteResultClient,
     runtime_config,
     runtime_contract_manifest,
     runtime_scope,
-    tool_calls,
 )
 
 
@@ -64,6 +66,48 @@ class IncompatibleContractClient(ContextClient):
         return manifest
 
 
+class SequencedContractWriteClient(WriteResultClient):
+    def __init__(self, manifests: list[dict[str, Any]]) -> None:
+        super().__init__(
+            append_result={
+                "event_id": "event-1",
+                "lane_id": "lane-1",
+                "lane_created": False,
+            }
+        )
+        self.manifests = manifests
+        self.contract_calls = 0
+
+    def get_contract(self, **arguments: Any) -> dict[str, Any]:
+        manifest = self.manifests[min(self.contract_calls, len(self.manifests) - 1)]
+        self.contract_calls += 1
+        return dict(manifest)
+
+
+class SequencedContractRunner(FakeRunner):
+    def __init__(self, manifests: list[dict[str, Any]]) -> None:
+        super().__init__()
+        self.manifests = manifests
+        self.contract_calls = 0
+
+    def __call__(
+        self,
+        argv: Sequence[str],
+        *,
+        timeout: float,
+    ) -> RunnerResult:
+        call = tuple(argv)
+        self.calls.append((call, timeout))
+        tool = call[2]
+        if tool == "get_contract":
+            manifest = self.manifests[min(self.contract_calls, len(self.manifests) - 1)]
+            self.contract_calls += 1
+            response = {"success": True, "result": manifest}
+        else:
+            response = self._response(tool)
+        return RunnerResult(stdout=json.dumps(response))
+
+
 class MalformedLaneClient(StartThenFailClient):
     def session_start(self, **arguments: Any) -> dict[str, Any]:
         return {
@@ -79,21 +123,60 @@ class MalformedLaneClient(StartThenFailClient):
         }
 
 
-def test_runtime_discovers_contract_once_before_first_semantic_call() -> None:
-    transport = LaneAwareTransport()
+def test_direct_manifest_mutation_after_lane_start_spools_then_recovers() -> None:
+    valid = runtime_contract_manifest()
+    altered = runtime_contract_manifest()
+    altered["schema_hash"] = "0" * 64
+    client = SequencedContractWriteClient([valid, altered, valid])
+    spool = FakeSpool()
     runtime = FirstClassMemoryRuntime(
-        runtime_config(), runtime_scope(), transport=transport
+        runtime_config(), runtime_scope(), client=client, spool=spool
     )
 
-    first = runtime.recall_context("first")
-    second = runtime.recall_context("second")
+    rejected = runtime.capture_distilled("Spool after direct manifest mutation")
+    recovered = runtime.capture_distilled("Save after direct manifest rollback")
 
-    assert first.receipt.status is ReceiptStatus.DIRECT
-    assert second.receipt.status is ReceiptStatus.DIRECT
-    assert [call["params"]["name"] for call in tool_calls(transport)] == [
+    assert rejected.receipt.status is ReceiptStatus.SPOOLED
+    assert rejected.receipt.durable is True
+    assert recovered.receipt.status is ReceiptStatus.SAVED
+    assert recovered.receipt.durable is True
+    assert client.contract_calls == 3
+    assert [operation for operation, _payload, _key in spool.calls] == [
+        "append_session_event"
+    ]
+
+
+def test_fallback_manifest_mutation_after_lane_start_spools_then_recovers() -> None:
+    valid = runtime_contract_manifest()
+    altered = runtime_contract_manifest()
+    altered["schema_hash"] = "0" * 64
+    runner = SequencedContractRunner([valid, altered, valid])
+    spool = FakeSpool()
+    runtime = FirstClassMemoryRuntime(
+        runtime_config(fallback_enabled=True),
+        runtime_scope(),
+        client=IncompatibleContractClient(),
+        fallback_runner=runner,
+        spool=spool,
+    )
+
+    rejected = runtime.capture_distilled("Spool after fallback manifest mutation")
+    recovered = runtime.capture_distilled("Save after fallback manifest rollback")
+
+    assert rejected.receipt.status is ReceiptStatus.SPOOLED
+    assert rejected.receipt.durable is True
+    assert recovered.receipt.status is ReceiptStatus.FALLBACK
+    assert recovered.receipt.durable is True
+    assert runner.contract_calls == 3
+    assert [call[0][2] for call in runner.calls] == [
         "get_contract",
-        "agent_context_pack",
-        "agent_context_pack",
+        "session_start",
+        "get_contract",
+        "get_contract",
+        "append_session_event",
+    ]
+    assert [operation for operation, _payload, _key in spool.calls] == [
+        "append_session_event"
     ]
 
 
@@ -180,6 +263,7 @@ def test_malformed_direct_lane_response_routes_to_fallback() -> None:
     assert [call[0][2] for call in runner.calls] == [
         "get_contract",
         "session_start",
+        "get_contract",
         "append_session_event",
     ]
 

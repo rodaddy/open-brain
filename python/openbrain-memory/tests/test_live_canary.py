@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any
@@ -10,6 +11,8 @@ from uuid import uuid4
 import pytest
 
 from openbrain_memory import (
+    CURRENT_CONTRACT_SCHEMA_HASH,
+    CURRENT_CONTRACT_SCHEMA_VERSION,
     CURRENT_CONTRACT_VERSION,
     OpenBrainClient,
     validate_required_memory_contract,
@@ -25,7 +28,7 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.fixture()
-def live_client() -> OpenBrainClient:
+def live_client() -> Iterator[OpenBrainClient]:
     base_url = os.environ["OPENBRAIN_BASE_URL"]
     token = os.environ["OPENBRAIN_TOKEN"]
     namespace = os.environ["OPENBRAIN_NAMESPACE"]
@@ -93,8 +96,8 @@ def test_live_contract_manifest_validates_required_memory_helpers(
 
     assert validation.ok, validation.reasons
     assert manifest["contract_version"] == CURRENT_CONTRACT_VERSION
-    assert isinstance(manifest.get("schema_hash"), str)
-    assert manifest["schema_hash"]
+    assert manifest["schema_version"] == CURRENT_CONTRACT_SCHEMA_VERSION
+    assert manifest["schema_hash"] == CURRENT_CONTRACT_SCHEMA_HASH
 
 
 def test_live_read_helpers_canary(live_client: OpenBrainClient):
