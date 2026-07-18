@@ -7,6 +7,12 @@ import {
 
 const AUTH: AuthInfo = { role: "admin", clientId: "rico" };
 
+type TimedQueryConfig = {
+  text: string;
+  values?: unknown[];
+  query_timeout?: number;
+};
+
 async function callBudgetedPack(
   pool: Parameters<typeof setupToolClient>[1],
   maxLatencyMs: number,
@@ -103,12 +109,57 @@ describe("agent_context_pack durable lane pool acquisition", () => {
     expect(JSON.stringify(payload)).not.toContain("private-connect-detail");
   });
 
+  it("fails open when the acquired client's BEGIN hits its query timeout", async () => {
+    let transactionStartCount = 0;
+    let laneQueryCount = 0;
+    let releaseCount = 0;
+    let releaseArgument: unknown;
+    const dbClient = {
+      query: async (config: TimedQueryConfig) => {
+        if (config.text === "BEGIN READ ONLY") {
+          transactionStartCount += 1;
+          expect(config.query_timeout).toBeGreaterThan(0);
+          if (!config.query_timeout) {
+            throw new Error("BEGIN query timeout was not configured");
+          }
+          await Bun.sleep(config.query_timeout);
+          throw new Error("Query read timeout");
+        }
+        if (config.text.includes("FROM ob_session_lanes")) {
+          laneQueryCount += 1;
+        }
+        return { rows: [] };
+      },
+      release: (error?: unknown) => {
+        releaseCount += 1;
+        releaseArgument = error;
+      },
+    };
+    const { pack, elapsedMs } = await callBudgetedPack(
+      {
+        query: async () => {
+          throw new Error("budgeted reads must use the acquired client");
+        },
+        connect: async () => dbClient,
+      },
+      25,
+    );
+
+    const payload = expectDatabaseUnavailable(pack);
+    expect(elapsedMs).toBeLessThan(250);
+    expect(transactionStartCount).toBe(1);
+    expect(laneQueryCount).toBe(0);
+    expect(releaseCount).toBe(1);
+    expect(releaseArgument).toBeInstanceOf(Error);
+    expect(JSON.stringify(payload)).not.toContain("Query read timeout");
+  });
+
   it("uses and releases a normally acquired client within the shared deadline", async () => {
-    const queries: Array<{ sql: string; params?: unknown[] }> = [];
+    const queries: TimedQueryConfig[] = [];
     let releaseCount = 0;
     const dbClient = {
-      query: async (sql: string, params?: unknown[]) => {
-        queries.push({ sql, params });
+      query: async (config: TimedQueryConfig) => {
+        queries.push(config);
         return { rows: [] };
       },
       release: () => {
@@ -131,18 +182,25 @@ describe("agent_context_pack durable lane pool acquisition", () => {
       source: "durable_lane_context",
       reasons: ["exact_scope"],
     });
-    expect(queries.map(({ sql }) => sql)).toEqual([
+    expect(queries.map(({ text }) => text)).toEqual([
       "BEGIN READ ONLY",
       "SELECT set_config('statement_timeout', $1, true)",
       expect.stringContaining("FROM ob_session_lanes"),
       "COMMIT",
     ]);
+    expect(queries.every(({ query_timeout }) => query_timeout! > 0)).toBe(true);
     const statementTimeoutMs = Number.parseInt(
-      String(queries[1]?.params?.[0]),
+      String(queries[1]?.values?.[0]),
       10,
     );
     expect(statementTimeoutMs).toBeGreaterThan(0);
     expect(statementTimeoutMs).toBeLessThanOrEqual(250);
+    expect(queries.map(({ text }) => text).join("\n")).not.toContain(
+      "SET statement_timeout",
+    );
+    expect(queries.map(({ text }) => text).join("\n")).not.toContain(
+      "RESET statement_timeout",
+    );
     expect(releaseCount).toBe(1);
   });
 });

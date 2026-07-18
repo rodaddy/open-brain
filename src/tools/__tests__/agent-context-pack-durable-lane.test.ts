@@ -428,10 +428,11 @@ describe("agent_context_pack durable lane context", () => {
     }
   });
 
-  it("waits for server-cancelled durable reads before releasing the pool client", async () => {
+  it("discards the pool client after a timed-out durable read", async () => {
     let statementTimeoutMs = 0;
     let activeQueries = 0;
     let released = false;
+    let releaseArgument: unknown;
     let rolledBack = false;
     const lane = {
       id: "lane-timeout",
@@ -447,22 +448,28 @@ describe("agent_context_pack durable lane context", () => {
       updated_at: "2026-07-17T18:00:00Z",
     };
     const dbClient = {
-      query: async (sql: string, params?: unknown[]) => {
-        if (sql === "BEGIN READ ONLY" || sql === "COMMIT") {
+      query: async (config: {
+        text: string;
+        values?: unknown[];
+        query_timeout?: number;
+      }) => {
+        const { text, values, query_timeout: queryTimeoutMs } = config;
+        expect(queryTimeoutMs).toBeGreaterThan(0);
+        if (text === "BEGIN READ ONLY" || text === "COMMIT") {
           return { rows: [] };
         }
-        if (sql === "ROLLBACK") {
+        if (text === "ROLLBACK") {
           rolledBack = true;
           return { rows: [] };
         }
-        if (sql.includes("set_config('statement_timeout'")) {
-          statementTimeoutMs = Number.parseInt(String(params?.[0]), 10);
+        if (text.includes("set_config('statement_timeout'")) {
+          statementTimeoutMs = Number.parseInt(String(values?.[0]), 10);
           return { rows: [] };
         }
-        if (sql.includes("FROM ob_session_lanes") && !sql.includes("JOIN")) {
+        if (text.includes("FROM ob_session_lanes") && !text.includes("JOIN")) {
           return { rows: [lane] };
         }
-        if (sql.includes("FROM ob_session_events")) {
+        if (text.includes("FROM ob_session_events")) {
           activeQueries += 1;
           await new Promise((resolve) =>
             setTimeout(resolve, statementTimeoutMs + 2),
@@ -472,8 +479,9 @@ describe("agent_context_pack durable lane context", () => {
         }
         return { rows: [] };
       },
-      release: () => {
+      release: (error?: unknown) => {
         released = true;
+        releaseArgument = error;
       },
     };
     const auth: AuthInfo = { role: "admin", clientId: "rico" };
@@ -508,8 +516,9 @@ describe("agent_context_pack durable lane context", () => {
       expect(JSON.stringify(payload)).not.toContain("secret-detail");
       expect(elapsedMs).toBeLessThan(250);
       expect(activeQueries).toBe(0);
-      expect(rolledBack).toBe(true);
+      expect(rolledBack).toBe(false);
       expect(released).toBe(true);
+      expect(releaseArgument).toBeInstanceOf(Error);
     } finally {
       await cleanup();
     }

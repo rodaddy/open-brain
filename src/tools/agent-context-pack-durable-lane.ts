@@ -1,4 +1,4 @@
-import type { PoolClient } from "pg";
+import type { PoolClient, QueryConfig } from "pg";
 import type { ToolDeps } from "./index.ts";
 import type { AgentContextPackArgs } from "./agent-context-pack.ts";
 
@@ -76,6 +76,26 @@ async function acquirePoolClient(
   });
 }
 
+type TimedQueryConfig = QueryConfig<unknown[]> & {
+  query_timeout: number;
+};
+
+async function queryWithinLatencyBudget(
+  client: PoolClient,
+  startedAt: number,
+  maxLatencyMs: number,
+  text: string,
+  values?: unknown[],
+): Promise<{ rows: Array<Record<string, unknown>> }> {
+  const config: TimedQueryConfig = {
+    text,
+    values,
+    query_timeout: remainingLatencyMs(startedAt, maxLatencyMs),
+  };
+  const result = await client.query(config);
+  return { rows: result.rows as Array<Record<string, unknown>> };
+}
+
 async function openDurableLaneReader(
   deps: ToolDeps,
   maxLatencyMs: number | undefined,
@@ -95,35 +115,59 @@ async function openDurableLaneReader(
   const startedAt = performance.now();
   const client = await acquirePoolClient(deps, startedAt, maxLatencyMs);
   let transactionOpen = false;
+  let released = false;
+  let unsafeError: Error | undefined;
+  const markUnsafe = (error: unknown) => {
+    unsafeError = error instanceof Error
+      ? error
+      : new Error("durable lane context client is unsafe");
+  };
+  const release = () => {
+    if (released) return;
+    released = true;
+    client.release(unsafeError);
+  };
+  const query = async (sql: string, params?: unknown[]) => {
+    try {
+      return await queryWithinLatencyBudget(
+        client,
+        startedAt,
+        maxLatencyMs,
+        sql,
+        params,
+      );
+    } catch (error) {
+      markUnsafe(error);
+      throw error;
+    }
+  };
   try {
-    remainingLatencyMs(startedAt, maxLatencyMs);
-    await client.query("BEGIN READ ONLY");
+    await query("BEGIN READ ONLY");
     transactionOpen = true;
+    await query(
+      "SELECT set_config('statement_timeout', $1, true)",
+      [`${remainingLatencyMs(startedAt, maxLatencyMs)}ms`],
+    );
   } catch (error) {
-    client.release();
+    markUnsafe(error);
+    release();
     throw error;
   }
 
   return {
     query: async (sql, params) => {
-      const remainingMs = remainingLatencyMs(startedAt, maxLatencyMs);
-      await client.query(
-        "SELECT set_config('statement_timeout', $1, true)",
-        [`${remainingMs}ms`],
-      );
-      const result = await client.query(sql, params);
-      return { rows: result.rows as Array<Record<string, unknown>> };
+      return await query(sql, params);
     },
     commit: async () => {
-      await client.query("COMMIT");
+      await query("COMMIT");
       transactionOpen = false;
     },
     rollback: async () => {
-      if (!transactionOpen) return;
-      await client.query("ROLLBACK").catch(() => undefined);
+      if (!transactionOpen || unsafeError) return;
+      await query("ROLLBACK");
       transactionOpen = false;
     },
-    release: () => client.release(),
+    release,
   };
 }
 
