@@ -75,8 +75,16 @@ _MAX_METADATA_KEYS = 50
 _MAX_METADATA_KEY_LENGTH = 100
 _MAX_METADATA_JSON_BYTES = 100_000
 _MAX_METADATA_DEPTH = 16
-SESSION_START_KEYS = {"channel_id", "thread_id", "topic"}
-SESSION_WRAP_KEYS = {"key_decisions", "next_steps", "receipt_refs"}
+SESSION_START_KEYS = {"platform", "server_id", "channel_id", "thread_id", "topic"}
+SESSION_WRAP_KEYS = {
+    "platform",
+    "server_id",
+    "channel_id",
+    "thread_id",
+    "key_decisions",
+    "next_steps",
+    "receipt_refs",
+}
 DECISION_KEYS = {"alternatives", "tags", "context"}
 THOUGHT_KEYS = {"tags"}
 LANE_STATUSES = {"active", "wrapped", "archived"}
@@ -875,6 +883,7 @@ class AgentMemory:
 
     def _session_payload(self, metadata: Mapping[str, Any]) -> dict[str, Any]:
         payload = dict(metadata)
+        payload["agent"] = self.agent
         if self.project is not None:
             payload["project"] = self.project
         if self.conversation_key is not None:

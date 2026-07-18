@@ -51,7 +51,7 @@ Changed paths now remain inside the package/spec surface plus `src/tools/{agent-
 - Moved fixed mcp2cli fallback/router/scope verification into
   `_runtime_router.py` and ordered lifecycle spool ownership into
   `_runtime_spool.py`; public runtime API/types remain in `runtime.py`.
-- `runtime.py` is 736 lines, below the repository's 750-line hard warning.
+- The private-module split keeps `runtime.py` within the repository's size policy without moving its public API/types.
 - Failed fresh-lane writes now atomically queue `session_start` followed by the
   requested capture/checkpoint/wrap through `JsonlSpool.append_batch()`. If the
   ordered pair cannot be committed, the receipt is `lost` and no orphan start
@@ -94,7 +94,7 @@ Changed paths now remain inside the package/spec surface plus `src/tools/{agent-
 - Real package CLI receipts passed through the local server: direct recall `direct`; capture/checkpoint/wrap `saved` and durable; forced isolated mcp2cli recall/write `fallback`; offline grouped write `spooled`; no-spool write `lost` with exit `1`; malformed input failed with exit `2`; secret-like content was rejected before transport.
 - Real JSONL replay dispatched the ordered `session_start` + `append_session_event` group and left zero records. The spool used mode `0600` and preserved group indexes `[0,1]` and group size `2`.
 - The canary proved a server gap: `agent_context_pack` returned only `working_set`, while an existing lane could retain null platform/server scope. Fixed the server owning boundary so first scoped append atomically attaches missing coordinates without overwriting asserted scope, and explicitly requested `durable_lane_context` uses all seven exact coordinates and bounded distilled events.
-- Compatibility decision: bump the changed hashed public contract to v22 rather than relabeling it v21. Package `0.1.8` accepts both v21 and v22 for rollout order, while the v22 manifest truthfully requires `openbrain-memory` `0.1.8` with range `>=0.1.8 <1.0.0`; package `0.1.7` pins only v21. Tool declarations advance to `agent_context_pack` v2 and `append_session_event` v8, with a regenerated deterministic schema-hash fixture.
+- Compatibility decision: bump the changed hashed public contract to v22 rather than relabeling it v21. Package `0.1.8` requires v22 with `agent_context_pack` v2 and `append_session_event` v8; it does not accept v21. The v22 manifest truthfully requires `openbrain-memory` `0.1.8` with range `>=0.1.8 <1.0.0`, while package `0.1.7` remains pinned to v21. The deterministic schema-hash fixture was regenerated.
 - Null thread is no longer treated as an attachable wildcard after agent/platform/server/channel are asserted. This preserves the unthreaded lane boundary and prevents a later threaded append from reclassifying existing events.
 - Post-fix live proof: one direct append persisted `shared|dev:open-brain|shared|development|local|open-brain|NULL`; durable context contained the marker; an `other-channel` append returned non-durable `lost`, persisted zero events, and mismatched recall returned one generic exact-scope denial with no durable section.
 - Full server validation with separate disposable application/migration databases passed: TypeScript check, `1,357 passed, 24 skipped`, and the anti-skip guard confirmed 25 live-Postgres cases across all six required suites with zero skipped/failed/errored.
@@ -107,7 +107,7 @@ Changed paths now remain inside the package/spec surface plus `src/tools/{agent-
 - TypeScript: `tsc --noEmit` passed against the issue worktree.
 - Python contract/client/live-canary suite: `110 passed, 5 skipped`; live tests remained environment-gated.
 - Ruff passed for the changed Python client and contract/client/live-canary tests.
-- Deterministic v22 `schema_hash`: `3f0ce606fe1fe6df02a36ab696011abca1cf08f1342045f9a6cd57c52dbb864d`.
+- Deterministic v22 `schema_hash`: `51bd6bd9901b88d1f7ae71b95c34a374cbfa4488f706134334aa839bb7cb7c66`.
 - `git diff --check` passed. No commit, push, GitHub mutation, deploy, or live infrastructure mutation was performed.
 
 ## Alignment verifier blocker fixes (2026-07-17)
@@ -154,7 +154,7 @@ Changed paths now remain inside the package/spec surface plus `src/tools/{agent-
 - Assumptions that could be wrong: `namespace + session_key` remains the lane identity while platform/server/channel/thread become immutable assertions on first scoped append; exact SQL predicates and a real conflict canary now prove that behavior.
 - Missing/weak tests: no crash injection between the transactional lane attachment and event insert; the transaction boundary, concurrent-conflict test, real-Postgres test, and post-fix HTTP canary cover observable atomicity.
 - Security/permission risk: durable context can expose only the auth-derived namespace and all seven exact lane coordinates. Queries reassert lane ID plus namespace/session/agent/platform/server/channel/thread; mismatches return a generic denial and do not read events.
-- Migration/deploy risk: no database schema migration is required, but the hashed required contract advances from v21 to `2026-07-17.memory-tools.v22`, with `agent_context_pack` v2 and `append_session_event` v8. Existing legacy lanes gain coordinates on their first valid scoped append. Deployment must use the gated core01 workflow, then prove the hosted v22 manifest and changed tools; rollback must restore a server/package combination that agrees on the accepted v21/v22 compatibility range and must not reintroduce ambiguous unscoped lanes.
+- Migration/deploy risk: no database schema migration is required, but the hashed required contract advances from v21 to `2026-07-17.memory-tools.v22`, with `agent_context_pack` v2 and `append_session_event` v8. Existing legacy lanes gain coordinates on their first valid scoped append. Deployment must use the gated core01 workflow, then prove the hosted v22 manifest and changed tools; rollback must preserve a server/package combination that both requires v22/v2/v8 and must not reintroduce ambiguous unscoped lanes.
 - Downstream client/runtime risk: the shared context-pack builder is now asynchronous and the NATS bridge awaits it. All in-repo callers, TypeScript checks, NATS tests, HTTP MCP canaries, and full tests pass; unknown direct TypeScript imports remain a residual compatibility risk.
 - Rollback/cleanup concern: Open Brain server context hydration and package runtime behavior must stay compatible with the separately deployed Development provider; either repository can be rolled back independently only if that compatibility is preserved.
 - Fixes made in this Open Brain candidate: transactional scope attachment, exact-scope durable context, async NATS caller update, public contract/tool declarations, corrected live canary assertions, and deterministic contract fixtures. Provider mcp2cli PATH/no-daemon forwarding and prioritized 3,000-character startup formatting belong to the separate Development branch and are evidence only here.

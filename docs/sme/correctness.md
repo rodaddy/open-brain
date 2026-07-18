@@ -475,3 +475,21 @@ healthy instead of degrading the rollup.
 **Status:** fixed in issue #288 implementation
 
 A bounded citation response must not hardcode `expandable`. Query one extra neighbor and derive it from unseen rows or transcript truncation; tests must cover both true and false cases.
+
+## [2026-07-17] Cross-tool lifecycle writers must round-trip exact scope
+
+**Severity:** HIGH
+**Source:** PR #294 Full-tier review
+**Scope:** `session_start`, scoped `append_session_event`, `session_checkpoint`, `session_wrap`, and their Python wrappers
+**Status:** fixed in PR #294
+
+Every lifecycle writer must establish the complete exact-scope coordinate set before persisting, including asserted nullable coordinates. Checkpoint and wrap cannot silently drop those coordinates or send a sibling tool's payload shape; tests must start a scoped lane, checkpoint it, wrap it, and prove the same exact scope is recovered end to end.
+
+## [2026-07-17] Contract compatibility must compare semantic tool versions
+
+**Severity:** MEDIUM
+**Source:** PR #294 Full-tier review
+**Scope:** server contract manifests and `openbrain-memory` compatibility checks
+**Status:** fixed in PR #294
+
+Required-tool presence is insufficient when the tool contract itself evolves. Compatibility must parse and compare each required tool's semantic version against the supported range, fail closed on malformed or incompatible versions, and test older, newer, malformed, and missing version declarations.

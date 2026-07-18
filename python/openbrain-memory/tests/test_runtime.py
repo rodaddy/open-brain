@@ -1,4 +1,4 @@
-"""Tests for the first-class local Open Brain runtime facade."""
+"""Tests for direct first-class local Open Brain runtime behavior."""
 
 from __future__ import annotations
 
@@ -6,12 +6,9 @@ import io
 import json
 import subprocess
 import sys
-from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
 from unittest.mock import patch
 
 import openbrain_memory.__main__ as main_module
@@ -29,321 +26,21 @@ from openbrain_memory.cli import (
     execute_json,
     parse_json_input,
 )
-from openbrain_memory.client import TransportResponse
+
+from ._runtime_fakes import (
+    ContextClient,
+    FakeRunner,
+    FakeSpool,
+    LaneAwareTransport,
+    StartThenFailClient,
+    WriteResultClient,
+    request_payload,
+    runtime_config,
+    runtime_scope,
+    tool_calls,
+)
 
 MAX_DISTILLED_CONTENT_BYTES = 16 * 1024
-
-
-class LaneAwareTransport:
-    """Fake MCP boundary that rejects writes before session_start."""
-
-    def __init__(self, *, fail_session_start: bool = False) -> None:
-        self.fail_session_start = fail_session_start
-        self.requests: list[dict[str, Any]] = []
-        self.started_sessions: dict[str, dict[str, Any]] = {}
-        self.delete_calls = 0
-
-    def get(self, url: str, *, headers: Mapping[str, str], timeout: float) -> Any:
-        raise AssertionError("GET not expected")
-
-    def delete(
-        self,
-        url: str,
-        *,
-        headers: Mapping[str, str],
-        timeout: float,
-    ) -> TransportResponse:
-        self.delete_calls += 1
-        return TransportResponse(status_code=200, headers={}, text="")
-
-    def post(
-        self,
-        url: str,
-        *,
-        headers: Mapping[str, str],
-        json_body: Mapping[str, Any],
-        timeout: float,
-    ) -> TransportResponse:
-        self.requests.append(
-            {
-                "url": url,
-                "headers": dict(headers),
-                "json": dict(json_body),
-                "timeout": timeout,
-            }
-        )
-        method = json_body.get("method")
-        if method == "initialize":
-            return TransportResponse(
-                status_code=200,
-                headers={
-                    "content-type": "application/json",
-                    "mcp-session-id": "runtime-session",
-                },
-                text=json.dumps(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": json_body["id"],
-                        "result": {"protocolVersion": "2025-03-26"},
-                    }
-                ),
-            )
-        if method == "notifications/initialized":
-            return TransportResponse(status_code=202, headers={}, text="")
-        if method != "tools/call":
-            raise AssertionError(f"unexpected method: {method}")
-
-        params = json_body["params"]
-        tool = params["name"]
-        arguments = params["arguments"]
-        if tool == "session_start":
-            if self.fail_session_start:
-                return self._tool_error(json_body["id"], "lane creation failed")
-            self.started_sessions.setdefault(
-                arguments["session_key"],
-                {
-                    key: arguments.get(key)
-                    for key in ("agent", "channel_id", "thread_id", "project")
-                },
-            )
-        elif tool in {"append_session_event", "session_wrap"}:
-            session_key = arguments.get("session_key")
-            lane = self.started_sessions.get(session_key)
-            if lane is None:
-                return self._tool_error(json_body["id"], "session lane does not exist")
-            if tool == "append_session_event":
-                for key in ("agent", "channel_id", "thread_id", "project"):
-                    if lane.get(key) != arguments.get(key):
-                        return self._tool_error(
-                            json_body["id"],
-                            "existing lane scope does not match requested append scope",
-                        )
-                lane["platform"] = arguments.get("platform")
-                lane["server_id"] = arguments.get("server_id")
-        body = {
-            "tool": tool,
-            "arguments": arguments,
-            "sections": {"working_set": {"items": []}},
-        }
-        return self._tool_result(json_body["id"], body)
-
-    @staticmethod
-    def _tool_result(request_id: int, body: Mapping[str, Any]) -> TransportResponse:
-        return TransportResponse(
-            status_code=200,
-            headers={"content-type": "application/json"},
-            text=json.dumps(
-                {
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "result": {"content": [{"type": "text", "text": json.dumps(body)}]},
-                }
-            ),
-        )
-
-    @staticmethod
-    def _tool_error(request_id: int, message: str) -> TransportResponse:
-        return TransportResponse(
-            status_code=200,
-            headers={"content-type": "application/json"},
-            text=json.dumps(
-                {
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "result": {
-                        "isError": True,
-                        "content": [{"type": "text", "text": message}],
-                    },
-                }
-            ),
-        )
-
-
-class StartThenFailClient:
-    def __init__(self, *, fail_start: bool = False) -> None:
-        self.fail_start = fail_start
-        self.timeout = 30.0
-        self.started = False
-        self.closed = False
-
-    def session_start(self, **arguments: Any) -> dict[str, Any]:
-        if self.fail_start:
-            raise ConnectionError("session start failed with token=secret-value")
-        self.started = True
-        return {"started": True}
-
-    def append_session_event(self, **arguments: Any) -> dict[str, Any]:
-        if not self.started:
-            raise RuntimeError("lane missing")
-        raise ConnectionError("append failed with token=secret-value")
-
-    def session_wrap(self, **arguments: Any) -> dict[str, Any]:
-        if not self.started:
-            raise RuntimeError("lane missing")
-        raise ConnectionError("wrap failed with token=secret-value")
-
-    def agent_context_pack(self, **arguments: Any) -> dict[str, Any]:
-        raise ConnectionError("recall failed with token=secret-value")
-
-    def close(self) -> None:
-        self.closed = True
-
-
-class ContextClient(StartThenFailClient):
-    def __init__(self) -> None:
-        super().__init__()
-        self.observed_timeouts: list[float] = []
-
-    def agent_context_pack(self, **arguments: Any) -> dict[str, Any]:
-        self.observed_timeouts.append(self.timeout)
-        return {"authorized_memory": "token=historical-value"}
-
-
-class FakeSpool:
-    def __init__(self, *, fail: bool = False) -> None:
-        self.fail = fail
-        self.calls: list[tuple[str, dict[str, Any], str | None]] = []
-
-    def append(
-        self,
-        operation: str,
-        payload: Mapping[str, Any],
-        *,
-        key: str | None = None,
-    ) -> str:
-        if self.fail:
-            raise OSError("spool unavailable")
-        self.calls.append((operation, dict(payload), key))
-        return key or "spool-key"
-
-    def append_batch(
-        self,
-        records: Sequence[tuple[str, Mapping[str, Any], str | None]],
-    ) -> list[str]:
-        if self.fail:
-            raise OSError("spool unavailable")
-        keys = []
-        for operation, payload, key in records:
-            self.calls.append((operation, dict(payload), key))
-            keys.append(key or f"spool-key-{len(keys)}")
-        return keys
-
-
-@dataclass(frozen=True)
-class RunnerResult:
-    returncode: int = 0
-    stdout: str = ""
-    stderr: str = ""
-
-
-class FakeRunner:
-    def __init__(self, result: RunnerResult | None = None) -> None:
-        self.result = result
-        self.calls: list[tuple[tuple[str, ...], float]] = []
-
-    def __call__(
-        self,
-        argv: Sequence[str],
-        *,
-        timeout: float,
-    ) -> RunnerResult:
-        call = tuple(argv)
-        self.calls.append((call, timeout))
-        if self.result is not None:
-            return self.result
-        return RunnerResult(stdout=json.dumps(self._response(call[2])))
-
-    @staticmethod
-    def _response(tool: str) -> dict[str, Any]:
-        scope = {
-            "namespace": "bilby",
-            "session_key": "repo/session-4",
-            "agent": "bilby",
-            "platform": "discord",
-            "server_id": "guild-1",
-            "channel_id": "channel-2",
-            "thread_id": "thread-3",
-        }
-        if tool == "session_start":
-            lane = {
-                key: scope[key]
-                for key in (
-                    "namespace",
-                    "session_key",
-                    "agent",
-                )
-            }
-            return {"success": True, "result": {"lane": lane, "is_new": True}}
-        if tool == "agent_context_pack":
-            return {
-                "success": True,
-                "result": {
-                    "schema": "openbrain.agent_context_pack.v1",
-                    "status": "ok",
-                    "scope": scope,
-                    "sections": {},
-                },
-            }
-        if tool == "append_session_event":
-            return {
-                "success": True,
-                "result": {"event_id": "event-1", "lane_id": "lane-1"},
-            }
-        if tool == "session_wrap":
-            return {
-                "success": True,
-                "result": {"session_id": "lane-1", "lane_id": "lane-1"},
-            }
-        raise AssertionError(f"unexpected fallback tool: {tool}")
-
-
-def runtime_config(**overrides: Any) -> RuntimeConfig:
-    values: dict[str, Any] = {
-        "base_url": "https://brain.example",
-        "token": "unit-test-token",
-        "namespace": "bilby",
-    }
-    values.update(overrides)
-    return RuntimeConfig(**values)
-
-
-def runtime_scope() -> RuntimeScope:
-    return RuntimeScope(
-        agent="bilby",
-        platform="discord",
-        server_id="guild-1",
-        channel_id="channel-2",
-        thread_id="thread-3",
-        session_key="repo/session-4",
-    )
-
-
-def tool_calls(transport: LaneAwareTransport) -> list[dict[str, Any]]:
-    return [
-        request["json"]
-        for request in transport.requests
-        if request["json"].get("method") == "tools/call"
-    ]
-
-
-def request_payload(operation: str, **values: Any) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "operation": operation,
-        "scope": {
-            "agent": "bilby",
-            "platform": "discord",
-            "server_id": "guild",
-            "channel_id": "channel",
-            "session_key": "session",
-        },
-        "config": {
-            "base_url": "https://brain.example",
-            "token": "unit-test-token",
-            "namespace": "bilby",
-        },
-    }
-    payload.update(values)
-    return payload
 
 
 def test_config_uses_canonical_environment_and_token_alias_only() -> None:
@@ -478,6 +175,8 @@ def test_first_capture_establishes_lane_before_append() -> None:
         "session_key": "repo/session-4",
         "agent": "bilby",
         "project": "open-brain",
+        "platform": "discord",
+        "server_id": "guild-1",
         "channel_id": "channel-2",
         "thread_id": "thread-3",
     }
@@ -492,6 +191,82 @@ def test_first_capture_establishes_lane_before_append() -> None:
     assert event["metadata"] == {
         "idempotency_key": event["metadata"]["idempotency_key"]
     }
+
+
+def test_fresh_checkpoint_and_wrap_are_immediately_recallable() -> None:
+    for operation, summary in (
+        ("checkpoint", "  checkpoint summary\n"),
+        ("wrap", "\twrap summary  "),
+    ):
+        transport = LaneAwareTransport()
+        runtime = FirstClassMemoryRuntime(
+            runtime_config(project="open-brain"),
+            runtime_scope(),
+            transport=transport,
+        )
+
+        saved = getattr(runtime, operation)(summary)
+        recalled = runtime.recall_context(
+            "resume",
+            requested_sections=["durable_lane_context"],
+        )
+
+        assert saved.receipt.status is ReceiptStatus.SAVED
+        assert recalled.receipt.status is ReceiptStatus.DIRECT
+        assert recalled.context is not None
+        assert (
+            recalled.context["sections"]["durable_lane_context"]["lane"][
+                "current_context_md"
+            ]
+            == summary
+        )
+        wrap_call = next(
+            call
+            for call in tool_calls(transport)
+            if call["params"]["name"] == "session_wrap"
+        )
+        assert wrap_call["params"]["arguments"]["summary"] == summary
+        assert (
+            wrap_call["params"]["arguments"]
+            | {
+                "agent": "bilby",
+                "platform": "discord",
+                "server_id": "guild-1",
+                "channel_id": "channel-2",
+                "thread_id": "thread-3",
+            }
+            == wrap_call["params"]["arguments"]
+        )
+
+
+def test_checkpoint_first_lane_denies_hostile_same_namespace_claim() -> None:
+    transport = LaneAwareTransport()
+    owner = FirstClassMemoryRuntime(
+        runtime_config(), runtime_scope(), transport=transport
+    )
+    hostile = FirstClassMemoryRuntime(
+        runtime_config(),
+        RuntimeScope(
+            agent="bilby",
+            platform="discord",
+            server_id="hostile-guild",
+            channel_id="channel-2",
+            thread_id="thread-3",
+            session_key="repo/session-4",
+        ),
+        transport=transport,
+    )
+
+    assert owner.checkpoint("owner summary").receipt.status is ReceiptStatus.SAVED
+    denied = hostile.wrap("hostile summary")
+
+    assert denied.receipt.status is ReceiptStatus.LOST
+    assert transport.started_sessions["repo/session-4"]["metadata"] == {
+        "server_id": "guild-1"
+    }
+    assert transport.started_sessions["repo/session-4"]["current_context_md"] == (
+        "owner summary"
+    )
 
 
 def test_same_session_key_with_different_scope_is_denied_by_transport_boundary() -> (
@@ -527,7 +302,8 @@ def test_same_session_key_with_different_scope_is_denied_by_transport_boundary()
         for call in tool_calls(transport)
         if call["params"]["name"] == "append_session_event"
     ]
-    assert append_calls[-1]["channel_id"] == "other-channel"
+    assert len(append_calls) == 1
+    assert append_calls[0]["channel_id"] == "channel-2"
 
 
 def test_concurrent_writes_have_isolated_receipts_and_single_lane_start() -> None:
@@ -622,7 +398,8 @@ def test_failed_lane_start_jsonl_spool_persists_ordered_replay_pair(
         spool=spool,
     )
 
-    output = runtime.capture_distilled("Distilled capture")
+    distilled = "  Distilled capture\n"
+    output = runtime.capture_distilled(distilled)
 
     records = spool.records()
     assert output.receipt.status is ReceiptStatus.SPOOLED
@@ -631,6 +408,7 @@ def test_failed_lane_start_jsonl_spool_persists_ordered_replay_pair(
         "append_session_event",
     ]
     assert output.receipt.spool_key == records[1].idempotency_key
+    assert records[1].payload["content"] == distilled
 
 
 def test_failed_lane_start_batch_failure_leaves_no_orphaned_prerequisite() -> None:
@@ -704,154 +482,53 @@ def test_recall_latency_budget_clamps_local_direct_timeout_and_restores_it() -> 
     assert client.timeout == 30.0
 
 
-def test_recall_fallback_unwraps_live_result_scope_and_clamps_timeout() -> None:
-    runner = FakeRunner()
-    runtime = FirstClassMemoryRuntime(
-        runtime_config(fallback_enabled=True),
-        runtime_scope(),
-        client=StartThenFailClient(),
-        fallback_runner=runner,
-    )
-
-    output = runtime.recall_context("bounded fallback", max_latency_ms=250)
-
-    assert output.receipt.status is ReceiptStatus.FALLBACK
-    assert output.context == {
-        "schema": "openbrain.agent_context_pack.v1",
-        "status": "ok",
-        "scope": {
-            "namespace": "bilby",
-            "session_key": "repo/session-4",
-            "agent": "bilby",
-            "platform": "discord",
-            "server_id": "guild-1",
-            "channel_id": "channel-2",
-            "thread_id": "thread-3",
-        },
-        "sections": {},
-    }
-    assert runner.calls[0][1] == 0.25
-
-
-def test_fallback_capture_accepts_live_lane_shape_without_channel_thread() -> None:
-    runner = FakeRunner()
-    runtime = FirstClassMemoryRuntime(
-        runtime_config(fallback_enabled=True),
-        runtime_scope(),
-        client=StartThenFailClient(fail_start=True),
-        fallback_runner=runner,
-    )
-
-    output = runtime.capture_distilled("Distilled fallback event")
-
-    assert output.receipt.status is ReceiptStatus.FALLBACK
-    assert output.receipt.direct_attempted is True
-    assert output.receipt.fallback_attempted is True
-    assert output.result == {"event_id": "event-1", "lane_id": "lane-1"}
-    assert len(runner.calls) == 2
-    tools = []
-    for (argv, timeout), expected_tool in zip(
-        runner.calls,
-        ("session_start", "append_session_event"),
-        strict=True,
-    ):
-        assert argv[:4] == ("mcp2cli", "open-brain", expected_tool, "--params")
-        assert len(argv) == 5
-        assert isinstance(json.loads(argv[4]), dict)
-        assert timeout == 30.0
-        tools.append(expected_tool)
-    assert tools == ["session_start", "append_session_event"]
-    assert json.loads(runner.calls[1][0][4])["content"] == "Distilled fallback event"
-
-
-def test_mcp2cli_wrapper_supports_checkpoint_and_wrap_after_verified_lane() -> None:
-    for operation in ("checkpoint", "wrap"):
-        runner = FakeRunner()
-        runtime = FirstClassMemoryRuntime(
-            runtime_config(fallback_enabled=True),
-            runtime_scope(),
-            client=StartThenFailClient(fail_start=True),
-            fallback_runner=runner,
-        )
-
-        output = getattr(runtime, operation)(f"Distilled {operation}")
-
-        assert output.receipt.status is ReceiptStatus.FALLBACK
-        assert output.result == {"session_id": "lane-1", "lane_id": "lane-1"}
-        assert [call[0][2] for call in runner.calls] == [
-            "session_start",
-            "session_wrap",
-        ]
-
-
-def test_fallback_write_requires_fallback_verified_lane() -> None:
-    runner = FakeRunner()
-    runtime = FirstClassMemoryRuntime(
-        runtime_config(fallback_enabled=True),
-        runtime_scope(),
-        client=StartThenFailClient(),
-        fallback_runner=runner,
-    )
-
-    output = runtime.capture_distilled("Direct lane then fallback append")
-
-    assert output.receipt.status is ReceiptStatus.LOST
-    assert output.receipt.durable is False
-    assert [call[0][2] for call in runner.calls] == ["append_session_event"]
-    assert "lacked a verified fallback lane" in (output.receipt.error or "")
-
-
-def test_fallback_without_scope_proof_cannot_claim_durable_success() -> None:
-    runner = FakeRunner(
-        RunnerResult(stdout='{"success":true,"result":{"is_new":true}}')
-    )
-    runtime = FirstClassMemoryRuntime(
-        runtime_config(fallback_enabled=True),
-        runtime_scope(),
-        client=StartThenFailClient(fail_start=True),
-        fallback_runner=runner,
-    )
-
-    output = runtime.capture_distilled("Distilled fallback event")
-
-    assert output.receipt.status is ReceiptStatus.LOST
-    assert output.receipt.durable is False
-    assert "session_start result missing lane object" in (output.receipt.error or "")
-
-
-def test_fallback_rejects_unsuccessful_or_missing_result_envelopes() -> None:
+def test_direct_write_results_require_created_or_duplicate_evidence() -> None:
     cases = (
-        ('{"success":false,"error":"denied"}', "success=true"),
-        ('{"success":true}', "missing result object"),
+        (
+            "capture_distilled",
+            WriteResultClient(append_result={}),
+            "created or duplicate",
+        ),
+        (
+            "checkpoint",
+            WriteResultClient(wrap_result={"lane_id": "lane-1"}),
+            "durable lane context update",
+        ),
     )
-    for stdout, expected_error in cases:
-        runner = FakeRunner(RunnerResult(stdout=stdout))
+    for operation, client, expected_error in cases:
         runtime = FirstClassMemoryRuntime(
-            runtime_config(fallback_enabled=True),
+            runtime_config(),
             runtime_scope(),
-            client=StartThenFailClient(),
-            fallback_runner=runner,
+            client=client,
         )
 
-        output = runtime.recall_context("fallback envelope")
+        output = getattr(runtime, operation)("Distilled result validation")
 
-        assert output.receipt.status is ReceiptStatus.FAILED
+        assert output.receipt.status is ReceiptStatus.LOST
+        assert output.receipt.durable is False
         assert expected_error in (output.receipt.error or "")
 
 
-def test_fallback_rejects_oversized_captured_output() -> None:
-    runner = FakeRunner(RunnerResult(stdout="x" * 1_000_001))
-    runtime = FirstClassMemoryRuntime(
-        runtime_config(fallback_enabled=True),
+def test_direct_write_results_accept_duplicate_evidence() -> None:
+    append = FirstClassMemoryRuntime(
+        runtime_config(),
         runtime_scope(),
-        client=StartThenFailClient(),
-        fallback_runner=runner,
-    )
+        client=WriteResultClient(append_result={"duplicate": True}),
+    ).capture_distilled("Duplicate event")
+    wrap = FirstClassMemoryRuntime(
+        runtime_config(),
+        runtime_scope(),
+        client=WriteResultClient(
+            wrap_result={
+                "duplicate": True,
+                "lane_id": "lane-1",
+                "context_updated": True,
+            }
+        ),
+    ).checkpoint("Duplicate checkpoint")
 
-    output = runtime.recall_context("oversized fallback")
-
-    assert output.receipt.status is ReceiptStatus.FAILED
-    assert "response limit" in (output.receipt.error or "")
+    assert append.receipt.status is ReceiptStatus.SAVED
+    assert wrap.receipt.status is ReceiptStatus.SAVED
 
 
 def test_direct_success_does_not_invoke_fallback() -> None:
@@ -899,6 +576,7 @@ def test_all_distilled_write_fields_fail_safely_before_persistence() -> None:
     )
 
     secret_capture = runtime.capture_distilled("token=super-secret-value")
+    whitespace_only = runtime.capture_distilled(" \t\n")
     oversized_summary = runtime.checkpoint("x" * (MAX_DISTILLED_CONTENT_BYTES + 1))
     secret_auxiliary = runtime.wrap(
         "Distilled summary",
@@ -911,6 +589,7 @@ def test_all_distilled_write_fields_fail_safely_before_persistence() -> None:
 
     for output in (
         secret_capture,
+        whitespace_only,
         oversized_summary,
         secret_auxiliary,
         oversized_list,

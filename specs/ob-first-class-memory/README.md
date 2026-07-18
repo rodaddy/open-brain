@@ -41,13 +41,12 @@ The explicit task acceptance criteria, issue #293, existing `python/openbrain-me
 - Wrap metadata performs one secret scan per persisted string; aggregate size
   checks remain, and every string still fails closed before any write.
 - Public runtime API/types remain in `runtime.py`; fixed mcp2cli routing and
-  ordered-spool internals live in focused private modules. `runtime.py` is below
-  the repository's 750-line hard warning.
-- Package version remains `0.1.8` and accepts both server contracts v21 and v22
-  for rollout-order compatibility. The changed hashed public contract is v22;
-  its manifest minimum is `openbrain-memory` `0.1.8` with range
-  `>=0.1.8 <1.0.0`. Package `0.1.7` pins only v21, so listing it as v22-compatible
-  would be inaccurate even though legacy wire call shapes remain additive.
+  ordered-spool internals live in focused private modules so the public module
+  stays within the repository's size policy.
+- Package version remains `0.1.8` and requires server contract v22 with
+  `agent_context_pack` v2 and `append_session_event` v8. Its manifest minimum is
+  `openbrain-memory` `0.1.8` with range `>=0.1.8 <1.0.0`; package `0.1.7` and
+  server contract v21 are not accepted by this first-class runtime.
 
 ## Out of scope
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import threading
 from collections.abc import Callable, Mapping, Sequence
@@ -12,6 +11,7 @@ from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlparse
 
+from . import _runtime_validation
 from ._runtime_router import (
     DirectClient,
     FallbackRunner,
@@ -22,6 +22,42 @@ from ._runtime_router import (
     safe_text,
 )
 from ._runtime_spool import TrackingSpool
+from ._runtime_validation import (
+    bounded_int as _bounded_int,
+)
+from ._runtime_validation import (
+    distilled_content as _validate_distilled_content,
+)
+from ._runtime_validation import (
+    mapping_optional_text as _mapping_optional_text,
+)
+from ._runtime_validation import (
+    mapping_text as _mapping_text,
+)
+from ._runtime_validation import (
+    optional_text as _optional_text,
+)
+from ._runtime_validation import (
+    persisted_text as _validate_persisted_text,
+)
+from ._runtime_validation import (
+    reject_unknown_keys as _reject_unknown_keys,
+)
+from ._runtime_validation import (
+    require_text as _require_text,
+)
+from ._runtime_validation import (
+    source_bool as _source_bool,
+)
+from ._runtime_validation import (
+    source_float as _source_float,
+)
+from ._runtime_validation import (
+    validate_started_lane as _validate_started_lane,
+)
+from ._runtime_validation import (
+    wrap_metadata as _validate_wrap_metadata,
+)
 from .agent import (
     EVENT_TYPES,
     AgentMemory,
@@ -33,7 +69,7 @@ from .client import JSON, OpenBrainClient, Transport
 from .policy import redact_value
 from .spool import JsonlSpool
 
-MAX_DISTILLED_CONTENT_BYTES = 16 * 1024
+MAX_DISTILLED_CONTENT_BYTES = _runtime_validation.MAX_DISTILLED_CONTENT_BYTES
 _CONFIG_KEYS = {
     "allow_insecure_http",
     "base_url",
@@ -131,10 +167,18 @@ class RuntimeScope:
 
     def start_metadata(self) -> dict[str, str]:
         """Return scope-owned lane coordinates supported by ``session_start``."""
-        metadata = {"channel_id": self.channel_id}
+        metadata = {
+            "platform": self.platform,
+            "server_id": self.server_id,
+            "channel_id": self.channel_id,
+        }
         if self.thread_id is not None:
             metadata["thread_id"] = self.thread_id
         return metadata
+
+    def wrap_metadata(self) -> dict[str, str]:
+        """Return exact scope coordinates supported by ``session_wrap``."""
+        return self.start_metadata()
 
 
 @dataclass(frozen=True)
@@ -469,7 +513,11 @@ class FirstClassMemoryRuntime:
             return _failed_write("checkpoint", error)
         return self._write(
             "checkpoint",
-            lambda: self._memory.checkpoint(safe_summary, **metadata),
+            lambda: self._memory.checkpoint(
+                safe_summary,
+                **self.scope.wrap_metadata(),
+                **metadata,
+            ),
         )
 
     def wrap(
@@ -488,7 +536,11 @@ class FirstClassMemoryRuntime:
             return _failed_write("wrap", error)
         return self._write(
             "wrap",
-            lambda: self._memory.wrap_session(safe_summary, **metadata),
+            lambda: self._memory.wrap_session(
+                safe_summary,
+                **self.scope.wrap_metadata(),
+                **metadata,
+            ),
         )
 
     def _write(self, operation: str, call: Callable[[], JSON]) -> RuntimeOutput:
@@ -576,10 +628,15 @@ class FirstClassMemoryRuntime:
     def _ensure_lane(self) -> None:
         if self._memory.conversation_key is not None:
             return
-        self._memory.start_session(
+        result = self._memory.start_session(
             self.scope.session_key,
             **self.scope.start_metadata(),
         )
+        try:
+            _validate_started_lane(result, self.config.namespace, self.scope)
+        except ValueError:
+            self._memory.conversation_key = None
+            raise
 
     def _receipt(
         self,
@@ -622,16 +679,11 @@ def _failed_write(operation: str, error: BaseException) -> RuntimeOutput:
 
 
 def _distilled_content(value: str, name: str) -> str:
-    text = _persisted_text(value, name)
-    return text
+    return _validate_distilled_content(value, name, _reject_secret_payload)
 
 
 def _persisted_text(value: Any, name: str) -> str:
-    text = _require_text(value, name)
-    if len(text.encode("utf-8")) > MAX_DISTILLED_CONTENT_BYTES:
-        raise ValueError(f"{name} exceeds {MAX_DISTILLED_CONTENT_BYTES} UTF-8 bytes")
-    _reject_secret_payload(text, name)
-    return text
+    return _validate_persisted_text(value, name, _reject_secret_payload)
 
 
 def _wrap_metadata(
@@ -639,98 +691,9 @@ def _wrap_metadata(
     next_steps: Sequence[str] | None,
     receipt_refs: Sequence[str] | None,
 ) -> dict[str, Any]:
-    metadata: dict[str, Any] = {}
-    for name, values in (
-        ("key_decisions", key_decisions),
-        ("next_steps", next_steps),
-        ("receipt_refs", receipt_refs),
-    ):
-        if values is None:
-            continue
-        if isinstance(values, str):
-            raise ValueError(f"{name} must be a sequence of strings")
-        distilled = [_distilled_content(value, name) for value in values]
-        if len(distilled) > 20:
-            raise ValueError(f"{name} must contain at most 20 items")
-        encoded = json.dumps(distilled, separators=(",", ":")).encode("utf-8")
-        if len(encoded) > MAX_DISTILLED_CONTENT_BYTES:
-            raise ValueError(
-                f"{name} exceeds {MAX_DISTILLED_CONTENT_BYTES} UTF-8 bytes"
-            )
-        metadata[name] = distilled
-    return metadata
-
-
-def _source_bool(
-    explicit: Mapping[str, Any],
-    name: str,
-    environ: Mapping[str, str],
-    env_name: str,
-) -> bool:
-    value = explicit.get(name)
-    if value is None:
-        value = environ.get(env_name)
-    if value is None:
-        return False
-    if isinstance(value, bool):
-        return value
-    normalized = str(value).strip().lower()
-    if normalized in {"1", "true", "yes", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "off", ""}:
-        return False
-    raise ValueError(f"{name} must be a boolean")
-
-
-def _source_float(value: Any, name: str, *, default: float) -> float:
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        raise ValueError(f"{name} must be a number")
-    try:
-        result = float(value)
-    except (TypeError, ValueError) as error:
-        raise ValueError(f"{name} must be a number") from error
-    if result <= 0:
-        raise ValueError(f"{name} must be > 0")
-    return result
-
-
-def _mapping_text(value: Mapping[str, Any], name: str) -> str:
-    return _require_text(value.get(name), name)
-
-
-def _mapping_optional_text(value: Mapping[str, Any], name: str) -> str | None:
-    return _optional_text(value.get(name), name)
-
-
-def _optional_text(value: Any, name: str) -> str | None:
-    if value is None:
-        return None
-    return _require_text(value, name)
-
-
-def _require_text(value: Any, name: str) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"{name} must be a non-empty string")
-    return value.strip()
-
-
-def _bounded_int(value: int, name: str, *, minimum: int, maximum: int) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError(f"{name} must be an integer")
-    if value < minimum or value > maximum:
-        raise ValueError(f"{name} must be between {minimum} and {maximum}")
-    return value
-
-
-def _reject_unknown_keys(
-    value: Mapping[str, Any],
-    allowed: set[str],
-    name: str,
-) -> None:
-    unknown = {str(key) for key in value if key not in allowed}
-    if unknown:
-        raise ValueError(
-            f"{name} contains unsupported keys: {', '.join(sorted(unknown))}"
-        )
+    return _validate_wrap_metadata(
+        key_decisions,
+        next_steps,
+        receipt_refs,
+        _reject_secret_payload,
+    )

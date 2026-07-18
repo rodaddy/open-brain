@@ -637,6 +637,22 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
           "Which agent owns this session (e.g. hermes, bilby, skippy). Set " +
           "so lanes can be attributed and filtered by agent.",
       },
+      platform: {
+        type: "string",
+        required: false,
+        maxLength: 500,
+        description:
+          "Platform/source identity for exact-scope lanes, such as discord. " +
+          "A supplied value is attached only when unasserted and mismatches fail closed.",
+      },
+      server_id: {
+        type: "string",
+        required: false,
+        maxLength: 500,
+        description:
+          "Server/guild/workspace identity for exact-scope lanes. Stored in lane metadata; " +
+          "a supplied mismatch fails closed.",
+      },
       channel_id: {
         type: "string",
         required: false,
@@ -662,7 +678,8 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
           "lane at a glance when listing or resuming.",
       },
     },
-    output_shape: "session lane plus recent events JSON text payload",
+    output_shape:
+      "session lane plus recent events JSON text payload; when all exact-scope fields are supplied, previously unasserted coordinates are attached and asserted mismatches fail closed; null thread is unthreaded rather than wildcard",
   },
   session_context: {
     version: 3,
@@ -1270,6 +1287,38 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
           "Memory partition for the lane. Defaults to your own auth-derived " +
           "namespace; override only when authorized for another.",
       },
+      agent: {
+        type: "string",
+        required: false,
+        maxLength: 500,
+        description: "Agent identity for exact-scope checkpoint validation.",
+      },
+      platform: {
+        type: "string",
+        required: false,
+        maxLength: 500,
+        description: "Platform/source identity for exact-scope checkpoint validation.",
+      },
+      server_id: {
+        type: "string",
+        required: false,
+        maxLength: 500,
+        description: "Server/guild/workspace identity for exact-scope checkpoint validation.",
+      },
+      channel_id: {
+        type: "string",
+        required: false,
+        maxLength: 500,
+        description: "Channel identity for exact-scope checkpoint validation.",
+      },
+      thread_id: {
+        type: "string",
+        required: false,
+        maxLength: 500,
+        description:
+          "Thread identity. When channel_id is supplied and thread_id is omitted, " +
+          "the request asserts an unthreaded lane rather than a wildcard.",
+      },
       summary: {
         type: "string",
         required: true,
@@ -1310,7 +1359,7 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
       source_refs: SOURCE_REFS_CONTRACT,
     },
     output_shape:
-      "session wrap checkpoint/source_refs JSON text payload; duplicate content_hash checkpoints are immutable no-ops and do not merge later source_refs",
+      "session wrap checkpoint/source_refs JSON text payload; supplied exact scope is established and validated before the transactional session/current_context_md write; duplicate content_hash checkpoints do not merge later source_refs but still materialize the scoped lane summary",
   },
   upsert_repo_fact: {
     version: 2,

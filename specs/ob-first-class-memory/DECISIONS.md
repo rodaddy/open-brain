@@ -44,7 +44,7 @@ The package/server own memory selection and safety. The separately owned Develop
 
 `durable_lane_context` is opt-in and legacy append call shapes remain wire-compatible, but the canonical hashed public contract changes: tool versions, accepted section names, output declarations, and exact-scope attachment semantics are new. Downstream Hermes enforcement pins both `contract_version` and `schema_hash`, and repository history bumps the memory-tools contract whenever hashed required fields change. Keeping v21 would therefore mislabel a contract that strict old clients reject on hash drift. The server contract becomes `2026-07-17.memory-tools.v22`; tool-level versions become `agent_context_pack` v2 and `append_session_event` v8.
 
-Package `0.1.8` accepts both additive server contracts v21 and v22 so it can roll out before or after the server. The v22 manifest minimum and range are `0.1.8` / `>=0.1.8 <1.0.0`, because package `0.1.7` pins only v21 and advertising it as v22-compatible would be false. This is the narrow necessary break: valid legacy wire calls remain additive, but strict contract-aware 0.1.7 clients must upgrade.
+Package `0.1.8` requires server contract v22 with `agent_context_pack` v2 and `append_session_event` v8. The v22 manifest minimum and range are `0.1.8` / `>=0.1.8 <1.0.0`; package `0.1.7` pins v21 and is not v22-compatible. This is the narrow necessary break: valid legacy wire call shapes remain additive, but the first-class runtime does not accept v21 and strict contract-aware 0.1.7 clients must upgrade.
 
 ## D10 — Transport priority stays direct HTTP, optional mcp2cli, then spool
 

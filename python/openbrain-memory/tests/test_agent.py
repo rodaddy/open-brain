@@ -801,6 +801,7 @@ def test_checkpoint_and_wrap_use_session_tools():
                 "summary": "Mid-run checkpoint.",
                 "key_decisions": ["Use wrapper facade"],
                 "session_key": "conversation",
+                "agent": "bilby",
             },
         ),
         (
@@ -809,6 +810,7 @@ def test_checkpoint_and_wrap_use_session_tools():
                 "next_steps": ["Open PR"],
                 "summary": "Done.",
                 "session_key": "conversation",
+                "agent": "bilby",
             },
         ),
     ]
@@ -849,6 +851,7 @@ def test_compact_reads_context_and_wraps_distilled_summary():
                 "summary": "distilled session_context",
                 "project": "open-brain",
                 "session_key": "conversation",
+                "agent": "bilby",
             },
         ),
     ]
@@ -875,6 +878,7 @@ def test_wrap_receipt_refs_are_encoded_as_server_supported_next_steps():
             ],
             "summary": "Done.",
             "session_key": "conversation",
+            "agent": "bilby",
         },
     )
 
@@ -909,6 +913,7 @@ def test_checkpoint_receipt_refs_share_wrap_schema_normalization():
             "next_steps": ["Receipt ref: receipt-1"],
             "summary": "Checkpoint.",
             "session_key": "conversation",
+            "agent": "bilby",
         },
     )
     assert "receipt_refs" not in client.calls[-1][1]

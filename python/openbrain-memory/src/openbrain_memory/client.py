@@ -52,12 +52,12 @@ def _resolve_package_version(pyproject: Path | None = None) -> str:
 
 
 PACKAGE_VERSION = _resolve_package_version()
-LEGACY_COMPATIBLE_CONTRACT_VERSION = "2026-07-13.memory-tools.v21"
 CURRENT_CONTRACT_VERSION = "2026-07-17.memory-tools.v22"
-COMPATIBLE_CONTRACT_VERSIONS = (
-    LEGACY_COMPATIBLE_CONTRACT_VERSION,
-    CURRENT_CONTRACT_VERSION,
-)
+COMPATIBLE_CONTRACT_VERSIONS = (CURRENT_CONTRACT_VERSION,)
+REQUIRED_CONTRACT_TOOL_VERSIONS: Mapping[str, int] = {
+    "agent_context_pack": 2,
+    "append_session_event": 8,
+}
 REQUIRED_CONTRACT_TOOLS = (
     "append_session_event",
     "agent_context_pack",

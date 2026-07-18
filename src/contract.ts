@@ -360,9 +360,9 @@ export const CONTRACT_CAPABILITIES: ContractCapability[] = [
     version: 2,
     kind: "tool",
     description:
-      "Open or resume a durable session lane and get recent events back. Call " +
-      "this at the start of a conversation/task to establish the lane other " +
-      "session tools write to, and to rehydrate prior context.",
+      "Open or resume a durable session lane and get recent events back. First-class " +
+      "callers supply agent/platform/server/channel/thread coordinates so the lane " +
+      "is established once and asserted scope mismatches fail closed.",
   },
   {
     name: "session_context",
@@ -417,8 +417,8 @@ export const CONTRACT_CAPABILITIES: ContractCapability[] = [
     kind: "tool",
     description:
       "Checkpoint a session lane with a durable summary, key decisions, and next " +
-      "steps. Call at the end of a work session so the next session can resume " +
-      "from a clean handoff.",
+      "steps. Exact scope is validated before the session record and lane " +
+      "current_context_md are updated transactionally for immediate recall.",
   },
   {
     name: "entity_graph",

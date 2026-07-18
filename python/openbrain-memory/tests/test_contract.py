@@ -15,6 +15,10 @@ from openbrain_memory import (
 CURRENT_CLIENT_VERSION = PACKAGE_VERSION
 PREVIOUS_CLIENT_VERSION = "0.1.7"
 PREVIOUS_CONTRACT_VERSION = "2026-07-13.memory-tools.v21"
+CURRENT_REQUIRED_TOOL_VERSIONS = {
+    "agent_context_pack": 2,
+    "append_session_event": 8,
+}
 
 
 def safe_string_display(value: str) -> str:
@@ -47,7 +51,7 @@ def representative_contract_manifest() -> dict:
         "capabilities": [
             {
                 "name": tool_name,
-                "version": 1,
+                "version": CURRENT_REQUIRED_TOOL_VERSIONS.get(tool_name, 1),
                 "kind": "tool",
                 "description": f"{tool_name} helper",
             }
@@ -55,7 +59,7 @@ def representative_contract_manifest() -> dict:
         ],
         "tool_contracts": {
             tool_name: {
-                "version": 1,
+                "version": CURRENT_REQUIRED_TOOL_VERSIONS.get(tool_name, 1),
                 "input_schema": {"type": "object"},
                 "output_shape": "object",
             }
@@ -107,19 +111,30 @@ def test_manifest_requires_current_package_without_overstating_legacy_compatibil
     assert previous_client.ok is False
 
 
-def test_current_package_accepts_previous_additive_server_contract():
+def test_current_package_rejects_realistic_v21_first_class_contract():
     manifest = representative_contract_manifest()
     manifest["contract_version"] = PREVIOUS_CONTRACT_VERSION
+    for capability in manifest["capabilities"]:
+        if capability["name"] == "agent_context_pack":
+            capability["version"] = 1
+        if capability["name"] == "append_session_event":
+            capability["version"] = 7
+    manifest["tool_contracts"]["agent_context_pack"]["version"] = 1
+    manifest["tool_contracts"]["append_session_event"]["version"] = 7
 
     result = validate_required_memory_contract(
         manifest,
         client_version=CURRENT_CLIENT_VERSION,
     )
 
-    assert result.ok is True
-    assert COMPATIBLE_CONTRACT_VERSIONS == (
-        PREVIOUS_CONTRACT_VERSION,
-        CURRENT_CONTRACT_VERSION,
+    assert result.ok is False
+    assert COMPATIBLE_CONTRACT_VERSIONS == (CURRENT_CONTRACT_VERSION,)
+    assert any("contract_version" in reason for reason in result.reasons)
+    assert "capability 'agent_context_pack'.version must be >= 2" in result.reasons
+    assert "capability 'append_session_event'.version must be >= 8" in result.reasons
+    assert "tool_contracts['agent_context_pack'].version must be >= 2" in result.reasons
+    assert (
+        "tool_contracts['append_session_event'].version must be >= 8" in result.reasons
     )
 
 
@@ -140,10 +155,7 @@ def test_validate_required_memory_contract_accepts_planned_realtime_advisory_met
 
     assert result.ok is True
     assert result.reasons == ()
-    assert COMPATIBLE_CONTRACT_VERSIONS == (
-        PREVIOUS_CONTRACT_VERSION,
-        CURRENT_CONTRACT_VERSION,
-    )
+    assert COMPATIBLE_CONTRACT_VERSIONS == (CURRENT_CONTRACT_VERSION,)
 
 
 def test_validate_required_memory_contract_reports_package_required_tool_gap():

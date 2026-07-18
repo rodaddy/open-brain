@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
+import selectors
 import subprocess
+import time
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -106,6 +109,12 @@ class Mcp2CliFallback:
         timeout: float | None = None,
     ) -> JSON:
         """Invoke one supported tool and verify its success evidence."""
+        if tool in {"append_session_event", "session_wrap"} and not self._lane_verified:
+            self.call(
+                "session_start",
+                _fallback_lane_arguments(arguments),
+                timeout=timeout,
+            )
         params = json.dumps(dict(arguments), separators=(",", ":"), sort_keys=True)
         argv = (*_FALLBACK_COMMAND, tool, "--params", params)
         try:
@@ -151,11 +160,11 @@ class Mcp2CliFallback:
         if tool == "agent_context_pack":
             _verify_fallback_context_pack(result, self.namespace, self.scope)
             return
-        if tool in {"append_session_event", "session_wrap"}:
-            if not self._lane_verified:
-                raise RuntimeCallError(
-                    "mcp2cli write result lacked a verified fallback lane"
-                )
+        if tool == "append_session_event":
+            _verify_append_result(result)
+            return
+        if tool == "session_wrap":
+            _verify_wrap_result(result)
             return
         raise RuntimeCallError(f"unsupported mcp2cli fallback tool: {tool}")
 
@@ -241,6 +250,7 @@ class RuntimeClientRouter:
                     result = method(**dict(arguments))
                 finally:
                     self.direct.timeout = original_timeout
+                _verify_direct_result(tool, result)
                 if self.state.path is None:
                     self.state.path = "direct"
                 return result
@@ -261,19 +271,147 @@ class RuntimeClientRouter:
         raise RuntimeCallError(self.state.error) from direct_error
 
 
+def _verify_direct_result(tool: str, result: Any) -> None:
+    if tool not in {"append_session_event", "session_wrap"}:
+        return
+    if not isinstance(result, Mapping):
+        raise RuntimeCallError(f"direct {tool} returned a non-object result")
+    if tool == "append_session_event":
+        _verify_append_result(result)
+    else:
+        _verify_wrap_result(result)
+
+
+def _verify_append_result(result: Mapping[str, Any]) -> None:
+    if result.get("duplicate") is True:
+        return
+    if not _nonempty_text(result.get("event_id")) or not _nonempty_text(
+        result.get("lane_id")
+    ):
+        raise RuntimeCallError(
+            "append_session_event result did not prove a created or duplicate event"
+        )
+    if not isinstance(result.get("lane_created"), bool):
+        raise RuntimeCallError(
+            "append_session_event result missing lane_created boolean"
+        )
+
+
+def _verify_wrap_result(result: Mapping[str, Any]) -> None:
+    if (
+        not _nonempty_text(result.get("lane_id"))
+        or result.get("context_updated") is not True
+    ):
+        raise RuntimeCallError(
+            "session_wrap result did not prove durable lane context update"
+        )
+    if result.get("duplicate") is True:
+        return
+    if not _nonempty_text(result.get("session_id")):
+        raise RuntimeCallError(
+            "session_wrap result did not prove a created or duplicate checkpoint"
+        )
+
+
+def _nonempty_text(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _fallback_lane_arguments(arguments: Mapping[str, Any]) -> dict[str, Any]:
+    lane_arguments = {
+        name: arguments[name]
+        for name in (
+            "session_key",
+            "agent",
+            "platform",
+            "server_id",
+            "channel_id",
+            "thread_id",
+            "project",
+        )
+        if name in arguments
+    }
+    required = ("session_key", "agent", "platform", "server_id", "channel_id")
+    missing = [
+        name for name in required if not _nonempty_text(lane_arguments.get(name))
+    ]
+    if missing:
+        raise RuntimeCallError(
+            "mcp2cli fallback write cannot verify lane without: " + ", ".join(missing)
+        )
+    return lane_arguments
+
+
 def run_subprocess(
     argv: Sequence[str],
     *,
     timeout: float,
 ) -> subprocess.CompletedProcess[str]:
-    """Run the fixed fallback command as argv with no shell."""
-    return subprocess.run(
+    """Run argv with incrementally bounded stdout/stderr and a hard timeout."""
+    process = subprocess.Popen(  # noqa: S603 - argv is fixed by the caller boundary
         list(argv),
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=False,
     )
+    if process.stdout is None or process.stderr is None:
+        _terminate_and_reap(process)
+        raise RuntimeCallError("mcp2cli subprocess pipes were unavailable")
+    streams = {process.stdout: bytearray(), process.stderr: bytearray()}
+    selector = selectors.DefaultSelector()
+    for stream in streams:
+        os.set_blocking(stream.fileno(), False)
+        selector.register(stream, selectors.EVENT_READ)
+    deadline = time.monotonic() + timeout
+    try:
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _terminate_and_reap(process)
+                raise RuntimeCallError("mcp2cli timed out")
+            events = selector.select(remaining)
+            if not events:
+                continue
+            for key, _ in events:
+                stream = cast(Any, key.fileobj)
+                chunk = os.read(stream.fileno(), 65_536)
+                if not chunk:
+                    selector.unregister(stream)
+                    continue
+                buffer = streams[stream]
+                buffer.extend(chunk)
+                if len(buffer) > MAX_FALLBACK_OUTPUT_BYTES:
+                    _terminate_and_reap(process)
+                    label = "output" if stream is process.stdout else "error output"
+                    raise RuntimeCallError(
+                        f"mcp2cli {label} exceeded the response limit"
+                    )
+        returncode = process.wait(timeout=max(0.0, deadline - time.monotonic()))
+    except subprocess.TimeoutExpired as error:
+        _terminate_and_reap(process)
+        raise RuntimeCallError("mcp2cli timed out") from error
+    except Exception:
+        _terminate_and_reap(process)
+        raise
+    finally:
+        selector.close()
+        process.stdout.close()
+        process.stderr.close()
+    stdout = streams[process.stdout].decode("utf-8", errors="replace")
+    stderr = streams[process.stderr].decode("utf-8", errors="replace")
+    return subprocess.CompletedProcess(list(argv), returncode, stdout, stderr)
+
+
+def _terminate_and_reap(process: subprocess.Popen[bytes]) -> None:
+    if process.poll() is not None:
+        process.wait()
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=1.0)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
 
 
 def safe_error(error: BaseException) -> str:
@@ -307,14 +445,31 @@ def _verify_fallback_lane(
     lane = result.get("lane")
     if not isinstance(lane, Mapping):
         raise RuntimeCallError("mcp2cli session_start result missing lane object")
-    expected: dict[str, str] = {
+    metadata = lane.get("metadata")
+    actual = {
+        "namespace": lane.get("namespace"),
+        "session_key": lane.get("session_key"),
+        "agent": lane.get("agent"),
+        "platform": lane.get("source"),
+        "server_id": (
+            metadata.get("server_id") if isinstance(metadata, Mapping) else None
+        ),
+        "channel_id": lane.get("channel_id"),
+        "thread_id": lane.get("thread_id"),
+    }
+    expected: dict[str, Any] = {
         "namespace": namespace,
         "session_key": scope.session_key,
         "agent": scope.agent,
+        "platform": scope.platform,
+        "server_id": scope.server_id,
+        "channel_id": scope.channel_id,
+        "thread_id": scope.thread_id,
     }
     if isinstance(project, str) and project and "project" in lane:
         expected["project"] = project
-    _verify_exact_fields(lane, expected, "session_start lane")
+        actual["project"] = lane.get("project")
+    _verify_exact_fields(actual, expected, "session_start lane")
 
 
 def _verify_fallback_context_pack(
@@ -328,22 +483,21 @@ def _verify_fallback_context_pack(
         candidate = payload.get("scope") if isinstance(payload, Mapping) else None
     if not isinstance(candidate, Mapping):
         raise RuntimeCallError("mcp2cli agent_context_pack result missing scope")
-    expected: dict[str, str] = {
+    expected: dict[str, Any] = {
         "namespace": namespace,
         "session_key": scope.session_key,
         "agent": scope.agent,
         "platform": scope.platform,
         "server_id": scope.server_id,
         "channel_id": scope.channel_id,
+        "thread_id": scope.thread_id,
     }
-    if scope.thread_id is not None:
-        expected["thread_id"] = scope.thread_id
     _verify_exact_fields(candidate, expected, "agent_context_pack scope")
 
 
 def _verify_exact_fields(
     candidate: Mapping[str, Any],
-    expected: Mapping[str, str],
+    expected: Mapping[str, Any],
     label: str,
 ) -> None:
     mismatches = [

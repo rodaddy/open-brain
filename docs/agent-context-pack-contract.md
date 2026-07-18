@@ -243,18 +243,26 @@ threaded caller. A mismatch returns one generic `exact_scope` denial and does
 not query lane events.
 
 The section may contain bounded lane metadata, `current_context_md`, and up to
-eight recent durable events. Content defaults are capped at 12,000 total
+eight recent durable events. The server selects that recent subset by
+`created_at DESC, id DESC`, fetches one extra row to detect omissions, and
+returns the selected events in deterministic chronological order by
+`created_at ASC, id ASC`. Content defaults are capped at 12,000 total
 characters, 6,000 checkpoint characters, and 1,000 characters per event.
-Truncation is declared in `warnings.truncation`; database failure degrades to a
-redacted `warnings.degraded_sources` entry. Returned lane/event references are
-listed in `citations`.
+Truncation is declared in `warnings.truncation`. When `budget.max_latency_ms`
+is requested, durable lane reads run on one checked-out PostgreSQL client with
+transaction-local statement timeouts derived from the remaining budget; a
+timed-out statement is rolled back before the client is released. Database
+failure or timeout degrades to a redacted `warnings.degraded_sources` entry.
+Returned lane/event references are listed in `citations`.
 
-A scoped `append_session_event` may attach previously null legacy-lane
-agent/platform/server/channel/thread coordinates before inserting the event.
-The attachment and insert share one database transaction. The update is
-predicate-bound to lane id, auth-derived namespace, session key, and conditional
-equality, so it never overwrites an asserted coordinate; a concurrent conflict
-fails closed. Fully asserted null thread remains unthreaded.
+First-class `session_start`, scoped `append_session_event`, and `session_wrap`
+carry the same agent/platform/server/channel/thread coordinates. Start creates
+or conditionally attaches the exact lane scope; append attaches before inserting
+the event; wrap validates/attaches before atomically writing the session record
+and materializing the summary in `current_context_md`. Predicate-bound updates
+never overwrite an asserted coordinate, concurrent conflicts fail closed, and a
+fully asserted null thread remains unthreaded. A fresh checkpoint/wrap is
+therefore immediately recallable through this section.
 
 `warnings`, `budget`, and `citations` are always-present top-level envelope
 fields, not section members. They are mirrored by
@@ -503,7 +511,10 @@ review of any contract-surface change.
 Downstream rollout classification for issue #293: applicable. The required
 contract advances to `2026-07-17.memory-tools.v22`, `agent_context_pack` advances
 to v2, `append_session_event` advances to v8, and the shared HTTP/NATS pack
-behavior changes. The post-merge sequence in `docs/downstream-rollout.md`
+behavior changes. `openbrain-memory` 0.1.8 fails closed on v21 and on manifests
+that advertise earlier context-pack or append semantics; v21 is not represented
+by a v22-shaped compatibility fixture. The post-merge sequence in
+`docs/downstream-rollout.md`
 therefore applies: deploy through the current gated core01 workflow, verify the
 hosted v22 manifest and changed operations, complete the authoritative rtech-mcps
 handoff, then refresh and verify mcp2cli through the documented local-direct and

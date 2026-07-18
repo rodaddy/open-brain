@@ -13,7 +13,7 @@ describe("Open Brain contract manifest", () => {
     expect(contract.contract_scope).toBe("required_openbrain_memory_contract");
     expect(contract.schema_hash).toMatch(/^[0-9a-f]{64}$/);
     expect(contract.schema_hash).toBe(
-      "3f0ce606fe1fe6df02a36ab696011abca1cf08f1342045f9a6cd57c52dbb864d",
+      "51bd6bd9901b88d1f7ae71b95c34a374cbfa4488f706134334aa839bb7cb7c66",
     );
     expect(contract.min_client_versions.mcp2cli).toBe("0.3.6");
     expect(contract.min_client_versions["openbrain-memory"]).toBe("0.1.8");
@@ -535,7 +535,10 @@ describe("Open Brain contract manifest", () => {
     });
     expect(sessionWrap?.output_shape).toContain("source_refs");
     expect(sessionWrap?.output_shape).toContain(
-      "duplicate content_hash checkpoints are immutable no-ops",
+      "duplicate content_hash checkpoints do not merge later source_refs",
+    );
+    expect(sessionWrap?.output_shape).toContain(
+      "still materialize the scoped lane summary",
     );
   });
 

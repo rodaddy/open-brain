@@ -392,3 +392,12 @@ inject a pg-like error carrying a secret-looking message, capture
 **Status:** fixed in issue #288 implementation
 
 Transcript payloads require the same synchronous secret rejection as other durable evidence. References use canonical host-neutral segments, empty transcript still requires a ref, and DB-error logs expose only allowlisted labels.
+
+## [2026-07-17] Persisted-write validation must not normalize caller content
+
+**Severity:** HIGH
+**Source:** PR #294 Full-tier review
+**Scope:** `openbrain-memory` live writes, spool validation, and replay validation
+**Status:** fixed in PR #294
+
+Validation may inspect a normalized copy for emptiness, bounds, or safety, but the accepted durable payload must remain byte-for-byte caller content. Trimming or rewriting during validation silently changes memory evidence and can make live and replayed writes disagree. Regression tests must use leading/trailing whitespace and sensitive-looking legitimate text and assert exact persisted and replayed content.

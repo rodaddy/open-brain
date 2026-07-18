@@ -414,3 +414,12 @@ live launchd state still differs from the repo template.
 **Status:** fixed in issue #288 implementation
 
 Do not round-trip PostgreSQL timestamps through millisecond JS dates for tuple boundaries. Compare against the target row in SQL, qualify every projected column, apply direction to every ORDER BY term, and make constraint creation retry-idempotent.
+
+## [2026-07-17] Bounded context reads need omission proof, total order, and cancellable latency
+
+**Severity:** HIGH
+**Source:** PR #294 Full-tier review
+**Scope:** `agent_context_pack` durable lane/event reads and bounded database retrieval
+**Status:** fixed in PR #294
+
+A bounded context query must fetch one extra row before truncating so omission flags are truthful, use a total order such as `(created_at, id)` in both selection and returned chronology, and enforce latency inside the database operation. `Promise.race` alone leaves a detached query consuming a pool connection; use a checked-out client plus statement timeout/cancellation and clean rollback before release. Tests must cover timestamp ties, exactly-at-limit versus over-limit results, and a concretely wedged query.
