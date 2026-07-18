@@ -157,13 +157,15 @@ describe("agent_context_pack durable lane pool acquisition", () => {
   it("uses and releases a normally acquired client within the shared deadline", async () => {
     const queries: TimedQueryConfig[] = [];
     let releaseCount = 0;
+    let releaseArgument: unknown;
     const dbClient = {
       query: async (config: TimedQueryConfig) => {
         queries.push(config);
         return { rows: [] };
       },
-      release: () => {
+      release: (error?: unknown) => {
         releaseCount += 1;
+        releaseArgument = error;
       },
     };
     const { pack } = await callBudgetedPack(
@@ -188,7 +190,12 @@ describe("agent_context_pack durable lane pool acquisition", () => {
       expect.stringContaining("FROM ob_session_lanes"),
       "COMMIT",
     ]);
-    expect(queries.every(({ query_timeout }) => query_timeout! > 0)).toBe(true);
+    expect(
+      queries.every(
+        ({ query_timeout }) =>
+          typeof query_timeout === "number" && query_timeout > 0,
+      ),
+    ).toBe(true);
     const statementTimeoutMs = Number.parseInt(
       String(queries[1]?.values?.[0]),
       10,
@@ -202,5 +209,6 @@ describe("agent_context_pack durable lane pool acquisition", () => {
       "RESET statement_timeout",
     );
     expect(releaseCount).toBe(1);
+    expect(releaseArgument).toBeUndefined();
   });
 });

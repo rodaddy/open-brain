@@ -431,7 +431,7 @@ describe("agent_context_pack durable lane context", () => {
   it("discards the pool client after a timed-out durable read", async () => {
     let statementTimeoutMs = 0;
     let activeQueries = 0;
-    let released = false;
+    let releaseCount = 0;
     let releaseArgument: unknown;
     let rolledBack = false;
     const lane = {
@@ -480,7 +480,7 @@ describe("agent_context_pack durable lane context", () => {
         return { rows: [] };
       },
       release: (error?: unknown) => {
-        released = true;
+        releaseCount += 1;
         releaseArgument = error;
       },
     };
@@ -517,7 +517,7 @@ describe("agent_context_pack durable lane context", () => {
       expect(elapsedMs).toBeLessThan(250);
       expect(activeQueries).toBe(0);
       expect(rolledBack).toBe(false);
-      expect(released).toBe(true);
+      expect(releaseCount).toBe(1);
       expect(releaseArgument).toBeInstanceOf(Error);
     } finally {
       await cleanup();
