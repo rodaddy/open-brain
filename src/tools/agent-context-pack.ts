@@ -16,6 +16,7 @@ import {
   RecoveryWalStore,
 } from "../realtime/recovery-wal.ts";
 import type { ToolDeps } from "./index.ts";
+import { loadDurableLaneContext } from "./agent-context-pack-durable-lane.ts";
 
 export const SECTION_NAMES = [
   "working_set",
@@ -58,7 +59,12 @@ export const scopeInputSchema = {
 export const agentContextPackInputSchema = {
   ...scopeInputSchema,
   query: z.string().max(4000).optional(),
-  requested_sections: z.array(z.enum(SECTION_NAMES)).optional(),
+  requested_sections: z
+    .array(z.enum(SECTION_NAMES))
+    .optional()
+    .describe(
+      "Sections to assemble. durable_lane_context is queried only when explicitly requested and requires all seven exact scope coordinates.",
+    ),
   include_unreviewed_recovery: z
     .boolean()
     .optional()
@@ -84,11 +90,11 @@ export function parseAgentContextPackArgs(args: unknown): AgentContextPackArgs {
   return agentContextPackArgsSchema.parse(args);
 }
 
-export function buildAgentContextPackPayload(
+export async function buildAgentContextPackPayload(
   args: AgentContextPackArgs,
   auth: AuthInfo | undefined,
   deps: ToolDeps,
-): AgentContextPackBuildResult {
+): Promise<AgentContextPackBuildResult> {
   if (!auth || !canRead(auth.role, "sessions")) {
     return {
       payload: { error: "Permission denied: cannot read agent context pack" },
@@ -121,9 +127,14 @@ export function buildAgentContextPackPayload(
     args.include_unreviewed_recovery === true &&
     (!args.requested_sections ||
       args.requested_sections.includes("recovery"));
+  const includeDurableLaneContext =
+    args.requested_sections?.includes("durable_lane_context") === true;
   const workingSet = storeFor(deps).buildContextPackFragment(scope);
   const recovery = includeRecovery
     ? recoveryStoreFor(deps).buildContextPackFragment(scope)
+    : null;
+  const durableLaneContext = includeDurableLaneContext
+    ? await loadDurableLaneContext(args, ns, deps)
     : null;
 
   return {
@@ -139,6 +150,9 @@ export function buildAgentContextPackPayload(
           ? { working_set: workingSet.working_set }
           : {}),
         ...(recovery ? { recovery: recovery.recovery } : {}),
+        ...(durableLaneContext?.section
+          ? { durable_lane_context: durableLaneContext.section }
+          : {}),
       },
       warnings: {
         scope_denials: [
@@ -146,14 +160,20 @@ export function buildAgentContextPackPayload(
             ? workingSet.warnings.scope_denials
             : []),
           ...(recovery ? recovery.warnings.scope_denials : []),
+          ...(durableLaneContext?.scopeDenials ?? []),
         ],
+        degraded_sources: durableLaneContext?.degradedSources ?? [],
+        truncation: durableLaneContext?.truncation ?? [],
       },
       budget: {
         requested: args.budget ?? null,
         ...(includeWorkingSet ? workingSet.budget : {}),
         ...(recovery ? recovery.budget : {}),
+        ...(durableLaneContext
+          ? { durable_lane_context: durableLaneContext.budget }
+          : {}),
       },
-      citations: [],
+      citations: durableLaneContext?.citations ?? [],
       query: args.query ?? null,
     },
     isError: false,
@@ -411,9 +431,10 @@ export function registerAgentContextPack(
     "agent_context_pack",
     {
       description:
-        "Build a scoped realtime agent context pack. The working_set section " +
-        "is included only for the exact namespace/agent/platform/server/" +
-        "channel/thread/session scope.",
+        "Build a scoped realtime agent context pack. working_set uses exact " +
+        "active scope; recovery requires explicit unreviewed-recovery opt-in; " +
+        "durable_lane_context is queried only when explicitly requested and " +
+        "returns bounded lane/events only after all seven scope coordinates match.",
       inputSchema: agentContextPackInputSchema,
       annotations: {
         title: "Agent Context Pack",
@@ -423,7 +444,7 @@ export function registerAgentContextPack(
       },
     },
     async (args, extra) => {
-      const result = buildAgentContextPackPayload(
+      const result = await buildAgentContextPackPayload(
         parseAgentContextPackArgs(args),
         extra.authInfo as AuthInfo | undefined,
         deps,

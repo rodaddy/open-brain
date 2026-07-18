@@ -389,3 +389,39 @@ making the diagnostic lie in exactly the failure cases it exists for.
 **Status:** fixed in issue #288 implementation
 
 Adding a required tool while retaining the released client version makes the manifest lie. Bump the package, minimum/range, lockfile, server assertions, and Python contract fixtures together; search expected error strings for the retired range too.
+
+## [2026-07-17] Spool success must mean a fully durable, atomically replayable group
+
+**Severity:** HIGH
+**Source:** PR #294 Full-tier review
+**Scope:** `python/openbrain-memory/src/openbrain_memory/spool.py`
+**Status:** fixed in PR #294; recurrence of #80 spool durability
+
+A spool append may report success only after checking the full write, flushing and `fsync`ing the file, and `fsync`ing the parent directory when a durable rename/create is involved. Replay must validate an entire logical group before dispatching any member; raw spool fields must satisfy their exact types before grouping, without coercing strings, booleans, or numerics into valid-looking records. One malformed record cannot allow a valid prefix from that group to partially replay. Tests must inject short writes, sync failures, wrong-typed raw fields, malformed middle records, and restart after durable replacement.
+
+## [2026-07-17] Runtime fallback receipts need tool-specific proof and bounded process I/O
+
+**Severity:** HIGH
+**Source:** PR #294 Full-tier review
+**Scope:** `python/openbrain-memory/src/openbrain_memory/_runtime_router.py`, `runtime.py`
+**Status:** fixed in PR #294; recurrence class of #81/#82 transport and contract proof
+
+Do not accept a generic success envelope as proof of a durable lifecycle write. Validate the expected receipt for the invoked tool, preserve exact nullable scope coordinates, stream subprocess output under fixed bounds, and after direct-start partial failure verify the intended lane before claiming fallback success. Exercise wrong-lane, malformed-receipt, null-scope, partial-start, timeout, and noisy-child failures.
+
+## [2026-07-17] Package validation must preserve persisted content exactly
+
+**Severity:** HIGH
+**Source:** PR #294 Full-tier review
+**Scope:** `python/openbrain-memory` live writes, spool writes, and replay
+**Status:** fixed in PR #294; recurrence of #77 live-write mutation
+
+Validation can reject content but must not normalize accepted caller payloads. Use normalized copies only for checks, then persist and replay the original string; exact-content tests must include leading/trailing whitespace and sensitive-looking legitimate values.
+
+## [2026-07-17] Package compatibility must enforce semantic versions per required tool
+
+**Severity:** MEDIUM
+**Source:** PR #294 Full-tier review
+**Scope:** `python/openbrain-memory/src/openbrain_memory/contract.py` and contract fixtures
+**Status:** fixed in PR #294; recurrence of #82 contract drift
+
+Checking only that a required tool name exists lets an incompatible schema pass. Parse the advertised tool version, enforce the supported semantic range, fail closed on malformed declarations, and cover missing, older, newer, and malformed versions in fixtures.

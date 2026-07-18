@@ -6,7 +6,13 @@ from dataclasses import dataclass
 from hashlib import sha256
 from typing import Any
 
-from .client import COMPATIBLE_CONTRACT_VERSIONS, REQUIRED_CONTRACT_TOOLS
+from .client import (
+    COMPATIBLE_CONTRACT_VERSIONS,
+    CURRENT_CONTRACT_SCHEMA_HASH,
+    CURRENT_CONTRACT_SCHEMA_VERSION,
+    REQUIRED_CONTRACT_TOOL_VERSIONS,
+    REQUIRED_CONTRACT_TOOLS,
+)
 
 EXPECTED_CONTRACT_SCOPE = "required_openbrain_memory_contract"
 DEFAULT_CLIENT_NAME = "openbrain-memory"
@@ -28,8 +34,11 @@ def validate_contract_manifest(
     client_name: str = DEFAULT_CLIENT_NAME,
     client_version: str | None = None,
     required_tools: Iterable[str] = (),
+    required_tool_versions: Mapping[str, int] | None = None,
     expected_scope: str = EXPECTED_CONTRACT_SCOPE,
     compatible_contract_versions: Iterable[str] = (),
+    expected_schema_version: int | None = None,
+    expected_schema_hash: str | None = None,
 ) -> ContractValidationResult:
     """Validate a live Open Brain contract manifest without network access."""
 
@@ -60,9 +69,16 @@ def validate_contract_manifest(
                 f"expected one of: {expected}",
             )
 
+    _validate_schema_snapshot(
+        manifest,
+        expected_version=expected_schema_version,
+        expected_hash=expected_schema_hash,
+        reasons=reasons,
+    )
     _validate_required_tools(
         manifest,
         required_tools=tuple(required_tools),
+        required_versions=required_tool_versions or {},
         reasons=reasons,
     )
     if client_version is not None:
@@ -89,14 +105,46 @@ def validate_required_memory_contract(
         client_name=client_name,
         client_version=client_version,
         required_tools=REQUIRED_CONTRACT_TOOLS,
+        required_tool_versions=REQUIRED_CONTRACT_TOOL_VERSIONS,
         compatible_contract_versions=COMPATIBLE_CONTRACT_VERSIONS,
+        expected_schema_version=CURRENT_CONTRACT_SCHEMA_VERSION,
+        expected_schema_hash=CURRENT_CONTRACT_SCHEMA_HASH,
     )
+
+
+def _validate_schema_snapshot(
+    manifest: Mapping[str, Any],
+    *,
+    expected_version: int | None,
+    expected_hash: str | None,
+    reasons: list[str],
+) -> None:
+    if expected_version is not None:
+        version = manifest.get("schema_version")
+        if isinstance(version, bool) or not isinstance(version, int):
+            reasons.append("schema_version is missing or not an integer")
+        elif version != expected_version:
+            reasons.append(
+                f"schema_version mismatch: expected {expected_version}, got {version}"
+            )
+
+    if expected_hash is not None:
+        schema_hash = manifest.get("schema_hash")
+        if not isinstance(schema_hash, str) or not schema_hash:
+            reasons.append("schema_hash is missing or not a non-empty string")
+        elif schema_hash != expected_hash:
+            reasons.append(
+                "schema_hash mismatch: "
+                f"expected {_display_value(expected_hash)}, "
+                f"got {_display_value(schema_hash)}"
+            )
 
 
 def _validate_required_tools(
     manifest: Mapping[str, Any],
     *,
     required_tools: Sequence[str],
+    required_versions: Mapping[str, int],
     reasons: list[str],
 ) -> None:
     if not required_tools:
@@ -110,6 +158,17 @@ def _validate_required_tools(
             "required tool(s) missing from contract capabilities: "
             + ", ".join(missing_capabilities),
         )
+    capability_versions = _capability_tool_versions(manifest.get("capabilities"))
+    for tool_name, minimum_version in required_versions.items():
+        version = capability_versions.get(tool_name)
+        if tool_name in capability_tools and (
+            isinstance(version, bool)
+            or not isinstance(version, int)
+            or version < minimum_version
+        ):
+            reasons.append(
+                f"capability {tool_name!r}.version must be >= {minimum_version}"
+            )
 
     tool_contracts = manifest.get("tool_contracts")
     if not isinstance(tool_contracts, Mapping):
@@ -130,6 +189,7 @@ def _validate_required_tools(
             _validate_tool_contract_entry(
                 tool_name,
                 tool_contracts[tool_name],
+                minimum_version=required_versions.get(tool_name),
                 reasons=reasons,
             )
 
@@ -138,6 +198,7 @@ def _validate_tool_contract_entry(
     tool_name: str,
     value: Any,
     *,
+    minimum_version: int | None,
     reasons: list[str],
 ) -> None:
     if not isinstance(value, Mapping):
@@ -147,6 +208,14 @@ def _validate_tool_contract_entry(
     version = value.get("version")
     if version is None or version == "":
         reasons.append(f"tool_contracts[{tool_name!r}].version is missing or empty")
+    elif minimum_version is not None and (
+        isinstance(version, bool)
+        or not isinstance(version, int)
+        or version < minimum_version
+    ):
+        reasons.append(
+            f"tool_contracts[{tool_name!r}].version must be >= {minimum_version}"
+        )
 
     input_schema = value.get("input_schema")
     if not isinstance(input_schema, Mapping):
@@ -243,6 +312,20 @@ def _capability_tool_names(value: Any) -> set[str]:
         ):
             names.add(capability["name"])
     return names
+
+
+def _capability_tool_versions(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Sequence) or isinstance(value, str):
+        return {}
+    versions: dict[str, Any] = {}
+    for capability in value:
+        if (
+            isinstance(capability, Mapping)
+            and capability.get("kind") == "tool"
+            and isinstance(capability.get("name"), str)
+        ):
+            versions[capability["name"]] = capability.get("version")
+    return versions
 
 
 def _tool_contract_names(value: Any) -> set[str]:

@@ -124,7 +124,7 @@ export async function startNatsContextPackBridge(
   markNatsBridgeAvailable(health);
   const subject = options.boundary.nats.context_pack_subject;
   const subscription = await driver.subscribe(subject, async (message) => {
-    const response = handleNatsContextPackMessage({
+    const response = await handleNatsContextPackMessage({
       message,
       boundary: options.boundary,
       tokenMap: options.tokenMap,
@@ -241,13 +241,13 @@ function declaredNamespace(
   );
 }
 
-export function handleNatsContextPackMessage(input: {
+export async function handleNatsContextPackMessage(input: {
   message: Pick<NatsRequestMessage, "subject" | "data" | "headers">;
   boundary: NatsRuntimeBoundary;
   tokenMap: Map<string, AuthInfo>;
   deps: ToolDeps;
   health?: NatsBridgeHealth;
-}): FleetEnvelope {
+}): Promise<FleetEnvelope> {
   let requestId: string | null = null;
   let namespaceSource: NamespaceSource | null = null;
 
@@ -305,7 +305,7 @@ export function handleNatsContextPackMessage(input: {
     }
     namespaceSource = binding.namespaceSource;
 
-    const result = buildAgentContextPackPayload(
+    const result = await buildAgentContextPackPayload(
       // On the override/declared local-bus path the synthetic auth.clientId IS
       // the namespace, so tool args must NOT also carry a namespace (which would
       // be a second, un-vetted source). On the require_auth path the token's own

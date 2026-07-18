@@ -1,10 +1,13 @@
 [project]
 name = "openbrain-memory"
-version = "0.1.7"
+version = "0.1.8"
 description = "Python client for remote Open Brain memory service"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = []
+
+[project.scripts]
+openbrain-memory = "openbrain_memory.__main__:main"
 
 [project.optional-dependencies]
 # Realtime NATS transport (fleet-bus). nats-py is the wire client. The fleet

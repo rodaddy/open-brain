@@ -16,9 +16,7 @@ from openbrain_memory.nats_wire import (
     envelope_to_wire_bytes,
 )
 
-_WIRE_FIXTURE = (
-    Path(__file__).parent / "fixtures" / "nats-context-pack-wire.json"
-)
+_WIRE_FIXTURE = Path(__file__).parent / "fixtures" / "nats-context-pack-wire.json"
 
 
 def test_subject_is_env_prefixed_and_slugged():
@@ -109,8 +107,7 @@ def test_response_wire_validates_and_yields_expected_shape():
 
     assert response["kind"] == CONTEXT_PACK_REPLY_KIND == "context_pack_response"
     assert (
-        response["correlation_id"]
-        == fixture["request"]["envelope"]["correlation_id"]
+        response["correlation_id"] == fixture["request"]["envelope"]["correlation_id"]
     )
     payload = response["payload"]
     assert payload["operation"] == "agent_context_pack"

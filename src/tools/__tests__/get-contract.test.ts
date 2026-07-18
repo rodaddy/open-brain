@@ -183,6 +183,24 @@ describe("get_contract", () => {
       expect(pack.warning_fields).toContain("truncation");
       expect(pack.working_set.not_durable_memory).toBe(true);
       expect(pack.working_set.exact_scope_required).toBe(true);
+      expect(pack.durable_lane_context).toMatchObject({
+        status: "runtime-available",
+        exact_scope_required: true,
+        explicit_include_required: true,
+        scope_mismatch_behavior: "generic_scope_denial",
+      });
+      expect(
+        parsed.capabilities.find(
+          (item: { name: string }) => item.name === "agent_context_pack",
+        ).version,
+      ).toBe(2);
+      expect(
+        parsed.capabilities.find(
+          (item: { name: string }) => item.name === "append_session_event",
+        ).version,
+      ).toBe(8);
+      expect(parsed.tool_contracts.agent_context_pack.version).toBe(2);
+      expect(parsed.tool_contracts.append_session_event.version).toBe(8);
 
       // Positive shape: the top-level contract surface is exactly this key
       // set (buildContract in src/contract.ts). Any new top-level capability

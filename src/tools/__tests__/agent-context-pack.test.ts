@@ -1,66 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import {
-  registerAgentContextPack,
-  registerRecoveryWalAppend,
-  registerRecoveryWalMark,
-  registerWorkingSetAppend,
-} from "../agent-context-pack.ts";
-import type { ToolDeps } from "../index.ts";
 import type { AuthInfo } from "../../types.ts";
-import { WorkingSetStore } from "../../realtime/working-set.ts";
-import { RecoveryWalStore } from "../../realtime/recovery-wal.ts";
-
-function createMockEmbed(result: number[] | null = Array(768).fill(0.1)) {
-  return async (_text: string) => result;
-}
-
-async function setupToolClient(
-  auth: AuthInfo,
-): Promise<{ client: Client; cleanup: () => Promise<void> }> {
-  const server = new McpServer({ name: "test", version: "1.0.0" });
-  const deps: ToolDeps = {
-    pool: { query: async () => ({ rows: [] }) } as any,
-    embedFn: createMockEmbed(),
-    workingSetStore: new WorkingSetStore(),
-    recoveryWalStore: new RecoveryWalStore(),
-  };
-  registerWorkingSetAppend(server, deps);
-  registerRecoveryWalAppend(server, deps);
-  registerRecoveryWalMark(server, deps);
-  registerAgentContextPack(server, deps);
-
-  const [clientTransport, serverTransport] =
-    InMemoryTransport.createLinkedPair();
-
-  const originalSend = clientTransport.send.bind(clientTransport);
-  clientTransport.send = (message: any, options?: any) => {
-    return originalSend(message, { ...options, authInfo: auth });
-  };
-
-  const client = new Client({ name: "test-client", version: "1.0.0" });
-  await server.connect(serverTransport);
-  await client.connect(clientTransport);
-
-  return {
-    client,
-    cleanup: async () => {
-      await client.close();
-      await server.close();
-    },
-  };
-}
-
-const SCOPE = {
-  namespace: "rico",
-  agent: "nagatha",
-  platform: "discord",
-  server_id: "rodaddy-live",
-  channel_id: "open-brain",
-  session_key: "discord:rodaddy-live:open-brain:nagatha",
-};
+import {
+  AGENT_CONTEXT_PACK_SCOPE as SCOPE,
+  setupAgentContextPackToolClient as setupToolClient,
+} from "./agent-context-pack-test-helpers.ts";
 
 describe("agent_context_pack and working_set_append", () => {
   it("round-trips RAM-only working context through exact-scope context pack", async () => {

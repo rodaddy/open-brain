@@ -30,9 +30,24 @@ If none of those apply, say so explicitly in the PR and release notes.
      operator's real local `~/.config/mcp2cli` as a test fixture.
 
 2. **Open Brain hosted verification**
-   - Deploy/pull Open Brain to the hosted service at `10.71.1.21` when the
-     change is runtime-facing.
-   - Run a focused live smoke against the changed tool or behavior.
+   - Merge alone does not deploy core01. After the candidate is on current
+     `origin/main`, use the `CI` workflow's explicit `workflow_dispatch` on
+     `main` with `deploy_core01=true`, or push a `v*` tag whose commit is
+     reachable from `origin/main`. The deploy job waits for `check`,
+     `db-integration`, and `python-package`, then runs
+     `scripts/core01-deploy-local.sh` on the `[self-hosted, macOS, core01]`
+     runner.
+   - The script refuses unsupported refs, requires a manual-dispatch checkout to
+     equal the current `origin/main` tip, stages the runtime, installs locked
+     dependencies, bootstraps qmd when its script is present, runs migrations,
+     swaps the runtime, restarts `system/com.rico.open-brain`, and checks
+     `http://127.0.0.1:3100/health`. After health passes it runs the Bun
+     `search-all` test file. That test is regression coverage, not a live
+     changed-tool smoke. On failed health the script restores the previous
+     runtime and checks health again.
+   - Therefore workflow success is necessary but not sufficient: after it
+     succeeds, run a real hosted MCP call for every changed tool or behavior and
+     record the returned contract/version evidence.
 
 3. **rtech-mcps handoff**
    - Land any required registry, secret-map, or process documentation update in
@@ -40,41 +55,62 @@ If none of those apply, say so explicitly in the PR and release notes.
    - Do this before treating mcp2cli refresh as complete. Direct hosted schema
      refresh is not a substitute for the rtech-mcps handoff.
 
-4. **mcp2cli pull and generated skill refresh**
+4. **mcp2cli pull, cache verification, and generated skill refresh**
    - Have mcp2cli consume the registry-backed service definition.
-   - Invalidate the stale schema cache, then regenerate skills:
+   - Known limitation: `mcp2cli cache warm open-brain --force` is currently
+     broken for a daemon-routed Open Brain service because `cache warm` asks the
+     running daemon to discover through itself. The command times out with the
+     deadlock tracked in `rodaddy/mcp2cli#60`. Do not make that known-broken
+     daemon-routed command a rollout requirement.
+   - A local, no-daemon refresh is supported only when the selected mcp2cli
+     config can connect to Open Brain directly and supplies service-level auth
+     (normally through supported secret refs). It does not consume the hosted
+     daemon's per-identity `credentials.json`, and it refreshes only the cache
+     under that local `HOME`/`MCP2CLI_CACHE_DIR`:
+
+     ```bash
+     MCP2CLI_NO_DAEMON=1 mcp2cli cache warm open-brain --force
+     MCP2CLI_NO_DAEMON=1 mcp2cli schema open-brain.append_session_event --fresh
+     MCP2CLI_NO_DAEMON=1 mcp2cli schema open-brain.agent_context_pack --fresh
+     ```
+
+   - Verify the hosted daemon separately with the rollout caller identity. The
+     normal daemon path from mcp2cli PR #59 self-heals schema drift when it opens
+     a new credentialed connection, clears the bare and credential-scoped cache
+     keys, and repopulates from the live service. First clear only the caller's
+     local cache, prove the daemon credential mapping exists without printing a
+     value, then make the credentialed calls:
+
+     ```bash
+     ROLLOUT_IDENTITY=<authenticated-daemon-caller>
+     mcp2cli daemon status
+     mcp2cli credentials resolve "$ROLLOUT_IDENTITY" open-brain
+     mcp2cli cache clear open-brain
+     mcp2cli open-brain get_contract --params '{}'
+     mcp2cli schema open-brain.append_session_event --fresh
+     mcp2cli schema open-brain.agent_context_pack --fresh
+     ```
+
+   - If the daemon still serves a stale schema because an old pooled connection
+     never reopened, the supported operator workaround while #60 remains open is
+     to force a pool/cache reset, not to retry `cache warm`: an authenticated
+     daemon admin may run `mcp2cli credentials reload` (which reloads the same
+     credential file, clears affected bare/credential cache entries, and closes
+     pooled connections), or the daemon owner may restart the daemon service.
+     Coordinate either action because it interrupts pooled connections. Then
+     rerun the credential-resolution, `get_contract`, and schema commands above.
+   - Only after the daemon-routed schemas show the deployed v22/v2/v8 contract
+     and a representative changed operation succeeds should generated skills be
+     refreshed:
 
      ```bash
      mcp2cli generate-skills open-brain --conflict=merge
      ```
 
-   - KNOWN ISSUE (rodaddy/mcp2cli#58): mcp2cli's schema cache is NOT invalidated
-     automatically on a contract bump — it serves the old tool shape until the
-     24h TTL expires. After an Open Brain contract change you must force a
-     refresh. `mcp2cli cache warm open-brain` is currently broken on the CT216
-     daemon (self-call: "Daemon failed to start within 10000ms"). Until #58
-     lands, clear the cached schema so the next call refetches the live contract,
-     across BOTH layers and all credential keys:
-
-     ```bash
-     # client (per host)
-     rm -f ~/.cache/mcp2cli/schemas/open-brain.json \
-           ~/.cache/mcp2cli/schemas/credential:*open-brain*.json 2>/dev/null
-     # daemon (CT216 — serves OB to all other hosts)
-     ssh root@10.71.20.63 'rm -f /var/lib/mcp2cli/schemas/open-brain.json \
-           "/var/lib/mcp2cli/schemas/credential:"*.json'
-     mcp2cli schema open-brain.append_session_event   # refetches v11; confirm new fields
-     ```
-
-   - The durable fix (mcp2cli#58) should pin on Open Brain's authoritative
-     `schema_hash` from `get_contract` (deterministic; excludes `generated_at`)
-     and push-invalidate all cache layers on drift — not a per-read live probe.
-   - Verify the hosted daemon sees the updated tools/schemas and can call a
-     representative changed operation. A correct refresh shows the new fields,
-     e.g. `mcp2cli schema open-brain.append_session_event` includes
-     `create_if_missing`.
-   - Update the mcp2cli Open Brain skill generation docs/skill when the new
-     behavior changes user-facing agent guidance.
+   - Open Brain's deterministic `schema_hash` excludes `generated_at`; record it
+     with `contract_version` as the authoritative drift receipt alongside the
+     refreshed tool schemas. Update the mcp2cli Open Brain generated skill/docs
+     when changed behavior affects agent guidance.
 
 5. **rtech-hermes Python runtime/plugin check**
    - Check whether the direct Hermes Open Brain path needs changes:

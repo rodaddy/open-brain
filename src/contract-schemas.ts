@@ -118,7 +118,7 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
       "RAM-only working-set append receipt with accepted/reason/item/counters/not_durable_memory",
   },
   agent_context_pack: {
-    version: 1,
+    version: 2,
     input_schema: {
       namespace: {
         type: "string",
@@ -158,6 +158,10 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
       requested_sections: {
         type: "array",
         required: false,
+        description:
+          "Sections to assemble. durable_lane_context is opt-in and returns " +
+          "bounded lane checkpoint/event data only after all seven exact scope " +
+          "coordinates match; omitted sections are not queried.",
         items: {
           type: "enum",
           values: [
@@ -201,7 +205,7 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
       },
     },
     output_shape:
-      "agent_context_pack envelope with exact-scope working_set and explicit recovery sections, warnings, budget, citations",
+      "agent_context_pack envelope with exact-scope working_set, explicitly opted-in recovery, and explicitly requested bounded durable_lane_context sections; warnings include generic exact-scope denials/degraded sources/truncation, budget declares per-source bounds, and citations identify returned durable lane/events",
   },
   recovery_wal_append: {
     version: 1,
@@ -633,6 +637,22 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
           "Which agent owns this session (e.g. hermes, bilby, skippy). Set " +
           "so lanes can be attributed and filtered by agent.",
       },
+      platform: {
+        type: "string",
+        required: false,
+        maxLength: 500,
+        description:
+          "Platform/source identity for exact-scope lanes, such as discord. " +
+          "A supplied value is attached only when unasserted and mismatches fail closed.",
+      },
+      server_id: {
+        type: "string",
+        required: false,
+        maxLength: 500,
+        description:
+          "Server/guild/workspace identity for exact-scope lanes. Stored in lane metadata; " +
+          "a supplied mismatch fails closed.",
+      },
       channel_id: {
         type: "string",
         required: false,
@@ -658,7 +678,8 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
           "lane at a glance when listing or resuming.",
       },
     },
-    output_shape: "session lane plus recent events JSON text payload",
+    output_shape:
+      "session lane plus recent events JSON text payload; when all exact-scope fields are supplied, previously unasserted coordinates are attached and asserted mismatches fail closed; null thread is unthreaded rather than wildcard",
   },
   session_context: {
     version: 3,
@@ -928,7 +949,7 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
     output_shape: "session lane array JSON text payload",
   },
   append_session_event: {
-    version: 7,
+    version: 8,
     input_schema: {
       session_key: {
         type: "string",
@@ -961,8 +982,9 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
         required: false,
         maxLength: 500,
         description:
-          "Agent identity to bind when create_if_missing creates a lane, and " +
-          "to validate against an existing lane when supplied.",
+          "Agent identity to bind when create_if_missing creates a lane. On an " +
+          "existing legacy lane, a previously null agent is atomically attached; " +
+          "an asserted mismatch fails closed.",
       },
       platform: {
         type: "string",
@@ -970,30 +992,36 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
         maxLength: 500,
         description:
           "Platform/source identity to bind when create_if_missing creates a " +
-          "lane, such as discord. Stored as the lane source.",
+          "lane, such as discord. Stored as lane source; a previously null legacy " +
+          "value is atomically attached and an asserted mismatch fails closed.",
       },
       server_id: {
         type: "string",
         required: false,
         maxLength: 500,
         description:
-          "Server/guild identity for exact realtime scope. Stored in lane metadata.",
+          "Server/guild identity for exact realtime scope. Stored in lane metadata; " +
+          "a previously absent legacy value is atomically attached and an asserted " +
+          "mismatch fails closed.",
       },
       channel_id: {
         type: "string",
         required: false,
         maxLength: 500,
         description:
-          "Channel identity to bind when create_if_missing creates a lane, and " +
-          "to validate against an existing lane when supplied.",
+          "Channel identity to bind when create_if_missing creates a lane. On an " +
+          "existing legacy lane, a previously null channel is atomically attached; " +
+          "an asserted mismatch fails closed.",
       },
       thread_id: {
         type: "string",
         required: false,
         maxLength: 500,
         description:
-          "Thread identity to bind when create_if_missing creates a lane, and " +
-          "to validate against an existing lane when supplied.",
+          "Thread identity to bind when create_if_missing creates a lane. On an " +
+          "incompletely scoped legacy lane, a non-null thread may be atomically " +
+          "attached; once the lane is otherwise exact, null means unthreaded and " +
+          "an asserted mismatch fails closed.",
       },
       project: {
         type: "string",
@@ -1234,8 +1262,10 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
       "and reject_detail {category, matched_kind, span_count, redaction_hint, " +
       "resubmittable, resubmit_attempt, max_resubmit_attempts, optional " +
       "resubmit_blocked_reason, and resubmit_metadata only when resubmittable}; " +
-      "reject_detail never echoes offending content; error payloads use error classes retryable_outage, auth_denied, " +
-      "scope_validation, unsupported_operation, or conflict_retry",
+      "reject_detail never echoes offending content; supplied exact-scope coordinates on an existing legacy lane " +
+      "are atomically attached only where unasserted before the event insert, while any asserted scope conflict " +
+      "returns scope_validation; other error classes are retryable_outage, auth_denied, unsupported_operation, " +
+      "or conflict_retry",
   },
   session_wrap: {
     version: 2,
@@ -1256,6 +1286,38 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
         description:
           "Memory partition for the lane. Defaults to your own auth-derived " +
           "namespace; override only when authorized for another.",
+      },
+      agent: {
+        type: "string",
+        required: false,
+        maxLength: 500,
+        description: "Agent identity for exact-scope checkpoint validation.",
+      },
+      platform: {
+        type: "string",
+        required: false,
+        maxLength: 500,
+        description: "Platform/source identity for exact-scope checkpoint validation.",
+      },
+      server_id: {
+        type: "string",
+        required: false,
+        maxLength: 500,
+        description: "Server/guild/workspace identity for exact-scope checkpoint validation.",
+      },
+      channel_id: {
+        type: "string",
+        required: false,
+        maxLength: 500,
+        description: "Channel identity for exact-scope checkpoint validation.",
+      },
+      thread_id: {
+        type: "string",
+        required: false,
+        maxLength: 500,
+        description:
+          "Thread identity. When channel_id is supplied and thread_id is omitted, " +
+          "the request asserts an unthreaded lane rather than a wildcard.",
       },
       summary: {
         type: "string",
@@ -1297,7 +1359,7 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
       source_refs: SOURCE_REFS_CONTRACT,
     },
     output_shape:
-      "session wrap checkpoint/source_refs JSON text payload; duplicate content_hash checkpoints are immutable no-ops and do not merge later source_refs",
+      "session wrap checkpoint/source_refs JSON text payload; supplied exact scope is established and validated before the transactional session/current_context_md write; duplicate content_hash checkpoints do not merge later source_refs but still materialize the scoped lane summary",
   },
   upsert_repo_fact: {
     version: 2,

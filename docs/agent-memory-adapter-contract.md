@@ -191,11 +191,14 @@ runtime code into this repo:
 - `metadata.transport`: `openbrain-memory`, `mcp2cli`, or direct provider path;
 - `record_receipt`: external channel, spool, validation, and handoff receipts.
 
-Scope comparison treats a null/absent stored value as unconstrained: a lane
-created by `session_start`/`lane_upsert` (which do not record `source` or
-`metadata.server_id`) accepts a first scoped append instead of failing
-`scope_validation`. Only a non-null mismatch on agent, platform, server_id,
-channel_id, or thread_id is rejected as a cross-scope spill.
+First-class lifecycle callers pass agent, platform, server, channel, thread,
+and session coordinates to `session_start`; checkpoint/wrap calls repeat them.
+The server atomically attaches only previously unasserted coordinates and fails
+closed on any asserted mismatch. Once agent/platform/server/channel are set, a
+null thread is an asserted unthreaded scope, never a wildcard for a later
+threaded caller. Legacy callers may still omit exact-scope fields, but package
+runtime durable-success receipts require the returned lane to prove every
+coordinate.
 
 For Nagatha-style realtime Discord writes, Hermes should call
 `append_session_event` with `create_if_missing=true` and the Discord exact scope.

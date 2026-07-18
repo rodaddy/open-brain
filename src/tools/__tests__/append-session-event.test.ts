@@ -596,22 +596,33 @@ describe("append_session_event", () => {
     // attach to such a lane rather than fail scope_validation on null vs
     // "discord"/"guild-1".
     let eventInsertAttempted = false;
+    let scopeUpdate: { sql: string; params?: any[] } | undefined;
+    const unscopedLane = {
+      id: "lane-uuid-sessionstart",
+      status: "active",
+      agent: "nagatha",
+      source: null,
+      channel_id: null,
+      thread_id: null,
+      metadata: {},
+    };
     const mockPool = {
-      query: async (sql: string, _params?: any[]) => {
-        if (sql.includes("FROM ob_session_lanes")) {
+      query: async (sql: string, params?: any[]) => {
+        if (sql.includes("UPDATE ob_session_lanes")) {
+          scopeUpdate = { sql, params };
           return {
             rows: [
               {
-                id: "lane-uuid-sessionstart",
-                status: "active",
-                agent: "nagatha",
-                source: null,
+                ...unscopedLane,
+                source: "discord",
                 channel_id: "channel-1",
-                thread_id: null,
-                metadata: {},
+                metadata: { server_id: "guild-1" },
               },
             ],
           };
+        }
+        if (sql.includes("FROM ob_session_lanes")) {
+          return { rows: [unscopedLane] };
         }
         if (sql.includes("INSERT INTO ob_session_events")) {
           eventInsertAttempted = true;
@@ -643,6 +654,78 @@ describe("append_session_event", () => {
       const parsed = JSON.parse((result.content as any)[0].text);
       expect(parsed.event_id).toBe("event-uuid-1");
       expect(eventInsertAttempted).toBe(true);
+      expect(scopeUpdate).toBeDefined();
+      expect(scopeUpdate!.sql).toContain("WHERE id = $1");
+      expect(scopeUpdate!.sql).toContain("AND namespace = $2");
+      expect(scopeUpdate!.sql).toContain("AND session_key = $3");
+      expect(scopeUpdate!.params).toEqual([
+        "lane-uuid-sessionstart",
+        "nagatha",
+        "discord:guild-1:channel-1:nagatha",
+        "nagatha",
+        "discord",
+        "guild-1",
+        "channel-1",
+        null,
+        true,
+      ]);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("fails closed when a concurrent writer asserts a conflicting scope during attachment", async () => {
+    let laneSelects = 0;
+    let eventInsertAttempted = false;
+    const mockPool = {
+      query: async (sql: string) => {
+        if (sql.includes("UPDATE ob_session_lanes")) {
+          return { rows: [] };
+        }
+        if (sql.includes("FROM ob_session_lanes")) {
+          laneSelects += 1;
+          return {
+            rows: [
+              {
+                id: "lane-uuid-raced-attachment",
+                status: "active",
+                agent: "nagatha",
+                source: laneSelects === 1 ? null : "discord",
+                channel_id: laneSelects === 1 ? null : "other-channel",
+                thread_id: null,
+                metadata: laneSelects === 1 ? {} : { server_id: "guild-1" },
+              },
+            ],
+          };
+        }
+        if (sql.includes("INSERT INTO ob_session_events")) {
+          eventInsertAttempted = true;
+        }
+        return { rows: [] };
+      },
+    };
+    const auth: AuthInfo = { role: "agent", clientId: "nagatha" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "append_session_event",
+        arguments: {
+          session_key: "discord:guild-1:channel-1:nagatha",
+          agent: "nagatha",
+          platform: "discord",
+          server_id: "guild-1",
+          channel_id: "channel-1",
+          event_type: "fact",
+          content: "Concurrent conflicting attachment must fail closed.",
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.error).toBe("scope_validation");
+      expect(parsed.conflicts).toEqual(["channel_id"]);
+      expect(eventInsertAttempted).toBe(false);
     } finally {
       await cleanup();
     }
@@ -696,6 +779,59 @@ describe("append_session_event", () => {
       const parsed = JSON.parse((result.content as any)[0].text);
       expect(parsed.error).toBe("scope_validation");
       expect(parsed.conflicts).toEqual(["channel_id"]);
+      expect(eventInsertAttempted).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("treats null thread as asserted unthreaded scope once the lane is otherwise exact", async () => {
+    let eventInsertAttempted = false;
+    const mockPool = {
+      query: async (sql: string) => {
+        if (sql.includes("FROM ob_session_lanes")) {
+          return {
+            rows: [
+              {
+                id: "lane-uuid-unthreaded",
+                status: "active",
+                agent: "nagatha",
+                source: "discord",
+                channel_id: "channel-1",
+                thread_id: null,
+                metadata: { server_id: "guild-1" },
+              },
+            ],
+          };
+        }
+        if (sql.includes("INSERT INTO ob_session_events")) {
+          eventInsertAttempted = true;
+        }
+        return { rows: [] };
+      },
+    };
+    const auth: AuthInfo = { role: "agent", clientId: "nagatha" };
+    const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+    try {
+      const result = await client.callTool({
+        name: "append_session_event",
+        arguments: {
+          session_key: "discord:guild-1:channel-1:nagatha",
+          agent: "nagatha",
+          platform: "discord",
+          server_id: "guild-1",
+          channel_id: "channel-1",
+          thread_id: "thread-2",
+          event_type: "fact",
+          content: "Threaded append must not claim an asserted unthreaded lane.",
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      const parsed = JSON.parse((result.content as any)[0].text);
+      expect(parsed.error).toBe("scope_validation");
+      expect(parsed.conflicts).toEqual(["thread_id"]);
       expect(eventInsertAttempted).toBe(false);
     } finally {
       await cleanup();
@@ -2515,6 +2651,64 @@ dbDescribe("append_session_event create_if_missing (live Postgres)", () => {
         expectedHash,
         expectedHash,
       ]);
+    } finally {
+      await cleanupNs();
+    }
+  });
+
+  it("persists previously unasserted exact scope on an existing lane and then fails closed", async () => {
+    await cleanupNs();
+    try {
+      await pool.query(
+        `INSERT INTO ob_session_lanes
+           (session_key, namespace, status, agent, source, channel_id, thread_id, metadata, created_by)
+         VALUES ($1, $2, 'active', $3, NULL, NULL, NULL, '{}'::jsonb, $4)`,
+        ["dev:open-brain", ns, "shared", ns],
+      );
+
+      const attached = await callAppend({
+        session_key: "dev:open-brain",
+        namespace: ns,
+        agent: "shared",
+        platform: "development",
+        server_id: "local",
+        channel_id: "open-brain",
+        event_type: "fact",
+        content: "Existing lane receives its first exact local scope.",
+      });
+      expect(attached.isError).toBeFalsy();
+
+      const { rows } = await pool.query(
+        `SELECT agent, source, channel_id, thread_id, metadata->>'server_id' AS server_id
+           FROM ob_session_lanes
+          WHERE namespace = $1 AND session_key = $2`,
+        [ns, "dev:open-brain"],
+      );
+      expect(rows).toEqual([
+        {
+          agent: "shared",
+          source: "development",
+          channel_id: "open-brain",
+          thread_id: null,
+          server_id: "local",
+        },
+      ]);
+
+      const conflict = await callAppend({
+        session_key: "dev:open-brain",
+        namespace: ns,
+        agent: "shared",
+        platform: "development",
+        server_id: "local",
+        channel_id: "other-channel",
+        event_type: "fact",
+        content: "A conflicting channel must not reuse the attached lane.",
+      });
+      expect(conflict.isError).toBe(true);
+      expect(JSON.parse((conflict.content as any)[0].text)).toMatchObject({
+        error: "scope_validation",
+        conflicts: ["channel_id"],
+      });
     } finally {
       await cleanupNs();
     }

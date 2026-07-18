@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any
@@ -10,6 +11,8 @@ from uuid import uuid4
 import pytest
 
 from openbrain_memory import (
+    CURRENT_CONTRACT_SCHEMA_HASH,
+    CURRENT_CONTRACT_SCHEMA_VERSION,
     CURRENT_CONTRACT_VERSION,
     OpenBrainClient,
     validate_required_memory_contract,
@@ -25,7 +28,7 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.fixture()
-def live_client() -> OpenBrainClient:
+def live_client() -> Iterator[OpenBrainClient]:
     base_url = os.environ["OPENBRAIN_BASE_URL"]
     token = os.environ["OPENBRAIN_TOKEN"]
     namespace = os.environ["OPENBRAIN_NAMESPACE"]
@@ -93,8 +96,8 @@ def test_live_contract_manifest_validates_required_memory_helpers(
 
     assert validation.ok, validation.reasons
     assert manifest["contract_version"] == CURRENT_CONTRACT_VERSION
-    assert isinstance(manifest.get("schema_hash"), str)
-    assert manifest["schema_hash"]
+    assert manifest["schema_version"] == CURRENT_CONTRACT_SCHEMA_VERSION
+    assert manifest["schema_hash"] == CURRENT_CONTRACT_SCHEMA_HASH
 
 
 def test_live_read_helpers_canary(live_client: OpenBrainClient):
@@ -130,7 +133,10 @@ def test_live_lane_session_append_read_and_wrap_helpers(
         )
     )
     assert isinstance(started, dict)
-    assert started.get("session_key") == session_key
+    started_lane = started.get("lane")
+    assert isinstance(started_lane, dict)
+    assert started_lane.get("session_key") == session_key
+    assert started.get("is_new") is True
 
     upserted = _tool_payload(
         live_client.lane_upsert(
@@ -156,7 +162,8 @@ def test_live_lane_session_append_read_and_wrap_helpers(
         )
     )
     assert isinstance(appended, dict)
-    assert appended.get("session_key") == session_key
+    assert isinstance(appended.get("event_id"), str)
+    assert appended.get("lane_id") == started_lane.get("id")
 
     context = _tool_payload(
         live_client.session_context(
@@ -184,14 +191,19 @@ def test_live_lane_session_append_read_and_wrap_helpers(
     wrapped = _tool_payload(
         live_client.session_wrap(
             session_key=session_key,
-            summary="openbrain-memory live canary verified helper readiness.",
+            summary=(
+                "openbrain-memory live canary verified helper readiness for "
+                f"{session_key}."
+            ),
             key_decisions=[],
             next_steps=[],
             project=project,
         )
     )
     assert isinstance(wrapped, dict)
-    assert wrapped.get("session_key") == session_key
+    assert isinstance(wrapped.get("session_id"), str)
+    assert wrapped.get("lane_status") == "active"
+    assert wrapped.get("event_count") == 1
 
 
 def test_live_optional_repo_fact_write_canary(live_client: OpenBrainClient):

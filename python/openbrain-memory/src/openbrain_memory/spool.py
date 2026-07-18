@@ -24,6 +24,9 @@ class SpoolRecord:
     operation: str
     payload: Mapping[str, Any]
     created_at: float
+    group_id: str | None = None
+    group_index: int | None = None
+    group_size: int | None = None
 
     def redacted_payload(self) -> Mapping[str, Any]:
         return cast(Mapping[str, Any], redact_value(dict(self.payload)))
@@ -34,6 +37,9 @@ class SpoolRecord:
             operation=self.operation,
             payload=self.redacted_payload(),
             created_at=self.created_at,
+            group_id=self.group_id,
+            group_index=self.group_index,
+            group_size=self.group_size,
         )
 
 
@@ -48,6 +54,21 @@ class SpoolStatus:
     newest_created_at: float | None
     operation_counts: Mapping[str, int]
     corrupted_line_count: int
+
+
+@dataclass(frozen=True)
+class _SpoolUnit:
+    lines: tuple[str, ...]
+    records: tuple[SpoolRecord, ...] | None
+    corrupted_line_count: int
+
+    def signature(self) -> tuple[str | None, tuple[str, ...]] | None:
+        if self.records is None:
+            return None
+        return (
+            self.records[0].group_id,
+            tuple(record.idempotency_key for record in self.records),
+        )
 
 
 class JsonlSpool:
@@ -74,79 +95,255 @@ class JsonlSpool:
         *,
         key: str | None = None,
     ) -> str:
+        """Append one replayable record."""
+        return self.append_batch([(operation, payload, key)])[0]
+
+    def append_batch(
+        self,
+        records: Iterable[tuple[str, Mapping[str, Any], str | None]],
+    ) -> list[str]:
+        """Append an ordered record group atomically or leave the spool unchanged."""
+        pending = list(records)
+        if not pending:
+            return []
+        created_at = time.time()
+        safe_keys = [record[2] or idempotency_key() for record in pending]
+        group_id = idempotency_key() if len(pending) > 1 else None
+        batch_lines = [
+            self._record_line(
+                operation,
+                payload,
+                key,
+                created_at,
+                group_id=group_id,
+                group_index=index if group_id is not None else None,
+                group_size=len(pending) if group_id is not None else None,
+            )
+            for index, ((operation, payload, _), key) in enumerate(
+                zip(pending, safe_keys, strict=True)
+            )
+        ]
+        batch_bytes = sum(len(line.encode("utf-8")) for line in batch_lines)
+        if len(batch_lines) > self.max_lines or batch_bytes > self.max_bytes:
+            raise ValueError(
+                "spool batch exceeds configured max_lines/max_bytes limits"
+            )
+
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._reject_symlink(self.path)
-        safe_key = key or idempotency_key()
-        record = {
-            "idempotency_key": safe_key,
-            "operation": operation,
-            "payload": dict(payload),
-            "created_at": time.time(),
-        }
-        line = json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n"
-        if len(line.encode("utf-8")) > self.max_bytes:
-            raise ValueError("spool record exceeds max_bytes")
         lock_fd = self._lock()
         try:
-            flags = os.O_CREAT | os.O_APPEND | os.O_WRONLY
-            if hasattr(os, "O_NOFOLLOW"):
-                flags |= os.O_NOFOLLOW
-            fd = os.open(self.path, flags, 0o600)
-            try:
-                self._validate_fd(fd, self.path)
-                os.fchmod(fd, 0o600)
-                os.write(fd, line.encode("utf-8"))
-            finally:
-                os.close(fd)
-            self._trim_locked()
+            existing = (
+                self.path.read_text(encoding="utf-8").splitlines(keepends=True)
+                if self.path.exists()
+                else []
+            )
+            existing_groups = self._line_groups(existing)
+            existing_line_count = sum(len(group) for group in existing_groups)
+            existing_bytes = sum(
+                len(line.encode("utf-8")) for group in existing_groups for line in group
+            )
+            while (
+                existing_line_count + len(batch_lines) > self.max_lines
+                or existing_bytes + batch_bytes > self.max_bytes
+            ):
+                if not existing_groups:
+                    raise ValueError(
+                        "spool batch exceeds configured max_lines/max_bytes limits"
+                    )
+                evicted = existing_groups.pop(0)
+                existing_line_count -= len(evicted)
+                existing_bytes -= sum(len(line.encode("utf-8")) for line in evicted)
+            retained = [line for group in existing_groups for line in group]
+            self._write_lines([*retained, *batch_lines])
         finally:
             self._unlock(lock_fd)
-        return safe_key
+        return safe_keys
+
+    @staticmethod
+    def _record_line(
+        operation: str,
+        payload: Mapping[str, Any],
+        key: str,
+        created_at: float,
+        *,
+        group_id: str | None = None,
+        group_index: int | None = None,
+        group_size: int | None = None,
+    ) -> str:
+        record = {
+            "idempotency_key": key,
+            "operation": operation,
+            "payload": dict(payload),
+            "created_at": created_at,
+        }
+        if group_id is not None:
+            record["group_id"] = group_id
+            record["group_index"] = group_index
+            record["group_size"] = group_size
+        return json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n"
+
+    @classmethod
+    def _line_groups(cls, lines: list[str]) -> list[list[str]]:
+        return [
+            [line for _, line in group] for group in cls._group_indexed_lines(lines)
+        ]
+
+    @classmethod
+    def _group_indexed_lines(cls, lines: list[str]) -> list[list[tuple[int, str]]]:
+        grouped: list[list[tuple[int, str]]] = []
+        active_group_id: str | None = None
+        for line_number, line in enumerate(lines, start=1):
+            group_id = cls._raw_group_id(line)
+            if group_id is not None and group_id == active_group_id:
+                grouped[-1].append((line_number, line))
+                continue
+            grouped.append([(line_number, line)])
+            active_group_id = group_id
+        return grouped
+
+    def _parse_units(self, lines: list[str], *, warn: bool) -> list[_SpoolUnit]:
+        units: list[_SpoolUnit] = []
+        grouped = self._group_indexed_lines(lines)
+        for group in grouped:
+            parsed: list[SpoolRecord] = []
+            corrupted = 0
+            for line_number, line in group:
+                if not line.strip():
+                    continue
+                record = self._parse_record(line, line_number, warn=warn)
+                if record is None:
+                    corrupted += 1
+                else:
+                    parsed.append(record)
+            if corrupted or not parsed:
+                units.append(
+                    _SpoolUnit(
+                        lines=tuple(line for _, line in group),
+                        records=None,
+                        corrupted_line_count=corrupted,
+                    )
+                )
+                continue
+            first = parsed[0]
+            valid_group = first.group_id is None or (
+                len(parsed) == first.group_size
+                and all(
+                    record.group_id == first.group_id
+                    and record.group_size == first.group_size
+                    for record in parsed
+                )
+                and [record.group_index for record in parsed]
+                == list(range(len(parsed)))
+            )
+            if not valid_group:
+                if warn:
+                    for line_number, _ in group:
+                        self._warn_corrupted_record(line_number)
+                units.append(
+                    _SpoolUnit(
+                        lines=tuple(line for _, line in group),
+                        records=None,
+                        corrupted_line_count=len(group),
+                    )
+                )
+                continue
+            units.append(
+                _SpoolUnit(
+                    lines=tuple(line for _, line in group),
+                    records=tuple(parsed),
+                    corrupted_line_count=0,
+                )
+            )
+        return units
+
+    @staticmethod
+    def _raw_group_id(line: str) -> str | None:
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            return None
+        candidate = payload.get("group_id") if isinstance(payload, dict) else None
+        return candidate if isinstance(candidate, str) and candidate else None
+
+    def _parse_record(
+        self,
+        line: str,
+        line_number: int,
+        *,
+        warn: bool,
+    ) -> SpoolRecord | None:
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            if warn:
+                self._warn_corrupted_record(line_number, exc_info=True)
+            return None
+        if not isinstance(payload, dict):
+            if warn:
+                self._warn_corrupted_record(line_number)
+            return None
+        try:
+            idempotency = payload["idempotency_key"]
+            operation = payload["operation"]
+            if not isinstance(idempotency, str) or not idempotency.strip():
+                raise ValueError("idempotency_key must be a non-empty string")
+            if not isinstance(operation, str) or not operation.strip():
+                raise ValueError("operation must be a non-empty string")
+            record_payload = payload.get("payload", {})
+            created_at = float(payload.get("created_at", 0))
+            group_id, group_index, group_size = self._group_metadata(payload)
+        except (KeyError, TypeError, ValueError):
+            if warn:
+                self._warn_corrupted_record(line_number, exc_info=True)
+            return None
+        if not isinstance(record_payload, dict):
+            if warn:
+                self._warn_corrupted_record(line_number)
+            return None
+        return SpoolRecord(
+            idempotency_key=idempotency,
+            operation=operation,
+            payload=record_payload,
+            created_at=created_at,
+            group_id=group_id,
+            group_index=group_index,
+            group_size=group_size,
+        )
 
     def records(self) -> list[SpoolRecord]:
         if not self.path.exists():
             return []
         self._reject_symlink(self.path)
-        records: list[SpoolRecord] = []
-        with self.path.open("r", encoding="utf-8") as handle:
-            for line_number, line in enumerate(handle, start=1):
-                if not line.strip():
-                    continue
-                try:
-                    payload = json.loads(line)
-                except json.JSONDecodeError:
-                    logger.warning(
-                        "Skipping corrupted spool record",
-                        extra={
-                            "spool_path": str(self.path),
-                            "spool_line": line_number,
-                        },
-                        exc_info=True,
-                    )
-                    continue
-                if not isinstance(payload, dict):
-                    self._warn_corrupted_record(line_number)
-                    continue
-                try:
-                    idempotency = str(payload["idempotency_key"])
-                    operation = str(payload["operation"])
-                    record_payload = payload.get("payload", {})
-                    created_at = float(payload.get("created_at", 0))
-                except (KeyError, TypeError, ValueError):
-                    self._warn_corrupted_record(line_number, exc_info=True)
-                    continue
-                if not isinstance(record_payload, dict):
-                    self._warn_corrupted_record(line_number)
-                    continue
-                records.append(
-                    SpoolRecord(
-                        idempotency_key=idempotency,
-                        operation=operation,
-                        payload=record_payload,
-                        created_at=created_at,
-                    )
-                )
-        return records
+        lines = self.path.read_text(encoding="utf-8").splitlines(keepends=True)
+        return [
+            record
+            for unit in self._parse_units(lines, warn=True)
+            if unit.records is not None
+            for record in unit.records
+        ]
+
+    @staticmethod
+    def _group_metadata(
+        payload: Mapping[str, Any],
+    ) -> tuple[str | None, int | None, int | None]:
+        values = (
+            payload.get("group_id"),
+            payload.get("group_index"),
+            payload.get("group_size"),
+        )
+        if values == (None, None, None):
+            return None, None, None
+        group_id, group_index, group_size = values
+        if not isinstance(group_id, str) or not group_id:
+            raise ValueError("group_id must be a non-empty string")
+        if isinstance(group_index, bool) or not isinstance(group_index, int):
+            raise ValueError("group_index must be an integer")
+        if isinstance(group_size, bool) or not isinstance(group_size, int):
+            raise ValueError("group_size must be an integer")
+        if group_size < 2 or group_index < 0 or group_index >= group_size:
+            raise ValueError("invalid spool group bounds")
+        return group_id, group_index, group_size
 
     def _warn_corrupted_record(
         self,
@@ -184,32 +381,21 @@ class JsonlSpool:
         oldest_created_at: float | None = None
         newest_created_at: float | None = None
         pending_count = 0
-        corrupted_line_count = 0
-        with self.path.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                if not line.strip():
-                    continue
-                try:
-                    payload = json.loads(line)
-                    if not isinstance(payload, dict):
-                        corrupted_line_count += 1
-                        continue
-                    operation = str(payload["operation"])
-                    record_payload = payload.get("payload", {})
-                    created_at = float(payload.get("created_at", 0))
-                    if not isinstance(record_payload, dict):
-                        corrupted_line_count += 1
-                        continue
-                except (KeyError, TypeError, ValueError, json.JSONDecodeError):
-                    corrupted_line_count += 1
-                    continue
-
+        lines = self.path.read_text(encoding="utf-8").splitlines(keepends=True)
+        units = self._parse_units(lines, warn=False)
+        corrupted_line_count = sum(unit.corrupted_line_count for unit in units)
+        for unit in units:
+            if unit.records is None:
+                continue
+            for record in unit.records:
                 pending_count += 1
-                operation_counts[operation] = operation_counts.get(operation, 0) + 1
-                if oldest_created_at is None or created_at < oldest_created_at:
-                    oldest_created_at = created_at
-                if newest_created_at is None or created_at > newest_created_at:
-                    newest_created_at = created_at
+                operation_counts[record.operation] = (
+                    operation_counts.get(record.operation, 0) + 1
+                )
+                if oldest_created_at is None or record.created_at < oldest_created_at:
+                    oldest_created_at = record.created_at
+                if newest_created_at is None or record.created_at > newest_created_at:
+                    newest_created_at = record.created_at
 
         return SpoolStatus(
             path=str(self.path),
@@ -224,76 +410,143 @@ class JsonlSpool:
         )
 
     def replay(self, dispatcher: Callable[[SpoolRecord], JSON]) -> list[JSON]:
-        results = []
+        results: list[JSON] = []
         lock_fd = self._lock()
         try:
-            snapshot = self.records()
+            lines = (
+                self.path.read_text(encoding="utf-8").splitlines(keepends=True)
+                if self.path.exists()
+                else []
+            )
+            snapshot = self._parse_units(lines, warn=True)
         finally:
             self._unlock(lock_fd)
 
-        replayed_keys = set()
-        for record in snapshot:
-            try:
-                results.append(dispatcher(record))
-                replayed_keys.add(record.idempotency_key)
-            except Exception:
-                pass
+        replayed_units: set[tuple[str | None, tuple[str, ...]]] = set()
+        for unit in snapshot:
+            if unit.records is None:
+                continue
+            unit_results: list[JSON] = []
+            for record in unit.records:
+                try:
+                    unit_results.append(dispatcher(record))
+                except Exception:
+                    logger.warning(
+                        "Spool replay failed",
+                        extra={
+                            "spool_path": str(self.path),
+                            "spool_operation": record.operation,
+                            "spool_key": record.idempotency_key,
+                        },
+                        exc_info=True,
+                    )
+                    break
+            else:
+                signature = unit.signature()
+                if signature is not None:
+                    replayed_units.add(signature)
+                    results.extend(unit_results)
 
+        if not replayed_units:
+            return results
         lock_fd = self._lock()
         try:
+            live_lines = (
+                self.path.read_text(encoding="utf-8").splitlines(keepends=True)
+                if self.path.exists()
+                else []
+            )
             remaining = [
-                record
-                for record in self.records()
-                if record.idempotency_key not in replayed_keys
+                line
+                for unit in self._parse_units(live_lines, warn=False)
+                if unit.signature() not in replayed_units
+                for line in unit.lines
             ]
-            self._rewrite_records(remaining)
+            self._write_lines(remaining)
         finally:
             self._unlock(lock_fd)
         return results
 
-    def _trim_locked(self) -> None:
-        if not self.path.exists():
-            return
-        lines = self.path.read_text(encoding="utf-8").splitlines(keepends=True)
-        sizes = [len(line.encode("utf-8")) for line in lines]
-        total = sum(sizes)
-        while len(lines) > self.max_lines or total > self.max_bytes:
-            lines.pop(0)
-            total -= sizes.pop(0)
-        self._write_lines(lines)
-
-    def _rewrite_records(self, records: list[SpoolRecord]) -> None:
-        lines = [
-            json.dumps(
-                {
-                    "idempotency_key": record.idempotency_key,
-                    "operation": record.operation,
-                    "payload": dict(record.payload),
-                    "created_at": record.created_at,
-                },
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-            + "\n"
-            for record in records
-        ]
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._reject_symlink(self.path)
-        self._write_lines(lines)
-
     def _write_lines(self, lines: list[str]) -> None:
-        fd, tmp_name = tempfile.mkstemp(
-            prefix=f".{self.path.name}.",
-            suffix=".tmp",
-            dir=self.path.parent,
-        )
+        payload = "".join(lines).encode("utf-8")
+        original = self.path.read_bytes() if self.path.exists() else None
+        directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        directory_fd = os.open(self.path.parent, directory_flags)
+        tmp_name: str | None = None
+        replaced = False
         try:
-            os.fchmod(fd, 0o600)
-            os.write(fd, "".join(lines).encode("utf-8"))
+            fd, tmp_name = tempfile.mkstemp(
+                prefix=f".{self.path.name}.",
+                suffix=".tmp",
+                dir=self.path.parent,
+            )
+            try:
+                os.fchmod(fd, 0o600)
+                self._write_all(fd, payload)
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            os.replace(tmp_name, self.path)
+            tmp_name = None
+            replaced = True
+            os.fsync(directory_fd)
+        except Exception:
+            if replaced:
+                self._restore_after_failed_replace(original, directory_fd)
+            raise
         finally:
-            os.close(fd)
-        os.replace(tmp_name, self.path)
-        os.chmod(self.path, 0o600)
+            if tmp_name is not None:
+                try:
+                    os.unlink(tmp_name)
+                except FileNotFoundError:
+                    pass
+            os.close(directory_fd)
+
+    @staticmethod
+    def _write_all(fd: int, payload: bytes) -> None:
+        remaining = memoryview(payload)
+        while remaining:
+            written = os.write(fd, remaining)
+            if written <= 0:
+                raise OSError("spool write made no forward progress")
+            remaining = remaining[written:]
+
+    def _restore_after_failed_replace(
+        self,
+        original: bytes | None,
+        directory_fd: int,
+    ) -> None:
+        tmp_name: str | None = None
+        try:
+            if original is None:
+                os.unlink(self.path)
+            else:
+                fd, tmp_name = tempfile.mkstemp(
+                    prefix=f".{self.path.name}.restore.",
+                    suffix=".tmp",
+                    dir=self.path.parent,
+                )
+                try:
+                    os.fchmod(fd, 0o600)
+                    self._write_all(fd, original)
+                    os.fsync(fd)
+                finally:
+                    os.close(fd)
+                os.replace(tmp_name, self.path)
+                tmp_name = None
+            os.fsync(directory_fd)
+        except Exception:
+            logger.error(
+                "Failed to restore spool after directory synchronization error",
+                extra={"spool_path": str(self.path)},
+                exc_info=True,
+            )
+        finally:
+            if tmp_name is not None:
+                try:
+                    os.unlink(tmp_name)
+                except FileNotFoundError:
+                    pass
 
     def _reject_symlink(self, path: Path) -> None:
         try:

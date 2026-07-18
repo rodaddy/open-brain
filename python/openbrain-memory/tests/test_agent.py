@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -22,7 +24,7 @@ from openbrain_memory.agent import _reject_secret_payload
 class FakeClient:
     def __init__(self) -> None:
         self.calls = []
-        self.search_payload = {
+        self.search_payload: dict[str, Any] | None = {
             "results": [
                 {
                     "text": "First useful fact about the project.",
@@ -53,9 +55,9 @@ class FakeClient:
     def append_session_event(self, **arguments):
         return self._record("append_session_event", arguments)
 
-    def search_all(self, **arguments):
+    def search_all(self, **arguments) -> dict[str, Any]:
         self.calls.append(("search_all", arguments))
-        return self.search_payload
+        return cast(dict[str, Any], self.search_payload)
 
     def brain_answer(self, **arguments):
         return self._record("brain_answer", arguments)
@@ -568,7 +570,7 @@ def test_record_receipt_validates_shape_and_reserved_metadata():
     with pytest.raises(ValueError, match="sources"):
         memory.record_receipt(
             "bad",
-            sources=["not a mapping"],
+            sources=cast(list[Mapping[str, Any]], ["not a mapping"]),
             outputs=[],
             validations=[],
         )
@@ -801,6 +803,7 @@ def test_checkpoint_and_wrap_use_session_tools():
                 "summary": "Mid-run checkpoint.",
                 "key_decisions": ["Use wrapper facade"],
                 "session_key": "conversation",
+                "agent": "bilby",
             },
         ),
         (
@@ -809,6 +812,7 @@ def test_checkpoint_and_wrap_use_session_tools():
                 "next_steps": ["Open PR"],
                 "summary": "Done.",
                 "session_key": "conversation",
+                "agent": "bilby",
             },
         ),
     ]
@@ -849,6 +853,7 @@ def test_compact_reads_context_and_wraps_distilled_summary():
                 "summary": "distilled session_context",
                 "project": "open-brain",
                 "session_key": "conversation",
+                "agent": "bilby",
             },
         ),
     ]
@@ -875,6 +880,7 @@ def test_wrap_receipt_refs_are_encoded_as_server_supported_next_steps():
             ],
             "summary": "Done.",
             "session_key": "conversation",
+            "agent": "bilby",
         },
     )
 
@@ -909,6 +915,7 @@ def test_checkpoint_receipt_refs_share_wrap_schema_normalization():
             "next_steps": ["Receipt ref: receipt-1"],
             "summary": "Checkpoint.",
             "session_key": "conversation",
+            "agent": "bilby",
         },
     )
     assert "receipt_refs" not in client.calls[-1][1]
@@ -979,10 +986,10 @@ def test_export_disclosure_bundle_matches_ts_feature_shape():
         "citations.md",
         "receipts.md",
     ]
-    assert "session_key: \"conversation\"" in files["index.md"]
-    assert "agent: \"bilby\"" in files["index.md"]
-    assert "project: \"open-brain\"" in files["index.md"]
-    assert "okf: {\"mode\":\"edge\"}" in files["index.md"]
+    assert 'session_key: "conversation"' in files["index.md"]
+    assert 'agent: "bilby"' in files["index.md"]
+    assert 'project: "open-brain"' in files["index.md"]
+    assert 'okf: {"mode":"edge"}' in files["index.md"]
     assert files["log.md"].find("Hermes uses Python.") < files["log.md"].find(
         "Use Open Brain memory."
     )

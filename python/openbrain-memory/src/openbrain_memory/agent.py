@@ -75,8 +75,16 @@ _MAX_METADATA_KEYS = 50
 _MAX_METADATA_KEY_LENGTH = 100
 _MAX_METADATA_JSON_BYTES = 100_000
 _MAX_METADATA_DEPTH = 16
-SESSION_START_KEYS = {"channel_id", "thread_id", "topic"}
-SESSION_WRAP_KEYS = {"key_decisions", "next_steps", "receipt_refs"}
+SESSION_START_KEYS = {"platform", "server_id", "channel_id", "thread_id", "topic"}
+SESSION_WRAP_KEYS = {
+    "platform",
+    "server_id",
+    "channel_id",
+    "thread_id",
+    "key_decisions",
+    "next_steps",
+    "receipt_refs",
+}
 DECISION_KEYS = {"alternatives", "tags", "context"}
 THOUGHT_KEYS = {"tags"}
 LANE_STATUSES = {"active", "wrapped", "archived"}
@@ -503,6 +511,44 @@ class AgentMemory:
             key=key,
         )
 
+    def append_scoped_event(
+        self,
+        role: str,
+        content: str,
+        *,
+        platform: str,
+        server_id: str,
+        channel_id: str,
+        thread_id: str | None = None,
+        event_type: str = "fact",
+    ) -> JSON:
+        """Append an event with server-validated exact-scope coordinates."""
+        self._require_session("append_scoped_event")
+        if event_type not in EVENT_TYPES:
+            raise ValueError(f"Unsupported event_type: {event_type}")
+        key = idempotency_key()
+        payload: dict[str, Any] = {
+            "session_key": self.conversation_key,
+            "agent": self.agent,
+            "platform": _required_str(platform, "platform"),
+            "server_id": _required_str(server_id, "server_id"),
+            "channel_id": _required_str(channel_id, "channel_id"),
+            "event_type": event_type,
+            "content": content,
+            "source": role,
+            "metadata": {"idempotency_key": key},
+        }
+        if thread_id is not None:
+            payload["thread_id"] = _required_str(thread_id, "thread_id")
+        if self.project is not None:
+            payload["project"] = self.project
+        return self._call_write(
+            "append_session_event",
+            payload,
+            self.client.append_session_event,
+            key=key,
+        )
+
     def candidate_memory(
         self,
         role: str,
@@ -837,6 +883,7 @@ class AgentMemory:
 
     def _session_payload(self, metadata: Mapping[str, Any]) -> dict[str, Any]:
         payload = dict(metadata)
+        payload["agent"] = self.agent
         if self.project is not None:
             payload["project"] = self.project
         if self.conversation_key is not None:
@@ -851,9 +898,7 @@ class AgentMemory:
         if len(metadata) > _MAX_METADATA_KEYS:
             raise ValueError(f"metadata must have at most {_MAX_METADATA_KEYS} keys")
         long_keys = [
-            str(key)
-            for key in metadata
-            if len(str(key)) > _MAX_METADATA_KEY_LENGTH
+            str(key) for key in metadata if len(str(key)) > _MAX_METADATA_KEY_LENGTH
         ]
         if long_keys:
             names = ", ".join(sorted(long_keys))

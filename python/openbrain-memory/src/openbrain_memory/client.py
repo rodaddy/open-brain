@@ -52,8 +52,23 @@ def _resolve_package_version(pyproject: Path | None = None) -> str:
 
 
 PACKAGE_VERSION = _resolve_package_version()
-CURRENT_CONTRACT_VERSION = "2026-07-13.memory-tools.v21"
+CURRENT_CONTRACT_VERSION = "2026-07-17.memory-tools.v22"
+CURRENT_CONTRACT_SCHEMA_VERSION = 1
+CURRENT_CONTRACT_SCHEMA_HASH = (
+    "51bd6bd9901b88d1f7ae71b95c34a374cbfa4488f706134334aa839bb7cb7c66"
+)
 COMPATIBLE_CONTRACT_VERSIONS = (CURRENT_CONTRACT_VERSION,)
+FIRST_CLASS_RUNTIME_TOOL_VERSIONS: Mapping[str, int] = {
+    "session_start": 2,
+    "session_wrap": 2,
+    "agent_context_pack": 2,
+    "append_session_event": 8,
+}
+FIRST_CLASS_RUNTIME_TOOLS = tuple(FIRST_CLASS_RUNTIME_TOOL_VERSIONS)
+REQUIRED_CONTRACT_TOOL_VERSIONS: Mapping[str, int] = {
+    "agent_context_pack": FIRST_CLASS_RUNTIME_TOOL_VERSIONS["agent_context_pack"],
+    "append_session_event": FIRST_CLASS_RUNTIME_TOOL_VERSIONS["append_session_event"],
+}
 REQUIRED_CONTRACT_TOOLS = (
     "append_session_event",
     "agent_context_pack",
@@ -77,13 +92,16 @@ REQUIRED_CONTRACT_TOOLS = (
     "citation_recall",
 )
 CURRENT_TOOL_HELP: Mapping[str, str] = {
-    "append_session_event": "Append a durable event to a session lane journal.",
+    "append_session_event": (
+        "Append a durable event, creating a lane or atomically attaching "
+        "previously unasserted exact scope when requested."
+    ),
     "citation_recall": (
         "Return stored transcript citation evidence for a session event."
     ),
     "agent_context_pack": (
-        "Build a scoped context pack with working context and explicit "
-        "quarantined recovery."
+        "Build an exact-scope context pack with working context, explicit "
+        "quarantined recovery, and opt-in bounded durable lane context."
     ),
     "brain_answer": "Return cited answer bullets from readable Open Brain evidence.",
     "decompose_entry": (
@@ -404,9 +422,7 @@ class NatsTransport:
             normalized_availability = RealtimeTransportAvailability(availability)
         except ValueError as exc:
             raise ValueError("NatsTransport is not runtime available yet") from exc
-        if (
-            normalized_availability is RealtimeTransportAvailability.AVAILABLE
-        ):
+        if normalized_availability is RealtimeTransportAvailability.AVAILABLE:
             raise ValueError("NatsTransport availability is derived from get_contract")
         if not identity:
             raise ValueError("NatsTransport identity must be non-empty")
