@@ -494,6 +494,15 @@ Every lifecycle writer must establish the complete exact-scope coordinate set be
 
 Required-tool presence is insufficient when the tool contract itself evolves. Compatibility must parse and compare each required tool's semantic version against the supported range, fail closed on malformed or incompatible versions, and test older, newer, malformed, and missing version declarations.
 
+## [2026-07-18] Exact-scope upgrades need real-Postgres conflict and history tests
+
+**Severity:** HIGH
+**Source:** Issues #295/#297, Claude first-class memory rollout
+**Scope:** `src/db/migrations/025_normalize_legacy_development_lanes.sql` and its live-Postgres test
+**Status:** active
+
+Legacy lane upgrades are data migrations, not ordinary tool behavior. Mock pools cannot prove PostgreSQL JSONB handling, case normalization, conflict predicates, idempotence, or preservation of existing lane IDs and events. Every changed upgrade predicate needs an env-gated real-pool test covering recognized and partially canonical shapes, repeated application, JSON null, unknown agent/source, server/channel/thread/project conflicts, multiple namespaces, and event-history continuity.
+
 ## [2026-07-17] First-class lifecycle runtimes must gate on the live manifest
 
 **Severity:** HIGH
