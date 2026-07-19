@@ -21,10 +21,10 @@ env:
 jobs:
   check:
     runs-on: [self-hosted, Linux, rodaddy]
-    # Self-hosted runner: never execute untrusted fork code. Run on all pushes
-    # and on same-repo PRs only; fork PRs skip (a maintainer re-pushes the
-    # branch to this repo to test).
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    # Self-hosted runner: never execute untrusted fork code. Run on pushes,
+    # trusted workflow dispatches, and same-repo PRs only; fork PRs skip (a
+    # maintainer re-pushes the branch to this repo to test).
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
     env:
       DB_HOST: 127.0.0.1
       DB_PORT: 5432
@@ -90,10 +90,10 @@ jobs:
   db-integration:
     runs-on: [self-hosted, Linux, rodaddy]
     # Docker-capable self-hosted runner: never execute untrusted fork code.
-    # Run on all pushes and on same-repo PRs only; fork PRs skip (a maintainer
-    # re-pushes the branch to this repo to test). `push` keeps this job alive
-    # on main so `deploy` (which needs it) still runs.
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    # Run on pushes, trusted workflow dispatches, and same-repo PRs only; fork
+    # PRs skip (a maintainer re-pushes the branch to this repo to test). Pushes
+    # and dispatches keep this job available to the deploy dependency chain.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
     env:
       # 127.0.0.1 (not localhost): the ephemeral Postgres listens on the IPv4
       # loopback only; `localhost` can resolve to ::1.
@@ -197,7 +197,7 @@ jobs:
   python-package:
     runs-on: [self-hosted, Linux, rodaddy]
     # Self-hosted runner: same trusted-source gate as `check`/`db-integration`.
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
     env:
       PYTHON_VERSION: "3.13"
     defaults:
