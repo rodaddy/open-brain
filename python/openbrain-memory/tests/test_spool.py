@@ -344,7 +344,11 @@ def test_spool_rejects_append_when_line_limit_is_full(tmp_path):
     ]
 
 
-def test_spool_rejects_append_when_byte_limit_is_full(tmp_path):
+def test_spool_rejects_append_when_byte_limit_is_full(tmp_path, monkeypatch):
+    # Freeze the persisted created_at timestamp: the JSON float's digit count
+    # otherwise varies between records, making the second line's byte length
+    # nondeterministic relative to the first.
+    monkeypatch.setattr("openbrain_memory.spool.time.time", lambda: 1_000_000.0)
     spool = JsonlSpool(tmp_path / "spool.jsonl")
     spool.append("one", {"content": "1"}, key="one")
     original = spool.path.read_bytes()
