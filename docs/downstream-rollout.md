@@ -40,7 +40,7 @@ If none of those apply, say so explicitly in the PR and release notes.
    - The script refuses unsupported refs, requires a manual-dispatch checkout to
      equal the current `origin/main` tip, stages the runtime, installs locked
      dependencies, bootstraps qmd when its script is present, runs migrations,
-     swaps the runtime, restarts `system/com.rico.open-brain`, and checks
+     swaps the runtime, restarts the `gui/<uid>/com.rico.open-brain` LaunchAgent (and, warn-only, `com.rico.open-brain-nats-worker`), and checks
      `http://127.0.0.1:3100/health`. After health passes it runs the Bun
      `search-all` test file. That test is regression coverage, not a live
      changed-tool smoke. On failed health the script restores the previous

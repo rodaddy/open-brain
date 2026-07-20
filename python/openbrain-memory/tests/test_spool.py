@@ -19,6 +19,7 @@ from openbrain_memory import (
     SpoolRecord,
     replay_records,
 )
+from openbrain_memory.spool import SpoolFullError
 
 
 def token_sample(*parts: str) -> str:
@@ -266,9 +267,11 @@ def test_failed_write_spools_replayable_payload_with_redacted_diagnostic_view(tm
         retry_policy=RetryPolicy(attempts=2, backoff_seconds=0),
     )
 
+    secret = token_sample("super", "secret")
+
     with pytest.raises(ConnectionError):
         memory.remember_fact(
-            "token=" + token_sample("super", "secret"),
+            "token=" + secret,
             tags=["incident", "memory"],
         )
 
@@ -285,23 +288,32 @@ def test_failed_write_spools_replayable_payload_with_redacted_diagnostic_view(tm
     assert lock_mode == 0o600
     assert len(records) == 1
     assert records[0].operation == "log_thought"
-    assert records[0].payload == client.calls[0][1]
     assert records[0].payload["tags"] == [
         "fact",
         "incident",
         "memory",
         f"idempotency:{records[0].idempotency_key}",
     ]
-    assert token_sample("super", "secret") in str(records[0].payload)
-    assert token_sample("super", "secret") not in str(records[0].redacted_payload())
-    assert token_sample("super", "secret") not in str(
-        spool.redacted_records()[0].payload
-    )
+    assert secret not in spool.path.read_text(encoding="utf-8")
+    assert secret not in str(records[0].payload)
+    assert records[0].redacted_payload() == records[0].payload
+    assert spool.redacted_records()[0].payload == records[0].payload
     assert records[0].idempotency_key
     assert spool.replay(dispatch) == [{"ok": True}]
     assert replayed[0].operation == records[0].operation
     assert replayed[0].idempotency_key == records[0].idempotency_key
     assert replayed[0].payload == records[0].payload
+    assert secret not in str(replayed[0].payload)
+
+
+def test_spool_never_persists_secret_material_to_disk(tmp_path):
+    spool = JsonlSpool(tmp_path / "spool.jsonl")
+    secret = token_sample("hunt", "er2")
+
+    spool.append("log_thought", {"content": "password: " + secret}, key="one")
+
+    assert secret not in spool.path.read_text(encoding="utf-8")
+    assert secret not in str(spool.records()[0].payload)
 
 
 def test_live_write_payload_preserves_original_content():
@@ -314,14 +326,42 @@ def test_live_write_payload_preserves_original_content():
     assert "[REDACTED]" not in client.calls[0][1]["content"]
 
 
-def test_spool_trims_old_records_by_line_count(tmp_path):
+def test_spool_rejects_append_when_line_limit_is_full(tmp_path):
     spool = JsonlSpool(tmp_path / "spool.jsonl", max_lines=2)
 
     spool.append("one", {"content": "1"}, key="one")
     spool.append("two", {"content": "2"}, key="two")
-    spool.append("three", {"content": "3"}, key="three")
+    original = spool.path.read_bytes()
 
-    assert [record.operation for record in spool.records()] == ["two", "three"]
+    with pytest.raises(SpoolFullError, match="spool is full"):
+        spool.append("three", {"content": "3"}, key="three")
+
+    assert spool.path.read_bytes() == original
+    assert [record.operation for record in spool.records()] == ["one", "two"]
+    assert spool.replay(lambda record: {"operation": record.operation}) == [
+        {"operation": "one"},
+        {"operation": "two"},
+    ]
+
+
+def test_spool_rejects_append_when_byte_limit_is_full(tmp_path, monkeypatch):
+    # Freeze the persisted created_at timestamp: the JSON float's digit count
+    # otherwise varies between records, making the second line's byte length
+    # nondeterministic relative to the first.
+    monkeypatch.setattr("openbrain_memory.spool.time.time", lambda: 1_000_000.0)
+    spool = JsonlSpool(tmp_path / "spool.jsonl")
+    spool.append("one", {"content": "1"}, key="one")
+    original = spool.path.read_bytes()
+    spool.max_bytes = len(original) * 2 - 1
+
+    with pytest.raises(SpoolFullError, match="spool is full"):
+        spool.append("two", {"content": "2"}, key="two")
+
+    assert spool.path.read_bytes() == original
+    assert [record.operation for record in spool.records()] == ["one"]
+    assert spool.replay(lambda record: {"operation": record.operation}) == [
+        {"operation": "one"}
+    ]
 
 
 def test_spool_replay_removes_successes_and_keeps_failures(tmp_path):
@@ -427,7 +467,7 @@ def test_spool_durability_failure_preserves_valid_file(tmp_path, failed_fsync):
     assert [record.idempotency_key for record in spool.records()] == ["existing-key"]
 
 
-def test_spool_later_append_evicts_whole_existing_batch(tmp_path):
+def test_spool_acknowledged_group_survives_saturation_attempt(tmp_path):
     spool = JsonlSpool(tmp_path / "spool.jsonl", max_lines=2)
     spool.append_batch(
         [
@@ -435,13 +475,26 @@ def test_spool_later_append_evicts_whole_existing_batch(tmp_path):
             ("session_wrap", {"session_key": "lane"}, "write-key"),
         ]
     )
+    original = spool.path.read_bytes()
+    returned = False
 
-    spool.append("new", {"content": "safe"}, key="new-key")
+    with pytest.raises(SpoolFullError, match="spool is full"):
+        spool.append("new", {"content": "safe"}, key="new-key")
+        returned = True
 
-    assert [record.idempotency_key for record in spool.records()] == ["new-key"]
+    assert returned is False
+    assert spool.path.read_bytes() == original
+    assert [record.idempotency_key for record in spool.records()] == [
+        "start-key",
+        "write-key",
+    ]
+    assert spool.replay(lambda record: {"key": record.idempotency_key}) == [
+        {"key": "start-key"},
+        {"key": "write-key"},
+    ]
 
 
-def test_spool_replay_preserves_batch_for_later_group_eviction(tmp_path):
+def test_spool_replay_preserves_batch_when_later_append_saturates(tmp_path):
     spool = JsonlSpool(tmp_path / "spool.jsonl", max_lines=3)
     spool.append("old", {"content": "safe"}, key="old-key")
     spool.append_batch(
@@ -472,11 +525,16 @@ def test_spool_replay_preserves_batch_for_later_group_eviction(tmp_path):
     ]
 
     spool.append("new-one", {"content": "1"}, key="new-one-key")
-    spool.append("new-two", {"content": "2"}, key="new-two-key")
+    original = spool.path.read_bytes()
 
+    with pytest.raises(SpoolFullError, match="spool is full"):
+        spool.append("new-two", {"content": "2"}, key="new-two-key")
+
+    assert spool.path.read_bytes() == original
     assert [record.idempotency_key for record in spool.records()] == [
+        "start-key",
+        "write-key",
         "new-one-key",
-        "new-two-key",
     ]
 
 
@@ -688,7 +746,7 @@ def test_spooled_operation_can_replay_through_real_client_method(tmp_path):
         (
             "log_thought",
             {
-                "content": secret,
+                "content": "[REDACTED]",
                 "tags": [
                     "fact",
                     "replay",
@@ -697,6 +755,7 @@ def test_spooled_operation_can_replay_through_real_client_method(tmp_path):
             },
         )
     ]
+    assert secret not in str(replay_client.calls)
 
 
 def test_replay_records_passes_full_record():

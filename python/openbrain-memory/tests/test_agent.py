@@ -977,6 +977,11 @@ def test_export_disclosure_bundle_matches_ts_feature_shape():
     )
 
     assert bundle["profile"] == "okf-like"
+    assert bundle["isolation"] == {
+        "session_key": "conversation",
+        "agent": "bilby",
+        "project": "open-brain",
+    }
     files = {file["path"]: file["content"] for file in bundle["files"]}
     assert list(files) == [
         "index.md",
@@ -989,6 +994,10 @@ def test_export_disclosure_bundle_matches_ts_feature_shape():
     assert 'session_key: "conversation"' in files["index.md"]
     assert 'agent: "bilby"' in files["index.md"]
     assert 'project: "open-brain"' in files["index.md"]
+    assert (
+        'isolation: {"agent":"bilby","project":"open-brain",'
+        '"session_key":"conversation"}' in files["index.md"]
+    )
     assert 'okf: {"mode":"edge"}' in files["index.md"]
     assert files["log.md"].find("Hermes uses Python.") < files["log.md"].find(
         "Use Open Brain memory."
@@ -997,6 +1006,40 @@ def test_export_disclosure_bundle_matches_ts_feature_shape():
     assert "fact:fact-a:path" in files["citations.md"]
     assert "receipt:receipt-1" in files["citations.md"]
     assert '"status":"passed"' in files["receipts.md"]
+
+
+def test_export_disclosure_bundle_rejects_cross_scope_items():
+    client = FakeClient()
+    memory = AgentMemory(client, agent="bilby", project="open-brain")
+    memory.start_session("conversation")
+
+    for arguments in (
+        {
+            "events": [
+                {
+                    "id": "event-1",
+                    "type": "fact",
+                    "content": "Cross-scope event.",
+                    "timestamp": "2026-06-26T12:00:00Z",
+                    "session_key": "another-session",
+                }
+            ]
+        },
+        {"repo_facts": [{"agent": "another-agent"}]},
+        {"receipts": [{"project": "another-project"}]},
+        {"repo_facts": [{"namespace": "unverified-namespace"}]},
+    ):
+        with pytest.raises(ValueError, match="cross-scope disclosure"):
+            memory.export_disclosure_bundle(**arguments)
+
+
+def test_export_disclosure_bundle_rejects_conflicting_lane_identity():
+    client = FakeClient()
+    memory = AgentMemory(client, agent="bilby", project="open-brain")
+    memory.start_session("conversation")
+
+    with pytest.raises(ValueError, match="lane sessionKey conflicts"):
+        memory.export_disclosure_bundle(lane={"sessionKey": "another-session"})
 
 
 def test_export_disclosure_bundle_matches_shared_golden_fixture():
@@ -1017,7 +1060,22 @@ def test_export_disclosure_bundle_matches_shared_golden_fixture():
 
     fixture_input = dict(fixture["input"])
     fixture_input["repo_facts"] = fixture_input.pop("repoFacts")
-    assert memory.export_disclosure_bundle(**fixture_input) == fixture["expected"]
+    expected = dict(fixture["expected"])
+    expected["isolation"] = {
+        "session_key": fixture["adapter"]["sessionKey"],
+        "agent": fixture["adapter"]["agent"],
+        "project": fixture["adapter"]["project"],
+    }
+    expected_files = [dict(file) for file in fixture["expected"]["files"]]
+    index = next(file for file in expected_files if file["path"] == "index.md")
+    index["content"] = index["content"].replace(
+        'project: "open-brain"\nokf:',
+        'project: "open-brain"\nisolation: '
+        '{"agent":"bilby","project":"open-brain","session_key":"fixture-session"}'
+        "\nokf:",
+    )
+    expected["files"] = expected_files
+    assert memory.export_disclosure_bundle(**fixture_input) == expected
 
 
 def test_public_facade_exports_quickstart_types():

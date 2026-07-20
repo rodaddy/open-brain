@@ -866,11 +866,17 @@ class AgentMemory:
         lane: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         self._require_session("export_disclosure_bundle")
+        session_key = cast(str, self.conversation_key)
         lane_payload: dict[str, Any] = dict(lane or {})
-        lane_payload["sessionKey"] = self.conversation_key
+        _validate_disclosure_lane_identity(
+            lane_payload,
+            session_key=session_key,
+            agent=self.agent,
+            project=self.project,
+        )
+        lane_payload["sessionKey"] = session_key
         lane_payload["agent"] = self.agent
-        if self.project is not None:
-            lane_payload["project"] = self.project
+        lane_payload["project"] = self.project
         event_payloads = [dict(item) for item in events or []]
         fact_payloads = [dict(item) for item in repo_facts or []]
         receipt_payloads = [dict(item) for item in receipts or []]
@@ -1273,6 +1279,9 @@ def _export_disclosure_bundle(
     repo_facts: list[dict[str, Any]],
     receipts: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    _validate_disclosure_scope(lane, events, "event")
+    _validate_disclosure_scope(lane, repo_facts, "repo fact")
+    _validate_disclosure_scope(lane, receipts, "receipt")
     sorted_events = sorted(events, key=lambda item: (item["timestamp"], item["id"]))
     sorted_facts = sorted(repo_facts, key=lambda item: item["id"])
     sorted_receipts = sorted(
@@ -1285,6 +1294,11 @@ def _export_disclosure_bundle(
         sorted_receipts,
     )
     fact_paths = _concept_paths(sorted_facts)
+    isolation = {
+        "session_key": lane["sessionKey"],
+        "agent": lane.get("agent"),
+        "project": lane.get("project"),
+    }
     files = [
         {
             "path": "index.md",
@@ -1295,6 +1309,7 @@ def _export_disclosure_bundle(
                 sorted_receipts,
                 citations,
                 fact_paths,
+                isolation,
             ),
         },
         {"path": "log.md", "content": _render_disclosure_log(sorted_events)},
@@ -1318,7 +1333,7 @@ def _export_disclosure_bundle(
             },
         ]
     )
-    return {"profile": "okf-like", "files": files}
+    return {"profile": "okf-like", "isolation": isolation, "files": files}
 
 
 def _render_disclosure_index(
@@ -1328,6 +1343,7 @@ def _render_disclosure_index(
     receipts: list[dict[str, Any]],
     citations: list[dict[str, Any]],
     fact_paths: list[str],
+    isolation: Mapping[str, Any],
 ) -> str:
     title = lane.get("topic") or lane["sessionKey"]
     lines = [
@@ -1338,6 +1354,7 @@ def _render_disclosure_index(
                 "session_key": lane["sessionKey"],
                 "agent": lane.get("agent"),
                 "project": lane.get("project"),
+                "isolation": isolation,
                 "okf": _okf_metadata(lane.get("metadata")),
             }
         ),
@@ -1369,6 +1386,46 @@ def _render_disclosure_index(
     )
     lines.append("")
     return "\n".join(lines)
+
+
+def _validate_disclosure_lane_identity(
+    lane: Mapping[str, Any],
+    *,
+    session_key: str,
+    agent: str,
+    project: str | None,
+) -> None:
+    expected = {"sessionKey": session_key, "agent": agent, "project": project}
+    for identity_field, value in expected.items():
+        if identity_field in lane and lane[identity_field] != value:
+            raise ValueError(
+                f"disclosure bundle lane {identity_field} conflicts with active session"
+            )
+
+
+def _validate_disclosure_scope(
+    lane: Mapping[str, Any],
+    items: list[dict[str, Any]],
+    item_type: str,
+) -> None:
+    expected = {
+        "sessionKey": lane["sessionKey"],
+        "session_key": lane["sessionKey"],
+        "agent": lane.get("agent"),
+        "project": lane.get("project"),
+    }
+    for item in items:
+        if "namespace" in item:
+            raise ValueError(
+                f"cross-scope disclosure {item_type}: "
+                "namespace cannot be verified by the export lane"
+            )
+        for identity_field, value in expected.items():
+            if identity_field in item and item[identity_field] != value:
+                raise ValueError(
+                    f"cross-scope disclosure {item_type}: "
+                    f"{identity_field} does not match export lane"
+                )
 
 
 def _render_disclosure_log(events: list[dict[str, Any]]) -> str:
