@@ -615,6 +615,11 @@ describe("AgentMemory TypeScript wrapper", () => {
     });
 
     expect(bundle.profile).toBe("okf-like");
+    expect(bundle.isolation).toEqual({
+      sessionKey: "session-disclosure",
+      agent: "codex",
+      project: undefined,
+    });
     expect(bundle.files.map((file) => file.path)).toEqual([
       "index.md",
       "log.md",
@@ -623,6 +628,9 @@ describe("AgentMemory TypeScript wrapper", () => {
       "receipts.md",
     ]);
     expect(bundle.files[0]!.content).toContain('"x_unknown_okf_key":"preserved"');
+    expect(bundle.files[0]!.content).toContain(
+      'isolation: {"agent":"codex","sessionKey":"session-disclosure"}',
+    );
     expect(bundle.files[1]!.content.indexOf("OKF is an edge")).toBeLessThan(
       bundle.files[1]!.content.indexOf("Generated report artifact"),
     );
@@ -645,9 +653,28 @@ describe("AgentMemory TypeScript wrapper", () => {
     });
     await memory.start({ sessionKey: disclosureGolden.adapter.sessionKey });
 
-    expect(memory.exportDisclosureBundle(disclosureGolden.input)).toEqual(
-      disclosureGolden.expected,
-    );
+    const expected = {
+      ...disclosureGolden.expected,
+      isolation: {
+        sessionKey: disclosureGolden.adapter.sessionKey,
+        agent: disclosureGolden.adapter.agent,
+        project: disclosureGolden.adapter.project,
+      },
+      files: disclosureGolden.expected.files.map((file) =>
+        file.path === "index.md"
+          ? {
+              ...file,
+              content: file.content.replace(
+                'project: "open-brain"\nokf:',
+                'project: "open-brain"\nisolation: '
+                  + '{"agent":"bilby","project":"open-brain","sessionKey":"fixture-session"}'
+                  + "\nokf:",
+              ),
+            }
+          : file,
+      ),
+    };
+    expect(memory.exportDisclosureBundle(disclosureGolden.input)).toEqual(expected);
   });
 
   it("makes disclosure concept paths stable and collision-resistant", async () => {
@@ -782,28 +809,93 @@ describe("AgentMemory TypeScript wrapper", () => {
     ).toHaveLength(0);
   });
 
-  it("keeps disclosure bundle identity bound to the active lane", async () => {
+  it("rejects conflicting disclosure bundle lane identity", async () => {
     const memory = new AgentMemory(new FakeTransport(), {
       agent: "codex",
       project: "open-brain",
     });
     await memory.start({ sessionKey: "real-session" });
 
-    const bundle = memory.exportDisclosureBundle({
-      lane: {
-        sessionKey: "spoofed-session",
-        agent: "spoofed-agent",
-        project: "spoofed-project",
-        topic: "Caller label is allowed",
+    expect(() =>
+      memory.exportDisclosureBundle({
+        lane: {
+          sessionKey: "spoofed-session",
+          agent: "spoofed-agent",
+          project: "spoofed-project",
+          topic: "Caller label is allowed",
+        },
+      }),
+    ).toThrow("disclosure bundle lane sessionKey conflicts with active session");
+  });
+
+  it("rejects cross-scope disclosure items and stamps untagged items from the active session", async () => {
+    const memory = new AgentMemory(new FakeTransport(), {
+      agent: "codex",
+      project: "open-brain",
+    });
+    await memory.start({ sessionKey: "real-session" });
+
+    for (const input of [
+      {
+        events: [
+          {
+            id: "event-1",
+            type: "fact",
+            content: "Cross-scope event.",
+            timestamp: "2026-06-26T12:00:00.000Z",
+            session_key: "spoofed-session",
+          },
+        ],
       },
+      { repoFacts: [{ id: "fact-1", subject: "Fact", fact: "Cross-scope.", agent: "spoofed" }] },
+      {
+        receipts: [
+          {
+            id: "receipt-1",
+            action: "validate",
+            timestamp: "2026-06-26T12:00:00.000Z",
+            project: "spoofed-project",
+          },
+        ],
+      },
+      {
+        repoFacts: [
+          { id: "fact-2", subject: "Fact", fact: "Unverified namespace.", namespace: "x" },
+        ],
+      },
+    ]) {
+      expect(() => memory.exportDisclosureBundle(input)).toThrow("cross-scope disclosure");
+    }
+
+    const bundle = memory.exportDisclosureBundle({
+      events: [
+        {
+          id: "event-1",
+          type: "fact",
+          content: "Untagged event.",
+          timestamp: "2026-06-26T12:00:00.000Z",
+        },
+      ],
+      repoFacts: [{ id: "fact-1", subject: "Fact", fact: "Untagged fact." }],
+      receipts: [
+        { id: "receipt-1", action: "validate", timestamp: "2026-06-26T12:00:00.000Z" },
+      ],
     });
     const index = bundle.files.find((file) => file.path === "index.md")!.content;
-    expect(index).toContain('session_key: "real-session"');
-    expect(index).toContain('agent: "codex"');
-    expect(index).toContain('project: "open-brain"');
-    expect(index).not.toContain("spoofed-session");
-    expect(index).not.toContain("spoofed-agent");
-    expect(index).not.toContain("spoofed-project");
+    expect(bundle.isolation).toEqual({
+      sessionKey: "real-session",
+      agent: "codex",
+      project: "open-brain",
+    });
+    expect(index).toContain(
+      'isolation: {"agent":"codex","project":"open-brain","sessionKey":"real-session"}',
+    );
+    expect(bundle.files.find((file) => file.path === "log.md")!.content).toContain(
+      "Untagged event.",
+    );
+    expect(bundle.files.find((file) => file.path === "receipts.md")!.content).toContain(
+      "validate",
+    );
   });
 
   it("feeds wrapper receipt/export evidence into the memory substrate eval shape", async () => {

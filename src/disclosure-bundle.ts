@@ -6,7 +6,15 @@ export interface DisclosureCitation {
   sourceRef?: string;
 }
 
-export interface DisclosureEvent {
+interface DisclosureScopeIdentity {
+  sessionKey?: string;
+  session_key?: string;
+  agent?: string;
+  project?: string;
+  namespace?: string;
+}
+
+export interface DisclosureEvent extends DisclosureScopeIdentity {
   id: string;
   type: string;
   content: string;
@@ -19,7 +27,7 @@ export interface DisclosureEvent {
   metadata?: Record<string, unknown>;
 }
 
-export interface DisclosureRepoFact {
+export interface DisclosureRepoFact extends DisclosureScopeIdentity {
   id: string;
   subject: string;
   fact: string;
@@ -30,7 +38,7 @@ export interface DisclosureRepoFact {
   metadata?: Record<string, unknown>;
 }
 
-export interface DisclosureReceipt {
+export interface DisclosureReceipt extends DisclosureScopeIdentity {
   id: string;
   action: string;
   timestamp: string;
@@ -60,20 +68,37 @@ export interface DisclosureBundleFile {
 
 export interface DisclosureBundle {
   profile: "okf-like";
+  isolation: {
+    sessionKey: string;
+    agent?: string;
+    project?: string;
+  };
   files: DisclosureBundleFile[];
 }
 
 export function exportDisclosureBundle(input: DisclosureBundleInput): DisclosureBundle {
+  validateDisclosureScope(input.lane, input.events ?? [], "event");
+  validateDisclosureScope(input.lane, input.repoFacts ?? [], "repo fact");
+  validateDisclosureScope(input.lane, input.receipts ?? [], "receipt");
   const events = [...(input.events ?? [])].sort(byTimestampThenId);
   const facts = [...(input.repoFacts ?? [])].sort((a, b) => a.id.localeCompare(b.id));
   const receipts = [...(input.receipts ?? [])].sort(byTimestampThenId);
   const citations = collectCitations(events, facts, receipts);
   const factPaths = conceptPaths(facts);
+  const isolation = {
+    sessionKey: input.lane.sessionKey,
+    agent: input.lane.agent,
+    project: input.lane.project,
+  };
 
   return {
     profile: "okf-like",
+    isolation,
     files: [
-      { path: "index.md", content: renderIndex(input, events, facts, receipts, citations, factPaths) },
+      {
+        path: "index.md",
+        content: renderIndex(input, events, facts, receipts, citations, factPaths, isolation),
+      },
       { path: "log.md", content: renderLog(events) },
       ...facts.map((fact, index) => ({
         path: factPaths[index] ?? conceptPath(fact),
@@ -100,6 +125,7 @@ function renderIndex(
   receipts: DisclosureReceipt[],
   citations: DisclosureCitation[],
   factPaths: string[],
+  isolation: DisclosureBundle["isolation"],
 ): string {
   const title = input.lane.topic ?? input.lane.sessionKey;
   return [
@@ -109,6 +135,7 @@ function renderIndex(
       session_key: input.lane.sessionKey,
       agent: input.lane.agent,
       project: input.lane.project,
+      isolation,
       okf: okfMetadata(input.lane.metadata),
     }),
     `# ${title}`,
@@ -131,6 +158,31 @@ function renderIndex(
   ]
     .filter((line): line is string => line !== undefined)
     .join("\n");
+}
+
+function validateDisclosureScope(
+  lane: DisclosureBundleInput["lane"],
+  items: DisclosureScopeIdentity[],
+  itemType: string,
+): void {
+  const expected = {
+    sessionKey: lane.sessionKey,
+    session_key: lane.sessionKey,
+    agent: lane.agent,
+    project: lane.project,
+  };
+  for (const item of items) {
+    if ("namespace" in item) {
+      throw new Error(
+        `cross-scope disclosure ${itemType}: namespace cannot be verified by the export lane`,
+      );
+    }
+    for (const [field, value] of Object.entries(expected)) {
+      if (field in item && item[field as keyof DisclosureScopeIdentity] !== value) {
+        throw new Error(`cross-scope disclosure ${itemType}: ${field} does not match export lane`);
+      }
+    }
+  }
 }
 
 function conceptPaths(facts: DisclosureRepoFact[]): string[] {

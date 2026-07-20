@@ -434,6 +434,11 @@ export class AgentMemory {
     lane?: Partial<DisclosureBundleInput["lane"]>;
   }): DisclosureBundle {
     this.requireSession("exportDisclosureBundle");
+    assertDisclosureLaneIdentity(input.lane, {
+      sessionKey: this.sessionKey,
+      agent: this.agent,
+      project: this.project,
+    });
     return exportDisclosureBundle({
       ...input,
       lane: {
@@ -487,6 +492,18 @@ export class AgentMemory {
 
   private requireSession(method: string): asserts this is this & { sessionKey: string } {
     if (!this.sessionKey) throw new Error(`${method} requires start() first`);
+  }
+}
+
+function assertDisclosureLaneIdentity(
+  lane: Partial<DisclosureBundleInput["lane"]> | undefined,
+  expected: Pick<DisclosureBundleInput["lane"], "sessionKey" | "agent" | "project">,
+): void {
+  if (!lane) return;
+  for (const field of ["sessionKey", "agent", "project"] as const) {
+    if (lane[field] !== undefined && lane[field] !== expected[field]) {
+      throw new Error(`disclosure bundle lane ${field} conflicts with active session`);
+    }
   }
 }
 
