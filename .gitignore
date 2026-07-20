@@ -44,3 +44,9 @@ __pycache__/
 reports/
 .claude/
 .env.dev
+
+# Session report buffers are local-only, never committed (public repo)
+_reports/
+
+# Added by ggshield
+.cache_ggshield
