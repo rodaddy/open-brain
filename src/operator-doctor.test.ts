@@ -14,15 +14,25 @@ import { readNatsRuntimeBoundary } from "./nats-runtime.ts";
 const originalFetch = globalThis.fetch;
 const THIS_FILE = fileURLToPath(import.meta.url);
 
-function makePool(appliedFilenames: string[]) {
+function makePool(
+  appliedFilenames: string[],
+  auditProbe: "reachable" | "throws" = "reachable",
+  onAuditProbe?: () => void,
+) {
   return {
     totalCount: 1,
     idleCount: 1,
     waitingCount: 0,
-    query: async (sql: string) => {
+    query: async (query: string | { text: string }) => {
+      const sql = typeof query === "string" ? query : query.text;
       if (sql.trim() === "SELECT 1") return { rows: [{ ok: 1 }] };
       if (sql.includes("FROM _migrations")) {
         return { rows: appliedFilenames.map((filename) => ({ filename })) };
+      }
+      if (sql.includes("to_regclass")) {
+        onAuditProbe?.();
+        if (auditProbe === "throws") throw new Error("audit table unavailable");
+        return { rows: [{ table_name: "mcp_tool_audit_log" }] };
       }
       return { rows: [] };
     },
@@ -70,6 +80,7 @@ afterEach(() => {
   delete process.env.LOG_FILE;
   delete process.env.LOG_MAX_BYTES;
   delete process.env.LOG_MAX_FILES;
+  delete process.env.OPENBRAIN_MCP_AUDIT_ENABLED;
   resetOperatorDoctorCache();
 });
 
@@ -113,7 +124,7 @@ describe("operator doctor status", () => {
       request_logger: "enabled",
       file_log_configured: true,
       rotation_configured: true,
-      audit_storage: "not_available",
+      audit_storage: "available",
     });
     // QMD_PATH points at an existing file: binary presence only.
     expect(status.qmd).toEqual({
@@ -127,6 +138,39 @@ describe("operator doctor status", () => {
     expect(serialized).not.toContain(logPath);
     // The resolved qmd path must never appear in the payload.
     expect(serialized).not.toContain(THIS_FILE);
+  });
+
+  it("reports audit storage as available when audit is enabled and the table is reachable", async () => {
+    const status = await buildOperatorDoctorStatus(
+      makePool(["001_init.sql"]),
+      readNatsRuntimeBoundary({}),
+    );
+
+    expect(status.log_audit.audit_storage).toBe("available");
+  });
+
+  it("reports audit storage as not available without probing when audit is disabled", async () => {
+    process.env.OPENBRAIN_MCP_AUDIT_ENABLED = "0";
+    let auditProbeCount = 0;
+
+    const status = await buildOperatorDoctorStatus(
+      makePool(["001_init.sql"], "reachable", () => {
+        auditProbeCount += 1;
+      }),
+      readNatsRuntimeBoundary({}),
+    );
+
+    expect(status.log_audit.audit_storage).toBe("not_available");
+    expect(auditProbeCount).toBe(0);
+  });
+
+  it("reports audit storage as not available when the table probe throws", async () => {
+    const status = await buildOperatorDoctorStatus(
+      makePool(["001_init.sql"], "throws"),
+      readNatsRuntimeBoundary({}),
+    );
+
+    expect(status.log_audit.audit_storage).toBe("not_available");
   });
 
   it("resolves qmd via the same search_all resolution and reports missing binaries as unavailable", async () => {

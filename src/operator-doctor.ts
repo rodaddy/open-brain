@@ -12,6 +12,7 @@ import {
   EMBEDDING_MODEL,
 } from "./embedding.ts";
 import { checkPoolHealth } from "./db/pool.ts";
+import { readMcpAuditConfig } from "./audit-log.ts";
 import { resolveQmdPath } from "./qmd-path.ts";
 import type { NatsBridgeHealth } from "./nats-bridge.ts";
 import type { NatsRuntimeBoundary } from "./nats-runtime.ts";
@@ -203,6 +204,26 @@ async function readMigrationStatus(pool: pg.Pool): Promise<OperatorDoctorStatus[
   }
 }
 
+async function readAuditStorageStatus(
+  pool: pg.Pool,
+): Promise<OperatorDoctorStatus["log_audit"]["audit_storage"]> {
+  if (!readMcpAuditConfig().enabled) return "not_available";
+
+  const query: pg.QueryConfig<[string]> & { query_timeout: number } = {
+    text: "SELECT to_regclass($1) AS table_name",
+    values: ["mcp_tool_audit_log"],
+    query_timeout: OPTIONAL_TIMEOUT_MS,
+  };
+  const reachable = await withTimeout(
+    pool
+      .query(query)
+      .then(({ rows }) => rows[0]?.table_name != null)
+      .catch(() => false),
+    false,
+  );
+  return reachable ? "available" : "not_available";
+}
+
 async function checkEmbeddingAvailability(): Promise<boolean> {
   const baseUrl = embeddingBaseUrl();
   if (!baseUrl) return false;
@@ -236,12 +257,13 @@ export async function buildOperatorDoctorStatus(
   natsRuntimeBoundary: NatsRuntimeBoundary,
   natsBridgeHealth?: NatsBridgeHealth,
 ): Promise<OperatorDoctorStatus> {
-  const [database, migrations, embeddingAvailable, serviceVersion] =
+  const [database, migrations, embeddingAvailable, serviceVersion, auditStorage] =
     await Promise.all([
       checkPoolHealth(pool),
       readMigrationStatus(pool),
       checkEmbeddingAvailability(),
       readServiceVersion(),
+      readAuditStorageStatus(pool),
     ]);
   const qmd = checkQmdBinaryPresence();
 
@@ -312,7 +334,7 @@ export async function buildOperatorDoctorStatus(
       rotation_configured:
         fileLogConfigured &&
         (Boolean(process.env.LOG_MAX_BYTES) || Boolean(process.env.LOG_MAX_FILES)),
-      audit_storage: "not_available",
+      audit_storage: auditStorage,
     },
     optional_dependencies: {
       embedding_provider: embeddingDiagnostics.configured
