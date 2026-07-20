@@ -18,6 +18,10 @@ from .policy import idempotency_key, redact_value
 logger = logging.getLogger(__name__)
 
 
+class SpoolFullError(ValueError):
+    """Raised when an append would exceed spool capacity."""
+
+
 @dataclass(frozen=True)
 class SpoolRecord:
     idempotency_key: str
@@ -138,24 +142,17 @@ class JsonlSpool:
                 if self.path.exists()
                 else []
             )
-            existing_groups = self._line_groups(existing)
-            existing_line_count = sum(len(group) for group in existing_groups)
-            existing_bytes = sum(
-                len(line.encode("utf-8")) for group in existing_groups for line in group
-            )
-            while (
+            existing_line_count = len(existing)
+            existing_bytes = sum(len(line.encode("utf-8")) for line in existing)
+            if (
                 existing_line_count + len(batch_lines) > self.max_lines
                 or existing_bytes + batch_bytes > self.max_bytes
             ):
-                if not existing_groups:
-                    raise ValueError(
-                        "spool batch exceeds configured max_lines/max_bytes limits"
-                    )
-                evicted = existing_groups.pop(0)
-                existing_line_count -= len(evicted)
-                existing_bytes -= sum(len(line.encode("utf-8")) for line in evicted)
-            retained = [line for group in existing_groups for line in group]
-            self._write_lines([*retained, *batch_lines])
+                raise SpoolFullError(
+                    "spool is full; append would exceed configured "
+                    "max_lines/max_bytes limits"
+                )
+            self._write_lines([*existing, *batch_lines])
         finally:
             self._unlock(lock_fd)
         return safe_keys
@@ -174,7 +171,7 @@ class JsonlSpool:
         record = {
             "idempotency_key": key,
             "operation": operation,
-            "payload": dict(payload),
+            "payload": redact_value(dict(payload)),
             "created_at": created_at,
         }
         if group_id is not None:
@@ -182,12 +179,6 @@ class JsonlSpool:
             record["group_index"] = group_index
             record["group_size"] = group_size
         return json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n"
-
-    @classmethod
-    def _line_groups(cls, lines: list[str]) -> list[list[str]]:
-        return [
-            [line for _, line in group] for group in cls._group_indexed_lines(lines)
-        ]
 
     @classmethod
     def _group_indexed_lines(cls, lines: list[str]) -> list[list[tuple[int, str]]]:
