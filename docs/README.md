@@ -171,7 +171,7 @@ Keep the boundaries explicit:
 Deploys should be owned by this repository, not by hand-copying files. Merging
 reviewed changes to `main` validates the repo, but production deploy is a
 separate release gate. Before installing a new Open Brain version on core01,
-follow [`docs/local-release-deploy-sop.md`](docs/local-release-deploy-sop.md):
+follow [`docs/local-release-deploy-sop.md`](local-release-deploy-sop.md):
 run the full local release-candidate test from a clean `main`, create a version
 tag whose commit is already reachable from `origin/main` or run a manual
 workflow dispatch from the current `origin/main` tip, and watch the deploy.
@@ -225,14 +225,14 @@ Do not put qmd indexes, qmd models, Postgres data, or required production
 NATS transport rollout is separate from the HTTP deploy. The broker label is
 `com.rico.open-brain-nats`; the Open Brain NATS request/reply worker label is
 `com.rico.open-brain-nats-worker`. Keep HTTP workers in HTTP mode and follow
-[`docs/core01-nats-worker-runbook.md`](docs/core01-nats-worker-runbook.md)
+[`docs/core01-nats-worker-runbook.md`](core01-nats-worker-runbook.md)
 before installing or restarting the dedicated NATS worker service.
 
 qmd is a repo-knowledge compiler and optional deep lookup source. It is not a
 required distributed memory layer for Hermes or other agents. Required qmd-
 derived facts must be promoted into Open Brain; remote qmd access remains a
 future best-effort escape hatch unless a separate approved wrapper ships.
-See [`docs/roadmap/optional-qmd-deep-lookup.md`](docs/roadmap/optional-qmd-deep-lookup.md).
+See [`docs/roadmap/optional-qmd-deep-lookup.md`](roadmap/optional-qmd-deep-lookup.md).
 
 Smoke after startup:
 
@@ -293,7 +293,7 @@ Open Brain endpoint. Use `https://open-brain.rodaddy.live` or direct
 `10.71.1.21:3100` for current host canaries.
 
 For full package usage, schema helper, live canary, and Hermes integration
-guidance, see [`python/openbrain-memory/README.md`](python/openbrain-memory/README.md).
+guidance, see [`python/openbrain-memory/README.md`](../python/openbrain-memory/README.md).
 
 ## Auth & Permissions
 
@@ -326,7 +326,7 @@ Five core tables, all with 768-dimensional halfvec embeddings and HNSW indexes:
 - **projects** — named projects with status and metadata
 - **sessions** — session summaries with blockers, next steps, and key decisions
 
-Supporting tables: `entry_access_log` (usage tracking), `discarded_entries` (archive staging), `mcp_tool_audit_log` (privacy-safe MCP tool audit — see [docs/operator-audit-log.md](docs/operator-audit-log.md)), `_migrations`.
+Supporting tables: `entry_access_log` (usage tracking), `discarded_entries` (archive staging), `mcp_tool_audit_log` (privacy-safe MCP tool audit — see [docs/operator-audit-log.md](operator-audit-log.md)), `_migrations`.
 
 ## Search
 
@@ -393,7 +393,7 @@ identities such as `bilby` and `skippy`, and promoter service identities such as
 Normal agents write their own lane and read their lane plus shared knowledge
 through server read policy. Direct `shared-kb` writes require an explicit
 promoter service identity and provenance; `X-Namespace` alone is not shared
-truth authority. See [docs/identity-boundary.md](docs/identity-boundary.md).
+truth authority. See [docs/identity-boundary.md](identity-boundary.md).
 
 ## CI/CD
 
@@ -454,7 +454,7 @@ lab HTTP endpoints such as `http://10.71.1.21:3100`.
 
 - [CONTRIBUTING.md](CONTRIBUTING.md) — coding standards, development workflow, and infrastructure rules
 - [GLOSSARY.md](GLOSSARY.md) — domain terminology (tiers, warmth, dream cycles, etc.)
-- [docs/operator-audit-log.md](docs/operator-audit-log.md) — MCP tool audit log schema, env controls, privacy guarantees, fail-open behavior
+- [docs/operator-audit-log.md](operator-audit-log.md) — MCP tool audit log schema, env controls, privacy guarantees, fail-open behavior
 
 ## License
 
