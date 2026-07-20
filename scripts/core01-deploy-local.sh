@@ -4,7 +4,8 @@ set -euo pipefail
 REPO_DIR="${REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 RUNTIME_DIR="${RUNTIME_DIR:-/Volumes/ThunderBolt/open-brain/app}"
 ENV_FILE="${ENV_FILE:-/Users/rico/.config/open-brain/env}"
-SERVICE_LABEL="${SERVICE_LABEL:-system/com.rico.open-brain}"
+SERVICE_LABEL="${SERVICE_LABEL:-gui/$(id -u)/com.rico.open-brain}"
+NATS_WORKER_LABEL="${NATS_WORKER_LABEL:-gui/$(id -u)/com.rico.open-brain-nats-worker}"
 QMD_PATH_VALUE="${QMD_PATH_VALUE:-/Volumes/ThunderBolt/qmd/open-brain-qmd.ts}"
 BUN_BIN="${BUN_BIN:-}"
 STAGING_DIR="${STAGING_DIR:-${RUNTIME_DIR}.next}"
@@ -152,7 +153,10 @@ if [[ -d "$RUNTIME_DIR" ]]; then
 fi
 mv "$STAGING_DIR" "$RUNTIME_DIR"
 
-sudo launchctl kickstart -k "$SERVICE_LABEL"
+launchctl kickstart -k "$SERVICE_LABEL"
+if ! launchctl kickstart -k "$NATS_WORKER_LABEL"; then
+  echo "WARN: could not restart Open Brain NATS worker: $NATS_WORKER_LABEL" >&2
+fi
 
 if wait_for_health "Open Brain"; then
   "$BUN_BIN" test src/tools/__tests__/search-all.test.ts
@@ -163,7 +167,10 @@ fi
 if [[ -d "$PREVIOUS_DIR" ]]; then
   rm -rf "$RUNTIME_DIR"
   mv "$PREVIOUS_DIR" "$RUNTIME_DIR"
-  sudo launchctl kickstart -k "$SERVICE_LABEL"
+  launchctl kickstart -k "$SERVICE_LABEL"
+  if ! launchctl kickstart -k "$NATS_WORKER_LABEL"; then
+    echo "WARN: could not restart Open Brain NATS worker after rollback: $NATS_WORKER_LABEL" >&2
+  fi
 
   if wait_for_health "Open Brain rollback"; then
     echo "FATAL: Open Brain health check failed after deploy; previous runtime restored and passed health" >&2
