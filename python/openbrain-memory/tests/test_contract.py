@@ -160,8 +160,8 @@ def test_manifest_requires_current_package_without_overstating_legacy_compatibil
         client_version=PREVIOUS_CLIENT_VERSION,
     )
 
-    assert CURRENT_CLIENT_VERSION == "0.1.9"
-    assert manifest["min_client_versions"]["openbrain-memory"] == "0.1.9"
+    assert CURRENT_CLIENT_VERSION == "0.1.10"
+    assert manifest["min_client_versions"]["openbrain-memory"] == "0.1.10"
     assert manifest["compatible_client_ranges"]["openbrain-memory"] == (
         ">=0.1.8 <1.0.0"
     )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
 from collections.abc import Callable, Mapping, Sequence
@@ -71,7 +72,9 @@ from .agent import (
 )
 from .client import JSON, OpenBrainClient, Transport
 from .policy import redact_value
-from .spool import JsonlSpool
+from .spool import JsonlSpool, SpoolRecord
+
+logger = logging.getLogger(__name__)
 
 MAX_DISTILLED_CONTENT_BYTES = _runtime_validation.MAX_DISTILLED_CONTENT_BYTES
 _CONFIG_KEYS = {
@@ -104,6 +107,17 @@ _CONTEXT_PACK_SECTIONS = {
     "repo_facts",
     "working_set",
 }
+_REPLAYABLE_SPOOL_OPERATIONS = frozenset(
+    {
+        "session_start",
+        "lane_upsert",
+        "upsert_repo_fact",
+        "append_session_event",
+        "log_thought",
+        "log_decision",
+        "session_wrap",
+    }
+)
 
 
 class ReceiptStatus(StrEnum):
@@ -464,10 +478,13 @@ class FirstClassMemoryRuntime:
                 if self._router.state.path is not None
                 else ReceiptStatus.FAILED
             )
-            return RuntimeOutput(
+            output = RuntimeOutput(
                 receipt=self._receipt("recall", status, durable=False),
                 context=result,
             )
+            if status is ReceiptStatus.DIRECT:
+                self._drain_spool()
+            return output
         except Exception as error:
             return RuntimeOutput(
                 receipt=self._receipt(
@@ -572,10 +589,13 @@ class FirstClassMemoryRuntime:
                 if self._router.state.path == ReceiptStatus.FALLBACK.value
                 else ReceiptStatus.SAVED
             )
-            return RuntimeOutput(
+            output = RuntimeOutput(
                 receipt=self._receipt(operation, receipt_status, durable=True),
                 result=result,
             )
+            if receipt_status is ReceiptStatus.SAVED:
+                self._drain_spool()
+            return output
         except ValueError as error:
             return RuntimeOutput(
                 receipt=self._receipt(
@@ -621,6 +641,30 @@ class FirstClassMemoryRuntime:
                     error=lost_error,
                 )
             )
+
+    def _drain_spool(self) -> None:
+        """Replay pending durable records after direct connectivity recovers."""
+        try:
+            if self._spool is None:
+                return
+            spool = self._spool.spool
+            if not isinstance(spool, JsonlSpool):
+                return
+            if spool.status().pending_count <= 0:
+                return
+
+            def dispatch(record: SpoolRecord) -> JSON:
+                if record.operation not in _REPLAYABLE_SPOOL_OPERATIONS:
+                    raise ValueError(
+                        f"Unsupported spooled operation: {record.operation}"
+                    )
+                method = getattr(self._router, record.operation)
+                return cast(JSON, method(**record.payload))
+
+            with self._router.direct_only():
+                spool.replay(dispatch)
+        except Exception:
+            logger.warning("Spool auto-drain failed", exc_info=True)
 
     def _queue_requested_write(self, call: Callable[[], JSON]) -> BaseException:
         previous_key = self._memory.conversation_key

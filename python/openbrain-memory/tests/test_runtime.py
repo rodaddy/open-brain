@@ -417,6 +417,204 @@ def test_failed_lane_start_jsonl_spool_persists_ordered_replay_pair(
     assert records[1].payload["content"] == distilled
 
 
+def test_successful_direct_write_drains_spooled_unit_in_order(tmp_path: Path) -> None:
+    transport = LaneAwareTransport(fail_session_start=True)
+    spool = JsonlSpool(tmp_path / "runtime-spool.jsonl")
+    runtime = FirstClassMemoryRuntime(
+        runtime_config(),
+        runtime_scope(),
+        transport=transport,
+        spool=spool,
+    )
+
+    queued = runtime.capture_distilled("Queued capture")
+    transport.fail_session_start = False
+    saved = runtime.capture_distilled("Recovery trigger")
+
+    calls = [
+        call["params"]
+        for call in tool_calls(transport)
+        if call["params"]["name"] != "get_contract"
+    ]
+    assert queued.receipt.status is ReceiptStatus.SPOOLED
+    assert saved.receipt.status is ReceiptStatus.SAVED
+    assert [call["name"] for call in calls[-2:]] == [
+        "session_start",
+        "append_session_event",
+    ]
+    assert calls[-1]["arguments"]["content"] == "Queued capture"
+    assert spool.status().pending_count == 0
+    assert spool.path.read_text(encoding="utf-8") == ""
+
+
+def test_successful_direct_recall_drains_spooled_unit_in_order(tmp_path: Path) -> None:
+    transport = LaneAwareTransport(fail_session_start=True)
+    spool = JsonlSpool(tmp_path / "runtime-spool.jsonl")
+    runtime = FirstClassMemoryRuntime(
+        runtime_config(),
+        runtime_scope(),
+        transport=transport,
+        spool=spool,
+    )
+
+    queued = runtime.capture_distilled("Queued before recall")
+    transport.fail_session_start = False
+    recalled = runtime.recall_context("Connectivity restored")
+
+    calls = [
+        call["params"]
+        for call in tool_calls(transport)
+        if call["params"]["name"] != "get_contract"
+    ]
+    assert queued.receipt.status is ReceiptStatus.SPOOLED
+    assert recalled.receipt.status is ReceiptStatus.DIRECT
+    assert [call["name"] for call in calls[-2:]] == [
+        "session_start",
+        "append_session_event",
+    ]
+    assert calls[-1]["arguments"]["content"] == "Queued before recall"
+    assert spool.status().pending_count == 0
+
+
+def test_spool_drain_retains_unknown_operation_and_replays_valid_unit(
+    tmp_path: Path,
+) -> None:
+    spool = JsonlSpool(tmp_path / "runtime-spool.jsonl")
+    spool.append("unknown_operation", {"value": "must stay"}, key="unknown-key")
+    spool.append(
+        "session_start",
+        {
+            **runtime_scope().start_metadata(),
+            "session_key": runtime_scope().session_key,
+            "agent": runtime_scope().agent,
+        },
+        key="valid-key",
+    )
+    transport = LaneAwareTransport()
+    runtime = FirstClassMemoryRuntime(
+        runtime_config(),
+        runtime_scope(),
+        transport=transport,
+        spool=spool,
+    )
+
+    recalled = runtime.recall_context("Drain valid records")
+
+    dispatched = [call["params"]["name"] for call in tool_calls(transport)]
+    assert recalled.receipt.status is ReceiptStatus.DIRECT
+    assert "unknown_operation" not in dispatched
+    assert dispatched[-1] == "session_start"
+    remaining = spool.records()
+    assert [record.idempotency_key for record in remaining] == ["unknown-key"]
+
+
+def test_spool_drain_dispatches_every_allowlisted_operation(tmp_path: Path) -> None:
+    scope = runtime_scope()
+    spool = JsonlSpool(tmp_path / "runtime-spool.jsonl")
+    records = [
+        (
+            "session_start",
+            {
+                **scope.start_metadata(),
+                "session_key": scope.session_key,
+                "agent": scope.agent,
+            },
+        ),
+        ("lane_upsert", {"session_key": scope.session_key}),
+        ("upsert_repo_fact", {"metadata": {"fact": "queued"}}),
+        (
+            "append_session_event",
+            {
+                **scope.start_metadata(),
+                "session_key": scope.session_key,
+                "agent": scope.agent,
+                "content": "Queued event",
+                "event_type": "fact",
+                "source": scope.agent,
+                "metadata": {"idempotency_key": "allowed-append"},
+            },
+        ),
+        ("log_thought", {"content": "Queued thought"}),
+        ("log_decision", {"content": "Queued decision"}),
+        (
+            "session_wrap",
+            {
+                **scope.start_metadata(),
+                "session_key": scope.session_key,
+                "agent": scope.agent,
+                "summary": "Queued wrap",
+            },
+        ),
+    ]
+    for index, (operation, payload) in enumerate(records):
+        spool.append(operation, payload, key=f"allowed-{index}")
+    transport = LaneAwareTransport()
+    runtime = FirstClassMemoryRuntime(
+        runtime_config(),
+        scope,
+        transport=transport,
+        spool=spool,
+    )
+
+    recalled = runtime.recall_context("Drain allowlisted records")
+
+    dispatched = [
+        call["params"]["name"]
+        for call in tool_calls(transport)
+        if call["params"]["name"] != "get_contract"
+    ]
+    assert recalled.receipt.status is ReceiptStatus.DIRECT
+    assert dispatched[1:] == [operation for operation, _payload in records]
+    assert spool.status().pending_count == 0
+
+
+def test_spool_replay_failure_keeps_unit_without_changing_outer_receipt(
+    tmp_path: Path,
+) -> None:
+    spool = JsonlSpool(tmp_path / "runtime-spool.jsonl")
+    spool.append(
+        "append_session_event",
+        {
+            **runtime_scope().start_metadata(),
+            "session_key": runtime_scope().session_key,
+            "agent": runtime_scope().agent,
+            "content": "Queued event",
+            "event_type": "fact",
+            "source": runtime_scope().agent,
+            "metadata": {"idempotency_key": "failed-key"},
+        },
+        key="failed-key",
+    )
+    runtime = FirstClassMemoryRuntime(
+        runtime_config(),
+        runtime_scope(),
+        transport=LaneAwareTransport(),
+        spool=spool,
+    )
+
+    recalled = runtime.recall_context("Outer operation succeeds")
+
+    assert recalled.receipt.status is ReceiptStatus.DIRECT
+    assert [record.idempotency_key for record in spool.records()] == ["failed-key"]
+
+
+def test_corrupt_spool_never_raises_out_of_capture_or_recall(tmp_path: Path) -> None:
+    spool = JsonlSpool(tmp_path / "runtime-spool.jsonl")
+    spool.path.write_bytes(b"\xff\xfe")
+    runtime = FirstClassMemoryRuntime(
+        runtime_config(),
+        runtime_scope(),
+        transport=LaneAwareTransport(),
+        spool=spool,
+    )
+
+    saved = runtime.capture_distilled("Direct write survives corrupt spool")
+    recalled = runtime.recall_context("Direct recall survives corrupt spool")
+
+    assert saved.receipt.status is ReceiptStatus.SAVED
+    assert recalled.receipt.status is ReceiptStatus.DIRECT
+
+
 def test_failed_lane_start_batch_failure_leaves_no_orphaned_prerequisite() -> None:
     spool = FakeSpool(fail=True)
     runtime = FirstClassMemoryRuntime(
