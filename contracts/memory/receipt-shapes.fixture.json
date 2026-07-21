@@ -1,0 +1,31 @@
+{
+  "id": "python-runtime-and-agent-receipt-shapes",
+  "description": "Lifecycle and durable agent receipts retain their existing schemas and required evidence fields.",
+  "capability": "receipt-shapes",
+  "runtime": "both",
+  "consumers": ["python"],
+  "request": {
+    "runtime_receipt": {
+      "operation": "capture",
+      "status": "spooled",
+      "durable": true,
+      "direct_attempted": true,
+      "fallback_attempted": false,
+      "spool_key": "receipt-spool-key",
+      "error": "network request failed"
+    },
+    "agent_receipt": {
+      "action": "contract_update",
+      "timestamp": "2026-06-26T16:00:00.000Z",
+      "sources": [{"kind": "repo_path", "path": "contracts/memory"}],
+      "outputs": [{"kind": "repo_path", "path": "python/openbrain-memory"}],
+      "validations": [{"kind": "test", "status": "passed", "command": "uv run pytest -q tests/test_contract_fixtures.py"}],
+      "residual_risk": "TypeScript consumer remains pending."
+    }
+  },
+  "expectation": {
+    "runtime_schema": "openbrain.runtime_receipt.v1",
+    "agent_schema": "openbrain.receipt.v1",
+    "agent_event_type": "receipt"
+  }
+}

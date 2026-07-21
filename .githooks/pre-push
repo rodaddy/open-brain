@@ -1,13 +1,65 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/usr/bin/env zsh
+set -eu
 
 # Open Brain pre-push gate.
-# Runs the repo validation that should be green before a branch is pushed.
+# Preserve the existing full validation and add path-sensitive Python/parity gates.
 
 echo "pre-push: running Open Brain validation..."
 
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
+
+# Single source of truth for the parity path filter; CI and the PR-body
+# workflow read the same file, and check-parity.ts asserts it is non-empty.
+PARITY_PATHS=("${(f)$(cat "$ROOT/contracts/parity-paths.txt")}")
+
+ZERO_SHA=0000000000000000000000000000000000000000
+SAW_RANGE=no
+CHANGED_PYTHON=no
+CHANGED_PARITY=no
+
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+  SAW_RANGE=yes
+  if [ "$local_sha" = "$ZERO_SHA" ]; then
+    continue
+  fi
+  if [ "$remote_sha" = "$ZERO_SHA" ]; then
+    if git rev-parse --verify origin/main >/dev/null 2>&1; then
+      base_sha="$(git merge-base "$local_sha" origin/main)"
+    elif git rev-parse --verify main >/dev/null 2>&1; then
+      base_sha="$(git merge-base "$local_sha" main)"
+    else
+      base_sha="$(git hash-object -t tree /dev/null)"
+    fi
+  else
+    base_sha="$remote_sha"
+  fi
+
+  if [ -n "$(git diff --name-only "$base_sha" "$local_sha" -- python/openbrain-memory)" ]; then
+    CHANGED_PYTHON=yes
+  fi
+  if [ -n "$(git diff --name-only "$base_sha" "$local_sha" -- "${PARITY_PATHS[@]}")" ]; then
+    CHANGED_PARITY=yes
+  fi
+done
+
+# A direct/manual invocation has no pre-push stdin. Compare the current branch
+# to main so local hook testing retains useful behavior.
+if [ "$SAW_RANGE" = no ]; then
+  if git rev-parse --verify origin/main >/dev/null 2>&1; then
+    BASE="$(git merge-base HEAD origin/main)"
+  elif git rev-parse --verify main >/dev/null 2>&1; then
+    BASE="$(git merge-base HEAD main)"
+  else
+    BASE="HEAD^"
+  fi
+  if [ -n "$(git diff --name-only "$BASE" HEAD -- python/openbrain-memory)" ]; then
+    CHANGED_PYTHON=yes
+  fi
+  if [ -n "$(git diff --name-only "$BASE" HEAD -- "${PARITY_PATHS[@]}")" ]; then
+    CHANGED_PARITY=yes
+  fi
+fi
 
 echo "  bun run typecheck ..."
 bun run typecheck
@@ -17,22 +69,7 @@ echo "  bun test ..."
 bun test
 echo "  ✓ Bun tests passed"
 
-MAIN_BRANCH="main"
-if git rev-parse --verify "$MAIN_BRANCH" >/dev/null 2>&1; then
-  BASE="$MAIN_BRANCH"
-elif git rev-parse --verify "origin/$MAIN_BRANCH" >/dev/null 2>&1; then
-  BASE="origin/$MAIN_BRANCH"
-else
-  BASE=""
-fi
-
-if [[ -n "$BASE" ]]; then
-  CHANGED_PYTHON=$(git diff --name-only "$BASE"...HEAD -- 'python/openbrain-memory/**' 2>/dev/null || true)
-else
-  CHANGED_PYTHON=$(git diff --name-only HEAD -- 'python/openbrain-memory/**' 2>/dev/null || true)
-fi
-
-if [[ -n "$CHANGED_PYTHON" ]]; then
+if [ "$CHANGED_PYTHON" = yes ]; then
   echo "  Python package changed; running Python validation ..."
   (
     cd python/openbrain-memory
@@ -50,6 +87,18 @@ if [[ -n "$CHANGED_PYTHON" ]]; then
   )
 else
   echo "  Python package unchanged; skipping Python package gate"
+fi
+
+if [ "$CHANGED_PARITY" = yes ]; then
+  echo "  Client/contract paths changed; running contract parity subset ..."
+  bun contracts/check-parity.ts
+  (
+    cd python/openbrain-memory
+    uv run pytest -q tests/test_contract_fixtures.py
+  )
+  echo "  ✓ Contract parity passed"
+else
+  echo "  Client/contract paths unchanged; skipping contract parity subset"
 fi
 
 echo "pre-push: all checks passed ✓"

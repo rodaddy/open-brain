@@ -1,0 +1,20 @@
+{
+  "id": "spool-line-cap-backpressure",
+  "description": "A full spool rejects the next append without changing acknowledged records or replay order.",
+  "capability": "spool-backpressure",
+  "runtime": "python",
+  "consumers": ["python"],
+  "request": {
+    "max_lines": 2,
+    "records": [
+      {"operation": "one", "payload": {"content": "1"}, "key": "one"},
+      {"operation": "two", "payload": {"content": "2"}, "key": "two"},
+      {"operation": "three", "payload": {"content": "3"}, "key": "three"}
+    ]
+  },
+  "expectation": {
+    "rejected_error": "SpoolFullError",
+    "retained_operations": ["one", "two"],
+    "replay_operations": ["one", "two"]
+  }
+}

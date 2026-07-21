@@ -18,6 +18,9 @@ env:
   BUN_VERSION: "1.3.13"
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
+permissions:
+  contents: read
+
 jobs:
   check:
     runs-on: [self-hosted, Linux, rodaddy]
@@ -231,8 +234,74 @@ jobs:
           TMPDIR: ${{ runner.temp }}
         run: uv build --python "${PYTHON_VERSION}"
 
+  contract-parity:
+    runs-on: [self-hosted, Linux, rodaddy]
+    # Self-hosted runner: same trusted-source gate as the existing validation jobs.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    env:
+      PYTHON_VERSION: "3.13"
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Detect client or contract changes
+        id: contract-paths
+        shell: sh
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
+            echo "required=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          base="${BASE_SHA}"
+          if [ "${EVENT_NAME}" != "pull_request" ]; then
+            base="${BEFORE_SHA}"
+          fi
+          case "${base}" in
+            ""|0000000000000000000000000000000000000000)
+              # New-branch pushes have no usable 'before' SHA. Match the
+              # pre-push hook: diff against the merge-base with origin/main so
+              # CI never checks a narrower range than the hook does.
+              git rev-parse --verify origin/main >/dev/null 2>&1 || git fetch origin main
+              base="$(git merge-base "${HEAD_SHA}" origin/main 2>/dev/null || git hash-object -t tree /dev/null)"
+              ;;
+          esac
+          if git diff --quiet "${base}" "${HEAD_SHA}" -- $(cat contracts/parity-paths.txt); then
+            echo "required=false" >> "${GITHUB_OUTPUT}"
+          else
+            echo "required=true" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        if: steps.contract-paths.outputs.required == 'true'
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        if: steps.contract-paths.outputs.required == 'true'
+
+      - name: Install Python ${{ env.PYTHON_VERSION }}
+        if: steps.contract-paths.outputs.required == 'true'
+        run: uv python install "${PYTHON_VERSION}"
+
+      - name: Validate parity manifest and fixtures
+        if: steps.contract-paths.outputs.required == 'true'
+        run: bun contracts/check-parity.ts
+
+      - name: Replay fixtures against Python
+        if: steps.contract-paths.outputs.required == 'true'
+        working-directory: python/openbrain-memory
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: uv run --python "${PYTHON_VERSION}" pytest -q tests/test_contract_fixtures.py
+
   deploy:
-    needs: [check, db-integration, python-package]
+    needs: [check, db-integration, python-package, contract-parity]
     runs-on: [self-hosted, macOS, core01]
     if: |
       (github.event_name == 'workflow_dispatch' && inputs.deploy_core01 && github.ref == 'refs/heads/main') ||

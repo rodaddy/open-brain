@@ -1,0 +1,47 @@
+{
+  "id": "lifecycle-checkpoint",
+  "description": "Checkpoint lazily starts the exact lane and persists a session_wrap checkpoint.",
+  "capability": "session-lifecycle",
+  "runtime": "both",
+  "consumers": ["python"],
+  "request": {
+    "entrypoint": "runtime.checkpoint",
+    "arguments": {
+      "summary": "Distilled fixture checkpoint",
+      "key_decisions": ["Keep parity executable"],
+      "next_steps": ["Build the TypeScript peer"],
+      "receipt_refs": ["receipt-fixture-1"]
+    }
+  },
+  "expectation": {
+    "tool_calls": [
+      {
+        "name": "session_start",
+        "arguments": {
+          "platform": "discord",
+          "server_id": "guild-1",
+          "channel_id": "channel-2",
+          "thread_id": "thread-3",
+          "session_key": "repo/session-4",
+          "agent": "bilby"
+        }
+      },
+      {
+        "name": "session_wrap",
+        "arguments": {
+          "summary": "Distilled fixture checkpoint",
+          "key_decisions": ["Keep parity executable"],
+          "next_steps": ["Build the TypeScript peer", "Receipt ref: receipt-fixture-1"],
+          "platform": "discord",
+          "server_id": "guild-1",
+          "channel_id": "channel-2",
+          "thread_id": "thread-3",
+          "agent": "bilby",
+          "session_key": "repo/session-4"
+        }
+      }
+    ],
+    "status": "saved",
+    "durable": true
+  }
+}

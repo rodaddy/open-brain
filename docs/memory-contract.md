@@ -292,6 +292,21 @@ auto-write every turn or treat memory as live truth. It must verify drift-prone
 facts when cheap, surface stale or conflicting evidence, and keep repo-local
 policy files as the behavior source of truth.
 
+### Contract Parity
+
+Runtime-neutral scenarios live in `contracts/memory/`. The parity gate validates
+that every fixture maps to `parity-manifest.json` and that every `both` or
+`python` fixture is consumed by the Python suite; the future TypeScript client
+must consume the same `both` fixtures before its manifest entries can leave
+`pending`.
+
+Intentional asymmetry must be declared as `runtime-specific` with a concrete
+reason. Client or contract changes run `bun contracts/check-parity.ts` plus the
+fixture-consuming pytest subset in CI and the repository pre-push hook. Python
+MCP requests also declare the reviewed contract id/schema hash in
+`X-OB-Contract`; the server logs a structured mismatch warning but does not yet
+reject the request.
+
 ### Failure-Mode Checklist
 
 - `mcp2cli` or Open Brain unavailable: do not invent memory state; continue from

@@ -27,6 +27,11 @@
 - [ ] MEDIUM+ review findings were captured in `docs/sme/` or explicitly marked not applicable
 - Live Open Brain checks: [ ] linked below or [ ] not applicable because:
 
+## Contract Parity
+
+- Contract parity: [ ] fixtures updated
+- Contract parity: [ ] runtime-specific because:
+
 ## Downstream Rollout
 
 - [ ] I checked `docs/downstream-rollout.md`

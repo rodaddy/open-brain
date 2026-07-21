@@ -1,0 +1,5 @@
+python/openbrain-memory/
+clients/ts/
+contracts/
+src/contract.ts
+src/contract-schemas.ts

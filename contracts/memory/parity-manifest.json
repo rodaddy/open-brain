@@ -1,0 +1,73 @@
+{
+  "id": "openbrain.memory.contract-parity.v1",
+  "description": "Phase-1 parity declarations for the Python client and planned TypeScript peer.",
+  "expected_fixture_ids": {
+    "auto-drain-replay-allowlist": "python",
+    "contract-declaration-v22": "both",
+    "exact-scope-proof-context-pack": "both",
+    "lifecycle-capture": "both",
+    "lifecycle-checkpoint": "both",
+    "lifecycle-recall": "both",
+    "lifecycle-session-start": "both",
+    "lifecycle-wrap": "both",
+    "python-runtime-and-agent-receipt-shapes": "both",
+    "spool-line-cap-backpressure": "python",
+    "spool-redact-before-persist": "python",
+    "ts-public-receipt-error-category-v1": "ts"
+  },
+  "capabilities": [
+    {
+      "capability": "contract-declaration",
+      "python": "implemented",
+      "ts": "pending"
+    },
+    {
+      "capability": "session-lifecycle",
+      "python": "implemented",
+      "ts": "pending"
+    },
+    {
+      "capability": "exact-scope-proof",
+      "python": "implemented",
+      "ts": "pending"
+    },
+    {
+      "capability": "spool-backpressure",
+      "python": "implemented",
+      "ts": "pending"
+    },
+    {
+      "capability": "redact-before-persist",
+      "python": "implemented",
+      "ts": "pending"
+    },
+    {
+      "capability": "auto-drain-allowlist",
+      "python": "implemented",
+      "ts": "pending"
+    },
+    {
+      "capability": "receipt-shapes",
+      "python": "implemented",
+      "ts": "runtime-specific",
+      "reason": "The Development-owned TS adapter adds a bounded public error_category enum; the Python package exposes sanitized error text in its internal runtime receipt and does not own that adapter taxonomy."
+    }
+  ],
+  "not_yet_extracted": [
+    {
+      "capability": "exact-scope-proof",
+      "scenario": "fallback-runner command and receipt ordering matrix",
+      "reason": "The current assertions mix transport fallback mechanics with scope proof; phase 1 keeps those tests authoritative instead of inventing a runtime-neutral fallback command contract."
+    },
+    {
+      "capability": "spool-backpressure",
+      "scenario": "corrupt JSONL, fsync failure, short-write, symlink, and concurrent-append matrix",
+      "reason": "These are Python JsonlSpool implementation and filesystem durability details, not yet a matched-client wire contract."
+    },
+    {
+      "capability": "receipt-shapes",
+      "scenario": "disclosure-bundle rendering and reserved-field rejection matrix",
+      "reason": "The golden disclosure fixture is a separate export contract; its existing tests remain authoritative until the TS client owns an equivalent export surface."
+    }
+  ]
+}

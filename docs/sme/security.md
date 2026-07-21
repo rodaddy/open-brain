@@ -441,3 +441,63 @@ must deliberately replay the redacted form rather than pretend raw fidelity.
 - Is there a test locking the OPPOSITE (bad) behavior that should be flipped?
 - Do pre-fix artifacts on disk (written before the redaction change) get
   retro-scrubbed or aged out, and is replay of old artifacts considered?
+
+## [2026-07-21] Gate prerequisites must fail closed on receipts and inputs
+
+**Severity:** MEDIUM
+**Source:** PR #313 / PR development#44 review swarm 2026-07-21
+**Scope:** CI warm-up/cache steps and environment-derived gate inputs
+**Status:** fixed-pre-merge
+
+- A warm-up gate that accepted failed receipts let downstream jobs proceed as if the prerequisite succeeded; a failed warm-up receipt must be a hard failure, never advisory.
+- Cache/env override class: caches and environment variables feeding a gate (e.g. the uv cache) are influencable inputs; gates must validate what actually executes at gate time, not what a cached or declared artifact claimed earlier.
+
+## [2026-07-21] Rejected by design: pinning fast-moving external binary hashes
+
+**Severity:** N/A (standing design rejection)
+**Source:** PR development#44 review swarm 2026-07-21, operator decision (Rico)
+**Scope:** Any provider/adapter that spawns an external tool (uv, bun, git, gh)
+**Status:** rejected-by-design — do NOT re-recommend
+
+### Pattern
+
+Reviewers repeatedly propose "also hash-pin the interpreter/tool binary"
+(e.g. verify a sha256 of the `uv` executable before every spawn). This is the
+upgrade-kill-shot pattern that caused the 2026-07-18/20 venv-pin disaster:
+pinning a mutable, routinely-upgraded artifact means every legitimate upgrade
+of that tool silently bricks all fail-closed consumers (stranded live sessions,
+emergency re-pin ceremonies). Pin only the reviewed artifact we ship (the
+wheel); treat the host toolchain as platform, verified by behavior (probe
+receipts), not by byte identity.
+
+### Review Questions
+
+- Does this recommendation pin something the operator upgrades routinely and
+  independently of this repo? If yes, it recreates the stranding class — reject.
+- Is the integrity goal already met by behavioral proof (deterministic probe
+  receipt, per-sha cache isolation)? Prefer that.
+
+## [2026-07-21] Rejected by design: fd-pinning / TOCTOU theater inside the local trust boundary
+
+**Severity:** N/A (standing design rejection)
+**Source:** PR development#44 review swarm 2026-07-21, operator decision (Rico)
+**Scope:** Local single-user adapter/hook code (Claude provider sandwich and peers)
+**Status:** rejected-by-design — do NOT re-recommend
+
+### Pattern
+
+Reviewers propose closing the hash-then-spawn window with fd/inode pinning,
+O_NOFOLLOW, or private immutable copies. In this deployment the artifact, the
+cache, AND the adapter source itself are all writable by the same local user:
+an attacker who can swap the wheel mid-window can more easily edit the adapter
+script that performs the check. Hardening one millisecond window while the
+whole verifier is user-writable is complexity without a threat model. The
+correct mitigations here are the ones that catch ACCIDENTS: single sha over the
+shipped artifact, per-sha cache dirs, deterministic probe receipts.
+
+### Review Questions
+
+- Is the proposed mitigation defending against an actor who already has write
+  access to the code doing the defending? If yes — wrong trust boundary, reject.
+- Does the accident-class equivalent (stale cache, wrong file, partial write)
+  already fail closed via hash + probe? Then the TOCTOU add-on is theater.

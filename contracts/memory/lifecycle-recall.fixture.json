@@ -1,0 +1,36 @@
+{
+  "id": "lifecycle-recall",
+  "description": "Recall requests an agent context pack using the complete exact scope.",
+  "capability": "session-lifecycle",
+  "runtime": "both",
+  "consumers": ["python"],
+  "request": {
+    "entrypoint": "runtime.recall_context",
+    "arguments": {
+      "query": "What contract decisions apply?",
+      "max_tokens": 1200,
+      "max_latency_ms": 500,
+      "requested_sections": ["durable_lane_context"]
+    }
+  },
+  "expectation": {
+    "tool_calls": [
+      {
+        "name": "agent_context_pack",
+        "arguments": {
+          "agent": "bilby",
+          "platform": "discord",
+          "server_id": "guild-1",
+          "channel_id": "channel-2",
+          "session_key": "repo/session-4",
+          "query": "What contract decisions apply?",
+          "thread_id": "thread-3",
+          "budget": {"max_tokens": 1200, "max_latency_ms": 500},
+          "requested_sections": ["durable_lane_context"]
+        }
+      }
+    ],
+    "status": "direct",
+    "durable": false
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "id": "lifecycle-session-start",
+  "description": "A session start sends the exact lane identity to session_start.",
+  "capability": "session-lifecycle",
+  "runtime": "both",
+  "consumers": ["python"],
+  "request": {
+    "entrypoint": "client.session_start",
+    "arguments": {
+      "session_key": "repo/session-4",
+      "agent": "bilby",
+      "platform": "discord",
+      "server_id": "guild-1",
+      "channel_id": "channel-2",
+      "thread_id": "thread-3"
+    }
+  },
+  "expectation": {
+    "tool_calls": [
+      {
+        "name": "session_start",
+        "arguments": {
+          "session_key": "repo/session-4",
+          "agent": "bilby",
+          "platform": "discord",
+          "server_id": "guild-1",
+          "channel_id": "channel-2",
+          "thread_id": "thread-3"
+        }
+      }
+    ],
+    "status": "direct"
+  }
+}

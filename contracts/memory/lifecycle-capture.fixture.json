@@ -1,0 +1,46 @@
+{
+  "id": "lifecycle-capture",
+  "description": "Capture lazily starts the exact lane before appending a distilled event.",
+  "capability": "session-lifecycle",
+  "runtime": "both",
+  "consumers": ["python"],
+  "request": {
+    "entrypoint": "runtime.capture_distilled",
+    "arguments": {
+      "content": "Distilled fixture capture",
+      "event_type": "fact"
+    }
+  },
+  "expectation": {
+    "tool_calls": [
+      {
+        "name": "session_start",
+        "arguments": {
+          "platform": "discord",
+          "server_id": "guild-1",
+          "channel_id": "channel-2",
+          "thread_id": "thread-3",
+          "session_key": "repo/session-4",
+          "agent": "bilby"
+        }
+      },
+      {
+        "name": "append_session_event",
+        "arguments": {
+          "session_key": "repo/session-4",
+          "agent": "bilby",
+          "platform": "discord",
+          "server_id": "guild-1",
+          "channel_id": "channel-2",
+          "thread_id": "thread-3",
+          "event_type": "fact",
+          "content": "Distilled fixture capture",
+          "source": "bilby",
+          "metadata": {"idempotency_key": "<non-empty-string>"}
+        }
+      }
+    ],
+    "status": "saved",
+    "durable": true
+  }
+}
