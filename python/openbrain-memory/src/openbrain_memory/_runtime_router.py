@@ -61,6 +61,14 @@ class DirectClient(Protocol):
 
     def append_session_event(self, **arguments: Any) -> JSON: ...
 
+    def lane_upsert(self, **arguments: Any) -> JSON: ...
+
+    def upsert_repo_fact(self, **arguments: Any) -> JSON: ...
+
+    def log_thought(self, **arguments: Any) -> JSON: ...
+
+    def log_decision(self, **arguments: Any) -> JSON: ...
+
     def session_wrap(self, **arguments: Any) -> JSON: ...
 
     def agent_context_pack(self, **arguments: Any) -> JSON: ...
@@ -194,7 +202,7 @@ class Mcp2CliFallback:
 
 
 class RuntimeClientRouter:
-    """Route only the four tools owned by the first-class runtime."""
+    """Route first-class runtime calls and direct durable-record replays."""
 
     def __init__(
         self,
@@ -210,6 +218,7 @@ class RuntimeClientRouter:
         self.direct_result_validator = direct_result_validator
         self.state = CallState()
         self._queue_only = False
+        self._direct_only = False
 
     def reset(self) -> None:
         """Reset evidence for one public runtime operation."""
@@ -225,11 +234,33 @@ class RuntimeClientRouter:
         finally:
             self._queue_only = previous
 
+    @contextmanager
+    def direct_only(self) -> Iterator[None]:
+        """Disable fallback while replaying records from the durable spool."""
+        previous = self._direct_only
+        self._direct_only = True
+        try:
+            yield
+        finally:
+            self._direct_only = previous
+
     def session_start(self, **arguments: Any) -> JSON:
         return self._call("session_start", arguments)
 
     def append_session_event(self, **arguments: Any) -> JSON:
         return self._call("append_session_event", arguments)
+
+    def lane_upsert(self, **arguments: Any) -> JSON:
+        return self._call("lane_upsert", arguments)
+
+    def upsert_repo_fact(self, **arguments: Any) -> JSON:
+        return self._call("upsert_repo_fact", arguments)
+
+    def log_thought(self, **arguments: Any) -> JSON:
+        return self._call("log_thought", arguments)
+
+    def log_decision(self, **arguments: Any) -> JSON:
+        return self._call("log_decision", arguments)
 
     def session_wrap(self, **arguments: Any) -> JSON:
         return self._call("session_wrap", arguments)
@@ -279,17 +310,16 @@ class RuntimeClientRouter:
         if self.direct is not None:
             try:
                 self._ensure_direct_contract(timeout=timeout)
-                method = {
-                    "session_start": self.direct.session_start,
-                    "append_session_event": self.direct.append_session_event,
-                    "session_wrap": self.direct.session_wrap,
-                    "agent_context_pack": self.direct.agent_context_pack,
-                }[tool]
+                method = getattr(self.direct, tool, None)
+                if not callable(method):
+                    raise RuntimeCallError(
+                        f"direct client does not implement {tool}"
+                    )
                 original_timeout = self.direct.timeout
                 if timeout is not None:
                     self.direct.timeout = min(original_timeout, timeout)
                 try:
-                    result = method(**dict(arguments))
+                    result = cast(JSON, method(**dict(arguments)))
                 finally:
                     self.direct.timeout = original_timeout
                 _verify_direct_result(tool, result)
@@ -300,7 +330,7 @@ class RuntimeClientRouter:
                 return result
             except Exception as error:
                 direct_error = error
-        if self.fallback is not None:
+        if self.fallback is not None and not self._direct_only:
             self.state.fallback_attempted = True
             try:
                 result = self.fallback.call(tool, arguments, timeout=timeout)
