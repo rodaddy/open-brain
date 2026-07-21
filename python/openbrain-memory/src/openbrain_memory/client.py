@@ -57,6 +57,9 @@ CURRENT_CONTRACT_SCHEMA_VERSION = 1
 CURRENT_CONTRACT_SCHEMA_HASH = (
     "51bd6bd9901b88d1f7ae71b95c34a374cbfa4488f706134334aa839bb7cb7c66"
 )
+CURRENT_CONTRACT_HEADER = (
+    f"{CURRENT_CONTRACT_VERSION};schema_hash={CURRENT_CONTRACT_SCHEMA_HASH}"
+)
 COMPATIBLE_CONTRACT_VERSIONS = (CURRENT_CONTRACT_VERSION,)
 FIRST_CLASS_RUNTIME_TOOL_VERSIONS: Mapping[str, int] = {
     "session_start": 2,
@@ -1478,6 +1481,7 @@ class OpenBrainClient:
             "Authorization": f"Bearer {self.token}",
             "Accept": "application/json, text/event-stream",
             "Content-Type": "application/json",
+            "X-OB-Contract": CURRENT_CONTRACT_HEADER,
         }
         if self.delegate_namespace:
             headers["X-Namespace"] = self.namespace

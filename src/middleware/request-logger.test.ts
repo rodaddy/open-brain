@@ -1,10 +1,19 @@
-import { describe, expect, test, mock, beforeEach, afterAll, spyOn } from "bun:test";
+import {
+  describe,
+  expect,
+  test,
+  mock,
+  beforeEach,
+  afterAll,
+  spyOn,
+} from "bun:test";
 import type { Request, Response, NextFunction } from "express";
 import { logger } from "../logger.ts";
 import { requestLogger } from "./request-logger.ts";
 
 // Spy on logger.info instead of mock.module to avoid global module pollution
 const loggerInfoSpy = spyOn(logger, "info");
+const loggerWarnSpy = spyOn(logger, "warn");
 
 // Helpers
 function mockReq(overrides: Partial<Record<string, unknown>> = {}) {
@@ -42,10 +51,12 @@ function lastInfoCall(): LogCall {
 describe("requestLogger middleware", () => {
   beforeEach(() => {
     loggerInfoSpy.mockClear();
+    loggerWarnSpy.mockClear();
   });
 
   afterAll(() => {
     loggerInfoSpy.mockRestore();
+    loggerWarnSpy.mockRestore();
   });
 
   test("calls next() immediately", () => {
@@ -168,5 +179,57 @@ describe("requestLogger middleware", () => {
     const duration = data.durationMs as number;
     expect(typeof duration).toBe("number");
     expect(Number.isInteger(duration)).toBe(true);
+  });
+
+  test("warns with structured contract fields when a client declaration mismatches", () => {
+    const req = mockReq({
+      method: "POST",
+      path: "/mcp",
+      headers: {
+        "x-ob-contract": `${"legacy-contract"};schema_hash=${"0".repeat(64)}`,
+      },
+    });
+    const res = mockRes();
+    const next = mock(() => {});
+
+    requestLogger(req, res, next as NextFunction);
+
+    expect(loggerWarnSpy).toHaveBeenCalledTimes(1);
+    expect(loggerWarnSpy).toHaveBeenCalledWith("client_contract_mismatch", {
+      method: "POST",
+      path: "/mcp",
+      reason: "contract_or_schema_mismatch",
+      declaredContractId: "legacy-contract",
+      declaredSchemaHash: "0".repeat(64),
+      expectedContractId: "2026-07-17.memory-tools.v22",
+      expectedSchemaHash:
+        "51bd6bd9901b88d1f7ae71b95c34a374cbfa4488f706134334aa839bb7cb7c66",
+    });
+  });
+
+  test("does not warn when the client declaration matches", () => {
+    const req = mockReq({
+      headers: {
+        "x-ob-contract":
+          "2026-07-17.memory-tools.v22;schema_hash=51bd6bd9901b88d1f7ae71b95c34a374cbfa4488f706134334aa839bb7cb7c66",
+      },
+    });
+
+    requestLogger(req, mockRes(), mock(() => {}) as NextFunction);
+
+    expect(loggerWarnSpy).not.toHaveBeenCalled();
+  });
+
+  test("does not log malformed client contract header contents", () => {
+    const req = mockReq({
+      headers: { "x-ob-contract": "Bearer leakmark-contract-header-secret" },
+    });
+
+    requestLogger(req, mockRes(), mock(() => {}) as NextFunction);
+
+    expect(loggerWarnSpy).toHaveBeenCalledTimes(1);
+    const serialized = JSON.stringify(loggerWarnSpy.mock.calls[0]);
+    expect(serialized).toContain("malformed_header");
+    expect(serialized).not.toContain("leakmark-contract-header-secret");
   });
 });

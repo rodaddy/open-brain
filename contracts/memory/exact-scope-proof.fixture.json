@@ -1,0 +1,32 @@
+{
+  "id": "exact-scope-proof-context-pack",
+  "description": "Direct context results must prove every requested scope field; mismatches fail open when fallback is disabled.",
+  "capability": "exact-scope-proof",
+  "runtime": "both",
+  "consumers": ["python"],
+  "request": {
+    "scope": {
+      "namespace": "bilby",
+      "session_key": "repo/session-4",
+      "agent": "bilby",
+      "platform": "discord",
+      "server_id": "guild-1",
+      "channel_id": "channel-2",
+      "thread_id": "thread-3"
+    },
+    "mismatch_fields": [
+      "namespace",
+      "session_key",
+      "agent",
+      "platform",
+      "server_id",
+      "channel_id",
+      "thread_id"
+    ]
+  },
+  "expectation": {
+    "exact_status": "direct",
+    "mismatch_status_without_fallback": "failed",
+    "mismatch_context_without_fallback": {}
+  }
+}

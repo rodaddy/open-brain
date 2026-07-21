@@ -1,0 +1,47 @@
+{
+  "id": "lifecycle-wrap",
+  "description": "Wrap lazily starts the exact lane and persists the final session summary.",
+  "capability": "session-lifecycle",
+  "runtime": "both",
+  "consumers": ["python"],
+  "request": {
+    "entrypoint": "runtime.wrap",
+    "arguments": {
+      "summary": "Distilled fixture wrap",
+      "key_decisions": ["Fixtures are the parity source"],
+      "next_steps": ["Consume them from TypeScript"],
+      "receipt_refs": ["receipt-fixture-2"]
+    }
+  },
+  "expectation": {
+    "tool_calls": [
+      {
+        "name": "session_start",
+        "arguments": {
+          "platform": "discord",
+          "server_id": "guild-1",
+          "channel_id": "channel-2",
+          "thread_id": "thread-3",
+          "session_key": "repo/session-4",
+          "agent": "bilby"
+        }
+      },
+      {
+        "name": "session_wrap",
+        "arguments": {
+          "summary": "Distilled fixture wrap",
+          "key_decisions": ["Fixtures are the parity source"],
+          "next_steps": ["Consume them from TypeScript", "Receipt ref: receipt-fixture-2"],
+          "platform": "discord",
+          "server_id": "guild-1",
+          "channel_id": "channel-2",
+          "thread_id": "thread-3",
+          "agent": "bilby",
+          "session_key": "repo/session-4"
+        }
+      }
+    ],
+    "status": "saved",
+    "durable": true
+  }
+}

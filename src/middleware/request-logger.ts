@@ -1,5 +1,44 @@
 import type { Request, Response, NextFunction } from "express";
+import { buildContract } from "../contract.ts";
 import { logger } from "../logger.ts";
+
+const EXPECTED_CONTRACT = buildContract("1970-01-01T00:00:00.000Z");
+const CLIENT_CONTRACT_HEADER_RE =
+  /^([A-Za-z0-9._-]{1,128});schema_hash=([a-f0-9]{64})$/;
+
+function warnOnContractMismatch(req: Request): void {
+  const raw = req.headers["x-ob-contract"];
+  if (raw === undefined) return;
+  const declared = Array.isArray(raw) ? raw[0] : raw;
+  const match = declared?.match(CLIENT_CONTRACT_HEADER_RE);
+  if (!match) {
+    logger.warn("client_contract_mismatch", {
+      method: req.method,
+      path: req.path,
+      reason: "malformed_header",
+      expectedContractId: EXPECTED_CONTRACT.contract_version,
+      expectedSchemaHash: EXPECTED_CONTRACT.schema_hash,
+    });
+    return;
+  }
+
+  const [, declaredContractId, declaredSchemaHash] = match;
+  if (
+    declaredContractId === EXPECTED_CONTRACT.contract_version &&
+    declaredSchemaHash === EXPECTED_CONTRACT.schema_hash
+  ) {
+    return;
+  }
+  logger.warn("client_contract_mismatch", {
+    method: req.method,
+    path: req.path,
+    reason: "contract_or_schema_mismatch",
+    declaredContractId,
+    declaredSchemaHash,
+    expectedContractId: EXPECTED_CONTRACT.contract_version,
+    expectedSchemaHash: EXPECTED_CONTRACT.schema_hash,
+  });
+}
 
 export function requestLogger(
   req: Request,
@@ -7,6 +46,7 @@ export function requestLogger(
   next: NextFunction,
 ): void {
   const start = process.hrtime.bigint();
+  warnOnContractMismatch(req);
 
   res.on("finish", () => {
     const durationMs = Math.round(

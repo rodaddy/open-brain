@@ -13,13 +13,31 @@ jobs:
     runs-on: [self-hosted, rodaddy]
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
+      - name: Detect client or contract changes
+        id: contract-paths
+        shell: sh
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if git diff --quiet "${BASE_SHA}" "${HEAD_SHA}" -- \
+            python/openbrain-memory contracts clients/ts \
+            src/contract.ts src/contract-schemas.ts; then
+            echo "required=false" >> "${GITHUB_OUTPUT}"
+          else
+            echo "required=true" >> "${GITHUB_OUTPUT}"
+          fi
+
       - name: Validate PR body gates
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
           PR_TITLE: ${{ github.event.pull_request.title }}
+          CONTRACT_PARITY_REQUIRED: ${{ steps.contract-paths.outputs.required }}
         run: bun run scripts/validate-pr-body.ts

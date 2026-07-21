@@ -2,16 +2,25 @@ interface ValidationResult {
   errors: string[];
 }
 
+interface ValidationOptions {
+  contractParityRequired?: boolean;
+}
+
 function section(body: string, name: string): string {
   const lines = body.split(/\r?\n/);
   const heading = `## ${name}`.toLowerCase();
-  const start = lines.findIndex((line) => line.trim().toLowerCase() === heading);
+  const start = lines.findIndex(
+    (line) => line.trim().toLowerCase() === heading,
+  );
   if (start === -1) return "";
 
   const end = lines.findIndex(
     (line, index) => index > start && line.trim().startsWith("## "),
   );
-  return lines.slice(start + 1, end === -1 ? undefined : end).join("\n").trim();
+  return lines
+    .slice(start + 1, end === -1 ? undefined : end)
+    .join("\n")
+    .trim();
 }
 
 function requireSpecificLine(
@@ -25,7 +34,9 @@ function requireSpecificLine(
   );
   const value = match?.[1]?.trim() ?? "";
   if (!value || value === "-" || value.toLowerCase() === "n/a") {
-    errors.push(`Critical Self-Review field '${label}' needs specific content.`);
+    errors.push(
+      `Critical Self-Review field '${label}' needs specific content.`,
+    );
   }
 }
 
@@ -42,7 +53,10 @@ function exactlyOneDisposition(
   errors: string[],
 ): void {
   const firstChecked = new RegExp(`\\[[xX]\\]\\s*${firstLabel}`).test(line);
-  const secondMatch = new RegExp(`\\[[xX]\\]\\s*${secondLabel}:\\s*(.+)$`, "i").exec(line);
+  const secondMatch = new RegExp(
+    `\\[[xX]\\]\\s*${secondLabel}:\\s*(.+)$`,
+    "i",
+  ).exec(line);
   const secondChecked = Boolean(secondMatch);
   const secondReason = secondMatch?.[1]?.trim() ?? "";
   if (firstChecked === secondChecked) {
@@ -52,7 +66,34 @@ function exactlyOneDisposition(
   }
 }
 
-export function validatePrBody(body: string): ValidationResult {
+function requireContractParityDisposition(
+  sectionBody: string,
+  errors: string[],
+): void {
+  const fixturesUpdated =
+    /^-\s*Contract parity:\s*\[[xX]\]\s*fixtures updated\s*$/im.test(
+      sectionBody,
+    );
+  const runtimeSpecific =
+    /^-\s*Contract parity:\s*\[[xX]\]\s*runtime-specific because:\s*(.+)$/im.exec(
+      sectionBody,
+    );
+  const runtimeSpecificReason = runtimeSpecific?.[1]?.trim() ?? "";
+
+  if (fixturesUpdated === Boolean(runtimeSpecific)) {
+    errors.push("Contract parity must check exactly one disposition.");
+  } else if (
+    runtimeSpecific &&
+    (!runtimeSpecificReason || runtimeSpecificReason === "-")
+  ) {
+    errors.push("Contract parity runtime-specific disposition needs a reason.");
+  }
+}
+
+export function validatePrBody(
+  body: string,
+  options: ValidationOptions = {},
+): ValidationResult {
   const errors: string[] = [];
   const criticalSelfReview = section(body, "Critical Self-Review");
   if (!criticalSelfReview) {
@@ -72,9 +113,10 @@ export function validatePrBody(body: string): ValidationResult {
       requireSpecificLine(criticalSelfReview, label, errors);
     }
 
-    const smeLine = criticalSelfReview.match(
-      /^-\s*SME review-memory update:\s*(.+)$/im,
-    )?.[1] ?? "";
+    const smeLine =
+      criticalSelfReview.match(
+        /^-\s*SME review-memory update:\s*(.+)$/im,
+      )?.[1] ?? "";
     exactlyOneDisposition(
       smeLine,
       "`?docs/sme/`? updated",
@@ -97,9 +139,8 @@ export function validatePrBody(body: string): ValidationResult {
       }
     }
 
-    const liveLine = reviewGate.match(
-      /^-\s*Live Open Brain checks:\s*(.+)$/im,
-    )?.[1] ?? "";
+    const liveLine =
+      reviewGate.match(/^-\s*Live Open Brain checks:\s*(.+)$/im)?.[1] ?? "";
     exactlyOneDisposition(
       liveLine,
       "linked below",
@@ -109,13 +150,25 @@ export function validatePrBody(body: string): ValidationResult {
     );
   }
 
+  if (options.contractParityRequired) {
+    const contractParity = section(body, "Contract Parity");
+    if (!contractParity) {
+      errors.push("Missing '## Contract Parity' section.");
+    } else {
+      requireContractParityDisposition(contractParity, errors);
+    }
+  }
+
   return { errors };
 }
 
 if (import.meta.main) {
   const body = process.env.PR_BODY ?? "";
   const title = process.env.PR_TITLE ?? "";
-  const result = validatePrBody(body);
+  const result = validatePrBody(body, {
+    contractParityRequired:
+      process.env.CONTRACT_PARITY_REQUIRED?.toLowerCase() === "true",
+  });
 
   if (result.errors.length > 0) {
     console.error("PR body validation failed:");

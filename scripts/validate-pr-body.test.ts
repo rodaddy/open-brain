@@ -23,6 +23,11 @@ const validBody = `## Summary
 - [x] Critical self-review fields above are filled with specific, non-placeholder content
 - [x] MEDIUM+ review findings were captured in \`docs/sme/\` or explicitly marked not applicable
 - Live Open Brain checks: [ ] linked below or [x] not applicable because: this fixture does not require live proof
+
+## Contract Parity
+
+- Contract parity: [x] fixtures updated
+- Contract parity: [ ] runtime-specific because:
 `;
 
 describe("validatePrBody", () => {
@@ -75,6 +80,60 @@ describe("validatePrBody", () => {
   });
 
   it("rejects self-attested bypass text", () => {
-    expect(validatePrBody("review-gate-bypass: rico-approved").errors.length).toBeGreaterThan(0);
+    expect(
+      validatePrBody("review-gate-bypass: rico-approved").errors.length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("requires the contract-parity section for client and contract changes", () => {
+    const body = validBody.replace(/\n## Contract Parity[\s\S]*$/, "");
+    expect(
+      validatePrBody(body, { contractParityRequired: true }).errors,
+    ).toContain("Missing '## Contract Parity' section.");
+  });
+
+  it("accepts either exact contract-parity disposition", () => {
+    expect(validatePrBody(validBody, { contractParityRequired: true })).toEqual(
+      { errors: [] },
+    );
+    const runtimeSpecific = validBody
+      .replace("[x] fixtures updated", "[ ] fixtures updated")
+      .replace(
+        "[ ] runtime-specific because:",
+        "[x] runtime-specific because: TS adapter owns the category taxonomy",
+      );
+    expect(
+      validatePrBody(runtimeSpecific, { contractParityRequired: true }),
+    ).toEqual({ errors: [] });
+  });
+
+  it("rejects ambiguous or unexplained contract-parity dispositions", () => {
+    const ambiguous = validBody.replace(
+      "[ ] runtime-specific because:",
+      "[x] runtime-specific because: duplicate",
+    );
+    expect(
+      validatePrBody(ambiguous, { contractParityRequired: true }).errors,
+    ).toContain("Contract parity must check exactly one disposition.");
+
+    const unexplained = validBody
+      .replace("[x] fixtures updated", "[ ] fixtures updated")
+      .replace(
+        "[ ] runtime-specific because:",
+        "[x] runtime-specific because: -",
+      );
+    expect(
+      validatePrBody(unexplained, { contractParityRequired: true }).errors,
+    ).toContain("Contract parity runtime-specific disposition needs a reason.");
+  });
+
+  it("rejects non-literal fixtures-updated declarations", () => {
+    const body = validBody.replace(
+      "[x] fixtures updated",
+      "[x] fixtures updated or runtime-specific",
+    );
+    expect(
+      validatePrBody(body, { contractParityRequired: true }).errors,
+    ).toContain("Contract parity must check exactly one disposition.");
   });
 });

@@ -1,0 +1,24 @@
+{
+  "id": "auto-drain-replay-allowlist",
+  "description": "Successful direct recall drains only the explicit durable-operation allowlist in original order.",
+  "capability": "auto-drain-allowlist",
+  "runtime": "python",
+  "consumers": ["python"],
+  "request": {
+    "trigger": "recall_context",
+    "operations": [
+      {"operation": "session_start", "payload": {"platform": "discord", "server_id": "guild-1", "channel_id": "channel-2", "thread_id": "thread-3", "session_key": "repo/session-4", "agent": "bilby"}},
+      {"operation": "lane_upsert", "payload": {"session_key": "repo/session-4"}},
+      {"operation": "upsert_repo_fact", "payload": {"metadata": {"fact": "queued"}}},
+      {"operation": "append_session_event", "payload": {"platform": "discord", "server_id": "guild-1", "channel_id": "channel-2", "thread_id": "thread-3", "session_key": "repo/session-4", "agent": "bilby", "content": "Queued event", "event_type": "fact", "source": "bilby", "metadata": {"idempotency_key": "allowed-append"}}},
+      {"operation": "log_thought", "payload": {"content": "Queued thought"}},
+      {"operation": "log_decision", "payload": {"content": "Queued decision"}},
+      {"operation": "session_wrap", "payload": {"platform": "discord", "server_id": "guild-1", "channel_id": "channel-2", "thread_id": "thread-3", "session_key": "repo/session-4", "agent": "bilby", "summary": "Queued wrap"}}
+    ]
+  },
+  "expectation": {
+    "trigger_status": "direct",
+    "dispatched_operations": ["session_start", "lane_upsert", "upsert_repo_fact", "append_session_event", "log_thought", "log_decision", "session_wrap"],
+    "pending_count": 0
+  }
+}

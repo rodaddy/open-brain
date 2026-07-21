@@ -1,0 +1,17 @@
+{
+  "id": "ts-public-receipt-error-category-v1",
+  "description": "The Development-owned TS adapter exposes a bounded content-free error category for non-saved public receipts.",
+  "capability": "receipt-shapes",
+  "runtime": "ts",
+  "consumers": [],
+  "request": {
+    "source": "Development _ob ob-memory-provider adapter",
+    "package_receipt_statuses": ["spooled", "failed", "lost"]
+  },
+  "expectation": {
+    "field": "error_category",
+    "taxonomy": ["scope-proof-failed", "http-auth", "http-error", "network", "spool-full", "invalid-request", "other"],
+    "unknown_maps_to": "other",
+    "free_text_allowed": false
+  }
+}
