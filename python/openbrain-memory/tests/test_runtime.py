@@ -31,6 +31,7 @@ from ._runtime_fakes import (
     ContextClient,
     FakeRunner,
     FakeSpool,
+    ForeignLaneTamperingTransport,
     LaneAwareTransport,
     StartThenFailClient,
     WriteResultClient,
@@ -566,6 +567,159 @@ def test_spool_drain_dispatches_every_allowlisted_operation(tmp_path: Path) -> N
     assert recalled.receipt.status is ReceiptStatus.DIRECT
     assert dispatched[1:] == [operation for operation, _payload in records]
     assert spool.status().pending_count == 0
+
+
+def _parked_unit_scope() -> RuntimeScope:
+    return RuntimeScope(
+        agent="bilby",
+        platform="discord",
+        server_id="guild-9",
+        channel_id="channel-parked",
+        session_key="other-repo/session-9",
+    )
+
+
+def _park_unit(spool: JsonlSpool, scope: RuntimeScope, content: str) -> None:
+    spool.append_batch(
+        [
+            (
+                "session_start",
+                {
+                    **scope.start_metadata(),
+                    "session_key": scope.session_key,
+                    "agent": scope.agent,
+                },
+                None,
+            ),
+            (
+                "append_session_event",
+                {
+                    **scope.start_metadata(),
+                    "session_key": scope.session_key,
+                    "agent": scope.agent,
+                    "content": content,
+                    "event_type": "fact",
+                    "source": scope.agent,
+                    "metadata": {"idempotency_key": f"parked-{content}"},
+                },
+                None,
+            ),
+        ]
+    )
+
+
+def test_spool_drain_replays_unit_parked_under_another_scope(tmp_path: Path) -> None:
+    parked = _parked_unit_scope()
+    spool = JsonlSpool(tmp_path / "runtime-spool.jsonl")
+    _park_unit(spool, parked, "Parked in another project")
+    transport = LaneAwareTransport()
+    runtime = FirstClassMemoryRuntime(
+        runtime_config(),
+        runtime_scope(),
+        transport=transport,
+        spool=spool,
+    )
+
+    saved = runtime.capture_distilled("Recovery trigger in current project")
+
+    assert saved.receipt.status is ReceiptStatus.SAVED
+    assert spool.status().pending_count == 0
+    started = [
+        call["params"]["arguments"]
+        for call in tool_calls(transport)
+        if call["params"]["name"] == "session_start"
+    ]
+    assert any(
+        arguments["session_key"] == parked.session_key
+        and arguments["channel_id"] == parked.channel_id
+        for arguments in started
+    )
+    appended = [
+        call["params"]["arguments"]
+        for call in tool_calls(transport)
+        if call["params"]["name"] == "append_session_event"
+    ]
+    assert any(
+        arguments["content"] == "Parked in another project"
+        and arguments["channel_id"] == parked.channel_id
+        for arguments in appended
+    )
+
+
+def test_spool_drain_rejects_tampered_lane_echo_for_parked_scope(
+    tmp_path: Path,
+) -> None:
+    parked = _parked_unit_scope()
+    spool = JsonlSpool(tmp_path / "runtime-spool.jsonl")
+    _park_unit(spool, parked, "Must stay parked")
+    transport = ForeignLaneTamperingTransport(parked.session_key)
+    runtime = FirstClassMemoryRuntime(
+        runtime_config(),
+        runtime_scope(),
+        transport=transport,
+        spool=spool,
+    )
+
+    saved = runtime.capture_distilled("Healthy current-scope write")
+
+    assert saved.receipt.status is ReceiptStatus.SAVED
+    # The replayed lane echo failed the parked unit's exact-scope proof, so the
+    # unit stays parked and its write never dispatched.
+    assert [record.operation for record in spool.records()] == [
+        "session_start",
+        "append_session_event",
+    ]
+    appended = [
+        call["params"]["arguments"]
+        for call in tool_calls(transport)
+        if call["params"]["name"] == "append_session_event"
+    ]
+    assert all(
+        arguments["content"] != "Must stay parked" for arguments in appended
+    )
+
+
+def test_spool_drain_retains_start_record_missing_scope_coordinates(
+    tmp_path: Path,
+) -> None:
+    spool = JsonlSpool(tmp_path / "runtime-spool.jsonl")
+    spool.append(
+        "session_start",
+        {"session_key": "other-repo/session-9", "agent": "bilby"},
+        key="incomplete-start",
+    )
+    scope = runtime_scope()
+    spool.append(
+        "session_start",
+        {
+            **scope.start_metadata(),
+            "session_key": scope.session_key,
+            "agent": scope.agent,
+        },
+        key="valid-start",
+    )
+    transport = LaneAwareTransport()
+    runtime = FirstClassMemoryRuntime(
+        runtime_config(),
+        scope,
+        transport=transport,
+        spool=spool,
+    )
+
+    recalled = runtime.recall_context("Drain what can be proven")
+
+    assert recalled.receipt.status is ReceiptStatus.DIRECT
+    # The incomplete record cannot prove a parked scope: retained, and never
+    # dispatched as a wasted live session_start.
+    assert [record.idempotency_key for record in spool.records()] == [
+        "incomplete-start"
+    ]
+    started_keys = [
+        call["params"]["arguments"].get("session_key")
+        for call in tool_calls(transport)
+        if call["params"]["name"] == "session_start"
+    ]
+    assert "other-repo/session-9" not in started_keys
 
 
 def test_spool_replay_failure_keeps_unit_without_changing_outer_receipt(

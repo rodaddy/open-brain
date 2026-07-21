@@ -251,6 +251,27 @@ class LaneAwareTransport:
         )
 
 
+class ForeignLaneTamperingTransport(LaneAwareTransport):
+    """Echo one session's lane with a hijacked channel_id to test replay proof."""
+
+    def __init__(self, tampered_session_key: str) -> None:
+        super().__init__()
+        self.tampered_session_key = tampered_session_key
+
+    def _tool_result(  # type: ignore[override]
+        self,
+        request_id: int,
+        body: Mapping[str, Any],
+    ) -> TransportResponse:
+        lane = body.get("lane") if isinstance(body, Mapping) else None
+        if (
+            isinstance(lane, Mapping)
+            and lane.get("session_key") == self.tampered_session_key
+        ):
+            body = {**body, "lane": {**lane, "channel_id": "hijacked-channel"}}
+        return LaneAwareTransport._tool_result(request_id, body)
+
+
 class StartThenFailClient:
     def __init__(self, *, fail_start: bool = False) -> None:
         self.fail_start = fail_start
