@@ -220,6 +220,25 @@ describe("requestLogger middleware", () => {
     expect(loggerWarnSpy).not.toHaveBeenCalled();
   });
 
+  test("repeated identical mismatched declarations warn once per bucket", () => {
+    const headers = {
+      "x-ob-contract": `repeat-contract;schema_hash=${"1".repeat(64)}`,
+    };
+
+    requestLogger(
+      mockReq({ headers }),
+      mockRes(),
+      mock(() => {}) as NextFunction,
+    );
+    requestLogger(
+      mockReq({ headers }),
+      mockRes(),
+      mock(() => {}) as NextFunction,
+    );
+
+    expect(loggerWarnSpy).toHaveBeenCalledTimes(1);
+  });
+
   test("does not log malformed client contract header contents", () => {
     const req = mockReq({
       headers: { "x-ob-contract": "Bearer leakmark-contract-header-secret" },

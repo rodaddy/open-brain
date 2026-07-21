@@ -289,3 +289,14 @@ Content-hash dedupe can turn citation backfill into a false success. When an exi
 **Status:** fixed in PR #294
 
 A generic success-shaped primary or fallback response is not durable evidence. Both paths must validate tool-specific result fields and presence-sensitive exact nullable scope proof for `session_start` and `agent_context_pack`; subprocess fallback must also bound stdout/stderr while streaming so a noisy child cannot exhaust memory. Response/receipt validation failures belong to the recoverable runtime path and must continue to the configured fallback or spool; caller-input validation failures must stop before any transport attempt. If direct start partially succeeds and a later step fails, fallback must verify the intended lane rather than treating any active lane as proof. Tests must force primary and fallback partial-start failure, wrong-lane evidence, null-versus-omitted scope, malformed success payloads, invalid caller input, and unbounded-output pressure.
+
+## [2026-07-21] Parity declarations need executable cross-runtime proof
+
+**Severity:** MEDIUM
+**Source:** PR #313 / PR development#44 review swarm 2026-07-21
+**Scope:** `contracts/check-parity.ts`, `src/middleware/request-logger.ts`, CI warm-up/cache steps
+**Status:** fixed-pre-merge
+
+- The TS test pin, Python constant, and contract-declaration fixture carried the same schema_hash as three hand-copied literals with no executable TS-vs-fixture check; the parity validator must compute the live `buildContract()` schema_hash and fail on divergence, closing the triangle the pytest replay leaves open.
+- The contract-mismatch tripwire warned on every request, so one stale client or attacker-supplied headers could amplify log volume; throttle to one warn per distinct declared (contract id, schema_hash) per 5-minute bucket with malformed headers collapsed to one key.
+- Verified-artifact-vs-executed-artifact class: a warm-up or cache step (e.g. the uv cache) can validate one artifact while the gated job later executes another; gates must prove the executed artifact is the one that passed verification.

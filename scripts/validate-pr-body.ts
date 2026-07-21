@@ -6,6 +6,12 @@ interface ValidationOptions {
   contractParityRequired?: boolean;
 }
 
+const PLACEHOLDER_REASONS = new Set(["-", "n/a", "na", "none", "todo", "tbd"]);
+
+function isPlaceholderReason(value: string): boolean {
+  return !value || PLACEHOLDER_REASONS.has(value.toLowerCase());
+}
+
 function section(body: string, name: string): string {
   const lines = body.split(/\r?\n/);
   const heading = `## ${name}`.toLowerCase();
@@ -82,10 +88,7 @@ function requireContractParityDisposition(
 
   if (fixturesUpdated === Boolean(runtimeSpecific)) {
     errors.push("Contract parity must check exactly one disposition.");
-  } else if (
-    runtimeSpecific &&
-    (!runtimeSpecificReason || runtimeSpecificReason === "-")
-  ) {
+  } else if (runtimeSpecific && isPlaceholderReason(runtimeSpecificReason)) {
     errors.push("Contract parity runtime-specific disposition needs a reason.");
   }
 }

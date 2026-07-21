@@ -127,6 +127,18 @@ describe("validatePrBody", () => {
     ).toContain("Contract parity runtime-specific disposition needs a reason.");
   });
 
+  it("rejects placeholder runtime-specific reasons", () => {
+    const placeholder = validBody
+      .replace("[x] fixtures updated", "[ ] fixtures updated")
+      .replace(
+        "[ ] runtime-specific because:",
+        "[x] runtime-specific because: TBD",
+      );
+    expect(
+      validatePrBody(placeholder, { contractParityRequired: true }).errors,
+    ).toContain("Contract parity runtime-specific disposition needs a reason.");
+  });
+
   it("rejects non-literal fixtures-updated declarations", () => {
     const body = validBody.replace(
       "[x] fixtures updated",

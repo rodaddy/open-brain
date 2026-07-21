@@ -1,6 +1,20 @@
 {
   "id": "openbrain.memory.contract-parity.v1",
   "description": "Phase-1 parity declarations for the Python client and planned TypeScript peer.",
+  "expected_fixture_ids": {
+    "auto-drain-replay-allowlist": "python",
+    "contract-declaration-v22": "both",
+    "exact-scope-proof-context-pack": "both",
+    "lifecycle-capture": "both",
+    "lifecycle-checkpoint": "both",
+    "lifecycle-recall": "both",
+    "lifecycle-session-start": "both",
+    "lifecycle-wrap": "both",
+    "python-runtime-and-agent-receipt-shapes": "both",
+    "spool-line-cap-backpressure": "python",
+    "spool-redact-before-persist": "python",
+    "ts-public-receipt-error-category-v1": "ts"
+  },
   "capabilities": [
     {
       "capability": "contract-declaration",

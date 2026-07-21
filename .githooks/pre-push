@@ -9,6 +9,10 @@ echo "pre-push: running Open Brain validation..."
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 
+# Single source of truth for the parity path filter; CI and the PR-body
+# workflow read the same file, and check-parity.ts asserts it is non-empty.
+PARITY_PATHS=("${(f)$(cat "$ROOT/contracts/parity-paths.txt")}")
+
 ZERO_SHA=0000000000000000000000000000000000000000
 SAW_RANGE=no
 CHANGED_PYTHON=no
@@ -34,9 +38,7 @@ while read -r _local_ref local_sha _remote_ref remote_sha; do
   if [ -n "$(git diff --name-only "$base_sha" "$local_sha" -- python/openbrain-memory)" ]; then
     CHANGED_PYTHON=yes
   fi
-  if [ -n "$(git diff --name-only "$base_sha" "$local_sha" -- \
-    python/openbrain-memory contracts clients/ts \
-    src/contract.ts src/contract-schemas.ts)" ]; then
+  if [ -n "$(git diff --name-only "$base_sha" "$local_sha" -- "${PARITY_PATHS[@]}")" ]; then
     CHANGED_PARITY=yes
   fi
 done
@@ -54,9 +56,7 @@ if [ "$SAW_RANGE" = no ]; then
   if [ -n "$(git diff --name-only "$BASE" HEAD -- python/openbrain-memory)" ]; then
     CHANGED_PYTHON=yes
   fi
-  if [ -n "$(git diff --name-only "$BASE" HEAD -- \
-    python/openbrain-memory contracts clients/ts \
-    src/contract.ts src/contract-schemas.ts)" ]; then
+  if [ -n "$(git diff --name-only "$BASE" HEAD -- "${PARITY_PATHS[@]}")" ]; then
     CHANGED_PARITY=yes
   fi
 fi

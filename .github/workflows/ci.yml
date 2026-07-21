@@ -264,12 +264,14 @@ jobs:
           fi
           case "${base}" in
             ""|0000000000000000000000000000000000000000)
-              base="$(git rev-parse HEAD^ 2>/dev/null || git hash-object -t tree /dev/null)"
+              # New-branch pushes have no usable 'before' SHA. Match the
+              # pre-push hook: diff against the merge-base with origin/main so
+              # CI never checks a narrower range than the hook does.
+              git rev-parse --verify origin/main >/dev/null 2>&1 || git fetch origin main
+              base="$(git merge-base "${HEAD_SHA}" origin/main 2>/dev/null || git hash-object -t tree /dev/null)"
               ;;
           esac
-          if git diff --quiet "${base}" "${HEAD_SHA}" -- \
-            python/openbrain-memory contracts clients/ts \
-            src/contract.ts src/contract-schemas.ts; then
+          if git diff --quiet "${base}" "${HEAD_SHA}" -- $(cat contracts/parity-paths.txt); then
             echo "required=false" >> "${GITHUB_OUTPUT}"
           else
             echo "required=true" >> "${GITHUB_OUTPUT}"

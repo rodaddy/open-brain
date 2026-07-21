@@ -49,6 +49,25 @@ def _load_fixtures() -> list[dict[str, Any]]:
 PYTHON_FIXTURES = _load_fixtures()
 
 
+def test_python_fixture_set_matches_manifest() -> None:
+    """A moved or emptied fixture directory must fail loudly, not skip.
+
+    The parametrized replay below collects zero tests when discovery finds
+    nothing, so this test pins the discovered python-consumable fixture set to
+    the manifest's explicit expectation.
+    """
+    manifest = json.loads(
+        (FIXTURE_DIR / "parity-manifest.json").read_text(encoding="utf-8")
+    )
+    expected_python_ids = {
+        fixture_id
+        for fixture_id, runtime in manifest["expected_fixture_ids"].items()
+        if runtime in {"both", "python"}
+    }
+    assert expected_python_ids
+    assert {fixture["id"] for fixture in PYTHON_FIXTURES} == expected_python_ids
+
+
 class ScopeProofClient(StartThenFailClient):
     def __init__(self, scope_result: Mapping[str, Any]) -> None:
         super().__init__()
