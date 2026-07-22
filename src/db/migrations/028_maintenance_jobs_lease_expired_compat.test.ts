@@ -1,5 +1,12 @@
-import { afterAll, beforeEach, describe, expect, it } from "bun:test";
-import { Pool } from "pg";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+} from "bun:test";
+import { Client } from "pg";
 
 const DB_URL = process.env.OPENBRAIN_TEST_DATABASE_URL;
 const dbDescribe = DB_URL ? describe : describe.skip;
@@ -9,6 +16,12 @@ const migration028Url = new URL(
   import.meta.url,
 );
 const namespace = "test-migration-028-lease-compat";
+
+// Fixed, code-owned identifier for the isolated test schema. Migration 026/028
+// SQL is applied verbatim here (never against public) so this file cannot
+// disturb the shared maintenance_jobs table while Bun runs test files in
+// parallel. Chosen once, never derived from anything mutable.
+const TEST_SCHEMA = "ob_test_mig028_lease_compat";
 
 // The canonical last_error_category allow-list minus the value that a
 // database upgraded across an earlier revision of migration 026 is missing.
@@ -26,34 +39,77 @@ const PRE_LEASE_EXPIRED_CATEGORIES = [
 
 const CONSTRAINT_NAME = "maintenance_jobs_last_error_category_check";
 
-dbDescribe("028 maintenance_jobs lease_expired compat (live Postgres)", () => {
-  const pool = new Pool({ connectionString: DB_URL });
-
-  async function cleanup(): Promise<void> {
-    await pool.query("DELETE FROM maintenance_jobs WHERE namespace = $1", [
-      namespace,
-    ]);
+// Narrowly extract the last_error_category CHECK allow-list from a migration's
+// SQL text. This is a targeted regex over the exact shape both migrations use —
+// `last_error_category IN ( 'a', 'b', ... )` — not a general SQL parser. It
+// backs the drift guard so a future addition to 026's set that is not mirrored
+// into 028 fails loudly.
+function extractLastErrorCategorySet(sql: string): Set<string> {
+  const match = sql.match(
+    /last_error_category\s+(?:TEXT\s+)?(?:CHECK\s*\()?\s*IN\s*\(([^)]*)\)/i,
+  );
+  if (!match) {
+    throw new Error(
+      "could not locate a `last_error_category IN (...)` list in the migration SQL",
+    );
   }
+  const values = [...match[1]!.matchAll(/'([^']*)'/g)].map((m) => m[1]!);
+  if (values.length === 0) {
+    throw new Error(
+      "found a `last_error_category IN (...)` list but it contained no quoted values",
+    );
+  }
+  return new Set(values);
+}
+
+// Drift guard — runs without a database. Proves migration 028's repaired CHECK
+// accepts exactly the set migration 026 currently defines, so a future value
+// added to 026 cannot silently be omitted from the 028 upgrade repair.
+describe("028 / 026 last_error_category allow-lists stay in sync", () => {
+  it("028's repaired accepted-value set equals 026's current accepted-value set", async () => {
+    const set026 = extractLastErrorCategorySet(
+      await Bun.file(migration026Url).text(),
+    );
+    const set028 = extractLastErrorCategorySet(
+      await Bun.file(migration028Url).text(),
+    );
+    // Compare as sorted arrays for a readable diff on failure.
+    expect([...set028].sort()).toEqual([...set026].sort());
+  });
+});
+
+dbDescribe("028 maintenance_jobs lease_expired compat (live Postgres)", () => {
+  // A dedicated Client (not a Pool) so the schema-scoping search_path set once
+  // at connect time holds for every query in this file. A Pool hands out
+  // arbitrary connections, which would let a query leak back to public.
+  const client = new Client({ connectionString: DB_URL });
 
   async function applyMigration026(): Promise<void> {
-    await pool.query(await Bun.file(migration026Url).text());
+    await client.query(await Bun.file(migration026Url).text());
   }
 
   async function applyMigration028(): Promise<void> {
-    await pool.query(await Bun.file(migration028Url).text());
+    await client.query(await Bun.file(migration028Url).text());
+  }
+
+  async function cleanup(): Promise<void> {
+    await client.query("DELETE FROM maintenance_jobs WHERE namespace = $1", [
+      namespace,
+    ]);
   }
 
   // Rewind the persisted constraint to the shape a database that applied an
   // earlier revision of 026 (before 'lease_expired') carries forward, so the
   // regression proves the real upgrade path rather than the fresh-DB path.
+  // Scoped to the test schema by search_path — public is never touched.
   async function installPreLeaseExpiredConstraint(): Promise<void> {
     // A CHECK constraint definition is DDL and cannot be parameterized, so the
     // fixture list is inlined from the const above (SQL string literals).
     const inList = PRE_LEASE_EXPIRED_CATEGORIES.map((c) => `'${c}'`).join(", ");
-    await pool.query(
+    await client.query(
       `ALTER TABLE maintenance_jobs DROP CONSTRAINT IF EXISTS ${CONSTRAINT_NAME}`,
     );
-    await pool.query(
+    await client.query(
       `ALTER TABLE maintenance_jobs
          ADD CONSTRAINT ${CONSTRAINT_NAME}
          CHECK (last_error_category IN (${inList}))`,
@@ -64,7 +120,7 @@ dbDescribe("028 maintenance_jobs lease_expired compat (live Postgres)", () => {
     idempotencyKey: string,
     category: string | null,
   ): Promise<void> {
-    await pool.query(
+    await client.query(
       `INSERT INTO maintenance_jobs
          (job_kind, job_version, idempotency_key, namespace, last_error_category)
        VALUES ($1, 1, $2, $3, $4)`,
@@ -72,17 +128,41 @@ dbDescribe("028 maintenance_jobs lease_expired compat (live Postgres)", () => {
     );
   }
 
+  beforeAll(async () => {
+    await client.connect();
+    // Own an isolated schema. Everything below runs against it via search_path,
+    // so migration 026/028 SQL exercises the exact real DDL without mutating
+    // public.maintenance_jobs (which parallel test files may depend on). public
+    // stays on the path only so core resolution (e.g. gen_random_uuid) works;
+    // maintenance_jobs resolves to the test schema because it is listed first.
+    await client.query(`DROP SCHEMA IF EXISTS ${TEST_SCHEMA} CASCADE`);
+    await client.query(`CREATE SCHEMA ${TEST_SCHEMA}`);
+    await client.query(`SET search_path TO ${TEST_SCHEMA}, public`);
+    // Migration 026 creates a trigger that calls update_updated_at(); provide
+    // it inside the isolated schema so 026 applies self-contained, without
+    // depending on the full base migration chain (which needs pgvector).
+    await client.query(
+      `CREATE OR REPLACE FUNCTION ${TEST_SCHEMA}.update_updated_at()
+         RETURNS TRIGGER AS $$
+         BEGIN
+           NEW.updated_at = NOW();
+           RETURN NEW;
+         END;
+         $$ LANGUAGE plpgsql`,
+    );
+  });
+
   beforeEach(async () => {
     // Ensure the table exists (idempotent), then model an upgraded database.
     await applyMigration026();
     await cleanup();
     await installPreLeaseExpiredConstraint();
   });
+
   afterAll(async () => {
-    await cleanup();
-    // Leave the table in the canonical (repaired) state for reuse.
-    await applyMigration028();
-    await pool.end();
+    // Drop the whole test-owned schema; public was never modified.
+    await client.query(`DROP SCHEMA IF EXISTS ${TEST_SCHEMA} CASCADE`);
+    await client.end();
   });
 
   it("rejects lease_expired before the migration and accepts it after — proving the upgrade repair", async () => {
@@ -95,7 +175,7 @@ dbDescribe("028 maintenance_jobs lease_expired compat (live Postgres)", () => {
 
     // After the repair, the queue's dead-letter category is accepted.
     await insertWithCategory("028-after", "lease_expired");
-    const { rows } = await pool.query(
+    const { rows } = await client.query(
       `SELECT last_error_category FROM maintenance_jobs
         WHERE namespace = $1 AND idempotency_key = $2`,
       [namespace, "028-after"],
@@ -114,7 +194,7 @@ dbDescribe("028 maintenance_jobs lease_expired compat (live Postgres)", () => {
 
     await applyMigration028();
 
-    const { rows } = await pool.query(
+    const { rows } = await client.query(
       `SELECT idempotency_key, last_error_category FROM maintenance_jobs
         WHERE namespace = $1
         ORDER BY idempotency_key`,
@@ -139,7 +219,7 @@ dbDescribe("028 maintenance_jobs lease_expired compat (live Postgres)", () => {
     await applyMigration028();
 
     await insertWithCategory("028-idempotent", "lease_expired");
-    const { rows } = await pool.query(
+    const { rows } = await client.query(
       `SELECT count(*)::int AS n FROM maintenance_jobs
         WHERE namespace = $1 AND idempotency_key = $2`,
       [namespace, "028-idempotent"],
