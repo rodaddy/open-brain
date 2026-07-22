@@ -453,3 +453,88 @@ delimiter overcharge.
   slack) proving content on the limit is retained, not truncated?
 - Is the framing accounting validated against real `JSON.stringify` output for
   single-member and multi-member objects, not just an asserted formula?
+## [2026-07-22] Denial classification must win over generic keywords in a mixed error body
+
+**Severity:** MEDIUM (P2)
+**Source:** PR #348 review swarm, 2026-07-22 (issue #322 live recall gate)
+**Scope:** `eval/open-brain/live/transport.ts` (`redactToolFailure`,
+`sanitizeThrownTransportError`), any content-free error classifier that picks a
+single keyword from an allowlist by first-match
+**Status:** fixed-pre-merge
+
+### Pattern
+
+The content-free redactor selected the error keyword with a single
+`KEYWORDS.find(kw => body.includes(kw))` over one flat array. Server error
+bodies routinely mix phrases — "invalid request: unauthorized for namespace",
+"invalid archive: forbidden" — and because `"invalid"` sat ahead of
+`"unauthorized"` / `"forbidden"` in the array, first-match returned the generic
+keyword and the label was classified as a NON-denial error. That silently
+weakens the two places denial classification matters: the isolation proof (a
+real permission denial mislabeled as a plain error is not counted as isolation
+proof) and a teardown/auth failure (a namespace/permission refusal read as a
+generic error loses its security meaning). Fixed by splitting the allowlist into
+denial keywords (`permission denied`, `not authenticated`, `unauthorized`,
+`forbidden`) matched FIRST, then generic keywords, so a mixed body always
+classifies as a denial regardless of array order.
+
+### Review Questions
+
+- Does any single-keyword error/label classifier depend on array ORDER to pick
+  the "right" keyword, when a real body can contain more than one match?
+- Are the security-relevant signals (denial / auth / permission) matched with
+  explicit precedence over generic ones (invalid / not-found / timeout), not by
+  incidental list position?
+- Is there a mixed-body test for BOTH the response-error path
+  (`redactToolFailure`) and the thrown-error path
+  (`sanitizeThrownTransportError`), asserting the denial keyword wins over a
+  leading generic keyword AND over a bare HTTP status code?
+- Does a generic-only body still classify as non-denial (no over-broad
+  promotion of every error to a denial)?
+
+## [2026-07-22] Per-run isolation namespaces must be non-reusable AND survive bounding
+
+**Severity:** MEDIUM (P2)
+**Source:** PR #348 terminal audit, 2026-07-22 (issue #322 live recall gate)
+**Scope:** `eval/open-brain/live/config.ts` (`makeRunId`, `runNamespaces`,
+`boundRunId`), any per-run throwaway namespace/tenant derived from an
+operator-supplied id that is later truncated to a length bound
+**Status:** fixed-pre-merge
+
+### Pattern
+
+The gate isolates each run in a unique namespace so teardown can only touch this
+run's rows. Two ways that uniqueness silently collapsed:
+
+1. **Reusable explicit id.** `OPEN_BRAIN_LIVE_EVAL_RUN_ID` was returned verbatim
+   as the run id ("reproducible namespace"). Reusing it re-entered a prior run's
+   namespace — where a stranded prior seed still lived. The seed then upserted
+   (`ON CONFLICT`) onto that row and returned `merged: true`, which the seeder
+   adopted as a current-run creation (see the correctness seed-proof entry) and
+   would archive on teardown. A "reproducible" isolation namespace is a
+   contradiction: isolation requires non-reuse. Fix: the explicit id is now a
+   human-readable LABEL; a per-invocation crypto nonce is ALWAYS appended, so the
+   namespace can never be reused even with a fixed label.
+
+2. **Truncation-collision.** `runNamespaces` bounded the id with
+   `.slice(0, 80)`. A long label plus a trailing nonce puts the nonce PAST the
+   cut, so two runs sharing an 80-char prefix mapped to the SAME namespace — the
+   nonce that was supposed to guarantee uniqueness was thrown away by the length
+   bound. Fix: `boundRunId` keeps a truncated prefix and appends a deterministic
+   short hash of the FULL sanitized id, so distinct long ids stay distinct while
+   still fitting the bound. The hash is SHA-256 (pure/deterministic — no
+   Date.now/random), keeping the helper pinnable.
+
+### Review Questions
+
+- Does any "unique per run" identifier have a mode (explicit id, reused label,
+  fixed seed) where two invocations can produce the SAME value? For an isolation
+  boundary, the uniqueness source (nonce) must be mandatory and always mixed in.
+- Does a length/format bound (`slice`, hash-to-fixed-width, sanitize) run AFTER
+  the uniqueness suffix in a way that can DROP it? Two inputs sharing the bounded
+  prefix must still map to different outputs — bound with a hash of the full
+  input, not a prefix cut.
+- Is the collision case tested directly: two ids sharing the max-length prefix
+  (and a reused label across invocations) asserting distinct final namespaces?
+- If the boundary doubles as a destructive-teardown scope, does reuse let one
+  run's teardown touch another run's / a real namespace's rows?
