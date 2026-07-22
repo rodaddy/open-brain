@@ -5,11 +5,8 @@
 import type pg from "pg";
 import { toSql } from "pgvector/pg";
 import { createPool } from "../src/db/pool.ts";
-import {
-  generateEmbedding,
-  contentHash,
-  EMBEDDING_MODEL,
-} from "../src/embedding.ts";
+import { generateEmbedding, EMBEDDING_MODEL } from "../src/embedding.ts";
+import { getEmbeddingTarget } from "../src/embedding-targets.ts";
 import { logger } from "../src/logger.ts";
 
 type EmbedFn = (text: string) => Promise<number[] | null>;
@@ -20,36 +17,31 @@ interface TableConfig {
    * 768-dim vectors (and other wide columns) out of JS memory on --all runs. */
   columns: string[];
   textFn: (row: Record<string, unknown>) => string;
+  hashFn: (row: Record<string, unknown>) => string;
 }
 
-const TABLE_CONFIGS: TableConfig[] = [
-  {
-    table: "thoughts",
-    columns: ["id", "content"],
-    textFn: (row) => row.content as string,
-  },
-  {
-    table: "decisions",
-    columns: ["id", "title", "rationale"],
-    textFn: (row) => `${row.title}\n${row.rationale}`,
-  },
-  {
-    table: "relationships",
-    columns: ["id", "person_name", "context", "notes"],
-    textFn: (row) =>
-      [row.person_name, row.context, row.notes].filter(Boolean).join("\n"),
-  },
-  {
-    table: "projects",
-    columns: ["id", "name", "description"],
-    textFn: (row) => [row.name, row.description].filter(Boolean).join("\n"),
-  },
-  {
-    table: "sessions",
-    columns: ["id", "summary"],
-    textFn: (row) => row.summary as string,
-  },
-];
+// Backfill covers the original 5 namespaced domain tables. Table -> text and
+// -> hash mappings are sourced from the shared EMBEDDING_TARGETS registry so
+// they never drift from the repair primitive or the write paths. Only the id
+// and source columns are projected here (not `namespace`) to keep the SELECT
+// shape and JS memory footprint identical to the pre-registry behavior.
+const BACKFILL_TABLES = [
+  "thoughts",
+  "decisions",
+  "relationships",
+  "projects",
+  "sessions",
+] as const;
+
+const TABLE_CONFIGS: TableConfig[] = BACKFILL_TABLES.map((name) => {
+  const target = getEmbeddingTarget(name);
+  return {
+    table: target.table,
+    columns: target.selectColumns.filter((c) => c !== "namespace"),
+    textFn: (row) => target.embedText(row),
+    hashFn: (row) => target.sourceHash(row),
+  };
+});
 
 // Per-row delay -- default 150ms is politeness for shared/cloud embedding
 // providers. Set BACKFILL_DELAY_MS=0 for a dedicated local provider.
@@ -82,7 +74,7 @@ export async function backfill(
   let totalFailed = 0;
   const whereClause = options.all ? "" : " WHERE embedding IS NULL";
 
-  for (const { table, columns, textFn } of TABLE_CONFIGS) {
+  for (const { table, columns, textFn, hashFn } of TABLE_CONFIGS) {
     // table/columns come from the static TABLE_CONFIGS allowlist above, never
     // from user input -- interpolation is safe here.
     const { rows } = await pool.query(
@@ -108,7 +100,10 @@ export async function backfill(
           continue;
         }
 
-        const hash = contentHash(text);
+        // Hash the canonical source (matches the write-path formula per table),
+        // NOT necessarily the embed text -- e.g. thoughts embed content+tags but
+        // hash content alone. See src/embedding-targets.ts.
+        const hash = hashFn(row);
         try {
           await pool.query(
             `UPDATE ${table}
