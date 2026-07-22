@@ -646,3 +646,261 @@ restorable one.
 - Would the post-upgrade validation catch an out-of-order application, or do
   both paths converge to identical final sets (making the ordering bug
   invisible after the fact)?
+
+## [2026-07-22] A retry bound must terminate the expiry-reclaim path, not just the fail() path
+
+**Severity:** P2
+**Source:** PR #350 / issue #343 review swarm, 2026-07-22
+**Scope:** `src/maintenance-queue.ts` `claimDueJobs` expired-lease reclaim
+**Status:** fixed
+
+### Pattern
+
+`claimDueJobs` reclaimed *every* expired `running` row and incremented
+`attempts` unconditionally, while only the explicit `fail()` path honored
+`max_attempts`. A handler that keeps blowing its lease (hang/crash, never
+calling complete/fail) was therefore reclaimed and re-executed forever, past
+its bound — the retry cap was enforced on one exit but not the other. The fix
+terminates in the same claim statement: an expired running row whose
+already-consumed execution attempts (`attempts`, which counts leases) have
+reached `max_attempts` is dead-lettered instead of reclaimed — lease cleared,
+`terminal_at`/`dead_lettered_at` stamped, a content-free `lease_expired`
+category stored — and is excluded from `RETURNING` so the runner never treats
+it as claimed. `attempts` is left at the number of leases actually consumed,
+never inflated past `max_attempts` by the sweep. Rows with budget remaining
+still reclaim normally.
+
+### Review Questions
+
+- Does every path that consumes an attempt (explicit failure AND lease-expiry
+  reclaim) enforce the same `max_attempts` bound, or can one path retry past
+  it?
+- When a bounded row terminates, is it moved to a real terminal state that
+  satisfies every migration CHECK (lease cleared, terminal/dead-letter
+  timestamps set, valid category) — or merely left un-selected and stuck
+  `running`?
+- Does the counter that gates the bound keep a stable meaning (executions
+  consumed) across both paths, or does the reclaim path inflate it?
+- Is there a real-database regression that fails on the pre-fix code by proving
+  the exhausted row cannot be reclaimed again?
+
+## [2026-07-22] The state-machine transition must derive from the durable row, not the caller's job object
+
+**Severity:** P2
+**Source:** PR #350 / issue #343 Terra terminal audit, 2026-07-22
+**Scope:** `src/maintenance-queue.ts` `MaintenanceQueue.fail`, `MaintenanceQueueRunner.execute/fail`
+**Status:** fixed
+
+### Pattern
+
+`fail()` decided the terminal state (`attempts >= $3`) and the retry schedule
+(`nextRunAfter = now + maintenanceBackoffMs(input.job)`) from the caller-supplied
+`input.job` retry fields — `maxAttempts`, `attempts`, `backoffBaseMs`,
+`backoffMaxMs`. The runner hands the **same** `MaintenanceJob` object to the
+registered handler (`handler(job)`), so a handler could mutate those fields
+before throwing and thereby override the persisted policy: inflate
+`maxAttempts` to dodge the terminal bound (dead-letter → indefinite requeue),
+or shrink `backoffBaseMs`/`backoffMaxMs` to collapse the schedule. The durable
+row's policy was authoritative on disk but ignored by the transition.
+
+The fix moves the whole decision to the persisted columns inside the
+lease-token-guarded UPDATE: terminal state is `attempts >= max_attempts`, and
+`run_after` is computed in SQL from the row's own `attempts`, `backoff_base_ms`,
+`backoff_max_ms` — `now + LEAST(backoff_base_ms * 2 ^ LEAST(GREATEST(attempts-1,
+0), 30), backoff_max_ms)` — mirroring `maintenanceBackoffMs()` exactly (first
+retry uses base, exponent bounded, cap preserved). No caller-supplied
+retry-policy value reaches the transition; `input.job` is used only for the
+id + lease-token guard, which `claimDueJobs` minted. The runner additionally
+captures immutable claim identity (`id`, `kind`, `leaseToken`) before invoking
+the handler and binds `complete`/`fail` to it, so handler mutation of
+`job.id`/`job.leaseToken` cannot redirect the guard to another row or make the
+regression vacuous. Content-free category and stale-lease no-op semantics are
+unchanged. See also [2026-07-22] retry-bound-must-terminate-the-expiry-reclaim
+above — both paths now honor `max_attempts` from the row, not from any object.
+
+### Rule
+
+A durable state-machine transition (terminal decision, next-run time, any
+policy gate) must be derived from persisted row columns inside the guarded
+UPDATE — never from a mutable in-memory object that untrusted or handler code
+holds a reference to. The passed object may supply only opaque identity used in
+the WHERE guard (here id + lease token), and even that identity should be
+snapshotted before handler code runs.
+
+### Review Questions
+
+- Does a state transition read retry/policy values from a caller-passed object,
+  or from the row's own columns? If the same object is handed to a handler that
+  runs before the transition, mutation of those fields silently rewrites policy.
+- Is the terminal bound and the schedule computed in SQL over persisted columns,
+  or in JS over the input job? A JS computation over the input is caller-owned.
+- Is the claim identity used in the lease-token guard snapshotted before handler
+  code runs, so mutation of `id`/`leaseToken` cannot redirect or void the guard?
+- Does a real-database regression enqueue a known policy, mutate the retry
+  fields via the handler (or the returned job) before failing, and prove the
+  persisted row still dead-letters/schedules per the durable policy — failing on
+  the pre-fix code?
+## [2026-07-22] Destructive-teardown success must fail closed on an unrecognized response shape
+
+**Severity:** MEDIUM (P2)
+**Source:** PR #348 review swarm, 2026-07-22 (issue #322 live recall gate)
+**Scope:** `eval/open-brain/live/transport.ts` (`OpenBrainLiveClient.archive`),
+any client wrapper mapping a destructive tool's success body to a terminal
+"already gone / cleanup clean" outcome
+**Status:** fixed-pre-merge
+
+### Pattern
+
+`archive` mapped `archived === true` to `"archived"` and treated **every other
+success** as `"already_absent"`. That default is a false-pass: a shape drift, a
+differently-worded body, an empty body, or a success that did not actually
+tombstone the row all collapsed to "the row is gone", so teardown reported clean
+cleanup while a live record was stranded and the gate could still return PASS —
+the exact mutation-safety guarantee the per-record teardown exists to provide.
+For a destructive operation, only the tool's REAL success shapes are safe to
+accept. `archive_entry` (src/tools/archive-entry.ts) has exactly two:
+`{id, table, archived: true}` for a tombstoned row, and the EXACT plain-text
+body "Already archived or not found" (trimmed, case-insensitive) for the
+zero-row no-op. Accept only those — a structured `archived: false` (the server
+never emits it), a broad substring ("not found" / "no rows"), or the marker in
+mixed text are all rejected, because they could false-pass on unrelated output.
+Every other success throws a content-free `LiveTransportError`
+(`archive_entry:unrecognized-success`) so an ambiguous success can never be
+counted as clean teardown.
+
+### Review Questions
+
+- Does a wrapper over a destructive/idempotent tool have a catch-all branch that
+  maps *any* non-confirmed success to "already done / nothing to do"? That
+  branch fails OPEN — invert it to fail closed on unrecognized shapes.
+- Are the accepted positive shapes an explicit allowlist of the tool's REAL
+  success bodies (confirmed-success OR an EXACT absent marker, not a broad
+  substring), with everything else — including an invented `false` field or a
+  marker in mixed text — throwing?
+- Is the thrown label content-free (tool + marker), never the raw body — and is
+  there a test proving an unrecognized success (including an empty body and a
+  non-marker plain-text body) throws rather than silently passing?
+- If the operation's response can be lost after a server-side commit, is that
+  residual documented (a committed row can be stranded) rather than papered over
+  with a broad query-shaped sweep that would violate mutation-safety?
+
+### Follow-up [2026-07-22, PR #348 terminal audit]: destructive success must bind returned identity/table
+
+The initial fix accepted `archived: true` alone. `archive_entry` actually
+returns `{id, table, archived: true}`, and `archived: true` does not say WHICH
+row was tombstoned. An echo for a different id/table, or a response missing them,
+would be credited as this record's cleanup while the real record stayed live.
+The terminal fix requires the returned `id`/`table` to EXACTLY match the
+requested record; anything else throws `archive_entry:identity-mismatch`
+(content-free). Extend the review question: for a destructive confirmed-success
+shape, is the confirmation BOUND to the requested record's identity/table, not
+just a bare `archived: true`? Tests must cover archived:true with a wrong id,
+wrong table, and missing id/table.
+
+## [2026-07-22] Unknown/foreign retrieval hits must fail closed, never drop before scoring
+
+**Severity:** MEDIUM (P1)
+**Source:** PR #348 terminal audit, 2026-07-22 (issue #322 live recall gate)
+**Scope:** `eval/open-brain/live/gate.ts` (`toFixtureRetrieval`), any scorer that
+maps live retrieval hits back to fixture/expected ids before computing metrics
+**Status:** fixed-pre-merge
+
+### Pattern
+
+`toFixtureRetrieval` mapped each hit's server id back to a fixture id and
+**silently skipped** any hit not in the seed map, and it never checked the hit's
+namespace at all. An unmapped or foreign-namespace hit therefore disappeared
+before scoring: ranks compressed (recall/MRR looked better than reality), a real
+cross-namespace leak left `namespace_leaks=0`, and the run could still reach
+PASS. Dropping an unaccountable hit is fail-OPEN. The fix validates EVERY hit
+before mapping — it must carry the EXACT bound primary namespace AND an id this
+run created (present in the seed map, which holds both primary and negative
+seeded ids) — and throws a content-free `LiveTransportError`
+(`search_brain:foreign-namespace` / `:unknown-hit`) otherwise, which defers to
+teardown and blocks PASS. A KNOWN negative-role id surfacing under the primary
+namespace is NOT a validation failure: it maps and flows to the scorer, which
+counts it as the namespace leak (that is how in-namespace leakage is scored).
+
+### Follow-up [2026-07-22, PR #348 terminal fix]: the parse boundary drops entries a layer earlier than the mapper
+
+`toFixtureRetrieval` only ever sees the hits `parseHits` (the transport parse
+boundary in `transport.ts`) chose to emit. `parseHits` was itself fail-OPEN: a
+non-array / invalid-JSON success body returned `[]` (conflating a malformed
+result set with a real empty read), and any non-object row or row lacking a
+string id was silently skipped. Those discarded raw results never reached the
+gate validator, so the gate-level fix above could not see them — the same
+rank-compression / hidden-leak hole, one layer up. Fix `parseHits` to fail
+closed: a success body MUST be a JSON array (`search_brain:malformed-results`
+otherwise) and EVERY entry MUST be an object with a non-empty string id
+(`search_brain:malformed-hit` otherwise). Keep namespace OPTIONAL at the parse
+boundary so a valid-but-namespace-less hit still reaches the gate and is
+classified there as `foreign-namespace` — moving the namespace check into
+`parseHits` would mask that distinct gate-level classification. The isolation
+probe (`attemptRead`) shares `parseHits`, so a malformed negative-namespace body
+throws instead of being misread as `hitCount: 0` (an empty allowed read).
+
+### Review Questions
+
+- Does a retrieval/scoring mapper `continue`/skip hits it cannot map? A skipped
+  hit compresses ranks and can hide a leak — validate and fail closed instead.
+- **Does the layer that PARSES the raw result set (before the mapper) also fail
+  closed?** A parser that returns `[]` for a non-array body, or skips a
+  non-object / idless row, drops the evidence before the mapper can validate it —
+  fix both the parse boundary and the mapper.
+- Is the retrieved row's namespace (or tenant/scope) checked to be EXACTLY the
+  one the query bound, so a row returned from outside the bound scope fails the
+  run rather than being scored or dropped?
+- Are the expected-but-present hits still returned alongside the bad one in the
+  test, proving the failure fires even when good data is also present (not just
+  on an all-bad result)?
+- Is the failure label content-free (no hit id, namespace value, or body)?
+- Do the read path (`search`) and the isolation-probe path (`attemptRead`) share
+  ONE parse boundary, so a malformed body cannot be misread as an empty allowed
+  read on the probe path?
+
+## [2026-07-22] Seed (create) proof must bind merged:false and the exact namespace
+
+**Severity:** MEDIUM (P2)
+**Source:** PR #348 terminal audit, 2026-07-22 (issue #322 live recall gate)
+**Scope:** `eval/open-brain/live/transport.ts` (`OpenBrainLiveClient.logMemory`),
+any client that treats a `log_*` / upsert response as a fresh this-run creation
+it will later mutate
+**Status:** fixed-pre-merge
+
+### Pattern
+
+`log_thought` / `log_decision` return `{id, namespace, merged}` where
+`merged = !isNew` (src/tools/log-thought.ts, log-decision.ts): the tool upserts
+`ON CONFLICT (content_hash, namespace)`. The seeder ignored `merged` and
+defaulted a missing `namespace` to the requested one. In a REUSED namespace
+(see the adversarial reusable/truncated-run-id entry), a second run's seed
+upserts onto a prior run's stranded row and returns `merged: true` with the
+prior row's id — which the gate then adopted as a current-run creation and would
+archive on teardown, tombstoning a row this run did not create (and, symmetric,
+counting a prior row toward this run's scoring). The fix fails closed
+content-free unless the response proves a fresh create: `merged` present and
+`false`, a returned namespace EXACTLY equal to `opts.namespace` (no defaulting a
+missing/other namespace), and a present id. Labels: `:merged-upsert`,
+`:missing-merged`, `:namespace-mismatch`, `:missing-id`.
+
+### Review Questions
+
+- Does the create path assert the write actually CREATED a row (an explicit
+  `merged: false` / `created: true` / affected-rows signal), or does it treat any
+  2xx-shaped response as a new record it now owns?
+- For an upsert-backed "create", can a merged response onto a pre-existing row
+  be mistaken for this caller's row and later mutated/deleted?
+- Is the returned namespace/scope required to EXACTLY equal the requested one,
+  with no defaulting a missing field back to the request (which masks a write
+  that landed elsewhere)?
+- Is every rejection content-free (tool + reason), and is there a test for each
+  of merged:true, missing/non-boolean merged, wrong/absent namespace, missing id?
+
+### Note on canonicalization
+
+`log_thought` returns `canonicalNamespace(ns)` and `log_decision` returns raw
+`ns`. For the eval-live namespace (`eval-live-recall-<run-id>`),
+`canonicalNamespace` is a no-op (it only rewrites the shared namespace), so the
+exact-equality check is safe. A tool that seeds into the shared namespace would
+need to compare against the canonical form — check the tool's actual return
+transform before pinning exact-equality.
