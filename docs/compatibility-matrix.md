@@ -34,20 +34,23 @@ From `contracts/memory/parity-manifest.json` (fixture-backed, CI-gated by
 
 | Capability | Python | TypeScript |
 |---|---|---|
-| contract-declaration | implemented | pending (#312) |
-| session-lifecycle | implemented | pending (#312) |
-| exact-scope-proof | implemented | pending (#312) |
-| spool-backpressure | implemented | pending (#312) |
-| redact-before-persist | implemented | pending (#312) |
-| auto-drain-allowlist | implemented | pending (#312) |
-| receipt-shapes | implemented | runtime-specific (bounded TS `error_category` enum is Development-adapter-owned) |
+| contract-declaration | implemented | implemented (#312) |
+| session-lifecycle | implemented | implemented (#312) |
+| exact-scope-proof | implemented | implemented (#312) |
+| spool-backpressure | implemented | implemented (#312) |
+| redact-before-persist | implemented | implemented (#312) |
+| auto-drain-allowlist | implemented | implemented (#312) |
+| drain-receipts | implemented | implemented (#312) |
+| receipt-shapes | implemented | runtime-specific (bounded TS `error_category` enum is owned by the TS client; the agent-receipt half stays Python-only) |
 
-The 12 fixtures in `contracts/memory/` are the runtime-neutral behavioral spec
+The 13 fixtures in `contracts/memory/` are the runtime-neutral behavioral spec
 for both columns; `python/openbrain-memory/tests/test_contract_fixtures.py` is
-the Python fixture runner. The `(#312)` annotations and the `clients/ts/`
-landing path are doc-only forward references (the manifest records only
-`pending`; `contracts/parity-paths.txt` pre-wires `clients/ts/`) — update this
-page if #312 is re-scoped.
+the Python fixture runner and
+`clients/ts/tests/contract-fixtures.test.ts` is the TypeScript fixture runner
+(#312, `clients/ts/`). The TS client's intentional runtime differences (no
+mcp2cli fallback, no cross-process spool lock, no client-version range
+validation until the server manifest declares a TS entry) are listed in
+`clients/ts/README.md`.
 
 ## Upgrade and deprecation policy
 

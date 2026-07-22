@@ -3,7 +3,7 @@
   "description": "Direct context results must prove every requested scope field; mismatches fail open when fallback is disabled.",
   "capability": "exact-scope-proof",
   "runtime": "both",
-  "consumers": ["python"],
+  "consumers": ["python", "ts"],
   "request": {
     "scope": {
       "namespace": "bilby",

@@ -6,8 +6,8 @@ namespace semantics, and package/runtime deployment boundaries.
 ## [2026-06-11] MCP transport must be bounded and stream-aware
 
 **Severity:** HIGH
-**Source:** Issue #81, PR #72 follow-up
-**Scope:** `python/openbrain-memory/src/openbrain_memory/client.py`
+**Source:** Issue #81, PR #72 follow-up; PR #319 fix delta
+**Scope:** `python/openbrain-memory/src/openbrain_memory/client.py`, `clients/ts/src/client.ts`
 **Status:** active
 
 ### Pattern
@@ -15,6 +15,10 @@ namespace semantics, and package/runtime deployment boundaries.
 Transport code that reads an entire HTTP response before parsing can hang on
 long-lived Streamable HTTP/SSE responses or consume too much memory on bad
 responses.
+
+**PR #319:** TS `response.text()` defeated its byte cap and its SSE parser
+waited for EOF. Bound bytes while reading chunks, cancel on overflow, and return
+after a complete matching JSON-RPC SSE event; cover JSON, SSE, and open streams.
 
 ### Review Questions
 
@@ -47,21 +51,32 @@ JSON body. Treating that as opaque HTTP failure hides diagnostics from callers.
 ## [2026-06-11] Session lifecycle must be explicit
 
 **Severity:** MEDIUM
-**Source:** Issue #81
-**Scope:** `OpenBrainClient`
+**Source:** Issue #81; PR #319 terminal audit
+**Scope:** Python and TypeScript `OpenBrainClient`
 **Status:** active
 
 ### Pattern
 
 MCP sessions can accumulate under churn if the client has no explicit close or
-context-manager path and no documented TTL reliance.
+context-manager path and no documented TTL reliance. Concurrent first-use calls
+can also create multiple sessions when initialization is not coalesced; a close
+that overlaps initialization must invalidate and tear down the pending session
+so no session is published after close returns. Concurrent expired-session
+responses must be bound to the session ID each request used, so a delayed 404
+from an older session cannot clear and leak a newer replacement session.
 
 ### Review Questions
 
 - Does `OpenBrainClient` support `close()` and context manager behavior if the
   server supports termination?
-- If not supported, does README/API docs state lifecycle and server TTL clearly?
-- Are lifecycle tests or docs included?
+- Are concurrent first-use calls coalesced onto one initialization attempt?
+- Does close-during-initialize invalidate the pending operation, delete the
+  pending server session, and still allow a later post-close call to reinitialize?
+- When concurrent requests receive delayed expiry responses, does each response
+  clear only the session ID used by that request and preserve any newer session?
+- If explicit close is unsupported, do README/API docs state lifecycle and server
+  TTL clearly?
+- Are lifecycle concurrency tests included?
 
 ## [2026-06-11] Python package gates belong in CI
 

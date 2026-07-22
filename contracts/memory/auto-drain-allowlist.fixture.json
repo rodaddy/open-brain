@@ -2,17 +2,17 @@
   "id": "auto-drain-replay-allowlist",
   "description": "Successful direct recall drains only the explicit durable-operation allowlist in original order.",
   "capability": "auto-drain-allowlist",
-  "runtime": "python",
-  "consumers": ["python"],
+  "runtime": "both",
+  "consumers": ["python", "ts"],
   "request": {
     "trigger": "recall_context",
     "operations": [
       {"operation": "session_start", "payload": {"platform": "discord", "server_id": "guild-1", "channel_id": "channel-2", "thread_id": "thread-3", "session_key": "repo/session-4", "agent": "bilby"}},
       {"operation": "lane_upsert", "payload": {"session_key": "repo/session-4"}},
-      {"operation": "upsert_repo_fact", "payload": {"metadata": {"fact": "queued"}}},
+      {"operation": "upsert_repo_fact", "payload": {"metadata": {"source_system": "qmd", "repo": "rodaddy/open-brain", "collection": "open-brain", "path": "clients/ts/src/runtime.ts", "subject": "TypeScript runtime auto-drain", "fact_type": "api_contract", "fact": "The TypeScript runtime replays only explicitly allowlisted durable operations.", "source_commit": "ab3b10b3364554fa30eb51aaa99c116c4de87589", "source_url": "https://github.com/rodaddy/open-brain/blob/ab3b10b3364554fa30eb51aaa99c116c4de87589/clients/ts/src/runtime.ts", "verified_at": "2026-07-22T00:00:00.000Z", "confidence": 1, "staleness_policy": "commit_pinned", "refresh_hint": "Re-check the runtime allowlist when replay operations change."}}},
       {"operation": "append_session_event", "payload": {"platform": "discord", "server_id": "guild-1", "channel_id": "channel-2", "thread_id": "thread-3", "session_key": "repo/session-4", "agent": "bilby", "content": "Queued event", "event_type": "fact", "source": "bilby", "metadata": {"idempotency_key": "allowed-append"}}},
       {"operation": "log_thought", "payload": {"content": "Queued thought"}},
-      {"operation": "log_decision", "payload": {"content": "Queued decision"}},
+      {"operation": "log_decision", "payload": {"title": "Replay durable operations", "rationale": "The client must retain only operations with schema-valid replay support."}},
       {"operation": "session_wrap", "payload": {"platform": "discord", "server_id": "guild-1", "channel_id": "channel-2", "thread_id": "thread-3", "session_key": "repo/session-4", "agent": "bilby", "summary": "Queued wrap"}}
     ]
   },

@@ -3,7 +3,7 @@
   "description": "The Development-owned TS adapter exposes a bounded content-free error category for non-saved public receipts.",
   "capability": "receipt-shapes",
   "runtime": "ts",
-  "consumers": [],
+  "consumers": ["ts"],
   "request": {
     "source": "Development _ob ob-memory-provider adapter",
     "package_receipt_statuses": ["spooled", "failed", "lost"]

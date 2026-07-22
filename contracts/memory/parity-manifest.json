@@ -1,8 +1,8 @@
 {
   "id": "openbrain.memory.contract-parity.v1",
-  "description": "Phase-1 parity declarations for the Python client and planned TypeScript peer.",
+  "description": "Phase-2 parity declarations for the matched Python client and TypeScript peer (clients/ts).",
   "expected_fixture_ids": {
-    "auto-drain-replay-allowlist": "python",
+    "auto-drain-replay-allowlist": "both",
     "contract-declaration-v22": "both",
     "exact-scope-proof-context-pack": "both",
     "lifecycle-capture": "both",
@@ -10,65 +10,65 @@
     "lifecycle-recall": "both",
     "lifecycle-session-start": "both",
     "lifecycle-wrap": "both",
-    "python-drain-replay-quarantine-receipts": "python",
+    "python-drain-replay-quarantine-receipts": "both",
     "python-runtime-and-agent-receipt-shapes": "both",
-    "spool-line-cap-backpressure": "python",
-    "spool-redact-before-persist": "python",
+    "spool-line-cap-backpressure": "both",
+    "spool-redact-before-persist": "both",
     "ts-public-receipt-error-category-v1": "ts"
   },
   "capabilities": [
     {
       "capability": "contract-declaration",
       "python": "implemented",
-      "ts": "pending"
+      "ts": "implemented"
     },
     {
       "capability": "session-lifecycle",
       "python": "implemented",
-      "ts": "pending"
+      "ts": "implemented"
     },
     {
       "capability": "exact-scope-proof",
       "python": "implemented",
-      "ts": "pending"
+      "ts": "implemented"
     },
     {
       "capability": "spool-backpressure",
       "python": "implemented",
-      "ts": "pending"
+      "ts": "implemented"
     },
     {
       "capability": "redact-before-persist",
       "python": "implemented",
-      "ts": "pending"
+      "ts": "implemented"
     },
     {
       "capability": "auto-drain-allowlist",
       "python": "implemented",
-      "ts": "pending"
+      "ts": "implemented"
     },
     {
       "capability": "drain-receipts",
       "python": "implemented",
-      "ts": "pending"
+      "ts": "implemented"
     },
     {
       "capability": "receipt-shapes",
       "python": "implemented",
       "ts": "runtime-specific",
-      "reason": "The Development-owned TS adapter adds a bounded public error_category enum; the Python package exposes sanitized error text in its internal runtime receipt and does not own that adapter taxonomy."
+      "reason": "The TS client owns the bounded public error_category enum (clients/ts receipts, fixture ts-public-receipt-error-category-v1); the Python package exposes sanitized error text on its internal runtime receipt and does not own that taxonomy. The agent-receipt half of the shared receipt-shapes fixture exercises AgentMemory.record_receipt, which the TS client intentionally does not implement."
     }
   ],
   "not_yet_extracted": [
     {
       "capability": "exact-scope-proof",
       "scenario": "fallback-runner command and receipt ordering matrix",
-      "reason": "The current assertions mix transport fallback mechanics with scope proof; phase 1 keeps those tests authoritative instead of inventing a runtime-neutral fallback command contract."
+      "reason": "The current assertions mix transport fallback mechanics with scope proof; phase 1 keeps those tests authoritative instead of inventing a runtime-neutral fallback command contract. The TS client has no mcp2cli fallback route at all."
     },
     {
       "capability": "spool-backpressure",
       "scenario": "corrupt JSONL, fsync failure, short-write, symlink, and concurrent-append matrix",
-      "reason": "These are Python JsonlSpool implementation and filesystem durability details, not yet a matched-client wire contract."
+      "reason": "These are per-runtime spool implementation and filesystem durability details, not yet a matched-client wire contract."
     },
     {
       "capability": "receipt-shapes",

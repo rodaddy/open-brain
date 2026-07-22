@@ -2,7 +2,7 @@ import { buildContract } from "../src/contract.ts";
 
 type Runtime = "both" | "python" | "ts";
 type PythonStatus = "implemented";
-type TsStatus = "pending" | "runtime-specific";
+type TsStatus = "pending" | "implemented" | "runtime-specific";
 
 interface Fixture {
   id: string;
@@ -104,7 +104,11 @@ for (const entry of manifest.capabilities ?? []) {
       `parity-manifest.json: '${entry.capability}' has invalid python status '${String(entry.python)}'`,
     );
   }
-  if (entry.ts !== "pending" && entry.ts !== "runtime-specific") {
+  if (
+    entry.ts !== "pending" &&
+    entry.ts !== "implemented" &&
+    entry.ts !== "runtime-specific"
+  ) {
     errors.push(
       `parity-manifest.json: '${entry.capability}' has invalid ts status '${String(entry.ts)}'`,
     );
@@ -125,6 +129,8 @@ const liveContract = buildContract("1970-01-01T00:00:00.000Z");
 const fixtureGlob = new Bun.Glob("*.fixture.json");
 const fixtureIds = new Set<string>();
 const fixtureCapabilities = new Set<string>();
+const tsConsumedCapabilities = new Set<string>();
+const fixtures: Fixture[] = [];
 let fixtureCount = 0;
 let contractDeclarationChecked = false;
 
@@ -134,6 +140,7 @@ for await (const name of fixtureGlob.scan({
 })) {
   fixtureCount += 1;
   const fixture = await readJson<Fixture>(new URL(name, fixtureDir));
+  fixtures.push(fixture);
   const prefix = `${name}:`;
   for (const key of [
     "id",
@@ -170,6 +177,9 @@ for await (const name of fixtureGlob.scan({
     errors.push(`${prefix} capability must be non-empty`);
   }
   fixtureCapabilities.add(fixture.capability);
+  if (fixture.consumers?.includes("ts")) {
+    tsConsumedCapabilities.add(fixture.capability);
+  }
   const manifestEntry = capabilityMap.get(fixture.capability);
   if (!manifestEntry) {
     errors.push(
@@ -247,6 +257,25 @@ for (const capability of capabilityMap.keys()) {
   if (!fixtureCapabilities.has(capability)) {
     errors.push(
       `parity-manifest.json: capability '${capability}' has no extracted fixture`,
+    );
+  }
+}
+for (const [capability, entry] of capabilityMap) {
+  if (entry.ts === "implemented" && !tsConsumedCapabilities.has(capability)) {
+    errors.push(
+      `parity-manifest.json: ts-implemented capability '${capability}' has no fixture declared as consumed by ts`,
+    );
+  }
+}
+for (const fixture of fixtures) {
+  const capability = capabilityMap.get(fixture.capability);
+  if (
+    fixture.runtime === "both" &&
+    capability?.ts === "implemented" &&
+    !fixture.consumers?.includes("ts")
+  ) {
+    errors.push(
+      `contracts/memory: both-runtime fixture '${fixture.id}' under TS-implemented capability '${fixture.capability}' must declare a TS consumer`,
     );
   }
 }

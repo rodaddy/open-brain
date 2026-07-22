@@ -43,8 +43,8 @@ for SQL writers; require a real-pool test for new/changed write paths.
 ## [2026-06-11] Python wrappers must prove server schema compatibility
 
 **Severity:** MEDIUM
-**Source:** Issues #82, PR #73 review loop
-**Scope:** `python/openbrain-memory/**`
+**Source:** Issues #82, PR #73 review loop; PR #319 fix delta
+**Scope:** `python/openbrain-memory/**`, `clients/ts/tests/fakes.ts`, `contracts/memory/**`
 **Status:** active
 
 ### Pattern
@@ -52,6 +52,10 @@ for SQL writers; require a real-pool test for new/changed write paths.
 Wrapper tests that only assert a method name or `probe=True` can pass while the
 real MCP tool rejects the payload. PR #73 needed several fixes because facade
 methods forwarded unsupported top-level fields or missed required fields.
+
+**PR #319:** a permissive TS fixture fake drained malformed `upsert_repo_fact`
+and `log_decision` records. Replay fakes must validate required nested shapes so
+fixture success proves server-compatible arguments, not only operation names.
 
 ### Review Questions
 

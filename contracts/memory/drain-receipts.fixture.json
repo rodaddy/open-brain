@@ -2,8 +2,8 @@
   "id": "python-drain-replay-quarantine-receipts",
   "description": "Automated spool replay emits content-free linked receipts: REPLAYED per replayed record and QUARANTINED per quarantined unit, both within the pinned openbrain.runtime_receipt.v1 schema (no schema bump).",
   "capability": "drain-receipts",
-  "runtime": "python",
-  "consumers": ["python"],
+  "runtime": "both",
+  "consumers": ["python", "ts"],
   "request": {
     "replayed_receipt": {
       "operation": "append_session_event",

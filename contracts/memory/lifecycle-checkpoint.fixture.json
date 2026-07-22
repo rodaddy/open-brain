@@ -3,7 +3,7 @@
   "description": "Checkpoint lazily starts the exact lane and persists a session_wrap checkpoint.",
   "capability": "session-lifecycle",
   "runtime": "both",
-  "consumers": ["python"],
+  "consumers": ["python", "ts"],
   "request": {
     "entrypoint": "runtime.checkpoint",
     "arguments": {
