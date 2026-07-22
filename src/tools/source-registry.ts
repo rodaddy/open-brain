@@ -273,20 +273,6 @@ export function registerSourceRegistry(
         config: configArg.optional(),
         lifecycle_state: z.enum(LIFECYCLE_STATES).optional(),
         sync_state: z.enum(SYNC_STATES).optional(),
-        content_hash: z
-          .string()
-          .trim()
-          .regex(
-            /^[0-9a-f]{64}$/,
-            "content_hash must be a lowercase sha256 hex digest",
-          )
-          .nullable()
-          .optional()
-          .describe(
-            "Lowercase sha256 hex digest of last-observed content. Collectors " +
-              "MUST compute this from real content via hashSourceContent; an " +
-              "arbitrary opaque string is rejected. null clears it.",
-          ),
         last_synced_at: z.string().datetime().nullable().optional(),
         approval_state: z.enum(APPROVAL_STATES).optional(),
       },

@@ -24,7 +24,7 @@ describe("extractMetadata", () => {
     // Regression for issue #337: representative approved input must yield stable
     // structured metadata from the zero-network default -- ingestion no longer
     // relies on an empty/null stub. The default contributes no semantic fields
-    // but always emits a title + content_hash for real text.
+    // but always emits a content_hash envelope for real text.
     const a = await extractMetadata(LONG_TEXT);
     const b = await extractMetadata(LONG_TEXT);
     expect(a).not.toBeNull();
@@ -32,7 +32,7 @@ describe("extractMetadata", () => {
     expect(a?.content_hash).toMatch(/^[0-9a-f]{64}$/);
     expect(a?.hash_version).toBe("sha256.v1");
     expect(a?.byte_length).toBe(new TextEncoder().encode(LONG_TEXT).byteLength);
-    expect(a?.title).toBe(LONG_TEXT);
+    expect(Object.keys(a ?? {})).not.toContain("title");
     // Semantic fields stay empty under the default; they are model territory.
     expect(a?.topics).toEqual([]);
     expect(a?.people).toEqual([]);
@@ -41,10 +41,13 @@ describe("extractMetadata", () => {
     expect(a?.content_hash?.length).toBe(64);
   });
 
-  it("derives a bounded title from the first non-empty line", async () => {
-    const text = "  \n\n  First real line as title\nsecond line\nthird";
-    const result = await extractMetadata(text);
-    expect(result?.title).toBe("First real line as title");
+  it("does not copy a source excerpt into extracted metadata", async () => {
+    const marker = "MARKER_TITLE_ONLY";
+    const result = await extractMetadata(
+      `${marker}\nsecond line with more text`,
+    );
+    expect(JSON.stringify(result)).not.toContain(marker);
+    expect(Object.keys(result ?? {})).not.toContain("title");
   });
 
   it("extracts ISO dates deterministically and unions provider dates", async () => {
@@ -98,7 +101,7 @@ describe("extractMetadata", () => {
 
   it("still yields deterministic structural metadata when a provider gives no semantic signal", async () => {
     // Empty semantic fields no longer collapse the whole result to null: the
-    // deterministic content_hash/title is the point of issue #337.
+    // deterministic content_hash envelope is the point of issue #337.
     setMetadataProvider({ extract: () => ({ topics: [], people: [] }) });
     const result = await extractMetadata(LONG_TEXT);
     expect(result).not.toBeNull();
@@ -117,7 +120,7 @@ describe("extractMetadata", () => {
   it("fails open when a provider throws: no throw, no leaked secret, still deterministic", async () => {
     // Fail-open now means the throw is swallowed AND the deterministic
     // structural metadata still lands -- the semantic provider failing must not
-    // strip the content_hash/title issue #337 requires. The provider's error
+    // strip the content_hash envelope issue #337 requires. The provider's error
     // message (which could carry source text) never appears in the result.
     const throwing: MetadataProvider = {
       extract: () => {
@@ -145,9 +148,8 @@ describe("extractMetadata", () => {
   });
 
   it("does not let a provider assert the deterministic structural fields", async () => {
-    // A provider that tries to inject its own content_hash/title is stripped by
-    // the strict schema; the structural fields are always computed here from the
-    // actual text, so a provider can never forge them.
+    // Provider attempts to inject a content hash or title are stripped. The
+    // digest is computed from the actual text and no source excerpt is persisted.
     setMetadataProvider({
       extract: () => ({
         topics: ["ok"],
@@ -158,7 +160,7 @@ describe("extractMetadata", () => {
     const result = await extractMetadata(LONG_TEXT);
     expect(result?.content_hash).toMatch(/^[0-9a-f]{64}$/);
     expect(result?.content_hash).not.toBe("deadbeef");
-    expect(result?.title).toBe(LONG_TEXT);
+    expect(Object.keys(result ?? {})).not.toContain("title");
   });
 });
 

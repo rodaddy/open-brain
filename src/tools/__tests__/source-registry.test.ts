@@ -138,6 +138,21 @@ describe("source registry MCP error boundary (issue #337 content-free catch)", (
     }
   });
 
+  it("does not expose caller-forgeable content_hash on update_source", async () => {
+    const mockPool = { query: async () => ({ rows: [] }) };
+    const { client, cleanup } = await setupToolClient(mockPool, adminAuth);
+    try {
+      const { tools } = await client.listTools();
+      const update = tools.find((tool) => tool.name === "update_source");
+      const properties = update?.inputSchema.properties as
+        Record<string, unknown> | undefined;
+      expect(properties).toBeDefined();
+      expect(properties).not.toHaveProperty("content_hash");
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("preserves a typed expected result (namespace_denied) instead of collapsing it to internal_error", async () => {
     // A header-scoped identity requesting a foreign namespace is a typed
     // expected denial, returned by the registry layer without a throw. It must

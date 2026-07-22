@@ -9,12 +9,9 @@ export interface ExtractedMetadata {
   action_items: string[];
   dates: string[];
   // Deterministic, zero-network structural metadata computed here (never by an
-  // injected provider): a bounded human-facing title derived from the text, and
-  // a content-free digest envelope of the exact text. These make representative
-  // approved inputs produce stable metadata WITHOUT any model or network, so the
-  // ingestion path no longer depends on an empty stub. All optional so a
-  // provider-only result (no deterministic pass) still type-checks.
-  title?: string;
+  // injected provider): a content-free digest envelope of the exact text. These
+  // make representative approved inputs produce stable metadata WITHOUT any
+  // model or network, so the ingestion path no longer depends on an empty stub.
   content_hash?: string;
   hash_version?: typeof CONTENT_HASH_VERSION;
   byte_length?: number;
@@ -33,9 +30,6 @@ const MIN_EXTRACT_LENGTH = 10;
 // cannot inflate an unbounded tags array. Applied AFTER normalize + dedupe.
 const MAX_ITEMS_PER_FIELD = 32;
 const MAX_ITEM_LENGTH = 120;
-// Bound on the derived title. A title is a label, not the body: an adversarial
-// or huge first line can never inflate the durable write.
-const MAX_TITLE_LENGTH = 200;
 // Matches an ISO-8601 date (optionally with a time). Deterministic, zero-network
 // timestamp extraction; only well-formed calendar-shaped tokens are surfaced.
 const ISO_DATE_RE =
@@ -67,7 +61,7 @@ export interface MetadataProvider {
 // Default provider for the model-ish fields (topics/people/action_items/dates).
 // These genuinely need a model or heuristic, so the DEFAULT contributes none of
 // them -- it returns an empty object, not null, so the deterministic structural
-// pass (title/content_hash/dates below) still runs and produces stable metadata.
+// pass (content_hash/dates below) still runs and produces stable metadata.
 // A real semantic extractor is injected via setMetadataProvider; its output is
 // always re-validated and capped here and can never assert the structural
 // fields. Deterministic, zero-network, no source-text logging.
@@ -106,19 +100,6 @@ function hashText(text: string): {
   };
 }
 
-// Deterministic title: the first non-empty line, trimmed and bounded. A label,
-// never the body. Returns undefined when no usable line exists.
-function deriveTitle(text: string): string | undefined {
-  for (const line of text.split("\n")) {
-    const trimmed = line.trim();
-    if (trimmed.length === 0) continue;
-    return trimmed.length > MAX_TITLE_LENGTH
-      ? trimmed.slice(0, MAX_TITLE_LENGTH)
-      : trimmed;
-  }
-  return undefined;
-}
-
 // Deterministic ISO-date extraction: order-preserving, deduped, capped. These
 // are the timestamps referenced in the text, computed with no model or network.
 function deriveDates(text: string): string[] {
@@ -152,8 +133,8 @@ function normalizeField(values: unknown): string[] {
 
 // Merge the (untrusted) provider output with the deterministic structural pass
 // over `text`. Provider fields are strictly validated/capped; the structural
-// fields (title, content_hash, byte_length, and deterministic ISO dates) are
-// computed here from the actual text and can never be supplied by a provider.
+// fields (content_hash, byte_length, and deterministic ISO dates) are computed
+// here from the actual text and can never be supplied by a provider.
 // Provider-supplied dates and deterministic dates are unioned, then deduped/
 // capped by normalizeField so the union stays bounded and order-stable.
 function normalizeExtraction(
@@ -164,7 +145,6 @@ function normalizeExtraction(
   if (!parsed.success) return null;
 
   const digest = hashText(text);
-  const title = deriveTitle(text);
   const providerDates = normalizeField(parsed.data.dates);
   const dates = normalizeField([...providerDates, ...deriveDates(text)]);
 
@@ -177,7 +157,6 @@ function normalizeExtraction(
     hash_version: digest.hash_version,
     byte_length: digest.byte_length,
   };
-  if (title !== undefined) result.title = title;
   // The deterministic pass always yields a content_hash for real text, so a
   // valid input never collapses to null: ingestion no longer relies on an
   // empty stub. Null is reserved for a schema-invalid provider result (handled

@@ -232,13 +232,8 @@ export interface SearchRow {
     action_items?: string[];
     dates?: string[];
     // Deterministic, content-free structural keys the write-time extractor
-    // (src/extraction.ts) now emits alongside the semantic fields: a bounded
-    // human-facing title and a digest envelope of the exact source text
-    // (content_hash / hash_version / byte_length). Projected here so the public
-    // search row type matches what is actually stored in extracted_metadata.
-    // content_hash/hash_version/byte_length are content-free (an opaque digest,
-    // an algorithm tag, and a length), never the source body.
-    title?: string;
+    // emits alongside the semantic fields. The digest, algorithm tag, and byte
+    // length reveal no source excerpt.
     content_hash?: string;
     hash_version?: string;
     byte_length?: number;

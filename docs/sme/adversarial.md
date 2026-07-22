@@ -386,7 +386,6 @@ single keyword from an allowlist by first-match
 
 ### Pattern
 
-<<<<<<< HEAD
 Three adversarial classes surfaced in the source-registry substrate:
 
 1. **Snapshot clobber:** a fire-and-forget background UPDATE that recomputes an
@@ -419,7 +418,6 @@ Three adversarial classes surfaced in the source-registry substrate:
   move it back into an eligible/active state?
 - Do retired/idempotent no-op results avoid becoming a staleness or existence
   oracle across namespaces, and does the no-op path skip the revision bump?
-=======
 The content-free redactor selected the error keyword with a single
 `KEYWORDS.find(kw => body.includes(kw))` over one flat array. Server error
 bodies routinely mix phrases — "invalid request: unauthorized for namespace",
@@ -494,4 +492,3 @@ run's rows. Two ways that uniqueness silently collapsed:
   (and a reused label across invocations) asserting distinct final namespaces?
 - If the boundary doubles as a destructive-teardown scope, does reuse let one
   run's teardown touch another run's / a real namespace's rows?
->>>>>>> origin/main
