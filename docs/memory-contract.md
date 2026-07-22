@@ -343,3 +343,23 @@ mcp2cli open-brain list_namespaces --params '{}'
 In this repo, also inspect `src/tools/` and `src/db/migrations/` before
 proposing new primitives. State what exists, what is missing, and what should be
 docs/protocol instead of code.
+
+## Operational-Path Isolation Disposition (#297)
+
+Namespace and exact-scope enforcement per operational surface, with the
+authority for each. Every ID-based read or mutation carries an auth-derived
+namespace predicate unless the surface is named below as intentionally global.
+
+| Surface | State | Authority |
+|---|---|---|
+| Spool replay | Enforced client-side: units replay under their parked exact scope with `_parked_namespace` provenance; foreign-namespace units are retained with zero dispatches (#309, #310, #314) | `python/openbrain-memory/src/openbrain_memory/runtime.py`, `_runtime_spool.py`; regressions in `tests/test_runtime.py` |
+| Deletion / archive | Enforced server-side: `appendWriteNamespacePredicate` on every archive/bulk-archive UPDATE; denial is content-free and indistinguishable from not-found | `src/namespace-policy.ts`; negative matrix in `src/tools/__tests__/namespace-isolation-matrix.test.ts` |
+| Export (disclosure bundle) | Enforced: fail-closed on lane-identity conflicts and namespace-tagged items with an immutable session-derived isolation stamp (#305); the formatter itself is local-only with no server path | `python/openbrain-memory` disclosure tests |
+| Migration | Schema migrations (`scripts/migrate.ts`) are not data-boundary operations; `scripts/retire-collab-migration.ts` is **intentionally global** — an operator-only, env-gated (DB_HOST/DB_USER) one-time script, per the issue's global-authorization carve-out; legacy-lane normalization landed in #301 | script env gates |
+| Diagnostics (operator doctor) | **Intentionally global** operator surface: role-gated (`canReadDoctor`) and content-free by construction (`last_error` is literally "redacted") | `src/operator-doctor.ts` |
+| Audit log | Facts-only rows, no payloads; fail-open under saturation is a documented deliberate trade on LAN-local infra | `src/audit-log.ts`, `docs/operator-audit-log.md`, `docs/memory-limits.md` |
+| Backup / restore | **Deferred-because-nonexistent**: no backup/restore subsystem exists yet, so there is no path to gate; the isolation requirement (backups retain immutable namespace/scope metadata, restore re-validates before mutation) is a build requirement of the backup program (#298), not a live gap | tracked in #298 |
+
+If a new operational surface (restore, bulk export, cross-namespace tooling)
+lands without a row here, that is a review finding — add the surface and its
+predicate or its explicit global carve-out in the same PR.
