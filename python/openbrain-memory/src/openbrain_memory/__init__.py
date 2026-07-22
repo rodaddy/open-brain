@@ -38,6 +38,14 @@ from .contract import (
     validate_required_memory_contract,
 )
 from .dream import DreamAction, DreamClient, DreamEngine, DreamPolicy, DreamRun
+from .maintenance import (
+    SPOOL_REPLAY_JOB_KIND,
+    MaintenanceHandler,
+    MaintenanceRegistry,
+    MaintenanceRegistryError,
+    MaintenanceScheduler,
+    SpoolReplayMaintenanceHandler,
+)
 from .policy import RetryExhaustedError, RetryPolicy, redact_text, redact_value
 from .runtime import (
     DrainReport,
@@ -80,6 +88,10 @@ __all__ = [
     "DreamEngine",
     "DreamPolicy",
     "DreamRun",
+    "MaintenanceHandler",
+    "MaintenanceRegistry",
+    "MaintenanceRegistryError",
+    "MaintenanceScheduler",
     "MemoryClient",
     "MemoryContext",
     "MemoryItem",
@@ -116,6 +128,8 @@ __all__ = [
     "RuntimeOutput",
     "RuntimeReceipt",
     "RuntimeScope",
+    "SPOOL_REPLAY_JOB_KIND",
+    "SpoolReplayMaintenanceHandler",
     "SpoolRecord",
     "SpoolReplayReport",
     "SpoolStatus",
