@@ -535,6 +535,46 @@ def test_scheduler_logs_error_status_content_free_when_handler_raises(
         assert record.exc_info is None
 
 
+def test_scheduler_loop_survives_a_handler_that_raises_once(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # A handler that raises on its first tick then succeeds. The loop must not
+    # die on the raise (later ticks still run) and the sentinel message must
+    # never reach stderr — the failure is logged content-free, not printed.
+    sentinel = "handler exploded carrying a secret path"
+    ran_again = threading.Event()
+
+    @dataclass
+    class _RaiseOnceHandler:
+        kind: str = "flaky"
+        calls: int = 0
+
+        def run(self) -> DrainReport | None:
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError(sentinel)
+            ran_again.set()
+            return None
+
+    handler = _RaiseOnceHandler()
+    registry = MaintenanceRegistry()
+    registry.register(handler)
+    scheduler = MaintenanceScheduler(registry)
+
+    try:
+        # A tiny interval so the second tick lands well within the wait.
+        scheduler.start("flaky", interval=0.01)
+        # The loop kept beating past the raise and reached a successful run.
+        assert ran_again.wait(2.0)
+        assert handler.calls >= 2
+        assert scheduler.is_running
+    finally:
+        scheduler.stop(timeout=2.0)
+
+    # The escaping exception never reached stderr as a daemon-thread traceback.
+    assert sentinel not in capsys.readouterr().err
+
+
 # --- Mutation checks ------------------------------------------------------
 
 

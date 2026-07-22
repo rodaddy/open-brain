@@ -237,7 +237,16 @@ class MaintenanceScheduler:
         # returns True the instant ``stop`` is signalled, so a clean stop never
         # blocks for a full interval.
         while not self._stop.is_set():
-            self.tick(kind)
+            try:
+                self.tick(kind)
+            except Exception:
+                # ``_run_handler`` already logged this failure content-free and
+                # re-raised for a one-shot caller's own accounting. In the loop
+                # that re-raise would escape the daemon thread and stop every
+                # later beat; swallow it here so a transient handler failure
+                # cannot kill the scheduler. Nothing new is logged — the error
+                # was already recorded before it reached here.
+                pass
             if self._stop.wait(interval):
                 break
 
