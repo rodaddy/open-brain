@@ -413,6 +413,8 @@ export class OpenBrainClient {
   private sessionId: string | null = null;
   private protocolVersion: string = MCP_PROTOCOL_VERSION;
   private nextId = 1;
+  private initializationPromise: Promise<void> | null = null;
+  private lifecycleEpoch = 0;
 
   constructor(baseUrl: string, options: OpenBrainClientOptions) {
     validateBaseUrl(baseUrl, options.allowInsecureHttp ?? false);
@@ -431,24 +433,27 @@ export class OpenBrainClient {
   }
 
   async close(): Promise<void> {
-    const sessionId = this.sessionId;
-    if (!sessionId) {
-      return;
+    // Invalidate operations that started before close, then wait for any
+    // coalesced initialize attempt to clean up its pending server session.
+    this.lifecycleEpoch += 1;
+    const initialization = this.initializationPromise;
+    if (initialization !== null) {
+      try {
+        await initialization;
+      } catch {
+        // Initialization owns cleanup for any pending session id.
+      }
     }
-    try {
-      await this.transport.delete(this.url("mcp"), {
-        headers: this.mcpHeaders(true, sessionId),
-        timeout: this.timeout,
-      });
-    } catch {
-      // Best-effort session teardown, mirroring the Python client.
-    } finally {
-      this.sessionId = null;
+    const sessionId = this.sessionId;
+    this.sessionId = null;
+    if (sessionId !== null) {
+      await this.discardSession(sessionId);
     }
   }
 
   async callTool(name: string, args: Json = {}): Promise<Json> {
-    await this.ensureSession();
+    const operationEpoch = this.lifecycleEpoch;
+    await this.ensureSession(operationEpoch);
     const requestId = this.nextId++;
     const payload: Json = {
       jsonrpc: "2.0",
@@ -458,8 +463,9 @@ export class OpenBrainClient {
     };
     let response = await this.postToolCall(payload);
     if (this.isExpiredSessionResponse(response)) {
+      this.assertOperationEpoch(operationEpoch);
       this.sessionId = null;
-      await this.ensureSession();
+      await this.ensureSession(operationEpoch);
       response = await this.postToolCall(payload);
     }
     this.raiseForStatus(response, `call_tool:${name}`);
@@ -529,13 +535,34 @@ export class OpenBrainClient {
     return this.callTool("log_decision", args);
   }
 
-  private async ensureSession(): Promise<void> {
-    if (this.sessionId) {
+  private async ensureSession(expectedEpoch: number): Promise<void> {
+    this.assertOperationEpoch(expectedEpoch);
+    if (this.sessionId !== null) {
       return;
     }
+    let initialization = this.initializationPromise;
+    if (initialization === null) {
+      initialization = this.initializeSessionWithRetry(expectedEpoch);
+      this.initializationPromise = initialization;
+      try {
+        await initialization;
+      } finally {
+        if (this.initializationPromise === initialization) {
+          this.initializationPromise = null;
+        }
+      }
+    } else {
+      await initialization;
+    }
+    this.assertOperationEpoch(expectedEpoch);
+  }
+
+  private async initializeSessionWithRetry(
+    expectedEpoch: number,
+  ): Promise<void> {
     // One bounded rate-limit retry, mirroring the Python initialize retry.
     try {
-      await this.initializeSession();
+      await this.initializeSession(expectedEpoch);
     } catch (error) {
       if (
         error instanceof OpenBrainError &&
@@ -543,14 +570,16 @@ export class OpenBrainClient {
         this.sessionId === null
       ) {
         await new Promise((resolve) => setTimeout(resolve, 50));
-        await this.initializeSession();
+        this.assertOperationEpoch(expectedEpoch);
+        await this.initializeSession(expectedEpoch);
         return;
       }
       throw error;
     }
   }
 
-  private async initializeSession(): Promise<void> {
+  private async initializeSession(expectedEpoch: number): Promise<void> {
+    this.assertOperationEpoch(expectedEpoch);
     const requestId = this.nextId++;
     const payload: Json = {
       jsonrpc: "2.0",
@@ -576,32 +605,58 @@ export class OpenBrainClient {
         { context: "initialize" },
       );
     }
-    const message = this.decodeJsonRpcResponse(
-      response,
-      requestId,
-      "initialize",
-    );
-    const result = message["result"];
-    if (
-      typeof result !== "object" ||
-      result === null ||
-      Array.isArray(result)
-    ) {
+    try {
+      const message = this.decodeJsonRpcResponse(
+        response,
+        requestId,
+        "initialize",
+      );
+      const result = message["result"];
+      if (
+        typeof result !== "object" ||
+        result === null ||
+        Array.isArray(result)
+      ) {
+        throw new OpenBrainProtocolError(
+          "Initialize response missing result object",
+          { context: "initialize", token: this.token },
+        );
+      }
+      const protocolVersion = (result as Json)["protocolVersion"];
+      if (typeof protocolVersion !== "string") {
+        throw new OpenBrainProtocolError(
+          "Initialize response missing protocolVersion",
+          { context: "initialize", token: this.token },
+        );
+      }
+      this.protocolVersion = protocolVersion;
+      await this.sendInitializedNotification(pendingSessionId);
+      this.assertOperationEpoch(expectedEpoch);
+      this.sessionId = pendingSessionId;
+    } catch (error) {
+      await this.discardSession(pendingSessionId);
+      throw error;
+    }
+  }
+
+  private assertOperationEpoch(expectedEpoch: number): void {
+    if (expectedEpoch !== this.lifecycleEpoch) {
       throw new OpenBrainProtocolError(
-        "Initialize response missing result object",
-        { context: "initialize", token: this.token },
+        "MCP operation was invalidated by close",
+        { context: "session_lifecycle" },
       );
     }
-    const protocolVersion = (result as Json)["protocolVersion"];
-    if (typeof protocolVersion !== "string") {
-      throw new OpenBrainProtocolError(
-        "Initialize response missing protocolVersion",
-        { context: "initialize", token: this.token },
-      );
+  }
+
+  private async discardSession(sessionId: string): Promise<void> {
+    try {
+      await this.transport.delete(this.url("mcp"), {
+        headers: this.mcpHeaders(true, sessionId),
+        timeout: this.timeout,
+      });
+    } catch {
+      // Best-effort session teardown, mirroring the Python client.
     }
-    this.protocolVersion = protocolVersion;
-    await this.sendInitializedNotification(pendingSessionId);
-    this.sessionId = pendingSessionId;
   }
 
   private async sendInitializedNotification(sessionId: string): Promise<void> {

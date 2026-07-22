@@ -51,21 +51,28 @@ JSON body. Treating that as opaque HTTP failure hides diagnostics from callers.
 ## [2026-06-11] Session lifecycle must be explicit
 
 **Severity:** MEDIUM
-**Source:** Issue #81
-**Scope:** `OpenBrainClient`
+**Source:** Issue #81; PR #319 terminal audit
+**Scope:** Python and TypeScript `OpenBrainClient`
 **Status:** active
 
 ### Pattern
 
 MCP sessions can accumulate under churn if the client has no explicit close or
-context-manager path and no documented TTL reliance.
+context-manager path and no documented TTL reliance. Concurrent first-use calls
+can also create multiple sessions when initialization is not coalesced; a close
+that overlaps initialization must invalidate and tear down the pending session
+so no session is published after close returns.
 
 ### Review Questions
 
 - Does `OpenBrainClient` support `close()` and context manager behavior if the
   server supports termination?
-- If not supported, does README/API docs state lifecycle and server TTL clearly?
-- Are lifecycle tests or docs included?
+- Are concurrent first-use calls coalesced onto one initialization attempt?
+- Does close-during-initialize invalidate the pending operation, delete the
+  pending server session, and still allow a later post-close call to reinitialize?
+- If explicit close is unsupported, do README/API docs state lifecycle and server
+  TTL clearly?
+- Are lifecycle concurrency tests included?
 
 ## [2026-06-11] Python package gates belong in CI
 

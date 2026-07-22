@@ -3,6 +3,7 @@ import { describe, expect, it } from "bun:test";
 import {
   OpenBrainClient,
   OpenBrainHTTPError,
+  OpenBrainProtocolError,
   OpenBrainToolError,
   FetchTransport,
   type Json,
@@ -22,6 +23,62 @@ function makeClient(
     transport,
     ...overrides,
   });
+}
+
+class DelayedInitializeTransport implements Transport {
+  initializeCalls = 0;
+  deleteCalls = 0;
+  private resolveStarted!: () => void;
+  private releaseGate!: () => void;
+  readonly initializeStarted = new Promise<void>((resolve) => {
+    this.resolveStarted = resolve;
+  });
+  private readonly gate = new Promise<void>((resolve) => {
+    this.releaseGate = resolve;
+  });
+
+  releaseInitialize(): void {
+    this.releaseGate();
+  }
+
+  async post(
+    _url: string,
+    options: {
+      headers: Record<string, string>;
+      json: Json;
+      timeout: number;
+      expectedId?: number;
+    },
+  ): Promise<TransportResponse> {
+    const method = options.json["method"];
+    const requestId = options.json["id"];
+    if (method === "initialize") {
+      this.initializeCalls += 1;
+      this.resolveStarted();
+      await this.gate;
+      return {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+          "mcp-session-id": "delayed-session",
+        },
+        text: JSON.stringify({
+          jsonrpc: "2.0",
+          id: requestId,
+          result: { protocolVersion: "2025-03-26" },
+        }),
+      };
+    }
+    if (method === "notifications/initialized") {
+      return { status: 202, headers: {}, text: "" };
+    }
+    return toolResult(requestId as number, { ok: true });
+  }
+
+  async delete(): Promise<TransportResponse> {
+    this.deleteCalls += 1;
+    return { status: 200, headers: {}, text: "" };
+  }
 }
 
 describe("OpenBrainClient header binding", () => {
@@ -80,6 +137,45 @@ describe("OpenBrainClient header binding", () => {
         },
       }),
     ).rejects.toBeInstanceOf(OpenBrainToolError);
+  });
+});
+
+describe("OpenBrainClient session concurrency", () => {
+  it("coalesces concurrent first-use initialization", async () => {
+    const transport = new DelayedInitializeTransport();
+    const client = makeClient(transport);
+    const first = client.get_contract();
+    await transport.initializeStarted;
+    const second = client.log_thought({ content: "parallel" });
+    await Bun.sleep(0);
+    expect(transport.initializeCalls).toBe(1);
+    transport.releaseInitialize();
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      { ok: true },
+      { ok: true },
+    ]);
+    expect(client.mcpSessionId).toBe("delayed-session");
+    await client.close();
+    expect(transport.deleteCalls).toBe(1);
+  });
+
+  it("invalidates and cleans initialization that overlaps close", async () => {
+    const transport = new DelayedInitializeTransport();
+    const client = makeClient(transport);
+    const request = client.get_contract();
+    await transport.initializeStarted;
+    const requestResult = request.catch((error: unknown) => error);
+    const closeResult = client.close();
+    transport.releaseInitialize();
+    const error = await requestResult;
+    await closeResult;
+    expect(error).toBeInstanceOf(OpenBrainProtocolError);
+    expect(transport.initializeCalls).toBe(1);
+    expect(transport.deleteCalls).toBe(1);
+    expect(client.mcpSessionId).toBeNull();
+
+    await expect(client.get_contract()).resolves.toEqual({ ok: true });
+    expect(transport.initializeCalls).toBe(2);
   });
 });
 
