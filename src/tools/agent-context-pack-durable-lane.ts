@@ -6,7 +6,36 @@ const DURABLE_LANE_MAX_CONTENT_CHARS = 12_000;
 const DURABLE_LANE_MAX_CONTEXT_CHARS = 6_000;
 const DURABLE_LANE_MAX_EVENTS = 8;
 const DURABLE_LANE_MAX_EVENT_CHARS = 1_000;
-const CONTEXT_PACK_ENVELOPE_CHAR_RESERVE = 1_200;
+export const CONTEXT_PACK_ENVELOPE_CHAR_RESERVE = 1_200;
+
+/**
+ * Resolve the durable-lane content char budget.
+ *
+ * When the whole-pack allocator supplies an explicit `contentCharLimit`, the
+ * lane content is bounded by the pack-level allocation it was granted (still
+ * clamped by the durable-lane hard cap). Otherwise the historical per-section
+ * derivation from `budget.max_tokens` applies, preserving compatibility when no
+ * whole-pack allocation is in effect.
+ */
+function resolveDurableLaneContentChars(
+  args: AgentContextPackArgs,
+  contentCharLimit: number | undefined,
+): number {
+  if (contentCharLimit !== undefined) {
+    return Math.max(
+      0,
+      Math.min(DURABLE_LANE_MAX_CONTENT_CHARS, contentCharLimit),
+    );
+  }
+  return Math.max(
+    0,
+    Math.min(
+      DURABLE_LANE_MAX_CONTENT_CHARS,
+      (args.budget?.max_tokens ?? 4000) * 4 -
+        CONTEXT_PACK_ENVELOPE_CHAR_RESERVE,
+    ),
+  );
+}
 
 type DurableLaneContextFragment = {
   section?: Record<string, unknown>;
@@ -118,9 +147,10 @@ async function openDurableLaneReader(
   let released = false;
   let unsafeError: Error | undefined;
   const markUnsafe = (error: unknown) => {
-    unsafeError = error instanceof Error
-      ? error
-      : new Error("durable lane context client is unsafe");
+    unsafeError =
+      error instanceof Error
+        ? error
+        : new Error("durable lane context client is unsafe");
   };
   const release = () => {
     if (released) return;
@@ -144,10 +174,9 @@ async function openDurableLaneReader(
   try {
     await query("BEGIN READ ONLY");
     transactionOpen = true;
-    await query(
-      "SELECT set_config('statement_timeout', $1, true)",
-      [`${remainingLatencyMs(startedAt, maxLatencyMs)}ms`],
-    );
+    await query("SELECT set_config('statement_timeout', $1, true)", [
+      `${remainingLatencyMs(startedAt, maxLatencyMs)}ms`,
+    ]);
   } catch (error) {
     markUnsafe(error);
     release();
@@ -171,12 +200,18 @@ async function openDurableLaneReader(
   };
 }
 
-function boundedText(value: unknown, maxChars: number): {
+function boundedText(
+  value: unknown,
+  maxChars: number,
+): {
   text: string | null;
   truncated: boolean;
 } {
   if (typeof value !== "string" || value.length === 0 || maxChars <= 0) {
-    return { text: null, truncated: typeof value === "string" && value.length > 0 };
+    return {
+      text: null,
+      truncated: typeof value === "string" && value.length > 0,
+    };
   }
   if (value.length <= maxChars) return { text: value, truncated: false };
   return { text: value.slice(0, maxChars), truncated: true };
@@ -186,14 +221,11 @@ export async function loadDurableLaneContext(
   args: AgentContextPackArgs,
   namespace: string,
   deps: ToolDeps,
+  contentCharLimit?: number,
 ): Promise<DurableLaneContextFragment> {
-  const maxContentChars = Math.max(
-    0,
-    Math.min(
-      DURABLE_LANE_MAX_CONTENT_CHARS,
-      (args.budget?.max_tokens ?? 4000) * 4 -
-        CONTEXT_PACK_ENVELOPE_CHAR_RESERVE,
-    ),
+  const maxContentChars = resolveDurableLaneContentChars(
+    args,
+    contentCharLimit,
   );
   const scopeParams = [
     namespace,

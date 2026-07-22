@@ -1,0 +1,237 @@
+/**
+ * Whole-pack budget allocation and section-fitting helpers for
+ * `agent_context_pack`. These are pure, store-agnostic functions that fit each
+ * assembled section inside a shared serialized-character budget in a fixed
+ * priority order, plus the narrow shared types/constants they operate on.
+ * Registration and tool behavior live in `agent-context-pack.ts`.
+ */
+
+/**
+ * Approximate serialized characters per token. Kept in sync with the
+ * durable-lane accounting so the whole-pack char budget derived here matches
+ * the per-section content accounting the durable-lane loader reuses.
+ */
+export const CHARS_PER_TOKEN = 4;
+
+/**
+ * Deterministic whole-pack allocation order, highest value first. working_set
+ * is the exact-scope hot active state, recovery is the explicit opt-in
+ * interrupted-session trace, and durable_lane_context is the broader recallable
+ * lane context. A lower-priority section is only assembled against whatever
+ * pack budget the higher-priority sections leave behind, so one large section
+ * cannot starve a higher-value one. This order is stable for identical inputs.
+ */
+export const CONTEXT_PACK_SECTION_PRIORITY = [
+  "working_set",
+  "recovery",
+  "durable_lane_context",
+] as const;
+
+/** Serialized size, in characters, of a section's content payload. */
+export function serializedLength(value: unknown): number {
+  if (value === undefined) return 0;
+  return JSON.stringify(value).length;
+}
+
+/**
+ * Serialized framing a section adds to the enclosing `sections` object beyond
+ * its own body: the quoted key, the `:` separator, and one `,`/`}` delimiter
+ * (`{"key":<body>}` / `,"key":<body>`). Counting this against the whole-pack
+ * budget keeps `JSON.stringify(payload.sections)` — not merely the summed
+ * per-section bodies — within the declared budget. The outer `{}` (2 chars for
+ * an empty object, otherwise the leading `{` and trailing `}` replace two of
+ * the per-section delimiters) is reserved once up front.
+ */
+export function sectionFrameCost(key: string): number {
+  // "key": plus one delimiter character.
+  return key.length + 3 + 1;
+}
+
+export type DurableLaneEvent = { content?: unknown; citation_id?: unknown };
+export type DurableLaneSection = {
+  lane?: { current_context_md?: unknown };
+  events?: DurableLaneEvent[];
+  event_count?: number;
+  truncated?: boolean;
+};
+
+/**
+ * Sum of durable-lane content-body characters (checkpoint + retained event
+ * bodies) for reconciling `budget.durable_lane_context.content_chars_used` to
+ * whatever survives the whole-pack re-fit.
+ */
+export function durableLaneContentChars(section: DurableLaneSection): number {
+  const context =
+    typeof section.lane?.current_context_md === "string"
+      ? section.lane.current_context_md.length
+      : 0;
+  let events = 0;
+  for (const event of section.events ?? []) {
+    if (typeof event.content === "string") events += event.content.length;
+  }
+  return context + events;
+}
+
+/**
+ * Fit a loaded durable-lane section inside the remaining whole-pack budget by
+ * its *serialized* size, not its content-body total. The loader already bounds
+ * raw content chars, but the serialized section additionally carries lane
+ * metadata, per-event wrappers, and citation ids that must be counted against
+ * the surviving whole-pack budget. Events are chronological oldest-first (the
+ * loader fetches newest-first then reverses), so trailing entries are the
+ * newest highest-value ones; drop the oldest (front) first, then trim the
+ * checkpoint, so the freshest lane evidence is preserved under pressure.
+ *
+ * Citations for dropped events are removed so no citation references evidence
+ * that is no longer present, and `event_count`/`truncated` are reconciled to
+ * the retained events.
+ */
+export function fitDurableLaneSection(
+  section: Record<string, unknown>,
+  citations: Array<Record<string, unknown>>,
+  remainingChars: number,
+): {
+  section: Record<string, unknown>;
+  citations: Array<Record<string, unknown>>;
+  truncated: boolean;
+} {
+  if (serializedLength(section) <= remainingChars) {
+    return { section, citations, truncated: false };
+  }
+
+  const events = Array.isArray(section.events)
+    ? [...(section.events as DurableLaneEvent[])]
+    : [];
+  const lane =
+    section.lane && typeof section.lane === "object"
+      ? { ...(section.lane as Record<string, unknown>) }
+      : undefined;
+
+  const rebuild = (
+    keptEvents: DurableLaneEvent[],
+    contextMd: unknown,
+  ): Record<string, unknown> => {
+    const next: Record<string, unknown> = {
+      ...section,
+      events: keptEvents,
+      event_count: keptEvents.length,
+    };
+    if (lane) next.lane = { ...lane, current_context_md: contextMd };
+    next.truncated = true;
+    return next;
+  };
+
+  let contextMd = lane?.current_context_md ?? null;
+
+  // Drop the oldest event (index 0) until the serialized section fits.
+  const kept = [...events];
+  while (kept.length > 0) {
+    kept.shift();
+    if (serializedLength(rebuild(kept, contextMd)) <= remainingChars) {
+      return {
+        section: rebuild(kept, contextMd),
+        citations: reconcileDurableCitations(citations, kept),
+        truncated: true,
+      };
+    }
+  }
+
+  // No events left: shrink the checkpoint text until the section fits, or empty
+  // it entirely.
+  if (typeof contextMd === "string" && contextMd.length > 0) {
+    let low = 0;
+    let high = contextMd.length;
+    while (low < high) {
+      const mid = Math.ceil((low + high) / 2);
+      const candidate = rebuild([], contextMd.slice(0, mid));
+      if (serializedLength(candidate) <= remainingChars) {
+        low = mid;
+      } else {
+        high = mid - 1;
+      }
+    }
+    contextMd = low > 0 ? (contextMd as string).slice(0, low) : null;
+  }
+
+  return {
+    section: rebuild([], contextMd),
+    citations: reconcileDurableCitations(citations, []),
+    truncated: true,
+  };
+}
+
+/**
+ * Keep the lane citation and only the event citations whose events survived the
+ * whole-pack re-fit, so citations never reference dropped evidence.
+ */
+export function reconcileDurableCitations(
+  citations: Array<Record<string, unknown>>,
+  keptEvents: DurableLaneEvent[],
+): Array<Record<string, unknown>> {
+  const keptEventCitationIds = new Set(
+    keptEvents
+      .map((event) => event.citation_id)
+      .filter((id): id is string => typeof id === "string"),
+  );
+  return citations.filter((citation) => {
+    if (citation.kind === "session_event") {
+      return (
+        typeof citation.id === "string" && keptEventCitationIds.has(citation.id)
+      );
+    }
+    return true;
+  });
+}
+
+/**
+ * Deterministically fit an item-bearing section (working_set/recovery) inside a
+ * remaining whole-pack char budget by dropping the oldest items until the
+ * serialized section fits. Both stores order items oldest-first: `append`
+ * pushes the newest item to the end, and store trimming removes index 0
+ * (`splice(0, …)` / `shift()`), so the newest highest-value items live at the
+ * tail. Whole-pack pressure must match that recency ordering — drop from the
+ * front (oldest) and preserve the newest — so the enforced budget never
+ * sacrifices the freshest working state to keep stale entries.
+ *
+ * The section is measured by its serialized length (`JSON.stringify`), not by
+ * summed content-body characters, so metadata, ids, and per-item wrappers are
+ * counted against the whole-pack section budget rather than allowed to
+ * overshoot it. Counts are reconciled to the retained items so citations and
+ * counters stay consistent with the emitted content.
+ */
+export function fitItemSection<T extends { items: Array<{ id: string }> }>(
+  section: T,
+  countKeys: Array<keyof T>,
+  remainingChars: number,
+): { section: T; truncated: boolean; starved: boolean } {
+  if (serializedLength(section) <= remainingChars) {
+    return { section, truncated: false, starved: false };
+  }
+
+  // Drop the oldest item (index 0) one at a time until the section fits or is
+  // emptied, preserving the newest tail items. A section is "starved" whenever
+  // no item body survives (items: []), whether it fit only once empty or was
+  // exhausted — the empty envelope may still exceed remainingChars, so the
+  // caller decides whether to emit it or omit the section to hold the budget.
+  const kept = [...section.items];
+  while (kept.length > 0) {
+    kept.shift();
+    const candidate = { ...section, items: kept } as T;
+    for (const countKey of countKeys) {
+      (candidate as Record<keyof T, unknown>)[countKey] = kept.length;
+    }
+    if (serializedLength(candidate) <= remainingChars) {
+      return {
+        section: candidate,
+        truncated: true,
+        starved: kept.length === 0,
+      };
+    }
+  }
+
+  const emptied = { ...section, items: [] as T["items"] } as T;
+  for (const countKey of countKeys) {
+    (emptied as Record<keyof T, unknown>)[countKey] = 0;
+  }
+  return { section: emptied, truncated: true, starved: true };
+}
