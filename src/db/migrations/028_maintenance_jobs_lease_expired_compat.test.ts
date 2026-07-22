@@ -22,6 +22,7 @@ const namespace = "test-migration-028-lease-compat";
 // disturb the shared maintenance_jobs table while Bun runs test files in
 // parallel. Chosen once, never derived from anything mutable.
 const TEST_SCHEMA = "ob_test_mig028_lease_compat";
+const TEST_SCHEMA_LOCK = 28_028;
 
 // The canonical last_error_category allow-list minus the value that a
 // database upgraded across an earlier revision of migration 026 is missing.
@@ -130,6 +131,9 @@ dbDescribe("028 maintenance_jobs lease_expired compat (live Postgres)", () => {
 
   beforeAll(async () => {
     await client.connect();
+    // Duplicate CI workflows can share one PostgreSQL database. Hold a
+    // session-scoped lock so their fixed test schema cannot be dropped mid-run.
+    await client.query("SELECT pg_advisory_lock($1)", [TEST_SCHEMA_LOCK]);
     // Own an isolated schema. Everything below runs against it via search_path,
     // so migration 026/028 SQL exercises the exact real DDL without mutating
     // public.maintenance_jobs (which parallel test files may depend on). public
@@ -160,9 +164,16 @@ dbDescribe("028 maintenance_jobs lease_expired compat (live Postgres)", () => {
   });
 
   afterAll(async () => {
-    // Drop the whole test-owned schema; public was never modified.
-    await client.query(`DROP SCHEMA IF EXISTS ${TEST_SCHEMA} CASCADE`);
-    await client.end();
+    try {
+      // Drop the whole test-owned schema; public was never modified.
+      await client.query(`DROP SCHEMA IF EXISTS ${TEST_SCHEMA} CASCADE`);
+    } finally {
+      try {
+        await client.query("SELECT pg_advisory_unlock($1)", [TEST_SCHEMA_LOCK]);
+      } finally {
+        await client.end();
+      }
+    }
   });
 
   it("rejects lease_expired before the migration and accepts it after — proving the upgrade repair", async () => {
