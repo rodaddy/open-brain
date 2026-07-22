@@ -339,10 +339,10 @@ describe("agent_context_pack whole-pack budget", () => {
       const payload = JSON.parse((pack.content as any)[0].text);
       // The section is omitted rather than emitted with an over-budget envelope.
       expect(payload.sections.working_set).toBeUndefined();
-      // The whole serialized sections object stays within the whole-pack budget
-      // (0 chars here) — an empty object.
+      // The serialized sections object is exactly the irreducible empty object
+      // "{}" (2 chars), and the declared limit accounts for it with no slack.
       expect(JSON.stringify(payload.sections).length).toBeLessThanOrEqual(
-        Math.max(0, 100 * 4 - 1200) + 2,
+        payload.budget.whole_pack.content_char_limit,
       );
       // Truncation still records the fully-starved requested section so the
       // caller knows it was dropped rather than silently absent.
@@ -353,6 +353,51 @@ describe("agent_context_pack whole-pack budget", () => {
       expect(starved).toBeDefined();
       expect(starved.starved).toBe(true);
       // whole_pack accounting never claims more content used than the limit.
+      expect(payload.budget.whole_pack.content_chars_used).toBeLessThanOrEqual(
+        payload.budget.whole_pack.content_char_limit,
+      );
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("declares a content_char_limit that admits the irreducible empty '{}' at a zero-member budget (#326)", async () => {
+    const { client, cleanup } = await setupToolClient(AUTH, {
+      query: async () => ({ rows: [] }),
+    });
+    try {
+      // A single item that cannot fit, forcing the section to be omitted so the
+      // serialized sections collapse to the irreducible empty object "{}".
+      await appendWorkingItem(client, "huge:" + "W".repeat(3900));
+
+      // max_tokens 100 => 400 - 1200 clamps the member budget to 0. The serialized
+      // sections object is still "{}" (2 chars), so the declared limit must admit
+      // those two irreducible chars while leaving zero for section members.
+      const pack = await client.callTool({
+        name: "agent_context_pack",
+        arguments: {
+          ...SCOPE,
+          requested_sections: ["working_set"],
+          budget: { max_tokens: 100 },
+        },
+      });
+
+      const payload = JSON.parse((pack.content as any)[0].text);
+      expect(payload.sections.working_set).toBeUndefined();
+      // The serialized sections is exactly "{}".
+      const serialized = JSON.stringify(payload.sections);
+      expect(serialized).toBe("{}");
+      // The declared whole-pack limit bounds the serialized sections object with
+      // NO slack: this fails on the old head where content_char_limit was 0 while
+      // JSON.stringify(payload.sections) is 2.
+      expect(serialized.length).toBeLessThanOrEqual(
+        payload.budget.whole_pack.content_char_limit,
+      );
+      // The limit accounts for the irreducible two-char empty object.
+      expect(payload.budget.whole_pack.content_char_limit).toBe(2);
+      // Zero characters were available for section members at this tiny budget.
+      expect(payload.budget.whole_pack.content_chars_used).toBe(0);
+      // content_chars_used stays truthful and within the declared limit.
       expect(payload.budget.whole_pack.content_chars_used).toBeLessThanOrEqual(
         payload.budget.whole_pack.content_char_limit,
       );
@@ -799,12 +844,12 @@ describe("agent_context_pack whole-pack budget: recovery section", () => {
       });
 
       const payload = JSON.parse((pack.content as any)[0].text);
-      const budget = 450 * 4 - 1200;
       // The section is omitted rather than emitted with an over-budget envelope.
       expect(payload.sections.recovery).toBeUndefined();
-      // The whole serialized sections object stays within the whole-pack budget.
+      // The serialized sections object is exactly the irreducible empty object
+      // "{}" (2 chars), and the declared limit accounts for it with no slack.
       expect(JSON.stringify(payload.sections).length).toBeLessThanOrEqual(
-        budget + 2,
+        payload.budget.whole_pack.content_char_limit,
       );
       // Truncation still records the fully-starved requested section so the
       // caller knows it was dropped rather than silently absent.

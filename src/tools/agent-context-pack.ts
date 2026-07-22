@@ -159,6 +159,14 @@ export async function buildAgentContextPackPayload(
             CONTEXT_PACK_ENVELOPE_CHAR_RESERVE,
         )
       : null;
+  // The declared serialized-section limit must always admit the irreducible
+  // two-character empty object `{}`, which JSON.stringify(payload.sections)
+  // emits even when every section is omitted. At tiny budgets wholePackBudget
+  // clamps to 0, but "{}" is 2 chars, so the reported limit is raised to that
+  // floor; section *members* still get zero of it (remainingChars below), so no
+  // section body is ever admitted at those budgets.
+  const wholePackSerializedLimit =
+    wholePackBudget !== null ? Math.max(2, wholePackBudget) : null;
   // Reserve the enclosing `{}` of the serialized `sections` object once, so the
   // running budget bounds JSON.stringify(payload.sections), not just the summed
   // section bodies. Each retained section additionally charges its own framing
@@ -372,7 +380,7 @@ export async function buildAgentContextPackPayload(
         ...(wholePackBudget !== null
           ? {
               whole_pack: {
-                content_char_limit: wholePackBudget,
+                content_char_limit: wholePackSerializedLimit,
                 content_chars_used:
                   wholePackBudget - Math.max(0, remainingChars),
                 allocation_order: [...CONTEXT_PACK_SECTION_PRIORITY],

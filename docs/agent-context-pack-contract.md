@@ -337,9 +337,14 @@ When `budget.max_tokens` is set, the envelope carries:
 }
 ```
 
-`content_char_limit` is the derived whole-pack character budget,
-`content_chars_used` is the portion of that budget consumed by the emitted
-sections (never greater than `content_char_limit`), and `allocation_order` is the
+`content_char_limit` is the derived whole-pack serialized-section limit: the
+`max_tokens * 4` minus `1200`-reserve budget, but never below `2` because
+`JSON.stringify(payload.sections)` always emits at least the irreducible empty
+object `{}` (2 characters). At tiny budgets that clamp the member budget to zero,
+`content_char_limit` is therefore `2` and no section member is admitted, yet the
+declared limit still bounds the serialized `sections` object with no slack.
+`content_chars_used` is the portion of that budget consumed by emitted section
+members (never greater than `content_char_limit`), and `allocation_order` is the
 fixed priority order above. Every section that is trimmed, starved, or omitted by
 the whole-pack budget adds a `whole_pack_budget` entry to `warnings.truncation`.
 
