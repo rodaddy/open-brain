@@ -3,7 +3,7 @@
   "description": "Recall requests an agent context pack using the complete exact scope.",
   "capability": "session-lifecycle",
   "runtime": "both",
-  "consumers": ["python"],
+  "consumers": ["python", "ts"],
   "request": {
     "entrypoint": "runtime.recall_context",
     "arguments": {

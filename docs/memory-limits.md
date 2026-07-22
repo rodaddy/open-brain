@@ -45,6 +45,12 @@ receipts) exposed on `RuntimeOutput.drain` of the triggering operation and on
 at-least-once: a crash between dispatch success and the spool rewrite
 re-delivers the same `idempotency_key` on the next drain.
 
+The TypeScript client peer (`clients/ts/`, #312) enforces the same
+distilled-content, spool-cap, redaction, quarantine, and retry-state limits
+(`clients/ts/src/spool.ts`, `clients/ts/src/validation.ts`); the CLI JSON
+input limit and the cross-process spool lock are Python-only — see
+`clients/ts/README.md` for the intentional runtime differences.
+
 ## Server (Bun/TypeScript)
 
 | Limit | Value | At-limit behavior | Source |

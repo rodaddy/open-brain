@@ -2,8 +2,8 @@
   "id": "auto-drain-replay-allowlist",
   "description": "Successful direct recall drains only the explicit durable-operation allowlist in original order.",
   "capability": "auto-drain-allowlist",
-  "runtime": "python",
-  "consumers": ["python"],
+  "runtime": "both",
+  "consumers": ["python", "ts"],
   "request": {
     "trigger": "recall_context",
     "operations": [

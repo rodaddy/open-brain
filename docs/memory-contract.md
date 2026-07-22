@@ -296,16 +296,22 @@ policy files as the behavior source of truth.
 
 Runtime-neutral scenarios live in `contracts/memory/`. The parity gate validates
 that every fixture maps to `parity-manifest.json` and that every `both` or
-`python` fixture is consumed by the Python suite; the future TypeScript client
-must consume the same `both` fixtures before its manifest entries can leave
-`pending`.
+`python` fixture is consumed by the Python suite. The TypeScript peer
+(`clients/ts/`, #312) consumes the same fixture set through
+`clients/ts/tests/contract-fixtures.test.ts`; its manifest capabilities are
+`implemented` only where that runner proves them, and a `ts`-implemented
+capability without a ts-consumed fixture fails `check-parity`.
 
 Intentional asymmetry must be declared as `runtime-specific` with a concrete
-reason. Client or contract changes run `bun contracts/check-parity.ts` plus the
-fixture-consuming pytest subset in CI and the repository pre-push hook. Python
-MCP requests also declare the reviewed contract id/schema hash in
-`X-OB-Contract`; the server logs a structured mismatch warning but does not yet
-reject the request.
+reason (currently only `receipt-shapes`: the TS client owns the bounded public
+`error_category` taxonomy and does not implement the Python `AgentMemory`
+agent-receipt surface). Client or contract changes run
+`bun contracts/check-parity.ts` plus the fixture-consuming pytest subset in
+the repository pre-push hook, and the hook's full `bun test` now includes the
+TS fixture runner.
+Python and TypeScript MCP requests both declare the reviewed contract
+id/schema hash in `X-OB-Contract`; the server logs a structured mismatch
+warning but does not yet reject the request.
 
 ### Failure-Mode Checklist
 

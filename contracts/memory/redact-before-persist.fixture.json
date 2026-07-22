@@ -2,8 +2,8 @@
   "id": "spool-redact-before-persist",
   "description": "Secret-like material is redacted before a durable spool record reaches disk or replay.",
   "capability": "redact-before-persist",
-  "runtime": "python",
-  "consumers": ["python"],
+  "runtime": "both",
+  "consumers": ["python", "ts"],
   "request": {
     "operation": "log_thought",
     "payload": {

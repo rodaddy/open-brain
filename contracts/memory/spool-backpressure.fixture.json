@@ -2,8 +2,8 @@
   "id": "spool-line-cap-backpressure",
   "description": "A full spool rejects the next append without changing acknowledged records or replay order.",
   "capability": "spool-backpressure",
-  "runtime": "python",
-  "consumers": ["python"],
+  "runtime": "both",
+  "consumers": ["python", "ts"],
   "request": {
     "max_lines": 2,
     "records": [

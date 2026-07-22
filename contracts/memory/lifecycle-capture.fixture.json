@@ -3,7 +3,7 @@
   "description": "Capture lazily starts the exact lane before appending a distilled event.",
   "capability": "session-lifecycle",
   "runtime": "both",
-  "consumers": ["python"],
+  "consumers": ["python", "ts"],
   "request": {
     "entrypoint": "runtime.capture_distilled",
     "arguments": {

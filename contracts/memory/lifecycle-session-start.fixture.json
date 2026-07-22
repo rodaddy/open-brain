@@ -3,7 +3,7 @@
   "description": "A session start sends the exact lane identity to session_start.",
   "capability": "session-lifecycle",
   "runtime": "both",
-  "consumers": ["python"],
+  "consumers": ["python", "ts"],
   "request": {
     "entrypoint": "client.session_start",
     "arguments": {

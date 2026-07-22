@@ -3,7 +3,7 @@
   "description": "Wrap lazily starts the exact lane and persists the final session summary.",
   "capability": "session-lifecycle",
   "runtime": "both",
-  "consumers": ["python"],
+  "consumers": ["python", "ts"],
   "request": {
     "entrypoint": "runtime.wrap",
     "arguments": {
