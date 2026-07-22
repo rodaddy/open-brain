@@ -11,6 +11,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 import openbrain_memory.__main__ as main_module
 import openbrain_memory.runtime as runtime_module
 from openbrain_memory import (
@@ -20,6 +22,7 @@ from openbrain_memory import (
     RuntimeConfig,
     RuntimeScope,
 )
+from openbrain_memory._runtime_spool import PARKED_NAMESPACE_KEY
 from openbrain_memory.cli import (
     MAX_JSON_INPUT_BYTES,
     encode_json_output,
@@ -31,6 +34,7 @@ from ._runtime_fakes import (
     ContextClient,
     FakeRunner,
     FakeSpool,
+    ForeignLaneTamperingTransport,
     LaneAwareTransport,
     StartThenFailClient,
     WriteResultClient,
@@ -566,6 +570,312 @@ def test_spool_drain_dispatches_every_allowlisted_operation(tmp_path: Path) -> N
     assert recalled.receipt.status is ReceiptStatus.DIRECT
     assert dispatched[1:] == [operation for operation, _payload in records]
     assert spool.status().pending_count == 0
+
+
+def _parked_unit_scope() -> RuntimeScope:
+    return RuntimeScope(
+        agent="bilby",
+        platform="discord",
+        server_id="guild-9",
+        channel_id="channel-parked",
+        session_key="other-repo/session-9",
+    )
+
+
+def _park_unit(spool: JsonlSpool, scope: RuntimeScope, content: str) -> None:
+    spool.append_batch(
+        [
+            (
+                "session_start",
+                {
+                    **scope.start_metadata(),
+                    "session_key": scope.session_key,
+                    "agent": scope.agent,
+                },
+                None,
+            ),
+            (
+                "append_session_event",
+                {
+                    **scope.start_metadata(),
+                    "session_key": scope.session_key,
+                    "agent": scope.agent,
+                    "content": content,
+                    "event_type": "fact",
+                    "source": scope.agent,
+                    "metadata": {"idempotency_key": f"parked-{content}"},
+                },
+                None,
+            ),
+        ]
+    )
+
+
+def test_spool_drain_replays_unit_parked_under_another_scope(tmp_path: Path) -> None:
+    parked = _parked_unit_scope()
+    spool = JsonlSpool(tmp_path / "runtime-spool.jsonl")
+    _park_unit(spool, parked, "Parked in another project")
+    transport = LaneAwareTransport()
+    runtime = FirstClassMemoryRuntime(
+        runtime_config(),
+        runtime_scope(),
+        transport=transport,
+        spool=spool,
+    )
+
+    saved = runtime.capture_distilled("Recovery trigger in current project")
+
+    assert saved.receipt.status is ReceiptStatus.SAVED
+    assert spool.status().pending_count == 0
+    started = [
+        call["params"]["arguments"]
+        for call in tool_calls(transport)
+        if call["params"]["name"] == "session_start"
+    ]
+    assert any(
+        arguments["session_key"] == parked.session_key
+        and arguments["channel_id"] == parked.channel_id
+        for arguments in started
+    )
+    appended = [
+        call["params"]["arguments"]
+        for call in tool_calls(transport)
+        if call["params"]["name"] == "append_session_event"
+    ]
+    assert any(
+        arguments["content"] == "Parked in another project"
+        and arguments["channel_id"] == parked.channel_id
+        for arguments in appended
+    )
+
+
+def test_spool_drain_rejects_tampered_lane_echo_for_parked_scope(
+    tmp_path: Path,
+) -> None:
+    parked = _parked_unit_scope()
+    spool = JsonlSpool(tmp_path / "runtime-spool.jsonl")
+    _park_unit(spool, parked, "Must stay parked")
+    transport = ForeignLaneTamperingTransport(parked.session_key)
+    runtime = FirstClassMemoryRuntime(
+        runtime_config(),
+        runtime_scope(),
+        transport=transport,
+        spool=spool,
+    )
+
+    saved = runtime.capture_distilled("Healthy current-scope write")
+
+    assert saved.receipt.status is ReceiptStatus.SAVED
+    # The replayed lane echo failed the parked unit's exact-scope proof, so the
+    # unit stays parked and its write never dispatched.
+    assert [record.operation for record in spool.records()] == [
+        "session_start",
+        "append_session_event",
+    ]
+    appended = [
+        call["params"]["arguments"]
+        for call in tool_calls(transport)
+        if call["params"]["name"] == "append_session_event"
+    ]
+    assert all(
+        arguments["content"] != "Must stay parked" for arguments in appended
+    )
+
+
+def test_spool_drain_retains_start_record_missing_scope_coordinates(
+    tmp_path: Path,
+) -> None:
+    spool = JsonlSpool(tmp_path / "runtime-spool.jsonl")
+    spool.append(
+        "session_start",
+        {"session_key": "other-repo/session-9", "agent": "bilby"},
+        key="incomplete-start",
+    )
+    scope = runtime_scope()
+    spool.append(
+        "session_start",
+        {
+            **scope.start_metadata(),
+            "session_key": scope.session_key,
+            "agent": scope.agent,
+        },
+        key="valid-start",
+    )
+    transport = LaneAwareTransport()
+    runtime = FirstClassMemoryRuntime(
+        runtime_config(),
+        scope,
+        transport=transport,
+        spool=spool,
+    )
+
+    recalled = runtime.recall_context("Drain what can be proven")
+
+    assert recalled.receipt.status is ReceiptStatus.DIRECT
+    # The incomplete record cannot prove a parked scope: retained, and never
+    # dispatched as a wasted live session_start.
+    assert [record.idempotency_key for record in spool.records()] == [
+        "incomplete-start"
+    ]
+    started_keys = [
+        call["params"]["arguments"].get("session_key")
+        for call in tool_calls(transport)
+        if call["params"]["name"] == "session_start"
+    ]
+    assert "other-repo/session-9" not in started_keys
+
+
+def test_live_write_after_foreign_unit_drain_validates_against_own_scope(
+    tmp_path: Path,
+) -> None:
+    parked = _parked_unit_scope()
+    spool = JsonlSpool(tmp_path / "runtime-spool.jsonl")
+    _park_unit(spool, parked, "Parked in another project")
+    transport = LaneAwareTransport()
+    scope = runtime_scope()
+    runtime = FirstClassMemoryRuntime(
+        runtime_config(),
+        scope,
+        transport=transport,
+        spool=spool,
+    )
+
+    recalled = runtime.recall_context("Drains the foreign unit")
+    saved = runtime.capture_distilled("Live write after the drain")
+
+    # A stale replay scope leaking past the drain would make this live
+    # session_start validate against the parked scope and fail.
+    assert recalled.receipt.status is ReceiptStatus.DIRECT
+    assert saved.receipt.status is ReceiptStatus.SAVED
+    assert spool.status().pending_count == 0
+    started = [
+        call["params"]["arguments"]
+        for call in tool_calls(transport)
+        if call["params"]["name"] == "session_start"
+    ]
+    assert started[-1]["session_key"] == scope.session_key
+    assert started[-1]["channel_id"] == scope.channel_id
+
+
+def test_spool_drain_retains_unit_parked_under_another_namespace(
+    tmp_path: Path,
+) -> None:
+    parked = _parked_unit_scope()
+    spool = JsonlSpool(tmp_path / "runtime-spool.jsonl")
+    spool.append_batch(
+        [
+            (
+                "session_start",
+                {
+                    **parked.start_metadata(),
+                    "session_key": parked.session_key,
+                    "agent": parked.agent,
+                    PARKED_NAMESPACE_KEY: "other-namespace",
+                },
+                None,
+            ),
+            (
+                "append_session_event",
+                {
+                    **parked.start_metadata(),
+                    "session_key": parked.session_key,
+                    "agent": parked.agent,
+                    "content": "Parked by another namespace",
+                    "event_type": "fact",
+                    "source": parked.agent,
+                    "metadata": {"idempotency_key": "parked-other-namespace"},
+                },
+                None,
+            ),
+        ]
+    )
+    transport = LaneAwareTransport()
+    runtime = FirstClassMemoryRuntime(
+        runtime_config(),
+        runtime_scope(),
+        transport=transport,
+        spool=spool,
+    )
+
+    saved = runtime.capture_distilled("Healthy current-scope write")
+
+    assert saved.receipt.status is ReceiptStatus.SAVED
+    # The unit was parked by a runtime bound to another namespace: retained,
+    # with no live dispatch for any of its records.
+    assert [record.operation for record in spool.records()] == [
+        "session_start",
+        "append_session_event",
+    ]
+    dispatched_keys = [
+        call["params"]["arguments"].get("session_key")
+        for call in tool_calls(transport)
+        if call["params"]["name"] != "get_contract"
+    ]
+    assert parked.session_key not in dispatched_keys
+
+
+def test_runtime_parked_start_record_carries_parking_namespace(
+    tmp_path: Path,
+) -> None:
+    spool = JsonlSpool(tmp_path / "runtime-spool.jsonl")
+    runtime = FirstClassMemoryRuntime(
+        runtime_config(),
+        runtime_scope(),
+        client=StartThenFailClient(fail_start=True),
+        spool=spool,
+    )
+
+    queued = runtime.capture_distilled("Parked by this runtime")
+
+    assert queued.receipt.status is ReceiptStatus.SPOOLED
+    records = spool.records()
+    assert records[0].operation == "session_start"
+    assert records[0].payload[PARKED_NAMESPACE_KEY] == "bilby"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("agent", "hijacked-agent"),
+        ("source", "hijacked-source"),
+        ("thread_id", "hijacked-thread"),
+        ("namespace", "hijacked-namespace"),
+        ("metadata.server_id", "hijacked-guild"),
+    ],
+)
+def test_spool_drain_rejects_any_tampered_lane_field_for_parked_scope(
+    tmp_path: Path,
+    field: str,
+    value: str,
+) -> None:
+    parked = _parked_unit_scope()
+    spool = JsonlSpool(tmp_path / "runtime-spool.jsonl")
+    _park_unit(spool, parked, "Must stay parked")
+    transport = ForeignLaneTamperingTransport(
+        parked.session_key, field=field, value=value
+    )
+    runtime = FirstClassMemoryRuntime(
+        runtime_config(),
+        runtime_scope(),
+        transport=transport,
+        spool=spool,
+    )
+
+    saved = runtime.capture_distilled("Healthy current-scope write")
+
+    assert saved.receipt.status is ReceiptStatus.SAVED
+    assert [record.operation for record in spool.records()] == [
+        "session_start",
+        "append_session_event",
+    ]
+    appended = [
+        call["params"]["arguments"]
+        for call in tool_calls(transport)
+        if call["params"]["name"] == "append_session_event"
+    ]
+    assert all(
+        arguments["content"] != "Must stay parked" for arguments in appended
+    )
 
 
 def test_spool_replay_failure_keeps_unit_without_changing_outer_receipt(

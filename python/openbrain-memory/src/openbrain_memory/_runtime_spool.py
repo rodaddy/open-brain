@@ -8,12 +8,17 @@ from typing import Any, cast
 from ._runtime_router import safe_error
 from .agent import MemorySpool
 
+# Client-internal provenance key stamped on spooled session_start payloads and
+# stripped before dispatch; it never reaches the server.
+PARKED_NAMESPACE_KEY = "_parked_namespace"
+
 
 class TrackingSpool:
     """Own ordered prerequisite/requested-write spooling for one runtime."""
 
-    def __init__(self, spool: MemorySpool) -> None:
+    def __init__(self, spool: MemorySpool, *, namespace: str | None = None) -> None:
         self.spool = spool
+        self.namespace = namespace
         self.last_key: str | None = None
         self.last_operation: str | None = None
         self.last_error: str | None = None
@@ -35,7 +40,13 @@ class TrackingSpool:
     ) -> str:
         """Defer lane setup until it can be atomically paired with the write."""
         if operation == "session_start":
-            self.pending_start = (operation, dict(payload), key)
+            parked = dict(payload)
+            if self.namespace is not None:
+                # Namespace provenance: a shared spool file replayed by a
+                # runtime configured for another namespace must retain this
+                # unit instead of silently transplanting its lane content.
+                parked[PARKED_NAMESPACE_KEY] = self.namespace
+            self.pending_start = (operation, parked, key)
             self.last_operation = operation
             return key or "pending-session-start"
         try:

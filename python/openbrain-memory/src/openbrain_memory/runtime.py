@@ -23,7 +23,7 @@ from ._runtime_router import (
     safe_error,
     safe_text,
 )
-from ._runtime_spool import TrackingSpool
+from ._runtime_spool import PARKED_NAMESPACE_KEY, TrackingSpool
 from ._runtime_validation import (
     bounded_int as _bounded_int,
 )
@@ -118,6 +118,23 @@ _REPLAYABLE_SPOOL_OPERATIONS = frozenset(
         "session_wrap",
     }
 )
+
+
+def _spooled_start_scope(payload: Mapping[str, Any]) -> RuntimeScope:
+    """Rebuild the exact scope a spooled session_start unit was parked under."""
+    try:
+        return RuntimeScope(
+            agent=payload["agent"],
+            platform=payload["platform"],
+            server_id=payload["server_id"],
+            channel_id=payload["channel_id"],
+            session_key=payload["session_key"],
+            thread_id=payload.get("thread_id"),
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError(
+            "spooled session_start record does not carry a complete exact scope"
+        ) from error
 
 
 class ReceiptStatus(StrEnum):
@@ -359,6 +376,9 @@ class FirstClassMemoryRuntime:
         self.scope = scope
         self._owns_client = client is None
         self._operation_lock = threading.RLock()
+        # Set only while draining a spooled unit parked under another scope;
+        # session_start replay results validate against this instead of scope.
+        self._replay_scope: RuntimeScope | None = None
         direct = client
         setup_error: BaseException | None = None
         if direct is None:
@@ -393,7 +413,11 @@ class FirstClassMemoryRuntime:
         configured_spool = spool
         if configured_spool is None and config.spool_path is not None:
             configured_spool = JsonlSpool(config.spool_path)
-        self._spool = TrackingSpool(configured_spool) if configured_spool else None
+        self._spool = (
+            TrackingSpool(configured_spool, namespace=config.namespace)
+            if configured_spool
+            else None
+        )
         self._memory = AgentMemory(
             cast(MemoryClient, self._router),
             agent=scope.agent,
@@ -654,15 +678,41 @@ class FirstClassMemoryRuntime:
                 return
 
             def dispatch(record: SpoolRecord) -> JSON:
+                # Reset per record so no later record or unit can inherit a
+                # stale scope if scope-validated replay operations are added.
+                self._replay_scope = None
                 if record.operation not in _REPLAYABLE_SPOOL_OPERATIONS:
                     raise ValueError(
                         f"Unsupported spooled operation: {record.operation}"
                     )
+                payload = dict(record.payload)
+                if record.operation == "session_start":
+                    # A unit parked by a runtime configured for another
+                    # namespace must stay parked: draining it here would
+                    # silently transplant its lane content into this
+                    # runtime's namespace.
+                    parked_namespace = payload.pop(PARKED_NAMESPACE_KEY, None)
+                    if (
+                        parked_namespace is not None
+                        and parked_namespace != self.config.namespace
+                    ):
+                        raise ValueError(
+                            "spooled unit parked under a different namespace"
+                        )
+                    # Validate the replayed lane against the scope the unit was
+                    # parked under, not the runtime's current scope, so units
+                    # from another project drain instead of re-failing forever
+                    # (#310). The namespace stays bound to this runtime's auth
+                    # config; only the lane coordinates come from the record.
+                    self._replay_scope = _spooled_start_scope(payload)
                 method = getattr(self._router, record.operation)
-                return cast(JSON, method(**record.payload))
+                return cast(JSON, method(**payload))
 
-            with self._router.direct_only():
-                spool.replay(dispatch)
+            try:
+                with self._router.direct_only():
+                    spool.replay(dispatch)
+            finally:
+                self._replay_scope = None
         except Exception:
             logger.warning("Spool auto-drain failed", exc_info=True)
 
@@ -681,7 +731,12 @@ class FirstClassMemoryRuntime:
     def _validate_direct_result(self, tool: str, result: Any) -> None:
         try:
             if tool == "session_start":
-                _validate_started_lane(result, self.config.namespace, self.scope)
+                scope = (
+                    self._replay_scope
+                    if self._replay_scope is not None
+                    else self.scope
+                )
+                _validate_started_lane(result, self.config.namespace, scope)
             elif tool == "agent_context_pack":
                 _validate_context_pack_scope(result, self.config.namespace, self.scope)
         except ValueError as error:
