@@ -284,9 +284,13 @@ export function durableMemoryContentChars(
  * The section is measured by its serialized length (`JSON.stringify`), so
  * per-item metadata, ids, and wrappers are counted against the whole-pack
  * budget. `item_count` is reconciled to the retained items so counters and
- * citations stay consistent with the emitted content. A section is "starved"
- * whenever no item body survives (items: []); the caller decides whether to
- * emit the empty envelope or omit the section to hold the budget.
+ * citations stay consistent with the emitted content. Whenever any item is
+ * dropped the section's own `truncated` flag is reconciled to `true` so it never
+ * reports a stale `false` while its content was trimmed. A section is "starved"
+ * whenever no item body survives (items: []); when trimming empties the retained
+ * list the section's `empty_reason` is stamped `whole_pack_budget` so the
+ * emitted empty envelope truthfully states why it holds no items, and the caller
+ * decides whether to emit that envelope or omit the section to hold the budget.
  */
 export function fitRankedItemSection<
   T extends { items: Array<{ citation_id?: unknown }> },
@@ -299,6 +303,18 @@ export function fitRankedItemSection<
     return { section, truncated: false, starved: false };
   }
 
+  // Reconcile a trimmed section to reflect that items were dropped: mark the
+  // section-level `truncated` flag, and when the retained list is emptied stamp a
+  // stable `empty_reason` so the empty envelope truthfully states the whole-pack
+  // budget starved it rather than reporting no reason.
+  const reconcile = (candidate: T): T => {
+    (candidate as Record<string, unknown>).truncated = true;
+    if ((candidate.items as unknown[]).length === 0) {
+      (candidate as Record<string, unknown>).empty_reason = "whole_pack_budget";
+    }
+    return candidate;
+  };
+
   // Drop the lowest-ranked item (last index) one at a time until the section
   // fits or is emptied, preserving the highest-ranked head items.
   const kept = [...section.items];
@@ -310,7 +326,7 @@ export function fitRankedItemSection<
     }
     if (serializedLength(candidate) <= remainingChars) {
       return {
-        section: candidate,
+        section: reconcile(candidate),
         truncated: true,
         starved: kept.length === 0,
       };
@@ -321,7 +337,7 @@ export function fitRankedItemSection<
   for (const countKey of countKeys) {
     (emptied as Record<keyof T, unknown>)[countKey] = 0;
   }
-  return { section: emptied, truncated: true, starved: true };
+  return { section: reconcile(emptied), truncated: true, starved: true };
 }
 
 /**

@@ -332,8 +332,9 @@ export async function buildAgentContextPackPayload(
           serializedLength(durableLaneSection) -
           durableLaneFrame,
       );
-      // durable_lane_context is last in priority, so this only keeps the
-      // first-member invariant honest; no later section frames after it.
+      // durable_memory frames after durable_lane_context, so record that a
+      // member was admitted to keep the first-member framing invariant honest
+      // for the section that follows.
       firstSectionAdmitted = false;
       if (fitted.truncated) {
         wholePackTruncation.push({

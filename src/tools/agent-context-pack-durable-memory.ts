@@ -1,15 +1,14 @@
 import type { ToolDeps } from "./index.ts";
-import type { AuthInfo } from "../types.ts";
+import type { AuthInfo, Table } from "../types.ts";
 import type { AgentContextPackArgs } from "./agent-context-pack.ts";
 import { canRead } from "../permissions.ts";
 import { namespaceFilterFor } from "../read-policy.ts";
 import { ALL_TABLES } from "./table-constants.ts";
+import { executeSearch, type SearchRow } from "./search-brain.ts";
 import {
-  executeSearch,
-  type SearchRow,
-  type SearchTable,
-} from "./search-brain.ts";
-import { CONTEXT_PACK_ENVELOPE_CHAR_RESERVE } from "./agent-context-pack-durable-lane.ts";
+  CONTEXT_PACK_ENVELOPE_CHAR_RESERVE,
+  boundedText,
+} from "./agent-context-pack-durable-lane.ts";
 
 const DURABLE_MEMORY_MAX_CONTENT_CHARS = 8_000;
 const DURABLE_MEMORY_MAX_ITEMS = 8;
@@ -52,20 +51,6 @@ export type DurableMemoryContextFragment = {
   budget: Record<string, unknown>;
   citations: Array<Record<string, unknown>>;
 };
-
-function boundedText(
-  value: unknown,
-  maxChars: number,
-): { text: string | null; truncated: boolean } {
-  if (typeof value !== "string" || value.length === 0 || maxChars <= 0) {
-    return {
-      text: null,
-      truncated: typeof value === "string" && value.length > 0,
-    };
-  }
-  if (value.length <= maxChars) return { text: value, truncated: false };
-  return { text: value.slice(0, maxChars), truncated: true };
-}
 
 /**
  * Build the `durable_memory` section: query-driven hybrid-RRF recall over the
@@ -125,7 +110,7 @@ export async function loadDurableMemoryContext(
     };
   }
 
-  const accessibleTables: SearchTable[] = ALL_TABLES.filter((table) =>
+  const accessibleTables: Table[] = ALL_TABLES.filter((table) =>
     canRead(auth.role, table),
   );
   if (accessibleTables.length === 0) {
