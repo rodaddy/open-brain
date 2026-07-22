@@ -12,7 +12,7 @@
 
 import { validateFirstClassContract } from "./contract.ts";
 import type { Json } from "./client.ts";
-import { OpenBrainClient } from "./client.ts";
+import { OpenBrainClient, OpenBrainError } from "./client.ts";
 import { idempotencyKey, redactText, ValidationError } from "./policy.ts";
 import {
   JsonlSpool,
@@ -106,10 +106,18 @@ export function safeText(value: string): string {
 }
 
 export function safeError(error: unknown): string {
-  if (error instanceof Error) {
-    return safeText(error.message || error.constructor.name);
+  if (error instanceof OpenBrainError) {
+    const status =
+      error.statusCode === undefined ? "none" : String(error.statusCode);
+    const context = error.context ?? "none";
+    return `remote_error=${error.constructor.name} status=${status} context=${context}`;
   }
-  return safeText(String(error));
+  if (error instanceof Error) {
+    // Local diagnostics may be useful, but never copy an arbitrary exception
+    // body into a durable receipt: callers and remote SDKs can include payloads.
+    return `local_error=${error.constructor.name || "Error"}`;
+  }
+  return `local_error=${typeof error}`;
 }
 
 export interface RuntimeReceiptInit {

@@ -1,5 +1,14 @@
 import { describe, expect, it } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, appendFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -89,6 +98,155 @@ describe("JsonlSpool caps and backpressure", () => {
     });
     expect(seen).toEqual(["first", "second"]);
     expect(spool.status().pending_count).toBe(0);
+  });
+});
+
+describe("JsonlSpool durability and cross-process exclusion", () => {
+  it("restores original bytes when directory durability proof fails", () => {
+    const baseline = tempSpool();
+    baseline.append("before", { content: "preserve" }, "before-key");
+    const original = readFileSync(baseline.path);
+    let calls = 0;
+    const spool = new JsonlSpool(baseline.path, {
+      directorySync() {
+        calls += 1;
+        if (calls === 1) throw new Error("injected directory fsync failure");
+      },
+    });
+    expect(() =>
+      spool.append("after", { content: "must not acknowledge" }),
+    ).toThrow("injected directory fsync failure");
+    expect(calls).toBe(2);
+    expect(readFileSync(baseline.path).equals(original)).toBe(true);
+    expect(baseline.records().map((record) => record.idempotency_key)).toEqual([
+      "before-key",
+    ]);
+  });
+
+  it("restores original absence when first-write directory durability proof fails", () => {
+    const baseline = tempSpool();
+    let calls = 0;
+    const spool = new JsonlSpool(baseline.path, {
+      directorySync() {
+        calls += 1;
+        if (calls === 1) throw new Error("injected directory fsync failure");
+      },
+    });
+    expect(() =>
+      spool.append("first", { content: "must not acknowledge" }),
+    ).toThrow("injected directory fsync failure");
+    expect(calls).toBe(2);
+    expect(existsSync(baseline.path)).toBe(false);
+  });
+
+  it("recovers a lock whose recorded owner process is dead", () => {
+    const spool = tempSpool();
+    writeFileSync(
+      spool.lockPath,
+      JSON.stringify({ token: "dead-owner", pid: 2_147_483_647 }),
+      { mode: 0o600 },
+    );
+    expect(
+      spool.append("after-crash", { content: "recover" }, "recovered-key"),
+    ).toBe("recovered-key");
+  });
+
+  it("recovers stale malformed lock metadata", () => {
+    const baseline = tempSpool();
+    writeFileSync(baseline.lockPath, "incomplete", { mode: 0o600 });
+    utimesSync(baseline.lockPath, new Date(0), new Date(0));
+    const spool = new JsonlSpool(baseline.path, {
+      lockTimeoutMs: 50,
+      lockStaleMs: 1,
+    });
+    expect(
+      spool.append("after-stale", { content: "recover" }, "stale-key"),
+    ).toBe("stale-key");
+  });
+
+  it("never steals a stale-looking lock from a live owner", () => {
+    const baseline = tempSpool();
+    writeFileSync(
+      baseline.lockPath,
+      JSON.stringify({ token: "live-owner", pid: process.pid }),
+      { mode: 0o600 },
+    );
+    utimesSync(baseline.lockPath, new Date(0), new Date(0));
+    const spool = new JsonlSpool(baseline.path, {
+      lockTimeoutMs: 20,
+      lockStaleMs: 1,
+    });
+    expect(() => spool.append("blocked", { content: "do not race" })).toThrow(
+      "timed out acquiring spool lock",
+    );
+    expect(existsSync(baseline.path)).toBe(false);
+  });
+
+  it("preserves every acknowledged key from independently opened child spools", async () => {
+    const spool = tempSpool();
+    const gate = join(tmpdir(), `obmem-ts-spool-gate-${crypto.randomUUID()}`);
+    const workerModule = new URL("../src/spool.ts", import.meta.url).href;
+    const keys = Array.from({ length: 12 }, (_, index) => `child-key-${index}`);
+    const children = keys.map((key) =>
+      Bun.spawn({
+        cmd: [
+          process.execPath,
+          "-e",
+          [
+            `import { existsSync } from "node:fs";`,
+            `import { JsonlSpool } from ${JSON.stringify(workerModule)};`,
+            `while (!existsSync(${JSON.stringify(gate)})) await Bun.sleep(1);`,
+            `new JsonlSpool(${JSON.stringify(spool.path)}).append("child", { content: "${key}" }, "${key}");`,
+          ].join("\n"),
+        ],
+        stdout: "ignore",
+        stderr: "pipe",
+      }),
+    );
+    writeFileSync(gate, "go", { mode: 0o600 });
+    for (const child of children) {
+      const exitCode = await child.exited;
+      if (exitCode !== 0) {
+        throw new Error(await new Response(child.stderr).text());
+      }
+    }
+    expect(
+      spool
+        .records()
+        .map((record) => record.idempotency_key)
+        .sort(),
+    ).toEqual([...keys].sort());
+  });
+});
+
+describe("JsonlSpool replay symlink checks", () => {
+  it("rejects a symlink before reading a replay snapshot", async () => {
+    const spool = tempSpool();
+    spool.append("log_thought", { content: "queued" });
+    const moved = spool.path + ".moved";
+    const target = spool.path + ".target";
+    renameSync(spool.path, moved);
+    writeFileSync(target, "unrelated", { mode: 0o600 });
+    symlinkSync(target, spool.path);
+    await expect(spool.replayWithReport(() => ({}))).rejects.toThrow(
+      "Refusing to use symlink spool path",
+    );
+  });
+
+  it("rejects a symlink before replay commit reconciliation", async () => {
+    const spool = tempSpool();
+    spool.append("log_thought", { content: "queued" });
+    const moved = spool.path + ".moved";
+    const target = spool.path + ".target";
+    writeFileSync(target, "unrelated", { mode: 0o600 });
+    await expect(
+      spool.replayWithReport(() => {
+        renameSync(spool.path, moved);
+        symlinkSync(target, spool.path);
+        return {};
+      }),
+    ).rejects.toThrow("Refusing to use symlink spool path");
+    expect(readFileSync(target, "utf-8")).toBe("unrelated");
   });
 });
 

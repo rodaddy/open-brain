@@ -45,6 +45,8 @@ Block if namespace is accepted as arbitrary metadata without policy checks.
 - Oversized records must not disappear after `append()` returns success.
 - Replay tests must map spooled operations back through fake client/facade calls,
   not only ad-hoc lambdas.
+- PR #319: require cross-process append/replay coverage, token-safe stale-lock
+  recovery, and failed-directory-sync restoration; lock scope ends before dispatch.
 
 Block if append success can mean "not actually recoverable."
 
@@ -56,6 +58,8 @@ Block if append success can mean "not actually recoverable."
 - SSE/Streamable HTTP must not wait for EOF on long-lived streams.
 - Health degraded responses should expose structured diagnostics.
 - Session lifecycle must be implemented or clearly documented.
+- PR #319: enforce the cap while consuming chunks and cancel overflow; an SSE
+  response succeeds on its complete matching id, not EOF.
 
 Block if a new transport path reads unbounded response bodies or assumes EOF for
 streamed JSON-RPC responses.
@@ -68,6 +72,8 @@ streamed JSON-RPC responses.
   request bodies against an in-process server when transport behavior changes.
 - Wrapper tests should prove schema-compatible payloads, not just method names.
 - DreamEngine must define malformed-report behavior.
+- PR #319: replay fixture fakes must reject invalid full tool argument shapes;
+  a dispatched method name alone is not contract evidence.
 
 Block if tests would pass while server schema, headers, or protocol order are
 wrong.

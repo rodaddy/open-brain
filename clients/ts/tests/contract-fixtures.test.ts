@@ -78,38 +78,38 @@ const TS_FIXTURES = ALL_FIXTURES.filter((fixture) =>
 );
 
 /**
- * A moved or emptied fixture directory must fail loudly, not skip. The
- * `python-runtime-and-agent-receipt-shapes` fixture stays python-consumed:
- * its agent-receipt half exercises `AgentMemory.record_receipt`, which the TS
- * client does not own (capability `receipt-shapes` is runtime-specific; the
- * TS-owned taxonomy fixture below covers the TS public receipt surface).
+ * Derive the TS fixture set from the parity manifest plus the fixture runtime,
+ * rather than maintaining a second list that can silently omit a new shared
+ * fixture from the TS replay suite.
  */
-const EXPECTED_TS_FIXTURE_IDS = new Set([
-  "auto-drain-replay-allowlist",
-  "contract-declaration-v22",
-  "exact-scope-proof-context-pack",
-  "lifecycle-capture",
-  "lifecycle-checkpoint",
-  "lifecycle-recall",
-  "lifecycle-session-start",
-  "lifecycle-wrap",
-  "python-drain-replay-quarantine-receipts",
-  "spool-line-cap-backpressure",
-  "spool-redact-before-persist",
-  "ts-public-receipt-error-category-v1",
-]);
+const PARITY_MANIFEST = JSON.parse(
+  readFileSync(join(FIXTURE_DIR, "parity-manifest.json"), "utf-8"),
+) as {
+  expected_fixture_ids: Record<string, string>;
+  capabilities: Array<{ capability: string; ts: string }>;
+};
+const TS_IMPLEMENTED_CAPABILITIES = new Set(
+  PARITY_MANIFEST.capabilities
+    .filter((entry) => entry.ts === "implemented")
+    .map((entry) => entry.capability),
+);
+const EXPECTED_TS_FIXTURE_IDS = new Set(
+  ALL_FIXTURES.filter(
+    (fixture) =>
+      fixture.runtime === "ts" ||
+      (fixture.runtime === "both" &&
+        TS_IMPLEMENTED_CAPABILITIES.has(fixture.capability)),
+  ).map((fixture) => fixture.id),
+);
 
 describe("contract fixture discovery", () => {
   it("matches the manifest's ts-consumable fixture set", () => {
-    const manifest = JSON.parse(
-      readFileSync(join(FIXTURE_DIR, "parity-manifest.json"), "utf-8"),
-    ) as { expected_fixture_ids: Record<string, string> };
     expect(EXPECTED_TS_FIXTURE_IDS.size).toBeGreaterThan(0);
     expect(new Set(TS_FIXTURES.map((fixture) => fixture.id))).toEqual(
       EXPECTED_TS_FIXTURE_IDS,
     );
     for (const id of EXPECTED_TS_FIXTURE_IDS) {
-      expect(manifest.expected_fixture_ids[id]).toBeDefined();
+      expect(PARITY_MANIFEST.expected_fixture_ids[id]).toBeDefined();
     }
   });
 });

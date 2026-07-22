@@ -16,10 +16,9 @@
  * restarts in the `<spool>.retry-state.json` sidecar; losing that sidecar
  * loses counters, never spool records.
  *
- * Runtime-specific difference from the Python spool: no cross-process
- * advisory file lock (`fcntl.flock`). Bun/Node has no portable flock; the TS
- * spool relies on single-process serialized access plus atomic tmp+rename
- * rewrites. Do not point two concurrent processes at one spool file.
+ * Cross-process exclusion uses an adjacent atomic-create lock file. Locks cover
+ * only local snapshots and commits; replay dispatch deliberately happens after
+ * releasing the lock, so slow networks never serialize writers.
  */
 
 import {
@@ -47,6 +46,9 @@ export const DEFAULT_QUARANTINE_THRESHOLD = 5;
 export const QUARANTINE_ENVELOPE_SCHEMA = "openbrain.spool_quarantine.v1";
 export const RETRY_STATE_SCHEMA = "openbrain.spool_retry_state.v1";
 const MAX_RETRY_STATE_FAILURES = 1_000_000;
+const LOCK_WAIT_MS = 10;
+const DEFAULT_LOCK_TIMEOUT_MS = 5_000;
+const DEFAULT_LOCK_STALE_MS = 30_000;
 
 /** Raised when an append would exceed spool capacity. */
 export class SpoolFullError extends ValidationError {}
@@ -184,9 +186,13 @@ export class JsonlSpool {
   readonly path: string;
   readonly quarantinePath: string;
   readonly retryStatePath: string;
+  readonly lockPath: string;
   readonly maxLines: number;
   readonly maxBytes: number;
   readonly quarantineThreshold: number;
+  private readonly directorySync: (directory: string) => void;
+  private readonly lockTimeoutMs: number;
+  private readonly lockStaleMs: number;
 
   constructor(
     path: string,
@@ -194,6 +200,10 @@ export class JsonlSpool {
       maxLines?: number;
       maxBytes?: number;
       quarantineThreshold?: number;
+      /** Test seam for the directory durability boundary. */
+      directorySync?: (directory: string) => void;
+      lockTimeoutMs?: number;
+      lockStaleMs?: number;
     } = {},
   ) {
     this.maxLines = options.maxLines ?? 1000;
@@ -209,9 +219,16 @@ export class JsonlSpool {
     if (this.quarantineThreshold < 1) {
       throw new ValidationError("quarantineThreshold must be >= 1");
     }
+    this.lockTimeoutMs = options.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS;
+    this.lockStaleMs = options.lockStaleMs ?? DEFAULT_LOCK_STALE_MS;
+    if (this.lockTimeoutMs < 1 || this.lockStaleMs < 1) {
+      throw new ValidationError("spool lock timeouts must be >= 1ms");
+    }
     this.path = path;
     this.quarantinePath = path + ".quarantine.jsonl";
     this.retryStatePath = path + ".retry-state.json";
+    this.lockPath = path + ".lock";
+    this.directorySync = options.directorySync ?? syncDirectory;
   }
 
   append(operation: string, payload: Json, key?: string | null): string {
@@ -248,24 +265,26 @@ export class JsonlSpool {
       );
     }
 
-    mkdirSync(dirname(this.path), { recursive: true });
-    this.rejectSymlink(this.path);
-    const existing = existsSync(this.path)
-      ? splitKeepEnds(readFileSync(this.path, "utf-8"))
-      : [];
-    const existingBytes = existing.reduce(
-      (total, line) => total + utf8Length(line),
-      0,
-    );
-    if (
-      existing.length + batchLines.length > this.maxLines ||
-      existingBytes + batchBytes > this.maxBytes
-    ) {
-      throw new SpoolFullError(
-        "spool is full; append would exceed configured maxLines/maxBytes limits",
+    this.withLock(() => {
+      mkdirSync(dirname(this.path), { recursive: true });
+      this.rejectSymlink(this.path);
+      const existing = existsSync(this.path)
+        ? splitKeepEnds(readFileSync(this.path, "utf-8"))
+        : [];
+      const existingBytes = existing.reduce(
+        (total, line) => total + utf8Length(line),
+        0,
       );
-    }
-    this.writeLines([...existing, ...batchLines]);
+      if (
+        existing.length + batchLines.length > this.maxLines ||
+        existingBytes + batchBytes > this.maxBytes
+      ) {
+        throw new SpoolFullError(
+          "spool is full; append would exceed configured maxLines/maxBytes limits",
+        );
+      }
+      this.writeLines([...existing, ...batchLines]);
+    });
     return safeKeys;
   }
 
@@ -395,11 +414,17 @@ export class JsonlSpool {
   async replayWithReport(
     dispatcher: SpoolDispatcher,
   ): Promise<SpoolReplayReport> {
-    const lines = existsSync(this.path)
-      ? splitKeepEnds(readFileSync(this.path, "utf-8"))
-      : [];
-    const snapshot = this.parseUnits(lines);
-    const retryState = this.loadRetryState();
+    const { snapshot, retryState } = this.withLock(() => {
+      // Check before every replay snapshot read; existsSync follows symlinks.
+      this.rejectSymlink(this.path);
+      const lines = existsSync(this.path)
+        ? splitKeepEnds(readFileSync(this.path, "utf-8"))
+        : [];
+      return {
+        snapshot: this.parseUnits(lines),
+        retryState: this.loadRetryState(),
+      };
+    });
 
     const now = nowSeconds();
     const results: Json[] = [];
@@ -491,13 +516,15 @@ export class JsonlSpool {
       failedUpdates.size > 0 ||
       quarantineUpdates.size > 0
     ) {
-      this.commitReplayPass(
-        replayedUnitKeys,
-        failedUpdates,
-        quarantineUpdates,
-        retryState,
-        anyReplayed,
-        now,
+      this.withLock(() =>
+        this.commitReplayPass(
+          replayedUnitKeys,
+          failedUpdates,
+          quarantineUpdates,
+          retryState,
+          anyReplayed,
+          now,
+        ),
       );
     }
     return { results, outcomes };
@@ -517,6 +544,9 @@ export class JsonlSpool {
     anyReplayed: boolean,
     now: number,
   ): void {
+    // Check before the commit read too: an attacker must not redirect a replay
+    // between its unlocked network dispatch and the reconciliation pass.
+    this.rejectSymlink(this.path);
     const liveLines = existsSync(this.path)
       ? splitKeepEnds(readFileSync(this.path, "utf-8"))
       : [];
@@ -548,20 +578,24 @@ export class JsonlSpool {
       this.removeQuarantinedEntries(replayedUnitKeys);
     }
     this.writeLines(remainingLines);
+    const currentState = this.loadRetryState();
     const units = new Map<string, UnitRetryState>();
     for (const unitKey of remainingKeys) {
       const update = failedUpdates.get(unitKey);
-      if (update !== undefined) {
+      const prior =
+        currentState.units.get(unitKey) ?? priorState.units.get(unitKey);
+      if (
+        update !== undefined &&
+        (prior === undefined ||
+          update.consecutive_failures >= prior.consecutive_failures)
+      ) {
         units.set(unitKey, update);
-      } else {
-        const prior = priorState.units.get(unitKey);
-        if (prior !== undefined) {
-          units.set(unitKey, prior);
-        }
+      } else if (prior !== undefined) {
+        units.set(unitKey, prior);
       }
     }
     this.writeRetryState({
-      last_success_at: anyReplayed ? now : priorState.last_success_at,
+      last_success_at: anyReplayed ? now : currentState.last_success_at,
       units,
     });
   }
@@ -722,6 +756,32 @@ export class JsonlSpool {
 
   private atomicWrite(path: string, lines: readonly string[]): void {
     const payload = Buffer.from(lines.join(""), "utf-8");
+    this.rejectSymlink(path);
+    const prior = existsSync(path) ? readFileSync(path) : null;
+    let replaced = false;
+    try {
+      this.replaceBytes(path, payload);
+      replaced = true;
+      this.directorySync(dirname(path));
+    } catch (error) {
+      if (replaced) {
+        try {
+          this.restorePrior(path, prior);
+        } catch (restoreError) {
+          throw new Error(
+            "spool durability failure could not restore prior state",
+            {
+              cause: restoreError,
+            },
+          );
+        }
+      }
+      throw error;
+    }
+  }
+
+  /** Replace bytes atomically after the caller captured the prior state. */
+  private replaceBytes(path: string, payload: Buffer): void {
     const directory = dirname(path);
     const tmpPath = join(
       directory,
@@ -763,16 +823,131 @@ export class JsonlSpool {
       }
       throw error;
     }
-    // Best-effort directory durability; macOS may reject fsync on dir fds.
+  }
+
+  /** Restore original bytes (or original absence) and prove the restore. */
+  private restorePrior(path: string, prior: Buffer | null): void {
+    if (prior === null) {
+      unlinkSync(path);
+    } else {
+      this.replaceBytes(path, prior);
+    }
+    this.directorySync(dirname(path));
+  }
+
+  /** Execute a short local filesystem transaction with a token-safe lock. */
+  private withLock<T>(action: () => T): T {
+    const token = this.acquireLock();
     try {
-      const dirFd = openSync(directory, "r");
+      return action();
+    } finally {
+      this.releaseLock(token);
+    }
+  }
+
+  private acquireLock(): string {
+    const deadline = Date.now() + this.lockTimeoutMs;
+    mkdirSync(dirname(this.lockPath), { recursive: true });
+    while (true) {
+      const token = crypto.randomUUID();
+      let fd: number | null = null;
+      let created = false;
       try {
-        fsyncSync(dirFd);
-      } finally {
-        closeSync(dirFd);
+        fd = openSync(this.lockPath, "wx", 0o600);
+        created = true;
+        const owner = Buffer.from(
+          JSON.stringify({
+            token,
+            pid: process.pid,
+            created_at_ms: Date.now(),
+          }),
+          "utf-8",
+        );
+        let written = 0;
+        while (written < owner.byteLength) {
+          const chunk = writeSync(
+            fd,
+            owner,
+            written,
+            owner.byteLength - written,
+          );
+          if (chunk <= 0) {
+            throw new Error("spool lock write made no forward progress");
+          }
+          written += chunk;
+        }
+        fsyncSync(fd);
+        closeSync(fd);
+        return token;
+      } catch (error) {
+        if (fd !== null) {
+          try {
+            closeSync(fd);
+          } catch {
+            // The lock acquisition failed before ownership was established.
+          }
+        }
+        if (created) {
+          try {
+            unlinkSync(this.lockPath);
+          } catch {
+            // Stale-lock recovery will safely handle a failed cleanup.
+          }
+        }
+        if (!isAlreadyExists(error)) throw error;
+        if (this.recoverDeadOrStaleLock()) continue;
+        if (Date.now() >= deadline) {
+          throw new Error("timed out acquiring spool lock");
+        }
+        waitForLock(LOCK_WAIT_MS);
+      }
+    }
+  }
+
+  private recoverDeadOrStaleLock(): boolean {
+    this.rejectSymlink(this.lockPath);
+    let lockStat: ReturnType<typeof statSync>;
+    try {
+      lockStat = statSync(this.lockPath);
+    } catch {
+      return true;
+    }
+    let owner: { pid?: unknown } = {};
+    try {
+      owner = JSON.parse(readFileSync(this.lockPath, "utf-8")) as {
+        pid?: unknown;
+      };
+    } catch {
+      // A creator may still be writing metadata; only steal an old empty lock.
+    }
+    const stale = Date.now() - lockStat.mtimeMs >= this.lockStaleMs;
+    const hasOwnerPid = typeof owner.pid === "number";
+    const dead = hasOwnerPid && ownerIsDead(owner.pid as number);
+    // Never steal a lock from a live owner merely because one local filesystem
+    // transaction exceeded the stale threshold. Staleness is a recovery signal
+    // only when the owner metadata is missing or malformed.
+    if (!dead && !(stale && !hasOwnerPid)) return false;
+    const stalePath = `${this.lockPath}.${crypto.randomUUID()}.stale`;
+    try {
+      renameSync(this.lockPath, stalePath);
+      unlinkSync(stalePath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private releaseLock(token: string): void {
+    try {
+      this.rejectSymlink(this.lockPath);
+      const owner = JSON.parse(readFileSync(this.lockPath, "utf-8")) as {
+        token?: unknown;
+      };
+      if (owner.token === token) {
+        unlinkSync(this.lockPath);
       }
     } catch {
-      // best-effort only
+      // A stale-lock recovery may have replaced our lock; never unlink it.
     }
   }
 
@@ -846,6 +1021,45 @@ export class JsonlSpool {
     }
     return units;
   }
+}
+
+function syncDirectory(directory: string): void {
+  const dirFd = openSync(directory, "r");
+  try {
+    fsyncSync(dirFd);
+  } finally {
+    closeSync(dirFd);
+  }
+}
+
+function isAlreadyExists(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "EEXIST"
+  );
+}
+
+function ownerIsDead(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    return (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as { code?: unknown }).code === "ESRCH"
+    );
+  }
+}
+
+function waitForLock(milliseconds: number): void {
+  const sleeper = new Int32Array(
+    new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
+  );
+  Atomics.wait(sleeper, 0, 0, milliseconds);
 }
 
 function rawGroupId(line: string): string | null {

@@ -42,7 +42,8 @@ and the root `bunx tsc --noEmit` typecheck (`clients/ts/**/*.ts` is in the root
   **redact-before-persist**: every payload passes `redactValue` before disk;
   nothing unredacted reaches the spool or any sidecar. Every record spooled by
   the runtime carries the `_parked_namespace` provenance marker (#314,
-  PR #317).
+  PR #317). Spool durability and replay cover this **redacted persisted
+  representation**, not the caller's exact original payload bytes.
 - **Scope-aware auto-drain (#307/#310/#314).** Healthy direct recalls and
   saved writes replay pending spool units through the explicit durable
   allowlist (`session_start`, `lane_upsert`, `upsert_repo_fact`,
@@ -125,10 +126,12 @@ bun contracts/check-parity.ts
 
 - **No mcp2cli subprocess fallback.** `fallback_attempted` is always `false`;
   scope mismatches and outages degrade to spool/receipts directly.
-- **No cross-process file lock.** Python uses `fcntl.flock`; Bun has no
-  portable flock. The TS spool serializes in-process and uses atomic
-  tmp+rename rewrites — do not point two concurrent processes at one spool
-  file.
+- **Portable cross-process spool lock.** The TS spool uses an atomic-create
+  lock file with bounded waits, dead/stale-owner recovery, and token-safe
+  release around local snapshot/read-modify-write and replay reconciliation.
+  It never holds that lock across replay dispatch/network calls. Atomic writes
+  require directory durability proof; a failed proof restores the prior bytes
+  (or prior absence) before reporting failure.
 - **No client-version range validation** against `min_client_versions` /
   `compatible_client_ranges`: the server manifest does not yet declare a
   TypeScript-client entry, so validating an absent entry would fail closed

@@ -9,6 +9,7 @@ import {
   ReceiptStatus,
 } from "../src/runtime.ts";
 import { JsonlSpool } from "../src/spool.ts";
+import { OpenBrainToolError, type Json } from "../src/client.ts";
 import {
   LaneAwareTransport,
   StartThenFailClient,
@@ -44,13 +45,37 @@ describe("runtime write degradation", () => {
     expect(output.receipt.spoolKey).not.toBeNull();
     // The client error carried a token=... payload; the receipt must not.
     expect(output.receipt.error ?? "").not.toContain(SENTINEL);
-    expect(output.receipt.error ?? "").toContain("[REDACTED]");
+    expect(output.receipt.error).toBe("local_error=Error");
     const records = spool.records();
     expect(records.map((record) => record.operation)).toEqual([
       "append_session_event",
     ]);
     expect(records[0]?.payload[PARKED_NAMESPACE_KEY]).toBe("bilby");
     expect(readFileSync(spool.path, "utf-8")).not.toContain(SENTINEL);
+  });
+
+  it("keeps remote response bodies out of runtime receipts", async () => {
+    const sentinel = "remote-body-sentinel";
+    class RemoteFailureClient extends StartThenFailClient {
+      override append_session_event(): Json {
+        throw new OpenBrainToolError("remote tool failure", {
+          statusCode: 502,
+          context: "call_tool:append_session_event",
+          body: sentinel,
+        });
+      }
+    }
+    const runtime = new FirstClassMemoryRuntime(
+      runtimeConfig(),
+      runtimeScope(),
+      { client: new RemoteFailureClient(), spool: tempSpool() },
+    );
+    const output = await runtime.captureDistilled("A distilled fact");
+    expect(output.receipt.status).toBe(ReceiptStatus.SPOOLED);
+    expect(output.receipt.error).toBe(
+      "remote_error=OpenBrainToolError status=502 context=call_tool:append_session_event",
+    );
+    expect(JSON.stringify(output.receipt.asDict())).not.toContain(sentinel);
   });
 
   it("pairs the lane prerequisite with the write when session start fails", async () => {

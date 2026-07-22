@@ -216,12 +216,68 @@ export class LaneAwareTransport implements Transport {
         sections: durable !== null ? { durable_lane_context: durable } : {},
       });
     }
+    // Fixture replay must exercise schema-compatible tool arguments. Keeping
+    // this fake permissive would let malformed parked records drain green.
+    if (tool === "lane_upsert") {
+      if (!nonEmpty(args["session_key"])) {
+        return toolError(requestId, "lane_upsert requires session_key");
+      }
+    } else if (tool === "upsert_repo_fact") {
+      if (!validRepoFactMetadata(args["metadata"])) {
+        return toolError(requestId, "upsert_repo_fact metadata is invalid");
+      }
+    } else if (tool === "log_thought") {
+      if (!nonEmpty(args["content"])) {
+        return toolError(requestId, "log_thought requires content");
+      }
+    } else if (tool === "log_decision") {
+      if (!nonEmpty(args["title"]) || !nonEmpty(args["rationale"])) {
+        return toolError(
+          requestId,
+          "log_decision requires title and rationale",
+        );
+      }
+    }
     return toolResult(requestId, {
       tool,
       arguments: args,
       sections: { working_set: { items: [] } },
     });
   }
+}
+
+function nonEmpty(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function validRepoFactMetadata(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const metadata = value as Json;
+  const requiredText = [
+    "repo",
+    "collection",
+    "path",
+    "fact_type",
+    "fact",
+    "source_commit",
+    "source_url",
+    "verified_at",
+    "staleness_policy",
+  ];
+  return (
+    metadata["source_system"] === "qmd" &&
+    requiredText.every((key) => nonEmpty(metadata[key])) &&
+    (nonEmpty(metadata["symbol"]) || nonEmpty(metadata["subject"])) &&
+    typeof metadata["confidence"] === "number" &&
+    metadata["confidence"] >= 0 &&
+    metadata["confidence"] <= 1 &&
+    /^[0-9a-f]{40}$/i.test(metadata["source_commit"] as string) &&
+    new Date(metadata["verified_at"] as string).getTime() <= Date.now() &&
+    metadata["source_url"] ===
+      `https://github.com/${metadata["repo"]}/blob/${metadata["source_commit"]}/${metadata["path"]}`
+  );
 }
 
 export function toolResult(requestId: number, body: Json): TransportResponse {

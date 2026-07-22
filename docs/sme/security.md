@@ -47,11 +47,17 @@ now redacts before persistence and replay deliberately replays the redacted
 form. The live-write half (successful live writes preserve caller content)
 remains active.
 
+**2026-07-22 update (PR #319):** runtime receipts must not re-expose remote
+HTTP/tool response bodies after transport redaction. Remote errors need bounded
+class/status/context evidence only; persisted spool replay is explicitly the
+redacted representation, not exact original payload replay.
+
 ### Review Questions
 
 - Are live writes preserving caller content?
 - Are logs/errors redacted separately?
 - Is spool data protected without pretending lossy redacted data is exact replay?
+- Do remote-error receipt tests use a sentinel body and prove it cannot escape?
 - Do tests prove successful live writes are not silently redacted?
 
 ## [2026-06-11] Redaction coverage must include common unlabeled credential shapes

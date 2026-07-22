@@ -6,8 +6,8 @@ namespace semantics, and package/runtime deployment boundaries.
 ## [2026-06-11] MCP transport must be bounded and stream-aware
 
 **Severity:** HIGH
-**Source:** Issue #81, PR #72 follow-up
-**Scope:** `python/openbrain-memory/src/openbrain_memory/client.py`
+**Source:** Issue #81, PR #72 follow-up; PR #319 fix delta
+**Scope:** `python/openbrain-memory/src/openbrain_memory/client.py`, `clients/ts/src/client.ts`
 **Status:** active
 
 ### Pattern
@@ -15,6 +15,10 @@ namespace semantics, and package/runtime deployment boundaries.
 Transport code that reads an entire HTTP response before parsing can hang on
 long-lived Streamable HTTP/SSE responses or consume too much memory on bad
 responses.
+
+**PR #319:** TS `response.text()` defeated its byte cap and its SSE parser
+waited for EOF. Bound bytes while reading chunks, cancel on overflow, and return
+after a complete matching JSON-RPC SSE event; cover JSON, SSE, and open streams.
 
 ### Review Questions
 

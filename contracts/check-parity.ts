@@ -130,6 +130,7 @@ const fixtureGlob = new Bun.Glob("*.fixture.json");
 const fixtureIds = new Set<string>();
 const fixtureCapabilities = new Set<string>();
 const tsConsumedCapabilities = new Set<string>();
+const fixtures: Fixture[] = [];
 let fixtureCount = 0;
 let contractDeclarationChecked = false;
 
@@ -139,6 +140,7 @@ for await (const name of fixtureGlob.scan({
 })) {
   fixtureCount += 1;
   const fixture = await readJson<Fixture>(new URL(name, fixtureDir));
+  fixtures.push(fixture);
   const prefix = `${name}:`;
   for (const key of [
     "id",
@@ -262,6 +264,18 @@ for (const [capability, entry] of capabilityMap) {
   if (entry.ts === "implemented" && !tsConsumedCapabilities.has(capability)) {
     errors.push(
       `parity-manifest.json: ts-implemented capability '${capability}' has no fixture declared as consumed by ts`,
+    );
+  }
+}
+for (const fixture of fixtures) {
+  const capability = capabilityMap.get(fixture.capability);
+  if (
+    fixture.runtime === "both" &&
+    capability?.ts === "implemented" &&
+    !fixture.consumers?.includes("ts")
+  ) {
+    errors.push(
+      `contracts/memory: both-runtime fixture '${fixture.id}' under TS-implemented capability '${fixture.capability}' must declare a TS consumer`,
     );
   }
 }

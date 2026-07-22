@@ -24,7 +24,13 @@ export interface TransportResponse {
 export interface Transport {
   post(
     url: string,
-    options: { headers: Record<string, string>; json: Json; timeout: number },
+    options: {
+      headers: Record<string, string>;
+      json: Json;
+      timeout: number;
+      /** Lets stream-capable transports stop after the matching SSE response. */
+      expectedId?: number;
+    },
   ): Promise<TransportResponse>;
   delete(
     url: string,
@@ -105,7 +111,12 @@ export class FetchTransport implements Transport {
 
   async post(
     url: string,
-    options: { headers: Record<string, string>; json: Json; timeout: number },
+    options: {
+      headers: Record<string, string>;
+      json: Json;
+      timeout: number;
+      expectedId?: number;
+    },
   ): Promise<TransportResponse> {
     return this.send(
       url,
@@ -113,6 +124,7 @@ export class FetchTransport implements Transport {
       options.headers,
       options.timeout,
       options.json,
+      options.expectedId,
     );
   }
 
@@ -129,6 +141,7 @@ export class FetchTransport implements Transport {
     headers: Record<string, string>,
     timeoutSeconds: number,
     json?: Json,
+    expectedId?: number,
   ): Promise<TransportResponse> {
     let response: Response;
     try {
@@ -147,18 +160,87 @@ export class FetchTransport implements Transport {
         { context: "transport" },
       );
     }
-    const text = await response.text();
-    if (new TextEncoder().encode(text).byteLength > this.maxResponseBytes) {
-      throw new OpenBrainHTTPError(
-        "Open Brain response exceeded maxResponseBytes",
-        { context: "transport" },
-      );
-    }
+    const text = await this.readBody(response, expectedId);
     const responseHeaders: Record<string, string> = {};
     response.headers.forEach((value, key) => {
       responseHeaders[key.toLowerCase()] = value;
     });
     return { status: response.status, headers: responseHeaders, text };
+  }
+
+  /** Read a bounded body and stop an SSE response at the requested JSON-RPC id. */
+  private async readBody(
+    response: Response,
+    expectedId?: number,
+  ): Promise<string> {
+    const reader = response.body?.getReader();
+    if (reader === undefined) return "";
+    const decoder = new TextDecoder();
+    const contentType = response.headers.get("content-type") ?? "";
+    const isSse = contentType.includes("text/event-stream");
+    let bytes = 0;
+    let text = "";
+    let pending = "";
+    let dataLines: string[] = [];
+    const matched = (): string | null => {
+      if (expectedId === undefined || dataLines.length === 0) return null;
+      const data = dataLines.join("\n");
+      try {
+        const message: unknown = JSON.parse(data);
+        if (
+          typeof message === "object" &&
+          message !== null &&
+          (message as Json)["id"] === expectedId
+        ) {
+          return data;
+        }
+      } catch {
+        // An unrelated malformed SSE event is handled by the protocol layer.
+      }
+      return null;
+    };
+    try {
+      while (true) {
+        const next = await reader.read();
+        if (next.done) break;
+        bytes += next.value.byteLength;
+        if (bytes > this.maxResponseBytes) {
+          await reader.cancel();
+          throw new OpenBrainHTTPError(
+            "Open Brain response exceeded maxResponseBytes",
+            { context: "transport" },
+          );
+        }
+        const chunk = decoder.decode(next.value, { stream: true });
+        text += chunk;
+        if (!isSse || expectedId === undefined) continue;
+        pending += chunk;
+        while (true) {
+          const newline = pending.indexOf("\n");
+          if (newline < 0) break;
+          const rawLine = pending.slice(0, newline);
+          pending = pending.slice(newline + 1);
+          const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+          if (line === "") {
+            const data = matched();
+            dataLines = [];
+            if (data !== null) {
+              await reader.cancel();
+              return `data: ${data}\n\n`;
+            }
+          } else if (line.startsWith("data:")) {
+            dataLines.push(line.slice("data:".length).trim());
+          }
+        }
+      }
+      text += decoder.decode();
+      return text;
+    } catch (error) {
+      if (error instanceof OpenBrainHTTPError) throw error;
+      throw new OpenBrainHTTPError("Open Brain response stream failed", {
+        context: "transport",
+      });
+    }
   }
 }
 
@@ -484,6 +566,7 @@ export class OpenBrainClient {
       headers: this.mcpHeaders(false),
       json: payload,
       timeout: this.timeout,
+      expectedId: payload["id"] as number | undefined,
     });
     this.raiseForStatus(response, "initialize");
     const pendingSessionId = headerValue(response.headers, "mcp-session-id");
@@ -539,6 +622,7 @@ export class OpenBrainClient {
       headers: this.mcpHeaders(true),
       json: payload,
       timeout: this.timeout,
+      expectedId: payload["id"] as number | undefined,
     });
   }
 
