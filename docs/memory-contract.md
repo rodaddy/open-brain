@@ -357,7 +357,7 @@ regardless of role.
 
 | Surface | State | Authority |
 |---|---|---|
-| Spool replay | Enforced client-side: units replay under their parked exact scope with `_parked_namespace` provenance; foreign-namespace units are retained with zero dispatches (#309, #310, #314). Honest carve-out: records spooled before #314 provenance stamping (or by a namespace-less runtime config) carry no `_parked_namespace` and drain under the replaying runtime's namespace; exposure is bounded to pre-#314 leftovers | `python/openbrain-memory/src/openbrain_memory/runtime.py`, `_runtime_spool.py`; regressions in `tests/test_runtime.py` |
+| Spool replay | Enforced client-side: units replay under their parked exact scope, with `_parked_namespace` provenance stamped on **every** replayable record (`session_start` since #314; extended to lone/non-start records by the PR #317 review swarm); foreign-namespace units are retained with zero dispatches and zero retry/quarantine accounting (#309, #310, #314). Honest carve-out: records already on disk without the marker — spooled before #314 provenance stamping for `session_start`, before PR #317 for the other replayable operations, or by a namespace-less runtime config — carry no `_parked_namespace` and drain under the replaying runtime's namespace; exposure is bounded to pre-existing spool leftovers | `python/openbrain-memory/src/openbrain_memory/runtime.py`, `_runtime_spool.py`; regressions in `tests/test_runtime.py` |
 | Deletion / archive | Enforced server-side across the full delete-capable surface: `archive_entry`, `bulk_archive`, `archive_entity` (`appendWriteNamespacePredicate` on every UPDATE), `unlink_entities` (`canWriteNamespace` gate + explicit `namespace = $1` binding), `demote_entry`, `curate_entries` auto-archive, and the REST demote route (per-tool predicate tests). On the denial/no-op path the response is content-free and indistinguishable from not-found; the `bulk_archive` transaction-failure path was sanitized in this PR to a stable content-free message with code/name-only logging | `src/namespace-policy.ts`; mock negative matrix in `src/tools/__tests__/namespace-isolation-matrix.test.ts` + live-Postgres negative test in `src/tools/__tests__/namespace-isolation-matrix-live.test.ts` |
 | Export (disclosure bundle) | Enforced: fail-closed on lane-identity conflicts and namespace-tagged items with an immutable session-derived isolation stamp (#305); the formatter itself is local-only with no server path. TypeScript enforcement: `validateDisclosureScope` in `src/disclosure-bundle.ts` rejects any namespace-tagged item ("namespace cannot be verified by the export lane") and `assertDisclosureLaneIdentity` in `src/agent-memory.ts` rejects lane-identity conflicts with the active session | `src/disclosure-bundle.ts`, `src/agent-memory.ts`; `python/openbrain-memory` disclosure tests |
 | Migration | Schema migrations (`scripts/migrate.ts`) are not data-boundary operations; `scripts/retire-collab-migration.ts` is **intentionally global** — an operator-only one-time script, per the issue's global-authorization carve-out. Real controls: dry-run by default, `--execute` required to mutate, the `COLLAB_RETIRE_APPROVAL_ENV` approval value required for execute, and the same approval forced for any non-local `DB_HOST` (`dbHostRequiresReleaseApproval`); `DB_HOST`/`DB_USER` are connection prerequisites only, not gates. Legacy-lane normalization landed in #301 | `scripts/retire-collab-migration.ts` (`assertExecuteApproval`, `dbHostRequiresReleaseApproval`) |
@@ -368,3 +368,50 @@ regardless of role.
 If a new operational surface (restore, bulk export, cross-namespace tooling)
 lands without a row here, that is a review finding — add the surface and its
 predicate or its explicit global carve-out in the same PR.
+
+### Spool Replay: Quarantine and Delivery Semantics (#296)
+
+Automated spool replay is fully receipted and content-free:
+
+- **Delivery semantics — at-least-once.** A replayed record is only removed
+  from the spool by the rewrite that follows the replay pass. A crash after
+  the dispatch succeeded but before that rewrite persists re-delivers the same
+  record (same `idempotency_key`) on the next drain. Records carry stable
+  `idempotency_key` values for exactly this linkage, but server-side dedup is
+  NOT currently guaranteed for every replayable operation — consumers that
+  need exactly-once must dedupe on `idempotency_key`.
+- **Drain receipts.** Every drain produces a `DrainReport` (counts + linked
+  receipts, no payloads, no error bodies) on the triggering operation's
+  `RuntimeOutput.drain` and on `last_drain_report`: `REPLAYED` per replayed
+  record, `QUARANTINED` per quarantined unit. Both statuses are additive
+  within the pinned `openbrain.runtime_receipt.v1` schema.
+- **Quarantine.** A unit that fails 5 consecutive drain attempts (default,
+  `JsonlSpool(quarantine_threshold=...)`) moves atomically to the
+  `<spool>.quarantine.jsonl` sidecar — a content-free envelope (unit spool
+  keys, retry count, first/last failure unix times, error class name only)
+  followed by the unit's original redacted lines — and is never retried
+  automatically. Poison units never block replay of valid units. Retry counts
+  survive restarts via the `<spool>.retry-state.json` sidecar (losing that
+  sidecar loses only counters, never records).
+- **Re-quarantine replaces; success reconciles.** Quarantining a unit whose
+  `unit_key` already has a sidecar entry REPLACES that entry's envelope and
+  lines with the fresh copy (one envelope per unit key per pass, last write
+  wins) — idempotent across the crash window between the sidecar append and
+  the main-spool rewrite, and preserving current (possibly operator-edited)
+  lines when a restored unit re-fails to threshold. Conversely, a unit that
+  replays successfully has any stale sidecar entry (left by that crash
+  window) removed in the same locked commit, so no phantom quarantine
+  entries survive a crash-then-success sequence.
+- **Operator restore procedure.** To restore a quarantined unit: copy the
+  unit's record lines — never the envelope line — from
+  `<spool>.quarantine.jsonl` back into the main spool file, then delete the
+  envelope line plus its record lines from the sidecar. A restored unit
+  restarts with a fresh retry budget (its retry counters were cleared at
+  quarantine time). If the restore is left incomplete (sidecar entry not
+  deleted) nothing is lost: a re-failing restored unit re-quarantines with
+  fresh lines and counts under the replace semantics above, and a
+  successfully replayed one removes the leftover entry automatically.
+- **#314 retention is not failure.** Units parked under another namespace —
+  any replayable operation, since provenance is stamped on every spooled
+  record — stay parked in the main spool with zero dispatches, zero
+  retry-count increments, and are never quarantined.

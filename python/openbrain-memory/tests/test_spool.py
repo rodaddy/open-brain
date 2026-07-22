@@ -793,3 +793,355 @@ def test_recall_context_is_bounded_by_count_and_character_budget():
 def test_safety_exports_are_public():
     assert RetryExhaustedError
     assert replay_records
+
+
+def _always_fail(error: Exception):
+    def dispatch(_: SpoolRecord):
+        raise error
+
+    return dispatch
+
+
+def test_spool_quarantine_crosses_threshold_exactly_and_stops_retrying(tmp_path):
+    spool = JsonlSpool(tmp_path / "spool.jsonl", quarantine_threshold=3)
+    spool.append("poison", {"content": "poison payload"}, key="poison-key")
+
+    for attempt in (1, 2):
+        report = spool.replay_with_report(
+            _always_fail(RuntimeError("provider still down"))
+        )
+        assert [outcome.status for outcome in report.outcomes] == ["failed"]
+        assert report.outcomes[0].consecutive_failures == attempt
+        assert [record.idempotency_key for record in spool.records()] == [
+            "poison-key"
+        ]
+        assert not spool.quarantine_path.exists()
+        assert spool.status().retry_counts == {"poison-key": attempt}
+
+    report = spool.replay_with_report(_always_fail(RuntimeError("still down")))
+
+    assert [outcome.status for outcome in report.outcomes] == ["quarantined"]
+    assert report.outcomes[0].consecutive_failures == 3
+    assert report.outcomes[0].error_category == "RuntimeError"
+    assert spool.records() == []
+    assert spool.quarantine_path.exists()
+    status = spool.status()
+    assert status.quarantined_count == 1
+    assert status.retry_counts == {}
+    seen = []
+
+    def spy(record: SpoolRecord):
+        seen.append(record.idempotency_key)
+        return {"ok": True}
+
+    follow_up = spool.replay_with_report(spy)
+
+    assert seen == []
+    assert follow_up.outcomes == ()
+    assert spool.status().quarantined_count == 1
+
+
+def test_spool_quarantine_envelope_is_content_free_and_lines_are_redacted(tmp_path):
+    spool = JsonlSpool(tmp_path / "spool.jsonl", quarantine_threshold=1)
+    secret = token_sample("hunt", "er2")
+    spool.append("poison", {"content": "password: " + secret}, key="poison-key")
+
+    spool.replay_with_report(
+        _always_fail(RuntimeError("error body with " + secret))
+    )
+
+    sidecar = spool.quarantine_path.read_text(encoding="utf-8")
+    lines = sidecar.splitlines()
+    envelope = json.loads(lines[0])
+    assert envelope["schema"] == "openbrain.spool_quarantine.v1"
+    assert envelope["record_keys"] == ["poison-key"]
+    assert envelope["operations"] == ["poison"]
+    assert envelope["consecutive_failures"] == 1
+    assert envelope["error_category"] == "RuntimeError"
+    assert envelope["first_failure_at"] <= envelope["last_failure_at"]
+    assert envelope["line_count"] == 1
+    assert "payload" not in envelope
+    assert "content" not in lines[0]
+    # No secret material and no error message bodies anywhere in the sidecar.
+    assert secret not in sidecar
+    assert "error body" not in sidecar
+    # The original redacted record line moved verbatim.
+    restored = json.loads(lines[1])
+    assert restored["idempotency_key"] == "poison-key"
+    assert restored["payload"] == {"content": "[REDACTED]"}
+    mode = os.stat(spool.quarantine_path).st_mode & 0o777
+    assert mode == 0o600
+
+
+def test_spool_poison_unit_never_blocks_valid_unit_replay(tmp_path):
+    spool = JsonlSpool(tmp_path / "spool.jsonl", quarantine_threshold=5)
+    spool.append("poison", {"content": "bad"}, key="poison-key")
+    spool.append("ok", {"content": "good"}, key="ok-key")
+
+    def dispatch(record: SpoolRecord):
+        if record.operation == "poison":
+            raise ConnectionError("boom")
+        return {"ok": True}
+
+    report = spool.replay_with_report(dispatch)
+
+    assert {outcome.status for outcome in report.outcomes} == {
+        "failed",
+        "replayed",
+    }
+    assert report.results == ({"ok": True},)
+    assert [record.idempotency_key for record in spool.records()] == [
+        "poison-key"
+    ]
+    status = spool.status()
+    assert status.retry_counts == {"poison-key": 1}
+    assert status.last_success_at is not None
+
+
+def test_spool_retry_counts_survive_process_restart(tmp_path):
+    path = tmp_path / "spool.jsonl"
+    first = JsonlSpool(path, quarantine_threshold=4)
+    first.append("poison", {"content": "bad"}, key="poison-key")
+    for _ in range(2):
+        first.replay_with_report(_always_fail(ConnectionError("down")))
+    assert first.status().retry_counts == {"poison-key": 2}
+
+    # Fresh objects from disk: counts must continue, not restart at zero.
+    second = JsonlSpool(path, quarantine_threshold=4)
+    below = second.replay_with_report(_always_fail(ConnectionError("down")))
+    assert below.outcomes[0].status == "failed"
+    assert below.outcomes[0].consecutive_failures == 3
+
+    crossing = second.replay_with_report(_always_fail(ConnectionError("down")))
+
+    assert crossing.outcomes[0].status == "quarantined"
+    assert crossing.outcomes[0].consecutive_failures == 4
+    assert second.records() == []
+    assert second.status().quarantined_count == 1
+
+
+def test_spool_replay_crash_before_rewrite_redelivers_same_key(tmp_path):
+    """Pin the documented at-least-once delivery semantic."""
+    spool = JsonlSpool(tmp_path / "spool.jsonl")
+    spool.append("ok", {"content": "once"}, key="dup-key")
+    delivered = []
+
+    def dispatch(record: SpoolRecord):
+        delivered.append(record.idempotency_key)
+        return {"ok": True}
+
+    with patch.object(
+        spool,
+        "_write_lines",
+        side_effect=OSError("crash before rewrite persisted"),
+    ):
+        with pytest.raises(OSError, match="crash before rewrite"):
+            spool.replay(dispatch)
+
+    # Dispatch succeeded but the removal never persisted: still pending.
+    assert [record.idempotency_key for record in spool.records()] == ["dup-key"]
+
+    second = spool.replay_with_report(dispatch)
+
+    assert delivered == ["dup-key", "dup-key"]
+    assert [outcome.status for outcome in second.outcomes] == ["replayed"]
+    assert spool.records() == []
+    assert spool.status().last_success_at is not None
+
+
+def test_spool_quarantined_lines_replay_after_manual_restore(tmp_path):
+    spool = JsonlSpool(tmp_path / "spool.jsonl", quarantine_threshold=1)
+    spool.append("restorable", {"content": "keep me"}, key="restore-key")
+    spool.replay_with_report(_always_fail(ConnectionError("down")))
+    assert spool.records() == []
+
+    sidecar_lines = spool.quarantine_path.read_text(encoding="utf-8").splitlines(
+        keepends=True
+    )
+    restored_lines = [
+        line
+        for line in sidecar_lines
+        if json.loads(line).get("schema") != "openbrain.spool_quarantine.v1"
+    ]
+    spool.path.write_text("".join(restored_lines), encoding="utf-8")
+
+    report = spool.replay_with_report(lambda record: {"ok": True})
+
+    assert [outcome.status for outcome in report.outcomes] == ["replayed"]
+    assert report.outcomes[0].record_keys == ("restore-key",)
+    assert spool.records() == []
+
+
+def test_requarantine_of_restored_unit_replaces_entry_with_fresh_lines(tmp_path):
+    spool = JsonlSpool(tmp_path / "spool.jsonl", quarantine_threshold=1)
+    spool.append("restorable", {"content": "original body"}, key="restore-key")
+    spool.replay_with_report(_always_fail(ConnectionError("down")))
+    assert spool.records() == []
+    assert spool.status().quarantined_count == 1
+
+    # Operator restore: copy the unit's record line back into the spool and
+    # edit it, but leave the sidecar entry behind (incomplete procedure or a
+    # crash mid-restore). Skip semantics would drop the edited line from BOTH
+    # files on the next threshold crossing.
+    sidecar_lines = spool.quarantine_path.read_text(encoding="utf-8").splitlines(
+        keepends=True
+    )
+    record_line = next(
+        line
+        for line in sidecar_lines
+        if json.loads(line).get("schema") != "openbrain.spool_quarantine.v1"
+    )
+    edited = json.loads(record_line)
+    edited["payload"]["content"] = "operator-edited body"
+    spool.path.write_text(json.dumps(edited) + "\n", encoding="utf-8")
+
+    report = spool.replay_with_report(_always_fail(ConnectionError("still down")))
+
+    assert [outcome.status for outcome in report.outcomes] == ["quarantined"]
+    # A restored unit restarts with a fresh retry budget.
+    assert report.outcomes[0].consecutive_failures == 1
+    sidecar = spool.quarantine_path.read_text(encoding="utf-8")
+    envelopes = [
+        json.loads(line)
+        for line in sidecar.splitlines()
+        if line.strip()
+        and json.loads(line).get("schema") == "openbrain.spool_quarantine.v1"
+    ]
+    # Replaced, not duplicated and not skipped: one envelope, fresh lines.
+    assert len(envelopes) == 1
+    assert envelopes[0]["record_keys"] == ["restore-key"]
+    assert envelopes[0]["consecutive_failures"] == 1
+    assert "operator-edited body" in sidecar
+    assert "original body" not in sidecar
+    assert spool.records() == []
+    assert spool.status().quarantined_count == 1
+
+
+def test_in_batch_duplicate_unit_keys_quarantine_as_single_envelope(tmp_path):
+    spool = JsonlSpool(tmp_path / "spool.jsonl", quarantine_threshold=1)
+    spool.append("poison", {"content": "duplicated"}, key="dup-key")
+    line = spool.path.read_text(encoding="utf-8")
+    # Same record line twice (for example an operator double-restore): two
+    # units with the same unit key fail in one pass.
+    spool.path.write_text(line + line, encoding="utf-8")
+
+    report = spool.replay_with_report(_always_fail(ConnectionError("down")))
+
+    assert [outcome.status for outcome in report.outcomes] == [
+        "quarantined",
+        "quarantined",
+    ]
+    sidecar_lines = spool.quarantine_path.read_text(encoding="utf-8").splitlines()
+    envelopes = [
+        json.loads(entry)
+        for entry in sidecar_lines
+        if entry.strip()
+        and json.loads(entry).get("schema") == "openbrain.spool_quarantine.v1"
+    ]
+    # Last write wins: a single envelope (plus its lines) per unit key per
+    # pass, and the spool is fully drained of both copies.
+    assert len(envelopes) == 1
+    assert envelopes[0]["record_keys"] == ["dup-key"]
+    assert spool.records() == []
+    assert spool.status().quarantined_count == 1
+
+
+def test_crash_between_quarantine_append_and_rewrite_reconciles_on_success(
+    tmp_path,
+):
+    spool = JsonlSpool(tmp_path / "spool.jsonl", quarantine_threshold=1)
+    spool.append("flaky", {"content": "recovers later"}, key="flaky-key")
+
+    with patch.object(
+        spool,
+        "_write_lines",
+        side_effect=OSError("crash before rewrite persisted"),
+    ):
+        with pytest.raises(OSError, match="crash before rewrite"):
+            spool.replay_with_report(_always_fail(ConnectionError("down")))
+
+    # Quarantine append persisted, spool rewrite did not: the unit exists in
+    # both files (phantom sidecar entry).
+    assert spool.status().quarantined_count == 1
+    assert [record.idempotency_key for record in spool.records()] == ["flaky-key"]
+
+    report = spool.replay_with_report(lambda record: {"ok": True})
+
+    assert [outcome.status for outcome in report.outcomes] == ["replayed"]
+    assert spool.records() == []
+    # The successful replay reconciled the stale entry in the same locked
+    # commit: no phantom quarantine remains.
+    assert spool.status().quarantined_count == 0
+
+
+def test_retry_state_nonfinite_and_absurd_values_degrade_safely(tmp_path):
+    spool = JsonlSpool(tmp_path / "spool.jsonl", quarantine_threshold=5)
+    spool.append("poison", {"content": "bad"}, key="poison-key")
+    spool.replay_with_report(_always_fail(ConnectionError("down")))
+    state = json.loads(spool.retry_state_path.read_text(encoding="utf-8"))
+    unit_state = next(iter(state["units"].values()))
+
+    # json.loads accepts bare NaN/Infinity tokens: non-finite floats must be
+    # treated as absent, never trusted.
+    state["last_success_at"] = float("nan")
+    unit_state["first_failure_at"] = float("inf")
+    spool.retry_state_path.write_text(json.dumps(state), encoding="utf-8")
+    status = spool.status()
+    assert status.last_success_at is None
+    assert status.retry_counts == {}
+
+    # Absurd counters are clamped to a sane bound instead of propagating.
+    unit_state["first_failure_at"] = 1.0
+    unit_state["consecutive_failures"] = 10**9
+    spool.retry_state_path.write_text(json.dumps(state), encoding="utf-8")
+    assert spool.status().retry_counts == {
+        "poison-key": spool_module._MAX_RETRY_STATE_FAILURES
+    }
+
+
+def test_spool_status_new_fields_stay_content_free(tmp_path):
+    spool = JsonlSpool(tmp_path / "spool.jsonl", quarantine_threshold=3)
+    secret = token_sample("hunt", "er2")
+    spool.append("poison", {"content": "password: " + secret}, key="poison-key")
+    spool.append("ok", {"content": "safe"}, key="ok-key")
+
+    def dispatch(record: SpoolRecord):
+        if record.operation == "poison":
+            raise ConnectionError("down")
+        return {"ok": True}
+
+    spool.replay_with_report(dispatch)
+    status = spool.status()
+
+    assert status.quarantined_count == 0
+    assert status.retry_counts == {"poison-key": 1}
+    assert status.last_success_at is not None
+    assert secret not in repr(status)
+    assert "safe" not in repr(status)
+    state_text = spool.retry_state_path.read_text(encoding="utf-8")
+    assert secret not in state_text
+    assert "down" not in state_text
+    assert "ConnectionError" in state_text
+
+
+def test_spool_corrupted_retry_state_degrades_to_zero_counts(tmp_path):
+    spool = JsonlSpool(tmp_path / "spool.jsonl", quarantine_threshold=3)
+    spool.append("poison", {"content": "bad"}, key="poison-key")
+    spool.replay_with_report(_always_fail(ConnectionError("down")))
+    spool.retry_state_path.write_text("not json", encoding="utf-8")
+
+    # Losing the sidecar loses only counters, never spool records.
+    assert [record.idempotency_key for record in spool.records()] == [
+        "poison-key"
+    ]
+    status = spool.status()
+    assert status.retry_counts == {}
+    assert status.last_success_at is None
+
+    report = spool.replay_with_report(_always_fail(ConnectionError("down")))
+    assert report.outcomes[0].consecutive_failures == 1
+
+
+def test_spool_rejects_nonpositive_quarantine_threshold(tmp_path):
+    with pytest.raises(ValueError, match="quarantine_threshold"):
+        JsonlSpool(tmp_path / "spool.jsonl", quarantine_threshold=0)

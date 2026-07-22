@@ -72,7 +72,13 @@ from .agent import (
 )
 from .client import JSON, OpenBrainClient, Transport
 from .policy import redact_value
-from .spool import JsonlSpool, SpoolRecord
+from .spool import (
+    JsonlSpool,
+    SpoolRecord,
+    SpoolReplayReport,
+    SpoolUnitOutcome,
+    SpoolUnitRetained,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -138,7 +144,11 @@ def _spooled_start_scope(payload: Mapping[str, Any]) -> RuntimeScope:
 
 
 class ReceiptStatus(StrEnum):
-    """Observable outcome of one runtime lifecycle operation."""
+    """Observable outcome of one runtime lifecycle operation.
+
+    ``REPLAYED`` and ``QUARANTINED`` are additive drain-receipt statuses
+    (#296) within the pinned ``openbrain.runtime_receipt.v1`` schema.
+    """
 
     DIRECT = "direct"
     SAVED = "saved"
@@ -146,6 +156,8 @@ class ReceiptStatus(StrEnum):
     FALLBACK = "fallback"
     FAILED = "failed"
     LOST = "lost"
+    REPLAYED = "replayed"
+    QUARANTINED = "quarantined"
 
 
 @dataclass(frozen=True)
@@ -341,12 +353,54 @@ class RuntimeReceipt:
 
 
 @dataclass(frozen=True)
+class DrainReport:
+    """Content-free outcome of one automatic spool drain (#296).
+
+    Carries counts and linked receipts only: spool keys, operations,
+    statuses, and error categories — never payload content and never error
+    message bodies. ``REPLAYED`` receipts are per successfully replayed
+    record. ``QUARANTINED`` receipts are per quarantined unit and use the
+    unit's first record key as ``spool_key``; they report ``durable=True``
+    because the unit's redacted lines still exist on disk in the quarantine
+    sidecar — the write was not delivered, but it was not lost, and an
+    operator can restore-and-replay it.
+
+    ``retained_units`` counts units left parked in the spool without any
+    dispatch or failure accounting, for either reason: foreign-namespace
+    provenance (#314) or a parked scope the record cannot prove.
+    """
+
+    attempted_units: int
+    replayed_units: int
+    replayed_records: int
+    failed_units: int
+    quarantined_units: int
+    retained_units: int
+    receipts: tuple[RuntimeReceipt, ...] = ()
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return a safe JSON representation."""
+        return {
+            "attempted_units": self.attempted_units,
+            "replayed_units": self.replayed_units,
+            "replayed_records": self.replayed_records,
+            "failed_units": self.failed_units,
+            "quarantined_units": self.quarantined_units,
+            "retained_units": self.retained_units,
+            "receipts": [receipt.as_dict() for receipt in self.receipts],
+        }
+
+
+@dataclass(frozen=True)
 class RuntimeOutput:
     """One context or write result with its receipt."""
 
     receipt: RuntimeReceipt
     context: Mapping[str, Any] | None = None
     result: Mapping[str, Any] | None = None
+    # Present only when this operation triggered an automatic spool drain;
+    # kept outside RuntimeReceipt because that shape is contract-pinned.
+    drain: DrainReport | None = None
 
     def as_dict(self) -> dict[str, Any]:
         """Return redacted JSON output for visible runtime adapters."""
@@ -355,6 +409,8 @@ class RuntimeOutput:
             output["context"] = dict(self.context)
         if self.result is not None:
             output["result"] = redact_value(dict(self.result))
+        if self.drain is not None:
+            output["drain"] = self.drain.as_dict()
         return output
 
 
@@ -376,6 +432,9 @@ class FirstClassMemoryRuntime:
         self.scope = scope
         self._owns_client = client is None
         self._operation_lock = threading.RLock()
+        # Content-free report from the most recent automatic spool drain;
+        # None until a drain has run in this runtime.
+        self.last_drain_report: DrainReport | None = None
         # Set only while draining a spooled unit parked under another scope;
         # session_start replay results validate against this instead of scope.
         self._replay_scope: RuntimeScope | None = None
@@ -502,13 +561,11 @@ class FirstClassMemoryRuntime:
                 if self._router.state.path is not None
                 else ReceiptStatus.FAILED
             )
-            output = RuntimeOutput(
-                receipt=self._receipt("recall", status, durable=False),
-                context=result,
+            receipt = self._receipt("recall", status, durable=False)
+            drain = (
+                self._drain_spool() if status is ReceiptStatus.DIRECT else None
             )
-            if status is ReceiptStatus.DIRECT:
-                self._drain_spool()
-            return output
+            return RuntimeOutput(receipt=receipt, context=result, drain=drain)
         except Exception as error:
             return RuntimeOutput(
                 receipt=self._receipt(
@@ -613,13 +670,13 @@ class FirstClassMemoryRuntime:
                 if self._router.state.path == ReceiptStatus.FALLBACK.value
                 else ReceiptStatus.SAVED
             )
-            output = RuntimeOutput(
-                receipt=self._receipt(operation, receipt_status, durable=True),
-                result=result,
-            )
-            if receipt_status is ReceiptStatus.SAVED:
+            receipt = self._receipt(operation, receipt_status, durable=True)
+            drain = (
                 self._drain_spool()
-            return output
+                if receipt_status is ReceiptStatus.SAVED
+                else None
+            )
+            return RuntimeOutput(receipt=receipt, result=result, drain=drain)
         except ValueError as error:
             return RuntimeOutput(
                 receipt=self._receipt(
@@ -666,16 +723,21 @@ class FirstClassMemoryRuntime:
                 )
             )
 
-    def _drain_spool(self) -> None:
-        """Replay pending durable records after direct connectivity recovers."""
+    def _drain_spool(self) -> DrainReport | None:
+        """Replay pending durable records after direct connectivity recovers.
+
+        Returns a content-free ``DrainReport`` (also stored on
+        ``last_drain_report``) when a drain ran, or ``None`` when there was
+        nothing to drain or the drain machinery itself failed.
+        """
         try:
             if self._spool is None:
-                return
+                return None
             spool = self._spool.spool
             if not isinstance(spool, JsonlSpool):
-                return
+                return None
             if spool.status().pending_count <= 0:
-                return
+                return None
 
             def dispatch(record: SpoolRecord) -> JSON:
                 # Reset per record so no later record or unit can inherit a
@@ -686,35 +748,101 @@ class FirstClassMemoryRuntime:
                         f"Unsupported spooled operation: {record.operation}"
                     )
                 payload = dict(record.payload)
+                # A record parked by a runtime configured for another
+                # namespace must stay parked: draining it here would
+                # silently transplant its content into this runtime's
+                # namespace. Provenance is stamped on EVERY spooled record
+                # (session_start since #314, all replayable operations since
+                # PR #317), so lone non-start units are covered too. Raised
+                # as SpoolUnitRetained so retention never counts toward
+                # quarantine. Honest legacy carve-out (mirrors
+                # docs/memory-contract.md): records already on disk without
+                # the marker — spooled before the stamping landed, or by a
+                # namespace-less runtime config — carry no provenance and
+                # drain under the replaying runtime's namespace.
+                parked_namespace = payload.pop(PARKED_NAMESPACE_KEY, None)
+                if (
+                    parked_namespace is not None
+                    and parked_namespace != self.config.namespace
+                ):
+                    raise SpoolUnitRetained(
+                        "spooled unit parked under a different namespace"
+                    )
                 if record.operation == "session_start":
-                    # A unit parked by a runtime configured for another
-                    # namespace must stay parked: draining it here would
-                    # silently transplant its lane content into this
-                    # runtime's namespace.
-                    parked_namespace = payload.pop(PARKED_NAMESPACE_KEY, None)
-                    if (
-                        parked_namespace is not None
-                        and parked_namespace != self.config.namespace
-                    ):
-                        raise ValueError(
-                            "spooled unit parked under a different namespace"
-                        )
                     # Validate the replayed lane against the scope the unit was
                     # parked under, not the runtime's current scope, so units
                     # from another project drain instead of re-failing forever
                     # (#310). The namespace stays bound to this runtime's auth
                     # config; only the lane coordinates come from the record.
-                    self._replay_scope = _spooled_start_scope(payload)
+                    # A record that cannot prove its parked scope is retained
+                    # without dispatch or failure accounting, as before #296.
+                    try:
+                        self._replay_scope = _spooled_start_scope(payload)
+                    except ValueError as error:
+                        raise SpoolUnitRetained(str(error)) from error
                 method = getattr(self._router, record.operation)
                 return cast(JSON, method(**payload))
 
             try:
                 with self._router.direct_only():
-                    spool.replay(dispatch)
+                    report = spool.replay_with_report(dispatch)
             finally:
                 self._replay_scope = None
+            drain = self._build_drain_report(report)
+            self.last_drain_report = drain
+            return drain
         except Exception:
             logger.warning("Spool auto-drain failed", exc_info=True)
+            return None
+
+    def _build_drain_report(self, report: SpoolReplayReport) -> DrainReport:
+        counts = {"replayed": 0, "failed": 0, "quarantined": 0, "retained": 0}
+        replayed_records = 0
+        receipts: list[RuntimeReceipt] = []
+        for outcome in report.outcomes:
+            counts[outcome.status] = counts.get(outcome.status, 0) + 1
+            if outcome.status == "replayed":
+                replayed_records += len(outcome.record_keys)
+                receipts.extend(self._replayed_receipts(outcome))
+            elif outcome.status == "quarantined":
+                receipts.append(self._quarantined_receipt(outcome))
+        return DrainReport(
+            attempted_units=len(report.outcomes),
+            replayed_units=counts["replayed"],
+            replayed_records=replayed_records,
+            failed_units=counts["failed"],
+            quarantined_units=counts["quarantined"],
+            retained_units=counts["retained"],
+            receipts=tuple(receipts),
+        )
+
+    @staticmethod
+    def _replayed_receipts(outcome: SpoolUnitOutcome) -> list[RuntimeReceipt]:
+        return [
+            RuntimeReceipt(
+                operation=operation,
+                status=ReceiptStatus.REPLAYED,
+                durable=True,
+                direct_attempted=True,
+                fallback_attempted=False,
+                spool_key=record_key,
+            )
+            for operation, record_key in zip(
+                outcome.operations, outcome.record_keys, strict=True
+            )
+        ]
+
+    @staticmethod
+    def _quarantined_receipt(outcome: SpoolUnitOutcome) -> RuntimeReceipt:
+        return RuntimeReceipt(
+            operation=outcome.operations[0],
+            status=ReceiptStatus.QUARANTINED,
+            durable=True,
+            direct_attempted=True,
+            fallback_attempted=False,
+            spool_key=outcome.record_keys[0],
+            error=outcome.error_category,
+        )
 
     def _queue_requested_write(self, call: Callable[[], JSON]) -> BaseException:
         previous_key = self._memory.conversation_key

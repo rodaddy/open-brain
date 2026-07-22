@@ -1,0 +1,31 @@
+{
+  "id": "python-drain-replay-quarantine-receipts",
+  "description": "Automated spool replay emits content-free linked receipts: REPLAYED per replayed record and QUARANTINED per quarantined unit, both within the pinned openbrain.runtime_receipt.v1 schema (no schema bump).",
+  "capability": "drain-receipts",
+  "runtime": "python",
+  "consumers": ["python"],
+  "request": {
+    "replayed_receipt": {
+      "operation": "append_session_event",
+      "status": "replayed",
+      "durable": true,
+      "direct_attempted": true,
+      "fallback_attempted": false,
+      "spool_key": "drain-replayed-record-key"
+    },
+    "quarantined_receipt": {
+      "operation": "session_start",
+      "status": "quarantined",
+      "durable": true,
+      "direct_attempted": true,
+      "fallback_attempted": false,
+      "spool_key": "drain-quarantined-first-record-key",
+      "error": "ConnectionError"
+    }
+  },
+  "expectation": {
+    "runtime_schema": "openbrain.runtime_receipt.v1",
+    "statuses": ["replayed", "quarantined"],
+    "error_is_category_only": true
+  }
+}

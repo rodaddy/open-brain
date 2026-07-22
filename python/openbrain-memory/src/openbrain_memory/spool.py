@@ -1,14 +1,35 @@
+"""Durable JSONL write-ahead spool with redact-before-persist replay.
+
+Delivery semantics (at-least-once): a replay dispatch that succeeds is only
+removed from the spool by the rewrite that follows the whole replay pass. A
+crash after the dispatcher succeeded but before that rewrite persists leaves
+the unit in place, so its records are re-delivered on the next drain with the
+same ``idempotency_key``. Consumers that need exactly-once behavior must
+dedupe on ``idempotency_key``; the Open Brain server does not currently
+guarantee server-side dedup for every replayable operation.
+
+Quarantine: a unit that fails ``quarantine_threshold`` consecutive replay
+attempts moves atomically to the ``<spool-name>.quarantine.jsonl`` sidecar as
+a content-free envelope line followed by the unit's original (already
+redacted) record lines, and is never retried automatically. Consecutive
+failure counts and the last replay-success time persist across process
+restarts in the ``<spool-name>.retry-state.json`` sidecar; that sidecar is
+crash-tolerant metadata only — losing it loses retry counters and the
+last-success timestamp, never spool records.
+"""
+
 from __future__ import annotations
 
 import fcntl
 import json
 import logging
+import math
 import os
 import stat
 import tempfile
 import time
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
@@ -17,9 +38,26 @@ from .policy import idempotency_key, redact_value
 
 logger = logging.getLogger(__name__)
 
+# Single home for the consecutive-failure quarantine default (#296).
+DEFAULT_QUARANTINE_THRESHOLD = 5
+QUARANTINE_ENVELOPE_SCHEMA = "openbrain.spool_quarantine.v1"
+RETRY_STATE_SCHEMA = "openbrain.spool_retry_state.v1"
+# Sanity clamp for persisted retry counters: the sidecar is untrusted input
+# and an absurd counter must never propagate into arithmetic or output.
+_MAX_RETRY_STATE_FAILURES = 1_000_000
+
 
 class SpoolFullError(ValueError):
     """Raised when an append would exceed spool capacity."""
+
+
+class SpoolUnitRetained(Exception):
+    """Dispatcher signal: retain this unit without counting a replay failure.
+
+    Raised by replay dispatchers for units that must stay parked in the spool
+    (for example units parked under another namespace, #314). Retained units
+    accrue no retry count and never quarantine.
+    """
 
 
 @dataclass(frozen=True)
@@ -58,6 +96,60 @@ class SpoolStatus:
     newest_created_at: float | None
     operation_counts: Mapping[str, int]
     corrupted_line_count: int
+    # Content-free replay observability (#296): counts, keys, and unix times
+    # only — never payloads and never error message bodies.
+    quarantined_count: int = 0
+    retry_counts: Mapping[str, int] = field(default_factory=dict)
+    # last_success_at is the *pass-start* timestamp of the most recent replay
+    # pass that replayed at least one unit (not per-record dispatch time). It
+    # lives in the counters-only retry-state sidecar: losing it loses
+    # observability, never records. With multiple processes draining the same
+    # spool the sidecar is last-writer-wins, so this reflects the most
+    # recently committed pass, not necessarily the latest successful dispatch.
+    last_success_at: float | None = None
+
+
+@dataclass(frozen=True)
+class SpoolUnitOutcome:
+    """Content-free outcome of one replay unit within a single pass."""
+
+    status: str  # "replayed" | "failed" | "quarantined" | "retained"
+    record_keys: tuple[str, ...]
+    operations: tuple[str, ...]
+    consecutive_failures: int = 0
+    error_category: str | None = None
+    first_failure_at: float | None = None
+    last_failure_at: float | None = None
+
+
+@dataclass(frozen=True)
+class SpoolReplayReport:
+    """Results plus per-unit outcomes for one replay pass."""
+
+    results: tuple[JSON, ...]
+    outcomes: tuple[SpoolUnitOutcome, ...]
+
+
+@dataclass
+class _UnitRetryState:
+    consecutive_failures: int
+    first_failure_at: float
+    last_failure_at: float
+    error_category: str
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "consecutive_failures": self.consecutive_failures,
+            "first_failure_at": self.first_failure_at,
+            "last_failure_at": self.last_failure_at,
+            "error_category": self.error_category,
+        }
+
+
+@dataclass
+class _RetryState:
+    last_success_at: float | None
+    units: dict[str, _UnitRetryState]
 
 
 @dataclass(frozen=True)
@@ -82,15 +174,25 @@ class JsonlSpool:
         *,
         max_lines: int = 1000,
         max_bytes: int = 1_000_000,
+        quarantine_threshold: int = DEFAULT_QUARANTINE_THRESHOLD,
     ) -> None:
         if max_lines < 1:
             raise ValueError("max_lines must be >= 1")
         if max_bytes < 1:
             raise ValueError("max_bytes must be >= 1")
+        if quarantine_threshold < 1:
+            raise ValueError("quarantine_threshold must be >= 1")
         self.path = Path(path)
         self.lock_path = self.path.with_suffix(self.path.suffix + ".lock")
+        self.quarantine_path = self.path.with_suffix(
+            self.path.suffix + ".quarantine.jsonl"
+        )
+        self.retry_state_path = self.path.with_suffix(
+            self.path.suffix + ".retry-state.json"
+        )
         self.max_lines = max_lines
         self.max_bytes = max_bytes
+        self.quarantine_threshold = quarantine_threshold
 
     def append(
         self,
@@ -355,6 +457,8 @@ class JsonlSpool:
         return [record.redacted() for record in self.records()]
 
     def status(self) -> SpoolStatus:
+        retry_state = self._load_retry_state()
+        quarantined_count = self._quarantined_count()
         if not self.path.exists():
             return SpoolStatus(
                 path=str(self.path),
@@ -366,6 +470,9 @@ class JsonlSpool:
                 newest_created_at=None,
                 operation_counts={},
                 corrupted_line_count=0,
+                quarantined_count=quarantined_count,
+                retry_counts={},
+                last_success_at=retry_state.last_success_at,
             )
         self._reject_symlink(self.path)
         operation_counts: dict[str, int] = {}
@@ -375,9 +482,19 @@ class JsonlSpool:
         lines = self.path.read_text(encoding="utf-8").splitlines(keepends=True)
         units = self._parse_units(lines, warn=False)
         corrupted_line_count = sum(unit.corrupted_line_count for unit in units)
+        retry_counts: dict[str, int] = {}
         for unit in units:
             if unit.records is None:
                 continue
+            signature = unit.signature()
+            if signature is not None:
+                unit_state = retry_state.units.get(self._unit_key(signature))
+                if unit_state is not None:
+                    # Keyed by the unit's first record key: content-free and
+                    # matches the spool_key used on quarantine receipts.
+                    retry_counts[unit.records[0].idempotency_key] = (
+                        unit_state.consecutive_failures
+                    )
             for record in unit.records:
                 pending_count += 1
                 operation_counts[record.operation] = (
@@ -398,9 +515,27 @@ class JsonlSpool:
             newest_created_at=newest_created_at,
             operation_counts=operation_counts,
             corrupted_line_count=corrupted_line_count,
+            quarantined_count=quarantined_count,
+            retry_counts=retry_counts,
+            last_success_at=retry_state.last_success_at,
         )
 
     def replay(self, dispatcher: Callable[[SpoolRecord], JSON]) -> list[JSON]:
+        return list(self.replay_with_report(dispatcher).results)
+
+    def replay_with_report(
+        self,
+        dispatcher: Callable[[SpoolRecord], JSON],
+    ) -> SpoolReplayReport:
+        """Replay whole units and report content-free per-unit outcomes.
+
+        Delivery is at-least-once: dispatched-and-succeeded units are only
+        removed by the rewrite at the end of the pass (see module docstring).
+        A dispatcher may raise ``SpoolUnitRetained`` to park a unit without
+        counting a failure; any other exception counts one consecutive
+        failure, and a unit reaching ``quarantine_threshold`` consecutive
+        failures moves to the quarantine sidecar in the same pass.
+        """
         results: list[JSON] = []
         lock_fd = self._lock()
         try:
@@ -410,18 +545,37 @@ class JsonlSpool:
                 else []
             )
             snapshot = self._parse_units(lines, warn=True)
+            retry_state = self._load_retry_state()
         finally:
             self._unlock(lock_fd)
 
+        now = time.time()
+        outcomes: list[SpoolUnitOutcome] = []
         replayed_units: set[tuple[str | None, tuple[str, ...]]] = set()
+        failed_updates: dict[str, _UnitRetryState] = {}
+        quarantine_updates: dict[str, _UnitRetryState] = {}
+        any_replayed = False
         for unit in snapshot:
             if unit.records is None:
                 continue
+            signature = unit.signature()
+            if signature is None:
+                continue
+            unit_key = self._unit_key(signature)
+            prior = retry_state.units.get(unit_key)
+            record_keys = tuple(record.idempotency_key for record in unit.records)
+            operations = tuple(record.operation for record in unit.records)
             unit_results: list[JSON] = []
+            error: BaseException | None = None
+            retained = False
             for record in unit.records:
                 try:
                     unit_results.append(dispatcher(record))
-                except Exception:
+                except SpoolUnitRetained:
+                    retained = True
+                    break
+                except Exception as dispatch_error:
+                    error = dispatch_error
                     logger.warning(
                         "Spool replay failed",
                         extra={
@@ -432,14 +586,94 @@ class JsonlSpool:
                         exc_info=True,
                     )
                     break
-            else:
-                signature = unit.signature()
-                if signature is not None:
-                    replayed_units.add(signature)
-                    results.extend(unit_results)
+            if retained:
+                outcomes.append(
+                    SpoolUnitOutcome(
+                        status="retained",
+                        record_keys=record_keys,
+                        operations=operations,
+                        consecutive_failures=(
+                            prior.consecutive_failures if prior is not None else 0
+                        ),
+                    )
+                )
+                continue
+            if error is None:
+                replayed_units.add(signature)
+                results.extend(unit_results)
+                any_replayed = True
+                outcomes.append(
+                    SpoolUnitOutcome(
+                        status="replayed",
+                        record_keys=record_keys,
+                        operations=operations,
+                    )
+                )
+                continue
+            update = _UnitRetryState(
+                consecutive_failures=(
+                    prior.consecutive_failures + 1 if prior is not None else 1
+                ),
+                first_failure_at=(
+                    prior.first_failure_at if prior is not None else now
+                ),
+                last_failure_at=now,
+                # Class name only — never error message bodies on disk or in
+                # observability output.
+                error_category=type(error).__name__,
+            )
+            crossed = update.consecutive_failures >= self.quarantine_threshold
+            (quarantine_updates if crossed else failed_updates)[unit_key] = update
+            outcomes.append(
+                SpoolUnitOutcome(
+                    status="quarantined" if crossed else "failed",
+                    record_keys=record_keys,
+                    operations=operations,
+                    consecutive_failures=update.consecutive_failures,
+                    error_category=update.error_category,
+                    first_failure_at=update.first_failure_at,
+                    last_failure_at=update.last_failure_at,
+                )
+            )
 
-        if not replayed_units:
-            return results
+        if replayed_units or failed_updates or quarantine_updates:
+            self._commit_replay_pass(
+                replayed_units=replayed_units,
+                failed_updates=failed_updates,
+                quarantine_updates=quarantine_updates,
+                prior_state=retry_state,
+                any_replayed=any_replayed,
+                now=now,
+            )
+        return SpoolReplayReport(
+            results=tuple(results),
+            outcomes=tuple(outcomes),
+        )
+
+    def _commit_replay_pass(
+        self,
+        *,
+        replayed_units: set[tuple[str | None, tuple[str, ...]]],
+        failed_updates: Mapping[str, _UnitRetryState],
+        quarantine_updates: Mapping[str, _UnitRetryState],
+        prior_state: _RetryState,
+        any_replayed: bool,
+        now: float,
+    ) -> None:
+        """Persist one replay pass: quarantine, spool rewrite, retry state.
+
+        Crash-safety ordering (each write is individually atomic):
+        1. quarantine sidecar (keyed on unit key with REPLACE semantics, so a
+           crash between steps 1 and 3 cannot lose a unit and re-quarantines
+           idempotently while preserving the freshest lines),
+        2. quarantine-sidecar reconcile: stale entries for units that just
+           replayed successfully (left by a crash between steps 1 and 3 of a
+           prior pass) are removed before the spool rewrite, so a crash here
+           leaves the unit pending in the spool rather than a phantom entry,
+        3. main spool rewrite without replayed/quarantined units,
+        4. retry-state sidecar. A crash before step 4 loses only retry
+           counters / last-success metadata, never spool records.
+        """
         lock_fd = self._lock()
         try:
             live_lines = (
@@ -447,29 +681,278 @@ class JsonlSpool:
                 if self.path.exists()
                 else []
             )
-            remaining = [
-                line
-                for unit in self._parse_units(live_lines, warn=False)
-                if unit.signature() not in replayed_units
-                for line in unit.lines
-            ]
-            self._write_lines(remaining)
+            live_units = self._parse_units(live_lines, warn=False)
+            remaining_lines: list[str] = []
+            remaining_keys: set[str] = set()
+            quarantined_now: list[tuple[str, _SpoolUnit, _UnitRetryState]] = []
+            for unit in live_units:
+                signature = unit.signature()
+                if signature is not None and signature in replayed_units:
+                    continue
+                unit_key = (
+                    self._unit_key(signature) if signature is not None else None
+                )
+                if unit_key is not None and unit_key in quarantine_updates:
+                    quarantined_now.append(
+                        (unit_key, unit, quarantine_updates[unit_key])
+                    )
+                    continue
+                remaining_lines.extend(unit.lines)
+                if unit_key is not None:
+                    remaining_keys.add(unit_key)
+            if quarantined_now:
+                self._append_quarantined_units(quarantined_now, now=now)
+            replayed_keys = {
+                self._unit_key(signature) for signature in replayed_units
+            }
+            if replayed_keys:
+                self._remove_quarantined_entries(replayed_keys)
+            self._write_lines(remaining_lines)
+            units: dict[str, _UnitRetryState] = {}
+            for unit_key in remaining_keys:
+                update = failed_updates.get(unit_key)
+                if update is not None:
+                    units[unit_key] = update
+                elif unit_key in prior_state.units:
+                    units[unit_key] = prior_state.units[unit_key]
+            self._write_retry_state(
+                _RetryState(
+                    last_success_at=(
+                        now if any_replayed else prior_state.last_success_at
+                    ),
+                    units=units,
+                )
+            )
         finally:
             self._unlock(lock_fd)
-        return results
+
+    def _append_quarantined_units(
+        self,
+        entries: list[tuple[str, _SpoolUnit, _UnitRetryState]],
+        *,
+        now: float,
+    ) -> None:
+        """Persist quarantined units, replacing any prior entry per unit key.
+
+        Replacement (never skip) keeps the crash-window idempotency property —
+        re-quarantining after a crash between the sidecar append and the
+        main-spool rewrite converges to a single entry — while preserving the
+        freshest content: a unit an operator restored (possibly with edited
+        lines) that re-fails to threshold re-enters with its current spool
+        lines and fresh counts/timestamps, instead of being silently dropped
+        from both files. In-batch duplicates of the same unit key collapse to
+        one envelope per pass (last write wins).
+        """
+        self._reject_symlink(self.quarantine_path)
+        existing_lines = (
+            self.quarantine_path.read_text(encoding="utf-8").splitlines(
+                keepends=True
+            )
+            if self.quarantine_path.exists()
+            else []
+        )
+        fresh: dict[str, list[str]] = {}
+        for unit_key, unit, state in entries:
+            assert unit.records is not None
+            envelope = {
+                "schema": QUARANTINE_ENVELOPE_SCHEMA,
+                "unit_key": unit_key,
+                "record_keys": [
+                    record.idempotency_key for record in unit.records
+                ],
+                "operations": [record.operation for record in unit.records],
+                "consecutive_failures": state.consecutive_failures,
+                "first_failure_at": state.first_failure_at,
+                "last_failure_at": state.last_failure_at,
+                "error_category": state.error_category,
+                "quarantined_at": now,
+                "line_count": len(unit.lines),
+            }
+            fresh[unit_key] = [
+                json.dumps(envelope, sort_keys=True, separators=(",", ":")) + "\n",
+                *unit.lines,
+            ]
+        kept_lines = self._quarantine_lines_without(existing_lines, set(fresh))
+        self._atomic_write(
+            self.quarantine_path,
+            kept_lines + [line for entry in fresh.values() for line in entry],
+        )
+
+    def _remove_quarantined_entries(self, unit_keys: set[str]) -> None:
+        """Drop sidecar entries for units that just replayed successfully.
+
+        A crash between the quarantine append and the main-spool rewrite
+        leaves a unit in both files; when the still-pending unit later
+        replays successfully, its stale sidecar entry is a phantom and is
+        removed here inside the same locked commit.
+        """
+        if not self.quarantine_path.exists():
+            return
+        self._reject_symlink(self.quarantine_path)
+        lines = self.quarantine_path.read_text(encoding="utf-8").splitlines(
+            keepends=True
+        )
+        kept = self._quarantine_lines_without(lines, unit_keys)
+        if len(kept) != len(lines):
+            self._atomic_write(self.quarantine_path, kept)
+
+    @classmethod
+    def _quarantine_lines_without(
+        cls,
+        lines: list[str],
+        unit_keys: set[str],
+    ) -> list[str]:
+        """Return sidecar lines minus each named envelope and its records."""
+        kept: list[str] = []
+        dropping = False
+        for line in lines:
+            envelope = cls._quarantine_envelope(line)
+            if envelope is not None:
+                key = envelope.get("unit_key")
+                dropping = isinstance(key, str) and key in unit_keys
+            if not dropping:
+                kept.append(line)
+        return kept
+
+    @staticmethod
+    def _quarantine_envelope(line: str) -> dict[str, Any] | None:
+        if not line.strip():
+            return None
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            return None
+        if (
+            isinstance(value, dict)
+            and value.get("schema") == QUARANTINE_ENVELOPE_SCHEMA
+        ):
+            return value
+        return None
+
+    @classmethod
+    def _quarantine_envelopes(cls, lines: Iterable[str]) -> list[dict[str, Any]]:
+        envelopes: list[dict[str, Any]] = []
+        for line in lines:
+            envelope = cls._quarantine_envelope(line)
+            if envelope is not None:
+                envelopes.append(envelope)
+        return envelopes
+
+    def _quarantined_count(self) -> int:
+        if not self.quarantine_path.exists():
+            return 0
+        self._reject_symlink(self.quarantine_path)
+        lines = self.quarantine_path.read_text(encoding="utf-8").splitlines(
+            keepends=True
+        )
+        return len(self._quarantine_envelopes(lines))
+
+    @staticmethod
+    def _unit_key(signature: tuple[str | None, tuple[str, ...]]) -> str:
+        group_id, record_keys = signature
+        return json.dumps([group_id, list(record_keys)], separators=(",", ":"))
+
+    def _load_retry_state(self) -> _RetryState:
+        """Load retry metadata; corruption degrades to empty (counts only)."""
+        empty = _RetryState(last_success_at=None, units={})
+        if not self.retry_state_path.exists():
+            return empty
+        self._reject_symlink(self.retry_state_path)
+        try:
+            raw = json.loads(
+                self.retry_state_path.read_text(encoding="utf-8")
+            )
+        except (OSError, json.JSONDecodeError):
+            return empty
+        if not isinstance(raw, dict) or not isinstance(raw.get("units"), dict):
+            return empty
+        last_success_at = raw.get("last_success_at")
+        units: dict[str, _UnitRetryState] = {}
+        for unit_key, value in raw["units"].items():
+            parsed = self._parse_unit_retry_state(unit_key, value)
+            if parsed is not None:
+                units[unit_key] = parsed
+        return _RetryState(
+            # json.loads accepts bare NaN/Infinity tokens: non-finite floats
+            # from the sidecar are treated as absent, never trusted.
+            last_success_at=(
+                float(last_success_at)
+                if isinstance(last_success_at, int | float)
+                and not isinstance(last_success_at, bool)
+                and math.isfinite(last_success_at)
+                else None
+            ),
+            units=units,
+        )
+
+    @staticmethod
+    def _parse_unit_retry_state(unit_key: Any, value: Any) -> _UnitRetryState | None:
+        if not isinstance(unit_key, str) or not isinstance(value, dict):
+            return None
+        failures = value.get("consecutive_failures")
+        first_failure_at = value.get("first_failure_at")
+        last_failure_at = value.get("last_failure_at")
+        error_category = value.get("error_category")
+        if isinstance(failures, bool) or not isinstance(failures, int):
+            return None
+        # Zero/negative counters carry no information: treat as absent (the
+        # unit restarts with a fresh retry budget, which is also the safe
+        # direction — it can never quarantine early).
+        if failures < 1:
+            return None
+        if isinstance(first_failure_at, bool) or not isinstance(
+            first_failure_at, int | float
+        ):
+            return None
+        if isinstance(last_failure_at, bool) or not isinstance(
+            last_failure_at, int | float
+        ):
+            return None
+        # json.loads accepts bare NaN/Infinity tokens: non-finite timestamps
+        # invalidate the entry (absent), and absurd counters are clamped.
+        if not math.isfinite(first_failure_at) or not math.isfinite(
+            last_failure_at
+        ):
+            return None
+        if not isinstance(error_category, str):
+            return None
+        return _UnitRetryState(
+            consecutive_failures=min(failures, _MAX_RETRY_STATE_FAILURES),
+            first_failure_at=float(first_failure_at),
+            last_failure_at=float(last_failure_at),
+            error_category=error_category,
+        )
+
+    def _write_retry_state(self, state: _RetryState) -> None:
+        self._reject_symlink(self.retry_state_path)
+        payload = {
+            "schema": RETRY_STATE_SCHEMA,
+            "last_success_at": state.last_success_at,
+            "units": {
+                unit_key: unit_state.as_dict()
+                for unit_key, unit_state in state.units.items()
+            },
+        }
+        self._atomic_write(
+            self.retry_state_path,
+            [json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"],
+        )
 
     def _write_lines(self, lines: list[str]) -> None:
+        self._atomic_write(self.path, lines)
+
+    def _atomic_write(self, path: Path, lines: list[str]) -> None:
         payload = "".join(lines).encode("utf-8")
-        original = self.path.read_bytes() if self.path.exists() else None
+        original = path.read_bytes() if path.exists() else None
         directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-        directory_fd = os.open(self.path.parent, directory_flags)
+        directory_fd = os.open(path.parent, directory_flags)
         tmp_name: str | None = None
         replaced = False
         try:
             fd, tmp_name = tempfile.mkstemp(
-                prefix=f".{self.path.name}.",
+                prefix=f".{path.name}.",
                 suffix=".tmp",
-                dir=self.path.parent,
+                dir=path.parent,
             )
             try:
                 os.fchmod(fd, 0o600)
@@ -477,13 +960,13 @@ class JsonlSpool:
                 os.fsync(fd)
             finally:
                 os.close(fd)
-            os.replace(tmp_name, self.path)
+            os.replace(tmp_name, path)
             tmp_name = None
             replaced = True
             os.fsync(directory_fd)
         except Exception:
             if replaced:
-                self._restore_after_failed_replace(original, directory_fd)
+                self._restore_after_failed_replace(path, original, directory_fd)
             raise
         finally:
             if tmp_name is not None:
@@ -504,18 +987,19 @@ class JsonlSpool:
 
     def _restore_after_failed_replace(
         self,
+        path: Path,
         original: bytes | None,
         directory_fd: int,
     ) -> None:
         tmp_name: str | None = None
         try:
             if original is None:
-                os.unlink(self.path)
+                os.unlink(path)
             else:
                 fd, tmp_name = tempfile.mkstemp(
-                    prefix=f".{self.path.name}.restore.",
+                    prefix=f".{path.name}.restore.",
                     suffix=".tmp",
-                    dir=self.path.parent,
+                    dir=path.parent,
                 )
                 try:
                     os.fchmod(fd, 0o600)
@@ -523,13 +1007,13 @@ class JsonlSpool:
                     os.fsync(fd)
                 finally:
                     os.close(fd)
-                os.replace(tmp_name, self.path)
+                os.replace(tmp_name, path)
                 tmp_name = None
             os.fsync(directory_fd)
         except Exception:
             logger.error(
                 "Failed to restore spool after directory synchronization error",
-                extra={"spool_path": str(self.path)},
+                extra={"spool_path": str(path)},
                 exc_info=True,
             )
         finally:
