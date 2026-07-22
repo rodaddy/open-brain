@@ -94,13 +94,18 @@ export function registerBulkArchive(server: McpServer, deps: ToolDeps): void {
         await client.query("COMMIT");
       } catch (err) {
         await client.query("ROLLBACK");
-        const message = err instanceof Error ? err.message : String(err);
-        logger.error("bulk_archive_error", { error: message });
+        // Log only stable error class/code -- never raw err.message, which can
+        // embed query fragments, row content, or namespace names (PR #275,
+        // PR #262 patterns). The response is a stable content-free string.
+        logger.error("bulk_archive_error", {
+          name: err instanceof Error ? err.name : "unknown",
+          code: (err as { code?: string } | null | undefined)?.code,
+        });
         return {
           content: [
             {
               type: "text" as const,
-              text: `Transaction failed: ${message}`,
+              text: "Transaction failed",
             },
           ],
           isError: true,
