@@ -81,6 +81,89 @@ class DelayedInitializeTransport implements Transport {
   }
 }
 
+class DualExpiredTransport implements Transport {
+  initializeCalls = 0;
+  private expireSessionOne = false;
+  private sessionOneCalls = 0;
+  private resolveBothExpired!: () => void;
+  private resolveDelayedExpired!: () => void;
+  private resolveReplacementInitialized!: () => void;
+  private readonly bothExpired = new Promise<void>((resolve) => {
+    this.resolveBothExpired = resolve;
+  });
+  private readonly delayedExpired = new Promise<void>((resolve) => {
+    this.resolveDelayedExpired = resolve;
+  });
+  readonly replacementInitialized = new Promise<void>((resolve) => {
+    this.resolveReplacementInitialized = resolve;
+  });
+
+  startConcurrentExpiry(): void {
+    this.expireSessionOne = true;
+  }
+
+  releaseDelayedResponse(): void {
+    this.resolveDelayedExpired();
+  }
+
+  async post(
+    _url: string,
+    options: {
+      headers: Record<string, string>;
+      json: Json;
+      timeout: number;
+      expectedId?: number;
+    },
+  ): Promise<TransportResponse> {
+    const method = options.json["method"];
+    const requestId = options.json["id"] as number;
+    if (method === "initialize") {
+      this.initializeCalls += 1;
+      const sessionId = `session-${this.initializeCalls}`;
+      if (this.initializeCalls === 2) {
+        this.resolveReplacementInitialized();
+      }
+      return {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+          "mcp-session-id": sessionId,
+        },
+        text: JSON.stringify({
+          jsonrpc: "2.0",
+          id: requestId,
+          result: { protocolVersion: "2025-03-26" },
+        }),
+      };
+    }
+    if (method === "notifications/initialized") {
+      return { status: 202, headers: {}, text: "" };
+    }
+    const sessionId = options.headers["Mcp-Session-Id"];
+    if (this.expireSessionOne && sessionId === "session-1") {
+      this.sessionOneCalls += 1;
+      const callIndex = this.sessionOneCalls;
+      if (callIndex === 2) {
+        this.resolveBothExpired();
+      }
+      await this.bothExpired;
+      if (callIndex === 2) {
+        await this.delayedExpired;
+      }
+      return {
+        status: 404,
+        headers: { "content-type": "application/json" },
+        text: JSON.stringify({ error: "invalid or missing session" }),
+      };
+    }
+    return toolResult(requestId, { session_id: sessionId });
+  }
+
+  async delete(): Promise<TransportResponse> {
+    return { status: 200, headers: {}, text: "" };
+  }
+}
+
 describe("OpenBrainClient header binding", () => {
   it("declares contract, bearer auth, and identity headers on every request", async () => {
     const transport = new LaneAwareTransport();
@@ -176,6 +259,29 @@ describe("OpenBrainClient session concurrency", () => {
 
     await expect(client.get_contract()).resolves.toEqual({ ok: true });
     expect(transport.initializeCalls).toBe(2);
+  });
+
+  it("does not let a delayed old-session 404 clear the replacement session", async () => {
+    const transport = new DualExpiredTransport();
+    const client = makeClient(transport);
+    await expect(client.get_contract()).resolves.toEqual({
+      session_id: "session-1",
+    });
+    transport.startConcurrentExpiry();
+
+    const first = client.log_thought({ content: "first" });
+    const second = client.log_decision({
+      title: "second",
+      rationale: "exercise delayed expiry",
+    });
+    await transport.replacementInitialized;
+    await expect(first).resolves.toEqual({ session_id: "session-2" });
+    expect(client.mcpSessionId).toBe("session-2");
+
+    transport.releaseDelayedResponse();
+    await expect(second).resolves.toEqual({ session_id: "session-2" });
+    expect(transport.initializeCalls).toBe(2);
+    expect(client.mcpSessionId).toBe("session-2");
   });
 });
 

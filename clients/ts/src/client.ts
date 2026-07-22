@@ -461,12 +461,17 @@ export class OpenBrainClient {
       method: "tools/call",
       params: { name, arguments: { ...args } },
     };
-    let response = await this.postToolCall(payload);
+    const requestSessionId = this.sessionId as string;
+    let response = await this.postToolCall(payload, requestSessionId);
     if (this.isExpiredSessionResponse(response)) {
       this.assertOperationEpoch(operationEpoch);
-      this.sessionId = null;
+      // A delayed response from an older session must not clear a newer session
+      // established by another concurrent caller.
+      if (this.sessionId === requestSessionId) {
+        this.sessionId = null;
+      }
       await this.ensureSession(operationEpoch);
-      response = await this.postToolCall(payload);
+      response = await this.postToolCall(payload, this.sessionId as string);
     }
     this.raiseForStatus(response, `call_tool:${name}`);
     const message = this.decodeJsonRpcResponse(
@@ -672,9 +677,12 @@ export class OpenBrainClient {
     this.raiseForStatus(response, "initialized");
   }
 
-  private async postToolCall(payload: Json): Promise<TransportResponse> {
+  private async postToolCall(
+    payload: Json,
+    sessionId: string,
+  ): Promise<TransportResponse> {
     return this.transport.post(this.url("mcp"), {
-      headers: this.mcpHeaders(true),
+      headers: this.mcpHeaders(true, sessionId),
       json: payload,
       timeout: this.timeout,
       expectedId: payload["id"] as number | undefined,
