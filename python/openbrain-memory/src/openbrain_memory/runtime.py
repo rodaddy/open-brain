@@ -23,7 +23,7 @@ from ._runtime_router import (
     safe_error,
     safe_text,
 )
-from ._runtime_spool import TrackingSpool
+from ._runtime_spool import PARKED_NAMESPACE_KEY, TrackingSpool
 from ._runtime_validation import (
     bounded_int as _bounded_int,
 )
@@ -413,7 +413,11 @@ class FirstClassMemoryRuntime:
         configured_spool = spool
         if configured_spool is None and config.spool_path is not None:
             configured_spool = JsonlSpool(config.spool_path)
-        self._spool = TrackingSpool(configured_spool) if configured_spool else None
+        self._spool = (
+            TrackingSpool(configured_spool, namespace=config.namespace)
+            if configured_spool
+            else None
+        )
         self._memory = AgentMemory(
             cast(MemoryClient, self._router),
             agent=scope.agent,
@@ -674,19 +678,35 @@ class FirstClassMemoryRuntime:
                 return
 
             def dispatch(record: SpoolRecord) -> JSON:
+                # Reset per record so no later record or unit can inherit a
+                # stale scope if scope-validated replay operations are added.
+                self._replay_scope = None
                 if record.operation not in _REPLAYABLE_SPOOL_OPERATIONS:
                     raise ValueError(
                         f"Unsupported spooled operation: {record.operation}"
                     )
+                payload = dict(record.payload)
                 if record.operation == "session_start":
+                    # A unit parked by a runtime configured for another
+                    # namespace must stay parked: draining it here would
+                    # silently transplant its lane content into this
+                    # runtime's namespace.
+                    parked_namespace = payload.pop(PARKED_NAMESPACE_KEY, None)
+                    if (
+                        parked_namespace is not None
+                        and parked_namespace != self.config.namespace
+                    ):
+                        raise ValueError(
+                            "spooled unit parked under a different namespace"
+                        )
                     # Validate the replayed lane against the scope the unit was
                     # parked under, not the runtime's current scope, so units
                     # from another project drain instead of re-failing forever
                     # (#310). The namespace stays bound to this runtime's auth
                     # config; only the lane coordinates come from the record.
-                    self._replay_scope = _spooled_start_scope(record.payload)
+                    self._replay_scope = _spooled_start_scope(payload)
                 method = getattr(self._router, record.operation)
-                return cast(JSON, method(**record.payload))
+                return cast(JSON, method(**payload))
 
             try:
                 with self._router.direct_only():

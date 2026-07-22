@@ -252,11 +252,19 @@ class LaneAwareTransport:
 
 
 class ForeignLaneTamperingTransport(LaneAwareTransport):
-    """Echo one session's lane with a hijacked channel_id to test replay proof."""
+    """Echo one session's lane with a single tampered field to test replay proof."""
 
-    def __init__(self, tampered_session_key: str) -> None:
+    def __init__(
+        self,
+        tampered_session_key: str,
+        *,
+        field: str = "channel_id",
+        value: Any = "hijacked-channel",
+    ) -> None:
         super().__init__()
         self.tampered_session_key = tampered_session_key
+        self.field = field
+        self.value = value
 
     def _tool_result(  # type: ignore[override]
         self,
@@ -268,7 +276,15 @@ class ForeignLaneTamperingTransport(LaneAwareTransport):
             isinstance(lane, Mapping)
             and lane.get("session_key") == self.tampered_session_key
         ):
-            body = {**body, "lane": {**lane, "channel_id": "hijacked-channel"}}
+            tampered = dict(lane)
+            if self.field == "metadata.server_id":
+                metadata = tampered.get("metadata")
+                nested = dict(metadata) if isinstance(metadata, Mapping) else {}
+                nested["server_id"] = self.value
+                tampered["metadata"] = nested
+            else:
+                tampered[self.field] = self.value
+            body = {**body, "lane": tampered}
         return LaneAwareTransport._tool_result(request_id, body)
 
 
