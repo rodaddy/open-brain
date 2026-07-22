@@ -10,6 +10,7 @@
     "lifecycle-recall": "both",
     "lifecycle-session-start": "both",
     "lifecycle-wrap": "both",
+    "python-drain-replay-quarantine-receipts": "python",
     "python-runtime-and-agent-receipt-shapes": "both",
     "spool-line-cap-backpressure": "python",
     "spool-redact-before-persist": "python",
@@ -43,6 +44,11 @@
     },
     {
       "capability": "auto-drain-allowlist",
+      "python": "implemented",
+      "ts": "pending"
+    },
+    {
+      "capability": "drain-receipts",
       "python": "implemented",
       "ts": "pending"
     },

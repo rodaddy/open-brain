@@ -40,6 +40,7 @@ from .contract import (
 from .dream import DreamAction, DreamClient, DreamEngine, DreamPolicy, DreamRun
 from .policy import RetryExhaustedError, RetryPolicy, redact_text, redact_value
 from .runtime import (
+    DrainReport,
     FirstClassMemoryRuntime,
     ReceiptStatus,
     RuntimeConfig,
@@ -54,7 +55,15 @@ from .schema import (
     tool_contract_to_input_schema,
     tool_contracts_to_tool_schemas,
 )
-from .spool import JsonlSpool, SpoolRecord, SpoolStatus, replay_records
+from .spool import (
+    JsonlSpool,
+    SpoolRecord,
+    SpoolReplayReport,
+    SpoolStatus,
+    SpoolUnitOutcome,
+    SpoolUnitRetained,
+    replay_records,
+)
 
 __all__ = [
     "AgentMemory",
@@ -85,6 +94,7 @@ __all__ = [
     "REQUIRED_CONTRACT_TOOLS",
     "ContractValidationResult",
     "ContractSchemaError",
+    "DrainReport",
     "FirstClassMemoryRuntime",
     "FleetNatsDriver",
     "JsonlSpool",
@@ -99,7 +109,10 @@ __all__ = [
     "RuntimeReceipt",
     "RuntimeScope",
     "SpoolRecord",
+    "SpoolReplayReport",
     "SpoolStatus",
+    "SpoolUnitOutcome",
+    "SpoolUnitRetained",
     "contract_field_to_json_schema",
     "contract_input_to_json_schema",
     "OpenBrainTransportUnavailableError",

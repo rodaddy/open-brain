@@ -127,6 +127,7 @@ def test_python_consumes_memory_contract_fixture(
         "redact-before-persist": _consume_redact_before_persist,
         "auto-drain-allowlist": _consume_auto_drain_allowlist,
         "receipt-shapes": _consume_receipt_shapes,
+        "drain-receipts": _consume_drain_receipts,
     }
     handlers[fixture["capability"]](fixture, tmp_path)
 
@@ -325,3 +326,34 @@ def _consume_receipt_shapes(
     assert receipt["schema"] == expectation["agent_schema"]
     for key, value in request["agent_receipt"].items():
         assert receipt[key] == value
+
+
+def _consume_drain_receipts(
+    fixture: dict[str, Any],
+    _tmp_path: Path,
+) -> None:
+    request = fixture["request"]
+    expectation = fixture["expectation"]
+    statuses: list[str] = []
+    for name in ("replayed_receipt", "quarantined_receipt"):
+        declared = request[name]
+        receipt = RuntimeReceipt(
+            operation=declared["operation"],
+            status=ReceiptStatus(declared["status"]),
+            durable=declared["durable"],
+            direct_attempted=declared["direct_attempted"],
+            fallback_attempted=declared["fallback_attempted"],
+            spool_key=declared["spool_key"],
+            error=declared.get("error"),
+        ).as_dict()
+        assert receipt["schema"] == expectation["runtime_schema"]
+        for key, value in declared.items():
+            assert receipt[key] == value
+        statuses.append(receipt["status"])
+    assert statuses == expectation["statuses"]
+    assert ReceiptStatus.REPLAYED.value == "replayed"
+    assert ReceiptStatus.QUARANTINED.value == "quarantined"
+    # Drain receipts carry error CATEGORY/class names only, never bodies.
+    quarantined_error = request["quarantined_receipt"]["error"]
+    assert expectation["error_is_category_only"] is True
+    assert " " not in quarantined_error

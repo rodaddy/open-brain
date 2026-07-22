@@ -22,7 +22,9 @@ old FIFO-eviction behavior).
 | Spool byte cap | 1,000,000 bytes | Same `SpoolFullError` backpressure at saturation; a single batch that can never fit raises plain `ValueError` | `spool.py` `JsonlSpool(max_bytes=1_000_000)` |
 | Spool payload redaction | always | Payloads pass `redact_value` before disk persistence | `spool.py` `_record_line` |
 | Replay concurrency | 1 (serialized) | Drain runs under the runtime operation lock on healthy operations only; failed/foreign/poison units are retained in place, never dropped | `runtime.py` `_drain_spool` (#309, #314) |
-| Queue observability | content-free | `SpoolStatus`: pending count, oldest/newest timestamps, per-operation counts, corrupted-line count — no payloads | `spool.py` `SpoolStatus` |
+| Quarantine threshold | 5 consecutive failed replay attempts per unit (configurable: `JsonlSpool(quarantine_threshold=...)`) | The unit's original redacted lines move atomically to the `<spool>.quarantine.jsonl` sidecar behind a content-free envelope (spool keys, retry count, first/last failure unix times, error class name only — never message bodies); the unit is never retried automatically and one `QUARANTINED` receipt lands in the triggering drain report. Foreign-namespace parked units (#314) never count toward quarantine | `spool.py` `DEFAULT_QUARANTINE_THRESHOLD`, `replay_with_report` (#296) |
+| Retry-count persistence | per-unit consecutive failures + last replay success time | Survives process restarts via the `<spool>.retry-state.json` sidecar; crash-tolerant metadata only — a lost or corrupted sidecar loses retry counters, never spool records | `spool.py` `_load_retry_state`, `_commit_replay_pass` (#296) |
+| Queue observability | content-free | `SpoolStatus`: pending count, oldest/newest timestamps, per-operation counts, corrupted-line count — no payloads; #296 adds `quarantined_count`, per-unit `retry_counts` (keyed by the unit's first record key), and `last_success_at` | `spool.py` `SpoolStatus` |
 
 Write outcomes (`ReceiptStatus`, `runtime.py`): `SAVED` (direct write
 succeeded) → `SPOOLED` (durable locally, replayed automatically on the next
@@ -31,7 +33,16 @@ healthy operation) → `FALLBACK` (delivered via a configured fallback route) �
 spool-saturated). `DIRECT` is the recall-success status, not a write status.
 Recovery is automatic: #309 auto-drain fires on every healthy direct recall
 and saved write; #314 replays units under their parked exact scope with
-namespace provenance.
+namespace provenance. #296 extends the ladder with drain outcomes: a spooled
+record that replays successfully gets a `REPLAYED` receipt (durable, linked by
+its `idempotency_key` as `spool_key`), and a unit that crosses the quarantine
+threshold gets one `QUARANTINED` receipt (durable — its redacted lines still
+exist in the quarantine sidecar and can be restored-and-replayed by an
+operator). Every drain produces a content-free `DrainReport` (counts +
+receipts) exposed on `RuntimeOutput.drain` of the triggering operation and on
+`FirstClassMemoryRuntime.last_drain_report`. Replay delivery is
+at-least-once: a crash between dispatch success and the spool rewrite
+re-delivers the same `idempotency_key` on the next drain.
 
 ## Server (Bun/TypeScript)
 
@@ -57,7 +68,8 @@ surface.
   operation lock, exact-scope proofs, and per-tool server tests, not by a
   load harness.
 - Saturation alerting thresholds / unified degraded-state signal beyond
-  `SpoolStatus` and receipts — revisit with #296's drain receipts.
+  `SpoolStatus` and receipts — #296 landed drain reports and quarantine
+  observability; alerting thresholds on top of them remain deferred.
 - Receipt retention policy and backup storage/duration envelopes — owned by
   the backup/restore program (#298).
 - Replay throughput limits beyond serialized-drain — no observed need at

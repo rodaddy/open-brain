@@ -368,3 +368,31 @@ regardless of role.
 If a new operational surface (restore, bulk export, cross-namespace tooling)
 lands without a row here, that is a review finding — add the surface and its
 predicate or its explicit global carve-out in the same PR.
+
+### Spool Replay: Quarantine and Delivery Semantics (#296)
+
+Automated spool replay is fully receipted and content-free:
+
+- **Delivery semantics — at-least-once.** A replayed record is only removed
+  from the spool by the rewrite that follows the replay pass. A crash after
+  the dispatch succeeded but before that rewrite persists re-delivers the same
+  record (same `idempotency_key`) on the next drain. Records carry stable
+  `idempotency_key` values for exactly this linkage, but server-side dedup is
+  NOT currently guaranteed for every replayable operation — consumers that
+  need exactly-once must dedupe on `idempotency_key`.
+- **Drain receipts.** Every drain produces a `DrainReport` (counts + linked
+  receipts, no payloads, no error bodies) on the triggering operation's
+  `RuntimeOutput.drain` and on `last_drain_report`: `REPLAYED` per replayed
+  record, `QUARANTINED` per quarantined unit. Both statuses are additive
+  within the pinned `openbrain.runtime_receipt.v1` schema.
+- **Quarantine.** A unit that fails 5 consecutive drain attempts (default,
+  `JsonlSpool(quarantine_threshold=...)`) moves atomically to the
+  `<spool>.quarantine.jsonl` sidecar — a content-free envelope (unit spool
+  keys, retry count, first/last failure unix times, error class name only)
+  followed by the unit's original redacted lines — and is never retried
+  automatically. Poison units never block replay of valid units. Retry counts
+  survive restarts via the `<spool>.retry-state.json` sidecar (losing that
+  sidecar loses only counters, never records).
+- **#314 retention is not failure.** Units parked under another namespace
+  stay parked in the main spool with zero dispatches, zero retry-count
+  increments, and are never quarantined.
