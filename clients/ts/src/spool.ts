@@ -930,7 +930,10 @@ export class JsonlSpool {
       // A creator may still be writing metadata; only steal an old empty lock.
     }
     const stale = Date.now() - lockStat.mtimeMs >= this.lockStaleMs;
-    const hasOwnerPid = typeof owner.pid === "number";
+    const hasOwnerPid =
+      typeof owner.pid === "number" &&
+      Number.isSafeInteger(owner.pid) &&
+      owner.pid > 0;
     const dead = hasOwnerPid && ownerIsDead(owner.pid as number);
     // Never steal a lock from a live owner merely because one local filesystem
     // transaction exceeded the stale threshold. Staleness is a recovery signal

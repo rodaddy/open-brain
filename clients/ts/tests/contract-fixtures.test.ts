@@ -112,6 +112,7 @@ const EXPECTED_TS_FIXTURE_IDS = new Set(
 
 describe("contract fixture discovery", () => {
   it("matches the manifest's ts-consumable fixture set", () => {
+    expect(ALL_FIXTURES.length).toBe(FIXTURE_BY_ID.size);
     expect(new Set(FIXTURE_BY_ID.keys())).toEqual(
       new Set(Object.keys(PARITY_MANIFEST.expected_fixture_ids)),
     );

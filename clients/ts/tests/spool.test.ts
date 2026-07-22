@@ -164,6 +164,25 @@ describe("JsonlSpool durability and cross-process exclusion", () => {
     ).toBe("stale-key");
   });
 
+  it("recovers stale locks with invalid numeric owner pids", () => {
+    for (const pid of [0, -1, 1.5]) {
+      const baseline = tempSpool();
+      writeFileSync(
+        baseline.lockPath,
+        JSON.stringify({ token: `invalid-${pid}`, pid }),
+        { mode: 0o600 },
+      );
+      utimesSync(baseline.lockPath, new Date(0), new Date(0));
+      const spool = new JsonlSpool(baseline.path, {
+        lockTimeoutMs: 50,
+        lockStaleMs: 1,
+      });
+      expect(typeof spool.append("after-invalid", { content: "recover" })).toBe(
+        "string",
+      );
+    }
+  });
+
   it("never steals a stale-looking lock from a live owner", () => {
     const baseline = tempSpool();
     writeFileSync(
