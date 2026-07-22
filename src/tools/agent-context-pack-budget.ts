@@ -35,16 +35,28 @@ export function serializedLength(value: unknown): number {
 
 /**
  * Serialized framing a section adds to the enclosing `sections` object beyond
- * its own body: the quoted key, the `:` separator, and one `,`/`}` delimiter
- * (`{"key":<body>}` / `,"key":<body>`). Counting this against the whole-pack
- * budget keeps `JSON.stringify(payload.sections)` — not merely the summed
- * per-section bodies — within the declared budget. The outer `{}` (2 chars for
- * an empty object, otherwise the leading `{` and trailing `}` replace two of
- * the per-section delimiters) is reserved once up front.
+ * its own body. The outer `{}` is reserved once up front (2 chars). Within
+ * those braces JSON writes members as `"key":<body>` joined by a single `,`
+ * between adjacent members — so in `{"a":1,"b":2}` member `a` is framed by just
+ * `"a":` (the `"`, key, `"`, `:` = keyLen + 3) and member `b` by a leading comma
+ * plus `"b":` (keyLen + 3 + 1).
+ *
+ * The framing therefore depends on member position, not just the key:
+ * - the FIRST admitted member charges `keyLen + 3` (quoted key + colon only);
+ * - each SUBSEQUENT admitted member charges `keyLen + 3 + 1` (add one comma).
+ *
+ * Charging a comma for the first member (the prior behavior) overcounted one
+ * character and could falsely truncate content that fit at the exact boundary.
+ * `isFirstAdmitted` MUST reflect whether any earlier candidate was actually
+ * admitted — a starved or omitted candidate does not consume the first-member
+ * slot, so the next admitted section still frames as the first.
  */
-export function sectionFrameCost(key: string): number {
-  // "key": plus one delimiter character.
-  return key.length + 3 + 1;
+export function sectionFrameCost(
+  key: string,
+  isFirstAdmitted: boolean,
+): number {
+  // '"' + key + '"' + ':' = key.length + 3, plus one ',' for non-first members.
+  return key.length + 3 + (isFirstAdmitted ? 0 : 1);
 }
 
 export type DurableLaneEvent = { content?: unknown; citation_id?: unknown };

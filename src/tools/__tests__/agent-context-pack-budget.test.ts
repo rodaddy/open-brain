@@ -4,8 +4,60 @@ import {
   AGENT_CONTEXT_PACK_SCOPE as SCOPE,
   setupAgentContextPackToolClient as setupToolClient,
 } from "./agent-context-pack-test-helpers.ts";
+import { sectionFrameCost } from "../agent-context-pack-budget.ts";
 
 const AUTH: AuthInfo = { role: "admin", clientId: "rico" };
+
+describe("sectionFrameCost object framing", () => {
+  it("charges no delimiter for the first admitted member", () => {
+    // The first member of `{...}` is written as `"key":<body>` with no comma —
+    // the outer braces are reserved separately. Framing is exactly the quoted
+    // key plus the colon: '"' + key + '"' + ':' === key.length + 3.
+    expect(sectionFrameCost("working_set", true)).toBe(
+      "working_set".length + 3,
+    );
+    expect(sectionFrameCost("recovery", true)).toBe("recovery".length + 3);
+    expect(sectionFrameCost("durable_lane_context", true)).toBe(
+      "durable_lane_context".length + 3,
+    );
+  });
+
+  it("charges exactly one comma for each subsequent admitted member", () => {
+    // Each member after the first is written as `,"key":<body>` — one leading
+    // comma on top of the quoted key and colon.
+    expect(sectionFrameCost("working_set", false)).toBe(
+      "working_set".length + 3 + 1,
+    );
+    expect(sectionFrameCost("recovery", false)).toBe("recovery".length + 3 + 1);
+    expect(sectionFrameCost("durable_lane_context", false)).toBe(
+      "durable_lane_context".length + 3 + 1,
+    );
+  });
+
+  it("matches the literal JSON framing of a two-member sections object", () => {
+    // Ground the helper against real JSON.stringify output: the framing a member
+    // adds beyond its own serialized body equals sectionFrameCost.
+    const bodyA = { x: 1 };
+    const bodyB = { y: 2 };
+    const twoMember = JSON.stringify({ working_set: bodyA, recovery: bodyB });
+    // Outer braces (2) + first-member framing + firstBody + second-member
+    // framing + secondBody === full serialized length.
+    const firstFrame = sectionFrameCost("working_set", true);
+    const secondFrame = sectionFrameCost("recovery", false);
+    const total =
+      2 +
+      firstFrame +
+      JSON.stringify(bodyA).length +
+      secondFrame +
+      JSON.stringify(bodyB).length;
+    expect(total).toBe(twoMember.length);
+    // A single-member object frames with only the first (comma-free) cost.
+    const oneMember = JSON.stringify({ working_set: bodyA });
+    expect(2 + firstFrame + JSON.stringify(bodyA).length).toBe(
+      oneMember.length,
+    );
+  });
+});
 
 /**
  * Sum of retained section *content* characters — working-set item bodies plus
@@ -401,6 +453,72 @@ describe("agent_context_pack whole-pack budget", () => {
       expect(payload.budget.whole_pack.content_chars_used).toBeLessThanOrEqual(
         payload.budget.whole_pack.content_char_limit,
       );
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("retains exact-boundary working-set content when the unbounded sections length equals the limit (#326 terminal)", async () => {
+    // Terminal-audit reproduction: outer `{}` is reserved once, but the prior
+    // sectionFrameCost charged a comma for EVERY admitted member — including the
+    // first, which has no comma. That overcharged one char and falsely truncated
+    // content sitting exactly on the boundary.
+    const { client, cleanup } = await setupToolClient(AUTH, {
+      query: async () => ({ rows: [] }),
+    });
+    try {
+      // A single small working-set item sized so the UNBOUNDED serialized
+      // sections length lands exactly on the budget boundary (804 chars).
+      await appendWorkingItem(client, "WXY");
+
+      // First measure the UNBOUNDED serialized sections length for this exact
+      // single-item working_set section.
+      const unbounded = await client.callTool({
+        name: "agent_context_pack",
+        arguments: {
+          ...SCOPE,
+          requested_sections: ["working_set"],
+        },
+      });
+      const unboundedPayload = JSON.parse((unbounded.content as any)[0].text);
+      const unboundedLen = JSON.stringify(unboundedPayload.sections).length;
+      // Terminal fixture: this exact single-item working_set section serializes
+      // to 804 chars unbounded, which is exactly the budget for max_tokens 501
+      // (501 * 4 - 1200 = 804). Anchor the fixture so the boundary is exact, not
+      // approximate — the item sits precisely on the limit with no slack.
+      expect(unboundedLen).toBe(804);
+      expect(501 * 4 - 1200).toBe(804);
+
+      // Now request exactly that budget. The item fits with NO slack: the outer
+      // braces plus first-member framing (no comma) plus the item body equal the
+      // limit precisely. The old one-comma overcharge dropped the item here.
+      const pack = await client.callTool({
+        name: "agent_context_pack",
+        arguments: {
+          ...SCOPE,
+          requested_sections: ["working_set"],
+          budget: { max_tokens: 501 },
+        },
+      });
+
+      const payload = JSON.parse((pack.content as any)[0].text);
+      const budget = 501 * 4 - 1200;
+      // The item survives — exact-boundary content is not falsely truncated.
+      expect(payload.sections.working_set).toBeDefined();
+      expect(payload.sections.working_set.item_count).toBe(1);
+      expect(payload.sections.working_set.items[0].content).toBe("WXY");
+      // Serialized sections is identical to the unbounded shape and exactly at
+      // the limit — no slack, no overshoot.
+      expect(JSON.stringify(payload.sections).length).toBe(budget);
+      expect(JSON.stringify(payload.sections).length).toBeLessThanOrEqual(
+        budget,
+      );
+      // No whole-pack truncation marker: nothing was dropped.
+      expect(
+        payload.warnings.truncation.some(
+          (t: any) => t.reason === "whole_pack_budget",
+        ),
+      ).toBe(false);
     } finally {
       await cleanup();
     }
@@ -923,6 +1041,187 @@ describe("agent_context_pack whole-pack budget: recovery section", () => {
           t.source === "working_set" && t.reason === "whole_pack_budget",
       );
       expect(workingSetMarker).toBeUndefined();
+    } finally {
+      await cleanup();
+    }
+  });
+});
+
+describe("agent_context_pack whole-pack budget: first-member framing (#326 terminal)", () => {
+  // Measure the unbounded serialized `sections` length, then set max_tokens so
+  // the whole-pack budget equals it exactly, and assert the content survives at
+  // the boundary. The first admitted member frames as `"key":<body>` with no
+  // comma, so a section on the exact limit must NOT be falsely truncated. This
+  // exercises the same defect for recovery-first and durable-lane-first as the
+  // working_set reproduction does, including the combination where an earlier
+  // requested section is omitted and a later one becomes the first member.
+  // Grow `content` by trailing padding until the recovery-only section's
+  // unbounded serialized length lands exactly on a reachable budget boundary
+  // (budget = max_tokens * 4 - 1200 can only hit multiples of 4). Returns the
+  // padded content, that exact length, and the integer max_tokens that makes the
+  // whole-pack budget equal it. This yields a genuine exact-boundary fixture for
+  // any section without hardcoding envelope internals.
+  async function recoveryExactBoundaryFixture(client: any) {
+    for (let pad = 0; pad < 8; pad += 1) {
+      const content = "REC" + "r".repeat(pad);
+      // Fresh client per probe so the store holds exactly one item.
+      const probe = await setupToolClient(AUTH, {
+        query: async () => ({ rows: [] }),
+      });
+      try {
+        await appendRecoveryItem(probe.client, content);
+        const unbounded = await probe.client.callTool({
+          name: "agent_context_pack",
+          arguments: {
+            ...SCOPE,
+            include_unreviewed_recovery: true,
+            requested_sections: ["recovery"],
+          },
+        });
+        const payload = JSON.parse((unbounded.content as any)[0].text);
+        const len = JSON.stringify(payload.sections).length;
+        if ((len + 1200) % 4 === 0) {
+          return { content, len, tokens: (len + 1200) / 4 };
+        }
+      } finally {
+        await probe.cleanup();
+      }
+    }
+    throw new Error("no exact-boundary recovery fixture found within padding");
+  }
+
+  it("frames recovery as the first admitted member at the exact boundary when working_set is absent", async () => {
+    // Derive an exact-boundary recovery-only fixture, then assert the item
+    // survives at that boundary. recovery is the only requested section, so it
+    // is the first (comma-free) member; the old +1 comma overcharge dropped it.
+    const fixtureClient = await setupToolClient(AUTH, {
+      query: async () => ({ rows: [] }),
+    });
+    let fixture: { content: string; len: number; tokens: number };
+    try {
+      fixture = await recoveryExactBoundaryFixture(fixtureClient.client);
+    } finally {
+      await fixtureClient.cleanup();
+    }
+
+    const { client, cleanup } = await setupToolClient(AUTH, {
+      query: async () => ({ rows: [] }),
+    });
+    try {
+      await appendRecoveryItem(client, fixture.content);
+      const pack = await client.callTool({
+        name: "agent_context_pack",
+        arguments: {
+          ...SCOPE,
+          include_unreviewed_recovery: true,
+          requested_sections: ["recovery"],
+          budget: { max_tokens: fixture.tokens },
+        },
+      });
+      const payload = JSON.parse((pack.content as any)[0].text);
+      // Recovery item survives at the exact boundary — no false truncation.
+      expect(payload.sections.recovery).toBeDefined();
+      expect(payload.sections.recovery.item_count).toBe(1);
+      expect(payload.sections.recovery.items[0].content_preview).toContain(
+        fixture.content,
+      );
+      // Serialized sections equals the unbounded length and exactly the budget.
+      expect(JSON.stringify(payload.sections).length).toBe(fixture.len);
+      expect(JSON.stringify(payload.sections).length).toBe(
+        fixture.tokens * 4 - 1200,
+      );
+      expect(
+        payload.warnings.truncation.some(
+          (t: any) => t.reason === "whole_pack_budget",
+        ),
+      ).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("frames a starved first member comma-free and charges the second member exactly one comma at the boundary", async () => {
+    // Combination case: working_set is requested with a body far too large to
+    // retain, so it collapses to its empty envelope and is admitted as the
+    // FIRST member (comma-free). recovery is admitted as the SECOND member and
+    // MUST be charged exactly one leading comma. Land the two-member sections
+    // object on an exact reachable budget and assert both survive with no slack:
+    // the old code overcharged the first member's comma, and any regression that
+    // dropped or mischarged the second member's comma would break the boundary.
+    async function twoMemberBoundaryFixture() {
+      for (let pad = 0; pad < 8; pad += 1) {
+        const recContent = "REC" + "r".repeat(pad);
+        const probe = await setupToolClient(AUTH, {
+          query: async () => ({ rows: [] }),
+        });
+        try {
+          await appendWorkingItem(probe.client, "hugews:" + "W".repeat(4000));
+          await appendRecoveryItem(probe.client, recContent);
+          // A budget comfortably above the two-member shape so nothing trims;
+          // we only need the untrimmed two-member serialized length.
+          const r = await probe.client.callTool({
+            name: "agent_context_pack",
+            arguments: {
+              ...SCOPE,
+              include_unreviewed_recovery: true,
+              requested_sections: ["working_set", "recovery"],
+              budget: { max_tokens: 5000 },
+            },
+          });
+          const p = JSON.parse((r.content as any)[0].text);
+          // Require the untrimmed shape: WS empty first member + recovery item.
+          if (
+            p.sections.working_set &&
+            p.sections.working_set.items.length === 0 &&
+            p.sections.recovery &&
+            p.sections.recovery.items.length === 1
+          ) {
+            const len = JSON.stringify(p.sections).length;
+            if ((len + 1200) % 4 === 0) {
+              return { recContent, len, tokens: (len + 1200) / 4 };
+            }
+          }
+        } finally {
+          await probe.cleanup();
+        }
+      }
+      throw new Error("no exact-boundary two-member fixture found");
+    }
+
+    const fixture = await twoMemberBoundaryFixture();
+
+    const { client, cleanup } = await setupToolClient(AUTH, {
+      query: async () => ({ rows: [] }),
+    });
+    try {
+      await appendWorkingItem(client, "hugews:" + "W".repeat(4000));
+      await appendRecoveryItem(client, fixture.recContent);
+
+      const pack = await client.callTool({
+        name: "agent_context_pack",
+        arguments: {
+          ...SCOPE,
+          include_unreviewed_recovery: true,
+          requested_sections: ["working_set", "recovery"],
+          budget: { max_tokens: fixture.tokens },
+        },
+      });
+      const payload = JSON.parse((pack.content as any)[0].text);
+      // working_set is the empty first member (comma-free); recovery is the
+      // second member (one comma) and its item survives at the exact boundary.
+      expect(payload.sections.working_set).toBeDefined();
+      expect(payload.sections.working_set.items).toEqual([]);
+      expect(payload.sections.recovery).toBeDefined();
+      expect(payload.sections.recovery.item_count).toBe(1);
+      expect(payload.sections.recovery.items[0].content_preview).toContain(
+        fixture.recContent,
+      );
+      // Serialized two-member sections equals the fixture length and exactly the
+      // budget — first member comma-free, second member one comma, no slack.
+      expect(JSON.stringify(payload.sections).length).toBe(fixture.len);
+      expect(JSON.stringify(payload.sections).length).toBe(
+        fixture.tokens * 4 - 1200,
+      );
     } finally {
       await cleanup();
     }

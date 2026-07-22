@@ -175,6 +175,11 @@ export async function buildAgentContextPackPayload(
     wholePackBudget !== null
       ? Math.max(0, wholePackBudget - 2)
       : Number.POSITIVE_INFINITY;
+  // Object framing is position-sensitive: the first admitted member costs only
+  // `"key":<body>`, each subsequent member adds one leading `,`. This flips to
+  // false the moment a section is actually admitted, so a starved/omitted
+  // candidate never consumes the first-member (comma-free) slot.
+  let firstSectionAdmitted = true;
   const wholePackTruncation: Array<Record<string, unknown>> = [];
 
   const workingSet = includeWorkingSet
@@ -197,11 +202,12 @@ export async function buildAgentContextPackPayload(
   // still recorded so the caller knows the requested section was fully dropped.
   let workingSetSection = workingSet?.working_set ?? null;
   if (workingSetSection) {
-    const frame = sectionFrameCost("working_set");
+    const frame = sectionFrameCost("working_set", firstSectionAdmitted);
     const serving = Math.max(0, remainingChars - frame);
     const fitted = fitItemSection(workingSetSection, ["item_count"], serving);
     if (fitted.starved && serializedLength(fitted.section) > serving) {
-      // Empty envelope does not fit: omit the section to hold the budget.
+      // Empty envelope does not fit: omit the section to hold the budget. It is
+      // not admitted, so the first-member slot stays available for a later one.
       workingSetSection = null;
     } else {
       workingSetSection = fitted.section;
@@ -209,6 +215,7 @@ export async function buildAgentContextPackPayload(
         0,
         remainingChars - serializedLength(fitted.section) - frame,
       );
+      firstSectionAdmitted = false;
     }
     if (fitted.truncated) {
       wholePackTruncation.push({
@@ -222,7 +229,7 @@ export async function buildAgentContextPackPayload(
 
   let recoverySection = recovery?.recovery ?? null;
   if (recoverySection) {
-    const frame = sectionFrameCost("recovery");
+    const frame = sectionFrameCost("recovery", firstSectionAdmitted);
     const serving = Math.max(0, remainingChars - frame);
     const fitted = fitItemSection(
       recoverySection,
@@ -237,6 +244,7 @@ export async function buildAgentContextPackPayload(
         0,
         remainingChars - serializedLength(fitted.section) - frame,
       );
+      firstSectionAdmitted = false;
     }
     if (fitted.truncated) {
       wholePackTruncation.push({
@@ -258,7 +266,10 @@ export async function buildAgentContextPackPayload(
   // serialized section fits. Counts, citations, and truncation are reconciled
   // to whatever survives. When there is no whole-pack budget the loader keeps
   // its historical per-section derivation and no re-fit runs.
-  const durableLaneFrame = sectionFrameCost("durable_lane_context");
+  const durableLaneFrame = sectionFrameCost(
+    "durable_lane_context",
+    firstSectionAdmitted,
+  );
   const durableLaneServingChars =
     wholePackBudget === null
       ? Number.POSITIVE_INFINITY
@@ -314,6 +325,9 @@ export async function buildAgentContextPackPayload(
           serializedLength(durableLaneSection) -
           durableLaneFrame,
       );
+      // durable_lane_context is last in priority, so this only keeps the
+      // first-member invariant honest; no later section frames after it.
+      firstSectionAdmitted = false;
       if (fitted.truncated) {
         wholePackTruncation.push({
           source: "durable_lane_context",
@@ -327,6 +341,7 @@ export async function buildAgentContextPackPayload(
       0,
       remainingChars - serializedLength(durableLaneSection) - durableLaneFrame,
     );
+    firstSectionAdmitted = false;
   }
 
   // Reconcile the durable-lane budget's content_chars_used to the content that

@@ -292,12 +292,19 @@ runtime-available sections today; sections added by later issues (for example
 **Serialized section accounting.** The budget bounds the *serialized* size of the
 emitted `sections` object — `JSON.stringify(payload.sections)` — not merely the
 summed per-section content bodies. The enclosing `{}` of the `sections` object is
-reserved once, and each retained section additionally charges its own framing
-(its quoted key plus one delimiter) against the running budget. Item-bearing
-sections (`working_set`, `recovery`) and the durable-lane section are each fitted
-by their full serialized length, so per-item wrappers, ids, lane metadata, event
-wrappers, and citation ids all count against the whole-pack budget rather than
-being allowed to overshoot it.
+reserved once, and each retained section additionally charges its own object
+framing against the running budget. That framing is position-aware, matching how
+JSON writes object members (`{"a":…,"b":…}`): the **first** admitted section
+charges only its quoted key plus the colon (`"key":`), and each **subsequent**
+admitted section additionally charges the one leading comma that separates it from
+the previous member. "First" tracks actual admission, so a starved-out or omitted
+candidate never consumes the comma-free first-member slot — the next admitted
+section still frames as the first. (Charging a comma for the first member would
+overcount one character and could falsely truncate content sitting on the exact
+boundary.) Item-bearing sections (`working_set`, `recovery`) and the durable-lane
+section are each fitted by their full serialized length, so per-item wrappers,
+ids, lane metadata, event wrappers, and citation ids all count against the
+whole-pack budget rather than being allowed to overshoot it.
 
 **Recency-preserving trim.** Both stores order items oldest-first, and store
 trimming removes the oldest (index 0), so the newest highest-value items live at
