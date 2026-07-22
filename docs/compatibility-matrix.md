@@ -18,8 +18,8 @@ declarations to it, and the deploy job cannot run without that gate passing.
 | Client surface | Runtime it serves | Minimum | Supported range | Enforced where |
 |---|---|---|---|---|
 | `openbrain-memory` (Python) | Claude direct provider (Development `_ob` adapter), Hermes Python runtime | 0.1.8 | `>=0.1.8 <1.0.0` | `get_contract` manifest + client `validate_required_memory_contract`; server `X-OB-Contract` tripwire |
-| `mcp2cli` | Codex durable memory (hosted daemon ct216), cc boxes, generated skills | 0.3.6 | `>=0.3.6 <1.0.0` | `get_contract` manifest; `X-OB-Contract` header forwarding on MCP paths |
-| `rtech-hermes-runtime` | Hermes live agents (Nagatha/Bilby/Skippy) | 0.1.0 | `>=0.1.0 <1.0.0` | `get_contract` manifest; fleet pins per `docs/downstream-rollout.md` |
+| `mcp2cli` | Codex durable memory (hosted daemon), cc boxes, generated skills | 0.3.6 | `>=0.3.6 <1.0.0` | `get_contract` manifest; `X-OB-Contract` header forwarding is expected from mcp2cli ≥0.3.6 (owned by the mcp2cli repo; verified live against core01 2026-07-21) |
+| `rtech-hermes-runtime` | Hermes live agents (inventory owned by the rtech-hermes repo) | 0.1.0 | `>=0.1.0 <1.0.0` | `get_contract` manifest; fleet pins per `docs/downstream-rollout.md` |
 
 Codex note: Codex is not itself a versioned Open Brain client. It reaches Open
 Brain through `mcp2cli`, which is the versioned, range-checked surface above.
@@ -44,8 +44,10 @@ From `contracts/memory/parity-manifest.json` (fixture-backed, CI-gated by
 
 The 12 fixtures in `contracts/memory/` are the runtime-neutral behavioral spec
 for both columns; `python/openbrain-memory/tests/test_contract_fixtures.py` is
-the Python fixture runner. The TS column flips to implemented via #312's
-fixture runner under `clients/ts/`.
+the Python fixture runner. The `(#312)` annotations and the `clients/ts/`
+landing path are doc-only forward references (the manifest records only
+`pending`; `contracts/parity-paths.txt` pre-wires `clients/ts/`) — update this
+page if #312 is re-scoped.
 
 ## Upgrade and deprecation policy
 
@@ -53,8 +55,10 @@ fixture runner under `clients/ts/`.
   validate on `get_contract` before lifecycle operations, and the rollout order
   in `docs/downstream-rollout.md` (steps 3-7) is the required fleet sequence.
 - `min_client_versions` only rises in a PR that also updates the parity
-  fixtures (`contract-declaration` fixture pins the live version), so CI fails
-  on any one-sided bump.
+  fixtures: the contract-declaration fixture pins `schema_hash`, and
+  `min_client_versions` is inside the hashed payload (only
+  `realtime_transport` is excluded from `schema_hash`), so any one-sided bump
+  changes the hash and fails CI.
 - Deprecating a client version = raising its minimum in `src/contract.ts`.
   There is no silent window: older clients fail contract validation loudly at
   session start, and the server logs drifted `X-OB-Contract` declarations.

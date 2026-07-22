@@ -18,30 +18,33 @@ old FIFO-eviction behavior).
 |---|---|---|---|
 | Distilled content size | 16 KiB (UTF-8 bytes) | `ValueError` before any transport call; nothing persisted | `_runtime_validation.py` `MAX_DISTILLED_CONTENT_BYTES` |
 | CLI JSON input | 64 KiB | Input rejected, error receipt, no partial parse | `cli.py` `MAX_JSON_INPUT_BYTES` |
-| Spool line cap | 1000 records | `SpoolFullError`; spool file byte-for-byte unchanged; caller receipt degrades (write reported non-durable) instead of silently evicting | `spool.py` `JsonlSpool(max_lines=1000)` |
-| Spool byte cap | 1,000,000 bytes | Same `SpoolFullError` backpressure; oversize single batch is `ValueError` | `spool.py` `JsonlSpool(max_bytes=1_000_000)` |
+| Spool line cap | 1000 records | `SpoolFullError` (a `ValueError` subclass); spool file byte-for-byte unchanged; caller receipt degrades (write reported non-durable) instead of silently evicting | `spool.py` `JsonlSpool(max_lines=1000)` |
+| Spool byte cap | 1,000,000 bytes | Same `SpoolFullError` backpressure at saturation; a single batch that can never fit raises plain `ValueError` | `spool.py` `JsonlSpool(max_bytes=1_000_000)` |
 | Spool payload redaction | always | Payloads pass `redact_value` before disk persistence | `spool.py` `_record_line` |
 | Replay concurrency | 1 (serialized) | Drain runs under the runtime operation lock on healthy operations only; failed/foreign/poison units are retained in place, never dropped | `runtime.py` `_drain_spool` (#309, #314) |
 | Queue observability | content-free | `SpoolStatus`: pending count, oldest/newest timestamps, per-operation counts, corrupted-line count — no payloads | `spool.py` `SpoolStatus` |
 
-Degraded-state ladder for a write when the provider is unhealthy:
-`SAVED` (direct) → `SPOOLED` (durable locally, replayed automatically on the
-next healthy operation) → `LOST` (spool saturated or unavailable; loudly
-reported in the receipt, never silent). Recovery is automatic: #309 auto-drain
-fires on every healthy direct recall and saved write; #314 replays units under
-their parked exact scope with namespace provenance.
+Write outcomes (`ReceiptStatus`, `runtime.py`): `SAVED` (direct write
+succeeded) → `SPOOLED` (durable locally, replayed automatically on the next
+healthy operation) → `FALLBACK` (delivered via a configured fallback route) →
+`FAILED`/`LOST` (loudly reported in the receipt, never silent; `LOST` includes
+spool-saturated). `DIRECT` is the recall-success status, not a write status.
+Recovery is automatic: #309 auto-drain fires on every healthy direct recall
+and saved write; #314 replays units under their parked exact scope with
+namespace provenance.
 
 ## Server (Bun/TypeScript)
 
 | Limit | Value | At-limit behavior | Source |
 |---|---|---|---|
-| Audit retention | 366 days max | Clamped; retention beyond cap rejected | `src/audit-log.ts` `MAX_RETENTION_DAYS` |
-| Audit write timeout | 5000 ms | Write abandoned; audit is fail-open by documented design on LAN-local infra (facts-only rows, no payloads) | `src/audit-log.ts` `MAX_WRITE_TIMEOUT_MS` |
-| Audit in-flight writes | 4 | Additional audit writes dropped while saturated (fail-open, intentional) | `src/audit-log.ts` `MAX_IN_FLIGHT_AUDIT_WRITES` |
+| Audit retention | configurable 1–366 days, default 30 | Out-of-range or non-numeric env values silently fall back to the default (30) — never clamped, never rejected; same fallback semantics for all audit config bounds | `src/audit-log.ts` `readBoundedInt`, `MAX_RETENTION_DAYS` |
+| Audit write timeout | default 1000 ms, configurable 50–5000 ms | Write abandoned at the configured timeout; out-of-range env falls back to 1000 ms; audit is fail-open by documented design on LAN-local infra (facts-only rows, no payloads) | `src/audit-log.ts` `DEFAULT_WRITE_TIMEOUT_MS`, `MAX_WRITE_TIMEOUT_MS` |
+| Audit in-flight writes | 4 | Audit writes are skipped while 4 are in flight **or whenever the DB pool has any waiters** — drops can occur below the cap under pool pressure (fail-open, intentional) | `src/audit-log.ts` `MAX_IN_FLIGHT_AUDIT_WRITES` |
 | Recovery WAL TTL | 24 h | Expired entries dropped from recovery view | `src/realtime/recovery-wal.ts` `DEFAULT_RECOVERY_WAL_BUDGET.ttl_ms` |
 | Recovery WAL sessions | 128 | Bounded; oldest-session eviction within the recovery (non-authoritative) view only | `recovery-wal.ts` `max_sessions` |
 | Recovery WAL items | 50/session, 2048 global | Bounded as above | `recovery-wal.ts` `max_items_per_session`, `max_global_items` |
-| Recovery WAL content | 8000 content / 2000 metadata / 1000 preview chars | Truncated at ingest | `recovery-wal.ts` budget fields |
+| Recovery WAL content | 8000 content / 2000 metadata chars | Oversize item **rejected at ingest** (`content_too_large` / `metadata_too_large`) — nothing stored | `recovery-wal.ts` append validation |
+| Recovery WAL preview | 1000 chars | Truncated (only the preview truncates; content/metadata reject) | `recovery-wal.ts` `max_preview_chars` |
 
 The recovery WAL is a bounded convenience view over durable lane data — its
 evictions never delete authoritative rows, so its caps are not a durability
