@@ -189,7 +189,7 @@ export function createRestRouter(deps: RestDeps): Router {
     const isNew = rows[0].is_new as boolean;
 
     if (isNew) {
-      backgroundExtract(deps.pool, "thoughts", entryId, content, tags ?? []);
+      backgroundExtract(deps.pool, "thoughts", entryId, ns, content, tags ?? []);
     }
 
     res
@@ -259,6 +259,7 @@ export function createRestRouter(deps: RestDeps): Router {
         deps.pool,
         "decisions",
         entryId,
+        ns,
         textToEmbed,
         tags ?? [],
       );
