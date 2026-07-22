@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "fixture_id": "open-brain-live-recall-v1",
+  "description": "Sealed synthetic corpus for the live recall gate. All content is invented for evaluation only and carries no real memory, secret, or token. Primary-role entries are seeded and read under a per-run throwaway namespace; negative-role entries are seeded into a sibling namespace the query token cannot read and must never surface. Grades: 2 = directly on-topic, 1 = partially relevant, 0 = declared distractor.",
+  "corpus": [
+    {
+      "id": "grommet-torque-spec",
+      "table": "thoughts",
+      "namespace_role": "primary",
+      "content": "The zephyr grommet assembly must be torqued to forty-two newton meters using the calibrated torque wrench before the flange cap is fitted.",
+      "tags": ["zephyr", "grommet", "torque", "assembly"]
+    },
+    {
+      "id": "grommet-coating-note",
+      "table": "thoughts",
+      "namespace_role": "primary",
+      "content": "Zephyr grommets receive a matte anodized coating so the assembly resists salt corrosion during coastal deployment.",
+      "tags": ["zephyr", "grommet", "coating", "corrosion"]
+    },
+    {
+      "id": "flange-cap-decision",
+      "table": "decisions",
+      "namespace_role": "primary",
+      "content": "We standardized on the hex flange cap for every zephyr grommet assembly because the square cap sheared under vibration load.",
+      "tags": ["zephyr", "flange", "cap", "vibration"]
+    },
+    {
+      "id": "quokka-migration-window",
+      "table": "decisions",
+      "namespace_role": "primary",
+      "content": "The quokka ledger migration runs only inside the Tuesday maintenance window so the reconciliation batch never overlaps the nightly export.",
+      "tags": ["quokka", "ledger", "migration", "maintenance"]
+    },
+    {
+      "id": "quokka-rollback-plan",
+      "table": "thoughts",
+      "namespace_role": "primary",
+      "content": "If the quokka ledger migration fails midway the rollback restores the pre-window snapshot and replays the reconciliation batch from the checkpoint.",
+      "tags": ["quokka", "ledger", "rollback", "snapshot"]
+    },
+    {
+      "id": "solstice-cache-policy",
+      "table": "thoughts",
+      "namespace_role": "primary",
+      "content": "The solstice cache evicts entries after ninety seconds so a stale tariff lookup can never dominate the pricing response.",
+      "tags": ["solstice", "cache", "eviction", "pricing"]
+    },
+    {
+      "id": "distractor-torque-unrelated",
+      "table": "thoughts",
+      "namespace_role": "primary",
+      "content": "The barista torque test measures how much force the espresso tamper applies and has nothing to do with the zephyr grommet program.",
+      "tags": ["barista", "espresso", "tamper", "torque"]
+    },
+    {
+      "id": "distractor-migration-unrelated",
+      "table": "thoughts",
+      "namespace_role": "primary",
+      "content": "The seasonal bird migration study tracks quokka-shaped decoys across the estuary and is unrelated to any ledger system.",
+      "tags": ["estuary", "decoy", "migration", "study"]
+    },
+    {
+      "id": "negative-zephyr-secret-plan",
+      "table": "decisions",
+      "namespace_role": "negative",
+      "content": "Confidential competitor sourcing plan for zephyr grommet torque assemblies that lives in a private namespace the eval query token cannot read.",
+      "tags": ["zephyr", "grommet", "torque", "confidential"]
+    },
+    {
+      "id": "negative-quokka-secret-ledger",
+      "table": "thoughts",
+      "namespace_role": "negative",
+      "content": "Private quokka ledger migration credentials note that belongs to a namespace outside the eval token's read scope and must never be recalled.",
+      "tags": ["quokka", "ledger", "migration", "private"]
+    }
+  ],
+  "probes": [
+    {
+      "id": "probe-grommet-torque",
+      "query": "How much torque does the zephyr grommet assembly need and what cap is used?",
+      "relevant": [
+        { "id": "grommet-torque-spec", "grade": 2 },
+        { "id": "flange-cap-decision", "grade": 2 },
+        { "id": "grommet-coating-note", "grade": 1 }
+      ],
+      "forbidden_ids": ["negative-zephyr-secret-plan"]
+    },
+    {
+      "id": "probe-quokka-migration",
+      "query": "When does the quokka ledger migration run and how is it rolled back?",
+      "relevant": [
+        { "id": "quokka-migration-window", "grade": 2 },
+        { "id": "quokka-rollback-plan", "grade": 2 }
+      ],
+      "forbidden_ids": ["negative-quokka-secret-ledger"]
+    },
+    {
+      "id": "probe-solstice-cache",
+      "query": "What is the solstice cache eviction policy for tariff pricing lookups?",
+      "relevant": [
+        { "id": "solstice-cache-policy", "grade": 2 }
+      ],
+      "forbidden_ids": []
+    }
+  ]
+}
