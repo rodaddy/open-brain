@@ -24,6 +24,13 @@ _CAFE_COMPOSED = "café"  # 'e-acute' precomposed (NFC)
 _CAFE_DECOMPOSED = "cafe" + _COMBINING_ACUTE  # 'e' + combining acute (NFD)
 _MOSKVA = "Москва"  # Cyrillic "Москва"
 _NIHONGO = "日本語"  # CJK "日本語"
+# German sharp-s: an uppercase form whose casefold expands where lower() does not.
+# "STRASSE".casefold() == "straße".casefold() == "strasse", but
+# "straße".lower() == "straße" (unchanged). This is the canonical case where
+# casefold and lower diverge, so it pins the dedupe/normalized-key contract to
+# casefold specifically.
+_STRASSE_UPPER = "STRASSE"
+_STRASSE_SHARP = "straße"  # 'stra' + U+00DF (ß) + 'e'
 
 
 class _RecordingClient:
@@ -174,6 +181,49 @@ def test_cyrillic_and_cjk_survive() -> None:
     assert _MOSKVA.casefold() in result.concepts
     # CJK has no case; the token passes the >=3 code-point concept threshold.
     assert _NIHONGO in result.concepts
+
+
+def test_casefold_not_lower_folds_expanding_sharp_s() -> None:
+    # Regression: the normalized dedupe key MUST use casefold, not lower.
+    # "STRASSE" and "straße" are the same word; casefold expands both to
+    # "strasse", so they dedupe to ONE concept key. A lower()-based key would
+    # leave "straße" un-expanded ("straße" != "strasse"), so the two spellings
+    # would survive as TWO distinct concept keys -- this test fails on that
+    # mutant. Both spellings are >=3 chars, separator-free (concepts, not
+    # entities), non-stopword, and non-digit, so nothing else can drop them.
+    assert _STRASSE_UPPER.casefold() == _STRASSE_SHARP.casefold() == "strasse"
+    assert _STRASSE_SHARP.lower() != "strasse"  # lower() would NOT fold ß
+
+    result = extract_turn_concepts(f"Rico noted {_STRASSE_UPPER} and {_STRASSE_SHARP}")
+    # Exactly one casefolded key, in composed/expanded form -- no ß survives.
+    assert result.concepts.count("strasse") == 1
+    assert _STRASSE_SHARP not in result.concepts
+    assert _STRASSE_UPPER.lower() not in [c for c in result.concepts if c != "strasse"]
+
+
+def test_derived_query_folds_sharp_s_verbatim_original_key_appended() -> None:
+    # The documented derived-query contract under an expanding casefold: the
+    # original query stays verbatim and first, and the single normalized recall
+    # key ("strasse") -- which is not a verbatim token of a query spelled with
+    # "STRASSE"/"straße" -- is appended exactly once. A lower()-based key would
+    # dedupe to two keys and could append a bare-ß fragment, breaking both the
+    # single-append bound and the "clean normalized key" guarantee.
+    query = f"Rico noted {_STRASSE_UPPER} and {_STRASSE_SHARP} today"
+    concepts = extract_turn_concepts(query)
+    derived = _derive_recall_query(query, concepts)
+
+    # Original preserved verbatim and first; recall key appended after it.
+    assert derived.startswith(query + " ")
+    assert query in derived
+    suffix = derived[len(query) :]
+    assert suffix.count("strasse") == 1
+    # The un-expanded sharp-s spelling never leaks into the appended keys.
+    assert _STRASSE_SHARP not in suffix
+    # Every appended fragment is a clean, re-extractable key (no garbage).
+    for appended in suffix.split():
+        assert extract_turn_concepts(appended).keys, (
+            f"appended fragment {appended!r} is not a clean extractable key"
+        )
 
 
 def test_normalization_equivalence_composed_and_decomposed() -> None:
