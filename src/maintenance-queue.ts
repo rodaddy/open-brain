@@ -441,30 +441,46 @@ export class MaintenanceQueue implements MaintenanceQueuePort {
     const now = input.now ?? new Date();
     const errorCategory =
       input.category ?? safeMaintenanceErrorCategory(input.error);
-    const nextRunAfter = new Date(
-      now.getTime() + maintenanceBackoffMs(input.job),
-    );
+    // The terminal decision and the retry schedule are derived from the durable
+    // row, never from the caller-supplied `input.job` retry fields. A registered
+    // handler receives the same job object it is failing and could mutate
+    // maxAttempts/backoff before throwing; deriving the transition from
+    // `input.job.maxAttempts`/`backoffBaseMs`/`backoffMaxMs` would let that
+    // mutation override the persisted policy and bypass the terminal bound.
+    // `attempts`, `max_attempts`, `backoff_base_ms`, and `backoff_max_ms` below
+    // are the row's own columns; `input.job` is used only for the lease-token
+    // guard (id + lease_token), which claimDueJobs minted and no handler owns.
+    //
+    // The SQL backoff mirrors maintenanceBackoffMs() exactly: the first retry
+    // (attempts = 1) uses backoff_base_ms, the exponent is (attempts - 1)
+    // clamped to [0, 30], and the result is capped at backoff_max_ms. attempts
+    // is bounded [0, 25] and the exponent [0, 30], so 2 ^ exponent stays within
+    // numeric range with no overflow.
     const failed = await this.pool.query<MaintenanceJobRow>(
       `UPDATE maintenance_jobs
-          SET state = CASE WHEN attempts >= $3 THEN 'dead_letter' ELSE 'queued' END,
-              run_after = CASE WHEN attempts >= $3 THEN run_after ELSE $4::timestamptz END,
+          SET state = CASE WHEN attempts >= max_attempts
+                           THEN 'dead_letter' ELSE 'queued' END,
+              run_after = CASE WHEN attempts >= max_attempts
+                               THEN run_after
+                               ELSE $3::timestamptz + (
+                                 LEAST(
+                                   backoff_base_ms::numeric
+                                     * (2 ^ LEAST(GREATEST(attempts - 1, 0), 30)),
+                                   backoff_max_ms::numeric
+                                 ) * interval '1 millisecond'
+                               ) END,
               lease_token = NULL,
               lease_until = NULL,
-              last_error_category = $5,
-              terminal_at = CASE WHEN attempts >= $3 THEN $6::timestamptz ELSE NULL END,
-              dead_lettered_at = CASE WHEN attempts >= $3 THEN $6::timestamptz ELSE NULL END
+              last_error_category = $4,
+              terminal_at = CASE WHEN attempts >= max_attempts
+                                 THEN $3::timestamptz ELSE NULL END,
+              dead_lettered_at = CASE WHEN attempts >= max_attempts
+                                      THEN $3::timestamptz ELSE NULL END
         WHERE id = $1
           AND state = 'running'
           AND lease_token = $2::uuid
        RETURNING ${JOB_COLUMNS}`,
-      [
-        input.job.id,
-        input.job.leaseToken,
-        input.job.maxAttempts,
-        nextRunAfter,
-        errorCategory,
-        now,
-      ],
+      [input.job.id, input.job.leaseToken, now, errorCategory],
     );
     return failed.rows[0] ? toJob(failed.rows[0]) : null;
   }
@@ -581,32 +597,44 @@ export class MaintenanceQueueRunner {
 
   private async execute(job: MaintenanceJob): Promise<void> {
     const startedAt = this.now().getTime();
-    const handler = this.options.handlers.get(job.kind);
+    // Capture the claim identity before the handler runs. The handler receives
+    // the same `job` object and may mutate it (deliberately or accidentally);
+    // the lease-token guard and completion call shape must bind to the id/kind
+    // and lease token claimDueJobs actually minted, not to whatever the handler
+    // left on the object. The durable row remains the retry-policy authority
+    // (see MaintenanceQueue.fail); this only keeps the row we address stable.
+    const claim = {
+      id: job.id,
+      kind: job.kind,
+      leaseToken: job.leaseToken,
+    };
+    const handler = this.options.handlers.get(claim.kind);
     if (!handler) {
-      await this.fail(job, "unsupported_job_kind", startedAt);
+      await this.fail(job, claim, "unsupported_job_kind", startedAt);
       return;
     }
 
     try {
       await handler(job);
       const completed = await this.options.queue.complete(
-        job.id,
-        job.leaseToken!,
+        claim.id,
+        claim.leaseToken!,
         this.now(),
       );
       this.options.logger.info("maintenance queue job completed", {
-        job_id: job.id,
-        job_kind: job.kind,
+        job_id: claim.id,
+        job_kind: claim.kind,
         status: completed ? "succeeded" : "stale_lease",
         duration_ms: this.now().getTime() - startedAt,
       });
     } catch (error) {
-      await this.fail(job, error, startedAt);
+      await this.fail(job, claim, error, startedAt);
     }
   }
 
   private async fail(
     job: MaintenanceJob,
+    claim: { id: string; kind: string; leaseToken: string | null },
     error: unknown,
     startedAt: number,
   ): Promise<void> {
@@ -615,23 +643,27 @@ export class MaintenanceQueueRunner {
         ? "unsupported_job_kind"
         : safeMaintenanceErrorCategory(error);
     try {
+      // Pass the immutable claim id/leaseToken as the lease-token guard so a
+      // handler that mutated job.id/job.leaseToken cannot redirect the fail
+      // UPDATE to a different row or make it a no-op. The retry-policy fields
+      // this UPDATE consults come from the durable row, not this object.
       const failed = await this.options.queue.fail({
-        job,
+        job: { ...job, id: claim.id, leaseToken: claim.leaseToken },
         error,
         category: errorCategory,
         now: this.now(),
       });
       this.options.logger.warn("maintenance queue job failed", {
-        job_id: job.id,
-        job_kind: job.kind,
+        job_id: claim.id,
+        job_kind: claim.kind,
         status: failed?.state ?? "stale_lease",
         error_category: errorCategory,
         duration_ms: this.now().getTime() - startedAt,
       });
     } catch (recordingError) {
       this.options.logger.error("maintenance queue failure recording failed", {
-        job_id: job.id,
-        job_kind: job.kind,
+        job_id: claim.id,
+        job_kind: claim.kind,
         error_category: safeMaintenanceErrorCategory(recordingError),
         duration_ms: this.now().getTime() - startedAt,
       });

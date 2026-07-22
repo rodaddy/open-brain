@@ -7,7 +7,12 @@ import {
   it,
 } from "bun:test";
 import type { Pool } from "pg";
-import { MaintenanceQueue } from "../../maintenance-queue.ts";
+import {
+  MaintenanceQueue,
+  MaintenanceQueueRunner,
+  type MaintenanceJob,
+  type MaintenanceJobHandler,
+} from "../../maintenance-queue.ts";
 
 const DB_URL = process.env.OPENBRAIN_TEST_DATABASE_URL;
 const dbDescribe = DB_URL ? describe : describe.skip;
@@ -328,5 +333,164 @@ dbDescribe("026 maintenance queue (live Postgres)", () => {
     });
     expect(afterRestart?.id).toBe(recovered.id);
     expect(afterRestart?.attempts).toBe(2);
+  });
+
+  // Drive the real runner over the real queue with a handler that mutates the
+  // job's durable retry fields before throwing. The terminal decision and the
+  // retry schedule must come from the persisted row, not the mutated object, so
+  // no caller-supplied retry-policy value can decide the transition.
+  function runnerFor(
+    handlers: Record<string, MaintenanceJobHandler>,
+    fixedNow: Date,
+  ): MaintenanceQueueRunner {
+    return new MaintenanceQueueRunner({
+      queue: queue(),
+      handlers: new Map(Object.entries(handlers)),
+      logger: {
+        info: () => undefined,
+        warn: () => undefined,
+        error: () => undefined,
+      },
+      concurrency: 1,
+      leaseMs: 60_000,
+      now: () => fixedNow,
+    });
+  }
+
+  it("dead-letters at attempt 1 when a handler inflates maxAttempts/backoff before throwing", async () => {
+    // maxAttempts=1: exactly one execution is allowed, so a first failure must
+    // dead-letter. The handler tries to buy itself more attempts and a larger
+    // backoff by mutating the job it was handed. The durable row's max_attempts
+    // must still terminate it — the caller cannot override the terminal bound.
+    const created = await enqueue({
+      idempotencyKey: "mutating-terminal",
+      retry: { maxAttempts: 1, backoffBaseMs: 1_000, backoffMaxMs: 4_000 },
+    });
+    const fixedNow = new Date("2026-07-22T16:00:00.000Z");
+    let observed: MaintenanceJob | undefined;
+    const runner = runnerFor(
+      {
+        "maintenance.test": async (job) => {
+          observed = job;
+          // Handler mutates the in-memory retry policy, then throws.
+          job.maxAttempts = 99;
+          job.backoffBaseMs = 1;
+          job.backoffMaxMs = 1;
+          job.attempts = 0;
+          throw new Error("handler blew up after tampering with retry policy");
+        },
+      },
+      fixedNow,
+    );
+    await runner.runOnce();
+    await runner.stop();
+
+    expect(observed?.id).toBe(created.id);
+    const { rows } = await pool.query<{
+      state: string;
+      attempts: number;
+      max_attempts: number;
+      run_after: string;
+      lease_token: string | null;
+      terminal_at: string | null;
+      dead_lettered_at: string | null;
+    }>(
+      `SELECT state, attempts, max_attempts, run_after, lease_token,
+              terminal_at, dead_lettered_at
+         FROM maintenance_jobs WHERE id = $1`,
+      [created.id],
+    );
+    const row = rows[0];
+    // Persisted policy wins: one execution consumed, terminal at attempt 1.
+    expect(row?.state).toBe("dead_letter");
+    expect(row?.attempts).toBe(1);
+    expect(row?.max_attempts).toBe(1);
+    expect(row?.lease_token).toBeNull();
+    expect(row?.terminal_at).not.toBeNull();
+    expect(row?.dead_lettered_at).not.toBeNull();
+
+    // No requeue: the terminated row is never claimed again.
+    const later = await queue().claimDueJobs({
+      limit: 1,
+      now: new Date(fixedNow.getTime() + 60_000),
+      leaseMs: 1_000,
+    });
+    expect(later).toHaveLength(0);
+  });
+
+  it("schedules the next retry from the persisted backoff, not a handler-mutated one", async () => {
+    // maxAttempts=3 leaves budget after the first failure, so the row requeues.
+    // The handler shrinks backoff_base/max on the object before throwing; the
+    // persisted schedule (base 2000ms at attempt 1) must be used, so run_after
+    // is now + 2000ms, not now + 1ms.
+    const created = await enqueue({
+      idempotencyKey: "mutating-schedule",
+      retry: { maxAttempts: 3, backoffBaseMs: 2_000, backoffMaxMs: 8_000 },
+    });
+    const fixedNow = new Date("2026-07-22T17:00:00.000Z");
+    const runner = runnerFor(
+      {
+        "maintenance.test": async (job) => {
+          job.backoffBaseMs = 1;
+          job.backoffMaxMs = 1;
+          job.maxAttempts = 25;
+          throw new Error("handler blew up after shrinking its own backoff");
+        },
+      },
+      fixedNow,
+    );
+    await runner.runOnce();
+    await runner.stop();
+
+    const { rows } = await pool.query<{
+      state: string;
+      attempts: number;
+      run_after: string;
+    }>(
+      "SELECT state, attempts, run_after FROM maintenance_jobs WHERE id = $1",
+      [created.id],
+    );
+    const row = rows[0];
+    expect(row?.state).toBe("queued");
+    expect(row?.attempts).toBe(1);
+    // First retry uses the persisted base (2000ms), capped exponent semantics
+    // unchanged. A handler-mutated 1ms backoff would have scheduled +1ms.
+    expect(new Date(row!.run_after).toISOString()).toBe(
+      "2026-07-22T17:00:02.000Z",
+    );
+  });
+
+  it("fail() derives the transition from the durable row when the passed job is tampered", async () => {
+    // Direct-queue proof independent of the runner: claim, then tamper the
+    // returned job's retry fields exactly as a handler holding the reference
+    // could, and fail it. maxAttempts=1 on the row must still dead-letter.
+    const created = await enqueue({
+      idempotencyKey: "direct-tamper",
+      retry: { maxAttempts: 1, backoffBaseMs: 1_000, backoffMaxMs: 4_000 },
+    });
+    const now = new Date("2026-07-22T18:00:00.000Z");
+    const [claimed] = await queue().claimDueJobs({
+      limit: 1,
+      now,
+      leaseMs: 60_000,
+    });
+    expect(claimed?.attempts).toBe(1);
+    // Tamper every retry-policy field the old code read from the object.
+    claimed!.maxAttempts = 99;
+    claimed!.attempts = 0;
+    claimed!.backoffBaseMs = 1;
+    claimed!.backoffMaxMs = 1;
+    const result = await queue().fail({
+      job: claimed!,
+      error: new Error("still private"),
+      now,
+    });
+    expect(result?.state).toBe("dead_letter");
+    const { rows } = await pool.query<{ state: string; attempts: number }>(
+      "SELECT state, attempts FROM maintenance_jobs WHERE id = $1",
+      [created.id],
+    );
+    expect(rows[0]?.state).toBe("dead_letter");
+    expect(rows[0]?.attempts).toBe(1);
   });
 });
