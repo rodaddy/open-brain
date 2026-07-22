@@ -64,9 +64,21 @@ from .spool import (
     SpoolUnitRetained,
     replay_records,
 )
+from .turn_concepts import (
+    DEFAULT_MAX_KEYS,
+    TurnConcepts,
+    extract_turn_concepts,
+    normalized_tokens,
+    verbatim_tokens,
+)
 
 __all__ = [
     "AgentMemory",
+    "DEFAULT_MAX_KEYS",
+    "TurnConcepts",
+    "extract_turn_concepts",
+    "normalized_tokens",
+    "verbatim_tokens",
     "DreamAction",
     "DreamClient",
     "DreamEngine",
