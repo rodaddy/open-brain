@@ -5,12 +5,16 @@ brain does not: the exact text of *this* turn. This module turns that text into 
 small, normalized, bounded set of salient **entity** and **concept** keys that can
 drive recall for the turn.
 
+This is currently a standalone Python client convenience. A TypeScript
+counterpart is future work tracked for the later client phase; no existing
+TypeScript module implements this pass today, so nothing here mirrors an
+existing counterpart.
+
 Design constraints (issue #332, REFLEX-1):
 
 - Deterministic and zero-network. The same input always yields the same keys; no
   model, provider, or network call participates. This is a pure tokenizer +
-  normalizer over the caller-supplied string, mirroring the deterministic
-  structural pass in the TypeScript ``src/extraction.ts``.
+  normalizer over the caller-supplied string.
 - Bounded. A configured maximum caps the number of emitted keys per category, so
   adversarial or verbose input cannot inflate an unbounded key list.
 - Normalized and stable. Equivalent spellings collapse to one key
@@ -28,6 +32,7 @@ Design constraints (issue #332, REFLEX-1):
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, field
 
 # Default cap on emitted keys *per category* (entities, concepts). Applied AFTER
@@ -45,16 +50,25 @@ MIN_CONCEPT_LENGTH = 3
 # unbroken token cannot smuggle a large substring of the turn into a key.
 MAX_KEY_LENGTH = 64
 
-# Tokenizer: a "word" is a run of letters/digits, optionally joined internally by
-# a single ``-``, ``_``, ``.`` or ``/`` (so ``open-brain``, ``agent_memory``,
-# ``v1.2`` and ``src/extraction`` survive as one token). Anchored to word
-# boundaries; punctuation between tokens is a separator, never part of a key.
-_TOKEN_RE = re.compile(r"[A-Za-z0-9]+(?:[-_./][A-Za-z0-9]+)*")
+# Tokenizer: a "word" is a run of Unicode letters/digits, optionally joined
+# internally by a single ``-``, ``_``, ``.`` or ``/`` (so ``open-brain``,
+# ``agent_memory``, ``v1.2`` and ``src/tokenizer`` survive as one token). The
+# atom class ``[^\W_]`` is the Unicode word set minus underscore -- i.e. any
+# letter or digit in any script (accented Latin ``café``, Cyrillic ``Москва``,
+# CJK ``日本語``, digits) -- so tokenization is not ASCII-only. ``re.UNICODE`` is
+# the default for ``str`` patterns; it is set explicitly here as documentation.
+#
+# Because every atom must contain at least one letter/digit, a run of pure
+# punctuation, a bare separator, or a standalone combining mark can never form a
+# token: punctuation-only and combining-mark garbage keys are impossible by
+# construction. Anchored to letter/digit runs; anything between tokens is a
+# separator, never part of a key.
+_TOKEN_RE = re.compile(r"[^\W_]+(?:[-_./][^\W_]+)*", re.UNICODE)
 
 # Entity classification is casing-independent so equivalent inputs are stable: a
 # token is an entity ONLY when it carries an internal separator (``-``, ``_``,
 # ``.`` or ``/``) -- the identifier-shaped tokens like ``open-brain``,
-# ``agent_memory``, ``v1.2`` or ``src/extraction``. Leading/mixed *case* is
+# ``agent_memory``, ``v1.2`` or ``src/tokenizer``. Leading/mixed *case* is
 # deliberately NOT used as an entity signal: "API"/"api" or sentence-initial
 # capitalization would otherwise flip a key's category between equivalent turns,
 # which breaks normalization stability. Ordinary words -- capitalized or not --
@@ -116,7 +130,7 @@ class TurnConcepts:
     """Bounded normalized keys extracted from one turn.
 
     ``entities`` are identifier-shaped keys -- tokens carrying an internal
-    separator (``open-brain``, ``agent_memory``, ``src/extraction``, ``v1.2``).
+    separator (``open-brain``, ``agent_memory``, ``src/tokenizer``, ``v1.2``).
     ``concepts`` are ordinary content keys. Both are lowercased (so equivalent
     inputs are stable regardless of casing), order-preserving, internally
     deduped, and capped at ``max_keys``.
@@ -160,40 +174,64 @@ class TurnConcepts:
         }
 
 
-def normalized_tokens(text: str) -> frozenset[str]:
-    """Return the set of normalized (bounded, casefolded) tokens in ``text``.
-
-    Uses the exact same tokenizer and normalization as ``extract_turn_concepts``
-    so a caller can test whether an extracted key's *normalized* form appears in
-    another string without re-implementing tokenization and risking a mismatch.
-    Deterministic and zero-network.
-    """
-    if not text:
-        return frozenset()
-    return frozenset(
-        _bound_key(match.group(0)).casefold() for match in _TOKEN_RE.finditer(text)
-    )
-
-
 def verbatim_tokens(text: str) -> frozenset[str]:
-    """Return the set of raw (bounded, case-preserving) tokens in ``text``.
+    """Return the set of raw (Unicode-normalized, bounded) tokens in ``text``.
 
-    Same tokenizer and length bound as ``extract_turn_concepts`` but WITHOUT
-    casefolding. A caller uses this to decide whether an extracted key -- which
-    is always lowercased -- is already represented in the original text in its
-    exact normalized form. A query token like ``API`` or ``Open-Brain`` is not a
-    verbatim match for the key ``api``/``open-brain``, so the normalized key is a
-    genuinely new representation worth surfacing. Deterministic and zero-network.
+    Same tokenizer, Unicode NFC normalization, and length bound as
+    ``extract_turn_concepts`` but WITHOUT casefolding. A caller uses this to
+    decide whether an extracted key -- which is always casefolded -- is already
+    represented in the original text in its exact normalized form. A query token
+    like ``API`` or ``Open-Brain`` is not a verbatim match for the key
+    ``api``/``open-brain``, so the normalized key is a genuinely new
+    representation worth surfacing. NFC normalization means an accented token
+    written in decomposed form (``e`` + combining acute) matches the same token
+    written composed (``é``). Deterministic and zero-network.
     """
     if not text:
         return frozenset()
     return frozenset(
-        _bound_key(match.group(0)) for match in _TOKEN_RE.finditer(text)
+        _verbatim_key(match.group(0)) for match in _TOKEN_RE.finditer(_nfc(text))
     )
+
+
+def _nfc(text: str) -> str:
+    """NFC-normalize the whole input BEFORE tokenizing.
+
+    Combining marks (U+0301 and friends) are not word characters, so the
+    tokenizer would otherwise break an atom at a base letter and silently drop a
+    trailing combining mark -- turning decomposed ``cafe`` + combining acute into
+    the key ``cafe`` instead of ``café``. Composing the text first means the
+    accented letter is a single word code point that survives tokenization, so
+    composed and decomposed spellings yield the same key and no bare combining
+    mark can leak into a key or a derived recall fragment.
+    """
+    return unicodedata.normalize("NFC", text)
 
 
 def _is_entity_token(token: str) -> bool:
     return bool(_SEPARATOR_RE.search(token))
+
+
+def _verbatim_key(token: str) -> str:
+    """Length-bound a token, preserving its casing.
+
+    The input text is already NFC-normalized before tokenization (see ``_nfc``),
+    so bounding is all that remains; it is applied last so ``MAX_KEY_LENGTH``
+    counts code points of the emitted key.
+    """
+    return _bound_key(token)
+
+
+def _casefold_key(token: str) -> str:
+    """Casefold and length-bound a token.
+
+    The input text is already NFC-normalized before tokenization (see ``_nfc``),
+    giving stable caseless equivalence across composed and decomposed accented
+    spellings. Casefold output is re-composed to NFC so casing folds that emit
+    combining sequences still yield a stable, composed key; bounding is applied
+    last so ``MAX_KEY_LENGTH`` counts code points of the final normalized key.
+    """
+    return _bound_key(unicodedata.normalize("NFC", token.casefold()))
 
 
 def _bound_key(token: str) -> str:
@@ -232,8 +270,8 @@ def extract_turn_concepts(
     dropped_concepts = 0
 
     if text:
-        for match in _TOKEN_RE.finditer(text):
-            lowered = _bound_key(match.group(0)).casefold()
+        for match in _TOKEN_RE.finditer(_nfc(text)):
+            lowered = _casefold_key(match.group(0))
             if _is_entity_token(lowered):
                 # Entity (identifier-shaped) keys are lowercased and deduped, so
                 # "Open-Brain" and "open-brain" collapse to one stable key.

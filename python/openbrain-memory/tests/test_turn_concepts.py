@@ -12,10 +12,18 @@ from openbrain_memory import (
     AgentMemory,
     TurnConcepts,
     extract_turn_concepts,
-    normalized_tokens,
-    verbatim_tokens,
 )
 from openbrain_memory.agent import DERIVED_QUERY_MAX_KEYS, _derive_recall_query
+from openbrain_memory.turn_concepts import verbatim_tokens
+
+# Combining acute / grave, written as escapes so the test source stays ASCII and
+# unambiguous about exactly which code points are fed to the extractor.
+_COMBINING_ACUTE = "́"
+_COMBINING_GRAVE = "̀"
+_CAFE_COMPOSED = "café"  # 'e-acute' precomposed (NFC)
+_CAFE_DECOMPOSED = "cafe" + _COMBINING_ACUTE  # 'e' + combining acute (NFD)
+_MOSKVA = "Москва"  # Cyrillic "Москва"
+_NIHONGO = "日本語"  # CJK "日本語"
 
 
 class _RecordingClient:
@@ -143,6 +151,82 @@ def test_pure_digit_tokens_are_dropped_from_concepts() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Unicode-aware tokenization
+# ---------------------------------------------------------------------------
+
+
+def test_accented_latin_survives_as_concept_keys() -> None:
+    # Accented Latin letters are word characters; the tokens survive intact and
+    # are casefolded, not stripped down to ASCII.
+    result = extract_turn_concepts(
+        f"Le {_CAFE_COMPOSED} and my résumé were both ready"
+    )
+    assert _CAFE_COMPOSED in result.concepts
+    assert "résumé" in result.concepts
+
+
+def test_cyrillic_and_cjk_survive() -> None:
+    # Cyrillic and CJK scripts tokenize as ordinary content words.
+    result = extract_turn_concepts(
+        f"The city {_MOSKVA} and the language {_NIHONGO} matter"
+    )
+    # Cyrillic is casefolded (Москва -> москва).
+    assert _MOSKVA.casefold() in result.concepts
+    # CJK has no case; the token passes the >=3 code-point concept threshold.
+    assert _NIHONGO in result.concepts
+
+
+def test_normalization_equivalence_composed_and_decomposed() -> None:
+    # "cafe" precomposed (U+00E9) and decomposed (e + U+0301 combining acute) are
+    # the same word; NFC normalization collapses them to one stable key.
+    assert _CAFE_COMPOSED != _CAFE_DECOMPOSED  # genuinely distinct code points
+    composed = extract_turn_concepts(f"{_CAFE_COMPOSED} recall")
+    decomposed = extract_turn_concepts(f"{_CAFE_DECOMPOSED} recall")
+    assert composed.concepts == decomposed.concepts
+    # The key is stored in composed (NFC) form regardless of input spelling.
+    assert _CAFE_COMPOSED in composed.concepts
+    for key in composed.concepts + decomposed.concepts:
+        assert _COMBINING_ACUTE not in key  # no bare combining mark in any key
+
+
+def test_punctuation_and_combining_marks_do_not_form_keys() -> None:
+    # A run of pure punctuation, bare separators, and standalone combining marks
+    # (with no base letter) can never become a token, so no garbage key appears.
+    text = f"--- ... /// ??? {_COMBINING_ACUTE}{_COMBINING_GRAVE} !!! recall"
+    result = extract_turn_concepts(text)
+    assert result.entities == ()
+    # Only the real word survives.
+    assert result.concepts == ("recall",)
+
+
+def test_mixed_separator_identifier_is_one_entity_key() -> None:
+    # A single identifier joining atoms with several of the allowed separators
+    # tokenizes as ONE key, not fragments; the whole path survives intact.
+    result = extract_turn_concepts("see src/openbrain_memory/turn-concepts.v2 now")
+    assert "src/openbrain_memory/turn-concepts.v2" in result.entities
+    # It is not split into mangled sub-fragments.
+    assert "src" not in result.concepts
+    assert "turn" not in result.concepts
+
+
+def test_large_input_is_linear_and_bounded() -> None:
+    # A large, varied Unicode input must extract in linear time and stay bounded
+    # by max_keys per category -- no pathological backtracking or unbounded keys.
+    chunk = (
+        f"{_CAFE_COMPOSED} {_MOSKVA} {_NIHONGO} open-brain agent_memory "
+        "recall boundary namespace "
+    )
+    big = chunk * 5000  # ~300k characters
+    result = extract_turn_concepts(big)
+    assert len(result.entities) <= DEFAULT_MAX_KEYS
+    assert len(result.concepts) <= DEFAULT_MAX_KEYS
+    # Distinct salient tokens are still surfaced from the repeated content.
+    assert _CAFE_COMPOSED in result.concepts
+    assert _MOSKVA.casefold() in result.concepts
+    assert "open-brain" in result.entities
+
+
+# ---------------------------------------------------------------------------
 # Content-free telemetry
 # ---------------------------------------------------------------------------
 
@@ -227,6 +311,24 @@ def test_derived_query_does_not_bloat_on_repeats_or_case() -> None:
     assert suffix.count("api") == 1
 
 
+def test_derived_query_appends_clean_unicode_keys_not_mangled_fragments() -> None:
+    # A cased accented token and a cased Cyrillic token surface normalized keys
+    # not present verbatim; the derived query appends exactly those clean tokens
+    # (NFC, casefolded) and never a bare combining mark or punctuation fragment.
+    query = f"About {_CAFE_COMPOSED.capitalize()} in {_MOSKVA}!!!"
+    concepts = extract_turn_concepts(query)
+    derived = _derive_recall_query(query, concepts)
+    suffix = derived[len(query) :]
+    assert _CAFE_COMPOSED in suffix
+    assert _MOSKVA.casefold() in suffix
+    # No stray combining mark or separator/punctuation-only fragment is appended.
+    assert _COMBINING_ACUTE not in suffix
+    for appended in suffix.split():
+        assert extract_turn_concepts(appended).keys, (
+            f"appended fragment {appended!r} is not a clean extractable key"
+        )
+
+
 def test_derived_query_appended_keys_are_bounded() -> None:
     # Many distinct cased tokens all yield novel normalized keys; the number of
     # keys folded onto the original query is capped at DERIVED_QUERY_MAX_KEYS.
@@ -258,19 +360,20 @@ def test_derived_query_empty_original_falls_back_to_keys() -> None:
     assert "reticulate" in derived
 
 
-def test_token_helpers_agree_up_to_casing() -> None:
+def test_verbatim_tokens_preserve_casing_and_normalize_unicode() -> None:
     text = "The API drives Open-Brain Recall"
     verbatim = verbatim_tokens(text)
-    normalized = normalized_tokens(text)
-    # Verbatim preserves the source casing; normalized casefolds each token.
+    # Verbatim preserves the exact source casing of each token.
     assert "API" in verbatim
     assert "Open-Brain" in verbatim
-    assert "api" in normalized
-    assert "open-brain" in normalized
-    # Same token set once casefolded, so the only difference is case.
-    assert {token.casefold() for token in verbatim} == normalized
+    assert "The" in verbatim
+    # A casefolded extracted key ("api") is NOT a verbatim token of a cased query,
+    # which is exactly why _derive_recall_query treats it as a new representation.
+    assert "api" not in verbatim
+    assert "open-brain" not in verbatim
     assert verbatim_tokens("") == frozenset()
-    assert normalized_tokens("") == frozenset()
+    # NFC normalization: a decomposed accented token matches the composed form.
+    assert verbatim_tokens(_CAFE_DECOMPOSED) == frozenset({_CAFE_COMPOSED})
 
 
 # ---------------------------------------------------------------------------
