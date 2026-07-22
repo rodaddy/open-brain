@@ -260,16 +260,41 @@ export function mergeTags(
   return merged;
 }
 
+/**
+ * The candidate tags a metadata extraction contributes: topics as-is and each
+ * person prefixed with "person:". Order-preserving and internally deduped
+ * (case-insensitive, first spelling wins), so the caller can hand this list to
+ * the atomic SQL merge below without re-deriving the prefix convention. This is
+ * the extraction-side half of what mergeTags did in JS; the DB-side half (union
+ * against the LIVE row) now happens in SQL so a concurrent tag write is not
+ * clobbered.
+ */
+export function extractedTagCandidates(
+  extracted: ExtractedMetadata | null,
+): string[] {
+  if (!extracted) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const push = (tag: string): void => {
+    const key = tag.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(tag);
+  };
+  for (const topic of extracted.topics) push(topic);
+  for (const person of extracted.people) push(`person:${person}`);
+  return out;
+}
+
 // Tables eligible for background metadata enrichment. Explicit allowlist so the
 // interpolated UPDATE target below can never be an arbitrary caller-supplied
-// string; callers pass one of these literals.
-const EXTRACTION_TABLES = new Set([
-  "thoughts",
-  "decisions",
-  "relationships",
-  "projects",
-  "sessions",
-]);
+// string; callers pass one of these literals. Scoped to the ONLY tables that
+// both carry an extracted_metadata column (migration 003) and are actual
+// callers of backgroundExtract (log-thought, log-decision, and their rest-api
+// twins). relationships/projects/sessions were never callers and have no
+// extracted_metadata column, so enriching them would UPDATE a nonexistent
+// column; keeping them out of the allowlist closes that latent footgun.
+const EXTRACTION_TABLES = new Set(["thoughts", "decisions"]);
 
 /**
  * Fire-and-forget background extraction: fetch metadata, merge tags, update DB.
@@ -285,6 +310,16 @@ const EXTRACTION_TABLES = new Set([
  * keeps background enrichment from touching rows a caller archived in the
  * interim. `namespace` here is the physical namespace already resolved and
  * authorized by the caller at write time.
+ *
+ * Tag merge is atomic against the LIVE row: the extracted topic/person tags are
+ * unioned onto the row's CURRENT tags column inside SQL, not onto the
+ * (possibly stale) snapshot captured at write time. Between the durable write
+ * and this fire-and-forget enrichment, a concurrent same-content upsert (or any
+ * other tag write) may have merged newer tags into the row; computing the final
+ * tags in JS from the old snapshot would clobber those. The SQL keeps every tag
+ * already present (case-insensitive) and appends only genuinely-new extracted
+ * candidates, so no current tag can be lost. `existingTags` is retained only as
+ * a param signature nicety for callers; it is not used to compute the result.
  */
 export function backgroundExtract(
   pool: pg.Pool,
@@ -292,7 +327,7 @@ export function backgroundExtract(
   entryId: string,
   namespace: string,
   text: string,
-  existingTags: string[],
+  _existingTags: string[],
 ): void {
   if (!EXTRACTION_TABLES.has(table)) {
     logger.warn("extraction_table_rejected", { table, id: entryId });
@@ -301,12 +336,33 @@ export function backgroundExtract(
   extractMetadata(text)
     .then((extracted) => {
       if (!extracted) return;
-      const enrichedTags = mergeTags(existingTags, extracted);
+      const candidates = extractedTagCandidates(extracted);
+      // Merge the extracted tag candidates against the row's LIVE tags column,
+      // not a stale JS snapshot. Existing tags are preserved in order; a
+      // candidate is appended only when no live tag already matches it
+      // case-insensitively (lower(tag)). This is a lossless union: any tag a
+      // concurrent writer added between the write and this enrichment survives.
       pool
         .query(
-          `UPDATE ${table} SET tags = $1, extracted_metadata = $2
-           WHERE id = $3 AND namespace = $4 AND archived_at IS NULL`,
-          [enrichedTags, JSON.stringify(extracted), entryId, namespace],
+          `UPDATE ${table} AS t
+             SET tags = (
+               SELECT COALESCE(array_agg(tag ORDER BY ord), '{}'::text[])
+               FROM (
+                 SELECT tag, ord, lower(tag) AS lkey
+                   FROM unnest(t.tags) WITH ORDINALITY AS live(tag, ord)
+                 UNION ALL
+                 SELECT tag,
+                        COALESCE(array_length(t.tags, 1), 0) + ord,
+                        lower(tag) AS lkey
+                   FROM unnest($1::text[]) WITH ORDINALITY AS cand(tag, ord)
+                   WHERE lower(tag) <> ALL (
+                     SELECT lower(x) FROM unnest(t.tags) AS existing(x)
+                   )
+               ) merged
+             ),
+             extracted_metadata = $2
+           WHERE t.id = $3 AND t.namespace = $4 AND t.archived_at IS NULL`,
+          [candidates, JSON.stringify(extracted), entryId, namespace],
         )
         .catch((err: unknown) => {
           logger.warn("extraction_update_error", {

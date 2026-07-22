@@ -185,7 +185,13 @@ export interface SourceRegistryResult<T> {
     | "approval_denied"
     | "not_found"
     | "stale_revision"
-    | "conflict";
+    | "conflict"
+    // Retirement is terminal: an update that would mutate a retired source
+    // (e.g. reactivate it to active/paused) is refused with this code. It is
+    // only ever returned for a row that provably exists in the caller's OWN
+    // authorized namespace, so it never becomes a cross-namespace existence
+    // oracle -- a foreign/missing id still resolves to not_found.
+    | "retired";
   reason?: string;
   data?: T;
 }
@@ -484,24 +490,43 @@ export async function updateSource(
   // Always advance the revision on a successful update.
   sets.push("revision = revision + 1");
 
+  // Retirement is terminal: never let an update touch a retired row, so it can
+  // never be moved back to active/paused or otherwise mutated into ingestion
+  // eligibility. The lifecycle_state <> 'retired' guard makes a retired row miss
+  // the UPDATE; the 0-row branch below then reports it as `retired` (within the
+  // caller's own namespace only) rather than silently reactivating it.
   const { rows } = await pool.query(
     `UPDATE ${SOURCE_REGISTRY_TABLE}
        SET ${sets.join(", ")}
      WHERE id = $1 AND namespace = $2 AND revision = $3
+       AND lifecycle_state <> 'retired'
      RETURNING ${SELECT_COLUMNS}`,
     params,
   );
 
   if (rows.length === 0) {
-    // Distinguish stale revision from missing (deleted / wrong namespace):
-    // check existence WITHIN the caller's own namespace only.
+    // Distinguish retired / stale revision / missing (deleted or wrong
+    // namespace). The existence probe reads lifecycle_state and revision WITHIN
+    // the caller's own authorized namespace only, so a foreign or absent id is
+    // indistinguishable from a genuinely missing one (no cross-namespace
+    // existence oracle).
     const { rows: existing } = await pool.query(
-      `SELECT revision FROM ${SOURCE_REGISTRY_TABLE}
+      `SELECT revision, lifecycle_state FROM ${SOURCE_REGISTRY_TABLE}
        WHERE id = $1 AND namespace = $2`,
       [input.id, namespace],
     );
     if (existing.length === 0) {
       return { ok: false, code: "not_found", reason: "source not found" };
+    }
+    if (existing[0].lifecycle_state === "retired") {
+      // Terminal state: the row exists and is retired. Report it as retired
+      // regardless of the supplied expected_revision, so a caller cannot probe
+      // for staleness on a retired row.
+      return {
+        ok: false,
+        code: "retired",
+        reason: "source is retired and cannot be modified",
+      };
     }
     return {
       ok: false,
@@ -538,11 +563,26 @@ export async function removeSource(
      RETURNING id`,
     [id, namespace],
   );
-  if (rows.length === 0) {
-    return { ok: false, code: "not_found", reason: "source not found" };
+  if (rows.length > 0) {
+    logger.info("source_registry_remove", { namespace, id });
+    return { ok: true, data: { id: rows[0].id as string } };
   }
-  logger.info("source_registry_remove", { namespace, id });
-  return { ok: true, data: { id: rows[0].id as string } };
+  // The retiring UPDATE matched nothing: either the row is already retired (a
+  // repeat remove) or it does not exist in this namespace. Remove is idempotent,
+  // so a repeat remove of an already-retired row is a truthful success/no-op --
+  // it must NOT bump the revision again. Probe existence WITHIN the caller's own
+  // authorized namespace only, so a missing or wrong-namespace id stays
+  // not_found and is indistinguishable from a genuinely absent one.
+  const { rows: existing } = await pool.query(
+    `SELECT id FROM ${SOURCE_REGISTRY_TABLE}
+     WHERE id = $1 AND namespace = $2 AND lifecycle_state = 'retired'`,
+    [id, namespace],
+  );
+  if (existing.length > 0) {
+    // Already retired: no-op success, revision untouched.
+    return { ok: true, data: { id: existing[0].id as string } };
+  }
+  return { ok: false, code: "not_found", reason: "source not found" };
 }
 
 // Ingestion gate: a source location is eligible ONLY if a registry entry for

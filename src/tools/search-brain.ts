@@ -107,7 +107,8 @@ type RelationalQuery = {
 
 function parseRelationalQuery(query: string): RelationalQuery | undefined {
   const trimmed = query.trim();
-  const outgoingDepends = RELATIONAL_OUTGOING_DEPENDS_PATTERN.exec(trimmed)?.groups;
+  const outgoingDepends =
+    RELATIONAL_OUTGOING_DEPENDS_PATTERN.exec(trimmed)?.groups;
   if (outgoingDepends?.seed) {
     const seed = outgoingDepends.seed.trim().replace(/\s+/g, " ");
     if (!seed) return undefined;
@@ -117,7 +118,8 @@ function parseRelationalQuery(query: string): RelationalQuery | undefined {
       direction: "outgoing",
     };
   }
-  const outgoingBlocked = RELATIONAL_OUTGOING_BLOCKED_PATTERN.exec(trimmed)?.groups;
+  const outgoingBlocked =
+    RELATIONAL_OUTGOING_BLOCKED_PATTERN.exec(trimmed)?.groups;
   if (outgoingBlocked?.seed) {
     const seed = outgoingBlocked.seed.trim().replace(/\s+/g, " ");
     if (!seed) return undefined;
@@ -132,7 +134,8 @@ function parseRelationalQuery(query: string): RelationalQuery | undefined {
   if (!groups?.relation || !groups.seed) return undefined;
   const relation = RELATION_ALIASES[groups.relation.toLowerCase()];
   const seed = groups.seed.trim().replace(/\s+/g, " ");
-  if (!relation || !seed || !LINK_RELATIONS.includes(relation)) return undefined;
+  if (!relation || !seed || !LINK_RELATIONS.includes(relation))
+    return undefined;
   return { relation, seed, direction: "incoming" };
 }
 
@@ -228,6 +231,17 @@ export interface SearchRow {
     people?: string[];
     action_items?: string[];
     dates?: string[];
+    // Deterministic, content-free structural keys the write-time extractor
+    // (src/extraction.ts) now emits alongside the semantic fields: a bounded
+    // human-facing title and a digest envelope of the exact source text
+    // (content_hash / hash_version / byte_length). Projected here so the public
+    // search row type matches what is actually stored in extracted_metadata.
+    // content_hash/hash_version/byte_length are content-free (an opaque digest,
+    // an algorithm tag, and a length), never the source body.
+    title?: string;
+    content_hash?: string;
+    hash_version?: string;
+    byte_length?: number;
   };
 }
 
@@ -270,7 +284,8 @@ function withSourceRefs(rows: SearchRow[]): SearchRow[] {
       namespace: row.namespace,
       created_by: row.created_by,
       created_at: toIsoString(row.created_at),
-      last_updated_at: toIsoString(row.updated_at) ?? toIsoString(row.created_at),
+      last_updated_at:
+        toIsoString(row.updated_at) ?? toIsoString(row.created_at),
       label: (row.content_preview ?? "").slice(0, 120),
       preview: (row.content_preview ?? "").slice(0, 300),
     },
@@ -707,7 +722,9 @@ async function relationalGraphSearch(
       : ` AND e.namespace = ${paramRef(namespaceParamIndex)}`
     : "";
   const hydrationSql = targetTables
-    .map((table) => buildRelationalHydrationSelect(table, parsed.direction, tier))
+    .map((table) =>
+      buildRelationalHydrationSelect(table, parsed.direction, tier),
+    )
     .join("\nUNION ALL\n");
 
   try {
@@ -953,8 +970,7 @@ export function trackUsage(
         });
       } else {
         const firstError = results.find((r) => r.status === "rejected") as
-          | PromiseRejectedResult
-          | undefined;
+          PromiseRejectedResult | undefined;
         logger.warn("search_tracking_error", {
           error:
             firstError?.reason instanceof Error
@@ -1428,7 +1444,9 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
         };
       }
       if (sourceScope) {
-        accessibleTables = accessibleTables.filter((table) => table !== "entities");
+        accessibleTables = accessibleTables.filter(
+          (table) => table !== "entities",
+        );
       }
       if (accessibleTables.length === 0) {
         return {
@@ -1453,7 +1471,8 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
       }
       const namespace = namespaceFilterFor(auth, requestedNamespace);
       const shouldUseSharedFallback =
-        requestedNamespace !== undefined && isSharedNamespace(requestedNamespace);
+        requestedNamespace !== undefined &&
+        isSharedNamespace(requestedNamespace);
 
       let rows;
       try {

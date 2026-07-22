@@ -315,8 +315,11 @@ describe("updateSource revision + namespace binding", () => {
   });
 
   it("distinguishes stale_revision from not_found", async () => {
-    // First UPDATE returns 0 rows; existence probe finds the row -> stale.
-    const stale = fakePool([{ rows: [] }, { rows: [{ revision: 5 }] }]);
+    // First UPDATE returns 0 rows; existence probe finds a live row -> stale.
+    const stale = fakePool([
+      { rows: [] },
+      { rows: [{ revision: 5, lifecycle_state: "active" }] },
+    ]);
     const staleRes = await updateSource(stale.pool, agentAuth, {
       id: "11111111-1111-1111-1111-111111111111",
       expected_revision: 1,
@@ -334,6 +337,44 @@ describe("updateSource revision + namespace binding", () => {
       title: "x",
     });
     expect(missingRes.code).toBe("not_found");
+  });
+
+  it("refuses to mutate a retired source into eligibility (permanent retirement)", async () => {
+    // The UPDATE guards on lifecycle_state <> 'retired', so a retired row misses
+    // it (0 rows); the existence probe finds the row retired -> `retired`, never
+    // a silent reactivation. This proves an attempted move back to active/paused
+    // cannot mutate a retired row.
+    const { pool, calls } = fakePool([
+      { rows: [] },
+      { rows: [{ revision: 9, lifecycle_state: "retired" }] },
+    ]);
+    const res = await updateSource(pool, agentAuth, {
+      id: "11111111-1111-1111-1111-111111111111",
+      expected_revision: 9,
+      lifecycle_state: "active",
+    });
+    expect(res.ok).toBe(false);
+    expect(res.code).toBe("retired");
+    // The retirement guard is in the UPDATE WHERE clause.
+    expect(calls[0]!.sql).toContain("lifecycle_state <> 'retired'");
+    // The existence probe stays within the caller's own namespace (no
+    // cross-namespace oracle).
+    expect(calls[1]!.sql).toContain("namespace = $2");
+  });
+
+  it("reports retired regardless of expected_revision, so a retired row is not a staleness oracle", async () => {
+    // Even with a matching-looking revision, a retired row is terminal: the
+    // caller learns it is retired, not stale.
+    const { pool } = fakePool([
+      { rows: [] },
+      { rows: [{ revision: 1, lifecycle_state: "retired" }] },
+    ]);
+    const res = await updateSource(pool, agentAuth, {
+      id: "11111111-1111-1111-1111-111111111111",
+      expected_revision: 1,
+      lifecycle_state: "paused",
+    });
+    expect(res.code).toBe("retired");
   });
 
   it("refuses a self-approval from an unauthorized role", async () => {
@@ -419,6 +460,48 @@ describe("removeSource", () => {
       "11111111-1111-1111-1111-111111111111",
       "alice",
     ]);
+    // A single-shot retire needs no idempotency probe.
+    expect(calls.length).toBe(1);
+  });
+
+  it("is idempotent: repeating remove on an already-retired row is a no-op success without bumping revision", async () => {
+    // The retiring UPDATE matches nothing (row already retired). A follow-up
+    // probe finds the retired row -> truthful success. The retiring UPDATE (the
+    // only revision-bumping statement) matched 0 rows, so no revision bump ran.
+    const { pool, calls } = fakePool([
+      { rows: [] },
+      { rows: [{ id: "11111111-1111-1111-1111-111111111111" }] },
+    ]);
+    const res = await removeSource(
+      pool,
+      agentAuth,
+      "11111111-1111-1111-1111-111111111111",
+    );
+    expect(res.ok).toBe(true);
+    expect(res.data?.id).toBe("11111111-1111-1111-1111-111111111111");
+    // First (revision-bumping) statement retires only non-retired rows.
+    expect(calls[0]!.sql).toContain("lifecycle_state <> 'retired'");
+    expect(calls[0]!.sql).toContain("revision = revision + 1");
+    // The idempotency probe is a plain SELECT with no revision mutation.
+    expect(calls[1]!.sql).toContain("lifecycle_state = 'retired'");
+    expect(calls[1]!.sql).not.toContain("revision = revision + 1");
+    expect(calls[1]!.sql).toContain("id = $1 AND namespace = $2");
+  });
+
+  it("keeps a missing / wrong-namespace id as not_found, indistinguishable from absent", async () => {
+    // Retiring UPDATE matches nothing AND the retired-existence probe is empty:
+    // whether the id is absent or lives in another namespace, the caller sees
+    // the same not_found (no cross-namespace existence oracle).
+    const { pool, calls } = fakePool([{ rows: [] }, { rows: [] }]);
+    const res = await removeSource(
+      pool,
+      agentAuth,
+      "11111111-1111-1111-1111-111111111111",
+    );
+    expect(res.ok).toBe(false);
+    expect(res.code).toBe("not_found");
+    // The probe is namespace-qualified so it cannot confirm a foreign row.
+    expect(calls[1]!.sql).toContain("namespace = $2");
   });
 });
 

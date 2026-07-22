@@ -368,3 +368,46 @@ row's `archived_at` stays NULL and the owning-namespace call succeeds
   with a paired owning-identity success proving the test is not vacuous?
 - Are all roles sharing the guarded branch parameterized, so a future
   role-specific branch cannot silently un-scope one of them?
+
+## [2026-07-22] Fire-and-forget enrichment must merge against the live row, and terminal states must be terminal
+
+**Severity:** MEDIUM
+**Source:** PR #351 / issue #337 review swarm
+**Scope:** `src/extraction.ts` (`backgroundExtract`), `src/source-registry.ts`
+(`updateSource`, `removeSource`), interpolated-table allowlists
+**Status:** fixed-pre-merge
+
+### Pattern
+
+Three adversarial classes surfaced in the source-registry substrate:
+
+1. **Snapshot clobber:** a fire-and-forget background UPDATE that recomputes an
+   array column (tags) in JS from the snapshot captured at write time overwrites
+   whatever a concurrent same-content upsert merged into the row in the interim.
+   Fixed by merging the extracted candidates onto the LIVE column in SQL
+   (`unnest(t.tags)` union, append-only for genuinely-new case-insensitive
+   keys), keeping `id + auth-derived namespace + archived_at IS NULL`. `$1`
+   carries only the candidates, never the pre-merged full array.
+2. **Over-broad interpolated-table allowlist:** `EXTRACTION_TABLES` listed
+   tables (relationships/projects/sessions) that were never callers and lack the
+   `extracted_metadata` column, so enrichment there would UPDATE a nonexistent
+   column. Narrow an interpolation allowlist to the exact current callers with
+   the required column, and add a test rejecting a formerly-listed table.
+3. **Non-terminal "terminal" state:** a soft-delete (retired) that `updateSource`
+   could still move back to active/paused re-opens ingestion eligibility. Guard
+   the UPDATE with `lifecycle_state <> 'retired'` and, on 0 rows, distinguish
+   `retired` from `stale_revision`/`not_found` using an existence probe scoped to
+   the caller's OWN namespace (no cross-namespace oracle). `remove_source` is
+   idempotent: a repeat on an already-retired row is a no-op success with no
+   revision bump; a missing/wrong-namespace id stays `not_found`.
+
+### Review Questions
+
+- Does any background/enrichment UPDATE that rebuilds an array/JSON column read
+  the LIVE column, or does it overwrite from a stale in-process snapshot?
+- Is every interpolated-table allowlist scoped to tables that both have the
+  target column and are actual current callers, with a rejection test?
+- Is every "terminal"/soft-delete state actually terminal — can an update path
+  move it back into an eligible/active state?
+- Do retired/idempotent no-op results avoid becoming a staleness or existence
+  oracle across namespaces, and does the no-op path skip the revision bump?

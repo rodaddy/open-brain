@@ -247,11 +247,47 @@ describe("backgroundExtract namespace + archived binding", () => {
     expect(calls.length).toBe(1);
     const { sql, params } = calls[0]!;
     expect(sql).toContain(
-      "WHERE id = $3 AND namespace = $4 AND archived_at IS NULL",
+      "WHERE t.id = $3 AND t.namespace = $4 AND t.archived_at IS NULL",
     );
-    // params: [enrichedTags, extractedJson, entryId, namespace]
+    // params: [tagCandidates, extractedJson, entryId, namespace]
     expect(params[2]).toBe("entry-1");
     expect(params[3]).toBe("alice");
+  });
+
+  it("merges extracted tags against the LIVE row, not a stale JS snapshot (issue #337 clobber)", async () => {
+    // Regression: the enrichment UPDATE must union the extracted tag candidates
+    // onto the row's CURRENT tags column in SQL. If it instead rebuilt the whole
+    // tags array in JS from the snapshot passed at write time, a tag a
+    // concurrent same-content upsert merged in the interim would be clobbered.
+    // We prove: (a) $1 carries ONLY the extracted candidates, not a
+    // pre-merged full array, and (b) the SQL reads the live column
+    // (unnest(t.tags)) rather than overwriting it with a bound param.
+    setMetadataProvider({
+      extract: () => ({ topics: ["Alpha"], people: ["Bob"] }),
+    });
+    const { pool, calls, done } = capturingPool();
+    // A concurrent writer already added "concurrent-tag" to the row; the stale
+    // snapshot handed to backgroundExtract does NOT include it.
+    backgroundExtract(
+      pool,
+      "thoughts",
+      "entry-1",
+      "alice",
+      "a long enough text body to extract from",
+      ["stale-snapshot-tag"],
+    );
+    await done;
+    const { sql, params } = calls[0]!;
+    // $1 is exactly the extracted candidates (topics + person:-prefixed), in
+    // order -- NOT a merge that folded in the stale snapshot tag.
+    expect(params[0]).toEqual(["Alpha", "person:Bob"]);
+    expect(params[0]).not.toContain("stale-snapshot-tag");
+    // The UPDATE reads the live tags column and appends only novel candidates.
+    expect(sql).toContain("unnest(t.tags)");
+    expect(sql).toContain("SET tags = (");
+    // It never overwrites tags with a bound array param ($1 stays the candidate
+    // source, not the whole new tags value).
+    expect(sql).not.toContain("SET tags = $1");
   });
 
   it("rejects a non-allowlisted table and never queries", async () => {
@@ -266,6 +302,25 @@ describe("backgroundExtract namespace + archived binding", () => {
       [],
     );
     // Rejected synchronously before any extraction/query.
+    expect(calls.length).toBe(0);
+  });
+
+  it("rejects a formerly-over-broad allowlist table (relationships) and never queries", async () => {
+    // Regression for issue #337 P3: EXTRACTION_TABLES was narrowed to the only
+    // tables that both have an extracted_metadata column and actually call
+    // backgroundExtract (thoughts, decisions). A table that used to be in the
+    // allowlist but was never a caller and has no extracted_metadata column
+    // (relationships) must now be rejected before any query.
+    setMetadataProvider({ extract: () => ({ topics: ["x"] }) });
+    const { pool, calls } = capturingPool();
+    backgroundExtract(
+      pool,
+      "relationships",
+      "entry-1",
+      "alice",
+      "a long enough text body to extract from",
+      [],
+    );
     expect(calls.length).toBe(0);
   });
 });
