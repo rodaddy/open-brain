@@ -39,7 +39,7 @@ const LABEL_TO_TABLE: Record<string, Table> = Object.fromEntries(
 
 export type SearchMode = "hybrid" | "vector" | "keyword";
 type NamespaceFilter = string | string[];
-type SearchTable = Table | "entities";
+export type SearchTable = Table | "entities";
 export type { SourceScope };
 
 type ExecuteSearchOptions = {

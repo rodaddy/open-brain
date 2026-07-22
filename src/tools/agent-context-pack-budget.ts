@@ -16,8 +16,10 @@ export const CHARS_PER_TOKEN = 4;
 /**
  * Deterministic whole-pack allocation order, highest value first. working_set
  * is the exact-scope hot active state, recovery is the explicit opt-in
- * interrupted-session trace, and durable_lane_context is the broader recallable
- * lane context. A lower-priority section is only assembled against whatever
+ * interrupted-session trace, durable_lane_context is the broader recallable
+ * lane context, and durable_memory is the query-driven hybrid recall over durable
+ * brain records — the lowest-priority section, allocated last against whatever
+ * budget survives. A lower-priority section is only assembled against whatever
  * pack budget the higher-priority sections leave behind, so one large section
  * cannot starve a higher-value one. This order is stable for identical inputs.
  */
@@ -25,6 +27,7 @@ export const CONTEXT_PACK_SECTION_PRIORITY = [
   "working_set",
   "recovery",
   "durable_lane_context",
+  "durable_memory",
 ] as const;
 
 /** Serialized size, in characters, of a section's content payload. */
@@ -246,4 +249,96 @@ export function fitItemSection<T extends { items: Array<{ id: string }> }>(
     (emptied as Record<keyof T, unknown>)[countKey] = 0;
   }
   return { section: emptied, truncated: true, starved: true };
+}
+
+export type DurableMemoryItem = { citation_id?: unknown; content?: unknown };
+export type DurableMemorySection = {
+  items?: DurableMemoryItem[];
+  item_count?: number;
+};
+
+/**
+ * Sum of durable-memory content-body characters (retained item content) for
+ * reconciling `budget.durable_memory.content_chars_used` to whatever survives
+ * the whole-pack re-fit.
+ */
+export function durableMemoryContentChars(
+  section: DurableMemorySection,
+): number {
+  let total = 0;
+  for (const item of section.items ?? []) {
+    if (typeof item.content === "string") total += item.content.length;
+  }
+  return total;
+}
+
+/**
+ * Fit a ranked item-bearing section (durable_memory) inside a remaining
+ * whole-pack char budget by dropping the LOWEST-ranked items first. Unlike the
+ * recency-ordered stores fit by {@link fitItemSection} (newest at the tail, drop
+ * the front), hybrid-RRF recall orders items highest-relevance-first, so the
+ * lowest-priority items live at the tail. Dropping the tail preserves the
+ * highest-ranked recall under budget pressure, matching the issue's
+ * "oldest/lowest-priority trimming" contract for a relevance-ordered section.
+ *
+ * The section is measured by its serialized length (`JSON.stringify`), so
+ * per-item metadata, ids, and wrappers are counted against the whole-pack
+ * budget. `item_count` is reconciled to the retained items so counters and
+ * citations stay consistent with the emitted content. A section is "starved"
+ * whenever no item body survives (items: []); the caller decides whether to
+ * emit the empty envelope or omit the section to hold the budget.
+ */
+export function fitRankedItemSection<
+  T extends { items: Array<{ citation_id?: unknown }> },
+>(
+  section: T,
+  countKeys: Array<keyof T>,
+  remainingChars: number,
+): { section: T; truncated: boolean; starved: boolean } {
+  if (serializedLength(section) <= remainingChars) {
+    return { section, truncated: false, starved: false };
+  }
+
+  // Drop the lowest-ranked item (last index) one at a time until the section
+  // fits or is emptied, preserving the highest-ranked head items.
+  const kept = [...section.items];
+  while (kept.length > 0) {
+    kept.pop();
+    const candidate = { ...section, items: kept } as T;
+    for (const countKey of countKeys) {
+      (candidate as Record<keyof T, unknown>)[countKey] = kept.length;
+    }
+    if (serializedLength(candidate) <= remainingChars) {
+      return {
+        section: candidate,
+        truncated: true,
+        starved: kept.length === 0,
+      };
+    }
+  }
+
+  const emptied = { ...section, items: [] as T["items"] } as T;
+  for (const countKey of countKeys) {
+    (emptied as Record<keyof T, unknown>)[countKey] = 0;
+  }
+  return { section: emptied, truncated: true, starved: true };
+}
+
+/**
+ * Keep only the citations whose durable-memory items survived the whole-pack
+ * re-fit, so citations never reference dropped records.
+ */
+export function reconcileDurableMemoryCitations(
+  citations: Array<Record<string, unknown>>,
+  keptItems: DurableMemoryItem[],
+): Array<Record<string, unknown>> {
+  const keptCitationIds = new Set(
+    keptItems
+      .map((item) => item.citation_id)
+      .filter((id): id is string => typeof id === "string"),
+  );
+  return citations.filter(
+    (citation) =>
+      typeof citation.id === "string" && keptCitationIds.has(citation.id),
+  );
 }

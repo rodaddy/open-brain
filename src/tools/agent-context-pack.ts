@@ -20,15 +20,20 @@ import {
   CONTEXT_PACK_ENVELOPE_CHAR_RESERVE,
   loadDurableLaneContext,
 } from "./agent-context-pack-durable-lane.ts";
+import { loadDurableMemoryContext } from "./agent-context-pack-durable-memory.ts";
 import {
   CHARS_PER_TOKEN,
   CONTEXT_PACK_SECTION_PRIORITY,
   durableLaneContentChars,
+  durableMemoryContentChars,
   fitDurableLaneSection,
   fitItemSection,
+  fitRankedItemSection,
+  reconcileDurableMemoryCitations,
   sectionFrameCost,
   serializedLength,
   type DurableLaneSection,
+  type DurableMemorySection,
 } from "./agent-context-pack-budget.ts";
 
 export const SECTION_NAMES = [
@@ -148,6 +153,8 @@ export async function buildAgentContextPackPayload(
     (!args.requested_sections || args.requested_sections.includes("recovery"));
   const includeDurableLaneContext =
     args.requested_sections?.includes("durable_lane_context") === true;
+  const includeDurableMemory =
+    args.requested_sections?.includes("durable_memory") === true;
 
   // Total whole-pack char budget. Absent max_tokens => no whole-pack bound, and
   // every section keeps its historical independent per-section behavior.
@@ -364,10 +371,121 @@ export async function buildAgentContextPackPayload(
           : durableLaneContext.budget
       : durableLaneContext?.budget;
 
+  // durable_memory is the lowest-priority section: query-driven hybrid recall
+  // over the caller's readable durable brain records, isolated to the
+  // auth-derived namespace. It is assembled against whatever budget survives the
+  // higher-priority sections, seeded with a content limit and then re-fit against
+  // remainingChars by dropping the lowest-ranked (tail) records so the highest
+  // RRF-ranked recall is preserved under pressure. Counts, citations, and
+  // truncation are reconciled to whatever survives. Without a whole-pack budget
+  // the loader keeps its historical per-section derivation and no re-fit runs.
+  const durableMemoryFrame = sectionFrameCost(
+    "durable_memory",
+    firstSectionAdmitted,
+  );
+  const durableMemoryServingChars =
+    wholePackBudget === null
+      ? Number.POSITIVE_INFINITY
+      : Math.max(0, remainingChars - durableMemoryFrame);
+  const durableMemoryContentLimit =
+    wholePackBudget === null
+      ? undefined
+      : Number.isFinite(durableMemoryServingChars)
+        ? Math.floor(durableMemoryServingChars)
+        : undefined;
+  const durableMemoryContext = includeDurableMemory
+    ? await loadDurableMemoryContext(
+        args,
+        auth,
+        ns,
+        deps,
+        durableMemoryContentLimit,
+      )
+    : null;
+  let durableMemorySection = durableMemoryContext?.section ?? null;
+  let durableMemoryCitations = durableMemorySection
+    ? (durableMemoryContext?.citations ?? [])
+    : [];
+  let durableMemoryStarvedOut = false;
+  if (durableMemorySection && wholePackBudget !== null) {
+    const fitted = fitRankedItemSection(
+      durableMemorySection as {
+        items: Array<{ citation_id?: unknown }>;
+        item_count: number;
+      },
+      ["item_count"],
+      durableMemoryServingChars,
+    );
+    if (
+      fitted.starved &&
+      serializedLength(fitted.section) > durableMemoryServingChars
+    ) {
+      // Even the empty durable-memory envelope overflows the surviving budget:
+      // omit it and drop its citations so the whole pack stays within budget and
+      // no citation references an unemitted section. The starved truncation
+      // marker still signals that the requested section was dropped.
+      durableMemorySection = null;
+      durableMemoryCitations = [];
+      durableMemoryStarvedOut = true;
+      wholePackTruncation.push({
+        source: "durable_memory",
+        reason: "whole_pack_budget",
+        max_chars: wholePackBudget,
+        starved: true,
+      });
+    } else {
+      durableMemorySection = fitted.section;
+      durableMemoryCitations = reconcileDurableMemoryCitations(
+        durableMemoryCitations,
+        (durableMemorySection as DurableMemorySection).items ?? [],
+      );
+      remainingChars = Math.max(
+        0,
+        remainingChars -
+          serializedLength(durableMemorySection) -
+          durableMemoryFrame,
+      );
+      firstSectionAdmitted = false;
+      if (fitted.truncated) {
+        wholePackTruncation.push({
+          source: "durable_memory",
+          reason: "whole_pack_budget",
+          max_chars: wholePackBudget,
+        });
+      }
+    }
+  } else if (durableMemorySection) {
+    remainingChars = Math.max(
+      0,
+      remainingChars -
+        serializedLength(durableMemorySection) -
+        durableMemoryFrame,
+    );
+    firstSectionAdmitted = false;
+  }
+
+  // Reconcile durable_memory content_chars_used to the content that survived the
+  // whole-pack re-fit, mirroring the durable-lane reconciliation. Without a
+  // whole-pack budget the loader's own accounting is authoritative.
+  const durableMemoryBudget =
+    wholePackBudget !== null && durableMemoryContext?.budget
+      ? durableMemorySection
+        ? {
+            ...durableMemoryContext.budget,
+            content_chars_used: durableMemoryContentChars(
+              durableMemorySection as DurableMemorySection,
+            ),
+          }
+        : durableMemoryStarvedOut
+          ? { ...durableMemoryContext.budget, content_chars_used: 0 }
+          : durableMemoryContext.budget
+      : durableMemoryContext?.budget;
+
   const sections: Record<string, unknown> = {};
   if (workingSetSection) sections.working_set = workingSetSection;
   if (recoverySection) sections.recovery = recoverySection;
   if (durableLaneSection) sections.durable_lane_context = durableLaneSection;
+  if (durableMemorySection) sections.durable_memory = durableMemorySection;
 
   return {
     payload: {
@@ -383,10 +501,17 @@ export async function buildAgentContextPackPayload(
           ...(workingSet ? workingSet.warnings.scope_denials : []),
           ...(recovery ? recovery.warnings.scope_denials : []),
           ...(durableLaneContext?.scopeDenials ?? []),
+          ...(durableMemoryContext?.scopeDenials ?? []),
         ],
-        degraded_sources: durableLaneContext?.degradedSources ?? [],
+        degraded_sources: [
+          ...(durableLaneContext?.degradedSources ?? []),
+          ...(durableMemoryContext?.degradedSources ?? []),
+        ],
         truncation: [
           ...(durableLaneSection ? (durableLaneContext?.truncation ?? []) : []),
+          ...(durableMemorySection
+            ? (durableMemoryContext?.truncation ?? [])
+            : []),
           ...wholePackTruncation,
         ],
       },
@@ -407,8 +532,11 @@ export async function buildAgentContextPackPayload(
         ...(durableLaneSection || durableLaneContext
           ? { durable_lane_context: durableLaneBudget }
           : {}),
+        ...(durableMemorySection || durableMemoryContext
+          ? { durable_memory: durableMemoryBudget }
+          : {}),
       },
-      citations: durableCitations,
+      citations: [...durableCitations, ...durableMemoryCitations],
       query: args.query ?? null,
     },
     isError: false,

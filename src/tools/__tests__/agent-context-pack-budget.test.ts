@@ -189,7 +189,12 @@ describe("agent_context_pack whole-pack budget", () => {
       expect(contentChars(payload)).toBeLessThanOrEqual(contentBudget);
       expect(payload.budget.whole_pack).toMatchObject({
         content_char_limit: contentBudget,
-        allocation_order: ["working_set", "recovery", "durable_lane_context"],
+        allocation_order: [
+          "working_set",
+          "recovery",
+          "durable_lane_context",
+          "durable_memory",
+        ],
       });
     } finally {
       await cleanup();
