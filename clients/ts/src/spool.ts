@@ -26,6 +26,7 @@ import {
   closeSync,
   existsSync,
   fsyncSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   openSync,
@@ -835,7 +836,7 @@ export class JsonlSpool {
     this.directorySync(dirname(path));
   }
 
-  /** Execute a short local filesystem transaction with a token-safe lock. */
+  /** Execute a short local filesystem transaction under an ownership lock. */
   private withLock<T>(action: () => T): T {
     const token = this.acquireLock();
     try {
@@ -850,11 +851,14 @@ export class JsonlSpool {
     mkdirSync(dirname(this.lockPath), { recursive: true });
     while (true) {
       const token = crypto.randomUUID();
+      const candidatePath = `${this.lockPath}.${token}.candidate`;
       let fd: number | null = null;
-      let created = false;
+      let acquired = false;
+      let collision: unknown = null;
       try {
-        fd = openSync(this.lockPath, "wx", 0o600);
-        created = true;
+        // Publish only a fully written owner record: the unique candidate is
+        // invisible to contenders until the atomic hard-link succeeds.
+        fd = openSync(candidatePath, "wx", 0o600);
         const owner = Buffer.from(
           JSON.stringify({
             token,
@@ -878,29 +882,34 @@ export class JsonlSpool {
         }
         fsyncSync(fd);
         closeSync(fd);
-        return token;
-      } catch (error) {
+        fd = null;
+        try {
+          linkSync(candidatePath, this.lockPath);
+          acquired = true;
+        } catch (error) {
+          collision = error;
+        }
+      } finally {
         if (fd !== null) {
           try {
             closeSync(fd);
           } catch {
-            // The lock acquisition failed before ownership was established.
+            // The candidate write already failed.
           }
         }
-        if (created) {
-          try {
-            unlinkSync(this.lockPath);
-          } catch {
-            // Stale-lock recovery will safely handle a failed cleanup.
-          }
+        try {
+          unlinkSync(candidatePath);
+        } catch {
+          // Candidate was never created or was already cleaned up.
         }
-        if (!isAlreadyExists(error)) throw error;
-        if (this.recoverDeadOrStaleLock()) continue;
-        if (Date.now() >= deadline) {
-          throw new Error("timed out acquiring spool lock");
-        }
-        waitForLock(LOCK_WAIT_MS);
       }
+      if (acquired) return token;
+      if (!isAlreadyExists(collision)) throw collision;
+      if (this.recoverDeadOrStaleLock()) continue;
+      if (Date.now() >= deadline) {
+        throw new Error("timed out acquiring spool lock");
+      }
+      waitForLock(LOCK_WAIT_MS);
     }
   }
 

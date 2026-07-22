@@ -45,8 +45,9 @@ Block if namespace is accepted as arbitrary metadata without policy checks.
 - Oversized records must not disappear after `append()` returns success.
 - Replay tests must map spooled operations back through fake client/facade calls,
   not only ad-hoc lambdas.
-- PR #319: require cross-process append/replay coverage, token-safe stale-lock
-  recovery, and failed-directory-sync restoration; lock scope ends before dispatch.
+- PR #319: require cross-process append/replay coverage, atomic publication of
+  complete lock-owner metadata, ownership-token checks, and failed-directory-sync
+  restoration; lock scope ends before dispatch.
 
 Block if append success can mean "not actually recoverable."
 

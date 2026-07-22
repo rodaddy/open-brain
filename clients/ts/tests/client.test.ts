@@ -58,6 +58,29 @@ describe("OpenBrainClient header binding", () => {
       expect(request.headers["X-Namespace"]).toBe("bilby");
     }
   });
+
+  it("makes the fixture transport reject server-invalid repo fact enums", async () => {
+    const client = makeClient(new LaneAwareTransport());
+    await expect(
+      client.upsert_repo_fact({
+        metadata: {
+          source_system: "qmd",
+          repo: "rodaddy/open-brain",
+          collection: "open-brain",
+          path: "clients/ts/src/runtime.ts",
+          subject: "fixture validation",
+          fact_type: "not-a-real-fact-type",
+          fact: "The fake must enforce the real nested schema.",
+          source_commit: "386fee2b15b84cc2eb1f4a0aa84d7c023db9b7d2",
+          source_url:
+            "https://github.com/rodaddy/open-brain/blob/386fee2b15b84cc2eb1f4a0aa84d7c023db9b7d2/clients/ts/src/runtime.ts",
+          verified_at: "2026-07-22T00:00:00.000Z",
+          confidence: 1,
+          staleness_policy: "commit_pinned",
+        },
+      }),
+    ).rejects.toBeInstanceOf(OpenBrainToolError);
+  });
 });
 
 describe("FetchTransport bounded streaming", () => {

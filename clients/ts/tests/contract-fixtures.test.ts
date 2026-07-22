@@ -93,17 +93,28 @@ const TS_IMPLEMENTED_CAPABILITIES = new Set(
     .filter((entry) => entry.ts === "implemented")
     .map((entry) => entry.capability),
 );
+const FIXTURE_BY_ID = new Map(
+  ALL_FIXTURES.map((fixture) => [fixture.id, fixture] as const),
+);
 const EXPECTED_TS_FIXTURE_IDS = new Set(
-  ALL_FIXTURES.filter(
-    (fixture) =>
-      fixture.runtime === "ts" ||
-      (fixture.runtime === "both" &&
-        TS_IMPLEMENTED_CAPABILITIES.has(fixture.capability)),
-  ).map((fixture) => fixture.id),
+  Object.entries(PARITY_MANIFEST.expected_fixture_ids).flatMap(
+    ([id, runtime]) => {
+      if (runtime === "ts") return [id];
+      const fixture = FIXTURE_BY_ID.get(id);
+      return runtime === "both" &&
+        fixture !== undefined &&
+        TS_IMPLEMENTED_CAPABILITIES.has(fixture.capability)
+        ? [id]
+        : [];
+    },
+  ),
 );
 
 describe("contract fixture discovery", () => {
   it("matches the manifest's ts-consumable fixture set", () => {
+    expect(new Set(FIXTURE_BY_ID.keys())).toEqual(
+      new Set(Object.keys(PARITY_MANIFEST.expected_fixture_ids)),
+    );
     expect(EXPECTED_TS_FIXTURE_IDS.size).toBeGreaterThan(0);
     expect(new Set(TS_FIXTURES.map((fixture) => fixture.id))).toEqual(
       EXPECTED_TS_FIXTURE_IDS,

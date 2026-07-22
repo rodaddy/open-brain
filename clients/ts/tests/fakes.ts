@@ -1,5 +1,6 @@
 /** Shared typed fakes for the TS client tests (peer of `_runtime_fakes.py`). */
 
+import { repoFactMetadata } from "../../../src/tools/repo-facts.ts";
 import type { Json, Transport, TransportResponse } from "../src/client.ts";
 import {
   CURRENT_CONTRACT_SCHEMA_HASH,
@@ -251,33 +252,7 @@ function nonEmpty(value: unknown): value is string {
 }
 
 function validRepoFactMetadata(value: unknown): boolean {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return false;
-  }
-  const metadata = value as Json;
-  const requiredText = [
-    "repo",
-    "collection",
-    "path",
-    "fact_type",
-    "fact",
-    "source_commit",
-    "source_url",
-    "verified_at",
-    "staleness_policy",
-  ];
-  return (
-    metadata["source_system"] === "qmd" &&
-    requiredText.every((key) => nonEmpty(metadata[key])) &&
-    (nonEmpty(metadata["symbol"]) || nonEmpty(metadata["subject"])) &&
-    typeof metadata["confidence"] === "number" &&
-    metadata["confidence"] >= 0 &&
-    metadata["confidence"] <= 1 &&
-    /^[0-9a-f]{40}$/i.test(metadata["source_commit"] as string) &&
-    new Date(metadata["verified_at"] as string).getTime() <= Date.now() &&
-    metadata["source_url"] ===
-      `https://github.com/${metadata["repo"]}/blob/${metadata["source_commit"]}/${metadata["path"]}`
-  );
+  return repoFactMetadata.safeParse(value).success;
 }
 
 export function toolResult(requestId: number, body: Json): TransportResponse {

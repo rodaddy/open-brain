@@ -126,9 +126,9 @@ bun contracts/check-parity.ts
 
 - **No mcp2cli subprocess fallback.** `fallback_attempted` is always `false`;
   scope mismatches and outages degrade to spool/receipts directly.
-- **Portable cross-process spool lock.** The TS spool uses an atomic-create
-  lock file with bounded waits, dead/stale-owner recovery, and token-safe
-  release around local snapshot/read-modify-write and replay reconciliation.
+- **Portable cross-process spool lock.** The TS spool atomically publishes a
+  fully written owner record, uses bounded waits plus dead/stale-owner recovery,
+  and checks the ownership token before release around local snapshot/read-modify-write and replay reconciliation.
   It never holds that lock across replay dispatch/network calls. Atomic writes
   require directory durability proof; a failed proof restores the prior bytes
   (or prior absence) before reporting failure.
