@@ -457,6 +457,7 @@ lab HTTP endpoints such as `http://10.71.1.21:3100`.
 - [docs/operator-audit-log.md](operator-audit-log.md) — MCP tool audit log schema, env controls, privacy guarantees, fail-open behavior
 - [docs/compatibility-matrix.md](compatibility-matrix.md) — supported client versions and Python/TS capability parity, rendered from the machine-enforced contract data
 - [docs/memory-limits.md](memory-limits.md) — enforced capacity/backpressure/degradation limits and their at-limit behavior
+- [docs/backup-restore.md](backup-restore.md) — backup/restore substrate: RPO/RTO/retention requirements, content-free manifests, verify-before-restore, upgrade matrix, CI drill
 
 ## License
 

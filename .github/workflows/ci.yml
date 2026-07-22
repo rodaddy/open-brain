@@ -193,6 +193,39 @@ jobs:
       - name: Assert DB-backed integration tests actually ran (anti-skip guard)
         run: bun run scripts/assert-db-tests-ran.ts ${{ runner.temp }}/junit-db.xml
 
+      # Issue #298 restore drill: exercises the real backup.ts ->
+      # backup-verify.ts -> restore.ts operator path end-to-end against the
+      # ephemeral pgvector Postgres. The drill creates and drops its OWN
+      # scratch databases (open_brain_ci_restore_*) via the admin connection,
+      # so it can never clobber open_brain_ci / open_brain_ci_migrations —
+      # mirroring the DB_NAME/DB_NAME_TEST separation documented above.
+      #
+      # pg_dump/pg_restore mechanism: `docker exec` into the digest-pinned
+      # pgvector/pgvector:pg18 container rather than the runner's
+      # postgresql-client. Chosen as the least invasive option that is
+      # GUARANTEED to work on ct106/ct107/ct108: the runner-host client tools
+      # are whatever distro major happens to be installed, and pg_dump refuses
+      # to dump a server NEWER than itself, while the container always carries
+      # tools matching the pinned pg18 server. `-e PGPASSWORD` (no value)
+      # propagates the password from the docker CLI's environment BY NAME, so
+      # the credential never appears in argv. The container runs with
+      # --network host, so 127.0.0.1:${DB_PORT} resolves identically inside.
+      #
+      # OPENBRAIN_BACKUP_DRILL=1 makes the drill MANDATORY here: with the flag
+      # set, missing prerequisites FAIL the suite loudly instead of skipping
+      # (see the prerequisites test in the drill file), so this step cannot
+      # silently no-op. The flag is intentionally NOT set for the generic
+      # `bun test` steps, whose host pg tools may be version-mismatched.
+      - name: Restore drill (issue #298 backup/restore substrate)
+        run: |
+          # URL assembled from the job's env (throwaway ephemeral-container
+          # credential) so no user:pass URI literal lives in the workflow.
+          export OPENBRAIN_TEST_DATABASE_URL="postgres://${DB_USER}:${DB_PASSWORD}@127.0.0.1:${DB_PORT}/${DB_NAME}"
+          export OPENBRAIN_BACKUP_DRILL=1
+          export OPENBRAIN_PG_DUMP_BIN="docker exec -e PGPASSWORD ${OB_CI_PG_CONTAINER} pg_dump"
+          export OPENBRAIN_PG_RESTORE_BIN="docker exec -i -e PGPASSWORD ${OB_CI_PG_CONTAINER} pg_restore"
+          bun test scripts/__tests__/backup-restore-live.test.ts
+
       - name: Tear down ephemeral Postgres
         if: always()
         run: docker rm -f "${OB_CI_PG_CONTAINER}" >/dev/null 2>&1 || true
