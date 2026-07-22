@@ -21,7 +21,11 @@ export type MaintenanceErrorCategory =
   | "range_error"
   | "error"
   | "non_error"
-  | "unsupported_job_kind";
+  | "unsupported_job_kind"
+  // Terminal signal for a running lease that expired after the job already
+  // consumed all of its execution attempts. Content-free and distinct from any
+  // handler-thrown error so dead-letter analysis can tell the two apart.
+  | "lease_expired";
 
 export interface MaintenanceJob {
   id: string;
@@ -349,23 +353,52 @@ export class MaintenanceQueue implements MaintenanceQueuePort {
 
     try {
       await client.query("BEGIN");
+      // A queued-due row and an expired running row are both eligible, but an
+      // expired running row whose already-consumed execution attempts have
+      // reached max_attempts must terminate, not be reclaimed for another
+      // handler run — otherwise a job that keeps blowing its lease is retried
+      // forever, past its bound. `attempts` counts execution leases: a running
+      // row already ran `attempts` handler executions, so attempts >= max means
+      // no budget is left. Such rows dead-letter in the same statement (clearing
+      // the lease, stamping terminal/dead-letter timestamps, and recording the
+      // content-free `lease_expired` category) and are excluded from RETURNING
+      // so the runner never treats a terminated job as claimed.
       const claimed = await client.query<MaintenanceJobRow>(
         `WITH eligible AS (
-           SELECT id
+           SELECT id, state, attempts, max_attempts
              FROM maintenance_jobs
             WHERE (state = 'queued' AND run_after <= $1)
                OR (state = 'running' AND lease_until <= $1)
             ORDER BY run_after, created_at, id
             FOR UPDATE SKIP LOCKED
             LIMIT $2
+         ),
+         reclaim AS (
+           SELECT id FROM eligible
+            WHERE state = 'queued' OR attempts < max_attempts
+         ),
+         expire AS (
+           SELECT id FROM eligible
+            WHERE state = 'running' AND attempts >= max_attempts
+         ),
+         dead AS (
+           UPDATE maintenance_jobs AS job
+              SET state = 'dead_letter',
+                  lease_token = NULL,
+                  lease_until = NULL,
+                  last_error_category = 'lease_expired',
+                  terminal_at = $1,
+                  dead_lettered_at = $1
+             FROM expire
+            WHERE job.id = expire.id
          )
          UPDATE maintenance_jobs AS job
             SET state = 'running',
                 lease_token = $3::uuid,
                 lease_until = $1 + ($4 * interval '1 millisecond'),
                 attempts = job.attempts + 1
-           FROM eligible
-          WHERE job.id = eligible.id
+           FROM reclaim
+          WHERE job.id = reclaim.id
          RETURNING ${jobColumns("job")}`,
         [now, input.limit, leaseToken, input.leaseMs],
       );
@@ -512,6 +545,13 @@ export class MaintenanceQueueRunner {
   }
 
   private async tick(): Promise<void> {
+    // Never begin a new claim once shutdown has started: a claim leases rows in
+    // the database, so starting one during stop would strand freshly-leased
+    // jobs. But a claim already in flight when stop() flips this flag has (or
+    // will) commit its leases, so every job it returns must still be dispatched
+    // and tracked in `active` below — stop() waits on `active`, and abandoning a
+    // leased job here would leave it stuck running until its lease expired.
+    if (this.stopping) return;
     const available = this.concurrency - this.active.size;
     if (available <= 0) return;
 
@@ -529,8 +569,10 @@ export class MaintenanceQueueRunner {
       return;
     }
 
+    // No mid-loop stopping guard: these rows are already leased to this runner,
+    // so each one is dispatched and tracked even if stop() began after the
+    // claim committed.
     for (const job of jobs.slice(0, available)) {
-      if (this.stopping) return;
       let active: Promise<void>;
       active = this.execute(job).finally(() => this.active.delete(active));
       this.active.add(active);

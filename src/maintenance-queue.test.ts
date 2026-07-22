@@ -83,6 +83,107 @@ describe("maintenance queue runner", () => {
     expect(stopped).toBe(true);
   });
 
+  it("dispatches and drains a claim already in flight when stop() begins", async () => {
+    // The claim resolves only after stop() has flipped `stopping`. The old
+    // mid-loop `if (this.stopping) return` abandoned every job the in-flight
+    // claim returned: the handler never ran, complete()/fail() was never
+    // invoked, and the leased rows were left stranded outside `active`.
+    let resolveClaim: ((jobs: MaintenanceJob[]) => void) | undefined;
+    let handlerRan = false;
+    let completeCalled = false;
+    const claimStarted = Promise.withResolvers<void>();
+    const queue: MaintenanceQueuePort = {
+      claimDueJobs: () => {
+        claimStarted.resolve();
+        return new Promise<MaintenanceJob[]>((resolve) => {
+          resolveClaim = resolve;
+        });
+      },
+      complete: async () => {
+        completeCalled = true;
+        return true;
+      },
+      fail: async () => null,
+    };
+    const runner = new MaintenanceQueueRunner({
+      queue,
+      handlers: new Map([
+        [
+          "maintenance.test",
+          async () => {
+            handlerRan = true;
+          },
+        ],
+      ]),
+      logger: {
+        info: () => undefined,
+        warn: () => undefined,
+        error: () => undefined,
+      },
+      concurrency: 1,
+    });
+
+    const tick = runner.runOnce();
+    // Wait until the claim is genuinely in flight before beginning shutdown.
+    await claimStarted.promise;
+
+    const stopping = runner.stop();
+    let stopResolved = false;
+    void stopping.then(() => {
+      stopResolved = true;
+    });
+    // Let stop() run up to its await; the leased jobs are not yet delivered.
+    await Promise.resolve();
+    expect(stopResolved).toBe(false);
+    expect(handlerRan).toBe(false);
+
+    // The claim commits its lease after stop began. Every returned job must be
+    // dispatched, executed, and completed; stop() must not resolve before that.
+    resolveClaim?.([job()]);
+    await tick;
+    await stopping;
+    expect(handlerRan).toBe(true);
+    expect(completeCalled).toBe(true);
+    expect(stopResolved).toBe(true);
+  });
+
+  it("does not begin a new claim once stopping is observed", async () => {
+    // A tick that starts after stop() has flipped `stopping` must not lease any
+    // new rows: no claim, no handler, immediate drain.
+    let claimCalls = 0;
+    let handlerRan = false;
+    const queue: MaintenanceQueuePort = {
+      claimDueJobs: async () => {
+        claimCalls += 1;
+        return [job()];
+      },
+      complete: async () => true,
+      fail: async () => null,
+    };
+    const runner = new MaintenanceQueueRunner({
+      queue,
+      handlers: new Map([
+        [
+          "maintenance.test",
+          async () => {
+            handlerRan = true;
+          },
+        ],
+      ]),
+      logger: {
+        info: () => undefined,
+        warn: () => undefined,
+        error: () => undefined,
+      },
+      concurrency: 1,
+    });
+
+    await runner.stop();
+    await runner.runOnce();
+    expect(claimCalls).toBe(0);
+    expect(handlerRan).toBe(false);
+  });
+
   it("stores unsupported_job_kind as its own category, not non_error", async () => {
     const failCalls: Array<{ error: unknown; category?: string }> = [];
     const logs: string[] = [];

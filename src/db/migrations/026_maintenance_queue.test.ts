@@ -190,6 +190,93 @@ dbDescribe("026 maintenance queue (live Postgres)", () => {
     ).toBe(true);
   });
 
+  it("dead-letters an expired lease once its execution attempts are exhausted, not reclaims it forever", async () => {
+    // maxAttempts=1: exactly one handler execution is allowed. The claim below
+    // consumes it (attempts 0 -> 1). The lease then expires without a
+    // complete()/fail(), simulating a handler that hung or crashed.
+    await enqueue({
+      idempotencyKey: "expired-bound",
+      retry: { maxAttempts: 1 },
+    });
+    const now = new Date("2026-07-22T14:00:00.000Z");
+    const [first] = await queue().claimDueJobs({
+      limit: 1,
+      now,
+      leaseMs: 1_000,
+    });
+    expect(first).toBeDefined();
+    expect(first?.attempts).toBe(1);
+
+    // Old behavior: the expired running row is reclaimed unconditionally,
+    // attempts -> 2, state stays running, and it is returned as a fresh claim —
+    // a second handler execution past the maxAttempts=1 bound. The bounded
+    // behavior returns nothing and terminates the row instead.
+    const afterExpiry = new Date(now.getTime() + 1_000);
+    const reclaimed = await queue().claimDueJobs({
+      limit: 1,
+      now: afterExpiry,
+      leaseMs: 1_000,
+    });
+    expect(reclaimed).toHaveLength(0);
+
+    const { rows } = await pool.query<{
+      state: string;
+      attempts: number;
+      lease_token: string | null;
+      lease_until: string | null;
+      last_error_category: string | null;
+      terminal_at: string | null;
+      dead_lettered_at: string | null;
+    }>(
+      `SELECT state, attempts, lease_token, lease_until, last_error_category,
+              terminal_at, dead_lettered_at
+         FROM maintenance_jobs WHERE id = $1`,
+      [first!.id],
+    );
+    const row = rows[0];
+    expect(row?.state).toBe("dead_letter");
+    // attempts stays at the number of execution leases actually consumed (1),
+    // never inflated past max_attempts by the expiry sweep.
+    expect(row?.attempts).toBe(1);
+    expect(row?.lease_token).toBeNull();
+    expect(row?.lease_until).toBeNull();
+    expect(row?.last_error_category).toBe("lease_expired");
+    expect(row?.terminal_at).not.toBeNull();
+    expect(row?.dead_lettered_at).not.toBeNull();
+
+    // The terminated row cannot be reclaimed again on any later sweep.
+    const laterSweep = await queue().claimDueJobs({
+      limit: 1,
+      now: new Date(now.getTime() + 10_000),
+      leaseMs: 1_000,
+    });
+    expect(laterSweep).toHaveLength(0);
+  });
+
+  it("still reclaims an expired lease that has execution attempts remaining", async () => {
+    // maxAttempts=3: after one claim (attempts 1) an expired lease has budget,
+    // so the bounded sweep must still reclaim it rather than dead-letter it.
+    await enqueue({
+      idempotencyKey: "expired-with-budget",
+      retry: { maxAttempts: 3 },
+    });
+    const now = new Date("2026-07-22T15:00:00.000Z");
+    const [first] = await queue().claimDueJobs({
+      limit: 1,
+      now,
+      leaseMs: 1_000,
+    });
+    expect(first?.attempts).toBe(1);
+    const [reclaimed] = await queue().claimDueJobs({
+      limit: 1,
+      now: new Date(now.getTime() + 1_000),
+      leaseMs: 1_000,
+    });
+    expect(reclaimed?.id).toBe(first?.id);
+    expect(reclaimed?.attempts).toBe(2);
+    expect(reclaimed?.state).toBe("running");
+  });
+
   it("retries at a deterministic time, dead-letters terminal attempts, and recovers after a restart", async () => {
     const now = new Date("2026-07-22T13:00:00.000Z");
     await enqueue({
