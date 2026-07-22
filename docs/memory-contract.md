@@ -343,3 +343,28 @@ mcp2cli open-brain list_namespaces --params '{}'
 In this repo, also inspect `src/tools/` and `src/db/migrations/` before
 proposing new primitives. State what exists, what is missing, and what should be
 docs/protocol instead of code.
+
+## Operational-Path Isolation Disposition (#297)
+
+Namespace and exact-scope enforcement per operational surface, with the
+authority for each. Every ID-based read or mutation carries an auth-derived
+namespace predicate unless the surface is named below as intentionally global
+or the token-sourced role is intentionally global (bare admin/ob-admin/promoter
+identities, which by design carry no restrictive namespace predicate — only
+frozen-namespace/shared-kb exclusions). Header-scoped identities
+(`namespaceSource === "header"`) are always bound to their own namespace,
+regardless of role.
+
+| Surface | State | Authority |
+|---|---|---|
+| Spool replay | Enforced client-side: units replay under their parked exact scope with `_parked_namespace` provenance; foreign-namespace units are retained with zero dispatches (#309, #310, #314). Honest carve-out: records spooled before #314 provenance stamping (or by a namespace-less runtime config) carry no `_parked_namespace` and drain under the replaying runtime's namespace; exposure is bounded to pre-#314 leftovers | `python/openbrain-memory/src/openbrain_memory/runtime.py`, `_runtime_spool.py`; regressions in `tests/test_runtime.py` |
+| Deletion / archive | Enforced server-side across the full delete-capable surface: `archive_entry`, `bulk_archive`, `archive_entity` (`appendWriteNamespacePredicate` on every UPDATE), `unlink_entities` (`canWriteNamespace` gate + explicit `namespace = $1` binding), `demote_entry`, `curate_entries` auto-archive, and the REST demote route (per-tool predicate tests). On the denial/no-op path the response is content-free and indistinguishable from not-found; the `bulk_archive` transaction-failure path was sanitized in this PR to a stable content-free message with code/name-only logging | `src/namespace-policy.ts`; mock negative matrix in `src/tools/__tests__/namespace-isolation-matrix.test.ts` + live-Postgres negative test in `src/tools/__tests__/namespace-isolation-matrix-live.test.ts` |
+| Export (disclosure bundle) | Enforced: fail-closed on lane-identity conflicts and namespace-tagged items with an immutable session-derived isolation stamp (#305); the formatter itself is local-only with no server path. TypeScript enforcement: `validateDisclosureScope` in `src/disclosure-bundle.ts` rejects any namespace-tagged item ("namespace cannot be verified by the export lane") and `assertDisclosureLaneIdentity` in `src/agent-memory.ts` rejects lane-identity conflicts with the active session | `src/disclosure-bundle.ts`, `src/agent-memory.ts`; `python/openbrain-memory` disclosure tests |
+| Migration | Schema migrations (`scripts/migrate.ts`) are not data-boundary operations; `scripts/retire-collab-migration.ts` is **intentionally global** — an operator-only one-time script, per the issue's global-authorization carve-out. Real controls: dry-run by default, `--execute` required to mutate, the `COLLAB_RETIRE_APPROVAL_ENV` approval value required for execute, and the same approval forced for any non-local `DB_HOST` (`dbHostRequiresReleaseApproval`); `DB_HOST`/`DB_USER` are connection prerequisites only, not gates. Legacy-lane normalization landed in #301 | `scripts/retire-collab-migration.ts` (`assertExecuteApproval`, `dbHostRequiresReleaseApproval`) |
+| Diagnostics (operator doctor) | **Intentionally global** operator surface: role-gated (`canReadDoctor`) and content-free by construction (`last_error` is literally "redacted") | `src/operator-doctor.ts` |
+| Audit log | Facts-only rows, no payloads; fail-open under saturation is a documented deliberate trade on LAN-local infra | `src/audit-log.ts`, `docs/operator-audit-log.md`, `docs/memory-limits.md` |
+| Backup / restore | **Deferred-because-nonexistent**: no backup/restore subsystem exists yet, so there is no path to gate; the isolation requirement (backups retain immutable namespace/scope metadata, restore re-validates before mutation) is a build requirement of the backup program (#298), not a live gap | tracked in #298 |
+
+If a new operational surface (restore, bulk export, cross-namespace tooling)
+lands without a row here, that is a review finding — add the surface and its
+predicate or its explicit global carve-out in the same PR.
