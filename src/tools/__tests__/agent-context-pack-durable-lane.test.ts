@@ -72,7 +72,9 @@ describe("agent_context_pack durable lane context", () => {
           return { rows: [lane] };
         }
         if (sql.includes("FROM ob_session_events")) {
-          return { rows: events.slice(0, 8) };
+          // Real SQL selects newest-first (created_at DESC); mirror it so the
+          // loader's chronological reverse() lands the newest event at the tail.
+          return { rows: [...events].reverse().slice(0, 8) };
         }
         return { rows: [] };
       },
@@ -91,25 +93,41 @@ describe("agent_context_pack durable lane context", () => {
       expect(pack.isError).toBeFalsy();
       const payload = JSON.parse((pack.content as any)[0].text);
       const durable = payload.sections.durable_lane_context;
+      // The whole-pack budget bounds the *serialized* section, so under a 10800
+      // whole-pack budget the loader's 5-event content selection is re-fit down
+      // to the newest events whose serialized wrappers also fit. Newest events
+      // are preserved; the oldest are dropped.
       expect(durable).toMatchObject({
         label: "durable_lane_context",
         exact_scope_required: true,
-        event_count: 5,
+        event_count: 3,
         truncated: true,
       });
+      expect(durable.events.map((e: any) => e.id)).toEqual([
+        "event-7",
+        "event-8",
+        "event-9",
+      ]);
       expect(durable.lane.current_context_md).toHaveLength(6000);
-      expect(durable.events).toHaveLength(5);
-      expect(durable.events.every((event: any) => event.content.length <= 1000)).toBe(true);
+      expect(
+        durable.events.every((event: any) => event.content.length <= 1000),
+      ).toBe(true);
+      // The whole serialized section stays within the whole-pack budget.
+      expect(JSON.stringify(durable).length).toBeLessThanOrEqual(
+        3000 * 4 - 1200,
+      );
       expect(JSON.stringify(durable)).not.toContain("RAW TRANSCRIPT");
       expect(JSON.stringify(durable)).not.toContain("RAW TOOL OUTPUT");
       expect(JSON.stringify(durable)).not.toContain("must not escape");
       expect(payload.warnings.truncation).not.toEqual([]);
+      // content_chars_used is reconciled to the retained content body (checkpoint
+      // 6000 + 3 events x 1000), not the loader's pre-refit selection.
       expect(payload.budget.durable_lane_context).toMatchObject({
-        content_char_limit: 10800,
-        content_chars_used: 10800,
+        content_chars_used: 9000,
         max_events: 8,
       });
-      expect(payload.citations).toHaveLength(6);
+      // One lane citation plus one per retained event, none for dropped events.
+      expect(payload.citations).toHaveLength(4);
 
       expect(queries[0]!.sql).toContain("WHERE namespace = $1");
       expect(queries[0]!.sql).toContain("AND session_key = $2");
@@ -117,7 +135,9 @@ describe("agent_context_pack durable lane context", () => {
       expect(queries[0]!.sql).toContain("AND source = $4");
       expect(queries[0]!.sql).toContain("metadata->>'server_id' = $5");
       expect(queries[0]!.sql).toContain("AND channel_id = $6");
-      expect(queries[0]!.sql).toContain("thread_id IS NOT DISTINCT FROM $7::text");
+      expect(queries[0]!.sql).toContain(
+        "thread_id IS NOT DISTINCT FROM $7::text",
+      );
       expect(queries[0]!.params).toEqual([
         "rico",
         SCOPE.session_key,
@@ -475,7 +495,9 @@ describe("agent_context_pack durable lane context", () => {
             setTimeout(resolve, statementTimeoutMs + 2),
           );
           activeQueries -= 1;
-          throw new Error("canceling statement due to statement timeout secret-detail");
+          throw new Error(
+            "canceling statement due to statement timeout secret-detail",
+          );
         }
         return { rows: [] };
       },
@@ -523,7 +545,6 @@ describe("agent_context_pack durable lane context", () => {
       await cleanup();
     }
   });
-
 });
 
 const DB_URL = process.env.OPENBRAIN_TEST_DATABASE_URL;
@@ -626,8 +647,10 @@ dbDescribe("agent_context_pack durable lane reads (live Postgres)", () => {
           (event: Record<string, unknown>) => event.id,
         ),
       ).toEqual(
-        Array.from({ length: 8 }, (_, index) =>
-          `00000000-0000-0000-0000-${String(index + 2).padStart(12, "0")}`,
+        Array.from(
+          { length: 8 },
+          (_, index) =>
+            `00000000-0000-0000-0000-${String(index + 2).padStart(12, "0")}`,
         ),
       );
       expect(payload.sections.durable_lane_context).toMatchObject({
@@ -645,7 +668,9 @@ dbDescribe("agent_context_pack durable lane reads (live Postgres)", () => {
     try {
       await insertLane();
       await blocker.query("BEGIN");
-      await blocker.query("LOCK TABLE ob_session_events IN ACCESS EXCLUSIVE MODE");
+      await blocker.query(
+        "LOCK TABLE ob_session_events IN ACCESS EXCLUSIVE MODE",
+      );
 
       const startedAt = performance.now();
       const pack = await callLivePack(50);
