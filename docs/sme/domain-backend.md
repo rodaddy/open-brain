@@ -438,3 +438,36 @@ Do not round-trip PostgreSQL timestamps through millisecond JS dates for tuple b
 **Status:** fixed in PR #294
 
 A bounded context query must fetch one extra row before truncating so omission flags are truthful, use a total order such as `(created_at, id)` in both selection and returned chronology, and keep timestamp comparison database-owned. PostgreSQL ordering boundaries must not round-trip through millisecond-precision `Date` values, which can collapse distinct timestamps and skip or duplicate rows. The request budget must cover pool acquisition as well as query execution: race `pool.connect()` against the remaining deadline, and if acquisition resolves after timeout, release that late client immediately so the pool does not leak capacity. Every acquired-client query, including `BEGIN`, transaction-local timeout setup, reads, commit, and rollback, must carry pg's per-query `query_timeout`; never bootstrap it with an unbounded session `SET`. Keep PostgreSQL `statement_timeout` transaction-local for server-side read cancellation, and discard a client after a timed-out or protocol-uncertain query rather than queueing cleanup behind it. Tests must cover sub-millisecond timestamps, timestamp ties, exactly-at-limit versus over-limit results, a saturated pool with late acquisition, a concretely wedged transaction start, per-query timeout configuration, and no session `SET`/`RESET`.
+
+## [2026-07-22] Shutdown must not abandon rows a claim leased while stop() ran
+
+**Severity:** P2
+**Source:** PR #350 / issue #343 review swarm, 2026-07-22
+**Scope:** `src/maintenance-queue.ts` `MaintenanceQueueRunner` tick/stop lifecycle
+**Status:** fixed
+
+### Pattern
+
+`stop()` could flip `stopping` while a `claimDueJobs` call was in flight. The
+claim then committed — leasing rows to this runner in the database — but the
+dispatch loop's mid-iteration `if (this.stopping) return` abandoned them: no
+handler ran, `complete()`/`fail()` was never called, and the rows sat
+`running` with a live lease, outside `active`, so `stop()` (which only waits on
+`active`) resolved without draining them. They stayed stuck until lease expiry.
+The lease-boundary rule for a claim-then-dispatch runner: refuse to *begin* a
+new claim once stopping is observed (a claim mutates durable state), but treat
+every row returned by a claim already in flight as owned work — dispatch and
+track each in `active`, and have `stop()` await the in-flight tick before
+draining `active`, so no leased row is ever dropped on the floor.
+
+### Review Questions
+
+- Can a shutdown flag be observed *between* a claim committing its leases and
+  those jobs being tracked, leaving leased rows dispatched by neither path?
+- Is the stop guard placed before the state-mutating claim (correct) or in the
+  post-claim dispatch loop (drops already-leased work)?
+- Does `stop()` await the in-flight tick so its claim's jobs land in the
+  tracked set before the drain wait begins?
+- Is there a deterministic test with a claim that resolves *after* stop begins,
+  asserting the handler runs, complete/fail is invoked, and stop does not
+  resolve until that work drains?
