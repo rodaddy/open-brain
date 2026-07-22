@@ -133,8 +133,13 @@ describe("log_decision", () => {
       ];
       const mockPool = {
         query: async (sql: string, params?: unknown[]) => {
-          capturedSql = sql;
-          capturedParams = params ?? [];
+          // Capture only the INSERT (identified by its RETURNING is_new); the
+          // deterministic extractor now fires a background enrichment UPDATE
+          // that would otherwise overwrite the captured INSERT SQL.
+          if (sql.includes("is_new")) {
+            capturedSql = sql;
+            capturedParams = params ?? [];
+          }
           return {
             rows: [
               {

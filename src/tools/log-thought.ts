@@ -3,10 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { toSql } from "pgvector/pg";
 import { canWrite } from "../permissions.ts";
 import { canWriteNamespace } from "../namespace-policy.ts";
-import {
-  canonicalNamespace,
-  physicalNamespace,
-} from "../shared-namespace.ts";
+import { canonicalNamespace, physicalNamespace } from "../shared-namespace.ts";
 import { contentHash, EMBEDDING_MODEL } from "../embedding.ts";
 import { backgroundExtract } from "../extraction.ts";
 import type { AuthInfo } from "../types.ts";
@@ -30,7 +27,9 @@ export function registerLogThought(server: McpServer, deps: ToolDeps): void {
           .describe("Namespace to store in (defaults to caller's clientId)"),
         source_refs: sourceRefsSchema
           .optional()
-          .describe("Structured file/document refs for closed-brain provenance"),
+          .describe(
+            "Structured file/document refs for closed-brain provenance",
+          ),
       },
       annotations: {
         title: "Log Thought",
@@ -115,6 +114,7 @@ export function registerLogThought(server: McpServer, deps: ToolDeps): void {
           deps.pool,
           "thoughts",
           entryId,
+          ns,
           args.content,
           args.tags ?? [],
         );

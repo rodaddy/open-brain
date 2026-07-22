@@ -643,3 +643,38 @@ filename.
   receipt carries neither the sentinel nor any quoted fragment?
 - Do operator-supplied file lists (manifests, indexes) constrain names to
   bare filenames before any stat/read/hash uses them?
+
+### [2026-07-22] Fourth occurrence — new MCP tool surface (source registry)
+
+**Source:** PR #351 / issue #337 review swarm
+**Scope:** `src/tools/source-registry.ts` (all five registry handlers)
+
+RECURRING again: the new `register/list/update/remove/eligibility` MCP handlers
+called the registry layer with no throw guard. `registerSource` re-throws any
+non-23505 error and the other paths call `pool.query` bare, so a raw driver
+error (message can carry `tags[]` row values on a failed write) would escape the
+handler and be serialized by the MCP SDK. Fixed with a single `guarded(op, fn)`
+wrapper per handler that returns ONE stable content-free `internal_error`
+envelope (`ok:false, code:"internal_error", error:"source registry operation
+failed"`) and logs only the operation name plus an allowlisted error code/name
+(regex-bounded), never `err.message`. Typed expected results
+(`namespace_denied`/`not_found`/`stale_revision`/`retired`/`conflict`/
+`approval_state`) still flow through `errorResult` unchanged — the catch only
+intercepts the throw path. Regression injects a non-23505 sentinel-bearing error
+and asserts the response and all `console.*` log lines omit the sentinel and raw
+message, and a paired test proves a typed denial is not collapsed to
+`internal_error`.
+
+Extra review question for this class:
+
+- Does a content-free catch envelope PRESERVE typed expected result codes, or
+  does it flatten every failure (including authorization denials the caller
+  needs to see) into one opaque error?
+
+## [2026-07-22] Digest shape is not proof of observed bytes
+
+**Severity:** P2
+**Source:** PR #351 terminal audit (issue #337)
+**Status:** fixed-pre-merge
+
+A public tool must not accept a caller-asserted digest as observed-content truth merely because it has SHA-256 shape. Keep source hashes behind a trusted collector path that hashes received bytes server-side; test that the public schema omits the field.

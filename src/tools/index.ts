@@ -52,6 +52,7 @@ import { registerPromoteShared } from "./promote-shared.ts";
 import { registerGetContract } from "./get-contract.ts";
 import { registerOperatorDoctor } from "./operator-doctor.ts";
 import { registerListRepoFacts, registerUpsertRepoFact } from "./repo-facts.ts";
+import { registerSourceRegistry } from "./source-registry.ts";
 import {
   registerAgentContextPack,
   registerRecoveryWalAppend,
@@ -143,4 +144,5 @@ export function registerAllTools(server: McpServer, deps: ToolDeps): void {
   registerOperatorDoctor(server, toolDeps);
   registerUpsertRepoFact(server, toolDeps);
   registerListRepoFacts(server, toolDeps);
+  registerSourceRegistry(server, toolDeps);
 }

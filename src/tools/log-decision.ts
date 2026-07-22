@@ -33,7 +33,9 @@ export function registerLogDecision(server: McpServer, deps: ToolDeps): void {
           .describe("Namespace to store in (defaults to caller's clientId)"),
         source_refs: sourceRefsSchema
           .optional()
-          .describe("Structured file/document refs for closed-brain provenance"),
+          .describe(
+            "Structured file/document refs for closed-brain provenance",
+          ),
       },
       annotations: {
         title: "Log Decision",
@@ -124,6 +126,8 @@ export function registerLogDecision(server: McpServer, deps: ToolDeps): void {
           deps.pool,
           "decisions",
           entryId,
+          // Bind enrichment to the exact namespace this row was written under.
+          ns,
           textToEmbed,
           args.tags ?? [],
         );
