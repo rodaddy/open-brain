@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { parseLiveFixture } from "../fixtures.ts";
 import { parseThresholds } from "../metrics.ts";
 import {
+  boundRunId,
   liveEvalEnabled,
   loadLiveConfig,
   makeRunId,
@@ -248,16 +249,31 @@ describe("live config validation", () => {
   });
 });
 
-describe("run id uniqueness (crypto/operator, deterministic namespaces)", () => {
-  it("prefers an explicit operator run id for reproducibility", () => {
-    const id = makeRunId({
+describe("run id uniqueness (crypto nonce always injected, operator id is a label)", () => {
+  it("treats an explicit operator run id as a LABEL and still appends the nonce", () => {
+    // The operator id is a human-readable prefix for triage, NOT a reusable
+    // namespace id: the nonce is always appended so two runs sharing the same
+    // label never enter the same namespace.
+    const a = makeRunId({
       prefix: "commitpref",
       randomHex: "deadbeef",
       env: {
         OPEN_BRAIN_LIVE_EVAL_RUN_ID: "operator-run-42",
       } as NodeJS.ProcessEnv,
     });
-    expect(id).toBe("operator-run-42");
+    expect(a).toBe("operator-run-42-deadbeef");
+
+    // Same label, different invocation nonce -> different id and namespace.
+    const b = makeRunId({
+      prefix: "commitpref",
+      randomHex: "cafef00d",
+      env: {
+        OPEN_BRAIN_LIVE_EVAL_RUN_ID: "operator-run-42",
+      } as NodeJS.ProcessEnv,
+    });
+    expect(b).toBe("operator-run-42-cafef00d");
+    expect(a).not.toBe(b);
+    expect(runNamespaces(a).primary).not.toBe(runNamespaces(b).primary);
   });
 
   it("combines prefix + random suffix so repeated same-commit runs never collide", () => {
@@ -278,18 +294,79 @@ describe("run id uniqueness (crypto/operator, deterministic namespaces)", () => 
     expect(runNamespaces(a).primary).not.toBe(runNamespaces(b).primary);
   });
 
-  it("throws when neither an operator id nor a random suffix is available", () => {
+  it("falls back to just the nonce when neither a label nor a prefix is present", () => {
+    const id = makeRunId({
+      prefix: "   ",
+      randomHex: "beadfeed",
+      env: {} as NodeJS.ProcessEnv,
+    });
+    expect(id).toBe("beadfeed");
+  });
+
+  it("throws when the crypto random suffix is missing (uniqueness cannot be guaranteed)", () => {
     expect(() =>
       makeRunId({
         prefix: "abc",
         randomHex: "   ",
+        env: {
+          OPEN_BRAIN_LIVE_EVAL_RUN_ID: "operator-run-42",
+        } as NodeJS.ProcessEnv,
+      }),
+    ).toThrow(/unique across every invocation/);
+    // Even with a prefix but no operator id, a missing nonce still throws.
+    expect(() =>
+      makeRunId({
+        prefix: "abc",
+        randomHex: "",
         env: {} as NodeJS.ProcessEnv,
       }),
-    ).toThrow(/unique across runs/);
+    ).toThrow(/unique across every invocation/);
   });
 
   it("runNamespaces stays deterministic for a fixed run id", () => {
     // No Date.now/random inside the helper: same input -> same output.
     expect(runNamespaces("fixed-run")).toEqual(runNamespaces("fixed-run"));
+  });
+});
+
+describe("collision-safe bounding of long run ids", () => {
+  it("keeps ids at or under the safe length verbatim", () => {
+    const short = "a".repeat(80);
+    expect(boundRunId(short)).toBe(short);
+  });
+
+  it("preserves uniqueness for two long labels sharing an 80-char prefix", () => {
+    // The dangerous case the audit flagged: a long operator label suffixed with
+    // a per-invocation nonce. A naive slice(0,80) drops the nonce and both runs
+    // collide. Bounding must keep them distinct.
+    const shared = "operator-label-".padEnd(85, "x"); // > 80 chars, identical prefix
+    const a = `${shared}-aaaa1111`;
+    const b = `${shared}-bbbb2222`;
+    // Sanity: the first 80 characters are identical, so a naive slice collides.
+    expect(a.slice(0, 80)).toBe(b.slice(0, 80));
+    // But the bounded ids -- and therefore the namespaces -- differ.
+    expect(boundRunId(a)).not.toBe(boundRunId(b));
+    expect(runNamespaces(a).primary).not.toBe(runNamespaces(b).primary);
+    // And the primary namespace still fits the safe bound.
+    expect(boundRunId(a).length).toBeLessThanOrEqual(80);
+  });
+
+  it("is deterministic (same long id -> same bounded id, no Date.now/random)", () => {
+    const long = "z".repeat(120);
+    expect(boundRunId(long)).toBe(boundRunId(long));
+  });
+
+  it("full makeRunId + runNamespaces stays collision-free with a long reused label", () => {
+    const env = {
+      OPEN_BRAIN_LIVE_EVAL_RUN_ID: "x".repeat(100),
+    } as NodeJS.ProcessEnv;
+    const a = runNamespaces(
+      makeRunId({ prefix: "c", randomHex: "aaaa1111", env }),
+    );
+    const b = runNamespaces(
+      makeRunId({ prefix: "c", randomHex: "bbbb2222", env }),
+    );
+    expect(a.primary).not.toBe(b.primary);
+    expect(a.negative).not.toBe(b.negative);
   });
 });

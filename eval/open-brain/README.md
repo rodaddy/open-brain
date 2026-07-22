@@ -88,9 +88,15 @@ Optional:
 - `OPEN_BRAIN_LIVE_EVAL_SEARCH_MODE` — one of `hybrid` (default), `vector`,
   `keyword`.
 - `OPEN_BRAIN_LIVE_EVAL_TIMEOUT_MS` — positive integer per-request timeout.
-- `OPEN_BRAIN_LIVE_EVAL_RUN_ID` — explicit run id for a reproducible namespace;
-  otherwise a crypto-random suffix keeps repeated runs on the same commit from
-  colliding.
+- `OPEN_BRAIN_LIVE_EVAL_RUN_ID` — an optional operator **label** for the run
+  (a human-readable prefix that shows up in the run's namespace for triage). It
+  is **not** a reusable namespace id: a per-invocation crypto nonce is always
+  appended, so setting the same label twice still produces two distinct
+  namespaces. Reusing a namespace would let a later run's seed upsert onto a
+  prior run's stranded row, so an explicit id can never yield a reproducible
+  namespace. When unset, the short commit is used as the label (still with the
+  appended nonce); when the label is long, the namespace is bounded with a
+  deterministic hash suffix that preserves uniqueness.
 
 ### Same-token isolation semantics
 
@@ -115,6 +121,34 @@ namespace-scoped `archive_entry` tool (never a bulk or query-shaped delete), so
 it can only touch records it wrote. Teardown runs even when seeding or a query
 fails partway. A teardown that strands a record fails the gate — a cleanup
 failure can never silently become a PASS.
+
+Every server response the gate depends on is bound to this run's exact identity
+and fails closed content-free (a redacted `tool:reason` label, never a body) on
+anything else:
+
+- **Seed (create) proof.** `log_thought` / `log_decision` must return
+  `merged: false` (a fresh row, not an upsert onto a pre-existing one) and a
+  namespace **exactly** equal to the one this run bound. A `merged: true`
+  upsert, a missing/non-boolean `merged`, a mismatched/absent namespace, or a
+  missing id fail the run. This stops a stranded prior seed in a reused
+  namespace from being adopted as a current-run creation and later archived as
+  though this run owned it.
+- **Retrieval-hit proof.** Validation is two-layered and neither layer ever
+  silently discards a raw result — dropping one would compress ranks and hide a
+  real leak while still reporting PASS. At the **transport boundary**
+  (`parseHits`), a successful search body must be a JSON array and every entry
+  must be an object with a non-empty string id; a non-array/invalid body
+  (`malformed-results`) or a non-object/idless entry (`malformed-hit`) fails the
+  run before scoring. Namespace stays optional here so the **gate** can then
+  enforce that every surviving hit carries the exact primary namespace **and** an
+  id this run created; a hit with a foreign/missing namespace
+  (`foreign-namespace`) or an unaccountable id (`unknown-hit`) fails the run. The
+  isolation probe (`attemptRead`) shares the same `parseHits` boundary, so a
+  malformed negative-namespace body cannot be misread as an empty allowed read.
+- **Archive proof.** A destructive archive success counts only when the server
+  returns `archived: true` **and** the returned `id`/`table` exactly match the
+  requested record. `archived: true` for a different or absent id/table fails
+  closed, so teardown cannot credit a row it did not actually tombstone.
 
 ### Thresholds, baseline receipt, and reports (#323)
 
@@ -157,9 +191,11 @@ The gate treats a seed/archive whose *response* is not received (a request
 timeout, a dropped connection after the server committed, or an ambiguous
 success body) as a failure — this is the correct default, because a destructive
 teardown must fail closed rather than assume a row is gone. `archive_entry`
-recognizes only two positive shapes: an explicit archived success or an explicit
-already-absent / not-found marker. Every other success response throws a
-content-free `LiveTransportError`, so teardown can never false-pass.
+recognizes only two positive shapes: an explicit archived success **bound to the
+requested `id`/`table`**, or the exact already-absent / not-found marker. Every
+other success response — an unrecognized body, or an `archived: true` for a
+different/absent id or table — throws a content-free `LiveTransportError`, so
+teardown can never false-pass on a row it did not actually tombstone.
 
 The residual is the write direction: if a `log_*` seed **commits server-side but
 the response is lost**, the gate never learns the server id, so teardown cannot

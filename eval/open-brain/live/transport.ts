@@ -49,7 +49,17 @@ export interface ToolCallResult {
 
 export interface LogMemoryResult {
   id: string;
+  /** The namespace the server reported the row was written to. */
   namespace: string;
+  /**
+   * The server's `merged` flag: false when this call CREATED a new row, true
+   * when it upserted onto an existing row (ON CONFLICT). The seeder requires
+   * `merged === false` so it can only ever count a fresh, this-run creation --
+   * a merged upsert means the record predates this run (a stranded prior seed in
+   * a reused namespace) and must never be treated as newly created and later
+   * archived as though this run owned it.
+   */
+  merged: boolean;
 }
 
 export interface SearchHit {
@@ -94,7 +104,26 @@ export class LiveTransportError extends Error {
 export class OpenBrainLiveClient {
   constructor(private readonly caller: OpenBrainToolCaller) {}
 
-  /** Seed one memory into a namespace, returning the server-assigned id. */
+  /**
+   * Seed one memory into a namespace, returning the server-assigned id.
+   *
+   * The seed is a CREATE: this run owns every record it later archives, so the
+   * response must prove a fresh row was created under the exact namespace we
+   * asked for. `log_thought`/`log_decision` return `{id, namespace, merged}`
+   * (src/tools/log-thought.ts, log-decision.ts). We fail closed content-free on
+   * any response that does not exactly match a create:
+   *
+   *  - missing/non-string `id` -> we never learned the server id, so teardown
+   *    could not archive this row (`:missing-id`).
+   *  - missing/non-boolean or `merged: true` -> the server upserted onto an
+   *    EXISTING row (a stranded prior seed in a reused namespace), so this is
+   *    not a this-run creation; archiving it later would tombstone a row this
+   *    run did not create (`:merged-upsert` / `:missing-merged`).
+   *  - a returned namespace that is not EXACTLY `opts.namespace` -> the row did
+   *    not land where we bound our teardown/scoring, so we must not treat it as
+   *    ours (`:namespace-mismatch`). We do NOT default a missing namespace to
+   *    the requested one: that would mask a server that wrote elsewhere.
+   */
   async logMemory(opts: {
     table: LiveMemoryTable;
     content: string;
@@ -121,13 +150,24 @@ export class OpenBrainLiveClient {
     }
     const parsed = safeJson(result.data);
     const id = typeof parsed?.id === "string" ? parsed.id : undefined;
-    const namespace =
-      typeof parsed?.namespace === "string" ? parsed.namespace : opts.namespace;
     if (!id) {
       // Content-free: name the tool, not the response body.
       throw new LiveTransportError(`${tool}:missing-id`, false);
     }
-    return { id, namespace };
+    // `merged` must be present and a boolean; a create is `merged === false`.
+    if (typeof parsed?.merged !== "boolean") {
+      throw new LiveTransportError(`${tool}:missing-merged`, false);
+    }
+    if (parsed.merged) {
+      // The server upserted onto a pre-existing row -- not a this-run creation.
+      throw new LiveTransportError(`${tool}:merged-upsert`, false);
+    }
+    // The returned namespace must EXACTLY equal the one we bound teardown/scoring
+    // to; no defaulting a missing/other namespace to the requested one.
+    if (parsed.namespace !== opts.namespace) {
+      throw new LiveTransportError(`${tool}:namespace-mismatch`, false);
+    }
+    return { id, namespace: opts.namespace, merged: false };
   }
 
   /**
@@ -201,9 +241,14 @@ export class OpenBrainLiveClient {
    * (src/tools/archive-entry.ts): a JSON object `{id, table, archived: true}`
    * for a row it tombstoned, and the EXACT plain-text body
    * "Already archived or not found" for the zero-row no-op. We recognize only
-   * those two -- `archived: true`, or that exact marker (trimmed,
-   * case-insensitive) -- and throw a content-free LiveTransportError for EVERY
-   * other success response.
+   * those two -- `archived: true` WITH the returned `id`/`table` exactly equal
+   * to the requested record, or that exact marker (trimmed, case-insensitive) --
+   * and throw a content-free LiveTransportError for EVERY other success response.
+   *
+   * The id/table binding matters because `archived: true` alone does not say
+   * WHICH row was tombstoned: an echo for a different id/table, or a response
+   * missing them, would otherwise be credited as this record's cleanup while the
+   * real record stays live. Binding returned identity closes that gap.
    *
    * We deliberately do NOT accept a structured `archived: false` (the server
    * never emits it), nor broad substrings like "not found" / "no rows", nor a
@@ -225,9 +270,21 @@ export class OpenBrainLiveClient {
       throw new LiveTransportError(result.errorLabel, result.denied);
     }
     const parsed = safeJson(result.data);
-    // Explicit archived success: the JSON object the server returns for a row
-    // it tombstoned. Only `archived: true` counts.
-    if (parsed?.archived === true) return "archived";
+    // Explicit archived success: the JSON object the server returns for a row it
+    // tombstoned is `{id, table, archived: true}` (src/tools/archive-entry.ts).
+    // A destructive success is only trustworthy when it is bound to the record
+    // we asked to archive: `archived: true` alone is not enough -- the returned
+    // `id` and `table` must EXACTLY match this request, or the server tombstoned
+    // some other row (a shape drift, a mismatched echo, or a response for a
+    // different record) and we must NOT count it as this record's cleanup.
+    if (parsed?.archived === true) {
+      if (parsed.id === opts.id && parsed.table === opts.table) {
+        return "archived";
+      }
+      // archived:true but for a different id/table (or missing them) -> fail
+      // closed content-free rather than credit this record as archived.
+      throw new LiveTransportError("archive_entry:identity-mismatch", false);
+    }
     // Exact already-absent no-op marker: the server returns the plain-text body
     // "Already archived or not found" (and nothing else) for the zero-row case.
     if (isAlreadyAbsentMarker(result.data)) return "already_absent";
@@ -243,24 +300,57 @@ export class OpenBrainLiveClient {
   }
 }
 
-/** Parse ranked search hits from a JSON array body. Never logs the body. */
+/**
+ * Parse ranked search hits from a JSON array body. Never logs the body.
+ *
+ * This is the transport boundary for every hit the gate scores or probes. It
+ * FAILS CLOSED content-free rather than silently dropping any entry, because a
+ * discarded raw result never reaches the gate-level validator (gate.ts
+ * `toFixtureRetrieval`) and so could compress rankings or hide a foreign /
+ * malformed result before PASS logic runs:
+ *
+ *  - a successful search body MUST be a JSON array. A non-array (object, scalar)
+ *    or invalid JSON is a malformed result set (`search_brain:malformed-results`)
+ *    -- NOT an empty result, which the old `return []` conflated with real
+ *    "no hits" and let a malformed body pass as a clean empty read.
+ *  - every array entry MUST be an object carrying a non-empty string `id`
+ *    (`search_brain:malformed-hit`). A non-object row, a missing id, or an empty
+ *    id is unaccountable at this boundary and must not be silently skipped.
+ *
+ * `namespace` stays OPTIONAL on purpose: a hit that is a valid object with a
+ * string id but no namespace passes THIS boundary and reaches gate.ts, which
+ * fails it specifically as `foreign-namespace`. Requiring namespace here would
+ * mask that distinct (and security-relevant) gate-level classification.
+ *
+ * Content-free: labels name only the tool + failure class, never a raw body,
+ * row, or id value.
+ */
 export function parseHits(text: string): SearchHit[] {
   const parsed = safeJsonArray(text);
-  if (!parsed) return [];
+  if (!parsed) {
+    // Non-array success body or invalid JSON: a malformed result set, not empty.
+    throw new LiveTransportError("search_brain:malformed-results", false);
+  }
   const hits: SearchHit[] = [];
   for (const row of parsed) {
-    if (row && typeof row === "object") {
-      const id = (row as Record<string, unknown>).id;
-      const sourceType = (row as Record<string, unknown>).source_type;
-      const namespace = (row as Record<string, unknown>).namespace;
-      if (typeof id === "string") {
-        hits.push({
-          id,
-          source_type: typeof sourceType === "string" ? sourceType : "",
-          namespace: typeof namespace === "string" ? namespace : undefined,
-        });
-      }
+    if (!row || typeof row !== "object") {
+      // A non-object array entry is unaccountable; never silently skip it.
+      throw new LiveTransportError("search_brain:malformed-hit", false);
     }
+    const id = (row as Record<string, unknown>).id;
+    if (typeof id !== "string" || id.length === 0) {
+      // Missing / non-string / empty id: cannot account for this hit.
+      throw new LiveTransportError("search_brain:malformed-hit", false);
+    }
+    const sourceType = (row as Record<string, unknown>).source_type;
+    const namespace = (row as Record<string, unknown>).namespace;
+    hits.push({
+      id,
+      source_type: typeof sourceType === "string" ? sourceType : "",
+      // Optional by design: a missing namespace reaches gate.ts, which fails it
+      // as foreign-namespace. Do NOT reject it here.
+      namespace: typeof namespace === "string" ? namespace : undefined,
+    });
   }
   return hits;
 }

@@ -1,6 +1,10 @@
 import type { LiveEvalConfig } from "./config.ts";
 import { buildScorecard } from "./metrics.ts";
-import { LiveTransportError, type OpenBrainLiveClient } from "./transport.ts";
+import {
+  LiveTransportError,
+  type OpenBrainLiveClient,
+  type SearchHit,
+} from "./transport.ts";
 import type {
   LiveCorpusEntry,
   LiveFixture,
@@ -156,18 +160,45 @@ export function withTeardownFailedCount(
 
 /**
  * Build the fixture-local retrieved-id list for one probe from live search hits.
- * Maps server ids back to fixture ids using the seed map, and appends any
- * forbidden (negative-namespace) server id that leaked so the metric can count
- * it. Preserves rank order.
+ *
+ * EVERY hit is validated before it is mapped: a hit is trustworthy only when it
+ * carries the EXACT primary namespace this run bound AND an id this run created
+ * (present in serverIdToFixtureId, which holds every seeded server id -- primary
+ * and negative). A hit that fails either check is NOT silently discarded:
+ * dropping an unmapped or foreign hit would compress the ranks, hide a real
+ * leak (leaving namespace_leaks=0), and let the run still reach PASS. Instead we
+ * fail the run closed, content-free -- naming only the failure class, never a
+ * hit id, namespace value, or body:
+ *
+ *  - a hit with no namespace, or a namespace that is not EXACTLY the primary
+ *    namespace, means the server returned a row from outside our bound
+ *    namespace (`:foreign-namespace`).
+ *  - a hit whose id this run did not create is an unknown row that our seed map
+ *    cannot account for (`:unknown-hit`).
+ *
+ * A KNOWN negative-role id that surfaces under the primary namespace is NOT a
+ * validation failure here: it maps to its fixture id and flows to the scorer,
+ * which counts it as a namespace leak (that is how in-namespace leakage is
+ * scored). Only genuinely unaccountable hits fail the run. Rank order is
+ * preserved for the survivors (which, on a clean run, is all of them).
  */
 function toFixtureRetrieval(
-  hits: { id: string }[],
+  hits: SearchHit[],
   serverIdToFixtureId: Map<string, string>,
+  primaryNamespace: string,
 ): string[] {
   const out: string[] = [];
   for (const hit of hits) {
+    if (hit.namespace !== primaryNamespace) {
+      // Missing or different namespace: a row from outside our bound namespace.
+      throw new LiveTransportError("search_brain:foreign-namespace", false);
+    }
     const fixtureId = serverIdToFixtureId.get(hit.id);
-    if (fixtureId) out.push(fixtureId);
+    if (!fixtureId) {
+      // A same-namespace id this run never created: unaccountable, fail closed.
+      throw new LiveTransportError("search_brain:unknown-hit", false);
+    }
+    out.push(fixtureId);
   }
   return out;
 }
@@ -291,7 +322,11 @@ export async function runLiveGate(opts: RunGateOptions): Promise<GateOutcome> {
         limit: thresholds.top_k,
         searchMode: config.searchMode,
       });
-      collected[probe.id] = toFixtureRetrieval(hits, serverIdToFixtureId);
+      collected[probe.id] = toFixtureRetrieval(
+        hits,
+        serverIdToFixtureId,
+        config.primaryNamespace,
+      );
     }
     retrievedByProbe = collected;
 

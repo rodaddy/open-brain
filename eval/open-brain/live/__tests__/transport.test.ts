@@ -127,14 +127,18 @@ describe("redactToolFailure (content-free error boundary)", () => {
 });
 
 describe("OpenBrainLiveClient.logMemory", () => {
-  it("returns the server id + namespace on success", async () => {
+  it("returns the server id + namespace on a fresh create (merged:false)", async () => {
     const log = {
       calls: [] as Array<{ name: string; args: Record<string, unknown> }>,
     };
     const client = new OpenBrainLiveClient(
       fakeCaller(
         {
-          log_thought: [ok(JSON.stringify({ id: "srv-1", namespace: "ns-a" }))],
+          log_thought: [
+            ok(
+              JSON.stringify({ id: "srv-1", namespace: "ns-a", merged: false }),
+            ),
+          ],
         },
         log,
       ),
@@ -145,7 +149,7 @@ describe("OpenBrainLiveClient.logMemory", () => {
       tags: [],
       namespace: "ns-a",
     });
-    expect(res).toEqual({ id: "srv-1", namespace: "ns-a" });
+    expect(res).toEqual({ id: "srv-1", namespace: "ns-a", merged: false });
     expect(log.calls[0]?.args.namespace).toBe("ns-a");
   });
 
@@ -161,6 +165,136 @@ describe("OpenBrainLiveClient.logMemory", () => {
         namespace: "n",
       }),
     ).rejects.toThrow(LiveTransportError);
+  });
+
+  it("FAILS CLOSED on a merged upsert (a stranded prior seed in a reused namespace)", async () => {
+    // A create must be merged:false. merged:true means the server upserted onto
+    // an EXISTING row -- a prior run's stranded seed in a reused namespace.
+    // Treating it as a this-run creation and later archiving it would tombstone a
+    // row this run did not create, so the seed must fail closed content-free.
+    const client = new OpenBrainLiveClient(
+      fakeCaller({
+        log_thought: [
+          ok(
+            JSON.stringify({
+              id: "srv-old",
+              namespace: "ns-a",
+              merged: true,
+            }),
+          ),
+        ],
+      }),
+    );
+    const err = await client
+      .logMemory({
+        table: "thoughts",
+        content: "c",
+        tags: [],
+        namespace: "ns-a",
+      })
+      .catch((e) => e as LiveTransportError);
+    expect(err).toBeInstanceOf(LiveTransportError);
+    expect(err.label).toBe("log_thought:merged-upsert");
+  });
+
+  it("FAILS CLOSED when `merged` is missing or not a boolean", async () => {
+    // No `merged` field at all: we cannot prove this was a fresh create.
+    const missing = new OpenBrainLiveClient(
+      fakeCaller({
+        log_decision: [ok(JSON.stringify({ id: "srv-1", namespace: "ns-a" }))],
+      }),
+    );
+    const missingErr = await missing
+      .logMemory({
+        table: "decisions",
+        content: "c",
+        tags: [],
+        namespace: "ns-a",
+      })
+      .catch((e) => e as LiveTransportError);
+    expect(missingErr).toBeInstanceOf(LiveTransportError);
+    expect(missingErr.label).toBe("log_decision:missing-merged");
+
+    // A non-boolean `merged` (string "false") is not a valid create signal.
+    const nonBool = new OpenBrainLiveClient(
+      fakeCaller({
+        log_thought: [
+          ok(
+            JSON.stringify({ id: "srv-1", namespace: "ns-a", merged: "false" }),
+          ),
+        ],
+      }),
+    );
+    const nonBoolErr = await nonBool
+      .logMemory({
+        table: "thoughts",
+        content: "c",
+        tags: [],
+        namespace: "ns-a",
+      })
+      .catch((e) => e as LiveTransportError);
+    expect(nonBoolErr.label).toBe("log_thought:missing-merged");
+  });
+
+  it("FAILS CLOSED when the returned namespace is not exactly the requested one", async () => {
+    // A row that landed in a different namespace (or a response with no
+    // namespace) is not where teardown/scoring were bound; do NOT default a
+    // missing namespace to the requested one.
+    const wrong = new OpenBrainLiveClient(
+      fakeCaller({
+        log_thought: [
+          ok(
+            JSON.stringify({
+              id: "srv-1",
+              namespace: "some-other-ns",
+              merged: false,
+            }),
+          ),
+        ],
+      }),
+    );
+    const wrongErr = await wrong
+      .logMemory({
+        table: "thoughts",
+        content: "c",
+        tags: [],
+        namespace: "ns-a",
+      })
+      .catch((e) => e as LiveTransportError);
+    expect(wrongErr).toBeInstanceOf(LiveTransportError);
+    expect(wrongErr.label).toBe("log_thought:namespace-mismatch");
+
+    const absent = new OpenBrainLiveClient(
+      fakeCaller({
+        log_decision: [ok(JSON.stringify({ id: "srv-1", merged: false }))],
+      }),
+    );
+    const absentErr = await absent
+      .logMemory({
+        table: "decisions",
+        content: "c",
+        tags: [],
+        namespace: "ns-a",
+      })
+      .catch((e) => e as LiveTransportError);
+    expect(absentErr.label).toBe("log_decision:namespace-mismatch");
+  });
+
+  it("still FAILS CLOSED on a missing id even when merged:false", async () => {
+    const client = new OpenBrainLiveClient(
+      fakeCaller({
+        log_thought: [ok(JSON.stringify({ namespace: "ns-a", merged: false }))],
+      }),
+    );
+    const err = await client
+      .logMemory({
+        table: "thoughts",
+        content: "c",
+        tags: [],
+        namespace: "ns-a",
+      })
+      .catch((e) => e as LiveTransportError);
+    expect(err.label).toBe("log_thought:missing-id");
   });
 });
 
@@ -256,12 +390,52 @@ describe("OpenBrainLiveClient.attemptRead (isolation probe)", () => {
       }),
     ).rejects.toThrow(LiveTransportError);
   });
+
+  it("FAILS CLOSED through the shared parseHits on a malformed successful body", async () => {
+    // The isolation probe shares parseHits with the primary search. A malformed
+    // (non-array) success body must NOT be read as hitCount:0 (an empty allowed
+    // read, which would look like a working boundary) -- it must throw, so
+    // probeNegativeControl reports the proof as unestablished rather than passing.
+    const nonArray = new OpenBrainLiveClient(
+      fakeCaller({ search_brain: [ok(JSON.stringify({ hits: [] }))] }),
+    );
+    const err = await nonArray
+      .attemptRead({
+        query: "q",
+        namespace: "neg",
+        limit: 5,
+        searchMode: "hybrid",
+      })
+      .catch((e) => e as LiveTransportError);
+    expect(err).toBeInstanceOf(LiveTransportError);
+    expect(err.label).toBe("search_brain:malformed-results");
+
+    // A malformed hit (missing id) on the probe path also fails closed.
+    const badHit = new OpenBrainLiveClient(
+      fakeCaller({
+        search_brain: [ok(JSON.stringify([{ source_type: "thoughts" }]))],
+      }),
+    );
+    const badHitErr = await badHit
+      .attemptRead({
+        query: "q",
+        namespace: "neg",
+        limit: 5,
+        searchMode: "hybrid",
+      })
+      .catch((e) => e as LiveTransportError);
+    expect(badHitErr.label).toBe("search_brain:malformed-hit");
+  });
 });
 
 describe("OpenBrainLiveClient.archive", () => {
-  it("maps archived=true to 'archived' and the EXACT absent marker to 'already_absent'", async () => {
+  it("maps archived=true (bound to the requested id/table) to 'archived' and the EXACT absent marker to 'already_absent'", async () => {
     const c1 = new OpenBrainLiveClient(
-      fakeCaller({ archive_entry: [ok(JSON.stringify({ archived: true }))] }),
+      fakeCaller({
+        archive_entry: [
+          ok(JSON.stringify({ id: "x", table: "thoughts", archived: true })),
+        ],
+      }),
     );
     expect(await c1.archive({ table: "thoughts", id: "x" })).toBe("archived");
     // The exact server no-op body (src/tools/archive-entry.ts).
@@ -293,6 +467,48 @@ describe("OpenBrainLiveClient.archive", () => {
       .catch((e) => e as LiveTransportError);
     expect(err).toBeInstanceOf(LiveTransportError);
     expect(err.label).toBe("archive_entry:unrecognized-success");
+  });
+
+  it("FAILS CLOSED on archived:true bound to a DIFFERENT id or table", async () => {
+    // archived:true says a row was tombstoned but not WHICH row. If the returned
+    // id/table do not exactly match this request, the server tombstoned some
+    // other row (or the response drifted); crediting it would leave OUR record
+    // live while teardown reports clean. Fail closed content-free.
+    const wrongId = new OpenBrainLiveClient(
+      fakeCaller({
+        archive_entry: [
+          ok(
+            JSON.stringify({ id: "other", table: "thoughts", archived: true }),
+          ),
+        ],
+      }),
+    );
+    const wrongIdErr = await wrongId
+      .archive({ table: "thoughts", id: "x" })
+      .catch((e) => e as LiveTransportError);
+    expect(wrongIdErr).toBeInstanceOf(LiveTransportError);
+    expect(wrongIdErr.label).toBe("archive_entry:identity-mismatch");
+
+    const wrongTable = new OpenBrainLiveClient(
+      fakeCaller({
+        archive_entry: [
+          ok(JSON.stringify({ id: "x", table: "decisions", archived: true })),
+        ],
+      }),
+    );
+    const wrongTableErr = await wrongTable
+      .archive({ table: "thoughts", id: "x" })
+      .catch((e) => e as LiveTransportError);
+    expect(wrongTableErr.label).toBe("archive_entry:identity-mismatch");
+
+    // archived:true with the id/table missing entirely is equally unbound.
+    const missing = new OpenBrainLiveClient(
+      fakeCaller({ archive_entry: [ok(JSON.stringify({ archived: true }))] }),
+    );
+    const missingErr = await missing
+      .archive({ table: "thoughts", id: "x" })
+      .catch((e) => e as LiveTransportError);
+    expect(missingErr.label).toBe("archive_entry:identity-mismatch");
   });
 
   it("FAILS CLOSED (throws) on an unrecognized success shape -- never a false already_absent", async () => {
@@ -363,15 +579,115 @@ describe("OpenBrainLiveClient.archive", () => {
   });
 });
 
-describe("parseHits", () => {
-  it("ignores rows without a string id and non-array bodies", () => {
-    expect(parseHits("not json")).toEqual([]);
-    expect(parseHits(JSON.stringify({ id: "a" }))).toEqual([]);
-    expect(
-      parseHits(
-        JSON.stringify([{ id: 1 }, { id: "ok", source_type: "t" }]),
-      ).map((h) => h.id),
-    ).toEqual(["ok"]);
+describe("parseHits (fail-closed transport boundary)", () => {
+  // parseHits is the boundary every scored/probed hit passes through. A dropped
+  // raw result never reaches the gate-level validator (toFixtureRetrieval), so a
+  // malformed body or entry must FAIL CLOSED here, never be silently discarded --
+  // discarding would compress ranks or hide a foreign/malformed row before PASS.
+
+  it("FAILS CLOSED on a non-array success body (object) -- not an empty result", () => {
+    // The old behavior returned [] for a non-array body, conflating a malformed
+    // result set with a real empty read. It must now throw, content-free.
+    const err = (() => {
+      try {
+        parseHits(JSON.stringify({ id: "a" }));
+        return undefined;
+      } catch (e) {
+        return e as LiveTransportError;
+      }
+    })();
+    expect(err).toBeInstanceOf(LiveTransportError);
+    expect(err?.label).toBe("search_brain:malformed-results");
+  });
+
+  it("FAILS CLOSED on a non-array success body (scalar)", () => {
+    expect(() => parseHits(JSON.stringify(42))).toThrow(LiveTransportError);
+    expect(() => parseHits(JSON.stringify("a string"))).toThrow(
+      LiveTransportError,
+    );
+  });
+
+  it("FAILS CLOSED on invalid JSON (content-free malformed-results)", () => {
+    const err = (() => {
+      try {
+        parseHits("not json {");
+        return undefined;
+      } catch (e) {
+        return e as LiveTransportError;
+      }
+    })();
+    expect(err).toBeInstanceOf(LiveTransportError);
+    expect(err?.label).toBe("search_brain:malformed-results");
+    // Content-free: the raw body never appears in the label.
+    expect(err?.label).not.toContain("not json");
+  });
+
+  it("FAILS CLOSED on a non-object array entry -- never silently skipped", () => {
+    const err = (() => {
+      try {
+        parseHits(JSON.stringify([{ id: "ok" }, 7]));
+        return undefined;
+      } catch (e) {
+        return e as LiveTransportError;
+      }
+    })();
+    expect(err).toBeInstanceOf(LiveTransportError);
+    expect(err?.label).toBe("search_brain:malformed-hit");
+  });
+
+  it("FAILS CLOSED on an entry with a missing / non-string id", () => {
+    const missing = (() => {
+      try {
+        parseHits(JSON.stringify([{ source_type: "t" }]));
+      } catch (e) {
+        return e as LiveTransportError;
+      }
+    })();
+    expect(missing?.label).toBe("search_brain:malformed-hit");
+
+    const nonString = (() => {
+      try {
+        parseHits(JSON.stringify([{ id: 1, source_type: "t" }]));
+      } catch (e) {
+        return e as LiveTransportError;
+      }
+    })();
+    expect(nonString?.label).toBe("search_brain:malformed-hit");
+  });
+
+  it("FAILS CLOSED on an entry with an EMPTY string id", () => {
+    const err = (() => {
+      try {
+        parseHits(JSON.stringify([{ id: "", source_type: "t" }]));
+      } catch (e) {
+        return e as LiveTransportError;
+      }
+    })();
+    expect(err).toBeInstanceOf(LiveTransportError);
+    expect(err?.label).toBe("search_brain:malformed-hit");
+  });
+
+  it("preserves rank/order for valid rows and keeps namespace OPTIONAL", () => {
+    // Valid rows must survive in order; a valid row WITHOUT a namespace passes
+    // this boundary (it reaches gate.ts, which fails it as foreign-namespace) --
+    // requiring namespace here would mask that distinct gate-level classification.
+    const hits = parseHits(
+      JSON.stringify([
+        { id: "a", source_type: "thoughts", namespace: "ns" },
+        { id: "b", source_type: "decisions" }, // no namespace -> undefined, kept
+        { id: "c", source_type: "thoughts", namespace: "ns" },
+      ]),
+    );
+    expect(hits.map((h) => h.id)).toEqual(["a", "b", "c"]);
+    expect(hits[0]?.namespace).toBe("ns");
+    expect(hits[1]?.namespace).toBeUndefined();
+    expect(hits[2]?.namespace).toBe("ns");
+  });
+
+  it("returns an empty array for a genuinely empty result set", () => {
+    // An empty JSON array is a real "no hits" read, distinct from a malformed
+    // body -- it must NOT throw.
+    expect(parseHits("[]")).toEqual([]);
   });
 });
 

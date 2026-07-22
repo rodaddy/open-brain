@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 // Env-gated configuration for the live recall gate.
 //
 // The gate is OFF unless OPEN_BRAIN_LIVE_EVAL=1 is set, so `bun test` and the
@@ -45,22 +47,56 @@ export function liveEvalEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.OPEN_BRAIN_LIVE_EVAL === "1";
 }
 
+/** Max sanitized run-id length that is copied verbatim into a namespace. */
+const MAX_SAFE_RUN_ID_LEN = 80;
+/** Hex chars of the deterministic collision-suffix used when bounding. */
+const RUN_ID_HASH_LEN = 12;
+
+/**
+ * Bound a sanitized run id to a safe length WITHOUT losing uniqueness. A naive
+ * `.slice(0, N)` collides whenever two distinct run ids share their first N
+ * characters -- which is exactly what happens when a long operator label is
+ * suffixed with a per-invocation nonce: the nonce is past the cut and both runs
+ * enter the SAME namespace, where the second seed upserts onto the first run's
+ * stranded row.
+ *
+ * Instead, when the sanitized id exceeds the safe length, we keep a truncated
+ * prefix and append a deterministic short hash of the FULL sanitized id. Because
+ * the hash covers the whole input (including the trailing nonce), two ids that
+ * share only the first N characters produce different suffixes and therefore
+ * different namespaces. The hash is SHA-256 (pure/deterministic -- no
+ * Date.now/random), so this helper stays pinnable in tests.
+ */
+export function boundRunId(safe: string): string {
+  if (safe.length <= MAX_SAFE_RUN_ID_LEN) return safe;
+  const hash = createHash("sha256")
+    .update(safe)
+    .digest("hex")
+    .slice(0, RUN_ID_HASH_LEN);
+  // Reserve room for the "-<hash>" suffix so the bounded id still fits.
+  const prefixLen = MAX_SAFE_RUN_ID_LEN - RUN_ID_HASH_LEN - 1;
+  return `${safe.slice(0, prefixLen)}-${hash}`;
+}
+
 /**
  * Derive a unique per-run namespace pair from a run id. The run id is supplied
- * by the caller; the gate constructs it at startup from an operator-provided
- * run id or crypto randomness (see makeRunId), keeping this helper pure and
- * deterministic so unit tests can pin it (no Date.now/random here).
+ * by the caller; the gate constructs it at startup by combining an optional
+ * operator LABEL with a per-invocation crypto nonce (see makeRunId), keeping
+ * this helper pure and deterministic so unit tests can pin it (no
+ * Date.now/random here). Bounding preserves uniqueness: two run ids that share
+ * an 80-char prefix still map to distinct namespaces (see boundRunId).
  */
 export function runNamespaces(runId: string): {
   primary: string;
   negative: string;
 } {
-  const safe = runId.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 80);
-  if (safe.length === 0) {
+  const sanitized = runId.replace(/[^a-zA-Z0-9_-]/g, "-");
+  if (sanitized.length === 0) {
     throw new Error(
       "live eval run id must contain at least one usable character",
     );
   }
+  const safe = boundRunId(sanitized);
   return {
     primary: `eval-live-recall-${safe}`,
     negative: `eval-live-recall-${safe}-negative`,
@@ -70,12 +106,18 @@ export function runNamespaces(runId: string): {
 const DEFAULT_TIMEOUT_MS = 15_000;
 
 /**
- * Build a per-run id that is unique across repeated runs on the same commit.
+ * Build a per-run id that is unique across EVERY invocation, including repeated
+ * runs on the same commit and runs that reuse an operator-supplied label.
  *
- * Precedence:
- *  1. An explicit operator run id (OPEN_BRAIN_LIVE_EVAL_RUN_ID) -- reproducible.
- *  2. A crypto-random suffix combined with a caller-supplied prefix (e.g. the
- *     short commit) so two runs of the same commit never collide.
+ * The injected `randomHex` nonce is ALWAYS appended -- it is the only part of
+ * the id that guarantees uniqueness, so it is mandatory. The optional
+ * `OPEN_BRAIN_LIVE_EVAL_RUN_ID` is an operator LABEL (a human-readable prefix
+ * for triage), NOT a reusable namespace id: reusing a label would otherwise let
+ * two runs enter the same namespace, where the second seed upserts onto the
+ * first run's stranded row. The commit prefix is a fallback label. Precedence
+ * for the label is: explicit operator label > commit prefix > none.
+ *
+ * Shapes: `<label>-<nonce>`, `<prefix>-<nonce>`, or `<nonce>`.
  *
  * `randomHex` is injected so tests can assert the shape deterministically; the
  * gate passes a crypto.randomUUID-derived value. This function itself never
@@ -87,18 +129,17 @@ export function makeRunId(opts: {
   env?: NodeJS.ProcessEnv;
 }): string {
   const env = opts.env ?? process.env;
-  const explicit = (env.OPEN_BRAIN_LIVE_EVAL_RUN_ID ?? "").trim();
-  if (explicit.length > 0) {
-    return explicit;
-  }
-  const suffix = opts.randomHex.trim();
-  if (suffix.length === 0) {
+  const nonce = opts.randomHex.trim();
+  if (nonce.length === 0) {
+    // The nonce is the uniqueness guarantee; without it we cannot promise two
+    // invocations differ, so refuse rather than emit a reusable id.
     throw new Error(
-      "live eval run id needs an operator run id or a random suffix to stay unique across runs",
+      "live eval run id needs a crypto random suffix to stay unique across every invocation",
     );
   }
-  const prefix = opts.prefix.trim();
-  return prefix.length > 0 ? `${prefix}-${suffix}` : suffix;
+  const explicitLabel = (env.OPEN_BRAIN_LIVE_EVAL_RUN_ID ?? "").trim();
+  const label = explicitLabel.length > 0 ? explicitLabel : opts.prefix.trim();
+  return label.length > 0 ? `${label}-${nonce}` : nonce;
 }
 
 /**
