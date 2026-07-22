@@ -23,6 +23,7 @@ from __future__ import annotations
 import fcntl
 import json
 import logging
+import math
 import os
 import stat
 import tempfile
@@ -41,6 +42,9 @@ logger = logging.getLogger(__name__)
 DEFAULT_QUARANTINE_THRESHOLD = 5
 QUARANTINE_ENVELOPE_SCHEMA = "openbrain.spool_quarantine.v1"
 RETRY_STATE_SCHEMA = "openbrain.spool_retry_state.v1"
+# Sanity clamp for persisted retry counters: the sidecar is untrusted input
+# and an absurd counter must never propagate into arithmetic or output.
+_MAX_RETRY_STATE_FAILURES = 1_000_000
 
 
 class SpoolFullError(ValueError):
@@ -96,6 +100,12 @@ class SpoolStatus:
     # only — never payloads and never error message bodies.
     quarantined_count: int = 0
     retry_counts: Mapping[str, int] = field(default_factory=dict)
+    # last_success_at is the *pass-start* timestamp of the most recent replay
+    # pass that replayed at least one unit (not per-record dispatch time). It
+    # lives in the counters-only retry-state sidecar: losing it loses
+    # observability, never records. With multiple processes draining the same
+    # spool the sidecar is last-writer-wins, so this reflects the most
+    # recently committed pass, not necessarily the latest successful dispatch.
     last_success_at: float | None = None
 
 
@@ -653,10 +663,15 @@ class JsonlSpool:
         """Persist one replay pass: quarantine, spool rewrite, retry state.
 
         Crash-safety ordering (each write is individually atomic):
-        1. quarantine sidecar (deduped on unit key, so a crash between steps
-           1 and 2 cannot lose a unit and re-quarantines idempotently),
-        2. main spool rewrite without replayed/quarantined units,
-        3. retry-state sidecar. A crash before step 3 loses only retry
+        1. quarantine sidecar (keyed on unit key with REPLACE semantics, so a
+           crash between steps 1 and 3 cannot lose a unit and re-quarantines
+           idempotently while preserving the freshest lines),
+        2. quarantine-sidecar reconcile: stale entries for units that just
+           replayed successfully (left by a crash between steps 1 and 3 of a
+           prior pass) are removed before the spool rewrite, so a crash here
+           leaves the unit pending in the spool rather than a phantom entry,
+        3. main spool rewrite without replayed/quarantined units,
+        4. retry-state sidecar. A crash before step 4 loses only retry
            counters / last-success metadata, never spool records.
         """
         lock_fd = self._lock()
@@ -687,6 +702,11 @@ class JsonlSpool:
                     remaining_keys.add(unit_key)
             if quarantined_now:
                 self._append_quarantined_units(quarantined_now, now=now)
+            replayed_keys = {
+                self._unit_key(signature) for signature in replayed_units
+            }
+            if replayed_keys:
+                self._remove_quarantined_entries(replayed_keys)
             self._write_lines(remaining_lines)
             units: dict[str, _UnitRetryState] = {}
             for unit_key in remaining_keys:
@@ -712,6 +732,17 @@ class JsonlSpool:
         *,
         now: float,
     ) -> None:
+        """Persist quarantined units, replacing any prior entry per unit key.
+
+        Replacement (never skip) keeps the crash-window idempotency property —
+        re-quarantining after a crash between the sidecar append and the
+        main-spool rewrite converges to a single entry — while preserving the
+        freshest content: a unit an operator restored (possibly with edited
+        lines) that re-fails to threshold re-enters with its current spool
+        lines and fresh counts/timestamps, instead of being silently dropped
+        from both files. In-batch duplicates of the same unit key collapse to
+        one envelope per pass (last write wins).
+        """
         self._reject_symlink(self.quarantine_path)
         existing_lines = (
             self.quarantine_path.read_text(encoding="utf-8").splitlines(
@@ -720,16 +751,8 @@ class JsonlSpool:
             if self.quarantine_path.exists()
             else []
         )
-        existing_keys = {
-            envelope.get("unit_key")
-            for envelope in self._quarantine_envelopes(existing_lines)
-        }
-        new_lines: list[str] = []
+        fresh: dict[str, list[str]] = {}
         for unit_key, unit, state in entries:
-            if unit_key in existing_keys:
-                # Crash-window dedupe: the previous pass quarantined this unit
-                # but crashed before the main-spool rewrite persisted.
-                continue
             assert unit.records is not None
             envelope = {
                 "schema": QUARANTINE_ENVELOPE_SCHEMA,
@@ -745,28 +768,74 @@ class JsonlSpool:
                 "quarantined_at": now,
                 "line_count": len(unit.lines),
             }
-            new_lines.append(
-                json.dumps(envelope, sort_keys=True, separators=(",", ":")) + "\n"
-            )
-            new_lines.extend(unit.lines)
-        if new_lines:
-            self._atomic_write(self.quarantine_path, existing_lines + new_lines)
+            fresh[unit_key] = [
+                json.dumps(envelope, sort_keys=True, separators=(",", ":")) + "\n",
+                *unit.lines,
+            ]
+        kept_lines = self._quarantine_lines_without(existing_lines, set(fresh))
+        self._atomic_write(
+            self.quarantine_path,
+            kept_lines + [line for entry in fresh.values() for line in entry],
+        )
+
+    def _remove_quarantined_entries(self, unit_keys: set[str]) -> None:
+        """Drop sidecar entries for units that just replayed successfully.
+
+        A crash between the quarantine append and the main-spool rewrite
+        leaves a unit in both files; when the still-pending unit later
+        replays successfully, its stale sidecar entry is a phantom and is
+        removed here inside the same locked commit.
+        """
+        if not self.quarantine_path.exists():
+            return
+        self._reject_symlink(self.quarantine_path)
+        lines = self.quarantine_path.read_text(encoding="utf-8").splitlines(
+            keepends=True
+        )
+        kept = self._quarantine_lines_without(lines, unit_keys)
+        if len(kept) != len(lines):
+            self._atomic_write(self.quarantine_path, kept)
+
+    @classmethod
+    def _quarantine_lines_without(
+        cls,
+        lines: list[str],
+        unit_keys: set[str],
+    ) -> list[str]:
+        """Return sidecar lines minus each named envelope and its records."""
+        kept: list[str] = []
+        dropping = False
+        for line in lines:
+            envelope = cls._quarantine_envelope(line)
+            if envelope is not None:
+                key = envelope.get("unit_key")
+                dropping = isinstance(key, str) and key in unit_keys
+            if not dropping:
+                kept.append(line)
+        return kept
 
     @staticmethod
-    def _quarantine_envelopes(lines: Iterable[str]) -> list[dict[str, Any]]:
+    def _quarantine_envelope(line: str) -> dict[str, Any] | None:
+        if not line.strip():
+            return None
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            return None
+        if (
+            isinstance(value, dict)
+            and value.get("schema") == QUARANTINE_ENVELOPE_SCHEMA
+        ):
+            return value
+        return None
+
+    @classmethod
+    def _quarantine_envelopes(cls, lines: Iterable[str]) -> list[dict[str, Any]]:
         envelopes: list[dict[str, Any]] = []
         for line in lines:
-            if not line.strip():
-                continue
-            try:
-                value = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if (
-                isinstance(value, dict)
-                and value.get("schema") == QUARANTINE_ENVELOPE_SCHEMA
-            ):
-                envelopes.append(value)
+            envelope = cls._quarantine_envelope(line)
+            if envelope is not None:
+                envelopes.append(envelope)
         return envelopes
 
     def _quarantined_count(self) -> int:
@@ -804,10 +873,13 @@ class JsonlSpool:
             if parsed is not None:
                 units[unit_key] = parsed
         return _RetryState(
+            # json.loads accepts bare NaN/Infinity tokens: non-finite floats
+            # from the sidecar are treated as absent, never trusted.
             last_success_at=(
                 float(last_success_at)
                 if isinstance(last_success_at, int | float)
                 and not isinstance(last_success_at, bool)
+                and math.isfinite(last_success_at)
                 else None
             ),
             units=units,
@@ -823,6 +895,9 @@ class JsonlSpool:
         error_category = value.get("error_category")
         if isinstance(failures, bool) or not isinstance(failures, int):
             return None
+        # Zero/negative counters carry no information: treat as absent (the
+        # unit restarts with a fresh retry budget, which is also the safe
+        # direction — it can never quarantine early).
         if failures < 1:
             return None
         if isinstance(first_failure_at, bool) or not isinstance(
@@ -833,10 +908,16 @@ class JsonlSpool:
             last_failure_at, int | float
         ):
             return None
+        # json.loads accepts bare NaN/Infinity tokens: non-finite timestamps
+        # invalidate the entry (absent), and absurd counters are clamped.
+        if not math.isfinite(first_failure_at) or not math.isfinite(
+            last_failure_at
+        ):
+            return None
         if not isinstance(error_category, str):
             return None
         return _UnitRetryState(
-            consecutive_failures=failures,
+            consecutive_failures=min(failures, _MAX_RETRY_STATE_FAILURES),
             first_failure_at=float(first_failure_at),
             last_failure_at=float(last_failure_at),
             error_category=error_category,

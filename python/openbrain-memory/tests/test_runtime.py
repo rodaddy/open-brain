@@ -22,7 +22,7 @@ from openbrain_memory import (
     RuntimeConfig,
     RuntimeScope,
 )
-from openbrain_memory._runtime_spool import PARKED_NAMESPACE_KEY
+from openbrain_memory._runtime_spool import PARKED_NAMESPACE_KEY, TrackingSpool
 from openbrain_memory.cli import (
     MAX_JSON_INPUT_BYTES,
     encode_json_output,
@@ -833,6 +833,120 @@ def test_runtime_parked_start_record_carries_parking_namespace(
     assert records[0].payload[PARKED_NAMESPACE_KEY] == "bilby"
 
 
+class AppendFailingTransport(LaneAwareTransport):
+    """Healthy lane, failing appends: produces LONE non-start spooled units."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.fail_append = True
+
+    def post(self, url, *, headers, json_body, timeout):
+        if (
+            self.fail_append
+            and json_body.get("method") == "tools/call"
+            and json_body["params"]["name"] == "append_session_event"
+        ):
+            return self._tool_error(json_body["id"], "append unavailable")
+        return super().post(
+            url, headers=headers, json_body=json_body, timeout=timeout
+        )
+
+
+def test_lone_spooled_write_carries_namespace_and_replays_marker_stripped(
+    tmp_path: Path,
+) -> None:
+    transport = AppendFailingTransport()
+    spool = JsonlSpool(tmp_path / "runtime-spool.jsonl")
+    runtime = FirstClassMemoryRuntime(
+        runtime_config(),
+        runtime_scope(),
+        transport=transport,
+        spool=spool,
+    )
+
+    queued = runtime.capture_distilled("Lone queued capture")
+
+    assert queued.receipt.status is ReceiptStatus.SPOOLED
+    records = spool.records()
+    # The lane started live, so only the write itself was spooled: a lone
+    # non-session_start unit — and it still carries namespace provenance.
+    assert [record.operation for record in records] == ["append_session_event"]
+    assert records[0].payload[PARKED_NAMESPACE_KEY] == "bilby"
+
+    transport.fail_append = False
+    saved = runtime.capture_distilled("Recovery trigger")
+
+    assert saved.receipt.status is ReceiptStatus.SAVED
+    assert saved.drain is not None
+    assert saved.drain.replayed_units == 1
+    assert saved.drain.retained_units == 0
+    assert spool.status().pending_count == 0
+    appended = [
+        call["params"]["arguments"]
+        for call in tool_calls(transport)
+        if call["params"]["name"] == "append_session_event"
+    ]
+    assert any(
+        arguments.get("content") == "Lone queued capture" for arguments in appended
+    )
+    # The router never receives the client-internal marker as a kwarg.
+    assert all(PARKED_NAMESPACE_KEY not in arguments for arguments in appended)
+
+
+def test_lone_foreign_namespace_unit_is_retained_without_retry_accounting(
+    tmp_path: Path,
+) -> None:
+    scope = runtime_scope()
+    # Threshold 1 would quarantine on the first counted failure: proves the
+    # retained path counts nothing for lone non-start units too.
+    spool = JsonlSpool(tmp_path / "runtime-spool.jsonl", quarantine_threshold=1)
+    foreign = TrackingSpool(spool, namespace="other-namespace")
+    foreign.append(
+        "append_session_event",
+        {
+            **scope.start_metadata(),
+            "session_key": scope.session_key,
+            "agent": scope.agent,
+            "content": "Lone unit parked by another namespace",
+            "event_type": "fact",
+            "source": scope.agent,
+            "metadata": {"idempotency_key": "lone-foreign"},
+        },
+        key="lone-foreign",
+    )
+    assert spool.records()[0].payload[PARKED_NAMESPACE_KEY] == "other-namespace"
+    transport = LaneAwareTransport()
+    runtime = FirstClassMemoryRuntime(
+        runtime_config(),
+        scope,
+        transport=transport,
+        spool=spool,
+    )
+
+    for attempt in range(3):
+        saved = runtime.capture_distilled(f"Healthy write {attempt}")
+        assert saved.receipt.status is ReceiptStatus.SAVED
+        assert saved.drain is not None
+        assert saved.drain.retained_units == 1
+        assert saved.drain.failed_units == 0
+        assert saved.drain.quarantined_units == 0
+
+    # Retained in the spool with zero dispatches, zero retry increments, and
+    # never quarantined into this runtime's sidecar.
+    assert [record.idempotency_key for record in spool.records()] == [
+        "lone-foreign"
+    ]
+    status = spool.status()
+    assert status.retry_counts == {}
+    assert status.quarantined_count == 0
+    appended_contents = [
+        call["params"]["arguments"].get("content")
+        for call in tool_calls(transport)
+        if call["params"]["name"] == "append_session_event"
+    ]
+    assert "Lone unit parked by another namespace" not in appended_contents
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
@@ -904,7 +1018,7 @@ def test_flapping_provider_auto_drain_reports_replayed_receipts(
     assert saved.drain.replayed_records == 2
     assert saved.drain.failed_units == 0
     assert saved.drain.quarantined_units == 0
-    assert saved.drain.retained_foreign_units == 0
+    assert saved.drain.retained_units == 0
     statuses = [receipt.status for receipt in saved.drain.receipts]
     assert statuses == [ReceiptStatus.REPLAYED, ReceiptStatus.REPLAYED]
     assert [receipt.operation for receipt in saved.drain.receipts] == [
@@ -1033,7 +1147,7 @@ def test_foreign_parked_unit_never_accrues_retries_or_quarantines(
         saved = runtime.capture_distilled(f"Healthy write {attempt}")
         assert saved.receipt.status is ReceiptStatus.SAVED
         assert saved.drain is not None
-        assert saved.drain.retained_foreign_units == 1
+        assert saved.drain.retained_units == 1
         assert saved.drain.quarantined_units == 0
         assert saved.drain.failed_units == 0
 

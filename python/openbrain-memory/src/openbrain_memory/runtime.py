@@ -364,6 +364,10 @@ class DrainReport:
     because the unit's redacted lines still exist on disk in the quarantine
     sidecar — the write was not delivered, but it was not lost, and an
     operator can restore-and-replay it.
+
+    ``retained_units`` counts units left parked in the spool without any
+    dispatch or failure accounting, for either reason: foreign-namespace
+    provenance (#314) or a parked scope the record cannot prove.
     """
 
     attempted_units: int
@@ -371,7 +375,7 @@ class DrainReport:
     replayed_records: int
     failed_units: int
     quarantined_units: int
-    retained_foreign_units: int
+    retained_units: int
     receipts: tuple[RuntimeReceipt, ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
@@ -382,7 +386,7 @@ class DrainReport:
             "replayed_records": self.replayed_records,
             "failed_units": self.failed_units,
             "quarantined_units": self.quarantined_units,
-            "retained_foreign_units": self.retained_foreign_units,
+            "retained_units": self.retained_units,
             "receipts": [receipt.as_dict() for receipt in self.receipts],
         }
 
@@ -744,20 +748,27 @@ class FirstClassMemoryRuntime:
                         f"Unsupported spooled operation: {record.operation}"
                     )
                 payload = dict(record.payload)
+                # A record parked by a runtime configured for another
+                # namespace must stay parked: draining it here would
+                # silently transplant its content into this runtime's
+                # namespace. Provenance is stamped on EVERY spooled record
+                # (session_start since #314, all replayable operations since
+                # PR #317), so lone non-start units are covered too. Raised
+                # as SpoolUnitRetained so retention never counts toward
+                # quarantine. Honest legacy carve-out (mirrors
+                # docs/memory-contract.md): records already on disk without
+                # the marker — spooled before the stamping landed, or by a
+                # namespace-less runtime config — carry no provenance and
+                # drain under the replaying runtime's namespace.
+                parked_namespace = payload.pop(PARKED_NAMESPACE_KEY, None)
+                if (
+                    parked_namespace is not None
+                    and parked_namespace != self.config.namespace
+                ):
+                    raise SpoolUnitRetained(
+                        "spooled unit parked under a different namespace"
+                    )
                 if record.operation == "session_start":
-                    # A unit parked by a runtime configured for another
-                    # namespace must stay parked: draining it here would
-                    # silently transplant its lane content into this
-                    # runtime's namespace. Raised as SpoolUnitRetained so
-                    # retention (#314) never counts toward quarantine.
-                    parked_namespace = payload.pop(PARKED_NAMESPACE_KEY, None)
-                    if (
-                        parked_namespace is not None
-                        and parked_namespace != self.config.namespace
-                    ):
-                        raise SpoolUnitRetained(
-                            "spooled unit parked under a different namespace"
-                        )
                     # Validate the replayed lane against the scope the unit was
                     # parked under, not the runtime's current scope, so units
                     # from another project drain instead of re-failing forever
@@ -801,7 +812,7 @@ class FirstClassMemoryRuntime:
             replayed_records=replayed_records,
             failed_units=counts["failed"],
             quarantined_units=counts["quarantined"],
-            retained_foreign_units=counts["retained"],
+            retained_units=counts["retained"],
             receipts=tuple(receipts),
         )
 
