@@ -368,3 +368,42 @@ row's `archived_at` stays NULL and the owning-namespace call succeeds
   with a paired owning-identity success proving the test is not vacuous?
 - Are all roles sharing the guarded branch parameterized, so a future
   role-specific branch cannot silently un-scope one of them?
+
+## [2026-07-22] Denial classification must win over generic keywords in a mixed error body
+
+**Severity:** MEDIUM (P2)
+**Source:** PR #348 review swarm, 2026-07-22 (issue #322 live recall gate)
+**Scope:** `eval/open-brain/live/transport.ts` (`redactToolFailure`,
+`sanitizeThrownTransportError`), any content-free error classifier that picks a
+single keyword from an allowlist by first-match
+**Status:** fixed-pre-merge
+
+### Pattern
+
+The content-free redactor selected the error keyword with a single
+`KEYWORDS.find(kw => body.includes(kw))` over one flat array. Server error
+bodies routinely mix phrases — "invalid request: unauthorized for namespace",
+"invalid archive: forbidden" — and because `"invalid"` sat ahead of
+`"unauthorized"` / `"forbidden"` in the array, first-match returned the generic
+keyword and the label was classified as a NON-denial error. That silently
+weakens the two places denial classification matters: the isolation proof (a
+real permission denial mislabeled as a plain error is not counted as isolation
+proof) and a teardown/auth failure (a namespace/permission refusal read as a
+generic error loses its security meaning). Fixed by splitting the allowlist into
+denial keywords (`permission denied`, `not authenticated`, `unauthorized`,
+`forbidden`) matched FIRST, then generic keywords, so a mixed body always
+classifies as a denial regardless of array order.
+
+### Review Questions
+
+- Does any single-keyword error/label classifier depend on array ORDER to pick
+  the "right" keyword, when a real body can contain more than one match?
+- Are the security-relevant signals (denial / auth / permission) matched with
+  explicit precedence over generic ones (invalid / not-found / timeout), not by
+  incidental list position?
+- Is there a mixed-body test for BOTH the response-error path
+  (`redactToolFailure`) and the thrown-error path
+  (`sanitizeThrownTransportError`), asserting the denial keyword wins over a
+  leading generic keyword AND over a bare HTTP status code?
+- Does a generic-only body still classify as non-denial (no over-broad
+  promotion of every error to a denial)?

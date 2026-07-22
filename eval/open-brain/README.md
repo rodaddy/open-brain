@@ -146,7 +146,46 @@ durable, intentionally-pinned baseline path is chosen.
 - `1` — the gate ran but failed a threshold, the isolation proof, or teardown.
 - `2` — a setup/transport error (missing env, unreachable server, seeding or
   query failure). Error output is content-free: an error class + redacted label
-  only, never a raw remote message or response body.
+  only, never a raw remote message or response body. When a deferred seed/query
+  failure also stranded records during teardown, the redacted error label
+  carries a `;teardown-failed=<n>` suffix (the integer count only — never a
+  record id or body) so the cleanup failure is not lost behind the setup error.
+
+### Residual risk: a commit that succeeds but times out on the response
+
+The gate treats a seed/archive whose *response* is not received (a request
+timeout, a dropped connection after the server committed, or an ambiguous
+success body) as a failure — this is the correct default, because a destructive
+teardown must fail closed rather than assume a row is gone. `archive_entry`
+recognizes only two positive shapes: an explicit archived success or an explicit
+already-absent / not-found marker. Every other success response throws a
+content-free `LiveTransportError`, so teardown can never false-pass.
+
+The residual is the write direction: if a `log_*` seed **commits server-side but
+the response is lost**, the gate never learns the server id, so teardown cannot
+archive that specific record. It is not silently counted as clean — the run
+fails (exit `2`, or a `teardown-failed` count if the loss happens during
+teardown) — but the committed row is left live under this run's unique
+throwaway namespace. The gate deliberately does **not** add a bulk or
+query-shaped delete to sweep it up: a query-shaped delete would be able to touch
+records the run did not create, which is exactly the mutation-safety property
+the per-record `archive_entry` teardown exists to guarantee. Broad cleanup is
+rejected by design.
+
+Because every run seeds under a **unique per-run namespace pair**
+(`eval-live-recall-<run-id>` and its `-negative` sibling), a stranded record is
+isolated to that one dead namespace and can never contaminate another run's
+scoring or a real memory namespace. Recovering a stranded record is therefore a
+bounded, operator-driven cleanup, not a gate responsibility:
+
+1. Identify the affected run id from the failed run's redacted receipt/output
+   (`namespace=eval-live-recall-<run-id>`). No id or body is needed.
+2. As an operator (not the gate), archive or delete exactly the records under
+   that unique namespace pair through the normal namespace-scoped admin tools.
+   Because the namespace is unique to the dead run, scoping cleanup to it cannot
+   touch any other run's or any real namespace's data.
+3. Never widen this into an automatic sweep inside the gate — the per-record,
+   namespace-scoped teardown is the only mutation the gate is allowed to make.
 
 ## Next Expansion Points
 

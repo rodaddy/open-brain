@@ -115,6 +115,8 @@ interface FakeState {
   seeded: Map<string, { table: string; namespace: string }>;
   archived: string[];
   closed: number;
+  /** Namespaces the PRIMARY caller's isolation probe (attemptRead) targeted. */
+  attemptReadNamespaces: string[];
 }
 
 /**
@@ -131,7 +133,12 @@ function makeFakeClients(
   clients: GateClients;
   state: FakeState;
 } {
-  const state: FakeState = { seeded: new Map(), archived: [], closed: 0 };
+  const state: FakeState = {
+    seeded: new Map(),
+    archived: [],
+    closed: 0,
+    attemptReadNamespaces: [],
+  };
   const serverId = (fixtureId: string) => `srv-${fixtureId}`;
 
   const seedFail = new Set(opts.seedFailFor ?? []);
@@ -179,7 +186,15 @@ function makeFakeClients(
             namespace: o.namespace,
           }));
       },
-      async attemptRead(): Promise<{ denied: boolean; hitCount: number }> {
+      async attemptRead(o: {
+        namespace: string;
+      }): Promise<{ denied: boolean; hitCount: number }> {
+        // Record the namespace the PRIMARY isolation probe targeted so a test can
+        // pin the live-proven call shape: the gate must probe the NEGATIVE
+        // namespace with the PRIMARY caller.
+        if (role === "primary") {
+          state.attemptReadNamespaces.push(o.namespace);
+        }
         switch (opts.negativeRead ?? "denied") {
           case "denied":
             return { denied: true, hitCount: 0 };
@@ -256,6 +271,14 @@ describe("runLiveGate happy path", () => {
     expect(receipt.negative_control.ran).toBe(true);
     expect(receipt.negative_control.denied).toBe(true);
     expect(receipt.negative_control.cross_token).toBe(false);
+    // The isolation probe used the PRIMARY caller against the NEGATIVE namespace
+    // -- pin the live-proven call shape so a future refactor cannot silently
+    // probe the primary namespace (which would prove nothing).
+    expect(state.attemptReadNamespaces.length).toBeGreaterThan(0);
+    for (const ns of state.attemptReadNamespaces) {
+      expect(ns).toBe(CONFIG.negativeNamespace);
+    }
+    expect(state.attemptReadNamespaces).not.toContain(CONFIG.primaryNamespace);
     // Teardown archived exactly the 3 seeded records, nothing stranded.
     expect(receipt.teardown).toEqual({
       attempted: 3,
@@ -298,6 +321,32 @@ describe("runLiveGate teardown discipline", () => {
     await expect(outcome).rejects.toThrow(LiveTransportError);
     // All 3 records were seeded before the query failed -> all 3 archived.
     expect(state.archived.length).toBe(3);
+  });
+
+  it("preserves the content-free teardown failed COUNT when the deferred error is rethrown", async () => {
+    // A query throws (deferred) AND one archive fails during teardown. The
+    // rethrown error must carry the stranded-record count (content-free) so the
+    // teardown failure is not lost behind the query error -- but never a record
+    // id, body, or raw error string.
+    const { outcome } = run(FIXTURE, {
+      searchThrows: true,
+      archiveFailFor: ["prim-a"],
+    });
+    const err = await outcome.catch((e) => e as LiveTransportError);
+    expect(err).toBeInstanceOf(LiveTransportError);
+    // Original redacted label preserved, teardown count appended.
+    expect(err.label).toBe("search_brain:timeout;teardown-failed=1");
+    expect(err.message).toBe("search_brain:timeout;teardown-failed=1");
+    // Content-free: no ids or bodies.
+    expect(err.label).not.toContain("srv-");
+    expect(err.label).not.toContain("body");
+  });
+
+  it("leaves the deferred error unchanged when teardown strands nothing", async () => {
+    const { outcome } = run(FIXTURE, { searchThrows: true });
+    const err = await outcome.catch((e) => e as LiveTransportError);
+    // No teardown failure -> label is untouched (no suffix).
+    expect(err.label).toBe("search_brain:timeout");
   });
 
   it("fails the gate (never PASS) when a teardown archive fails", async () => {

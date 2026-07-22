@@ -195,6 +195,23 @@ export class OpenBrainLiveClient {
    * can only ever archive records it owns -- this is what makes per-record
    * teardown mutation-safe. Returns "archived", "already_absent", or throws a
    * redacted LiveTransportError.
+   *
+   * A destructive teardown operation MUST fail closed on an ambiguous success.
+   * archive_entry has exactly two real successful response shapes on the server
+   * (src/tools/archive-entry.ts): a JSON object `{id, table, archived: true}`
+   * for a row it tombstoned, and the EXACT plain-text body
+   * "Already archived or not found" for the zero-row no-op. We recognize only
+   * those two -- `archived: true`, or that exact marker (trimmed,
+   * case-insensitive) -- and throw a content-free LiveTransportError for EVERY
+   * other success response.
+   *
+   * We deliberately do NOT accept a structured `archived: false` (the server
+   * never emits it), nor broad substrings like "not found" / "no rows", nor a
+   * marker embedded in mixed text: any of those could false-pass on unrelated
+   * output. Treating an unrecognized success as "already_absent" would let
+   * teardown false-pass -- a shape drift, a differently-worded body, or a
+   * success that did not actually tombstone the row would be silently counted
+   * as clean cleanup, stranding a live record while the gate reports PASS.
    */
   async archive(opts: {
     table: LiveMemoryTable;
@@ -208,10 +225,17 @@ export class OpenBrainLiveClient {
       throw new LiveTransportError(result.errorLabel, result.denied);
     }
     const parsed = safeJson(result.data);
+    // Explicit archived success: the JSON object the server returns for a row
+    // it tombstoned. Only `archived: true` counts.
     if (parsed?.archived === true) return "archived";
-    // The tool returns a plain-text "Already archived or not found" body when
-    // the row is absent or already tombstoned.
-    return "already_absent";
+    // Exact already-absent no-op marker: the server returns the plain-text body
+    // "Already archived or not found" (and nothing else) for the zero-row case.
+    if (isAlreadyAbsentMarker(result.data)) return "already_absent";
+    // Any other success shape -- a structured `archived: false`, a partial or
+    // mixed-text marker, "no rows", or an unknown body -- is ambiguous for a
+    // destructive operation: fail closed content-free rather than assume the
+    // row is gone.
+    throw new LiveTransportError("archive_entry:unrecognized-success", false);
   }
 
   close(): Promise<void> {
@@ -241,6 +265,25 @@ export function parseHits(text: string): SearchHit[] {
   return hits;
 }
 
+/**
+ * The exact plain-text no-op marker archive_entry returns for the zero-row case
+ * (src/tools/archive-entry.ts): "Already archived or not found", and nothing
+ * else. This is the ONLY non-structured success shape teardown treats as "the
+ * row is gone".
+ *
+ * Matching is EXACT (trimmed, case-insensitive) -- not substring -- on purpose:
+ * a destructive teardown must fail closed, so a partial phrase ("not found"),
+ * "no rows", or the marker embedded in incidental/mixed text must NOT classify,
+ * because any of those could false-pass on unrelated server output. Anything
+ * that is not exactly this marker fails closed at the caller. The raw text is
+ * never logged or returned -- only the boolean.
+ */
+const ARCHIVE_ABSENT_MARKER = "already archived or not found";
+
+function isAlreadyAbsentMarker(text: string): boolean {
+  return text.trim().toLowerCase() === ARCHIVE_ABSENT_MARKER;
+}
+
 function safeJson(text: string): Record<string, unknown> | undefined {
   try {
     const value = JSON.parse(text);
@@ -262,22 +305,53 @@ function safeJsonArray(text: string): unknown[] | undefined {
 }
 
 /**
- * Server error bodies the gate is willing to name in a content-free label. Only
- * these known, non-sensitive tokens are ever copied out of a response; anything
- * else collapses to "error", so a memory body or secret in the error text can
- * never leak into a log or receipt.
+ * Denial keywords: a permission/namespace/auth refusal. These are the security-
+ * relevant signals the isolation proof depends on, so they are classified FIRST,
+ * ahead of any generic error keyword. A server body can legitimately mix a
+ * denial phrase with a generic one (e.g. "invalid request: permission denied for
+ * namespace"); if a generic keyword like "invalid" were matched first, a real
+ * denial would be mislabeled as a non-denial error and the isolation proof (or a
+ * teardown auth failure) would be silently misread. Denial precedence closes
+ * that classification hole.
  */
-const REDACTED_ERROR_KEYWORDS: readonly string[] = [
+const DENIAL_ERROR_KEYWORDS: readonly string[] = [
   "permission denied",
   "not authenticated",
+  "unauthorized",
+  "forbidden",
+];
+
+/**
+ * Generic (non-denial) error bodies the gate is willing to name in a content-
+ * free label. Matched only AFTER the denial keywords above, so a mixed body that
+ * contains a denial phrase always classifies as a denial regardless of array
+ * order.
+ */
+const GENERIC_ERROR_KEYWORDS: readonly string[] = [
   "invalid",
   "not found",
   "already archived",
   "rate limit",
   "timeout",
-  "unauthorized",
-  "forbidden",
 ];
+
+/**
+ * The full allowlist of non-sensitive tokens the gate may copy out of a
+ * response is exactly DENIAL_ERROR_KEYWORDS followed by GENERIC_ERROR_KEYWORDS.
+ * Only these tokens are ever emitted; anything else collapses to a bare marker,
+ * so a memory body or secret in the error text can never leak into a log or
+ * receipt.
+ *
+ * Select the single keyword to name in a content-free label, prioritizing any
+ * denial keyword over every generic one so a mixed body classifies as a denial.
+ * Returns undefined when no known keyword is present.
+ */
+function matchRedactedKeyword(lower: string): string | undefined {
+  return (
+    DENIAL_ERROR_KEYWORDS.find((kw) => lower.includes(kw)) ??
+    GENERIC_ERROR_KEYWORDS.find((kw) => lower.includes(kw))
+  );
+}
 
 /** True when the redacted error signal indicates a permission/namespace denial. */
 export function isDenialLabel(label: string): boolean {
@@ -299,7 +373,7 @@ export function redactToolFailure(
   rawText: string,
 ): { errorLabel: string; denied: boolean } {
   const lower = rawText.toLowerCase();
-  const matched = REDACTED_ERROR_KEYWORDS.find((kw) => lower.includes(kw));
+  const matched = matchRedactedKeyword(lower);
   const slug = matched ? matched.replace(/\s+/g, "-") : "error";
   const errorLabel = `${toolName}:${slug}`;
   return { errorLabel, denied: isDenialLabel(errorLabel) };
@@ -329,9 +403,7 @@ export function sanitizeThrownTransportError(
   }
   const raw = error instanceof Error ? error.message : String(error);
   const lower = raw.toLowerCase();
-  const matchedKeyword = REDACTED_ERROR_KEYWORDS.find((kw) =>
-    lower.includes(kw),
-  );
+  const matchedKeyword = matchRedactedKeyword(lower);
   const statusMatch = /\b([1-5]\d{2})\b/.exec(raw);
   let slug: string;
   if (matchedKeyword) {

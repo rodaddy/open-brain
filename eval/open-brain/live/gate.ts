@@ -131,6 +131,30 @@ async function teardown(
 }
 
 /**
+ * Preserve the content-free teardown failed COUNT when a deferred seed/query
+ * error is rethrown after teardown. When nothing was stranded (failed === 0),
+ * the original error passes through unchanged. When records were stranded, a new
+ * LiveTransportError carries the original (already-redacted) label with a
+ * `;teardown-failed=<n>` suffix -- only the integer count, never a record id,
+ * body, or raw error string -- and preserves the original `denied` flag. A
+ * non-LiveTransportError is left untouched so we never widen an unknown error's
+ * content-free guarantees.
+ */
+export function withTeardownFailedCount(
+  error: unknown,
+  teardownFailed: number,
+): unknown {
+  if (teardownFailed <= 0) return error;
+  if (error instanceof LiveTransportError) {
+    return new LiveTransportError(
+      `${error.label};teardown-failed=${teardownFailed}`,
+      error.denied,
+    );
+  }
+  return error;
+}
+
+/**
  * Build the fixture-local retrieved-id list for one probe from live search hits.
  * Maps server ids back to fixture ids using the seed map, and appends any
  * forbidden (negative-namespace) server id that leaked so the metric can count
@@ -287,7 +311,11 @@ export async function runLiveGate(opts: RunGateOptions): Promise<GateOutcome> {
   const teardownTally = await teardown(seeded, clients);
 
   if (deferredError) {
-    throw deferredError;
+    // Re-raise the original (already content-free) seed/query error, but preserve
+    // the teardown failed COUNT so a partial-failure run that also stranded
+    // records does not silently lose that signal. Only the integer count is
+    // attached -- never a record id, body, or raw error string.
+    throw withTeardownFailedCount(deferredError, teardownTally.failed);
   }
 
   // --- Score + threshold ---

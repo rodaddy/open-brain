@@ -81,6 +81,49 @@ describe("redactToolFailure (content-free error boundary)", () => {
     expect(isDenialLabel("search_brain:not-found")).toBe(false);
     expect(isDenialLabel("log_thought:error")).toBe(false);
   });
+
+  it("prioritizes a denial keyword over a generic one in a mixed body", () => {
+    // A body that mixes "invalid" with "unauthorized" must classify as a denial:
+    // the generic keyword appears first lexically, but denial precedence wins so
+    // the isolation proof / auth failure is never misread as a plain error.
+    const mixed = redactToolFailure(
+      "search_brain",
+      "Invalid request: unauthorized for namespace 'neg'",
+    );
+    expect(mixed.errorLabel).toBe("search_brain:unauthorized");
+    expect(mixed.denied).toBe(true);
+
+    const mixed2 = redactToolFailure(
+      "archive_entry",
+      "invalid archive: forbidden for this namespace",
+    );
+    expect(mixed2.errorLabel).toBe("archive_entry:forbidden");
+    expect(mixed2.denied).toBe(true);
+
+    // "permission denied" also wins over a leading "invalid".
+    const mixed3 = redactToolFailure(
+      "search_brain",
+      "invalid: permission denied reading namespace",
+    );
+    expect(mixed3.errorLabel).toBe("search_brain:permission-denied");
+    expect(mixed3.denied).toBe(true);
+  });
+
+  it("keeps a generic label when no denial keyword is present", () => {
+    const generic = redactToolFailure("log_thought", "invalid payload shape");
+    expect(generic.errorLabel).toBe("log_thought:invalid");
+    expect(generic.denied).toBe(false);
+  });
+
+  it("sanitizeThrownTransportError prioritizes a mixed-body denial keyword", () => {
+    const err = sanitizeThrownTransportError(
+      "connect",
+      new Error("HTTP 400 invalid request: forbidden token for namespace"),
+    );
+    // Denial keyword wins over both "invalid" and the status code.
+    expect(err.label).toBe("connect:forbidden");
+    expect(err.denied).toBe(true);
+  });
 });
 
 describe("OpenBrainLiveClient.logMemory", () => {
@@ -216,17 +259,98 @@ describe("OpenBrainLiveClient.attemptRead (isolation probe)", () => {
 });
 
 describe("OpenBrainLiveClient.archive", () => {
-  it("maps archived=true to 'archived' and absent to 'already_absent'", async () => {
+  it("maps archived=true to 'archived' and the EXACT absent marker to 'already_absent'", async () => {
     const c1 = new OpenBrainLiveClient(
       fakeCaller({ archive_entry: [ok(JSON.stringify({ archived: true }))] }),
     );
     expect(await c1.archive({ table: "thoughts", id: "x" })).toBe("archived");
+    // The exact server no-op body (src/tools/archive-entry.ts).
     const c2 = new OpenBrainLiveClient(
       fakeCaller({ archive_entry: [ok("Already archived or not found")] }),
     );
     expect(await c2.archive({ table: "thoughts", id: "y" })).toBe(
       "already_absent",
     );
+    // Trimmed + case-insensitive: whitespace/case variants of the exact marker
+    // still classify (the server body, tolerantly matched, nothing more).
+    const c3 = new OpenBrainLiveClient(
+      fakeCaller({ archive_entry: [ok("  ALREADY archived or not found  ")] }),
+    );
+    expect(await c3.archive({ table: "thoughts", id: "z" })).toBe(
+      "already_absent",
+    );
+  });
+
+  it("FAILS CLOSED on a structured archived=false -- the server never emits it", async () => {
+    // archive_entry has exactly two success shapes: {archived:true} or the exact
+    // plain-text marker. A structured {archived:false} is an unrecognized shape
+    // and must fail closed, never a silent already_absent.
+    const c = new OpenBrainLiveClient(
+      fakeCaller({ archive_entry: [ok(JSON.stringify({ archived: false }))] }),
+    );
+    const err = await c
+      .archive({ table: "thoughts", id: "y" })
+      .catch((e) => e as LiveTransportError);
+    expect(err).toBeInstanceOf(LiveTransportError);
+    expect(err.label).toBe("archive_entry:unrecognized-success");
+  });
+
+  it("FAILS CLOSED (throws) on an unrecognized success shape -- never a false already_absent", async () => {
+    // The destructive-teardown hole: a success body that neither confirms an
+    // archive nor matches the already-absent marker must NOT be silently counted
+    // as clean cleanup. That would strand a live record while PASS is reported.
+    const ambiguous = new OpenBrainLiveClient(
+      fakeCaller({
+        archive_entry: [ok(JSON.stringify({ status: "queued", ok: true }))],
+      }),
+    );
+    const ambiguousErr = await ambiguous
+      .archive({ table: "thoughts", id: "z" })
+      .catch((e) => e as LiveTransportError);
+    expect(ambiguousErr).toBeInstanceOf(LiveTransportError);
+    // Content-free label: names the tool + a marker, never the raw body.
+    expect(ambiguousErr.label).toBe("archive_entry:unrecognized-success");
+
+    // An empty body is also ambiguous -> fail closed.
+    const empty = new OpenBrainLiveClient(
+      fakeCaller({ archive_entry: [ok("")] }),
+    );
+    await expect(empty.archive({ table: "thoughts", id: "z" })).rejects.toThrow(
+      LiveTransportError,
+    );
+
+    // A non-JSON body that is NOT an absent marker is ambiguous -> fail closed.
+    const junk = new OpenBrainLiveClient(
+      fakeCaller({ archive_entry: [ok("row body: private grommet note")] }),
+    );
+    const junkErr = junk
+      .archive({ table: "thoughts", id: "z" })
+      .catch((e) => e as LiveTransportError);
+    const resolved = await junkErr;
+    expect(resolved).toBeInstanceOf(LiveTransportError);
+    expect(resolved.label).not.toContain("grommet");
+  });
+
+  it("FAILS CLOSED on partial / mixed-text markers -- only the exact marker passes", async () => {
+    // Under the exact-marker contract, a body that merely CONTAINS "not found"
+    // (or "no rows", or the marker embedded in incidental text) must NOT be
+    // treated as the absent no-op: it could false-pass on unrelated output.
+    const cases = [
+      "archive_entry: row not found (already tombstoned)", // marker embedded in mixed text
+      "not found", // partial substring of the marker
+      "no rows", // never a real archive_entry body
+      "Already archived or not found. extra tail", // exact marker + trailing text
+    ];
+    for (const body of cases) {
+      const c = new OpenBrainLiveClient(
+        fakeCaller({ archive_entry: [ok(body)] }),
+      );
+      const err = await c
+        .archive({ table: "thoughts", id: "y" })
+        .catch((e) => e as LiveTransportError);
+      expect(err).toBeInstanceOf(LiveTransportError);
+      expect(err.label).toBe("archive_entry:unrecognized-success");
+    }
   });
 
   it("throws a redacted LiveTransportError when archive errors", async () => {
