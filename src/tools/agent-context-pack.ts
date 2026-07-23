@@ -530,12 +530,18 @@ export async function buildAgentContextPackPayload(
   //   - degrades content-free on database failure,
   //   - carries a citation_id + bounded source_ref on every item.
   //
-  // Fitting mirrors working_set/recovery: item-bearing sections keyed by `id`,
-  // fit by serialized length via fitItemSection, oldest-item-first trimming, and
-  // citations reconciled to the surviving items after the re-fit so the
+  // Fitting is item-bearing sections keyed by `id`, fit by serialized length,
+  // with citations reconciled to the surviving items after the re-fit so the
   // citation set stays a bijection of the emitted items. When there is no
   // whole-pack budget the loader's per-section item budget is authoritative and
   // no re-fit runs.
+  //
+  // Trim direction differs from working_set/recovery: those append stores are
+  // oldest-first (newest at the tail), so fitItemSection drops the front. These
+  // three loaders emit newest/current items first (ORDER BY created_at DESC /
+  // updated_at DESC), so the current head must survive and the oldest/lowest-
+  // priority tail is dropped — fitItemSection(..., "tail"). Front-dropping here
+  // would keep stale older guidance/facts and shed the newest current ones.
   //
   // A section-level SectionQuery wrapper adapts the shared read pool to the
   // section modules' minimal query surface.
@@ -597,6 +603,7 @@ export async function buildAgentContextPackPayload(
       body as { items: Array<{ id: string }>; item_count: number },
       ["item_count"],
       serving,
+      "tail",
     );
     // Whole-pack truth: when the re-fit drops any item the emitted body must say
     // so on its own `truncated` flag — a downstream reader trusts the section

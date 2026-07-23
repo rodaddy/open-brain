@@ -634,6 +634,78 @@ describe("hard serialized whole-pack budget and higher-priority survival", () =>
   });
 });
 
+describe("newest-first whole-pack trim preserves the current head", () => {
+  it("keeps the newest guidance item and drops the older one when only one fits", async () => {
+    // Two promoted, distinct-key preferences. The loader emits them newest-first
+    // (SQL returns created_at DESC), so items[0] is the NEWEST/current guidance
+    // and items[1] the older one. Under a whole-pack budget that admits exactly
+    // one, the head-drop fitter used by working_set/recovery would have kept the
+    // OLDER tail item and shed the newest — the #328 bug. The newest-first fitter
+    // must keep the current head and drop the oldest tail instead.
+    const older = prefRow({
+      id: "old",
+      created_at: "2026-07-10T10:00:00Z",
+      candidate_scope: { key: "k-old" },
+      content: "STALE " + "o".repeat(300),
+    });
+    const newer = prefRow({
+      id: "new",
+      created_at: "2026-07-20T10:00:00Z",
+      candidate_scope: { key: "k-new" },
+      content: "CURRENT " + "n".repeat(300),
+    });
+    // Real SQL orders created_at DESC: newest ("new") first, older ("old") last.
+    const { pool } = routingPool({ guidance: () => [newer, older] });
+    const { client, cleanup } = await setupToolClient(ADMIN, pool);
+    try {
+      // A budget that admits the section envelope plus exactly one ~300-char
+      // item (one-item sections serialize to 716 chars) but not both (1252).
+      // max_tokens 480 => 720-char whole-pack budget lands in that window.
+      const maxTokens = 480;
+      const { payload } = await callPack(client, {
+        requested_sections: ["profile_guidance"],
+        budget: { max_tokens: maxTokens },
+      });
+      const section = payload.sections.profile_guidance;
+      // Exactly one item survived — a genuine one-of-two trim.
+      expect(section.item_count).toBe(1);
+      expect(section.items).toHaveLength(1);
+      // The survivor is the NEWEST/current item, not the older tail one.
+      expect(section.items[0].id).toBe("new");
+      expect(section.items[0].guidance).toContain("CURRENT");
+      // The emitted body declares the partial trim; it is not an empty state.
+      expect(section.truncated).toBe(true);
+      expect(section.empty_reason).toBeUndefined();
+      // Hard serialized budget: the whole sections object stays within the limit.
+      const contentBudget = maxTokens * 4 - 1200;
+      expect(JSON.stringify(payload.sections).length).toBeLessThanOrEqual(
+        Math.max(2, contentBudget),
+      );
+      // Citation bijection: exactly the surviving item's citation remains — the
+      // dropped older item's citation is gone.
+      const sessionCitations = payload.citations.filter(
+        (c: Row) => c.kind === "session_event",
+      );
+      expect(sessionCitations).toEqual([
+        {
+          id: "session_event:new",
+          kind: "session_event",
+          source_ref: "ob_session_events/new",
+        },
+      ]);
+      // A whole-pack truncation marker names the trimmed section.
+      expect(payload.warnings.truncation).toContainEqual(
+        expect.objectContaining({
+          source: "profile_guidance",
+          reason: "whole_pack_budget",
+        }),
+      );
+    } finally {
+      await cleanup();
+    }
+  });
+});
+
 describe("prompt-placement ownership and no MCP _meta injection", () => {
   it("returns structured sections in the payload body only, with no _meta channel", async () => {
     const { pool } = routingPool({
