@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -15,6 +16,21 @@ from .policy import (
     idempotency_key,
     with_retry,
 )
+from .turn_concepts import (
+    TurnConcepts,
+    extract_turn_concepts,
+    verbatim_tokens,
+)
+
+logger = logging.getLogger(__name__)
+
+# Cap on how many extracted keys may be appended to the derived recall query, on
+# top of the original turn text (which is always kept in full). Applied AFTER
+# dropping keys already textually represented in the query and after
+# case-insensitive dedupe, so the derived query length is bounded regardless of
+# how many keys the turn produced. Keys are appended in extraction order
+# (entities before concepts), first-seen wins.
+DERIVED_QUERY_MAX_KEYS = 8
 
 EVENT_TYPES = {
     "fact",
@@ -163,12 +179,20 @@ class MemoryItem:
 
 @dataclass(frozen=True)
 class MemoryContext:
+    # ``query`` is the ORIGINAL user input, verbatim -- never the internally
+    # derived recall query. The keys extracted from it drive this turn's recall
+    # via that derived query (see AgentMemory.recall), not by mutating this field.
     query: str
     items: tuple[MemoryItem, ...]
     text: str
     raw: Mapping[str, Any]
     session: JSON | None = None
     answer: JSON | None = None
+    # Bounded, normalized entity/concept keys extracted deterministically from
+    # the current turn's query at the recall-request boundary (OB #332). Exposed
+    # as structured output for the caller; they drove this turn's derived recall
+    # query internally. NOT durable memory -- the caller must not persist them.
+    concepts: TurnConcepts = field(default_factory=TurnConcepts)
 
     def as_prompt_text(self) -> str:
         return self.text
@@ -219,8 +243,21 @@ class AgentMemory:
     ) -> MemoryContext:
         effective_limit = self._effective_limit(limit)
         sources = _sources(include_decisions, include_facts)
+        # Deterministic per-turn concept/entity extraction at the recall-request
+        # boundary (OB #332). The keys are computed here, surfaced on the returned
+        # MemoryContext as structured output, AND folded into a single derived
+        # recall query so they actually drive this turn's retrieval. The derived
+        # query is original text plus only the keys not already represented in it
+        # (see _derive_recall_query); the caller's auth-derived namespace, scope,
+        # session, and sources are untouched, and no key is added as a payload
+        # field or persisted as a memory.
+        concepts = extract_turn_concepts(query)
+        recall_query = _derive_recall_query(query, concepts)
+        # Content-free telemetry: counts and category names only, never the raw
+        # turn text and never an extracted key.
+        logger.debug("turn_concepts_extracted", extra=concepts.telemetry())
         payload = {
-            "query": query,
+            "query": recall_query,
             "limit": effective_limit,
         }
         if sources:
@@ -237,7 +274,7 @@ class AgentMemory:
         )
         raw = self.client.search_all(**payload)
         answer = (
-            self.client.brain_answer(query=query, limit=effective_limit)
+            self.client.brain_answer(query=recall_query, limit=effective_limit)
             if include_answer
             else None
         )
@@ -250,6 +287,7 @@ class AgentMemory:
             raw=raw_mapping if include_raw else {},
             session=cast(JSON | None, session),
             answer=cast(JSON | None, answer),
+            concepts=concepts,
         )
 
     def load_session_context(
@@ -1000,6 +1038,44 @@ class AgentMemory:
                 except Exception as spool_error:
                     error.add_note(f"Failed to spool {operation}: {spool_error}")
             raise
+
+
+def _derive_recall_query(query: str, concepts: TurnConcepts) -> str:
+    """Fold extracted keys into one bounded derived recall query (OB #332).
+
+    Deterministic and zero-network. The result is the original ``query`` text
+    verbatim, followed by only the extracted keys whose exact normalized form is
+    NOT already a verbatim token of the query. Extracted keys are always
+    lowercased and identifier-normalized, so a key like ``open-brain`` or ``api``
+    is appended even when the query said ``Open-Brain`` or ``API`` -- the
+    normalized form is a new representation and is what should drive retrieval --
+    while a key already present in that exact form (``handle`` in ``handle``) is
+    not re-appended. Extractor dedupe plus this guard mean a repeated or
+    case-equivalent key contributes at most one appended token. Appended keys are
+    capped at ``DERIVED_QUERY_MAX_KEYS`` in extraction order (entities before
+    concepts), so the derived query cannot bloat regardless of turn length.
+
+    The original query is always kept in full and represented first, so recall
+    never loses the user's exact wording. When no key adds a new normalized form
+    the derived query is exactly the original query. This changes only the recall
+    *query* -- never the caller's namespace, scope, sources, or session.
+    """
+    represented = set(verbatim_tokens(query))
+    appended: list[str] = []
+    for key in concepts.keys:
+        if len(appended) >= DERIVED_QUERY_MAX_KEYS:
+            break
+        if key in represented:
+            continue
+        # Guard against re-appending a key already emitted (extractor dedupes
+        # its own output, but stay defensive so a key never repeats here).
+        represented.add(key)
+        appended.append(key)
+    if not appended:
+        return query
+    if not query:
+        return " ".join(appended)
+    return f"{query} {' '.join(appended)}"
 
 
 def _coerce_policy(policy: MemoryPolicy | Mapping[str, Any] | None) -> MemoryPolicy:

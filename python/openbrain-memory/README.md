@@ -333,9 +333,20 @@ paths. The supported public surface is:
 - `CURRENT_CONTRACT_VERSION`, `CURRENT_CONTRACT_SCHEMA_VERSION`,
   `CURRENT_CONTRACT_SCHEMA_HASH`, `REQUIRED_CONTRACT_TOOLS`, `CURRENT_TOOL_HELP`,
   and `PACKAGE_VERSION`.
+- `extract_turn_concepts()`, `TurnConcepts`, and `DEFAULT_MAX_KEYS` -- the
+  deterministic per-turn concept/entity key extractor that `AgentMemory.recall()`
+  uses to augment the recall query with salient keys from the current turn.
 
 The wheel includes a `py.typed` marker so typed consumers can rely on the
 package's inline annotations.
+
+Per-turn concept extraction is a **Python-only client convenience today**. It is
+a zero-network, deterministic tokenizer/normalizer over the caller-supplied turn
+text; it drives recall for the current turn only and is never persisted as
+durable memory. A standalone TypeScript counterpart is **deferred** to the later
+client phase -- no TypeScript module implements this pass today, so there is no
+existing counterpart to mirror. It carries **no Hermes dependency or Hermes
+rollout requirement**.
 
 ### Versioning and Contract Pinning
 
