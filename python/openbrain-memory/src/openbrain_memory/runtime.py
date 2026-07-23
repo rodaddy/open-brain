@@ -818,7 +818,15 @@ class FirstClassMemoryRuntime:
             self.last_drain_report = drain
             return drain
         except Exception:
-            logger.warning("Spool auto-drain failed", exc_info=True)
+            # Content-free background observability (#296): the raised error may
+            # be an OpenBrainError whose message/body carries redacted-but-
+            # private content, and a traceback exposes it. Log a stable status
+            # token only — no exception object/traceback, message, spool path,
+            # idempotency key, namespace, payload, or provider/server body.
+            logger.warning(
+                "Spool auto-drain failed",
+                extra={"spool_drain_status": "error"},
+            )
             return None
 
     def _build_drain_report(self, report: SpoolReplayReport) -> DrainReport:

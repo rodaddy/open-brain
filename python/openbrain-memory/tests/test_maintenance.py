@@ -30,6 +30,7 @@ from openbrain_memory import (
 from openbrain_memory._runtime_spool import PARKED_NAMESPACE_KEY
 
 from ._runtime_fakes import (
+    FailingReplayTransport,
     LaneAwareTransport,
     runtime_config,
     runtime_scope,
@@ -573,6 +574,60 @@ def test_scheduler_loop_survives_a_handler_that_raises_once(
 
     # The escaping exception never reached stderr as a daemon-thread traceback.
     assert sentinel not in capsys.readouterr().err
+
+
+def test_scheduled_drain_dispatch_failure_is_content_free(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A dispatch failure reached through the scheduler stays content-free.
+
+    Scheduled replay reuses the exact ``_drain_spool``/``replay_with_report``
+    path. When a replayed unit's direct dispatch fails, its provider error
+    body plus the spool path/key each carry a non-secret private sentinel;
+    none may reach any ``openbrain_memory`` log message, args, structured
+    extra, ``exc_info``, or stderr — while the drain still counts the failed
+    unit and leaves it pending.
+    """
+    body_sentinel = "PRIVATE-scheduled-provider-body"
+    path_sentinel = "private-scheduled-path"
+    key_sentinel = "private-scheduled-key"
+    spool = JsonlSpool(tmp_path / f"{path_sentinel}.jsonl")
+    spool.append("log_thought", {"content": "queued secret"}, key=key_sentinel)
+    transport = FailingReplayTransport(
+        fail_tool="log_thought", error_body=body_sentinel
+    )
+    runtime = _build_runtime(spool, transport)
+    scheduler = MaintenanceScheduler(_replay_registry(runtime))
+
+    with caplog.at_level(logging.DEBUG, logger="openbrain_memory"):
+        report = scheduler.run_once(SPOOL_REPLAY_JOB_KIND)
+
+    assert report is not None
+    assert report.failed_units == 1
+    assert report.replayed_units == 0
+    assert report.quarantined_units == 0
+    # The failed unit stayed pending with its retry counter incremented.
+    assert [record.idempotency_key for record in spool.records()] == [key_sentinel]
+    assert spool.status().retry_counts == {key_sentinel: 1}
+
+    records = [
+        r for r in caplog.records if r.name.startswith("openbrain_memory")
+    ]
+    assert records
+    for record in records:
+        for leaked in (body_sentinel, path_sentinel, key_sentinel):
+            assert leaked not in record.getMessage()
+            assert leaked not in str(record.args or "")
+            for value in vars(record).values():
+                assert leaked not in str(value)
+        assert record.exc_info is None
+
+    combined = capsys.readouterr()
+    for leaked in (body_sentinel, path_sentinel, key_sentinel):
+        assert leaked not in combined.err
+        assert leaked not in combined.out
 
 
 # --- Mutation checks ------------------------------------------------------
