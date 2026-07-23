@@ -19,6 +19,7 @@ import {
   type SourceKind,
 } from "./source-registry.ts";
 import {
+  MaintenanceTerminalError,
   type EnqueueMaintenanceJob,
   type MaintenanceJob,
   type MaintenanceJobHandler,
@@ -300,20 +301,15 @@ export async function enqueueGraphDerivationJobs(
  * disposition is to dead-letter it immediately rather than burn the retry
  * budget.
  *
- * Current truth (do not overstate): this is only a NON-RETRYABLE SIGNAL. The
- * maintenance queue (maintenance-queue.ts) does not yet special-case this
- * subclass — a thrown Error still follows the generic attempts>=max_attempts
- * retry-then-dead-letter path, so today this error merely exhausts retries
- * before dead-lettering rather than short-circuiting to it. Immediate
- * dead-lettering awaits generic queue support (a terminal/non-retryable
- * category the `fail()` path honors), which lands with this handler's queue
- * registration (rebase onto #356). Until then this handler is intentionally
- * NOT registered in maintenance-queue.ts / src/index.ts; the subclass exists so
- * that once the queue can distinguish terminal from retryable failures, the
- * wrapper can map it to immediate dead-letter without any content leaving the
- * server.
+ * This extends the queue-owned {@link MaintenanceTerminalError} marker, so the
+ * generic MaintenanceQueueRunner recognizes it by type and MaintenanceQueue.fail
+ * dead-letters the job on this exact attempt (category `terminal`) instead of
+ * scheduling a bounded backoff retry to the attempt bound. The dependency points
+ * the right way — this handler imports the queue's marker; the queue imports
+ * nothing from this handler. Content leaves the server on neither path: the
+ * category is a stable enum value and the runner's failure log is content-free.
  */
-export class GraphDerivationTerminalError extends Error {
+export class GraphDerivationTerminalError extends MaintenanceTerminalError {
   constructor(reason: string) {
     super(reason);
     this.name = "GraphDerivationTerminalError";

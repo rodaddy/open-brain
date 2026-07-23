@@ -25,7 +25,42 @@ export type MaintenanceErrorCategory =
   // Terminal signal for a running lease that expired after the job already
   // consumed all of its execution attempts. Content-free and distinct from any
   // handler-thrown error so dead-letter analysis can tell the two apart.
-  | "lease_expired";
+  | "lease_expired"
+  // A handler declared its own failure non-retryable by throwing a
+  // MaintenanceTerminalError (below). The job dead-letters on this exact
+  // attempt regardless of remaining retry budget. Distinct from `error` and
+  // `lease_expired` so dead-letter analysis can tell a policy-driven immediate
+  // dead-letter from a retry-exhaustion or an expired lease. Content-free.
+  | "terminal";
+
+/**
+ * Queue-owned generic marker for a handler failure that is NON-RETRYABLE.
+ *
+ * A handler throws this (or a subclass) to tell the queue that retrying the
+ * SAME job payload can never succeed, so the queue must dead-letter it on this
+ * exact attempt instead of scheduling a bounded backoff retry to the attempt
+ * bound. This marker lives at the queue boundary on purpose: handlers depend on
+ * the queue, never the reverse, so a handler's own terminal-error subclass can
+ * extend this without the queue importing anything from the handler.
+ *
+ * Everything else (transient DB failures, provider outages, unclassified
+ * errors) stays retryable and follows the persisted attempts>=max_attempts
+ * retry-then-dead-letter policy. Only an explicit throw of this type opts a
+ * failure into immediate dead-lettering.
+ */
+export class MaintenanceTerminalError extends Error {
+  constructor(reason: string) {
+    super(reason);
+    this.name = "MaintenanceTerminalError";
+  }
+}
+
+/** True when a thrown value is the queue's non-retryable terminal marker. */
+export function isMaintenanceTerminalError(
+  error: unknown,
+): error is MaintenanceTerminalError {
+  return error instanceof MaintenanceTerminalError;
+}
 
 export interface MaintenanceJob {
   id: string;
@@ -86,6 +121,11 @@ export interface MaintenanceQueuePort {
     // unsupported-job-kind sentinel, which is not a thrown Error). When unset,
     // the category is derived from `error`.
     category?: MaintenanceErrorCategory;
+    // When true, the failure is non-retryable: the job dead-letters on this
+    // attempt regardless of remaining retry budget (see MaintenanceQueue.fail).
+    // The runner sets this from a MaintenanceTerminalError; ordinary errors
+    // leave it unset and follow the persisted bounded-retry policy.
+    terminal?: boolean;
     now?: Date;
   }): Promise<MaintenanceJob | null>;
 }
@@ -436,11 +476,18 @@ export class MaintenanceQueue implements MaintenanceQueuePort {
     job: MaintenanceJob;
     error: unknown;
     category?: MaintenanceErrorCategory;
+    terminal?: boolean;
     now?: Date;
   }): Promise<MaintenanceJob | null> {
     const now = input.now ?? new Date();
+    // A non-retryable failure dead-letters on this attempt regardless of
+    // remaining retry budget. The flag is derived from a MaintenanceTerminalError
+    // at the runner boundary, never from the caller-supplied `input.job` fields;
+    // it forces the dead-letter branch below without touching backoff math.
+    const terminal = input.terminal === true;
     const errorCategory =
-      input.category ?? safeMaintenanceErrorCategory(input.error);
+      input.category ??
+      (terminal ? "terminal" : safeMaintenanceErrorCategory(input.error));
     // The terminal decision and the retry schedule are derived from the durable
     // row, never from the caller-supplied `input.job` retry fields. A registered
     // handler receives the same job object it is failing and could mutate
@@ -456,11 +503,19 @@ export class MaintenanceQueue implements MaintenanceQueuePort {
     // clamped to [0, 30], and the result is capped at backoff_max_ms. attempts
     // is bounded [0, 25] and the exponent [0, 30], so 2 ^ exponent stays within
     // numeric range with no overflow.
+    //
+    // The dead-letter branch fires when the row has exhausted its bounded retry
+    // budget (attempts >= max_attempts) OR the caller flagged the failure
+    // terminal ($5). A terminal failure short-circuits to dead_letter on this
+    // attempt without consulting attempts/max_attempts and without scheduling a
+    // backoff retry; an ordinary failure keeps the persisted bounded-retry
+    // policy verbatim. The stale-lease guard (state='running' AND lease_token)
+    // and content-free category are preserved on both paths.
     const failed = await this.pool.query<MaintenanceJobRow>(
       `UPDATE maintenance_jobs
-          SET state = CASE WHEN attempts >= max_attempts
+          SET state = CASE WHEN $5::boolean OR attempts >= max_attempts
                            THEN 'dead_letter' ELSE 'queued' END,
-              run_after = CASE WHEN attempts >= max_attempts
+              run_after = CASE WHEN $5::boolean OR attempts >= max_attempts
                                THEN run_after
                                ELSE $3::timestamptz + (
                                  LEAST(
@@ -472,15 +527,15 @@ export class MaintenanceQueue implements MaintenanceQueuePort {
               lease_token = NULL,
               lease_until = NULL,
               last_error_category = $4,
-              terminal_at = CASE WHEN attempts >= max_attempts
+              terminal_at = CASE WHEN $5::boolean OR attempts >= max_attempts
                                  THEN $3::timestamptz ELSE NULL END,
-              dead_lettered_at = CASE WHEN attempts >= max_attempts
+              dead_lettered_at = CASE WHEN $5::boolean OR attempts >= max_attempts
                                       THEN $3::timestamptz ELSE NULL END
         WHERE id = $1
           AND state = 'running'
           AND lease_token = $2::uuid
        RETURNING ${JOB_COLUMNS}`,
-      [input.job.id, input.job.leaseToken, now, errorCategory],
+      [input.job.id, input.job.leaseToken, now, errorCategory, terminal],
     );
     return failed.rows[0] ? toJob(failed.rows[0]) : null;
   }
@@ -638,10 +693,18 @@ export class MaintenanceQueueRunner {
     error: unknown,
     startedAt: number,
   ): Promise<void> {
+    // A handler that threw the queue-owned non-retryable marker opts this
+    // failure into immediate dead-lettering: the queue skips the bounded-retry
+    // schedule and dead-letters on this attempt. The classification is made
+    // here from the thrown value's TYPE, not from any handler import — the
+    // marker lives on the queue and a handler's own subclass extends it.
+    const terminal = isMaintenanceTerminalError(error);
     const errorCategory =
       error === "unsupported_job_kind"
         ? "unsupported_job_kind"
-        : safeMaintenanceErrorCategory(error);
+        : terminal
+          ? "terminal"
+          : safeMaintenanceErrorCategory(error);
     try {
       // Pass the immutable claim id/leaseToken as the lease-token guard so a
       // handler that mutated job.id/job.leaseToken cannot redirect the fail
@@ -651,6 +714,7 @@ export class MaintenanceQueueRunner {
         job: { ...job, id: claim.id, leaseToken: claim.leaseToken },
         error,
         category: errorCategory,
+        terminal,
         now: this.now(),
       });
       this.options.logger.warn("maintenance queue job failed", {

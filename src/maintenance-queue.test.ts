@@ -2,6 +2,8 @@ import { describe, expect, it } from "bun:test";
 import {
   MaintenanceQueue,
   MaintenanceQueueRunner,
+  MaintenanceTerminalError,
+  isMaintenanceTerminalError,
   maintenanceBackoffMs,
   safeMaintenanceErrorCategory,
   type MaintenanceJob,
@@ -255,6 +257,85 @@ describe("maintenance queue runner", () => {
     expect(logs.join("\n")).toContain('"error_category":"type_error"');
   });
 
+  it("routes a MaintenanceTerminalError to fail() as terminal, category 'terminal'", async () => {
+    const failCalls: Array<{ category?: string; terminal?: boolean }> = [];
+    const logs: string[] = [];
+    const queue: MaintenanceQueuePort = {
+      claimDueJobs: async () => [job()],
+      complete: async () => true,
+      fail: async (input) => {
+        failCalls.push({ category: input.category, terminal: input.terminal });
+        // The queue dead-letters immediately for a terminal failure.
+        return job({ state: "dead_letter", lastErrorCategory: "terminal" });
+      },
+    };
+    const runner = new MaintenanceQueueRunner({
+      queue,
+      handlers: new Map([
+        [
+          "maintenance.test",
+          async () => {
+            throw new MaintenanceTerminalError("private terminal reason text");
+          },
+        ],
+      ]),
+      logger: {
+        info: (message, fields) =>
+          logs.push(JSON.stringify({ message, fields })),
+        warn: (message, fields) =>
+          logs.push(JSON.stringify({ message, fields })),
+        error: (message, fields) =>
+          logs.push(JSON.stringify({ message, fields })),
+      },
+    });
+
+    await runner.runOnce();
+    expect(failCalls).toHaveLength(1);
+    expect(failCalls[0]?.terminal).toBe(true);
+    expect(failCalls[0]?.category).toBe("terminal");
+    // Content-free: the terminal category is logged; the reason text is not.
+    expect(logs.join("\n")).toContain('"error_category":"terminal"');
+    expect(logs.join("\n")).not.toContain("private terminal reason text");
+    expect(logs.join("\n")).toContain('"status":"dead_letter"');
+  });
+
+  it("routes an ordinary error to fail() as non-terminal (bounded retry preserved)", async () => {
+    const failCalls: Array<{ category?: string; terminal?: boolean }> = [];
+    const queue: MaintenanceQueuePort = {
+      claimDueJobs: async () => [job()],
+      complete: async () => true,
+      fail: async (input) => {
+        failCalls.push({ category: input.category, terminal: input.terminal });
+        return job({ state: "queued" });
+      },
+    };
+    const runner = new MaintenanceQueueRunner({
+      queue,
+      handlers: new Map([
+        [
+          "maintenance.test",
+          async () => {
+            throw new Error("transient DB blip");
+          },
+        ],
+      ]),
+      logger: { info: () => {}, warn: () => {}, error: () => {} },
+    });
+
+    await runner.runOnce();
+    expect(failCalls).toHaveLength(1);
+    // An ordinary error is NOT terminal: the queue keeps the bounded-retry path.
+    expect(failCalls[0]?.terminal).toBe(false);
+    expect(failCalls[0]?.category).toBe("error");
+  });
+
+  it("classifies a MaintenanceTerminalError subclass as terminal", () => {
+    class HandlerTerminal extends MaintenanceTerminalError {}
+    expect(isMaintenanceTerminalError(new HandlerTerminal("x"))).toBe(true);
+    expect(isMaintenanceTerminalError(new Error("x"))).toBe(false);
+    expect(isMaintenanceTerminalError("unsupported_job_kind")).toBe(false);
+  });
+
   it("contains persistence failures as content-free runner errors", async () => {
     const logs: string[] = [];
     const queue: MaintenanceQueuePort = {
@@ -400,5 +481,85 @@ describe("maintenance queue retry policy", () => {
     expect(safeMaintenanceErrorCategory("private error text")).toBe(
       "non_error",
     );
+  });
+});
+
+// A fake pool that captures the params of the fail UPDATE and echoes a row so
+// MaintenanceQueue.fail resolves. It proves the terminal flag reaches SQL as the
+// 5th positional param and picks the category, WITHOUT a live database. The
+// exact dead-letter/queued row transition on a real CHECK/CASE is proven by the
+// live-Postgres test in maintenance-queue.pg.test.ts.
+function captureFailPool() {
+  const failParams: unknown[][] = [];
+  const pool = {
+    query: async (sql: string, params: unknown[] = []) => {
+      if (/UPDATE\s+maintenance_jobs[\s\S]*state\s*=\s*CASE/i.test(sql)) {
+        failParams.push(params);
+      }
+      // Echo a minimal running->transition row so toJob() succeeds.
+      return {
+        rows: [
+          {
+            id: "job-1",
+            job_kind: "maintenance.test",
+            job_version: 1,
+            payload: {},
+            idempotency_key: "once",
+            state: "dead_letter",
+            run_after: new Date("2026-07-22T12:00:00.000Z"),
+            lease_token: null,
+            lease_until: null,
+            attempts: 1,
+            max_attempts: 3,
+            backoff_base_ms: 1_000,
+            backoff_max_ms: 4_000,
+            last_error_category: (params?.[3] as string) ?? null,
+            terminal_at: new Date("2026-07-22T12:00:01.000Z"),
+            dead_lettered_at: new Date("2026-07-22T12:00:01.000Z"),
+            namespace: null,
+            provenance: null,
+            created_at: new Date("2026-07-22T12:00:00.000Z"),
+            updated_at: new Date("2026-07-22T12:00:01.000Z"),
+          },
+        ],
+        rowCount: 1,
+      };
+    },
+    connect: async () => {
+      throw new Error("fail() must not open a transaction");
+    },
+  };
+  return { pool: pool as never, failParams };
+}
+
+describe("maintenance queue fail() terminal short-circuit", () => {
+  it("passes terminal=true and category 'terminal' to the fail UPDATE", async () => {
+    const { pool, failParams } = captureFailPool();
+    const queue = new MaintenanceQueue(pool);
+    // A job with retry budget remaining (attempts 1 < max 3): only the terminal
+    // flag can force an immediate dead-letter, not the attempt bound.
+    const failed = await queue.fail({
+      job: job({ attempts: 1, maxAttempts: 3 }),
+      error: new MaintenanceTerminalError("private terminal text"),
+      category: "terminal",
+      terminal: true,
+    });
+    expect(failParams).toHaveLength(1);
+    // $4 = category, $5 = terminal flag.
+    expect(failParams[0]?.[3]).toBe("terminal");
+    expect(failParams[0]?.[4]).toBe(true);
+    expect(failed?.state).toBe("dead_letter");
+  });
+
+  it("passes terminal=false for an ordinary error (bounded retry preserved)", async () => {
+    const { pool, failParams } = captureFailPool();
+    const queue = new MaintenanceQueue(pool);
+    await queue.fail({
+      job: job({ attempts: 1, maxAttempts: 3 }),
+      error: new Error("transient text"),
+    });
+    expect(failParams).toHaveLength(1);
+    expect(failParams[0]?.[3]).toBe("error");
+    expect(failParams[0]?.[4]).toBe(false);
   });
 });

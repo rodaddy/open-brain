@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS maintenance_jobs (
   backoff_max_ms      INTEGER NOT NULL DEFAULT 300000 CHECK (backoff_max_ms >= backoff_base_ms),
   last_error_category TEXT CHECK (last_error_category IN (
     'syntax_error', 'type_error', 'range_error', 'error', 'non_error',
-    'unsupported_job_kind', 'lease_expired'
+    'unsupported_job_kind', 'lease_expired', 'terminal'
   )),
   terminal_at         TIMESTAMPTZ,
   dead_lettered_at    TIMESTAMPTZ,
