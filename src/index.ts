@@ -26,6 +26,12 @@ import {
 import type { ToolDeps } from "./tools/index.ts";
 import type { AuthInfo, HealthStatus } from "./types.ts";
 import { canReadDoctor, getOperatorDoctorStatus } from "./operator-doctor.ts";
+import {
+  startMaintenanceQueue,
+  maintenanceQueueEnabled,
+  type MaintenanceRuntime,
+} from "./maintenance-bootstrap.ts";
+import { safeMaintenanceErrorCategory } from "./maintenance-queue.ts";
 
 const EMBEDDING_BASE_URL = process.env.EMBEDDING_BASE_URL;
 
@@ -141,7 +147,9 @@ export function createApp(
       if (!canReadDoctor(authInfo)) {
         res
           .status(403)
-          .json({ error: "Permission denied: admin or ob-admin role required" });
+          .json({
+            error: "Permission denied: admin or ob-admin role required",
+          });
         return;
       }
       try {
@@ -173,13 +181,23 @@ export function createApp(
         typeof err === "object" && err !== null && "statusCode" in err
           ? Number((err as { statusCode?: unknown }).statusCode)
           : undefined;
-      const status = statusCode && statusCode >= 400 ? statusCode : pgCode === "23505" ? 409 : 500;
+      const status =
+        statusCode && statusCode >= 400
+          ? statusCode
+          : pgCode === "23505"
+            ? 409
+            : 500;
       logger.error("REST API error", {
         error: err instanceof Error ? err.message : String(err),
         code: pgCode,
       });
       res.status(status).json({
-        error: status === 500 ? "Internal error" : err instanceof Error ? err.message : "Request failed",
+        error:
+          status === 500
+            ? "Internal error"
+            : err instanceof Error
+              ? err.message
+              : "Request failed",
       });
     },
   );
@@ -297,13 +315,16 @@ if (import.meta.main) {
       process.exit(1);
     }
   } else if (natsRuntimeBoundary.requested_transport === "nats") {
-    logger.warn("OPENBRAIN_TRANSPORT=nats requested but bridge is not available", {
-      availability: natsRuntimeBoundary.nats.availability,
-      fallback_transport: natsRuntimeBoundary.fallback_transport,
-      fallback_http: natsRuntimeBoundary.nats.fallback_http,
-      context_pack_subject: natsRuntimeBoundary.nats.context_pack_subject,
-      nats_url: summarizeNatsUrlForLog(natsRuntimeBoundary.nats.url),
-    });
+    logger.warn(
+      "OPENBRAIN_TRANSPORT=nats requested but bridge is not available",
+      {
+        availability: natsRuntimeBoundary.nats.availability,
+        fallback_transport: natsRuntimeBoundary.fallback_transport,
+        fallback_http: natsRuntimeBoundary.nats.fallback_http,
+        context_pack_subject: natsRuntimeBoundary.nats.context_pack_subject,
+        nats_url: summarizeNatsUrlForLog(natsRuntimeBoundary.nats.url),
+      },
+    );
   }
 
   if (tokenMap.size === 0) {
@@ -318,21 +339,62 @@ if (import.meta.main) {
     logger.info("open-brain server started", { port });
   });
 
+  // Server-owned maintenance queue (#343 substrate + #345 embedding-repair
+  // handler). Started only here, after migrations ran, tokens were validated,
+  // and the NATS bridge resolved — i.e. once every startup dependency the
+  // handler relies on (the pool, the schema, the embed provider config) is
+  // ready. Automatic bounded polling begins now; enqueue stays an explicit,
+  // auth-scoped caller boundary and this bootstrap invents no namespace. Opt out
+  // per-worker with OPEN_BRAIN_MAINTENANCE_ENABLED=0.
+  let maintenance: MaintenanceRuntime | null = null;
+  if (maintenanceQueueEnabled()) {
+    maintenance = startMaintenanceQueue({ pool, logger });
+    logger.info("maintenance queue started", {
+      handlers: "embedding.repair",
+    });
+  } else {
+    logger.info("maintenance queue disabled", {
+      OPEN_BRAIN_MAINTENANCE_ENABLED:
+        process.env.OPEN_BRAIN_MAINTENANCE_ENABLED ?? "unset",
+    });
+  }
+
   const shutdown = async () => {
     logger.info("Shutting down...");
     server.close();
+    // Stop polling and drain in-flight maintenance jobs BEFORE the pool closes;
+    // stop() honors leases already claimed so no job is stranded mid-run.
+    if (maintenance) {
+      try {
+        await maintenance.stop();
+      } catch (err) {
+        // Content-free observability (#345/#356): a failed maintenance stop must
+        // log only a stable category, never the raw exception or any dependency
+        // body — the maintenance-queue error path never leaks message text and
+        // shutdown must match. See safeMaintenanceErrorCategory.
+        logger.error("Maintenance queue failed to stop during shutdown", {
+          error_category: safeMaintenanceErrorCategory(err),
+        });
+      }
+    }
     if (natsBridge) {
       try {
         await Promise.race([
           natsBridge.close(),
           new Promise((_, reject) =>
-            setTimeout(() => reject(new Error("NATS bridge close timed out")), 5000),
+            setTimeout(
+              () => reject(new Error("NATS bridge close timed out")),
+              5000,
+            ),
           ),
         ]);
       } catch (err) {
-        logger.error("NATS context-pack bridge failed to close during shutdown", {
-          error: err instanceof Error ? err.message : String(err),
-        });
+        logger.error(
+          "NATS context-pack bridge failed to close during shutdown",
+          {
+            error: err instanceof Error ? err.message : String(err),
+          },
+        );
       }
     }
     try {

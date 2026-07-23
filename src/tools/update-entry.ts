@@ -4,6 +4,11 @@ import { toSql } from "pgvector/pg";
 import { canWrite } from "../permissions.ts";
 import { appendWriteNamespacePredicate } from "../namespace-policy.ts";
 import { contentHash, EMBEDDING_MODEL } from "../embedding.ts";
+import {
+  decisionCanonicalText,
+  sessionEmbedText,
+  sessionSourceHashInput,
+} from "../embedding-canonical.ts";
 import type { AuthInfo, Table } from "../types.ts";
 import { logger } from "../logger.ts";
 import type { ToolDeps } from "./index.ts";
@@ -11,7 +16,7 @@ import type { ToolDeps } from "./index.ts";
 /** Which optional fields are valid for each table */
 const VALID_FIELDS: Record<Table, string[]> = {
   thoughts: ["content", "tags"],
-  decisions: ["title", "rationale", "context", "tags"],
+  decisions: ["title", "rationale", "context", "alternatives", "tags"],
   relationships: [
     "person_name",
     "context",
@@ -25,19 +30,58 @@ const VALID_FIELDS: Record<Table, string[]> = {
     "metadata",
   ],
   projects: ["name", "description", "tags"],
-  sessions: ["summary", "tags"],
+  sessions: [
+    "summary",
+    "project",
+    "key_decisions",
+    "next_steps",
+    "blockers",
+    "tags",
+  ],
 };
 
-/** Which fields trigger re-embedding when changed */
+/**
+ * Which fields, when changed, mark the embedding stale and require re-embedding.
+ *
+ * For decisions and sessions this MUST list every field the shared canonical
+ * builder folds into the embed text / source-hash input -- not just the primary
+ * text. The repair registry (src/embedding-targets.ts) recomputes the source
+ * hash from ALL of these fields, so if a context/alternatives/tags edit (or a
+ * project/key_decisions/next_steps/blockers edit) did not re-embed, the stored
+ * content_hash would immediately disagree with the registry and repair would
+ * flag the freshly-updated row as source_drift.
+ */
 const CONTENT_FIELDS: Record<Table, string[]> = {
   thoughts: ["content"],
-  decisions: ["title", "rationale"],
+  decisions: ["title", "rationale", "context", "alternatives", "tags"],
   relationships: ["person_name", "context", "notes"],
   projects: ["name", "description"],
-  sessions: ["summary"],
+  sessions: ["summary", "project", "key_decisions", "next_steps", "blockers"],
 };
 
-/** Build embeddable text from merged field values */
+/**
+ * Source-hash input for the merged post-update row.
+ *
+ * For most tables the embed text and the hash input are the same string, so this
+ * returns the embed text. Sessions are the exception: they HASH `summary|project`
+ * but EMBED a richer continuity text, so the registry's sourceHash is computed
+ * from sessionSourceHashInput(), NOT from the embed text. Keeping the hash input
+ * distinct here mirrors src/embedding-targets.ts:sessions exactly.
+ */
+function buildHashInput(table: Table, merged: Record<string, unknown>): string {
+  if (table === "sessions") {
+    return sessionSourceHashInput(merged);
+  }
+  return buildEmbeddableText(table, merged);
+}
+
+/**
+ * Build embeddable text from merged field values.
+ *
+ * decisions and sessions route through the shared canonical builders
+ * (decisionCanonicalText / sessionEmbedText) so this writer, the other live
+ * writers, and the embedding-repair registry all agree on the exact string.
+ */
 function buildEmbeddableText(
   table: Table,
   merged: Record<string, unknown>,
@@ -46,7 +90,7 @@ function buildEmbeddableText(
     case "thoughts":
       return merged.content as string;
     case "decisions":
-      return `${merged.title}\n${merged.rationale}`;
+      return decisionCanonicalText(merged);
     case "relationships":
       return [merged.person_name, merged.context ?? "", merged.notes ?? ""]
         .filter(Boolean)
@@ -54,7 +98,7 @@ function buildEmbeddableText(
     case "projects":
       return `${merged.name}: ${merged.description ?? ""}`;
     case "sessions":
-      return merged.summary as string;
+      return sessionEmbedText(merged);
   }
 }
 
@@ -78,7 +122,24 @@ export function registerUpdateEntry(server: McpServer, deps: ToolDeps): void {
         content: z.string().optional().describe("New content (thoughts)"),
         title: z.string().optional().describe("New title (decisions)"),
         rationale: z.string().optional().describe("New rationale (decisions)"),
+        alternatives: z
+          .array(z.string())
+          .optional()
+          .describe("New alternatives considered (decisions)"),
         summary: z.string().optional().describe("New summary (sessions)"),
+        project: z.string().optional().describe("New project (sessions)"),
+        key_decisions: z
+          .array(z.string())
+          .optional()
+          .describe("New key decisions (sessions)"),
+        next_steps: z
+          .array(z.string())
+          .optional()
+          .describe("New next steps (sessions)"),
+        blockers: z
+          .array(z.string())
+          .optional()
+          .describe("New blockers (sessions)"),
         person_name: z
           .string()
           .optional()
@@ -222,7 +283,11 @@ export function registerUpdateEntry(server: McpServer, deps: ToolDeps): void {
           }
 
           const embeddableText = buildEmbeddableText(table, merged);
-          hash = contentHash(embeddableText);
+          // Sessions hash `summary|project` but embed a richer text; every other
+          // table hashes the same string it embeds. buildHashInput() keeps this
+          // split aligned with the embedding-repair registry so the row we write
+          // is not immediately flagged as source_drift.
+          hash = contentHash(buildHashInput(table, merged));
 
           // Check content_hash collision
           const { rows: collisionRows } = await client.query(
@@ -258,8 +323,16 @@ export function registerUpdateEntry(server: McpServer, deps: ToolDeps): void {
 
         // Add provided fields
         for (const [field, value] of Object.entries(providedFields)) {
-          setClauses.push(`${field} = $${paramIndex}`);
-          params.push(value);
+          // decisions.alternatives is a jsonb column -- a raw JS array serializes
+          // as a Postgres array literal ("{..}"), which is invalid JSON. Encode
+          // it explicitly, matching the log_decision / REST writers.
+          if (table === "decisions" && field === "alternatives") {
+            setClauses.push(`${field} = $${paramIndex}::jsonb`);
+            params.push(JSON.stringify(value ?? []));
+          } else {
+            setClauses.push(`${field} = $${paramIndex}`);
+            params.push(value);
+          }
           paramIndex++;
         }
 

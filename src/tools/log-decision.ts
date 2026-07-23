@@ -4,6 +4,7 @@ import { toSql } from "pgvector/pg";
 import { canWrite } from "../permissions.ts";
 import { canWriteNamespace } from "../namespace-policy.ts";
 import { contentHash, EMBEDDING_MODEL } from "../embedding.ts";
+import { decisionCanonicalText } from "../embedding-canonical.ts";
 import { backgroundExtract } from "../extraction.ts";
 import type { AuthInfo } from "../types.ts";
 import { logger } from "../logger.ts";
@@ -72,11 +73,9 @@ export function registerLogDecision(server: McpServer, deps: ToolDeps): void {
         };
       }
 
-      const parts = [args.title, args.rationale];
-      if (args.context) parts.push(args.context);
-      if (args.alternatives?.length) parts.push(args.alternatives.join(", "));
-      if (args.tags?.length) parts.push(args.tags.join(" "));
-      const textToEmbed = parts.join("\n");
+      // Canonical decision text -- shared with the repair registry via
+      // decisionCanonicalText() so repair never disagrees with this writer.
+      const textToEmbed = decisionCanonicalText(args);
       const hash = contentHash(textToEmbed);
       const embedding = await deps.embedFn(textToEmbed);
       logger.info("tool_embedding", {

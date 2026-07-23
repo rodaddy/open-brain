@@ -5,6 +5,10 @@ import { toSql } from "pgvector/pg";
 import { canWrite } from "../permissions.ts";
 import { canWriteNamespace } from "../namespace-policy.ts";
 import { contentHash, EMBEDDING_MODEL } from "../embedding.ts";
+import {
+  sessionEmbedText,
+  sessionSourceHashInput,
+} from "../embedding-canonical.ts";
 import type { AuthInfo } from "../types.ts";
 import { logger } from "../logger.ts";
 import { sourceRefsSchema } from "../source-refs.ts";
@@ -47,9 +51,9 @@ async function withWrapDb<T>(
   }
 }
 
-function hasCompleteExactScope(args: WrapScope): args is Required<
-  Omit<WrapScope, "thread_id">
-> & { thread_id?: string } {
+function hasCompleteExactScope(
+  args: WrapScope,
+): args is Required<Omit<WrapScope, "thread_id">> & { thread_id?: string } {
   return (
     args.agent !== undefined &&
     args.platform !== undefined &&
@@ -205,12 +209,16 @@ export function registerSessionWrap(server: McpServer, deps: ToolDeps): void {
           .string()
           .max(500)
           .optional()
-          .describe("Platform/source identity for exact-scope checkpoint validation"),
+          .describe(
+            "Platform/source identity for exact-scope checkpoint validation",
+          ),
         server_id: z
           .string()
           .max(500)
           .optional()
-          .describe("Server/guild/workspace identity for exact-scope validation"),
+          .describe(
+            "Server/guild/workspace identity for exact-scope validation",
+          ),
         channel_id: z
           .string()
           .max(500)
@@ -220,7 +228,9 @@ export function registerSessionWrap(server: McpServer, deps: ToolDeps): void {
           .string()
           .max(500)
           .optional()
-          .describe("Thread identity; omission with channel_id asserts unthreaded scope"),
+          .describe(
+            "Thread identity; omission with channel_id asserts unthreaded scope",
+          ),
         summary: z
           .string()
           .min(1)
@@ -243,7 +253,9 @@ export function registerSessionWrap(server: McpServer, deps: ToolDeps): void {
           .describe("Project name for the session record"),
         source_refs: sourceRefsSchema
           .optional()
-          .describe("Structured file/document refs for closed-brain provenance"),
+          .describe(
+            "Structured file/document refs for closed-brain provenance",
+          ),
       },
       annotations: {
         title: "Session Wrap",
@@ -294,7 +306,12 @@ export function registerSessionWrap(server: McpServer, deps: ToolDeps): void {
 
       let embedding: number[] | null = null;
       try {
-        embedding = await deps.embedFn(args.summary);
+        // Embed the canonical session text (summary + key_decisions/next_steps),
+        // matching session_save / REST via sessionEmbedText(). Historically this
+        // path embedded the summary alone, which diverged from the other session
+        // writers and from the repair registry; converge on the shared builder.
+        // session_wrap has no `blockers` field, so that segment is simply absent.
+        embedding = await deps.embedFn(sessionEmbedText(args));
       } catch (error) {
         logger.warn("session_wrap_embed_error", {
           session_key: args.session_key,
@@ -335,7 +352,8 @@ export function registerSessionWrap(server: McpServer, deps: ToolDeps): void {
                   type: "text" as const,
                   text: JSON.stringify({
                     error: "scope_validation",
-                    message: "Existing lane scope does not match session_wrap request",
+                    message:
+                      "Existing lane scope does not match session_wrap request",
                     retryable: false,
                     conflicts: laneResult.conflicts,
                   }),
@@ -352,8 +370,11 @@ export function registerSessionWrap(server: McpServer, deps: ToolDeps): void {
           );
           const eventCount: number = countRows[0].cnt;
           const project = args.project ?? lane.project ?? null;
+          // Shared session hash input: summary + "|" + project (the resolved
+          // project, which may come from the lane). Matches the other session
+          // writers and the repair registry via sessionSourceHashInput().
           const sessionHash = contentHash(
-            args.summary + "|" + (project == null ? "" : String(project)),
+            sessionSourceHashInput({ summary: args.summary, project }),
           );
           const laneHash = contentHash(args.session_key + "|" + args.summary);
 
