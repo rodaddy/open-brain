@@ -904,3 +904,63 @@ missing/other namespace), and a present id. Labels: `:merged-upsert`,
 exact-equality check is safe. A tool that seeds into the shared namespace would
 need to compare against the canonical form — check the tool's actual return
 transform before pinning exact-equality.
+
+## [2026-07-22] Whole-pack trimming must reconcile section truth, not only retained items
+
+**Severity:** MEDIUM (P2)
+**Source:** PR #353 / issue #327 Full-tier review
+**Scope:** `src/tools/agent-context-pack-budget.ts`, ranked context-pack sections
+**Status:** fixed-pre-merge
+
+### Pattern
+
+A whole-pack fitter can correctly drop low-priority items and citations while
+leaving the section envelope's own state stale. In PR #353, `durable_memory`
+reported `truncated: false` after ranked tail items were removed, and an empty
+retained envelope lacked a stable whole-pack empty reason. Counts and citations
+were correct, but the section still lied about whether the caller received the
+full result. The fix reconciles every trimmed return path: any dropped item sets
+`truncated: true`; an emptied-but-retained envelope reports
+`empty_reason: "whole_pack_budget"`; counts, citations, warnings, and serialized
+budget are rechecked after metadata changes.
+
+### Review Questions
+
+- When a pack-level fitter drops items, does it update the section's own
+  `truncated` and `empty_reason`, not only arrays and counts?
+- Are both partial-tail-drop and all-item-drop paths covered by tests that fail
+  against the old metadata behavior?
+- If reconciliation adds metadata, is the serialized pack measured again so the
+  fix cannot exceed the hard budget?
+- Do citations and warnings derive from the final retained item set?
+
+## [2026-07-22] Requested degraded sections and cited items need self-contained truth
+
+**Severity:** MEDIUM (P2)
+**Source:** PR #353 / issue #327 Terra terminal audit
+**Scope:** `src/tools/agent-context-pack-durable-memory.ts`, context-pack section/citation contracts
+**Status:** fixed-pre-merge
+
+### Pattern
+
+A requested section that fails internally must not disappear into the same shape
+as an unrequested section. PR #353 initially omitted `durable_memory` when recall
+threw, leaving only a degraded warning; callers could not distinguish "not
+requested" from "requested but unavailable." It also put `source_ref` only on
+the separate citation even though each recalled item claimed item-level
+resolvability. The fix returns a truthful empty `recall_failed` envelope and
+builds one bounded `source_ref` per row, attaching the same value to both item and
+citation. Whole-pack trimming then prunes citations by retained `citation_id`,
+keeping an item/citation/source-ref bijection.
+
+### Review Questions
+
+- Does every explicitly requested degraded section return a stable empty envelope
+  with zero counts and a specific content-free reason, while an unrequested
+  section remains absent?
+- If an item contract promises `source_ref`, is it present on the item itself and
+  equal to the matching citation's reference?
+- After partial trim, all-item trim, or whole-section starvation, are there any
+  dangling citations or source refs?
+- Is duplicated item/citation provenance charged to the serialized hard budget,
+  and do higher-priority sections still survive unchanged?
