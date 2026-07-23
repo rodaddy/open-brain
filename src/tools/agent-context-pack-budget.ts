@@ -28,6 +28,9 @@ export const CONTEXT_PACK_SECTION_PRIORITY = [
   "recovery",
   "durable_lane_context",
   "durable_memory",
+  "profile_guidance",
+  "process_guidance",
+  "repo_facts",
 ] as const;
 
 /** Serialized size, in characters, of a section's content payload. */
@@ -350,6 +353,35 @@ export function reconcileDurableMemoryCitations(
 ): Array<Record<string, unknown>> {
   const keptCitationIds = new Set(
     keptItems
+      .map((item) => item.citation_id)
+      .filter((id): id is string => typeof id === "string"),
+  );
+  return citations.filter(
+    (citation) =>
+      typeof citation.id === "string" && keptCitationIds.has(citation.id),
+  );
+}
+
+/** An item-bearing section whose items each carry a `citation_id`. */
+export type CitedItemSection = {
+  items?: Array<{ citation_id?: unknown }>;
+};
+
+/**
+ * Keep only the citations whose section items survived the whole-pack re-fit,
+ * keyed on the item's `citation_id` matching the citation's `id`. This is the
+ * generic reconciler used by the guidance and repo_facts sections: every emitted
+ * item carries a `citation_id` and every citation carries the same value as its
+ * `id`, so after `fitItemSection` drops the oldest items the surviving citation
+ * set is exactly the bijection of the surviving item set — no citation ever
+ * references a trimmed item, and no surviving item loses its citation.
+ */
+export function reconcileCitedItemCitations(
+  citations: Array<Record<string, unknown>>,
+  section: CitedItemSection,
+): Array<Record<string, unknown>> {
+  const keptCitationIds = new Set(
+    (section.items ?? [])
       .map((item) => item.citation_id)
       .filter((id): id is string => typeof id === "string"),
   );

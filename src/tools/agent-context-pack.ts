@@ -29,12 +29,20 @@ import {
   fitDurableLaneSection,
   fitItemSection,
   fitRankedItemSection,
+  reconcileCitedItemCitations,
   reconcileDurableMemoryCitations,
   sectionFrameCost,
   serializedLength,
   type DurableLaneSection,
   type DurableMemorySection,
 } from "./agent-context-pack-budget.ts";
+import { physicalNamespace } from "../shared-namespace.ts";
+import {
+  loadGuidanceSection,
+  type GuidanceSectionName,
+} from "./agent-context-pack-guidance.ts";
+import { loadRepoFactsSection } from "./agent-context-pack-repo-facts.ts";
+import type { SectionFragment } from "./agent-context-pack-sections.ts";
 
 export const SECTION_NAMES = [
   "working_set",
@@ -73,11 +81,21 @@ export const scopeInputSchema = {
 export const agentContextPackInputSchema = {
   ...scopeInputSchema,
   query: z.string().max(4000).optional(),
+  repo: z
+    .string()
+    .min(1)
+    .max(300)
+    .optional()
+    .describe(
+      "Active repository slug (e.g. owner/name) that repo_facts binds to exactly. " +
+        "When absent, repo_facts returns its defined no-active-repo empty state; " +
+        "repo_facts never falls back to any other repository.",
+    ),
   requested_sections: z
     .array(z.enum(SECTION_NAMES))
     .optional()
     .describe(
-      "Sections to assemble. durable_lane_context is queried only when explicitly requested and requires all seven exact scope coordinates.",
+      "Sections to assemble. durable_lane_context is queried only when explicitly requested and requires all seven exact scope coordinates. profile_guidance, process_guidance, and repo_facts are each queried only when explicitly requested.",
     ),
   include_unreviewed_recovery: z
     .boolean()
@@ -155,6 +173,21 @@ export async function buildAgentContextPackPayload(
     args.requested_sections?.includes("durable_lane_context") === true;
   const includeDurableMemory =
     args.requested_sections?.includes("durable_memory") === true;
+  const includeProfileGuidance =
+    args.requested_sections?.includes("profile_guidance") === true;
+  const includeProcessGuidance =
+    args.requested_sections?.includes("process_guidance") === true;
+  const includeRepoFacts =
+    args.requested_sections?.includes("repo_facts") === true;
+
+  // The auth-derived physical namespace is the single isolation predicate every
+  // structured-section read binds to. `canReadNamespace(auth, ns)` above already
+  // failed an unauthorized explicit namespace override BEFORE any query runs, so
+  // reaching here means this namespace is authorized. `physicalNamespace` maps
+  // the canonical shared alias to its physical partition exactly as every other
+  // namespace-isolated read-policy path does, so two namespaces sharing a scope
+  // key or repo slug never bleed across the boundary.
+  const readNamespace = physicalNamespace(ns);
 
   // Total whole-pack char budget. Absent max_tokens => no whole-pack bound, and
   // every section keeps its historical independent per-section behavior.
@@ -482,11 +515,171 @@ export async function buildAgentContextPackPayload(
           : durableMemoryContext.budget
       : durableMemoryContext?.budget;
 
+  // Structured guidance / repo_facts sections (post-#353 integration).
+  //
+  // These three sections are the lowest-priority members: they are assembled
+  // only after every higher-value section has claimed the budget, so under
+  // whole-pack pressure a higher-priority section always survives while these are
+  // the first to be trimmed or starved. Each is a self-contained item-bearing
+  // fragment (loadGuidanceSection / loadRepoFactsSection) that:
+  //   - binds the auth-derived `readNamespace` predicate (isolation boundary),
+  //   - derives selection only from explicit typed durable metadata (promoted
+  //     user_preference / process_rule; exact-repo repo_fact) — never inferred
+  //     from raw conversation content,
+  //   - returns a defined empty state (never fabricated guidance/facts),
+  //   - degrades content-free on database failure,
+  //   - carries a citation_id + bounded source_ref on every item.
+  //
+  // Fitting mirrors working_set/recovery: item-bearing sections keyed by `id`,
+  // fit by serialized length via fitItemSection, oldest-item-first trimming, and
+  // citations reconciled to the surviving items after the re-fit so the
+  // citation set stays a bijection of the emitted items. When there is no
+  // whole-pack budget the loader's per-section item budget is authoritative and
+  // no re-fit runs.
+  //
+  // A section-level SectionQuery wrapper adapts the shared read pool to the
+  // section modules' minimal query surface.
+  const structuredSectionQuery = async (
+    sql: string,
+    params?: unknown[],
+  ): Promise<{ rows: Array<Record<string, unknown>> }> => {
+    const result = await deps.pool.query(sql, params);
+    return { rows: result.rows as Array<Record<string, unknown>> };
+  };
+
+  // Accumulators for the structured-section warnings/citations merged into the
+  // envelope below. Each entry is the fragment plus the section body that
+  // actually survived the whole-pack re-fit (null when omitted to hold budget).
+  const structuredScopeDenials: Array<Record<string, unknown>> = [];
+  const structuredDegradedSources: Array<Record<string, unknown>> = [];
+  const structuredTruncation: Array<Record<string, unknown>> = [];
+  const structuredCitations: Array<Record<string, unknown>> = [];
+  const structuredSections: Array<{
+    key: string;
+    section: Record<string, unknown>;
+  }> = [];
+
+  // Fit one already-assembled structured fragment into the surviving whole-pack
+  // budget, reconcile its citations to the surviving items, and record its
+  // warnings. Returns nothing; it mutates the shared budget/framing state and the
+  // accumulators above, exactly like the higher-priority section blocks.
+  const admitStructuredSection = (
+    key: string,
+    fragment: SectionFragment,
+  ): void => {
+    // Content-free scope denials / degraded sources always propagate: they carry
+    // no body, only a reason, and the caller needs them even when the section
+    // itself is omitted (e.g. no_active_repo, database_unavailable).
+    structuredScopeDenials.push(...fragment.scopeDenials);
+    structuredDegradedSources.push(...fragment.degradedSources);
+
+    const body = fragment.section;
+    if (!body) {
+      // Hard internal error path (database_unavailable): no section body to fit;
+      // the degraded-source marker above is the whole story.
+      return;
+    }
+
+    const citations = fragment.citations;
+
+    if (wholePackBudget === null) {
+      // No whole-pack budget: the loader's own item budget is authoritative.
+      structuredSections.push({ key, section: body });
+      structuredTruncation.push(...fragment.truncation);
+      structuredCitations.push(...citations);
+      firstSectionAdmitted = false;
+      return;
+    }
+
+    const frame = sectionFrameCost(key, firstSectionAdmitted);
+    const serving = Math.max(0, remainingChars - frame);
+    const fitted = fitItemSection(
+      body as { items: Array<{ id: string }>; item_count: number },
+      ["item_count"],
+      serving,
+    );
+    if (fitted.starved && serializedLength(fitted.section) > serving) {
+      // Even the empty envelope overflows the surviving budget: omit the section
+      // to hold the hard whole-pack budget, and drop its citations so no citation
+      // references an unemitted section. The starved marker still tells the
+      // caller the requested section was fully dropped.
+      structuredTruncation.push({
+        source: key,
+        reason: "whole_pack_budget",
+        max_chars: wholePackBudget,
+        starved: true,
+      });
+      return;
+    }
+
+    const survived = fitted.section as Record<string, unknown>;
+    structuredSections.push({ key, section: survived });
+    remainingChars = Math.max(
+      0,
+      remainingChars - serializedLength(survived) - frame,
+    );
+    firstSectionAdmitted = false;
+    // Reconcile citations to exactly the items that survived the re-fit.
+    structuredCitations.push(
+      ...reconcileCitedItemCitations(citations, survived),
+    );
+    // The section's own truncation notices only make sense when its body was
+    // emitted; a fully-starved (omitted) section is covered by the starved
+    // marker above instead.
+    structuredTruncation.push(...fragment.truncation);
+    if (fitted.truncated) {
+      structuredTruncation.push({
+        source: key,
+        reason: "whole_pack_budget",
+        max_chars: wholePackBudget,
+      });
+    }
+  };
+
+  // Assemble in priority order (profile_guidance, then process_guidance, then
+  // repo_facts) so the deterministic allocation order matches
+  // CONTEXT_PACK_SECTION_PRIORITY and each sees only the budget its predecessors
+  // leave behind.
+  const guidanceRequests: Array<{
+    include: boolean;
+    section: GuidanceSectionName;
+  }> = [
+    { include: includeProfileGuidance, section: "profile_guidance" },
+    { include: includeProcessGuidance, section: "process_guidance" },
+  ];
+  for (const req of guidanceRequests) {
+    if (!req.include) continue;
+    const fragment = await loadGuidanceSection(
+      { section: req.section, namespace: readNamespace },
+      { query: structuredSectionQuery },
+    );
+    admitStructuredSection(req.section, fragment);
+  }
+
+  if (includeRepoFacts) {
+    // repo_facts binds the requested active repository exactly. `nowMs` is
+    // captured once so staleness dispositions are deterministic for one pack
+    // build. `repo` absent -> the loader's defined no-active-repo empty state;
+    // it never falls back to another repository.
+    const repoFactsFragment = await loadRepoFactsSection(
+      {
+        namespace: readNamespace,
+        repo: args.repo ?? null,
+        nowMs: Date.now(),
+      },
+      { query: structuredSectionQuery },
+    );
+    admitStructuredSection("repo_facts", repoFactsFragment);
+  }
+
   const sections: Record<string, unknown> = {};
   if (workingSetSection) sections.working_set = workingSetSection;
   if (recoverySection) sections.recovery = recoverySection;
   if (durableLaneSection) sections.durable_lane_context = durableLaneSection;
   if (durableMemorySection) sections.durable_memory = durableMemorySection;
+  for (const { key, section } of structuredSections) {
+    sections[key] = section;
+  }
 
   return {
     payload: {
@@ -503,10 +696,12 @@ export async function buildAgentContextPackPayload(
           ...(recovery ? recovery.warnings.scope_denials : []),
           ...(durableLaneContext?.scopeDenials ?? []),
           ...(durableMemoryContext?.scopeDenials ?? []),
+          ...structuredScopeDenials,
         ],
         degraded_sources: [
           ...(durableLaneContext?.degradedSources ?? []),
           ...(durableMemoryContext?.degradedSources ?? []),
+          ...structuredDegradedSources,
         ],
         truncation: [
           ...(durableLaneSection ? (durableLaneContext?.truncation ?? []) : []),
@@ -514,6 +709,7 @@ export async function buildAgentContextPackPayload(
             ? (durableMemoryContext?.truncation ?? [])
             : []),
           ...wholePackTruncation,
+          ...structuredTruncation,
         ],
       },
       budget: {
@@ -537,7 +733,11 @@ export async function buildAgentContextPackPayload(
           ? { durable_memory: durableMemoryBudget }
           : {}),
       },
-      citations: [...durableCitations, ...durableMemoryCitations],
+      citations: [
+        ...durableCitations,
+        ...durableMemoryCitations,
+        ...structuredCitations,
+      ],
       query: args.query ?? null,
     },
     isError: false,

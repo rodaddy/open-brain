@@ -194,6 +194,9 @@ describe("agent_context_pack whole-pack budget", () => {
           "recovery",
           "durable_lane_context",
           "durable_memory",
+          "profile_guidance",
+          "process_guidance",
+          "repo_facts",
         ],
       });
     } finally {
