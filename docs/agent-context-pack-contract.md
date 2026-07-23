@@ -2,11 +2,13 @@
 
 Status: locally runtime-available over MCP for scoped working-set context,
 explicit quarantined recovery summaries, explicitly requested exact-scope durable
-lane context, and the query-driven `durable_memory`, `profile_guidance`,
-`process_guidance`, and `repo_facts` sections — seven sections wired into the
-whole-pack allocation order. An opt-in server-side NATS request/reply bridge can
-expose the same pack when explicitly enabled. The remaining `pointers` and
-`candidate_memory` sections remain planned.
+lane context, the query-driven `durable_memory`, `profile_guidance`,
+`process_guidance`, and `repo_facts` sections, and the body-free `pointers` and
+truthful-empty `candidate_memory` sections — all wired into the whole-pack
+allocation order. A dedicated per-turn `agent_reflex_pointers` MCP tool projects
+that same single recall + pointer stack down to a budget-bounded, cited,
+body-free pointer reflex (#334). An opt-in server-side NATS request/reply bridge
+can expose the same pack when explicitly enabled.
 Parent issue: #220.
 Research receipt: PR #225, `docs/realtime-agent-memory-research.md`.
 
@@ -28,9 +30,12 @@ server-authoritative pack path only when `OPENBRAIN_TRANSPORT=nats`,
 `OPENBRAIN_NATS_ENABLE_BRIDGE=true`, and an allowed `OPENBRAIN_NATS_URL` are
 configured.
 The query-driven `durable_memory`, `profile_guidance`, `process_guidance`, and
-`repo_facts` sections are now assembled server-side and wired into the whole-pack
-allocation order. The remaining `pointers` and `candidate_memory` section names
-remain planned until their owning issues land.
+`repo_facts` sections are assembled server-side and wired into the whole-pack
+allocation order. The `pointers` section (body-free resolvable references) and
+the truthful-empty `candidate_memory` section are also wired: both are pure
+transforms over the single `durable_memory` hybrid recall — no second retrieval
+or pointer stack. The `agent_reflex_pointers` tool (see "Reflex Pointer Surface")
+is a thin projection over that same pointers path.
 
 ## Ownership Boundary
 
@@ -143,7 +148,7 @@ Top-level fields:
     "degraded_sources": [],
     "truncation": []
   },
-  "budget": {},
+  "budget": { "requested": null },
   "citations": []
 }
 ```
@@ -295,10 +300,13 @@ first:
 Each lower-priority section is only fitted against whatever whole-pack budget the
 higher-priority sections leave behind, so a large low-priority section can never
 starve a higher-value one. This order is stable for identical inputs and is
-echoed back in `budget.whole_pack.allocation_order`. It matches the seven
-runtime-available sections wired into the allocation order today. The remaining
-known section names (`pointers`, `candidate_memory`) are not yet wired into this
-allocation order.
+echoed back in `budget.whole_pack.allocation_order`. `pointers` and
+`candidate_memory` are the lowest-priority members, admitted last after
+`repo_facts` through the same whole-pack fitter: `pointers` is a pure transform
+over the `durable_memory` recall's already-authorized, already-suppressed surplus
+pool (deduped against the durable identities that recall retained), and
+`candidate_memory` drives no recall of its own (no candidate predicate exists
+yet, so it is truthfully empty).
 
 **Serialized section accounting.** The budget bounds the *serialized* size of the
 emitted `sections` object — `JSON.stringify(payload.sections)` — not merely the
@@ -357,6 +365,7 @@ When `budget.max_tokens` is set, the envelope carries:
 ```json
 {
   "budget": {
+    "requested": { "max_tokens": 4000 },
     "whole_pack": {
       "content_char_limit": 14800,
       "content_chars_used": 9213,
@@ -405,6 +414,71 @@ tokens, omitted section counts, and truncation decisions.
 Every included durable fact, repo fact, lane event, pointer, or candidate should
 carry a citation or source ref. Working context may cite trace ids or event ids;
 it must be labeled as unpromoted working state.
+
+## Reflex Pointer Surface
+
+`agent_reflex_pointers` (#334) is the smallest explicit per-turn reflex API for
+cited pointers. It is a thin PROJECTION over the same `agent_context_pack`
+pointers path — it forces `requested_sections: ["pointers"]`, runs the single
+`durable_memory` hybrid recall exactly once (which #332 concept keys can drive and
+#333 prior-context suppression prunes), reuses the #329 pointer machinery, and
+then narrows the whole-pack payload down to just the body-free cited pointer
+references plus the pointer-relevant envelope. It owns no retrieval, dedupe,
+identity, or pointer logic of its own; it never issues a second retrieval or
+pointer stack.
+
+Request shape mirrors the pack scope contract plus a required `query` (a reflex
+with no query has no pool to point at), optional `prior_context`, and optional
+`budget`. It omits `requested_sections`, section toggles, and recovery opt-in,
+because a pointer reflex never emits non-pointer sections.
+
+Response shape:
+
+```json
+{
+  "schema": "openbrain.agent_reflex_pointers.v1",
+  "status": "ok",
+  "placement": "client_owned",
+  "resolvable_reference_only": true,
+  "scope": { "namespace_source": "authorization", "...": "..." },
+  "pointers": {
+    "label": "pointers",
+    "namespace_scoped": true,
+    "resolvable_reference_only": true,
+    "items": [],
+    "item_count": 0,
+    "truncated": false
+  },
+  "warnings": { "scope_denials": [], "degraded_sources": [], "truncation": [] },
+  "budget": {},
+  "citations": []
+}
+```
+
+Guarantees, all inherited from the shared pack path:
+
+- **Budget-bounded.** When `budget.max_tokens` is set, pointers are fitted under
+  the same whole-pack budget and `budget.whole_pack` reports the accounting;
+  budget pressure appears in `warnings.truncation`.
+- **Every pointer resolvable, no bodies.** Each pointer carries identity
+  (`brain_record:${source_type}:${id}`), a structural `source_ref`
+  (source/type/id/namespace only), and lightweight structural metadata — never
+  `content`, `content_preview`, `label`, or `preview`. Resolve through the
+  authorized read path: `get_entry` with `table = source_ref.type + "s"` and
+  `id = source_ref.id`. `citations` is a bijection with the emitted pointers.
+- **Prior-context suppression.** Records already represented in `prior_context`
+  are dropped by the shared recall before any pointer is emitted.
+- **Namespace isolation.** The auth-derived namespace predicate binds the single
+  recall; an unauthorized explicit `namespace` override is denied content-free
+  through the same path as the pack, before recall runs.
+- **Placement is client-owned.** The response carries `placement:
+  "client_owned"` and resolvable references only. Open Brain performs NO implicit
+  MCP `_meta` injection and NO prompt placement — the client decides whether and
+  how to place the pointers. This is the same owning boundary as the rejected
+  `_meta` alternative in "Hot Memory Boundary Decision (#271)".
+- **Fail-open.** A degraded shared recall surfaces content-free in
+  `warnings.degraded_sources` with an empty pointer set; the reflex itself does
+  not error. Only auth/namespace denial returns an error payload.
 
 ## Hermes One-Call Example
 

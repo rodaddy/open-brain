@@ -54,8 +54,10 @@ import { registerOperatorDoctor } from "./operator-doctor.ts";
 import { registerListRepoFacts, registerUpsertRepoFact } from "./repo-facts.ts";
 import { registerSourceRegistry } from "./source-registry.ts";
 import { registerDropFolderCollector } from "./drop-folder-collector.ts";
+import { registerIngestConversationFacts } from "./ingest-conversation-facts.ts";
 import {
   registerAgentContextPack,
+  registerAgentReflexPointers,
   registerRecoveryWalAppend,
   registerRecoveryWalMark,
   registerWorkingSetAppend,
@@ -141,10 +143,12 @@ export function registerAllTools(server: McpServer, deps: ToolDeps): void {
   registerRecoveryWalAppend(server, toolDeps);
   registerRecoveryWalMark(server, toolDeps);
   registerAgentContextPack(server, toolDeps);
+  registerAgentReflexPointers(server, toolDeps);
   registerGetContract(server, toolDeps);
   registerOperatorDoctor(server, toolDeps);
   registerUpsertRepoFact(server, toolDeps);
   registerListRepoFacts(server, toolDeps);
   registerSourceRegistry(server, toolDeps);
   registerDropFolderCollector(server, toolDeps);
+  registerIngestConversationFacts(server, toolDeps);
 }

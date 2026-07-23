@@ -1755,6 +1755,46 @@ def test_thin_wrappers_cover_current_issue_scope():
     }
 
 
+def test_agent_reflex_pointers_wrapper_sends_arguments_unchanged():
+    # The reflex pointer projection is a plain runtime-neutral call_tool wrapper,
+    # like its neighbors: the caller payload must reach the server intact under
+    # the matching tool name with no default namespace delegation.
+    transport = FakeTransport()
+    client = make_client(transport)
+
+    result = client.agent_reflex_pointers(
+        agent="nagatha",
+        platform="discord",
+        server_id="guild",
+        channel_id="chan",
+        session_key="session",
+        query="how does spool replay work",
+        prior_context=[{"citation_id": "cit-1"}],
+    )
+
+    calls = tool_requests(transport)
+    assert len(calls) == 1
+    params = calls[0]["json"]["params"]
+    assert params["name"] == "agent_reflex_pointers"
+    assert params["arguments"] == {
+        "agent": "nagatha",
+        "platform": "discord",
+        "server_id": "guild",
+        "channel_id": "chan",
+        "session_key": "session",
+        "query": "how does spool replay work",
+        "prior_context": [{"citation_id": "cit-1"}],
+    }
+    assert result["tool"] == "agent_reflex_pointers"
+
+
+def test_agent_reflex_pointers_is_a_known_help_tool():
+    client = make_client(FakeTransport())
+
+    assert "agent_reflex_pointers" in client.known_tools()
+    assert client.tool_help("agent_reflex_pointers")
+
+
 def test_all_registered_tool_wrappers_call_matching_tool_names():
     transport = FakeTransport()
     client = make_client(transport)
@@ -1764,6 +1804,7 @@ def test_all_registered_tool_wrappers_call_matching_tool_names():
         "append_session_event",
         "citation_recall",
         "agent_context_pack",
+        "agent_reflex_pointers",
         "archive_entity",
         "archive_entry",
         "brain_answer",
@@ -1822,7 +1863,7 @@ def test_all_registered_tool_wrappers_call_matching_tool_names():
 
 
 def test_required_contract_tools_have_first_class_wrappers_and_help():
-    assert CURRENT_CONTRACT_VERSION == "2026-07-17.memory-tools.v22"
+    assert CURRENT_CONTRACT_VERSION == "2026-07-23.memory-tools.v23"
     assert set(REQUIRED_CONTRACT_TOOLS) <= set(CURRENT_TOOL_HELP)
 
     for tool_name in REQUIRED_CONTRACT_TOOLS:

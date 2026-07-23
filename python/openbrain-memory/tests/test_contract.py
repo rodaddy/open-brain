@@ -45,7 +45,7 @@ def representative_contract_manifest() -> dict:
             "rtech-hermes-runtime": "0.1.0",
         },
         "compatible_client_ranges": {
-            "openbrain-memory": ">=0.1.8 <1.0.0",
+            "openbrain-memory": ">=0.1.15 <1.0.0",
             "rtech-hermes-runtime": ">=0.1.0 <1.0.0",
         },
         "transport": {
@@ -86,11 +86,11 @@ def test_validate_contract_manifest_accepts_representative_contract_shape():
     assert result.reasons == ()
 
 
-def test_package_pins_reviewed_v22_schema_snapshot() -> None:
-    assert CURRENT_CONTRACT_VERSION == "2026-07-17.memory-tools.v22"
+def test_package_pins_reviewed_v23_schema_snapshot() -> None:
+    assert CURRENT_CONTRACT_VERSION == "2026-07-23.memory-tools.v23"
     assert CURRENT_CONTRACT_SCHEMA_VERSION == 1
     assert CURRENT_CONTRACT_SCHEMA_HASH == (
-        "51bd6bd9901b88d1f7ae71b95c34a374cbfa4488f706134334aa839bb7cb7c66"
+        "4b69e9b437c96175531b049b6e3c2782f383334e9e1931e96e73835599e4a4a8"
     )
 
 
@@ -160,10 +160,10 @@ def test_manifest_requires_current_package_without_overstating_legacy_compatibil
         client_version=PREVIOUS_CLIENT_VERSION,
     )
 
-    assert CURRENT_CLIENT_VERSION == "0.1.14"
-    assert manifest["min_client_versions"]["openbrain-memory"] == "0.1.14"
+    assert CURRENT_CLIENT_VERSION == "0.1.15"
+    assert manifest["min_client_versions"]["openbrain-memory"] == "0.1.15"
     assert manifest["compatible_client_ranges"]["openbrain-memory"] == (
-        ">=0.1.8 <1.0.0"
+        ">=0.1.15 <1.0.0"
     )
     assert current.ok is True
     assert previous_client.ok is False
@@ -193,6 +193,50 @@ def test_current_package_rejects_realistic_v21_first_class_contract():
     assert "tool_contracts['agent_context_pack'].version must be >= 2" in result.reasons
     assert (
         "tool_contracts['append_session_event'].version must be >= 8" in result.reasons
+    )
+
+
+def test_v23_manifest_publishing_agent_reflex_pointers_validates():
+    """The real v23 contract must publish agent_reflex_pointers as both a tool
+    capability and a tool_contracts entry; openbrain-memory >=0.1.15 requires it."""
+
+    manifest = representative_contract_manifest()
+
+    assert "agent_reflex_pointers" in REQUIRED_CONTRACT_TOOLS
+    capability_tools = {
+        capability["name"]
+        for capability in manifest["capabilities"]
+        if capability["kind"] == "tool"
+    }
+    assert "agent_reflex_pointers" in capability_tools
+    assert "agent_reflex_pointers" in manifest["tool_contracts"]
+
+    result = validate_required_memory_contract(
+        manifest,
+        client_version=CURRENT_CLIENT_VERSION,
+    )
+
+    assert result.ok is True
+    assert result.reasons == ()
+
+
+def test_v23_manifest_missing_reflex_tool_contract_fails_closed():
+    """The P1 regression: a v23 manifest that advertises the reflex capability but
+    omits it from tool_contracts must fail closed, not validate."""
+
+    manifest = representative_contract_manifest()
+    del manifest["tool_contracts"]["agent_reflex_pointers"]
+
+    result = validate_required_memory_contract(
+        manifest,
+        client_version=CURRENT_CLIENT_VERSION,
+    )
+
+    assert result.ok is False
+    assert any(
+        "required tool(s) missing from tool_contracts" in reason
+        and "agent_reflex_pointers" in reason
+        for reason in result.reasons
     )
 
 
@@ -359,7 +403,7 @@ def test_validate_contract_manifest_reports_min_client_version_failure():
         f"{safe_string_display(CURRENT_CLIENT_VERSION)}",
         "openbrain-memory "
         f"{safe_string_display('0.0.9')} does not satisfy compatible range "
-        f"{safe_string_display('>=0.1.8 <1.0.0')}",
+        f"{safe_string_display('>=0.1.15 <1.0.0')}",
     )
 
 
@@ -372,7 +416,7 @@ def test_validate_contract_manifest_reports_compatible_range_failure():
     assert result.reasons == (
         "openbrain-memory "
         f"{safe_string_display('1.0.0')} does not satisfy compatible range "
-        f"{safe_string_display('>=0.1.8 <1.0.0')}",
+        f"{safe_string_display('>=0.1.15 <1.0.0')}",
     )
 
 
