@@ -85,6 +85,8 @@ interface FakeAnchor {
   namespace: string;
   entity_type: string;
   canonical_id: string;
+  name: string;
+  display_name: string | null;
   content_hash: string | null;
   derivation_hash: string | null;
   archived_at: string | null;
@@ -218,7 +220,7 @@ class FakeSourcePool {
     // Model just enough: the prior-hash SELECT returns the anchor's stamped
     // hash; entity/link INSERTs return a fresh-namespace row and stamp the
     // anchor. This lets the handler exercise the real primitive end to end.
-    if (text.includes("SELECT metadata ->> 'derivation_hash'")) {
+    if (text.includes("metadata ->> 'derivation_hash' AS derivation_hash")) {
       const [ns, type, canonical] = params as [string, string, string];
       const anchor = this.anchors.find(
         (a) =>
@@ -233,18 +235,21 @@ class FakeSourcePool {
       return {
         rows: [
           {
+            name: anchor.name,
+            display_name: anchor.display_name,
             derivation_hash: anchor.derivation_hash ?? null,
             content_hash: anchor.content_hash ?? null,
           },
         ],
       };
     }
-    // Content-hash refresh on the unchanged path (metadata || $4::jsonb).
+    // Display/content refresh on the unchanged derivation path.
     if (
       text.includes("UPDATE ob_entities") &&
-      text.includes("metadata || $4::jsonb")
+      text.includes("metadata = metadata || $5::jsonb")
     ) {
-      const [ns, type, canonical, patch] = params as [
+      const [ns, type, canonical, name, patch] = params as [
+        string,
         string,
         string,
         string,
@@ -258,7 +263,12 @@ class FakeSourcePool {
           a.archived_at === null,
       );
       if (anchor) {
-        const parsed = JSON.parse(patch) as { content_hash?: string };
+        const parsed = JSON.parse(patch) as {
+          content_hash?: string;
+          display_name?: string;
+        };
+        anchor.name = name;
+        anchor.display_name = parsed.display_name ?? anchor.display_name;
         if (parsed.content_hash !== undefined) {
           anchor.content_hash = parsed.content_hash;
         }
@@ -266,7 +276,7 @@ class FakeSourcePool {
       return { rows: [] };
     }
     if (text.includes("INSERT INTO ob_entities")) {
-      const [type, , canonical, ns, meta] = params as [
+      const [type, name, canonical, ns, meta] = params as [
         string,
         string,
         string,
@@ -278,6 +288,7 @@ class FakeSourcePool {
         const parsedMeta = JSON.parse(meta) as {
           derivation_hash?: string;
           content_hash?: string;
+          display_name?: string;
         };
         const existing = this.anchors.find(
           (a) =>
@@ -288,6 +299,9 @@ class FakeSourcePool {
         // The primitive stamps content_hash and derivation_hash directly in the
         // $5::jsonb metadata bind — read them straight from the parsed param.
         if (existing) {
+          existing.name = name;
+          existing.display_name =
+            parsedMeta.display_name ?? existing.display_name;
           existing.content_hash =
             parsedMeta.content_hash ?? existing.content_hash;
           existing.derivation_hash =
@@ -302,6 +316,8 @@ class FakeSourcePool {
           namespace: ns,
           entity_type: type,
           canonical_id: canonical,
+          name,
+          display_name: parsedMeta.display_name ?? null,
           content_hash: parsedMeta.content_hash ?? null,
           derivation_hash: parsedMeta.derivation_hash ?? null,
           archived_at: null,
@@ -428,6 +444,8 @@ describe("selectSourcesNeedingDerivation", () => {
       namespace: s.namespace,
       entity_type: SOURCE_ANCHOR_ENTITY_TYPE,
       canonical_id: `${SOURCE_ANCHOR_ENTITY_TYPE}:${s.id}`,
+      name: `source:${s.id}`,
+      display_name: s.title,
       content_hash: s.content_hash,
       derivation_hash: "deadbeef",
       archived_at: null,
@@ -444,6 +462,8 @@ describe("selectSourcesNeedingDerivation", () => {
       namespace: s.namespace,
       entity_type: SOURCE_ANCHOR_ENTITY_TYPE,
       canonical_id: `${SOURCE_ANCHOR_ENTITY_TYPE}:${s.id}`,
+      name: `source:${s.id}`,
+      display_name: s.title,
       content_hash: "a".repeat(64),
       derivation_hash: "deadbeef",
       archived_at: null,
@@ -629,6 +649,25 @@ describe("makeGraphDerivationHandler", () => {
       (a) => a.canonical_id === `${SOURCE_ANCHOR_ENTITY_TYPE}:${s.id}`,
     );
     expect(anchor?.content_hash).toBe(s.content_hash);
+  });
+
+  it("preserves the complete source title while bounding only the stored entity name", async () => {
+    const pool = new FakeSourcePool();
+    const title = Array.from({ length: 40 }, () => "Long source title").join(
+      " ",
+    );
+    const s = makeSource({ title });
+    pool.sources.push(s);
+    const handler = makeGraphDerivationHandler({ pool: pool as never, auth });
+
+    await handler(jobFor(payloadFor(s), s.namespace));
+
+    const anchor = pool.anchors.find(
+      (a) => a.canonical_id === `${SOURCE_ANCHOR_ENTITY_TYPE}:${s.id}`,
+    );
+    expect(anchor?.display_name).toBe(title);
+    expect(anchor?.name.length).toBeLessThanOrEqual(500);
+    expect(anchor?.name.endsWith(`[source:${s.id}]`)).toBe(true);
   });
 
   it("future job version is TERMINAL, rejected before any payload parse or SQL", async () => {

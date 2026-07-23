@@ -1210,6 +1210,16 @@ rename-to-existing-title against real PostgreSQL.
 - Does a real-PostgreSQL regression cover both duplicate-title creation and a
   rename onto an existing title?
 
+### Follow-up: display state must refresh independently of structural derivation
+
+A collision-safe name is incomplete if the unchanged short-circuit ignores a
+pure title rename. The derivation hash intentionally covers the node set, not the
+human label, so the `unchanged` path must separately compare and refresh the
+stored name plus `metadata.display_name`. Production callers must pass the full
+label to the primitive and bound only the indexed storage name; slicing upstream
+silently destroys the supposedly preserved display value. Tests need a pure
+rename with identical topics/people and a label longer than the storage limit.
+
 ## [2026-07-23] Maintenance handlers must reject unsupported job versions before parsing
 
 **Severity:** MEDIUM (P2)

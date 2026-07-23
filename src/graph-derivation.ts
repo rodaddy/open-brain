@@ -113,9 +113,8 @@ const PERSON_ENTITY_TYPE = "person";
 const ANCHOR_RELATION: LinkRelation = "mentions";
 const MAX_TERMS = 200;
 // The existing ob_entities.name length bound this primitive honors on every
-// stored name (the handler slices anchorName to the same width upstream). Both
-// the deterministic anchor storage name and any derived term name stay within
-// it; the human anchor label is preserved verbatim in metadata, unsliced.
+// stored name. The deterministic anchor storage name and every derived term stay
+// within it; the complete human anchor label is preserved separately in metadata.
 const MAX_ENTITY_NAME = 500;
 
 /**
@@ -265,6 +264,7 @@ export async function deriveGraphFromMetadata(
   const hash = derivationHash(namespace, anchorType, anchorId, entities);
 
   const anchorCanonical = `${anchorType}:${anchorId}`;
+  const anchorStoredName = anchorStorageName(anchorCanonical, anchorLabel);
 
   // 1) Read the anchor node's prior derivation + content hashes (namespace-
   //    bound). If the derivation is unchanged we skip the node/edge writes, but
@@ -274,7 +274,9 @@ export async function deriveGraphFromMetadata(
   //    maintenance selection sweep — which compares the source content_hash to
   //    the anchor's stamped content_hash — would re-select that source forever.
   const prior = await pool.query(
-    `SELECT metadata ->> 'derivation_hash' AS derivation_hash,
+    `SELECT name,
+            metadata ->> 'display_name'    AS display_name,
+            metadata ->> 'derivation_hash' AS derivation_hash,
             metadata ->> 'content_hash'    AS content_hash
        FROM ob_entities
       WHERE namespace = $1
@@ -287,18 +289,33 @@ export async function deriveGraphFromMetadata(
     prior.rows[0]?.derivation_hash ?? undefined;
   const previousContentHash: string | undefined =
     prior.rows[0]?.content_hash ?? undefined;
+  const previousStoredName: string | undefined =
+    prior.rows[0]?.name ?? undefined;
+  const previousDisplayName: string | undefined =
+    prior.rows[0]?.display_name ?? undefined;
 
   if (previousHash === hash) {
-    // The derived node set is unchanged. Only touch the anchor when the caller
-    // supplied a content_hash that differs from the stamped one (a source-bytes
-    // change with identical extracted terms); otherwise this is a true no-op.
-    if (
+    // The derived node set is unchanged, but source bytes and the human label are
+    // independent anchor state. Refresh either when it drifted so a pure title
+    // rename does not leave stale graph display data behind.
+    const contentHashChanged =
       anchorContentHash !== undefined &&
-      anchorContentHash !== previousContentHash
-    ) {
+      anchorContentHash !== previousContentHash;
+    const nameChanged =
+      anchorStoredName !== previousStoredName ||
+      anchorLabel !== previousDisplayName;
+    if (contentHashChanged || nameChanged) {
+      const metadataPatch: Record<string, string> = {
+        display_name: anchorLabel,
+      };
+      if (anchorContentHash !== undefined) {
+        metadataPatch.content_hash = anchorContentHash;
+      }
       await pool.query(
         `UPDATE ob_entities
-            SET metadata = metadata || $4::jsonb, updated_at = NOW()
+            SET name = $4,
+                metadata = metadata || $5::jsonb,
+                updated_at = NOW()
           WHERE namespace = $1
             AND entity_type = $2
             AND canonical_id = $3
@@ -307,7 +324,8 @@ export async function deriveGraphFromMetadata(
           namespace,
           anchorType,
           anchorCanonical,
-          JSON.stringify({ content_hash: anchorContentHash }),
+          anchorStoredName,
+          JSON.stringify(metadataPatch),
         ],
       );
     }
@@ -381,7 +399,6 @@ export async function deriveGraphFromMetadata(
   // Same-titled anchors therefore hold distinct lower(name) keys, while the
   // canonical upsert still resolves a rename to a safe in-place UPDATE. The full
   // unbounded human label rides in metadata above.
-  const anchorStoredName = anchorStorageName(anchorCanonical, anchorLabel);
   const anchorRow = await pool.query(
     `INSERT INTO ob_entities
        (entity_type, name, canonical_id, namespace, metadata, created_by)

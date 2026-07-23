@@ -73,10 +73,9 @@ dbDescribe("deriveGraphFromMetadata anchor rename (live Postgres)", () => {
     expect(beforeRes.rows[0].name).toBe(`release plan [${anchorCanonical}]`);
     expect(beforeRes.rows[0].display_name).toBe("release plan");
 
-    // Second derivation: SAME anchor (same canonical id), NEW display name, plus
-    // a new term so the run takes the write path (a pure rename with identical
-    // metadata short-circuits to `unchanged`). Pre-fix this raised
-    // "duplicate key value violates unique constraint idx_ob_entities_canonical".
+    // Second derivation: SAME anchor and derived terms, NEW display name only.
+    // The derivation remains structurally `unchanged`, but the anchor's readable
+    // storage name and exact display_name must still refresh in place.
     const renamed = await deriveGraphFromMetadata(
       { query: pool.query.bind(pool) },
       auth,
@@ -85,10 +84,10 @@ dbDescribe("deriveGraphFromMetadata anchor rename (live Postgres)", () => {
         anchorId,
         anchorName: "Release Plan v2",
         namespace: ns,
-        metadata: { topics: ["Migrations", "pgvector"], people: [] },
+        metadata: { topics: ["Migrations"], people: [] },
       },
     );
-    expect(renamed.status).toBe("changed");
+    expect(renamed.status).toBe("unchanged");
 
     // The canonical index still points at exactly one active row — the SAME id,
     // renamed in place. No duplicate anchor row, no unique violation.
@@ -113,7 +112,7 @@ dbDescribe("deriveGraphFromMetadata anchor rename (live Postgres)", () => {
         anchorId,
         anchorName: "Release Plan v2",
         namespace: ns,
-        metadata: { topics: ["Migrations", "pgvector"], people: [] },
+        metadata: { topics: ["Migrations"], people: [] },
       },
     );
     expect(again.status).toBe("unchanged");

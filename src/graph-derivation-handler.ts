@@ -499,9 +499,8 @@ export function makeGraphDerivationHandler(
 
       // The anchor label names the anchor entity node. Prefer the source title;
       // fall back to the external id so an untitled source still names its anchor.
-      const anchorName = (
-        title && title.trim().length > 0 ? title : payload.external_id
-      ).slice(0, 500);
+      const anchorName =
+        title && title.trim().length > 0 ? title : payload.external_id;
 
       // Derive on the SAME client, INSIDE this transaction. Every anchor/hash,
       // entity, link, and prune write the primitive issues is now part of the

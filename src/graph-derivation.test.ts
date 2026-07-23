@@ -139,7 +139,7 @@ class FakeGraph implements GraphDerivationPool {
     this.calls.push({ sql, params });
     const text = String(sql);
 
-    if (text.includes("SELECT metadata ->> 'derivation_hash'")) {
+    if (text.includes("metadata ->> 'derivation_hash' AS derivation_hash")) {
       const [ns, type, canonical] = params as [string, string, string];
       const found = this.byCanonical(ns, type, canonical);
       if (!found) return { rows: [] } as any;
@@ -148,6 +148,8 @@ class FakeGraph implements GraphDerivationPool {
       return {
         rows: [
           {
+            name: found.name,
+            display_name: found.metadata["display_name"] ?? null,
             derivation_hash: found.metadata["derivation_hash"] ?? null,
             content_hash: found.metadata["content_hash"] ?? null,
           },
@@ -155,14 +157,14 @@ class FakeGraph implements GraphDerivationPool {
       } as any;
     }
 
-    // Content-hash refresh on the unchanged path: metadata || $4::jsonb merges
-    // the new content_hash into the addressed anchor row without touching the
-    // node/edge set. Mirrors the partial-index-scoped UPDATE.
+    // Anchor refresh on the unchanged derivation path: update the collision-safe
+    // storage name plus display/content metadata without touching nodes or edges.
     if (
       text.includes("UPDATE ob_entities") &&
-      text.includes("metadata || $4::jsonb")
+      text.includes("metadata = metadata || $5::jsonb")
     ) {
-      const [ns, type, canonical, patch] = params as [
+      const [ns, type, canonical, name, patch] = params as [
+        string,
         string,
         string,
         string,
@@ -170,6 +172,7 @@ class FakeGraph implements GraphDerivationPool {
       ];
       const row = this.byCanonical(ns, type, canonical);
       if (row) {
+        row.name = name;
         row.metadata = {
           ...row.metadata,
           ...(JSON.parse(patch) as Record<string, unknown>),
@@ -363,7 +366,7 @@ describe("deriveGraphFromMetadata", () => {
     // Only the prior-hash SELECT ran; no INSERTs after the short-circuit.
     expect(g.calls.length).toBe(callsAfterFirst + 1);
     expect(g.calls.at(-1)?.sql).toContain(
-      "SELECT metadata ->> 'derivation_hash'",
+      "metadata ->> 'derivation_hash' AS derivation_hash",
     );
   });
 
@@ -449,6 +452,34 @@ describe("deriveGraphFromMetadata", () => {
     // not duplicate — it was renamed in place.
     expect(g.rows.length).toBe(rowCountBefore + 1);
     expect(after.metadata["derivation_hash"]).toBe(renamed.derivation_hash);
+  });
+
+  it("pure anchor rename refreshes display state even when derived terms are unchanged", async () => {
+    const g = new FakeGraph();
+    const anchorCanonical = "thought:11111111-1111-4111-8111-111111111111";
+
+    await deriveGraphFromMetadata(
+      g,
+      auth,
+      baseInput({
+        anchorName: "Original Title",
+        metadata: { topics: ["Migrations"], people: [] },
+      }),
+    );
+
+    const renamed = await deriveGraphFromMetadata(
+      g,
+      auth,
+      baseInput({
+        anchorName: "Renamed Only",
+        metadata: { topics: ["Migrations"], people: [] },
+      }),
+    );
+
+    expect(renamed.status).toBe("unchanged");
+    const anchor = g.rows.find((r) => r.canonical_id === anchorCanonical)!;
+    expect(anchor.name).toBe(`Renamed Only [${anchorCanonical}]`);
+    expect(anchor.metadata["display_name"]).toBe("Renamed Only");
   });
 
   it("duplicate source titles: two distinct anchors with the same display title coexist (no lower(name) collision)", async () => {
@@ -960,7 +991,7 @@ describe("deriveGraphFromMetadata", () => {
     // Exactly one extra call: the prior-hash SELECT. No stamp UPDATE.
     expect(g.calls.length).toBe(callsAfterFirst + 1);
     expect(g.calls.at(-1)?.sql).toContain(
-      "SELECT metadata ->> 'derivation_hash'",
+      "metadata ->> 'derivation_hash' AS derivation_hash",
     );
   });
 
