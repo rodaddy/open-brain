@@ -203,7 +203,7 @@ describe("requestLogger middleware", () => {
       declaredSchemaHash: "0".repeat(64),
       expectedContractId: "2026-07-23.memory-tools.v23",
       expectedSchemaHash:
-        "e60ea54f0797548b69722adc205377f100b685721fc69aa9b3a045ffb05bea82",
+        "342e71429ff16edaac92a1a0b7160fa72c880a086788edbeb922586b92417456",
     });
   });
 
@@ -211,7 +211,7 @@ describe("requestLogger middleware", () => {
     const req = mockReq({
       headers: {
         "x-ob-contract":
-          "2026-07-23.memory-tools.v23;schema_hash=e60ea54f0797548b69722adc205377f100b685721fc69aa9b3a045ffb05bea82",
+          "2026-07-23.memory-tools.v23;schema_hash=342e71429ff16edaac92a1a0b7160fa72c880a086788edbeb922586b92417456",
       },
     });
 

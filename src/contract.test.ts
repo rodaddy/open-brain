@@ -13,7 +13,7 @@ describe("Open Brain contract manifest", () => {
     expect(contract.contract_scope).toBe("required_openbrain_memory_contract");
     expect(contract.schema_hash).toMatch(/^[0-9a-f]{64}$/);
     expect(contract.schema_hash).toBe(
-      "e60ea54f0797548b69722adc205377f100b685721fc69aa9b3a045ffb05bea82",
+      "342e71429ff16edaac92a1a0b7160fa72c880a086788edbeb922586b92417456",
     );
     expect(contract.min_client_versions.mcp2cli).toBe("0.3.6");
     expect(contract.min_client_versions["openbrain-memory"]).toBe("0.1.15");
@@ -345,6 +345,7 @@ describe("Open Brain contract manifest", () => {
       "recovery_wal_append",
       "recovery_wal_mark",
       "agent_context_pack",
+      "agent_reflex_pointers",
       "list_repo_facts",
       "upsert_repo_fact",
     ]) {
@@ -395,6 +396,45 @@ describe("Open Brain contract manifest", () => {
         },
       },
     });
+    // The public reflex tool advertised by v23 (and required by openbrain-memory
+    // >=0.1.15) must publish a v1 tool contract whose input matches the actual
+    // public Zod schema and whose output declares the body-free, client-owned,
+    // resolvable-pointer projection. Without this the Python required-tool
+    // validation fails closed on a missing tool_contracts entry (P1).
+    const reflexPointers = contract.tool_contracts.agent_reflex_pointers;
+    expect(reflexPointers).toBeDefined();
+    expect(reflexPointers?.version).toBe(1);
+    // query is required (a reflex with no query has no pool to point at); the
+    // reflex takes NO requested_sections/repo/include_unreviewed_recovery input.
+    expect((reflexPointers?.input_schema as any).query).toMatchObject({
+      type: "string",
+      required: true,
+      minLength: 1,
+      maxLength: 4000,
+    });
+    expect(
+      (reflexPointers?.input_schema as any).requested_sections,
+    ).toBeUndefined();
+    expect((reflexPointers?.input_schema as any).repo).toBeUndefined();
+    expect(
+      (reflexPointers?.input_schema as any).include_unreviewed_recovery,
+    ).toBeUndefined();
+    // Same shared whole-pack budget contract as agent_context_pack — no drift.
+    expect((reflexPointers?.input_schema as any).budget).toEqual(
+      (agentContextPack?.input_schema as any).budget,
+    );
+    // prior_context accepts bounded resolvable references only (no raw text).
+    expect((reflexPointers?.input_schema as any).prior_context).toMatchObject({
+      type: "array",
+      required: false,
+      maxItems: 200,
+    });
+    // Output contract is the ordinary result envelope with the body-free,
+    // client-owned pointer projection — never memory bodies.
+    expect(reflexPointers?.output_shape).toContain("agent_reflex_pointers.v1");
+    expect(reflexPointers?.output_shape).toContain("client_owned");
+    expect(reflexPointers?.output_shape).toContain("body-free");
+    expect(reflexPointers?.output_shape).toContain("NO memory bodies");
     const upsertRepoFact = contract.tool_contracts.upsert_repo_fact;
     expect(upsertRepoFact).toBeDefined();
     const getEntry = contract.tool_contracts.get_entry;

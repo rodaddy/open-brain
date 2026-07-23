@@ -7,10 +7,10 @@
   "request": {
     "contract_id": "2026-07-23.memory-tools.v23",
     "schema_version": 1,
-    "schema_hash": "e60ea54f0797548b69722adc205377f100b685721fc69aa9b3a045ffb05bea82"
+    "schema_hash": "342e71429ff16edaac92a1a0b7160fa72c880a086788edbeb922586b92417456"
   },
   "expectation": {
     "compatible_contract_ids": ["2026-07-23.memory-tools.v23"],
-    "client_header": "2026-07-23.memory-tools.v23;schema_hash=e60ea54f0797548b69722adc205377f100b685721fc69aa9b3a045ffb05bea82"
+    "client_header": "2026-07-23.memory-tools.v23;schema_hash=342e71429ff16edaac92a1a0b7160fa72c880a086788edbeb922586b92417456"
   }
 }

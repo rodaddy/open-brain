@@ -90,7 +90,7 @@ def test_package_pins_reviewed_v23_schema_snapshot() -> None:
     assert CURRENT_CONTRACT_VERSION == "2026-07-23.memory-tools.v23"
     assert CURRENT_CONTRACT_SCHEMA_VERSION == 1
     assert CURRENT_CONTRACT_SCHEMA_HASH == (
-        "e60ea54f0797548b69722adc205377f100b685721fc69aa9b3a045ffb05bea82"
+        "342e71429ff16edaac92a1a0b7160fa72c880a086788edbeb922586b92417456"
     )
 
 
@@ -193,6 +193,50 @@ def test_current_package_rejects_realistic_v21_first_class_contract():
     assert "tool_contracts['agent_context_pack'].version must be >= 2" in result.reasons
     assert (
         "tool_contracts['append_session_event'].version must be >= 8" in result.reasons
+    )
+
+
+def test_v23_manifest_publishing_agent_reflex_pointers_validates():
+    """The real v23 contract must publish agent_reflex_pointers as both a tool
+    capability and a tool_contracts entry; openbrain-memory >=0.1.15 requires it."""
+
+    manifest = representative_contract_manifest()
+
+    assert "agent_reflex_pointers" in REQUIRED_CONTRACT_TOOLS
+    capability_tools = {
+        capability["name"]
+        for capability in manifest["capabilities"]
+        if capability["kind"] == "tool"
+    }
+    assert "agent_reflex_pointers" in capability_tools
+    assert "agent_reflex_pointers" in manifest["tool_contracts"]
+
+    result = validate_required_memory_contract(
+        manifest,
+        client_version=CURRENT_CLIENT_VERSION,
+    )
+
+    assert result.ok is True
+    assert result.reasons == ()
+
+
+def test_v23_manifest_missing_reflex_tool_contract_fails_closed():
+    """The P1 regression: a v23 manifest that advertises the reflex capability but
+    omits it from tool_contracts must fail closed, not validate."""
+
+    manifest = representative_contract_manifest()
+    del manifest["tool_contracts"]["agent_reflex_pointers"]
+
+    result = validate_required_memory_contract(
+        manifest,
+        client_version=CURRENT_CLIENT_VERSION,
+    )
+
+    assert result.ok is False
+    assert any(
+        "required tool(s) missing from tool_contracts" in reason
+        and "agent_reflex_pointers" in reason
+        for reason in result.reasons
     )
 
 
