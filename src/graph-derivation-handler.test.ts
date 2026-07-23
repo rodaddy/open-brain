@@ -283,6 +283,15 @@ class FakeSourcePool {
       const ns = params[3] as string;
       return { rows: [{ id: this.nextId(), is_new: true, namespace: ns }] };
     }
+    // Stale-edge prune (#346). This handler-level fake does not model link
+    // identity — these tests exercise the handler's snapshot/convergence path,
+    // not edge pruning — so a prune sweep finds nothing stale and archives zero.
+    if (
+      text.includes("UPDATE ob_links") &&
+      text.includes("SET archived_at = NOW()")
+    ) {
+      return { rows: [] };
+    }
 
     throw new Error(`unexpected sql: ${text.slice(0, 60)}`);
   }) as any;

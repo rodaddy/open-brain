@@ -79,7 +79,21 @@ interface FakeEntityRow {
  */
 class FakeGraph implements GraphDerivationPool {
   rows: FakeEntityRow[] = [];
-  links = new Map<string, { id: string; namespace: string }>();
+  // Link rows keyed by the (namespace, from, to, relation) live identity. The
+  // stored value carries archived state so the prune UPDATE (soft-delete) and
+  // the partial-unique WHERE archived_at IS NULL revive-on-conflict are both
+  // observable, exactly like the real ob_links table under migration 017.
+  links = new Map<
+    string,
+    {
+      id: string;
+      namespace: string;
+      from_id: string;
+      to_id: string;
+      relation: string;
+      archived: boolean;
+    }
+  >();
   calls: Array<{ sql: string; params: unknown[] }> = [];
   private seq = 0;
 
@@ -239,6 +253,12 @@ class FakeGraph implements GraphDerivationPool {
       const key = `${ns}|entity|${fromId}|entity|${toId}|${relation}`;
       const existing = this.links.get(key);
       if (existing) {
+        // The ON CONFLICT ... WHERE archived_at IS NULL arbiter only matches a
+        // LIVE edge. A previously-archived edge with the same identity is not
+        // seen by the partial index, so the DO UPDATE revives it (archived_at =
+        // NULL) — modeled here by clearing the archived flag. `xmax = 0` on a
+        // conflict-resolved row is false either way (not a fresh insert).
+        existing.archived = false;
         return {
           rows: [
             { id: existing.id, is_new: false, namespace: existing.namespace },
@@ -246,8 +266,47 @@ class FakeGraph implements GraphDerivationPool {
         } as any;
       }
       const id = this.nextId("l");
-      this.links.set(key, { id, namespace: ns });
+      this.links.set(key, {
+        id,
+        namespace: ns,
+        from_id: fromId,
+        to_id: toId,
+        relation,
+        archived: false,
+      });
       return { rows: [{ id, is_new: true, namespace: ns }] } as any;
+    }
+
+    // Stale-edge prune (#346): soft-delete this anchor's live `mentions` edges
+    // whose target dropped out of the derived set. Scoped by exact namespace +
+    // anchor identity (from_type/from_id) + relation; the surviving-target list
+    // is a bound uuid[] compared with NOT (to_id = ANY(...)). Returns the rows
+    // it archived so the primitive can count and same-namespace-verify them.
+    if (
+      text.includes("UPDATE ob_links") &&
+      text.includes("SET archived_at = NOW()")
+    ) {
+      const [ns, fromId, relation, survivors] = params as [
+        string,
+        string,
+        string,
+        string[],
+      ];
+      const keep = new Set(survivors);
+      const archived: Array<{ namespace: string }> = [];
+      for (const link of this.links.values()) {
+        if (
+          link.namespace === ns &&
+          link.from_id === fromId &&
+          link.relation === relation &&
+          !link.archived &&
+          !keep.has(link.to_id)
+        ) {
+          link.archived = true;
+          archived.push({ namespace: link.namespace });
+        }
+      }
+      return { rows: archived } as any;
     }
 
     throw new Error(`unexpected sql: ${text.slice(0, 60)}`);
@@ -448,6 +507,125 @@ describe("deriveGraphFromMetadata", () => {
     expect(changed.entities_upserted).toBe(5);
     expect(changed.entities_new).toBe(1);
     expect(changed.links_new).toBe(1);
+  });
+
+  it("stale-edge prune: a dropped term's anchor->term edge is archived and stays gone on rerun", async () => {
+    // Regression for #346 stale-edge convergence. Initial derivation has two
+    // topics; the second derivation drops one. The dropped topic's ENTITY NODE
+    // is shared and must survive (another anchor may reference it), but the
+    // obsolete anchor->term `mentions` EDGE must be soft-deleted so the
+    // search-brain graph join (archived_at IS NULL) stops returning it. A third
+    // derivation with the same shrunk set must be a no-op — nothing new to prune.
+    const g = new FakeGraph();
+    const anchorCanonical = "thought:11111111-1111-4111-8111-111111111111";
+
+    // Initial: topics [migrations, indexing] -> 2 live anchor->term edges.
+    const first = await deriveGraphFromMetadata(
+      g,
+      auth,
+      baseInput({
+        metadata: { topics: ["migrations", "indexing"], people: [] },
+      }),
+    );
+    expect(first.status).toBe("new");
+    expect(first.links_new).toBe(2);
+    expect(first.links_archived).toBe(0);
+
+    const anchorRow = g.rows.find((r) => r.canonical_id === anchorCanonical)!;
+    const indexingRow = g.rows.find(
+      (r) => r.entity_type === "topic" && r.name === "indexing",
+    )!;
+    const indexingKey = `team-kb|entity|${anchorRow.id}|entity|${indexingRow.id}|mentions`;
+    // Both edges start live.
+    expect([...g.links.values()].filter((l) => !l.archived).length).toBe(2);
+    expect(g.links.get(indexingKey)?.archived).toBe(false);
+
+    // Changed: topics [migrations] -> the indexing edge is now stale.
+    const changed = await deriveGraphFromMetadata(
+      g,
+      auth,
+      baseInput({ metadata: { topics: ["migrations"], people: [] } }),
+    );
+    expect(changed.status).toBe("changed");
+    // Exactly one edge archived: anchor->indexing. The migrations edge stays.
+    expect(changed.links_archived).toBe(1);
+    // The shared "indexing" ENTITY NODE is NOT archived — only the link is.
+    expect(
+      g.rows.find((r) => r.entity_type === "topic" && r.name === "indexing"),
+    ).toBeDefined();
+    // The stale edge is no longer live; the migrations edge still is.
+    expect(g.links.get(indexingKey)?.archived).toBe(true);
+    expect([...g.links.values()].filter((l) => !l.archived).length).toBe(1);
+
+    // Rerun the SAME shrunk set: unchanged content => no re-prune, no re-derive.
+    const again = await deriveGraphFromMetadata(
+      g,
+      auth,
+      baseInput({ metadata: { topics: ["migrations"], people: [] } }),
+    );
+    expect(again.status).toBe("unchanged");
+    expect(again.links_archived).toBe(0);
+    // Still exactly one live edge; the archived indexing edge did not revive.
+    expect([...g.links.values()].filter((l) => !l.archived).length).toBe(1);
+    expect(g.links.get(indexingKey)?.archived).toBe(true);
+  });
+
+  it("stale-edge prune: only THIS anchor's edges are touched, never a sibling anchor's", async () => {
+    // The prune predicate is scoped by from_id = the derived anchor's entity id.
+    // A different anchor that also mentions the dropped term must keep its edge
+    // live: the prune deactivates obsolete anchor->term links for one anchor
+    // only, never a shared node or a sibling anchor's edge.
+    const g = new FakeGraph();
+    const otherAnchorId = "22222222-2222-4222-8222-222222222222";
+
+    // Anchor A and Anchor B both mention "indexing".
+    await deriveGraphFromMetadata(
+      g,
+      auth,
+      baseInput({
+        metadata: { topics: ["migrations", "indexing"], people: [] },
+      }),
+    );
+    await deriveGraphFromMetadata(
+      g,
+      auth,
+      baseInput({
+        anchorId: otherAnchorId,
+        // A distinct display name: two anchor entities of the same type cannot
+        // share (namespace, entity_type, lower(name)) under the lookup index.
+        anchorName: "sibling plan",
+        metadata: { topics: ["indexing"], people: [] },
+      }),
+    );
+    const liveBefore = [...g.links.values()].filter((l) => !l.archived).length;
+    expect(liveBefore).toBe(3); // A->migrations, A->indexing, B->indexing
+
+    // Anchor A drops "indexing". Only A->indexing is archived; B->indexing lives.
+    const anchorA = g.rows.find(
+      (r) => r.canonical_id === "thought:11111111-1111-4111-8111-111111111111",
+    )!;
+    const anchorB = g.rows.find(
+      (r) => r.canonical_id === `thought:${otherAnchorId}`,
+    )!;
+    const indexingRow = g.rows.find(
+      (r) => r.entity_type === "topic" && r.name === "indexing",
+    )!;
+
+    const changed = await deriveGraphFromMetadata(
+      g,
+      auth,
+      baseInput({ metadata: { topics: ["migrations"], people: [] } }),
+    );
+    expect(changed.links_archived).toBe(1);
+
+    const aIndexing = g.links.get(
+      `team-kb|entity|${anchorA.id}|entity|${indexingRow.id}|mentions`,
+    );
+    const bIndexing = g.links.get(
+      `team-kb|entity|${anchorB.id}|entity|${indexingRow.id}|mentions`,
+    );
+    expect(aIndexing?.archived).toBe(true);
+    expect(bIndexing?.archived).toBe(false);
   });
 
   it("case-insensitive identity: 'Rico' and 'rico' collapse to one node", async () => {

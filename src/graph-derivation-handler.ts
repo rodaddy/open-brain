@@ -296,10 +296,22 @@ export async function enqueueGraphDerivationJobs(
 /**
  * A terminal (non-retryable) handler failure. The source drifted out from under
  * the job (revoked approval, retired, deleted, content re-observed, or a stale
- * revision), so retrying the SAME payload can never succeed — it must
- * dead-letter immediately rather than burn the retry budget. The queue maps a
- * plain thrown Error to a retryable category; this subclass lets the wrapper
- * distinguish the two without any content leaving the server.
+ * revision), so retrying the SAME payload can never succeed — the correct
+ * disposition is to dead-letter it immediately rather than burn the retry
+ * budget.
+ *
+ * Current truth (do not overstate): this is only a NON-RETRYABLE SIGNAL. The
+ * maintenance queue (maintenance-queue.ts) does not yet special-case this
+ * subclass — a thrown Error still follows the generic attempts>=max_attempts
+ * retry-then-dead-letter path, so today this error merely exhausts retries
+ * before dead-lettering rather than short-circuiting to it. Immediate
+ * dead-lettering awaits generic queue support (a terminal/non-retryable
+ * category the `fail()` path honors), which lands with this handler's queue
+ * registration (rebase onto #356). Until then this handler is intentionally
+ * NOT registered in maintenance-queue.ts / src/index.ts; the subclass exists so
+ * that once the queue can distinguish terminal from retryable failures, the
+ * wrapper can map it to immediate dead-letter without any content leaving the
+ * server.
  */
 export class GraphDerivationTerminalError extends Error {
   constructor(reason: string) {
@@ -319,8 +331,10 @@ interface GraphDerivationHandlerDeps {
 }
 
 /**
- * Build the registered handler for GRAPH_DERIVATION_JOB_KIND. The returned
- * function is the MaintenanceJobHandler the runner invokes per claimed job.
+ * Build the handler for GRAPH_DERIVATION_JOB_KIND. The returned function is the
+ * MaintenanceJobHandler the runner will invoke per claimed job once the queue
+ * registration lands (rebase onto #356); it is intentionally not yet wired into
+ * maintenance-queue.ts / src/index.ts.
  *
  * On each run it:
  *  1. Validates the payload shape (a malformed payload is terminal — a retry
@@ -452,6 +466,7 @@ export function makeGraphDerivationHandler(
       entities_new: receipt.entities_new,
       links_upserted: receipt.links_upserted,
       links_new: receipt.links_new,
+      links_archived: receipt.links_archived,
     });
   };
 }

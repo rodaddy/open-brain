@@ -116,3 +116,149 @@ dbDescribe("deriveGraphFromMetadata anchor rename (live Postgres)", () => {
     expect(JSON.stringify(again)).not.toContain("Release Plan");
   });
 });
+
+/**
+ * Live-Postgres regression for the #346 stale-edge convergence bug.
+ *
+ * When an anchor's derived term set shrinks, the dropped term's anchor->term
+ * `mentions` edge must be soft-deleted (archived_at set) so the search-brain
+ * graph join (which filters archived_at IS NULL) stops returning it, while the
+ * SHARED term entity node is left intact. A rerun of the shrunk set is a no-op.
+ * Proven against the real partial-unique index and the real UPDATE semantics.
+ */
+dbDescribe("deriveGraphFromMetadata stale-edge prune (live Postgres)", () => {
+  const pool = new Pool({ connectionString: DB_URL });
+  const ns = "test-graph-derivation-prune";
+  const anchorType = "thought";
+  const anchorId = "bb000000-0000-4000-8000-000000000346";
+  const anchorCanonical = `${anchorType}:${anchorId}`;
+  const auth: AuthInfo = {
+    role: "admin",
+    clientId: "test-graph-derivation",
+    namespaceSource: "token",
+  };
+
+  async function cleanup(): Promise<void> {
+    await pool.query("DELETE FROM ob_links WHERE namespace = $1", [ns]);
+    await pool.query("DELETE FROM ob_entities WHERE namespace = $1", [ns]);
+  }
+
+  async function anchorEntityId(): Promise<string> {
+    const res = await pool.query(
+      `SELECT id FROM ob_entities
+        WHERE namespace = $1 AND entity_type = $2 AND canonical_id = $3
+          AND archived_at IS NULL`,
+      [ns, anchorType, anchorCanonical],
+    );
+    return res.rows[0].id as string;
+  }
+
+  async function topicId(name: string): Promise<string | undefined> {
+    const res = await pool.query(
+      `SELECT id FROM ob_entities
+        WHERE namespace = $1 AND entity_type = 'topic' AND lower(name) = lower($2)
+          AND archived_at IS NULL`,
+      [ns, name],
+    );
+    return res.rows[0]?.id as string | undefined;
+  }
+
+  afterAll(async () => {
+    await cleanup();
+    await pool.end();
+  });
+
+  it("archives the dropped term's edge, keeps the shared node, and no-ops on rerun", async () => {
+    await cleanup();
+
+    // Initial: topics [migrations, indexing] -> two live anchor->term edges.
+    const first = await deriveGraphFromMetadata(
+      { query: pool.query.bind(pool) },
+      auth,
+      {
+        anchorType,
+        anchorId,
+        anchorName: "release plan",
+        namespace: ns,
+        metadata: { topics: ["migrations", "indexing"], people: [] },
+      },
+    );
+    expect(first.status).toBe("new");
+    expect(first.links_new).toBe(2);
+    expect(first.links_archived).toBe(0);
+
+    const anchor = await anchorEntityId();
+    const indexingId = await topicId("indexing");
+    expect(indexingId).toBeDefined();
+
+    const liveBefore = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM ob_links
+        WHERE namespace = $1 AND from_id = $2 AND relation = 'mentions'
+          AND archived_at IS NULL`,
+      [ns, anchor],
+    );
+    expect(liveBefore.rows[0].n).toBe(2);
+
+    // Changed: topics [migrations] -> the indexing edge is now stale.
+    const changed = await deriveGraphFromMetadata(
+      { query: pool.query.bind(pool) },
+      auth,
+      {
+        anchorType,
+        anchorId,
+        anchorName: "release plan",
+        namespace: ns,
+        metadata: { topics: ["migrations"], people: [] },
+      },
+    );
+    expect(changed.status).toBe("changed");
+    expect(changed.links_archived).toBe(1);
+
+    // The anchor->indexing edge is now archived (not hard-deleted).
+    const staleEdge = await pool.query(
+      `SELECT archived_at FROM ob_links
+        WHERE namespace = $1 AND from_id = $2 AND to_id = $3
+          AND relation = 'mentions'`,
+      [ns, anchor, indexingId],
+    );
+    expect(staleEdge.rows.length).toBe(1);
+    expect(staleEdge.rows[0].archived_at).not.toBeNull();
+
+    // Exactly one live edge remains (anchor->migrations).
+    const liveAfter = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM ob_links
+        WHERE namespace = $1 AND from_id = $2 AND relation = 'mentions'
+          AND archived_at IS NULL`,
+      [ns, anchor],
+    );
+    expect(liveAfter.rows[0].n).toBe(1);
+
+    // The SHARED "indexing" entity node is untouched — only the link was pruned.
+    const indexingStillLive = await topicId("indexing");
+    expect(indexingStillLive).toBe(indexingId);
+
+    // Rerun the SAME shrunk set: unchanged content, nothing new to prune.
+    const again = await deriveGraphFromMetadata(
+      { query: pool.query.bind(pool) },
+      auth,
+      {
+        anchorType,
+        anchorId,
+        anchorName: "release plan",
+        namespace: ns,
+        metadata: { topics: ["migrations"], people: [] },
+      },
+    );
+    expect(again.status).toBe("unchanged");
+    expect(again.links_archived).toBe(0);
+
+    // Still exactly one live edge; the archived edge did not revive.
+    const liveFinal = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM ob_links
+        WHERE namespace = $1 AND from_id = $2 AND relation = 'mentions'
+          AND archived_at IS NULL`,
+      [ns, anchor],
+    );
+    expect(liveFinal.rows[0].n).toBe(1);
+  });
+});

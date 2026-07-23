@@ -93,6 +93,12 @@ export interface DerivationReceipt {
   entities_new: number;
   links_upserted: number;
   links_new: number;
+  /**
+   * Count of previously-live anchor->term `mentions` edges soft-deleted this run
+   * because their target dropped out of the derived term set. Always 0 on `new`
+   * and `unchanged`; only a `changed` derivation whose term set shrank prunes.
+   */
+  links_archived: number;
 }
 
 export class CrossNamespaceEndpointError extends Error {
@@ -278,6 +284,7 @@ export async function deriveGraphFromMetadata(
       entities_new: 0,
       links_upserted: 0,
       links_new: 0,
+      links_archived: 0,
     };
   }
 
@@ -342,6 +349,15 @@ export async function deriveGraphFromMetadata(
   let entitiesNew = anchorNode.is_new ? 1 : 0;
   let linksUpserted = 0;
   let linksNew = 0;
+  let linksArchived = 0;
+
+  // The entity ids this derivation keeps a live anchor->term edge to. Any live
+  // `mentions` edge FROM this anchor to an id NOT in this set is a stale edge
+  // left behind by a prior derivation whose term set has since shrunk; step 4
+  // archives exactly those. The anchor's own id is included defensively so the
+  // self-link guard below can never let the prune touch a (nonexistent) self
+  // edge.
+  const liveTargetIds = new Set<string>([anchorEntityId]);
 
   // 3) Upsert each derived node and its anchor->node edge. Every write is
   //    parameterized and namespace-bound; every returned row's namespace is
@@ -392,7 +408,42 @@ export async function deriveGraphFromMetadata(
     assertSameNamespace(link.namespace, namespace, "derived link");
     linksUpserted += 1;
     if (link.is_new) linksNew += 1;
+    liveTargetIds.add(nodeId);
   }
+
+  // 4) Prune obsolete anchor->term edges. A `changed` derivation whose term set
+  //    shrank (e.g. topics [migrations,indexing] -> [migrations]) leaves the
+  //    dropped term's `mentions` edge live, so the search-brain graph join keeps
+  //    returning it. Archive (soft-delete) every live edge FROM this exact
+  //    anchor node under this exact namespace whose target is no longer in the
+  //    current derived set. We deactivate only the obsolete anchor->term LINK —
+  //    the shared term entity node is left untouched (another anchor may still
+  //    reference it, and it upserts back into the live set on its own).
+  //
+  //    Scoped by the exact namespace + anchor-identity predicates
+  //    (from_type = 'entity' AND from_id = the anchor entity id) and the
+  //    ANCHOR_RELATION, so no other anchor's edges and no cross-namespace edge
+  //    can ever be touched. Fully parameterized; NOT (... = ANY($n)) keeps the
+  //    surviving-target list a bound array, never interpolated. `archived_at IS
+  //    NULL` in the predicate makes a rerun with no newly-stale edges a no-op.
+  const pruneRes = await pool.query(
+    `UPDATE ob_links
+        SET archived_at = NOW(), updated_at = NOW()
+      WHERE namespace = $1
+        AND from_type = 'entity'
+        AND from_id = $2
+        AND relation = $3
+        AND archived_at IS NULL
+        AND NOT (to_id = ANY($4::uuid[]))
+      RETURNING namespace`,
+    [namespace, anchorEntityId, ANCHOR_RELATION, [...liveTargetIds]],
+  );
+  for (const row of pruneRes.rows) {
+    // Defense in depth: a soft-deleted edge must belong to the derivation
+    // namespace, mirroring the same-namespace guard on every persisted write.
+    assertSameNamespace(row.namespace, namespace, "pruned link");
+  }
+  linksArchived = pruneRes.rows.length;
 
   // Content-free: only the stable anchor_type category, the status, and
   // structural counts. No namespace value, no derivation_hash value, no ids.
@@ -403,6 +454,7 @@ export async function deriveGraphFromMetadata(
     entities_new: entitiesNew,
     links_upserted: linksUpserted,
     links_new: linksNew,
+    links_archived: linksArchived,
   });
 
   return {
@@ -416,6 +468,7 @@ export async function deriveGraphFromMetadata(
     entities_new: entitiesNew,
     links_upserted: linksUpserted,
     links_new: linksNew,
+    links_archived: linksArchived,
   };
 }
 
