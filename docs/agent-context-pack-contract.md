@@ -148,7 +148,7 @@ Top-level fields:
     "degraded_sources": [],
     "truncation": []
   },
-  "budget": {},
+  "budget": { "requested": null },
   "citations": []
 }
 ```
@@ -365,6 +365,7 @@ When `budget.max_tokens` is set, the envelope carries:
 ```json
 {
   "budget": {
+    "requested": { "max_tokens": 4000 },
     "whole_pack": {
       "content_char_limit": 14800,
       "content_chars_used": 9213,

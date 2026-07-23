@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { TOOL_CONTRACTS } from "./contract-schemas.ts";
 
-export const CONTRACT_VERSION = "2026-07-17.memory-tools.v22";
+export const CONTRACT_VERSION = "2026-07-23.memory-tools.v23";
 export const CONTRACT_SCHEMA_VERSION = 1;
 
 export interface ContractCapability {
@@ -445,6 +445,17 @@ export const CONTRACT_CAPABILITIES: ContractCapability[] = [
       "the optional NATS bridge returns the same server-authoritative pack.",
   },
   {
+    name: "agent_reflex_pointers",
+    version: 1,
+    kind: "tool",
+    description:
+      "Per-turn reflex projection over the single agent_context_pack durable " +
+      "recall and pointer machinery. Returns budget-bounded, body-free, cited " +
+      "resolvable pointers to durable records relevant to the current query, with " +
+      "prior-context suppression applied; placement into the model prompt stays " +
+      "client-owned and the tool returns an ordinary result envelope only.",
+  },
+  {
     name: "working_set_append",
     version: 1,
     kind: "tool",
@@ -554,12 +565,12 @@ export function buildContract(
     contract_scope: "required_openbrain_memory_contract" as const,
     schema_version: CONTRACT_SCHEMA_VERSION,
     min_client_versions: {
-      "openbrain-memory": "0.1.8",
+      "openbrain-memory": "0.1.15",
       "rtech-hermes-runtime": "0.1.0",
       mcp2cli: "0.3.6",
     },
     compatible_client_ranges: {
-      "openbrain-memory": ">=0.1.8 <1.0.0",
+      "openbrain-memory": ">=0.1.15 <1.0.0",
       "rtech-hermes-runtime": ">=0.1.0 <1.0.0",
       mcp2cli: ">=0.3.6 <1.0.0",
     },

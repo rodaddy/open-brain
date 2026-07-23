@@ -152,6 +152,54 @@ describe("agent_reflex_pointers (#334)", () => {
     }
   });
 
+  it("returns a stable empty envelope that is truthfully truncated when the whole-pack budget starves the section out", async () => {
+    // A 100-token budget derives a whole-pack char budget of
+    // max(0, 100*4 - 1200) = 0, so even the empty pointer envelope overflows the
+    // surviving budget and the pack OMITS the pointers section body entirely,
+    // recording a `source: "pointers", starved: true` whole_pack_budget
+    // truncation warning. Records exist (recall succeeds) so the section is not
+    // genuinely empty — it was starved by budget.
+    const { pool } = searchPool(nRecords(10));
+    const { client, cleanup } = await setupToolClient(admin, pool);
+    try {
+      const res = await callReflex(client, {
+        query: "durable",
+        budget: { max_tokens: 100 },
+      });
+      const payload = JSON.parse((res.content as any)[0].text);
+      expect(res.isError).toBeFalsy();
+
+      // The reflex still returns a STABLE pointer envelope, never an absent key.
+      const pointers = payload.pointers;
+      expect(pointers).toBeDefined();
+      expect(pointers.label).toBe("pointers");
+      expect(pointers.items).toEqual([]);
+      expect(pointers.item_count).toBe(0);
+
+      // Truthful to the upstream warning: starved-out => truncated, with an
+      // empty_reason derived from the actual whole_pack_budget truncation. The
+      // old behavior fabricated truncated=false and no empty_reason, which
+      // contradicted the emitted warning — these two assertions fail on it.
+      expect(pointers.truncated).toBe(true);
+      expect(pointers.empty_reason).toBe("whole_pack_budget");
+
+      // The empty envelope is honest, not a genuine-empty no-data result: the
+      // starving warning is present in the carried-through pack warnings.
+      const truncation = payload.warnings.truncation as Array<any>;
+      const starved = truncation.find(
+        (t) => t.source === "pointers" && t.starved === true,
+      );
+      expect(starved).toBeDefined();
+      expect(starved.reason).toBe("whole_pack_budget");
+
+      // Body-free even when starved: no pointer bodies, and no citations for an
+      // emitted-but-empty section.
+      expect(payload.citations).toEqual([]);
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("failed shared recall degrades content-free without an error and points at nothing", async () => {
     const { pool } = throwingSearchPool();
     const { client, cleanup } = await setupToolClient(admin, pool);

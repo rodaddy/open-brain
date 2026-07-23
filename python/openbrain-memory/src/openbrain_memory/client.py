@@ -52,10 +52,10 @@ def _resolve_package_version(pyproject: Path | None = None) -> str:
 
 
 PACKAGE_VERSION = _resolve_package_version()
-CURRENT_CONTRACT_VERSION = "2026-07-17.memory-tools.v22"
+CURRENT_CONTRACT_VERSION = "2026-07-23.memory-tools.v23"
 CURRENT_CONTRACT_SCHEMA_VERSION = 1
 CURRENT_CONTRACT_SCHEMA_HASH = (
-    "51bd6bd9901b88d1f7ae71b95c34a374cbfa4488f706134334aa839bb7cb7c66"
+    "e60ea54f0797548b69722adc205377f100b685721fc69aa9b3a045ffb05bea82"
 )
 CURRENT_CONTRACT_HEADER = (
     f"{CURRENT_CONTRACT_VERSION};schema_hash={CURRENT_CONTRACT_SCHEMA_HASH}"
@@ -75,6 +75,7 @@ REQUIRED_CONTRACT_TOOL_VERSIONS: Mapping[str, int] = {
 REQUIRED_CONTRACT_TOOLS = (
     "append_session_event",
     "agent_context_pack",
+    "agent_reflex_pointers",
     "decompose_entry",
     "get_contract",
     "get_entry",
@@ -105,6 +106,10 @@ CURRENT_TOOL_HELP: Mapping[str, str] = {
     "agent_context_pack": (
         "Build an exact-scope context pack with working context, explicit "
         "quarantined recovery, and opt-in bounded durable lane context."
+    ),
+    "agent_reflex_pointers": (
+        "Return budget-bounded, body-free, cited resolvable pointers to durable "
+        "records for the current query, with prior-context suppression applied."
     ),
     "brain_answer": "Return cited answer bullets from readable Open Brain evidence.",
     "decompose_entry": (
@@ -1229,6 +1234,9 @@ class OpenBrainClient:
 
     def agent_context_pack(self, **arguments: Any) -> JSON:
         return self.call_tool("agent_context_pack", arguments)
+
+    def agent_reflex_pointers(self, **arguments: Any) -> JSON:
+        return self.call_tool("agent_reflex_pointers", arguments)
 
     def working_set_append(self, **arguments: Any) -> JSON:
         return self.call_tool("working_set_append", arguments)

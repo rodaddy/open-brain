@@ -118,6 +118,17 @@ export const priorContextReferenceInputSchema = z
     },
   );
 
+// Single source of truth for the whole-pack budget bounds. Both the full
+// agent_context_pack and the reflex-pointer projection accept the EXACT same
+// budget contract, so the bounds live here once rather than being duplicated
+// (and risking silent drift) in each tool's input schema.
+export const contextPackBudgetInputSchema = z
+  .object({
+    max_tokens: z.number().int().min(100).max(20000).optional(),
+    max_latency_ms: z.number().int().min(1).max(10000).optional(),
+  })
+  .optional();
+
 export const agentContextPackInputSchema = {
   ...scopeInputSchema,
   query: z.string().max(4000).optional(),
@@ -153,12 +164,7 @@ export const agentContextPackInputSchema = {
     .boolean()
     .optional()
     .describe("Explicitly include exact-scope quarantined recovery summary"),
-  budget: z
-    .object({
-      max_tokens: z.number().int().min(100).max(20000).optional(),
-      max_latency_ms: z.number().int().min(1).max(10000).optional(),
-    })
-    .optional(),
+  budget: contextPackBudgetInputSchema,
 };
 
 const agentContextPackArgsSchema = z.object(agentContextPackInputSchema);
@@ -1217,12 +1223,9 @@ export const agentReflexPointersInputSchema = {
         "references before any pointer is emitted, so the reflex points only at " +
         "net-new durable records. Raw prior-context text is never accepted.",
     ),
-  budget: z
-    .object({
-      max_tokens: z.number().int().min(100).max(20000).optional(),
-      max_latency_ms: z.number().int().min(1).max(10000).optional(),
-    })
-    .optional(),
+  // Same whole-pack budget contract as agent_context_pack — shared, not
+  // duplicated, so the bounds cannot drift between the two surfaces.
+  budget: contextPackBudgetInputSchema,
 };
 
 const agentReflexPointersArgsSchema = z.object(agentReflexPointersInputSchema);
@@ -1284,23 +1287,38 @@ export async function buildAgentReflexPointersPayload(
     status: string;
     scope: Record<string, unknown>;
     sections: { pointers?: Record<string, unknown> };
-    warnings: Record<string, unknown>;
+    warnings: {
+      truncation?: Array<Record<string, unknown>>;
+      [key: string]: unknown;
+    };
     budget: Record<string, unknown>;
     citations: Array<Record<string, unknown>>;
     query: string | null;
   };
 
   // The pointers section is always present for a pointers request unless the
-  // whole-pack budget starved even its empty envelope out. Project it to the
-  // reflex's own defined empty shape so the caller always gets a stable pointer
-  // envelope rather than an absent key.
+  // whole-pack budget starved even its empty envelope out, in which case the
+  // pack omits the section body entirely and records a
+  // `source: "pointers", reason: "whole_pack_budget", starved: true` entry in
+  // `warnings.truncation`. Project that starved case to the reflex's own defined
+  // empty shape, but derive `truncated`/`empty_reason` from the ACTUAL upstream
+  // truncation warning so a budget-starved reflex is honest (truncated=true,
+  // empty_reason=whole_pack_budget) rather than fabricating a genuine-empty
+  // envelope (truncated=false) that contradicts the emitted warning.
+  const pointerBudgetStarvation = pack.warnings.truncation?.find(
+    (warning) =>
+      warning.source === POINTERS_SECTION_NAME &&
+      warning.reason === "whole_pack_budget" &&
+      warning.starved === true,
+  );
   const pointers = pack.sections.pointers ?? {
     label: POINTERS_SECTION_NAME,
     namespace_scoped: true,
     resolvable_reference_only: true,
     items: [],
     item_count: 0,
-    truncated: false,
+    truncated: pointerBudgetStarvation !== undefined,
+    ...(pointerBudgetStarvation ? { empty_reason: "whole_pack_budget" } : {}),
   };
 
   return {

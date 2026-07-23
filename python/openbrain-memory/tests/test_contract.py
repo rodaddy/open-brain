@@ -45,7 +45,7 @@ def representative_contract_manifest() -> dict:
             "rtech-hermes-runtime": "0.1.0",
         },
         "compatible_client_ranges": {
-            "openbrain-memory": ">=0.1.8 <1.0.0",
+            "openbrain-memory": ">=0.1.15 <1.0.0",
             "rtech-hermes-runtime": ">=0.1.0 <1.0.0",
         },
         "transport": {
@@ -86,11 +86,11 @@ def test_validate_contract_manifest_accepts_representative_contract_shape():
     assert result.reasons == ()
 
 
-def test_package_pins_reviewed_v22_schema_snapshot() -> None:
-    assert CURRENT_CONTRACT_VERSION == "2026-07-17.memory-tools.v22"
+def test_package_pins_reviewed_v23_schema_snapshot() -> None:
+    assert CURRENT_CONTRACT_VERSION == "2026-07-23.memory-tools.v23"
     assert CURRENT_CONTRACT_SCHEMA_VERSION == 1
     assert CURRENT_CONTRACT_SCHEMA_HASH == (
-        "51bd6bd9901b88d1f7ae71b95c34a374cbfa4488f706134334aa839bb7cb7c66"
+        "e60ea54f0797548b69722adc205377f100b685721fc69aa9b3a045ffb05bea82"
     )
 
 
@@ -160,10 +160,10 @@ def test_manifest_requires_current_package_without_overstating_legacy_compatibil
         client_version=PREVIOUS_CLIENT_VERSION,
     )
 
-    assert CURRENT_CLIENT_VERSION == "0.1.14"
-    assert manifest["min_client_versions"]["openbrain-memory"] == "0.1.14"
+    assert CURRENT_CLIENT_VERSION == "0.1.15"
+    assert manifest["min_client_versions"]["openbrain-memory"] == "0.1.15"
     assert manifest["compatible_client_ranges"]["openbrain-memory"] == (
-        ">=0.1.8 <1.0.0"
+        ">=0.1.15 <1.0.0"
     )
     assert current.ok is True
     assert previous_client.ok is False
@@ -359,7 +359,7 @@ def test_validate_contract_manifest_reports_min_client_version_failure():
         f"{safe_string_display(CURRENT_CLIENT_VERSION)}",
         "openbrain-memory "
         f"{safe_string_display('0.0.9')} does not satisfy compatible range "
-        f"{safe_string_display('>=0.1.8 <1.0.0')}",
+        f"{safe_string_display('>=0.1.15 <1.0.0')}",
     )
 
 
@@ -372,7 +372,7 @@ def test_validate_contract_manifest_reports_compatible_range_failure():
     assert result.reasons == (
         "openbrain-memory "
         f"{safe_string_display('1.0.0')} does not satisfy compatible range "
-        f"{safe_string_display('>=0.1.8 <1.0.0')}",
+        f"{safe_string_display('>=0.1.15 <1.0.0')}",
     )
 
 

@@ -13,12 +13,12 @@ describe("Open Brain contract manifest", () => {
     expect(contract.contract_scope).toBe("required_openbrain_memory_contract");
     expect(contract.schema_hash).toMatch(/^[0-9a-f]{64}$/);
     expect(contract.schema_hash).toBe(
-      "51bd6bd9901b88d1f7ae71b95c34a374cbfa4488f706134334aa839bb7cb7c66",
+      "e60ea54f0797548b69722adc205377f100b685721fc69aa9b3a045ffb05bea82",
     );
     expect(contract.min_client_versions.mcp2cli).toBe("0.3.6");
-    expect(contract.min_client_versions["openbrain-memory"]).toBe("0.1.8");
+    expect(contract.min_client_versions["openbrain-memory"]).toBe("0.1.15");
     expect(contract.compatible_client_ranges["openbrain-memory"]).toBe(
-      ">=0.1.8 <1.0.0",
+      ">=0.1.15 <1.0.0",
     );
     expect(contract.transport.namespace_boundary).toBe("authorization");
     expect(contract.realtime_transport.nats_jetstream).toMatchObject({
@@ -305,6 +305,16 @@ describe("Open Brain contract manifest", () => {
     expect(contract.capabilities.map((c) => c.name)).toContain(
       "agent_context_pack",
     );
+    // The new public reflex tool must be discoverable/compatibility-gateable via
+    // the curated manifest, not only via tools/list.
+    expect(contract.capabilities.map((c) => c.name)).toContain(
+      "agent_reflex_pointers",
+    );
+    expect(
+      contract.capabilities.find(
+        (item) => item.name === "agent_reflex_pointers",
+      ),
+    ).toMatchObject({ version: 1, kind: "tool" });
     expect(contract.capabilities.map((c) => c.name)).toContain(
       "receipt_contract",
     );
@@ -549,7 +559,7 @@ describe("Open Brain contract manifest", () => {
     // contract so a future TS/Python divergence fails here, in lockstep with
     // python/openbrain-memory CURRENT_CONTRACT_VERSION.
     const contract = buildContract("2026-06-18T00:00:00.000Z");
-    expect(contract.contract_version).toBe("2026-07-17.memory-tools.v22");
+    expect(contract.contract_version).toBe("2026-07-23.memory-tools.v23");
 
     const appendEvent = contract.tool_contracts.append_session_event;
     expect(appendEvent).toBeDefined();
