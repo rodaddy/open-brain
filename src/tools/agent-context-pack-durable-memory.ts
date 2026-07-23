@@ -66,16 +66,6 @@ export type DurableMemoryContextFragment = {
   budget: Record<string, unknown>;
   citations: Array<Record<string, unknown>>;
   /**
-   * The canonical `brain_record:${source_type}:${id}` identities actually
-   * EMITTED as durable_memory items — kept content-free, ids only, and byte-
-   * identical to each item's `citation_id`. The `pointers` and
-   * `candidate_memory` sections (#329) dedupe against this set so the same
-   * evidence the durable section already owns is never re-listed or
-   * double-counted. Empty on every empty/degraded/denied path (nothing was
-   * emitted to dedupe against).
-   */
-  durableIdentities: string[];
-  /**
    * ALL net-new recall rows the SAME `executeSearch` call returned and that
    * survived prior-context suppression, in hybrid-RRF rank order (#329). This is
    * the pointer/candidate builders' already-authorized, already-suppressed pool;
@@ -216,7 +206,6 @@ export async function loadDurableMemoryContext(
       degradedSources: [],
       budget: emptyBudget(),
       citations: [],
-      durableIdentities: [],
       pointerCandidatePool: [],
     };
   }
@@ -242,7 +231,6 @@ export async function loadDurableMemoryContext(
       degradedSources: [],
       budget: emptyBudget(),
       citations: [],
-      durableIdentities: [],
       pointerCandidatePool: [],
     };
   }
@@ -292,7 +280,6 @@ export async function loadDurableMemoryContext(
       degradedSources: [{ source: "durable_memory", reason: "recall_failed" }],
       budget: emptyBudget(),
       citations: [],
-      durableIdentities: [],
       pointerCandidatePool: [],
     };
   }
@@ -321,10 +308,6 @@ export async function loadDurableMemoryContext(
   const items: Array<Record<string, unknown>> = [];
   const citations: Array<Record<string, unknown>> = [];
   let itemsTruncated = false;
-  // Canonical `brain_record:${source_type}:${id}` identity of every row EMITTED
-  // as a durable_memory item (== its citation_id), so the pointer/candidate
-  // builders never re-list evidence this section already owns. Ids only.
-  const durableIdentities: string[] = [];
   // Every net-new authorized row, in rank order, handed to the pointer/candidate
   // builders. It includes rows this section emitted as items — pointer
   // eligibility is decided in the pack against the durable identities actually
@@ -379,9 +362,6 @@ export async function loadDurableMemoryContext(
       kind: "brain_record",
       source_ref: sourceRef,
     });
-    // Canonical durable identity == the item's citation_id (byte-identical), so
-    // pointers/candidates dedupe on the exact string the durable item exposes.
-    durableIdentities.push(citationId);
     remainingChars -= bounded.text.length;
     if (bounded.truncated) itemsTruncated = true;
   }
@@ -462,7 +442,6 @@ export async function loadDurableMemoryContext(
       max_item_chars: DURABLE_MEMORY_MAX_ITEM_CHARS,
     },
     citations,
-    durableIdentities,
     pointerCandidatePool,
   };
 }

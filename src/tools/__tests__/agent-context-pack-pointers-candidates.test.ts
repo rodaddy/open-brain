@@ -2,85 +2,29 @@ import { describe, expect, it } from "bun:test";
 import type { AuthInfo } from "../../types.ts";
 import {
   AGENT_CONTEXT_PACK_SCOPE as SCOPE,
+  admin,
+  brainRecord,
+  canonical,
+  isRecallSql,
+  nRecords,
+  searchPool,
   setupAgentContextPackToolClient as setupToolClient,
 } from "./agent-context-pack-test-helpers.ts";
 
 /**
- * pointers + candidate_memory (#329). These sections are pure transforms over
- * the durable_memory hybrid recall's already-authorized, already-suppressed
- * surplus pool — no second retrieval stack. They are black-boxed through the MCP
- * tool: vary requested sections, budget, prior_context, and namespace, and
- * assert the observable envelope, dedupe contract, structural (body-free)
- * source_ref, citation bijection, and the truthful empty candidate shape. The
- * internal SQL is not asserted beyond the single-recall and namespace-predicate
+ * pointers + candidate_memory (#329) — baseline section behavior. These sections
+ * are pure transforms over the durable_memory hybrid recall's already-authorized,
+ * already-suppressed surplus pool (pointers) or independently truthful-empty
+ * (candidate_memory) — no second retrieval stack. They are black-boxed through
+ * the MCP tool: vary requested sections, prior_context, and namespace, and assert
+ * the observable envelope, dedupe contract, structural (body-free) source_ref,
+ * citation bijection, and the truthful empty candidate shape. The internal SQL is
+ * not asserted beyond the single-recall, zero-recall, and namespace-predicate
  * invariants the issue requires proving.
+ *
+ * Whole-pack budget/coexistence and the get_entry resolution proof live in the
+ * companion file agent-context-pack-pointers-candidates-budget.test.ts.
  */
-
-/**
- * A mock pool that answers the hybrid search CTEs (vector + FTS) with a supplied
- * set of brain records and records every query's params so isolation predicates
- * and the single-recall invariant can be asserted.
- */
-function searchPool(
-  records: Array<Record<string, unknown>>,
-  captured: Array<{ sql: string; params?: unknown[] }> = [],
-) {
-  return {
-    pool: {
-      query: async (sql: string, params?: unknown[]) => {
-        captured.push({ sql, params });
-        if (
-          sql.includes("query_embedding") ||
-          sql.includes("fts_query") ||
-          sql.includes("FROM ob_")
-        ) {
-          return { rows: records };
-        }
-        return { rows: [] };
-      },
-    },
-    captured,
-  };
-}
-
-function brainRecord(
-  overrides: Partial<Record<string, unknown>> = {},
-): Record<string, unknown> {
-  return {
-    source_type: "decisions",
-    id: overrides.id ?? "dec-1",
-    namespace: "rico",
-    content_preview: "durable decision content",
-    tags: null,
-    created_by: "rico",
-    created_at: "2026-07-01T00:00:00Z",
-    updated_at: "2026-07-02T00:00:00Z",
-    usefulness: 0.9,
-    tier: "warm",
-    distance: 0.1,
-    fts_rank: 0.9,
-    ...overrides,
-  };
-}
-
-/** N distinct decision records dec-1..dec-N with distinct ranked previews. */
-function nRecords(n: number): Array<Record<string, unknown>> {
-  return Array.from({ length: n }, (_v, i) =>
-    brainRecord({
-      id: `dec-${i + 1}`,
-      content_preview: `durable decision content ${i + 1}`,
-      // Descending distance keeps dec-1 highest-ranked, dec-N lowest.
-      distance: 0.01 * (i + 1),
-      fts_rank: 1 - 0.01 * (i + 1),
-    }),
-  );
-}
-
-const admin: AuthInfo = { role: "admin", clientId: "rico" };
-
-function canonical(sourceType: string, id: string): string {
-  return `brain_record:${sourceType}:${id}`;
-}
 
 describe("agent_context_pack pointers + candidate_memory (#329)", () => {
   it("pointers-only request makes every authorized recalled row pointer-eligible, including the top durable-memory rows", async () => {
@@ -117,15 +61,8 @@ describe("agent_context_pack pointers + candidate_memory (#329)", () => {
 
       // The recall ran exactly once (one executeSearch => one vector CTE + one
       // FTS CTE call is the search stack; no second retrieval stack for pointers).
-      // Assert no additional recall was issued beyond the durable_memory recall.
-      const recallCalls = captured.filter(
-        (c) =>
-          typeof c.sql === "string" &&
-          (c.sql.includes("query_embedding") ||
-            c.sql.includes("fts_query") ||
-            c.sql.includes("FROM ob_")),
-      );
       // vector + FTS arms of the single hybrid recall; no third arm for pointers.
+      const recallCalls = captured.filter((c) => isRecallSql(c.sql));
       expect(recallCalls.length).toBeLessThanOrEqual(2);
     } finally {
       await cleanup();
@@ -164,55 +101,8 @@ describe("agent_context_pack pointers + candidate_memory (#329)", () => {
       for (const item of [...durable.items, ...pointers.items]) {
         expect(item.citation_id).toBe(canonical(item.source_type, item.id));
       }
-      // deduped_against_durable reflects the retained durable identities.
+      // The rows beyond the cap surface as pointers.
       expect(pointers.item_count).toBe(2);
-    } finally {
-      await cleanup();
-    }
-  });
-
-  it("whole-pack trimming does not silently lose pointer-eligible rows: a durable row trimmed for budget stays pointer-eligible", async () => {
-    // A tight whole-pack budget starves the durable_memory bodies. Rows the
-    // durable section could not retain must resurface as pointers (a pointer
-    // envelope is far smaller than a body), never silently lost.
-    const { pool } = searchPool(nRecords(10));
-    const { client, cleanup } = await setupToolClient(admin, pool);
-    try {
-      const pack = await client.callTool({
-        name: "agent_context_pack",
-        arguments: {
-          ...SCOPE,
-          query: "durable",
-          requested_sections: ["durable_memory", "pointers"],
-          // Trims durable bodies down to a single retained item, but the far
-          // smaller pointer envelope still admits a trimmed row.
-          budget: { max_tokens: 600 },
-        },
-      });
-      const payload = JSON.parse((pack.content as any)[0].text);
-      expect(pack.isError).toBeFalsy();
-      const durable = payload.sections.durable_memory;
-      const pointers = payload.sections.pointers;
-
-      const durableIds = new Set(
-        (durable?.items ?? []).map((i: any) => i.citation_id as string),
-      );
-      const pointerIds = new Set(
-        (pointers?.items ?? []).map((p: any) => p.citation_id as string),
-      );
-      // Durable was trimmed under budget pressure but did retain at least one
-      // body, and pointers surfaced at least one additional row.
-      expect(durableIds.size).toBeGreaterThan(0);
-      expect(pointerIds.size).toBeGreaterThan(0);
-      // No identity is both durable and pointer.
-      for (const id of pointerIds) {
-        expect(durableIds.has(id)).toBe(false);
-      }
-      // Union covers strictly more than the retained durable set alone: a row the
-      // durable section shed for budget is still surfaced as a pointer, never
-      // silently lost.
-      const union = new Set([...durableIds, ...pointerIds]);
-      expect(union.size).toBeGreaterThan(durableIds.size);
     } finally {
       await cleanup();
     }
@@ -345,21 +235,68 @@ describe("agent_context_pack pointers + candidate_memory (#329)", () => {
       expect(pack.isError).toBe(true);
       expect(String(payload.error)).toContain("Permission denied");
       // No recall query was ever issued.
-      const recallCalls = captured.filter(
-        (c) =>
-          typeof c.sql === "string" &&
-          (c.sql.includes("query_embedding") ||
-            c.sql.includes("fts_query") ||
-            c.sql.includes("FROM ob_")),
-      );
+      const recallCalls = captured.filter((c) => isRecallSql(c.sql));
       expect(recallCalls).toHaveLength(0);
     } finally {
       await cleanup();
     }
   });
 
-  it("candidate_memory is a truthful empty section: no predicate, no inference, no citations", async () => {
-    const { pool } = searchPool(nRecords(10));
+  it("candidate_memory alone runs ZERO recall queries and is a truthful empty section", async () => {
+    // candidate_memory has no write-side candidate predicate, so it always emits
+    // a truthful empty envelope. A candidate-only request must therefore NOT run
+    // the durable hybrid recall just to compute anything: zero recall queries.
+    const captured: Array<{ sql: string; params?: unknown[] }> = [];
+    const { pool } = searchPool(nRecords(10), captured);
+    const { client, cleanup } = await setupToolClient(admin, pool);
+    try {
+      const pack = await client.callTool({
+        name: "agent_context_pack",
+        arguments: {
+          ...SCOPE,
+          query: "durable",
+          requested_sections: ["candidate_memory"],
+        },
+      });
+      const payload = JSON.parse((pack.content as any)[0].text);
+      expect(pack.isError).toBeFalsy();
+
+      // Zero recall queries: candidate_memory alone never drives the hybrid
+      // retrieval stack.
+      const recallCalls = captured.filter((c) => isRecallSql(c.sql));
+      expect(recallCalls).toHaveLength(0);
+
+      const candidate = payload.sections.candidate_memory;
+      // Exact truthful-empty candidate contract.
+      expect(candidate).toEqual({
+        label: "candidate_memory",
+        namespace_scoped: true,
+        confidence: "unconfirmed",
+        auto_promotable: false,
+        items: [],
+        item_count: 0,
+        empty_reason: "candidate_predicate_unavailable",
+        truncated: false,
+      });
+      // No durable_memory or pointers section leaked into a candidate-only pack.
+      expect(payload.sections.durable_memory).toBeUndefined();
+      expect(payload.sections.pointers).toBeUndefined();
+      // No candidate citation is emitted.
+      const candidateCitations = payload.citations.filter(
+        (c: any) => c.kind === "candidate",
+      );
+      expect(candidateCitations).toHaveLength(0);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("candidate_memory co-requested with durable/pointers reuses the single recall and stays a truthful empty section", async () => {
+    // When durable_memory or pointers is also requested the recall runs once for
+    // them; candidate_memory reuses nothing extra and still emits its exact
+    // truthful empty envelope with no dedupe-count field and no citations.
+    const captured: Array<{ sql: string; params?: unknown[] }> = [];
+    const { pool } = searchPool(nRecords(10), captured);
     const { client, cleanup } = await setupToolClient(admin, pool);
     try {
       const pack = await client.callTool({
@@ -376,98 +313,29 @@ describe("agent_context_pack pointers + candidate_memory (#329)", () => {
       });
       const payload = JSON.parse((pack.content as any)[0].text);
       expect(pack.isError).toBeFalsy();
+      // A single hybrid recall (its two arms) serves durable + pointers; the
+      // candidate section adds no third arm.
+      const recallCalls = captured.filter((c) => isRecallSql(c.sql));
+      expect(recallCalls.length).toBeLessThanOrEqual(2);
+
       const candidate = payload.sections.candidate_memory;
-      expect(candidate).toMatchObject({
+      expect(candidate).toEqual({
         label: "candidate_memory",
         namespace_scoped: true,
         confidence: "unconfirmed",
         auto_promotable: false,
+        items: [],
         item_count: 0,
         empty_reason: "candidate_predicate_unavailable",
         truncated: false,
       });
-      expect(candidate.items).toEqual([]);
-      // No verbose public missing-contract detail leaks.
+      // No synthetic dedupe observability is emitted.
+      expect(candidate).not.toHaveProperty("dedupe_against_count");
       expect(candidate).not.toHaveProperty("missing_contract");
-      // dedupe_against_count reflects retained durable + emitted pointer
-      // identities (candidate dedupe contract), content-free.
-      const durableCount = payload.sections.durable_memory.item_count;
-      const pointerCount = payload.sections.pointers.item_count;
-      expect(candidate.dedupe_against_count).toBe(durableCount + pointerCount);
-      // No candidate citation is emitted.
       const candidateCitations = payload.citations.filter(
         (c: any) => c.kind === "candidate",
       );
       expect(candidateCitations).toHaveLength(0);
-    } finally {
-      await cleanup();
-    }
-  });
-
-  it("pointers/candidate coexist with guidance/repo_facts and appear last in allocation order", async () => {
-    const { pool } = searchPool(nRecords(3));
-    const { client, cleanup } = await setupToolClient(admin, pool);
-    try {
-      const pack = await client.callTool({
-        name: "agent_context_pack",
-        arguments: {
-          ...SCOPE,
-          query: "durable",
-          repo: "rodaddy/open-brain",
-          requested_sections: [
-            "profile_guidance",
-            "process_guidance",
-            "repo_facts",
-            "pointers",
-            "candidate_memory",
-          ],
-          budget: { max_tokens: 4000 },
-        },
-      });
-      const payload = JSON.parse((pack.content as any)[0].text);
-      expect(pack.isError).toBeFalsy();
-      // All requested structured sections coexist.
-      expect(payload.sections.pointers).toBeDefined();
-      expect(payload.sections.candidate_memory).toBeDefined();
-      // Allocation order lists pointers + candidate_memory LAST, after repo_facts.
-      const order = payload.budget.whole_pack.allocation_order as string[];
-      expect(order[order.length - 2]).toBe("pointers");
-      expect(order[order.length - 1]).toBe("candidate_memory");
-      expect(order.indexOf("pointers")).toBeGreaterThan(
-        order.indexOf("repo_facts"),
-      );
-    } finally {
-      await cleanup();
-    }
-  });
-
-  it("lowest-priority pointers are starved before any higher-value section under a tight budget", async () => {
-    // A budget large enough for working_set but not for the lowest-priority
-    // pointers section drops pointers first, leaving higher-value sections.
-    const { pool } = searchPool(nRecords(10));
-    const { client, cleanup } = await setupToolClient(admin, pool);
-    try {
-      const pack = await client.callTool({
-        name: "agent_context_pack",
-        arguments: {
-          ...SCOPE,
-          query: "durable",
-          requested_sections: ["durable_memory", "pointers"],
-          budget: { max_tokens: 150 },
-        },
-      });
-      const payload = JSON.parse((pack.content as any)[0].text);
-      expect(pack.isError).toBeFalsy();
-      // Under severe pressure the lowest-priority pointers section is trimmed or
-      // starved before durable_memory loses everything: if pointers is present
-      // it never overflows, and any drop is recorded in truncation.
-      const truncation = payload.warnings.truncation as Array<any>;
-      const pointerStarve = truncation.find((t) => t.source === "pointers");
-      if (!payload.sections.pointers) {
-        // Fully starved: a starved marker must record the drop.
-        expect(pointerStarve).toBeDefined();
-        expect(pointerStarve.starved).toBe(true);
-      }
     } finally {
       await cleanup();
     }

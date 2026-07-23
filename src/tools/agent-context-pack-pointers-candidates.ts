@@ -26,7 +26,10 @@
 //      `auto_promotable: false`, carry identity/citation/source_ref, and be
 //      deduped against BOTH the retained durable_memory identities and the
 //      emitted pointer identities before any candidate count/budget. Candidates
-//      are never promoted here.
+//      are never promoted here. Because no predicate exists yet, the section is
+//      always empty and therefore does NOT drive recall on its own: a
+//      candidate-only request runs no hybrid retrieval stack (nothing to dedupe
+//      against, nothing to emit).
 //
 //      NO PREDICATE YET (documented, not invented): the current recall surface
 //      (`SearchRow` from executeSearch) carries NO explicit candidate/unconfirmed
@@ -235,23 +238,6 @@ export function buildPointerSection(
 const CANDIDATE_PREDICATE_UNAVAILABLE =
   "candidate_predicate_unavailable" as const;
 
-export interface CandidateBuilderInput {
-  /**
-   * The same net-new authorized pool handed to the pointer builder. Present so
-   * the candidate contract can be evaluated against real authorized rows; it is
-   * NOT emitted, because no explicit candidate predicate selects from it (empty
-   * with empty_reason candidate_predicate_unavailable).
-   */
-  pool: readonly SearchRow[];
-  /**
-   * Canonical `brain_record:${source_type}:${id}` identities retained as durable
-   * memory OR emitted as pointers. Candidates would dedupe against these before
-   * any candidate count/budget; retained here so the dedupe contract is explicit
-   * and testable even while the section is truthfully empty.
-   */
-  excludedIdentities: Iterable<string>;
-}
-
 /**
  * Build the `candidate_memory` section fragment.
  *
@@ -263,20 +249,16 @@ export interface CandidateBuilderInput {
  * relabels confirmed recall as a candidate, never infers candidacy, and never
  * emits a body or a verbose public missing-contract payload.
  *
- * The dedupe set (retained durable + emitted pointer identities) is computed so
- * the candidate contract — candidates dedupe against retained durable AND
- * pointer identities before any candidate count/budget — is explicit and
- * testable even while the section is truthfully empty. It is surfaced only as a
- * content-free count, never as ids.
+ * The section owns no real selection or dedupe behavior yet: with no predicate
+ * it emits nothing, so it takes no pool and no dedupe set. Critically, a
+ * candidate_memory request MUST NOT trigger durable recall just to compute a
+ * synthetic dedupe count against rows it can never emit (that would run the
+ * hybrid retrieval stack for a section that is always empty). The dedupe
+ * contract (candidates would dedupe against retained durable AND pointer
+ * identities) is documented here and enforced only once a real write-side
+ * candidate predicate exists.
  */
-export function buildCandidateSection(
-  input: CandidateBuilderInput,
-): SectionFragment {
-  // The dedupe set is computed even though no items are emitted, so the empty
-  // section is honest about the contract it WOULD enforce. Ids-only, never
-  // surfaced except as a count.
-  const excluded = new Set(input.excludedIdentities);
-
+export function buildCandidateSection(): SectionFragment {
   return {
     section: {
       label: CANDIDATES_SECTION_NAME,
@@ -292,9 +274,6 @@ export function buildCandidateSection(
       // empty (whole_pack_budget), which the pack stamps instead.
       empty_reason: CANDIDATE_PREDICATE_UNAVAILABLE,
       truncated: false,
-      // Content-free observability: the dedupe set size the section would apply
-      // (retained durable + emitted pointer identities). Never an id or body.
-      dedupe_against_count: excluded.size,
     },
     scopeDenials: [],
     truncation: [],
