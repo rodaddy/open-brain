@@ -200,7 +200,12 @@ async function openDurableLaneReader(
   };
 }
 
-function boundedText(
+/**
+ * Bound a text value to `maxChars`, reporting whether anything was dropped.
+ * Shared with the durable-memory loader ({@link ./agent-context-pack-durable-memory.ts})
+ * so both context-pack recall paths bound content the same way.
+ */
+export function boundedText(
   value: unknown,
   maxChars: number,
 ): {
