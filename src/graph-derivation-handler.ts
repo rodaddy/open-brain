@@ -328,9 +328,13 @@ interface GraphDerivationHandlerDeps {
 
 /**
  * Build the handler for GRAPH_DERIVATION_JOB_KIND. The returned function is the
- * MaintenanceJobHandler the runner will invoke per claimed job once the queue
- * registration lands (rebase onto #356); it is intentionally not yet wired into
- * maintenance-queue.ts / src/index.ts.
+ * MaintenanceJobHandler the runner invokes per claimed job. It is registered by
+ * composeMaintenanceHandlers (maintenance-bootstrap.ts) and dispatched by the
+ * runner started in startMaintenanceQueue — the queue/index wiring is present.
+ * graph.derive jobs are produced only by the explicit, bounded
+ * enqueueGraphDerivationJobs producer (an operator or the future #347
+ * scheduler); the bootstrap enqueues nothing and defines no recurring sweep, so
+ * there is no automatic continuous derivation.
  *
  * On each run it:
  *  1. Validates the payload shape (a malformed payload is terminal — a retry

@@ -58,12 +58,23 @@ import {
  *
  * `namespaceSource: "token"` is required: a "header"-sourced identity would pin
  * every write to a single clientId namespace and could not serve jobs across
- * namespaces. The clientId is a fixed, non-secret label used only for logging
- * and the promoter-convention check (which this identity intentionally is not).
+ * namespaces.
+ *
+ * `tokenClientId: "openbrain-promoter"` satisfies the EXISTING shared-kb write
+ * convention (namespace-policy.ts: canWriteNamespace gates shared-kb writes on
+ * isPromoterIdentity, which recognizes an admin/ob-admin token whose
+ * `tokenClientId ?? clientId` is in PROMOTER_CLIENT_IDS). Without it, a claimed
+ * shared-kb graph.derive job fails canWriteNamespace and terminal-dead-letters,
+ * even though ob-admin holds global maintenance capability everywhere else. The
+ * `clientId` stays the fixed maintenance label used for logging/provenance; only
+ * the promoter-convention check reads `tokenClientId`, so this narrowly grants
+ * the shared-kb write capability without weakening canWriteNamespace or adding a
+ * bypass — the per-job namespace and source-snapshot guards remain the authority.
  */
 export const MAINTENANCE_GRAPH_AUTH: AuthInfo = {
   role: "ob-admin",
   clientId: "open-brain-maintenance",
+  tokenClientId: "openbrain-promoter",
   namespaceSource: "token",
 };
 

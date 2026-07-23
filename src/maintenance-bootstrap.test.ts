@@ -28,10 +28,15 @@ import {
 import {
   GRAPH_DERIVATION_JOB_KIND,
   GRAPH_DERIVATION_JOB_VERSION,
+  GraphDerivationTerminalError,
 } from "./graph-derivation-handler.ts";
-import type { MaintenanceQueueLogger } from "./maintenance-queue.ts";
+import type {
+  MaintenanceJob,
+  MaintenanceQueueLogger,
+} from "./maintenance-queue.ts";
 import type { EmbedWithMetaFn } from "./embedding-repair.ts";
 import type { AuthInfo } from "./types.ts";
+import { sharedNamespaceConfig } from "./shared-namespace.ts";
 
 const silentLogger: MaintenanceQueueLogger = {
   info: () => {},
@@ -283,6 +288,140 @@ describe("composeMaintenanceHandlers", () => {
     expect(MAINTENANCE_GRAPH_AUTH.namespaceSource).toBe("token");
     expect(MAINTENANCE_GRAPH_AUTH.role).toBe("ob-admin");
     expect(MAINTENANCE_GRAPH_AUTH.clientId.length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * Regression for #358 finding 1 (P1): the PRODUCTION-composed graph.derive
+ * handler must authorize and dispatch a shared-kb job, because
+ * MAINTENANCE_GRAPH_AUTH now satisfies the existing shared-kb promoter
+ * convention (tokenClientId ∈ PROMOTER_CLIENT_IDS). Before the fix, ob-admin
+ * without a promoter tokenClientId failed canWriteNamespace for the shared
+ * namespace, so every shared-kb graph.derive job terminal-dead-lettered.
+ *
+ * The handler under test is pulled from composeMaintenanceHandlers with the real
+ * default identity — no synthetic auth — so this exercises exactly what the
+ * server wires. Proof of "authorization passed, dispatch reached": the handler
+ * gets PAST canWriteNamespace and issues the snapshot-guard SELECT; with an
+ * empty source table that guard then throws the SNAPSHOT terminal reason, which
+ * is a distinct signal from the pre-read authorization rejection. Foreign
+ * namespace authority remains guarded: the same production identity is still
+ * rejected pre-read for a frozen namespace, and the promoter grant never
+ * bypasses the per-job namespace/source guards.
+ */
+describe("MAINTENANCE_GRAPH_AUTH shared-kb authorization (#358 finding 1)", () => {
+  const SHARED_NS = sharedNamespaceConfig().physicalSharedNamespace;
+  const VALID_SOURCE_ID = "44444444-4444-4444-8444-444444444444";
+
+  /** A fake pool that records every SQL statement and returns no rows for the
+   * snapshot-guard SELECT (empty source table) so the handler terminates there
+   * — AFTER passing authorization. */
+  function recordingPool() {
+    const sqls: string[] = [];
+    const query = async (sql: string) => {
+      sqls.push(sql);
+      return { rows: [], rowCount: 0 };
+    };
+    return { pool: { query } as any, sqls };
+  }
+
+  /** The production-composed graph.derive handler under the real default id. */
+  function productionGraphHandler(pool: any) {
+    const handlers = composeMaintenanceHandlers({
+      pool,
+      logger: silentLogger,
+      embedFn: stubEmbed,
+      graphAuth: MAINTENANCE_GRAPH_AUTH,
+    });
+    const handler = handlers.get(GRAPH_DERIVATION_JOB_KIND);
+    if (!handler) throw new Error("graph.derive handler not registered");
+    return handler;
+  }
+
+  function graphJob(namespace: string | null): MaintenanceJob {
+    const now = new Date("2026-07-22T12:00:00.000Z");
+    return {
+      id: "job-shared-1",
+      kind: GRAPH_DERIVATION_JOB_KIND,
+      version: GRAPH_DERIVATION_JOB_VERSION,
+      payload: {
+        source_id: VALID_SOURCE_ID,
+        source_kind: "git",
+        external_id: "https://example.invalid/repo.git",
+        content_hash: "a".repeat(64),
+        revision: 3,
+      },
+      idempotencyKey: "k-shared",
+      state: "running",
+      runAfter: now,
+      leaseToken: "00000000-0000-4000-8000-000000000001",
+      leaseUntil: new Date("2026-07-22T12:00:30.000Z"),
+      attempts: 1,
+      maxAttempts: 3,
+      backoffBaseMs: 1_000,
+      backoffMaxMs: 4_000,
+      lastErrorCategory: null,
+      terminalAt: null,
+      deadLetteredAt: null,
+      namespace,
+      provenance: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+  }
+
+  it("a shared-kb job PASSES authorization and reaches snapshot dispatch", async () => {
+    const { pool, sqls } = recordingPool();
+    const handler = productionGraphHandler(pool);
+
+    // The empty source table makes the snapshot guard the terminal cause. The
+    // point is WHICH terminal cause: it must be the post-auth snapshot guard,
+    // proving canWriteNamespace(MAINTENANCE_GRAPH_AUTH, shared-kb) allowed.
+    let thrown: unknown;
+    try {
+      await handler(graphJob(SHARED_NS));
+      throw new Error("expected the snapshot guard to terminate this job");
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(GraphDerivationTerminalError);
+    // Authorization passed: the reason is the snapshot guard, NOT "not writable".
+    expect(String((thrown as Error).message)).toContain("snapshot changed");
+    expect(String((thrown as Error).message)).not.toContain("not writable");
+    // Dispatch reached the DB: the snapshot-guard SELECT was actually issued.
+    expect(sqls.some((s) => s.includes("SELECT title"))).toBe(true);
+  });
+
+  it("the canonical shared alias also passes authorization to snapshot dispatch", async () => {
+    const canonical = sharedNamespaceConfig().canonicalSharedNamespace;
+    const { pool, sqls } = recordingPool();
+    const handler = productionGraphHandler(pool);
+    await expect(handler(graphJob(canonical))).rejects.toThrow(
+      "snapshot changed",
+    );
+    expect(sqls.some((s) => s.includes("SELECT title"))).toBe(true);
+  });
+
+  it("foreign namespace authority stays guarded: a frozen namespace is rejected pre-read", async () => {
+    // Even the promoter-conventioned maintenance identity cannot write a frozen
+    // snapshot namespace; it is rejected before any source read. Proof the grant
+    // is scoped to shared-kb and does not blanket-open canWriteNamespace.
+    const { pool, sqls } = recordingPool();
+    const handler = productionGraphHandler(pool);
+    await expect(handler(graphJob("collab"))).rejects.toBeInstanceOf(
+      GraphDerivationTerminalError,
+    );
+    // Rejected before the snapshot read: no SELECT issued.
+    expect(sqls.some((s) => s.includes("SELECT title"))).toBe(false);
+  });
+
+  it("still fails closed on a missing job namespace (no bypass introduced)", async () => {
+    const { pool, sqls } = recordingPool();
+    const handler = productionGraphHandler(pool);
+    await expect(handler(graphJob(null))).rejects.toBeInstanceOf(
+      GraphDerivationTerminalError,
+    );
+    expect(sqls.some((s) => s.includes("SELECT title"))).toBe(false);
   });
 });
 
