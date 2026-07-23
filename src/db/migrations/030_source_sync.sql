@@ -113,13 +113,20 @@ CREATE TABLE IF NOT EXISTS ob_source_sync_runs (
                 CHECK (status IN ('running', 'completed')),
 
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-
-  -- A source has at most ONE run per observed corpus. Re-planning the same
-  -- observation (e.g. a crash before the run was marked complete) resolves to the
-  -- existing run row and resumes it, rather than forking a duplicate plan.
-  UNIQUE (source_id, observation_hash)
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- A source has at most ONE RESUMABLE run per observed corpus. Only 'running' runs
+-- are resumable identity; a 'completed' run is terminal HISTORY and must NOT block
+-- a fresh run for the same observation. So the uniqueness that makes concurrent
+-- planners converge on one row (and lets ON CONFLICT recover a lost insert race)
+-- is PARTIAL on status = 'running'. A revert (A -> B -> A) can therefore mint a
+-- brand-new running run for observation A even though A's original run is a
+-- completed history row, and every prior completed run for that observation is
+-- preserved untouched.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ob_source_sync_runs_running_obs
+  ON ob_source_sync_runs (source_id, observation_hash)
+  WHERE status = 'running';
 
 CREATE INDEX IF NOT EXISTS idx_ob_source_sync_runs_resumable
   ON ob_source_sync_runs (source_id, created_at)

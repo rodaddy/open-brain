@@ -318,9 +318,21 @@ interface RunRow {
 }
 
 /**
- * Read the source's identity/eligibility row, namespace-bound. Returns the
- * source's namespace + scope (which every manifest/run row inherits) when the
- * source is registered, approved, and active. Content-free rejections only.
+ * Read the source's identity/eligibility row, namespace-bound, and SERIALIZE all
+ * concurrent syncs of this exact source on it. Returns the source's namespace +
+ * scope (which every manifest/run row inherits) when the source is registered,
+ * approved, and active. Content-free rejections only.
+ *
+ * Serialization contract (#338): this takes a `FOR UPDATE` row lock on the exact
+ * (id, namespace) eligible source row. It runs inside syncSource's transaction,
+ * BEFORE the manifest is read and the plan diffed, and the lock is held until that
+ * transaction COMMITs. So two concurrent syncs of one source cannot both read the
+ * same manifest, plan disjoint mutations, and commit a hybrid corpus neither
+ * caller observed: the second sync blocks here until the first commits, then plans
+ * against the manifest the first already produced. `FOR UPDATE` is safe because
+ * the predicate pins one row by primary key + namespace (no lock escalation, no
+ * cross-namespace contention), and it never regresses a checkpoint because the
+ * losing writer's read happens strictly after the winner's commit.
  */
 async function loadEligibleSource(
   client: SyncClient,
@@ -334,7 +346,8 @@ async function loadEligibleSource(
     `SELECT scope, approval_state, lifecycle_state
        FROM ${SOURCE_REGISTRY_TABLE}
       WHERE id = $1 AND namespace = $2
-        AND source_kind IN ('git', 'directory')`,
+        AND source_kind IN ('git', 'directory')
+      FOR UPDATE`,
     [sourceId, namespace],
   );
   if (rows.length === 0) {
@@ -381,10 +394,18 @@ async function loadLiveManifest(
 }
 
 /**
- * Resolve the sync run for (source, observation): resume the existing row if one
- * is present (crash before completion), otherwise plan fresh and persist the
- * plan BEFORE any op is applied. The UNIQUE (source_id, observation_hash) key
- * makes concurrent planners converge on one row. Returns the run and whether it
+ * Resolve the sync run for (source, observation): resume the existing RUNNING row
+ * if one is present (crash before completion), otherwise plan fresh and persist
+ * the plan BEFORE any op is applied.
+ *
+ * Run identity is RUNNING-ONLY (#338). A 'completed' run is terminal, immutable
+ * history — its checkpoint sits at plan-end, so reopening it would only re-apply
+ * its tail and could never reconcile a manifest that has since diverged. So only
+ * a status='running' row is resumable: a fresh observation that happens to match a
+ * completed run's hash (e.g. a revert A -> B -> A) plans a NEW run against the
+ * CURRENT manifest and leaves the old completed run intact as history. The partial
+ * unique index (source_id, observation_hash) WHERE status='running' makes
+ * concurrent planners converge on one running row. Returns the run and whether it
  * was resumed.
  */
 async function resolveRun(
@@ -396,11 +417,13 @@ async function resolveRun(
 ): Promise<{ run: RunRow; resumed: boolean; unchanged: number }> {
   const obsHash = observationHash(observation);
 
-  // A run for this exact observation already exists — resume it. Namespace-bound.
+  // A RUNNING run for this exact observation already exists — resume it. Completed
+  // runs are immutable history and are deliberately excluded. Namespace-bound.
   const existing = await client.query(
     `SELECT id, namespace, scope, observation_hash, plan, checkpoint_index, status
        FROM ${SYNC_RUNS_TABLE}
-      WHERE source_id = $1 AND namespace = $2 AND observation_hash = $3`,
+      WHERE source_id = $1 AND namespace = $2 AND observation_hash = $3
+        AND status = 'running'`,
     [sourceId, namespace, obsHash],
   );
   if (existing.rows.length > 0) {
@@ -415,14 +438,16 @@ async function resolveRun(
     randomUuid(),
   );
 
-  // Insert the run. ON CONFLICT handles a concurrent planner that inserted the
-  // same (source_id, observation_hash) first: we then re-read and resume theirs
-  // rather than fork a duplicate plan.
+  // Insert the run. ON CONFLICT targets the PARTIAL running-only unique index, so
+  // it only fires against a concurrent planner's still-RUNNING row for the same
+  // (source_id, observation_hash) — a completed history row with the same hash is
+  // outside the index and never blocks this insert. On conflict we re-read and
+  // resume the other planner's running row rather than forking a duplicate plan.
   const inserted = await client.query(
     `INSERT INTO ${SYNC_RUNS_TABLE}
        (source_id, namespace, scope, observation_hash, plan, checkpoint_index, status)
      VALUES ($1, $2, $3::jsonb, $4, $5::jsonb, 0, 'running')
-     ON CONFLICT (source_id, observation_hash) DO NOTHING
+     ON CONFLICT (source_id, observation_hash) WHERE status = 'running' DO NOTHING
      RETURNING id, namespace, scope, observation_hash, plan, checkpoint_index, status`,
     [sourceId, namespace, JSON.stringify(scope), obsHash, JSON.stringify(ops)],
   );
@@ -430,11 +455,13 @@ async function resolveRun(
     return { run: mapRun(inserted.rows[0]), resumed: false, unchanged };
   }
 
-  // Lost the insert race: read and resume the row the other planner committed.
+  // Lost the insert race: read and resume the RUNNING row the other planner
+  // committed (the only kind the partial index could have conflicted on).
   const raced = await client.query(
     `SELECT id, namespace, scope, observation_hash, plan, checkpoint_index, status
        FROM ${SYNC_RUNS_TABLE}
-      WHERE source_id = $1 AND namespace = $2 AND observation_hash = $3`,
+      WHERE source_id = $1 AND namespace = $2 AND observation_hash = $3
+        AND status = 'running'`,
     [sourceId, namespace, obsHash],
   );
   return { run: mapRun(raced.rows[0]), resumed: true, unchanged: 0 };
@@ -747,24 +774,49 @@ function tallyOp(counts: SyncReceipt["counts"], kind: SyncOpKind): void {
   else if (kind === "delete") counts.deleted += 1;
 }
 
+// The ONLY error class names this substrate will ever emit. Membership is decided
+// off the reliable error CLASS (constructor), never off an attacker-mutable
+// `.name` STRING field: a leaky dependency can assign any class-name-shaped
+// alphanumeric token (a secret, an id, a codename) to `error.name`, and the old
+// pattern-based acceptance would have logged it verbatim. Anything whose
+// constructor is not on this finite allowlist collapses to the constant 'other'.
+const KNOWN_ERROR_CLASSES = new Set<string>([
+  "Error",
+  "TypeError",
+  "RangeError",
+  "ReferenceError",
+  "SyntaxError",
+  "EvalError",
+  "URIError",
+  "AggregateError",
+  "DatabaseError", // pg's error class
+]);
+
+const UNKNOWN_ERROR_LABEL = "other" as const;
+
 // Extract ONLY a stable, content-free label from a thrown dependency error: the
-// error class name and (for pg errors) the SQLSTATE `code`. Deliberately reads no
-// `message`, `detail`, `hint`, `query`, `where`, or parameter fields — those can
-// echo path/content bytes or SQL text, which must never leave this substrate.
-// SQLSTATE is a fixed 5-char alphanumeric code; anything non-conforming is dropped.
+// error class name (allowlisted) and (for pg errors) the SQLSTATE `code`.
+// Deliberately reads no `message`, `detail`, `hint`, `query`, `where`, or `name`
+// string field — those can echo path/content bytes, SQL text, or an attacker-
+// planted sentinel, which must never leave this substrate.
+//
+// The class name is derived from the constructor and validated against the finite
+// KNOWN_ERROR_CLASSES allowlist; an unknown class (or a non-object throw) maps to
+// the constant 'other', so no caller-influenced byte reaches the log. SQLSTATE is
+// a fixed 5-char alphanumeric code and is preserved when it conforms.
 function contentFreeErrorLabel(err: unknown): { name: string; code: string } {
-  let name = "unknown";
+  let name: string = UNKNOWN_ERROR_LABEL;
   let code = "unknown";
   if (err && typeof err === "object") {
-    const rec = err as { name?: unknown; code?: unknown };
-    if (
-      typeof rec.name === "string" &&
-      /^[A-Za-z][A-Za-z0-9]{0,63}$/.test(rec.name)
-    ) {
-      name = rec.name;
+    // Class off the constructor, NOT the mutable `.name` string field.
+    const ctorName = (err as { constructor?: { name?: unknown } }).constructor
+      ?.name;
+    if (typeof ctorName === "string" && KNOWN_ERROR_CLASSES.has(ctorName)) {
+      name = ctorName;
     }
     // pg SQLSTATE is always exactly 5 alphanumerics (e.g. 23505). Reject anything
     // else so a driver that stuffs a string into `code` cannot leak content.
+    const rec = err as { code?: unknown };
     if (typeof rec.code === "string" && /^[0-9A-Za-z]{5}$/.test(rec.code)) {
       code = rec.code;
     }

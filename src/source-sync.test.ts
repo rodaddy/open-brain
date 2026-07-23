@@ -436,4 +436,55 @@ describe("syncSource - dependency failure is content-free (sentinel)", () => {
     expect(serialized).not.toContain("duplicate key");
     expect(serialized).not.toContain("INSERT INTO");
   });
+
+  // A dependency can put a sensitive alphanumeric SENTINEL into Error.name — a
+  // token, an internal id, a codename — that looks like a valid class name. The
+  // old logging path accepted any /^[A-Za-z][A-Za-z0-9]{0,63}$/ name verbatim, so
+  // that sentinel would be written straight into the failure log. The failure
+  // label must be classified off the reliable error CLASS (constructor) against a
+  // strict allowlist, and an unknown class must collapse to a constant category —
+  // so no attacker-controlled name byte ever reaches the log line.
+  it("never logs an alphanumeric sentinel placed in Error.name", async () => {
+    const SENTINEL = "Sk1ppyS3cr3tSentinelXYZ789";
+    // A leaky error whose CLASS is unknown and whose `.name` field is the
+    // sentinel. It is alphanumeric and class-name-shaped, so a pattern-based
+    // acceptance would have logged it; a strict class allowlist must not.
+    class SentinelError extends Error {}
+    const err = new SentinelError("boom");
+    err.name = SENTINEL;
+
+    // Capture the actual emitted log line (logger.error -> console.error), which
+    // is where the leak would surface. The result is already asserted content-free
+    // above; this proves the LOG boundary is scrubbed too.
+    const original = console.error;
+    const lines: string[] = [];
+    console.error = (...args: unknown[]) => {
+      lines.push(args.map((a) => String(a)).join(" "));
+    };
+    let res: Awaited<ReturnType<typeof syncSource>>;
+    try {
+      res = await syncSource(
+        failingPool(err) as never,
+        admin,
+        "00000000-0000-0000-0000-000000000000",
+        { files: [{ path: "a.ts", content_hash: H(1) }] },
+        { target_namespace: "lane338-fail-ns" },
+      );
+    } finally {
+      console.error = original;
+    }
+
+    expect(res.ok).toBe(false);
+    expect(res.code).toBe("sync_failed");
+
+    // A failure line WAS emitted (the guard actually ran, not skipped)...
+    const failLine = lines.find((l) => l.includes("source_sync_failed"));
+    expect(failLine).toBeDefined();
+    // ...and it carries the constant category, never the sentinel.
+    expect(failLine).toContain('"error_name":"other"');
+    // No captured line — for any reason — may contain the sentinel bytes.
+    for (const line of lines) expect(line).not.toContain(SENTINEL);
+    // Nor may the returned result.
+    expect(JSON.stringify(res)).not.toContain(SENTINEL);
+  });
 });
