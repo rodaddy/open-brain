@@ -161,6 +161,34 @@ export interface IsolationVerdict {
   expected_recall_present: boolean;
 }
 
+/**
+ * Explicit cross-namespace denial proof for the complete-pack gate, mirroring
+ * the recall gate's NegativeControlProof. The PRIMARY caller attempts a
+ * primary-identity read against the NEGATIVE namespace, and the server MUST deny
+ * it. A denial is the ONLY proof of isolation the gate trusts: an
+ * allowed-but-empty read looks identical to a working boundary but proves
+ * nothing, so `allowed-empty` and `allowed-nonempty` both fail here. This is
+ * distinct from the leak walk over the emitted pack (which only catches a
+ * forbidden id that happened to surface below the result cut); the denial probe
+ * proves the boundary refuses the read at all. Content-free: only booleans, a
+ * count, and a redacted failure label.
+ */
+export interface NegativeControlVerdict {
+  /** True when the cross-namespace read was actually attempted this run. */
+  ran: boolean;
+  /** True when the primary caller's read of the negative namespace was denied. */
+  denied: boolean;
+  /**
+   * Hit count observed if the read unexpectedly SUCCEEDED; 0 on denial. Lets the
+   * receipt distinguish "denied" from "allowed but empty" content-free.
+   */
+  observed_hit_count: number;
+  /** True when a distinct negative token also exercised cross-token denial. */
+  cross_token: boolean;
+  /** Content-free reason the proof did not establish isolation, if any. */
+  failure?: string;
+}
+
 /** Content-free structured baseline receipt for the complete-pack gate. */
 export interface CompletePackReceipt {
   schema: "openbrain.complete_pack_gate.v1";
@@ -175,11 +203,13 @@ export interface CompletePackReceipt {
   budget: BudgetVerdict;
   citations: CitationVerdict;
   isolation: IsolationVerdict;
+  negative_control: NegativeControlVerdict;
   /**
    * Composite verdict. PASS requires ALL of: every requested section present or
    * defined-empty, citation bijection, serialized budget respected with a
    * complete allocation order, exact-scope isolation with zero namespace leaks
-   * and the expected recall present, and teardown left nothing behind.
+   * and the expected recall present, the cross-namespace denial probe ran and
+   * was denied, and teardown left nothing behind.
    */
   passed: boolean;
   failures: string[];

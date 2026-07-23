@@ -15,6 +15,7 @@ import {
   type CompletePackSeededRecord,
   type CompletePackSectionName,
   type IsolationVerdict,
+  type NegativeControlVerdict,
   type SectionVerdict,
 } from "./complete-pack-types.ts";
 
@@ -23,26 +24,36 @@ import {
 // One run: seed a unique throwaway namespace (and a sibling negative namespace)
 // with the sealed synthetic corpus, call the real `agent_context_pack` tool
 // under the primary namespace requesting ALL NINE sections and one whole-pack
-// budget, verify the assembled pack against five functional properties, and
+// budget, verify the assembled pack against six functional properties, and
 // ALWAYS tear down exactly the records this run created -- even when the pack
 // call or a verification fails partway through.
 //
-// The five properties, all functional (no assertions about SQL shape or
+// The six properties, all functional (no assertions about SQL shape or
 // internal call counts):
 //   1. Presence-or-defined-emptiness: every requested section either carries
 //      items or is in its DEFINED-EMPTY state (a recognized empty/denial marker,
 //      or a legitimately-empty RAM-only section, or a defined scope-denial).
 //   2. Exact-scope isolation: durable_lane_context reports its exact-scope
 //      defined-empty for the fresh throwaway scope, no negative-namespace record
-//      surfaces in any section item or citation, and the expected primary recall
-//      IS present (a hollow empty recall would otherwise hide a broken predicate).
+//      surfaces in any section item, lane, event, source_ref, or citation, and
+//      the expected primary recall IS present (a hollow empty recall would
+//      otherwise hide a broken predicate).
 //   3. Citation truth: the top-level citations array is a bijection of the
-//      emitted item citation_ids -- no dangling citation, no uncited item.
+//      emitted item citation_ids (durable_memory/pointer items, the lane, AND
+//      each durable_lane_context event) -- no dangling citation, no uncited item.
 //   4. Serialized budget: JSON.stringify(sections) stays within the reported
 //      whole-pack content_char_limit, and an allocation order covering all nine
 //      sections is present.
 //   5. Per-section contribution: the serialized-character contribution and item
 //      count of every section is recorded in the receipt.
+//   6. Explicit cross-namespace denial: the PRIMARY caller attempts a
+//      primary-identity read against the NEGATIVE namespace and the server MUST
+//      deny it. A leak-scan over the emitted pack only catches a forbidden id
+//      that happened to surface; a forbidden record ranked below the result cut
+//      would still pass. The denial probe proves the boundary REFUSES the read
+//      outright -- an allowed-but-empty read (which looks identical to a working
+//      boundary) is NOT proof and fails the gate. Reuses the recall gate's
+//      attemptRead probe transport.
 //
 // Teardown reuses the recall gate's discipline: per-record, namespace-scoped
 // archive_entry only, never a bulk or query-shaped delete, so it can only touch
@@ -349,17 +360,23 @@ function classifySection(
       serialized_chars: serializedChars,
     };
   }
-  // durable_lane_context present-but-empty is reported through its scope-denial
-  // (exact_scope), so a present empty lane body with no items and a matching
-  // denial is defined-empty too.
+  // A present-but-empty section reported through its own scope-denial is
+  // defined-empty. The disposition is the ACTUAL denial reason(s), not a
+  // hardcoded label: durable_lane_context reports `exact_scope`, but repo_facts
+  // is present-empty with `no_active_repo` (a `{repo: null, repo_bound: false}`
+  // body plus a `no_active_repo` denial -- src/tools/agent-context-pack-repo-facts.ts),
+  // and hardcoding `exact_scope` would mislabel it. Derive from scopeDenial.reasons.
   if (scopeDenial) {
+    const reasons = Array.isArray(scopeDenial.reasons)
+      ? scopeDenial.reasons.map(String).join(",")
+      : "scope_denied";
     return {
       section: name,
       present: true,
       has_items: false,
       defined_empty: true,
       item_count: 0,
-      disposition: "exact_scope",
+      disposition: reasons || "scope_denied",
       serialized_chars: serializedChars,
     };
   }
@@ -409,9 +426,23 @@ function classifySection(
   };
 }
 
+/** Add one record's `citation_id` to the id set when it carries one. */
+function addCitationId(ids: Set<string>, record: unknown): void {
+  if (!record || typeof record !== "object" || Array.isArray(record)) return;
+  const cid = (record as Record<string, unknown>).citation_id;
+  if (typeof cid === "string" && cid.length > 0) ids.add(cid);
+}
+
 /**
- * Collect every emitted item's `citation_id` across all sections, plus the
- * lane's own citation_id. Content-free: only the id strings, never a body.
+ * Collect every emitted citable unit's `citation_id` across all sections. A
+ * unit is any record the pack emits with its own citation: durable_memory /
+ * pointer items (in `items[]`), and -- for durable_lane_context -- the lane
+ * object AND each event in `events[]`. A populated lane emits a
+ * `session_lane:<id>` citation for the lane and a `session_event:<id>` citation
+ * for each event (src/tools/agent-context-pack-durable-lane.ts); missing the
+ * events here would classify every event citation as dangling and break the
+ * bijection on any populated lane. Content-free: only the id strings, never a
+ * body.
  */
 function collectEmittedItemCitationIds(
   payload: ContextPackPayload,
@@ -419,12 +450,7 @@ function collectEmittedItemCitationIds(
   const ids = new Set<string>();
   const addFrom = (items: unknown) => {
     if (!Array.isArray(items)) return;
-    for (const item of items) {
-      if (item && typeof item === "object" && !Array.isArray(item)) {
-        const cid = (item as Record<string, unknown>).citation_id;
-        if (typeof cid === "string" && cid.length > 0) ids.add(cid);
-      }
-    }
+    for (const item of items) addCitationId(ids, item);
   };
   for (const name of COMPLETE_PACK_SECTION_NAMES) {
     const body = payload.sections[name];
@@ -432,12 +458,11 @@ function collectEmittedItemCitationIds(
     const section = body as Record<string, unknown>;
     addFrom(section.items);
     // durable_lane_context carries its lane citation_id on the lane object, not
-    // in an items array; it is an emitted, citable unit too.
-    const lane = section.lane;
-    if (lane && typeof lane === "object" && !Array.isArray(lane)) {
-      const cid = (lane as Record<string, unknown>).citation_id;
-      if (typeof cid === "string" && cid.length > 0) ids.add(cid);
-    }
+    // in an items array; the lane is an emitted, citable unit too.
+    addCitationId(ids, section.lane);
+    // durable_lane_context also emits its events in an events[] array, each with
+    // its own session_event citation_id -- a populated lane cites every event.
+    addFrom(section.events);
   }
   return ids;
 }
@@ -493,13 +518,38 @@ function verifyBudget(payload: ContextPackPayload): BudgetVerdict {
 }
 
 /**
+ * Collect one record's structural identity strings (never a body): its own `id`,
+ * and its `source_ref` -- which the pack emits either as an OBJECT carrying an
+ * `id` (durable_memory / pointer items) OR as a plain STRING pointer such as
+ * `ob_session_events/<id>` (durable_lane_context lane + events). Both forms are
+ * captured: object source_refs contribute their `id`, string source_refs the
+ * whole pointer string (so an embedded forbidden id is caught by containment).
+ */
+function collectIdentityStrings(record: unknown, into: Set<string>): void {
+  if (!record || typeof record !== "object" || Array.isArray(record)) return;
+  const rec = record as Record<string, unknown>;
+  if (typeof rec.id === "string" && rec.id.length > 0) into.add(rec.id);
+  const ref = rec.source_ref;
+  if (typeof ref === "string" && ref.length > 0) {
+    into.add(ref);
+  } else if (ref && typeof ref === "object" && !Array.isArray(ref)) {
+    const refId = (ref as Record<string, unknown>).id;
+    if (typeof refId === "string" && refId.length > 0) into.add(refId);
+  }
+}
+
+/**
  * Verify isolation: durable_lane_context reports its exact-scope defined-empty,
  * no forbidden (negative-namespace) server id surfaces anywhere in the pack, and
  * the expected primary recall ids surfaced in durable_memory items or pointers.
  *
  * Forbidden ids are checked by their SERVER ids (the ids this run seeded into the
- * negative namespace), matched against every item id and source_ref id in the
- * pack -- so a leak is detected structurally, without inspecting any body.
+ * negative namespace), matched against every emitted identity string across the
+ * pack -- item ids and item source_ref ids, AND the durable_lane_context lane id
+ * plus every event id and event source_ref pointer. A forbidden id is a leak
+ * whether it appears as an exact identity id or is embedded in a string
+ * source_ref pointer (e.g. `ob_session_events/<forbidden-id>`), so leaks are
+ * detected structurally without inspecting any body.
  */
 function verifyIsolation(
   payload: ContextPackPayload,
@@ -525,30 +575,34 @@ function verifyIsolation(
       .map((r) => r.server_id),
   );
 
-  // Walk every emitted item id + source_ref id across all sections.
+  // Walk every emitted identity string across all sections: item ids +
+  // source_refs, and durable_lane_context's lane id + each event id/source_ref.
   const emittedIds = new Set<string>();
   const collectIds = (items: unknown) => {
     if (!Array.isArray(items)) return;
-    for (const item of items) {
-      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
-      const rec = item as Record<string, unknown>;
-      if (typeof rec.id === "string") emittedIds.add(rec.id);
-      const ref = rec.source_ref;
-      if (ref && typeof ref === "object" && !Array.isArray(ref)) {
-        const refId = (ref as Record<string, unknown>).id;
-        if (typeof refId === "string") emittedIds.add(refId);
-      }
-    }
+    for (const item of items) collectIdentityStrings(item, emittedIds);
   };
   for (const name of COMPLETE_PACK_SECTION_NAMES) {
     const body = payload.sections[name];
     if (!body || typeof body !== "object" || Array.isArray(body)) continue;
-    collectIds((body as Record<string, unknown>).items);
+    const section = body as Record<string, unknown>;
+    collectIds(section.items);
+    // durable_lane_context: the lane object and each event are emitted, citable
+    // units with their own identity -- walk them for leaks too.
+    collectIdentityStrings(section.lane, emittedIds);
+    collectIds(section.events);
   }
 
+  // A forbidden id is a leak whether it is an exact emitted id OR is embedded in
+  // a string source_ref pointer (ob_session_events/<forbidden-id>).
   let leaks = 0;
-  for (const id of emittedIds) {
-    if (forbiddenServerIds.has(id)) leaks += 1;
+  for (const forbidden of forbiddenServerIds) {
+    for (const id of emittedIds) {
+      if (id === forbidden || id.includes(forbidden)) {
+        leaks += 1;
+        break;
+      }
+    }
   }
   let expectedPresent = false;
   for (const id of emittedIds) {
@@ -574,12 +628,73 @@ function verifyIsolation(
   };
 }
 
+/** Fixed top-k for the cross-namespace denial probe read. */
+const NEGATIVE_CONTROL_PROBE_TOP_K = 10;
+
 /**
- * Run the full complete-pack gate. Seeding and the pack call are wrapped so
- * teardown always runs; a thrown error is re-raised only AFTER teardown, with
- * the content-free teardown failed count preserved (shared with the recall gate
- * via withTeardownFailedCount). PASS requires all five properties AND clean
- * teardown.
+ * Explicit cross-namespace denial proof, mirroring the recall gate's
+ * probeNegativeControl. The PRIMARY caller attempts a primary-identity read of
+ * the NEGATIVE namespace (which the negative control seeded), and the server
+ * must DENY it. An allowed-but-empty read is NOT proof: the namespace being
+ * empty for the primary caller looks identical to a working isolation boundary,
+ * so we require an actual permission denial. This closes the gap the emitted-pack
+ * leak walk leaves open -- a forbidden record ranked below the result cut never
+ * surfaces in the pack, so the walk passes, but the denial probe still fails
+ * closed because the read is refused outright.
+ *
+ * The probe reuses the pack's recall `query` (the query the forbidden negative
+ * records are most likely to match if isolation were broken). Runs after seeding
+ * (records exist) and before teardown. Content-free: only booleans, a count, and
+ * a redacted failure label -- never a hit body.
+ */
+async function probeNegativeControl(
+  fixture: CompletePackFixture,
+  config: LiveEvalConfig,
+  clients: CompletePackGateClients,
+): Promise<NegativeControlVerdict> {
+  const proof: NegativeControlVerdict = {
+    ran: true,
+    denied: false,
+    observed_hit_count: 0,
+    cross_token: config.negativeTokenIsDistinct,
+  };
+
+  let result;
+  try {
+    result = await clients.primary.attemptRead({
+      query: fixture.query,
+      namespace: config.negativeNamespace,
+      limit: NEGATIVE_CONTROL_PROBE_TOP_K,
+      searchMode: config.searchMode,
+    });
+  } catch (error) {
+    // A non-denial transport error means we could not establish the proof.
+    const label =
+      error instanceof LiveTransportError ? error.label : "attempt-read-error";
+    proof.denied = false;
+    proof.failure = `negative-control read failed: ${label}`;
+    return proof;
+  }
+
+  proof.observed_hit_count = result.hitCount;
+  // Isolation is proven ONLY by an actual denial. A successful read -- empty or
+  // not -- fails: allowed-empty proves nothing and allowed-nonempty is a breach.
+  proof.denied = result.denied;
+  if (!proof.denied) {
+    proof.failure =
+      result.hitCount > 0
+        ? "primary caller was permitted to read the negative namespace (non-empty)"
+        : "primary caller's read of the negative namespace was allowed (empty), not denied";
+  }
+  return proof;
+}
+
+/**
+ * Run the full complete-pack gate. Seeding, the pack call, and the
+ * cross-namespace denial probe are wrapped so teardown always runs; a thrown
+ * error is re-raised only AFTER teardown, with the content-free teardown failed
+ * count preserved (shared with the recall gate via withTeardownFailedCount).
+ * PASS requires all six properties AND clean teardown.
  */
 export async function runCompletePackGate(
   opts: RunCompletePackGateOptions,
@@ -589,6 +704,15 @@ export async function runCompletePackGate(
   const seeded: CompletePackSeededRecord[] = [];
   let deferredError: unknown = null;
   let payload: ContextPackPayload | null = null;
+  // Default proof: did-not-run. Only replaced by a real probe result when
+  // seeding + the pack call complete without a deferred error.
+  let negativeControl: NegativeControlVerdict = {
+    ran: false,
+    denied: false,
+    observed_hit_count: 0,
+    cross_token: config.negativeTokenIsDistinct,
+    failure: "negative-control proof did not run",
+  };
 
   const packScope: ContextPackScope = {
     namespace: config.primaryNamespace,
@@ -611,6 +735,9 @@ export async function runCompletePackGate(
       requestedSections: COMPLETE_PACK_SECTION_NAMES,
       budgetMaxTokens,
     });
+
+    // --- Explicit cross-namespace denial proof (after seeding, before teardown) ---
+    negativeControl = await probeNegativeControl(fixture, config, clients);
   } catch (error) {
     deferredError = error;
   }
@@ -683,6 +810,18 @@ export async function runCompletePackGate(
       "expected primary recall did not surface in durable_memory/pointers (hollow recall would hide a broken predicate)",
     );
   }
+  // 6. Explicit cross-namespace denial. A leak-free emitted pack is NOT enough:
+  // the boundary must actually REFUSE the primary caller's read of the negative
+  // namespace. An allowed read -- empty or not -- fails.
+  if (!negativeControl.ran) {
+    failures.push(
+      `negative-control proof did not run: ${negativeControl.failure ?? "unknown"}`,
+    );
+  } else if (!negativeControl.denied) {
+    failures.push(
+      `negative-control not denied: ${negativeControl.failure ?? "isolation not proven"}`,
+    );
+  }
   // Teardown discipline.
   const teardownClean = teardownTally.failed === 0;
   if (!teardownClean) {
@@ -706,6 +845,7 @@ export async function runCompletePackGate(
     budget,
     citations,
     isolation,
+    negative_control: negativeControl,
     passed,
     failures,
     teardown: teardownTally,

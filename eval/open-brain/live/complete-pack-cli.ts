@@ -137,6 +137,7 @@ function printReceipt(
     `budget serialized=${receipt.budget.serialized_sections_chars}/${receipt.budget.content_char_limit ?? "none"} within=${receipt.budget.within_budget} allocation_order_complete=${receipt.budget.allocation_order_complete}`,
     `citations total=${receipt.citations.citations_total} emitted_item_citations=${receipt.citations.emitted_item_citations} dangling=${receipt.citations.dangling_citations} uncited=${receipt.citations.uncited_items} bijective=${receipt.citations.bijective}`,
     `isolation exact_scope_denied=${receipt.isolation.exact_scope_denied} namespace_leaks=${receipt.isolation.namespace_leaks} expected_recall_present=${receipt.isolation.expected_recall_present}`,
+    `negative_control ran=${receipt.negative_control.ran} denied=${receipt.negative_control.denied} observed_hit_count=${receipt.negative_control.observed_hit_count} cross_token=${receipt.negative_control.cross_token}${receipt.negative_control.failure ? ` failure=${receipt.negative_control.failure}` : ""}`,
     `teardown attempted=${receipt.teardown.attempted} archived=${receipt.teardown.archived} already_absent=${receipt.teardown.already_absent} failed=${receipt.teardown.failed}`,
   ];
   for (const section of receipt.sections) {

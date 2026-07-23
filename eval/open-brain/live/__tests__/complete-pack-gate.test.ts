@@ -157,6 +157,18 @@ function goodPayload(
       items: [],
       item_count: 0,
     },
+    repo_facts: {
+      // Production present-empty shape for no active repo
+      // (src/tools/agent-context-pack-repo-facts.ts): a present body carrying
+      // {repo: null, repo_bound: false, items: []} PLUS a no_active_repo denial.
+      label: "repo_facts",
+      repo: null,
+      namespace_bound: true,
+      repo_bound: false,
+      items: [],
+      item_count: 0,
+      truncated: false,
+    },
     pointers: {
       label: "pointers",
       namespace_scoped: true,
@@ -181,8 +193,10 @@ function goodPayload(
   //  - profile_guidance / process_guidance / pointers emit a truthful empty body
   //    with a namespace-binding flag and NO empty_reason and NO scope-denial
   //    (the guidance loaders and pointer builder return scopeDenials: []);
-  //  - durable_lane_context reports its exact_scope denial;
-  //  - repo_facts reports its no_active_repo denial.
+  //  - durable_lane_context reports its exact_scope denial (body omitted);
+  //  - repo_facts is PRESENT-empty ({repo: null, repo_bound: false}) AND reports
+  //    its no_active_repo denial — its disposition must derive from that reason,
+  //    not the hardcoded exact_scope of durable_lane_context.
   // So the only scope-denials the server surfaces here are durable_lane_context
   // and repo_facts — the guidance/pointer empties are self-describing bodies.
 
@@ -225,12 +239,21 @@ interface FakeOptions {
   packThrows?: boolean;
   seedFailFor?: string[];
   archiveFailFor?: string[];
+  /**
+   * How the PRIMARY caller's cross-namespace read of the NEGATIVE namespace
+   * resolves. "denied" is the only isolation-proving outcome; "empty" and "leak"
+   * are allowed reads that must fail the gate; "throws" is a non-denial transport
+   * error that leaves the proof unestablished (denied=false, no gate throw).
+   */
+  negativeRead?: "denied" | "empty" | "leak" | "throws";
 }
 
 interface FakeState {
   seeded: Map<string, { table: string; namespace: string }>;
   archived: string[];
   packScopes: ContextPackScope[];
+  /** Namespaces the PRIMARY caller's isolation probe (attemptRead) targeted. */
+  attemptReadNamespaces: string[];
 }
 
 function makeFakeClients(opts: FakeOptions = {}): {
@@ -241,12 +264,13 @@ function makeFakeClients(opts: FakeOptions = {}): {
     seeded: new Map(),
     archived: [],
     packScopes: [],
+    attemptReadNamespaces: [],
   };
   const seedFail = new Set(opts.seedFailFor ?? []);
   const archiveFail = new Set(opts.archiveFailFor ?? []);
   const byServerId = (id: string) => id.replace(/^srv-/, "");
 
-  function makeClient(): OpenBrainLiveClient {
+  function makeClient(role: "primary" | "negative"): OpenBrainLiveClient {
     const fake = {
       async logMemory(o: {
         table: string;
@@ -270,6 +294,26 @@ function makeFakeClients(opts: FakeOptions = {}): {
         }
         return opts.payload ?? goodPayload();
       },
+      async attemptRead(o: {
+        namespace: string;
+      }): Promise<{ denied: boolean; hitCount: number }> {
+        // Record the namespace the PRIMARY isolation probe targeted so a test can
+        // pin the live-proven call shape: the gate must probe the NEGATIVE
+        // namespace with the PRIMARY caller.
+        if (role === "primary") {
+          state.attemptReadNamespaces.push(o.namespace);
+        }
+        switch (opts.negativeRead ?? "denied") {
+          case "denied":
+            return { denied: true, hitCount: 0 };
+          case "empty":
+            return { denied: false, hitCount: 0 };
+          case "leak":
+            return { denied: false, hitCount: 1 };
+          case "throws":
+            throw new LiveTransportError("search_brain:timeout", false);
+        }
+      },
       async archive(o: { table: string; id: string }) {
         const fixtureId = byServerId(o.id);
         if (archiveFail.has(fixtureId)) {
@@ -284,7 +328,10 @@ function makeFakeClients(opts: FakeOptions = {}): {
   }
 
   return {
-    clients: { primary: makeClient(), negative: makeClient() },
+    clients: {
+      primary: makeClient("primary"),
+      negative: makeClient("negative"),
+    },
     state,
   };
 }
@@ -313,7 +360,7 @@ function assertContentFree(receipt: unknown): void {
 }
 
 describe("runCompletePackGate happy path", () => {
-  it("verifies all five properties, tears down, and reports PASS", async () => {
+  it("verifies all six properties, tears down, and reports PASS", async () => {
     const { outcome, state } = run();
     const { receipt, passed } = await outcome;
 
@@ -337,11 +384,25 @@ describe("runCompletePackGate happy path", () => {
       (s) => s.section === "candidate_memory",
     );
     expect(candidate!.disposition).toBe("candidate_predicate_unavailable");
+    // repo_facts is present-empty with a no_active_repo denial: its disposition
+    // is that ACTUAL reason, never the hardcoded exact_scope (finding #3).
+    const repoFacts = receipt.sections.find((s) => s.section === "repo_facts");
+    expect(repoFacts!.present).toBe(true);
+    expect(repoFacts!.defined_empty).toBe(true);
+    expect(repoFacts!.disposition).toBe("no_active_repo");
 
     // 2. Isolation.
     expect(receipt.isolation.exact_scope_denied).toBe(true);
     expect(receipt.isolation.namespace_leaks).toBe(0);
     expect(receipt.isolation.expected_recall_present).toBe(true);
+
+    // 6. Explicit cross-namespace denial ran and was denied, and the probe
+    // targeted the NEGATIVE namespace with the PRIMARY caller.
+    expect(receipt.negative_control.ran).toBe(true);
+    expect(receipt.negative_control.denied).toBe(true);
+    expect(receipt.negative_control.observed_hit_count).toBe(0);
+    expect(state.attemptReadNamespaces).toEqual([CONFIG.negativeNamespace]);
+    expect(state.attemptReadNamespaces).not.toContain(CONFIG.primaryNamespace);
 
     // 3. Citation bijection.
     expect(receipt.citations.bijective).toBe(true);
@@ -616,6 +677,284 @@ describe("runCompletePackGate exact-scope isolation", () => {
     expect(receipt.failures.some((f) => f.includes("hollow recall"))).toBe(
       true,
     );
+  });
+});
+
+describe("runCompletePackGate present-empty scope-denial disposition", () => {
+  it("labels a present-empty repo_facts with its actual no_active_repo reason, not exact_scope", async () => {
+    // Finding #3 false-pass regression: the goodPayload repo_facts is present
+    // (repo: null) with a no_active_repo denial. The hardcoded-exact_scope bug
+    // would mislabel it; the disposition must be the real reason.
+    const { outcome } = run();
+    const { receipt } = await outcome;
+    const repoFacts = receipt.sections.find((s) => s.section === "repo_facts");
+    expect(repoFacts!.present).toBe(true);
+    expect(repoFacts!.has_items).toBe(false);
+    expect(repoFacts!.defined_empty).toBe(true);
+    expect(repoFacts!.disposition).toBe("no_active_repo");
+    // durable_lane_context (omitted body) still carries its own exact_scope
+    // reason: the two present/absent denials are NOT conflated to one label.
+    const lane = receipt.sections.find(
+      (s) => s.section === "durable_lane_context",
+    );
+    expect(lane!.disposition).toBe("exact_scope");
+  });
+
+  it("joins multiple present-empty denial reasons instead of one hardcoded label", async () => {
+    // A present-empty repo_facts reporting two reasons must surface both, proving
+    // the disposition is derived from scopeDenial.reasons, not a constant.
+    const payload = goodPayload({
+      warnings: {
+        scope_denials: [
+          { source: "durable_lane_context", reasons: ["exact_scope"] },
+          {
+            source: "repo_facts",
+            reasons: ["no_active_repo", "namespace_bound"],
+          },
+        ],
+        degraded_sources: [],
+        truncation: [],
+      },
+    });
+    const { outcome } = run({ payload });
+    const { receipt } = await outcome;
+    const repoFacts = receipt.sections.find((s) => s.section === "repo_facts");
+    expect(repoFacts!.disposition).toBe("no_active_repo,namespace_bound");
+  });
+});
+
+describe("runCompletePackGate cross-namespace denial probe (finding #1)", () => {
+  it("passes when the primary caller's read of the negative namespace is denied", async () => {
+    const { outcome } = run({ negativeRead: "denied" });
+    const { receipt, passed } = await outcome;
+    expect(receipt.negative_control.ran).toBe(true);
+    expect(receipt.negative_control.denied).toBe(true);
+    expect(passed).toBe(true);
+  });
+
+  it("FALSE-PASS regression: an allowed-but-empty negative read must FAIL the gate", async () => {
+    // The emitted-pack leak walk is clean (no forbidden id surfaced), so the old
+    // gate would PASS. But an allowed-but-empty read is not proof of isolation —
+    // a forbidden record ranked below the cut looks identical. The denial probe
+    // fails the gate closed.
+    const { outcome } = run({ negativeRead: "empty" });
+    const { receipt, passed } = await outcome;
+    expect(receipt.isolation.namespace_leaks).toBe(0); // walk is clean...
+    expect(receipt.negative_control.ran).toBe(true);
+    expect(receipt.negative_control.denied).toBe(false); // ...but read was allowed
+    expect(receipt.negative_control.observed_hit_count).toBe(0);
+    expect(passed).toBe(false);
+    expect(
+      receipt.failures.some((f) => f.includes("negative-control not denied")),
+    ).toBe(true);
+    assertContentFree(receipt);
+  });
+
+  it("fails when the primary caller is permitted a NON-empty read of the negative namespace", async () => {
+    const { outcome } = run({ negativeRead: "leak" });
+    const { receipt, passed } = await outcome;
+    expect(receipt.negative_control.denied).toBe(false);
+    expect(receipt.negative_control.observed_hit_count).toBe(1);
+    expect(passed).toBe(false);
+    expect(
+      receipt.failures.some((f) => f.includes("negative-control not denied")),
+    ).toBe(true);
+  });
+
+  it("fails the proof (denied=false) without throwing when the probe read errors", async () => {
+    // A non-denial transport error means the proof could not be established;
+    // probeNegativeControl catches it and reports denied=false with a redacted
+    // failure label, so the gate does NOT throw but still fails closed.
+    const { outcome } = run({ negativeRead: "throws" });
+    const { receipt, passed } = await outcome;
+    expect(receipt.negative_control.ran).toBe(true);
+    expect(receipt.negative_control.denied).toBe(false);
+    expect(receipt.negative_control.failure).toContain(
+      "negative-control read failed",
+    );
+    expect(passed).toBe(false);
+    assertContentFree(receipt);
+  });
+});
+
+describe("runCompletePackGate durable_lane_context events/lane walkers (finding #2)", () => {
+  const laneId = "lane-uuid-777";
+  const eventAId = "event-uuid-111";
+  const eventBId = "event-uuid-222";
+
+  /**
+   * A production-accurate POPULATED durable_lane_context section: an exact-scope
+   * lane WITH events, each citing itself via session_event:<id>, exactly as
+   * src/tools/agent-context-pack-durable-lane.ts emits it. No exact_scope
+   * scope-denial (the lane exists), so this run is used to exercise the citation
+   * bijection over events and lane-scoped leak detection, not overall PASS.
+   */
+  function populatedLanePayload(
+    overrides: {
+      leakEventSourceRef?: string;
+      dropEventCitations?: boolean;
+    } = {},
+  ): ContextPackPayload {
+    const laneCitationId = `session_lane:${laneId}`;
+    const eventACitation = `session_event:${eventAId}`;
+    const eventBCitation = `session_event:${eventBId}`;
+    const payload = goodPayload({
+      warnings: {
+        // Lane exists -> no exact_scope denial; repo_facts still present-empty.
+        scope_denials: [{ source: "repo_facts", reasons: ["no_active_repo"] }],
+        degraded_sources: [],
+        truncation: [],
+      },
+      sections: {
+        durable_lane_context: {
+          label: "durable_lane_context",
+          exact_scope_required: true,
+          lane: {
+            id: laneId,
+            session_key: "eval:complete-pack:v1",
+            status: "active",
+            citation_id: laneCitationId,
+          },
+          events: [
+            {
+              id: eventAId,
+              event_type: "decision",
+              content: "lane event a body",
+              citation_id: eventACitation,
+              source_ref:
+                overrides.leakEventSourceRef ?? `ob_session_events/${eventAId}`,
+            },
+            {
+              id: eventBId,
+              event_type: "thought",
+              content: "lane event b body",
+              citation_id: eventBCitation,
+              source_ref: `ob_session_events/${eventBId}`,
+            },
+          ],
+          event_count: 2,
+          truncated: false,
+        },
+      },
+    });
+    // The pack cites the lane and every event. Drop the event citations when a
+    // test wants to prove the events are walked (uncited detection).
+    const laneCitations = overrides.dropEventCitations
+      ? [
+          {
+            id: laneCitationId,
+            kind: "session_lane",
+            source_ref: `ob_session_lanes/${laneId}`,
+          },
+        ]
+      : [
+          {
+            id: laneCitationId,
+            kind: "session_lane",
+            source_ref: `ob_session_lanes/${laneId}`,
+          },
+          {
+            id: eventACitation,
+            kind: "session_event",
+            source_ref: `ob_session_events/${eventAId}`,
+          },
+          {
+            id: eventBCitation,
+            kind: "session_event",
+            source_ref: `ob_session_events/${eventBId}`,
+          },
+        ];
+    payload.citations = [...payload.citations, ...laneCitations];
+    return payload;
+  }
+
+  it("counts each lane event citation as emitted so a populated lane stays bijective", async () => {
+    const { outcome } = run({ payload: populatedLanePayload() });
+    const { receipt } = await outcome;
+    // The two durable_memory items + lane + two events are all cited: bijective.
+    expect(receipt.citations.dangling_citations).toBe(0);
+    expect(receipt.citations.uncited_items).toBe(0);
+    expect(receipt.citations.bijective).toBe(true);
+    // emitted item citations now include the lane and both events.
+    expect(receipt.citations.emitted_item_citations).toBe(5);
+  });
+
+  it("flags an uncited lane event as a bijection break (events ARE walked)", async () => {
+    const { outcome } = run({
+      payload: populatedLanePayload({ dropEventCitations: true }),
+    });
+    const { receipt, passed } = await outcome;
+    // Two event citations were dropped but the events are still emitted, so they
+    // are now uncited — proving the walker reaches events[], not just items/lane.
+    expect(receipt.citations.uncited_items).toBe(2);
+    expect(receipt.citations.bijective).toBe(false);
+    expect(passed).toBe(false);
+  });
+
+  it("detects a forbidden negative id embedded in a lane event source_ref pointer", async () => {
+    // A leaked negative record surfacing as an event source_ref pointer must be
+    // caught even though it lives on events[], not items[]. Cite it so the ONLY
+    // failure is the isolation leak.
+    const forbidden = serverId("neg-secret");
+    const payload = populatedLanePayload({
+      leakEventSourceRef: `ob_session_events/${forbidden}`,
+    });
+    const { outcome } = run({ payload });
+    const { receipt, passed } = await outcome;
+    expect(receipt.isolation.namespace_leaks).toBeGreaterThanOrEqual(1);
+    expect(passed).toBe(false);
+    expect(receipt.failures.some((f) => f.includes("isolation breach"))).toBe(
+      true,
+    );
+    assertContentFree(receipt);
+  });
+
+  it("detects a forbidden negative id surfacing as a lane event id", async () => {
+    // The forbidden id as an event's own `id` (not a source_ref) is still a leak.
+    const forbidden = serverId("neg-secret");
+    const payload = goodPayload({
+      warnings: {
+        scope_denials: [{ source: "repo_facts", reasons: ["no_active_repo"] }],
+        degraded_sources: [],
+        truncation: [],
+      },
+      sections: {
+        durable_lane_context: {
+          label: "durable_lane_context",
+          exact_scope_required: true,
+          lane: { id: "lane-ok", citation_id: "session_lane:lane-ok" },
+          events: [
+            {
+              id: forbidden,
+              event_type: "decision",
+              content: "leaked event body",
+              citation_id: `session_event:${forbidden}`,
+              source_ref: `ob_session_events/${forbidden}`,
+            },
+          ],
+          event_count: 1,
+          truncated: false,
+        },
+      },
+    });
+    payload.citations = [
+      ...payload.citations,
+      {
+        id: "session_lane:lane-ok",
+        kind: "session_lane",
+        source_ref: "ob_session_lanes/lane-ok",
+      },
+      {
+        id: `session_event:${forbidden}`,
+        kind: "session_event",
+        source_ref: `ob_session_events/${forbidden}`,
+      },
+    ];
+    const { outcome } = run({ payload });
+    const { receipt, passed } = await outcome;
+    expect(receipt.isolation.namespace_leaks).toBeGreaterThanOrEqual(1);
+    expect(passed).toBe(false);
+    assertContentFree(receipt);
   });
 });
 
