@@ -21,8 +21,7 @@ function suiteXml(
     opts.testcases ??
     Array.from(
       { length: tests },
-      (_, i) =>
-        `<testcase name="case ${i}" classname="${name}" time="0.01" />`,
+      (_, i) => `<testcase name="case ${i}" classname="${name}" time="0.01" />`,
     ).join("\n");
   return (
     `<testsuite name="${name}" tests="${tests}" failures="${failures}" ` +
@@ -31,9 +30,9 @@ function suiteXml(
 }
 
 function allSuitesGreen(): string {
-  return REQUIRED_SUITES.map((s) => suiteXml(s.name, { tests: s.minTests })).join(
-    "\n",
-  );
+  return REQUIRED_SUITES.map((s) =>
+    suiteXml(s.name, { tests: s.minTests }),
+  ).join("\n");
 }
 
 function wrap(inner: string): string {
@@ -44,14 +43,103 @@ describe("assert-db-tests-ran anti-skip guard", () => {
   it("passes when every required live-Postgres suite executed cleanly", () => {
     const result = evaluateJunit(wrap(allSuitesGreen()));
     expect(result.errors).toEqual([]);
-    expect(result.executedLiveTestcases).toBe(19);
+    expect(result.executedLiveTestcases).toBe(27);
+    expect(
+      result.executedLiveTestcasesBySuite.get(
+        "search_brain language-aware FTS ranking (live Postgres)",
+      ),
+    ).toBe(4);
+    expect(
+      result.executedLiveTestcasesBySuite.get(
+        "language-aware FTS covers every migration-007 source field (live Postgres)",
+      ),
+    ).toBe(1);
+    expect(
+      result.executedLiveTestcasesBySuite.get(
+        "declared source language selects the real search config via explicit request (live Postgres)",
+      ),
+    ).toBe(3);
+  });
+
+  it("fails when the language-aware FTS ranking suite is omitted", () => {
+    const missingName =
+      "search_brain language-aware FTS ranking (live Postgres)";
+    const xml = wrap(
+      REQUIRED_SUITES.filter((s) => s.name !== missingName)
+        .map((s) => suiteXml(s.name, { tests: s.minTests }))
+        .join("\n"),
+    );
+    const result = evaluateJunit(xml);
+    expect(
+      result.errors.some((e) => e.includes(`MISSING suite "${missingName}"`)),
+    ).toBe(true);
+  });
+
+  it("fails when the all-table language parity suite is omitted", () => {
+    const missingName =
+      "language-aware FTS covers every migration-007 source field (live Postgres)";
+    const xml = wrap(
+      REQUIRED_SUITES.filter((s) => s.name !== missingName)
+        .map((s) => suiteXml(s.name, { tests: s.minTests }))
+        .join("\n"),
+    );
+    const result = evaluateJunit(xml);
+    expect(
+      result.errors.some((e) => e.includes(`MISSING suite "${missingName}"`)),
+    ).toBe(true);
+  });
+
+  it("fails when the all-table language parity suite is skipped", () => {
+    const skippedName =
+      "language-aware FTS covers every migration-007 source field (live Postgres)";
+    const suites = REQUIRED_SUITES.map((s) =>
+      s.name === skippedName
+        ? suiteXml(s.name, {
+            tests: s.minTests,
+            skipped: s.minTests,
+            testcases: Array.from(
+              { length: s.minTests },
+              (_, i) =>
+                `<testcase name="case ${i}" classname="${s.name}"><skipped /></testcase>`,
+            ).join("\n"),
+          })
+        : suiteXml(s.name, { tests: s.minTests }),
+    ).join("\n");
+    const result = evaluateJunit(wrap(suites));
+    expect(
+      result.errors.some((e) =>
+        e.includes(`SKIPPED tests in "${skippedName}"`),
+      ),
+    ).toBe(true);
+  });
+
+  it("fails when the declared-source language suite is skipped", () => {
+    const skippedName =
+      "declared source language selects the real search config via explicit request (live Postgres)";
+    const suites = REQUIRED_SUITES.map((s) =>
+      s.name === skippedName
+        ? suiteXml(s.name, {
+            tests: s.minTests,
+            skipped: s.minTests,
+            testcases: Array.from(
+              { length: s.minTests },
+              (_, i) =>
+                `<testcase name="case ${i}" classname="${s.name}"><skipped /></testcase>`,
+            ).join("\n"),
+          })
+        : suiteXml(s.name, { tests: s.minTests }),
+    ).join("\n");
+    const result = evaluateJunit(wrap(suites));
+    expect(
+      result.errors.some((e) =>
+        e.includes(`SKIPPED tests in "${skippedName}"`),
+      ),
+    ).toBe(true);
   });
 
   it("fails when a required suite is missing entirely", () => {
     const xml = wrap(
-      REQUIRED_SUITES.filter(
-        (s) => s.name !== "lane_upsert (live Postgres)",
-      )
+      REQUIRED_SUITES.filter((s) => s.name !== "lane_upsert (live Postgres)")
         .map((s) => suiteXml(s.name, { tests: s.minTests }))
         .join("\n"),
     );
@@ -123,8 +211,7 @@ describe("assert-db-tests-ran anti-skip guard", () => {
               `<testcase name="boom" classname="${name}"><error message="thrown" /></testcase>\n` +
               Array.from(
                 { length: s.minTests - 1 },
-                (_, i) =>
-                  `<testcase name="case ${i}" classname="${name}" />`,
+                (_, i) => `<testcase name="case ${i}" classname="${name}" />`,
               ).join("\n"),
           })
         : suiteXml(s.name, { tests: s.minTests }),
@@ -181,7 +268,7 @@ describe("assert-db-tests-ran anti-skip guard", () => {
     }).join("\n");
 
     const result = evaluateJunit(wrap(suites));
-    expect(result.executedLiveTestcases).toBe(19);
+    expect(result.executedLiveTestcases).toBe(27);
     expect(
       result.errors.some((e) =>
         e.includes(

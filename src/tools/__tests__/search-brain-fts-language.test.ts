@@ -1,7 +1,11 @@
 import { describe, it, expect, afterEach } from "bun:test";
-import { registerSearchBrain } from "../search-brain.ts";
+import { executeSearch, registerSearchBrain } from "../search-brain.ts";
 import type { AuthInfo } from "../../types.ts";
-import { createMockEmbed, setupMcpClient } from "./test-helpers.ts";
+import {
+  createMockEmbed,
+  getErrorText,
+  setupMcpClient,
+} from "./test-helpers.ts";
 
 /**
  * Functional coverage for language-aware FTS configuration selection (#341).
@@ -16,6 +20,11 @@ import { createMockEmbed, setupMcpClient } from "./test-helpers.ts";
  */
 
 const admin: AuthInfo = { role: "admin", clientId: "admin-client" };
+const agent: AuthInfo = { role: "agent", clientId: "agent-client" };
+const obAdmin: AuthInfo = {
+  role: "ob-admin",
+  clientId: "ob-admin-client",
+};
 
 /** Pool that records every FTS-arm SQL statement it is asked to run. */
 function recordingPool() {
@@ -39,16 +48,20 @@ function recordingPool() {
 async function runKeywordSearch(
   pool: { query: (...args: any[]) => Promise<{ rows: any[] }> },
   query: string,
-  opts: { namespace?: string; ftsConfig?: string } = {},
-): Promise<void> {
+  opts: {
+    namespace?: string;
+    ftsConfig?: string;
+    auth?: AuthInfo;
+  } = {},
+): Promise<any> {
   const { client, cleanup } = await setupMcpClient(
     registerSearchBrain,
     pool,
     createMockEmbed(),
-    admin,
+    opts.auth ?? admin,
   );
   try {
-    await client.callTool({
+    return await client.callTool({
       name: "search_brain",
       arguments: {
         query,
@@ -67,6 +80,108 @@ const savedFtsConfig = process.env.OPENBRAIN_FTS_CONFIG;
 afterEach(() => {
   if (savedFtsConfig === undefined) delete process.env.OPENBRAIN_FTS_CONFIG;
   else process.env.OPENBRAIN_FTS_CONFIG = savedFtsConfig;
+});
+
+describe("shared executeSearch FTS default", () => {
+  it("ignores OPENBRAIN_FTS_CONFIG for sibling keyword callers", async () => {
+    process.env.OPENBRAIN_FTS_CONFIG = "german";
+    const { ftsSql, pool } = recordingPool();
+
+    await executeSearch(
+      { pool: pool as any, embedFn: createMockEmbed() },
+      ["thoughts"],
+      "quarterly planning",
+      10,
+      "keyword",
+      undefined,
+      0,
+      undefined,
+      false,
+    );
+
+    const sql = ftsSql.join("\n");
+    expect(sql).toContain("t.search_vector @@");
+    expect(sql).toContain("plainto_tsquery('english',");
+    expect(sql).not.toContain("to_tsvector('german'");
+    expect(sql).not.toContain("plainto_tsquery('german',");
+  });
+
+  it("keeps english when a sibling hybrid caller falls back after embedding failure", async () => {
+    process.env.OPENBRAIN_FTS_CONFIG = "german";
+    const { ftsSql, pool } = recordingPool();
+
+    await executeSearch(
+      { pool: pool as any, embedFn: createMockEmbed(null) },
+      ["thoughts"],
+      "quarterly planning",
+      10,
+      "hybrid",
+      undefined,
+      0,
+      undefined,
+      false,
+    );
+
+    const sql = ftsSql.join("\n");
+    expect(sql).toContain("t.search_vector @@");
+    expect(sql).toContain("plainto_tsquery('english',");
+    expect(sql).not.toContain("to_tsvector('german'");
+    expect(sql).not.toContain("plainto_tsquery('german',");
+  });
+
+  it("keeps english for a sibling hybrid caller when vector search succeeds", async () => {
+    process.env.OPENBRAIN_FTS_CONFIG = "german";
+    const allSql: string[] = [];
+    const pool = {
+      query: async (...args: any[]) => {
+        const sql = String(args[0]);
+        allSql.push(sql);
+        if (sql.includes("query_embedding")) {
+          return {
+            rows: [
+              {
+                source_type: "thought",
+                id: "vector-hit",
+                namespace: "rico",
+                content_preview: "Quarterly planning",
+                tags: [],
+                created_by: "test",
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
+                tier: "warm",
+                distance: 0.1,
+                fts_rank: null,
+                usefulness: 0.5,
+                access_count: 0,
+                extracted_metadata: null,
+              },
+            ],
+          };
+        }
+        return { rows: [] };
+      },
+    };
+
+    const rows = await executeSearch(
+      { pool: pool as any, embedFn: createMockEmbed() },
+      ["thoughts"],
+      "quarterly planning",
+      10,
+      "hybrid",
+      undefined,
+      0,
+      undefined,
+      false,
+    );
+
+    expect(rows.map((row) => row.id)).toEqual(["vector-hit"]);
+    expect(allSql.some((sql) => sql.includes("query_embedding"))).toBe(true);
+    const ftsSql = allSql.find((sql) => sql.includes("fts_query"));
+    expect(ftsSql).toContain("t.search_vector @@");
+    expect(ftsSql).toContain("plainto_tsquery('english',");
+    expect(ftsSql).not.toContain("to_tsvector('german'");
+    expect(ftsSql).not.toContain("plainto_tsquery('german',");
+  });
 });
 
 describe("search_brain FTS configuration selection", () => {
@@ -168,6 +283,74 @@ describe("search_brain FTS configuration selection", () => {
 });
 
 describe("search_brain explicit fts_config request argument", () => {
+  it("denies an ordinary caller's effective non-english config before search", async () => {
+    delete process.env.OPENBRAIN_FTS_CONFIG;
+    for (const ftsConfig of ["german", "de-DE"]) {
+      const { allSql, pool } = recordingPool();
+      const result = await runKeywordSearch(pool, "Planung", {
+        ftsConfig,
+        auth: agent,
+      });
+
+      expect(result.isError).toBe(true);
+      expect(getErrorText(result)).toBe(
+        "Permission denied: non-English FTS configuration requires admin or ob-admin",
+      );
+      expect(allSql).toEqual([]);
+    }
+  });
+
+  it("allows ob-admin to request a non-english config", async () => {
+    delete process.env.OPENBRAIN_FTS_CONFIG;
+    const { ftsSql, pool } = recordingPool();
+    const result = await runKeywordSearch(pool, "Planung", {
+      ftsConfig: "german",
+      auth: obAdmin,
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(ftsSql.join("\n")).toContain("plainto_tsquery('german',");
+  });
+
+  it("allows an ordinary caller to request english under a non-english operator default", async () => {
+    process.env.OPENBRAIN_FTS_CONFIG = "german";
+    const { ftsSql, pool } = recordingPool();
+    const result = await runKeywordSearch(pool, "planning", {
+      ftsConfig: "english",
+      auth: agent,
+    });
+
+    expect(result.isError).toBeFalsy();
+    const sql = ftsSql.join("\n");
+    expect(sql).toContain("t.search_vector @@");
+    expect(sql).toContain("plainto_tsquery('english',");
+    expect(sql).not.toContain("plainto_tsquery('german',");
+  });
+
+  it("allows an operator-controlled non-english default for an ordinary caller", async () => {
+    process.env.OPENBRAIN_FTS_CONFIG = "german";
+    const { ftsSql, pool } = recordingPool();
+    const result = await runKeywordSearch(pool, "Planung", { auth: agent });
+
+    expect(result.isError).toBeFalsy();
+    expect(ftsSql.join("\n")).toContain("plainto_tsquery('german',");
+  });
+
+  it("denies an explicit typo when its effective operator default is non-english", async () => {
+    process.env.OPENBRAIN_FTS_CONFIG = "german";
+    const { allSql, pool } = recordingPool();
+    const result = await runKeywordSearch(pool, "Planung", {
+      ftsConfig: "gernam",
+      auth: agent,
+    });
+
+    expect(result.isError).toBe(true);
+    expect(getErrorText(result)).toBe(
+      "Permission denied: non-English FTS configuration requires admin or ob-admin",
+    );
+    expect(allSql).toEqual([]);
+  });
+
   it("an explicit fts_config selects the config in the real search path (no env)", async () => {
     // The caller-visible knob, not an env var, drives the emitted SQL.
     delete process.env.OPENBRAIN_FTS_CONFIG;

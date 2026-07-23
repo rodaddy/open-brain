@@ -19,15 +19,17 @@ import { z } from "zod";
  *   interpolated into SQL, so the config literal can be inlined safely (same
  *   discipline the repo applies to interpolated table names). tsquery text and
  *   all namespace / source-scope predicates stay fully parameterized.
- * - The config that governs a search is selected by an EXPLICIT setting on the
- *   real search path: the `search_brain` `fts_config` request argument, or the
- *   deployment-wide OPENBRAIN_FTS_CONFIG env default. A free-text source
- *   language (`ob_sources.language`, BCP-47-ish) is only a candidate value for
- *   that setting -- resolveFtsConfig maps such a token to a supported regconfig
- *   (english fallback for the unrecognized). It is NOT auto-linked to a row's
- *   retrieval: `thoughts` has no source_id, so an ob_sources row cannot, on its
- *   own, control the config a search analyzes with. This never invents a config
- *   Postgres does not ship, and never widens an isolation boundary.
+ * - The public `search_brain` handler selects its config from the request's
+ *   `fts_config` argument or the operator-controlled OPENBRAIN_FTS_CONFIG env
+ *   default, then passes the resolved value explicitly to the shared search
+ *   primitive. Other executeSearch callers always retain the english default.
+ *   A free-text source language (`ob_sources.language`, BCP-47-ish) is only a
+ *   candidate value for that public setting -- resolveFtsConfig maps such a
+ *   token to a supported regconfig (english fallback for the unrecognized). It
+ *   is NOT auto-linked to a row's retrieval: `thoughts` has no source_id, so an
+ *   ob_sources row cannot, on its own, control the config a search analyzes
+ *   with. This never invents a config Postgres does not ship, and never widens
+ *   an isolation boundary.
  *
  * NON-GOALS
  * - No per-row language column, no generated-column rewrite, no migration. The
@@ -127,9 +129,10 @@ export function resolveFtsConfig(
 }
 
 /**
- * Resolve the effective corpus FTS config for a search invocation. Retrieval
- * does not carry a per-row language, so a deployment declares its corpus FTS
- * config out of band via env; unset or unsupported keeps the english default.
+ * Resolve the operator-controlled corpus FTS config for the public search
+ * handler. Retrieval does not carry a per-row language, so a deployment opts
+ * into its corpus FTS config out of band via env; unset or unsupported keeps
+ * the english default.
  *
  * OPENBRAIN_FTS_CONFIG accepts either a supported regconfig name directly
  * (`german`) or a source-style language token (`de`, `de-DE`); both resolve
@@ -147,10 +150,10 @@ export function corpusFtsConfig(
 }
 
 /**
- * Resolve the FTS config for a single search request. An explicit caller
- * setting (the `search_brain` `fts_config` argument) wins when it names a
- * supported regconfig or a recognized language token; anything else falls back
- * to the deployment corpus default (OPENBRAIN_FTS_CONFIG, else english).
+ * Resolve the FTS config for one public `search_brain` request. An explicit
+ * caller setting (`fts_config`) wins when it names a supported regconfig or a
+ * recognized language token; anything else falls back to the deployment corpus
+ * default (OPENBRAIN_FTS_CONFIG, else english).
  *
  * This is the caller-visible, provenance-bound selector: the config is carried
  * by the request itself, not inferred from an unlinked source row, so what a

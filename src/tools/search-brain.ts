@@ -28,7 +28,7 @@ import {
   VALID_TIERS,
 } from "./table-constants.ts";
 import {
-  corpusFtsConfig,
+  DEFAULT_FTS_CONFIG,
   ftsConfigLiteral,
   requestFtsConfig,
   SUPPORTED_FTS_CONFIGS,
@@ -54,14 +54,16 @@ type ExecuteSearchOptions = {
   enableGraph?: boolean;
   /**
    * Text-search configuration for the lexical arm. When unset, defaults to the
-   * deployment corpus config (english unless OPENBRAIN_FTS_CONFIG selects a
-   * supported language). The `search_brain` handler sets this from its explicit
-   * `fts_config` request argument via requestFtsConfig, so a caller-visible
-   * setting -- not an unlinked source row -- selects the regconfig the real
-   * search path analyzes with.
+   * shared english configuration. The public `search_brain` handler is the only
+   * boundary that resolves its request argument and deployment env; sibling
+   * executeSearch callers remain byte-compatible unless they explicitly pass a
+   * config.
    */
   ftsConfig?: FtsConfig;
 };
+
+const NON_ENGLISH_FTS_AUTHORIZATION_ERROR =
+  "Permission denied: non-English FTS configuration requires admin or ob-admin";
 
 /** RRF constant -- standard value from Cormack et al. 2009 */
 const RRF_K = 60;
@@ -864,7 +866,7 @@ async function ftsSearch(
   offset = 0,
   namespace?: NamespaceFilter,
   sourceScope?: SourceScope,
-  ftsConfig: FtsConfig = corpusFtsConfig(),
+  ftsConfig: FtsConfig = DEFAULT_FTS_CONFIG,
 ): Promise<SearchRow[]> {
   const perTableLimit = fetchLimit;
   const params = [query, fetchLimit, offset];
@@ -1044,7 +1046,7 @@ export async function executeSearch(
   options: ExecuteSearchOptions = {},
 ): Promise<SearchRow[]> {
   const enableGraph = options.enableGraph === true;
-  const ftsConfig = options.ftsConfig ?? corpusFtsConfig();
+  const ftsConfig = options.ftsConfig ?? DEFAULT_FTS_CONFIG;
   if (sourceScope) {
     accessibleTables = accessibleTables.filter((table) => table !== "entities");
     if (accessibleTables.length === 0) return [];
@@ -1421,6 +1423,7 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
               `Accepts a supported Postgres regconfig (${SUPPORTED_FTS_CONFIGS.join(", ")}) ` +
               `or a language token (e.g. 'de', 'de-DE', 'spanish'). Unrecognized values ` +
               `fall back to the deployment corpus default (OPENBRAIN_FTS_CONFIG, else english). ` +
+              `An explicitly requested effective non-English config requires admin or ob-admin. ` +
               `Affects keyword/hybrid stemming only; english is byte-identical to prior behavior.`,
           ),
       },
@@ -1500,7 +1503,24 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
       const tier = args.tier as Tier | undefined;
       const requestedNamespace = args.namespace as string | undefined;
       const sourceScope = args.source_scope as SourceScope | undefined;
-      const ftsConfig = requestFtsConfig(args.fts_config as string | undefined);
+      const requestedFtsConfig = args.fts_config as string | undefined;
+      const ftsConfig = requestFtsConfig(requestedFtsConfig);
+      if (
+        requestedFtsConfig !== undefined &&
+        ftsConfig !== DEFAULT_FTS_CONFIG &&
+        auth.role !== "admin" &&
+        auth.role !== "ob-admin"
+      ) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: NON_ENGLISH_FTS_AUTHORIZATION_ERROR,
+            },
+          ],
+          isError: true,
+        };
+      }
       const sourceScopeError = sourceScopeAuthorizationError(auth, sourceScope);
       if (sourceScopeError) {
         return {

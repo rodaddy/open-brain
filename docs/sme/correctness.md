@@ -1335,3 +1335,37 @@ Two coupled receipt-truth defects shipped together:
 - Is there a regression that submits the same identity twice and proves the second
   call is rejected (no mutation, honest verdict), failing on the pre-fix
   mutate-then-check ordering?
+
+## [2026-07-23] Shared search helpers need caller-stable defaults
+
+**Severity:** MEDIUM
+**Source:** PR #368 review, 2026-07-23
+**Scope:** shared search helpers and deployment configuration
+**Status:** fixed-pre-merge
+
+A deployment env default must be resolved at the public boundary and passed
+explicitly; putting it inside a shared helper silently changes sibling consumers
+that never opted into the new behavior.
+
+### Review Questions
+
+- Is deployment configuration resolved by the owning public caller and passed
+  explicitly, while shared helpers retain a caller-stable default?
+
+## [2026-07-23] Every env-gated PG suite needs anti-skip registration
+
+**Severity:** MEDIUM
+**Source:** PR #368 review, 2026-07-23
+**Scope:** env-gated live-Postgres suites and CI anti-skip guards
+**Status:** fixed-pre-merge; all three PR #368 suites registered
+
+Adding an `OPENBRAIN_TEST_DATABASE_URL` suite is incomplete until its exact
+suite name and minimum case count are registered in the CI anti-skip allowlist,
+so a missing DB cannot turn new functional coverage into a green skip. The
+pre-merge fix registers all three PR #368 suites, raises the aggregate floor, and
+tests missing and skipped-suite failures.
+
+### Review Questions
+
+- Does every new env-gated PG suite appear in the anti-skip allowlist with a
+  minimum executed count and a guard regression?
