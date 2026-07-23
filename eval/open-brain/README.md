@@ -223,6 +223,78 @@ bounded, operator-driven cleanup, not a gate responsibility:
 3. Never widen this into an automatic sweep inside the gate — the per-record,
    namespace-scoped teardown is the only mutation the gate is allowed to make.
 
+## Complete Context Pack Gate (EVAL-3, issue #330)
+
+A companion live gate under `eval/open-brain/live/complete-pack-*.ts` seeds a
+per-run throwaway namespace, calls the real `agent_context_pack` tool requesting
+all nine sections under one whole-pack budget, and verifies six functional
+properties (presence-or-defined-empty, exact-scope isolation, citation
+bijection, serialized whole-pack budget, per-section contribution, and an
+explicit cross-namespace denial control), then tears down exactly this run's
+records. It reuses the recall gate's config/transport/setup discipline and is
+run directly:
+
+```bash
+bun run eval/open-brain/live/complete-pack-cli.ts
+bun run eval/open-brain/live/complete-pack-cli.ts --json
+bun run eval/open-brain/live/complete-pack-cli.ts --report /Volumes/ThunderBolt/_tmp/open-brain/complete-pack.json
+```
+
+## Reflex A/B Suppression Gate (REFLEX-4, issue #335)
+
+This gate exercises the already-landed complete reflex (`agent_reflex_pointers`,
+#334 — detect/query, durable recall, prior-context suppression, cited body-free
+pointers) end to end and proves the A/B suppression contrast: suppression ON
+returns **demonstrably fewer already-known items** than suppression OFF over the
+**same seeded evidence**, with zero redundant resurfacing and the net-new
+evidence preserved.
+
+```bash
+bun run eval:reflex-ab
+bun run eval:reflex-ab -- --json
+bun run eval:reflex-ab -- --report /Volumes/ThunderBolt/_tmp/open-brain/reflex-ab.json
+bun run eval:reflex-ab -- --budget-tokens 8000
+```
+
+One run:
+
+1. Seeds a per-run throwaway namespace (plus a mandatory sibling negative
+   namespace) with the sealed synthetic corpus in
+   `fixtures/reflex-ab-v1.json`. Primary seeds are either `prior_known`
+   (already-supplied-this-turn) or net-new; negative seeds must never surface.
+2. Calls `agent_reflex_pointers` **twice** over the same evidence and exact
+   scope:
+   - **OFF arm** — no `prior_context`. Every net-new authorized durable record
+     surfaces as a body-free cited pointer, including the already-known seeds
+     (the redundant-resurfacing baseline).
+   - **ON arm** — the already-known seeds' **own emitted pointer references**
+     (the exact `citation_id` + structural `source_ref` the OFF arm returned for
+     them, i.e. the identities a real agent would echo back) are sent as
+     `prior_context`, so the shared recall suppresses them before any pointer is
+     emitted.
+3. Compares the arms and records content-free relevance and
+   redundant-resurfacing metrics. PASS requires suppression ON to return
+   strictly fewer already-known items (zero resurfacing) while preserving the
+   net-new evidence on **both** arms.
+4. Requires each arm to independently clear the established EVAL-3 functional
+   bar: every pointer cited (citation bijection), body-free
+   (identity/`source_ref` only — any body-bearing field fails), whole-pack
+   budget respected with a complete nine-section allocation order, exact-scope
+   authorized under the throwaway namespace, placement `client_owned` (no MCP
+   `_meta` injection), and no negative-namespace leak.
+5. Proves cross-namespace isolation with an explicit negative control (the
+   primary caller's read of the negative namespace must be **denied**; an
+   allowed-but-empty read is not proof), then tears down exactly this run's
+   records via per-record namespace-scoped `archive_entry`.
+
+Prompt placement is client-owned by contract: the gate only asserts the reflex
+returns resolvable pointers and `placement: "client_owned"`; it never injects
+anything into an MCP `_meta` channel. Opt-in and required environment are
+identical to the live recall gate above (`OPEN_BRAIN_LIVE_EVAL=1` plus base
+URL + token). The receipt (`schema: openbrain.reflex_ab_gate.v1`) is
+content-free: only ids, namespaces, labels, counts, and booleans — no memory
+bodies, tokens, or secrets.
+
 ## Next Expansion Points
 
 - Add a live Open Brain adapter that loads fixtures into an isolated namespace

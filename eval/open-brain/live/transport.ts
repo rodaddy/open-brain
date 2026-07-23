@@ -117,6 +117,42 @@ export interface DenialProbeResult {
 }
 
 /**
+ * One explicit prior-context reference for a reflex-pointers call: an identifier
+ * or structural source pointer for a record already supplied to the model this
+ * turn. Only resolvable identity is ever carried -- never a raw prior-context
+ * body -- mirroring `agent_reflex_pointers.prior_context`. The suppression-ON
+ * arm of the A/B gate echoes back the citation ids the already-known seeds were
+ * emitted under; the suppression-OFF arm sends none.
+ */
+export interface ReflexPriorContextRef {
+  citation_id?: string;
+  source_ref?:
+    string | { source: string; type: string; id: string; namespace?: string };
+}
+
+/**
+ * The structural fields the reflex-A/B gate reads out of an
+ * `agent_reflex_pointers` payload. Deliberately narrow: the body-free pointer
+ * section (items carry identity + structural source_ref only), the top-level
+ * citations, the whole-pack budget, and the warnings channel. Section item
+ * bodies stay opaque records so the gate reads pointer ids / citation ids /
+ * counts WITHOUT ever inspecting a memory body. The raw payload text is never
+ * carried past this boundary.
+ */
+export interface ReflexPointersPayload {
+  status: string;
+  placement: string;
+  pointers: Record<string, unknown>;
+  citations: Array<Record<string, unknown>>;
+  budget: Record<string, unknown>;
+  warnings: {
+    scope_denials: Array<Record<string, unknown>>;
+    degraded_sources: Array<Record<string, unknown>>;
+    truncation: Array<Record<string, unknown>>;
+  };
+}
+
+/**
  * The public error surface for a live transport failure. Callers may log or
  * embed `label` in a receipt; it is redacted to tool/class/status/reason
  * keywords only and never contains raw response text.
@@ -312,6 +348,61 @@ export class OpenBrainLiveClient {
   }
 
   /**
+   * Call the per-turn reflex `agent_reflex_pointers` for the exact active scope,
+   * returning the parsed body-free pointer payload. This is the single tool the
+   * REFLEX-4 A/B gate exercises: it reuses `agent_context_pack`'s scope, query,
+   * prior-context, and whole-pack budget contract but returns only cited
+   * resolvable pointers (no memory bodies). Passing `priorContext` (the
+   * suppression-ON arm) makes the shared recall drop records already represented
+   * by those references before any pointer is emitted; omitting it (the
+   * suppression-OFF arm) emits every net-new authorized pointer.
+   *
+   * Fails closed content-free exactly like `contextPack`: a permission denial is
+   * a redacted LiveTransportError, and the raw payload text (which could carry a
+   * body if the tool ever regressed) is never logged -- only structural fields
+   * the gate reads (pointer ids, citation ids, counts, budget numbers).
+   */
+  async reflexPointers(opts: {
+    scope: ContextPackScope;
+    query: string;
+    priorContext?: readonly ReflexPriorContextRef[];
+    budgetMaxTokens?: number;
+  }): Promise<ReflexPointersPayload> {
+    const args: Record<string, unknown> = {
+      namespace: opts.scope.namespace,
+      agent: opts.scope.agent,
+      platform: opts.scope.platform,
+      server_id: opts.scope.server_id,
+      channel_id: opts.scope.channel_id,
+      session_key: opts.scope.session_key,
+      query: opts.query,
+    };
+    if (opts.scope.thread_id !== undefined && opts.scope.thread_id !== null) {
+      args.thread_id = opts.scope.thread_id;
+    }
+    // Only attach prior_context on the suppression-ON arm. An empty array is the
+    // suppression-OFF arm and is deliberately OMITTED rather than sent as [], so
+    // the two arms differ exactly by the presence of the references -- never by
+    // an incidental empty-array vs absent distinction.
+    if (opts.priorContext !== undefined && opts.priorContext.length > 0) {
+      args.prior_context = opts.priorContext.map((ref) => {
+        const out: Record<string, unknown> = {};
+        if (ref.citation_id !== undefined) out.citation_id = ref.citation_id;
+        if (ref.source_ref !== undefined) out.source_ref = ref.source_ref;
+        return out;
+      });
+    }
+    if (opts.budgetMaxTokens !== undefined) {
+      args.budget = { max_tokens: opts.budgetMaxTokens };
+    }
+    const result = await this.caller.callTool("agent_reflex_pointers", args);
+    if (result.isError) {
+      throw new LiveTransportError(result.errorLabel, result.denied);
+    }
+    return parseReflexPointersPayload(result.data);
+  }
+
+  /**
    * Archive exactly one record by table + id. archive_entry is namespace-scoped
    * server-side (it appends the caller's write-namespace predicate), so a token
    * can only ever archive records it owns -- this is what makes per-record
@@ -472,6 +563,55 @@ export function parseContextPackPayload(text: string): ContextPackPayload {
   return {
     status: typeof parsed.status === "string" ? parsed.status : "",
     sections: asRecord(parsed.sections),
+    citations: asRecordArray(parsed.citations),
+    budget: asRecord(parsed.budget),
+    warnings: {
+      scope_denials: asRecordArray(warnings.scope_denials),
+      degraded_sources: asRecordArray(warnings.degraded_sources),
+      truncation: asRecordArray(warnings.truncation),
+    },
+  };
+}
+
+/**
+ * Parse the reflex-pointers payload from a JSON object body. Never logs the
+ * body. Fails closed content-free rather than defaulting a malformed body to an
+ * empty reflex: a non-object body or invalid JSON is a malformed reflex
+ * (`agent_reflex_pointers:malformed-payload`), NOT an empty one -- conflating
+ * the two would let a broken reflex pass as a clean empty. `pointers`,
+ * `citations`, `budget`, and `warnings.*` are normalized to their expected
+ * container shapes, defaulting a MISSING container to its empty form so the gate
+ * can classify a genuinely-empty reflex without inspecting any body. The pointer
+ * item bodies stay opaque records; the gate reads only their structural fields
+ * (id, citation_id, source_ref identity coordinates).
+ */
+export function parseReflexPointersPayload(
+  text: string,
+): ReflexPointersPayload {
+  const parsed = safeJson(text);
+  if (!parsed) {
+    throw new LiveTransportError(
+      "agent_reflex_pointers:malformed-payload",
+      false,
+    );
+  }
+  const asRecordArray = (value: unknown): Array<Record<string, unknown>> => {
+    if (!Array.isArray(value)) return [];
+    return value.filter(
+      (row): row is Record<string, unknown> =>
+        !!row && typeof row === "object" && !Array.isArray(row),
+    );
+  };
+  const asRecord = (value: unknown): Record<string, unknown> =>
+    value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {};
+
+  const warnings = asRecord(parsed.warnings);
+  return {
+    status: typeof parsed.status === "string" ? parsed.status : "",
+    placement: typeof parsed.placement === "string" ? parsed.placement : "",
+    pointers: asRecord(parsed.pointers),
     citations: asRecordArray(parsed.citations),
     budget: asRecord(parsed.budget),
     warnings: {

@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "fixture_id": "open-brain-reflex-ab-v1",
+  "description": "Sealed synthetic corpus for the live REFLEX A/B suppression gate (REFLEX-4, #335). All content is invented for evaluation only and carries no real memory, secret, or token. Primary-role entries are seeded under a per-run throwaway namespace and are recallable by the reflex query as body-free pointers. prior_known entries are the 'already-known' records the model is treated as having been given this turn: the gate echoes their emitted citation ids back as prior_context on the suppression-ON arm, so a correct reflex suppresses them there while still emitting them on the suppression-OFF arm. net_new entries must survive on BOTH arms (suppression never drops net-new evidence). negative-role entries are seeded into a sibling namespace the reflex caller cannot read and must never surface as a pointer or citation on either arm.",
+  "query": "What is the pelagic drifter buoy telemetry cache eviction window, how is the sonar beacon rotation scheduled, and how does the handoff checkpoint replay work?",
+  "corpus": [
+    {
+      "id": "known-cache-eviction",
+      "table": "thoughts",
+      "namespace_role": "primary",
+      "prior_known": true,
+      "content": "The pelagic drifter buoy telemetry cache evicts every buffered reading after one hundred twenty seconds so a stale sonar sample can never dominate the fused drift estimate.",
+      "tags": ["drifter", "telemetry", "cache", "eviction"]
+    },
+    {
+      "id": "known-beacon-rotation",
+      "table": "decisions",
+      "namespace_role": "primary",
+      "prior_known": true,
+      "content": "We rotate the drifter sonar beacon channel on a ninety second schedule so overlapping estuary transmitters never collide during the telemetry handoff.",
+      "tags": ["drifter", "beacon", "rotation", "sonar"]
+    },
+    {
+      "id": "netnew-handoff-checkpoint",
+      "table": "thoughts",
+      "namespace_role": "primary",
+      "content": "During a drifter sonar beacon rotation the handoff replays the last cached reading from the checkpoint so the drift estimate stays continuous across the channel switch.",
+      "tags": ["drifter", "beacon", "handoff", "checkpoint"]
+    },
+    {
+      "id": "netnew-fusion-weighting",
+      "table": "decisions",
+      "namespace_role": "primary",
+      "content": "The drifter fusion stage weights each sonar beacon reading by its telemetry cache age so a freshly evicted reading is trusted more than a near-stale one during the handoff.",
+      "tags": ["drifter", "fusion", "telemetry", "beacon"]
+    },
+    {
+      "id": "netnew-checkpoint-window",
+      "table": "thoughts",
+      "namespace_role": "primary",
+      "content": "The drifter handoff checkpoint retains the last sonar beacon telemetry reading for one rotation window so the replay always has a cached sample to restore.",
+      "tags": ["drifter", "checkpoint", "telemetry", "rotation"]
+    },
+    {
+      "id": "distractor-drifter-unrelated",
+      "table": "thoughts",
+      "namespace_role": "primary",
+      "content": "The coastal drifter buoy paint refurbishment schedule tracks hull maintenance and has nothing to do with the telemetry cache or sonar beacon program.",
+      "tags": ["drifter", "maintenance", "hull", "coastal"]
+    },
+    {
+      "id": "negative-beacon-secret-key",
+      "table": "decisions",
+      "namespace_role": "negative",
+      "content": "Confidential drifter sonar beacon rotation keying schedule that lives in a private namespace the eval reflex token cannot read and must never surface.",
+      "tags": ["drifter", "beacon", "rotation", "confidential"]
+    },
+    {
+      "id": "negative-telemetry-secret-cache",
+      "table": "thoughts",
+      "namespace_role": "negative",
+      "content": "Private drifter telemetry cache credential note that belongs to a namespace outside the eval token's read scope and must never be pointed at by the reflex.",
+      "tags": ["drifter", "telemetry", "cache", "private"]
+    }
+  ],
+  "prior_known_ids": ["known-cache-eviction", "known-beacon-rotation"],
+  "net_new_ids": [
+    "netnew-handoff-checkpoint",
+    "netnew-fusion-weighting",
+    "netnew-checkpoint-window"
+  ],
+  "forbidden_ids": [
+    "negative-beacon-secret-key",
+    "negative-telemetry-secret-cache"
+  ]
+}
