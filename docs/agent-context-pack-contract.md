@@ -1,9 +1,12 @@
 # Agent Context Pack Contract
 
 Status: locally runtime-available over MCP for scoped working-set context,
-explicit quarantined recovery summaries, and explicitly requested exact-scope
-durable lane context; an opt-in server-side NATS request/reply bridge can expose
-the same pack when explicitly enabled. Broader section assembly remains planned.
+explicit quarantined recovery summaries, explicitly requested exact-scope durable
+lane context, and the query-driven `durable_memory`, `profile_guidance`,
+`process_guidance`, and `repo_facts` sections — seven sections wired into the
+whole-pack allocation order. An opt-in server-side NATS request/reply bridge can
+expose the same pack when explicitly enabled. The remaining `pointers` and
+`candidate_memory` sections remain planned.
 Parent issue: #220.
 Research receipt: PR #225, `docs/realtime-agent-memory-research.md`.
 
@@ -24,7 +27,10 @@ bridge maps `ob.memory.context_pack` request/reply traffic to that same
 server-authoritative pack path only when `OPENBRAIN_TRANSPORT=nats`,
 `OPENBRAIN_NATS_ENABLE_BRIDGE=true`, and an allowed `OPENBRAIN_NATS_URL` are
 configured.
-Broader durable-memory and guidance section assembly remains planned until its owning issues land.
+The query-driven `durable_memory`, `profile_guidance`, `process_guidance`, and
+`repo_facts` sections are now assembled server-side and wired into the whole-pack
+allocation order. The remaining `pointers` and `candidate_memory` section names
+remain planned until their owning issues land.
 
 ## Ownership Boundary
 
@@ -280,14 +286,19 @@ first:
 
 1. `working_set` — exact-scope hot active state;
 2. `recovery` — explicit opt-in interrupted-session trace;
-3. `durable_lane_context` — broader recallable exact-scope lane context.
+3. `durable_lane_context` — broader recallable exact-scope lane context;
+4. `durable_memory` — query-driven hybrid recall over durable brain records;
+5. `profile_guidance` — promoted user-preference standing guidance;
+6. `process_guidance` — promoted process-rule standing guidance;
+7. `repo_facts` — exact-repo curated facts with source refs and staleness.
 
 Each lower-priority section is only fitted against whatever whole-pack budget the
 higher-priority sections leave behind, so a large low-priority section can never
 starve a higher-value one. This order is stable for identical inputs and is
-echoed back in `budget.whole_pack.allocation_order`. It matches the three
-runtime-available sections today; sections added by later issues (for example
-`#327`-`#329`) are not yet wired into this allocation order.
+echoed back in `budget.whole_pack.allocation_order`. It matches the seven
+runtime-available sections wired into the allocation order today. The remaining
+known section names (`pointers`, `candidate_memory`) are not yet wired into this
+allocation order.
 
 **Serialized section accounting.** The budget bounds the *serialized* size of the
 emitted `sections` object — `JSON.stringify(payload.sections)` — not merely the
@@ -306,15 +317,26 @@ section are each fitted by their full serialized length, so per-item wrappers,
 ids, lane metadata, event wrappers, and citation ids all count against the
 whole-pack budget rather than being allowed to overshoot it.
 
-**Recency-preserving trim.** Both stores order items oldest-first, and store
-trimming removes the oldest (index 0), so the newest highest-value items live at
-the tail. Whole-pack pressure matches that recency ordering: it drops the oldest
-items/events first and preserves the newest suffix. For `working_set` the
-retained `item_count` is reconciled to the surviving items; for `recovery` both
-`item_count` and `pending_count` are reconciled to the surviving items; for
-`durable_lane_context` the oldest events are dropped first (then the checkpoint
-is trimmed), `event_count`/`truncated` are reconciled, and citations for dropped
-events are removed so no citation references unemitted evidence.
+**Recency-preserving trim.** The `working_set` and `recovery` append stores order
+items oldest-first, and store trimming removes the oldest (index 0), so the newest
+highest-value items live at the tail. Whole-pack pressure matches that recency
+ordering: it drops the oldest items/events from the front first and preserves the
+newest suffix. For `working_set` the retained `item_count` is reconciled to the
+surviving items; for `recovery` both `item_count` and `pending_count` are
+reconciled to the surviving items; for `durable_lane_context` the oldest events
+are dropped first (then the checkpoint is trimmed), `event_count`/`truncated` are
+reconciled, and citations for dropped events are removed so no citation references
+unemitted evidence.
+
+The `durable_memory`, `profile_guidance`, `process_guidance`, and `repo_facts`
+sections instead emit their items current/highest-value first — `durable_memory`
+is relevance-ordered, and the three structured sections are newest-first
+(`created_at DESC` / `updated_at DESC`), so the current head is the most valuable
+item. For these, whole-pack pressure drops the lowest-priority items from the
+**tail** and preserves the current head, so a tight budget never sheds the newest
+standing guidance or most-recently-updated repo fact to retain stale older ones.
+Retained counts are reconciled to the surviving items, and citations are
+reconciled to exactly the surviving item set.
 
 **Starvation and omission.** A requested item-bearing section that is fully
 starved (all item bodies dropped) keeps its defined empty envelope
@@ -338,7 +360,15 @@ When `budget.max_tokens` is set, the envelope carries:
     "whole_pack": {
       "content_char_limit": 14800,
       "content_chars_used": 9213,
-      "allocation_order": ["working_set", "recovery", "durable_lane_context"]
+      "allocation_order": [
+        "working_set",
+        "recovery",
+        "durable_lane_context",
+        "durable_memory",
+        "profile_guidance",
+        "process_guidance",
+        "repo_facts"
+      ]
     }
   }
 }

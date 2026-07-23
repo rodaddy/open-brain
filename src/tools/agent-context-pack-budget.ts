@@ -28,6 +28,9 @@ export const CONTEXT_PACK_SECTION_PRIORITY = [
   "recovery",
   "durable_lane_context",
   "durable_memory",
+  "profile_guidance",
+  "process_guidance",
+  "repo_facts",
 ] as const;
 
 /** Serialized size, in characters, of a section's content payload. */
@@ -199,14 +202,17 @@ export function reconcileDurableCitations(
 }
 
 /**
- * Deterministically fit an item-bearing section (working_set/recovery) inside a
- * remaining whole-pack char budget by dropping the oldest items until the
- * serialized section fits. Both stores order items oldest-first: `append`
- * pushes the newest item to the end, and store trimming removes index 0
- * (`splice(0, …)` / `shift()`), so the newest highest-value items live at the
- * tail. Whole-pack pressure must match that recency ordering — drop from the
- * front (oldest) and preserve the newest — so the enforced budget never
- * sacrifices the freshest working state to keep stale entries.
+ * Deterministically fit an item-bearing section inside a remaining whole-pack
+ * char budget by dropping items until the serialized section fits. `dropFrom`
+ * selects which end sheds first: the default `"head"` drops the oldest item
+ * (index 0) and preserves the newest tail — matching working_set/recovery, whose
+ * append stores order items oldest-first (`append` pushes newest to the end,
+ * store trimming removes index 0), so the newest highest-value items live at the
+ * tail. `"tail"` drops the last item and preserves the head — for the structured
+ * loaders (profile_guidance/process_guidance/repo_facts) that emit items
+ * newest/current first (`ORDER BY created_at DESC` / `updated_at DESC`), so the
+ * freshest standing guidance and most-recently-updated repo facts live at the
+ * head and must survive a tight budget rather than be shed for stale older ones.
  *
  * The section is measured by its serialized length (`JSON.stringify`), not by
  * summed content-body characters, so metadata, ids, and per-item wrappers are
@@ -218,19 +224,23 @@ export function fitItemSection<T extends { items: Array<{ id: string }> }>(
   section: T,
   countKeys: Array<keyof T>,
   remainingChars: number,
+  dropFrom: "head" | "tail" = "head",
 ): { section: T; truncated: boolean; starved: boolean } {
   if (serializedLength(section) <= remainingChars) {
     return { section, truncated: false, starved: false };
   }
 
-  // Drop the oldest item (index 0) one at a time until the section fits or is
-  // emptied, preserving the newest tail items. A section is "starved" whenever
-  // no item body survives (items: []), whether it fit only once empty or was
-  // exhausted — the empty envelope may still exceed remainingChars, so the
-  // caller decides whether to emit it or omit the section to hold the budget.
+  // Drop the lowest-priority item one at a time until the section fits or is
+  // emptied: "head" sheds the oldest front item (preserving the newest tail),
+  // "tail" sheds the oldest tail item (preserving the newest head). A section is
+  // "starved" whenever no item body survives (items: []), whether it fit only
+  // once empty or was exhausted — the empty envelope may still exceed
+  // remainingChars, so the caller decides whether to emit it or omit the section
+  // to hold the budget.
   const kept = [...section.items];
   while (kept.length > 0) {
-    kept.shift();
+    if (dropFrom === "tail") kept.pop();
+    else kept.shift();
     const candidate = { ...section, items: kept } as T;
     for (const countKey of countKeys) {
       (candidate as Record<keyof T, unknown>)[countKey] = kept.length;
@@ -350,6 +360,35 @@ export function reconcileDurableMemoryCitations(
 ): Array<Record<string, unknown>> {
   const keptCitationIds = new Set(
     keptItems
+      .map((item) => item.citation_id)
+      .filter((id): id is string => typeof id === "string"),
+  );
+  return citations.filter(
+    (citation) =>
+      typeof citation.id === "string" && keptCitationIds.has(citation.id),
+  );
+}
+
+/** An item-bearing section whose items each carry a `citation_id`. */
+export type CitedItemSection = {
+  items?: Array<{ citation_id?: unknown }>;
+};
+
+/**
+ * Keep only the citations whose section items survived the whole-pack re-fit,
+ * keyed on the item's `citation_id` matching the citation's `id`. This is the
+ * generic reconciler used by the guidance and repo_facts sections: every emitted
+ * item carries a `citation_id` and every citation carries the same value as its
+ * `id`, so after `fitItemSection` drops the oldest items the surviving citation
+ * set is exactly the bijection of the surviving item set — no citation ever
+ * references a trimmed item, and no surviving item loses its citation.
+ */
+export function reconcileCitedItemCitations(
+  citations: Array<Record<string, unknown>>,
+  section: CitedItemSection,
+): Array<Record<string, unknown>> {
+  const keptCitationIds = new Set(
+    (section.items ?? [])
       .map((item) => item.citation_id)
       .filter((id): id is string => typeof id === "string"),
   );
