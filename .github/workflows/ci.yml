@@ -33,13 +33,15 @@ jobs:
       DB_PORT: 5432
       DB_USER: test
       DB_PASSWORD: test
-      DB_NAME: open_brain_test
+      DB_NAME: open_brain_test_${{ github.run_id }}_${{ github.run_attempt }}
       DB_NAME_TEST: open_brain_test_migrations_${{ github.run_id }}_${{ github.run_attempt }}
       # Enable the env-gated real-Pool integration tests in CI (issue #165).
       # Without this, every `dbDescribe`-gated suite (lane_upsert, the #161
       # cursor-stall promoter tests) silently SKIPs and the SQL write paths get
       # zero CI coverage — the exact gap that let the #162 lane_upsert bugs ship.
-      OPENBRAIN_TEST_DATABASE_URL: postgres://test:test@127.0.0.1:5432/open_brain_test
+      # Each workflow run owns its database so simultaneous push/pull_request runs
+      # cannot delete or clean up rows underneath one another.
+      OPENBRAIN_TEST_DATABASE_URL: postgres://test:test@127.0.0.1:5432/open_brain_test_${{ github.run_id }}_${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v6
 
@@ -53,22 +55,28 @@ jobs:
       - name: Typecheck
         run: bunx tsc --noEmit
 
-      - name: Run migrations
-        run: bun run migrate
-
-      - name: Create isolated migration-test database
+      - name: Create isolated test databases
         run: |
+          PGPASSWORD="${DB_PASSWORD}" createdb -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" "${DB_NAME}"
           PGPASSWORD="${DB_PASSWORD}" createdb -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" "${DB_NAME_TEST}"
+          PGPASSWORD="${DB_PASSWORD}" psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME}" \
+            -v ON_ERROR_STOP=1 \
+            -c "CREATE EXTENSION IF NOT EXISTS vector;"
           PGPASSWORD="${DB_PASSWORD}" psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME_TEST}" \
             -v ON_ERROR_STOP=1 \
             -c "CREATE EXTENSION IF NOT EXISTS vector;"
 
+      - name: Run migrations
+        run: bun run migrate
+
       - name: Test
         run: bun test
 
-      - name: Drop isolated migration-test database
+      - name: Drop isolated test databases
         if: always()
-        run: PGPASSWORD="${DB_PASSWORD}" dropdb --if-exists --force -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" "${DB_NAME_TEST}"
+        run: |
+          PGPASSWORD="${DB_PASSWORD}" dropdb --if-exists --force -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" "${DB_NAME}"
+          PGPASSWORD="${DB_PASSWORD}" dropdb --if-exists --force -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" "${DB_NAME_TEST}"
 
   # Issue #165: authoritative DB-backed integration gate.
   #
