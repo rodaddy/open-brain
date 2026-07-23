@@ -290,9 +290,20 @@ async function mergeDuplicateEvidence(
   eventContentHash: string,
   fact: { event_type: ConversationFactEventType; source_locator?: string },
 ): Promise<{ eventId: string; kind: UnitDisposition }> {
+  // Lock the conflicting row FOR UPDATE so the evidence read-modify-write is
+  // serialized. Without the lock, two concurrent transactions merging distinct
+  // source_locators onto the same duplicate row both read the same base
+  // metadata, both append their own locator, and the later UPDATE overwrites
+  // the earlier one's additional_evidence — a lost update while every caller
+  // still reports duplicate_evidence_merged. Taking the row lock inside this
+  // transaction forces a concurrent merge to block until this one commits, so
+  // it then reads the freshly-written evidence and appends to it. The primary
+  // INSERT above already holds the write path for a brand-new row; this lock
+  // only serializes the duplicate-merge branch that mutates existing metadata.
   const { rows: existing } = await client.query(
     `SELECT id, event_type, metadata FROM ob_session_events
-      WHERE lane_id = $1 AND content_hash = $2`,
+      WHERE lane_id = $1 AND content_hash = $2
+      FOR UPDATE`,
     [laneId, eventContentHash],
   );
   const row = existing[0];
