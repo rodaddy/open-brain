@@ -291,15 +291,27 @@ export async function loadDurableMemoryContext(
     });
   }
 
-  // Truthful empty state: when nothing survives, distinguish "recall matched
-  // nothing" from "every match was already in prior context". `all_suppressed`
-  // only applies when the recall DID return rows and suppression removed them
-  // all; otherwise the recall genuinely found no matches.
+  // Truthful empty state: when nothing survives, distinguish the three genuine
+  // zero-item causes, in the only order that reads correctly:
+  //   - `content_unavailable`: net-new records DID survive suppression but none
+  //     produced an emittable body (null/empty content_preview, or the char
+  //     budget was too small for even the first body). This is NOT "no_matches"
+  //     (there was a net-new match) and NOT "all_suppressed" (nothing was
+  //     suppressed away). It is a content-free empty: net-new existed but was
+  //     unemittable, and `truncated` is already true for it above.
+  //   - `all_suppressed`: recall DID return rows and suppression removed every
+  //     one, so there is no net-new content at all.
+  //   - `no_matches`: recall genuinely found nothing to begin with.
+  // net_new is checked first so a net-new-but-unemittable section can never be
+  // mislabeled no_matches; all_suppressed keeps its exact prior meaning (rows
+  // recalled, none net-new because all were suppressed).
   const emptyReason =
     items.length === 0
-      ? rows.length > 0 && suppression.suppression.suppressed === rows.length
-        ? "all_suppressed"
-        : "no_matches"
+      ? suppression.suppression.net_new > 0
+        ? "content_unavailable"
+        : rows.length > 0 && suppression.suppression.suppressed === rows.length
+          ? "all_suppressed"
+          : "no_matches"
       : undefined;
 
   return {
