@@ -415,7 +415,10 @@ describe("deriveGraphFromMetadata", () => {
     const anchorCanonical = "thought:11111111-1111-4111-8111-111111111111";
     const before = g.rows.find((r) => r.canonical_id === anchorCanonical)!;
     const anchorIdBefore = before.id;
-    expect(before.name).toBe("release plan");
+    // The stored name keeps the human label readable and appends the stable
+    // canonical identity so lower(name) remains collision-safe.
+    expect(before.name).toBe(`release plan [${anchorCanonical}]`);
+    expect(before.metadata["display_name"]).toBe("release plan");
     const rowCountBefore = g.rows.length;
 
     // Re-derive the SAME anchor (same canonical id) under a NEW display name.
@@ -435,14 +438,123 @@ describe("deriveGraphFromMetadata", () => {
     );
 
     expect(renamed.status).toBe("changed");
-    // The anchor row was UPDATED in place (same id), not duplicated.
+    // The anchor row was UPDATED in place (same id), not duplicated. Both the
+    // readable prefix and metadata display label follow the rename while the
+    // canonical suffix keeps the stored name unique.
     const after = g.rows.find((r) => r.canonical_id === anchorCanonical)!;
     expect(after.id).toBe(anchorIdBefore);
-    expect(after.name).toBe("Release Plan v2");
+    expect(after.name).toBe(`Release Plan v2 [${anchorCanonical}]`);
+    expect(after.metadata["display_name"]).toBe("Release Plan v2");
     // Exactly one new row appeared: the added "pgvector" term. The anchor did
     // not duplicate — it was renamed in place.
     expect(g.rows.length).toBe(rowCountBefore + 1);
     expect(after.metadata["derivation_hash"]).toBe(renamed.derivation_hash);
+  });
+
+  it("duplicate source titles: two distinct anchors with the same display title coexist (no lower(name) collision)", async () => {
+    // Regression for #346 P2. Two DISTINCT source anchors (distinct canonical
+    // ids source:<id1> / source:<id2>) that share the same human display title
+    // must both persist. Pre-fix the stored `name` WAS the title, so the second
+    // anchor found no canonical conflict, attempted an INSERT, and collided on
+    // idx_ob_entities_lookup_unique (namespace, entity_type, lower(name)) — a
+    // 23505 that threw the whole derivation. The fix stores anchorStorageName
+    // (canonical-derived), so lower(name) is unique exactly where canonical_id
+    // is; the shared title lives in metadata.display_name on each anchor.
+    const g = new FakeGraph();
+    const sharedTitle = "Q3 Release Plan";
+    const idA = "aaaaaaaa-1111-4111-8111-111111111111";
+    const idB = "bbbbbbbb-2222-4222-8222-222222222222";
+
+    const a = await deriveGraphFromMetadata(
+      g,
+      auth,
+      baseInput({
+        anchorType: "source",
+        anchorId: idA,
+        anchorName: sharedTitle,
+        metadata: { topics: ["Migrations"], people: [] },
+      }),
+    );
+    // The second source shares the exact title but is a different canonical id.
+    // Pre-fix this call threw FakeUniqueViolation("idx_ob_entities_lookup_unique").
+    const b = await deriveGraphFromMetadata(
+      g,
+      auth,
+      baseInput({
+        anchorType: "source",
+        anchorId: idB,
+        anchorName: sharedTitle,
+        metadata: { topics: ["Migrations"], people: [] },
+      }),
+    );
+    expect(a.status).toBe("new");
+    expect(b.status).toBe("new");
+
+    const anchorA = g.rows.find((r) => r.canonical_id === `source:${idA}`)!;
+    const anchorB = g.rows.find((r) => r.canonical_id === `source:${idB}`)!;
+    // Two distinct anchor rows survive; their stored names differ (canonical-
+    // derived) so lower(name) never collides, and both preserve the shared label.
+    expect(anchorA.id).not.toBe(anchorB.id);
+    expect(anchorA.name).not.toBe(anchorB.name);
+    expect(anchorA.name).toBe(`${sharedTitle} [source:${idA}]`);
+    expect(anchorB.name).toBe(`${sharedTitle} [source:${idB}]`);
+    expect(anchorA.metadata["display_name"]).toBe(sharedTitle);
+    expect(anchorB.metadata["display_name"]).toBe(sharedTitle);
+  });
+
+  it("rename-to-existing-title: renaming an anchor onto a sibling's display title does not collide", async () => {
+    // Regression for #346 P2. Anchor B is renamed so its display title becomes
+    // IDENTICAL to anchor A's, on a run that also changes B's term set (the
+    // realistic write-path trigger). Pre-fix the stored name would become the
+    // title and collide with A on lower(name); with the fix the stored name is
+    // canonical-derived and stable, so the rename is a clean in-place UPDATE and
+    // only display_name converges on the shared label.
+    const g = new FakeGraph();
+    const idA = "aaaaaaaa-3333-4333-8333-333333333333";
+    const idB = "bbbbbbbb-4444-4444-8444-444444444444";
+
+    await deriveGraphFromMetadata(
+      g,
+      auth,
+      baseInput({
+        anchorType: "source",
+        anchorId: idA,
+        anchorName: "Existing Title",
+        metadata: { topics: ["Migrations"], people: [] },
+      }),
+    );
+    await deriveGraphFromMetadata(
+      g,
+      auth,
+      baseInput({
+        anchorType: "source",
+        anchorId: idB,
+        anchorName: "Different Title",
+        metadata: { topics: ["Migrations"], people: [] },
+      }),
+    );
+
+    // Rename B onto A's title, adding a term so the run takes the write path.
+    const renamed = await deriveGraphFromMetadata(
+      g,
+      auth,
+      baseInput({
+        anchorType: "source",
+        anchorId: idB,
+        anchorName: "Existing Title",
+        metadata: { topics: ["Migrations", "pgvector"], people: [] },
+      }),
+    );
+    expect(renamed.status).toBe("changed");
+
+    const anchorA = g.rows.find((r) => r.canonical_id === `source:${idA}`)!;
+    const anchorB = g.rows.find((r) => r.canonical_id === `source:${idB}`)!;
+    // Both anchors now carry the SAME display title, yet remain distinct rows
+    // with distinct stored names — no lower(name) collision on the rename.
+    expect(anchorA.metadata["display_name"]).toBe("Existing Title");
+    expect(anchorB.metadata["display_name"]).toBe("Existing Title");
+    expect(anchorA.id).not.toBe(anchorB.id);
+    expect(anchorB.name).toBe(`Existing Title [source:${idB}]`);
   });
 
   it("anchor rename: the old lower(name)-only arbiter would raise a canonical unique violation", async () => {

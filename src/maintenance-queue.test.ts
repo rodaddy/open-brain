@@ -186,6 +186,219 @@ describe("maintenance queue runner", () => {
     expect(handlerRan).toBe(false);
   });
 
+  it("renews a held lease on cadence while the handler runs, then stops after completion", async () => {
+    // Regression for the #346 lease-renewal finding. A handler that blocks past
+    // several lease windows must have its lease renewed under the immutable
+    // (id, lease token) so a competing claim can never reclaim/dead-letter it.
+    const renewCalls: Array<{ id: string; token: string; leaseMs: number }> =
+      [];
+    let releaseHandler: (() => void) | undefined;
+    const queue: MaintenanceQueuePort = {
+      claimDueJobs: async () => [job()],
+      renew: async (id, token, leaseMs) => {
+        renewCalls.push({ id, token, leaseMs });
+        return true; // still owned.
+      },
+      complete: async () => true,
+      fail: async () => null,
+    };
+    const runner = new MaintenanceQueueRunner({
+      queue,
+      handlers: new Map([
+        [
+          "maintenance.test",
+          async () =>
+            new Promise<void>((resolve) => {
+              releaseHandler = resolve;
+            }),
+        ],
+      ]),
+      logger: { info: () => {}, warn: () => {}, error: () => {} },
+      // Tiny windows so several renewals land during the test deterministically.
+      leaseMs: 30,
+      leaseRenewMs: 10,
+    });
+
+    await runner.runOnce();
+    // Let the handler block across multiple heartbeat intervals.
+    await new Promise((r) => setTimeout(r, 55));
+    expect(renewCalls.length).toBeGreaterThanOrEqual(3);
+    // Every renewal used the IMMUTABLE claim id + minted lease token, and the
+    // durable lease window (leaseMs), never a handler-mutable value.
+    for (const call of renewCalls) {
+      expect(call.id).toBe("job-1");
+      expect(call.token).toBe("00000000-0000-4000-8000-000000000001");
+      expect(call.leaseMs).toBe(30);
+    }
+
+    // Complete the handler; the heartbeat must stop — no further renewals.
+    const before = renewCalls.length;
+    releaseHandler?.();
+    await runner.stop();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(renewCalls.length).toBe(before);
+  });
+
+  it("stops renewing the moment a stale token loses the lease (content-free)", async () => {
+    // renew() returning false means the lease was reclaimed/rotated: the
+    // heartbeat must stop immediately rather than spin, and log content-free.
+    const logs: string[] = [];
+    let renewCalls = 0;
+    let releaseHandler: (() => void) | undefined;
+    const queue: MaintenanceQueuePort = {
+      claimDueJobs: async () => [job()],
+      renew: async () => {
+        renewCalls += 1;
+        return false; // lease lost on the very first renewal.
+      },
+      complete: async () => true,
+      fail: async () => null,
+    };
+    const runner = new MaintenanceQueueRunner({
+      queue,
+      handlers: new Map([
+        [
+          "maintenance.test",
+          async () =>
+            new Promise<void>((resolve) => {
+              releaseHandler = resolve;
+            }),
+        ],
+      ]),
+      logger: {
+        info: (message, fields) =>
+          logs.push(JSON.stringify({ message, fields })),
+        warn: (message, fields) =>
+          logs.push(JSON.stringify({ message, fields })),
+        error: (message, fields) =>
+          logs.push(JSON.stringify({ message, fields })),
+      },
+      leaseMs: 30,
+      leaseRenewMs: 10,
+    });
+
+    await runner.runOnce();
+    await new Promise((r) => setTimeout(r, 55));
+    // A lost lease stops the heartbeat after the first renewal; it does not spin.
+    expect(renewCalls).toBe(1);
+    releaseHandler?.();
+    await runner.stop();
+    // Content-free: the lost-lease warning carries only ids/kind + a stable
+    // status token; never the payload text.
+    expect(logs.join("\n")).toContain('"status":"lease_lost"');
+    expect(logs.join("\n")).not.toContain("must never reach logs");
+  });
+
+  it("never overlaps renewal calls even when renew is slower than the cadence", async () => {
+    // The overlap guard: a renew that outlasts the heartbeat interval must not
+    // stack a second concurrent renew. Peak in-flight renewals stays 1.
+    let inFlight = 0;
+    let peak = 0;
+    let releaseHandler: (() => void) | undefined;
+    const queue: MaintenanceQueuePort = {
+      claimDueJobs: async () => [job()],
+      renew: async () => {
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        // Renew takes ~25ms — longer than the 10ms cadence, so ticks pile up
+        // behind it and would overlap without the guard.
+        await new Promise((r) => setTimeout(r, 25));
+        inFlight -= 1;
+        return true;
+      },
+      complete: async () => true,
+      fail: async () => null,
+    };
+    const runner = new MaintenanceQueueRunner({
+      queue,
+      handlers: new Map([
+        [
+          "maintenance.test",
+          async () =>
+            new Promise<void>((resolve) => {
+              releaseHandler = resolve;
+            }),
+        ],
+      ]),
+      logger: { info: () => {}, warn: () => {}, error: () => {} },
+      leaseMs: 60,
+      leaseRenewMs: 10,
+    });
+
+    await runner.runOnce();
+    await new Promise((r) => setTimeout(r, 90));
+    expect(peak).toBe(1);
+    releaseHandler?.();
+    await runner.stop();
+  });
+
+  it("awaits an in-flight renewal before completing (no renew races complete)", async () => {
+    // stop() on the heartbeat must await any renewal already in flight so it
+    // cannot land concurrently with (or after) the complete UPDATE. We record
+    // the ORDER of the last renew finishing vs complete starting.
+    const order: string[] = [];
+    let completeSeen = false;
+    let renewFinishedBeforeComplete = true;
+    const queue: MaintenanceQueuePort = {
+      claimDueJobs: async () => [job()],
+      renew: async () => {
+        await new Promise((r) => setTimeout(r, 20));
+        order.push("renew_done");
+        if (completeSeen) renewFinishedBeforeComplete = false;
+        return true;
+      },
+      complete: async () => {
+        completeSeen = true;
+        order.push("complete");
+        return true;
+      },
+      fail: async () => null,
+    };
+    const runner = new MaintenanceQueueRunner({
+      queue,
+      handlers: new Map([
+        [
+          "maintenance.test",
+          // Handler finishes right as a renew is mid-flight.
+          async () => {
+            await new Promise((r) => setTimeout(r, 12));
+          },
+        ],
+      ]),
+      logger: { info: () => {}, warn: () => {}, error: () => {} },
+      leaseMs: 30,
+      leaseRenewMs: 10,
+    });
+
+    await runner.runOnce();
+    await runner.stop();
+    // complete never fired before an in-flight renew resolved.
+    expect(renewFinishedBeforeComplete).toBe(true);
+  });
+
+  it("does not renew a job whose handler is unsupported (no heartbeat, immediate fail)", async () => {
+    let renewCalls = 0;
+    const queue: MaintenanceQueuePort = {
+      claimDueJobs: async () => [job()],
+      renew: async () => {
+        renewCalls += 1;
+        return true;
+      },
+      complete: async () => true,
+      fail: async () => job({ state: "dead_letter" }),
+    };
+    const runner = new MaintenanceQueueRunner({
+      queue,
+      handlers: new Map([["some.other.kind", async () => undefined]]),
+      logger: { info: () => {}, warn: () => {}, error: () => {} },
+      leaseMs: 30,
+      leaseRenewMs: 10,
+    });
+    await runner.runOnce();
+    await new Promise((r) => setTimeout(r, 40));
+    expect(renewCalls).toBe(0);
+  });
+
   it("stores unsupported_job_kind as its own category, not non_error", async () => {
     const failCalls: Array<{ error: unknown; category?: string }> = [];
     const logs: string[] = [];

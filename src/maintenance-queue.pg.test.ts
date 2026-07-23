@@ -27,6 +27,7 @@ import type { Pool } from "pg";
 import { runMigrations } from "./db/migrate.ts";
 import {
   MaintenanceQueue,
+  MaintenanceQueueRunner,
   MaintenanceTerminalError,
   type MaintenanceJob,
 } from "./maintenance-queue.ts";
@@ -149,5 +150,89 @@ dbDescribe("maintenance queue terminal dead-letter (live Postgres)", () => {
     expect(failed?.state).toBe("dead_letter");
     const row = await readRow(job.id);
     expect(row.last_error_category).toBe("terminal");
+  });
+
+  it("renews a live handler lease across competing claim windows", async () => {
+    await queue.enqueue({
+      kind: "maintenance.heartbeat-test",
+      version: 1,
+      payload: { unit: "lease-renew" },
+      idempotencyKey: `${JOB_KEY_PREFIX}lease-renew`,
+      retry: { maxAttempts: 3, backoffBaseMs: 10, backoffMaxMs: 40 },
+    });
+
+    let handlerStartedResolve!: () => void;
+    const handlerStarted = new Promise<void>((resolve) => {
+      handlerStartedResolve = resolve;
+    });
+    let releaseHandler!: () => void;
+    const handlerBlocked = new Promise<void>((resolve) => {
+      releaseHandler = resolve;
+    });
+    const logger = { info: () => {}, warn: () => {}, error: () => {} };
+    const runner = new MaintenanceQueueRunner({
+      queue,
+      handlers: new Map([
+        [
+          "maintenance.heartbeat-test",
+          async () => {
+            handlerStartedResolve();
+            await handlerBlocked;
+          },
+        ],
+      ]),
+      logger,
+      concurrency: 1,
+      leaseMs: 100,
+      leaseRenewMs: 20,
+    });
+
+    await runner.runOnce();
+    await handlerStarted;
+
+    const { rows: initialRows } = await pool.query(
+      `SELECT id, lease_until, attempts
+         FROM maintenance_jobs
+        WHERE idempotency_key = $1`,
+      [`${JOB_KEY_PREFIX}lease-renew`],
+    );
+    const jobId: string = initialRows[0].id;
+    const initialLeaseUntil = new Date(initialRows[0].lease_until).getTime();
+    expect(initialRows[0].attempts).toBe(1);
+
+    // Cross several original lease windows. A second queue instance repeatedly
+    // attempts to reclaim due work; the live runner's heartbeat must keep this
+    // exact job unavailable without incrementing its attempt count.
+    const competitor = new MaintenanceQueue(pool);
+    for (let i = 0; i < 3; i += 1) {
+      await Bun.sleep(120);
+      const claimed = await competitor.claimDueJobs({
+        limit: 10,
+        leaseMs: 100,
+      });
+      expect(claimed.some((candidate) => candidate.id === jobId)).toBe(false);
+    }
+
+    const { rows: heldRows } = await pool.query(
+      `SELECT state, lease_until, attempts, dead_lettered_at
+         FROM maintenance_jobs
+        WHERE id = $1`,
+      [jobId],
+    );
+    expect(heldRows[0].state).toBe("running");
+    expect(heldRows[0].attempts).toBe(1);
+    expect(heldRows[0].dead_lettered_at).toBeNull();
+    expect(new Date(heldRows[0].lease_until).getTime()).toBeGreaterThan(
+      initialLeaseUntil,
+    );
+
+    releaseHandler();
+    await runner.stop();
+
+    const completed = await readRow(jobId);
+    expect(completed.state).toBe("succeeded");
+    expect(completed.attempts).toBe(1);
+    expect(completed.last_error_category).toBeNull();
+    expect(completed.dead_lettered_at).toBeNull();
   });
 });

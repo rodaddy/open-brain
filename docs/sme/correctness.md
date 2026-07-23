@@ -1177,3 +1177,63 @@ drift and terminal-stops after the newer revision commits.
   no partial hash, nodes, or links and that retry converges?
 - Does a deterministic old/new interleaving test prove the newer snapshot remains
   final and an obsolete job cannot overwrite it?
+
+## [2026-07-23] Canonical anchor identity must also satisfy display-name uniqueness
+
+**Severity:** MEDIUM (P2)
+**Source:** PR #358 exact-head terminal audit (issue #346)
+**Scope:** `src/graph-derivation.ts`, entity tables with independent canonical-id and display-name unique indexes
+**Status:** fixed-pre-merge
+
+### Pattern
+
+An anchor upsert correctly arbitrated on stable `canonical_id`, but the table also
+enforced live uniqueness on `(namespace, entity_type, lower(name))`. Two distinct
+source IDs with the same title therefore missed the canonical conflict and failed
+on the name index with deterministic `23505`; a rename onto a sibling title failed
+the same way.
+
+### Rule
+
+When one row is constrained by independent identity indexes, the stored values
+must satisfy all of them. Keep the human label readable, append the stable
+canonical identity to form a bounded collision-safe storage name, and preserve
+the complete display label separately. Prove same-title creation and
+rename-to-existing-title against real PostgreSQL.
+
+### Review Questions
+
+- Does an upsert arbitrate one unique index while another applicable index can
+  still reject the proposed row?
+- Can two stable IDs legitimately share a human title, and if so is the stored
+  name deterministic, readable, bounded, and collision-safe?
+- Does a real-PostgreSQL regression cover both duplicate-title creation and a
+  rename onto an existing title?
+
+## [2026-07-23] Maintenance handlers must reject unsupported job versions before parsing
+
+**Severity:** MEDIUM (P2)
+**Source:** PR #358 exact-head terminal audit (issue #346)
+**Scope:** `src/graph-derivation-handler.ts`, versioned maintenance payloads
+**Status:** fixed-pre-merge
+
+### Pattern
+
+`graph.derive` enqueue stamped a payload version, but its handler validated only
+the payload shape. A future-version payload that remained structurally compatible
+could execute under an older deployment after rollback, applying obsolete
+semantics instead of failing closed.
+
+### Rule
+
+Every versioned handler checks the exact job version before payload parsing or any
+read/write. Unsupported older or newer versions are permanent input failures and
+must use the queue-owned terminal path. Tests cover current-version dispatch plus
+both version directions.
+
+### Review Questions
+
+- Is the enqueued version checked by the handler, or merely persisted?
+- Does the guard run before payload parsing and database access?
+- Do older and future versions terminal-stop immediately while the exact current
+  version still dispatches?

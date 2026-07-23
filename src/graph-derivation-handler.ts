@@ -345,6 +345,9 @@ interface GraphDerivationHandlerDeps {
  * there is no automatic continuous derivation.
  *
  * On each run it:
+ *  0. Rejects any job.version other than GRAPH_DERIVATION_JOB_VERSION BEFORE
+ *     parsing the payload — a foreign-version job carries a payload under a
+ *     different contract and is terminal (a retry cannot change the version).
  *  1. Validates the payload shape (a malformed payload is terminal — a retry
  *     cannot fix it).
  *  2. Confirms the job's namespace is writable by the handler identity, and
@@ -390,6 +393,22 @@ export function makeGraphDerivationHandler(
   deps: GraphDerivationHandlerDeps,
 ): MaintenanceJobHandler {
   return async (job: MaintenanceJob): Promise<void> => {
+    // Version gate FIRST, before any payload parsing. A job whose version is not
+    // the exact contract version this handler implements carries a payload under
+    // a DIFFERENT (future or older) contract; parsing it against the current
+    // strict schema is meaningless — a future payload could add fields the strict
+    // schema rejects, and an older payload could parse yet mean something else.
+    // A retry cannot change a job's stamped version, so a mismatch is terminal:
+    // dead-letter immediately rather than derive from a foreign contract. The
+    // producer (buildGraphDerivationEnqueue) always stamps GRAPH_DERIVATION_JOB_
+    // VERSION; a mismatch means a cross-version enqueue that this handler build
+    // must not process. Content-free: only the stable category leaves the server.
+    if (job.version !== GRAPH_DERIVATION_JOB_VERSION) {
+      throw new GraphDerivationTerminalError(
+        "graph derivation job version is not supported by this handler",
+      );
+    }
+
     const parsed = graphDerivationPayloadSchema.safeParse(job.payload);
     if (!parsed.success) {
       // A structurally invalid payload can never succeed on retry.

@@ -112,6 +112,36 @@ const TOPIC_ENTITY_TYPE = "topic";
 const PERSON_ENTITY_TYPE = "person";
 const ANCHOR_RELATION: LinkRelation = "mentions";
 const MAX_TERMS = 200;
+// The existing ob_entities.name length bound this primitive honors on every
+// stored name (the handler slices anchorName to the same width upstream). Both
+// the deterministic anchor storage name and any derived term name stay within
+// it; the human anchor label is preserved verbatim in metadata, unsliced.
+const MAX_ENTITY_NAME = 500;
+
+/**
+ * The deterministic, collision-safe storage name for an anchor entity.
+ *
+ * The anchor's IDENTITY is its stable canonical id (anchorType:anchorId), and the
+ * anchor upsert arbitrates on idx_ob_entities_canonical. But ob_entities ALSO
+ * enforces idx_ob_entities_lookup_unique (namespace, entity_type, lower(name)),
+ * which the canonical upsert never mentions. If the stored `name` were the human
+ * label, two DISTINCT anchors (distinct canonical ids) that happen to share a
+ * display title would resolve to no canonical conflict, attempt an INSERT, and
+ * collide on lower(name) — an unarbitrated 23505 that throws the whole
+ * derivation (#346 P2). Appending the stable canonical id to a bounded human
+ * label makes lower(name) unique exactly where canonical_id is unique, so two
+ * same-titled sources coexist without reducing graph displays to opaque ids. The
+ * complete human label is also preserved in metadata.display_name (see anchor
+ * upsert). The readable prefix is shortened as needed to honor MAX_ENTITY_NAME.
+ */
+function anchorStorageName(canonicalId: string, displayName: string): string {
+  const suffix = ` [${canonicalId}]`;
+  const prefixLimit = Math.max(MAX_ENTITY_NAME - suffix.length, 0);
+  return `${displayName.slice(0, prefixLimit)}${suffix}`.slice(
+    0,
+    MAX_ENTITY_NAME,
+  );
+}
 
 interface DerivedEntity {
   entity_type: string;
@@ -319,20 +349,39 @@ export async function deriveGraphFromMetadata(
   //    would find no lower(name) match, attempt an INSERT, and violate the
   //    canonical index that ON CONFLICT never mentioned — throwing the whole
   //    derivation. Arbitrating on the canonical index resolves the anchor by
-  //    its stable identity and updates the display name in place, so a rename
-  //    is a safe UPDATE. (Migration 017 makes the canonical index partial on
-  //    archived_at IS NULL, matching this arbiter exactly.)
-  // Stamp both hashes on the anchor. `derivation_hash` (over the derived node
-  // set) drives the primitive's own unchanged short-circuit; `content_hash`
-  // (the upstream source snapshot digest, when the caller supplies one) is what
-  // the maintenance selection sweep reads back to decide new/unchanged/changed.
-  // The metadata `||` merge below preserves any content_hash a prior run
-  // stamped, so a caller that omits it never clears a previously-recorded one.
+  //    its stable identity, so a rename is a safe in-place UPDATE. (Migration
+  //    017 makes the canonical index partial on archived_at IS NULL, matching
+  //    this arbiter exactly.)
+  //
+  //    The stored `name` is anchorStorageName(canonical, label): a readable,
+  //    bounded human-label prefix plus the stable canonical id. This closes the
+  //    #346 P2 lower(name) collision: two DISTINCT anchors that share a display
+  //    title still get distinct stored names. The complete human label is also
+  //    preserved in metadata.display_name and overwritten in place on a rename.
+  // Stamp both hashes AND the human display label on the anchor. `derivation_hash`
+  // (over the derived node set) drives the primitive's own unchanged short-circuit;
+  // `content_hash` (the upstream source snapshot digest, when the caller supplies
+  // one) is what the maintenance selection sweep reads back to decide
+  // new/unchanged/changed. `display_name` preserves the human anchor label
+  // verbatim now that the STORED name is the deterministic, collision-safe
+  // anchorStorageName (see below): the label is no longer the row's `name`, so it
+  // must live somewhere retrievable. The metadata `||` merge below preserves any
+  // content_hash a prior run stamped, so a caller that omits it never clears a
+  // previously-recorded one; a rename overwrites only display_name in place.
   const anchorMeta = JSON.stringify(
     anchorContentHash === undefined
-      ? { derivation_hash: hash }
-      : { derivation_hash: hash, content_hash: anchorContentHash },
+      ? { derivation_hash: hash, display_name: anchorLabel }
+      : {
+          derivation_hash: hash,
+          content_hash: anchorContentHash,
+          display_name: anchorLabel,
+        },
   );
+  // The stored name includes the stable canonical id after a readable label.
+  // Same-titled anchors therefore hold distinct lower(name) keys, while the
+  // canonical upsert still resolves a rename to a safe in-place UPDATE. The full
+  // unbounded human label rides in metadata above.
+  const anchorStoredName = anchorStorageName(anchorCanonical, anchorLabel);
   const anchorRow = await pool.query(
     `INSERT INTO ob_entities
        (entity_type, name, canonical_id, namespace, metadata, created_by)
@@ -347,7 +396,7 @@ export async function deriveGraphFromMetadata(
      RETURNING id, (xmax = 0) AS is_new, namespace`,
     [
       anchorType,
-      anchorLabel,
+      anchorStoredName,
       anchorCanonical,
       namespace,
       anchorMeta,

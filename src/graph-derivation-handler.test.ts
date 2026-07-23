@@ -14,8 +14,11 @@ import {
   type SourceNeedingDerivation,
 } from "./graph-derivation-handler.ts";
 import {
+  MaintenanceQueueRunner,
+  isMaintenanceTerminalError,
   type EnqueueMaintenanceJob,
   type MaintenanceJob,
+  type MaintenanceQueuePort,
 } from "./maintenance-queue.ts";
 import { logger } from "./logger.ts";
 import type { AuthInfo } from "./types.ts";
@@ -363,11 +366,12 @@ function makeSource(over: Partial<FakeSource> = {}): FakeSource {
 function jobFor(
   payload: GraphDerivationPayload,
   namespace: string | null,
+  version: number = GRAPH_DERIVATION_JOB_VERSION,
 ): MaintenanceJob {
   return {
     id: "job-1",
     kind: GRAPH_DERIVATION_JOB_KIND,
-    version: GRAPH_DERIVATION_JOB_VERSION,
+    version,
     payload: payload as unknown as Record<string, unknown>,
     idempotencyKey: "k",
     state: "running",
@@ -607,6 +611,117 @@ describe("makeGraphDerivationHandler", () => {
     // After the first run, the source is no longer selectable (hash derived).
     const stillNeeded = await selectSourcesNeedingDerivation(pool, ["team-kb"]);
     expect(stillNeeded.length).toBe(0);
+  });
+
+  it("exact current version succeeds and derives", async () => {
+    const pool = new FakeSourcePool();
+    const s = makeSource();
+    pool.sources.push(s);
+    const handler = makeGraphDerivationHandler({ pool: pool as never, auth });
+    // The canonical current version drives the full derivation.
+    await handler(
+      jobFor(payloadFor(s), s.namespace, GRAPH_DERIVATION_JOB_VERSION),
+    );
+    expect(
+      pool.calls.some((c) => c.sql.includes("INSERT INTO ob_entities")),
+    ).toBe(true);
+    const anchor = pool.anchors.find(
+      (a) => a.canonical_id === `${SOURCE_ANCHOR_ENTITY_TYPE}:${s.id}`,
+    );
+    expect(anchor?.content_hash).toBe(s.content_hash);
+  });
+
+  it("future job version is TERMINAL, rejected before any payload parse or SQL", async () => {
+    const pool = new FakeSourcePool();
+    const s = makeSource();
+    pool.sources.push(s);
+    const handler = makeGraphDerivationHandler({ pool: pool as never, auth });
+    await expect(
+      handler(
+        jobFor(payloadFor(s), s.namespace, GRAPH_DERIVATION_JOB_VERSION + 1),
+      ),
+    ).rejects.toBeInstanceOf(GraphDerivationTerminalError);
+    // Rejected before the payload parse and before the snapshot read: no SQL.
+    expect(pool.calls.length).toBe(0);
+  });
+
+  it("older job version is TERMINAL, rejected before any payload parse or SQL", async () => {
+    const pool = new FakeSourcePool();
+    const s = makeSource();
+    pool.sources.push(s);
+    const handler = makeGraphDerivationHandler({ pool: pool as never, auth });
+    await expect(
+      handler(
+        jobFor(payloadFor(s), s.namespace, GRAPH_DERIVATION_JOB_VERSION - 1),
+      ),
+    ).rejects.toBeInstanceOf(GraphDerivationTerminalError);
+    expect(pool.calls.length).toBe(0);
+  });
+
+  it("version gate runs BEFORE payload parse: a foreign-version job with a malformed payload is still terminal", async () => {
+    // The version check must not depend on a parseable payload. A future-version
+    // job whose body would ALSO fail the strict schema must still be rejected on
+    // the version, proving the gate precedes the parse (order matters: a future
+    // contract may legitimately carry fields the current strict schema rejects).
+    const pool = new FakeSourcePool();
+    const handler = makeGraphDerivationHandler({ pool: pool as never, auth });
+    const bad = jobFor(
+      { source_id: "not-a-uuid" } as unknown as GraphDerivationPayload,
+      "team-kb",
+      GRAPH_DERIVATION_JOB_VERSION + 5,
+    );
+    await expect(handler(bad)).rejects.toBeInstanceOf(
+      GraphDerivationTerminalError,
+    );
+    expect(pool.calls.length).toBe(0);
+  });
+
+  it("runner classification: a foreign-version job dead-letters as terminal on attempt 1", async () => {
+    // End-to-end through the real runner: a version-mismatch throw from the
+    // handler is the queue-owned non-retryable marker, so the runner classifies
+    // it terminal and fail() dead-letters immediately (category 'terminal'),
+    // rather than scheduling a bounded retry that could never succeed.
+    const pool = new FakeSourcePool();
+    const s = makeSource();
+    pool.sources.push(s);
+    const handler = makeGraphDerivationHandler({ pool: pool as never, auth });
+
+    const failCalls: Array<{ category?: string; terminal?: boolean }> = [];
+    const queue: MaintenanceQueuePort = {
+      claimDueJobs: async () => [
+        jobFor(payloadFor(s), s.namespace, GRAPH_DERIVATION_JOB_VERSION + 1),
+      ],
+      complete: async () => true,
+      fail: async (input) => {
+        failCalls.push({ category: input.category, terminal: input.terminal });
+        return jobFor(payloadFor(s), s.namespace);
+      },
+    };
+    const runner = new MaintenanceQueueRunner({
+      queue,
+      handlers: new Map([[GRAPH_DERIVATION_JOB_KIND, handler]]),
+      logger: { info: () => {}, warn: () => {}, error: () => {} },
+    });
+
+    await runner.runOnce();
+    expect(failCalls).toHaveLength(1);
+    expect(failCalls[0]?.terminal).toBe(true);
+    expect(failCalls[0]?.category).toBe("terminal");
+  });
+
+  it("the version-mismatch error is the queue-owned terminal marker (runner recognizes it)", async () => {
+    const pool = new FakeSourcePool();
+    const s = makeSource();
+    pool.sources.push(s);
+    const handler = makeGraphDerivationHandler({ pool: pool as never, auth });
+    try {
+      await handler(
+        jobFor(payloadFor(s), s.namespace, GRAPH_DERIVATION_JOB_VERSION + 2),
+      );
+      throw new Error("expected throw");
+    } catch (err) {
+      expect(isMaintenanceTerminalError(err)).toBe(true);
+    }
   });
 
   it("snapshot guard — stale revision is TERMINAL", async () => {

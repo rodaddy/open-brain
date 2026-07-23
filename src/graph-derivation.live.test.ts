@@ -62,14 +62,16 @@ dbDescribe("deriveGraphFromMetadata anchor rename (live Postgres)", () => {
     expect(first.status).toBe("new");
 
     const beforeRes = await pool.query(
-      `SELECT id, name FROM ob_entities
+      `SELECT id, name, metadata ->> 'display_name' AS display_name
+         FROM ob_entities
         WHERE namespace = $1 AND entity_type = $2 AND canonical_id = $3
           AND archived_at IS NULL`,
       [ns, anchorType, anchorCanonical],
     );
     expect(beforeRes.rows.length).toBe(1);
     const anchorIdBefore: string = beforeRes.rows[0].id;
-    expect(beforeRes.rows[0].name).toBe("release plan");
+    expect(beforeRes.rows[0].name).toBe(`release plan [${anchorCanonical}]`);
+    expect(beforeRes.rows[0].display_name).toBe("release plan");
 
     // Second derivation: SAME anchor (same canonical id), NEW display name, plus
     // a new term so the run takes the write path (a pure rename with identical
@@ -91,14 +93,16 @@ dbDescribe("deriveGraphFromMetadata anchor rename (live Postgres)", () => {
     // The canonical index still points at exactly one active row — the SAME id,
     // renamed in place. No duplicate anchor row, no unique violation.
     const afterRes = await pool.query(
-      `SELECT id, name FROM ob_entities
+      `SELECT id, name, metadata ->> 'display_name' AS display_name
+         FROM ob_entities
         WHERE namespace = $1 AND entity_type = $2 AND canonical_id = $3
           AND archived_at IS NULL`,
       [ns, anchorType, anchorCanonical],
     );
     expect(afterRes.rows.length).toBe(1);
     expect(afterRes.rows[0].id).toBe(anchorIdBefore);
-    expect(afterRes.rows[0].name).toBe("Release Plan v2");
+    expect(afterRes.rows[0].name).toBe(`Release Plan v2 [${anchorCanonical}]`);
+    expect(afterRes.rows[0].display_name).toBe("Release Plan v2");
 
     // Re-running the exact same (renamed) input is idempotent and content-free.
     const again = await deriveGraphFromMetadata(
@@ -116,6 +120,143 @@ dbDescribe("deriveGraphFromMetadata anchor rename (live Postgres)", () => {
     expect(JSON.stringify(again)).not.toContain("Release Plan");
   });
 });
+
+/**
+ * Live-Postgres regression for the #346 P2 duplicate-source-title collision.
+ *
+ * Two DISTINCT source anchors (distinct canonical ids) that share the same human
+ * display title must both persist. Against the REAL idx_ob_entities_lookup_unique
+ * (namespace, entity_type, lower(name)), storing the human title as the row name
+ * makes the second anchor's INSERT raise a 23505 on that index (the canonical
+ * upsert never arbitrates lower(name)). The fix stores a canonical-derived name
+ * so lower(name) is unique exactly where canonical_id is, and preserves the
+ * shared label in metadata.display_name.
+ */
+dbDescribe(
+  "deriveGraphFromMetadata duplicate source titles (live Postgres)",
+  () => {
+    const pool = new Pool({ connectionString: DB_URL });
+    const ns = "test-graph-derivation-dup-title";
+    const anchorType = "source";
+    const idA = "cc000000-0000-4000-8000-0000000003a1";
+    const idB = "cc000000-0000-4000-8000-0000000003b2";
+    const auth: AuthInfo = {
+      role: "admin",
+      clientId: "test-graph-derivation",
+      namespaceSource: "token",
+    };
+
+    async function cleanup(): Promise<void> {
+      await pool.query("DELETE FROM ob_links WHERE namespace = $1", [ns]);
+      await pool.query("DELETE FROM ob_entities WHERE namespace = $1", [ns]);
+    }
+
+    afterAll(async () => {
+      await cleanup();
+      await pool.end();
+    });
+
+    it("stores two same-titled anchors without a lower(name) unique violation", async () => {
+      await cleanup();
+      const sharedTitle = "Q3 Release Plan";
+
+      // First anchor: title T under canonical source:idA.
+      const a = await deriveGraphFromMetadata(
+        { query: pool.query.bind(pool) },
+        auth,
+        {
+          anchorType,
+          anchorId: idA,
+          anchorName: sharedTitle,
+          namespace: ns,
+          metadata: { topics: ["Migrations"], people: [] },
+        },
+      );
+      expect(a.status).toBe("new");
+
+      // Second anchor: SAME title T under a DIFFERENT canonical source:idB.
+      // Pre-fix this raised "duplicate key value violates unique constraint
+      // idx_ob_entities_lookup_unique".
+      const b = await deriveGraphFromMetadata(
+        { query: pool.query.bind(pool) },
+        auth,
+        {
+          anchorType,
+          anchorId: idB,
+          anchorName: sharedTitle,
+          namespace: ns,
+          metadata: { topics: ["Migrations"], people: [] },
+        },
+      );
+      expect(b.status).toBe("new");
+
+      // Both anchors persist as distinct active rows, each preserving the label.
+      const anchors = await pool.query(
+        `SELECT canonical_id, name, metadata ->> 'display_name' AS display_name
+         FROM ob_entities
+        WHERE namespace = $1 AND entity_type = $2
+          AND canonical_id = ANY($3::text[]) AND archived_at IS NULL
+        ORDER BY canonical_id`,
+        [ns, anchorType, [`${anchorType}:${idA}`, `${anchorType}:${idB}`]],
+      );
+      expect(anchors.rows.length).toBe(2);
+      for (const row of anchors.rows) {
+        expect(row.display_name).toBe(sharedTitle);
+      }
+      // Stored names differ (canonical-derived), so lower(name) never collided.
+      expect(anchors.rows[0].name).not.toBe(anchors.rows[1].name);
+    });
+
+    it("renames an anchor onto a sibling's title without a lower(name) collision", async () => {
+      await cleanup();
+
+      await deriveGraphFromMetadata({ query: pool.query.bind(pool) }, auth, {
+        anchorType,
+        anchorId: idA,
+        anchorName: "Existing Title",
+        namespace: ns,
+        metadata: { topics: ["Migrations"], people: [] },
+      });
+      await deriveGraphFromMetadata({ query: pool.query.bind(pool) }, auth, {
+        anchorType,
+        anchorId: idB,
+        anchorName: "Different Title",
+        namespace: ns,
+        metadata: { topics: ["Migrations"], people: [] },
+      });
+
+      // Rename B onto A's exact title, adding a term so the run takes the write
+      // path. Pre-fix the rename would set name = "Existing Title" and collide
+      // with A's row on lower(name).
+      const renamed = await deriveGraphFromMetadata(
+        { query: pool.query.bind(pool) },
+        auth,
+        {
+          anchorType,
+          anchorId: idB,
+          anchorName: "Existing Title",
+          namespace: ns,
+          metadata: { topics: ["Migrations", "pgvector"], people: [] },
+        },
+      );
+      expect(renamed.status).toBe("changed");
+
+      const anchors = await pool.query(
+        `SELECT canonical_id, metadata ->> 'display_name' AS display_name
+         FROM ob_entities
+        WHERE namespace = $1 AND entity_type = $2
+          AND canonical_id = ANY($3::text[]) AND archived_at IS NULL
+        ORDER BY canonical_id`,
+        [ns, anchorType, [`${anchorType}:${idA}`, `${anchorType}:${idB}`]],
+      );
+      // Two distinct anchor rows, both now titled "Existing Title" via display_name.
+      expect(anchors.rows.length).toBe(2);
+      for (const row of anchors.rows) {
+        expect(row.display_name).toBe("Existing Title");
+      }
+    });
+  },
+);
 
 /**
  * Live-Postgres regression for the #346 stale-edge convergence bug.
