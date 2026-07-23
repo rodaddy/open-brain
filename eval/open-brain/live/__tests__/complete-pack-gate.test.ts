@@ -958,6 +958,331 @@ describe("runCompletePackGate durable_lane_context events/lane walkers (finding 
   });
 });
 
+describe("runCompletePackGate citation occurrence-count bijection (terminal finding #1)", () => {
+  it("flags TWO distinct emitted units sharing ONE citation_id (set-based would pass)", async () => {
+    // Two DISTINCT durable_memory items carry the SAME citation_id. A single
+    // top-level citation for that id cannot cite both units. The old set-based
+    // bijection collapsed both emitted occurrences to one member and matched the
+    // single citation -> false PASS. Occurrence counting sees 2 emitted vs 1
+    // cited for that id -> 1 uncited, not bijective.
+    const shared = canonical("thought", serverId("prim-a"));
+    const payload = goodPayload({
+      sections: {
+        durable_memory: {
+          label: "durable_memory",
+          namespace_scoped: true,
+          query: FIXTURE.query,
+          items: [
+            {
+              id: serverId("prim-a"),
+              source_type: "thought",
+              namespace: CONFIG.primaryNamespace,
+              citation_id: shared,
+              source_ref: {
+                source: "brain",
+                type: "thought",
+                id: serverId("prim-a"),
+                namespace: CONFIG.primaryNamespace,
+              },
+            },
+            {
+              // A distinct unit (different server id) reusing prim-a's citation_id.
+              id: serverId("prim-b"),
+              source_type: "decision",
+              namespace: CONFIG.primaryNamespace,
+              citation_id: shared,
+              source_ref: {
+                source: "brain",
+                type: "decision",
+                id: serverId("prim-b"),
+                namespace: CONFIG.primaryNamespace,
+              },
+            },
+          ],
+          item_count: 2,
+          truncated: false,
+        },
+      },
+      // Exactly ONE top-level citation for the shared id.
+      citations: [{ id: shared, kind: "brain_record" }],
+    });
+    const { outcome } = run({ payload });
+    const { receipt, passed } = await outcome;
+    // 2 emitted occurrences of the shared id, 1 cited -> 1 uncited occurrence.
+    expect(receipt.citations.emitted_item_citations).toBe(2);
+    expect(receipt.citations.uncited_items).toBe(1);
+    expect(receipt.citations.bijective).toBe(false);
+    expect(passed).toBe(false);
+    assertContentFree(receipt);
+  });
+
+  it("still rejects matching duplicate counts when two units share one citation identity", async () => {
+    const shared = canonical("thought", serverId("prim-a"));
+    const payload = goodPayload({
+      sections: {
+        durable_memory: {
+          label: "durable_memory",
+          namespace_scoped: true,
+          query: FIXTURE.query,
+          items: [
+            {
+              id: serverId("prim-a"),
+              source_type: "thought",
+              namespace: CONFIG.primaryNamespace,
+              citation_id: shared,
+              source_ref: {
+                source: "brain",
+                type: "thought",
+                id: serverId("prim-a"),
+                namespace: CONFIG.primaryNamespace,
+              },
+            },
+            {
+              id: serverId("prim-b"),
+              source_type: "decision",
+              namespace: CONFIG.primaryNamespace,
+              citation_id: shared,
+              source_ref: {
+                source: "brain",
+                type: "decision",
+                id: serverId("prim-b"),
+                namespace: CONFIG.primaryNamespace,
+              },
+            },
+          ],
+          item_count: 2,
+          truncated: false,
+        },
+      },
+      // Repeating the same top-level id does not make the identity bijective:
+      // two distinct emitted units still cannot share one citation identity.
+      citations: [
+        { id: shared, kind: "brain_record" },
+        { id: shared, kind: "brain_record" },
+      ],
+    });
+    const { outcome } = run({ payload });
+    const { receipt, passed } = await outcome;
+    expect(receipt.citations.emitted_item_citations).toBe(2);
+    expect(receipt.citations.uncited_items).toBe(1);
+    expect(receipt.citations.dangling_citations).toBe(1);
+    expect(receipt.citations.bijective).toBe(false);
+    expect(passed).toBe(false);
+    assertContentFree(receipt);
+  });
+
+  it("flags a DUPLICATE top-level citation occurrence for one emitted unit (set-based would pass)", async () => {
+    // One emitted durable_memory item, but its citation_id appears TWICE in the
+    // top-level citations array. The old set-based check deduped the two
+    // citations to one member and matched -> false PASS. Occurrence counting
+    // sees 1 emitted vs 2 cited -> 1 dangling surplus, not bijective.
+    const payload = goodPayload();
+    const firstCitation = payload.citations[0]!;
+    payload.citations = [...payload.citations, { ...firstCitation }];
+    const { outcome } = run({ payload });
+    const { receipt, passed } = await outcome;
+    expect(receipt.citations.dangling_citations).toBe(1);
+    expect(receipt.citations.bijective).toBe(false);
+    expect(passed).toBe(false);
+    assertContentFree(receipt);
+  });
+});
+
+describe("runCompletePackGate every-expected-recall (terminal finding #2)", () => {
+  it("fails when only ONE of the two expected recall ids surfaces (one-of-many)", async () => {
+    // durable_memory surfaces ONLY prim-a; prim-b (also expected) never recalls.
+    // The old "any one expected id present" check passed because prim-a appeared;
+    // requiring EVERY expected id catches the missing prim-b as a partial-recall
+    // defect. Citations kept bijective (only prim-a cited) so the ONLY failure is
+    // the incomplete expected recall.
+    const payload = goodPayload({
+      sections: {
+        durable_memory: {
+          label: "durable_memory",
+          namespace_scoped: true,
+          query: FIXTURE.query,
+          items: [
+            {
+              id: serverId("prim-a"),
+              source_type: "thought",
+              namespace: CONFIG.primaryNamespace,
+              citation_id: canonical("thought", serverId("prim-a")),
+              source_ref: {
+                source: "brain",
+                type: "thought",
+                id: serverId("prim-a"),
+                namespace: CONFIG.primaryNamespace,
+              },
+            },
+          ],
+          item_count: 1,
+          truncated: false,
+        },
+      },
+      citations: [
+        {
+          id: canonical("thought", serverId("prim-a")),
+          kind: "brain_record",
+          source_ref: {
+            source: "brain",
+            type: "thought",
+            id: serverId("prim-a"),
+          },
+        },
+      ],
+    });
+    const { outcome } = run({ payload });
+    const { receipt, passed } = await outcome;
+    // The section is fine and prim-a surfaced, but prim-b did not.
+    expect(receipt.citations.bijective).toBe(true);
+    expect(receipt.isolation.expected_recall_present).toBe(false);
+    expect(passed).toBe(false);
+    expect(receipt.failures.some((f) => f.includes("hollow recall"))).toBe(
+      true,
+    );
+    assertContentFree(receipt);
+  });
+});
+
+describe("runCompletePackGate populated-section denial + reason allowlist (terminal finding #3)", () => {
+  it("fails a POPULATED section that also claims a scope-denial for itself (forged denial)", async () => {
+    // durable_lane_context is emitted with items AND its exact_scope denial is
+    // present. A denial must agree with an actually empty/omitted section; a
+    // populated section claiming denial is forged/stale. The old classifier
+    // returned "items" and passed the section, letting the contradictory denial
+    // stand; now the populated-with-denial case fails the section.
+    const payload = goodPayload({
+      sections: {
+        durable_lane_context: {
+          label: "durable_lane_context",
+          exact_scope_required: true,
+          items: [
+            {
+              id: "lane-item-1",
+              source_type: "session_event",
+              citation_id: "session_event:lane-item-1",
+              source_ref: "ob_session_events/lane-item-1",
+            },
+          ],
+          item_count: 1,
+          truncated: false,
+        },
+      },
+      // The denial is retained for durable_lane_context even though it is now
+      // populated -- the contradiction the gate must catch.
+      warnings: {
+        scope_denials: [
+          { source: "durable_lane_context", reasons: ["exact_scope"] },
+          { source: "repo_facts", reasons: ["no_active_repo"] },
+        ],
+        degraded_sources: [],
+        truncation: [],
+      },
+    });
+    payload.citations = [
+      ...payload.citations,
+      { id: "session_event:lane-item-1", kind: "session_event" },
+    ];
+    const { outcome } = run({ payload });
+    const { receipt, passed } = await outcome;
+    const lane = receipt.sections.find(
+      (s) => s.section === "durable_lane_context",
+    );
+    expect(lane!.has_items).toBe(true);
+    expect(lane!.defined_empty).toBe(false);
+    expect(
+      receipt.failures.some(
+        (f) => f.includes("durable_lane_context") && f.includes("populated"),
+      ),
+    ).toBe(true);
+    expect(passed).toBe(false);
+    assertContentFree(receipt);
+  });
+
+  it("rejects an omitted section 'explained' by an ARBITRARY non-allowlisted denial reason", async () => {
+    // candidate_memory is dropped and 'explained' by a made-up scope-denial
+    // reason that is NOT in candidate_memory's allowlist (candidate_memory has no
+    // allowed scope-denial reasons at all). The old classifier accepted any
+    // source-matched denial and marked it defined-empty; the allowlist now
+    // rejects the arbitrary reason so the omitted section fails.
+    const payload = goodPayload({
+      dropSection: "candidate_memory",
+      warnings: {
+        scope_denials: [
+          { source: "durable_lane_context", reasons: ["exact_scope"] },
+          { source: "repo_facts", reasons: ["no_active_repo"] },
+          {
+            source: "candidate_memory",
+            reasons: ["totally_made_up_reason"],
+          },
+        ],
+        degraded_sources: [],
+        truncation: [],
+      },
+    });
+    const { outcome } = run({ payload });
+    const { receipt, passed } = await outcome;
+    const candidate = receipt.sections.find(
+      (s) => s.section === "candidate_memory",
+    );
+    expect(candidate!.present).toBe(false);
+    expect(candidate!.defined_empty).toBe(false);
+    expect(passed).toBe(false);
+    assertContentFree(receipt);
+  });
+});
+
+describe("runCompletePackGate reason/status sentinel sanitization (terminal finding #4)", () => {
+  it("never echoes a malicious server reason into a section disposition", async () => {
+    // repo_facts present-empty but its scope-denial reason carries an injected
+    // sentinel. definedScopeDenialReasons only returns allowlisted reasons, so
+    // this unrecognized reason yields null -> the present-empty repo_facts falls
+    // through to the unmarked-empty defect (generic disposition), and the raw
+    // sentinel never lands in the receipt.
+    const sentinel = "SENTINEL_LEAK_marlin cache body";
+    const payload = goodPayload({
+      warnings: {
+        scope_denials: [
+          { source: "durable_lane_context", reasons: ["exact_scope"] },
+          { source: "repo_facts", reasons: [sentinel] },
+        ],
+        degraded_sources: [],
+        truncation: [],
+      },
+    });
+    const { outcome } = run({ payload });
+    const { receipt, passed } = await outcome;
+    const repoFacts = receipt.sections.find((s) => s.section === "repo_facts");
+    // The arbitrary reason is NOT accepted as a defined denial; disposition is a
+    // finite generic label, never the raw sentinel string.
+    expect(repoFacts!.defined_empty).toBe(false);
+    expect(repoFacts!.disposition).not.toContain("SENTINEL_LEAK");
+    expect(JSON.stringify(receipt)).not.toContain("SENTINEL_LEAK");
+    expect(passed).toBe(false);
+    assertContentFree(receipt);
+  });
+
+  it("sanitizes a malicious pack status to a finite label in the failures list", async () => {
+    // A non-ok status that carries an injected sentinel/body must be reduced to a
+    // finite allowlisted label (or the fixed generic) before entering failures.
+    const payload = goodPayload({
+      status: "error: leaked marlin cache body SENTINEL_STATUS",
+    });
+    const { outcome } = run({ payload });
+    const { receipt, passed } = await outcome;
+    expect(passed).toBe(false);
+    const statusFailure = receipt.failures.find((f) =>
+      f.includes("pack status is"),
+    );
+    expect(statusFailure).toBeDefined();
+    expect(statusFailure).toContain("'unrecognized'");
+    expect(statusFailure).not.toContain("SENTINEL_STATUS");
+    expect(statusFailure).not.toContain("marlin cache body");
+    expect(JSON.stringify(receipt)).not.toContain("SENTINEL_STATUS");
+    assertContentFree(receipt);
+  });
+});
+
 describe("runCompletePackGate teardown discipline", () => {
   it("tears down seeded records even when the pack call throws", async () => {
     const { outcome, state } = run({ packThrows: true });
