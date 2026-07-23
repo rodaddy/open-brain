@@ -794,16 +794,35 @@ const KNOWN_ERROR_CLASSES = new Set<string>([
 
 const UNKNOWN_ERROR_LABEL = "other" as const;
 
+// Finite SQLSTATE CLASS labels. Never emit a dependency-controlled five-character
+// code verbatim: even a class-name-shaped value such as `S3CRT` can carry a
+// sentinel. The first two SQLSTATE characters are useful only when they map to a
+// known PostgreSQL class; everything else collapses to `unknown`.
+const SAFE_SQLSTATE_CLASSES: Readonly<Record<string, string>> = {
+  "08": "connection_exception",
+  "22": "data_exception",
+  "23": "integrity_constraint_violation",
+  "25": "invalid_transaction_state",
+  "40": "transaction_rollback",
+  "42": "syntax_or_access_rule_violation",
+  "53": "insufficient_resources",
+  "54": "program_limit_exceeded",
+  "55": "object_not_in_prerequisite_state",
+  "57": "operator_intervention",
+  "58": "system_error",
+  XX: "internal_error",
+};
+
 // Extract ONLY a stable, content-free label from a thrown dependency error: the
-// error class name (allowlisted) and (for pg errors) the SQLSTATE `code`.
+// error class name (allowlisted) and a finite SQLSTATE CLASS label.
 // Deliberately reads no `message`, `detail`, `hint`, `query`, `where`, or `name`
 // string field — those can echo path/content bytes, SQL text, or an attacker-
 // planted sentinel, which must never leave this substrate.
 //
 // The class name is derived from the constructor and validated against the finite
 // KNOWN_ERROR_CLASSES allowlist; an unknown class (or a non-object throw) maps to
-// the constant 'other', so no caller-influenced byte reaches the log. SQLSTATE is
-// a fixed 5-char alphanumeric code and is preserved when it conforms.
+// the constant 'other'. A dependency code contributes only through the finite
+// SAFE_SQLSTATE_CLASSES map, so no caller-controlled code byte reaches the log.
 function contentFreeErrorLabel(err: unknown): { name: string; code: string } {
   let name: string = UNKNOWN_ERROR_LABEL;
   let code = "unknown";
@@ -814,11 +833,13 @@ function contentFreeErrorLabel(err: unknown): { name: string; code: string } {
     if (typeof ctorName === "string" && KNOWN_ERROR_CLASSES.has(ctorName)) {
       name = ctorName;
     }
-    // pg SQLSTATE is always exactly 5 alphanumerics (e.g. 23505). Reject anything
-    // else so a driver that stuffs a string into `code` cannot leak content.
+    // Convert only a recognized PostgreSQL SQLSTATE class to a finite label.
+    // Never emit the raw five-character value: an arbitrary dependency can place
+    // a content-bearing sentinel in `.code` even when it matches the SQLSTATE
+    // shape.
     const rec = err as { code?: unknown };
-    if (typeof rec.code === "string" && /^[0-9A-Za-z]{5}$/.test(rec.code)) {
-      code = rec.code;
+    if (typeof rec.code === "string") {
+      code = SAFE_SQLSTATE_CLASSES[rec.code.slice(0, 2)] ?? "unknown";
     }
   }
   return { name, code };

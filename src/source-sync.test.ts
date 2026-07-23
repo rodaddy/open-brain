@@ -444,14 +444,16 @@ describe("syncSource - dependency failure is content-free (sentinel)", () => {
   // label must be classified off the reliable error CLASS (constructor) against a
   // strict allowlist, and an unknown class must collapse to a constant category —
   // so no attacker-controlled name byte ever reaches the log line.
-  it("never logs an alphanumeric sentinel placed in Error.name", async () => {
+  it("never logs alphanumeric sentinels placed in Error.name or Error.code", async () => {
     const SENTINEL = "Sk1ppyS3cr3tSentinelXYZ789";
-    // A leaky error whose CLASS is unknown and whose `.name` field is the
-    // sentinel. It is alphanumeric and class-name-shaped, so a pattern-based
-    // acceptance would have logged it; a strict class allowlist must not.
+    const CODE_SENTINEL = "S3CRT";
+    // A leaky error whose CLASS is unknown and whose mutable `.name` / `.code`
+    // fields carry sentinels. Both values look structurally valid to a naive
+    // pattern check; finite class maps must collapse them instead of logging them.
     class SentinelError extends Error {}
-    const err = new SentinelError("boom");
+    const err = new SentinelError("boom") as Error & { code: string };
     err.name = SENTINEL;
+    err.code = CODE_SENTINEL;
 
     // Capture the actual emitted log line (logger.error -> console.error), which
     // is where the leak would surface. The result is already asserted content-free
@@ -480,11 +482,16 @@ describe("syncSource - dependency failure is content-free (sentinel)", () => {
     // A failure line WAS emitted (the guard actually ran, not skipped)...
     const failLine = lines.find((l) => l.includes("source_sync_failed"));
     expect(failLine).toBeDefined();
-    // ...and it carries the constant category, never the sentinel.
+    // ...and it carries finite categories, never either sentinel.
     expect(failLine).toContain('"error_name":"other"');
-    // No captured line — for any reason — may contain the sentinel bytes.
-    for (const line of lines) expect(line).not.toContain(SENTINEL);
+    expect(failLine).toContain('"error_code":"unknown"');
+    // No captured line — for any reason — may contain sentinel bytes.
+    for (const line of lines) {
+      expect(line).not.toContain(SENTINEL);
+      expect(line).not.toContain(CODE_SENTINEL);
+    }
     // Nor may the returned result.
     expect(JSON.stringify(res)).not.toContain(SENTINEL);
+    expect(JSON.stringify(res)).not.toContain(CODE_SENTINEL);
   });
 });
