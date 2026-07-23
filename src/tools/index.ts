@@ -55,6 +55,7 @@ import { registerListRepoFacts, registerUpsertRepoFact } from "./repo-facts.ts";
 import { registerSourceRegistry } from "./source-registry.ts";
 import {
   registerAgentContextPack,
+  registerAgentReflexPointers,
   registerRecoveryWalAppend,
   registerRecoveryWalMark,
   registerWorkingSetAppend,
@@ -140,6 +141,7 @@ export function registerAllTools(server: McpServer, deps: ToolDeps): void {
   registerRecoveryWalAppend(server, toolDeps);
   registerRecoveryWalMark(server, toolDeps);
   registerAgentContextPack(server, toolDeps);
+  registerAgentReflexPointers(server, toolDeps);
   registerGetContract(server, toolDeps);
   registerOperatorDoctor(server, toolDeps);
   registerUpsertRepoFact(server, toolDeps);
