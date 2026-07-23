@@ -13,6 +13,9 @@ deliberately.
     `deploy_core01=true`; or
   - a pushed version tag matching `v*` whose target commit is reachable from
     `origin/main`.
+- This allow/refuse policy is enforced provider-neutrally by
+  `scripts/deploy-ref-gate.ts` (see the Forgejo section below). GitHub Actions
+  remains the active deploy path today.
 - Never use production secrets in command logs, PR bodies, issues, or reports.
   Evidence may name env vars and commands only.
 - Use a clean release-candidate worktree under
@@ -221,6 +224,54 @@ echoing the request `id`) — see the runbook's Verification section and
 `docs/fleet-nats-integration.md` for the authoritative shape. If the release does
 not include the NATS worker runtime entrypoint, leave the launchd template
 uninstalled and record the worker rollout as deferred.
+
+## Forgejo Deploy Path (Prepared, Deferred)
+
+GitHub Actions is the active CI and core01 deploy path today. Nothing in this
+section changes that. A parallel Forgejo Actions path exists in source only, so
+a future migration to a self-hosted Forgejo repository is a config-and-runner
+task rather than a re-authoring task.
+
+Prepared source:
+
+- `.forgejo/workflows/ci.yml` ports the required validation jobs (`check`,
+  `db-integration`, `python-package`, `contract-parity`) to the Forgejo CI
+  runner pool `[self-hosted, Linux, X64, rodaddy, forgejo-ci-small]`.
+- `.forgejo/workflows/deploy.yml` is a separate workflow scoped to the
+  repository's production deploy runner
+  `[self-hosted, macOS, core01, open-brain-deploy]`, with non-canceling
+  `deploy-core01-production` concurrency. It runs the same validation jobs as
+  in-workflow `needs` gates and deploys only after all pass. Merging to `main`
+  is not a deploy signal on this path either.
+- `scripts/core01-deploy-local.sh` and `scripts/deploy-ref-gate.ts` implement a
+  provider-neutral pre-mutation ref gate. The gate accepts explicit
+  `DEPLOY_PROVIDER` / `DEPLOY_EVENT_NAME` / `DEPLOY_REF` inputs and falls back
+  to the GitHub Actions environment for backward compatibility, so the exact
+  same allow/refuse policy protects both paths: manual dispatch only from the
+  current `main` tip, or a `v*` tag reachable from `main`. In CI, missing or
+  unsupported metadata fails closed.
+
+Repository-scoped deploy label: the Forgejo deploy runner is scoped by the
+`open-brain-deploy` label so only this repository's production runner is
+eligible to mutate core01. The Docker/Linux `forgejo-ci-small` CI runners
+cannot deploy, and the macOS deploy runner does not run CI.
+
+Host-local secret boundary is unchanged. The deploy runner reads
+`/Users/rico/.config/open-brain/env` on the host, exactly as the GitHub path
+does. No production secrets are stored in `.forgejo/` YAML, in the Forgejo
+repository, or in any workflow variable. Evidence may name env vars and
+commands only.
+
+Action resolution caveat: Forgejo resolves `uses:` action refs against the
+instance's configured actions registry, not github.com by default. The
+SHA-pinned GitHub actions in `.forgejo/workflows/*.yml` match the pins in the
+GitHub workflow; before activation, the Forgejo instance/runner must be
+configured to fetch those actions (or their Forgejo mirrors).
+
+Activation is explicitly deferred. Do not create or backfill a Forgejo
+repository, register a Forgejo runner, copy production secrets, or enable this
+path until an existing-repository cutover is authorized. Until then, follow the
+GitHub deploy path above.
 
 ## Rollback
 
