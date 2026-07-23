@@ -78,6 +78,41 @@ export const scopeInputSchema = {
   session_key: z.string().min(1).max(500).describe("Stable active-session key"),
 };
 
+/**
+ * One explicit prior-context reference: an identifier or structural source
+ * pointer for a record already supplied to the model this turn. Only resolvable
+ * identity is accepted — never raw prior-context text — and at least one of
+ * `citation_id`/`source_ref` must be present so the reference is addressable
+ * without inspecting a body. `source_ref` accepts the string or structural form
+ * the recall emits, so a caller can echo back an item's own `source_ref`.
+ */
+export const priorContextReferenceInputSchema = z
+  .object({
+    citation_id: z.string().trim().min(1).max(500).optional(),
+    source_ref: z
+      .union([
+        z.string().trim().min(1).max(1000),
+        z
+          .object({
+            source: z.string().trim().min(1).max(200),
+            type: z.string().trim().min(1).max(200),
+            id: z.string().trim().min(1).max(500),
+            namespace: z.string().trim().min(1).max(200).optional(),
+          })
+          .passthrough(),
+      ])
+      .optional(),
+  })
+  .strict()
+  .refine(
+    (value) =>
+      value.citation_id !== undefined || value.source_ref !== undefined,
+    {
+      message: "prior_context reference requires citation_id or source_ref",
+      path: ["citation_id"],
+    },
+  );
+
 export const agentContextPackInputSchema = {
   ...scopeInputSchema,
   query: z.string().max(4000).optional(),
@@ -90,6 +125,16 @@ export const agentContextPackInputSchema = {
       "Active repository slug (e.g. owner/name) that repo_facts binds to exactly. " +
         "When absent, repo_facts returns its defined no-active-repo empty state; " +
         "repo_facts never falls back to any other repository.",
+    ),
+  prior_context: z
+    .array(priorContextReferenceInputSchema)
+    .max(200)
+    .optional()
+    .describe(
+      "Explicit identifiers/source refs already supplied to the model this " +
+        "turn. durable_memory recall removes records already represented by " +
+        "these references and returns only net-new results. Raw prior-context " +
+        "text is never accepted; references carry resolvable identity only.",
     ),
   requested_sections: z
     .array(z.enum(SECTION_NAMES))
