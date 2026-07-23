@@ -9,7 +9,7 @@ import {
 import type { ToolDeps } from "./index.ts";
 
 // Content-free label for a thrown error: an allowlisted class/name or code only
-// -- never err.message, which can carry a raw driver string echoing a drop body
+// -- never err.message, which can carry a raw driver string echoing a file body
 // or path. Mirrors extraction.ts / source-registry.ts so collector logs stay
 // body-free.
 function internalErrorLabel(err: unknown): string {
@@ -73,8 +73,9 @@ function unauthenticated() {
 }
 
 // The content-free public view of a collection result. The collector result is
-// already body-free (typed codes, opaque digests, counts, durable ids); this
-// centralizes the tool shape so no internal-only field can leak later.
+// already body-free (typed codes, opaque digests, opaque file tokens, counts,
+// durable ids); this centralizes the tool shape so no internal-only field can
+// leak later.
 function publicResult(result: CollectDropFolderResult) {
   if (!result.eligible) {
     return {
@@ -83,21 +84,34 @@ function publicResult(result: CollectDropFolderResult) {
       code: result.code,
     };
   }
+  // An eligible collection that could not resolve a folder root is still
+  // content-free but reports ok:false with a typed code.
+  if (!result.ok) {
+    return {
+      ok: false,
+      eligible: true as const,
+      code: result.code,
+      namespace: result.namespace,
+    };
+  }
   return {
     ok: true,
     eligible: true as const,
     namespace: result.namespace,
     collected: result.collected,
     deduped: result.deduped,
-    rejected: result.rejected,
-    items: result.items,
+    skipped: result.skipped,
+    truncated: result.truncated,
+    files: result.files,
   };
 }
 
 const tagsArg = z
   .array(z.string().trim().min(1).max(120))
   .max(64)
-  .describe("Content-free tags to carry onto the durable row (never bodies)");
+  .describe(
+    "Content-free tags to carry onto every durable row from this collection (never bodies)",
+  );
 
 export function registerDropFolderCollector(
   server: McpServer,
@@ -107,10 +121,15 @@ export function registerDropFolderCollector(
     "collect_drop_folder",
     {
       description:
-        "Collect caller-supplied drop items for a registered, approved, active " +
-        "'drop' source. Only an approved+active drop source in a readable " +
-        "namespace is eligible; unregistered or unapproved sources are rejected " +
-        "truthfully. Repeated identical content dedupes by hash and is a no-op.",
+        "Ingest files placed under a registered, approved, active 'drop' source's " +
+        "folder. The server derives the folder root from the durable source " +
+        "registry, discovers and reads bounded supported files itself, and " +
+        "ingests them through the shared metadata + durable capture path. " +
+        "Callers select the approved source and bounded options; they never " +
+        "submit file bodies or paths. Unregistered/unapproved sources and " +
+        "callers without write authority for the target namespace are rejected " +
+        "before any file is read. Repeated content dedupes by hash, so a rerun " +
+        "of an unchanged folder is a no-op.",
       inputSchema: {
         external_id: z
           .string()
@@ -127,28 +146,17 @@ export function registerDropFolderCollector(
           .describe(
             "Namespace the drop source lives in. Defaults to your own. A " +
               "global admin/ob-admin token may target another namespace; " +
-              "header-scoped identities are bound to their header namespace.",
+              "header-scoped identities are bound to their header namespace. " +
+              "Write authority for this namespace is enforced before any read.",
           ),
-        items: z
-          .array(
-            z
-              .object({
-                external_id: z.string().trim().min(1).max(1000),
-                content: z.string().min(1),
-                tags: tagsArg.optional(),
-              })
-              .strict(),
-          )
-          .min(1)
-          .max(256)
-          .describe("Bounded batch of drop items belonging to this source"),
+        tags: tagsArg.optional(),
       },
       annotations: {
         title: "Collect Drop Folder",
         readOnlyHint: false,
         destructiveHint: false,
         // Repeated identical content is a no-op (dedupe by hash), so a re-run of
-        // the same batch produces no new durable state.
+        // an unchanged folder produces no new durable state.
         idempotentHint: true,
       },
     },
@@ -162,7 +170,8 @@ export function registerDropFolderCollector(
           code: result.code,
           collected: result.collected,
           deduped: result.deduped,
-          rejected: result.rejected,
+          skipped: result.skipped,
+          truncated: result.truncated,
         });
         return okResult(publicResult(result));
       } catch (err) {
