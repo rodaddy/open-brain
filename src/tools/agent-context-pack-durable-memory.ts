@@ -155,7 +155,21 @@ export async function loadDurableMemoryContext(
       false,
     );
   } catch {
+    // Recall was explicitly requested for this section but the search failed.
+    // Return a truthful empty durable_memory envelope (not an omitted section) so
+    // the caller can tell "requested, recall failed" apart from "not requested".
+    // The degraded_sources warning stays content-free — no dependency/error
+    // detail is leaked into the envelope or the warning.
     return {
+      section: {
+        label: "durable_memory",
+        namespace_scoped: true,
+        query,
+        empty_reason: "recall_failed",
+        items: [],
+        item_count: 0,
+        truncated: false,
+      },
       scopeDenials: [],
       truncation: [],
       degradedSources: [{ source: "durable_memory", reason: "recall_failed" }],
@@ -184,6 +198,20 @@ export async function loadDurableMemoryContext(
       break;
     }
     const citationId = `brain_record:${row.source_type}:${row.id}`;
+    // Build the bounded source_ref once per row and attach the SAME object to
+    // both the item and its citation, so an item is independently resolvable back
+    // to its brain record without a citation lookup, and item.source_ref is
+    // identical to citation.source_ref. Citation reconciliation after whole-pack
+    // trimming keys off citation_id, so co-locating source_ref on the item keeps
+    // the two consistent through partial and full trims.
+    const sourceRef = row.source_ref ?? {
+      source: "brain",
+      type: row.source_type,
+      id: row.id,
+      namespace: row.namespace,
+      label: (row.content_preview ?? "").slice(0, 120),
+      preview: (row.content_preview ?? "").slice(0, 300),
+    };
     items.push({
       id: row.id,
       source_type: row.source_type,
@@ -193,18 +221,12 @@ export async function loadDurableMemoryContext(
       updated_at: row.updated_at ?? null,
       tier: row.tier ?? null,
       citation_id: citationId,
+      source_ref: sourceRef,
     });
     citations.push({
       id: citationId,
       kind: "brain_record",
-      source_ref: row.source_ref ?? {
-        source: "brain",
-        type: row.source_type,
-        id: row.id,
-        namespace: row.namespace,
-        label: (row.content_preview ?? "").slice(0, 120),
-        preview: (row.content_preview ?? "").slice(0, 300),
-      },
+      source_ref: sourceRef,
     });
     remainingChars -= bounded.text.length;
     if (bounded.truncated) itemsTruncated = true;

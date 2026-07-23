@@ -195,6 +195,14 @@ describe("agent_context_pack durable_memory", () => {
         expect(citation.source_ref.source).toBe("brain");
         expect(citation.source_ref.id).toBe(item.id);
         expect(citation.source_ref.type).toBe(item.source_type);
+        // Every item carries its OWN bounded source_ref, not just a citation_id,
+        // and it is the same source_ref the citation exposes — the item is
+        // independently resolvable back to its brain record.
+        expect(item.source_ref).toBeDefined();
+        expect(item.source_ref).toEqual(citation.source_ref);
+        expect(item.source_ref.source).toBe("brain");
+        expect(item.source_ref.id).toBe(item.id);
+        expect(item.source_ref.type).toBe(item.source_type);
       }
       // No citation is emitted without a corresponding retained item.
       const retainedIds = new Set(section.items.map((i: any) => i.citation_id));
@@ -434,6 +442,69 @@ describe("agent_context_pack durable_memory", () => {
     }
   });
 
+  it("preserves item.source_ref == citation.source_ref with no dangling refs after a partial whole-pack trim", async () => {
+    // After a partial trim, every surviving item must still carry its own
+    // source_ref, that source_ref must equal its citation's source_ref, and no
+    // citation (source_ref) may reference a dropped item — the item-carried
+    // source_ref must reconcile alongside the citation.
+    const records = Array.from({ length: 8 }, (_, index) =>
+      brainRecord({
+        id: `ref-${index}`,
+        source_type: "decisions",
+        content_preview: `ref-${index}:` + "D".repeat(800),
+        distance: 0.1 + index * 0.05,
+        fts_rank: 1 - index * 0.1,
+        usefulness: 1 - index * 0.05,
+        created_at: "2026-07-01T00:00:00Z",
+      }),
+    );
+    const { pool } = searchPool(records);
+    const auth: AuthInfo = { role: "admin", clientId: "rico" };
+    const { client, cleanup } = await setupToolClient(auth, pool);
+    try {
+      const pack = await client.callTool({
+        name: "agent_context_pack",
+        arguments: {
+          ...SCOPE,
+          query: "ref",
+          requested_sections: ["durable_memory"],
+          budget: { max_tokens: 900 },
+        },
+      });
+      const payload = JSON.parse((pack.content as any)[0].text);
+      const section = payload.sections.durable_memory;
+      expect(section).toBeDefined();
+      // A genuine partial trim.
+      expect(section.items.length).toBeGreaterThan(0);
+      expect(section.items.length).toBeLessThan(8);
+
+      const citationById = new Map<string, any>(
+        payload.citations.map((c: any) => [c.id as string, c]),
+      );
+      // Every retained item has its own source_ref equal to its citation's.
+      for (const item of section.items) {
+        expect(item.source_ref).toBeDefined();
+        const citation = citationById.get(item.citation_id);
+        expect(citation).toBeDefined();
+        expect(item.source_ref).toEqual(citation.source_ref);
+        expect(item.source_ref.id).toBe(item.id);
+      }
+      // No dangling citation/source_ref: every citation maps to a retained item.
+      const retainedIds = new Set(section.items.map((i: any) => i.citation_id));
+      expect(payload.citations.length).toBe(section.items.length);
+      for (const citation of payload.citations) {
+        expect(retainedIds.has(citation.id)).toBe(true);
+      }
+      // No dropped record's source_ref survives on any retained item.
+      const retainedRecordIds = new Set(section.items.map((i: any) => i.id));
+      for (const item of section.items) {
+        expect(retainedRecordIds.has(item.source_ref.id)).toBe(true);
+      }
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("emits a zero-item durable_memory envelope with a truthful whole_pack_budget empty_reason when trimming empties it but the envelope still fits", async () => {
     // A single record whose serialized body cannot fit the surviving budget, but
     // where the empty durable_memory envelope (label/query/counters/empty_reason)
@@ -551,7 +622,12 @@ describe("agent_context_pack durable_memory", () => {
     }
   });
 
-  it("degrades a recall failure without leaking database errors", async () => {
+  it("emits a truthful recall_failed durable_memory envelope for an explicitly requested section without leaking database errors", async () => {
+    // When recall throws for an explicitly requested durable_memory section, the
+    // section is NOT omitted: a truthful empty envelope is emitted (items [],
+    // item_count 0, truncated false, empty_reason recall_failed) alongside the
+    // content-free degraded_sources warning and empty citations. This is distinct
+    // from an unrequested section (which is absent entirely).
     const auth: AuthInfo = { role: "admin", clientId: "rico" };
     const { client, cleanup } = await setupToolClient(auth, {
       query: async () => {
@@ -569,13 +645,66 @@ describe("agent_context_pack durable_memory", () => {
       });
       const payload = JSON.parse((pack.content as any)[0].text);
       expect(pack.isError).toBeFalsy();
-      expect(payload.sections.durable_memory).toBeUndefined();
+      const section = payload.sections.durable_memory;
+      // The requested section is present and truthful, not omitted.
+      expect(section).toBeDefined();
+      expect(section).toMatchObject({
+        label: "durable_memory",
+        namespace_scoped: true,
+        query: "durable",
+        empty_reason: "recall_failed",
+        item_count: 0,
+        truncated: false,
+      });
+      expect(section.items).toEqual([]);
+      expect(payload.citations).toEqual([]);
+      // The content-free degraded_sources warning is retained.
       expect(payload.warnings.degraded_sources).toContainEqual({
         source: "durable_memory",
         reason: "recall_failed",
       });
+      // No dependency/error detail leaks anywhere in the emitted pack — not the
+      // envelope, the warning, the citations, or the section body.
       expect(JSON.stringify(payload)).not.toContain("secret-host");
       expect(JSON.stringify(payload)).not.toContain("internal-detail");
+      expect(JSON.stringify(payload)).not.toContain("postgres");
+      // The only reason string anywhere is the stable, content-free recall_failed
+      // marker — no raw error message or dependency detail is carried through.
+      expect(section.empty_reason).toBe("recall_failed");
+      expect(JSON.stringify(payload)).not.toContain("Error");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("omits durable_memory entirely (no recall_failed envelope) when the section is not requested even if recall would fail", async () => {
+    // Behavior must stay distinct from "requested": an unrequested durable_memory
+    // section is absent from the pack. No recall runs, so no recall_failed
+    // envelope or degraded_sources warning is emitted for it.
+    const auth: AuthInfo = { role: "admin", clientId: "rico" };
+    const { client, cleanup } = await setupToolClient(auth, {
+      query: async () => {
+        throw new Error("postgres://secret-host/internal-detail");
+      },
+    });
+    try {
+      const pack = await client.callTool({
+        name: "agent_context_pack",
+        arguments: {
+          ...SCOPE,
+          query: "durable",
+          requested_sections: ["working_set"],
+        },
+      });
+      const payload = JSON.parse((pack.content as any)[0].text);
+      expect(pack.isError).toBeFalsy();
+      // Not requested => section absent, distinct from the empty recall_failed
+      // envelope emitted when it IS requested.
+      expect(payload.sections.durable_memory).toBeUndefined();
+      const degraded = payload.warnings.degraded_sources ?? [];
+      expect(degraded.some((d: any) => d.source === "durable_memory")).toBe(
+        false,
+      );
     } finally {
       await cleanup();
     }
