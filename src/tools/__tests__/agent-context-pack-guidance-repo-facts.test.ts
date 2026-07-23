@@ -455,6 +455,96 @@ describe("citation bijection reconciles after deterministic trimming", () => {
   });
 });
 
+describe("whole-pack trim stamps section-body truth", () => {
+  it("sets truncated=true on the emitted body when a partial trim drops items", async () => {
+    // Ten promoted preferences under a whole-pack budget that admits some but not
+    // all of them. The loader itself did NOT truncate (all ten fit its own item
+    // budget), so a body that read truncated=false would lie about the re-fit.
+    const rows = Array.from({ length: 10 }, (_, i) =>
+      prefRow({
+        id: `p${i}`,
+        created_at: `2026-07-${10 + i}T10:00:00Z`,
+        candidate_scope: { key: `k${i}` },
+        content: "pref " + "x".repeat(120),
+      }),
+    );
+    const { pool } = routingPool({ guidance: () => [...rows].reverse() });
+    const { client, cleanup } = await setupToolClient(ADMIN, pool);
+    try {
+      const { payload } = await callPack(client, {
+        requested_sections: ["profile_guidance"],
+        budget: { max_tokens: 600 },
+      });
+      const section = payload.sections.profile_guidance;
+      // A real partial trim: some survived, but fewer than all ten.
+      expect(section.item_count).toBeGreaterThan(0);
+      expect(section.item_count).toBeLessThan(10);
+      // The emitted body — not just the warnings channel — declares the trim.
+      expect(section.truncated).toBe(true);
+      // A partial trim is not an empty state.
+      expect(section.empty_reason).toBeUndefined();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("stamps empty_reason=whole_pack_budget when trim empties an admitted body", async () => {
+    // A single large promoted preference under a budget that admits the empty
+    // section envelope but not the one item. The item is dropped to zero, the
+    // empty envelope is still admitted, and its emptiness is budget-caused — not
+    // a genuine no-data empty — so the body must say so and carry no citations.
+    const rows = [
+      prefRow({
+        id: "big",
+        candidate_scope: { key: "k-big" },
+        content: "pref " + "x".repeat(400),
+      }),
+    ];
+    const { pool } = routingPool({ guidance: () => rows });
+    const { client, cleanup } = await setupToolClient(ADMIN, pool);
+    try {
+      const { payload } = await callPack(client, {
+        requested_sections: ["profile_guidance"],
+        budget: { max_tokens: 360 },
+      });
+      const section = payload.sections.profile_guidance;
+      // The section survived as an admitted envelope, trimmed to empty.
+      expect(section).toBeTruthy();
+      expect(section.item_count).toBe(0);
+      expect(section.items).toEqual([]);
+      // Budget-caused empty is distinguished from a genuine no-data empty.
+      expect(section.truncated).toBe(true);
+      expect(section.empty_reason).toBe("whole_pack_budget");
+      // Citation bijection: no item survived, so no session_event citation remains.
+      expect(
+        payload.citations.filter((c: Row) => c.kind === "session_event"),
+      ).toEqual([]);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("leaves a genuine no-data empty state unstamped (truncated=false, no empty_reason)", async () => {
+    // Nothing promoted: the loader emits its defined empty state. The whole-pack
+    // re-fit must not stamp a budget reason onto an empty that budget did not
+    // cause — mutation-killing the naive "always stamp when items===0" fix.
+    const { pool } = routingPool({ guidance: () => [] });
+    const { client, cleanup } = await setupToolClient(ADMIN, pool);
+    try {
+      const { payload } = await callPack(client, {
+        requested_sections: ["profile_guidance"],
+        budget: { max_tokens: 600 },
+      });
+      const section = payload.sections.profile_guidance;
+      expect(section.item_count).toBe(0);
+      expect(section.truncated).toBe(false);
+      expect(section.empty_reason).toBeUndefined();
+    } finally {
+      await cleanup();
+    }
+  });
+});
+
 describe("hard serialized whole-pack budget and higher-priority survival", () => {
   it("never lets structured sections push the serialized pack past the budget", async () => {
     const rows = Array.from({ length: 12 }, (_, i) =>

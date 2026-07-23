@@ -598,6 +598,23 @@ export async function buildAgentContextPackPayload(
       ["item_count"],
       serving,
     );
+    // Whole-pack truth: when the re-fit drops any item the emitted body must say
+    // so on its own `truncated` flag — a downstream reader trusts the section
+    // body, not just the warnings channel. When the trim empties the retained
+    // items but the empty envelope is still admitted, stamp
+    // `empty_reason='whole_pack_budget'` so the emitted empty state truthfully
+    // states the budget starved it rather than reading as a genuine no-data
+    // empty. Reconcile before the serving/overflow checks below so the extra
+    // keys are counted against the surviving whole-pack budget. `fitted.section`
+    // is a fresh object unless nothing was trimmed (fitted.truncated === false),
+    // so this never mutates the loader's genuine-empty body.
+    if (fitted.truncated) {
+      const survivedBody = fitted.section as Record<string, unknown>;
+      survivedBody.truncated = true;
+      if ((survivedBody.item_count as number) === 0) {
+        survivedBody.empty_reason = "whole_pack_budget";
+      }
+    }
     if (fitted.starved && serializedLength(fitted.section) > serving) {
       // Even the empty envelope overflows the surviving budget: omit the section
       // to hold the hard whole-pack budget, and drop its citations so no citation

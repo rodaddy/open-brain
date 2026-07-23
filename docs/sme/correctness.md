@@ -934,6 +934,21 @@ budget are rechecked after metadata changes.
   fix cannot exceed the hard budget?
 - Do citations and warnings derive from the final retained item set?
 
+### Recurrence (PR #357 / issue #328)
+
+The same defect recurred in a different code location: the structured
+`profile_guidance` / `process_guidance` / `repo_facts` sections re-fit through
+`fitItemSection`, which — unlike `fitRankedItemSection` — does NOT self-reconcile
+the section body. So the reconciliation must happen in the **caller**
+(`admitStructuredSection` in `agent-context-pack.ts`): after a trim it stamps
+`truncated: true`, and `empty_reason: "whole_pack_budget"` when the trim empties
+an admitted envelope. Stamp before the serving/overflow checks so the added keys
+are counted against the surviving budget, and only mutate the trimmed body (a
+no-trim `fitItemSection` returns the loader's genuine-empty body by reference —
+mutating it would falsely stamp a real no-data empty). Extra review question:
+when a section reconciles at the caller rather than inside the fitter, is a
+genuine no-data empty (loader emitted `items: []`) left unstamped?
+
 ## [2026-07-22] Requested degraded sections and cited items need self-contained truth
 
 **Severity:** MEDIUM (P2)
