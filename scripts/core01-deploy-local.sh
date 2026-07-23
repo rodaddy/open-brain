@@ -31,45 +31,41 @@ cleanup_previous_dir() {
   return 1
 }
 
-verify_github_deploy_ref() {
-  if [[ "${GITHUB_ACTIONS:-}" != "true" ]]; then
+# Pre-mutation deploy ref gate. Provider-neutral: supports GitHub Actions and a
+# future Forgejo Actions repository-scoped runner. Provider/event/ref come from
+# explicit DEPLOY_* inputs, falling back to GitHub Actions env for backward
+# compatibility. The ALLOW/REFUSE decision itself lives in the unit-tested
+# scripts/deploy-ref-gate.ts so it can be exercised without touching git, env
+# loading, launchctl, runtime dirs, or production state.
+#
+# Fail closed: inside CI (any supported provider) a missing/unsupported/stale
+# trigger refuses the deploy. Outside CI the gate is a no-op, preserving the
+# prior operator-run behavior.
+verify_deploy_ref() {
+  local bun_bin="$1"
+
+  # Detect CI. Explicit DEPLOY_PROVIDER wins; otherwise fall back to the
+  # provider-native "actions" flags. Outside CI, skip the gate entirely.
+  if [[ -z "${DEPLOY_PROVIDER:-}" \
+        && "${GITHUB_ACTIONS:-}" != "true" \
+        && "${FORGEJO_ACTIONS:-}" != "true" ]]; then
     return 0
   fi
 
-  local event_name="${GITHUB_EVENT_NAME:-}"
-  local ref="${GITHUB_REF:-}"
-  local head_sha
-  local main_sha
-
-  case "$event_name:$ref" in
-    workflow_dispatch:refs/heads/main)
-      ;;
-    push:refs/tags/v*)
-      ;;
-    *)
-      echo "FATAL: refusing core01 deploy from unsupported GitHub ref: event=$event_name ref=$ref" >&2
-      exit 1
-      ;;
-  esac
-
+  # Gather git facts here (preserving the exact fetch/rev-parse/merge-base
+  # behavior) and hand the decision to the TS gate.
+  local head_sha main_sha reachable="false"
   git -C "$REPO_DIR" fetch --no-tags origin main:refs/remotes/origin/main
   head_sha="$(git -C "$REPO_DIR" rev-parse HEAD)"
   main_sha="$(git -C "$REPO_DIR" rev-parse origin/main)"
+  if git -C "$REPO_DIR" merge-base --is-ancestor "$head_sha" origin/main; then
+    reachable="true"
+  fi
 
-  case "$event_name:$ref" in
-    workflow_dispatch:refs/heads/main)
-      if [[ "$head_sha" != "$main_sha" ]]; then
-        echo "FATAL: refusing manual core01 deploy because HEAD is not the current origin/main tip: head=$head_sha origin/main=$main_sha" >&2
-        exit 1
-      fi
-      ;;
-    push:refs/tags/v*)
-      if ! git -C "$REPO_DIR" merge-base --is-ancestor "$head_sha" origin/main; then
-        echo "FATAL: refusing tag core01 deploy because HEAD is not reachable from origin/main: $head_sha" >&2
-        exit 1
-      fi
-      ;;
-  esac
+  DEPLOY_HEAD_SHA="$head_sha" \
+  DEPLOY_MAIN_SHA="$main_sha" \
+  DEPLOY_HEAD_REACHABLE_FROM_MAIN="$reachable" \
+    "$bun_bin" run "$REPO_DIR/scripts/deploy-ref-gate.ts"
 }
 
 wait_for_health() {
@@ -86,8 +82,6 @@ wait_for_health() {
   return 1
 }
 
-verify_github_deploy_ref
-
 if [[ -z "$BUN_BIN" ]]; then
   if [[ -x "/Users/rico/Library/Application Support/reflex/bun/bin/bun" ]]; then
     BUN_BIN="/Users/rico/Library/Application Support/reflex/bun/bin/bun"
@@ -98,6 +92,11 @@ if [[ -z "$BUN_BIN" ]]; then
     exit 1
   fi
 fi
+
+# Ref gate runs before ANY mutation (env load, staging, tar, migrate, swap).
+# It needs bun to run the unit-tested decision module, so it follows bun
+# resolution but precedes every side effect below.
+verify_deploy_ref "$BUN_BIN"
 
 if [[ ! -d "/Volumes/ThunderBolt" ]]; then
   echo "FATAL: /Volumes/ThunderBolt is not mounted" >&2
@@ -121,6 +120,7 @@ mkdir -p "$STAGING_DIR"
 tar \
   --exclude "./.git" \
   --exclude "./.github" \
+  --exclude "./.forgejo" \
   --exclude "./.planning" \
   --exclude "./.pi" \
   --exclude "./.omc" \
