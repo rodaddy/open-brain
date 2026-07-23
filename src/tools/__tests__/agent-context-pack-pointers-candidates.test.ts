@@ -99,8 +99,13 @@ describe("agent_context_pack pointers + candidate_memory (#329)", () => {
         expect(durableIds.has(id)).toBe(false);
       }
       // Every id is canonical brain_record:${source_type}:${id}; no bare key.
+      // source_type is the SINGULAR production label ("decision"), so the
+      // canonical identity is brain_record:decision:<id> — this fails if the
+      // fake ever regresses to emitting a plural source_type.
       for (const item of [...durable.items, ...pointers.items]) {
+        expect(item.source_type).toBe("decision");
         expect(item.citation_id).toBe(canonical(item.source_type, item.id));
+        expect(item.citation_id).toBe(`brain_record:decision:${item.id}`);
       }
       // The rows beyond the cap surface as pointers.
       expect(pointers.item_count).toBe(2);
@@ -195,7 +200,7 @@ describe("agent_context_pack pointers + candidate_memory (#329)", () => {
           ...SCOPE,
           query: "durable",
           requested_sections: ["pointers"],
-          prior_context: [{ citation_id: canonical("decisions", "dec-1") }],
+          prior_context: [{ citation_id: canonical("decision", "dec-1") }],
         },
       });
       const payload = JSON.parse((pack.content as any)[0].text);

@@ -130,7 +130,11 @@ export function brainRecord(
   overrides: Partial<Record<string, unknown>> = {},
 ): Record<string, unknown> {
   return {
-    source_type: "decisions",
+    // Production executeSearch labels rows with the SINGULAR source_type
+    // (SOURCE_LABELS: decisions -> "decision"); the plural is the table name.
+    // Emit singular here so the canonical identity is brain_record:decision:<id>
+    // and get_entry resolution must derive the table as source_type + "s".
+    source_type: "decision",
     id: overrides.id ?? "dec-1",
     namespace: "rico",
     content_preview: "durable decision content",

@@ -31,7 +31,7 @@ import {
 
 describe("agent_context_pack pointers + candidate_memory budget/integration (#329)", () => {
   it("whole-pack trimming actually trims durable and resurfaces the trimmed row as a pointer, never silently losing it", async () => {
-    // A calibrated whole-pack budget (max_tokens 600) trims the durable_memory
+    // A calibrated whole-pack budget (max_tokens 580) trims the durable_memory
     // bodies from the normal cap of 8 down to a SINGLE retained item and stamps a
     // durable_memory whole_pack_budget truncation marker. The row the durable
     // section shed for budget must resurface as a pointer (a pointer envelope is
@@ -45,7 +45,7 @@ describe("agent_context_pack pointers + candidate_memory budget/integration (#32
           ...SCOPE,
           query: "durable",
           requested_sections: ["durable_memory", "pointers"],
-          budget: { max_tokens: 600 },
+          budget: { max_tokens: 580 },
         },
       });
       const payload = JSON.parse((pack.content as any)[0].text);
@@ -81,8 +81,8 @@ describe("agent_context_pack pointers + candidate_memory budget/integration (#32
       // The pointer surfaces a row that was NOT retained as a durable item: the
       // top-ranked dec-1 was kept durable, dec-2 (next-ranked, trimmed for
       // budget) resurfaces as the pointer.
-      expect(durableIds.has(canonical("decisions", "dec-1"))).toBe(true);
-      expect(pointerIds.has(canonical("decisions", "dec-2"))).toBe(true);
+      expect(durableIds.has(canonical("decision", "dec-1"))).toBe(true);
+      expect(pointerIds.has(canonical("decision", "dec-2"))).toBe(true);
       // Union covers strictly more than the retained durable set alone.
       const union = new Set([...durableIds, ...pointerIds]);
       expect(union.size).toBeGreaterThan(durableIds.size);
@@ -187,11 +187,16 @@ describe("agent_context_pack pointers + candidate_memory budget/integration (#32
       expect(pointers.item_count).toBeGreaterThan(0);
 
       // Take the FIRST emitted pointer's STRUCTURAL source_ref (type + id) and
-      // resolve it. type is the source_type ("decisions"), which is exactly the
-      // get_entry table name; id is the entry UUID.
+      // resolve it. type is the SINGULAR source_type ("decision") production's
+      // executeSearch emits; get_entry's table is that source_type + "s"
+      // ("decisions"). Deriving the table this way — rather than passing
+      // source_ref.type through verbatim — is the exact resolution contract a
+      // client follows, and it fails loudly if the fixture ever regresses to
+      // emitting a plural source_type again.
       const pointer = pointers.items[0];
-      const table = pointer.source_ref.type as string;
       const id = pointer.source_ref.id as string;
+      expect(pointer.source_ref.type).toBe("decision");
+      const table = `${pointer.source_ref.type as string}s`;
       expect(table).toBe("decisions");
 
       // Clear captured so we inspect only the resolution query's params.

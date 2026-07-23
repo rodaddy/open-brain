@@ -145,7 +145,7 @@ export const agentContextPackInputSchema = {
     .optional()
     .describe(
       "Sections to assemble. durable_lane_context is queried only when explicitly requested and requires all seven exact scope coordinates. profile_guidance, process_guidance, and repo_facts are each queried only when explicitly requested. " +
-        "pointers returns resolvable-reference-only entries (identity/source_ref/structural metadata, never a body) for durable records not already emitted as durable_memory items; requesting pointers reuses the single durable_memory hybrid recall (no second retrieval stack) and needs a query. " +
+        'pointers returns resolvable-reference-only entries (identity/source_ref/structural metadata, never a body) for durable records not already emitted as durable_memory items; requesting pointers reuses the single durable_memory hybrid recall (no second retrieval stack) and needs a query. source_ref.type is the singular source_type, so resolve a pointer through get_entry with table = source_ref.type + "s" and id = source_ref.id. ' +
         "candidate_memory currently has no write-side candidate predicate, so it always returns a truthful empty section (items [], empty_reason candidate_predicate_unavailable, confidence unconfirmed, auto_promotable false) and never triggers recall on its own.",
     ),
   include_unreviewed_recovery: z

@@ -88,6 +88,11 @@ function identityOf(row: SearchRow): string {
 /**
  * A single pointer. Resolvable reference ONLY — identity, structural source_ref,
  * and lightweight structural metadata. No body, content_preview, or full text.
+ *
+ * source_ref.type carries the SINGULAR source_type executeSearch emits
+ * (e.g. "decision"). To resolve a pointer through get_entry, derive the table by
+ * appending "s" (get_entry table = source_ref.type + "s", e.g. "decisions") and
+ * pass source_ref.id as the entry id.
  */
 export interface PointerItem {
   id: string;
