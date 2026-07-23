@@ -19,6 +19,17 @@ const DURABLE_MEMORY_MAX_ITEMS = 8;
 const DURABLE_MEMORY_MAX_ITEM_CHARS = 1_000;
 
 /**
+ * Extra recall rows fetched beyond {@link DURABLE_MEMORY_MAX_ITEMS} so the
+ * `pointers` section (#329) has a net-new, already-authorized pool to draw from
+ * WITHOUT a second retrieval stack. The single `executeSearch` call below
+ * over-fetches by this much; the first rows become durable_memory items (with
+ * bodies) and the surplus net-new rows are handed to the pointer builder as
+ * lightweight references only (no body copied, no second query issued). Bounded
+ * so recall stays cheap; the pointer builder applies its own hard item ceiling.
+ */
+const DURABLE_MEMORY_POINTER_OVERFETCH = 20;
+
+/**
  * Resolve the durable-memory content char budget.
  *
  * When the whole-pack allocator supplies an explicit `contentCharLimit`, the
@@ -54,14 +65,43 @@ export type DurableMemoryContextFragment = {
   degradedSources: Array<Record<string, unknown>>;
   budget: Record<string, unknown>;
   citations: Array<Record<string, unknown>>;
+  /**
+   * The canonical `brain_record:${source_type}:${id}` identities actually
+   * EMITTED as durable_memory items — kept content-free, ids only, and byte-
+   * identical to each item's `citation_id`. The `pointers` and
+   * `candidate_memory` sections (#329) dedupe against this set so the same
+   * evidence the durable section already owns is never re-listed or
+   * double-counted. Empty on every empty/degraded/denied path (nothing was
+   * emitted to dedupe against).
+   */
+  durableIdentities: string[];
+  /**
+   * ALL net-new recall rows the SAME `executeSearch` call returned and that
+   * survived prior-context suppression, in hybrid-RRF rank order (#329). This is
+   * the pointer/candidate builders' already-authorized, already-suppressed pool;
+   * it is passed by reference so no second retrieval stack runs.
+   *
+   * It deliberately includes rows the durable_memory section DID emit as items,
+   * not only the surplus beyond the item cap. Pointer eligibility is decided in
+   * the pack against the durable identities ACTUALLY retained in the final fitted
+   * durable_memory output — so a pointers-only request (section suppressed) makes
+   * every authorized row pointer-eligible, and a whole-pack-trimmed or
+   * starved-out durable row stays pointer-eligible instead of being silently
+   * lost. Never emitted directly; the pointer builder derives lightweight
+   * references from it and copies no body. Empty on every empty/degraded/denied
+   * path.
+   */
+  pointerCandidatePool: SearchRow[];
 };
 
 /**
  * The stable citation id emitted for a recalled brain record. Kept in one place
  * so prior-context suppression keys off the EXACT string that becomes the item's
- * `citation_id`, and the emitted item derives its id from the same call.
+ * `citation_id`, and the emitted item derives its id from the same call. The
+ * pointer/candidate builders (#329) reuse this so a pointer's identity is byte-
+ * identical to the durable item it dedupes against.
  */
-function recordCitationId(row: SearchRow): string {
+export function recordCitationId(row: SearchRow): string {
   return `brain_record:${row.source_type}:${row.id}`;
 }
 
@@ -70,8 +110,13 @@ function recordCitationId(row: SearchRow): string {
  * store's own source_ref when present, else a derived `brain_record` pointer.
  * Its identity coordinates (source/type/id/namespace) are what suppression
  * canonicalizes on; `label`/`preview` are display-only and never affect matching.
+ *
+ * NOTE: this shape MAY carry `label`/`preview` (bounded content) for the durable
+ * item and its citation. The `pointers` section MUST NOT emit those display
+ * fields — it uses {@link recordStructuralSourceRef} instead, which is the same
+ * identity object stripped of any body-bearing display field.
  */
-function recordSourceRef(row: SearchRow) {
+export function recordSourceRef(row: SearchRow) {
   return (
     row.source_ref ?? {
       source: "brain",
@@ -82,6 +127,38 @@ function recordSourceRef(row: SearchRow) {
       preview: (row.content_preview ?? "").slice(0, 300),
     }
   );
+}
+
+/**
+ * The identity-only structural source_ref for a recalled brain record: the SAME
+ * identity coordinates suppression canonicalizes on (source/type/id/namespace),
+ * with every display/body field (`label`, `preview`, or any other) stripped.
+ * This is what `pointers` emit — a resolvable structural ref with NO body,
+ * content_preview, or full text — while remaining byte-comparable on identity to
+ * the durable item's source_ref. Derived from {@link recordSourceRef} so a
+ * store-supplied source_ref and a derived one are handled identically.
+ */
+export function recordStructuralSourceRef(row: SearchRow): {
+  source: string;
+  type: string;
+  id: string;
+  namespace?: string;
+} {
+  const full = recordSourceRef(row) as unknown as Record<string, unknown>;
+  const structural: {
+    source: string;
+    type: string;
+    id: string;
+    namespace?: string;
+  } = {
+    source: String(full.source),
+    type: String(full.type),
+    id: String(full.id),
+  };
+  if (full.namespace !== undefined && full.namespace !== null) {
+    structural.namespace = String(full.namespace);
+  }
+  return structural;
 }
 
 /**
@@ -139,6 +216,8 @@ export async function loadDurableMemoryContext(
       degradedSources: [],
       budget: emptyBudget(),
       citations: [],
+      durableIdentities: [],
+      pointerCandidatePool: [],
     };
   }
 
@@ -163,6 +242,8 @@ export async function loadDurableMemoryContext(
       degradedSources: [],
       budget: emptyBudget(),
       citations: [],
+      durableIdentities: [],
+      pointerCandidatePool: [],
     };
   }
 
@@ -179,7 +260,11 @@ export async function loadDurableMemoryContext(
       deps,
       accessibleTables,
       query,
-      DURABLE_MEMORY_MAX_ITEMS,
+      // Over-fetch a bounded pool so the pointers section (#329) can draw from
+      // net-new rows this SAME recall already authorized, without a second
+      // retrieval stack. durable_memory still emits only its own top
+      // DURABLE_MEMORY_MAX_ITEMS; the surplus feeds pointers as references only.
+      DURABLE_MEMORY_MAX_ITEMS + DURABLE_MEMORY_POINTER_OVERFETCH,
       "hybrid",
       undefined,
       0,
@@ -207,6 +292,8 @@ export async function loadDurableMemoryContext(
       degradedSources: [{ source: "durable_memory", reason: "recall_failed" }],
       budget: emptyBudget(),
       citations: [],
+      durableIdentities: [],
+      pointerCandidatePool: [],
     };
   }
 
@@ -234,8 +321,24 @@ export async function loadDurableMemoryContext(
   const items: Array<Record<string, unknown>> = [];
   const citations: Array<Record<string, unknown>> = [];
   let itemsTruncated = false;
+  // Canonical `brain_record:${source_type}:${id}` identity of every row EMITTED
+  // as a durable_memory item (== its citation_id), so the pointer/candidate
+  // builders never re-list evidence this section already owns. Ids only.
+  const durableIdentities: string[] = [];
+  // Every net-new authorized row, in rank order, handed to the pointer/candidate
+  // builders. It includes rows this section emitted as items — pointer
+  // eligibility is decided in the pack against the durable identities actually
+  // retained in the FINAL fitted durable_memory output, so a suppressed or
+  // whole-pack-trimmed durable row stays pointer-eligible instead of being lost.
+  const pointerCandidatePool: SearchRow[] = [...netNewRows];
 
   for (const row of netNewRows) {
+    // Hard item cap: durable_memory keeps its historical top-N selection even
+    // though recall now over-fetches. Rows beyond the cap are surfaced only as
+    // pointers, not a durable truncation, and remain in the pool above.
+    if (items.length >= DURABLE_MEMORY_MAX_ITEMS) {
+      continue;
+    }
     const bounded = boundedText(
       row.content_preview,
       Math.min(DURABLE_MEMORY_MAX_ITEM_CHARS, remainingChars),
@@ -245,9 +348,12 @@ export async function loadDurableMemoryContext(
         typeof row.content_preview === "string" &&
         row.content_preview.length > 0
       ) {
+        // Non-empty body the char budget could not admit: a genuine durable
+        // truncation, exactly as before the over-fetch change. The row still has
+        // a valid resolvable identity and stays in the pool as a pointer.
         itemsTruncated = true;
       }
-      break;
+      continue;
     }
     const citationId = recordCitationId(row);
     // Build the bounded source_ref once per row and attach the SAME object to
@@ -273,13 +379,26 @@ export async function loadDurableMemoryContext(
       kind: "brain_record",
       source_ref: sourceRef,
     });
+    // Canonical durable identity == the item's citation_id (byte-identical), so
+    // pointers/candidates dedupe on the exact string the durable item exposes.
+    durableIdentities.push(citationId);
     remainingChars -= bounded.text.length;
     if (bounded.truncated) itemsTruncated = true;
   }
-  // Net-new records beyond the ones whose bodies fit were dropped by the char
-  // budget. Compare against the post-suppression set: records removed as prior
-  // context are not a truncation, so they must not flip this flag.
-  if (items.length < netNewRows.length) itemsTruncated = true;
+  // A net-new record diverted to the pointer pool because the item cap was hit
+  // is NOT a durable truncation (it is fully surfaced as a pointer). Only a body
+  // the char budget could not admit flips itemsTruncated, which the loop already
+  // does above; do not additionally flip it here for cap-diverted rows.
+  //
+  // content_unavailable preservation: when net-new records survived suppression
+  // but NONE produced an emittable durable body (all previews null/empty, or the
+  // char budget admitted none), durable_memory reports zero items with a
+  // truncated empty state, exactly as before the over-fetch change. The diverted
+  // rows still resurface as pointers, but the durable section truthfully states
+  // it emitted no content for a net-new match.
+  if (items.length === 0 && suppression.suppression.net_new > 0) {
+    itemsTruncated = true;
+  }
 
   const truncation: Array<Record<string, unknown>> = [];
   if (itemsTruncated) {
@@ -343,5 +462,7 @@ export async function loadDurableMemoryContext(
       max_item_chars: DURABLE_MEMORY_MAX_ITEM_CHARS,
     },
     citations,
+    durableIdentities,
+    pointerCandidatePool,
   };
 }

@@ -42,6 +42,10 @@ import {
   type GuidanceSectionName,
 } from "./agent-context-pack-guidance.ts";
 import { loadRepoFactsSection } from "./agent-context-pack-repo-facts.ts";
+import {
+  buildCandidateSection,
+  buildPointerSection,
+} from "./agent-context-pack-pointers-candidates.ts";
 import type { SectionFragment } from "./agent-context-pack-sections.ts";
 
 export const SECTION_NAMES = [
@@ -216,7 +220,7 @@ export async function buildAgentContextPackPayload(
     (!args.requested_sections || args.requested_sections.includes("recovery"));
   const includeDurableLaneContext =
     args.requested_sections?.includes("durable_lane_context") === true;
-  const includeDurableMemory =
+  const includeDurableMemorySection =
     args.requested_sections?.includes("durable_memory") === true;
   const includeProfileGuidance =
     args.requested_sections?.includes("profile_guidance") === true;
@@ -224,6 +228,18 @@ export async function buildAgentContextPackPayload(
     args.requested_sections?.includes("process_guidance") === true;
   const includeRepoFacts =
     args.requested_sections?.includes("repo_facts") === true;
+  const includePointers =
+    args.requested_sections?.includes("pointers") === true;
+  const includeCandidateMemory =
+    args.requested_sections?.includes("candidate_memory") === true;
+  // pointers and candidate_memory are derived from the durable_memory hybrid
+  // recall — the single retrieval stack. Requesting either runs that recall so
+  // its net-new surplus pool and emitted-identity set are available, even when
+  // the durable_memory SECTION itself was not requested for output. The
+  // durable_memory section body is still only ADDED to the pack when it was
+  // explicitly requested (includeDurableMemorySection).
+  const includeDurableMemory =
+    includeDurableMemorySection || includePointers || includeCandidateMemory;
 
   // The auth-derived physical namespace is the single isolation predicate every
   // structured-section read binds to. `canReadNamespace(auth, ns)` above already
@@ -481,7 +497,15 @@ export async function buildAgentContextPackPayload(
         durableMemoryContentLimit,
       )
     : null;
-  let durableMemorySection = durableMemoryContext?.section ?? null;
+  // The durable_memory SECTION is only fitted/emitted/charged when it was
+  // explicitly requested. When the recall ran ONLY to feed pointers/candidates
+  // (includeDurableMemory true via includePointers/includeCandidateMemory but
+  // includeDurableMemorySection false), the section body is suppressed here while
+  // its surplus pool and identities still flow to the pointer/candidate builders
+  // below.
+  let durableMemorySection = includeDurableMemorySection
+    ? (durableMemoryContext?.section ?? null)
+    : null;
   let durableMemoryCitations = durableMemorySection
     ? (durableMemoryContext?.citations ?? [])
     : [];
@@ -741,6 +765,92 @@ export async function buildAgentContextPackPayload(
     admitStructuredSection("repo_facts", repoFactsFragment);
   }
 
+  // pointers + candidate_memory (#329): the lowest-priority members, admitted
+  // LAST after repo_facts. Both are pure transforms over the durable_memory
+  // recall's already-authorized, already-suppressed surplus pool — no second
+  // retrieval stack. Pointers dedupe against the durable identities the recall
+  // already emitted; candidates dedupe against durable identities AND the
+  // pointers just emitted. Each is admitted through the SAME structured-section
+  // fitter so it shares one whole-pack budget, citation, and truncation
+  // reconciliation with guidance/repo_facts.
+  //
+  // The recall pool is empty (and dedupe/identity sets empty) when durable
+  // recall did not run, returned nothing, or degraded — the builders then emit
+  // their defined empty envelopes. When the durable_memory SECTION itself was
+  // not requested for output, the shared recall's content-free scope-denial /
+  // degraded-source warnings are surfaced through these sections instead (folded
+  // in once) so a failed shared recall is never silently swallowed.
+  const durablePool = durableMemoryContext?.pointerCandidatePool ?? [];
+  // Pointer eligibility is decided against the durable identities ACTUALLY
+  // retained in the FINAL fitted durable_memory output — not the loader's
+  // pre-fit emitted set. When the durable_memory section is suppressed for output
+  // (pointers-only request) this is empty, so every authorized recalled row is
+  // pointer-eligible. When the whole-pack re-fit trimmed or starved out durable
+  // rows, those rows are absent here and stay pointer-eligible instead of being
+  // silently lost. `citation_id` on each retained item is the canonical
+  // `brain_record:${source_type}:${id}` identity.
+  const retainedDurableIdentities: string[] = [];
+  if (durableMemorySection) {
+    const retainedItems =
+      (durableMemorySection as { items?: Array<{ citation_id?: unknown }> })
+        .items ?? [];
+    for (const item of retainedItems) {
+      if (typeof item.citation_id === "string") {
+        retainedDurableIdentities.push(item.citation_id);
+      }
+    }
+  }
+  // Identities the pointer builder actually emitted, so candidates dedupe
+  // against durable memory AND pointers. Populated during pointer admission.
+  const pointerEmittedIdentities: string[] = [];
+  // When the durable_memory section is suppressed for output but its recall ran
+  // for pointers/candidates, its recall warnings attach to the first admitted
+  // #329 section so they are emitted exactly once.
+  let sharedRecallWarningsPending =
+    includeDurableMemory && !includeDurableMemorySection;
+  const foldSharedRecallWarnings = (fragment: SectionFragment): void => {
+    if (!sharedRecallWarningsPending) return;
+    sharedRecallWarningsPending = false;
+    fragment.scopeDenials.push(...(durableMemoryContext?.scopeDenials ?? []));
+    fragment.degradedSources.push(
+      ...(durableMemoryContext?.degradedSources ?? []),
+    );
+  };
+
+  if (includePointers) {
+    const pointerFragment = buildPointerSection({
+      pool: durablePool,
+      durableIdentities: retainedDurableIdentities,
+    });
+    // Capture the canonical identities pointers emitted so candidate dedupe can
+    // exclude them, BEFORE admission trims the section for budget (dedupe is a
+    // semantic identity relationship, independent of whole-pack budget survival).
+    // Each pointer's `citation_id` IS the canonical
+    // `brain_record:${source_type}:${id}` identity — never a bare source_type:id.
+    const pointerItems =
+      (pointerFragment.section?.items as
+        Array<{ citation_id?: unknown }> | undefined) ?? [];
+    for (const item of pointerItems) {
+      if (typeof item.citation_id === "string") {
+        pointerEmittedIdentities.push(item.citation_id);
+      }
+    }
+    foldSharedRecallWarnings(pointerFragment);
+    admitStructuredSection("pointers", pointerFragment);
+  }
+
+  if (includeCandidateMemory) {
+    const candidateFragment = buildCandidateSection({
+      pool: durablePool,
+      excludedIdentities: [
+        ...retainedDurableIdentities,
+        ...pointerEmittedIdentities,
+      ],
+    });
+    foldSharedRecallWarnings(candidateFragment);
+    admitStructuredSection("candidate_memory", candidateFragment);
+  }
+
   const sections: Record<string, unknown> = {};
   if (workingSetSection) sections.working_set = workingSetSection;
   if (recoverySection) sections.recovery = recoverySection;
@@ -764,12 +874,20 @@ export async function buildAgentContextPackPayload(
           ...(workingSet ? workingSet.warnings.scope_denials : []),
           ...(recovery ? recovery.warnings.scope_denials : []),
           ...(durableLaneContext?.scopeDenials ?? []),
-          ...(durableMemoryContext?.scopeDenials ?? []),
+          // durable_memory recall warnings are emitted here ONLY when the section
+          // was requested for output; when the recall ran solely for
+          // pointers/candidates they are folded into those sections' fragments
+          // instead (see foldSharedRecallWarnings) so they surface exactly once.
+          ...(includeDurableMemorySection
+            ? (durableMemoryContext?.scopeDenials ?? [])
+            : []),
           ...structuredScopeDenials,
         ],
         degraded_sources: [
           ...(durableLaneContext?.degradedSources ?? []),
-          ...(durableMemoryContext?.degradedSources ?? []),
+          ...(includeDurableMemorySection
+            ? (durableMemoryContext?.degradedSources ?? [])
+            : []),
           ...structuredDegradedSources,
         ],
         truncation: [
@@ -798,7 +916,10 @@ export async function buildAgentContextPackPayload(
         ...(durableLaneSection || durableLaneContext
           ? { durable_lane_context: durableLaneBudget }
           : {}),
-        ...(durableMemorySection || durableMemoryContext
+        // durable_memory budget is reported only when the section was requested
+        // for output. A recall that ran solely to feed pointers/candidates does
+        // not report a durable_memory budget block (the section is absent).
+        ...(includeDurableMemorySection && durableMemoryContext
           ? { durable_memory: durableMemoryBudget }
           : {}),
       },

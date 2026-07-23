@@ -18,10 +18,13 @@ export const CHARS_PER_TOKEN = 4;
  * is the exact-scope hot active state, recovery is the explicit opt-in
  * interrupted-session trace, durable_lane_context is the broader recallable
  * lane context, and durable_memory is the query-driven hybrid recall over durable
- * brain records — the lowest-priority section, allocated last against whatever
- * budget survives. A lower-priority section is only assembled against whatever
- * pack budget the higher-priority sections leave behind, so one large section
- * cannot starve a higher-value one. This order is stable for identical inputs.
+ * brain records. The structured guidance/repo_facts sections follow, and
+ * `pointers` + `candidate_memory` (#329) are the lowest-priority members,
+ * allocated LAST after repo_facts against whatever budget survives — lightweight
+ * reference/candidate views that must never starve a higher-value body-bearing
+ * section. A lower-priority section is only assembled against whatever pack
+ * budget the higher-priority sections leave behind, so one large section cannot
+ * starve a higher-value one. This order is stable for identical inputs.
  */
 export const CONTEXT_PACK_SECTION_PRIORITY = [
   "working_set",
@@ -31,6 +34,8 @@ export const CONTEXT_PACK_SECTION_PRIORITY = [
   "profile_guidance",
   "process_guidance",
   "repo_facts",
+  "pointers",
+  "candidate_memory",
 ] as const;
 
 /** Serialized size, in characters, of a section's content payload. */

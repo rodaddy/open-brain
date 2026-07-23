@@ -197,6 +197,8 @@ describe("agent_context_pack whole-pack budget", () => {
           "profile_guidance",
           "process_guidance",
           "repo_facts",
+          "pointers",
+          "candidate_memory",
         ],
       });
     } finally {
