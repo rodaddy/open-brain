@@ -69,6 +69,42 @@ export interface SearchHit {
 }
 
 /**
+ * The exact seven-coordinate active scope the complete-pack gate binds. The
+ * namespace is the isolation predicate (the per-run throwaway namespace); the
+ * remaining coordinates address the exact working-set / durable-lane scope. A
+ * missing `thread_id` means the unthreaded lane, exactly as the pack tool treats
+ * an omitted thread id.
+ */
+export interface ContextPackScope {
+  namespace: string;
+  agent: string;
+  platform: string;
+  server_id: string;
+  channel_id: string;
+  thread_id?: string | null;
+  session_key: string;
+}
+
+/**
+ * The structural fields the complete-pack gate reads out of the pack payload.
+ * Deliberately narrow: only the shape needed to verify presence/emptiness,
+ * citations, budget, and warnings. Section bodies are kept as opaque records so
+ * the gate reads item counts / citation ids / empty markers WITHOUT the eval
+ * code ever needing to log a memory body. The raw payload text is never carried.
+ */
+export interface ContextPackPayload {
+  status: string;
+  sections: Record<string, unknown>;
+  citations: Array<Record<string, unknown>>;
+  budget: Record<string, unknown>;
+  warnings: {
+    scope_denials: Array<Record<string, unknown>>;
+    degraded_sources: Array<Record<string, unknown>>;
+    truncation: Array<Record<string, unknown>>;
+  };
+}
+
+/**
  * Result of an explicit isolation probe: an attempt by one caller to read a
  * namespace it must not be able to read. `denied` is the only signal the gate
  * trusts as proof of isolation; an empty-but-successful search is NOT denial.
@@ -230,6 +266,52 @@ export class OpenBrainLiveClient {
   }
 
   /**
+   * Build the complete agent context pack for the exact active scope, requesting
+   * all of `requestedSections` under one whole-pack budget. Returns the parsed
+   * structured payload object (sections/citations/budget/warnings) for the
+   * complete-pack gate to verify functional outcomes against.
+   *
+   * The pack tool returns a JSON OBJECT (never an array). We fail closed
+   * content-free on a body that is not a JSON object or that the server flagged
+   * as an error: the pack payload can carry memory bodies inside its section
+   * items, so the raw text is NEVER logged or surfaced -- only structural fields
+   * the gate reads (ids, counts, citation ids, budget numbers). A permission
+   * denial is thrown as a redacted LiveTransportError, exactly like `search`.
+   */
+  async contextPack(opts: {
+    scope: ContextPackScope;
+    query: string;
+    requestedSections: readonly string[];
+    budgetMaxTokens?: number;
+    includeUnreviewedRecovery?: boolean;
+  }): Promise<ContextPackPayload> {
+    const args: Record<string, unknown> = {
+      namespace: opts.scope.namespace,
+      agent: opts.scope.agent,
+      platform: opts.scope.platform,
+      server_id: opts.scope.server_id,
+      channel_id: opts.scope.channel_id,
+      session_key: opts.scope.session_key,
+      query: opts.query,
+      requested_sections: [...opts.requestedSections],
+    };
+    if (opts.scope.thread_id !== undefined && opts.scope.thread_id !== null) {
+      args.thread_id = opts.scope.thread_id;
+    }
+    if (opts.includeUnreviewedRecovery) {
+      args.include_unreviewed_recovery = true;
+    }
+    if (opts.budgetMaxTokens !== undefined) {
+      args.budget = { max_tokens: opts.budgetMaxTokens };
+    }
+    const result = await this.caller.callTool("agent_context_pack", args);
+    if (result.isError) {
+      throw new LiveTransportError(result.errorLabel, result.denied);
+    }
+    return parseContextPackPayload(result.data);
+  }
+
+  /**
    * Archive exactly one record by table + id. archive_entry is namespace-scoped
    * server-side (it appends the caller's write-namespace predicate), so a token
    * can only ever archive records it owns -- this is what makes per-record
@@ -353,6 +435,51 @@ export function parseHits(text: string): SearchHit[] {
     });
   }
   return hits;
+}
+
+/**
+ * Parse the complete context-pack payload from a JSON object body. Never logs
+ * the body, which can carry memory bodies inside its section items.
+ *
+ * Fails closed content-free rather than defaulting a malformed body to an empty
+ * pack: a non-object body, or invalid JSON, is a malformed pack
+ * (`agent_context_pack:malformed-payload`), NOT an empty pack -- conflating the
+ * two would let a broken pack pass as a clean empty. `sections`, `citations`,
+ * `budget`, and `warnings.*` are normalized to their expected container shapes
+ * (object / array), defaulting a MISSING container to its empty form so the gate
+ * can classify a genuinely-empty pack without inspecting any body. The section
+ * bodies themselves stay opaque records; the gate reads only their structural
+ * fields.
+ */
+export function parseContextPackPayload(text: string): ContextPackPayload {
+  const parsed = safeJson(text);
+  if (!parsed) {
+    throw new LiveTransportError("agent_context_pack:malformed-payload", false);
+  }
+  const asRecordArray = (value: unknown): Array<Record<string, unknown>> => {
+    if (!Array.isArray(value)) return [];
+    return value.filter(
+      (row): row is Record<string, unknown> =>
+        !!row && typeof row === "object" && !Array.isArray(row),
+    );
+  };
+  const asRecord = (value: unknown): Record<string, unknown> =>
+    value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {};
+
+  const warnings = asRecord(parsed.warnings);
+  return {
+    status: typeof parsed.status === "string" ? parsed.status : "",
+    sections: asRecord(parsed.sections),
+    citations: asRecordArray(parsed.citations),
+    budget: asRecord(parsed.budget),
+    warnings: {
+      scope_denials: asRecordArray(warnings.scope_denials),
+      degraded_sources: asRecordArray(warnings.degraded_sources),
+      truncation: asRecordArray(warnings.truncation),
+    },
+  };
 }
 
 /**

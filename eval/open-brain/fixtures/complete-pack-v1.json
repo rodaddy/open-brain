@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "fixture_id": "open-brain-complete-pack-v1",
+  "description": "Sealed synthetic corpus for the live COMPLETE CONTEXT PACK gate (EVAL-3, #330). All content is invented for evaluation only and carries no real memory, secret, or token. Primary-role entries are seeded under a per-run throwaway namespace and must be recallable by the pack's durable_memory query; negative-role entries are seeded into a sibling namespace the pack caller cannot read and must never surface in any section item or citation. The gate requests all nine sections under one whole-pack budget; RAM-only working_set and recovery are legitimately defined-empty on a fresh remote scope, and durable_lane_context returns its exact-scope defined-empty because no seven-coordinate lane exists for the throwaway scope.",
+  "query": "What is the marlin telemetry cache eviction window and how is the beacon rotation scheduled?",
+  "corpus": [
+    {
+      "id": "marlin-cache-eviction",
+      "table": "thoughts",
+      "namespace_role": "primary",
+      "content": "The marlin telemetry cache evicts every buffered reading after one hundred twenty seconds so a stale beacon sample can never dominate the fused position estimate.",
+      "tags": ["marlin", "telemetry", "cache", "eviction"]
+    },
+    {
+      "id": "beacon-rotation-decision",
+      "table": "decisions",
+      "namespace_role": "primary",
+      "content": "We rotate the marlin beacon channel on a ninety second schedule so overlapping estuary transmitters never collide during the telemetry handoff.",
+      "tags": ["marlin", "beacon", "rotation", "telemetry"]
+    },
+    {
+      "id": "beacon-handoff-note",
+      "table": "thoughts",
+      "namespace_role": "primary",
+      "content": "During a marlin beacon rotation the handoff replays the last cached reading from the checkpoint so the position estimate stays continuous across the channel switch.",
+      "tags": ["marlin", "beacon", "handoff", "checkpoint"]
+    },
+    {
+      "id": "distractor-marlin-unrelated",
+      "table": "thoughts",
+      "namespace_role": "primary",
+      "content": "The coastal marlin fishing tournament schedule tracks tide charts and has nothing to do with the telemetry cache or beacon program.",
+      "tags": ["marlin", "tournament", "tide", "coastal"]
+    },
+    {
+      "id": "negative-marlin-secret-key",
+      "table": "decisions",
+      "namespace_role": "negative",
+      "content": "Confidential marlin beacon rotation keying schedule that lives in a private namespace the eval pack token cannot read and must never surface.",
+      "tags": ["marlin", "beacon", "rotation", "confidential"]
+    },
+    {
+      "id": "negative-telemetry-secret-cache",
+      "table": "thoughts",
+      "namespace_role": "negative",
+      "content": "Private marlin telemetry cache credential note that belongs to a namespace outside the eval token's read scope and must never be recalled by the pack.",
+      "tags": ["marlin", "telemetry", "cache", "private"]
+    }
+  ],
+  "expected_recall_ids": [
+    "marlin-cache-eviction",
+    "beacon-rotation-decision"
+  ],
+  "forbidden_ids": [
+    "negative-marlin-secret-key",
+    "negative-telemetry-secret-cache"
+  ]
+}
