@@ -53,6 +53,7 @@ import { registerGetContract } from "./get-contract.ts";
 import { registerOperatorDoctor } from "./operator-doctor.ts";
 import { registerListRepoFacts, registerUpsertRepoFact } from "./repo-facts.ts";
 import { registerSourceRegistry } from "./source-registry.ts";
+import { registerDropFolderCollector } from "./drop-folder-collector.ts";
 import { registerIngestConversationFacts } from "./ingest-conversation-facts.ts";
 import {
   registerAgentContextPack,
@@ -148,5 +149,6 @@ export function registerAllTools(server: McpServer, deps: ToolDeps): void {
   registerUpsertRepoFact(server, toolDeps);
   registerListRepoFacts(server, toolDeps);
   registerSourceRegistry(server, toolDeps);
+  registerDropFolderCollector(server, toolDeps);
   registerIngestConversationFacts(server, toolDeps);
 }
