@@ -1,11 +1,15 @@
 import { describe, expect, it } from "bun:test";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   observationHash,
   planReconciliation,
   sourceObservationSchema,
+  syncSource,
   type SourceObservation,
   type SyncOp,
 } from "./source-sync.ts";
+import type { AuthInfo } from "./types.ts";
 
 // Deterministic id minter so an `add` produces a stable, inspectable file_id.
 function seqMinter(prefix = "new"): () => string {
@@ -223,6 +227,75 @@ describe("observationHash - order-insensitive, content-free", () => {
   it("is a lowercase sha256 hex digest", () => {
     expect(observationHash(obs([["a.ts", H(1)]]))).toMatch(/^[0-9a-f]{64}$/);
   });
+
+  it("is deterministic: the same file set hashes identically every call", () => {
+    const files = obs([
+      ["src/a.ts", H(1)],
+      ["src/b.ts", H(2)],
+      ["deep/nested path.ts", H(3)],
+    ]);
+    expect(observationHash(files)).toEqual(observationHash(files));
+  });
+
+  it("does not collide when a delimiter could fuse path and hash fields", () => {
+    // The canonical encoding must treat (path, content_hash) as separate fields.
+    // A naive `${path}${hash}` or space-joined encoding would let two DIFFERENT
+    // observations serialize to the same bytes. Prove those inputs stay distinct.
+    //
+    // Boundary shift: same characters, different field split.
+    const a = observationHash(obs([["ab", H(1)]]));
+    const b = observationHash(obs([["a", `b${H(1)}`.slice(0, 64)]]));
+    expect(a).not.toEqual(b);
+
+    // A path that literally contains the neighbouring encoding must not let one
+    // file masquerade as two (or two as one).
+    const single = observationHash(obs([[`x", "${H(2)}`, H(1)]]));
+    const paired = observationHash(
+      obs([
+        ["x", H(2)],
+        ["", H(1)],
+      ]),
+    );
+    expect(single).not.toEqual(paired);
+  });
+
+  it("distinguishes a path/hash swap that a symmetric join would collapse", () => {
+    // ("a.ts", H1)+("b.ts", H2) must not equal ("a.ts", H2)+("b.ts", H1): the
+    // pair binding, not just the multiset of tokens, is part of the identity.
+    const straight = observationHash(
+      obs([
+        ["a.ts", H(1)],
+        ["b.ts", H(2)],
+      ]),
+    );
+    const swapped = observationHash(
+      obs([
+        ["a.ts", H(2)],
+        ["b.ts", H(1)],
+      ]),
+    );
+    expect(straight).not.toEqual(swapped);
+  });
+});
+
+describe("source-sync.ts source file is reviewable text (no binary bytes)", () => {
+  // The observation-hash encoding once used a literal NUL delimiter, which made
+  // Git classify this module as a binary blob and defeated line diff/blame/review.
+  // Assert the SOURCE BYTES contain no NUL or C0 control byte (tab/newline/CR
+  // excepted) so the file stays a reviewable text source. Reviewability is the
+  // user-visible defect here, so a source-byte assertion is the right check.
+  it("contains no NUL or disallowed control bytes", () => {
+    const path = fileURLToPath(new URL("./source-sync.ts", import.meta.url));
+    const bytes = readFileSync(path);
+    const offending: number[] = [];
+    for (let i = 0; i < bytes.length; i += 1) {
+      const b = bytes[i]!;
+      const isAllowedControl = b === 0x09 || b === 0x0a || b === 0x0d;
+      if (b < 0x20 && !isAllowedControl) offending.push(b);
+      if (b === 0x7f) offending.push(b);
+    }
+    expect(offending).toEqual([]);
+  });
 });
 
 describe("sourceObservationSchema - content-free input validation", () => {
@@ -248,5 +321,119 @@ describe("sourceObservationSchema - content-free input validation", () => {
         files: [{ path: "a.ts", content_hash: H(1), body: "secret" }],
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("syncSource - duplicate observed paths are rejected with zero mutation", () => {
+  // A pool that fails loudly if anyone tries to open a DB connection. A duplicate
+  // path must be rejected BEFORE planning/mutation, so connect() is never called.
+  function poisonPool(): { connect: () => Promise<never> } {
+    return {
+      connect: () => {
+        throw new Error("connect() must not be called: no mutation on reject");
+      },
+    };
+  }
+
+  const admin: AuthInfo = {
+    role: "admin",
+    clientId: "lane338-dupe",
+    namespaceSource: "token",
+  };
+
+  it("returns invalid_observation and never opens a connection", async () => {
+    const res = await syncSource(
+      poisonPool() as never,
+      admin,
+      "00000000-0000-0000-0000-000000000000",
+      {
+        files: [
+          { path: "dup.ts", content_hash: H(1) },
+          { path: "dup.ts", content_hash: H(2) },
+        ],
+      },
+      { target_namespace: "lane338-dupe-ns" },
+    );
+    expect(res.ok).toBe(false);
+    expect(res.code).toBe("invalid_observation");
+    // Zero mutation: connect() would have thrown had planning proceeded, so a
+    // clean rejection here proves nothing touched the database.
+    expect(res.data).toBeUndefined();
+  });
+
+  it("allows a distinct-path observation to proceed to the DB layer", async () => {
+    // Same shape, but paths are distinct — the duplicate guard must NOT trip, so
+    // execution reaches connect() (which our poison pool throws on). This proves
+    // the guard rejects duplicates specifically, not every observation.
+    await expect(
+      syncSource(
+        poisonPool() as never,
+        admin,
+        "00000000-0000-0000-0000-000000000000",
+        {
+          files: [
+            { path: "a.ts", content_hash: H(1) },
+            { path: "b.ts", content_hash: H(2) },
+          ],
+        },
+        { target_namespace: "lane338-dupe-ns" },
+      ),
+    ).rejects.toThrow("connect() must not be called");
+  });
+});
+
+describe("syncSource - dependency failure is content-free (sentinel)", () => {
+  const admin: AuthInfo = {
+    role: "admin",
+    clientId: "lane338-fail",
+    namespaceSource: "token",
+  };
+
+  // A leaky pg-shaped error: `message`/`detail`/`query` echo the kind of content
+  // (paths, SQL, parameter values) that must NEVER escape this substrate. `.name`
+  // and `.code` are the only allowlisted, content-free fields.
+  const SECRET = "/secret/absolute/path/with-body-bytes.ts";
+  function leakyPgError(): Error {
+    const err = Object.assign(new Error(`duplicate key value: ${SECRET}`), {
+      name: "error",
+      code: "23505",
+      detail: `Key (path)=(${SECRET}) already exists.`,
+      query: `INSERT INTO ob_source_files ... '${SECRET}'`,
+      where: SECRET,
+    });
+    return err;
+  }
+
+  // A client that BEGINs fine, then throws the leaky error on the first non-BEGIN
+  // statement — simulating a mid-transaction dependency failure. ROLLBACK resolves.
+  function failingPool(err: Error): { connect: () => Promise<unknown> } {
+    return {
+      connect: async () => ({
+        query: async (sql: string) => {
+          if (sql === "BEGIN" || sql === "ROLLBACK") return { rows: [] };
+          throw err;
+        },
+        release: () => undefined,
+      }),
+    };
+  }
+
+  it("returns sync_failed instead of rethrowing the raw dependency error", async () => {
+    const res = await syncSource(
+      failingPool(leakyPgError()) as never,
+      admin,
+      "00000000-0000-0000-0000-000000000000",
+      { files: [{ path: "a.ts", content_hash: H(1) }] },
+      { target_namespace: "lane338-fail-ns" },
+    );
+    expect(res.ok).toBe(false);
+    expect(res.code).toBe("sync_failed");
+    // The result carries no receipt and, crucially, no leaked content: the whole
+    // serialized result must not contain the secret path or any raw driver detail.
+    expect(res.data).toBeUndefined();
+    const serialized = JSON.stringify(res);
+    expect(serialized).not.toContain(SECRET);
+    expect(serialized).not.toContain("duplicate key");
+    expect(serialized).not.toContain("INSERT INTO");
   });
 });

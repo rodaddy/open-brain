@@ -151,10 +151,16 @@ dbDescribe("resumable file-source sync (live Postgres)", () => {
     );
     expect(second.ok).toBe(true);
     expect(second.data?.status).toBe("completed");
+    // Mixed receipt: keep.ts is an unchanged no-op (no op emitted, counted as
+    // unchanged), plus one edit, one rename, one add. This is a FRESH plan, so
+    // counts.unchanged carries the no-op count.
+    expect(second.data?.resumed).toBe(false);
     expect(second.data?.counts).toMatchObject({
+      added: 1,
       edited: 1,
       renamed: 1,
-      added: 1,
+      deleted: 0,
+      unchanged: 1,
     });
 
     const m2 = await liveManifest(nsA, sourceId);
@@ -245,21 +251,69 @@ dbDescribe("resumable file-source sync (live Postgres)", () => {
       ["a.ts", H(1)],
       ["b.ts", H(2)],
     ]);
-    await syncSource(pool, admin(), sourceId, observation, {
+    const first = await syncSource(pool, admin(), sourceId, observation, {
       target_namespace: nsA,
     });
+    // Fresh plan on an empty manifest: two adds, nothing unchanged yet.
+    expect(first.data?.resumed).toBe(false);
+    expect(first.data?.counts.unchanged).toBe(0);
+
     const again = await syncSource(pool, admin(), sourceId, observation, {
       target_namespace: nsA,
     });
     expect(again.ok).toBe(true);
     expect(again.data?.status).toBe("completed");
     expect(again.data?.resumed).toBe(true);
-    // Nothing changed the second time.
+    // Nothing changed the second time. This is a RESUME of the persisted run, not
+    // a fresh diff, so unchanged is 0 by the documented resumed semantics even
+    // though every observed file matches the manifest.
     expect(again.data?.counts).toMatchObject({
       added: 0,
       edited: 0,
       renamed: 0,
       deleted: 0,
+      unchanged: 0,
+    });
+  });
+
+  it("a fresh no-op plan over an already-synced manifest reports unchanged", async () => {
+    const sourceId = await approvedSource(nsA, "git://acme/repo-freshnoop");
+    // Seed the manifest.
+    await syncSource(
+      pool,
+      admin(),
+      sourceId,
+      obs([
+        ["a.ts", H(1)],
+        ["b.ts", H(2)],
+      ]),
+      { target_namespace: nsA },
+    );
+
+    // A DISTINCT observation (different hash → fresh plan) whose file set exactly
+    // matches the live manifest. No ops are emitted, and because it is a fresh
+    // plan the receipt carries the full unchanged count — proving counts.unchanged
+    // is plumbed through, not discarded.
+    const noop = await syncSource(
+      pool,
+      admin(),
+      sourceId,
+      obs([
+        ["a.ts", H(1)],
+        ["b.ts", H(2)],
+        // add a third file so the observation hash differs from the seed run,
+        // forcing a fresh plan rather than a resume of the seed run.
+        ["c.ts", H(3)],
+      ]),
+      { target_namespace: nsA },
+    );
+    expect(noop.data?.resumed).toBe(false);
+    expect(noop.data?.counts).toMatchObject({
+      added: 1, // c.ts is the only op
+      edited: 0,
+      renamed: 0,
+      deleted: 0,
+      unchanged: 2, // a.ts and b.ts matched — plumbed into the receipt
     });
   });
 
