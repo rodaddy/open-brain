@@ -8,7 +8,7 @@ the same PR whenever either source changes (the contract-parity pre-push hook
 watches `contracts/**`; treat `docs/compatibility-matrix.md` as part of that
 change set by convention).
 
-Live contract: `2026-07-17.memory-tools.v22` (`src/contract.ts`
+Live contract: `2026-07-23.memory-tools.v23` (`src/contract.ts`
 `CONTRACT_VERSION`), enforced end-to-end — clients validate the manifest before
 lifecycle operations, CI's `contract-parity` job binds in-tree client
 declarations to it, and the deploy job cannot run without that gate passing.
@@ -17,7 +17,7 @@ declarations to it, and the deploy job cannot run without that gate passing.
 
 | Client surface | Runtime it serves | Minimum | Supported range | Enforced where |
 |---|---|---|---|---|
-| `openbrain-memory` (Python) | Claude direct provider (Development `_ob` adapter), Hermes Python runtime | 0.1.8 | `>=0.1.8 <1.0.0` | `get_contract` manifest + client `validate_required_memory_contract`; server `X-OB-Contract` tripwire |
+| `openbrain-memory` (Python) | Claude direct provider (Development `_ob` adapter), Hermes Python runtime | 0.1.15 | `>=0.1.15 <1.0.0` | `get_contract` manifest + client `validate_required_memory_contract`; server `X-OB-Contract` tripwire |
 | `mcp2cli` | Codex durable memory (hosted daemon), cc boxes, generated skills | 0.3.6 | `>=0.3.6 <1.0.0` | `get_contract` manifest; `X-OB-Contract` header forwarding is expected from mcp2cli ≥0.3.6 (owned by the mcp2cli repo; verified live against core01 2026-07-21) |
 | `rtech-hermes-runtime` | Hermes live agents (inventory owned by the rtech-hermes repo) | 0.1.0 | `>=0.1.0 <1.0.0` | `get_contract` manifest; fleet pins per `docs/downstream-rollout.md` |
 

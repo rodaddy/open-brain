@@ -3,7 +3,7 @@
   "description": "Phase-2 parity declarations for the matched Python client and TypeScript peer (clients/ts).",
   "expected_fixture_ids": {
     "auto-drain-replay-allowlist": "both",
-    "contract-declaration-v22": "both",
+    "contract-declaration-v23": "both",
     "exact-scope-proof-context-pack": "both",
     "lifecycle-capture": "both",
     "lifecycle-checkpoint": "both",

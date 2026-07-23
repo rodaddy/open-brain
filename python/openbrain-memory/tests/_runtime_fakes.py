@@ -26,7 +26,7 @@ def runtime_contract_manifest() -> dict[str, Any]:
         "schema_version": CURRENT_CONTRACT_SCHEMA_VERSION,
         "schema_hash": CURRENT_CONTRACT_SCHEMA_HASH,
         "min_client_versions": {"openbrain-memory": PACKAGE_VERSION},
-        "compatible_client_ranges": {"openbrain-memory": ">=0.1.8 <1.0.0"},
+        "compatible_client_ranges": {"openbrain-memory": ">=0.1.15 <1.0.0"},
         "capabilities": [
             {"kind": "tool", "name": name, "version": version}
             for name, version in FIRST_CLASS_RUNTIME_TOOL_VERSIONS.items()

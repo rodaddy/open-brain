@@ -3,6 +3,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import {
   registerAgentContextPack,
+  registerAgentReflexPointers,
   registerRecoveryWalAppend,
   registerRecoveryWalMark,
   registerWorkingSetAppend,
@@ -45,6 +46,7 @@ export async function setupAgentContextPackToolClient(
   registerRecoveryWalAppend(server, deps);
   registerRecoveryWalMark(server, deps);
   registerAgentContextPack(server, deps);
+  registerAgentReflexPointers(server, deps);
 
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair();

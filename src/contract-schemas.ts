@@ -207,6 +207,140 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
     output_shape:
       "agent_context_pack envelope with exact-scope working_set, explicitly opted-in recovery, and explicitly requested bounded durable_lane_context sections; warnings include generic exact-scope denials/degraded sources/truncation, budget declares per-source bounds, and citations identify returned durable lane/events",
   },
+  agent_reflex_pointers: {
+    version: 1,
+    input_schema: {
+      namespace: {
+        type: "string",
+        required: false,
+        maxLength: 500,
+        description:
+          "Namespace for isolation. Defaults to auth-derived clientId; the " +
+          "server enforces read authority before returning any scoped pointers.",
+      },
+      agent: { type: "string", required: true, minLength: 1, maxLength: 200 },
+      platform: {
+        type: "string",
+        required: true,
+        minLength: 1,
+        maxLength: 200,
+      },
+      server_id: {
+        type: "string",
+        required: true,
+        minLength: 1,
+        maxLength: 500,
+      },
+      channel_id: {
+        type: "string",
+        required: true,
+        minLength: 1,
+        maxLength: 500,
+      },
+      thread_id: { type: "string", required: false, maxLength: 500 },
+      session_key: {
+        type: "string",
+        required: true,
+        minLength: 1,
+        maxLength: 500,
+      },
+      query: {
+        type: "string",
+        required: true,
+        minLength: 1,
+        maxLength: 4000,
+        description:
+          "Current-turn query that drives the single durable_memory hybrid " +
+          "recall the pointer pool is derived from. Required — a reflex with " +
+          "no query has no pool to point at.",
+      },
+      prior_context: {
+        type: "array",
+        required: false,
+        maxItems: 200,
+        description:
+          "Explicit identifiers/source refs already supplied to the model this " +
+          "turn. The shared recall removes records already represented by these " +
+          "references before any pointer is emitted, so the reflex points only " +
+          "at net-new durable records. Raw prior-context text is never accepted; " +
+          "each reference carries resolvable identity only (citation_id or " +
+          "source_ref).",
+        items: {
+          type: "object",
+          fields: {
+            citation_id: {
+              type: "string",
+              required: "citation_id_or_source_ref",
+              minLength: 1,
+              maxLength: 500,
+            },
+            source_ref: {
+              type: "union",
+              required: "citation_id_or_source_ref",
+              description:
+                "The recalled item's own resolvable source ref: either the " +
+                "string form (<=1000) or the structural {source,type,id," +
+                "namespace?} form. At least one of citation_id/source_ref is " +
+                "required per reference.",
+              variants: [
+                { type: "string", minLength: 1, maxLength: 1000 },
+                {
+                  type: "object",
+                  additionalProperties: true,
+                  fields: {
+                    source: {
+                      type: "string",
+                      required: true,
+                      minLength: 1,
+                      maxLength: 200,
+                    },
+                    type: {
+                      type: "string",
+                      required: true,
+                      minLength: 1,
+                      maxLength: 200,
+                    },
+                    id: {
+                      type: "string",
+                      required: true,
+                      minLength: 1,
+                      maxLength: 500,
+                    },
+                    namespace: {
+                      type: "string",
+                      required: false,
+                      minLength: 1,
+                      maxLength: 200,
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        },
+      },
+      budget: {
+        type: "object",
+        required: false,
+        fields: {
+          max_tokens: {
+            type: "integer",
+            required: false,
+            min: 100,
+            max: 20000,
+          },
+          max_latency_ms: {
+            type: "integer",
+            required: false,
+            min: 1,
+            max: 10000,
+          },
+        },
+      },
+    },
+    output_shape:
+      "ordinary agent_reflex_pointers.v1 result envelope (schema/status/scope/query, placement=client_owned, resolvable_reference_only=true) carrying a single body-free pointers section: namespace-scoped resolvable pointers with identity/source_ref/structural metadata only and NO memory bodies, deduped against retained durable identities with prior-context suppression applied and whole-pack budget bounded; citations are a bijection with the emitted pointers (kind=pointer), and warnings/budget are carried through from the shared pack so budget starvation and degraded/denied shared recall stay honest",
+  },
   recovery_wal_append: {
     version: 1,
     input_schema: {
@@ -1297,13 +1431,15 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
         type: "string",
         required: false,
         maxLength: 500,
-        description: "Platform/source identity for exact-scope checkpoint validation.",
+        description:
+          "Platform/source identity for exact-scope checkpoint validation.",
       },
       server_id: {
         type: "string",
         required: false,
         maxLength: 500,
-        description: "Server/guild/workspace identity for exact-scope checkpoint validation.",
+        description:
+          "Server/guild/workspace identity for exact-scope checkpoint validation.",
       },
       channel_id: {
         type: "string",

@@ -150,6 +150,8 @@ def _contract_field_to_json_schema(
         return _enum_node_to_json_schema(node, path=path)
     if raw_type == "literal":
         return _literal_node_to_json_schema(node, path=path)
+    if raw_type == "union":
+        return _union_node_to_json_schema(node, path=path, enum_refs=enum_refs)
     if raw_type in _SEMANTIC_STRING_TYPES:
         schema: JSONSchema = {"type": "string"}
         if raw_type == "datetime_not_future":
@@ -231,6 +233,31 @@ def _literal_node_to_json_schema(node: Mapping[str, Any], *, path: str) -> JSONS
     if inferred_type is not None:
         schema["type"] = inferred_type
     _preserve_metadata(node, schema, path=path, enum_refs={})
+    return schema
+
+
+def _union_node_to_json_schema(
+    node: Mapping[str, Any],
+    *,
+    path: str,
+    enum_refs: Mapping[str, JSONSchema],
+) -> JSONSchema:
+    variants = node.get("variants")
+    if not isinstance(variants, list) or not variants:
+        raise ContractSchemaError(
+            f"{path}.variants: union variants must be a non-empty list",
+        )
+    schema: JSONSchema = {
+        "anyOf": [
+            _contract_field_to_json_schema(
+                variant,
+                path=f"{path}.variants[{index}]",
+                enum_refs=enum_refs,
+            )
+            for index, variant in enumerate(variants)
+        ],
+    }
+    _preserve_metadata(node, schema, path=path, enum_refs=enum_refs)
     return schema
 
 

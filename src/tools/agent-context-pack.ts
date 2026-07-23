@@ -45,6 +45,7 @@ import { loadRepoFactsSection } from "./agent-context-pack-repo-facts.ts";
 import {
   buildCandidateSection,
   buildPointerSection,
+  POINTERS_SECTION_NAME,
 } from "./agent-context-pack-pointers-candidates.ts";
 import type { SectionFragment } from "./agent-context-pack-sections.ts";
 
@@ -117,6 +118,17 @@ export const priorContextReferenceInputSchema = z
     },
   );
 
+// Single source of truth for the whole-pack budget bounds. Both the full
+// agent_context_pack and the reflex-pointer projection accept the EXACT same
+// budget contract, so the bounds live here once rather than being duplicated
+// (and risking silent drift) in each tool's input schema.
+export const contextPackBudgetInputSchema = z
+  .object({
+    max_tokens: z.number().int().min(100).max(20000).optional(),
+    max_latency_ms: z.number().int().min(1).max(10000).optional(),
+  })
+  .optional();
+
 export const agentContextPackInputSchema = {
   ...scopeInputSchema,
   query: z.string().max(4000).optional(),
@@ -152,12 +164,7 @@ export const agentContextPackInputSchema = {
     .boolean()
     .optional()
     .describe("Explicitly include exact-scope quarantined recovery summary"),
-  budget: z
-    .object({
-      max_tokens: z.number().int().min(100).max(20000).optional(),
-      max_latency_ms: z.number().int().min(1).max(10000).optional(),
-    })
-    .optional(),
+  budget: contextPackBudgetInputSchema,
 };
 
 const agentContextPackArgsSchema = z.object(agentContextPackInputSchema);
@@ -1179,6 +1186,207 @@ export function registerRecoveryWalMark(
           },
         ],
         isError: !result.accepted,
+      };
+    },
+  );
+}
+
+/**
+ * Reflex-pointer input: the smallest explicit per-turn reflex surface (#334).
+ *
+ * It reuses the EXACT `agent_context_pack` scope, query, prior-context, and
+ * budget contract — nothing new is invented on the retrieval side — but it is a
+ * body-free cited-pointer reflex, not a whole pack. It intentionally omits
+ * `requested_sections` (the reflex forces pointers), the section-shaping toggles,
+ * and recovery opt-in, because those select non-pointer sections a pointer reflex
+ * never emits. `query` is required here (recall has no meaning without one, and
+ * the pointer pool derives from that single durable_memory recall).
+ */
+export const agentReflexPointersInputSchema = {
+  ...scopeInputSchema,
+  query: z
+    .string()
+    .min(1)
+    .max(4000)
+    .describe(
+      "Current-turn query that drives the single durable_memory hybrid recall " +
+        "the pointer pool is derived from. Required — a reflex with no query " +
+        "has no pool to point at.",
+    ),
+  prior_context: z
+    .array(priorContextReferenceInputSchema)
+    .max(200)
+    .optional()
+    .describe(
+      "Explicit identifiers/source refs already supplied to the model this " +
+        "turn. The shared recall removes records already represented by these " +
+        "references before any pointer is emitted, so the reflex points only at " +
+        "net-new durable records. Raw prior-context text is never accepted.",
+    ),
+  // Same whole-pack budget contract as agent_context_pack — shared, not
+  // duplicated, so the bounds cannot drift between the two surfaces.
+  budget: contextPackBudgetInputSchema,
+};
+
+const agentReflexPointersArgsSchema = z.object(agentReflexPointersInputSchema);
+
+export type AgentReflexPointersArgs = z.infer<
+  typeof agentReflexPointersArgsSchema
+>;
+
+export function parseAgentReflexPointersArgs(
+  args: unknown,
+): AgentReflexPointersArgs {
+  return agentReflexPointersArgsSchema.parse(args);
+}
+
+export interface AgentReflexPointersBuildResult {
+  payload: unknown;
+  isError: boolean;
+}
+
+/**
+ * Build the reflex-pointer payload (#334). This is a PURE PROJECTION over the
+ * single `buildAgentContextPackPayload` path: it forces
+ * `requested_sections: ["pointers"]` (so the shared durable_memory recall runs
+ * once to feed pointers and the durable_memory SECTION body is suppressed), then
+ * narrows the whole-pack payload down to just the body-free cited pointer
+ * references plus the pointer-relevant envelope (budget, warnings, citations).
+ *
+ * No second retrieval stack, no second pointer builder, no new dedupe/identity
+ * logic — the reflex owns none of that. It reuses the pointer machinery #329
+ * already wired and #332/#333 already feed. Placement into the model prompt is
+ * the CLIENT's job: this returns a small structured envelope, never an MCP
+ * `_meta` injection.
+ */
+export async function buildAgentReflexPointersPayload(
+  args: AgentReflexPointersArgs,
+  auth: AuthInfo | undefined,
+  deps: ToolDeps,
+): Promise<AgentReflexPointersBuildResult> {
+  // Reuse the pack builder unchanged — one retrieval, one pointer stack. The
+  // reflex only fixes requested_sections to pointers; every isolation, budget,
+  // suppression, and citation guarantee is inherited from that path.
+  const packResult = await buildAgentContextPackPayload(
+    {
+      ...args,
+      requested_sections: ["pointers"],
+    },
+    auth,
+    deps,
+  );
+
+  if (packResult.isError) {
+    // Permission/namespace denials already produced a content-free error payload;
+    // pass it through unchanged so the reflex never invents its own auth message.
+    return { payload: packResult.payload, isError: true };
+  }
+
+  const pack = packResult.payload as {
+    schema: string;
+    status: string;
+    scope: Record<string, unknown>;
+    sections: { pointers?: Record<string, unknown> };
+    warnings: {
+      truncation?: Array<Record<string, unknown>>;
+      [key: string]: unknown;
+    };
+    budget: Record<string, unknown>;
+    citations: Array<Record<string, unknown>>;
+    query: string | null;
+  };
+
+  // The pointers section is always present for a pointers request unless the
+  // whole-pack budget starved even its empty envelope out, in which case the
+  // pack omits the section body entirely and records a
+  // `source: "pointers", reason: "whole_pack_budget", starved: true` entry in
+  // `warnings.truncation`. Project that starved case to the reflex's own defined
+  // empty shape, but derive `truncated`/`empty_reason` from the ACTUAL upstream
+  // truncation warning so a budget-starved reflex is honest (truncated=true,
+  // empty_reason=whole_pack_budget) rather than fabricating a genuine-empty
+  // envelope (truncated=false) that contradicts the emitted warning.
+  const pointerBudgetStarvation = pack.warnings.truncation?.find(
+    (warning) =>
+      warning.source === POINTERS_SECTION_NAME &&
+      warning.reason === "whole_pack_budget" &&
+      warning.starved === true,
+  );
+  const pointers = pack.sections.pointers ?? {
+    label: POINTERS_SECTION_NAME,
+    namespace_scoped: true,
+    resolvable_reference_only: true,
+    items: [],
+    item_count: 0,
+    truncated: pointerBudgetStarvation !== undefined,
+    ...(pointerBudgetStarvation ? { empty_reason: "whole_pack_budget" } : {}),
+  };
+
+  return {
+    payload: {
+      schema: "openbrain.agent_reflex_pointers.v1",
+      status: pack.status,
+      // Placement ownership is explicit and body-free: Open Brain returns
+      // resolvable pointers only; the client decides whether and how to place
+      // them into the model prompt. There is no implicit _meta injection.
+      placement: "client_owned",
+      resolvable_reference_only: true,
+      scope: pack.scope,
+      // The single reflex payload member: body-free cited pointers, already
+      // deduped against retained durable identities and budget-bounded upstream.
+      pointers,
+      // Envelope carried through from the shared pack so the reflex is honest
+      // about budget pressure and any degraded/denied shared recall.
+      warnings: pack.warnings,
+      budget: pack.budget,
+      // Only pointer citations are relevant; the shared pack citation list for a
+      // pointers-only request is exactly the emitted pointers' citations.
+      citations: pack.citations,
+      query: pack.query,
+    },
+    isError: false,
+  };
+}
+
+export function registerAgentReflexPointers(
+  server: McpServer,
+  deps: ToolDeps,
+): void {
+  server.registerTool(
+    "agent_reflex_pointers",
+    {
+      description:
+        "Per-turn reflex that returns budget-bounded, body-free, cited " +
+        "resolvable pointers to durable records relevant to the current query. " +
+        "It reuses the single agent_context_pack durable_memory hybrid recall and " +
+        "pointer machinery (no second retrieval or pointer stack) with " +
+        "prior-context suppression applied, and emits NO memory bodies — every " +
+        "pointer carries identity/source_ref/structural metadata only, resolvable " +
+        "through the authorized read path (get_entry, table = source_ref.type + " +
+        '"s", id = source_ref.id). Placement into the model prompt is client-owned; ' +
+        "this tool never performs implicit _meta injection.",
+      inputSchema: agentReflexPointersInputSchema,
+      annotations: {
+        title: "Agent Reflex Pointers",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+      },
+    },
+    async (args, extra) => {
+      const result = await buildAgentReflexPointersPayload(
+        parseAgentReflexPointersArgs(args),
+        extra.authInfo as AuthInfo | undefined,
+        deps,
+      );
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(result.payload),
+          },
+        ],
+        isError: result.isError,
       };
     },
   );

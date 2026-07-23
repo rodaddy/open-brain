@@ -201,9 +201,9 @@ describe("requestLogger middleware", () => {
       reason: "contract_or_schema_mismatch",
       declaredContractId: "legacy-contract",
       declaredSchemaHash: "0".repeat(64),
-      expectedContractId: "2026-07-17.memory-tools.v22",
+      expectedContractId: "2026-07-23.memory-tools.v23",
       expectedSchemaHash:
-        "51bd6bd9901b88d1f7ae71b95c34a374cbfa4488f706134334aa839bb7cb7c66",
+        "4b69e9b437c96175531b049b6e3c2782f383334e9e1931e96e73835599e4a4a8",
     });
   });
 
@@ -211,7 +211,7 @@ describe("requestLogger middleware", () => {
     const req = mockReq({
       headers: {
         "x-ob-contract":
-          "2026-07-17.memory-tools.v22;schema_hash=51bd6bd9901b88d1f7ae71b95c34a374cbfa4488f706134334aa839bb7cb7c66",
+          "2026-07-23.memory-tools.v23;schema_hash=4b69e9b437c96175531b049b6e3c2782f383334e9e1931e96e73835599e4a4a8",
       },
     });
 
