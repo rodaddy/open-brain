@@ -139,22 +139,67 @@ export interface ReflexArmVerdict {
 }
 
 /**
- * The A/B contrast between the two arms. This is the REFLEX-4 acceptance signal:
+ * The A/B contrast between the arms. This is the REFLEX-4 acceptance signal:
  * suppression ENABLED must return demonstrably fewer already-known items and no
- * redundant resurfacing, while preserving the net-new evidence both arms share.
+ * redundant resurfacing, while preserving the net-new evidence every arm shares.
+ *
+ * The contrast is only trustworthy when the disappearance of the known items on
+ * the ON arm is ATTRIBUTABLE TO SUPPRESSION rather than to a variable ranked
+ * recall that happened to drop them anyway. Two guards make that attribution
+ * sound:
+ *  - `references_sent` proves the gate actually fed the ON arm a non-empty
+ *    prior_context that EXACTLY covers the known items the OFF arm emitted; an
+ *    empty or partial prior_context would leave "suppression" with nothing (or
+ *    too little) to act on and any disappearance would be unattributable.
+ *  - the unsuppressed CONTROL arm (same seed/query, no prior_context) must
+ *    resurface the SAME known set the OFF arm did. Stable known resurfacing
+ *    across the two unsuppressed calls rules out a variable recall silently
+ *    dropping the known items; only then can the ON arm's zero be credited to
+ *    suppression.
  */
 export interface ReflexAbComparison {
   /** Already-known items resurfaced with suppression OFF (baseline > 0). */
   known_resurfaced_off: number;
+  /**
+   * Already-known items resurfaced on the second unsuppressed CONTROL arm (same
+   * seed/query, no prior_context). Must equal the OFF baseline: stable known
+   * resurfacing across the two unsuppressed calls proves the recall did not
+   * variably drop the known items on its own.
+   */
+  known_resurfaced_control: number;
   /** Already-known items resurfaced with suppression ON (must be 0). */
   known_resurfaced_on: number;
   /** off - on: net already-known items suppression removed (must be > 0). */
   known_suppressed_delta: number;
   /** True when ON returned strictly fewer already-known items than OFF. */
   fewer_known_when_enabled: boolean;
+  /**
+   * True when the OFF and CONTROL arms resurfaced the EXACT SAME already-known
+   * set (stable, non-vacuous). This is the control that stops a variable recall
+   * from being mistaken for suppression: without a stable unsuppressed baseline,
+   * the ON arm's zero could just be recall variance.
+   */
+  known_resurfacing_stable: boolean;
+  /**
+   * Count of already-known identities the OFF and CONTROL arms agreed on. When
+   * `known_resurfacing_stable` is true this equals both arms' resurfacing count.
+   */
+  stable_known_count: number;
+  /**
+   * Count of prior_context references the gate sent to the ON arm. Content-free:
+   * the number of identities echoed back, never the identities themselves. Must
+   * be non-zero and must exactly cover the OFF arm's emitted known set.
+   */
+  references_sent: number;
+  /**
+   * True when `references_sent` exactly covers (one-to-one) the already-known
+   * items the OFF arm emitted -- no known item left un-referenced and no extra
+   * reference for an item the OFF arm did not resurface.
+   */
+  references_cover_off_known: boolean;
   /** Net-new pointers common to both arms (suppression preserved the evidence). */
   net_new_preserved: number;
-  /** True when every expected net-new seed survived on BOTH arms. */
+  /** True when every expected net-new seed survived on ALL arms (off/control/on). */
   net_new_preserved_on_both: boolean;
 }
 
@@ -188,15 +233,24 @@ export interface ReflexAbReceipt {
     net_new: number;
   };
   arm_off: ReflexArmVerdict;
+  /**
+   * The second UNSUPPRESSED control arm (same seed/query, no prior_context). Its
+   * already-known resurfacing must match the OFF baseline so a variable recall
+   * cannot be mistaken for suppression.
+   */
+  arm_control: ReflexArmVerdict;
   arm_on: ReflexArmVerdict;
   comparison: ReflexAbComparison;
   negative_control: ReflexAbNegativeControl;
   /**
-   * Composite verdict. PASS requires ALL of: both arms independently clear the
-   * EVAL-3 functional bar (cited, body-free, budget-bounded, no leaks), the A/B
-   * contrast shows suppression ENABLED returns strictly fewer already-known items
-   * with zero redundant resurfacing, the net-new evidence is preserved on both
-   * arms, the cross-namespace denial control ran and was denied, and teardown
+   * Composite verdict. PASS requires ALL of: every arm independently clears the
+   * EVAL-3 functional bar (cited with strict per-identity citation multiplicity,
+   * body-free, budget-bounded, no leaks); the two unsuppressed arms (OFF and the
+   * CONTROL replay) resurface the SAME non-vacuous already-known set (stable
+   * baseline); the gate fed the ON arm a non-empty prior_context that exactly
+   * covers that emitted known set; the ON arm returns strictly fewer already-known
+   * items with zero redundant resurfacing; the net-new evidence is preserved on
+   * every arm; the cross-namespace denial control ran and was denied; and teardown
    * left nothing behind.
    */
   passed: boolean;

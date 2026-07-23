@@ -192,6 +192,12 @@ interface FakeOptions {
   /** Payload for the OFF arm (no prior_context). Defaults to all 4 primaries. */
   offPayload?: ReflexPointersPayload;
   /**
+   * Payload for the second unsuppressed CONTROL arm (no prior_context). When
+   * omitted it mirrors the OFF arm exactly (stable resurfacing). Override it to
+   * simulate a variable ranked recall that drops the known items on its own.
+   */
+  controlPayload?: ReflexPointersPayload;
+  /**
    * Payload for the ON arm. When omitted, the fake computes a REALISTIC
    * suppressed payload: it drops any pointer whose citation_id/source_ref was
    * passed as prior_context, so a correct suppression is simulated end to end.
@@ -199,7 +205,7 @@ interface FakeOptions {
   onPayload?: ReflexPointersPayload;
   /** Override the ON arm to ignore prior_context (simulate broken suppression). */
   onIgnoresPriorContext?: boolean;
-  reflexThrowsOn?: "off" | "on";
+  reflexThrowsOn?: "off" | "control" | "on";
   seedFailFor?: string[];
   archiveFailFor?: string[];
   negativeRead?: "denied" | "empty" | "leak" | "throws";
@@ -231,6 +237,9 @@ function makeFakeClients(opts: FakeOptions = {}): {
   const offPayload =
     opts.offPayload ??
     reflexPayload(["known-a", "known-b", "netnew-a", "netnew-b"]);
+  // The control arm is a second unsuppressed call; by default it mirrors the OFF
+  // arm exactly, so the known items resurface stably across both.
+  const controlPayload = opts.controlPayload ?? offPayload;
 
   function suppressedPayload(
     priorContext: readonly ReflexPriorContextRef[] | undefined,
@@ -281,12 +290,15 @@ function makeFakeClients(opts: FakeOptions = {}): {
       }) {
         state.reflexScopes.push(o.scope);
         state.priorContextByCall.push(o.priorContext);
-        const arm = reflexCall === 0 ? "off" : "on";
+        const arm =
+          reflexCall === 0 ? "off" : reflexCall === 1 ? "control" : "on";
         reflexCall += 1;
         if (opts.reflexThrowsOn === arm) {
           throw new LiveTransportError("agent_reflex_pointers:timeout", false);
         }
-        return arm === "off" ? offPayload : suppressedPayload(o.priorContext);
+        if (arm === "off") return offPayload;
+        if (arm === "control") return controlPayload;
+        return suppressedPayload(o.priorContext);
       },
       async attemptRead(o: {
         namespace: string;
@@ -377,6 +389,13 @@ describe("runReflexAbGate happy path", () => {
     expect(receipt.arm_off.budget.within_budget).toBe(true);
     expect(receipt.arm_off.budget.allocation_order_complete).toBe(true);
 
+    // CONTROL arm (second unsuppressed call): mirrors the OFF baseline exactly,
+    // proving the known items resurface stably across two unsuppressed calls.
+    expect(receipt.arm_control.pointer_count).toBe(4);
+    expect(receipt.arm_control.redundant_resurfacing).toBe(2);
+    expect(receipt.arm_control.net_new_present).toBe(2);
+    expect(receipt.arm_control.net_new_missing).toBe(0);
+
     // ON arm: both known items suppressed, net-new preserved.
     expect(receipt.arm_on.pointer_count).toBe(2);
     expect(receipt.arm_on.redundant_resurfacing).toBe(0);
@@ -385,14 +404,26 @@ describe("runReflexAbGate happy path", () => {
 
     // A/B comparison: the REFLEX-4 acceptance signal.
     expect(receipt.comparison.known_resurfaced_off).toBe(2);
+    expect(receipt.comparison.known_resurfaced_control).toBe(2);
     expect(receipt.comparison.known_resurfaced_on).toBe(0);
     expect(receipt.comparison.known_suppressed_delta).toBe(2);
     expect(receipt.comparison.fewer_known_when_enabled).toBe(true);
+    // Stability control: OFF and CONTROL resurfaced the SAME non-vacuous set.
+    expect(receipt.comparison.known_resurfacing_stable).toBe(true);
+    expect(receipt.comparison.stable_known_count).toBe(2);
+    // Reference-coverage control: a non-empty prior_context that exactly covers
+    // the OFF arm's emitted known set was sent to the ON arm.
+    expect(receipt.comparison.references_sent).toBe(2);
+    expect(receipt.comparison.references_cover_off_known).toBe(true);
     expect(receipt.comparison.net_new_preserved).toBe(2);
     expect(receipt.comparison.net_new_preserved_on_both).toBe(true);
 
-    // The ON arm received the OFF arm's known-seed references as prior_context.
-    const onPriorContext = state.priorContextByCall[1];
+    // Only the ON arm (third call) received prior_context; both unsuppressed
+    // arms (OFF, CONTROL) sent none.
+    expect(state.priorContextByCall.length).toBe(3);
+    expect(state.priorContextByCall[0]).toBeUndefined();
+    expect(state.priorContextByCall[1]).toBeUndefined();
+    const onPriorContext = state.priorContextByCall[2];
     expect(onPriorContext).toBeDefined();
     expect(onPriorContext!.length).toBe(2);
     const sentCitations = onPriorContext!.map((r) => r.citation_id).sort();
@@ -402,16 +433,14 @@ describe("runReflexAbGate happy path", () => {
         canonical("decision", serverId("known-b")),
       ].sort(),
     );
-    // The OFF arm sent NO prior_context.
-    expect(state.priorContextByCall[0]).toBeUndefined();
 
     // Cross-namespace denial ran and denied, probing the NEGATIVE namespace.
     expect(receipt.negative_control.ran).toBe(true);
     expect(receipt.negative_control.denied).toBe(true);
     expect(state.attemptReadNamespaces).toEqual([CONFIG.negativeNamespace]);
 
-    // Both reflex calls ran under the PRIMARY throwaway namespace.
-    expect(state.reflexScopes.length).toBe(2);
+    // All three reflex calls ran under the PRIMARY throwaway namespace.
+    expect(state.reflexScopes.length).toBe(3);
     for (const s of state.reflexScopes) {
       expect(s.namespace).toBe(CONFIG.primaryNamespace);
     }
@@ -479,6 +508,134 @@ describe("runReflexAbGate A/B contrast", () => {
     expect(
       receipt.failures.some((f) => f.includes("net-new record(s) missing")),
     ).toBe(true);
+  });
+});
+
+describe("runReflexAbGate stability control", () => {
+  it("fails when the unsuppressed control arm resurfaces a DIFFERENT known set (variable recall)", async () => {
+    // OFF resurfaces both known items; the CONTROL replay resurfaces only one of
+    // them. A variable recall dropped a known item on its own, so the ON arm's
+    // zero cannot be attributed to suppression -> the contrast is not sound.
+    const { outcome } = run({
+      offPayload: reflexPayload(["known-a", "known-b", "netnew-a", "netnew-b"]),
+      controlPayload: reflexPayload(["known-a", "netnew-a", "netnew-b"]),
+    });
+    const { receipt, passed } = await outcome;
+    expect(passed).toBe(false);
+    expect(receipt.comparison.known_resurfaced_off).toBe(2);
+    expect(receipt.comparison.known_resurfaced_control).toBe(1);
+    expect(receipt.comparison.known_resurfacing_stable).toBe(false);
+    expect(receipt.comparison.stable_known_count).toBe(0);
+    expect(
+      receipt.failures.some((f) =>
+        f.includes("unsuppressed known resurfacing is not stable"),
+      ),
+    ).toBe(true);
+    assertContentFree(receipt);
+  });
+
+  it("fails when a known item is emitted without a resolvable identity (references cannot cover it)", async () => {
+    // known-b surfaces on the OFF arm as a body-free pointer but carries NO
+    // citation_id and NO structural source_ref, so the gate cannot build a
+    // prior_context reference for it. references_sent then does not cover the
+    // OFF arm's emitted known set and the suppression contrast is unattributable.
+    const strippedKnownB: Record<string, unknown> = {
+      id: serverId("known-b"),
+      source_type: "decision",
+      namespace: CONFIG.primaryNamespace,
+      tier: null,
+      created_at: "2026-01-01T00:00:00.000Z",
+      updated_at: null,
+    };
+    const off = reflexPayload(["known-a", "netnew-a", "netnew-b"], {
+      extraPointer: strippedKnownB,
+    });
+    // The emitted known-b pointer has no citation_id, so it needs no citation to
+    // stay bijective; the OFF arm's citations already cover the cited pointers.
+    const { outcome } = run({
+      offPayload: off,
+      controlPayload: off,
+    });
+    const { receipt, passed } = await outcome;
+    expect(passed).toBe(false);
+    // Both known items resurfaced, but only known-a was referenceable.
+    expect(receipt.comparison.known_resurfaced_off).toBe(2);
+    expect(receipt.comparison.references_sent).toBe(1);
+    expect(receipt.comparison.references_cover_off_known).toBe(false);
+    expect(
+      receipt.failures.some((f) =>
+        f.includes(
+          "do not exactly cover the off arm's emitted already-known set",
+        ),
+      ),
+    ).toBe(true);
+    assertContentFree(receipt);
+  });
+});
+
+describe("runReflexAbGate citation multiplicity bijection", () => {
+  // Build the natural one-citation-per-emitted-pointer list for a fixture set,
+  // matching reflexPayload's default so a test can then perturb ONE identity.
+  const citationsFor = (fixtureIds: string[]) =>
+    fixtureIds.map((fid) => {
+      const entry = FIXTURE.corpus.find((c) => c.id === fid)!;
+      const st = sourceTypeOf(entry.table);
+      return {
+        id: canonical(st, serverId(fid)),
+        kind: "pointer",
+      };
+    });
+
+  it("accepts an identity emitted and cited with equal multiplicity (>1)", async () => {
+    // Emit known-a twice (same identity) and cite it twice: emitted count ==
+    // cited count per identity, so the bijection must hold even though the old
+    // Math.max(-1) logic wrongly flagged a legitimate equal-multiplicity pair.
+    const dupPointer = pointerFor("known-a");
+    const off = reflexPayload(["known-a", "known-b", "netnew-a", "netnew-b"], {
+      extraPointer: dupPointer,
+      // known-a cited twice (once for each emitted copy); everything else once.
+      citations: [
+        ...citationsFor(["known-a", "known-b", "netnew-a", "netnew-b"]),
+        { id: canonical("thought", serverId("known-a")), kind: "pointer" },
+      ],
+    });
+    const { outcome } = run({ offPayload: off, controlPayload: off });
+    const { receipt } = await outcome;
+    expect(receipt.arm_off.citations_bijective).toBe(true);
+    expect(receipt.arm_off.dangling_citations).toBe(0);
+    expect(receipt.arm_off.uncited_pointers).toBe(0);
+  });
+
+  it("fails when an identity is emitted twice but cited once (uncited surplus)", async () => {
+    const dupPointer = pointerFor("known-a");
+    const off = reflexPayload(["known-a", "known-b", "netnew-a", "netnew-b"], {
+      extraPointer: dupPointer,
+      // known-a emitted twice but cited ONLY once: emitted=2, cited=1 -> one
+      // uncited surplus. The old lenient logic tolerated this off-by-one.
+      citations: citationsFor(["known-a", "known-b", "netnew-a", "netnew-b"]),
+    });
+    const { outcome } = run({ offPayload: off, controlPayload: off });
+    const { receipt, passed } = await outcome;
+    expect(passed).toBe(false);
+    expect(receipt.arm_off.citations_bijective).toBe(false);
+    expect(receipt.arm_off.uncited_pointers).toBe(1);
+    expect(receipt.arm_off.dangling_citations).toBe(0);
+  });
+
+  it("fails when an identity is cited twice but emitted once (dangling surplus)", async () => {
+    // known-a emitted once but cited TWICE: cited=2, emitted=1 -> one dangling.
+    const off = reflexPayload(["known-a", "known-b", "netnew-a", "netnew-b"], {
+      citations: [
+        ...citationsFor(["known-a", "known-b", "netnew-a", "netnew-b"]),
+        { id: canonical("thought", serverId("known-a")), kind: "pointer" },
+      ],
+    });
+    const { outcome } = run({ offPayload: off, controlPayload: off });
+    const { receipt, passed } = await outcome;
+    expect(passed).toBe(false);
+    expect(receipt.arm_off.citations_bijective).toBe(false);
+    expect(receipt.arm_off.dangling_citations).toBe(1);
+    expect(receipt.arm_off.uncited_pointers).toBe(0);
   });
 });
 
@@ -652,6 +809,12 @@ describe("runReflexAbGate cross-namespace denial control", () => {
 describe("runReflexAbGate teardown discipline", () => {
   it("tears down seeded records even when the OFF reflex call throws", async () => {
     const { outcome, state } = run({ reflexThrowsOn: "off" });
+    await expect(outcome).rejects.toThrow(LiveTransportError);
+    expect(state.archived.length).toBe(5);
+  });
+
+  it("tears down seeded records even when the CONTROL reflex call throws", async () => {
+    const { outcome, state } = run({ reflexThrowsOn: "control" });
     await expect(outcome).rejects.toThrow(LiveTransportError);
     expect(state.archived.length).toBe(5);
   });

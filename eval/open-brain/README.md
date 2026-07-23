@@ -262,22 +262,34 @@ One run:
    namespace) with the sealed synthetic corpus in
    `fixtures/reflex-ab-v1.json`. Primary seeds are either `prior_known`
    (already-supplied-this-turn) or net-new; negative seeds must never surface.
-2. Calls `agent_reflex_pointers` **twice** over the same evidence and exact
-   scope:
+2. Calls `agent_reflex_pointers` **three times** over the same evidence and
+   exact scope:
    - **OFF arm** — no `prior_context`. Every net-new authorized durable record
      surfaces as a body-free cited pointer, including the already-known seeds
      (the redundant-resurfacing baseline).
+   - **CONTROL arm** — a second unsuppressed call (still no `prior_context`)
+     over the same seed/query. It proves the known items resurface **stably**
+     across two unsuppressed calls; without it, a variable ranked recall that
+     dropped the known items on its own could be misattributed to suppression on
+     the ON arm. The OFF and CONTROL arms must resurface the **exact same
+     non-vacuous** already-known set.
    - **ON arm** — the already-known seeds' **own emitted pointer references**
      (the exact `citation_id` + structural `source_ref` the OFF arm returned for
      them, i.e. the identities a real agent would echo back) are sent as
      `prior_context`, so the shared recall suppresses them before any pointer is
-     emitted.
+     emitted. The receipt records a content-free `references_sent` count, and the
+     references must be **non-empty** and **exactly cover** the OFF arm's emitted
+     already-known set — so suppression is proven to act on precisely the items
+     that were resurfaced.
 3. Compares the arms and records content-free relevance and
-   redundant-resurfacing metrics. PASS requires suppression ON to return
-   strictly fewer already-known items (zero resurfacing) while preserving the
-   net-new evidence on **both** arms.
+   redundant-resurfacing metrics. PASS requires the two unsuppressed arms
+   (OFF/CONTROL) to resurface the same non-vacuous known set, a non-empty
+   prior_context that exactly covers it, and suppression ON to then return zero
+   redundant resurfacing while preserving the net-new evidence on **all** arms.
 4. Requires each arm to independently clear the established EVAL-3 functional
-   bar: every pointer cited (citation bijection), body-free
+   bar: every pointer cited (citation bijection with **strict per-identity
+   multiplicity** — the emitted count must equal the cited count for every
+   identity, so a duplicated or missing citation fails), body-free
    (identity/`source_ref` only — any body-bearing field fails), whole-pack
    budget respected with a complete nine-section allocation order, exact-scope
    authorized under the throwaway namespace, placement `client_owned` (no MCP

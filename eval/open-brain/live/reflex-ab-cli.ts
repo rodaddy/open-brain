@@ -124,9 +124,9 @@ async function main(): Promise<number> {
   }
 }
 
-function armLine(v: ReflexArmVerdict): string {
+function armLine(v: ReflexArmVerdict, label?: string): string {
   return (
-    `- arm=${v.arm} pointers=${v.pointer_count} net_new_present=${v.net_new_present} ` +
+    `- arm=${label ?? v.arm} pointers=${v.pointer_count} net_new_present=${v.net_new_present} ` +
     `net_new_missing=${v.net_new_missing} redundant_resurfacing=${v.redundant_resurfacing} ` +
     `leaks=${v.namespace_leaks} bijective=${v.citations_bijective} body_free=${v.body_free} ` +
     `client_owned=${v.placement_client_owned} within_budget=${v.budget.within_budget} ` +
@@ -145,8 +145,9 @@ function printReceipt(
     `namespace=${receipt.primary_namespace} (negative=${receipt.negative_namespace})`,
     `seeded primary=${receipt.seeded.primary} negative=${receipt.seeded.negative} prior_known=${receipt.seeded.prior_known} net_new=${receipt.seeded.net_new}`,
     armLine(receipt.arm_off),
+    armLine(receipt.arm_control, "control"),
     armLine(receipt.arm_on),
-    `comparison known_off=${receipt.comparison.known_resurfaced_off} known_on=${receipt.comparison.known_resurfaced_on} suppressed_delta=${receipt.comparison.known_suppressed_delta} fewer_when_enabled=${receipt.comparison.fewer_known_when_enabled} net_new_preserved=${receipt.comparison.net_new_preserved} preserved_on_both=${receipt.comparison.net_new_preserved_on_both}`,
+    `comparison known_off=${receipt.comparison.known_resurfaced_off} known_control=${receipt.comparison.known_resurfaced_control} known_on=${receipt.comparison.known_resurfaced_on} suppressed_delta=${receipt.comparison.known_suppressed_delta} fewer_when_enabled=${receipt.comparison.fewer_known_when_enabled} stable=${receipt.comparison.known_resurfacing_stable} stable_known=${receipt.comparison.stable_known_count} references_sent=${receipt.comparison.references_sent} references_cover=${receipt.comparison.references_cover_off_known} net_new_preserved=${receipt.comparison.net_new_preserved} preserved_on_all=${receipt.comparison.net_new_preserved_on_both}`,
     `negative_control ran=${receipt.negative_control.ran} denied=${receipt.negative_control.denied} observed_hit_count=${receipt.negative_control.observed_hit_count} cross_token=${receipt.negative_control.cross_token}${receipt.negative_control.failure ? ` failure=${receipt.negative_control.failure}` : ""}`,
     `teardown attempted=${receipt.teardown.attempted} archived=${receipt.teardown.archived} already_absent=${receipt.teardown.already_absent} failed=${receipt.teardown.failed}`,
   ];
