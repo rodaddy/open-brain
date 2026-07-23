@@ -8,7 +8,7 @@ the same PR whenever either source changes (the contract-parity pre-push hook
 watches `contracts/**`; treat `docs/compatibility-matrix.md` as part of that
 change set by convention).
 
-Live contract: `2026-07-17.memory-tools.v22` (`src/contract.ts`
+Live contract: `2026-07-23.memory-tools.v23` (`src/contract.ts`
 `CONTRACT_VERSION`), enforced end-to-end — clients validate the manifest before
 lifecycle operations, CI's `contract-parity` job binds in-tree client
 declarations to it, and the deploy job cannot run without that gate passing.

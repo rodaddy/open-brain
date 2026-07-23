@@ -689,3 +689,93 @@ to reclaim it, then prove one attempt completes without dead-lettering.
   ownership is lost?
 - Does a real-database test cross multiple lease windows with a competing claimer
   and prove attempts stay at one and the row finishes succeeded?
+
+## [2026-07-23] Multi-row ingestion must be atomic, dependency errors content-free, and concurrent evidence merges row-locked
+
+**Severity:** HIGH
+**Source:** PR #363 review swarm, 2026-07-23
+**Scope:** multi-row ingestion/observation writers and their content-dedupe +
+citation/evidence merge paths
+**Status:** fixed-pre-merge
+
+### Pattern
+
+Three coupled failure classes in one ingestion path:
+
+1. **Non-atomic multi-row ingest.** One ingest call wrote multiple durable rows
+   without a single transaction, so a mid-batch failure left partial rows with an
+   error returned to the caller — the ambiguous-apply contract from the
+   [2026-07-06] domain entry (multi-row-explicit-apply-paths-need-atomicity),
+   recurring on a new surface. Wrap the whole row set in `BEGIN`/`COMMIT`/
+   `ROLLBACK` (or return explicit recoverable partial progress); one call → all
+   rows or none.
+2. **Raw dependency errors on the failure path.** The catch path surfaced raw
+   pg/driver `err.message`, which can carry row/COPY/constraint content across the
+   MCP boundary — the RECURRING content-free-surface class (see the security lane's
+   [2026-07-22] child-process/validation-catch entries). Every catch on the
+   surface must be a stable class + `err.code`/`err.name` only, with a leak test
+   injecting a sentinel-bearing dependency error.
+3. **Content-dedupe that silently drops new citation/evidence, and unlocked
+   concurrent evidence merges.** Content-hash dedupe treated a matching body as a
+   harmless duplicate even when the incoming record carried NEW citation/evidence
+   the stored row lacked — a false success (the [2026-07-13] duplicate-facts entry:
+   return an explicit citation-not-stored rejection, do not claim a harmless
+   duplicate). Worse, two concurrent same-content ingests could each read the row
+   and each merge their evidence from a stale snapshot, so one clobbered the
+   other's citation (the snapshot-clobber shape from the [2026-07-22] source-registry
+   entry). Concurrent evidence merges must take a row lock (`SELECT ... FOR UPDATE`)
+   or merge onto the LIVE column in SQL, so evidence is preserved (or explicitly
+   rejected), never lost to a lost-update race.
+
+### Review Questions
+
+- Does one ingest call produce multiple durable writes? If so, are they one
+  transaction (all-or-nothing), or does the tool return explicit recoverable
+  partial progress — and is there a mid-batch-failure rollback test?
+- Do all catch paths on the ingest surface emit a stable class + `err.code`/
+  `err.name` only, with a sentinel leak test proving no row/constraint content
+  escapes?
+- When content-hash dedupe fires, does the path preserve or EXPLICITLY REJECT new
+  citation/evidence the stored row lacks, rather than reporting a harmless
+  duplicate that silently discards it?
+- Do concurrent same-content evidence merges take a row lock or merge onto the
+  live column in SQL, with a regression proving two interleaved merges both
+  survive (no lost update)?
+
+## [2026-07-23] Isolation evals must prove EXPLICIT denial, not observe zero leaks below a ranking cut
+
+**Severity:** MEDIUM
+**Source:** PR #364 review swarm, 2026-07-23
+**Scope:** isolation/leak evals and any test that infers a boundary holds from a
+metric (recall/leak count) computed over a truncated result set
+**Status:** fixed-pre-merge
+
+### Pattern
+
+The isolation eval concluded "no leak" from observing zero foreign-namespace hits
+in the returned/scored results — but the results were the top-K after a ranking
+cut, so a foreign row ranked below the cut was simply never seen, not proven
+denied. Absence-below-a-cut is not denial: a real cross-namespace leak that
+happens to rank low reads as a pass, and the eval's isolation guarantee is
+vacuous. This is the eval-design mirror of the [2026-07-22] correctness entries
+(unknown/foreign hits must fail closed, never drop before scoring; isolation
+evals must PROVE explicit denial): the boundary must be exercised by a probe that
+attempts to read the foreign row directly and asserts an explicit denial /
+zero-row scoped read, not inferred from a leak counter over a bounded ranking.
+Pair it with the enumeration discipline from the [2026-07-21] negative-matrix
+entry — enumerate the surface, attempt an override, and anchor at least one denial
+on a real database (foreign row provably untouched/unreadable) with a paired
+owning-identity success proving the probe is non-vacuous.
+
+### Review Questions
+
+- Does the isolation eval assert an EXPLICIT denial (a direct probe read of the
+  foreign row returns zero rows / a permission denial), or does it only observe
+  zero foreign hits in a top-K / above-cut scored set?
+- Could a foreign row rank BELOW the result cut and thus be counted as "no leak"
+  when it was merely unranked, not denied?
+- Is there a direct-read probe scoped to the foreign namespace asserting the row
+  cannot be read, plus a paired owning-namespace read proving the probe is not
+  vacuously empty?
+- Is at least one denial anchored on a real database (row provably unreadable from
+  the wrong namespace), per the negative-matrix live-anchor rule?
