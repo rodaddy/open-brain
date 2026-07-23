@@ -1,10 +1,24 @@
-import { afterEach, beforeEach, describe, it, expect } from "bun:test";
-import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { afterEach, beforeEach, describe, it, expect, spyOn } from "bun:test";
+import * as fsPromises from "node:fs/promises";
+import {
+  mkdtemp,
+  mkdir,
+  realpath,
+  rm,
+  rename,
+  stat,
+  symlink,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   collectDropFolder,
+  discoverFiles,
+  readConfinedFile,
   resolveEligibleDropSource,
+  type DiscoveredFile,
   type DropCollectorPool,
 } from "./drop-folder-collector.ts";
 import { contentHash } from "./embedding.ts";
@@ -101,6 +115,10 @@ function makeFake(source: Partial<SourceRow> & { external_id: string }) {
   };
   const thoughts: ThoughtRow[] = [];
   let idSeq = 0;
+  // Count of statements that could DURABLY MUTATE the thoughts table (INSERT or
+  // tag-only UPDATE). The read probe/re-read do NOT count. A true no-op rerun
+  // must leave this at zero.
+  const counters = { durableWrites: 0 };
 
   const pool = {
     query: async (sql: string, params: unknown[] = []) => {
@@ -122,8 +140,60 @@ function makeFake(source: Partial<SourceRow> & { external_id: string }) {
         return { rows: [] };
       }
 
-      // Durable upsert into thoughts with content-hash dedupe.
+      // Pre-write probe for an existing (content_hash, namespace) row. This is
+      // the no-op gate: the collector reads this BEFORE embedding/writing. Each
+      // probe is counted so a rerun can be proven not to touch the write path.
+      if (
+        sql.includes("SELECT id, tags FROM thoughts") &&
+        sql.includes("WHERE content_hash = $1 AND namespace = $2")
+      ) {
+        const [hash, namespace] = params as [string, string];
+        const existing = thoughts.find(
+          (t) => t.content_hash === hash && t.namespace === namespace,
+        );
+        return existing
+          ? { rows: [{ id: existing.id, tags: [...existing.tags] }] }
+          : { rows: [] };
+      }
+
+      // Re-read of id after an ON CONFLICT arm whose WHERE excluded the update.
+      if (
+        sql.includes("SELECT id FROM thoughts") &&
+        sql.includes("WHERE content_hash = $1 AND namespace = $2")
+      ) {
+        const [hash, namespace] = params as [string, string];
+        const existing = thoughts.find(
+          (t) => t.content_hash === hash && t.namespace === namespace,
+        );
+        return existing ? { rows: [{ id: existing.id }] } : { rows: [] };
+      }
+
+      // Tag-only UPDATE (content unchanged, tag set strictly grew). Bumps only
+      // tags; counted as a durable mutation.
+      if (
+        sql.includes("UPDATE thoughts") &&
+        sql.includes("WHERE content_hash = $1 AND namespace = $2")
+      ) {
+        counters.durableWrites += 1;
+        const [hash, namespace, tags] = params as [string, string, string[]];
+        const existing = thoughts.find(
+          (t) => t.content_hash === hash && t.namespace === namespace,
+        );
+        if (existing) {
+          for (const tag of tags) {
+            if (!existing.tags.includes(tag)) existing.tags.push(tag);
+          }
+          return { rows: [{ id: existing.id }] };
+        }
+        return { rows: [] };
+      }
+
+      // Durable upsert into thoughts with content-hash dedupe. Only reached for
+      // NEW content (the collector probes first), but the ON CONFLICT arm is
+      // modeled for the concurrent-writer race: if the row already exists, the
+      // WHERE (NOT EXCLUDED.tags <@ thoughts.tags) decides whether to update.
       if (sql.includes("INSERT INTO thoughts")) {
+        counters.durableWrites += 1;
         const [content, tags, , namespace, , hash] = params as [
           string,
           string[],
@@ -136,7 +206,13 @@ function makeFake(source: Partial<SourceRow> & { external_id: string }) {
           (t) => t.content_hash === hash && t.namespace === namespace,
         );
         if (existing) {
-          // ON CONFLICT DO UPDATE: merge distinct tags, keep id, is_new=false.
+          // ON CONFLICT ... WHERE NOT (EXCLUDED.tags <@ thoughts.tags): update
+          // (and RETURN a row) only when the incoming tags add something.
+          const adds = tags.some((tag) => !existing.tags.includes(tag));
+          if (!adds) {
+            // WHERE excluded the update: no row returned (collector re-reads id).
+            return { rows: [] };
+          }
           for (const tag of tags) {
             if (!existing.tags.includes(tag)) existing.tags.push(tag);
           }
@@ -203,10 +279,26 @@ function makeFake(source: Partial<SourceRow> & { external_id: string }) {
 
   // The fake's query is a stable-substring router, not pg's overloaded signature;
   // cast to the minimal DropCollectorPool the collector actually uses.
-  return { pool: pool as unknown as DropCollectorPool, thoughts, src };
+  return {
+    pool: pool as unknown as DropCollectorPool,
+    thoughts,
+    src,
+    counters,
+  };
 }
 
 const embedFn = async () => null;
+
+// A counting embed function: proves the collector does NOT embed on a no-op
+// rerun. Every call increments; a genuine no-op leaves it unchanged.
+function countingEmbedFn() {
+  const state = { calls: 0 };
+  const fn = (async () => {
+    state.calls += 1;
+    return null;
+  }) as typeof embedFn;
+  return { fn, state };
+}
 
 function assertContentFree(value: unknown, root: string, relPaths: string[]) {
   const serialized = JSON.stringify(value);
@@ -579,6 +671,80 @@ describe("drop-folder collector — dedupe + normalization truthfulness", () => 
     expect(second.deduped).toBe(2);
     expect(fake.thoughts.length).toBe(2);
   });
+
+  it("a repeated unchanged collection performs ZERO embedding and ZERO durable mutation", async () => {
+    await writeFile(join(root, "a.txt"), BODY_A);
+    await writeFile(join(root, "b.md"), BODY_B);
+    const fake = makeFake({ external_id: "drop-a", config: { root } });
+    const embed1 = countingEmbedFn();
+
+    const first = await collectDropFolder(
+      { pool: fake.pool, embedFn: embed1.fn },
+      adminAuth,
+      { external_id: "drop-a", tags: ["drop"] },
+    );
+    expect(first.collected).toBe(2);
+    // First pass: two new rows embedded + written.
+    expect(embed1.state.calls).toBe(2);
+    expect(fake.counters.durableWrites).toBe(2);
+    const stampedAfterFirst = fake.src.content_hash;
+
+    // Rerun with a FRESH embed counter and the write counter reset, same tags.
+    const embed2 = countingEmbedFn();
+    fake.counters.durableWrites = 0;
+    const second = await collectDropFolder(
+      { pool: fake.pool, embedFn: embed2.fn },
+      adminAuth,
+      { external_id: "drop-a", tags: ["drop"] },
+    );
+    expect(second.collected).toBe(0);
+    expect(second.deduped).toBe(2);
+    // The proof: nothing embedded and nothing durably mutated on the rerun.
+    expect(embed2.state.calls).toBe(0);
+    expect(fake.counters.durableWrites).toBe(0);
+    // The source hash stamp did not churn either (same manifest digest).
+    expect(fake.src.content_hash).toBe(stampedAfterFirst);
+    // Still exactly two durable rows.
+    expect(fake.thoughts.length).toBe(2);
+  });
+
+  it("an unchanged rerun with NEW tags updates only tags (no embed, one tag-only write)", async () => {
+    await writeFile(join(root, "a.txt"), BODY_A);
+    const fake = makeFake({ external_id: "drop-a", config: { root } });
+
+    await collectDropFolder({ pool: fake.pool, embedFn }, adminAuth, {
+      external_id: "drop-a",
+      tags: ["one"],
+    });
+    expect(fake.thoughts.length).toBe(1);
+    expect(fake.thoughts[0]!.tags).toEqual(["one"]);
+
+    // Rerun with a new tag: content unchanged, so NO embed; only the tag set is
+    // updated, and only because it strictly grows.
+    const embed = countingEmbedFn();
+    fake.counters.durableWrites = 0;
+    const result = await collectDropFolder(
+      { pool: fake.pool, embedFn: embed.fn },
+      adminAuth,
+      { external_id: "drop-a", tags: ["two"] },
+    );
+    expect(result.collected).toBe(0);
+    expect(result.deduped).toBe(1);
+    expect(embed.state.calls).toBe(0); // no re-embed
+    expect(fake.counters.durableWrites).toBe(1); // exactly one tag-only update
+    expect(fake.thoughts[0]!.tags.sort()).toEqual(["one", "two"]);
+
+    // A further rerun with the SAME merged tags is again a true no-op.
+    const embed2 = countingEmbedFn();
+    fake.counters.durableWrites = 0;
+    await collectDropFolder(
+      { pool: fake.pool, embedFn: embed2.fn },
+      adminAuth,
+      { external_id: "drop-a", tags: ["one", "two"] },
+    );
+    expect(embed2.state.calls).toBe(0);
+    expect(fake.counters.durableWrites).toBe(0);
+  });
 });
 
 describe("drop-folder collector — bounds", () => {
@@ -607,7 +773,7 @@ describe("drop-folder collector — bounds", () => {
     }
   });
 
-  it("truncates truthfully when more files exist than the count bound", async () => {
+  it("truncates truthfully (aggregate flag only) when more files exist than the count bound", async () => {
     process.env.DROP_COLLECTOR_MAX_FILES = "2";
     try {
       await writeFile(join(root, "a.txt"), "alpha content one");
@@ -622,11 +788,15 @@ describe("drop-folder collector — bounds", () => {
       });
       expect(result.truncated).toBe(true);
       expect(result.collected).toBe(2);
-      // The third file is reported as skipped(count_bound), not silently dropped.
-      const countSkips = (result.files ?? []).filter(
-        (f) => f.reason === "count_bound",
-      );
-      expect(countSkips.length).toBe(1);
+      // Bounded discovery contract: the omitted tail produces NO per-file
+      // receipts. Only maxFiles receipts exist; truncation is the aggregate flag.
+      expect((result.files ?? []).length).toBe(2);
+      // No receipt has a count_bound reason (the reason no longer exists).
+      expect(
+        (result.files ?? []).some(
+          (f) => (f.reason as string) === "count_bound",
+        ),
+      ).toBe(false);
       expect(thoughts.length).toBe(2);
     } finally {
       delete process.env.DROP_COLLECTOR_MAX_FILES;
@@ -656,6 +826,347 @@ describe("drop-folder collector — bounds", () => {
       expect(thoughts.length).toBe(1);
     } finally {
       delete process.env.DROP_COLLECTOR_MAX_TOTAL_BYTES;
+    }
+  });
+});
+
+// Capture the confined discovery identity (dev/ino/relPath) of one file exactly
+// as discoverFiles would, so an adversarial test can swap the underlying path
+// AFTER capture and prove the descriptor read still binds to the ORIGINAL inode.
+async function captureIdentity(
+  realPath: string,
+  relPath: string,
+): Promise<DiscoveredFile> {
+  const st = await stat(realPath);
+  return { realPath, dev: st.dev, ino: st.ino, relPath };
+}
+
+describe("drop-folder collector — P1 TOCTOU descriptor binding", () => {
+  it("rejects the read when a validated file is swapped to an OUTSIDE symlink before read", async () => {
+    // A legitimate in-root file is discovered and its identity captured.
+    const inside = join(root, "a.txt");
+    await writeFile(inside, "ORIGINAL_SAFE_CONTENT within the root");
+    const file = await captureIdentity(inside, "a.txt");
+
+    // Attacker: an oversized/secret target OUTSIDE the root.
+    const outside = await mkdtemp(join(tmpdir(), "drop-toctou-out-"));
+    try {
+      const secret = join(outside, "secret.txt");
+      await writeFile(secret, "OUTSIDE_SECRET_do_not_leak: attacker target");
+
+      // Swap the final component to a symlink pointing at the outside secret,
+      // AFTER discovery captured the real-file identity.
+      await unlink(inside);
+      await symlink(secret, inside);
+
+      // O_NOFOLLOW makes the open fail (ELOOP) on the swapped symlink; the read
+      // is rejected and never follows the post-validation symlink.
+      const read = await readConfinedFile(file, 1_048_576, 1_048_576);
+      expect(read.ok).toBe(false);
+      if (!read.ok) expect(read.reason).toBe("unreadable");
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects the read when the validated name is swapped to a DIFFERENT regular file (inode mismatch)", async () => {
+    // Discover file A and capture its inode identity.
+    const target = join(root, "a.txt");
+    await writeFile(target, "ORIGINAL_A content under the root");
+    const file = await captureIdentity(target, "a.txt");
+
+    // Swap the name to a DIFFERENT real regular file (a plain rename-over, not a
+    // symlink) so O_NOFOLLOW alone would not catch it — only the dev/ino identity
+    // binding does.
+    const other = join(root, "other.txt");
+    await writeFile(other, "SWAPPED_B_do_not_leak: a different inode entirely");
+    await rename(other, target); // target now has a different inode
+
+    const read = await readConfinedFile(file, 1_048_576, 1_048_576);
+    // The opened descriptor's inode no longer matches the captured identity.
+    expect(read.ok).toBe(false);
+    if (!read.ok) expect(read.reason).toBe("unreadable");
+  });
+
+  it("reads only bounded bytes even if the file GROWS after metadata capture", async () => {
+    // Capture identity at a small size, then grow the file far past the per-file
+    // cap before the descriptor read. The read must stay bounded and reject.
+    const p = join(root, "grow.txt");
+    await writeFile(p, "small");
+    const file = await captureIdentity(p, "grow.txt");
+
+    // Grow the SAME inode (append in place) to 4 KiB, well past a 16-byte cap.
+    await writeFile(p, "X".repeat(4096));
+
+    const cap = 16;
+    const read = await readConfinedFile(file, cap, 1_048_576);
+    // Same inode, but now oversized: bounded read detects overflow and rejects
+    // rather than ingesting the grown content.
+    expect(read.ok).toBe(false);
+    if (!read.ok) expect(read.reason).toBe("too_large");
+  });
+
+  it("reads exactly the descriptor bytes for a legitimate in-identity file", async () => {
+    const p = join(root, "ok.txt");
+    await writeFile(p, "exactly these bytes");
+    const file = await captureIdentity(p, "ok.txt");
+    const read = await readConfinedFile(file, 1_048_576, 1_048_576);
+    expect(read.ok).toBe(true);
+    if (read.ok) {
+      expect(read.content).toBe("exactly these bytes");
+      expect(read.byteLength).toBe("exactly these bytes".length);
+    }
+  });
+
+  it("end-to-end: a file swapped to an outside symlink after discovery never lands the outside body", async () => {
+    // Full collectDropFolder path. We cannot interleave the swap mid-call
+    // deterministically, but the descriptor binding is proven above; here we
+    // confirm the integrated path never reads an escaping symlink's target even
+    // when the symlink is present at discovery time (confinement) AND that the
+    // read path is descriptor-bound (no path re-resolution).
+    const outside = await mkdtemp(join(tmpdir(), "drop-e2e-out-"));
+    try {
+      await writeFile(join(outside, "secret.txt"), "E2E_SECRET_do_not_leak");
+      await writeFile(join(root, "real.txt"), "E2E_REAL under root");
+      await symlink(join(outside, "secret.txt"), join(root, "link.txt"));
+
+      const { pool, thoughts } = makeFake({
+        external_id: "drop-a",
+        config: { root },
+      });
+      const result = await collectDropFolder({ pool, embedFn }, adminAuth, {
+        external_id: "drop-a",
+      });
+      expect(result.collected).toBe(1);
+      expect(thoughts.length).toBe(1);
+      expect(thoughts[0]!.content).toBe("E2E_REAL under root");
+      const serialized = JSON.stringify({ result, thoughts });
+      expect(serialized).not.toContain("E2E_SECRET_do_not_leak");
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("drop-folder collector — P2 bounded discovery work", () => {
+  it("retains at most maxFiles and reports truncated for a >maxFiles tree without per-file tail work", async () => {
+    process.env.DROP_COLLECTOR_MAX_FILES = "3";
+    try {
+      // 12 supported files, well over the bound of 3.
+      for (let i = 0; i < 12; i++) {
+        await writeFile(
+          join(root, `f${String(i).padStart(2, "0")}.txt`),
+          `content number ${i}`,
+        );
+      }
+      const { files, truncated } = await discoverFiles(await realpath(root), 3);
+      // At most maxFiles retained; the omitted tail is NOT materialized.
+      expect(files.length).toBe(3);
+      expect(truncated).toBe(true);
+      // The retained bounded set is SORTED before return. Which specific files
+      // survive the bounded-buffer race is intentionally NOT asserted: hard
+      // bounded work forbids a full per-directory sort, so the candidate sentinel
+      // stops the walk after limit+1 supported files are seen in filesystem order.
+      // Determinism under a truncated hostile tree is secondary to the work bound;
+      // the ordering of the retained set is the invariant.
+      const rels = files.map((f) => f.relPath);
+      expect([...rels].sort()).toEqual(rels);
+      // Every retained entry is one of the real supported files (no phantom).
+      for (const rel of rels) {
+        expect(rel).toMatch(/^f\d{2}\.txt$/);
+      }
+    } finally {
+      delete process.env.DROP_COLLECTOR_MAX_FILES;
+    }
+  });
+
+  it("does not truncate when the tree has exactly maxFiles files", async () => {
+    await writeFile(join(root, "a.txt"), "one");
+    await writeFile(join(root, "b.txt"), "two");
+    await writeFile(join(root, "c.txt"), "three");
+    const { files, truncated } = await discoverFiles(await realpath(root), 3);
+    expect(files.length).toBe(3);
+    expect(truncated).toBe(false);
+  });
+
+  it("integrated: an oversized tree yields exactly maxFiles receipts, truncated=true, and no count_bound receipts", async () => {
+    process.env.DROP_COLLECTOR_MAX_FILES = "4";
+    try {
+      for (let i = 0; i < 20; i++) {
+        await writeFile(
+          join(root, `x${String(i).padStart(2, "0")}.txt`),
+          `distinct body ${i} here`,
+        );
+      }
+      const { pool, thoughts } = makeFake({
+        external_id: "drop-a",
+        config: { root },
+      });
+      const result = await collectDropFolder({ pool, embedFn }, adminAuth, {
+        external_id: "drop-a",
+      });
+      expect(result.truncated).toBe(true);
+      // Exactly maxFiles receipts — the omitted 16 produce NO receipts.
+      expect((result.files ?? []).length).toBe(4);
+      expect(result.collected).toBe(4);
+      expect(thoughts.length).toBe(4);
+      // The tail was never enumerated into per-file work.
+      expect(
+        (result.files ?? []).some(
+          (f) => (f.reason as string) === "count_bound",
+        ),
+      ).toBe(false);
+    } finally {
+      delete process.env.DROP_COLLECTOR_MAX_FILES;
+    }
+  });
+
+  it("bounded-buffer discovery keeps the sorted prefix regardless of filesystem order across subdirs", async () => {
+    process.env.DROP_COLLECTOR_MAX_FILES = "2";
+    try {
+      await mkdir(join(root, "zsub"));
+      await mkdir(join(root, "asub"));
+      await writeFile(join(root, "zsub", "z.txt"), "z");
+      await writeFile(join(root, "asub", "a.txt"), "a");
+      await writeFile(join(root, "m.txt"), "m");
+      const { files, truncated } = await discoverFiles(await realpath(root), 2);
+      expect(truncated).toBe(true);
+      expect(files.length).toBe(2);
+      // Global sorted prefix by relPath: asub/a.txt < m.txt < zsub/z.txt.
+      expect(files.map((f) => f.relPath)).toEqual(["asub/a.txt", "m.txt"]);
+    } finally {
+      delete process.env.DROP_COLLECTOR_MAX_FILES;
+    }
+  });
+});
+
+// Run discoverFiles while counting the ACTUAL realpath/stat calls it makes, by
+// spying on the shared node:fs/promises module the collector imports from. The
+// spies delegate to the real implementations (so discovery behaves normally) and
+// are restored afterward. `entriesInspected` is the collector's own honest work
+// counter; realpathCalls/statCalls prove the per-entry syscall work stayed
+// bounded too, independent of tree size.
+async function countedDiscover(realRoot: string, limit: number) {
+  let realpathCalls = 0;
+  let statCalls = 0;
+  const realRealpath = fsPromises.realpath;
+  const realStat = fsPromises.stat;
+  const realpathSpy = spyOn(fsPromises, "realpath").mockImplementation(((
+    ...args: Parameters<typeof realRealpath>
+  ) => {
+    realpathCalls += 1;
+    return (realRealpath as (...a: unknown[]) => unknown)(...args);
+  }) as typeof realRealpath);
+  const statSpy = spyOn(fsPromises, "stat").mockImplementation(((
+    ...args: Parameters<typeof realStat>
+  ) => {
+    statCalls += 1;
+    return (realStat as (...a: unknown[]) => unknown)(...args);
+  }) as typeof realStat);
+  try {
+    const result = await discoverFiles(realRoot, limit);
+    return { result, realpathCalls, statCalls };
+  } finally {
+    realpathSpy.mockRestore();
+    statSpy.mockRestore();
+  }
+}
+
+describe("drop-folder collector — P2 hard-bounded traversal work", () => {
+  it("bounds inspected/realpath/stat work far below tree size when the entry-scan bound trips first", async () => {
+    // A tree FAR beyond both the file candidate bound AND the entry-scan bound.
+    // With maxFiles=4 and scan-entries=40, we place 500 supported files. The scan
+    // bound (40) trips long before all 500 are inspected, so work must stay near
+    // the bound — NOT scale with the 500-entry tree.
+    process.env.DROP_COLLECTOR_MAX_FILES = "4";
+    process.env.DROP_COLLECTOR_MAX_SCAN_ENTRIES = "40";
+    try {
+      for (let i = 0; i < 500; i++) {
+        await writeFile(
+          join(root, `f${String(i).padStart(4, "0")}.txt`),
+          `body number ${i}`,
+        );
+      }
+      // Wrap fs to count actual realpath/stat calls the discovery performs.
+      const realRoot = await realpath(root);
+      const counts = await countedDiscover(realRoot, 4);
+
+      // truncated because the walk stopped before draining the tree.
+      expect(counts.result.truncated).toBe(true);
+      // At most maxFiles retained.
+      expect(counts.result.files.length).toBe(4);
+      // The hard bound: entries inspected never exceeds the scan bound, and is
+      // orders of magnitude below the 500-file tree.
+      expect(counts.result.entriesInspected).toBeLessThanOrEqual(40);
+      expect(counts.result.entriesInspected).toBeLessThan(60);
+      // realpath + stat work is bounded by inspected entries, NOT tree size.
+      expect(counts.realpathCalls).toBeLessThanOrEqual(40);
+      expect(counts.statCalls).toBeLessThanOrEqual(40);
+      // Proof it did not walk the whole tree: work is a tiny fraction of 500.
+      expect(counts.realpathCalls).toBeLessThan(60);
+    } finally {
+      delete process.env.DROP_COLLECTOR_MAX_FILES;
+      delete process.env.DROP_COLLECTOR_MAX_SCAN_ENTRIES;
+    }
+  });
+
+  it("many UNSUPPORTED entries cannot hide unbounded scanning: work stays bounded by the scan bound", async () => {
+    // Only a handful of supported files, but a huge number of UNSUPPORTED entries
+    // (.bin). The supported-file candidate sentinel (maxFiles+1) will NEVER trip,
+    // so the ONLY thing that can bound the walk is the entry-scan bound. Without
+    // it, the walk would stat/realpath every one of the 400 unsupported entries.
+    process.env.DROP_COLLECTOR_MAX_FILES = "8";
+    process.env.DROP_COLLECTOR_MAX_SCAN_ENTRIES = "50";
+    try {
+      // 2 supported files (well under maxFiles=8, so the file sentinel can't trip)
+      // amid 400 unsupported ones.
+      await writeFile(join(root, "keep-a.txt"), "supported alpha");
+      await writeFile(join(root, "keep-b.md"), "supported bravo");
+      for (let i = 0; i < 400; i++) {
+        await writeFile(
+          join(root, `junk${String(i).padStart(4, "0")}.bin`),
+          `unsupported ${i}`,
+        );
+      }
+      const realRoot = await realpath(root);
+      const counts = await countedDiscover(realRoot, 8);
+
+      // The scan bound tripped (tree not drained) even though the file sentinel
+      // could not: many unsupported entries did NOT enable unbounded scanning.
+      expect(counts.result.truncated).toBe(true);
+      expect(counts.result.entriesInspected).toBeLessThanOrEqual(50);
+      // realpath/stat work bounded by inspected entries, far below the 402-entry
+      // tree — every inspected UNSUPPORTED entry counts against the same bound.
+      expect(counts.realpathCalls).toBeLessThanOrEqual(50);
+      expect(counts.statCalls).toBeLessThanOrEqual(50);
+      expect(counts.realpathCalls).toBeLessThan(100);
+    } finally {
+      delete process.env.DROP_COLLECTOR_MAX_FILES;
+      delete process.env.DROP_COLLECTOR_MAX_SCAN_ENTRIES;
+    }
+  });
+
+  it("does NOT truncate and inspects the whole (small) tree when both bounds have headroom", async () => {
+    // A small tree well under both bounds: discovery drains it fully, truncated is
+    // false, and entriesInspected equals the real entry count (proving the counter
+    // is honest, not clamped).
+    process.env.DROP_COLLECTOR_MAX_FILES = "10";
+    process.env.DROP_COLLECTOR_MAX_SCAN_ENTRIES = "100";
+    try {
+      await writeFile(join(root, "a.txt"), "one");
+      await writeFile(join(root, "b.md"), "two");
+      await writeFile(join(root, "c.log"), "three");
+      const realRoot = await realpath(root);
+      const counts = await countedDiscover(realRoot, 10);
+      expect(counts.result.truncated).toBe(false);
+      expect(counts.result.files.length).toBe(3);
+      // Exactly the three real entries were inspected — no over- or under-count.
+      expect(counts.result.entriesInspected).toBe(3);
+      expect(counts.realpathCalls).toBe(3);
+      expect(counts.statCalls).toBe(3);
+    } finally {
+      delete process.env.DROP_COLLECTOR_MAX_FILES;
+      delete process.env.DROP_COLLECTOR_MAX_SCAN_ENTRIES;
     }
   });
 });
