@@ -9,6 +9,10 @@ import {
   CONTEXT_PACK_ENVELOPE_CHAR_RESERVE,
   boundedText,
 } from "./agent-context-pack-durable-lane.ts";
+import {
+  suppressReferencedRecords,
+  type PriorContextReference,
+} from "../prior-context-suppression.ts";
 
 const DURABLE_MEMORY_MAX_CONTENT_CHARS = 8_000;
 const DURABLE_MEMORY_MAX_ITEMS = 8;
@@ -51,6 +55,34 @@ export type DurableMemoryContextFragment = {
   budget: Record<string, unknown>;
   citations: Array<Record<string, unknown>>;
 };
+
+/**
+ * The stable citation id emitted for a recalled brain record. Kept in one place
+ * so prior-context suppression keys off the EXACT string that becomes the item's
+ * `citation_id`, and the emitted item derives its id from the same call.
+ */
+function recordCitationId(row: SearchRow): string {
+  return `brain_record:${row.source_type}:${row.id}`;
+}
+
+/**
+ * The bounded structural source_ref emitted for a recalled brain record: the
+ * store's own source_ref when present, else a derived `brain_record` pointer.
+ * Its identity coordinates (source/type/id/namespace) are what suppression
+ * canonicalizes on; `label`/`preview` are display-only and never affect matching.
+ */
+function recordSourceRef(row: SearchRow) {
+  return (
+    row.source_ref ?? {
+      source: "brain",
+      type: row.source_type,
+      id: row.id,
+      namespace: row.namespace,
+      label: (row.content_preview ?? "").slice(0, 120),
+      preview: (row.content_preview ?? "").slice(0, 300),
+    }
+  );
+}
 
 /**
  * Build the `durable_memory` section: query-driven hybrid-RRF recall over the
@@ -178,12 +210,32 @@ export async function loadDurableMemoryContext(
     };
   }
 
+  // Prior-context suppression (#333): deterministically drop records already
+  // represented in prior context BEFORE the char budget selects and bounds
+  // bodies, so the surviving relevance order, item selection, citations, and
+  // budget accounting all reconcile against net-new results only. Suppression is
+  // pure removal — it can never add, reorder, or leak a record — and keys off the
+  // exact citation_id and structural source_ref each record emits. Records with
+  // no resolvable identity are kept (they cannot be proven prior context). No raw
+  // prior-context text is consulted; only resolvable identity references are.
+  const priorContext = (args.prior_context ??
+    []) as ReadonlyArray<PriorContextReference>;
+  const suppression = suppressReferencedRecords(
+    rows,
+    (row) => ({
+      citation_id: recordCitationId(row),
+      source_ref: recordSourceRef(row),
+    }),
+    priorContext,
+  );
+  const netNewRows = suppression.kept;
+
   let remainingChars = maxContentChars;
   const items: Array<Record<string, unknown>> = [];
   const citations: Array<Record<string, unknown>> = [];
   let itemsTruncated = false;
 
-  for (const row of rows) {
+  for (const row of netNewRows) {
     const bounded = boundedText(
       row.content_preview,
       Math.min(DURABLE_MEMORY_MAX_ITEM_CHARS, remainingChars),
@@ -197,21 +249,14 @@ export async function loadDurableMemoryContext(
       }
       break;
     }
-    const citationId = `brain_record:${row.source_type}:${row.id}`;
+    const citationId = recordCitationId(row);
     // Build the bounded source_ref once per row and attach the SAME object to
     // both the item and its citation, so an item is independently resolvable back
     // to its brain record without a citation lookup, and item.source_ref is
     // identical to citation.source_ref. Citation reconciliation after whole-pack
     // trimming keys off citation_id, so co-locating source_ref on the item keeps
     // the two consistent through partial and full trims.
-    const sourceRef = row.source_ref ?? {
-      source: "brain",
-      type: row.source_type,
-      id: row.id,
-      namespace: row.namespace,
-      label: (row.content_preview ?? "").slice(0, 120),
-      preview: (row.content_preview ?? "").slice(0, 300),
-    };
+    const sourceRef = recordSourceRef(row);
     items.push({
       id: row.id,
       source_type: row.source_type,
@@ -231,8 +276,10 @@ export async function loadDurableMemoryContext(
     remainingChars -= bounded.text.length;
     if (bounded.truncated) itemsTruncated = true;
   }
-  // Records beyond the ones whose bodies fit were dropped by the char budget.
-  if (items.length < rows.length) itemsTruncated = true;
+  // Net-new records beyond the ones whose bodies fit were dropped by the char
+  // budget. Compare against the post-suppression set: records removed as prior
+  // context are not a truncation, so they must not flip this flag.
+  if (items.length < netNewRows.length) itemsTruncated = true;
 
   const truncation: Array<Record<string, unknown>> = [];
   if (itemsTruncated) {
@@ -244,15 +291,47 @@ export async function loadDurableMemoryContext(
     });
   }
 
+  // Truthful empty state: when nothing survives, distinguish the three genuine
+  // zero-item causes, in the only order that reads correctly:
+  //   - `content_unavailable`: net-new records DID survive suppression but none
+  //     produced an emittable body (null/empty content_preview, or the char
+  //     budget was too small for even the first body). This is NOT "no_matches"
+  //     (there was a net-new match) and NOT "all_suppressed" (nothing was
+  //     suppressed away). It is a content-free empty: net-new existed but was
+  //     unemittable, and `truncated` is already true for it above.
+  //   - `all_suppressed`: recall DID return rows and suppression removed every
+  //     one, so there is no net-new content at all.
+  //   - `no_matches`: recall genuinely found nothing to begin with.
+  // net_new is checked first so a net-new-but-unemittable section can never be
+  // mislabeled no_matches; all_suppressed keeps its exact prior meaning (rows
+  // recalled, none net-new because all were suppressed).
+  const emptyReason =
+    items.length === 0
+      ? suppression.suppression.net_new > 0
+        ? "content_unavailable"
+        : rows.length > 0 && suppression.suppression.suppressed === rows.length
+          ? "all_suppressed"
+          : "no_matches"
+      : undefined;
+
   return {
     section: {
       label: "durable_memory",
       namespace_scoped: true,
       query,
-      ...(items.length === 0 ? { empty_reason: "no_matches" } : {}),
+      ...(emptyReason ? { empty_reason: emptyReason } : {}),
       items,
       item_count: items.length,
       truncated: truncation.length > 0,
+      // Content-free suppression counters (#333): counts only, never an id, a
+      // reference, or a body. `net_new` is pre-budget net-new records; `emitted`
+      // is how many survived the char budget.
+      prior_context_suppression: {
+        recalled: suppression.suppression.recalled,
+        suppressed: suppression.suppression.suppressed,
+        net_new: suppression.suppression.net_new,
+        emitted: items.length,
+      },
     },
     scopeDenials: [],
     truncation,
