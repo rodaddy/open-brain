@@ -9,6 +9,7 @@ import {
   nRecords,
   searchPool,
   setupAgentContextPackToolClient as setupToolClient,
+  throwingSearchPool,
 } from "./agent-context-pack-test-helpers.ts";
 
 /**
@@ -336,6 +337,115 @@ describe("agent_context_pack pointers + candidate_memory (#329)", () => {
         (c: any) => c.kind === "candidate",
       );
       expect(candidateCitations).toHaveLength(0);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("pointers-only recall failure yields a truthful empty pointers section with exactly one degraded marker, folded once when candidate is co-requested", async () => {
+    // The shared durable recall throws. pointers was the ONLY driver of that
+    // recall (durable_memory section not requested), so its content-free
+    // recall_failed warning must surface through the pointers section exactly
+    // once — and co-requesting candidate_memory must NOT duplicate it.
+    const captured: Array<{ sql: string; params?: unknown[] }> = [];
+    const { pool } = throwingSearchPool(captured);
+    const { client, cleanup } = await setupToolClient(admin, pool);
+    try {
+      const pack = await client.callTool({
+        name: "agent_context_pack",
+        arguments: {
+          ...SCOPE,
+          query: "durable",
+          requested_sections: ["pointers", "candidate_memory"],
+        },
+      });
+      const payload = JSON.parse((pack.content as any)[0].text);
+      expect(pack.isError).toBeFalsy();
+
+      // The recall was actually attempted (and threw) — this is a failure path,
+      // not a "never queried" path.
+      expect(captured.some((c) => isRecallSql(c.sql))).toBe(true);
+
+      // pointers is emitted, truthfully empty, with zero pointer citations.
+      const pointers = payload.sections.pointers;
+      expect(pointers.label).toBe("pointers");
+      expect(pointers.item_count).toBe(0);
+      expect(pointers.items).toEqual([]);
+      expect(pointers.truncated).toBe(false);
+      // durable_memory section body stays suppressed (it was never requested).
+      expect(payload.sections.durable_memory).toBeUndefined();
+      const pointerCitations = payload.citations.filter(
+        (c: any) => c.kind === "pointer",
+      );
+      expect(pointerCitations).toHaveLength(0);
+
+      // Exactly one degraded marker at the top level, content-free.
+      const degraded = payload.warnings.degraded_sources;
+      const recallFailed = degraded.filter(
+        (d: any) =>
+          d.source === "durable_memory" && d.reason === "recall_failed",
+      );
+      expect(recallFailed).toHaveLength(1);
+      expect(recallFailed[0]).toEqual({
+        source: "durable_memory",
+        reason: "recall_failed",
+      });
+      // Co-requested candidate_memory did not fold the same warning a second time.
+      expect(degraded).toHaveLength(1);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("more than 20 eligible pointers cap at 20 with a truncation marker, complete citations, and no orphans", async () => {
+    // 25 distinct rows are recalled; a pointers-only request suppresses the
+    // durable_memory section, so all 25 are pointer-eligible (zero durable
+    // dedupe). The pointer builder's hard ceiling is 20.
+    const { pool } = searchPool(nRecords(25));
+    const { client, cleanup } = await setupToolClient(admin, pool);
+    try {
+      const pack = await client.callTool({
+        name: "agent_context_pack",
+        arguments: {
+          ...SCOPE,
+          query: "durable",
+          requested_sections: ["pointers"],
+        },
+      });
+      const payload = JSON.parse((pack.content as any)[0].text);
+      expect(pack.isError).toBeFalsy();
+      const pointers = payload.sections.pointers;
+
+      // Capped at exactly 20, section reports the truncation.
+      expect(pointers.item_count).toBe(20);
+      expect(pointers.items).toHaveLength(20);
+      expect(pointers.truncated).toBe(true);
+
+      // Exactly 20 matching pointer citations — a bijection, no orphans either way.
+      const pointerCitations = payload.citations.filter(
+        (c: any) => c.kind === "pointer",
+      );
+      expect(pointerCitations).toHaveLength(20);
+      const citationIds = new Set(pointerCitations.map((c: any) => c.id));
+      const itemIds = new Set(pointers.items.map((p: any) => p.citation_id));
+      expect(citationIds).toEqual(itemIds);
+      for (const item of pointers.items) {
+        expect(citationIds.has(item.citation_id)).toBe(true);
+      }
+      for (const citation of pointerCitations) {
+        expect(itemIds.has(citation.id)).toBe(true);
+      }
+
+      // The truncation warning names the pointer item source with the 20 ceiling.
+      const truncation = payload.warnings.truncation;
+      const pointerTruncation = truncation.filter(
+        (t: any) => t.source === "pointers.items",
+      );
+      expect(pointerTruncation).toHaveLength(1);
+      expect(pointerTruncation[0]).toMatchObject({
+        source: "pointers.items",
+        max_items: 20,
+      });
     } finally {
       await cleanup();
     }

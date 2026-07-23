@@ -506,11 +506,12 @@ export async function buildAgentContextPackPayload(
       )
     : null;
   // The durable_memory SECTION is only fitted/emitted/charged when it was
-  // explicitly requested. When the recall ran ONLY to feed pointers/candidates
-  // (includeDurableMemory true via includePointers/includeCandidateMemory but
-  // includeDurableMemorySection false), the section body is suppressed here while
-  // its surplus pool and identities still flow to the pointer/candidate builders
-  // below.
+  // explicitly requested. When the recall ran ONLY to feed pointers
+  // (includeDurableMemory true via includePointers, but includeDurableMemorySection
+  // false), the section body is suppressed here while its surplus pool and
+  // identities still flow to the pointer/candidate builders below.
+  // candidate_memory alone never drives recall (see includeDurableMemory), so a
+  // candidate-only request does not reach this suppressed-recall path.
   let durableMemorySection = includeDurableMemorySection
     ? (durableMemoryContext?.section ?? null)
     : null;

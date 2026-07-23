@@ -94,6 +94,28 @@ export function searchPool(
   };
 }
 
+/**
+ * A mock pool whose recall arms (vector/FTS/entity table) reject, so
+ * `executeSearch` throws and the durable-memory loader takes its `recall_failed`
+ * degraded path. Non-recall queries still answer empty so unrelated reads work.
+ */
+export function throwingSearchPool(
+  captured: Array<{ sql: string; params?: unknown[] }> = [],
+) {
+  return {
+    pool: {
+      query: async (sql: string, params?: unknown[]) => {
+        captured.push({ sql, params });
+        if (isRecallSql(sql)) {
+          throw new Error("recall boom");
+        }
+        return { rows: [] };
+      },
+    },
+    captured,
+  };
+}
+
 /** True for any SQL that is a durable recall arm (vector/FTS/entity table). */
 export function isRecallSql(sql: unknown): boolean {
   return (

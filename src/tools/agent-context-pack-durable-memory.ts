@@ -26,6 +26,14 @@ const DURABLE_MEMORY_MAX_ITEM_CHARS = 1_000;
  * bodies) and the surplus net-new rows are handed to the pointer builder as
  * lightweight references only (no body copied, no second query issued). Bounded
  * so recall stays cheap; the pointer builder applies its own hard item ceiling.
+ *
+ * The emitted durable_memory count is unchanged by this over-fetch: it stays
+ * capped at {@link DURABLE_MEMORY_MAX_ITEMS} regardless of how large the pool is.
+ * What CAN legitimately shift is the fused top-N itself — hybrid RRF ranks over
+ * the whole fetched/candidate pool, so a larger pool can reorder or swap which
+ * rows land in that top {@link DURABLE_MEMORY_MAX_ITEMS}. That identity/order
+ * shift is a property of fetching a deeper pool, not a change to the count; tests
+ * assert the count and the pointer/dedupe contract, not a frozen top-N identity.
  */
 const DURABLE_MEMORY_POINTER_OVERFETCH = 20;
 
