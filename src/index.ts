@@ -145,11 +145,9 @@ export function createApp(
     async (req: Request, res: Response) => {
       const authInfo = (req as Request & { auth?: AuthInfo }).auth;
       if (!canReadDoctor(authInfo)) {
-        res
-          .status(403)
-          .json({
-            error: "Permission denied: admin or ob-admin role required",
-          });
+        res.status(403).json({
+          error: "Permission denied: admin or ob-admin role required",
+        });
         return;
       }
       try {
@@ -350,7 +348,7 @@ if (import.meta.main) {
   if (maintenanceQueueEnabled()) {
     maintenance = startMaintenanceQueue({ pool, logger });
     logger.info("maintenance queue started", {
-      handlers: "embedding.repair",
+      handlers: "embedding.repair,graph.derive",
     });
   } else {
     logger.info("maintenance queue disabled", {

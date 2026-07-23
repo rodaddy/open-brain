@@ -24,5 +24,5 @@ ALTER TABLE maintenance_jobs
   ADD CONSTRAINT maintenance_jobs_last_error_category_check
   CHECK (last_error_category IN (
     'syntax_error', 'type_error', 'range_error', 'error', 'non_error',
-    'unsupported_job_kind', 'lease_expired'
+    'unsupported_job_kind', 'lease_expired', 'terminal'
   ));

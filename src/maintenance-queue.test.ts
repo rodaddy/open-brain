@@ -2,6 +2,8 @@ import { describe, expect, it } from "bun:test";
 import {
   MaintenanceQueue,
   MaintenanceQueueRunner,
+  MaintenanceTerminalError,
+  isMaintenanceTerminalError,
   maintenanceBackoffMs,
   safeMaintenanceErrorCategory,
   type MaintenanceJob,
@@ -184,6 +186,219 @@ describe("maintenance queue runner", () => {
     expect(handlerRan).toBe(false);
   });
 
+  it("renews a held lease on cadence while the handler runs, then stops after completion", async () => {
+    // Regression for the #346 lease-renewal finding. A handler that blocks past
+    // several lease windows must have its lease renewed under the immutable
+    // (id, lease token) so a competing claim can never reclaim/dead-letter it.
+    const renewCalls: Array<{ id: string; token: string; leaseMs: number }> =
+      [];
+    let releaseHandler: (() => void) | undefined;
+    const queue: MaintenanceQueuePort = {
+      claimDueJobs: async () => [job()],
+      renew: async (id, token, leaseMs) => {
+        renewCalls.push({ id, token, leaseMs });
+        return true; // still owned.
+      },
+      complete: async () => true,
+      fail: async () => null,
+    };
+    const runner = new MaintenanceQueueRunner({
+      queue,
+      handlers: new Map([
+        [
+          "maintenance.test",
+          async () =>
+            new Promise<void>((resolve) => {
+              releaseHandler = resolve;
+            }),
+        ],
+      ]),
+      logger: { info: () => {}, warn: () => {}, error: () => {} },
+      // Tiny windows so several renewals land during the test deterministically.
+      leaseMs: 30,
+      leaseRenewMs: 10,
+    });
+
+    await runner.runOnce();
+    // Let the handler block across multiple heartbeat intervals.
+    await new Promise((r) => setTimeout(r, 55));
+    expect(renewCalls.length).toBeGreaterThanOrEqual(3);
+    // Every renewal used the IMMUTABLE claim id + minted lease token, and the
+    // durable lease window (leaseMs), never a handler-mutable value.
+    for (const call of renewCalls) {
+      expect(call.id).toBe("job-1");
+      expect(call.token).toBe("00000000-0000-4000-8000-000000000001");
+      expect(call.leaseMs).toBe(30);
+    }
+
+    // Complete the handler; the heartbeat must stop — no further renewals.
+    const before = renewCalls.length;
+    releaseHandler?.();
+    await runner.stop();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(renewCalls.length).toBe(before);
+  });
+
+  it("stops renewing the moment a stale token loses the lease (content-free)", async () => {
+    // renew() returning false means the lease was reclaimed/rotated: the
+    // heartbeat must stop immediately rather than spin, and log content-free.
+    const logs: string[] = [];
+    let renewCalls = 0;
+    let releaseHandler: (() => void) | undefined;
+    const queue: MaintenanceQueuePort = {
+      claimDueJobs: async () => [job()],
+      renew: async () => {
+        renewCalls += 1;
+        return false; // lease lost on the very first renewal.
+      },
+      complete: async () => true,
+      fail: async () => null,
+    };
+    const runner = new MaintenanceQueueRunner({
+      queue,
+      handlers: new Map([
+        [
+          "maintenance.test",
+          async () =>
+            new Promise<void>((resolve) => {
+              releaseHandler = resolve;
+            }),
+        ],
+      ]),
+      logger: {
+        info: (message, fields) =>
+          logs.push(JSON.stringify({ message, fields })),
+        warn: (message, fields) =>
+          logs.push(JSON.stringify({ message, fields })),
+        error: (message, fields) =>
+          logs.push(JSON.stringify({ message, fields })),
+      },
+      leaseMs: 30,
+      leaseRenewMs: 10,
+    });
+
+    await runner.runOnce();
+    await new Promise((r) => setTimeout(r, 55));
+    // A lost lease stops the heartbeat after the first renewal; it does not spin.
+    expect(renewCalls).toBe(1);
+    releaseHandler?.();
+    await runner.stop();
+    // Content-free: the lost-lease warning carries only ids/kind + a stable
+    // status token; never the payload text.
+    expect(logs.join("\n")).toContain('"status":"lease_lost"');
+    expect(logs.join("\n")).not.toContain("must never reach logs");
+  });
+
+  it("never overlaps renewal calls even when renew is slower than the cadence", async () => {
+    // The overlap guard: a renew that outlasts the heartbeat interval must not
+    // stack a second concurrent renew. Peak in-flight renewals stays 1.
+    let inFlight = 0;
+    let peak = 0;
+    let releaseHandler: (() => void) | undefined;
+    const queue: MaintenanceQueuePort = {
+      claimDueJobs: async () => [job()],
+      renew: async () => {
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        // Renew takes ~25ms — longer than the 10ms cadence, so ticks pile up
+        // behind it and would overlap without the guard.
+        await new Promise((r) => setTimeout(r, 25));
+        inFlight -= 1;
+        return true;
+      },
+      complete: async () => true,
+      fail: async () => null,
+    };
+    const runner = new MaintenanceQueueRunner({
+      queue,
+      handlers: new Map([
+        [
+          "maintenance.test",
+          async () =>
+            new Promise<void>((resolve) => {
+              releaseHandler = resolve;
+            }),
+        ],
+      ]),
+      logger: { info: () => {}, warn: () => {}, error: () => {} },
+      leaseMs: 60,
+      leaseRenewMs: 10,
+    });
+
+    await runner.runOnce();
+    await new Promise((r) => setTimeout(r, 90));
+    expect(peak).toBe(1);
+    releaseHandler?.();
+    await runner.stop();
+  });
+
+  it("awaits an in-flight renewal before completing (no renew races complete)", async () => {
+    // stop() on the heartbeat must await any renewal already in flight so it
+    // cannot land concurrently with (or after) the complete UPDATE. We record
+    // the ORDER of the last renew finishing vs complete starting.
+    const order: string[] = [];
+    let completeSeen = false;
+    let renewFinishedBeforeComplete = true;
+    const queue: MaintenanceQueuePort = {
+      claimDueJobs: async () => [job()],
+      renew: async () => {
+        await new Promise((r) => setTimeout(r, 20));
+        order.push("renew_done");
+        if (completeSeen) renewFinishedBeforeComplete = false;
+        return true;
+      },
+      complete: async () => {
+        completeSeen = true;
+        order.push("complete");
+        return true;
+      },
+      fail: async () => null,
+    };
+    const runner = new MaintenanceQueueRunner({
+      queue,
+      handlers: new Map([
+        [
+          "maintenance.test",
+          // Handler finishes right as a renew is mid-flight.
+          async () => {
+            await new Promise((r) => setTimeout(r, 12));
+          },
+        ],
+      ]),
+      logger: { info: () => {}, warn: () => {}, error: () => {} },
+      leaseMs: 30,
+      leaseRenewMs: 10,
+    });
+
+    await runner.runOnce();
+    await runner.stop();
+    // complete never fired before an in-flight renew resolved.
+    expect(renewFinishedBeforeComplete).toBe(true);
+  });
+
+  it("does not renew a job whose handler is unsupported (no heartbeat, immediate fail)", async () => {
+    let renewCalls = 0;
+    const queue: MaintenanceQueuePort = {
+      claimDueJobs: async () => [job()],
+      renew: async () => {
+        renewCalls += 1;
+        return true;
+      },
+      complete: async () => true,
+      fail: async () => job({ state: "dead_letter" }),
+    };
+    const runner = new MaintenanceQueueRunner({
+      queue,
+      handlers: new Map([["some.other.kind", async () => undefined]]),
+      logger: { info: () => {}, warn: () => {}, error: () => {} },
+      leaseMs: 30,
+      leaseRenewMs: 10,
+    });
+    await runner.runOnce();
+    await new Promise((r) => setTimeout(r, 40));
+    expect(renewCalls).toBe(0);
+  });
+
   it("stores unsupported_job_kind as its own category, not non_error", async () => {
     const failCalls: Array<{ error: unknown; category?: string }> = [];
     const logs: string[] = [];
@@ -253,6 +468,85 @@ describe("maintenance queue runner", () => {
     expect(logs.join("\n")).not.toContain("secret payload text");
     expect(logs.join("\n")).not.toContain("must never reach logs");
     expect(logs.join("\n")).toContain('"error_category":"type_error"');
+  });
+
+  it("routes a MaintenanceTerminalError to fail() as terminal, category 'terminal'", async () => {
+    const failCalls: Array<{ category?: string; terminal?: boolean }> = [];
+    const logs: string[] = [];
+    const queue: MaintenanceQueuePort = {
+      claimDueJobs: async () => [job()],
+      complete: async () => true,
+      fail: async (input) => {
+        failCalls.push({ category: input.category, terminal: input.terminal });
+        // The queue dead-letters immediately for a terminal failure.
+        return job({ state: "dead_letter", lastErrorCategory: "terminal" });
+      },
+    };
+    const runner = new MaintenanceQueueRunner({
+      queue,
+      handlers: new Map([
+        [
+          "maintenance.test",
+          async () => {
+            throw new MaintenanceTerminalError("private terminal reason text");
+          },
+        ],
+      ]),
+      logger: {
+        info: (message, fields) =>
+          logs.push(JSON.stringify({ message, fields })),
+        warn: (message, fields) =>
+          logs.push(JSON.stringify({ message, fields })),
+        error: (message, fields) =>
+          logs.push(JSON.stringify({ message, fields })),
+      },
+    });
+
+    await runner.runOnce();
+    expect(failCalls).toHaveLength(1);
+    expect(failCalls[0]?.terminal).toBe(true);
+    expect(failCalls[0]?.category).toBe("terminal");
+    // Content-free: the terminal category is logged; the reason text is not.
+    expect(logs.join("\n")).toContain('"error_category":"terminal"');
+    expect(logs.join("\n")).not.toContain("private terminal reason text");
+    expect(logs.join("\n")).toContain('"status":"dead_letter"');
+  });
+
+  it("routes an ordinary error to fail() as non-terminal (bounded retry preserved)", async () => {
+    const failCalls: Array<{ category?: string; terminal?: boolean }> = [];
+    const queue: MaintenanceQueuePort = {
+      claimDueJobs: async () => [job()],
+      complete: async () => true,
+      fail: async (input) => {
+        failCalls.push({ category: input.category, terminal: input.terminal });
+        return job({ state: "queued" });
+      },
+    };
+    const runner = new MaintenanceQueueRunner({
+      queue,
+      handlers: new Map([
+        [
+          "maintenance.test",
+          async () => {
+            throw new Error("transient DB blip");
+          },
+        ],
+      ]),
+      logger: { info: () => {}, warn: () => {}, error: () => {} },
+    });
+
+    await runner.runOnce();
+    expect(failCalls).toHaveLength(1);
+    // An ordinary error is NOT terminal: the queue keeps the bounded-retry path.
+    expect(failCalls[0]?.terminal).toBe(false);
+    expect(failCalls[0]?.category).toBe("error");
+  });
+
+  it("classifies a MaintenanceTerminalError subclass as terminal", () => {
+    class HandlerTerminal extends MaintenanceTerminalError {}
+    expect(isMaintenanceTerminalError(new HandlerTerminal("x"))).toBe(true);
+    expect(isMaintenanceTerminalError(new Error("x"))).toBe(false);
+    expect(isMaintenanceTerminalError("unsupported_job_kind")).toBe(false);
   });
 
   it("contains persistence failures as content-free runner errors", async () => {
@@ -400,5 +694,85 @@ describe("maintenance queue retry policy", () => {
     expect(safeMaintenanceErrorCategory("private error text")).toBe(
       "non_error",
     );
+  });
+});
+
+// A fake pool that captures the params of the fail UPDATE and echoes a row so
+// MaintenanceQueue.fail resolves. It proves the terminal flag reaches SQL as the
+// 5th positional param and picks the category, WITHOUT a live database. The
+// exact dead-letter/queued row transition on a real CHECK/CASE is proven by the
+// live-Postgres test in maintenance-queue.pg.test.ts.
+function captureFailPool() {
+  const failParams: unknown[][] = [];
+  const pool = {
+    query: async (sql: string, params: unknown[] = []) => {
+      if (/UPDATE\s+maintenance_jobs[\s\S]*state\s*=\s*CASE/i.test(sql)) {
+        failParams.push(params);
+      }
+      // Echo a minimal running->transition row so toJob() succeeds.
+      return {
+        rows: [
+          {
+            id: "job-1",
+            job_kind: "maintenance.test",
+            job_version: 1,
+            payload: {},
+            idempotency_key: "once",
+            state: "dead_letter",
+            run_after: new Date("2026-07-22T12:00:00.000Z"),
+            lease_token: null,
+            lease_until: null,
+            attempts: 1,
+            max_attempts: 3,
+            backoff_base_ms: 1_000,
+            backoff_max_ms: 4_000,
+            last_error_category: (params?.[3] as string) ?? null,
+            terminal_at: new Date("2026-07-22T12:00:01.000Z"),
+            dead_lettered_at: new Date("2026-07-22T12:00:01.000Z"),
+            namespace: null,
+            provenance: null,
+            created_at: new Date("2026-07-22T12:00:00.000Z"),
+            updated_at: new Date("2026-07-22T12:00:01.000Z"),
+          },
+        ],
+        rowCount: 1,
+      };
+    },
+    connect: async () => {
+      throw new Error("fail() must not open a transaction");
+    },
+  };
+  return { pool: pool as never, failParams };
+}
+
+describe("maintenance queue fail() terminal short-circuit", () => {
+  it("passes terminal=true and category 'terminal' to the fail UPDATE", async () => {
+    const { pool, failParams } = captureFailPool();
+    const queue = new MaintenanceQueue(pool);
+    // A job with retry budget remaining (attempts 1 < max 3): only the terminal
+    // flag can force an immediate dead-letter, not the attempt bound.
+    const failed = await queue.fail({
+      job: job({ attempts: 1, maxAttempts: 3 }),
+      error: new MaintenanceTerminalError("private terminal text"),
+      category: "terminal",
+      terminal: true,
+    });
+    expect(failParams).toHaveLength(1);
+    // $4 = category, $5 = terminal flag.
+    expect(failParams[0]?.[3]).toBe("terminal");
+    expect(failParams[0]?.[4]).toBe(true);
+    expect(failed?.state).toBe("dead_letter");
+  });
+
+  it("passes terminal=false for an ordinary error (bounded retry preserved)", async () => {
+    const { pool, failParams } = captureFailPool();
+    const queue = new MaintenanceQueue(pool);
+    await queue.fail({
+      job: job({ attempts: 1, maxAttempts: 3 }),
+      error: new Error("transient text"),
+    });
+    expect(failParams).toHaveLength(1);
+    expect(failParams[0]?.[3]).toBe("error");
+    expect(failParams[0]?.[4]).toBe(false);
   });
 });

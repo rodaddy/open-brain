@@ -1090,3 +1090,160 @@ allocator to trim.
 - If a downstream allocator can also stamp an `empty_reason`, is the ownership
   boundary explicit so the loader-owned and allocator-owned reasons cannot
   overwrite each other in the wrong case?
+
+## [2026-07-22] A "non-retryable" classification is inert unless the queue honors it
+
+**Severity:** MEDIUM
+**Source:** Issue #346 (MAINT-4), graph-derivation queue integration
+**Scope:** `src/maintenance-queue.ts` (`fail`, runner dispatch), any handler that
+throws a terminal/non-retryable error
+**Status:** active
+
+### Pattern
+
+The graph-derivation handler classified drift (revoked approval, retired,
+content re-observed, stale revision) as a `GraphDerivationTerminalError` — but
+the class was only a plain `Error`, and `MaintenanceQueue.fail` dead-lettered
+solely on `attempts >= max_attempts`. So a "terminal" failure was correctly
+*named* yet still burned the full bounded-retry budget (N backoff attempts)
+before dead-lettering. A classification that no code branches on is a comment,
+not behavior. The mirror of this on the write side is equally easy to miss: a
+handler must not be able to force an *immediate* dead-letter for a genuinely
+retryable failure either — the terminal decision has to be a distinct,
+queue-owned signal, not something derivable from a handler-mutable field.
+
+### Rule
+
+When a handler can declare a failure non-retryable, the queue must (1) own the
+marker type at its own boundary (handlers depend on the queue, never the
+reverse — a handler's terminal subclass `extends` the queue marker so the queue
+imports nothing from the handler), (2) identify it by *type* at the dispatch
+boundary and pass an explicit `terminal` flag into `fail`, and (3) fork the
+persisted-row UPDATE so a terminal failure dead-letters on THIS attempt
+regardless of remaining budget, while an ordinary error keeps the exact bounded
+backoff/retry policy. Derive the decision from the durable row + the flag, never
+from the handler-supplied job object. Store a distinct content-free category
+(`terminal`) so dead-letter analysis can tell a policy-driven immediate
+dead-letter apart from retry-exhaustion and expired-lease. If the category is
+CHECK-constrained, ship the migration (fresh inline + a named re-derive for
+already-upgraded DBs, mirroring the `lease_expired` compat migration) or the
+first terminal write fails on upgraded databases.
+
+### Review Questions
+
+- Is the terminal/non-retryable error a queue-owned type the handler extends, or
+  a bare `Error` the queue can't distinguish from a retryable one?
+- Does `fail` actually branch on a terminal signal, or only on
+  `attempts >= max_attempts`? Is there a test with `attempts < max_attempts`
+  proving dead-letter-on-attempt-1 for terminal AND bounded retry for ordinary?
+- Is the terminal decision derived from the durable row + an explicit flag, not
+  from a handler-mutable `job` field a handler could set to force a dead-letter?
+- Is a NEW `last_error_category` value added to BOTH the fresh inline CHECK and a
+  named re-derive migration for already-upgraded DBs, with a drift-guard test?
+- Is the failure log content-free (stable category only, never the reason text)?
+
+## [2026-07-23] Snapshot validation and derived writes must share one locked transaction
+
+**Severity:** HIGH (P1)
+**Source:** PR #358 opposite-runtime terminal audit (issue #346)
+**Scope:** `src/graph-derivation-handler.ts`, multi-statement maintenance derivations
+**Status:** fixed-pre-merge
+
+### Pattern
+
+The graph handler validated a source snapshot, then stamped the final derivation
+hash and wrote nodes, links, and stale-edge pruning in independent statements.
+A later transient failure could leave the completed hash with an incomplete graph;
+a retry then returned `unchanged` and never repaired it. The same gap let an old
+job pass its snapshot check, pause, and overwrite a newer derivation after the
+source advanced.
+
+### Rule
+
+Lock and revalidate the authoritative source row with `SELECT ... FOR UPDATE`,
+then run the entire derived write set on the same checked-out client and in the
+same transaction. Commit the source proof, final hash, nodes, links, and pruning
+as one unit; rollback all of them on any error. This serializes source updates
+with derivation so an old job either finishes before the source advances or sees
+drift and terminal-stops after the newer revision commits.
+
+### Review Questions
+
+- Can a final hash/status stamp commit before any later derived write or prune?
+- Do snapshot validation and every derived mutation use one transaction/client?
+- Is the source row locked so concurrent source updates cannot invalidate the
+  snapshot between validation and commit?
+- Does a real-PostgreSQL fault-injection test prove a mid-derivation failure leaves
+  no partial hash, nodes, or links and that retry converges?
+- Does a deterministic old/new interleaving test prove the newer snapshot remains
+  final and an obsolete job cannot overwrite it?
+
+## [2026-07-23] Canonical anchor identity must also satisfy display-name uniqueness
+
+**Severity:** MEDIUM (P2)
+**Source:** PR #358 exact-head terminal audit (issue #346)
+**Scope:** `src/graph-derivation.ts`, entity tables with independent canonical-id and display-name unique indexes
+**Status:** fixed-pre-merge
+
+### Pattern
+
+An anchor upsert correctly arbitrated on stable `canonical_id`, but the table also
+enforced live uniqueness on `(namespace, entity_type, lower(name))`. Two distinct
+source IDs with the same title therefore missed the canonical conflict and failed
+on the name index with deterministic `23505`; a rename onto a sibling title failed
+the same way.
+
+### Rule
+
+When one row is constrained by independent identity indexes, the stored values
+must satisfy all of them. Keep the human label readable, append the stable
+canonical identity to form a bounded collision-safe storage name, and preserve
+the complete display label separately. Prove same-title creation and
+rename-to-existing-title against real PostgreSQL.
+
+### Review Questions
+
+- Does an upsert arbitrate one unique index while another applicable index can
+  still reject the proposed row?
+- Can two stable IDs legitimately share a human title, and if so is the stored
+  name deterministic, readable, bounded, and collision-safe?
+- Does a real-PostgreSQL regression cover both duplicate-title creation and a
+  rename onto an existing title?
+
+### Follow-up: display state must refresh independently of structural derivation
+
+A collision-safe name is incomplete if the unchanged short-circuit ignores a
+pure title rename. The derivation hash intentionally covers the node set, not the
+human label, so the `unchanged` path must separately compare and refresh the
+stored name plus `metadata.display_name`. Production callers must pass the full
+label to the primitive and bound only the indexed storage name; slicing upstream
+silently destroys the supposedly preserved display value. Tests need a pure
+rename with identical topics/people and a label longer than the storage limit.
+
+## [2026-07-23] Maintenance handlers must reject unsupported job versions before parsing
+
+**Severity:** MEDIUM (P2)
+**Source:** PR #358 exact-head terminal audit (issue #346)
+**Scope:** `src/graph-derivation-handler.ts`, versioned maintenance payloads
+**Status:** fixed-pre-merge
+
+### Pattern
+
+`graph.derive` enqueue stamped a payload version, but its handler validated only
+the payload shape. A future-version payload that remained structurally compatible
+could execute under an older deployment after rollback, applying obsolete
+semantics instead of failing closed.
+
+### Rule
+
+Every versioned handler checks the exact job version before payload parsing or any
+read/write. Unsupported older or newer versions are permanent input failures and
+must use the queue-owned terminal path. Tests cover current-version dispatch plus
+both version directions.
+
+### Review Questions
+
+- Is the enqueued version checked by the handler, or merely persisted?
+- Does the guard run before payload parsing and database access?
+- Do older and future versions terminal-stop immediately while the exact current
+  version still dispatches?

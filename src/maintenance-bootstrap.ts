@@ -6,11 +6,19 @@
  * an enqueued `embedding.repair` job could never actually run in production.
  *
  * `startMaintenanceQueue` constructs the durable `MaintenanceQueue` over the real
- * pool, registers the embedding-repair handler with the real embed provider and a
- * content-free logger, and starts the runner's bounded automatic polling. The
- * returned handle exposes `stop()`, which the server's shutdown path awaits before
- * `pool.end()` so in-flight jobs drain (their leases are honored) instead of being
- * stranded mid-run.
+ * pool, composes the server-owned handler map (embedding-repair #345 +
+ * graph-derivation #346, the latter under an explicit global maintenance
+ * identity) with the real embed provider and a content-free logger, and starts
+ * the runner's bounded automatic polling. The returned handle exposes `stop()`,
+ * which the server's shutdown path awaits before `pool.end()` so in-flight jobs
+ * drain (their leases are honored) instead of being stranded mid-run.
+ *
+ * The bootstrap enqueues nothing and defines no recurring sweep: the maintenance
+ * queue has no recurrence primitive. graph.derive jobs are produced only by the
+ * explicit, bounded `enqueueGraphDerivationJobs` producer, which an operator or
+ * a future scheduler (#347) must call. This bootstrap only DISPATCHES claimed
+ * graph.derive jobs; it never invents or schedules them, and there is no
+ * automatic continuous derivation.
  *
  * #343 invariants preserved verbatim — this only wires them, it changes none:
  *  - Bounded concurrency: the runner clamps to [1, MAX_CONCURRENCY].
@@ -25,12 +33,50 @@
 import type pg from "pg";
 import { generateEmbeddingWithMetadata } from "./embedding.ts";
 import type { EmbedWithMetaFn } from "./embedding-repair.ts";
+import type { AuthInfo } from "./types.ts";
 import {
   MaintenanceQueue,
   MaintenanceQueueRunner,
+  type MaintenanceJobHandler,
   type MaintenanceQueueLogger,
 } from "./maintenance-queue.ts";
 import { buildEmbeddingRepairHandlers } from "./embedding-repair-handler.ts";
+import {
+  GRAPH_DERIVATION_JOB_KIND,
+  makeGraphDerivationHandler,
+} from "./graph-derivation-handler.ts";
+
+/**
+ * The deliberate, server-owned identity the graph-derivation handler derives
+ * under. It is a global maintenance identity (ob-admin, token-sourced) so the
+ * handler can write into whatever namespace a claimed job carries — but it is
+ * NOT the namespace authority: the persisted job payload's namespace remains the
+ * exact authority, and the handler re-checks canWriteNamespace against it AND
+ * re-validates it against the live source row before deriving. This identity
+ * only grants the cross-namespace write capability a maintenance sweep needs; it
+ * grants no bypass of the per-job namespace/source guards.
+ *
+ * `namespaceSource: "token"` is required: a "header"-sourced identity would pin
+ * every write to a single clientId namespace and could not serve jobs across
+ * namespaces.
+ *
+ * `tokenClientId: "openbrain-promoter"` satisfies the EXISTING shared-kb write
+ * convention (namespace-policy.ts: canWriteNamespace gates shared-kb writes on
+ * isPromoterIdentity, which recognizes an admin/ob-admin token whose
+ * `tokenClientId ?? clientId` is in PROMOTER_CLIENT_IDS). Without it, a claimed
+ * shared-kb graph.derive job fails canWriteNamespace and terminal-dead-letters,
+ * even though ob-admin holds global maintenance capability everywhere else. The
+ * `clientId` stays the fixed maintenance label used for logging/provenance; only
+ * the promoter-convention check reads `tokenClientId`, so this narrowly grants
+ * the shared-kb write capability without weakening canWriteNamespace or adding a
+ * bypass — the per-job namespace and source-snapshot guards remain the authority.
+ */
+export const MAINTENANCE_GRAPH_AUTH: AuthInfo = {
+  role: "ob-admin",
+  clientId: "open-brain-maintenance",
+  tokenClientId: "openbrain-promoter",
+  namespaceSource: "token",
+};
 
 /**
  * Runtime handle for the started maintenance queue. `stop()` halts polling and
@@ -56,6 +102,55 @@ export interface StartMaintenanceQueueOptions {
   leaseMs?: number;
   /** Start automatic polling immediately (default true). Set false to wire without polling. */
   autoStart?: boolean;
+  /**
+   * The server-owned identity the graph-derivation handler derives under.
+   * Defaults to {@link MAINTENANCE_GRAPH_AUTH}. Injectable for tests; must carry
+   * a concrete role/clientId — a handler cannot be registered without a clear
+   * auth identity (see composeMaintenanceHandlers).
+   */
+  graphAuth?: AuthInfo;
+}
+
+/**
+ * Compose the server-owned maintenance handler map without a second bootstrap or
+ * framework: start from the #345 embedding-repair map and register the #346
+ * graph-derivation handler under its kind. Both handlers share the runner's
+ * content-free logger and the same pool.
+ *
+ * The graph handler CANNOT be registered without a clear auth identity: a
+ * missing role or clientId throws before any handler is built, so a mis-wired
+ * bootstrap fails closed at startup instead of dispatching graph jobs under an
+ * ambiguous identity. The identity grants only the cross-namespace write
+ * capability the sweep needs; the per-job namespace and source-snapshot guards
+ * inside the handler remain the authority.
+ */
+export function composeMaintenanceHandlers(input: {
+  pool: pg.Pool;
+  logger: MaintenanceQueueLogger;
+  embedFn: EmbedWithMetaFn;
+  graphAuth: AuthInfo;
+}): ReadonlyMap<string, MaintenanceJobHandler> {
+  if (!input.graphAuth.role || !input.graphAuth.clientId) {
+    throw new Error(
+      "maintenance bootstrap requires a graph-derivation auth identity with a role and clientId",
+    );
+  }
+
+  const handlers = new Map<string, MaintenanceJobHandler>(
+    buildEmbeddingRepairHandlers({
+      db: input.pool,
+      logger: input.logger,
+      embedFn: input.embedFn,
+    }),
+  );
+  handlers.set(
+    GRAPH_DERIVATION_JOB_KIND,
+    makeGraphDerivationHandler({
+      pool: input.pool,
+      auth: input.graphAuth,
+    }),
+  );
+  return handlers;
 }
 
 /**
@@ -96,12 +191,16 @@ export function startMaintenanceQueue(
   options: StartMaintenanceQueueOptions,
 ): MaintenanceRuntime {
   const queue = new MaintenanceQueue(options.pool);
-  const handlers = buildEmbeddingRepairHandlers({
-    db: options.pool,
+  // Compose the server-owned handler map: embedding.repair (#345) +
+  // graph.derive (#346), the latter under an explicit global maintenance
+  // identity. currentModel / embeddingUrl are intentionally omitted from the
+  // embedding handler: it defaults to the configured EMBEDDING_MODEL and
+  // endpoint, matching the live write path.
+  const handlers = composeMaintenanceHandlers({
+    pool: options.pool,
     logger: options.logger,
     embedFn: options.embedFn ?? generateEmbeddingWithMetadata,
-    // currentModel / embeddingUrl intentionally omitted: the handler defaults to
-    // the configured EMBEDDING_MODEL and endpoint, matching the live write path.
+    graphAuth: options.graphAuth ?? MAINTENANCE_GRAPH_AUTH,
   });
 
   const runner = new MaintenanceQueueRunner({

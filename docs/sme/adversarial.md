@@ -606,3 +606,86 @@ exception.
 - Does a regression use a handler that raises once and then succeeds, proving a
   later beat runs and the thread remains alive until explicit stop?
 - Can the thread excepthook or stderr expose the handler's exception message?
+
+## [2026-07-22] Registering a maintenance handler is not "continuous derivation"; a server-owned identity is not a namespace bypass
+
+**Severity:** MEDIUM
+**Source:** Issue #346 (MAINT-4), graph-derivation bootstrap wiring
+**Scope:** `src/maintenance-bootstrap.ts`, `src/graph-derivation-handler.ts`,
+any handler registered under a server-owned global maintenance identity
+**Status:** active
+
+### Pattern
+
+Two adversarial traps in wiring a maintenance handler into the production
+bootstrap:
+
+1. **Phantom recurrence.** The maintenance queue has no recurrence primitive —
+   the runner only claims and dispatches *already-enqueued* jobs. Registering
+   `graph.derive` makes the server able to *run* graph jobs; it does NOT make
+   derivation automatic or continuous. Claiming otherwise ("graph is now kept up
+   to date automatically") is false: with no producer calling
+   `enqueueGraphDerivationJobs`, the queue stays empty forever. The explicit,
+   bounded producer must stay the only enqueue path, and docs must say an
+   operator / a future scheduler (#347) has to drive sweeps.
+2. **Identity as a bypass.** A server-owned global maintenance identity
+   (`ob-admin`, token-sourced) is needed so one runner can derive into whatever
+   namespace a claimed job carries. The trap is treating that identity as the
+   authority: it must grant only the cross-namespace *write capability*, while
+   the persisted job payload's namespace stays the exact authority — re-checked
+   via `canWriteNamespace` AND re-validated against the live source row inside
+   the handler. A `header`-sourced identity would wrongly pin every write to one
+   clientId namespace; a handler that trusted the identity instead of the
+   per-job guard could derive into a namespace the job never authorized.
+
+### Review Questions
+
+- Does any doc/PR claim automatic/continuous derivation when the queue has no
+  recurrence primitive and nothing enqueues sweeps? Is the explicit bounded
+  producer preserved and documented as the required trigger?
+- Can the handler be registered WITHOUT a clear auth identity (missing
+  role/clientId)? It must fail closed at startup, not dispatch under an ambiguous
+  identity — is there a test asserting the throw?
+- Is the maintenance identity token-sourced (can serve cross-namespace jobs), and
+  is the per-job namespace still the authority (re-checked against the live
+  source), so the identity grants capability, not a guard bypass?
+- Does the bootstrap compose handlers into one map without inventing a second
+  bootstrap/framework, and is there a test proving BOTH existing and new kinds
+  dispatch to their own handlers (not `unsupported_job_kind`)?
+
+## [2026-07-23] Active queue handlers must renew leases before reclaim can win
+
+**Severity:** MEDIUM (P2)
+**Source:** PR #358 exact-head terminal audit (issue #346)
+**Scope:** `src/maintenance-queue.ts`, long-running or lock-waiting maintenance handlers
+**Status:** fixed-pre-merge
+
+### Pattern
+
+A claimed job had a bounded lease but no heartbeat. A live graph handler could
+wait on a source-row lock or execute enough statements to cross the 30-second
+window. Another runner could then reclaim the job repeatedly and eventually mark
+it `lease_expired`, while the original handler still committed valid graph state
+but could no longer complete its stale queue token. The durable graph and queue
+receipt contradicted each other, and the current hash could suppress repair.
+
+### Rule
+
+The queue runner renews each active lease at a bounded cadence under the immutable
+claimed job ID and lease token. Renewal calls never overlap, stop on lost
+ownership, and are cleared and awaited before complete/fail so a heartbeat cannot
+race a terminal transition. The lease duration itself remains bounded; ownership
+is extended only while the live handler is tracked. Real-PostgreSQL coverage must
+hold a handler across multiple short lease windows while a competing queue tries
+to reclaim it, then prove one attempt completes without dead-lettering.
+
+### Review Questions
+
+- Can a valid handler exceed its lease through work or lock contention without a
+  renewal path?
+- Is renewal guarded by the immutable claimed ID/token rather than a handler-
+  mutable job object?
+- Can heartbeat calls overlap, outlive completion/failure, or keep renewing after
+  ownership is lost?
+- Does a real-database test cross multiple lease windows with a competing claimer
+  and prove attempts stay at one and the row finishes succeeded?

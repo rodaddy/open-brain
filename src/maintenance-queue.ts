@@ -4,6 +4,10 @@ const DEFAULT_MAX_ATTEMPTS = 3;
 const DEFAULT_BACKOFF_BASE_MS = 1_000;
 const DEFAULT_BACKOFF_MAX_MS = 300_000;
 const MAX_CONCURRENCY = 16;
+// A held lease is renewed every leaseMs / LEASE_RENEW_DIVISOR while its handler
+// runs, so a renewal always lands with a safe margin before the deadline. Three
+// gives two renewal opportunities per lease window before expiry.
+const LEASE_RENEW_DIVISOR = 3;
 // Upper bound on a single direct claim. The scheduled runner never asks for
 // more than its available concurrency, but a direct caller must not be able to
 // drain or lock the whole table in one statement.
@@ -25,7 +29,42 @@ export type MaintenanceErrorCategory =
   // Terminal signal for a running lease that expired after the job already
   // consumed all of its execution attempts. Content-free and distinct from any
   // handler-thrown error so dead-letter analysis can tell the two apart.
-  | "lease_expired";
+  | "lease_expired"
+  // A handler declared its own failure non-retryable by throwing a
+  // MaintenanceTerminalError (below). The job dead-letters on this exact
+  // attempt regardless of remaining retry budget. Distinct from `error` and
+  // `lease_expired` so dead-letter analysis can tell a policy-driven immediate
+  // dead-letter from a retry-exhaustion or an expired lease. Content-free.
+  | "terminal";
+
+/**
+ * Queue-owned generic marker for a handler failure that is NON-RETRYABLE.
+ *
+ * A handler throws this (or a subclass) to tell the queue that retrying the
+ * SAME job payload can never succeed, so the queue must dead-letter it on this
+ * exact attempt instead of scheduling a bounded backoff retry to the attempt
+ * bound. This marker lives at the queue boundary on purpose: handlers depend on
+ * the queue, never the reverse, so a handler's own terminal-error subclass can
+ * extend this without the queue importing anything from the handler.
+ *
+ * Everything else (transient DB failures, provider outages, unclassified
+ * errors) stays retryable and follows the persisted attempts>=max_attempts
+ * retry-then-dead-letter policy. Only an explicit throw of this type opts a
+ * failure into immediate dead-lettering.
+ */
+export class MaintenanceTerminalError extends Error {
+  constructor(reason: string) {
+    super(reason);
+    this.name = "MaintenanceTerminalError";
+  }
+}
+
+/** True when a thrown value is the queue's non-retryable terminal marker. */
+export function isMaintenanceTerminalError(
+  error: unknown,
+): error is MaintenanceTerminalError {
+  return error instanceof MaintenanceTerminalError;
+}
 
 export interface MaintenanceJob {
   id: string;
@@ -77,6 +116,25 @@ export interface ClaimMaintenanceJobs {
 
 export interface MaintenanceQueuePort {
   claimDueJobs(input: ClaimMaintenanceJobs): Promise<MaintenanceJob[]>;
+  /**
+   * Extend a still-owned running lease. Guarded by the immutable (id, lease
+   * token) the claim minted: it advances lease_until to now + leaseMs ONLY while
+   * the row is still `running` under that exact token. A job whose lease was
+   * already reclaimed, completed, failed, or dead-lettered no longer matches the
+   * token guard, so renewal is a safe no-op that returns false — the runner then
+   * knows it no longer owns the job. The new lease_until is derived here from the
+   * durable row + the passed leaseMs, never from any handler-mutable state.
+   *
+   * Optional on the port so a minimal/legacy queue fake need not implement it;
+   * the runner heartbeats only when a queue provides `renew`. The concrete
+   * MaintenanceQueue always implements it.
+   */
+  renew?(
+    jobId: string,
+    leaseToken: string,
+    leaseMs: number,
+    now?: Date,
+  ): Promise<boolean>;
   complete(jobId: string, leaseToken: string, now?: Date): Promise<boolean>;
   fail(input: {
     job: MaintenanceJob;
@@ -86,6 +144,11 @@ export interface MaintenanceQueuePort {
     // unsupported-job-kind sentinel, which is not a thrown Error). When unset,
     // the category is derived from `error`.
     category?: MaintenanceErrorCategory;
+    // When true, the failure is non-retryable: the job dead-letters on this
+    // attempt regardless of remaining retry budget (see MaintenanceQueue.fail).
+    // The runner sets this from a MaintenanceTerminalError; ordinary errors
+    // leave it unset and follow the persisted bounded-retry policy.
+    terminal?: boolean;
     now?: Date;
   }): Promise<MaintenanceJob | null>;
 }
@@ -412,6 +475,32 @@ export class MaintenanceQueue implements MaintenanceQueuePort {
     }
   }
 
+  async renew(
+    jobId: string,
+    leaseToken: string,
+    leaseMs: number,
+    now = new Date(),
+  ): Promise<boolean> {
+    assertPositiveInteger(leaseMs, "lease duration");
+    // Advance the lease under the same stale-lease guard `complete`/`fail` use:
+    // the row must still be `running` under this exact minted token. If a
+    // concurrent claim already reclaimed the row (state changed or token
+    // rotated) the guard matches nothing and this is a no-op returning false.
+    // lease_until is recomputed from the durable NOW() + leaseMs, so a renewal
+    // can only ever push the deadline forward for a lease we still own. The
+    // maintenance_jobs_lease_shape CHECK is preserved: a running row keeps a
+    // non-null lease_token and lease_until throughout.
+    const renewed = await this.pool.query(
+      `UPDATE maintenance_jobs
+          SET lease_until = $3::timestamptz + ($4 * interval '1 millisecond')
+        WHERE id = $1
+          AND state = 'running'
+          AND lease_token = $2::uuid`,
+      [jobId, leaseToken, now, leaseMs],
+    );
+    return (renewed.rowCount ?? 0) === 1;
+  }
+
   async complete(
     jobId: string,
     leaseToken: string,
@@ -436,11 +525,18 @@ export class MaintenanceQueue implements MaintenanceQueuePort {
     job: MaintenanceJob;
     error: unknown;
     category?: MaintenanceErrorCategory;
+    terminal?: boolean;
     now?: Date;
   }): Promise<MaintenanceJob | null> {
     const now = input.now ?? new Date();
+    // A non-retryable failure dead-letters on this attempt regardless of
+    // remaining retry budget. The flag is derived from a MaintenanceTerminalError
+    // at the runner boundary, never from the caller-supplied `input.job` fields;
+    // it forces the dead-letter branch below without touching backoff math.
+    const terminal = input.terminal === true;
     const errorCategory =
-      input.category ?? safeMaintenanceErrorCategory(input.error);
+      input.category ??
+      (terminal ? "terminal" : safeMaintenanceErrorCategory(input.error));
     // The terminal decision and the retry schedule are derived from the durable
     // row, never from the caller-supplied `input.job` retry fields. A registered
     // handler receives the same job object it is failing and could mutate
@@ -456,11 +552,19 @@ export class MaintenanceQueue implements MaintenanceQueuePort {
     // clamped to [0, 30], and the result is capped at backoff_max_ms. attempts
     // is bounded [0, 25] and the exponent [0, 30], so 2 ^ exponent stays within
     // numeric range with no overflow.
+    //
+    // The dead-letter branch fires when the row has exhausted its bounded retry
+    // budget (attempts >= max_attempts) OR the caller flagged the failure
+    // terminal ($5). A terminal failure short-circuits to dead_letter on this
+    // attempt without consulting attempts/max_attempts and without scheduling a
+    // backoff retry; an ordinary failure keeps the persisted bounded-retry
+    // policy verbatim. The stale-lease guard (state='running' AND lease_token)
+    // and content-free category are preserved on both paths.
     const failed = await this.pool.query<MaintenanceJobRow>(
       `UPDATE maintenance_jobs
-          SET state = CASE WHEN attempts >= max_attempts
+          SET state = CASE WHEN $5::boolean OR attempts >= max_attempts
                            THEN 'dead_letter' ELSE 'queued' END,
-              run_after = CASE WHEN attempts >= max_attempts
+              run_after = CASE WHEN $5::boolean OR attempts >= max_attempts
                                THEN run_after
                                ELSE $3::timestamptz + (
                                  LEAST(
@@ -472,15 +576,15 @@ export class MaintenanceQueue implements MaintenanceQueuePort {
               lease_token = NULL,
               lease_until = NULL,
               last_error_category = $4,
-              terminal_at = CASE WHEN attempts >= max_attempts
+              terminal_at = CASE WHEN $5::boolean OR attempts >= max_attempts
                                  THEN $3::timestamptz ELSE NULL END,
-              dead_lettered_at = CASE WHEN attempts >= max_attempts
+              dead_lettered_at = CASE WHEN $5::boolean OR attempts >= max_attempts
                                       THEN $3::timestamptz ELSE NULL END
         WHERE id = $1
           AND state = 'running'
           AND lease_token = $2::uuid
        RETURNING ${JOB_COLUMNS}`,
-      [input.job.id, input.job.leaseToken, now, errorCategory],
+      [input.job.id, input.job.leaseToken, now, errorCategory, terminal],
     );
     return failed.rows[0] ? toJob(failed.rows[0]) : null;
   }
@@ -501,6 +605,14 @@ export interface MaintenanceQueueRunnerOptions {
   concurrency?: number;
   pollIntervalMs?: number;
   leaseMs?: number;
+  /**
+   * Heartbeat cadence for renewing a held lease WHILE its handler runs. Defaults
+   * to leaseMs / LEASE_RENEW_DIVISOR (a fraction of the lease window) so a renew
+   * always lands well before the deadline. Clamped to [1, leaseMs - 1] so a
+   * renew never coincides with or trails expiry. Injectable for tests that drive
+   * multiple short lease windows deterministically.
+   */
+  leaseRenewMs?: number;
   now?: () => Date;
 }
 
@@ -513,6 +625,7 @@ export class MaintenanceQueueRunner {
   private readonly concurrency: number;
   private readonly pollIntervalMs: number;
   private readonly leaseMs: number;
+  private readonly leaseRenewMs: number;
   private readonly now: () => Date;
   private readonly active = new Set<Promise<void>>();
   private interval: ReturnType<typeof setInterval> | null = null;
@@ -526,6 +639,18 @@ export class MaintenanceQueueRunner {
     );
     this.pollIntervalMs = Math.max(options.pollIntervalMs ?? 5_000, 1);
     this.leaseMs = Math.max(options.leaseMs ?? 30_000, 1);
+    // Heartbeat cadence: renew at a fraction of the lease window so a renewal
+    // always lands before the deadline, and clamp to [1, leaseMs - 1] so it can
+    // never sit at or past expiry. With the default 30s lease this renews every
+    // 10s. This is a CADENCE, not a longer lease — leaseMs itself is unchanged.
+    const renewDefault = Math.max(
+      Math.floor(this.leaseMs / LEASE_RENEW_DIVISOR),
+      1,
+    );
+    this.leaseRenewMs = Math.min(
+      Math.max(options.leaseRenewMs ?? renewDefault, 1),
+      Math.max(this.leaseMs - 1, 1),
+    );
     this.now = options.now ?? (() => new Date());
   }
 
@@ -614,8 +739,22 @@ export class MaintenanceQueueRunner {
       return;
     }
 
+    // Renew this lease on a heartbeat WHILE the handler runs, so a handler that
+    // blocks on a long/contended transaction past the lease window is not
+    // reclaimed or dead-lettered out from under its live owner. The heartbeat is
+    // bound to the immutable claim (id + minted lease token), so a handler that
+    // mutated job.id/job.leaseToken cannot redirect it. It is cleared and awaited
+    // BEFORE complete/fail below so no renewal races the terminal transition, and
+    // drained again in stop() via `active`.
+    // null when this queue/claim cannot heartbeat (no renew capability or no
+    // lease token). We only await stop() when a heartbeat actually started, so a
+    // queue without renewal keeps its exact pre-existing execute timing.
+    const heartbeat = this.startHeartbeat(claim);
     try {
       await handler(job);
+      // Stop and await the heartbeat before completing: a renewal must never run
+      // concurrently with (or after) the complete UPDATE on the same row.
+      if (heartbeat) await heartbeat.stop();
       const completed = await this.options.queue.complete(
         claim.id,
         claim.leaseToken!,
@@ -628,8 +767,95 @@ export class MaintenanceQueueRunner {
         duration_ms: this.now().getTime() - startedAt,
       });
     } catch (error) {
+      // Same ordering on the failure path: quiesce the heartbeat before fail().
+      if (heartbeat) await heartbeat.stop();
       await this.fail(job, claim, error, startedAt);
     }
+  }
+
+  /**
+   * Start a lease-renewal heartbeat for one claimed job and return a handle whose
+   * `stop()` clears the timer and awaits any in-flight renewal. The heartbeat:
+   *  - renews under the IMMUTABLE claim (id + minted lease token), never a
+   *    handler-mutable field, so it addresses exactly the row the claim leased;
+   *  - NEVER overlaps its own renewal: a `renewing` guard skips a tick while the
+   *    previous renew is still awaiting, so a slow DB cannot stack renew calls;
+   *  - stops heartbeating the moment it observes it no longer owns the lease
+   *    (renew returned false — reclaimed/completed/failed elsewhere), or a renew
+   *    threw, so a lost lease does not spin; and
+   *  - logs content-free only (job id/kind + a stable status token), never the
+   *    payload, error message, or lease values.
+   */
+  private startHeartbeat(claim: {
+    id: string;
+    kind: string;
+    leaseToken: string | null;
+  }): { stop(): Promise<void> } | null {
+    // A null lease token means the claim carried no lease to renew (defensive;
+    // claimDueJobs always mints one for a running row). And a queue without a
+    // `renew` capability cannot heartbeat. Either way: no heartbeat at all.
+    const renew = this.options.queue.renew;
+    if (claim.leaseToken === null || typeof renew !== "function") {
+      return null;
+    }
+    const leaseToken = claim.leaseToken;
+    let inFlight: Promise<void> | null = null;
+    let stopped = false;
+
+    const renewOnce = async (): Promise<void> => {
+      // Overlap guard: a previous renew is still awaiting; skip this tick.
+      if (inFlight || stopped) return;
+      const run = (async () => {
+        try {
+          const held = await renew.call(
+            this.options.queue,
+            claim.id,
+            leaseToken,
+            this.leaseMs,
+            this.now(),
+          );
+          if (!held) {
+            // We no longer own the lease (reclaimed/completed/failed elsewhere).
+            // Stop heartbeating; the terminal transition is owned elsewhere.
+            stopped = true;
+            if (timer) clearInterval(timer);
+            this.options.logger.warn("maintenance queue lease renewal lost", {
+              job_id: claim.id,
+              job_kind: claim.kind,
+              status: "lease_lost",
+            });
+          }
+        } catch (error) {
+          // A transient renewal failure is contained content-free. Do not crash
+          // the run; the next tick retries, or the lease simply expires.
+          this.options.logger.error("maintenance queue lease renewal failed", {
+            job_id: claim.id,
+            job_kind: claim.kind,
+            error_category: safeMaintenanceErrorCategory(error),
+          });
+        }
+      })();
+      inFlight = run;
+      try {
+        await run;
+      } finally {
+        inFlight = null;
+      }
+    };
+
+    const timer: ReturnType<typeof setInterval> | null = setInterval(() => {
+      void renewOnce();
+    }, this.leaseRenewMs);
+
+    return {
+      stop: async (): Promise<void> => {
+        stopped = true;
+        if (timer) clearInterval(timer);
+        // Await any renewal already in flight so it can never land concurrently
+        // with (or after) the complete/fail UPDATE the caller runs next.
+        if (inFlight) await inFlight;
+      },
+    };
   }
 
   private async fail(
@@ -638,10 +864,18 @@ export class MaintenanceQueueRunner {
     error: unknown,
     startedAt: number,
   ): Promise<void> {
+    // A handler that threw the queue-owned non-retryable marker opts this
+    // failure into immediate dead-lettering: the queue skips the bounded-retry
+    // schedule and dead-letters on this attempt. The classification is made
+    // here from the thrown value's TYPE, not from any handler import — the
+    // marker lives on the queue and a handler's own subclass extends it.
+    const terminal = isMaintenanceTerminalError(error);
     const errorCategory =
       error === "unsupported_job_kind"
         ? "unsupported_job_kind"
-        : safeMaintenanceErrorCategory(error);
+        : terminal
+          ? "terminal"
+          : safeMaintenanceErrorCategory(error);
     try {
       // Pass the immutable claim id/leaseToken as the lease-token guard so a
       // handler that mutated job.id/job.leaseToken cannot redirect the fail
@@ -651,6 +885,7 @@ export class MaintenanceQueueRunner {
         job: { ...job, id: claim.id, leaseToken: claim.leaseToken },
         error,
         category: errorCategory,
+        terminal,
         now: this.now(),
       });
       this.options.logger.warn("maintenance queue job failed", {
