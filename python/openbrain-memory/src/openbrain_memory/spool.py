@@ -576,14 +576,18 @@ class JsonlSpool:
                     break
                 except Exception as dispatch_error:
                     error = dispatch_error
+                    # Content-free background observability (#296): a dispatch
+                    # failure carries the OpenBrainError message/body, which may
+                    # hold redacted-but-private content, and a traceback exposes
+                    # it. Log a stable status token only — never the exception
+                    # object/traceback, raw message, spool path, idempotency
+                    # key, namespace, payload, or provider/server body. Retry,
+                    # quarantine accounting, and the returned per-unit outcome
+                    # (which already carries the non-content class-name category)
+                    # are unchanged.
                     logger.warning(
-                        "Spool replay failed",
-                        extra={
-                            "spool_path": str(self.path),
-                            "spool_operation": record.operation,
-                            "spool_key": record.idempotency_key,
-                        },
-                        exc_info=True,
+                        "Spool replay dispatch failed",
+                        extra={"spool_replay_status": "failed"},
                     )
                     break
             if retained:

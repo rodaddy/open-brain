@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 from typing import Any
@@ -871,6 +872,53 @@ def test_spool_quarantine_envelope_is_content_free_and_lines_are_redacted(tmp_pa
     assert restored["payload"] == {"content": "[REDACTED]"}
     mode = os.stat(spool.quarantine_path).st_mode & 0o777
     assert mode == 0o600
+
+
+def test_replay_dispatch_failure_log_is_content_free(tmp_path, caplog, capsys):
+    """A dispatch failure must log a stable status token only (#296/#344 P1).
+
+    The failing dispatcher's exception body, the spool path, and the
+    idempotency key all carry a non-secret private sentinel. None may reach the
+    log message, the log args, the structured extra, ``exc_info``, or stderr —
+    while the retry counter and returned outcome stay correct.
+    """
+    msg_sentinel = token_sample("PRIVATE-", "dispatch-body")
+    path_sentinel = token_sample("private-", "path-marker")
+    key_sentinel = token_sample("private-", "key-marker")
+    spool = JsonlSpool(tmp_path / f"{path_sentinel}.jsonl", quarantine_threshold=5)
+    spool.append("op", {"content": "secret payload"}, key=key_sentinel)
+
+    with caplog.at_level(logging.WARNING, logger="openbrain_memory.spool"):
+        report = spool.replay_with_report(
+            _always_fail(ConnectionError(msg_sentinel))
+        )
+
+    # The failure was accounted for and the returned outcome is unchanged: the
+    # class-name category survives, the raw body/path/key do not.
+    assert [outcome.status for outcome in report.outcomes] == ["failed"]
+    assert report.outcomes[0].consecutive_failures == 1
+    assert report.outcomes[0].error_category == "ConnectionError"
+    assert spool.status().retry_counts == {key_sentinel: 1}
+
+    records = [r for r in caplog.records if r.name == "openbrain_memory.spool"]
+    assert records  # the dispatch failure was logged
+    for record in records:
+        rendered = record.getMessage()
+        for leaked in (msg_sentinel, path_sentinel, key_sentinel):
+            assert leaked not in rendered
+            assert leaked not in str(record.args or "")
+            for value in vars(record).values():
+                assert leaked not in str(value)
+        assert record.exc_info is None
+        # Only the stable status token is allowed as structured context.
+        emitted = {key for key in vars(record) if key.startswith("spool_")}
+        assert emitted == {"spool_replay_status"}
+        assert record.spool_replay_status == "failed"
+
+    combined = capsys.readouterr()
+    for leaked in (msg_sentinel, path_sentinel, key_sentinel):
+        assert leaked not in combined.err
+        assert leaked not in combined.out
 
 
 def test_spool_poison_unit_never_blocks_valid_unit_replay(tmp_path):

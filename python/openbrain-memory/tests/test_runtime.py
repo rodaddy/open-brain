@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -32,6 +33,7 @@ from openbrain_memory.cli import (
 
 from ._runtime_fakes import (
     ContextClient,
+    FailingReplayTransport,
     FakeRunner,
     FakeSpool,
     ForeignLaneTamperingTransport,
@@ -510,6 +512,118 @@ def test_spool_drain_retains_unknown_operation_and_replays_valid_unit(
     assert dispatched[-1] == "session_start"
     remaining = spool.records()
     assert [record.idempotency_key for record in remaining] == ["unknown-key"]
+
+
+def test_runtime_drain_dispatch_failure_logs_are_content_free(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A dispatch failure during ``_drain_spool`` must stay content-free.
+
+    The failing direct call carries a non-secret private sentinel in its error
+    body, and the spool path/key carry their own sentinels. None may reach any
+    ``openbrain_memory`` log message, log args, structured extra, ``exc_info``,
+    or stderr — while the drain report still counts the failed unit and the
+    unit stays pending for a later retry.
+    """
+    body_sentinel = "PRIVATE-provider-body-marker"
+    path_sentinel = "private-spool-path-marker"
+    key_sentinel = "private-spool-key-marker"
+    spool = JsonlSpool(tmp_path / f"{path_sentinel}.jsonl")
+    spool.append("log_thought", {"content": "queued secret"}, key=key_sentinel)
+    transport = FailingReplayTransport(
+        fail_tool="log_thought", error_body=body_sentinel
+    )
+    runtime = FirstClassMemoryRuntime(
+        runtime_config(),
+        runtime_scope(),
+        transport=transport,
+        spool=spool,
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="openbrain_memory"):
+        recalled = runtime.recall_context("Trigger a failing drain")
+
+    # The direct recall itself succeeded, so a drain ran; the failing unit was
+    # counted and left pending for a later attempt (retry accounting intact).
+    assert recalled.receipt.status is ReceiptStatus.DIRECT
+    assert recalled.drain is not None
+    assert recalled.drain.failed_units == 1
+    assert recalled.drain.replayed_units == 0
+    assert recalled.drain.quarantined_units == 0
+    assert [record.idempotency_key for record in spool.records()] == [key_sentinel]
+    assert spool.status().retry_counts == {key_sentinel: 1}
+
+    records = [
+        r for r in caplog.records if r.name.startswith("openbrain_memory")
+    ]
+    assert records  # the drain path did log
+    for record in records:
+        for leaked in (body_sentinel, path_sentinel, key_sentinel):
+            assert leaked not in record.getMessage()
+            assert leaked not in str(record.args or "")
+            for value in vars(record).values():
+                assert leaked not in str(value)
+        assert record.exc_info is None
+
+    combined = capsys.readouterr()
+    for leaked in (body_sentinel, path_sentinel, key_sentinel):
+        assert leaked not in combined.err
+        assert leaked not in combined.out
+
+
+def test_runtime_outer_drain_failure_log_is_content_free(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The outer ``_drain_spool`` catch must also stay content-free.
+
+    A failure of the drain *machinery* itself (outside per-record dispatch)
+    carries the sentinel in its exception body and traceback. The outer catch
+    must log a stable status token only — no exception object, message, or
+    path — and return ``None`` so the caller's own receipt is unchanged.
+    """
+    body_sentinel = "PRIVATE-outer-drain-body-marker"
+    path_sentinel = "private-outer-drain-path-marker"
+    spool = JsonlSpool(tmp_path / f"{path_sentinel}.jsonl")
+    spool.append("log_thought", {"content": "queued secret"}, key="outer-key")
+    runtime = FirstClassMemoryRuntime(
+        runtime_config(),
+        runtime_scope(),
+        transport=LaneAwareTransport(),
+        spool=spool,
+    )
+
+    def boom(_dispatcher: object) -> None:
+        raise RuntimeError(body_sentinel)
+
+    with caplog.at_level(logging.DEBUG, logger="openbrain_memory"):
+        with patch.object(spool, "replay_with_report", side_effect=boom):
+            recalled = runtime.recall_context("Trigger an outer drain failure")
+
+    # The drain machinery failed, so no drain report is surfaced, but the
+    # direct recall itself is unaffected.
+    assert recalled.receipt.status is ReceiptStatus.DIRECT
+    assert recalled.drain is None
+
+    records = [
+        r for r in caplog.records if r.name.startswith("openbrain_memory")
+    ]
+    assert records
+    for record in records:
+        for leaked in (body_sentinel, path_sentinel):
+            assert leaked not in record.getMessage()
+            assert leaked not in str(record.args or "")
+            for value in vars(record).values():
+                assert leaked not in str(value)
+        assert record.exc_info is None
+
+    combined = capsys.readouterr()
+    for leaked in (body_sentinel, path_sentinel):
+        assert leaked not in combined.err
+        assert leaked not in combined.out
 
 
 def test_spool_drain_dispatches_every_allowlisted_operation(tmp_path: Path) -> None:

@@ -251,6 +251,46 @@ class LaneAwareTransport:
         )
 
 
+class FailingReplayTransport(LaneAwareTransport):
+    """Fail one replay tool call with a sentinel-bearing error body.
+
+    Every other tool (including ``initialize``/``get_contract``) behaves
+    normally so the runtime reaches the drain, but the chosen replay operation
+    returns an MCP tool error whose text carries a non-secret private sentinel.
+    That surfaces as the dispatch failure the content-free replay/drain logs
+    must never leak.
+    """
+
+    def __init__(self, *, fail_tool: str, error_body: str) -> None:
+        super().__init__()
+        self.fail_tool = fail_tool
+        self.error_body = error_body
+
+    def post(
+        self,
+        url: str,
+        *,
+        headers: Mapping[str, str],
+        json_body: Mapping[str, Any],
+        timeout: float,
+    ) -> TransportResponse:
+        if json_body.get("method") == "tools/call":
+            params = json_body["params"]
+            if params.get("name") == self.fail_tool:
+                self.requests.append(
+                    {
+                        "url": url,
+                        "headers": dict(headers),
+                        "json": dict(json_body),
+                        "timeout": timeout,
+                    }
+                )
+                return self._tool_error(json_body["id"], self.error_body)
+        return super().post(
+            url, headers=headers, json_body=json_body, timeout=timeout
+        )
+
+
 class ForeignLaneTamperingTransport(LaneAwareTransport):
     """Echo one session's lane with a single tampered field to test replay proof."""
 

@@ -325,6 +325,18 @@ paths. The supported public surface is:
 - `FirstClassMemoryRuntime`, `RuntimeConfig`, `RuntimeScope`, `RuntimeOutput`,
   `RuntimeReceipt`, and `ReceiptStatus`.
 - `JsonlSpool`, `SpoolRecord`, `SpoolStatus`, and `replay_records`.
+- `MaintenanceRegistry`, `MaintenanceScheduler`, `MaintenanceHandler`,
+  `SpoolReplayMaintenanceHandler`, `MaintenanceRegistryError`, and
+  `SPOOL_REPLAY_JOB_KIND` -- an **explicit opt-in, client-local** maintenance
+  registry and in-process scheduler for running the runtime's spool
+  replay/quarantine flow (via `FirstClassMemoryRuntime.drain_spool_now()`) once,
+  on demand, or on a bounded interval. State scheduling is Python client
+  authority over a client-local JSONL spool: it does **not** depend on the
+  server TypeScript maintenance queue or any second job database, and nothing
+  runs in the background until `MaintenanceScheduler.start()` is called
+  explicitly. Each pass reuses the standalone drain unchanged, so exact-scope
+  replay, `REPLAYED`/`QUARANTINED` disposition, drain receipts, and content-free
+  observability are identical to the write/recall path.
 - `RetryPolicy` and `RetryExhaustedError`.
 - `redact_text()` and `redact_value()`.
 - `validate_required_memory_contract()` and `validate_contract_manifest()`.

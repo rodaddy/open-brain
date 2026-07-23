@@ -492,6 +492,32 @@ class FirstClassMemoryRuntime:
         with self._operation_lock:
             self._router.close()
 
+    def drain_spool_now(self) -> DrainReport | None:
+        """Replay pending durable records on demand, outside a write/recall.
+
+        Scheduled or queued maintenance uses this to run the *same* spool
+        drain the write and recall paths trigger automatically after a
+        successful direct call: it reuses ``_drain_spool`` unchanged, so the
+        exact-scope replay, foreign-namespace/unprovable-scope retention,
+        ``REPLAYED``/``QUARANTINED`` semantics, full-record namespace
+        provenance, drain receipts, and content-free observability are
+        identical to the standalone path.
+
+        Idempotent by construction: a replayed unit is removed from the spool
+        in the same pass, so a re-run only drains what is still pending and a
+        fully-drained spool returns a zero-count report. Returns ``None`` when
+        there was nothing to drain or the drain machinery itself failed, and
+        the same content-free ``DrainReport`` otherwise (also stored on
+        ``last_drain_report``). The operation lock and per-operation state
+        reset mirror the write path so a concurrent write and a scheduled
+        drain never share a partial spool snapshot or stale router evidence.
+        """
+        with self._operation_lock:
+            self._router.reset()
+            if self._spool is not None:
+                self._spool.reset()
+            return self._drain_spool()
+
     def recall_context(
         self,
         query: str,
@@ -792,7 +818,15 @@ class FirstClassMemoryRuntime:
             self.last_drain_report = drain
             return drain
         except Exception:
-            logger.warning("Spool auto-drain failed", exc_info=True)
+            # Content-free background observability (#296): the raised error may
+            # be an OpenBrainError whose message/body carries redacted-but-
+            # private content, and a traceback exposes it. Log a stable status
+            # token only — no exception object/traceback, message, spool path,
+            # idempotency key, namespace, payload, or provider/server body.
+            logger.warning(
+                "Spool auto-drain failed",
+                extra={"spool_drain_status": "error"},
+            )
             return None
 
     def _build_drain_report(self, report: SpoolReplayReport) -> DrainReport:
