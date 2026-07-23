@@ -98,6 +98,37 @@ class FakeSourcePool {
     return `00000000-0000-4000-8000-${String(this.seq).padStart(12, "0")}`;
   }
 
+  // The handler now runs the snapshot guard + derivation inside one transaction
+  // on a checked-out client. connect() hands back a client whose query delegates
+  // to THIS fake (shared state) so every statement — including the FOR UPDATE
+  // guard and the primitive's writes — hits the same in-memory tables, and whose
+  // BEGIN/COMMIT/ROLLBACK are recognized no-ops. It dispatches through
+  // `this.query` on every call (not a captured reference) so a test that
+  // monkeypatches pool.query mid-run still sees its override on the client too.
+  released = 0;
+  connect: any = async () => {
+    const self = this;
+    return {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      query: (async (sql: string, params: unknown[] = []) => {
+        const text = String(sql).trim();
+        if (
+          text === "BEGIN" ||
+          text === "COMMIT" ||
+          text === "ROLLBACK" ||
+          text.startsWith("ROLLBACK")
+        ) {
+          self.calls.push({ sql, params });
+          return { rows: [] };
+        }
+        return self.query(sql, params);
+      }) as any,
+      release: () => {
+        self.released += 1;
+      },
+    };
+  };
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   query: any = (async (sql: string, params: unknown[] = []) => {
     this.calls.push({ sql, params });

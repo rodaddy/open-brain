@@ -322,7 +322,8 @@ describe("MAINTENANCE_GRAPH_AUTH shared-kb authorization (#358 finding 1)", () =
       sqls.push(sql);
       return { rows: [], rowCount: 0 };
     };
-    return { pool: { query } as any, sqls };
+    const connect = async () => ({ query, release: () => undefined });
+    return { pool: { query, connect } as any, sqls };
   }
 
   /** The production-composed graph.derive handler under the real default id. */

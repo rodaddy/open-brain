@@ -317,7 +317,15 @@ export class GraphDerivationTerminalError extends MaintenanceTerminalError {
 }
 
 interface GraphDerivationHandlerDeps {
-  pool: GraphDerivationPool & Pick<pg.Pool, "query">;
+  /**
+   * The pool the handler checks a client out of. `connect` is required (not just
+   * `query`) because the handler runs the snapshot guard and the whole graph
+   * derivation inside ONE transaction on ONE checked-out client — see the
+   * transaction-ownership contract on {@link makeGraphDerivationHandler}. `query`
+   * is retained for callers that still hand a bare pool; the handler only uses
+   * `connect`.
+   */
+  pool: GraphDerivationPool & Pick<pg.Pool, "query" | "connect">;
   /**
    * The server identity the handler derives under. Must be able to write the
    * job's namespace; deriveGraphFromMetadata re-checks this too. A maintenance
@@ -342,14 +350,41 @@ interface GraphDerivationHandlerDeps {
  *  2. Confirms the job's namespace is writable by the handler identity, and
  *     that it matches the source's own namespace (defense in depth against a
  *     payload whose namespace was tampered with; both are cross-checked).
- *  3. Re-reads the live source row under a snapshot guard: it must still be
- *     approved + active in the job namespace AND carry the exact content_hash
- *     and revision the job was enqueued for. Any drift is terminal — the world
- *     moved on and this exact unit of work is obsolete.
- *  4. Derives the graph from the (already-extracted) metadata, or from a
- *     deterministic extraction over the source label when the payload carried
- *     none. The primitive's content-hash short-circuit makes a redundant run a
- *     no-op; a changed hash converges without duplicate nodes/edges.
+ *  3. Opens ONE database transaction on ONE checked-out client and, inside it,
+ *     re-reads the live source row under a snapshot guard that ALSO locks it
+ *     (`SELECT ... FOR UPDATE`): the row must still be approved + active in the
+ *     job namespace AND carry the exact content_hash and revision the job was
+ *     enqueued for. Any drift is terminal — the world moved on and this exact
+ *     unit of work is obsolete.
+ *  4. In the SAME transaction and on the SAME client, derives the graph from
+ *     the (already-extracted) metadata, or from a deterministic extraction over
+ *     the source label when the payload carried none. The primitive's
+ *     content-hash short-circuit makes a redundant run a no-op; a changed hash
+ *     converges without duplicate nodes/edges.
+ *  5. COMMITs. Any error — the guard, extraction, or any derivation write —
+ *     ROLLs BACK every graph mutation AND the anchor hash stamp together, so a
+ *     transient failure never leaves a partial graph with a completed hash that
+ *     a retry would falsely short-circuit past.
+ *
+ * Transaction ownership (the fix for the coupled P1 atomicity findings):
+ *  - The HANDLER owns the transaction boundary. It checks out the client, runs
+ *    BEGIN, holds the source-row lock, calls the derivation primitive on that
+ *    client, and runs COMMIT/ROLLBACK. deriveGraphFromMetadata does NOT open a
+ *    transaction of its own — it runs every statement through the `query` of
+ *    whatever client/pool it is handed, so handing it this client enlists all
+ *    of its writes (anchor+hash, entities, links, stale-edge prune) in the one
+ *    transaction. The primitive stays a reusable, transaction-agnostic
+ *    primitive and its unit-test injectability is unchanged (a fake pool with a
+ *    `query` still drives it directly).
+ *  - The `SELECT ... FOR UPDATE` in step 3 serializes concurrent derivations
+ *    for one source AND against the source registry's own row updates. An OLDER
+ *    job that already holds the lock finishes and commits before the source can
+ *    advance (the registry UPDATE blocks on the lock), so a later fresh-hash job
+ *    runs after it; a job that starts AFTER a newer revision committed re-reads
+ *    under its stale content_hash/revision predicate, matches zero rows, and
+ *    terminal-stops. An obsolete job therefore can never overwrite a newer
+ *    committed graph, and the succeeded current-hash queue key never blocks a
+ *    genuine repair because a rolled-back failure stamps no hash at all.
  */
 export function makeGraphDerivationHandler(
   deps: GraphDerivationHandlerDeps,
@@ -382,56 +417,77 @@ export function makeGraphDerivationHandler(
       );
     }
 
-    // Snapshot guard: re-read the live source, namespace-bound by id, and prove
-    // it is still an approved+active ingestion target at the exact revision and
-    // content hash the job was enqueued for. This is the source-snapshot guard:
-    // a stale job (content re-observed, approval revoked, retired, deleted, or a
-    // revision bump) resolves to zero rows and terminates without deriving from
-    // an obsolete snapshot.
-    const guarded = await deps.pool.query(
-      `SELECT title
-         FROM ${SOURCE_REGISTRY_TABLE}
-        WHERE id = $1
-          AND namespace = $2
-          AND source_kind = $3
-          AND external_id = $4
-          AND content_hash = $5
-          AND revision = $6
-          AND approval_state = 'approved'
-          AND lifecycle_state = 'active'`,
-      [
-        payload.source_id,
-        namespace,
-        payload.source_kind,
-        payload.external_id,
-        payload.content_hash,
-        payload.revision,
-      ],
-    );
-    if (guarded.rows.length === 0) {
-      throw new GraphDerivationTerminalError(
-        "source snapshot changed since enqueue; derivation obsolete",
-      );
-    }
-    const title: string | null =
-      (guarded.rows[0].title as string | null) ?? null;
-
-    // Resolve the metadata to derive from. The already-extracted metadata the
-    // collector observed rides in the payload; when absent, run the
-    // deterministic (zero-network) extractor over the source label so the
-    // source still yields its stable anchor node. Extraction runs OUTSIDE any
-    // queue lock — the job is already leased, not holding a row lock.
-    const metadata = await resolveDerivationMetadata(payload, title);
-
-    // The anchor label names the anchor entity node. Prefer the source title;
-    // fall back to the external id so an untitled source still names its anchor.
-    const anchorName = (
-      title && title.trim().length > 0 ? title : payload.external_id
-    ).slice(0, 500);
-
+    // Everything from here — the snapshot guard, the source-row lock, and the
+    // full graph derivation (anchor+hash, entities, links, stale-edge prune) —
+    // runs inside ONE transaction on ONE client. deps.pool.connect() hands us a
+    // dedicated client; deriveGraphFromMetadata runs its statements through this
+    // client's `query`, so its writes are enlisted in this transaction and roll
+    // back atomically with the guard on any error. The handler owns COMMIT and
+    // ROLLBACK; the primitive stays transaction-agnostic (see the ownership note
+    // on makeGraphDerivationHandler).
+    const client = await deps.pool.connect();
     let receipt: DerivationReceipt;
     try {
-      receipt = await deriveGraphFromMetadata(deps.pool, deps.auth, {
+      await client.query("BEGIN");
+
+      // Snapshot guard + row lock: re-read the live source, namespace-bound by
+      // id, and prove it is still an approved+active ingestion target at the
+      // exact revision and content hash the job was enqueued for. FOR UPDATE
+      // locks the matched row FOR THE LIFE OF THIS TRANSACTION, which is what
+      // serializes concurrent/racing derivations and the registry's own source
+      // updates: a stale job (content re-observed, approval revoked, retired,
+      // deleted, or a revision bump) resolves to zero rows and terminates
+      // without deriving from an obsolete snapshot; a newer source revision
+      // cannot commit over us while we hold the lock, and a job that starts
+      // after a newer revision committed sees zero rows here and stops. The
+      // predicate is unchanged from the pre-fix read — only FOR UPDATE is added.
+      const guarded = await client.query(
+        `SELECT title
+           FROM ${SOURCE_REGISTRY_TABLE}
+          WHERE id = $1
+            AND namespace = $2
+            AND source_kind = $3
+            AND external_id = $4
+            AND content_hash = $5
+            AND revision = $6
+            AND approval_state = 'approved'
+            AND lifecycle_state = 'active'
+          FOR UPDATE`,
+        [
+          payload.source_id,
+          namespace,
+          payload.source_kind,
+          payload.external_id,
+          payload.content_hash,
+          payload.revision,
+        ],
+      );
+      if (guarded.rows.length === 0) {
+        throw new GraphDerivationTerminalError(
+          "source snapshot changed since enqueue; derivation obsolete",
+        );
+      }
+      const title: string | null =
+        (guarded.rows[0].title as string | null) ?? null;
+
+      // Resolve the metadata to derive from. The already-extracted metadata the
+      // collector observed rides in the payload; when absent, run the
+      // deterministic (zero-network) extractor over the source label so the
+      // source still yields its stable anchor node. Extraction is CPU-only and
+      // networkless; running it while the source row is locked keeps the derive
+      // atomic with the guard without any external wait inside the transaction.
+      const metadata = await resolveDerivationMetadata(payload, title);
+
+      // The anchor label names the anchor entity node. Prefer the source title;
+      // fall back to the external id so an untitled source still names its anchor.
+      const anchorName = (
+        title && title.trim().length > 0 ? title : payload.external_id
+      ).slice(0, 500);
+
+      // Derive on the SAME client, INSIDE this transaction. Every anchor/hash,
+      // entity, link, and prune write the primitive issues is now part of the
+      // atomic unit below and rolls back together on any failure.
+      receipt = await deriveGraphFromMetadata(client, deps.auth, {
         anchorType: SOURCE_ANCHOR_ENTITY_TYPE,
         anchorId: payload.source_id,
         anchorName,
@@ -439,10 +495,16 @@ export function makeGraphDerivationHandler(
         metadata,
         // Stamp the source snapshot digest on the anchor so the selection sweep
         // can read it back and skip this source until its content_hash changes.
-        // The guard above already proved this hash matches the live source row.
+        // The guard above already proved this hash matches the locked source row.
         anchorContentHash: payload.content_hash,
       });
+
+      await client.query("COMMIT");
     } catch (err) {
+      // Roll back the entire unit: any mutation the primitive made — including
+      // the anchor hash stamp — is undone, so a transient later failure leaves
+      // NO partial graph and NO stamped hash for a retry to short-circuit past.
+      await client.query("ROLLBACK").catch(() => undefined);
       if (err instanceof CrossNamespaceEndpointError) {
         // An isolation breach or an un-writable namespace is terminal: the same
         // payload will breach again. Surface content-free and dead-letter.
@@ -450,9 +512,12 @@ export function makeGraphDerivationHandler(
           "graph derivation rejected a cross-namespace endpoint",
         );
       }
-      // Any other error (e.g. a transient DB failure) is retryable: rethrow so
-      // the queue schedules a bounded backoff retry.
+      // A GraphDerivationTerminalError (e.g. the snapshot guard above) stays
+      // terminal; any other error (e.g. a transient DB failure) stays retryable
+      // — both simply propagate after the rollback.
       throw err;
+    } finally {
+      client.release();
     }
 
     // Content-free: only the stable source_kind category, the derivation

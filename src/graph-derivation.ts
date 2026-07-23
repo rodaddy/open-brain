@@ -188,6 +188,19 @@ function derivationHash(
  * metadata. Content-hash idempotent, namespace-bound, cross-namespace-rejecting,
  * content-free receipt. Throws CrossNamespaceEndpointError on isolation breach
  * and rethrows DB errors to the caller (no partial receipt on failure).
+ *
+ * Transaction-agnostic: this primitive opens NO transaction of its own. It runs
+ * every statement — the prior-hash read, the anchor upsert that stamps the
+ * derivation/content hash, the entity+link upserts, and the stale-edge prune —
+ * through the `query` of whatever `pool` it is handed, in call order. Hand it a
+ * bare pool and each statement auto-commits independently (fine for a
+ * durable-memory anchor with no cross-statement atomicity need, and what the
+ * unit tests inject). Hand it a checked-out client that is mid-transaction — as
+ * the maintenance handler does under its source-row lock — and ALL of these
+ * writes, including the hash stamp, become part of that caller's transaction and
+ * roll back together on any error. The caller owns BEGIN/COMMIT/ROLLBACK; this
+ * primitive never touches them, which is why passing a client (whose surface is
+ * a superset of GraphDerivationPool) needs no signature change.
  */
 export async function deriveGraphFromMetadata(
   pool: GraphDerivationPool,
