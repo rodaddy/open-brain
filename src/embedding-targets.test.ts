@@ -105,9 +105,12 @@ describe("embedding-targets registry", () => {
     expect(t.sourceHash(row)).toBe(contentHash("Use Bun\nIt is fast"));
   });
 
-  it("decisions: folds context, alternatives (', '), tags (' ') in write-path order", () => {
+  it("decisions: folds context, alternatives (', '), tags (' ') — tags deduped+sorted (#345/#356)", () => {
     const t = getEmbeddingTarget("decisions");
     // `alternatives` is a jsonb column -> node-postgres returns a parsed array.
+    // `alternatives` keeps caller order (its ON CONFLICT merge does not reorder
+    // it); only `tags` are normalized — deduped and sorted — so a post-conflict
+    // array_agg(DISTINCT) reordering never recomputes a divergent source hash.
     const row = {
       id: "d2",
       title: "Use Bun",
@@ -116,11 +119,15 @@ describe("embedding-targets registry", () => {
       alternatives: ["Node", "Deno"],
       tags: ["runtime", "perf"],
     };
+    // tags fold in deterministic sorted order ("perf" < "runtime"), NOT input order.
     const expected =
-      "Use Bun\nIt is fast\ngreenfield service\nNode, Deno\nruntime perf";
+      "Use Bun\nIt is fast\ngreenfield service\nNode, Deno\nperf runtime";
     expect(t.embedText(row)).toBe(expected);
     expect(t.canonicalText(row)).toBe(expected);
     expect(t.sourceHash(row)).toBe(contentHash(expected));
+    // And any permutation of the same tag set folds to the identical string.
+    const reordered = { ...row, tags: ["perf", "runtime"] };
+    expect(t.canonicalText(reordered)).toBe(expected);
   });
 
   it("decisions: tolerates a jsonb alternatives that arrived as a JSON string", () => {

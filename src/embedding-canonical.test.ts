@@ -17,7 +17,15 @@ import {
 
 // --- Reference formulas (transcribed from the pre-refactor write paths) -----
 
-/** log-decision.ts / rest-api.ts POST /decisions inline formula. */
+/**
+ * log-decision.ts / rest-api.ts POST /decisions formula.
+ *
+ * The tag segment is deterministic: the ON CONFLICT merge stores
+ * `array_agg(DISTINCT tag)` (deduped, arbitrarily ordered), so the canonical
+ * text dedupes + sorts tags to keep the source hash stable across merges
+ * (#345/#356). This reference mirrors that: every other field keeps its raw
+ * write-path formula; only tags are normalized.
+ */
 function decisionReference(args: {
   title: string;
   rationale: string;
@@ -28,7 +36,10 @@ function decisionReference(args: {
   const parts = [args.title, args.rationale];
   if (args.context) parts.push(args.context);
   if (args.alternatives?.length) parts.push(args.alternatives.join(", "));
-  if (args.tags?.length) parts.push(args.tags.join(" "));
+  const tags = [...new Set(args.tags ?? [])].sort((a, b) =>
+    a < b ? -1 : a > b ? 1 : 0,
+  );
+  if (tags.length) parts.push(tags.join(" "));
   return parts.join("\n");
 }
 
@@ -95,6 +106,60 @@ describe("decisionCanonicalText matches the write path exactly", () => {
       expect(decisionCanonicalText(c)).toBe(decisionReference(c));
     });
   }
+});
+
+describe("decisionCanonicalText tag order is deterministic (#345/#356)", () => {
+  // Regression: the ON CONFLICT merge stores array_agg(DISTINCT tag), whose
+  // order Postgres does not guarantee. If the canonical text folded tags in raw
+  // order, a merged row's recomputed source hash would disagree with the stored
+  // one and the repair registry would flag false source_drift. These prove the
+  // tag segment is invariant under permutation and duplication.
+  const base = { title: "T", rationale: "R" };
+
+  it("reversed tag order yields the identical canonical text", () => {
+    const forward = decisionCanonicalText({
+      ...base,
+      tags: ["alpha", "beta", "gamma"],
+    });
+    const reversed = decisionCanonicalText({
+      ...base,
+      tags: ["gamma", "beta", "alpha"],
+    });
+    expect(reversed).toBe(forward);
+  });
+
+  it("duplicate tags collapse and do not change the canonical text", () => {
+    const clean = decisionCanonicalText({ ...base, tags: ["alpha", "beta"] });
+    const dup = decisionCanonicalText({
+      ...base,
+      tags: ["beta", "alpha", "alpha", "beta"],
+    });
+    expect(dup).toBe(clean);
+  });
+
+  it("any permutation of a merged set hashes to one deterministic string", () => {
+    const set = ["runtime", "perf", "infra"];
+    const permutations = [
+      ["runtime", "perf", "infra"],
+      ["infra", "runtime", "perf"],
+      ["perf", "infra", "runtime"],
+      // A duplicated merge (array_agg keeps DISTINCT but any order):
+      ["perf", "runtime", "infra", "perf"],
+    ];
+    const texts = new Set(
+      permutations.map((tags) => decisionCanonicalText({ ...base, tags })),
+    );
+    expect(texts.size).toBe(1);
+    // And it folds the deterministic sorted order, not any input order.
+    expect(decisionCanonicalText({ ...base, tags: set })).toBe(
+      "T\nR\n" + [...set].sort().join(" "),
+    );
+  });
+
+  it("empty and whitespace-preserving tags stay stable (no fabricated drift)", () => {
+    // Empty set omits the segment entirely, matching the ?.length guard.
+    expect(decisionCanonicalText({ ...base, tags: [] })).toBe("T\nR");
+  });
 });
 
 describe("sessionSourceHashInput matches the write path exactly", () => {

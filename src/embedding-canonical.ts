@@ -47,15 +47,44 @@ export interface DecisionSource {
 }
 
 /**
+ * Deterministically normalize a decision tag set: dedupe and sort into a fixed
+ * order WITHOUT mutating the caller's input. Returns a fresh array.
+ *
+ * This is the owning-boundary rule for tag order in the canonical text. The
+ * decision `content_hash` is baked from this text at INSERT time, but the
+ * `ON CONFLICT DO UPDATE` merge stores `array_agg(DISTINCT tag)`, whose order is
+ * NOT guaranteed by Postgres. If the canonical text folded tags in raw array
+ * order, a post-conflict row (with its arbitrarily-ordered merged tags) would
+ * recompute a different source hash than the stored one and the embedding-repair
+ * registry would flag it as false `source_drift` — regenerating a different
+ * vector and rewriting the dedup key on every repair pass (churn).
+ *
+ * Sorting by codepoint order (a strict total order — no locale/collation
+ * ambiguity that could tie two distinct tags and leave their relative order
+ * platform-dependent) makes the folded tag segment identical for any permutation
+ * or duplication of the same tag set, so the INSERT hash, the merged-row repair
+ * recompute, and the update_entry writer all converge on one string regardless
+ * of tag ordering. The stored `tags` COLUMN is unaffected — only the string fed
+ * to embed/hash is normalized.
+ */
+function normalizeDecisionTags(tags: string[]): string[] {
+  return [...new Set(tags)].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
+/**
  * Canonical decision text. Decisions embed and hash the SAME string, so this is
  * both the embed text and the source-hash input. Mirrors log_decision / the
- * REST POST /decisions writer exactly:
+ * REST POST /decisions writer exactly, EXCEPT that the tag segment is
+ * order-independent:
  *
- *   [title, rationale, context?, alternatives.join(", ")?, tags.join(" ")?]
- *     .join("\n")
+ *   [title, rationale, context?, alternatives.join(", ")?,
+ *    normalizeDecisionTags(tags).join(" ")?].join("\n")
  *
  * Optional fields are appended only when present/non-empty, in this fixed order.
- * `alternatives` is joined with ", " (comma + space); `tags` with " " (space).
+ * `alternatives` is joined with ", " (comma + space); `tags` are deduped, sorted
+ * (see normalizeDecisionTags — closes the array_agg(DISTINCT) drift, #345/#356),
+ * then joined with " " (space). `alternatives` keeps caller order because its
+ * ON CONFLICT merge does not reorder it; only `tags` is merged via array_agg.
  */
 export function decisionCanonicalText(source: DecisionSource): string {
   const title = source.title == null ? "" : String(source.title);
@@ -69,7 +98,7 @@ export function decisionCanonicalText(source: DecisionSource): string {
   const alternatives = coerceStringArray(source.alternatives);
   if (alternatives.length) parts.push(alternatives.join(", "));
 
-  const tags = coerceStringArray(source.tags);
+  const tags = normalizeDecisionTags(coerceStringArray(source.tags));
   if (tags.length) parts.push(tags.join(" "));
 
   return parts.join("\n");

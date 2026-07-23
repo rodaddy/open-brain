@@ -450,6 +450,100 @@ dbDescribe("embedding repair (live Postgres, multi-namespace)", () => {
     });
   });
 
+  // Regression for #345/#356: the live decision writer's ON CONFLICT merge stores
+  // tags via array_agg(DISTINCT tag), whose order Postgres does not guarantee.
+  // Before the fix, a merge that reordered tags left a row whose stored
+  // content_hash (baked at first write) disagreed with the registry's recompute,
+  // producing FALSE source_drift and churning the embedding on every repair pass.
+  // These drive the real writer SQL, not the seed helper, to prove no drift.
+  describe("decision ON CONFLICT tag merge does not produce false source_drift", () => {
+    const DECISION = {
+      title: "Adopt queue substrate",
+      rationale: "durable retries",
+      context: "MAINT lane",
+      alternatives: ["cron", "inline"],
+    };
+
+    /** Insert/merge exactly like log_decision / POST /decisions. */
+    async function writeDecision(ns: string, tags: string[]): Promise<string> {
+      const pgvector = await import("pgvector/pg");
+      const text = decisionCanonicalText({ ...DECISION, tags });
+      const hash = contentHash(text);
+      const { rows } = await pool.query(
+        `INSERT INTO decisions
+           (title, rationale, alternatives, tags, context, created_by, namespace,
+            embedding, content_hash, embedded_at, embedding_model)
+         VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9, NOW(), $10)
+         ON CONFLICT (content_hash, namespace) WHERE content_hash IS NOT NULL
+         DO UPDATE SET
+           tags = (
+             SELECT COALESCE(array_agg(DISTINCT tag), '{}')
+             FROM unnest(decisions.tags || EXCLUDED.tags) AS tag
+             WHERE tag IS NOT NULL
+           ),
+           updated_at = NOW()
+         RETURNING id`,
+        [
+          DECISION.title,
+          DECISION.rationale,
+          JSON.stringify(DECISION.alternatives),
+          tags,
+          DECISION.context,
+          CREATED_BY,
+          ns,
+          pgvector.toSql(STUB_VECTOR),
+          hash,
+          EMBEDDING_MODEL,
+        ],
+      );
+      return rows[0].id as string;
+    }
+
+    it("reversed-tag re-write hits the merge but is NOT flagged as drift", async () => {
+      // First write bakes the content_hash from the normalized (sorted) tags.
+      const id = await writeDecision(NS_A, ["runtime", "perf"]);
+      const before = await storedHash("decisions", id);
+      // Re-write the SAME decision with tags reversed. Because the canonical text
+      // is order-independent, the content_hash matches -> the ON CONFLICT merge
+      // fires and array_agg(DISTINCT) rewrites the tags column (possibly a new
+      // order), WITHOUT changing content_hash.
+      const mergedId = await writeDecision(NS_A, ["perf", "runtime"]);
+      expect(mergedId).toBe(id); // proves the merge path, not a second row
+      expect(await storedHash("decisions", id)).toBe(before);
+
+      // The repair registry recomputes source hash from the merged row's tags.
+      // With deterministic normalization it must equal the stored hash -> NO drift.
+      const drifted = await selectStale(pool, "decisions", {
+        reasons: ["source_drift"],
+        scope: { namespaces: [NS_A] },
+      });
+      expect(drifted.find((c) => c.id === id)).toBeUndefined();
+
+      // And a full repair pass is a no-op: no rewrite, hash preserved.
+      const batch = await repairStaleBatch(pool, "decisions", stubEmbed, {
+        scope: { namespaces: [NS_A] },
+        reasons: ["missing", "source_drift"],
+      });
+      expect(batch.results.find((r) => r.id === id)).toBeUndefined();
+      expect(batch.repaired).toBe(0);
+      expect(await storedHash("decisions", id)).toBe(before);
+    });
+
+    it("a duplicate-tag merge (array_agg DISTINCT) also stays stable", async () => {
+      const id = await writeDecision(NS_A, ["alpha", "beta"]);
+      const before = await storedHash("decisions", id);
+      // Merge a superset with a duplicate; array_agg(DISTINCT) collapses it.
+      const mergedId = await writeDecision(NS_A, ["beta", "alpha", "beta"]);
+      expect(mergedId).toBe(id);
+      const drifted = await selectStale(pool, "decisions", {
+        reasons: ["source_drift"],
+        scope: { namespaces: [NS_A] },
+      });
+      expect(drifted.find((c) => c.id === id)).toBeUndefined();
+      expect(await storedHash("decisions", id)).toBe(before);
+    });
+  });
+
   describe("sessions written by the live formula are not falsely flagged", () => {
     const SESSION = {
       summary: "did a lot of work",

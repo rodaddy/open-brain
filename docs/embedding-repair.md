@@ -4,23 +4,74 @@ Shared primitives for finding rows whose stored embedding no longer reflects
 their source (or the current model) and repairing them safely. Lives in
 `src/embedding-repair.ts` with the table registry in `src/embedding-targets.ts`.
 
-These are **building blocks only**. This module does not:
+`src/embedding-repair.ts` itself is **primitives only**: it exposes
+`selectStale` + `repairOne` for a queue to drive per-unit, and
+`repairStaleBatch` for bulk script runs. It adds and runs no database migration.
 
-- wire the Issue #343 spool/queue handler (it exposes `selectStale` +
-  `repairOne` for a queue to drive per-unit, and `repairStaleBatch` for bulk
-  script runs);
-- add or run a database migration.
+The Issue #343 durable maintenance queue substrate (`src/maintenance-queue.ts`)
+and the Issue #345 `embedding.repair` handler (`src/embedding-repair-handler.ts`)
+are wired into the running server by `src/maintenance-bootstrap.ts` — see
+[Server-owned runtime and enqueue boundary](#server-owned-runtime-and-enqueue-boundary)
+below.
 
 `scripts/backfill.ts` (`bun run backfill`) is preserved and now sources its
 table -> text and table -> hash mappings from the same `EMBEDDING_TARGETS`
 registry, so the two never drift.
+
+## Server-owned runtime and enqueue boundary
+
+The detection/repair primitives and the durable queue substrate are wired into
+the live server by `src/maintenance-bootstrap.ts`, started from `src/index.ts`.
+Before this bootstrap, `buildEmbeddingRepairHandlers` and
+`MaintenanceQueueRunner` both existed but nothing in the running process
+constructed the queue, registered the handler, or polled — so an enqueued
+`embedding.repair` job could never run in production. `startMaintenanceQueue`:
+
+1. constructs the durable `MaintenanceQueue` over the real `pg.Pool`;
+2. registers the single `embedding.repair` handler with the real embed provider
+   (`generateEmbeddingWithMetadata`) and the content-free app logger;
+3. starts the runner's bounded automatic polling.
+
+**Lifecycle.** It is started only after every startup dependency is ready —
+migrations run, tokens validated, the NATS bridge resolved, the HTTP server
+listening — and its `stop()` is awaited in the existing `SIGTERM`/`SIGINT`
+shutdown path **before** `pool.end()`, so `stop()` drains in-flight jobs (their
+already-claimed leases are honored) instead of stranding them mid-run.
+
+**#343 invariants are preserved verbatim — the bootstrap only wires them:**
+bounded concurrency (clamped to `[1, 16]`), no overlapping ticks (`runOnce` is
+single-flight), persisted retries/backoff (owned by `MaintenanceQueue.fail`,
+derived from the durable row, never from a handler-mutated job object),
+content-free logs (counts/table/kind only), and no Dream/MCP mutation path (the
+bootstrap touches only `maintenance_jobs` and the embedding columns via the
+repair primitive).
+
+**Configuration (safe env overrides; each re-clamped by the runner).** All are
+optional; sensible defaults apply when unset:
+
+| Env var                             | Effect                                    | Runner default |
+| ----------------------------------- | ----------------------------------------- | -------------- |
+| `OPEN_BRAIN_MAINTENANCE_ENABLED`    | `0` / `false` opts a worker out of polling | enabled        |
+| `OPEN_BRAIN_MAINTENANCE_POLL_MS`    | poll cadence                              | `5000`         |
+| `OPEN_BRAIN_MAINTENANCE_CONCURRENCY`| max concurrent jobs                       | `2`            |
+| `OPEN_BRAIN_MAINTENANCE_LEASE_MS`   | job lease window                          | `30000`        |
+
+**Enqueue stays an explicit, auth-scoped caller boundary.** The bootstrap
+**invents no namespace and enqueues no job.** Every `embedding.repair` payload
+MUST carry an explicit scope — a non-empty auth-derived `{ namespaces: [...] }`
+or the separately named `{ global: true }` — validated at the queue boundary
+(`embeddingRepairPayloadSchema`). A payload without a valid scope fails
+validation and dead-letters as a permanent input error; it never falls back to
+an unscoped default. Producing jobs (from an operator tool, a scheduled
+enqueuer, or a future handler) is a deliberate act that supplies that scope; the
+running server only *consumes* what a scoped caller enqueued.
 
 ## Embedding-bearing tables (current stored schema)
 
 | Table               | embedding | content_hash | embedded_at | embedding_model | Embed text          | Source-hash input                       |
 | ------------------- | :-------: | :----------: | :---------: | :-------------: | ------------------- | --------------------------------------- |
 | `thoughts`          |     ✓     |      ✓       |      ✓      |        ✓        | content + tags      | `content`                               |
-| `decisions`         |     ✓     |      ✓       |      ✓      |        ✓        | title \n rationale [\n context] [\n alternatives joined `", "`] [\n tags joined `" "`] | same as embed text                      |
+| `decisions`         |     ✓     |      ✓       |      ✓      |        ✓        | title \n rationale [\n context] [\n alternatives joined `", "`] [\n tags **deduped+sorted**, joined `" "`] | same as embed text                      |
 | `relationships`     |     ✓     |      ✓       |      ✓      |        ✓        | name \n context \n notes | same as embed text                 |
 | `projects`          |     ✓     |      ✓       |      ✓      |        ✓        | name \n description | same as embed text                      |
 | `sessions`          |     ✓     |      ✓       |      ✓      |        ✓        | summary [\n key_decisions] [\n next_steps] [\n blockers] (each joined `". "`) | `summary + "\|" + project`              |
@@ -46,7 +97,18 @@ pure module, `src/embedding-canonical.ts`:
 
 - `decisionCanonicalText()` — decisions embed and hash the SAME string:
   `title \n rationale [\n context] [\n alternatives joined ", "] [\n tags joined " "]`,
-  used by `log_decision` and `POST /api/v1/decisions`.
+  used by `log_decision`, `POST /api/v1/decisions`, and `update_entry`. The tag
+  segment is **deterministic**: tags are deduped and sorted (without mutating the
+  caller's input) before joining. Both decision writers merge tags on
+  `ON CONFLICT (content_hash, namespace)` via `array_agg(DISTINCT tag)`, whose
+  order Postgres does not guarantee and which does **not** recompute
+  `content_hash`. Folding tags in raw array order would make a post-conflict
+  row's recomputed source hash disagree with the stored one, so repair would flag
+  false `source_drift` and churn the vector/hash on every pass. Sorting makes the
+  canonical string identical for any permutation or duplication of the same tag
+  set, so the INSERT hash, the merged-row recompute, and `update_entry` all
+  converge (#345/#356). `alternatives` keeps caller order — its merge does not
+  reorder it; only `tags` is `array_agg`-merged.
 - `sessionSourceHashInput()` — `summary + "|" + project`, the hash input for
   `session_save`, `session_wrap`, and `POST /api/v1/sessions`.
 - `sessionEmbedText()` — `summary [\n key_decisions] [\n next_steps] [\n blockers]`
