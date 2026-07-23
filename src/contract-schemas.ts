@@ -270,18 +270,51 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
           fields: {
             citation_id: {
               type: "string",
-              required: false,
+              required: "citation_id_or_source_ref",
               minLength: 1,
               maxLength: 500,
             },
             source_ref: {
-              type: "string_or_object",
-              required: false,
+              type: "union",
+              required: "citation_id_or_source_ref",
               description:
                 "The recalled item's own resolvable source ref: either the " +
                 "string form (<=1000) or the structural {source,type,id," +
                 "namespace?} form. At least one of citation_id/source_ref is " +
                 "required per reference.",
+              variants: [
+                { type: "string", minLength: 1, maxLength: 1000 },
+                {
+                  type: "object",
+                  additionalProperties: true,
+                  fields: {
+                    source: {
+                      type: "string",
+                      required: true,
+                      minLength: 1,
+                      maxLength: 200,
+                    },
+                    type: {
+                      type: "string",
+                      required: true,
+                      minLength: 1,
+                      maxLength: 200,
+                    },
+                    id: {
+                      type: "string",
+                      required: true,
+                      minLength: 1,
+                      maxLength: 500,
+                    },
+                    namespace: {
+                      type: "string",
+                      required: false,
+                      minLength: 1,
+                      maxLength: 200,
+                    },
+                  },
+                },
+              ],
             },
           },
         },

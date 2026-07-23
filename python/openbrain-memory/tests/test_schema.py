@@ -802,3 +802,163 @@ def test_representative_get_contract_manifest_converts_current_shapes():
         "x-openbrain-maxKeys": 8,
         "x-openbrain-maxJsonBytes": 4096,
     }
+
+
+def test_union_node_converts_variants_to_anyof_and_preserves_description():
+    assert contract_field_to_json_schema(
+        {
+            "type": "union",
+            "description": "String or structural source ref.",
+            "variants": [
+                {"type": "string", "minLength": 1, "maxLength": 1000},
+                {
+                    "type": "object",
+                    "additionalProperties": True,
+                    "fields": {
+                        "source": {"type": "string", "required": True},
+                        "id": {"type": "string", "required": True},
+                    },
+                },
+            ],
+        },
+        path="$.source_ref",
+    ) == {
+        "anyOf": [
+            {"type": "string", "minLength": 1, "maxLength": 1000},
+            {
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string"},
+                    "id": {"type": "string"},
+                },
+                "required": ["source", "id"],
+                "additionalProperties": True,
+            },
+        ],
+        "description": "String or structural source ref.",
+    }
+
+
+def test_union_node_requires_non_empty_variants():
+    for node in (
+        {"type": "union"},
+        {"type": "union", "variants": []},
+        {"type": "union", "variants": "string"},
+    ):
+        with pytest.raises(
+            ContractSchemaError,
+            match=r"\$\.source_ref\.variants",
+        ):
+            contract_field_to_json_schema(node, path="$.source_ref")
+
+
+def test_reflex_pointers_source_ref_union_and_identity_anyof_convert():
+    """Functional conversion of the real agent_reflex_pointers ToolContract.
+
+    Proves both source_ref variants (string form and structural object form)
+    and the per-reference identity anyOf (citation_id OR source_ref) that
+    encodes the runtime Zod refine.
+    """
+
+    manifest = {
+        "tool_contracts": {
+            "agent_reflex_pointers": {
+                "version": 1,
+                "input_schema": {
+                    "query": {
+                        "type": "string",
+                        "required": True,
+                        "minLength": 1,
+                        "maxLength": 4000,
+                    },
+                    "prior_context": {
+                        "type": "array",
+                        "required": False,
+                        "maxItems": 200,
+                        "items": {
+                            "type": "object",
+                            "fields": {
+                                "citation_id": {
+                                    "type": "string",
+                                    "required": "citation_id_or_source_ref",
+                                    "minLength": 1,
+                                    "maxLength": 500,
+                                },
+                                "source_ref": {
+                                    "type": "union",
+                                    "required": "citation_id_or_source_ref",
+                                    "variants": [
+                                        {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 1000,
+                                        },
+                                        {
+                                            "type": "object",
+                                            "additionalProperties": True,
+                                            "fields": {
+                                                "source": {
+                                                    "type": "string",
+                                                    "required": True,
+                                                    "minLength": 1,
+                                                    "maxLength": 200,
+                                                },
+                                                "type": {
+                                                    "type": "string",
+                                                    "required": True,
+                                                    "minLength": 1,
+                                                    "maxLength": 200,
+                                                },
+                                                "id": {
+                                                    "type": "string",
+                                                    "required": True,
+                                                    "minLength": 1,
+                                                    "maxLength": 500,
+                                                },
+                                                "namespace": {
+                                                    "type": "string",
+                                                    "required": False,
+                                                    "minLength": 1,
+                                                    "maxLength": 200,
+                                                },
+                                            },
+                                        },
+                                    ],
+                                },
+                            },
+                        },
+                    },
+                },
+                "output_shape": "agent_reflex_pointers.v1",
+            },
+        },
+    }
+
+    [schema] = tool_contracts_to_tool_schemas(manifest)
+    item = schema["input_schema"]["properties"]["prior_context"]["items"]
+
+    # The Zod refine (citation_id OR source_ref) converts to a per-item anyOf.
+    assert item["anyOf"] == [
+        {"required": ["citation_id"]},
+        {"required": ["source_ref"]},
+    ]
+
+    # source_ref maps to a JSON Schema anyOf carrying both concrete variants.
+    assert item["properties"]["source_ref"]["anyOf"] == [
+        {"type": "string", "minLength": 1, "maxLength": 1000},
+        {
+            "type": "object",
+            "properties": {
+                "source": {"type": "string", "minLength": 1, "maxLength": 200},
+                "type": {"type": "string", "minLength": 1, "maxLength": 200},
+                "id": {"type": "string", "minLength": 1, "maxLength": 500},
+                "namespace": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200,
+                },
+            },
+            "required": ["source", "type", "id"],
+            "additionalProperties": True,
+        },
+    ]
