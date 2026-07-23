@@ -77,7 +77,7 @@ interface SourceRow {
 interface ThoughtRow {
   id: string;
   content: string;
-  tags: string[];
+  tags: string[] | null;
   namespace: string;
   content_hash: string;
 }
@@ -152,7 +152,14 @@ function makeFake(source: Partial<SourceRow> & { external_id: string }) {
           (t) => t.content_hash === hash && t.namespace === namespace,
         );
         return existing
-          ? { rows: [{ id: existing.id, tags: [...existing.tags] }] }
+          ? {
+              rows: [
+                {
+                  id: existing.id,
+                  tags: existing.tags === null ? null : [...existing.tags],
+                },
+              ],
+            }
           : { rows: [] };
       }
 
@@ -180,6 +187,7 @@ function makeFake(source: Partial<SourceRow> & { external_id: string }) {
           (t) => t.content_hash === hash && t.namespace === namespace,
         );
         if (existing) {
+          existing.tags ??= [];
           for (const tag of tags) {
             if (!existing.tags.includes(tag)) existing.tags.push(tag);
           }
@@ -206,9 +214,10 @@ function makeFake(source: Partial<SourceRow> & { external_id: string }) {
           (t) => t.content_hash === hash && t.namespace === namespace,
         );
         if (existing) {
-          // ON CONFLICT ... WHERE NOT (EXCLUDED.tags <@ thoughts.tags): update
-          // (and RETURN a row) only when the incoming tags add something.
-          const adds = tags.some((tag) => !existing.tags.includes(tag));
+          // ON CONFLICT ... WHERE NOT (EXCLUDED.tags <@ COALESCE(thoughts.tags,
+          // '{}')): update (and RETURN a row) only when incoming tags add something.
+          const existingTags = (existing.tags ??= []);
+          const adds = tags.some((tag) => !existingTags.includes(tag));
           if (!adds) {
             // WHERE excluded the update: no row returned (collector re-reads id).
             return { rows: [] };
@@ -732,7 +741,7 @@ describe("drop-folder collector — dedupe + normalization truthfulness", () => 
     expect(result.deduped).toBe(1);
     expect(embed.state.calls).toBe(0); // no re-embed
     expect(fake.counters.durableWrites).toBe(1); // exactly one tag-only update
-    expect(fake.thoughts[0]!.tags.sort()).toEqual(["one", "two"]);
+    expect(fake.thoughts[0]!.tags!.sort()).toEqual(["one", "two"]);
 
     // A further rerun with the SAME merged tags is again a true no-op.
     const embed2 = countingEmbedFn();
@@ -744,6 +753,41 @@ describe("drop-folder collector — dedupe + normalization truthfulness", () => 
     );
     expect(embed2.state.calls).toBe(0);
     expect(fake.counters.durableWrites).toBe(0);
+  });
+
+  it("adds tags to a matching durable row whose existing tags are NULL, then converges to a no-op", async () => {
+    await writeFile(join(root, "a.txt"), BODY_A);
+    const fake = makeFake({ external_id: "drop-a", config: { root } });
+
+    await collectDropFolder({ pool: fake.pool, embedFn }, adminAuth, {
+      external_id: "drop-a",
+    });
+    expect(fake.thoughts).toHaveLength(1);
+    fake.thoughts[0]!.tags = null;
+
+    const firstEmbed = countingEmbedFn();
+    fake.counters.durableWrites = 0;
+    const first = await collectDropFolder(
+      { pool: fake.pool, embedFn: firstEmbed.fn },
+      adminAuth,
+      { external_id: "drop-a", tags: ["restored"] },
+    );
+    expect(first.collected).toBe(0);
+    expect(first.deduped).toBe(1);
+    expect(firstEmbed.state.calls).toBe(0);
+    expect(fake.counters.durableWrites).toBe(1);
+    expect((fake.thoughts[0]!.tags ?? []) as string[]).toEqual(["restored"]);
+
+    const repeatEmbed = countingEmbedFn();
+    fake.counters.durableWrites = 0;
+    await collectDropFolder(
+      { pool: fake.pool, embedFn: repeatEmbed.fn },
+      adminAuth,
+      { external_id: "drop-a", tags: ["restored"] },
+    );
+    expect(repeatEmbed.state.calls).toBe(0);
+    expect(fake.counters.durableWrites).toBe(0);
+    expect((fake.thoughts[0]!.tags ?? []) as string[]).toEqual(["restored"]);
   });
 });
 

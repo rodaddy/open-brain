@@ -705,7 +705,7 @@ async function writeDurableFile(
       `UPDATE ${DURABLE_TABLE}
          SET tags = (
                SELECT COALESCE(array_agg(DISTINCT tag), '{}')
-               FROM unnest(${DURABLE_TABLE}.tags || $3::text[]) AS tag
+               FROM unnest(COALESCE(${DURABLE_TABLE}.tags, '{}') || $3::text[]) AS tag
                WHERE tag IS NOT NULL
              ),
              updated_at = NOW()
@@ -730,11 +730,11 @@ async function writeDurableFile(
      DO UPDATE SET
        tags = (
          SELECT COALESCE(array_agg(DISTINCT tag), '{}')
-         FROM unnest(${DURABLE_TABLE}.tags || EXCLUDED.tags) AS tag
+         FROM unnest(COALESCE(${DURABLE_TABLE}.tags, '{}') || EXCLUDED.tags) AS tag
          WHERE tag IS NOT NULL
        ),
        updated_at = NOW()
-     WHERE NOT (EXCLUDED.tags <@ ${DURABLE_TABLE}.tags)
+     WHERE NOT (EXCLUDED.tags <@ COALESCE(${DURABLE_TABLE}.tags, '{}'))
      RETURNING id, (xmax = 0) AS is_new`,
     [
       content,

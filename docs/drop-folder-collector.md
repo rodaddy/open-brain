@@ -75,11 +75,13 @@ caller-supplied way to raise them. Defaults (env override in parentheses):
 | Max total bytes | 16 MiB | `DROP_COLLECTOR_MAX_TOTAL_BYTES` |
 | Max directory depth | 8 | `DROP_COLLECTOR_MAX_DEPTH` |
 
-A file over the per-file cap is skipped (`too_large`) — never partially read. A
-folder with more eligible files than the count bound ingests the first N in
-stable sorted order and reports the rest as `count_bound` with `truncated:
-true`. Once the next file would exceed the total-byte cap, the remaining files
-are reported as `total_bound`.
+A file over the per-file cap is skipped (`too_large`) — never partially read.
+Discovery stops after bounded filesystem-order iteration when either the file
+candidate limit or inspected-entry limit is reached. Only the retained bounded
+set is sorted for processing; omitted tail entries are not enumerated and do
+not produce per-file receipts. The aggregate result reports `truncated: true`.
+Once the next retained file would exceed the total-byte cap, that file and the
+remaining retained files are reported as `total_bound`.
 
 ## Identity, dedupe, and idempotence
 
@@ -102,9 +104,11 @@ the background exactly as a logged thought would be.
 
 ## Partial failure
 
-A single unreadable file, an over-cap file, or a bound hit does not fail the
-whole collection: it produces a truthful per-file `skipped` receipt and the rest
-proceed. If the post-ingest source content-hash stamp drifts (concurrent update,
+A single unreadable or over-cap retained file does not fail the whole
+collection: it produces a truthful per-file `skipped` receipt and the rest
+proceed. Discovery count/scan truncation is reported only by the aggregate
+`truncated` flag because omitted tail entries are never materialized. If the
+post-ingest source content-hash stamp drifts (concurrent update,
 retirement, revocation), the already-landed durable rows are unaffected and the
 stamp outcome is logged content-free.
 
