@@ -154,8 +154,16 @@ dbDescribe(
       // Rebuild the tables 030 owns from scratch each test, then rewind to the
       // legacy permanent-constraint shape. gen_random_uuid() is a core function
       // in Postgres 18, so no pgcrypto is required for the UUID defaults.
-      await client.query(`DROP TABLE IF EXISTS ob_source_sync_runs CASCADE`);
-      await client.query(`DROP TABLE IF EXISTS ob_source_files CASCADE`);
+      // Qualify the isolated schema explicitly. On the first test these tables do
+      // not exist in TEST_SCHEMA yet; an unqualified DROP would continue through
+      // search_path to `public` and destroy the shared source-sync tables used by
+      // concurrently running suites.
+      await client.query(
+        `DROP TABLE IF EXISTS ${TEST_SCHEMA}.ob_source_sync_runs CASCADE`,
+      );
+      await client.query(
+        `DROP TABLE IF EXISTS ${TEST_SCHEMA}.ob_source_files CASCADE`,
+      );
       // ob_source_sync_runs FK-references ob_sources (id); in this isolated
       // schema there is no registry, so strip the FK from the 030 body before
       // applying it. Uniqueness — the only thing under test — is untouched.
