@@ -42,6 +42,10 @@ import {
   type GuidanceSectionName,
 } from "./agent-context-pack-guidance.ts";
 import { loadRepoFactsSection } from "./agent-context-pack-repo-facts.ts";
+import {
+  buildCandidateSection,
+  buildPointerSection,
+} from "./agent-context-pack-pointers-candidates.ts";
 import type { SectionFragment } from "./agent-context-pack-sections.ts";
 
 export const SECTION_NAMES = [
@@ -140,7 +144,9 @@ export const agentContextPackInputSchema = {
     .array(z.enum(SECTION_NAMES))
     .optional()
     .describe(
-      "Sections to assemble. durable_lane_context is queried only when explicitly requested and requires all seven exact scope coordinates. profile_guidance, process_guidance, and repo_facts are each queried only when explicitly requested.",
+      "Sections to assemble. durable_lane_context is queried only when explicitly requested and requires all seven exact scope coordinates. profile_guidance, process_guidance, and repo_facts are each queried only when explicitly requested. " +
+        'pointers returns resolvable-reference-only entries (identity/source_ref/structural metadata, never a body) for durable records not already emitted as durable_memory items; requesting pointers reuses the single durable_memory hybrid recall (no second retrieval stack) and needs a query. source_ref.type is the singular source_type, so resolve a pointer through get_entry with table = source_ref.type + "s" and id = source_ref.id. ' +
+        "candidate_memory currently has no write-side candidate predicate, so it always returns a truthful empty section (items [], empty_reason candidate_predicate_unavailable, confidence unconfirmed, auto_promotable false) and never triggers recall on its own.",
     ),
   include_unreviewed_recovery: z
     .boolean()
@@ -216,7 +222,7 @@ export async function buildAgentContextPackPayload(
     (!args.requested_sections || args.requested_sections.includes("recovery"));
   const includeDurableLaneContext =
     args.requested_sections?.includes("durable_lane_context") === true;
-  const includeDurableMemory =
+  const includeDurableMemorySection =
     args.requested_sections?.includes("durable_memory") === true;
   const includeProfileGuidance =
     args.requested_sections?.includes("profile_guidance") === true;
@@ -224,6 +230,24 @@ export async function buildAgentContextPackPayload(
     args.requested_sections?.includes("process_guidance") === true;
   const includeRepoFacts =
     args.requested_sections?.includes("repo_facts") === true;
+  const includePointers =
+    args.requested_sections?.includes("pointers") === true;
+  const includeCandidateMemory =
+    args.requested_sections?.includes("candidate_memory") === true;
+  // pointers is derived from the durable_memory hybrid recall — the single
+  // retrieval stack. Requesting durable_memory OR pointers runs that recall so
+  // its net-new surplus pool and emitted-identity set are available, even when
+  // the durable_memory SECTION itself was not requested for output. The
+  // durable_memory section body is still only ADDED to the pack when it was
+  // explicitly requested (includeDurableMemorySection).
+  //
+  // candidate_memory does NOT drive recall: it has no explicit candidate
+  // predicate yet, so it always emits a truthful empty envelope with nothing to
+  // dedupe against. A candidate_memory-only request must therefore run zero
+  // recall queries. The shared recall runs for candidate_memory ONLY when
+  // durable_memory or pointers is also requested (and is then reused, never
+  // re-issued).
+  const includeDurableMemory = includeDurableMemorySection || includePointers;
 
   // The auth-derived physical namespace is the single isolation predicate every
   // structured-section read binds to. `canReadNamespace(auth, ns)` above already
@@ -481,7 +505,16 @@ export async function buildAgentContextPackPayload(
         durableMemoryContentLimit,
       )
     : null;
-  let durableMemorySection = durableMemoryContext?.section ?? null;
+  // The durable_memory SECTION is only fitted/emitted/charged when it was
+  // explicitly requested. When the recall ran ONLY to feed pointers
+  // (includeDurableMemory true via includePointers, but includeDurableMemorySection
+  // false), the section body is suppressed here while its surplus pool and
+  // identities still flow to the pointer/candidate builders below.
+  // candidate_memory alone never drives recall (see includeDurableMemory), so a
+  // candidate-only request does not reach this suppressed-recall path.
+  let durableMemorySection = includeDurableMemorySection
+    ? (durableMemoryContext?.section ?? null)
+    : null;
   let durableMemoryCitations = durableMemorySection
     ? (durableMemoryContext?.citations ?? [])
     : [];
@@ -741,6 +774,78 @@ export async function buildAgentContextPackPayload(
     admitStructuredSection("repo_facts", repoFactsFragment);
   }
 
+  // pointers + candidate_memory (#329): the lowest-priority members, admitted
+  // LAST after repo_facts. They differ in how they relate to durable recall.
+  // pointers is a pure transform over the durable_memory recall's
+  // already-authorized, already-suppressed surplus pool — no second retrieval
+  // stack — deduping against the durable identities the recall already emitted.
+  // candidate_memory has no write-side predicate yet, so it drives NO recall and
+  // takes NO pool: it is independently truthful-empty and never queries. Each is
+  // still admitted through the SAME structured-section fitter so it shares one
+  // whole-pack budget, citation, and truncation reconciliation with
+  // guidance/repo_facts.
+  //
+  // The pointer recall pool is empty (and dedupe/identity sets empty) when
+  // durable recall did not run, returned nothing, or degraded — the pointer
+  // builder then emits its defined empty envelope. When the durable_memory
+  // SECTION itself was not requested for output, the shared recall's
+  // content-free scope-denial / degraded-source warnings are surfaced through
+  // these sections instead (folded in once) so a failed shared recall is never
+  // silently swallowed.
+  const durablePool = durableMemoryContext?.pointerCandidatePool ?? [];
+  // Pointer eligibility is decided against the durable identities ACTUALLY
+  // retained in the FINAL fitted durable_memory output — not the loader's
+  // pre-fit emitted set. When the durable_memory section is suppressed for output
+  // (pointers-only request) this is empty, so every authorized recalled row is
+  // pointer-eligible. When the whole-pack re-fit trimmed or starved out durable
+  // rows, those rows are absent here and stay pointer-eligible instead of being
+  // silently lost. `citation_id` on each retained item is the canonical
+  // `brain_record:${source_type}:${id}` identity.
+  const retainedDurableIdentities: string[] = [];
+  if (durableMemorySection) {
+    const retainedItems =
+      (durableMemorySection as { items?: Array<{ citation_id?: unknown }> })
+        .items ?? [];
+    for (const item of retainedItems) {
+      if (typeof item.citation_id === "string") {
+        retainedDurableIdentities.push(item.citation_id);
+      }
+    }
+  }
+  // When the durable_memory section is suppressed for output but its recall ran
+  // for pointers/candidates, its recall warnings attach to the first admitted
+  // #329 section so they are emitted exactly once.
+  let sharedRecallWarningsPending =
+    includeDurableMemory && !includeDurableMemorySection;
+  const foldSharedRecallWarnings = (fragment: SectionFragment): void => {
+    if (!sharedRecallWarningsPending) return;
+    sharedRecallWarningsPending = false;
+    fragment.scopeDenials.push(...(durableMemoryContext?.scopeDenials ?? []));
+    fragment.degradedSources.push(
+      ...(durableMemoryContext?.degradedSources ?? []),
+    );
+  };
+
+  if (includePointers) {
+    const pointerFragment = buildPointerSection({
+      pool: durablePool,
+      durableIdentities: retainedDurableIdentities,
+    });
+    foldSharedRecallWarnings(pointerFragment);
+    admitStructuredSection("pointers", pointerFragment);
+  }
+
+  if (includeCandidateMemory) {
+    // candidate_memory owns no selection or dedupe behavior yet (no predicate),
+    // so it takes no pool and drives no recall — a candidate-only request issues
+    // zero recall queries. Any shared-recall warnings from a co-requested
+    // durable/pointers recall are already folded into the pointers section (or
+    // reported by the durable_memory section) above.
+    const candidateFragment = buildCandidateSection();
+    foldSharedRecallWarnings(candidateFragment);
+    admitStructuredSection("candidate_memory", candidateFragment);
+  }
+
   const sections: Record<string, unknown> = {};
   if (workingSetSection) sections.working_set = workingSetSection;
   if (recoverySection) sections.recovery = recoverySection;
@@ -764,12 +869,20 @@ export async function buildAgentContextPackPayload(
           ...(workingSet ? workingSet.warnings.scope_denials : []),
           ...(recovery ? recovery.warnings.scope_denials : []),
           ...(durableLaneContext?.scopeDenials ?? []),
-          ...(durableMemoryContext?.scopeDenials ?? []),
+          // durable_memory recall warnings are emitted here ONLY when the section
+          // was requested for output; when the recall ran solely for
+          // pointers/candidates they are folded into those sections' fragments
+          // instead (see foldSharedRecallWarnings) so they surface exactly once.
+          ...(includeDurableMemorySection
+            ? (durableMemoryContext?.scopeDenials ?? [])
+            : []),
           ...structuredScopeDenials,
         ],
         degraded_sources: [
           ...(durableLaneContext?.degradedSources ?? []),
-          ...(durableMemoryContext?.degradedSources ?? []),
+          ...(includeDurableMemorySection
+            ? (durableMemoryContext?.degradedSources ?? [])
+            : []),
           ...structuredDegradedSources,
         ],
         truncation: [
@@ -798,7 +911,10 @@ export async function buildAgentContextPackPayload(
         ...(durableLaneSection || durableLaneContext
           ? { durable_lane_context: durableLaneBudget }
           : {}),
-        ...(durableMemorySection || durableMemoryContext
+        // durable_memory budget is reported only when the section was requested
+        // for output. A recall that ran solely to feed pointers/candidates does
+        // not report a durable_memory budget block (the section is absent).
+        ...(includeDurableMemorySection && durableMemoryContext
           ? { durable_memory: durableMemoryBudget }
           : {}),
       },
@@ -1079,7 +1195,11 @@ export function registerAgentContextPack(
         "Build a scoped realtime agent context pack. working_set uses exact " +
         "active scope; recovery requires explicit unreviewed-recovery opt-in; " +
         "durable_lane_context is queried only when explicitly requested and " +
-        "returns bounded lane/events only after all seven scope coordinates match.",
+        "returns bounded lane/events only after all seven scope coordinates match. " +
+        "pointers surfaces body-free resolvable references to durable records not " +
+        "emitted as durable_memory items, reusing the single durable_memory recall; " +
+        "candidate_memory is a truthful empty section (no candidate predicate yet) " +
+        "that never drives its own recall.",
       inputSchema: agentContextPackInputSchema,
       annotations: {
         title: "Agent Context Pack",

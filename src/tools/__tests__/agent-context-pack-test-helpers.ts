@@ -66,3 +66,105 @@ export async function setupAgentContextPackToolClient(
     },
   };
 }
+
+/**
+ * A mock pool that answers the hybrid search CTEs (vector + FTS) with a supplied
+ * set of brain records and records every query's sql/params so the single-recall
+ * / zero-recall invariants and namespace predicates can be asserted.
+ */
+export function searchPool(
+  records: Array<Record<string, unknown>>,
+  captured: Array<{ sql: string; params?: unknown[] }> = [],
+) {
+  return {
+    pool: {
+      query: async (sql: string, params?: unknown[]) => {
+        captured.push({ sql, params });
+        if (
+          sql.includes("query_embedding") ||
+          sql.includes("fts_query") ||
+          sql.includes("FROM ob_")
+        ) {
+          return { rows: records };
+        }
+        return { rows: [] };
+      },
+    },
+    captured,
+  };
+}
+
+/**
+ * A mock pool whose recall arms (vector/FTS/entity table) reject, so
+ * `executeSearch` throws and the durable-memory loader takes its `recall_failed`
+ * degraded path. Non-recall queries still answer empty so unrelated reads work.
+ */
+export function throwingSearchPool(
+  captured: Array<{ sql: string; params?: unknown[] }> = [],
+) {
+  return {
+    pool: {
+      query: async (sql: string, params?: unknown[]) => {
+        captured.push({ sql, params });
+        if (isRecallSql(sql)) {
+          throw new Error("recall boom");
+        }
+        return { rows: [] };
+      },
+    },
+    captured,
+  };
+}
+
+/** True for any SQL that is a durable recall arm (vector/FTS/entity table). */
+export function isRecallSql(sql: unknown): boolean {
+  return (
+    typeof sql === "string" &&
+    (sql.includes("query_embedding") ||
+      sql.includes("fts_query") ||
+      sql.includes("FROM ob_"))
+  );
+}
+
+export function brainRecord(
+  overrides: Partial<Record<string, unknown>> = {},
+): Record<string, unknown> {
+  return {
+    // Production executeSearch labels rows with the SINGULAR source_type
+    // (SOURCE_LABELS: decisions -> "decision"); the plural is the table name.
+    // Emit singular here so the canonical identity is brain_record:decision:<id>
+    // and get_entry resolution must derive the table as source_type + "s".
+    source_type: "decision",
+    id: overrides.id ?? "dec-1",
+    namespace: "rico",
+    content_preview: "durable decision content",
+    tags: null,
+    created_by: "rico",
+    created_at: "2026-07-01T00:00:00Z",
+    updated_at: "2026-07-02T00:00:00Z",
+    usefulness: 0.9,
+    tier: "warm",
+    distance: 0.1,
+    fts_rank: 0.9,
+    ...overrides,
+  };
+}
+
+/** N distinct decision records dec-1..dec-N with distinct ranked previews. */
+export function nRecords(n: number): Array<Record<string, unknown>> {
+  return Array.from({ length: n }, (_v, i) =>
+    brainRecord({
+      id: `dec-${i + 1}`,
+      content_preview: `durable decision content ${i + 1}`,
+      // Descending distance keeps dec-1 highest-ranked, dec-N lowest.
+      distance: 0.01 * (i + 1),
+      fts_rank: 1 - 0.01 * (i + 1),
+    }),
+  );
+}
+
+export const admin: AuthInfo = { role: "admin", clientId: "rico" };
+
+export function canonical(sourceType: string, id: string): string {
+  return `brain_record:${sourceType}:${id}`;
+}
