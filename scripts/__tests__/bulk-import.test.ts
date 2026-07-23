@@ -629,9 +629,14 @@ describe("table routing", () => {
     expect(params![0]).toBeNull(); // project
   });
 
-  it("importSession uses VALUES (not WHERE NOT EXISTS) since sessions allow duplicates", async () => {
+  it("importSession dedups on the canonical summary|project hash (WHERE NOT EXISTS)", async () => {
+    // Sessions used to hash summary + a live timestamp so every import created a
+    // fresh row. That hash can never be reproduced by the embedding-repair
+    // registry, so every imported session was permanently source_drift. The
+    // writer now hashes the canonical summary|project source and dedups on it,
+    // matching the live session writers.
     const file = makeFile(
-      "Session content that can appear multiple times in the database.",
+      "Session content that maps to a stable canonical source hash.",
     );
     const { pool, mockQuery } = createMockPool();
 
@@ -642,8 +647,7 @@ describe("table routing", () => {
     });
 
     const [sql] = mockQuery.mock.calls[0] as [string, unknown[]];
-    expect(sql).toContain("VALUES");
-    expect(sql).not.toContain("WHERE NOT EXISTS");
+    expect(sql).toContain("WHERE NOT EXISTS");
   });
 });
 

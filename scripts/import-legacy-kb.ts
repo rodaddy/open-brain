@@ -9,6 +9,7 @@
 import type pg from "pg";
 import { createPool } from "../src/db/pool.ts";
 import { contentHash } from "../src/embedding.ts";
+import { decisionCanonicalText } from "../src/embedding-canonical.ts";
 import { logger } from "../src/logger.ts";
 import { sharedNamespaceConfig } from "../src/shared-namespace.ts";
 
@@ -53,10 +54,11 @@ function buildThoughtContent(entry: LegacyEntry): string {
   return parts.join("\n\n");
 }
 
-async function importDecisions(
+export async function importDecisions(
   pool: pg.Pool,
+  filePath: string = `${KB_DIR}/decisions-v2.json`,
 ): Promise<{ imported: number; skipped: number }> {
-  const raw = await Bun.file(`${KB_DIR}/decisions-v2.json`).text();
+  const raw = await Bun.file(filePath).text();
   const entries: LegacyEntry[] = JSON.parse(raw);
   let imported = 0;
   let skipped = 0;
@@ -74,8 +76,22 @@ async function importDecisions(
       skipped++;
       continue;
     }
-    const text = `${entry.title}\n${rationale}`;
-    const hash = contentHash(text);
+    const tags = entry.tags || [];
+    const context = `Legacy import. Weight: ${entry.weight}, Occurrences: ${entry.occurrences}`;
+    // Canonical decision text -- shared with the live writers and the
+    // embedding-repair registry via decisionCanonicalText(). The old
+    // `${title}\n${rationale}` hash omitted the context/tags this insert stores,
+    // so backfill/repair would recompute a different hash and flag every legacy
+    // decision as source_drift. Hash the full canonical text over the exact
+    // fields inserted.
+    const hash = contentHash(
+      decisionCanonicalText({
+        title: entry.title,
+        rationale,
+        context,
+        tags,
+      }),
+    );
 
     const { rowCount } = await pool.query(
       `INSERT INTO decisions (title, rationale, tags, context, created_by, created_at, namespace, content_hash)
@@ -84,8 +100,8 @@ async function importDecisions(
       [
         entry.title,
         rationale,
-        entry.tags || [],
-        `Legacy import. Weight: ${entry.weight}, Occurrences: ${entry.occurrences}`,
+        tags,
+        context,
         "legacy-import",
         safeDate(entry.date),
         LEGACY_IMPORT_NAMESPACE,

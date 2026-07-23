@@ -23,6 +23,11 @@ import {
   generateEmbedding,
   EMBEDDING_MODEL,
 } from "../src/embedding.ts";
+import {
+  decisionCanonicalText,
+  sessionEmbedText,
+  sessionSourceHashInput,
+} from "../src/embedding-canonical.ts";
 import { extractMetadata, mergeTags } from "../src/extraction.ts";
 import { logger } from "../src/logger.ts";
 import { sharedNamespaceConfig } from "../src/shared-namespace.ts";
@@ -170,8 +175,7 @@ export async function importDecision(
     (file.frontmatter.name as string) ||
     (file.body.split("\n")[0] ?? "").replace(/^#+\s*/, "").slice(0, 200);
   const rationale = file.body;
-  const textToEmbed = `${title}\n${rationale}`;
-  const hash = contentHash(textToEmbed);
+  const context = `Imported from: ${file.filePath}`;
 
   const fmTags = Array.isArray(file.frontmatter.tags)
     ? (file.frontmatter.tags as string[])
@@ -181,16 +185,29 @@ export async function importDecision(
   let embedding: number[] | null = null;
   let extracted: Awaited<ReturnType<typeof extractMetadata>> = null;
 
-  if (opts.embed || opts.extract) {
-    const promises: [
-      Promise<number[] | null>,
-      Promise<Awaited<ReturnType<typeof extractMetadata>>>,
-    ] = [
-      opts.embed ? generateEmbedding(textToEmbed) : Promise.resolve(null),
-      opts.extract ? extractMetadata(textToEmbed) : Promise.resolve(null),
-    ];
-    [embedding, extracted] = await Promise.all(promises);
+  if (opts.extract) {
+    extracted = await extractMetadata(`${title}\n${rationale}`);
     tags = mergeTags(tags, extracted);
+  }
+
+  // Canonical decision text -- shared with the live writers and the
+  // embedding-repair registry via decisionCanonicalText(). Built from the FINAL
+  // inserted fields (including context and the post-extraction tags) so the row's
+  // stored content_hash matches what the registry recomputes; the old
+  // `${title}\n${rationale}` hash omitted context/tags and would be flagged as
+  // source_drift the moment repair scanned the row.
+  const textToEmbed = decisionCanonicalText({
+    title,
+    rationale,
+    context,
+    tags,
+  });
+  const hash = contentHash(textToEmbed);
+
+  if (opts.embed) {
+    embedding = await generateEmbedding(textToEmbed);
+  }
+  if (opts.embed || opts.extract) {
     await new Promise((r) => setTimeout(r, DELAY_MS));
   }
 
@@ -203,7 +220,7 @@ export async function importDecision(
         title,
         rationale,
         tags,
-        `Imported from: ${file.filePath}`,
+        context,
         "bulk-import",
         DEFAULT_IMPORT_NAMESPACE,
         embedding ? toSql(embedding) : null,
@@ -234,8 +251,13 @@ export async function importSession(
 ): Promise<"imported" | "duplicate" | "error"> {
   const summary = file.body;
   const project = (file.frontmatter.project as string) || null;
-  // Sessions use timestamp in hash to allow multiple saves
-  const hash = contentHash(summary + "|" + new Date().toISOString());
+  // Canonical session source hash + embed text -- shared with the live writers
+  // (session_save / session_wrap / REST) and the embedding-repair registry via
+  // sessionSourceHashInput()/sessionEmbedText(). The old timestamp-in-hash
+  // produced a content_hash the registry can never reproduce, so every imported
+  // session was permanently source_drift; hash the summary|project source
+  // instead and dedup on it like the other importers.
+  const hash = contentHash(sessionSourceHashInput({ summary, project }));
 
   const fmTags = Array.isArray(file.frontmatter.tags)
     ? (file.frontmatter.tags as string[])
@@ -244,14 +266,15 @@ export async function importSession(
 
   let embedding: number[] | null = null;
   if (opts.embed) {
-    embedding = await generateEmbedding(summary);
+    embedding = await generateEmbedding(sessionEmbedText({ summary, project }));
     await new Promise((r) => setTimeout(r, DELAY_MS));
   }
 
   try {
     const { rowCount } = await pool.query(
       `INSERT INTO sessions (project, summary, tags, created_by, namespace, embedding, content_hash, embedded_at, embedding_model)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+       SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9
+       WHERE NOT EXISTS (SELECT 1 FROM sessions WHERE namespace = $5 AND content_hash = $7)`,
       [
         project,
         summary,

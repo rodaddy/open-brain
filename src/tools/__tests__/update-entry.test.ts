@@ -5,6 +5,18 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { registerUpdateEntry } from "../update-entry.ts";
 import type { ToolDeps } from "../index.ts";
 import type { AuthInfo } from "../../types.ts";
+import { contentHash } from "../../embedding.ts";
+import { EMBEDDING_TARGETS } from "../../embedding-targets.ts";
+
+/**
+ * Extract the content_hash value from a captured UPDATE (SET content_hash = $N).
+ * Returns null when the statement did not re-embed (no content_hash SET).
+ */
+function updateContentHash(sql: string, params: unknown[]): string | null {
+  const m = sql.match(/content_hash = \$(\d+)/);
+  if (!m) return null;
+  return params[Number(m[1]) - 1] as string;
+}
 
 function createMockEmbed(result: number[] | null = Array(768).fill(0.1)) {
   return async (_text: string) => result;
@@ -391,10 +403,12 @@ describe("update_entry", () => {
 
     it("locks the initial row lookup to the agent namespace", async () => {
       const calls: Array<{ sql: string; params?: unknown[] }> = [];
-      const mockPool = createMockPool(async (sql: string, params?: unknown[]) => {
-        calls.push({ sql, params });
-        return { rows: [] };
-      });
+      const mockPool = createMockPool(
+        async (sql: string, params?: unknown[]) => {
+          calls.push({ sql, params });
+          return { rows: [] };
+        },
+      );
       const mockEmbed = createMockEmbed();
       const auth: AuthInfo = { role: "agent", clientId: "agent-client" };
 
@@ -430,25 +444,27 @@ describe("update_entry", () => {
     it("checks content_hash collisions only in the existing row namespace", async () => {
       const calls: Array<{ sql: string; params?: unknown[] }> = [];
       let dataCallCount = 0;
-      const mockPool = createMockPool(async (sql: string, params?: unknown[]) => {
-        calls.push({ sql, params });
-        dataCallCount++;
-        if (dataCallCount === 1) {
-          return {
-            rows: [
-              {
-                id: "agent-uuid",
-                namespace: "agent-client",
-                content: "old",
-                tags: [],
-                archived_at: null,
-              },
-            ],
-          };
-        }
-        if (dataCallCount === 2) return { rows: [] };
-        return { rows: [{ id: "agent-uuid" }] };
-      });
+      const mockPool = createMockPool(
+        async (sql: string, params?: unknown[]) => {
+          calls.push({ sql, params });
+          dataCallCount++;
+          if (dataCallCount === 1) {
+            return {
+              rows: [
+                {
+                  id: "agent-uuid",
+                  namespace: "agent-client",
+                  content: "old",
+                  tags: [],
+                  archived_at: null,
+                },
+              ],
+            };
+          }
+          if (dataCallCount === 2) return { rows: [] };
+          return { rows: [{ id: "agent-uuid" }] };
+        },
+      );
       const mockEmbed = createMockEmbed();
       const auth: AuthInfo = { role: "agent", clientId: "agent-client" };
 
@@ -551,6 +567,134 @@ describe("update_entry", () => {
         const parsed = JSON.parse((result.content as any)[0].text);
         expect(parsed.updated).toBe(true);
         expect(parsed.embedded).toBe(false);
+      } finally {
+        await cleanup();
+      }
+    });
+  });
+
+  describe("canonical convergence -- no source_drift after update", () => {
+    it("decision: written content_hash equals the registry sourceHash over the merged row (context/alternatives/tags)", async () => {
+      const calls: Array<{ sql: string; params?: unknown[] }> = [];
+      let dataCallCount = 0;
+      const existing = {
+        id: "dec-uuid",
+        title: "old title",
+        rationale: "old rationale",
+        context: "old context",
+        alternatives: ["keep as-is"],
+        tags: ["old"],
+        namespace: "admin-client",
+        archived_at: null,
+      };
+      const mockPool = createMockPool(
+        async (sql: string, params?: unknown[]) => {
+          calls.push({ sql, params });
+          dataCallCount++;
+          if (dataCallCount === 1) return { rows: [existing] };
+          if (dataCallCount === 2) return { rows: [] }; // no hash collision
+          return { rows: [{ id: "dec-uuid" }] };
+        },
+      );
+      const mockEmbed = createMockEmbed();
+      const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
+
+      const { client, cleanup } = await setupToolClient(
+        mockPool,
+        mockEmbed,
+        auth,
+      );
+
+      try {
+        // Change only title; context/alternatives/tags come from the existing row.
+        const result = await client.callTool({
+          name: "update_entry",
+          arguments: {
+            table: "decisions",
+            id: "550e8400-e29b-41d4-a716-446655440020",
+            title: "new title",
+          },
+        });
+
+        expect(result.isError).toBeFalsy();
+
+        // Capture the content_hash the UPDATE wrote.
+        const update = calls.find((c) => c.sql.includes("content_hash = $"))!;
+        const written = updateContentHash(update.sql, update.params ?? []);
+        expect(written).not.toBeNull();
+
+        // The registry recomputes its sourceHash from the FINAL post-update row.
+        // If update_entry hashed a different string, repair would flag drift.
+        const finalRow = {
+          ...existing,
+          title: "new title",
+        };
+        const registryHash = EMBEDDING_TARGETS.decisions!.sourceHash(finalRow);
+        expect(written).toBe(registryHash);
+        // Sanity: it is NOT the old title+rationale-only hash.
+        expect(written).not.toBe(contentHash("new title\nold rationale"));
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("session: written content_hash equals the registry sourceHash (summary|project, ignores key_decisions/next_steps)", async () => {
+      const calls: Array<{ sql: string; params?: unknown[] }> = [];
+      let dataCallCount = 0;
+      const existing = {
+        id: "sess-uuid",
+        summary: "old summary",
+        project: "openbrain",
+        key_decisions: ["chose canonical builders"],
+        next_steps: ["ship it"],
+        blockers: [],
+        namespace: "admin-client",
+        archived_at: null,
+      };
+      const mockPool = createMockPool(
+        async (sql: string, params?: unknown[]) => {
+          calls.push({ sql, params });
+          dataCallCount++;
+          if (dataCallCount === 1) return { rows: [existing] };
+          if (dataCallCount === 2) return { rows: [] }; // no hash collision
+          return { rows: [{ id: "sess-uuid" }] };
+        },
+      );
+      const mockEmbed = createMockEmbed();
+      const auth: AuthInfo = { role: "admin", clientId: "admin-client" };
+
+      const { client, cleanup } = await setupToolClient(
+        mockPool,
+        mockEmbed,
+        auth,
+      );
+
+      try {
+        const result = await client.callTool({
+          name: "update_entry",
+          arguments: {
+            table: "sessions",
+            id: "550e8400-e29b-41d4-a716-446655440021",
+            summary: "new summary",
+            next_steps: ["ship it", "then document"],
+          },
+        });
+
+        expect(result.isError).toBeFalsy();
+
+        const update = calls.find((c) => c.sql.includes("content_hash = $"))!;
+        const written = updateContentHash(update.sql, update.params ?? []);
+        expect(written).not.toBeNull();
+
+        const finalRow = {
+          ...existing,
+          summary: "new summary",
+          next_steps: ["ship it", "then document"],
+        };
+        const registryHash = EMBEDDING_TARGETS.sessions!.sourceHash(finalRow);
+        expect(written).toBe(registryHash);
+        // Sessions hash summary|project only -- next_steps must not enter the hash.
+        expect(written).toBe(contentHash("new summary|openbrain"));
       } finally {
         await cleanup();
       }
