@@ -21,7 +21,16 @@ import {
 } from "bun:test";
 import type { Pool } from "pg";
 import { runMigrations } from "./db/migrate.ts";
-import { EMBEDDING_DIMENSIONS, contentHash } from "./embedding.ts";
+import {
+  EMBEDDING_DIMENSIONS,
+  EMBEDDING_MODEL,
+  contentHash,
+} from "./embedding.ts";
+import {
+  decisionCanonicalText,
+  sessionEmbedText,
+  sessionSourceHashInput,
+} from "./embedding-canonical.ts";
 import {
   selectStale,
   repairOne,
@@ -87,7 +96,7 @@ dbDescribe("embedding repair (live Postgres, multi-namespace)", () => {
     await pool.query("DELETE FROM ob_session_lanes WHERE created_by = $1", [
       CREATED_BY,
     ]);
-    for (const t of ["thoughts", "ob_entities"]) {
+    for (const t of ["thoughts", "ob_entities", "decisions", "sessions"]) {
       await pool.query(`DELETE FROM ${t} WHERE created_by = $1`, [CREATED_BY]);
     }
     // Clear the suite's own queue rows too. maintenance_jobs is durable and its
@@ -123,6 +132,97 @@ dbDescribe("embedding repair (live Postgres, multi-namespace)", () => {
       ["person", name, CREATED_BY, ns],
     );
     return rows[0].id as string;
+  }
+
+  const STUB_VECTOR = Array(EMBEDDING_DIMENSIONS).fill(0.01);
+
+  /**
+   * Seed a decision the way the live writer does: embedding + content_hash =
+   * contentHash(decisionCanonicalText(...)) with ALL optional fields set, so we
+   * can prove repair does NOT immediately flag a genuinely written row as
+   * source_drift. `alternatives` is a jsonb column.
+   */
+  async function seedWrittenDecision(
+    ns: string,
+    fields: {
+      title: string;
+      rationale: string;
+      context?: string;
+      alternatives?: string[];
+      tags?: string[];
+    },
+  ): Promise<string> {
+    const pgvector = await import("pgvector/pg");
+    const hash = contentHash(decisionCanonicalText(fields));
+    const { rows } = await pool.query(
+      `INSERT INTO decisions
+         (title, rationale, alternatives, tags, context, created_by, namespace,
+          embedding, content_hash, embedded_at, embedding_model)
+       VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9, NOW(), $10)
+       RETURNING id`,
+      [
+        fields.title,
+        fields.rationale,
+        JSON.stringify(fields.alternatives ?? []),
+        fields.tags ?? [],
+        fields.context ?? null,
+        CREATED_BY,
+        ns,
+        pgvector.toSql(STUB_VECTOR),
+        hash,
+        EMBEDDING_MODEL,
+      ],
+    );
+    return rows[0].id as string;
+  }
+
+  /**
+   * Seed a session the way the live writer does: embedding of
+   * sessionEmbedText(...) and content_hash = contentHash(summary|project) with
+   * the structured text[] fields set, so we can prove repair does NOT
+   * immediately flag it as source_drift even though the embed text != hash input.
+   */
+  async function seedWrittenSession(
+    ns: string,
+    fields: {
+      summary: string;
+      project?: string;
+      key_decisions?: string[];
+      next_steps?: string[];
+      blockers?: string[];
+    },
+  ): Promise<string> {
+    const pgvector = await import("pgvector/pg");
+    const hash = contentHash(sessionSourceHashInput(fields));
+    const { rows } = await pool.query(
+      `INSERT INTO sessions
+         (project, summary, tags, blockers, next_steps, key_decisions,
+          created_by, namespace, embedding, content_hash, embedded_at, embedding_model)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), $11)
+       RETURNING id`,
+      [
+        fields.project ?? null,
+        fields.summary,
+        [],
+        fields.blockers ?? [],
+        fields.next_steps ?? [],
+        fields.key_decisions ?? [],
+        CREATED_BY,
+        ns,
+        pgvector.toSql(STUB_VECTOR),
+        hash,
+        EMBEDDING_MODEL,
+      ],
+    );
+    return rows[0].id as string;
+  }
+
+  async function storedHash(table: string, id: string): Promise<string | null> {
+    const { rows } = await pool.query(
+      `SELECT content_hash FROM ${table} WHERE id = $1`,
+      [id],
+    );
+    return (rows[0]?.content_hash as string | null) ?? null;
   }
 
   async function embeddingIsNull(table: string, id: string): Promise<boolean> {
@@ -287,6 +387,134 @@ dbDescribe("embedding repair (live Postgres, multi-namespace)", () => {
       [id],
     );
     expect(rows[0].content_hash).toBe(contentHash("v2-edited"));
+  });
+
+  // --- Writer-parity: genuinely written rows are NOT flagged as drift --------
+
+  describe("decisions written by the live formula are not falsely flagged", () => {
+    const DECISION = {
+      title: "Use Bun",
+      rationale: "It is fast",
+      context: "greenfield service",
+      alternatives: ["Node", "Deno"],
+      tags: ["runtime", "perf"],
+    };
+
+    it("a freshly written decision is NOT selected for source_drift", async () => {
+      const id = await seedWrittenDecision(NS_A, DECISION);
+      const drifted = await selectStale(pool, "decisions", {
+        reasons: ["source_drift"],
+        scope: { namespaces: [NS_A] },
+      });
+      // The row's stored hash equals the registry's recomputed hash -> no drift.
+      expect(drifted.find((c) => c.id === id)).toBeUndefined();
+    });
+
+    it("repeat-run repair is a no-op and preserves the content_hash", async () => {
+      const id = await seedWrittenDecision(NS_A, DECISION);
+      const before = await storedHash("decisions", id);
+      // Ask for every detectable reason -- none should fire for a valid row.
+      const batch = await repairStaleBatch(pool, "decisions", stubEmbed, {
+        scope: { namespaces: [NS_A] },
+        reasons: ["missing", "source_drift"],
+      });
+      expect(batch.results.find((r) => r.id === id)).toBeUndefined();
+      expect(batch.repaired).toBe(0);
+      // The dedup key is untouched by a no-op repair pass.
+      expect(await storedHash("decisions", id)).toBe(before);
+      expect(before).toBe(contentHash(decisionCanonicalText(DECISION)));
+    });
+
+    it("a genuine source edit IS detected and repair writes the fresh hash back", async () => {
+      const id = await seedWrittenDecision(NS_A, DECISION);
+      // Edit a field that participates in the canonical text.
+      await pool.query("UPDATE decisions SET rationale = $1 WHERE id = $2", [
+        "It is fast and safe",
+        id,
+      ]);
+      const drifted = await selectStale(pool, "decisions", {
+        reasons: ["source_drift"],
+        scope: { namespaces: [NS_A] },
+      });
+      const hit = drifted.find((c) => c.id === id);
+      expect(hit).toBeTruthy();
+      await repairOne(pool, hit!, stubEmbed, { scope: { namespaces: [NS_A] } });
+      expect(await storedHash("decisions", id)).toBe(
+        contentHash(
+          decisionCanonicalText({
+            ...DECISION,
+            rationale: "It is fast and safe",
+          }),
+        ),
+      );
+    });
+  });
+
+  describe("sessions written by the live formula are not falsely flagged", () => {
+    const SESSION = {
+      summary: "did a lot of work",
+      project: "open-brain",
+      key_decisions: ["chose A", "dropped B"],
+      next_steps: ["ship it"],
+      blockers: ["waiting on review"],
+    };
+
+    it("a freshly written session is NOT selected for source_drift", async () => {
+      const id = await seedWrittenSession(NS_A, SESSION);
+      const drifted = await selectStale(pool, "sessions", {
+        reasons: ["source_drift"],
+        scope: { namespaces: [NS_A] },
+      });
+      // Hash is summary|project (embed text differs) -- must still not drift.
+      expect(drifted.find((c) => c.id === id)).toBeUndefined();
+    });
+
+    it("repeat-run repair is a no-op and preserves the content_hash", async () => {
+      const id = await seedWrittenSession(NS_A, SESSION);
+      const before = await storedHash("sessions", id);
+      const batch = await repairStaleBatch(pool, "sessions", stubEmbed, {
+        scope: { namespaces: [NS_A] },
+        reasons: ["missing", "source_drift"],
+      });
+      expect(batch.results.find((r) => r.id === id)).toBeUndefined();
+      expect(batch.repaired).toBe(0);
+      expect(await storedHash("sessions", id)).toBe(before);
+      expect(before).toBe(contentHash(sessionSourceHashInput(SESSION)));
+    });
+
+    it("editing summary/project IS detected; editing only key_decisions is NOT (hash ignores it)", async () => {
+      const id = await seedWrittenSession(NS_A, SESSION);
+
+      // key_decisions is embed-only, not part of the hash input: editing it must
+      // NOT register as source_drift (the stored hash still matches).
+      await pool.query("UPDATE sessions SET key_decisions = $1 WHERE id = $2", [
+        ["chose A", "dropped B", "added C"],
+        id,
+      ]);
+      let drifted = await selectStale(pool, "sessions", {
+        reasons: ["source_drift"],
+        scope: { namespaces: [NS_A] },
+      });
+      expect(drifted.find((c) => c.id === id)).toBeUndefined();
+
+      // Editing the summary DOES change the hash input -> drift is detected.
+      await pool.query("UPDATE sessions SET summary = $1 WHERE id = $2", [
+        "did even more work",
+        id,
+      ]);
+      drifted = await selectStale(pool, "sessions", {
+        reasons: ["source_drift"],
+        scope: { namespaces: [NS_A] },
+      });
+      const hit = drifted.find((c) => c.id === id);
+      expect(hit).toBeTruthy();
+      await repairOne(pool, hit!, stubEmbed, { scope: { namespaces: [NS_A] } });
+      expect(await storedHash("sessions", id)).toBe(
+        contentHash(
+          sessionSourceHashInput({ ...SESSION, summary: "did even more work" }),
+        ),
+      );
+    });
   });
 
   // --- End-to-end through the real queue + runner --------------------------

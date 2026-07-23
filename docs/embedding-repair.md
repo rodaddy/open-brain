@@ -20,22 +20,45 @@ registry, so the two never drift.
 | Table               | embedding | content_hash | embedded_at | embedding_model | Embed text          | Source-hash input                       |
 | ------------------- | :-------: | :----------: | :---------: | :-------------: | ------------------- | --------------------------------------- |
 | `thoughts`          |     ✓     |      ✓       |      ✓      |        ✓        | content + tags      | `content`                               |
-| `decisions`         |     ✓     |      ✓       |      ✓      |        ✓        | title \n rationale  | title \n rationale                      |
+| `decisions`         |     ✓     |      ✓       |      ✓      |        ✓        | title \n rationale [\n context] [\n alternatives joined `", "`] [\n tags joined `" "`] | same as embed text                      |
 | `relationships`     |     ✓     |      ✓       |      ✓      |        ✓        | name \n context \n notes | same as embed text                 |
 | `projects`          |     ✓     |      ✓       |      ✓      |        ✓        | name \n description | same as embed text                      |
-| `sessions`          |     ✓     |      ✓       |      ✓      |        ✓        | summary             | summary                                 |
+| `sessions`          |     ✓     |      ✓       |      ✓      |        ✓        | summary [\n key_decisions] [\n next_steps] [\n blockers] (each joined `". "`) | `summary + "\|" + project`              |
 | `ob_session_lanes`  |     ✓     |      ✓       |      ✓      |        ✓        | topic [\n project]  | `session_key + "\|" + topic`            |
 | `ob_session_events` |     ✓     |      ✓       |      ✓      |        ✓        | content             | content                                 |
 | `ob_entities`       |     ✓     |      ✗       |      ✗      |        ✗        | `entity_type: name` | (no column — see migration contract)    |
 
 Two texts are tracked per table because they legitimately differ:
 
-- **Embed text** is what goes to the provider (thoughts append tags).
+- **Embed text** is what goes to the provider (thoughts append tags; sessions
+  append their structured continuity fields).
 - **Source-hash input** is the exact string each write path feeds to
   `contentHash(...)`. Comparing the stored `content_hash` to a freshly computed
   one detects that the source was edited without a re-embed. The lane hash
   formula (`session_key | topic`) is deliberately not the embed text — matching
   `firstWriteLaneContentHash()` in `src/tools/append-session-event.ts`.
+
+`decisions` and `sessions` embed and hash strings that the registry MUST compute
+identically to their live writers, or repair would flag every fresh row as
+drifted, regenerate a different vector, and rewrite the dedup key. To keep the
+two sides from ever diverging, both the registry and the writers call one shared
+pure module, `src/embedding-canonical.ts`:
+
+- `decisionCanonicalText()` — decisions embed and hash the SAME string:
+  `title \n rationale [\n context] [\n alternatives joined ", "] [\n tags joined " "]`,
+  used by `log_decision` and `POST /api/v1/decisions`.
+- `sessionSourceHashInput()` — `summary + "|" + project`, the hash input for
+  `session_save`, `session_wrap`, and `POST /api/v1/sessions`.
+- `sessionEmbedText()` — `summary [\n key_decisions] [\n next_steps] [\n blockers]`
+  (each array joined with `". "`), the embed text for all three session writers.
+  `session_wrap` has no `blockers` field, so that segment is simply absent — the
+  builder is total over whichever fields a caller has. Historically `session_wrap`
+  embedded the summary alone; it now shares this builder.
+
+`alternatives` is a `jsonb` column and the session structured fields are
+`text[]`; the shared builders coerce each safely (`coerceStringArray`) so a
+legacy row that stored a jsonb value as its raw JSON text, `null`, or a scalar
+degrades to "field absent" instead of corrupting the hash.
 
 **Add-a-row rule:** when a new embedding column lands on any table, add one
 entry to `EMBEDDING_TARGETS` and one row to the table above. The registry test

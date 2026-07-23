@@ -96,11 +96,42 @@ describe("embedding-targets registry", () => {
     expect(t.embedText(row)).toBe("just content");
   });
 
-  it("decisions: title + newline + rationale", () => {
+  it("decisions: title + rationale only when no optional fields", () => {
     const t = getEmbeddingTarget("decisions");
     const row = { id: "d1", title: "Use Bun", rationale: "It is fast" };
     expect(t.embedText(row)).toBe("Use Bun\nIt is fast");
+    // Decisions embed and hash the SAME canonical string.
+    expect(t.canonicalText(row)).toBe("Use Bun\nIt is fast");
     expect(t.sourceHash(row)).toBe(contentHash("Use Bun\nIt is fast"));
+  });
+
+  it("decisions: folds context, alternatives (', '), tags (' ') in write-path order", () => {
+    const t = getEmbeddingTarget("decisions");
+    // `alternatives` is a jsonb column -> node-postgres returns a parsed array.
+    const row = {
+      id: "d2",
+      title: "Use Bun",
+      rationale: "It is fast",
+      context: "greenfield service",
+      alternatives: ["Node", "Deno"],
+      tags: ["runtime", "perf"],
+    };
+    const expected =
+      "Use Bun\nIt is fast\ngreenfield service\nNode, Deno\nruntime perf";
+    expect(t.embedText(row)).toBe(expected);
+    expect(t.canonicalText(row)).toBe(expected);
+    expect(t.sourceHash(row)).toBe(contentHash(expected));
+  });
+
+  it("decisions: tolerates a jsonb alternatives that arrived as a JSON string", () => {
+    const t = getEmbeddingTarget("decisions");
+    const row = {
+      id: "d3",
+      title: "T",
+      rationale: "R",
+      alternatives: '["A","B"]',
+    };
+    expect(t.embedText(row)).toBe("T\nR\nA, B");
   });
 
   it("relationships: filters null parts before joining", () => {
@@ -120,10 +151,38 @@ describe("embedding-targets registry", () => {
     expect(t.embedText(row)).toBe("OpenBrain\nAI memory");
   });
 
-  it("sessions: summary only", () => {
+  it("sessions: hash is summary|project, embed is summary alone when no structured fields", () => {
     const t = getEmbeddingTarget("sessions");
-    const row = { id: "s1", summary: "session summary text" };
+    const row = { id: "s1", summary: "session summary text", project: "ob" };
     expect(t.embedText(row)).toBe("session summary text");
+    // Hash input is summary|project, NOT the embed text -- matches every writer.
+    expect(t.canonicalText(row)).toBe("session summary text|ob");
+    expect(t.sourceHash(row)).toBe(contentHash("session summary text|ob"));
+  });
+
+  it("sessions: embed folds key_decisions/next_steps/blockers (join '. '), hash stays summary|project", () => {
+    const t = getEmbeddingTarget("sessions");
+    const row = {
+      id: "s2",
+      summary: "did work",
+      project: "ob",
+      key_decisions: ["chose A", "dropped B"],
+      next_steps: ["ship it"],
+      blockers: ["waiting on review"],
+    };
+    expect(t.embedText(row)).toBe(
+      "did work\nchose A. dropped B\nship it\nwaiting on review",
+    );
+    // Hash ignores the structured fields entirely.
+    expect(t.canonicalText(row)).toBe("did work|ob");
+    expect(t.sourceHash(row)).toBe(contentHash("did work|ob"));
+  });
+
+  it("sessions: null project hashes summary|'' (matches writers' project ?? '')", () => {
+    const t = getEmbeddingTarget("sessions");
+    const row = { id: "s3", summary: "s", project: null };
+    expect(t.canonicalText(row)).toBe("s|");
+    expect(t.sourceHash(row)).toBe(contentHash("s|"));
   });
 
   it("lanes: embed text is topic[+project], hash is session_key|topic (matches write path)", () => {

@@ -31,6 +31,11 @@
  * embedding built from source text that changed since selection.
  */
 import { contentHash } from "./embedding.ts";
+import {
+  decisionCanonicalText,
+  sessionEmbedText,
+  sessionSourceHashInput,
+} from "./embedding-canonical.ts";
 
 /** A row projected from an embedding target's `selectColumns`. */
 export type TargetRow = Record<string, unknown>;
@@ -158,10 +163,14 @@ function joinNonEmpty(parts: Array<unknown>): string {
  *
  * Text mappings mirror the write paths:
  * - thoughts      src/tools/log-thought.ts (hash content; embed content + tags)
- * - decisions     src/tools/log-decision.ts (title \n rationale)
+ * - decisions     src/tools/log-decision.ts (embed == hash of
+ *                 title \n rationale [\n context] [\n alternatives joined ", "]
+ *                 [\n tags joined " "]; shared via decisionCanonicalText())
  * - relationships src/tools/upsert-person.ts (name \n context \n notes)
  * - projects      scripts/backfill.ts / project write (name \n description)
- * - sessions      src/tools/session-save.ts (summary)
+ * - sessions      src/tools/session-save.ts / session-wrap.ts (hash summary|project;
+ *                 embed summary [\n key_decisions] [\n next_steps] [\n blockers];
+ *                 shared via sessionSourceHashInput()/sessionEmbedText())
  * - ob_session_lanes  src/tools/append-session-event.ts (topic [\n project];
  *                     hash = contentHash(session_key + "|" + topic))
  * - ob_session_events src/tools/append-session-event.ts (content)
@@ -185,11 +194,25 @@ export const EMBEDDING_TARGETS: Record<string, EmbeddingTarget> = {
   decisions: {
     table: "decisions",
     idColumn: "id",
-    selectColumns: ["id", "title", "rationale", "namespace"],
-    canonicalText: (row) => `${row.title ?? ""}\n${row.rationale ?? ""}`,
-    embedText: (row) => `${row.title ?? ""}\n${row.rationale ?? ""}`,
-    sourceHash: (row) =>
-      contentHash(`${row.title ?? ""}\n${row.rationale ?? ""}`),
+    // Every source field the write path folds into the canonical text must be
+    // projected, or repair would recompute a shorter string and flag the row as
+    // drifted. `alternatives` is a jsonb column (arrives parsed); `tags` a
+    // text[]; `context` a nullable text. See src/tools/log-decision.ts.
+    selectColumns: [
+      "id",
+      "title",
+      "rationale",
+      "context",
+      "alternatives",
+      "tags",
+      "namespace",
+    ],
+    // Decisions embed and hash the SAME canonical string; see the write path in
+    // src/tools/log-decision.ts / rest-api.ts POST /decisions. Both build
+    // [title, rationale, context?, alternatives.join(", ")?, tags.join(" ")?].
+    canonicalText: (row) => decisionCanonicalText(row),
+    embedText: (row) => decisionCanonicalText(row),
+    sourceHash: (row) => contentHash(decisionCanonicalText(row)),
     provenance: FULL_PROVENANCE,
     namespaceColumn: "namespace",
   },
@@ -218,10 +241,26 @@ export const EMBEDDING_TARGETS: Record<string, EmbeddingTarget> = {
   sessions: {
     table: "sessions",
     idColumn: "id",
-    selectColumns: ["id", "summary", "namespace"],
-    canonicalText: (row) => (row.summary as string) ?? "",
-    embedText: (row) => (row.summary as string) ?? "",
-    sourceHash: (row) => contentHash((row.summary as string) ?? ""),
+    // Sessions hash `summary|project` but embed a richer text
+    // (summary + key_decisions/next_steps/blockers). Project both the hash
+    // input columns (summary, project) and the embed-only text[] columns so the
+    // registry can reproduce each writer's exact string. See session-save.ts,
+    // session-wrap.ts, and rest-api.ts POST /sessions.
+    selectColumns: [
+      "id",
+      "summary",
+      "project",
+      "key_decisions",
+      "next_steps",
+      "blockers",
+      "namespace",
+    ],
+    // Canonical text drives sourceHash and MUST equal the writers' hash input:
+    // contentHash(summary + "|" + project). It is NOT the embed text.
+    canonicalText: (row) => sessionSourceHashInput(row),
+    // Embed text is the richer continuity text every writer feeds the provider.
+    embedText: (row) => sessionEmbedText(row),
+    sourceHash: (row) => contentHash(sessionSourceHashInput(row)),
     provenance: FULL_PROVENANCE,
     namespaceColumn: "namespace",
   },
