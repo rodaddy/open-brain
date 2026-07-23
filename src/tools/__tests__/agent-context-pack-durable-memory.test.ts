@@ -47,7 +47,7 @@ function brainRecord(
   overrides: Partial<Record<string, unknown>> = {},
 ): Record<string, unknown> {
   return {
-    source_type: "decisions",
+    source_type: "decision",
     id: overrides.id ?? "dec-1",
     namespace: "rico",
     content_preview: "durable decision content",
@@ -153,10 +153,10 @@ describe("agent_context_pack durable_memory", () => {
 
   it("returns recalled records with a resolvable source_ref and matching citation on every item", async () => {
     const records = [
-      brainRecord({ id: "dec-1", source_type: "decisions" }),
+      brainRecord({ id: "dec-1", source_type: "decision" }),
       brainRecord({
         id: "th-1",
-        source_type: "thoughts",
+        source_type: "thought",
         content_preview: "a durable thought",
       }),
     ];
@@ -300,7 +300,7 @@ describe("agent_context_pack durable_memory", () => {
     const records = Array.from({ length: 8 }, (_, index) =>
       brainRecord({
         id: `rank-${index}`,
-        source_type: "decisions",
+        source_type: "decision",
         content_preview: `rank-${index}:` + "D".repeat(800),
         // Descending relevance so RRF keeps rank-0 first, rank-7 last.
         distance: 0.1 + index * 0.05,
@@ -380,7 +380,7 @@ describe("agent_context_pack durable_memory", () => {
     const records = Array.from({ length: 8 }, (_, index) =>
       brainRecord({
         id: `trim-${index}`,
-        source_type: "decisions",
+        source_type: "decision",
         content_preview: `trim-${index}:` + "D".repeat(800),
         distance: 0.1 + index * 0.05,
         fts_rank: 1 - index * 0.1,
@@ -450,7 +450,7 @@ describe("agent_context_pack durable_memory", () => {
     const records = Array.from({ length: 8 }, (_, index) =>
       brainRecord({
         id: `ref-${index}`,
-        source_type: "decisions",
+        source_type: "decision",
         content_preview: `ref-${index}:` + "D".repeat(800),
         distance: 0.1 + index * 0.05,
         fts_rank: 1 - index * 0.1,
@@ -515,7 +515,7 @@ describe("agent_context_pack durable_memory", () => {
     const records = [
       brainRecord({
         id: "solo-1",
-        source_type: "decisions",
+        source_type: "decision",
         content_preview: "solo:" + "D".repeat(2000),
       }),
     ];
@@ -715,10 +715,10 @@ describe("agent_context_pack durable_memory", () => {
     // this turn is passed back by citation_id; recall must drop it and return
     // only net-new records, preserving the original relevance order.
     const records = [
-      brainRecord({ id: "dec-1", source_type: "decisions" }),
+      brainRecord({ id: "dec-1", source_type: "decision" }),
       brainRecord({
         id: "th-1",
-        source_type: "thoughts",
+        source_type: "thought",
         content_preview: "a durable thought",
       }),
     ];
@@ -732,7 +732,7 @@ describe("agent_context_pack durable_memory", () => {
           ...SCOPE,
           query: "durable",
           requested_sections: ["durable_memory"],
-          prior_context: [{ citation_id: "brain_record:decisions:dec-1" }],
+          prior_context: [{ citation_id: "brain_record:decision:dec-1" }],
         },
       });
       const payload = JSON.parse((pack.content as any)[0].text);
@@ -753,7 +753,7 @@ describe("agent_context_pack durable_memory", () => {
       expect(section.empty_reason).toBeUndefined();
       // No citation dangles onto the suppressed record.
       const citationIds = new Set(payload.citations.map((c: any) => c.id));
-      expect(citationIds.has("brain_record:decisions:dec-1")).toBe(false);
+      expect(citationIds.has("brain_record:decision:dec-1")).toBe(false);
       const retainedIds = new Set(section.items.map((i: any) => i.citation_id));
       for (const citation of payload.citations) {
         expect(retainedIds.has(citation.id)).toBe(true);
@@ -772,8 +772,8 @@ describe("agent_context_pack durable_memory", () => {
     // is on identity coordinates (source/type/id/namespace) only, so display
     // fields the caller round-trips must not defeat suppression.
     const records = [
-      brainRecord({ id: "dec-1", source_type: "decisions" }),
-      brainRecord({ id: "dec-2", source_type: "decisions" }),
+      brainRecord({ id: "dec-1", source_type: "decision" }),
+      brainRecord({ id: "dec-2", source_type: "decision" }),
     ];
     const { pool } = searchPool(records);
     const auth: AuthInfo = { role: "admin", clientId: "rico" };
@@ -789,7 +789,7 @@ describe("agent_context_pack durable_memory", () => {
             {
               source_ref: {
                 source: "brain",
-                type: "decisions",
+                type: "decision",
                 id: "dec-1",
                 namespace: "rico",
                 label: "round-tripped display text",
@@ -813,8 +813,8 @@ describe("agent_context_pack durable_memory", () => {
     // An unknown/unmatched prior reference removes nothing: relevant records the
     // model has not already seen are all retained.
     const records = [
-      brainRecord({ id: "dec-1", source_type: "decisions" }),
-      brainRecord({ id: "dec-2", source_type: "decisions" }),
+      brainRecord({ id: "dec-1", source_type: "decision" }),
+      brainRecord({ id: "dec-2", source_type: "decision" }),
     ];
     const { pool } = searchPool(records);
     const auth: AuthInfo = { role: "admin", clientId: "rico" };
@@ -827,7 +827,7 @@ describe("agent_context_pack durable_memory", () => {
           query: "durable",
           requested_sections: ["durable_memory"],
           prior_context: [
-            { citation_id: "brain_record:decisions:not-recalled" },
+            { citation_id: "brain_record:decision:not-recalled" },
           ],
         },
       });
@@ -851,8 +851,8 @@ describe("agent_context_pack durable_memory", () => {
     // empty envelope must say all_suppressed — not no_matches, which would falsely
     // claim recall found nothing.
     const records = [
-      brainRecord({ id: "dec-1", source_type: "decisions" }),
-      brainRecord({ id: "dec-2", source_type: "decisions" }),
+      brainRecord({ id: "dec-1", source_type: "decision" }),
+      brainRecord({ id: "dec-2", source_type: "decision" }),
     ];
     const { pool } = searchPool(records);
     const auth: AuthInfo = { role: "admin", clientId: "rico" };
@@ -865,8 +865,8 @@ describe("agent_context_pack durable_memory", () => {
           query: "durable",
           requested_sections: ["durable_memory"],
           prior_context: [
-            { citation_id: "brain_record:decisions:dec-1" },
-            { citation_id: "brain_record:decisions:dec-2" },
+            { citation_id: "brain_record:decision:dec-1" },
+            { citation_id: "brain_record:decision:dec-2" },
           ],
         },
       });
@@ -1022,8 +1022,8 @@ describe("agent_context_pack durable_memory", () => {
       });
       // Only the emitted record's citation exists; the empty-body one dangles nowhere.
       const citationIds = new Set(payload.citations.map((c: any) => c.id));
-      expect(citationIds.has("brain_record:decisions:good-1")).toBe(true);
-      expect(citationIds.has("brain_record:decisions:empty-1")).toBe(false);
+      expect(citationIds.has("brain_record:decision:good-1")).toBe(true);
+      expect(citationIds.has("brain_record:decision:empty-1")).toBe(false);
       const retainedIds = new Set(section.items.map((i: any) => i.citation_id));
       for (const citation of payload.citations) {
         expect(retainedIds.has(citation.id)).toBe(true);
