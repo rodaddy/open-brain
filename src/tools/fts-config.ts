@@ -181,6 +181,42 @@ export function requestFtsConfig(
 }
 
 /**
+ * Default per-statement time bound for the non-default (unindexed) FTS path,
+ * in milliseconds.
+ */
+export const DEFAULT_FTS_STATEMENT_TIMEOUT_MS = 5000;
+
+/**
+ * Resolve the operator-tunable statement timeout for non-default FTS searches
+ * (OPENBRAIN_FTS_STATEMENT_TIMEOUT_MS). A non-default config recomputes
+ * `to_tsvector` per row with no index, so its statement is bounded via a
+ * transaction-scoped `SET LOCAL statement_timeout` at the query execution
+ * boundary (search-brain runBoundedFtsQuery). The default GIN-indexed english
+ * path never pays this bound.
+ *
+ * The raw env value is validated to a positive base-10 integer BEFORE use;
+ * anything else (unset, blank, non-numeric, zero, negative, fractional,
+ * overflow) falls back to the 5000 ms default so a typo can never disable the
+ * bound or smuggle text toward SQL. Callers must only ever interpolate the
+ * returned number, never the raw env string.
+ */
+export function ftsStatementTimeoutMs(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  const raw = env.OPENBRAIN_FTS_STATEMENT_TIMEOUT_MS?.trim();
+  if (!raw) return DEFAULT_FTS_STATEMENT_TIMEOUT_MS;
+  if (!/^\d+$/.test(raw)) return DEFAULT_FTS_STATEMENT_TIMEOUT_MS;
+  const parsed = Number.parseInt(raw, 10);
+  // statement_timeout is a 32-bit Postgres parameter; anything outside
+  // (0, 2147483647] would fail at SET LOCAL, so fall back like any other
+  // invalid value instead of hard-failing the permitted FTS path.
+  if (!Number.isSafeInteger(parsed) || parsed <= 0 || parsed > 2_147_483_647) {
+    return DEFAULT_FTS_STATEMENT_TIMEOUT_MS;
+  }
+  return parsed;
+}
+
+/**
  * Assert a config is on the allowlist and return it as a bare regconfig literal
  * safe to interpolate. Throws on anything unexpected -- a defensive backstop in
  * case a caller bypasses the schema. Callers already hold an FtsConfig, so this
