@@ -316,6 +316,73 @@ def test_json_adapter_recall_rejects_non_boolean_recovery_before_transport() -> 
     assert tool_calls(transport) == []
 
 
+@pytest.mark.parametrize(
+    ("operation", "values", "expected_status"),
+    [
+        ("recall", {"query": "current task"}, "direct"),
+        ("reflex", {"query": "current pointers"}, "direct"),
+        (
+            "capture",
+            {"distilled": True, "content": "distilled event"},
+            "saved",
+        ),
+        (
+            "checkpoint",
+            {"distilled": True, "summary": "distilled checkpoint"},
+            "saved",
+        ),
+        (
+            "wrap",
+            {"distilled": True, "summary": "distilled wrap"},
+            "saved",
+        ),
+    ],
+)
+@pytest.mark.parametrize("unknown_key_count", [1, 2])
+def test_json_adapter_ignores_unknown_optional_top_level_fields(
+    operation: str,
+    values: dict[str, object],
+    expected_status: str,
+    unknown_key_count: int,
+) -> None:
+    transport = LaneAwareTransport()
+    payload = request_payload(operation, **values)
+    payload["future_optional_field"] = "must-never-be-forwarded"
+    if unknown_key_count == 2:
+        payload["second_future_field"] = {"private": "must-never-be-forwarded"}
+
+    output = execute_json(payload, transport=transport)
+
+    assert output["receipt"]["status"] == expected_status
+    assert (
+        output["receipt"]["compatibility_note"]
+        == "ignored_optional_request_keys"
+    )
+    assert output["receipt"]["ignored_optional_key_count"] == unknown_key_count
+    serialized_calls = json.dumps(tool_calls(transport))
+    assert "future_optional_field" not in serialized_calls
+    assert "second_future_field" not in serialized_calls
+    assert "must-never-be-forwarded" not in serialized_calls
+
+
+def test_json_adapter_required_field_typo_still_fails_closed() -> None:
+    transport = LaneAwareTransport()
+
+    output = execute_json(
+        request_payload("recall", qurey="misspelled required field"),
+        transport=transport,
+    )
+
+    assert output["receipt"]["status"] == "failed"
+    assert output["receipt"]["error"] == "query must be a non-empty string"
+    assert (
+        output["receipt"]["compatibility_note"]
+        == "ignored_optional_request_keys"
+    )
+    assert output["receipt"]["ignored_optional_key_count"] == 1
+    assert tool_calls(transport) == []
+
+
 def test_first_capture_establishes_lane_before_append() -> None:
     transport = LaneAwareTransport()
     runtime = FirstClassMemoryRuntime(
@@ -1687,21 +1754,25 @@ def test_json_adapter_requires_distilled_for_every_write() -> None:
         assert output["receipt"]["direct_attempted"] is False
 
 
-def test_json_adapter_rejects_metadata_scope_and_config_overrides() -> None:
-    payloads = [
-        request_payload(
-            "capture",
-            distilled=True,
-            content="distilled event",
-            metadata={"namespace": "other"},
-        ),
+def test_json_adapter_tolerates_metadata_but_rejects_authority_overrides() -> None:
+    top_level_metadata = request_payload(
+        "capture",
+        distilled=True,
+        content="distilled event",
+        metadata={"namespace": "other"},
+    )
+    authority_overrides = [
         request_payload("capture", distilled=True, content="event"),
         request_payload("capture", distilled=True, content="event"),
     ]
-    payloads[1]["scope"]["namespace"] = "other"
-    payloads[2]["config"]["fallback_command"] = ["other-command"]
+    authority_overrides[0]["scope"]["namespace"] = "other"
+    authority_overrides[1]["config"]["fallback_command"] = ["other-command"]
 
-    for payload in payloads:
+    tolerated = execute_json(top_level_metadata, transport=LaneAwareTransport())
+    assert tolerated["receipt"]["status"] == "saved"
+    assert tolerated["receipt"]["ignored_optional_key_count"] == 1
+
+    for payload in authority_overrides:
         output = execute_json(payload, transport=LaneAwareTransport())
         assert output["receipt"]["status"] == "failed"
         assert output["receipt"]["direct_attempted"] is False

@@ -391,7 +391,7 @@ def test_reflex_cli_returns_validated_envelope_with_content_free_receipt() -> No
     assert "context" not in output
 
 
-def test_reflex_cli_rejects_unsupported_and_body_bearing_input() -> None:
+def test_reflex_cli_ignores_unknown_top_level_but_rejects_body_bearing_input() -> None:
     transport = LaneAwareTransport()
 
     unsupported_key = execute_json(
@@ -411,10 +411,20 @@ def test_reflex_cli_rejects_unsupported_and_body_bearing_input() -> None:
         transport=transport,
     )
 
-    assert unsupported_key["receipt"]["status"] == "failed"
+    assert unsupported_key["receipt"]["status"] == "direct"
+    assert (
+        unsupported_key["receipt"]["compatibility_note"]
+        == "ignored_optional_request_keys"
+    )
+    assert unsupported_key["receipt"]["ignored_optional_key_count"] == 1
     assert body_bearing["receipt"]["status"] == "failed"
     assert non_object_reference["receipt"]["status"] == "failed"
-    assert tool_calls(transport) == []
+    calls = tool_calls(transport)
+    assert [call["params"]["name"] for call in calls] == [
+        "get_contract",
+        "agent_reflex_pointers",
+    ]
+    assert "requested_sections" not in calls[1]["params"]["arguments"]
 
 
 # --- Finding #1: reflex requires the published contract tool version ---------

@@ -20,6 +20,8 @@ from .runtime import (
 
 MAX_JSON_INPUT_BYTES = 64 * 1024
 MAX_JSON_OUTPUT_BYTES = 1_000_000
+MAX_IGNORED_OPTIONAL_KEY_COUNT = 65_535
+IGNORED_OPTIONAL_REQUEST_KEYS_NOTE = "ignored_optional_request_keys"
 _COMMON_KEYS = {"config", "operation", "scope"}
 _OPERATION_KEYS = {
     "recall": {
@@ -60,15 +62,16 @@ def execute_json(
 ) -> dict[str, Any]:
     """Execute one bounded JSON lifecycle request and return JSON-ready output."""
     runtime: FirstClassMemoryRuntime | None = None
+    ignored_optional_key_count = 0
     try:
         operation = _mapping_text(payload, "operation")
-        scope_value = payload.get("scope")
-        config_value = payload.get("config", {})
+        projected, ignored_optional_key_count = _project_request(payload, operation)
+        scope_value = projected.get("scope")
+        config_value = projected.get("config", {})
         if not isinstance(scope_value, Mapping):
             raise ValueError("scope must be a JSON object")
         if not isinstance(config_value, Mapping):
             raise ValueError("config must be a JSON object")
-        _validate_request_keys(payload, operation)
         runtime = FirstClassMemoryRuntime(
             RuntimeConfig.from_sources(config_value, environ=environ),
             RuntimeScope.from_mapping(scope_value),
@@ -78,14 +81,17 @@ def execute_json(
             fallback_runner=fallback_runner,
             spool=spool,
         )
-        output = _dispatch(runtime, operation, payload).as_dict()
+        output = _dispatch(runtime, operation, projected).as_dict()
     except Exception as error:
         output = failure_output(_safe_operation(payload.get("operation")), error)
+    _attach_compatibility_receipt(output, ignored_optional_key_count)
     if runtime is not None:
         try:
             runtime.close()
         except Exception as error:
-            return failure_output("close", error)
+            output = failure_output("close", error)
+            _attach_compatibility_receipt(output, ignored_optional_key_count)
+            return output
     return output
 
 
@@ -185,15 +191,33 @@ def _dispatch(
     raise ValueError(f"unsupported operation: {_safe_text(operation)}")
 
 
-def _validate_request_keys(payload: Mapping[str, Any], operation: str) -> None:
+def _project_request(
+    payload: Mapping[str, Any],
+    operation: str,
+) -> tuple[dict[str, Any], int]:
     allowed = _OPERATION_KEYS.get(operation)
     if allowed is None:
         raise ValueError(f"unsupported operation: {_safe_text(operation)}")
-    unknown = {str(key) for key in payload if key not in _COMMON_KEYS | allowed}
-    if unknown:
-        raise ValueError(
-            f"{operation} contains unsupported keys: {', '.join(sorted(unknown))}"
-        )
+    known_keys = _COMMON_KEYS | allowed
+    projected = {key: value for key, value in payload.items() if key in known_keys}
+    ignored_count = min(
+        sum(1 for key in payload if key not in known_keys),
+        MAX_IGNORED_OPTIONAL_KEY_COUNT,
+    )
+    return projected, ignored_count
+
+
+def _attach_compatibility_receipt(
+    output: dict[str, Any],
+    ignored_optional_key_count: int,
+) -> None:
+    if ignored_optional_key_count <= 0:
+        return
+    receipt = output.get("receipt")
+    if not isinstance(receipt, dict):
+        return
+    receipt["compatibility_note"] = IGNORED_OPTIONAL_REQUEST_KEYS_NOTE
+    receipt["ignored_optional_key_count"] = ignored_optional_key_count
 
 
 def _require_distilled(payload: Mapping[str, Any], operation: str) -> None:
