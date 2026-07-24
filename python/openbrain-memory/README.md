@@ -268,9 +268,14 @@ mcp2cli envelope shape, `{"success":true,"result":{...}}`, and returns only the
 inner tool result. `session_start` must prove the public lane authority fields
 it returns: namespace, session key, and agent (plus project when returned).
 `agent_context_pack` must prove every coordinate in its inner result's top-level
-`scope`. Every direct or fallback semantic operation first validates a fresh live
-`get_contract` result against the reviewed v22 contract, schema version, schema
-hash, and tool versions; compatibility success is never cached across operations
+`scope`, and `agent_reflex_pointers` must prove both that scope and the published
+`openbrain.agent_reflex_pointers.v1` envelope before its projected body-free
+result is surfaced. Every direct or fallback semantic operation first validates a
+fresh live `get_contract` result against the reviewed v23 contract, schema
+version, schema hash, and tool versions — including `agent_reflex_pointers` at its
+published version, so a manifest that omits the reflex or advertises the wrong
+version fails the reflex closed rather than dispatching it; compatibility success
+is never cached across operations
 or from `session_start` into a later write. Append and wrap fallback are accepted
 only after the same fallback instance verified its lane initialization. Unverified
 responses are reported as lost rather than durable success. The local LLM
@@ -296,6 +301,7 @@ Required memory contract methods:
 - `lane_upsert()`
 - `lane_load()`
 - `session_wrap()`
+- `agent_reflex_pointers()`
 - `log_thought()`
 - `search_all()`
 - `upsert_repo_fact()`

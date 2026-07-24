@@ -280,6 +280,63 @@ class LaneAwareTransport:
         )
 
 
+class ReflexContractGapTransport(LaneAwareTransport):
+    """Serve a v23 manifest with the reflex tool omitted or version-downgraded.
+
+    Every other tool behaves normally so the runtime reaches the contract gate,
+    but ``get_contract`` returns a manifest that fails to publish
+    ``agent_reflex_pointers`` at its required version. The reflex must never
+    dispatch against such a manifest.
+    """
+
+    def __init__(self, *, mode: str) -> None:
+        super().__init__()
+        self.mode = mode
+
+    def _tampered_manifest(self) -> dict[str, Any]:
+        manifest = runtime_contract_manifest()
+        if self.mode == "omit_capability":
+            manifest["capabilities"] = [
+                capability
+                for capability in manifest["capabilities"]
+                if capability["name"] != "agent_reflex_pointers"
+            ]
+        elif self.mode == "omit_tool_contract":
+            del manifest["tool_contracts"]["agent_reflex_pointers"]
+        elif self.mode == "wrong_version":
+            for capability in manifest["capabilities"]:
+                if capability["name"] == "agent_reflex_pointers":
+                    capability["version"] = 0
+            manifest["tool_contracts"]["agent_reflex_pointers"]["version"] = 0
+        elif self.mode == "malformed_version":
+            manifest["tool_contracts"]["agent_reflex_pointers"]["version"] = ""
+        else:  # pragma: no cover - defensive
+            raise AssertionError(f"unknown contract-gap mode: {self.mode}")
+        return manifest
+
+    def post(
+        self,
+        url: str,
+        *,
+        headers: Mapping[str, str],
+        json_body: Mapping[str, Any],
+        timeout: float,
+    ) -> TransportResponse:
+        if json_body.get("method") == "tools/call":
+            params = json_body["params"]
+            if params.get("name") == "get_contract":
+                self.requests.append(
+                    {
+                        "url": url,
+                        "headers": dict(headers),
+                        "json": dict(json_body),
+                        "timeout": timeout,
+                    }
+                )
+                return self._tool_result(json_body["id"], self._tampered_manifest())
+        return super().post(url, headers=headers, json_body=json_body, timeout=timeout)
+
+
 class FailingReplayTransport(LaneAwareTransport):
     """Fail one replay tool call with a sentinel-bearing error body.
 
@@ -315,9 +372,7 @@ class FailingReplayTransport(LaneAwareTransport):
                     }
                 )
                 return self._tool_error(json_body["id"], self.error_body)
-        return super().post(
-            url, headers=headers, json_body=json_body, timeout=timeout
-        )
+        return super().post(url, headers=headers, json_body=json_body, timeout=timeout)
 
 
 class ForeignLaneTamperingTransport(LaneAwareTransport):
@@ -482,6 +537,23 @@ class ReflexClient(StartThenFailClient):
             "citations": [],
             "query": arguments["query"],
         }
+
+
+class EnvelopeReflexClient(StartThenFailClient):
+    """Return a caller-supplied reflex envelope verbatim.
+
+    Lets a test hand the runtime a specific server-shaped (or hostile) envelope
+    and prove the projector's behavior end to end without a transport.
+    """
+
+    def __init__(self, envelope: Mapping[str, Any]) -> None:
+        super().__init__()
+        self.envelope = dict(envelope)
+        self.observed_arguments: list[dict[str, Any]] = []
+
+    def agent_reflex_pointers(self, **arguments: Any) -> dict[str, Any]:
+        self.observed_arguments.append(dict(arguments))
+        return dict(self.envelope)
 
 
 class FakeSpool:

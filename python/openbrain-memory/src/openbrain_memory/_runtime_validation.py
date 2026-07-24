@@ -126,8 +126,7 @@ def validate_reflex_scope(
         raise ValueError("agent_reflex_pointers result missing scope")
     if result.get("schema") != REFLEX_ENVELOPE_SCHEMA:
         raise ValueError(
-            "agent_reflex_pointers result is not the "
-            f"{REFLEX_ENVELOPE_SCHEMA} envelope"
+            f"agent_reflex_pointers result is not the {REFLEX_ENVELOPE_SCHEMA} envelope"
         )
     candidate = result.get("scope")
     if not isinstance(candidate, Mapping):
@@ -137,6 +136,388 @@ def validate_reflex_scope(
         exact_scope_fields(namespace, scope),
         "agent_reflex_pointers result",
     )
+
+
+REFLEX_STATUSES = {"ok", "degraded", "error"}
+REFLEX_POINTERS_LABEL = "pointers"
+REFLEX_CITATION_KIND = "pointer"
+MAX_REFLEX_POINTER_ITEMS = 500
+MAX_TIER_CHARS = 100
+MAX_TIMESTAMP_CHARS = 100
+MAX_EMPTY_REASON_CHARS = 200
+MAX_STATUS_CHARS = 100
+MAX_REFLEX_WARNING_ITEMS = 200
+MAX_WARNING_SCALAR_CHARS = 200
+
+_POINTER_ITEM_KEYS = {
+    "id",
+    "source_type",
+    "namespace",
+    "tier",
+    "created_at",
+    "updated_at",
+    "citation_id",
+    "source_ref",
+}
+_CITATION_KEYS = {"id", "kind", "source_ref"}
+_WARNING_CHANNELS = ("scope_denials", "degraded_sources", "truncation")
+_CONTEXT_PACK_SECTION_NAMES = {
+    "working_set",
+    "recovery",
+    "durable_lane_context",
+    "durable_memory",
+    "profile_guidance",
+    "process_guidance",
+    "repo_facts",
+    "pointers",
+    "candidate_memory",
+}
+
+
+def project_reflex_result(
+    result: Any,
+    namespace: str,
+    scope: RuntimeScopeCoordinates,
+) -> dict[str, Any]:
+    """Return a freshly built, body-free ``agent_reflex_pointers.v1`` envelope.
+
+    The runtime must never hand an agent an arbitrary server payload. This
+    validates and projects every top-level truth of the published reflex
+    envelope and rebuilds a new mapping from scratch: it never mutates or returns
+    the untrusted original, and it copies no nested value it has not explicitly
+    allowlisted as content-free. Any missing invariant, broken pointer/citation
+    bijection, raw body/display/private field, or unknown key raises
+    ``ValueError`` so the reflex fails closed with a content-free receipt.
+    """
+    validate_reflex_scope(result, namespace, scope)
+    assert isinstance(result, Mapping)  # validate_reflex_scope proved this
+
+    status = _bounded_text(result.get("status"), "status", MAX_STATUS_CHARS)
+    if status not in REFLEX_STATUSES:
+        raise ValueError("agent_reflex_pointers status is not a published status")
+    if result.get("placement") != "client_owned":
+        raise ValueError("agent_reflex_pointers placement must be client_owned")
+    if result.get("resolvable_reference_only") is not True:
+        raise ValueError("agent_reflex_pointers resolvable_reference_only must be true")
+    query = _bounded_text(result.get("query"), "query", MAX_REFLEX_QUERY_CHARS)
+
+    pointers, emitted_citation_ids = _project_reflex_pointers(result.get("pointers"))
+    citations = _project_reflex_citations(result.get("citations"), emitted_citation_ids)
+
+    scope_candidate = result.get("scope")
+    assert isinstance(scope_candidate, Mapping)  # proven by validate_reflex_scope
+
+    return {
+        "schema": REFLEX_ENVELOPE_SCHEMA,
+        "status": status,
+        "placement": "client_owned",
+        "resolvable_reference_only": True,
+        "scope": _project_reflex_scope(scope_candidate, namespace, scope),
+        "pointers": pointers,
+        "warnings": _project_reflex_warnings(result.get("warnings")),
+        "budget": _project_reflex_budget(result.get("budget")),
+        "citations": citations,
+        "query": query,
+    }
+
+
+def _project_reflex_scope(
+    candidate: Mapping[str, Any],
+    namespace: str,
+    scope: RuntimeScopeCoordinates,
+) -> dict[str, Any]:
+    projected: dict[str, Any] = dict(exact_scope_fields(namespace, scope))
+    source = candidate.get("namespace_source")
+    if source is not None:
+        projected["namespace_source"] = _bounded_text(
+            source, "scope.namespace_source", MAX_WARNING_SCALAR_CHARS
+        )
+    return projected
+
+
+def _project_reflex_pointers(value: Any) -> tuple[dict[str, Any], list[str]]:
+    if not isinstance(value, Mapping):
+        raise ValueError("agent_reflex_pointers pointers section must be an object")
+    if value.get("label") != REFLEX_POINTERS_LABEL:
+        raise ValueError("pointers section label must be 'pointers'")
+    if value.get("namespace_scoped") is not True:
+        raise ValueError("pointers section must be namespace_scoped")
+    if value.get("resolvable_reference_only") is not True:
+        raise ValueError("pointers section resolvable_reference_only must be true")
+    if not isinstance(value.get("truncated"), bool):
+        raise ValueError("pointers section truncated must be a boolean")
+
+    raw_items = value.get("items")
+    if not isinstance(raw_items, Sequence) or isinstance(raw_items, (str, bytes)):
+        raise ValueError("pointers section items must be an array")
+    if len(raw_items) > MAX_REFLEX_POINTER_ITEMS:
+        raise ValueError(f"pointers section exceeds {MAX_REFLEX_POINTER_ITEMS} items")
+
+    items: list[dict[str, Any]] = []
+    citation_ids: list[str] = []
+    for raw in raw_items:
+        item, citation_id = _project_pointer_item(raw)
+        items.append(item)
+        citation_ids.append(citation_id)
+
+    item_count = value.get("item_count")
+    if isinstance(item_count, bool) or not isinstance(item_count, int):
+        raise ValueError("pointers section item_count must be an integer")
+    if item_count != len(items):
+        raise ValueError("pointers section item_count does not match emitted items")
+
+    if len(set(citation_ids)) != len(citation_ids):
+        raise ValueError("pointers section emitted duplicate citation ids")
+
+    projected: dict[str, Any] = {
+        "label": REFLEX_POINTERS_LABEL,
+        "namespace_scoped": True,
+        "resolvable_reference_only": True,
+        "items": items,
+        "item_count": len(items),
+        "truncated": bool(value.get("truncated")),
+    }
+    if "empty_reason" in value:
+        if items:
+            raise ValueError("pointers section empty_reason set with emitted items")
+        projected["empty_reason"] = _bounded_text(
+            value.get("empty_reason"),
+            "pointers.empty_reason",
+            MAX_EMPTY_REASON_CHARS,
+        )
+    return projected, citation_ids
+
+
+def _project_pointer_item(value: Any) -> tuple[dict[str, Any], str]:
+    if not isinstance(value, Mapping):
+        raise ValueError("pointer item must be an object")
+    unknown = {str(key) for key in value if key not in _POINTER_ITEM_KEYS}
+    if unknown:
+        raise ValueError(
+            "pointer item carries unsupported field(s): " + ", ".join(sorted(unknown))
+        )
+    citation_id = _bounded_text(
+        value.get("citation_id"), "pointer.citation_id", MAX_CITATION_ID_CHARS
+    )
+    item: dict[str, Any] = {
+        "id": _bounded_text(value.get("id"), "pointer.id", MAX_SOURCE_REF_ID_CHARS),
+        "source_type": _bounded_text(
+            value.get("source_type"),
+            "pointer.source_type",
+            MAX_SOURCE_REF_TYPE_CHARS,
+        ),
+        "namespace": _nullable_bounded_text(
+            value.get("namespace"),
+            "pointer.namespace",
+            MAX_SOURCE_REF_NAMESPACE_CHARS,
+        ),
+        "tier": _nullable_bounded_text(
+            value.get("tier"), "pointer.tier", MAX_TIER_CHARS
+        ),
+        "created_at": _bounded_text(
+            value.get("created_at"), "pointer.created_at", MAX_TIMESTAMP_CHARS
+        ),
+        "updated_at": _nullable_bounded_text(
+            value.get("updated_at"), "pointer.updated_at", MAX_TIMESTAMP_CHARS
+        ),
+        "citation_id": citation_id,
+        "source_ref": _project_structural_source_ref(
+            value.get("source_ref"), "pointer.source_ref"
+        ),
+    }
+    return item, citation_id
+
+
+def _project_reflex_citations(
+    value: Any,
+    emitted_citation_ids: Sequence[str],
+) -> list[dict[str, Any]]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        raise ValueError("agent_reflex_pointers citations must be an array")
+    citations: list[dict[str, Any]] = []
+    citation_ids: list[str] = []
+    for raw in value:
+        if not isinstance(raw, Mapping):
+            raise ValueError("citation must be an object")
+        unknown = {str(key) for key in raw if key not in _CITATION_KEYS}
+        if unknown:
+            raise ValueError(
+                "citation carries unsupported field(s): " + ", ".join(sorted(unknown))
+            )
+        if raw.get("kind") != REFLEX_CITATION_KIND:
+            raise ValueError("citation kind must be 'pointer'")
+        citation_id = _bounded_text(raw.get("id"), "citation.id", MAX_CITATION_ID_CHARS)
+        citations.append(
+            {
+                "id": citation_id,
+                "kind": REFLEX_CITATION_KIND,
+                "source_ref": _project_structural_source_ref(
+                    raw.get("source_ref"), "citation.source_ref"
+                ),
+            }
+        )
+        citation_ids.append(citation_id)
+    if sorted(citation_ids) != sorted(emitted_citation_ids):
+        raise ValueError("citations are not a bijection with the emitted pointer items")
+    return citations
+
+
+def _project_structural_source_ref(value: Any, name: str) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{name} must be a structural object")
+    unknown = {str(key) for key in value if key not in _SOURCE_REF_OBJECT_KEYS}
+    if unknown:
+        raise ValueError(
+            f"{name} carries unsupported field(s): " + ", ".join(sorted(unknown))
+        )
+    structural: dict[str, Any] = {
+        "source": _bounded_text(
+            value.get("source"), f"{name}.source", MAX_SOURCE_REF_SOURCE_CHARS
+        ),
+        "type": _bounded_text(
+            value.get("type"), f"{name}.type", MAX_SOURCE_REF_TYPE_CHARS
+        ),
+        "id": _bounded_text(value.get("id"), f"{name}.id", MAX_SOURCE_REF_ID_CHARS),
+    }
+    if "namespace" in value:
+        structural["namespace"] = _nullable_bounded_text(
+            value.get("namespace"),
+            f"{name}.namespace",
+            MAX_SOURCE_REF_NAMESPACE_CHARS,
+        )
+    return structural
+
+
+def _project_reflex_warnings(value: Any) -> dict[str, list[dict[str, Any]]]:
+    warnings: dict[str, list[dict[str, Any]]] = {
+        channel: [] for channel in _WARNING_CHANNELS
+    }
+    if value is None:
+        return warnings
+    if not isinstance(value, Mapping):
+        raise ValueError("agent_reflex_pointers warnings must be an object")
+    for channel in _WARNING_CHANNELS:
+        entries = value.get(channel)
+        if entries is None:
+            continue
+        if not isinstance(entries, Sequence) or isinstance(entries, (str, bytes)):
+            raise ValueError(f"warnings.{channel} must be an array")
+        if len(entries) > MAX_REFLEX_WARNING_ITEMS:
+            raise ValueError(f"warnings.{channel} exceeds the bounded item count")
+        warnings[channel] = [
+            _project_warning_entry(channel, entry) for entry in entries
+        ]
+    return warnings
+
+
+def _project_warning_entry(channel: str, value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError("warning entry must be an object")
+    source = value.get("source")
+    if channel == "scope_denials":
+        reasons = value.get("reasons")
+        if source != "durable_memory" or reasons != ["no_readable_tables"]:
+            raise ValueError("scope denial is not a published reflex warning")
+        return {"source": "durable_memory", "reasons": ["no_readable_tables"]}
+    if channel == "degraded_sources":
+        if source != "durable_memory" or value.get("reason") != "recall_failed":
+            raise ValueError("degraded source is not a published reflex warning")
+        return {"source": "durable_memory", "reason": "recall_failed"}
+    if source == "pointers.items":
+        max_items = _bounded_nonnegative_int(
+            value.get("max_items"), "warning.max_items"
+        )
+        if max_items > MAX_REFLEX_POINTER_ITEMS:
+            raise ValueError("warning.max_items exceeds the pointer item bound")
+        return {"source": "pointers.items", "max_items": max_items}
+    if source == "pointers" and value.get("reason") == "whole_pack_budget":
+        projected: dict[str, Any] = {
+            "source": "pointers",
+            "reason": "whole_pack_budget",
+            "max_chars": _bounded_nonnegative_int(
+                value.get("max_chars"), "warning.max_chars"
+            ),
+        }
+        if "starved" in value:
+            if value.get("starved") is not True:
+                raise ValueError("warning.starved must be true when present")
+            projected["starved"] = True
+        return projected
+    raise ValueError("truncation entry is not a published reflex warning")
+
+
+def _project_reflex_budget(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError("agent_reflex_pointers budget must be an object")
+    budget: dict[str, Any] = {}
+    if "requested" in value:
+        budget["requested"] = _project_requested_budget(value.get("requested"))
+    if "whole_pack" in value:
+        budget["whole_pack"] = _project_whole_pack_budget(value.get("whole_pack"))
+    return budget
+
+
+def _project_requested_budget(value: Any) -> dict[str, int] | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise ValueError("budget.requested must be an object")
+    requested: dict[str, int] = {}
+    if "max_tokens" in value:
+        max_tokens = _bounded_nonnegative_int(
+            value.get("max_tokens"), "budget.requested.max_tokens"
+        )
+        if not 100 <= max_tokens <= 20_000:
+            raise ValueError("budget.requested.max_tokens is out of range")
+        requested["max_tokens"] = max_tokens
+    if "max_latency_ms" in value:
+        max_latency_ms = _bounded_nonnegative_int(
+            value.get("max_latency_ms"), "budget.requested.max_latency_ms"
+        )
+        if not 1 <= max_latency_ms <= 10_000:
+            raise ValueError("budget.requested.max_latency_ms is out of range")
+        requested["max_latency_ms"] = max_latency_ms
+    return requested
+
+
+def _project_whole_pack_budget(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError("budget.whole_pack must be an object")
+    content_char_limit = _bounded_nonnegative_int(
+        value.get("content_char_limit"), "budget.whole_pack.content_char_limit"
+    )
+    content_chars_used = _bounded_nonnegative_int(
+        value.get("content_chars_used"), "budget.whole_pack.content_chars_used"
+    )
+    if content_chars_used > content_char_limit:
+        raise ValueError("budget.whole_pack usage exceeds its limit")
+    order = value.get("allocation_order")
+    if not isinstance(order, Sequence) or isinstance(order, (str, bytes)):
+        raise ValueError("budget.whole_pack.allocation_order must be an array")
+    allocation_order = []
+    for entry in order:
+        if entry not in _CONTEXT_PACK_SECTION_NAMES:
+            raise ValueError("budget allocation order contains an unknown section")
+        allocation_order.append(entry)
+    return {
+        "content_char_limit": content_char_limit,
+        "content_chars_used": content_chars_used,
+        "allocation_order": allocation_order,
+    }
+
+
+def _bounded_nonnegative_int(value: Any, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{name} must be a non-negative integer")
+    return value
+
+
+def _nullable_bounded_text(value: Any, name: str, maximum: int) -> str | None:
+    if value is None:
+        return None
+    return _bounded_text(value, name, maximum)
 
 
 def reflex_query(value: Any) -> str:
@@ -181,9 +562,7 @@ def _sanitize_prior_context_reference(item: Any) -> dict[str, Any]:
     if "source_ref" in item:
         reference["source_ref"] = _sanitize_source_ref(item["source_ref"])
     if not reference:
-        raise ValueError(
-            "prior_context reference requires citation_id or source_ref"
-        )
+        raise ValueError("prior_context reference requires citation_id or source_ref")
     return reference
 
 

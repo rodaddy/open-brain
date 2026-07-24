@@ -2,21 +2,91 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from openbrain_memory import FirstClassMemoryRuntime, ReceiptStatus
 from openbrain_memory.cli import execute_json
 
 from ._runtime_fakes import (
+    EnvelopeReflexClient,
     FakeRunner,
     LaneAwareTransport,
     ReflexClient,
+    ReflexContractGapTransport,
     StartThenFailClient,
     request_payload,
     runtime_config,
     runtime_scope,
     tool_calls,
 )
+
+
+def _reflex_tool_calls(transport: LaneAwareTransport) -> list[dict[str, Any]]:
+    return [
+        call
+        for call in tool_calls(transport)
+        if call["params"]["name"] == "agent_reflex_pointers"
+    ]
+
+
+def _server_reflex_envelope(arguments: dict[str, Any]) -> dict[str, Any]:
+    """A valid server-shaped v1 reflex envelope with one cited pointer item."""
+    return {
+        "schema": "openbrain.agent_reflex_pointers.v1",
+        "status": "ok",
+        "placement": "client_owned",
+        "resolvable_reference_only": True,
+        "scope": {
+            "namespace": "bilby",
+            "namespace_source": "authorization",
+            "session_key": arguments["session_key"],
+            "agent": arguments["agent"],
+            "platform": arguments["platform"],
+            "server_id": arguments["server_id"],
+            "channel_id": arguments["channel_id"],
+            "thread_id": arguments.get("thread_id"),
+        },
+        "pointers": {
+            "label": "pointers",
+            "namespace_scoped": True,
+            "resolvable_reference_only": True,
+            "items": [
+                {
+                    "id": "row-1",
+                    "source_type": "thought",
+                    "namespace": "bilby",
+                    "tier": None,
+                    "created_at": "2026-07-01T00:00:00.000Z",
+                    "updated_at": None,
+                    "citation_id": "cit-1",
+                    "source_ref": {
+                        "source": "thoughts",
+                        "type": "thought",
+                        "id": "row-1",
+                        "namespace": "bilby",
+                    },
+                }
+            ],
+            "item_count": 1,
+            "truncated": False,
+        },
+        "warnings": {"scope_denials": [], "degraded_sources": [], "truncation": []},
+        "budget": {"requested": None},
+        "citations": [
+            {
+                "kind": "pointer",
+                "id": "cit-1",
+                "source_ref": {
+                    "source": "thoughts",
+                    "type": "thought",
+                    "id": "row-1",
+                    "namespace": "bilby",
+                },
+            }
+        ],
+        "query": arguments["query"],
+    }
 
 
 def test_reflex_sends_exact_scope_query_and_bounded_budget() -> None:
@@ -343,3 +413,329 @@ def test_reflex_cli_rejects_unsupported_and_body_bearing_input() -> None:
     assert body_bearing["receipt"]["status"] == "failed"
     assert non_object_reference["receipt"]["status"] == "failed"
     assert tool_calls(transport) == []
+
+
+# --- Finding #1: reflex requires the published contract tool version ---------
+
+
+def test_reflex_never_dispatches_when_contract_omits_reflex_capability() -> None:
+    for mode in ("omit_capability", "omit_tool_contract", "wrong_version"):
+        transport = ReflexContractGapTransport(mode=mode)
+        runtime = FirstClassMemoryRuntime(
+            runtime_config(), runtime_scope(), transport=transport
+        )
+
+        output = runtime.reflex("contract must prove the reflex")
+
+        # No reflex dispatch happened: the contract gate rejected the runtime
+        # before any agent_reflex_pointers call could reach the transport.
+        assert _reflex_tool_calls(transport) == [], mode
+        # The receipt is a content-free FAILED read: no durable claim, no body.
+        assert output.receipt.status is ReceiptStatus.FAILED, mode
+        assert output.receipt.durable is False, mode
+        assert output.result == {}, mode
+        serialized = json.dumps(output.as_dict())
+        assert "how does spool" not in serialized, mode
+
+
+def test_reflex_never_dispatches_when_contract_reflex_version_malformed() -> None:
+    transport = ReflexContractGapTransport(mode="malformed_version")
+    runtime = FirstClassMemoryRuntime(
+        runtime_config(), runtime_scope(), transport=transport
+    )
+
+    output = runtime.reflex("malformed reflex version")
+
+    assert _reflex_tool_calls(transport) == []
+    assert output.receipt.status is ReceiptStatus.FAILED
+    assert output.result == {}
+
+
+# --- Finding #2: reflex result is validated and projected, never raw ---------
+
+
+def test_reflex_projects_valid_server_envelope_into_body_free_result() -> None:
+    scope = runtime_scope()
+    envelope = _server_reflex_envelope(
+        {
+            "session_key": scope.session_key,
+            "agent": scope.agent,
+            "platform": scope.platform,
+            "server_id": scope.server_id,
+            "channel_id": scope.channel_id,
+            "thread_id": scope.thread_id,
+            "query": "valid envelope",
+        }
+    )
+    runtime = FirstClassMemoryRuntime(
+        runtime_config(), scope, client=EnvelopeReflexClient(envelope)
+    )
+
+    output = runtime.reflex("valid envelope")
+
+    assert output.receipt.status is ReceiptStatus.DIRECT
+    result = output.result
+    assert result is not None
+    assert result["schema"] == "openbrain.agent_reflex_pointers.v1"
+    assert result["placement"] == "client_owned"
+    assert result["resolvable_reference_only"] is True
+    assert result["status"] == "ok"
+    assert result["query"] == "valid envelope"
+
+    pointers = result["pointers"]
+    assert pointers["label"] == "pointers"
+    assert pointers["namespace_scoped"] is True
+    assert pointers["resolvable_reference_only"] is True
+    assert pointers["item_count"] == 1
+    assert pointers["truncated"] is False
+    item = pointers["items"][0]
+    assert set(item) == {
+        "id",
+        "source_type",
+        "namespace",
+        "tier",
+        "created_at",
+        "updated_at",
+        "citation_id",
+        "source_ref",
+    }
+    assert set(item["source_ref"]) == {"source", "type", "id", "namespace"}
+
+    citations = result["citations"]
+    assert [citation["kind"] for citation in citations] == ["pointer"]
+    # Bijection: every emitted pointer's citation_id is exactly the citation set.
+    assert {p["citation_id"] for p in pointers["items"]} == {c["id"] for c in citations}
+    assert set(result["warnings"]) == {
+        "scope_denials",
+        "degraded_sources",
+        "truncation",
+    }
+
+
+def test_reflex_projects_away_body_and_unknown_pointer_fields() -> None:
+    scope = runtime_scope()
+    envelope = _server_reflex_envelope(
+        {
+            "session_key": scope.session_key,
+            "agent": scope.agent,
+            "platform": scope.platform,
+            "server_id": scope.server_id,
+            "channel_id": scope.channel_id,
+            "thread_id": scope.thread_id,
+            "query": "hostile envelope",
+        }
+    )
+    # A hostile server tries to smuggle a raw body and an unknown display field
+    # onto the pointer item, and an arbitrary nested value onto the envelope.
+    envelope["pointers"]["items"][0]["content"] = "raw remembered secret body"
+    envelope["pointers"]["items"][0]["preview"] = "leaked preview"
+    envelope["injected_top_level"] = {"nested": "arbitrary server payload"}
+    runtime = FirstClassMemoryRuntime(
+        runtime_config(), scope, client=EnvelopeReflexClient(envelope)
+    )
+
+    output = runtime.reflex("hostile envelope")
+
+    # A body-bearing pointer item is a hard invariant break: fail closed.
+    assert output.receipt.status is ReceiptStatus.FAILED
+    assert output.result == {}
+    serialized = json.dumps(output.as_dict())
+    assert "raw remembered secret body" not in serialized
+    assert "leaked preview" not in serialized
+    assert "arbitrary server payload" not in serialized
+
+
+def test_reflex_result_projection_strips_unknown_top_level_and_warning_fields() -> None:
+    scope = runtime_scope()
+    envelope = _server_reflex_envelope(
+        {
+            "session_key": scope.session_key,
+            "agent": scope.agent,
+            "platform": scope.platform,
+            "server_id": scope.server_id,
+            "channel_id": scope.channel_id,
+            "thread_id": scope.thread_id,
+            "query": "extra fields",
+        }
+    )
+    # An unknown top-level envelope key must never survive projection; a warning
+    # entry carrying an arbitrary nested body must be reduced to its content-free
+    # scalar markers only.
+    envelope["memory_bodies"] = ["a whole remembered paragraph"]
+    envelope["warnings"]["degraded_sources"] = [
+        {"source": "durable_memory", "reason": "recall_failed", "body": "leak"}
+    ]
+    runtime = FirstClassMemoryRuntime(
+        runtime_config(), scope, client=EnvelopeReflexClient(envelope)
+    )
+
+    output = runtime.reflex("extra fields")
+
+    assert output.receipt.status is ReceiptStatus.DIRECT
+    result = output.result
+    assert result is not None
+    assert set(result) == {
+        "schema",
+        "status",
+        "placement",
+        "resolvable_reference_only",
+        "scope",
+        "pointers",
+        "warnings",
+        "budget",
+        "citations",
+        "query",
+    }
+    assert "memory_bodies" not in result
+    degraded = result["warnings"]["degraded_sources"][0]
+    assert degraded == {"source": "durable_memory", "reason": "recall_failed"}
+    serialized = json.dumps(output.as_dict())
+    assert "a whole remembered paragraph" not in serialized
+    assert "leak" not in serialized
+
+
+def test_reflex_rejects_private_text_in_known_warning_fields() -> None:
+    scope = runtime_scope()
+    envelope = _server_reflex_envelope(
+        {
+            "session_key": scope.session_key,
+            "agent": scope.agent,
+            "platform": scope.platform,
+            "server_id": scope.server_id,
+            "channel_id": scope.channel_id,
+            "thread_id": scope.thread_id,
+            "query": "hostile warning",
+        }
+    )
+    private_reason = "customer note alpha omega"
+    envelope["warnings"]["degraded_sources"] = [
+        {"source": "durable_memory", "reason": private_reason}
+    ]
+    runtime = FirstClassMemoryRuntime(
+        runtime_config(), scope, client=EnvelopeReflexClient(envelope)
+    )
+
+    output = runtime.reflex("hostile warning")
+
+    assert output.receipt.status is ReceiptStatus.FAILED
+    assert output.receipt.error == "reflex_result_invalid"
+    assert output.result == {}
+    assert private_reason not in json.dumps(output.as_dict())
+
+
+def test_reflex_rejects_broken_citation_bijection() -> None:
+    scope = runtime_scope()
+    envelope = _server_reflex_envelope(
+        {
+            "session_key": scope.session_key,
+            "agent": scope.agent,
+            "platform": scope.platform,
+            "server_id": scope.server_id,
+            "channel_id": scope.channel_id,
+            "thread_id": scope.thread_id,
+            "query": "bad bijection",
+        }
+    )
+    # The lone citation references a different id than the emitted pointer item.
+    envelope["citations"][0]["id"] = "cit-does-not-match"
+    runtime = FirstClassMemoryRuntime(
+        runtime_config(), scope, client=EnvelopeReflexClient(envelope)
+    )
+
+    output = runtime.reflex("bad bijection")
+
+    assert output.receipt.status is ReceiptStatus.FAILED
+    assert output.result == {}
+
+
+def test_reflex_rejects_broken_pointer_invariants() -> None:
+    scope = runtime_scope()
+    args = {
+        "session_key": scope.session_key,
+        "agent": scope.agent,
+        "platform": scope.platform,
+        "server_id": scope.server_id,
+        "channel_id": scope.channel_id,
+        "thread_id": scope.thread_id,
+        "query": "bad invariants",
+    }
+
+    wrong_count = _server_reflex_envelope(args)
+    wrong_count["pointers"]["item_count"] = 5
+
+    wrong_label = _server_reflex_envelope(args)
+    wrong_label["pointers"]["label"] = "not-pointers"
+
+    not_scoped = _server_reflex_envelope(args)
+    not_scoped["pointers"]["namespace_scoped"] = False
+
+    wrong_kind = _server_reflex_envelope(args)
+    wrong_kind["citations"][0]["kind"] = "durable"
+
+    for hostile in (wrong_count, wrong_label, not_scoped, wrong_kind):
+        runtime = FirstClassMemoryRuntime(
+            runtime_config(), scope, client=EnvelopeReflexClient(hostile)
+        )
+        output = runtime.reflex("bad invariants")
+        assert output.receipt.status is ReceiptStatus.FAILED
+        assert output.result == {}
+
+
+# --- Finding #3: reflex failure receipt error is a stable content-free label -
+
+
+def test_reflex_failure_receipt_error_is_stable_category_without_sentinel() -> None:
+    sentinel = "private-sentinel-9f3c-not-a-secret"
+
+    class SentinelReflexClient(StartThenFailClient):
+        def agent_reflex_pointers(self, **arguments: Any) -> dict[str, Any]:
+            raise RuntimeError(f"reflex dispatch exploded: {sentinel}")
+
+    runtime = FirstClassMemoryRuntime(
+        runtime_config(fallback_enabled=True),
+        runtime_scope(),
+        client=SentinelReflexClient(),
+        fallback_runner=FakeRunner(),
+    )
+
+    output = runtime.reflex("sentinel must not leak")
+
+    assert output.receipt.status is ReceiptStatus.FAILED
+    # The category is stable and content-free; it never echoes exception text.
+    assert output.receipt.error == "reflex_dispatch_failed"
+    # Truthful flags: the read never fell back to mcp2cli.
+    assert output.receipt.direct_attempted is True
+    assert output.receipt.fallback_attempted is False
+    assert output.result == {}
+    # The sentinel is absent from the complete serialized output.
+    serialized = json.dumps(output.as_dict())
+    assert sentinel not in serialized
+
+
+def test_reflex_result_projection_failure_uses_stable_result_category() -> None:
+    sentinel = "hostile-envelope-sentinel-not-a-secret"
+    scope = runtime_scope()
+    envelope = _server_reflex_envelope(
+        {
+            "session_key": scope.session_key,
+            "agent": scope.agent,
+            "platform": scope.platform,
+            "server_id": scope.server_id,
+            "channel_id": scope.channel_id,
+            "thread_id": scope.thread_id,
+            "query": "hostile projection",
+        }
+    )
+    # A hostile server smuggles a sentinel-bearing unknown field onto a pointer.
+    envelope["pointers"]["items"][0]["leaked_field"] = sentinel
+    runtime = FirstClassMemoryRuntime(
+        runtime_config(), scope, client=EnvelopeReflexClient(envelope)
+    )
+
+    output = runtime.reflex("hostile projection")
+
+    assert output.receipt.status is ReceiptStatus.FAILED
+    assert output.receipt.error == "reflex_result_invalid"
+    assert output.result == {}
+    serialized = json.dumps(output.as_dict())
+    assert sentinel not in serialized

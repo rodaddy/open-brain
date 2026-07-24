@@ -43,6 +43,9 @@ from ._runtime_validation import (
     persisted_text as _validate_persisted_text,
 )
 from ._runtime_validation import (
+    project_reflex_result as _project_reflex_result,
+)
+from ._runtime_validation import (
     reflex_query as _reflex_query,
 )
 from ._runtime_validation import (
@@ -623,9 +626,7 @@ class FirstClassMemoryRuntime:
                 else ReceiptStatus.FAILED
             )
             receipt = self._receipt("recall", status, durable=False)
-            drain = (
-                self._drain_spool() if status is ReceiptStatus.DIRECT else None
-            )
+            drain = self._drain_spool() if status is ReceiptStatus.DIRECT else None
             return RuntimeOutput(receipt=receipt, context=result, drain=drain)
         except Exception as error:
             return RuntimeOutput(
@@ -696,20 +697,34 @@ class FirstClassMemoryRuntime:
                 timeout=local_timeout,
                 **arguments,
             )
+            # Never surface the raw server payload: project the complete
+            # openbrain.agent_reflex_pointers.v1 envelope into a freshly built,
+            # body-free mapping. Any invariant break, raw body/display field, or
+            # broken citation bijection raises here and fails the read closed.
+            try:
+                projected = _project_reflex_result(
+                    result, self.config.namespace, self.scope
+                )
+            except ValueError as error:
+                raise _ReflexResultError from error
             status = (
                 ReceiptStatus(self._router.state.path)
                 if self._router.state.path is not None
                 else ReceiptStatus.FAILED
             )
             receipt = self._receipt("reflex", status, durable=False)
-            return RuntimeOutput(receipt=receipt, result=result)
+            return RuntimeOutput(receipt=receipt, result=projected)
         except Exception as error:
+            # A reflex failure receipt carries a stable content-free category, not
+            # redacted exception text: even a redacted message could echo a
+            # private, non-secret-shaped sentinel from a hostile server body. The
+            # category is derived from the failure kind alone.
             return RuntimeOutput(
                 receipt=self._receipt(
                     "reflex",
                     ReceiptStatus.FAILED,
                     durable=False,
-                    error=error,
+                    error=_reflex_error_category(error),
                 ),
                 result={},
             )
@@ -809,9 +824,7 @@ class FirstClassMemoryRuntime:
             )
             receipt = self._receipt(operation, receipt_status, durable=True)
             drain = (
-                self._drain_spool()
-                if receipt_status is ReceiptStatus.SAVED
-                else None
+                self._drain_spool() if receipt_status is ReceiptStatus.SAVED else None
             )
             return RuntimeOutput(receipt=receipt, result=result, drain=drain)
         except ValueError as error:
@@ -1005,9 +1018,7 @@ class FirstClassMemoryRuntime:
         try:
             if tool == "session_start":
                 scope = (
-                    self._replay_scope
-                    if self._replay_scope is not None
-                    else self.scope
+                    self._replay_scope if self._replay_scope is not None else self.scope
                 )
                 _validate_started_lane(result, self.config.namespace, scope)
             elif tool == "agent_context_pack":
@@ -1050,6 +1061,33 @@ class FirstClassMemoryRuntime:
             spool_key=spool_key,
             error=error_text,
         )
+
+
+class _ReflexResultError(Exception):
+    """A projected reflex envelope failed a body-free invariant.
+
+    Carries no message so a hostile server envelope can never smuggle text into
+    the content-free failure receipt; the stable category is derived from the
+    exception type alone.
+    """
+
+
+# Stable, content-free reflex failure categories. The failure receipt never
+# echoes exception text — a redacted message could still surface a private,
+# non-secret-shaped sentinel from a hostile server body — so the category is
+# derived from the failure kind only.
+_REFLEX_ERROR_REQUEST_INVALID = "reflex_request_invalid"
+_REFLEX_ERROR_RESULT_INVALID = "reflex_result_invalid"
+_REFLEX_ERROR_DISPATCH_FAILED = "reflex_dispatch_failed"
+
+
+def _reflex_error_category(error: BaseException) -> str:
+    """Map a reflex failure to a stable content-free category label."""
+    if isinstance(error, _ReflexResultError):
+        return _REFLEX_ERROR_RESULT_INVALID
+    if isinstance(error, ValueError):
+        return _REFLEX_ERROR_REQUEST_INVALID
+    return _REFLEX_ERROR_DISPATCH_FAILED
 
 
 def _failed_write(operation: str, error: BaseException) -> RuntimeOutput:
