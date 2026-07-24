@@ -305,7 +305,7 @@ export const productionDependencies: LocalCloneLauncherDependencies = {
           SELECT
             current_database() AS database,
             current_user AS user_name,
-            inet_server_addr()::text AS server_address,
+            host(inet_server_addr()) AS server_address,
             inet_server_port() AS server_port,
             current_setting('server_version') AS server_version,
             current_setting('transaction_read_only') AS transaction_read_only,
