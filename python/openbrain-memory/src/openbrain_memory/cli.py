@@ -22,7 +22,13 @@ MAX_JSON_INPUT_BYTES = 64 * 1024
 MAX_JSON_OUTPUT_BYTES = 1_000_000
 _COMMON_KEYS = {"config", "operation", "scope"}
 _OPERATION_KEYS = {
-    "recall": {"max_latency_ms", "max_tokens", "query", "requested_sections"},
+    "recall": {
+        "include_unreviewed_recovery",
+        "max_latency_ms",
+        "max_tokens",
+        "query",
+        "requested_sections",
+    },
     "reflex": {"max_latency_ms", "max_tokens", "prior_context", "query"},
     "capture": {"content", "distilled", "event_type"},
     "checkpoint": {
@@ -142,6 +148,10 @@ def _dispatch(
                 payload,
                 "requested_sections",
             ),
+            include_unreviewed_recovery=_mapping_optional_bool(
+                payload,
+                "include_unreviewed_recovery",
+            ),
         )
     if operation == "reflex":
         return runtime.reflex(
@@ -214,6 +224,15 @@ def _mapping_optional_int(value: Mapping[str, Any], name: str) -> int | None:
         return None
     if isinstance(item, bool) or not isinstance(item, int):
         raise ValueError(f"{name} must be an integer")
+    return item
+
+
+def _mapping_optional_bool(value: Mapping[str, Any], name: str) -> bool | None:
+    item = value.get(name)
+    if item is None:
+        return None
+    if not isinstance(item, bool):
+        raise ValueError(f"{name} must be a boolean")
     return item
 
 

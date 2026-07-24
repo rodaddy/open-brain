@@ -560,6 +560,7 @@ class FirstClassMemoryRuntime:
         max_tokens: int | None = None,
         max_latency_ms: int | None = None,
         requested_sections: Sequence[str] | None = None,
+        include_unreviewed_recovery: bool | None = None,
     ) -> RuntimeOutput:
         """Fail open while recalling the exact-scope server context pack."""
         with self._operation_lock:
@@ -568,6 +569,7 @@ class FirstClassMemoryRuntime:
                 max_tokens=max_tokens,
                 max_latency_ms=max_latency_ms,
                 requested_sections=requested_sections,
+                include_unreviewed_recovery=include_unreviewed_recovery,
             )
 
     def _recall_context(
@@ -577,6 +579,7 @@ class FirstClassMemoryRuntime:
         max_tokens: int | None,
         max_latency_ms: int | None,
         requested_sections: Sequence[str] | None,
+        include_unreviewed_recovery: bool | None = None,
     ) -> RuntimeOutput:
         self._router.reset()
         try:
@@ -610,6 +613,30 @@ class FirstClassMemoryRuntime:
                         f"{', '.join(sorted(unsupported))}"
                     )
                 arguments["requested_sections"] = sections
+            # Runtime-specific projection of an already server-supported
+            # agent_context_pack argument (#371): forward it only when the
+            # caller explicitly opted in, so an omitted flag preserves the
+            # prior request shape exactly. Revalidate boolean-ness here as well
+            # because programmatic callers can bypass the CLI type boundary.
+            if include_unreviewed_recovery is not None:
+                opted_in = _require_bool(
+                    include_unreviewed_recovery,
+                    "include_unreviewed_recovery",
+                )
+                # The server drops the opt-in when requested_sections omits
+                # "recovery"; reject that provably ineffective combination
+                # loudly instead of returning a silently recovery-free pack.
+                if (
+                    opted_in
+                    and requested_sections is not None
+                    and "recovery" not in arguments["requested_sections"]
+                ):
+                    raise ValueError(
+                        "include_unreviewed_recovery=true requires "
+                        "requested_sections to include 'recovery' "
+                        "(or requested_sections to be omitted)"
+                    )
+                arguments["include_unreviewed_recovery"] = opted_in
             local_timeout = (
                 max_latency_ms / 1000 if max_latency_ms is not None else None
             )
@@ -1107,6 +1134,12 @@ def _distilled_content(value: str, name: str) -> str:
 
 def _persisted_text(value: Any, name: str) -> str:
     return _validate_persisted_text(value, name, _reject_secret_payload)
+
+
+def _require_bool(value: Any, name: str) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError(f"{name} must be a boolean")
+    return value
 
 
 def _wrap_metadata(
