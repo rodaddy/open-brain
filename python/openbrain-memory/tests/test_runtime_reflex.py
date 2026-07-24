@@ -668,7 +668,7 @@ def test_reflex_rejects_private_text_in_known_scalar_channels() -> None:
         assert sentinel not in json.dumps(output.as_dict())
 
 
-def test_reflex_binds_pointer_and_citation_references_to_authorization() -> None:
+def test_reflex_binds_pointer_and_citation_reference_identity() -> None:
     scope = runtime_scope()
     arguments = {
         "session_key": scope.session_key,
@@ -706,6 +706,35 @@ def test_reflex_binds_pointer_and_citation_references_to_authorization() -> None
         assert output.receipt.status is ReceiptStatus.FAILED
         assert output.receipt.error == "reflex_result_invalid"
         assert output.result == {}
+
+
+def test_reflex_accepts_authorized_shared_namespace_pointer_identity() -> None:
+    scope = runtime_scope()
+    arguments = {
+        "session_key": scope.session_key,
+        "agent": scope.agent,
+        "platform": scope.platform,
+        "server_id": scope.server_id,
+        "channel_id": scope.channel_id,
+        "thread_id": scope.thread_id,
+        "query": "shared pointer",
+    }
+    envelope = _server_reflex_envelope(arguments)
+    envelope["pointers"]["items"][0]["namespace"] = "shared-kb"
+    envelope["pointers"]["items"][0]["source_ref"]["namespace"] = "shared-kb"
+    envelope["citations"][0]["source_ref"]["namespace"] = "shared-kb"
+    runtime = FirstClassMemoryRuntime(
+        runtime_config(), scope, client=EnvelopeReflexClient(envelope)
+    )
+
+    output = runtime.reflex("shared pointer")
+
+    assert output.receipt.status is ReceiptStatus.DIRECT
+    assert output.result is not None
+    pointer = output.result["pointers"]["items"][0]
+    assert pointer["namespace"] == "shared-kb"
+    assert pointer["source_ref"]["namespace"] == "shared-kb"
+    assert output.result["citations"][0]["source_ref"]["namespace"] == "shared-kb"
 
 
 def test_reflex_rejects_duplicate_or_unbounded_allocation_order() -> None:

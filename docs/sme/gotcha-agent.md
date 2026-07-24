@@ -495,8 +495,9 @@ redacted exception text, which preserves private non-secret-shaped messages.
   validate pointer/citation counts, structural refs, and bijection, rather than
   returning the server mapping after a shallow scope check?
 - Are pointer ids, source types, namespaces, structural source refs, and citations
-  identity-bound to each other and to the auth-derived namespace, rather than
-  checked as independent strings or by citation id alone?
+  identity-bound to each other, while still accepting server-authorized readable
+  namespaces such as `shared-kb` instead of incorrectly forcing every pointer to
+  the envelope scope namespace?
 - Can arbitrary text survive in known query, scope-source, tier, empty-reason,
   warning, or budget fields, or are values omitted or restricted to published
   content-free enums, token shapes, and numeric bounds?

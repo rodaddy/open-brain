@@ -210,12 +210,8 @@ def project_reflex_result(
     if query != expected_query:
         raise ValueError("agent_reflex_pointers query does not match the request")
 
-    pointers, emitted_references = _project_reflex_pointers(
-        result.get("pointers"), namespace
-    )
-    citations = _project_reflex_citations(
-        result.get("citations"), emitted_references, namespace
-    )
+    pointers, emitted_references = _project_reflex_pointers(result.get("pointers"))
+    citations = _project_reflex_citations(result.get("citations"), emitted_references)
 
     scope_candidate = result.get("scope")
     assert isinstance(scope_candidate, Mapping)  # proven by validate_reflex_scope
@@ -248,7 +244,6 @@ def _project_reflex_scope(
 
 def _project_reflex_pointers(
     value: Any,
-    namespace: str,
 ) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
     if not isinstance(value, Mapping):
         raise ValueError("agent_reflex_pointers pointers section must be an object")
@@ -270,7 +265,7 @@ def _project_reflex_pointers(
     items: list[dict[str, Any]] = []
     references: dict[str, dict[str, Any]] = {}
     for raw in raw_items:
-        item, citation_id, source_ref = _project_pointer_item(raw, namespace)
+        item, citation_id, source_ref = _project_pointer_item(raw)
         if citation_id in references:
             raise ValueError("pointers section emitted duplicate citation ids")
         items.append(item)
@@ -302,7 +297,6 @@ def _project_reflex_pointers(
 
 def _project_pointer_item(
     value: Any,
-    namespace: str,
 ) -> tuple[dict[str, Any], str, dict[str, Any]]:
     if not isinstance(value, Mapping):
         raise ValueError("pointer item must be an object")
@@ -315,9 +309,11 @@ def _project_pointer_item(
     source_type = value.get("source_type")
     if source_type not in REFLEX_SOURCE_TYPES:
         raise ValueError("pointer.source_type is not a published brain source type")
-    pointer_namespace = value.get("namespace")
-    if pointer_namespace != namespace:
-        raise ValueError("pointer.namespace does not match the authorized namespace")
+    pointer_namespace = _bounded_text(
+        value.get("namespace"),
+        "pointer.namespace",
+        MAX_SOURCE_REF_NAMESPACE_CHARS,
+    )
     tier = value.get("tier")
     if tier is not None and tier not in REFLEX_TIERS:
         raise ValueError("pointer.tier is not a published tier")
@@ -328,7 +324,7 @@ def _project_pointer_item(
     if citation_id != expected_citation_id:
         raise ValueError("pointer.citation_id does not match pointer identity")
     source_ref = _project_structural_source_ref(
-        value.get("source_ref"), "pointer.source_ref", namespace
+        value.get("source_ref"), "pointer.source_ref", pointer_namespace
     )
     if (
         source_ref["source"] != REFLEX_SOURCE_REF_SOURCE
@@ -339,7 +335,7 @@ def _project_pointer_item(
     item: dict[str, Any] = {
         "id": record_id,
         "source_type": source_type,
-        "namespace": namespace,
+        "namespace": pointer_namespace,
         "tier": tier,
         "created_at": _iso_timestamp(value.get("created_at"), "pointer.created_at"),
         "updated_at": _nullable_iso_timestamp(
@@ -354,7 +350,6 @@ def _project_pointer_item(
 def _project_reflex_citations(
     value: Any,
     emitted_references: Mapping[str, Mapping[str, Any]],
-    namespace: str,
 ) -> list[dict[str, Any]]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
         raise ValueError("agent_reflex_pointers citations must be an array")
@@ -373,10 +368,15 @@ def _project_reflex_citations(
         citation_id = _bounded_text(raw.get("id"), "citation.id", MAX_CITATION_ID_CHARS)
         if citation_id in citation_ids:
             raise ValueError("citations contain a duplicate pointer id")
+        expected_source_ref = emitted_references.get(citation_id)
+        if expected_source_ref is None:
+            raise ValueError("citation does not identify an emitted pointer")
         source_ref = _project_structural_source_ref(
-            raw.get("source_ref"), "citation.source_ref", namespace
+            raw.get("source_ref"),
+            "citation.source_ref",
+            str(expected_source_ref["namespace"]),
         )
-        if emitted_references.get(citation_id) != source_ref:
+        if expected_source_ref != source_ref:
             raise ValueError("citation source_ref does not match its emitted pointer")
         citations.append(
             {
@@ -411,7 +411,7 @@ def _project_structural_source_ref(
         raise ValueError(f"{name}.type is not a published brain source type")
     source_namespace = value.get("namespace")
     if source_namespace != namespace:
-        raise ValueError(f"{name}.namespace does not match authorization")
+        raise ValueError(f"{name}.namespace does not match pointer identity")
     return {
         "source": REFLEX_SOURCE_REF_SOURCE,
         "type": source_type,
