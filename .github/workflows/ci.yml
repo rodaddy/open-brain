@@ -56,9 +56,17 @@ jobs:
         run: bunx tsc --noEmit
 
       - name: Create isolated test databases
+        # Pin UTF8 explicitly (-E UTF8 -T template0). A bare `createdb` inherits
+        # the runner cluster's template1 encoding; a cluster initialized with a
+        # C/POSIX locale and no explicit encoding defaults to SQL_ASCII, under
+        # which the snowball stemmers split multibyte accented characters (ä, ó)
+        # and every non-English FTS ranking assertion (#341) silently fails while
+        # ASCII-only English passes. Open Brain is UTF8 in production, so a
+        # non-UTF8 test DB is simply an invalid harness. `-T template0` is
+        # required because a new encoding cannot be chosen when copying template1.
         run: |
-          PGPASSWORD="${DB_PASSWORD}" createdb -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" "${DB_NAME}"
-          PGPASSWORD="${DB_PASSWORD}" createdb -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" "${DB_NAME_TEST}"
+          PGPASSWORD="${DB_PASSWORD}" createdb -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -E UTF8 -T template0 "${DB_NAME}"
+          PGPASSWORD="${DB_PASSWORD}" createdb -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -E UTF8 -T template0 "${DB_NAME_TEST}"
           PGPASSWORD="${DB_PASSWORD}" psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME}" \
             -v ON_ERROR_STOP=1 \
             -c "CREATE EXTENSION IF NOT EXISTS vector;"
@@ -180,10 +188,15 @@ jobs:
           exit 1
 
       - name: Create isolated migration-test database
+        # Pin UTF8 (ENCODING 'UTF8' TEMPLATE template0) for the same reason as
+        # the `check` job: the snowball stemmers require UTF8 to fold multibyte
+        # accented characters. The pgvector image's open_brain_ci defaults to
+        # UTF8, but this migration-test DB is created explicitly, so pin it too
+        # so a future base-image change cannot regress the #341 FTS suite.
         run: |
           PGPASSWORD=ci psql -h 127.0.0.1 -p "${DB_PORT}" -U ci -d open_brain_ci \
             -v ON_ERROR_STOP=1 \
-            -c "CREATE DATABASE ${DB_NAME_TEST};"
+            -c "CREATE DATABASE ${DB_NAME_TEST} ENCODING 'UTF8' TEMPLATE template0;"
           PGPASSWORD=ci psql -h 127.0.0.1 -p "${DB_PORT}" -U ci -d "${DB_NAME_TEST}" \
             -v ON_ERROR_STOP=1 \
             -c "CREATE EXTENSION IF NOT EXISTS vector;"

@@ -25,25 +25,39 @@ import { readFileSync } from "node:fs";
 // Required live-Postgres suites and the minimum executed testcase count each
 // must contribute. Counts are lower bounds: adding tests must not require
 // touching this guard, but deleting/skipping them will trip it.
-export const REQUIRED_SUITES: ReadonlyArray<{ name: string; minTests: number }> =
-  [
-    { name: "lane_upsert (live Postgres)", minTests: 2 },
-    { name: "promote_shared (live Postgres)", minTests: 1 },
-    { name: "tier_lane (live Postgres)", minTests: 2 },
-    {
-      name: "append_session_event create_if_missing (live Postgres)",
-      minTests: 4,
-    },
-    { name: "runSharedPromoter cursor-stall fix (live Postgres)", minTests: 8 },
-    {
-      name: "search_brain relational retrieval eval fixture (live Postgres)",
-      minTests: 2,
-    },
-  ];
+export const REQUIRED_SUITES: ReadonlyArray<{
+  name: string;
+  minTests: number;
+}> = [
+  { name: "lane_upsert (live Postgres)", minTests: 2 },
+  { name: "promote_shared (live Postgres)", minTests: 1 },
+  { name: "tier_lane (live Postgres)", minTests: 2 },
+  {
+    name: "append_session_event create_if_missing (live Postgres)",
+    minTests: 4,
+  },
+  { name: "runSharedPromoter cursor-stall fix (live Postgres)", minTests: 8 },
+  {
+    name: "search_brain relational retrieval eval fixture (live Postgres)",
+    minTests: 2,
+  },
+  {
+    name: "search_brain language-aware FTS ranking (live Postgres)",
+    minTests: 4,
+  },
+  {
+    name: "language-aware FTS covers every migration-007 source field (live Postgres)",
+    minTests: 1,
+  },
+  {
+    name: "declared source language selects the real search config via explicit request (live Postgres)",
+    minTests: 3,
+  },
+];
 
 // Absolute floor on total executed (non-skipped) live-Postgres testcases,
 // independent of the per-suite breakdown above.
-export const MIN_TOTAL_LIVE_TESTCASES = 19;
+export const MIN_TOTAL_LIVE_TESTCASES = 27;
 
 export interface SuiteStats {
   tests: number;
