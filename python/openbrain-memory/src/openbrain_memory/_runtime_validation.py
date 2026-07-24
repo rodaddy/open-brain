@@ -165,6 +165,7 @@ MAX_TIMESTAMP_CHARS = 100
 MAX_STATUS_CHARS = 100
 MAX_REFLEX_WARNING_ITEMS = 200
 _ISO_TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$")
+_NAMESPACE_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
 _POINTER_ITEM_KEYS = {
     "id",
@@ -309,11 +310,7 @@ def _project_pointer_item(
     source_type = value.get("source_type")
     if source_type not in REFLEX_SOURCE_TYPES:
         raise ValueError("pointer.source_type is not a published brain source type")
-    pointer_namespace = _bounded_text(
-        value.get("namespace"),
-        "pointer.namespace",
-        MAX_SOURCE_REF_NAMESPACE_CHARS,
-    )
+    pointer_namespace = _namespace_token(value.get("namespace"), "pointer.namespace")
     tier = value.get("tier")
     if tier is not None and tier not in REFLEX_TIERS:
         raise ValueError("pointer.tier is not a published tier")
@@ -786,6 +783,13 @@ def _bounded_text(value: Any, name: str, maximum: int) -> str:
     text = require_text(value, name)
     if len(text) > maximum:
         raise ValueError(f"{name} must contain at most {maximum} characters")
+    return text
+
+
+def _namespace_token(value: Any, name: str) -> str:
+    text = require_text(value, name)
+    if not _NAMESPACE_TOKEN.fullmatch(text):
+        raise ValueError(f"{name} must be a published namespace token")
     return text
 
 

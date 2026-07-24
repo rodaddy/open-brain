@@ -708,6 +708,34 @@ def test_reflex_binds_pointer_and_citation_reference_identity() -> None:
         assert output.result == {}
 
 
+def test_reflex_rejects_sentence_shaped_pointer_namespace_scalar() -> None:
+    scope = runtime_scope()
+    arguments = {
+        "session_key": scope.session_key,
+        "agent": scope.agent,
+        "platform": scope.platform,
+        "server_id": scope.server_id,
+        "channel_id": scope.channel_id,
+        "thread_id": scope.thread_id,
+        "query": "namespace scalar",
+    }
+    sentinel = "private customer note alpha omega"
+    envelope = _server_reflex_envelope(arguments)
+    envelope["pointers"]["items"][0]["namespace"] = sentinel
+    envelope["pointers"]["items"][0]["source_ref"]["namespace"] = sentinel
+    envelope["citations"][0]["source_ref"]["namespace"] = sentinel
+    runtime = FirstClassMemoryRuntime(
+        runtime_config(), scope, client=EnvelopeReflexClient(envelope)
+    )
+
+    output = runtime.reflex("namespace scalar")
+
+    assert output.receipt.status is ReceiptStatus.FAILED
+    assert output.receipt.error == "reflex_result_invalid"
+    assert output.result == {}
+    assert sentinel not in json.dumps(output.as_dict())
+
+
 def test_reflex_accepts_authorized_shared_namespace_pointer_identity() -> None:
     scope = runtime_scope()
     arguments = {

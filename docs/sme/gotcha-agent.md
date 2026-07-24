@@ -498,8 +498,9 @@ redacted exception text, which preserves private non-secret-shaped messages.
   identity-bound to each other, while still accepting server-authorized readable
   namespaces such as `shared-kb` instead of incorrectly forcing every pointer to
   the envelope scope namespace?
-- Can arbitrary text survive in known query, scope-source, tier, empty-reason,
-  warning, or budget fields, or are values omitted or restricted to published
+- Can arbitrary text survive in known query, scope-source, pointer-namespace,
+  tier, empty-reason, warning, or budget fields, or are values omitted or
+  restricted to published
   content-free enums, token shapes, and numeric bounds?
 - Are bounded arrays such as whole-pack allocation order capped, unique, and
   equal to the published order rather than accepting duplicate amplification?
