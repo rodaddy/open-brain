@@ -89,6 +89,7 @@ export async function runPgDump(opts: {
   password: string | undefined;
   dbName: string;
   dumpPath: string;
+  snapshot: string;
 }): Promise<void> {
   const tool = resolvePgTool("pg_dump");
   // Custom format to stdout, streamed to a host-side file. Writing via stdout
@@ -105,6 +106,8 @@ export async function runPgDump(opts: {
     opts.user,
     "-d",
     opts.dbName,
+    "--snapshot",
+    opts.snapshot,
   ];
   const proc = Bun.spawn([...tool, ...args], {
     // Only override PGPASSWORD when a password was configured; otherwise the
@@ -171,13 +174,45 @@ async function main(): Promise<void> {
   const startedAt = Date.now();
   const pool = createPool({ max: 2, application_name: "openbrain-backup" });
   try {
-    // Gather content-free DB facts first, then dump. The dump is written
-    // before the manifest so a valid set always has manifest mtime >= dump
-    // mtime (the verify drift heuristic relies on this ordering).
-    const dbInfo = await gatherDbInfo(pool);
-    const dumpStartedAt = Date.now();
-    await runPgDump({ host, port, user, password, dbName, dumpPath });
-    const dumpDurationMs = Date.now() - dumpStartedAt;
+    // Hold one read-only, repeatable-read transaction while both the manifest
+    // facts and pg_dump read its exported snapshot. This prevents a concurrent
+    // commit from landing in only one half of the backup set.
+    const client = await pool.connect();
+    let dbInfo;
+    let dumpDurationMs: number;
+    try {
+      await client.query(
+        "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
+      );
+      const { rows: snapshotRows } = await client.query(
+        "SELECT pg_export_snapshot() AS snapshot",
+      );
+      const snapshot = String(snapshotRows[0]?.snapshot ?? "");
+      if (!snapshot) {
+        throw new Error("PostgreSQL did not return an exported snapshot");
+      }
+
+      // The dump is written before the manifest so a valid set always has
+      // manifest mtime >= dump mtime (verify's drift heuristic relies on it).
+      dbInfo = await gatherDbInfo(client);
+      const dumpStartedAt = Date.now();
+      await runPgDump({
+        host,
+        port,
+        user,
+        password,
+        dbName,
+        dumpPath,
+        snapshot,
+      });
+      dumpDurationMs = Date.now() - dumpStartedAt;
+      await client.query("ROLLBACK");
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
 
     const { sha256, bytes } = await sha256File(dumpPath);
     const manifest = buildManifest({

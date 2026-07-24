@@ -621,6 +621,11 @@ export async function runPgRestore(
   const args = [
     "--no-owner",
     "--no-privileges",
+    // A fresh local-clone target preinstalls pgvector through its local admin.
+    // That extension remains admin-owned, so replaying the archive's COMMENT
+    // would require the non-superuser clone role to own it. Comments are not
+    // functional restore state; omit them while keeping the archive DDL/data.
+    "--no-comments",
     "--exit-on-error",
     "--single-transaction",
     "-h",

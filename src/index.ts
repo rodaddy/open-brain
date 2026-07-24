@@ -32,6 +32,7 @@ import {
   type MaintenanceRuntime,
 } from "./maintenance-bootstrap.ts";
 import { safeMaintenanceErrorCategory } from "./maintenance-queue.ts";
+import { validateLocalCloneMode } from "./local-clone-mode.ts";
 
 const EMBEDDING_BASE_URL = process.env.EMBEDDING_BASE_URL;
 
@@ -242,6 +243,10 @@ export function createApp(
 }
 
 if (import.meta.main) {
+  const localClone = validateLocalCloneMode(
+    process.env as Record<string, string | undefined>,
+  );
+
   // The vector columns are halfvec(768) in the schema; a mismatched
   // EMBEDDING_DIMENSIONS makes every embedding INSERT fail at runtime.
   if (EMBEDDING_DIMENSIONS !== 768) {
@@ -333,9 +338,20 @@ if (import.meta.main) {
   const app = createApp(pool, tokenMap, toolDeps);
   const port = parseInt(process.env.PORT || "3100", 10);
 
-  const server = app.listen(port, () => {
-    logger.info("open-brain server started", { port });
-  });
+  const bindHost = localClone.enabled
+    ? localClone.bindHost
+    : process.env.OPEN_BRAIN_BIND_HOST?.trim();
+  const server = bindHost
+    ? app.listen(port, bindHost, () => {
+        logger.info("open-brain server started", {
+          port,
+          bind_host: bindHost,
+          local_clone: localClone.enabled,
+        });
+      })
+    : app.listen(port, () => {
+        logger.info("open-brain server started", { port });
+      });
 
   // Server-owned maintenance queue (#343 substrate + #345 embedding-repair
   // handler). Started only here, after migrations ran, tokens were validated,

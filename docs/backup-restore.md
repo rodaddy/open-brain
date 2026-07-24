@@ -4,6 +4,8 @@ Operator-run backup/restore substrate for the Open Brain database (issue
 #298). Three CLIs — `scripts/backup.ts`, `scripts/backup-verify.ts`,
 `scripts/restore.ts` — plus a content-free manifest format
 (`openbrain.backup_manifest.v1`) and a live restore drill that runs in CI.
+For the loopback-only dogfood clone procedure, see
+[`local-clone-dogfood.md`](local-clone-dogfood.md).
 
 Everything here is honest about its verification level: each procedure is
 marked **TESTED** (with the test that proves it) or **DOCUMENTED-ONLY**.
@@ -35,6 +37,11 @@ sizes, per-table row counts, per-table archived-row counts, and the
 distinct-namespace COUNT. Namespace names are scope metadata and never appear
 in manifests or receipts; the namespace boundary itself lives inside the dump
 (every row keeps its `namespace` column) and is re-validated on restore.
+
+A backup set is one coordinated snapshot: `openbrain.dump` and its
+`manifest.json` must be created together by one successful `backup.ts` run and
+transferred together without substitution. Never assemble a clone from files
+belonging to different sets.
 
 ## Operations
 
