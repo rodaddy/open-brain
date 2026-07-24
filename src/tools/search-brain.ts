@@ -30,6 +30,7 @@ import {
 import {
   DEFAULT_FTS_CONFIG,
   ftsConfigLiteral,
+  ftsStatementTimeoutMs,
   requestFtsConfig,
   SUPPORTED_FTS_CONFIGS,
   type FtsConfig,
@@ -857,6 +858,58 @@ LIMIT $2 OFFSET $3`;
   return withSourceRefs(rows as SearchRow[]);
 }
 
+/**
+ * Execute one FTS statement under the cost policy for its configuration
+ * (the query execution boundary for the lexical arm).
+ *
+ * english (default): a plain pooled query. The GIN-indexed stored-column path
+ * needs no extra bound and stays byte-identical to the pre-#341 execution.
+ *
+ * non-default config: the match arm recomputes `to_tsvector` per row with no
+ * index (see ftsMatchExpressions), so the statement runs inside a transaction
+ * bounded by a transaction-scoped `SET LOCAL statement_timeout`. The bound
+ * comes from OPENBRAIN_FTS_STATEMENT_TIMEOUT_MS validated to a positive
+ * integer (default 5000 ms) by ftsStatementTimeoutMs -- the raw env string is
+ * never interpolated. `SET` accepts no bind parameters, so the vetted number
+ * (and only the number) is inlined, mirroring the allowlist-then-interpolate
+ * discipline used for table names and the regconfig literal. SET LOCAL scopes
+ * the timeout to this transaction, so the pooled connection is returned clean.
+ */
+async function runBoundedFtsQuery(
+  deps: ToolDeps,
+  sql: string,
+  params: unknown[],
+  ftsConfig: FtsConfig,
+): Promise<{ rows: unknown[] }> {
+  if (ftsConfig === DEFAULT_FTS_CONFIG) {
+    return deps.pool.query(sql, params as unknown[] as never[]);
+  }
+  const timeoutMs = ftsStatementTimeoutMs();
+  const client = await deps.pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await (async () => {
+      await client.query(`SET LOCAL statement_timeout = ${timeoutMs}`);
+      const queried = await client.query(sql, params as unknown[] as never[]);
+      await client.query("COMMIT");
+      return queried;
+    })();
+    client.release();
+    return result;
+  } catch (err) {
+    try {
+      await client.query("ROLLBACK");
+      client.release();
+    } catch {
+      // The original error is the signal; a failed ROLLBACK must not mask
+      // it. Destroy the client so a connection with an aborted transaction
+      // (or a dead socket) can never be handed back to the shared pool.
+      client.release(err instanceof Error ? err : new Error(String(err)));
+    }
+    throw err;
+  }
+}
+
 async function ftsSearch(
   deps: ToolDeps,
   accessibleTables: SearchTable[],
@@ -899,7 +952,7 @@ ${unionAll}
 ORDER BY fts_rank DESC
 LIMIT $2 OFFSET $3`;
 
-  const { rows } = await deps.pool.query(sql, params);
+  const { rows } = await runBoundedFtsQuery(deps, sql, params, ftsConfig);
   return withSourceRefs(rows as SearchRow[]);
 }
 
@@ -1423,7 +1476,10 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
               `Accepts a supported Postgres regconfig (${SUPPORTED_FTS_CONFIGS.join(", ")}) ` +
               `or a language token (e.g. 'de', 'de-DE', 'spanish'). Unrecognized values ` +
               `fall back to the deployment corpus default (OPENBRAIN_FTS_CONFIG, else english). ` +
-              `An explicitly requested effective non-English config requires admin or ob-admin. ` +
+              `An explicitly requested effective non-English config requires admin or ob-admin ` +
+              `for keyword/hybrid searches; vector mode performs no FTS, so fts_config is ` +
+              `ignored there. For ordinary roles, a non-English deployment env default ` +
+              `degrades to english rather than denying. ` +
               `Affects keyword/hybrid stemming only; english is byte-identical to prior behavior.`,
           ),
       },
@@ -1504,22 +1560,33 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
       const requestedNamespace = args.namespace as string | undefined;
       const sourceScope = args.source_scope as SourceScope | undefined;
       const requestedFtsConfig = args.fts_config as string | undefined;
-      const ftsConfig = requestFtsConfig(requestedFtsConfig);
-      if (
-        requestedFtsConfig !== undefined &&
-        ftsConfig !== DEFAULT_FTS_CONFIG &&
-        auth.role !== "admin" &&
-        auth.role !== "ob-admin"
-      ) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: NON_ENGLISH_FTS_AUTHORIZATION_ERROR,
-            },
-          ],
-          isError: true,
-        };
+      const ftsPrivileged = auth.role === "admin" || auth.role === "ob-admin";
+      // The non-English privilege boundary applies to the EFFECTIVE config for
+      // keyword/hybrid searches regardless of provenance (request argument or
+      // OPENBRAIN_FTS_CONFIG env default), because either one selects the
+      // unindexed on-the-fly to_tsvector path (#368 post-merge finding 1).
+      let ftsConfig = requestFtsConfig(requestedFtsConfig);
+      if (ftsConfig !== DEFAULT_FTS_CONFIG && !ftsPrivileged) {
+        if (mode !== "vector" && requestedFtsConfig !== undefined) {
+          // An ordinary role explicitly asked for an effective non-English
+          // config on a mode that runs FTS: content-free denial (unchanged).
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: NON_ENGLISH_FTS_AUTHORIZATION_ERROR,
+              },
+            ],
+            isError: true,
+          };
+        }
+        // Non-English arrived only via the operator env default, or the mode
+        // is vector (which performs no FTS, so fts_config is unused -- #368
+        // post-merge finding 2). Degrade to the GIN-indexed english default
+        // instead of denying: ordinary roles keep exactly the pre-#341
+        // availability and cost profile, and an unused argument can neither
+        // deny nor influence execution.
+        ftsConfig = DEFAULT_FTS_CONFIG;
       }
       const sourceScopeError = sourceScopeAuthorizationError(auth, sourceScope);
       if (sourceScopeError) {

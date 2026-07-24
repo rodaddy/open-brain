@@ -26,38 +26,65 @@ const obAdmin: AuthInfo = {
   clientId: "ob-admin-client",
 };
 
-/** Pool that records every FTS-arm SQL statement it is asked to run. */
-function recordingPool() {
+/**
+ * Pool that records every FTS-arm SQL statement it is asked to run.
+ *
+ * `allSql`/`ftsSql` record statements regardless of which boundary ran them.
+ * `clientSql` records ONLY statements run on a dedicated checked-out client
+ * (deps.pool.connect()), which is the transaction-scoped execution boundary the
+ * non-default FTS statement-timeout uses -- so tests can observe whether the
+ * cost bound applied without asserting broader SQL shape.
+ */
+function recordingPool(rowsFor?: (sql: string) => any[]) {
   const ftsSql: string[] = [];
   const allSql: string[] = [];
+  const clientSql: string[] = [];
+  const record = (sql: string) => {
+    allSql.push(sql);
+    if (sql.includes("fts_query")) ftsSql.push(sql);
+  };
+  const respond = (sql: string) => ({ rows: rowsFor ? rowsFor(sql) : [] });
   return {
     ftsSql,
     allSql,
+    clientSql,
     pool: {
       query: async (...args: any[]) => {
         const sql = String(args[0]);
-        allSql.push(sql);
-        if (sql.includes("fts_query")) ftsSql.push(sql);
-        if (sql.includes("FROM ob_links")) return { rows: [] };
-        return { rows: [] };
+        record(sql);
+        return respond(sql);
       },
+      connect: async () => ({
+        query: async (...args: any[]) => {
+          const sql = String(args[0]);
+          clientSql.push(sql);
+          record(sql);
+          return respond(sql);
+        },
+        release: () => {},
+      }),
     },
   };
 }
 
-async function runKeywordSearch(
-  pool: { query: (...args: any[]) => Promise<{ rows: any[] }> },
+async function runSearch(
+  pool: {
+    query: (...args: any[]) => Promise<{ rows: any[] }>;
+    connect?: (...args: any[]) => Promise<any>;
+  },
   query: string,
   opts: {
     namespace?: string;
     ftsConfig?: string;
     auth?: AuthInfo;
+    mode?: "hybrid" | "vector" | "keyword";
+    embed?: ReturnType<typeof createMockEmbed>;
   } = {},
 ): Promise<any> {
   const { client, cleanup } = await setupMcpClient(
     registerSearchBrain,
     pool,
-    createMockEmbed(),
+    opts.embed ?? createMockEmbed(),
     opts.auth ?? admin,
   );
   try {
@@ -65,7 +92,7 @@ async function runKeywordSearch(
       name: "search_brain",
       arguments: {
         query,
-        search_mode: "keyword",
+        search_mode: opts.mode ?? "keyword",
         table: "thoughts",
         ...(opts.namespace ? { namespace: opts.namespace } : {}),
         ...(opts.ftsConfig ? { fts_config: opts.ftsConfig } : {}),
@@ -76,10 +103,18 @@ async function runKeywordSearch(
   }
 }
 
+const runKeywordSearch = runSearch;
+
 const savedFtsConfig = process.env.OPENBRAIN_FTS_CONFIG;
+const savedFtsTimeout = process.env.OPENBRAIN_FTS_STATEMENT_TIMEOUT_MS;
 afterEach(() => {
   if (savedFtsConfig === undefined) delete process.env.OPENBRAIN_FTS_CONFIG;
   else process.env.OPENBRAIN_FTS_CONFIG = savedFtsConfig;
+  if (savedFtsTimeout === undefined) {
+    delete process.env.OPENBRAIN_FTS_STATEMENT_TIMEOUT_MS;
+  } else {
+    process.env.OPENBRAIN_FTS_STATEMENT_TIMEOUT_MS = savedFtsTimeout;
+  }
 });
 
 describe("shared executeSearch FTS default", () => {
@@ -327,13 +362,55 @@ describe("search_brain explicit fts_config request argument", () => {
     expect(sql).not.toContain("plainto_tsquery('german',");
   });
 
-  it("allows an operator-controlled non-english default for an ordinary caller", async () => {
+  it("degrades an ordinary caller to indexed english under a non-english env default (keyword)", async () => {
+    // #368 post-merge finding 1: the env default must not hand ordinary roles
+    // the unindexed non-english path. It degrades to english (availability
+    // preserved, pre-#341 behavior and cost) rather than denying.
     process.env.OPENBRAIN_FTS_CONFIG = "german";
-    const { ftsSql, pool } = recordingPool();
+    const { ftsSql, clientSql, pool } = recordingPool();
     const result = await runKeywordSearch(pool, "Planung", { auth: agent });
 
     expect(result.isError).toBeFalsy();
-    expect(ftsSql.join("\n")).toContain("plainto_tsquery('german',");
+    const sql = ftsSql.join("\n");
+    expect(sql).toContain("t.search_vector @@");
+    expect(sql).toContain("plainto_tsquery('english',");
+    expect(sql).not.toContain("german");
+    // The degraded path is the indexed default -- no bounded-transaction
+    // client checkout, no statement_timeout cost bound needed.
+    expect(clientSql).toEqual([]);
+  });
+
+  it("degrades an ordinary caller to indexed english under a non-english env default (hybrid)", async () => {
+    process.env.OPENBRAIN_FTS_CONFIG = "german";
+    const { ftsSql, pool } = recordingPool();
+    const result = await runSearch(pool, "Planung", {
+      auth: agent,
+      mode: "hybrid",
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(ftsSql.length).toBeGreaterThan(0);
+    const sql = ftsSql.join("\n");
+    expect(sql).toContain("t.search_vector @@");
+    expect(sql).toContain("plainto_tsquery('english',");
+    expect(sql).not.toContain("german");
+  });
+
+  it("keeps the env-default german config for an admin caller (keyword and hybrid)", async () => {
+    process.env.OPENBRAIN_FTS_CONFIG = "german";
+    for (const mode of ["keyword", "hybrid"] as const) {
+      const { ftsSql, pool } = recordingPool();
+      const result = await runSearch(pool, "vierteljährliche Planung", {
+        auth: admin,
+        mode,
+      });
+
+      expect(result.isError).toBeFalsy();
+      const sql = ftsSql.join("\n");
+      expect(sql).toContain("to_tsvector('german',");
+      expect(sql).toContain("@@ plainto_tsquery('german',");
+      expect(sql).not.toContain("t.search_vector @@");
+    }
   });
 
   it("denies an explicit typo when its effective operator default is non-english", async () => {
@@ -406,5 +483,143 @@ describe("search_brain explicit fts_config request argument", () => {
     const sql = ftsSql.join("\n");
     expect(sql).not.toContain("DROP TABLE");
     expect(sql).toContain("plainto_tsquery('english',");
+  });
+});
+
+/** A vector-arm result row as the search SQL would return it. */
+function vectorHit(id: string) {
+  return {
+    source_type: "thought",
+    id,
+    namespace: "rico",
+    content_preview: "Quarterly planning",
+    tags: [],
+    created_by: "test",
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    tier: "warm",
+    distance: 0.1,
+    fts_rank: null,
+    usefulness: 0.5,
+    access_count: 0,
+    extracted_metadata: null,
+  };
+}
+
+describe("search_brain vector mode ignores fts_config (#368 finding 2)", () => {
+  it("lets an ordinary caller run a vector search with an explicit non-english fts_config", async () => {
+    // vector mode performs no FTS; the unused fts_config argument must neither
+    // deny the request nor influence execution. Pre-fix this returned the
+    // non-English privilege denial.
+    delete process.env.OPENBRAIN_FTS_CONFIG;
+    const { ftsSql, allSql, pool } = recordingPool((sql) =>
+      sql.includes("query_embedding") ? [vectorHit("vector-hit")] : [],
+    );
+    const result = await runSearch(pool, "vierteljährliche Planung", {
+      auth: agent,
+      mode: "vector",
+      ftsConfig: "german",
+    });
+
+    expect(result.isError).toBeFalsy();
+    const rows = JSON.parse((result.content as any)[0].text);
+    expect(rows.map((row: any) => row.id)).toEqual(["vector-hit"]);
+    // No FTS statement ran at all, and the unused config never reached SQL.
+    expect(ftsSql).toEqual([]);
+    expect(allSql.join("\n")).not.toContain("german");
+  });
+
+  it("keeps the keyword/hybrid denial for the same ordinary explicit request", async () => {
+    // Same caller, same argument -- only the mode changes the outcome, proving
+    // the gate keys off whether FTS actually runs.
+    delete process.env.OPENBRAIN_FTS_CONFIG;
+    for (const mode of ["keyword", "hybrid"] as const) {
+      const { allSql, pool } = recordingPool();
+      const result = await runSearch(pool, "Planung", {
+        auth: agent,
+        mode,
+        ftsConfig: "german",
+      });
+
+      expect(result.isError).toBe(true);
+      expect(getErrorText(result)).toBe(
+        "Permission denied: non-English FTS configuration requires admin or ob-admin",
+      );
+      expect(allSql).toEqual([]);
+    }
+  });
+});
+
+describe("non-default FTS statement timeout (#368 finding 1 cost control)", () => {
+  it("bounds a permitted non-english FTS statement with the 5000 ms default", async () => {
+    // Admin on the unindexed german path: the FTS statement must run on a
+    // dedicated client inside a transaction carrying the SET LOCAL bound.
+    delete process.env.OPENBRAIN_FTS_CONFIG;
+    delete process.env.OPENBRAIN_FTS_STATEMENT_TIMEOUT_MS;
+    const { ftsSql, clientSql, pool } = recordingPool();
+    const result = await runKeywordSearch(pool, "Planung", {
+      auth: admin,
+      ftsConfig: "german",
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(clientSql).toContain("BEGIN");
+    expect(clientSql).toContain("SET LOCAL statement_timeout = 5000");
+    expect(clientSql).toContain("COMMIT");
+    // The bounded transaction is the boundary that actually ran the FTS scan.
+    const ftsOnClient = clientSql.filter((sql) => sql.includes("fts_query"));
+    expect(ftsOnClient).toEqual(ftsSql);
+    expect(ftsSql.length).toBeGreaterThan(0);
+    // The timeout precedes the bounded statement inside the transaction.
+    expect(clientSql.indexOf("BEGIN")).toBeLessThan(
+      clientSql.indexOf("SET LOCAL statement_timeout = 5000"),
+    );
+    expect(
+      clientSql.indexOf("SET LOCAL statement_timeout = 5000"),
+    ).toBeLessThan(clientSql.findIndex((sql) => sql.includes("fts_query")));
+  });
+
+  it("applies a valid OPENBRAIN_FTS_STATEMENT_TIMEOUT_MS override", async () => {
+    delete process.env.OPENBRAIN_FTS_CONFIG;
+    process.env.OPENBRAIN_FTS_STATEMENT_TIMEOUT_MS = "250";
+    const { clientSql, pool } = recordingPool();
+    await runKeywordSearch(pool, "Planung", {
+      auth: admin,
+      ftsConfig: "german",
+    });
+
+    expect(clientSql).toContain("SET LOCAL statement_timeout = 250");
+  });
+
+  it("falls back to the default for invalid timeout env values", async () => {
+    delete process.env.OPENBRAIN_FTS_CONFIG;
+    for (const invalid of ["abc", "-5", "0", "2.5", "5; DROP TABLE thoughts"]) {
+      process.env.OPENBRAIN_FTS_STATEMENT_TIMEOUT_MS = invalid;
+      const { clientSql, allSql, pool } = recordingPool();
+      await runKeywordSearch(pool, "Planung", {
+        auth: admin,
+        ftsConfig: "german",
+      });
+
+      expect(clientSql).toContain("SET LOCAL statement_timeout = 5000");
+      // The raw env text is never interpolated into any statement.
+      expect(allSql.join("\n")).not.toContain("DROP TABLE");
+      expect(allSql.join("\n")).not.toContain(
+        invalid === "0" ? "= 0" : invalid,
+      );
+    }
+  });
+
+  it("never pays the bound on the default english indexed path", async () => {
+    delete process.env.OPENBRAIN_FTS_CONFIG;
+    process.env.OPENBRAIN_FTS_STATEMENT_TIMEOUT_MS = "250";
+    const { ftsSql, clientSql, pool } = recordingPool();
+    const result = await runKeywordSearch(pool, "planning", { auth: agent });
+
+    expect(result.isError).toBeFalsy();
+    expect(ftsSql.length).toBeGreaterThan(0);
+    // Default path: plain pooled query, no transaction, no SET LOCAL.
+    expect(clientSql).toEqual([]);
+    expect(ftsSql.join("\n")).not.toContain("statement_timeout");
   });
 });

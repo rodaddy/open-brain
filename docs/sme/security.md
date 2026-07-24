@@ -765,7 +765,13 @@ digest is not observed-content truth — hash received bytes server-side).
 **Source:** PR #368 review, 2026-07-23
 **Scope:** caller-selected FTS configurations and other query modes that bypass
 an index
-**Status:** active
+**Status:** active (FTS instance addressed post-merge: the privilege gate now
+applies to the EFFECTIVE config regardless of provenance -- env-default
+non-English degrades ordinary roles to the indexed english path; vector mode
+ignores the unused `fts_config`; and permitted non-default statements are
+bounded by a transaction-scoped `SET LOCAL statement_timeout` from validated
+`OPENBRAIN_FTS_STATEMENT_TIMEOUT_MS`, default 5000 ms. Pattern stays active for
+future unindexed modes.)
 
 An allowlisted query mode can still be a resource-exhaustion surface. If a
 caller can replace an indexed predicate with per-row computation across multiple

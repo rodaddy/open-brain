@@ -2,7 +2,9 @@ import { describe, it, expect } from "bun:test";
 import {
   SUPPORTED_FTS_CONFIGS,
   DEFAULT_FTS_CONFIG,
+  DEFAULT_FTS_STATEMENT_TIMEOUT_MS,
   ftsConfigSchema,
+  ftsStatementTimeoutMs,
   resolveFtsConfig,
   corpusFtsConfig,
   requestFtsConfig,
@@ -145,6 +147,70 @@ describe("requestFtsConfig -- explicit per-request selection", () => {
     const hostile = "english'); DROP TABLE thoughts; --";
     const result = requestFtsConfig(hostile, {});
     expect(SUPPORTED_FTS_CONFIGS).toContain(result);
+  });
+});
+
+describe("ftsStatementTimeoutMs -- non-default FTS cost bound", () => {
+  it("defaults to 5000 ms when the env knob is unset or blank", () => {
+    expect(DEFAULT_FTS_STATEMENT_TIMEOUT_MS).toBe(5000);
+    expect(ftsStatementTimeoutMs({})).toBe(5000);
+    expect(
+      ftsStatementTimeoutMs({ OPENBRAIN_FTS_STATEMENT_TIMEOUT_MS: "" }),
+    ).toBe(5000);
+    expect(
+      ftsStatementTimeoutMs({ OPENBRAIN_FTS_STATEMENT_TIMEOUT_MS: "   " }),
+    ).toBe(5000);
+  });
+
+  it("accepts a positive integer override (whitespace tolerated)", () => {
+    expect(
+      ftsStatementTimeoutMs({ OPENBRAIN_FTS_STATEMENT_TIMEOUT_MS: "250" }),
+    ).toBe(250);
+    expect(
+      ftsStatementTimeoutMs({ OPENBRAIN_FTS_STATEMENT_TIMEOUT_MS: " 15000 " }),
+    ).toBe(15000);
+  });
+
+  it("falls back to the default for anything that is not a positive integer", () => {
+    for (const invalid of [
+      "abc",
+      "-5",
+      "0",
+      "2.5",
+      "1e3",
+      "0x10",
+      "5000ms",
+      "5; DROP TABLE thoughts",
+      "9007199254740993", // beyond Number.MAX_SAFE_INTEGER
+    ]) {
+      expect(
+        ftsStatementTimeoutMs({ OPENBRAIN_FTS_STATEMENT_TIMEOUT_MS: invalid }),
+      ).toBe(5000);
+    }
+  });
+
+  it("falls back to the default above the 32-bit statement_timeout maximum", () => {
+    expect(
+      ftsStatementTimeoutMs({
+        OPENBRAIN_FTS_STATEMENT_TIMEOUT_MS: "2147483647",
+      }),
+    ).toBe(2147483647);
+    for (const overflow of ["2147483648", "3000000000", "9007199254740991"]) {
+      expect(
+        ftsStatementTimeoutMs({ OPENBRAIN_FTS_STATEMENT_TIMEOUT_MS: overflow }),
+      ).toBe(5000);
+    }
+  });
+
+  it("always returns a finite positive number, never env text", () => {
+    for (const raw of ["german", "'; --", "NaN", "Infinity", "01000"]) {
+      const value = ftsStatementTimeoutMs({
+        OPENBRAIN_FTS_STATEMENT_TIMEOUT_MS: raw,
+      });
+      expect(typeof value).toBe("number");
+      expect(Number.isSafeInteger(value)).toBe(true);
+      expect(value).toBeGreaterThan(0);
+    }
   });
 });
 

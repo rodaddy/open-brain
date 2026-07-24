@@ -70,7 +70,10 @@ EMBEDDING_DIMENSIONS=768
 
 # Optional operator opt-in for the public search_brain default
 # Non-English keyword/hybrid FTS is recomputed on the fly and is not index-backed
+# (admin/ob-admin only; ordinary roles degrade to english -- see docs/fts-operations.md)
 # OPENBRAIN_FTS_CONFIG=german
+# Statement timeout for the permitted non-default (unindexed) FTS path, ms
+# OPENBRAIN_FTS_STATEMENT_TIMEOUT_MS=5000
 
 # Server
 PORT=3100
@@ -339,7 +342,16 @@ Supporting tables: `entry_access_log` (usage tracking), `discarded_entries` (arc
 1. **Vector search** — HNSW nearest-neighbor over halfvec(768) embeddings (cosine distance)
 2. **Full-text search** — PostgreSQL `tsvector`; English uses the stored GIN-indexed `search_vector`
 
-English is the shared default and preserves existing search behavior. Supported non-English configurations recompute the same source text with PostgreSQL `to_tsvector` on the fly for keyword and hybrid searches, so those scans are not index-backed. `OPENBRAIN_FTS_CONFIG` is an operator opt-in that changes the public `search_brain` deployment default; it does not implicitly change sibling `executeSearch` consumers. A caller may explicitly select English, while an explicitly requested effective non-English `fts_config` requires the `admin` or `ob-admin` role.
+English is the shared default and preserves existing search behavior. Supported non-English configurations recompute the same source text with PostgreSQL `to_tsvector` on the fly for keyword and hybrid searches, so those scans are not index-backed. `OPENBRAIN_FTS_CONFIG` is an operator opt-in that changes the public `search_brain` deployment default; it does not implicitly change sibling `executeSearch` consumers.
+
+The non-English path is a privilege boundary on the **effective** configuration for keyword/hybrid searches, regardless of whether it came from the request or the env default:
+
+- A caller may always explicitly select English.
+- An explicitly requested effective non-English `fts_config` requires the `admin` or `ob-admin` role (content-free denial otherwise).
+- When a non-English config comes only from the `OPENBRAIN_FTS_CONFIG` env default, ordinary roles (`agent`, `readonly`, `discord`, `promoter`) silently degrade to the GIN-indexed English default instead of being denied -- availability and the pre-language-aware cost profile are preserved. Admin roles get the configured language.
+- `search_mode: "vector"` performs no FTS, so `fts_config` is ignored there and never denies a request.
+
+Permitted non-default searches are cost-bounded with a transaction-scoped statement timeout (`OPENBRAIN_FTS_STATEMENT_TIMEOUT_MS`, default 5000 ms). Operator enable/monitor/rollback procedures live in [docs/fts-operations.md](fts-operations.md).
 
 Results are merged via Reciprocal Rank Fusion (RRF) with adjustments for:
 - **Cognitive tier** — hot entries boosted (+0.3), cold entries penalized (−0.2)
