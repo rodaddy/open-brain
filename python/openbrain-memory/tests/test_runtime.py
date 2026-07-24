@@ -160,6 +160,104 @@ def test_recall_rejects_schema_invalid_budget_and_sections_before_transport() ->
     assert tool_calls(transport) == []
 
 
+def test_recall_forwards_recovery_opt_in_to_context_pack_arguments() -> None:
+    transport = LaneAwareTransport()
+    runtime = FirstClassMemoryRuntime(
+        runtime_config(), runtime_scope(), transport=transport
+    )
+
+    output = runtime.recall_context(
+        "what changed?",
+        include_unreviewed_recovery=True,
+    )
+
+    assert output.receipt.status is ReceiptStatus.DIRECT
+    calls = tool_calls(transport)
+    assert calls[1]["params"]["name"] == "agent_context_pack"
+    assert calls[1]["params"]["arguments"]["include_unreviewed_recovery"] is True
+
+
+def test_recall_rejects_non_boolean_recovery_before_transport() -> None:
+    transport = LaneAwareTransport()
+    runtime = FirstClassMemoryRuntime(
+        runtime_config(), runtime_scope(), transport=transport
+    )
+
+    output = runtime.recall_context(
+        "what changed?",
+        include_unreviewed_recovery=1,  # type: ignore[arg-type]
+    )
+
+    assert output.receipt.status is ReceiptStatus.FAILED
+    assert output.receipt.error == "include_unreviewed_recovery must be a boolean"
+    assert tool_calls(transport) == []
+
+
+def test_recall_omitting_recovery_opt_in_preserves_prior_argument_shape() -> None:
+    transport = LaneAwareTransport()
+    runtime = FirstClassMemoryRuntime(
+        runtime_config(), runtime_scope(), transport=transport
+    )
+
+    output = runtime.recall_context("what changed?")
+
+    assert output.receipt.status is ReceiptStatus.DIRECT
+    calls = tool_calls(transport)
+    arguments = calls[1]["params"]["arguments"]
+    assert "include_unreviewed_recovery" not in arguments
+    assert arguments == {
+        "agent": "bilby",
+        "platform": "discord",
+        "server_id": "guild-1",
+        "channel_id": "channel-2",
+        "thread_id": "thread-3",
+        "session_key": "repo/session-4",
+        "query": "what changed?",
+    }
+
+
+def test_json_adapter_recall_forwards_recovery_opt_in() -> None:
+    transport = LaneAwareTransport()
+
+    output = execute_json(
+        request_payload(
+            "recall",
+            query="current task",
+            include_unreviewed_recovery=True,
+        ),
+        transport=transport,
+    )
+
+    assert output["receipt"]["status"] == "direct"
+    calls = tool_calls(transport)
+    assert calls[1]["params"]["name"] == "agent_context_pack"
+    assert calls[1]["params"]["arguments"]["include_unreviewed_recovery"] is True
+
+
+def test_json_adapter_recall_rejects_non_boolean_recovery_before_transport() -> None:
+    transport = LaneAwareTransport()
+
+    # A string, an int, and a list must all fail as non-boolean input. The
+    # error names the boolean requirement (the type validator's message), which
+    # distinguishes accept-key-then-type-reject from a pre-fix unknown-key
+    # rejection.
+    for bad in ("true", 1, [True]):
+        output = execute_json(
+            request_payload(
+                "recall",
+                query="current task",
+                include_unreviewed_recovery=bad,
+            ),
+            transport=transport,
+        )
+        assert output["receipt"]["status"] == "failed"
+        assert "include_unreviewed_recovery must be a boolean" in (
+            output["receipt"].get("error") or ""
+        )
+
+    assert tool_calls(transport) == []
+
+
 def test_first_capture_establishes_lane_before_append() -> None:
     transport = LaneAwareTransport()
     runtime = FirstClassMemoryRuntime(
