@@ -7,6 +7,13 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Protocol
 
 MAX_DISTILLED_CONTENT_BYTES = 16 * 1024
+MAX_REFLEX_QUERY_CHARS = 4_000
+MAX_CITATION_ID_CHARS = 500
+MAX_SOURCE_REF_CHARS = 1_000
+MAX_SOURCE_REF_SOURCE_CHARS = 200
+MAX_SOURCE_REF_TYPE_CHARS = 200
+MAX_SOURCE_REF_ID_CHARS = 500
+MAX_SOURCE_REF_NAMESPACE_CHARS = 200
 
 
 class RuntimeScopeCoordinates(Protocol):
@@ -95,6 +102,122 @@ def validate_context_pack_scope(
         exact_scope_fields(namespace, scope),
         "agent_context_pack result",
     )
+
+
+REFLEX_ENVELOPE_SCHEMA = "openbrain.agent_reflex_pointers.v1"
+_PRIOR_CONTEXT_REFERENCE_KEYS = {"citation_id", "source_ref"}
+_SOURCE_REF_OBJECT_KEYS = {"source", "type", "id", "namespace"}
+MAX_PRIOR_CONTEXT_ITEMS = 200
+
+
+def validate_reflex_scope(
+    result: Any,
+    namespace: str,
+    scope: RuntimeScopeCoordinates,
+) -> None:
+    """Require a reflex-pointer result to be the exact-scope v1 envelope.
+
+    The runtime must never surface a reflex payload that fails to prove the
+    ordinary ``openbrain.agent_reflex_pointers.v1`` schema tag or the requested
+    exact scope, so a server that returned another tool's shape, or scope for a
+    different lane, is rejected instead of leaking foreign pointers.
+    """
+    if not isinstance(result, Mapping):
+        raise ValueError("agent_reflex_pointers result missing scope")
+    if result.get("schema") != REFLEX_ENVELOPE_SCHEMA:
+        raise ValueError(
+            "agent_reflex_pointers result is not the "
+            f"{REFLEX_ENVELOPE_SCHEMA} envelope"
+        )
+    candidate = result.get("scope")
+    if not isinstance(candidate, Mapping):
+        raise ValueError("agent_reflex_pointers result missing scope")
+    validate_exact_fields(
+        candidate,
+        exact_scope_fields(namespace, scope),
+        "agent_reflex_pointers result",
+    )
+
+
+def reflex_query(value: Any) -> str:
+    """Validate the reflex query against the server's exact 4,000-char bound."""
+    return _bounded_text(value, "query", MAX_REFLEX_QUERY_CHARS)
+
+
+def sanitize_prior_context(value: Any) -> list[dict[str, Any]]:
+    """Return body-free prior-context references or raise on anything else.
+
+    Only ``citation_id`` and ``source_ref`` identities are accepted, mirroring
+    the server ``prior_context`` contract: at least one identity per reference,
+    ``source_ref`` in its string form or the structural ``{source,type,id}``
+    object, and NO arbitrary bodies or extra secret-like fields. Raw
+    prior-context text or any unknown key is rejected before it can reach the
+    transport.
+    """
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        raise ValueError("prior_context must be an array of references")
+    references = list(value)
+    if len(references) > MAX_PRIOR_CONTEXT_ITEMS:
+        raise ValueError(
+            f"prior_context must contain at most {MAX_PRIOR_CONTEXT_ITEMS} references"
+        )
+    return [_sanitize_prior_context_reference(item) for item in references]
+
+
+def _sanitize_prior_context_reference(item: Any) -> dict[str, Any]:
+    if not isinstance(item, Mapping):
+        raise ValueError("prior_context reference must be an object")
+    unknown = {str(key) for key in item if key not in _PRIOR_CONTEXT_REFERENCE_KEYS}
+    if unknown:
+        raise ValueError(
+            "prior_context reference contains unsupported keys: "
+            + ", ".join(sorted(unknown))
+        )
+    reference: dict[str, Any] = {}
+    if "citation_id" in item:
+        reference["citation_id"] = _bounded_text(
+            item["citation_id"], "citation_id", MAX_CITATION_ID_CHARS
+        )
+    if "source_ref" in item:
+        reference["source_ref"] = _sanitize_source_ref(item["source_ref"])
+    if not reference:
+        raise ValueError(
+            "prior_context reference requires citation_id or source_ref"
+        )
+    return reference
+
+
+def _sanitize_source_ref(value: Any) -> Any:
+    if isinstance(value, str):
+        return _bounded_text(value, "source_ref", MAX_SOURCE_REF_CHARS)
+    if isinstance(value, Mapping):
+        unknown = {str(key) for key in value if key not in _SOURCE_REF_OBJECT_KEYS}
+        if unknown:
+            raise ValueError(
+                "source_ref object contains unsupported keys: "
+                + ", ".join(sorted(unknown))
+            )
+        structural: dict[str, Any] = {
+            "source": _bounded_text(
+                value.get("source"),
+                "source_ref.source",
+                MAX_SOURCE_REF_SOURCE_CHARS,
+            ),
+            "type": _bounded_text(
+                value.get("type"), "source_ref.type", MAX_SOURCE_REF_TYPE_CHARS
+            ),
+            "id": _bounded_text(
+                value.get("id"), "source_ref.id", MAX_SOURCE_REF_ID_CHARS
+            ),
+        }
+        if "namespace" in value:
+            structural["namespace"] = _bounded_text(
+                value.get("namespace"),
+                "source_ref.namespace",
+                MAX_SOURCE_REF_NAMESPACE_CHARS,
+            )
+        return structural
+    raise ValueError("source_ref must be a string or a structural object")
 
 
 def exact_scope_fields(
@@ -226,6 +349,13 @@ def optional_text(value: Any, name: str) -> str | None:
     if value is None:
         return None
     return require_text(value, name)
+
+
+def _bounded_text(value: Any, name: str, maximum: int) -> str:
+    text = require_text(value, name)
+    if len(text) > maximum:
+        raise ValueError(f"{name} must contain at most {maximum} characters")
+    return text
 
 
 def require_text(value: Any, name: str) -> str:

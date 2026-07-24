@@ -211,6 +211,11 @@ runtime = FirstClassMemoryRuntime(
 )
 
 context = runtime.recall_context("current task", max_tokens=2000)
+pointers = runtime.reflex(
+    "current task",
+    max_tokens=2000,
+    prior_context=[{"citation_id": "cit-1"}],
+)
 receipt = runtime.capture_distilled(
     "Distilled implementation decision; no raw transcript.",
     event_type="decision",
@@ -219,17 +224,31 @@ checkpoint = runtime.checkpoint("Distilled checkpoint summary.")
 wrapped = runtime.wrap("Distilled final session summary.")
 ```
 
-Receipts use `direct` for direct recall, `saved` only after a successful direct
-write, `fallback` after a successful secondary write, `spooled` only when the
-requested write and any required lane start are durably queued in replay order,
-`lost` when the requested write reached no durable destination, and `failed` for
-read/input failures. A queued prerequisite alone is never reported as durable
-capture, checkpoint, or wrap.
+`reflex()` is a per-turn pure read over the published `agent_reflex_pointers`
+tool: it returns budget-bounded, body-free, cited pointers for the current
+query with prior-context suppression applied. The query is capped at the server
+contract's 4,000 characters. `prior_context` accepts at most 200 body-free
+`citation_id`/`source_ref` identities and enforces the server's field bounds
+(citation 500, string source ref 1,000, structural source/type/namespace 200,
+id 500); raw text, oversize identities, and extra fields are rejected before
+the transport. It routes **direct-only** — a read never spools
+and never uses the mcp2cli fallback — and the result is surfaced only after the
+returned exact scope and the `openbrain.agent_reflex_pointers.v1` envelope are
+proven. Placement of pointers into the model prompt stays client-owned.
+
+Receipts use `direct` for direct recall or reflex, `saved` only after a
+successful direct write, `fallback` after a successful secondary write,
+`spooled` only when the requested write and any required lane start are durably
+queued in replay order, `lost` when the requested write reached no durable
+destination, and `failed` for read/input failures. A queued prerequisite alone
+is never reported as durable capture, checkpoint, or wrap. A reflex receipt is
+content-free (`durable=false`, no pointer bodies).
 
 The stable `openbrain-memory` console script and `python -m openbrain_memory`
 read one JSON object from stdin and emit one JSON object to stdout. Input is
 capped at 64 KiB, output at 1 MB, and distilled lifecycle content at 16 KiB.
-Capture, checkpoint, and wrap requests must include `"distilled": true`.
+The `recall` and `reflex` operations read; capture, checkpoint, and wrap
+requests must include `"distilled": true`.
 
 Optional mcp2cli fallback is disabled by default. Enable it with
 `OPENBRAIN_MCP2CLI_FALLBACK=1` or explicit config. Calls use an argv sequence,

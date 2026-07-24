@@ -73,6 +73,8 @@ class DirectClient(Protocol):
 
     def agent_context_pack(self, **arguments: Any) -> JSON: ...
 
+    def agent_reflex_pointers(self, **arguments: Any) -> JSON: ...
+
     def close(self) -> None: ...
 
 
@@ -272,6 +274,19 @@ class RuntimeClientRouter:
         **arguments: Any,
     ) -> JSON:
         return self._call("agent_context_pack", arguments, timeout=timeout)
+
+    def agent_reflex_pointers(
+        self,
+        *,
+        timeout: float | None = None,
+        **arguments: Any,
+    ) -> JSON:
+        # A reflex is a read: it must never spool and must never route through
+        # the mcp2cli fallback. direct_only() disables the fallback branch so a
+        # direct failure fails the read outright instead of silently reading
+        # through another path.
+        with self.direct_only():
+            return self._call("agent_reflex_pointers", arguments, timeout=timeout)
 
     def close(self) -> None:
         if self.direct is not None:

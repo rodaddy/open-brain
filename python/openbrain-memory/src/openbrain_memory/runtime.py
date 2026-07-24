@@ -43,10 +43,16 @@ from ._runtime_validation import (
     persisted_text as _validate_persisted_text,
 )
 from ._runtime_validation import (
+    reflex_query as _reflex_query,
+)
+from ._runtime_validation import (
     reject_unknown_keys as _reject_unknown_keys,
 )
 from ._runtime_validation import (
     require_text as _require_text,
+)
+from ._runtime_validation import (
+    sanitize_prior_context as _sanitize_prior_context,
 )
 from ._runtime_validation import (
     source_bool as _source_bool,
@@ -56,6 +62,9 @@ from ._runtime_validation import (
 )
 from ._runtime_validation import (
     validate_context_pack_scope as _validate_context_pack_scope,
+)
+from ._runtime_validation import (
+    validate_reflex_scope as _validate_reflex_scope,
 )
 from ._runtime_validation import (
     validate_started_lane as _validate_started_lane,
@@ -210,6 +219,32 @@ class RuntimeScope:
         }
         if self.thread_id is not None:
             arguments["thread_id"] = self.thread_id
+        return arguments
+
+    def reflex_arguments(
+        self,
+        query: str,
+        prior_context: Sequence[Mapping[str, Any]] | None,
+    ) -> dict[str, Any]:
+        """Return the reflex tool's exact-scope, body-free request fields.
+
+        Reuses the exact-scope coordinates ``agent_context_pack`` requires and
+        adds only the required ``query`` and an optional body-free
+        ``prior_context``; the reflex has no ``namespace`` argument because the
+        server derives it from the bound token.
+        """
+        arguments: dict[str, Any] = {
+            "agent": self.agent,
+            "platform": self.platform,
+            "server_id": self.server_id,
+            "channel_id": self.channel_id,
+            "session_key": self.session_key,
+            "query": _reflex_query(query),
+        }
+        if self.thread_id is not None:
+            arguments["thread_id"] = self.thread_id
+        if prior_context is not None:
+            arguments["prior_context"] = _sanitize_prior_context(prior_context)
         return arguments
 
     def start_metadata(self) -> dict[str, str]:
@@ -603,6 +638,82 @@ class FirstClassMemoryRuntime:
                 context={},
             )
 
+    def reflex(
+        self,
+        query: str,
+        *,
+        max_tokens: int | None = None,
+        max_latency_ms: int | None = None,
+        prior_context: Sequence[Mapping[str, Any]] | None = None,
+    ) -> RuntimeOutput:
+        """Return exact-scope body-free reflex pointers for the current query.
+
+        A pure read: it routes direct-only (never spool, never mcp2cli
+        fallback), enforces the exact returned scope and the ordinary
+        ``openbrain.agent_reflex_pointers.v1`` envelope, and returns that
+        validated envelope through ``result`` with a content-free receipt.
+        """
+        with self._operation_lock:
+            return self._reflex(
+                query,
+                max_tokens=max_tokens,
+                max_latency_ms=max_latency_ms,
+                prior_context=prior_context,
+            )
+
+    def _reflex(
+        self,
+        query: str,
+        *,
+        max_tokens: int | None,
+        max_latency_ms: int | None,
+        prior_context: Sequence[Mapping[str, Any]] | None,
+    ) -> RuntimeOutput:
+        self._router.reset()
+        try:
+            arguments = self.scope.reflex_arguments(query, prior_context)
+            budget: dict[str, int] = {}
+            if max_tokens is not None:
+                budget["max_tokens"] = _bounded_int(
+                    max_tokens,
+                    "max_tokens",
+                    minimum=100,
+                    maximum=20_000,
+                )
+            if max_latency_ms is not None:
+                budget["max_latency_ms"] = _bounded_int(
+                    max_latency_ms,
+                    "max_latency_ms",
+                    minimum=1,
+                    maximum=10_000,
+                )
+            if budget:
+                arguments["budget"] = budget
+            local_timeout = (
+                max_latency_ms / 1000 if max_latency_ms is not None else None
+            )
+            result = self._router.agent_reflex_pointers(
+                timeout=local_timeout,
+                **arguments,
+            )
+            status = (
+                ReceiptStatus(self._router.state.path)
+                if self._router.state.path is not None
+                else ReceiptStatus.FAILED
+            )
+            receipt = self._receipt("reflex", status, durable=False)
+            return RuntimeOutput(receipt=receipt, result=result)
+        except Exception as error:
+            return RuntimeOutput(
+                receipt=self._receipt(
+                    "reflex",
+                    ReceiptStatus.FAILED,
+                    durable=False,
+                    error=error,
+                ),
+                result={},
+            )
+
     def capture_distilled(
         self,
         content: str,
@@ -901,6 +1012,8 @@ class FirstClassMemoryRuntime:
                 _validate_started_lane(result, self.config.namespace, scope)
             elif tool == "agent_context_pack":
                 _validate_context_pack_scope(result, self.config.namespace, self.scope)
+            elif tool == "agent_reflex_pointers":
+                _validate_reflex_scope(result, self.config.namespace, self.scope)
         except ValueError as error:
             raise RuntimeCallError(str(error)) from error
 

@@ -212,6 +212,35 @@ class LaneAwareTransport:
                 ),
             }
             return self._tool_result(json_body["id"], body)
+        elif tool == "agent_reflex_pointers":
+            body = {
+                "schema": "openbrain.agent_reflex_pointers.v1",
+                "status": "ok",
+                "placement": "client_owned",
+                "resolvable_reference_only": True,
+                "scope": {
+                    "namespace": "bilby",
+                    "session_key": arguments["session_key"],
+                    "agent": arguments["agent"],
+                    "platform": arguments["platform"],
+                    "server_id": arguments["server_id"],
+                    "channel_id": arguments["channel_id"],
+                    "thread_id": arguments.get("thread_id"),
+                },
+                "pointers": {
+                    "label": "pointers",
+                    "namespace_scoped": True,
+                    "resolvable_reference_only": True,
+                    "items": [],
+                    "item_count": 0,
+                    "truncated": False,
+                },
+                "warnings": {},
+                "budget": {},
+                "citations": [],
+                "query": arguments["query"],
+            }
+            return self._tool_result(json_body["id"], body)
         body = {
             "tool": tool,
             "arguments": arguments,
@@ -367,6 +396,9 @@ class StartThenFailClient:
     def agent_context_pack(self, **arguments: Any) -> dict[str, Any]:
         raise ConnectionError("recall failed with token=secret-value")
 
+    def agent_reflex_pointers(self, **arguments: Any) -> dict[str, Any]:
+        raise ConnectionError("reflex failed with token=secret-value")
+
     def close(self) -> None:
         self.closed = True
 
@@ -411,6 +443,44 @@ class ContextClient(StartThenFailClient):
                 "channel_id": arguments["channel_id"],
                 "thread_id": arguments.get("thread_id"),
             },
+        }
+
+
+class ReflexClient(StartThenFailClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.observed_timeouts: list[float] = []
+        self.observed_arguments: list[dict[str, Any]] = []
+
+    def agent_reflex_pointers(self, **arguments: Any) -> dict[str, Any]:
+        self.observed_timeouts.append(self.timeout)
+        self.observed_arguments.append(dict(arguments))
+        return {
+            "schema": "openbrain.agent_reflex_pointers.v1",
+            "status": "ok",
+            "placement": "client_owned",
+            "resolvable_reference_only": True,
+            "scope": {
+                "namespace": "bilby",
+                "session_key": arguments["session_key"],
+                "agent": arguments["agent"],
+                "platform": arguments["platform"],
+                "server_id": arguments["server_id"],
+                "channel_id": arguments["channel_id"],
+                "thread_id": arguments.get("thread_id"),
+            },
+            "pointers": {
+                "label": "pointers",
+                "namespace_scoped": True,
+                "resolvable_reference_only": True,
+                "items": [],
+                "item_count": 0,
+                "truncated": False,
+            },
+            "warnings": {},
+            "budget": {},
+            "citations": [],
+            "query": arguments["query"],
         }
 
 
