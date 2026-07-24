@@ -347,6 +347,19 @@ describe("validatePostRestore", () => {
     expect(names).toContain("embedding_column_dimension");
   });
 
+  it("keeps pre-forward applied history exact to the manifest", async () => {
+    const results = await validatePostRestore(
+      makeRestoredDb({ applied: ["001_init.sql", "005_fts_hybrid"] }),
+      makeManifest({
+        applied: ["001_init.sql", "005_fts_hybrid.sql"],
+      }),
+    );
+    expect(
+      results.find((r) => r.name === "applied_migrations_match_manifest")
+        ?.verdict,
+    ).toBe("fail");
+  });
+
   it("row count mismatch fails that table's validation", async () => {
     const results = await validatePostRestore(
       makeRestoredDb({ counts: { thoughts: 4 } }),
@@ -502,6 +515,39 @@ describe("validateMigrationsMatchRepo", () => {
       "002_curation.sql",
       "003_next.sql",
     ]);
+    expect(result.verdict).toBe("fail");
+  });
+  it("ignores allowlisted legacy markers after canonical migrations apply", async () => {
+    const repo = [
+      "001_init.sql",
+      "002_curation.sql",
+      "005_fts_hybrid.sql",
+      "011_chunking.sql",
+    ];
+    const db = makeRestoredDb({
+      applied: [...repo, "005_fts_hybrid", "010_chunking.sql"],
+    });
+    expect((await validateMigrationsMatchRepo(db, repo)).verdict).toBe("ok");
+  });
+  it("fails post-forward validation for unknown and near-match markers", async () => {
+    const repo = ["001_init.sql", "002_curation.sql"];
+    expect(
+      (
+        await validateMigrationsMatchRepo(
+          makeRestoredDb({ applied: [...repo, "005_fts_hybri"] }),
+          repo,
+        )
+      ).verdict,
+    ).toBe("fail");
+  });
+  it("fails post-forward validation when a legacy marker lacks its canonical migration", async () => {
+    const repo = ["001_init.sql", "002_curation.sql", "005_fts_hybrid.sql"];
+    const result = await validateMigrationsMatchRepo(
+      makeRestoredDb({
+        applied: ["001_init.sql", "002_curation.sql", "005_fts_hybrid"],
+      }),
+      repo,
+    );
     expect(result.verdict).toBe("fail");
   });
 });
