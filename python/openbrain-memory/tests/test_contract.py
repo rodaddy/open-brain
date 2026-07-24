@@ -23,6 +23,7 @@ CURRENT_REQUIRED_TOOL_VERSIONS = {
     "session_start": 2,
     "session_wrap": 2,
     "agent_context_pack": 2,
+    "agent_reflex_pointers": 1,
     "append_session_event": 8,
 }
 
@@ -160,8 +161,8 @@ def test_manifest_requires_current_package_without_overstating_legacy_compatibil
         client_version=PREVIOUS_CLIENT_VERSION,
     )
 
-    assert CURRENT_CLIENT_VERSION == "0.1.15"
-    assert manifest["min_client_versions"]["openbrain-memory"] == "0.1.15"
+    assert CURRENT_CLIENT_VERSION == "0.1.16"
+    assert manifest["min_client_versions"]["openbrain-memory"] == "0.1.16"
     assert manifest["compatible_client_ranges"]["openbrain-memory"] == (
         ">=0.1.15 <1.0.0"
     )
@@ -235,6 +236,65 @@ def test_v23_manifest_missing_reflex_tool_contract_fails_closed():
     assert result.ok is False
     assert any(
         "required tool(s) missing from tool_contracts" in reason
+        and "agent_reflex_pointers" in reason
+        for reason in result.reasons
+    )
+
+
+def test_first_class_runtime_requires_reflex_at_published_version() -> None:
+    """The first-class runtime authority pins the reflex at its published v1.
+
+    A v23 manifest that advertises agent_reflex_pointers below its published
+    semantic version must be rejected by both the capability and tool_contract
+    version floors, not silently accepted."""
+
+    from openbrain_memory.client import (
+        FIRST_CLASS_RUNTIME_TOOL_VERSIONS,
+        FIRST_CLASS_RUNTIME_TOOLS,
+        REQUIRED_CONTRACT_TOOL_VERSIONS,
+    )
+
+    assert FIRST_CLASS_RUNTIME_TOOL_VERSIONS["agent_reflex_pointers"] == 1
+    assert "agent_reflex_pointers" in FIRST_CLASS_RUNTIME_TOOLS
+    assert REQUIRED_CONTRACT_TOOL_VERSIONS["agent_reflex_pointers"] == 1
+
+    manifest = representative_contract_manifest()
+    for capability in manifest["capabilities"]:
+        if capability["name"] == "agent_reflex_pointers":
+            capability["version"] = 0
+    manifest["tool_contracts"]["agent_reflex_pointers"]["version"] = 0
+
+    result = validate_required_memory_contract(
+        manifest,
+        client_version=CURRENT_CLIENT_VERSION,
+    )
+
+    assert result.ok is False
+    assert "capability 'agent_reflex_pointers'.version must be >= 1" in result.reasons
+    assert (
+        "tool_contracts['agent_reflex_pointers'].version must be >= 1" in result.reasons
+    )
+
+
+def test_v23_manifest_omitting_reflex_capability_fails_closed() -> None:
+    """A v23 manifest that drops the reflex capability entirely must fail closed:
+    the required-tool floor names the gap rather than admitting the runtime."""
+
+    manifest = representative_contract_manifest()
+    manifest["capabilities"] = [
+        item
+        for item in manifest["capabilities"]
+        if item["name"] != "agent_reflex_pointers"
+    ]
+
+    result = validate_required_memory_contract(
+        manifest,
+        client_version=CURRENT_CLIENT_VERSION,
+    )
+
+    assert result.ok is False
+    assert any(
+        "required tool(s) missing from contract capabilities" in reason
         and "agent_reflex_pointers" in reason
         for reason in result.reasons
     )

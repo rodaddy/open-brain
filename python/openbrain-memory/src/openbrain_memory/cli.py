@@ -23,6 +23,7 @@ MAX_JSON_OUTPUT_BYTES = 1_000_000
 _COMMON_KEYS = {"config", "operation", "scope"}
 _OPERATION_KEYS = {
     "recall": {"max_latency_ms", "max_tokens", "query", "requested_sections"},
+    "reflex": {"max_latency_ms", "max_tokens", "prior_context", "query"},
     "capture": {"content", "distilled", "event_type"},
     "checkpoint": {
         "distilled",
@@ -142,6 +143,13 @@ def _dispatch(
                 "requested_sections",
             ),
         )
+    if operation == "reflex":
+        return runtime.reflex(
+            _mapping_text(payload, "query"),
+            max_tokens=_mapping_optional_int(payload, "max_tokens"),
+            max_latency_ms=_mapping_optional_int(payload, "max_latency_ms"),
+            prior_context=_mapping_optional_object_list(payload, "prior_context"),
+        )
     if operation == "capture":
         _require_distilled(payload, operation)
         return runtime.capture_distilled(
@@ -223,6 +231,23 @@ def _mapping_optional_str_list(
         if not isinstance(entry, str) or not entry.strip():
             raise ValueError(f"{name} must contain non-empty strings")
         result.append(entry.strip())
+    return result
+
+
+def _mapping_optional_object_list(
+    value: Mapping[str, Any],
+    name: str,
+) -> list[Mapping[str, Any]] | None:
+    item = value.get(name)
+    if item is None:
+        return None
+    if not isinstance(item, list):
+        raise ValueError(f"{name} must be a JSON array")
+    result: list[Mapping[str, Any]] = []
+    for entry in item:
+        if not isinstance(entry, Mapping):
+            raise ValueError(f"{name} must contain JSON objects")
+        result.append(entry)
     return result
 
 

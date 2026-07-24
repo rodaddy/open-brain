@@ -65,11 +65,19 @@ FIRST_CLASS_RUNTIME_TOOL_VERSIONS: Mapping[str, int] = {
     "session_start": 2,
     "session_wrap": 2,
     "agent_context_pack": 2,
+    # A reflex is a first-class direct-only runtime operation, so the live
+    # contract proof that gates direct dispatch must require the reflex tool at
+    # its published semantic version (agent_reflex_pointers.v1 in src/contract.ts
+    # and the v23 tool_contracts). Without this floor a manifest could omit the
+    # reflex or advertise the wrong version and the runtime would still dispatch
+    # it and hand back a content-bearing receipt.
+    "agent_reflex_pointers": 1,
     "append_session_event": 8,
 }
 FIRST_CLASS_RUNTIME_TOOLS = tuple(FIRST_CLASS_RUNTIME_TOOL_VERSIONS)
 REQUIRED_CONTRACT_TOOL_VERSIONS: Mapping[str, int] = {
     "agent_context_pack": FIRST_CLASS_RUNTIME_TOOL_VERSIONS["agent_context_pack"],
+    "agent_reflex_pointers": FIRST_CLASS_RUNTIME_TOOL_VERSIONS["agent_reflex_pointers"],
     "append_session_event": FIRST_CLASS_RUNTIME_TOOL_VERSIONS["append_session_event"],
 }
 REQUIRED_CONTRACT_TOOLS = (

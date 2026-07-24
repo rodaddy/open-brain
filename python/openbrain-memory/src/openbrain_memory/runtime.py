@@ -43,10 +43,19 @@ from ._runtime_validation import (
     persisted_text as _validate_persisted_text,
 )
 from ._runtime_validation import (
+    project_reflex_result as _project_reflex_result,
+)
+from ._runtime_validation import (
+    reflex_query as _reflex_query,
+)
+from ._runtime_validation import (
     reject_unknown_keys as _reject_unknown_keys,
 )
 from ._runtime_validation import (
     require_text as _require_text,
+)
+from ._runtime_validation import (
+    sanitize_prior_context as _sanitize_prior_context,
 )
 from ._runtime_validation import (
     source_bool as _source_bool,
@@ -210,6 +219,32 @@ class RuntimeScope:
         }
         if self.thread_id is not None:
             arguments["thread_id"] = self.thread_id
+        return arguments
+
+    def reflex_arguments(
+        self,
+        query: str,
+        prior_context: Sequence[Mapping[str, Any]] | None,
+    ) -> dict[str, Any]:
+        """Return the reflex tool's exact-scope, body-free request fields.
+
+        Reuses the exact-scope coordinates ``agent_context_pack`` requires and
+        adds only the required ``query`` and an optional body-free
+        ``prior_context``; the reflex has no ``namespace`` argument because the
+        server derives it from the bound token.
+        """
+        arguments: dict[str, Any] = {
+            "agent": self.agent,
+            "platform": self.platform,
+            "server_id": self.server_id,
+            "channel_id": self.channel_id,
+            "session_key": self.session_key,
+            "query": _reflex_query(query),
+        }
+        if self.thread_id is not None:
+            arguments["thread_id"] = self.thread_id
+        if prior_context is not None:
+            arguments["prior_context"] = _sanitize_prior_context(prior_context)
         return arguments
 
     def start_metadata(self) -> dict[str, str]:
@@ -588,9 +623,7 @@ class FirstClassMemoryRuntime:
                 else ReceiptStatus.FAILED
             )
             receipt = self._receipt("recall", status, durable=False)
-            drain = (
-                self._drain_spool() if status is ReceiptStatus.DIRECT else None
-            )
+            drain = self._drain_spool() if status is ReceiptStatus.DIRECT else None
             return RuntimeOutput(receipt=receipt, context=result, drain=drain)
         except Exception as error:
             return RuntimeOutput(
@@ -601,6 +634,99 @@ class FirstClassMemoryRuntime:
                     error=error,
                 ),
                 context={},
+            )
+
+    def reflex(
+        self,
+        query: str,
+        *,
+        max_tokens: int | None = None,
+        max_latency_ms: int | None = None,
+        prior_context: Sequence[Mapping[str, Any]] | None = None,
+    ) -> RuntimeOutput:
+        """Return exact-scope body-free reflex pointers for the current query.
+
+        A pure read: it routes direct-only (never spool, never mcp2cli
+        fallback), enforces the exact returned scope and the ordinary
+        ``openbrain.agent_reflex_pointers.v1`` envelope, and returns that
+        validated envelope through ``result`` with a content-free receipt.
+        """
+        with self._operation_lock:
+            return self._reflex(
+                query,
+                max_tokens=max_tokens,
+                max_latency_ms=max_latency_ms,
+                prior_context=prior_context,
+            )
+
+    def _reflex(
+        self,
+        query: str,
+        *,
+        max_tokens: int | None,
+        max_latency_ms: int | None,
+        prior_context: Sequence[Mapping[str, Any]] | None,
+    ) -> RuntimeOutput:
+        self._router.reset()
+        try:
+            arguments = self.scope.reflex_arguments(query, prior_context)
+            budget: dict[str, int] = {}
+            if max_tokens is not None:
+                budget["max_tokens"] = _bounded_int(
+                    max_tokens,
+                    "max_tokens",
+                    minimum=100,
+                    maximum=20_000,
+                )
+            if max_latency_ms is not None:
+                budget["max_latency_ms"] = _bounded_int(
+                    max_latency_ms,
+                    "max_latency_ms",
+                    minimum=1,
+                    maximum=10_000,
+                )
+            if budget:
+                arguments["budget"] = budget
+            local_timeout = (
+                max_latency_ms / 1000 if max_latency_ms is not None else None
+            )
+            result = self._router.agent_reflex_pointers(
+                timeout=local_timeout,
+                **arguments,
+            )
+            # Never surface the raw server payload: project the complete
+            # openbrain.agent_reflex_pointers.v1 envelope into a freshly built,
+            # body-free mapping. Any invariant break, raw body/display field, or
+            # broken citation bijection raises here and fails the read closed.
+            try:
+                projected = _project_reflex_result(
+                    result,
+                    self.config.namespace,
+                    self.scope,
+                    str(arguments["query"]),
+                )
+            except ValueError as error:
+                raise _ReflexResultError from error
+            status = (
+                ReceiptStatus(self._router.state.path)
+                if self._router.state.path is not None
+                else ReceiptStatus.FAILED
+            )
+            receipt = self._receipt("reflex", status, durable=False)
+            return RuntimeOutput(receipt=receipt, result=projected)
+        except Exception as error:
+            # A reflex failure receipt carries a stable content-free category, not
+            # redacted exception text: even a redacted message could echo a
+            # private, non-secret-shaped sentinel from a hostile server body. The
+            # category is derived from the failure kind alone.
+            return RuntimeOutput(
+                receipt=self._receipt(
+                    "reflex",
+                    ReceiptStatus.FAILED,
+                    durable=False,
+                    error=_reflex_error_category(error),
+                ),
+                result={},
             )
 
     def capture_distilled(
@@ -698,9 +824,7 @@ class FirstClassMemoryRuntime:
             )
             receipt = self._receipt(operation, receipt_status, durable=True)
             drain = (
-                self._drain_spool()
-                if receipt_status is ReceiptStatus.SAVED
-                else None
+                self._drain_spool() if receipt_status is ReceiptStatus.SAVED else None
             )
             return RuntimeOutput(receipt=receipt, result=result, drain=drain)
         except ValueError as error:
@@ -894,9 +1018,7 @@ class FirstClassMemoryRuntime:
         try:
             if tool == "session_start":
                 scope = (
-                    self._replay_scope
-                    if self._replay_scope is not None
-                    else self.scope
+                    self._replay_scope if self._replay_scope is not None else self.scope
                 )
                 _validate_started_lane(result, self.config.namespace, scope)
             elif tool == "agent_context_pack":
@@ -937,6 +1059,33 @@ class FirstClassMemoryRuntime:
             spool_key=spool_key,
             error=error_text,
         )
+
+
+class _ReflexResultError(Exception):
+    """A projected reflex envelope failed a body-free invariant.
+
+    Carries no message so a hostile server envelope can never smuggle text into
+    the content-free failure receipt; the stable category is derived from the
+    exception type alone.
+    """
+
+
+# Stable, content-free reflex failure categories. The failure receipt never
+# echoes exception text — a redacted message could still surface a private,
+# non-secret-shaped sentinel from a hostile server body — so the category is
+# derived from the failure kind only.
+_REFLEX_ERROR_REQUEST_INVALID = "reflex_request_invalid"
+_REFLEX_ERROR_RESULT_INVALID = "reflex_result_invalid"
+_REFLEX_ERROR_DISPATCH_FAILED = "reflex_dispatch_failed"
+
+
+def _reflex_error_category(error: BaseException) -> str:
+    """Map a reflex failure to a stable content-free category label."""
+    if isinstance(error, _ReflexResultError):
+        return _REFLEX_ERROR_RESULT_INVALID
+    if isinstance(error, ValueError):
+        return _REFLEX_ERROR_REQUEST_INVALID
+    return _REFLEX_ERROR_DISPATCH_FAILED
 
 
 def _failed_write(operation: str, error: BaseException) -> RuntimeOutput:
