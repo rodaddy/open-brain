@@ -758,3 +758,24 @@ digest is not observed-content truth — hash received bytes server-side).
 - Is there a regression proving forged caller-attributed content for an approved
   root is rejected/ignored in favor of the server-derived content, failing on the
   pre-fix accept-caller-body path?
+
+## [2026-07-23] Caller-selectable unindexed query modes need privilege, rate, and cost controls
+
+**Severity:** MEDIUM
+**Source:** PR #368 review, 2026-07-23
+**Scope:** caller-selected FTS configurations and other query modes that bypass
+an index
+**Status:** active
+
+An allowlisted query mode can still be a resource-exhaustion surface. If a
+caller can replace an indexed predicate with per-row computation across multiple
+tables, the server must constrain who may select it and bound its aggregate
+frequency and database cost; ordinary result limits do not bound the scan work
+performed before rows are returned.
+
+### Review Questions
+
+- Is the unindexed mode restricted to an appropriate role or server-owned
+  corpus setting rather than every reader?
+- Are rate, concurrency, statement-timeout, and cost/table-scope limits enforced
+  and tested on the expensive path?

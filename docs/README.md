@@ -68,6 +68,10 @@ EMBEDDING_API_KEY=your-key
 EMBEDDING_MODEL=embeddinggemma-300m-8bit
 EMBEDDING_DIMENSIONS=768
 
+# Optional operator opt-in for the public search_brain default
+# Non-English keyword/hybrid FTS is recomputed on the fly and is not index-backed
+# OPENBRAIN_FTS_CONFIG=german
+
 # Server
 PORT=3100
 
@@ -333,7 +337,9 @@ Supporting tables: `entry_access_log` (usage tracking), `discarded_entries` (arc
 `search_brain` fuses results from two retrieval paths:
 
 1. **Vector search** — HNSW nearest-neighbor over halfvec(768) embeddings (cosine distance)
-2. **Full-text search** — PostgreSQL `tsvector` with English stemming
+2. **Full-text search** — PostgreSQL `tsvector`; English uses the stored GIN-indexed `search_vector`
+
+English is the shared default and preserves existing search behavior. Supported non-English configurations recompute the same source text with PostgreSQL `to_tsvector` on the fly for keyword and hybrid searches, so those scans are not index-backed. `OPENBRAIN_FTS_CONFIG` is an operator opt-in that changes the public `search_brain` deployment default; it does not implicitly change sibling `executeSearch` consumers. A caller may explicitly select English, while an explicitly requested effective non-English `fts_config` requires the `admin` or `ob-admin` role.
 
 Results are merged via Reciprocal Rank Fusion (RRF) with adjustments for:
 - **Cognitive tier** — hot entries boosted (+0.3), cold entries penalized (−0.2)

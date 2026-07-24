@@ -22,10 +22,18 @@ import {
   ALL_TABLES,
   SOURCE_LABELS,
   CONTENT_PREVIEW,
+  FTS_SOURCE_TEXT,
   LINK_RELATIONS,
   TABLE_ALIAS,
   VALID_TIERS,
 } from "./table-constants.ts";
+import {
+  DEFAULT_FTS_CONFIG,
+  ftsConfigLiteral,
+  requestFtsConfig,
+  SUPPORTED_FTS_CONFIGS,
+  type FtsConfig,
+} from "./fts-config.ts";
 
 export { ALL_TABLES };
 
@@ -44,7 +52,18 @@ export type { SourceScope };
 
 type ExecuteSearchOptions = {
   enableGraph?: boolean;
+  /**
+   * Text-search configuration for the lexical arm. When unset, defaults to the
+   * shared english configuration. The public `search_brain` handler is the only
+   * boundary that resolves its request argument and deployment env; sibling
+   * executeSearch callers remain byte-compatible unless they explicitly pass a
+   * config.
+   */
+  ftsConfig?: FtsConfig;
 };
+
+const NON_ENGLISH_FTS_AUTHORIZATION_ERROR =
+  "Permission denied: non-English FTS configuration requires admin or ob-admin";
 
 /** RRF constant -- standard value from Cormack et al. 2009 */
 const RRF_K = 60;
@@ -557,9 +576,39 @@ function buildTableCTE(
 )`;
 }
 
+/**
+ * Build the lexical (FTS) match + rank expressions for one table under a chosen
+ * text-search configuration.
+ *
+ * english (default): use the GIN-indexed stored `search_vector` column exactly
+ * as before -- byte-identical to the pre-#341 behavior and index-fast.
+ *
+ * non-english supported config: recompute `to_tsvector(<config>, <source text>)`
+ * on the fly against the same columns the stored column indexes, so the query
+ * arm and the analyzed text share one configuration (correct stemming, no
+ * index/query mismatch, no migration). `config` is an allowlist-validated
+ * FtsConfig; ftsConfigLiteral re-asserts that before it is interpolated.
+ */
+function ftsMatchExpressions(
+  table: Table,
+  config: FtsConfig,
+): {
+  vectorSql: string;
+  querySql: string;
+} {
+  const querySql = `plainto_tsquery('${ftsConfigLiteral(config)}', (SELECT q FROM fts_query))`;
+  if (config === "english") {
+    const alias = TABLE_ALIAS[table];
+    return { vectorSql: `${alias}.search_vector`, querySql };
+  }
+  const vectorSql = `to_tsvector('${ftsConfigLiteral(config)}', ${FTS_SOURCE_TEXT[table]})`;
+  return { vectorSql, querySql };
+}
+
 function buildFtsCTE(
   table: SearchTable,
   perTableLimit: number,
+  ftsConfig: FtsConfig,
   tier?: Tier,
   namespaceParamIndex?: number,
   namespaceIsArray = false,
@@ -617,6 +666,8 @@ function buildFtsCTE(
     ? `${alias}.extracted_metadata`
     : "NULL::jsonb AS extracted_metadata";
 
+  const { vectorSql, querySql } = ftsMatchExpressions(table, ftsConfig);
+
   return `${cteName} AS (
   SELECT
     '${label}' AS source_type,
@@ -628,12 +679,12 @@ function buildFtsCTE(
     ${alias}.created_at,
     ${alias}.updated_at,
     ${alias}.tier,
-    ts_rank_cd(${alias}.search_vector, plainto_tsquery('english', (SELECT q FROM fts_query))) AS fts_rank,
+    ts_rank_cd(${vectorSql}, ${querySql}) AS fts_rank,
     COALESCE(${alias}.usefulness_score, 0.5) AS usefulness,
     COALESCE(${alias}.access_count, 0) AS access_count,
     ${metaCol}
   FROM ${table} ${alias}
-  WHERE ${alias}.search_vector @@ plainto_tsquery('english', (SELECT q FROM fts_query))
+  WHERE ${vectorSql} @@ ${querySql}
     AND ${alias}.archived_at IS NULL${tierFilter}${nsFilter}${sourceScopeFilter}
   ORDER BY fts_rank DESC
   LIMIT ${perTableLimit}
@@ -815,6 +866,7 @@ async function ftsSearch(
   offset = 0,
   namespace?: NamespaceFilter,
   sourceScope?: SourceScope,
+  ftsConfig: FtsConfig = DEFAULT_FTS_CONFIG,
 ): Promise<SearchRow[]> {
   const perTableLimit = fetchLimit;
   const params = [query, fetchLimit, offset];
@@ -825,6 +877,7 @@ async function ftsSearch(
     buildFtsCTE(
       t,
       perTableLimit,
+      ftsConfig,
       tier,
       namespaceParamIndex,
       namespaceIsArray,
@@ -993,6 +1046,7 @@ export async function executeSearch(
   options: ExecuteSearchOptions = {},
 ): Promise<SearchRow[]> {
   const enableGraph = options.enableGraph === true;
+  const ftsConfig = options.ftsConfig ?? DEFAULT_FTS_CONFIG;
   if (sourceScope) {
     accessibleTables = accessibleTables.filter((table) => table !== "entities");
     if (accessibleTables.length === 0) return [];
@@ -1008,6 +1062,7 @@ export async function executeSearch(
       offset,
       namespace,
       sourceScope,
+      ftsConfig,
     );
     if (includeLinks !== false) {
       rows = await attachExplicitLinks(deps, rows, namespace);
@@ -1046,6 +1101,7 @@ export async function executeSearch(
           0,
           namespace,
           sourceScope,
+          ftsConfig,
         );
         rows = rrfMerge([], ftsRows, totalNeeded, graphRows).slice(offset);
       } else {
@@ -1058,6 +1114,7 @@ export async function executeSearch(
           offset,
           namespace,
           sourceScope,
+          ftsConfig,
         );
       }
       if (includeLinks !== false) {
@@ -1110,6 +1167,7 @@ export async function executeSearch(
       0,
       namespace,
       sourceScope,
+      ftsConfig,
     ),
   ]);
   const graphRows =
@@ -1354,6 +1412,20 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
           .describe(
             "Optional: require matching source reference client_id, matter_id, document_id, path, and/or dms_id.",
           ),
+        fts_config: z
+          .string()
+          .trim()
+          .min(1)
+          .max(64)
+          .optional()
+          .describe(
+            `Optional: keyword full-text-search language configuration for this request. ` +
+              `Accepts a supported Postgres regconfig (${SUPPORTED_FTS_CONFIGS.join(", ")}) ` +
+              `or a language token (e.g. 'de', 'de-DE', 'spanish'). Unrecognized values ` +
+              `fall back to the deployment corpus default (OPENBRAIN_FTS_CONFIG, else english). ` +
+              `An explicitly requested effective non-English config requires admin or ob-admin. ` +
+              `Affects keyword/hybrid stemming only; english is byte-identical to prior behavior.`,
+          ),
       },
       annotations: {
         title: "Search Brain",
@@ -1431,6 +1503,24 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
       const tier = args.tier as Tier | undefined;
       const requestedNamespace = args.namespace as string | undefined;
       const sourceScope = args.source_scope as SourceScope | undefined;
+      const requestedFtsConfig = args.fts_config as string | undefined;
+      const ftsConfig = requestFtsConfig(requestedFtsConfig);
+      if (
+        requestedFtsConfig !== undefined &&
+        ftsConfig !== DEFAULT_FTS_CONFIG &&
+        auth.role !== "admin" &&
+        auth.role !== "ob-admin"
+      ) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: NON_ENGLISH_FTS_AUTHORIZATION_ERROR,
+            },
+          ],
+          isError: true,
+        };
+      }
       const sourceScopeError = sourceScopeAuthorizationError(auth, sourceScope);
       if (sourceScopeError) {
         return {
@@ -1483,7 +1573,7 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
               namespace,
               undefined,
               sourceScope,
-              { enableGraph: true },
+              { enableGraph: true, ftsConfig },
             )
           : await executeSearchWithScopedSharedFallback(
               deps,
@@ -1496,7 +1586,7 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
               namespace,
               undefined,
               sourceScope,
-              { enableGraph: true },
+              { enableGraph: true, ftsConfig },
             );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
