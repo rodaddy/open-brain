@@ -255,6 +255,115 @@ describe("migration compatibility matrix", () => {
       "unknown_migrations",
     );
   });
+
+  const productionRepo = [
+    "001_init.sql",
+    "002_curation.sql",
+    "003_extraction_metadata.sql",
+    "004_contact_fields.sql",
+    "005_fts_hybrid.sql",
+    "006_cognitive_tiering.sql",
+    "006_namespace.sql",
+    "007_search_improvements.sql",
+    "008_index_cleanup.sql",
+    "009_agent_attribution.sql",
+    "010_entity_links.sql",
+    "011_chunking.sql",
+    "012_session_lanes.sql",
+    "013_session_events.sql",
+    "014_namespace_scoped_uniqueness.sql",
+    "015_session_id_namespace_scoped.sql",
+    "016_promotion_provenance.sql",
+    "017_entity_graph_lifecycle.sql",
+    "018_link_relation_supplements.sql",
+    "019_drop_collab_namespace_defaults.sql",
+    "020_session_lane_namespace_hash.sql",
+    "021_source_refs.sql",
+    "022_mcp_tool_audit_log.sql",
+    "023_session_event_transcript_citations.sql",
+    "024_session_lane_content_hash_nonunique.sql",
+    "025_normalize_legacy_development_lanes.sql",
+    "026_maintenance_queue.sql",
+    "027_source_registry.sql",
+    "028_maintenance_jobs_lease_expired_compat.sql",
+    "029_maintenance_jobs_terminal_category.sql",
+    "030_source_sync.sql",
+    "031_source_sync_runs_running_only_unique.sql",
+  ];
+  const productionApplied = [
+    ...productionRepo,
+    "005_fts_hybrid",
+    "010_chunking.sql",
+  ].sort();
+
+  it("normalizes both allowlisted legacy markers in a production-shaped history", () => {
+    expect(compareMigrationSets(productionApplied, productionRepo)).toBe(
+      "equal",
+    );
+  });
+
+  it("normalizes each allowlisted legacy marker independently", () => {
+    expect(
+      compareMigrationSets(
+        [...productionRepo, "005_fts_hybrid"],
+        productionRepo,
+      ),
+    ).toBe("equal");
+    expect(
+      compareMigrationSets(
+        [...productionRepo, "010_chunking.sql"],
+        productionRepo,
+      ),
+    ).toBe("equal");
+  });
+
+  it("rejects near-matches, duplicates, and a missing canonical replacement", () => {
+    expect(
+      compareMigrationSets(["005_fts_hybrid.sql.bak"], productionRepo),
+    ).toBe("unknown_migrations");
+    expect(compareMigrationSets(["010_chunking"], productionRepo)).toBe(
+      "unknown_migrations",
+    );
+    expect(
+      compareMigrationSets(
+        ["005_fts_hybrid", "005_fts_hybrid"],
+        productionRepo,
+      ),
+    ).toBe("unknown_migrations");
+    expect(
+      compareMigrationSets(
+        [
+          ...productionRepo.filter((file) => file !== "005_fts_hybrid.sql"),
+          "005_fts_hybrid",
+        ],
+        productionRepo,
+      ),
+    ).toBe("unknown_migrations");
+    expect(
+      compareMigrationSets(
+        [
+          ...productionRepo.filter((file) => file !== "011_chunking.sql"),
+          "010_chunking.sql",
+        ],
+        productionRepo,
+      ),
+    ).toBe("unknown_migrations");
+    expect(
+      compareMigrationSets(
+        [...productionRepo, "005_fts_hybrid"],
+        productionRepo.filter((file) => file !== "005_fts_hybrid.sql"),
+      ),
+    ).toBe("unknown_migrations");
+  });
+
+  it("still rejects missing and interleaved canonical migrations", () => {
+    expect(
+      compareMigrationSets(
+        productionRepo.filter((file) => file !== "008_index_cleanup.sql"),
+        productionRepo,
+      ),
+    ).toBe("incompatible_interleaved");
+  });
 });
 
 describe("contract compatibility matrix", () => {

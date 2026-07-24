@@ -54,6 +54,7 @@ import {
   EXIT_USAGE,
   NAMESPACE_TABLE_ALLOWLIST,
   RESTORE_RECEIPT_SCHEMA,
+  compareMigrationSets,
   listRepoMigrations,
   redactSecret,
   resolvePgTool,
@@ -503,16 +504,13 @@ export async function validateMigrationsMatchRepo(
       "SELECT filename FROM _migrations ORDER BY filename",
     );
     const applied = rows.map((r) => String(r.filename));
-    const expected = [...repoMigrations].sort();
-    const matches =
-      applied.length === expected.length &&
-      applied.every((f, i) => f === expected[i]);
+    const matches = compareMigrationSets(applied, repoMigrations) === "equal";
     return {
       name: "post_migration_head_matches_repo",
       verdict: matches ? "ok" : "fail",
       detail: matches
         ? `applied=${applied.length}`
-        : `applied=${applied.length} expected=${expected.length}`,
+        : `applied=${applied.length} expected=${repoMigrations.length}`,
     };
   } catch (err) {
     return {

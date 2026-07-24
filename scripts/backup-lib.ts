@@ -383,6 +383,40 @@ export type MigrationCompat =
   | "unknown_migrations"
   | "incompatible_interleaved";
 
+const LEGACY_MIGRATION_REPLACEMENTS = new Map([
+  ["005_fts_hybrid", "005_fts_hybrid.sql"],
+  ["010_chunking.sql", "011_chunking.sql"],
+]);
+
+// These are known duplicate ledger rows, not substitutes for the canonical
+// migrations. Ignore one only when the canonical filename remains present on
+// both sides of the compatibility comparison.
+function normalizeAppliedMigrationHistory(
+  applied: string[],
+  repoMigrations: string[],
+): string[] | null {
+  if (
+    new Set(applied).size !== applied.length ||
+    new Set(repoMigrations).size !== repoMigrations.length
+  ) {
+    return null;
+  }
+
+  const repoSet = new Set(repoMigrations);
+  const appliedSet = new Set(applied);
+  const normalized = new Set<string>();
+  for (const file of applied) {
+    const replacement = LEGACY_MIGRATION_REPLACEMENTS.get(file);
+    if (replacement) {
+      if (!repoSet.has(replacement) || !appliedSet.has(replacement))
+        return null;
+      continue;
+    }
+    normalized.add(file);
+  }
+  return [...normalized].sort();
+}
+
 /**
  * "restorable_with_migrations" requires the sorted backup applied list to be
  * an exact PREFIX of the sorted repo list — subset membership is not enough.
@@ -396,7 +430,11 @@ export function compareMigrationSets(
   repoMigrations: string[],
 ): MigrationCompat {
   const repoSorted = [...repoMigrations].sort();
-  const backupSorted = [...backupApplied].sort();
+  const backupSorted = normalizeAppliedMigrationHistory(
+    backupApplied,
+    repoMigrations,
+  );
+  if (!backupSorted) return "unknown_migrations";
   const repoSet = new Set(repoSorted);
   for (const file of backupSorted) {
     if (!repoSet.has(file)) return "unknown_migrations";

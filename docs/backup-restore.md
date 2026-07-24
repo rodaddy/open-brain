@@ -88,6 +88,17 @@ FAILS CLOSED; an embedding model/dimension mismatch FAILS CLOSED unless
 silently corrupt retrieval). Exit codes: 0 passed/warned, 1 failed, 2 usage,
 3 stale.
 
+One exact legacy-history exception follows issue #370, discovered after PR
+#373 local activation: production `_migrations` contains historical duplicate
+markers `005_fts_hybrid` alongside canonical `005_fts_hybrid.sql`, and
+`010_chunking.sql` alongside canonical `011_chunking.sql`. Only those exact
+legacy markers are ignored when comparing backup/applied history to the current
+repo and when validating the post-forward head, and only when their canonical
+replacement is present in both applied history and the current repo. The
+restored pre-forward history must still match its backup manifest exactly.
+Every other unknown, newer, missing, interleaved, or near-match marker remains
+rejected. No migration row or file is renamed, removed, or mutated.
+
 ### Restore — TESTED (same drill, including refusal paths)
 
 ```bash
