@@ -619,10 +619,24 @@ class FirstClassMemoryRuntime:
             # prior request shape exactly. Revalidate boolean-ness here as well
             # because programmatic callers can bypass the CLI type boundary.
             if include_unreviewed_recovery is not None:
-                arguments["include_unreviewed_recovery"] = _require_bool(
+                opted_in = _require_bool(
                     include_unreviewed_recovery,
                     "include_unreviewed_recovery",
                 )
+                # The server drops the opt-in when requested_sections omits
+                # "recovery"; reject that provably ineffective combination
+                # loudly instead of returning a silently recovery-free pack.
+                if (
+                    opted_in
+                    and requested_sections is not None
+                    and "recovery" not in arguments["requested_sections"]
+                ):
+                    raise ValueError(
+                        "include_unreviewed_recovery=true requires "
+                        "requested_sections to include 'recovery' "
+                        "(or requested_sections to be omitted)"
+                    )
+                arguments["include_unreviewed_recovery"] = opted_in
             local_timeout = (
                 max_latency_ms / 1000 if max_latency_ms is not None else None
             )

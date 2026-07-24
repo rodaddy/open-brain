@@ -193,6 +193,64 @@ def test_recall_rejects_non_boolean_recovery_before_transport() -> None:
     assert tool_calls(transport) == []
 
 
+def test_recall_rejects_recovery_opt_in_without_recovery_section() -> None:
+    transport = LaneAwareTransport()
+    runtime = FirstClassMemoryRuntime(
+        runtime_config(), runtime_scope(), transport=transport
+    )
+
+    output = runtime.recall_context(
+        "what changed?",
+        requested_sections=["working_set"],
+        include_unreviewed_recovery=True,
+    )
+
+    assert output.receipt.status is ReceiptStatus.FAILED
+    assert output.receipt.error == (
+        "include_unreviewed_recovery=true requires requested_sections to "
+        "include 'recovery' (or requested_sections to be omitted)"
+    )
+    assert tool_calls(transport) == []
+
+
+def test_recall_allows_recovery_opt_in_with_recovery_section() -> None:
+    transport = LaneAwareTransport()
+    runtime = FirstClassMemoryRuntime(
+        runtime_config(), runtime_scope(), transport=transport
+    )
+
+    output = runtime.recall_context(
+        "what changed?",
+        requested_sections=["working_set", "recovery"],
+        include_unreviewed_recovery=True,
+    )
+
+    assert output.receipt.status is ReceiptStatus.DIRECT
+    calls = tool_calls(transport)
+    arguments = calls[1]["params"]["arguments"]
+    assert arguments["include_unreviewed_recovery"] is True
+    assert arguments["requested_sections"] == ["working_set", "recovery"]
+
+
+def test_recall_allows_explicit_false_opt_out_without_recovery_section() -> None:
+    transport = LaneAwareTransport()
+    runtime = FirstClassMemoryRuntime(
+        runtime_config(), runtime_scope(), transport=transport
+    )
+
+    output = runtime.recall_context(
+        "what changed?",
+        requested_sections=["working_set"],
+        include_unreviewed_recovery=False,
+    )
+
+    assert output.receipt.status is ReceiptStatus.DIRECT
+    calls = tool_calls(transport)
+    assert (
+        calls[1]["params"]["arguments"]["include_unreviewed_recovery"] is False
+    )
+
+
 def test_recall_omitting_recovery_opt_in_preserves_prior_argument_shape() -> None:
     transport = LaneAwareTransport()
     runtime = FirstClassMemoryRuntime(
