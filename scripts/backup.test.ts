@@ -60,6 +60,7 @@ describe("runPgDump failure handling", () => {
           password: ["dump-secret", "pw"].join("-"),
           dbName: "never_connected",
           dumpPath,
+          snapshot: "00000003-0000001B-1",
         });
       } catch (err) {
         thrown = err as Error;
@@ -94,8 +95,39 @@ describe("runPgDump failure handling", () => {
         password: undefined,
         dbName: "never_connected",
         dumpPath,
+        snapshot: "00000003-0000001B-1",
       });
       expect(await Bun.file(dumpPath).text()).toBe("full-dump-bytes");
+    });
+  });
+
+  it("passes the exported snapshot as a distinct pg_dump option and value", async () => {
+    const dir = await tempDir();
+    const argvPath = join(dir, "argv.json");
+    const script = [
+      `await Bun.write(${JSON.stringify(argvPath)}, JSON.stringify(Bun.argv.slice(2)));`,
+      `process.stdout.write("dump");`,
+      "",
+    ].join("\n");
+    await withFakePgDump(script, async () => {
+      const dumpPath = join(await tempDir(), "openbrain.dump");
+      const snapshot = "00000003-0000001B-1 --no-data";
+      await runPgDump({
+        host: "127.0.0.1",
+        port: 5432,
+        user: "drill",
+        password: undefined,
+        dbName: "never_connected",
+        dumpPath,
+        snapshot,
+      });
+      const argv = JSON.parse(await Bun.file(argvPath).text()) as string[];
+      const snapshotIndex = argv.indexOf("--snapshot");
+      expect(snapshotIndex).toBeGreaterThanOrEqual(0);
+      expect(argv[snapshotIndex + 1]).toBe(snapshot);
+      expect(argv).not.toContain(`--snapshot=${snapshot}`);
+      expect(argv).not.toContain("--no-data");
+      expect(argv).toContain("-Fc");
     });
   });
 });

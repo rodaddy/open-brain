@@ -35,7 +35,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import pg from "pg";
 import { runMigrations } from "../../src/db/migrate.ts";
-import { pgToolAvailable } from "../backup-lib.ts";
+import { pgToolAvailable, resolvePgTool } from "../backup-lib.ts";
 import {
   RESTORE_WIPE_APPROVAL_ENV,
   RESTORE_WIPE_APPROVAL_VALUE,
@@ -56,7 +56,8 @@ const SRC_DB = "open_brain_ci_restore_src";
 const TGT_DB = "open_brain_ci_restore_tgt";
 const OLD_SRC_DB = "open_brain_ci_restore_oldsrc";
 const OLD_TGT_DB = "open_brain_ci_restore_oldtgt";
-const SCRATCH_DBS = [SRC_DB, TGT_DB, OLD_SRC_DB, OLD_TGT_DB];
+const SNAPSHOT_TGT_DB = "open_brain_ci_restore_snapshot_tgt";
+const SCRATCH_DBS = [SRC_DB, TGT_DB, OLD_SRC_DB, OLD_TGT_DB, SNAPSHOT_TGT_DB];
 
 const NS_ALPHA = "drill-ns-alpha";
 const NS_BETA = "drill-ns-beta";
@@ -385,6 +386,101 @@ drillDescribe("backup restore drill (live Postgres, #298)", () => {
         expect(eventRows[0]!.count).toBe(2);
       } finally {
         await tgtPool.end();
+      }
+    }, 180_000);
+
+    it("uses one exported snapshot for manifest counts and dump contents across a concurrent commit", async () => {
+      const coordinationDir = await tempDir();
+      const readyPath = join(coordinationDir, "pg-dump-ready");
+      const releasePath = join(coordinationDir, "pg-dump-release");
+      const wrapperPath = join(coordinationDir, "coordinated-pg-dump.ts");
+      const realPgDump = resolvePgTool("pg_dump");
+      await Bun.write(
+        wrapperPath,
+        [
+          `await Bun.write(process.env.OB_SNAPSHOT_TEST_READY!, "ready");`,
+          `while (!(await Bun.file(process.env.OB_SNAPSHOT_TEST_RELEASE!).exists())) await Bun.sleep(20);`,
+          `const tool = JSON.parse(process.env.OB_SNAPSHOT_TEST_TOOL!) as string[];`,
+          `const proc = Bun.spawn([...tool, ...Bun.argv.slice(2)], {`,
+          `  env: process.env, stdin: "inherit", stdout: "inherit", stderr: "inherit",`,
+          `});`,
+          `process.exit(await proc.exited);`,
+          "",
+        ].join("\n"),
+      );
+
+      const snapshotBackupDir = join(await tempDir(), "set-snapshot");
+      const backupPromise = runCli("backup.ts", ["--out", snapshotBackupDir], {
+        ...cliEnv(admin, SRC_DB),
+        OPENBRAIN_PG_DUMP_BIN: `bun ${wrapperPath}`,
+        OB_SNAPSHOT_TEST_READY: readyPath,
+        OB_SNAPSHOT_TEST_RELEASE: releasePath,
+        OB_SNAPSHOT_TEST_TOOL: JSON.stringify(realPgDump),
+      });
+
+      const readyDeadline = Date.now() + 30_000;
+      while (!(await Bun.file(readyPath).exists())) {
+        if (Date.now() >= readyDeadline) {
+          await Bun.write(releasePath, "release");
+          await backupPromise;
+          throw new Error("timed out waiting for coordinated pg_dump");
+        }
+        await Bun.sleep(20);
+      }
+
+      const concurrentHash = "drill-concurrent-after-snapshot";
+      const writer = makePool(admin, SRC_DB);
+      try {
+        await writer.query(
+          `INSERT INTO thoughts (content, created_by, namespace, content_hash)
+             VALUES ($1, $2, $3, $4)`,
+          [
+            "concurrent write after exported snapshot",
+            "drill",
+            NS_ALPHA,
+            concurrentHash,
+          ],
+        );
+      } finally {
+        await writer.end();
+        // Always unblock the wrapper, including when the concurrent write
+        // fails, so the backup subprocess cannot leak into later tests.
+        await Bun.write(releasePath, "release");
+      }
+
+      const backup = await backupPromise;
+      expect(backup.exitCode).toBe(0);
+      expect(backup.receipt?.status).toBe("ok");
+      const manifest = JSON.parse(
+        await Bun.file(join(snapshotBackupDir, "manifest.json")).text(),
+      );
+
+      const restore = await runCli(
+        "restore.ts",
+        [
+          "--dir",
+          snapshotBackupDir,
+          "--target-db-url",
+          dbUrl(admin, SNAPSHOT_TGT_DB),
+        ],
+        cliEnv(admin, SRC_DB),
+      );
+      expect(restore.exitCode).toBe(0);
+      expect(restore.receipt?.status).toBe("ok");
+
+      const restored = makePool(admin, SNAPSHOT_TGT_DB);
+      try {
+        const { rows: countRows } = await restored.query(
+          "SELECT COUNT(*)::int AS count FROM thoughts",
+        );
+        expect(countRows[0]!.count).toBe(manifest.row_counts.thoughts);
+        const { rows: concurrentRows } = await restored.query(
+          "SELECT 1 FROM thoughts WHERE content_hash = $1",
+          [concurrentHash],
+        );
+        expect(concurrentRows).toEqual([]);
+      } finally {
+        await restored.end();
       }
     }, 180_000);
 
