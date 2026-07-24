@@ -311,8 +311,7 @@ describe.skipIf(!REAL_PG_URL)(
       expect(proof).toMatchObject({
         database,
         user,
-        // node-postgres renders inet as CIDR text (127.0.0.1/32, ::1/128).
-        serverAddress: host === "127.0.0.1" ? "127.0.0.1/32" : "::1/128",
+        serverAddress: host,
         serverPort: Number.parseInt(url.port || "5432", 10),
         postgresMajor: 18,
         transactionReadOnly: true,
