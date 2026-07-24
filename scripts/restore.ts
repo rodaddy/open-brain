@@ -494,7 +494,7 @@ export async function validatePostRestore(
   return results;
 }
 
-/** After forward migration, the applied set must equal the repo set. */
+/** After forward migration, applied history must equal the repo after approved legacy normalization. */
 export async function validateMigrationsMatchRepo(
   db: Queryable,
   repoMigrations: string[],
