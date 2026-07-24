@@ -9,7 +9,8 @@ const REQUIRED_LOCAL_TOKEN_KEYS = [
   "AUTH_TOKEN_READONLY",
 ] as const;
 
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { lstatSync, realpathSync } from "node:fs";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
 const PROHIBITED_PATH_KEYS = ["EMBEDDING_WATCHDOG_RESTART_SCRIPT"] as const;
 
@@ -60,6 +61,55 @@ function requirePathInsideRoot(path: string, root: string, key: string): void {
     fromRoot === ".." ||
     fromRoot.startsWith(`..${sep}`) ||
     isAbsolute(fromRoot)
+  ) {
+    throw new Error(
+      `Local clone mode requires ${key} beneath OPENBRAIN_LOCAL_CLONE_ROOT`,
+    );
+  }
+
+  let canonicalRoot: string;
+  try {
+    canonicalRoot = realpathSync(resolvedRoot);
+  } catch {
+    throw new Error(
+      "Local clone mode requires OPENBRAIN_LOCAL_CLONE_ROOT to exist",
+    );
+  }
+
+  let existingPath = resolvedPath;
+  while (true) {
+    try {
+      lstatSync(existingPath);
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw new Error(
+          `Local clone mode requires ${key} beneath OPENBRAIN_LOCAL_CLONE_ROOT`,
+        );
+      }
+      const parent = dirname(existingPath);
+      if (parent === existingPath) {
+        throw new Error(
+          `Local clone mode requires ${key} beneath OPENBRAIN_LOCAL_CLONE_ROOT`,
+        );
+      }
+      existingPath = parent;
+    }
+  }
+
+  let canonicalExistingPath: string;
+  try {
+    canonicalExistingPath = realpathSync(existingPath);
+  } catch {
+    throw new Error(
+      `Local clone mode requires ${key} beneath OPENBRAIN_LOCAL_CLONE_ROOT`,
+    );
+  }
+  const fromCanonicalRoot = relative(canonicalRoot, canonicalExistingPath);
+  if (
+    fromCanonicalRoot === ".." ||
+    fromCanonicalRoot.startsWith(`..${sep}`) ||
+    isAbsolute(fromCanonicalRoot)
   ) {
     throw new Error(
       `Local clone mode requires ${key} beneath OPENBRAIN_LOCAL_CLONE_ROOT`,

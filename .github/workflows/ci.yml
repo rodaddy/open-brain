@@ -126,6 +126,12 @@ jobs:
       # migration test's DROP TABLE cannot clobber the live-Postgres suites.
       DB_NAME: open_brain_ci
       DB_NAME_TEST: open_brain_ci_migrations
+      # The local-clone boundary is a separate fresh database owned by the
+      # exact non-superuser role the runbook creates. It is intentionally not
+      # the admin/migration database above.
+      DB_NAME_LOCAL_CLONE: open_brain_local_ci_clone
+      DB_USER_LOCAL_CLONE: open_brain_local_clone
+      DB_PASSWORD_LOCAL_CLONE: local-clone-ci
       OB_CI_PG_CONTAINER: obci-pg-${{ github.run_id }}-${{ github.run_attempt }}
       # Digest-pinned image: this job gates deploy, so a mutable tag must not
       # be able to change under us. Digest is pgvector/pgvector:pg18
@@ -187,7 +193,7 @@ jobs:
           docker logs "${OB_CI_PG_CONTAINER}" 2>&1 | tail -20 || true
           exit 1
 
-      - name: Create isolated migration-test database
+      - name: Create isolated migration-test and local-clone databases
         # Pin UTF8 (ENCODING 'UTF8' TEMPLATE template0) for the same reason as
         # the `check` job: the snowball stemmers require UTF8 to fold multibyte
         # accented characters. The pgvector image's open_brain_ci defaults to
@@ -200,6 +206,21 @@ jobs:
           PGPASSWORD=ci psql -h 127.0.0.1 -p "${DB_PORT}" -U ci -d "${DB_NAME_TEST}" \
             -v ON_ERROR_STOP=1 \
             -c "CREATE EXTENSION IF NOT EXISTS vector;"
+          PGPASSWORD=ci psql -h 127.0.0.1 -p "${DB_PORT}" -U ci -d open_brain_ci \
+            -v ON_ERROR_STOP=1 \
+            -v clone_role="${DB_USER_LOCAL_CLONE}" \
+            -v clone_password="${DB_PASSWORD_LOCAL_CLONE}" <<'SQL'
+          CREATE ROLE :"clone_role" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD :'clone_password';
+          SQL
+          PGPASSWORD=ci psql -h 127.0.0.1 -p "${DB_PORT}" -U ci -d open_brain_ci \
+            -v ON_ERROR_STOP=1 \
+            -c "CREATE DATABASE ${DB_NAME_LOCAL_CLONE} OWNER ${DB_USER_LOCAL_CLONE} ENCODING 'UTF8' TEMPLATE template0;"
+          # Administrative bootstrap only: the clone user remains a
+          # non-superuser and restores into this fresh database.
+          PGPASSWORD=ci psql -h 127.0.0.1 -p "${DB_PORT}" -U ci -d "${DB_NAME_LOCAL_CLONE}" \
+            -v ON_ERROR_STOP=1 \
+            -c "CREATE EXTENSION vector;" \
+            -c "CREATE EXTENSION pg_stat_statements;"
 
       - name: Run migrations against ephemeral Postgres
         run: bun run migrate
@@ -207,6 +228,7 @@ jobs:
       - name: Test (JUnit reporter for the anti-skip guard)
         run: |
           export OPENBRAIN_TEST_DATABASE_URL="postgres://ci:ci@127.0.0.1:${DB_PORT}/open_brain_ci"
+          export OPENBRAIN_LOCAL_CLONE_TEST_DATABASE_URL="postgres://${DB_USER_LOCAL_CLONE}:${DB_PASSWORD_LOCAL_CLONE}@127.0.0.1:${DB_PORT}/${DB_NAME_LOCAL_CLONE}"
           bun test \
             --reporter=junit \
             --reporter-outfile=${{ runner.temp }}/junit-db.xml
@@ -242,6 +264,7 @@ jobs:
           # URL assembled from the job's env (throwaway ephemeral-container
           # credential) so no user:pass URI literal lives in the workflow.
           export OPENBRAIN_TEST_DATABASE_URL="postgres://${DB_USER}:${DB_PASSWORD}@127.0.0.1:${DB_PORT}/${DB_NAME}"
+          export OPENBRAIN_LOCAL_CLONE_TEST_DATABASE_URL="postgres://${DB_USER_LOCAL_CLONE}:${DB_PASSWORD_LOCAL_CLONE}@127.0.0.1:${DB_PORT}/${DB_NAME_LOCAL_CLONE}"
           export OPENBRAIN_BACKUP_DRILL=1
           export OPENBRAIN_PG_DUMP_BIN="docker exec -e PGPASSWORD ${OB_CI_PG_CONTAINER} pg_dump"
           export OPENBRAIN_PG_RESTORE_BIN="docker exec -i -e PGPASSWORD ${OB_CI_PG_CONTAINER} pg_restore"

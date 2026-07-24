@@ -42,12 +42,13 @@ import {
 } from "../restore.ts";
 
 const DB_URL = process.env.OPENBRAIN_TEST_DATABASE_URL;
+const LOCAL_CLONE_URL = process.env.OPENBRAIN_LOCAL_CLONE_TEST_DATABASE_URL;
 const DRILL_ENABLED = process.env.OPENBRAIN_BACKUP_DRILL === "1";
 const TOOLS_AVAILABLE =
   pgToolAvailable("pg_dump") && pgToolAvailable("pg_restore");
 
 const drillDescribe = DRILL_ENABLED ? describe : describe.skip;
-const READY = Boolean(DB_URL) && TOOLS_AVAILABLE;
+const READY = Boolean(DB_URL) && Boolean(LOCAL_CLONE_URL) && TOOLS_AVAILABLE;
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const MIGRATIONS_DIR = join(REPO_ROOT, "src", "db", "migrations");
@@ -141,6 +142,7 @@ drillDescribe("backup restore drill (live Postgres, #298)", () => {
     // OPENBRAIN_BACKUP_DRILL=1 means "the drill MUST run" — missing DB URL or
     // pg client tools is a wiring failure, not a skip.
     expect(Boolean(DB_URL)).toBe(true);
+    expect(Boolean(LOCAL_CLONE_URL)).toBe(true);
     expect(TOOLS_AVAILABLE).toBe(true);
   });
 
@@ -150,6 +152,9 @@ drillDescribe("backup restore drill (live Postgres, #298)", () => {
     // the drill is actually ready to run.
     const admin: Conn & { database: string } = READY
       ? parseAdminUrl(DB_URL!)
+      : { host: "", port: 0, user: "", password: undefined, database: "" };
+    const clone: Conn & { database: string } = READY
+      ? parseAdminUrl(LOCAL_CLONE_URL!)
       : { host: "", port: 0, user: "", password: undefined, database: "" };
     let adminClient: pg.Client;
     const tempDirs: string[] = [];
@@ -386,6 +391,55 @@ drillDescribe("backup restore drill (live Postgres, #298)", () => {
         expect(eventRows[0]!.count).toBe(2);
       } finally {
         await tgtPool.end();
+      }
+    }, 180_000);
+
+    it("restores into the fresh administrator-bootstrapped non-superuser clone", async () => {
+      expect(clone.host).toBe("127.0.0.1");
+      expect(clone.user).toBe("open_brain_local_clone");
+      expect(clone.database.startsWith("open_brain_local_")).toBe(true);
+
+      const restore = await runCli(
+        "restore.ts",
+        ["--dir", backupDir, "--target-db-url", dbUrl(clone, clone.database)],
+        cliEnv(admin, SRC_DB),
+      );
+      expect(restore.exitCode).toBe(0);
+      expect(restore.receipt?.status).toBe("ok");
+      expect(
+        (restore.receipt?.validations ?? []).every(
+          (v: any) => v.verdict === "ok",
+        ),
+      ).toBe(true);
+
+      const restored = makePool(clone, clone.database);
+      try {
+        const { rows: identity } = await restored.query(
+          `SELECT current_user,
+                  EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector') AS vector_installed,
+                  EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_stat_statements') AS pg_stat_statements_installed`,
+        );
+        expect(identity[0]).toEqual({
+          current_user: "open_brain_local_clone",
+          vector_installed: true,
+          pg_stat_statements_installed: true,
+        });
+        const { rows: readRows } = await restored.query(
+          "SELECT COUNT(*)::int AS count FROM thoughts",
+        );
+        expect(readRows[0]!.count).toBeGreaterThan(0);
+        await restored.query(
+          `INSERT INTO thoughts (content, created_by, namespace, content_hash)
+             VALUES ($1, $2, $3, $4)`,
+          [
+            "non-superuser clone restore write",
+            "drill",
+            NS_ALPHA,
+            "drill-clone-write",
+          ],
+        );
+      } finally {
+        await restored.end();
       }
     }, 180_000);
 

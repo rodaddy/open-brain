@@ -43,7 +43,7 @@ describe("assert-db-tests-ran anti-skip guard", () => {
   it("passes when every required live-Postgres suite executed cleanly", () => {
     const result = evaluateJunit(wrap(allSuitesGreen()));
     expect(result.errors).toEqual([]);
-    expect(result.executedLiveTestcases).toBe(27);
+    expect(result.executedLiveTestcases).toBe(28);
     expect(
       result.executedLiveTestcasesBySuite.get(
         "search_brain language-aware FTS ranking (live Postgres)",
@@ -268,12 +268,44 @@ describe("assert-db-tests-ran anti-skip guard", () => {
     }).join("\n");
 
     const result = evaluateJunit(wrap(suites));
-    expect(result.executedLiveTestcases).toBe(27);
+    expect(result.executedLiveTestcases).toBe(28);
     expect(
       result.errors.some((e) =>
         e.includes(
           `"${skippedName}" executed 0 non-skipped live-Postgres testcases`,
         ),
+      ),
+    ).toBe(true);
+  });
+
+  it("fails when the required local-clone boundary suite is missing", () => {
+    const name = "local clone real PostgreSQL boundary (live Postgres)";
+    const xml = wrap(
+      REQUIRED_SUITES.filter((suite) => suite.name !== name)
+        .map((suite) => suiteXml(suite.name, { tests: suite.minTests }))
+        .join("\n"),
+    );
+    const result = evaluateJunit(xml);
+    expect(result.errors).toContain(
+      `MISSING suite "${name}" — it did not run at all (SKIPPED or never registered). The CI Postgres / OPENBRAIN_TEST_DATABASE_URL is not wired correctly.`,
+    );
+  });
+
+  it("fails when the required local-clone boundary suite is skipped", () => {
+    const name = "local clone real PostgreSQL boundary (live Postgres)";
+    const suites = REQUIRED_SUITES.map((suite) =>
+      suite.name === name
+        ? suiteXml(name, {
+            tests: suite.minTests,
+            skipped: suite.minTests,
+            testcases: `<testcase name="boundary" classname="${name}"><skipped /></testcase>`,
+          })
+        : suiteXml(suite.name, { tests: suite.minTests }),
+    ).join("\n");
+    const result = evaluateJunit(wrap(suites));
+    expect(
+      result.errors.some((error) =>
+        error.includes(`SKIPPED tests in "${name}"`),
       ),
     ).toBe(true);
   });

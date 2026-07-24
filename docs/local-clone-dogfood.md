@@ -54,10 +54,24 @@ createuser -h 127.0.0.1 -p 5432 -U <local-admin-role> \
 
 createdb -h 127.0.0.1 -p 5432 -U <local-admin-role> \
   --owner open_brain_local_clone open_brain_local_<clone-id>
+
+# The database is fresh: bootstrap both source-required extensions once as the
+# local administrator. Do not use IF NOT EXISTS; an existing extension means
+# this was not a fresh target.
+psql -h 127.0.0.1 -p 5432 -U <local-admin-role> \
+  -d open_brain_local_<clone-id> -v ON_ERROR_STOP=1 \
+  -c 'CREATE EXTENSION vector;' \
+  -c 'CREATE EXTENSION pg_stat_statements;'
 ```
 
 The role and database must be new. Do not point the procedure at a production
 role, an existing application database, or a non-loopback PostgreSQL server.
+The administrative `vector` and `pg_stat_statements` bootstrap is intentionally
+limited to the new target database; these are the extensions created by the
+repository migrations and therefore present in the source archive. The restore
+still runs as `open_brain_local_clone`, which is a non-superuser with no database
+or role creation privileges. The restore omits archive comments so it does not
+need ownership of these administrator-created extensions.
 The restore CLI refuses a non-empty target unless its separate destructive wipe
 approval is supplied; this runbook does not use that escape hatch.
 
@@ -210,9 +224,24 @@ case "${OPEN_BRAIN_BIND_HOST}" in
     ;;
 esac
 
-curl --fail --silent --show-error \
-  "http://${health_host}:${PORT}/health"
+health_body="$(curl --fail --silent --show-error \
+  "http://${health_host}:${PORT}/health")" || exit 1
+printf '%s' "${health_body}" | bun -e '
+  const health = JSON.parse(await Bun.stdin.text());
+  if (
+    health.database?.connected !== true ||
+    health.embedding?.configured !== true ||
+    health.embedding?.connected !== true
+  ) {
+    console.error("health body does not prove database and embedding readiness");
+    process.exit(1);
+  }
+'
 ```
+
+HTTP success alone is insufficient: `/health` can return `200` while an
+embedding provider is disconnected. Continue only when all three structured
+fields above are `true`.
 
 Prove the application has exactly one listener and that its address and port
 equal the configured literal loopback endpoint. macOS `lsof` renders an IPv6
@@ -249,8 +278,8 @@ Expected fields are the configured clone database,
 PostgreSQL port. Do not use `pg_isready` alone: it does not prove the database,
 role, or resolved server address.
 
-For foreground operation, status is the successful `/health` response plus the
-exact listener check above. When another supervisor records the foreground
+For foreground operation, status is the structured `/health` proof above plus
+the exact listener check above. When another supervisor records the foreground
 launcher PID, prove both launcher and child are present:
 
 ```zsh

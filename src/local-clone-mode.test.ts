@@ -1,5 +1,24 @@
-import { describe, expect, it } from "bun:test";
+import { afterAll, describe, expect, it } from "bun:test";
+import {
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { validateLocalCloneMode } from "./local-clone-mode.ts";
+
+const localCloneTestDir = mkdtempSync(join(tmpdir(), "open-brain-clone-"));
+const localCloneRoot = join(localCloneTestDir, "clone");
+const outsideRoot = join(localCloneTestDir, "outside");
+mkdirSync(localCloneRoot);
+mkdirSync(outsideRoot);
+
+afterAll(() => {
+  rmSync(localCloneTestDir, { recursive: true, force: true });
+});
 
 function validCloneEnv(
   overrides: Record<string, string | undefined> = {},
@@ -13,7 +32,7 @@ function validCloneEnv(
     EMBEDDING_BASE_URL: "http://127.0.0.1:8791/v1",
     QMD_PATH: "",
     OPEN_BRAIN_RUN_MIGRATIONS: "0",
-    OPENBRAIN_LOCAL_CLONE_ROOT: "/tmp/open-brain-local",
+    OPENBRAIN_LOCAL_CLONE_ROOT: localCloneRoot,
     AUTH_TOKEN_ADMIN: "local-admin",
     AUTH_TOKEN_AGENT: "local-agent",
     AUTH_TOKEN_DISCORD: "local-discord",
@@ -103,27 +122,74 @@ describe("validateLocalCloneMode", () => {
     ).toThrow("prohibit");
   });
 
-  it.each([
-    ["OPENBRAIN_RECOVERY_WAL_PATH", "/tmp/open-brain-local/state/recovery.wal"],
-    ["LOG_FILE", "/tmp/open-brain-local/log/open-brain.log"],
-  ])(
-    "accepts local runtime path %s beneath the clone root",
-    (key, configured) => {
+  it.each(["OPENBRAIN_RECOVERY_WAL_PATH", "LOG_FILE"])(
+    "accepts existing and nonexistent %s leaves beneath the clone root",
+    (key) => {
+      const existing = join(localCloneRoot, "existing", key.toLowerCase());
+      const nonexistent = join(
+        localCloneRoot,
+        "nonexistent",
+        key.toLowerCase(),
+      );
+      mkdirSync(dirname(existing), { recursive: true });
+      writeFileSync(existing, "");
+
       expect(
-        validateLocalCloneMode(validCloneEnv({ [key]: configured })),
+        validateLocalCloneMode(validCloneEnv({ [key]: existing })),
+      ).toEqual({ enabled: true, bindHost: "127.0.0.1" });
+      expect(
+        validateLocalCloneMode(validCloneEnv({ [key]: nonexistent })),
       ).toEqual({ enabled: true, bindHost: "127.0.0.1" });
     },
   );
 
-  it.each([
-    [
-      "OPENBRAIN_RECOVERY_WAL_PATH",
-      "/Volumes/ThunderBolt/open-brain/recovery.wal",
-    ],
-    ["LOG_FILE", "/tmp/open-brain.log"],
-  ])("rejects runtime path %s outside the clone root", (key, configured) => {
+  it.each(["OPENBRAIN_RECOVERY_WAL_PATH", "LOG_FILE"])(
+    "rejects direct %s symlink escapes",
+    (key) => {
+      const outside = join(outsideRoot, `direct-${key.toLowerCase()}`);
+      const configured = join(localCloneRoot, `direct-${key.toLowerCase()}`);
+      writeFileSync(outside, "");
+      symlinkSync(outside, configured);
+
+      expect(() =>
+        validateLocalCloneMode(validCloneEnv({ [key]: configured })),
+      ).toThrow("OPENBRAIN_LOCAL_CLONE_ROOT");
+    },
+  );
+
+  it.each(["OPENBRAIN_RECOVERY_WAL_PATH", "LOG_FILE"])(
+    "rejects nested %s symlink escapes",
+    (key) => {
+      const symlink = join(localCloneRoot, `nested-${key.toLowerCase()}`);
+      symlinkSync(outsideRoot, symlink, "dir");
+      const configured = join(symlink, "not-yet-created");
+
+      expect(() =>
+        validateLocalCloneMode(validCloneEnv({ [key]: configured })),
+      ).toThrow("OPENBRAIN_LOCAL_CLONE_ROOT");
+    },
+  );
+
+  it.each(["OPENBRAIN_RECOVERY_WAL_PATH", "LOG_FILE"])(
+    "rejects lexical %s paths outside the clone root",
+    (key) => {
+      const configured = join(outsideRoot, key.toLowerCase());
+
+      expect(() =>
+        validateLocalCloneMode(validCloneEnv({ [key]: configured })),
+      ).toThrow("OPENBRAIN_LOCAL_CLONE_ROOT");
+    },
+  );
+
+  it("rejects a missing clone root when a runtime path is configured", () => {
+    const missingRoot = join(localCloneTestDir, "missing-root");
     expect(() =>
-      validateLocalCloneMode(validCloneEnv({ [key]: configured })),
+      validateLocalCloneMode(
+        validCloneEnv({
+          OPENBRAIN_LOCAL_CLONE_ROOT: missingRoot,
+          LOG_FILE: join(missingRoot, "open-brain.log"),
+        }),
+      ),
     ).toThrow("OPENBRAIN_LOCAL_CLONE_ROOT");
   });
 

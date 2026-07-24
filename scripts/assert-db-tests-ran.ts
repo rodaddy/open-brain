@@ -53,11 +53,12 @@ export const REQUIRED_SUITES: ReadonlyArray<{
     name: "declared source language selects the real search config via explicit request (live Postgres)",
     minTests: 3,
   },
+  { name: "local clone real PostgreSQL boundary (live Postgres)", minTests: 1 },
 ];
 
 // Absolute floor on total executed (non-skipped) live-Postgres testcases,
 // independent of the per-suite breakdown above.
-export const MIN_TOTAL_LIVE_TESTCASES = 27;
+export const MIN_TOTAL_LIVE_TESTCASES = 28;
 
 export interface SuiteStats {
   tests: number;

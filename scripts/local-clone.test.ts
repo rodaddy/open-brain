@@ -271,50 +271,54 @@ describe("local clone launcher", () => {
 
 const REAL_PG_URL = process.env.OPENBRAIN_LOCAL_CLONE_TEST_DATABASE_URL;
 
-describe.skipIf(!REAL_PG_URL)("local clone real PostgreSQL boundary", () => {
-  it("proves the explicit loopback clone in a read-only transaction", async () => {
-    const url = new URL(REAL_PG_URL!);
-    const host = url.hostname === "[::1]" ? "::1" : url.hostname;
-    if (url.protocol !== "postgres:" && url.protocol !== "postgresql:") {
-      throw new Error(
-        "OPENBRAIN_LOCAL_CLONE_TEST_DATABASE_URL must be a PostgreSQL URL",
-      );
-    }
-    if (host !== "127.0.0.1" && host !== "::1") {
-      throw new Error(
-        "OPENBRAIN_LOCAL_CLONE_TEST_DATABASE_URL must use literal loopback",
-      );
-    }
-    const database = decodeURIComponent(url.pathname.replace(/^\//, ""));
-    const user = decodeURIComponent(url.username);
-    if (!database.startsWith("open_brain_local_")) {
-      throw new Error(
-        "OPENBRAIN_LOCAL_CLONE_TEST_DATABASE_URL must name a local clone",
-      );
-    }
-    if (user !== "open_brain_local_clone") {
-      throw new Error(
-        "OPENBRAIN_LOCAL_CLONE_TEST_DATABASE_URL must use the clone role",
-      );
-    }
+describe.skipIf(!REAL_PG_URL)(
+  "local clone real PostgreSQL boundary (live Postgres)",
+  () => {
+    it("proves the explicit loopback clone in a read-only transaction", async () => {
+      const url = new URL(REAL_PG_URL!);
+      const host = url.hostname === "[::1]" ? "::1" : url.hostname;
+      if (url.protocol !== "postgres:" && url.protocol !== "postgresql:") {
+        throw new Error(
+          "OPENBRAIN_LOCAL_CLONE_TEST_DATABASE_URL must be a PostgreSQL URL",
+        );
+      }
+      if (host !== "127.0.0.1" && host !== "::1") {
+        throw new Error(
+          "OPENBRAIN_LOCAL_CLONE_TEST_DATABASE_URL must use literal loopback",
+        );
+      }
+      const database = decodeURIComponent(url.pathname.replace(/^\//, ""));
+      const user = decodeURIComponent(url.username);
+      if (!database.startsWith("open_brain_local_")) {
+        throw new Error(
+          "OPENBRAIN_LOCAL_CLONE_TEST_DATABASE_URL must name a local clone",
+        );
+      }
+      if (user !== "open_brain_local_clone") {
+        throw new Error(
+          "OPENBRAIN_LOCAL_CLONE_TEST_DATABASE_URL must use the clone role",
+        );
+      }
 
-    const proof = await productionDependencies.database.prove({
-      DB_HOST: host,
-      DB_PORT: url.port || "5432",
-      DB_NAME: database,
-      DB_USER: user,
-      DB_PASSWORD: decodeURIComponent(url.password),
-    });
+      const proof = await productionDependencies.database.prove({
+        DB_HOST: host,
+        DB_PORT: url.port || "5432",
+        DB_NAME: database,
+        DB_USER: user,
+        DB_PASSWORD: decodeURIComponent(url.password),
+      });
 
-    expect(proof).toMatchObject({
-      database,
-      user,
-      serverAddress: host,
-      serverPort: Number.parseInt(url.port || "5432", 10),
-      postgresMajor: 18,
-      transactionReadOnly: true,
-      pgvectorAvailable: true,
-      pgvectorInstalled: true,
+      expect(proof).toMatchObject({
+        database,
+        user,
+        // node-postgres renders inet as CIDR text (127.0.0.1/32, ::1/128).
+        serverAddress: host === "127.0.0.1" ? "127.0.0.1/32" : "::1/128",
+        serverPort: Number.parseInt(url.port || "5432", 10),
+        postgresMajor: 18,
+        transactionReadOnly: true,
+        pgvectorAvailable: true,
+        pgvectorInstalled: true,
+      });
     });
-  });
-});
+  },
+);
