@@ -67,9 +67,6 @@ from ._runtime_validation import (
     validate_context_pack_scope as _validate_context_pack_scope,
 )
 from ._runtime_validation import (
-    validate_reflex_scope as _validate_reflex_scope,
-)
-from ._runtime_validation import (
     validate_started_lane as _validate_started_lane,
 )
 from ._runtime_validation import (
@@ -703,7 +700,10 @@ class FirstClassMemoryRuntime:
             # broken citation bijection raises here and fails the read closed.
             try:
                 projected = _project_reflex_result(
-                    result, self.config.namespace, self.scope
+                    result,
+                    self.config.namespace,
+                    self.scope,
+                    str(arguments["query"]),
                 )
             except ValueError as error:
                 raise _ReflexResultError from error
@@ -1023,8 +1023,6 @@ class FirstClassMemoryRuntime:
                 _validate_started_lane(result, self.config.namespace, scope)
             elif tool == "agent_context_pack":
                 _validate_context_pack_scope(result, self.config.namespace, self.scope)
-            elif tool == "agent_reflex_pointers":
-                _validate_reflex_scope(result, self.config.namespace, self.scope)
         except ValueError as error:
             raise RuntimeCallError(str(error)) from error
 

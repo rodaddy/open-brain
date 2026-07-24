@@ -494,8 +494,16 @@ redacted exception text, which preserves private non-secret-shaped messages.
 - Does the runtime rebuild a new response from explicit body-free fields and
   validate pointer/citation counts, structural refs, and bijection, rather than
   returning the server mapping after a shallow scope check?
-- Can arbitrary text survive in known warning/budget fields, or are their values
-  restricted to published content-free enums and numeric bounds?
+- Are pointer ids, source types, namespaces, structural source refs, and citations
+  identity-bound to each other and to the auth-derived namespace, rather than
+  checked as independent strings or by citation id alone?
+- Can arbitrary text survive in known query, scope-source, tier, empty-reason,
+  warning, or budget fields, or are values omitted or restricted to published
+  content-free enums, token shapes, and numeric bounds?
+- Are bounded arrays such as whole-pack allocation order capped, unique, and
+  equal to the published order rather than accepting duplicate amplification?
+- Are malformed server envelopes classified as result-invalid while real
+  transport/dispatch failures retain the distinct dispatch-failed category?
 - Does a failed read receipt use a stable category derived from failure type,
   never exception text, response bodies, paths, identities, or query content?
 - Do regressions remove the tool/version, inject bodies and private text into

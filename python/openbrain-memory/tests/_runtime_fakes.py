@@ -200,6 +200,7 @@ class LaneAwareTransport:
                 "arguments": arguments,
                 "scope": {
                     "namespace": "bilby",
+                    "namespace_source": "authorization",
                     "session_key": arguments["session_key"],
                     "agent": arguments["agent"],
                     "platform": arguments["platform"],
@@ -220,6 +221,7 @@ class LaneAwareTransport:
                 "resolvable_reference_only": True,
                 "scope": {
                     "namespace": "bilby",
+                    "namespace_source": "authorization",
                     "session_key": arguments["session_key"],
                     "agent": arguments["agent"],
                     "platform": arguments["platform"],
@@ -517,6 +519,7 @@ class ReflexClient(StartThenFailClient):
             "resolvable_reference_only": True,
             "scope": {
                 "namespace": "bilby",
+                "namespace_source": "authorization",
                 "session_key": arguments["session_key"],
                 "agent": arguments["agent"],
                 "platform": arguments["platform"],

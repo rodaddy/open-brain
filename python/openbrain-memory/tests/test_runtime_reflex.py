@@ -30,6 +30,16 @@ def _reflex_tool_calls(transport: LaneAwareTransport) -> list[dict[str, Any]]:
     ]
 
 
+_POINTER_ID = "11111111-1111-4111-8111-111111111111"
+_POINTER_CITATION_ID = f"brain_record:thought:{_POINTER_ID}"
+_POINTER_SOURCE_REF = {
+    "source": "brain",
+    "type": "thought",
+    "id": _POINTER_ID,
+    "namespace": "bilby",
+}
+
+
 def _server_reflex_envelope(arguments: dict[str, Any]) -> dict[str, Any]:
     """A valid server-shaped v1 reflex envelope with one cited pointer item."""
     return {
@@ -53,19 +63,14 @@ def _server_reflex_envelope(arguments: dict[str, Any]) -> dict[str, Any]:
             "resolvable_reference_only": True,
             "items": [
                 {
-                    "id": "row-1",
+                    "id": _POINTER_ID,
                     "source_type": "thought",
                     "namespace": "bilby",
                     "tier": None,
                     "created_at": "2026-07-01T00:00:00.000Z",
                     "updated_at": None,
-                    "citation_id": "cit-1",
-                    "source_ref": {
-                        "source": "thoughts",
-                        "type": "thought",
-                        "id": "row-1",
-                        "namespace": "bilby",
-                    },
+                    "citation_id": _POINTER_CITATION_ID,
+                    "source_ref": dict(_POINTER_SOURCE_REF),
                 }
             ],
             "item_count": 1,
@@ -76,13 +81,8 @@ def _server_reflex_envelope(arguments: dict[str, Any]) -> dict[str, Any]:
         "citations": [
             {
                 "kind": "pointer",
-                "id": "cit-1",
-                "source_ref": {
-                    "source": "thoughts",
-                    "type": "thought",
-                    "id": "row-1",
-                    "namespace": "bilby",
-                },
+                "id": _POINTER_CITATION_ID,
+                "source_ref": dict(_POINTER_SOURCE_REF),
             }
         ],
         "query": arguments["query"],
@@ -320,6 +320,7 @@ def test_reflex_rejects_exact_scope_mismatch_from_server() -> None:
     output = runtime.reflex("scope proof required")
 
     assert output.receipt.status is ReceiptStatus.FAILED
+    assert output.receipt.error == "reflex_result_invalid"
     assert output.result == {}
 
 
@@ -346,6 +347,7 @@ def test_reflex_rejects_wrong_envelope_schema_from_server() -> None:
     output = runtime.reflex("wrong envelope")
 
     assert output.receipt.status is ReceiptStatus.FAILED
+    assert output.receipt.error == "reflex_result_invalid"
     assert output.result == {}
 
 
@@ -480,7 +482,7 @@ def test_reflex_projects_valid_server_envelope_into_body_free_result() -> None:
     assert result["placement"] == "client_owned"
     assert result["resolvable_reference_only"] is True
     assert result["status"] == "ok"
-    assert result["query"] == "valid envelope"
+    assert "query" not in result
 
     pointers = result["pointers"]
     assert pointers["label"] == "pointers"
@@ -584,7 +586,6 @@ def test_reflex_result_projection_strips_unknown_top_level_and_warning_fields() 
         "warnings",
         "budget",
         "citations",
-        "query",
     }
     assert "memory_bodies" not in result
     degraded = result["warnings"]["degraded_sources"][0]
@@ -621,6 +622,128 @@ def test_reflex_rejects_private_text_in_known_warning_fields() -> None:
     assert output.receipt.error == "reflex_result_invalid"
     assert output.result == {}
     assert private_reason not in json.dumps(output.as_dict())
+
+
+def test_reflex_rejects_private_text_in_known_scalar_channels() -> None:
+    scope = runtime_scope()
+    arguments = {
+        "session_key": scope.session_key,
+        "agent": scope.agent,
+        "platform": scope.platform,
+        "server_id": scope.server_id,
+        "channel_id": scope.channel_id,
+        "thread_id": scope.thread_id,
+        "query": "known scalar validation",
+    }
+    sentinel = "private-customer-note-alpha-omega"
+
+    wrong_query = _server_reflex_envelope(arguments)
+    wrong_query["query"] = sentinel
+
+    wrong_namespace_source = _server_reflex_envelope(arguments)
+    wrong_namespace_source["scope"]["namespace_source"] = sentinel
+
+    wrong_tier = _server_reflex_envelope(arguments)
+    wrong_tier["pointers"]["items"][0]["tier"] = sentinel
+
+    wrong_empty_reason = _server_reflex_envelope(arguments)
+    wrong_empty_reason["pointers"]["items"] = []
+    wrong_empty_reason["pointers"]["item_count"] = 0
+    wrong_empty_reason["pointers"]["empty_reason"] = sentinel
+    wrong_empty_reason["citations"] = []
+
+    for envelope in (
+        wrong_query,
+        wrong_namespace_source,
+        wrong_tier,
+        wrong_empty_reason,
+    ):
+        runtime = FirstClassMemoryRuntime(
+            runtime_config(), scope, client=EnvelopeReflexClient(envelope)
+        )
+        output = runtime.reflex("known scalar validation")
+        assert output.receipt.status is ReceiptStatus.FAILED
+        assert output.receipt.error == "reflex_result_invalid"
+        assert output.result == {}
+        assert sentinel not in json.dumps(output.as_dict())
+
+
+def test_reflex_binds_pointer_and_citation_references_to_authorization() -> None:
+    scope = runtime_scope()
+    arguments = {
+        "session_key": scope.session_key,
+        "agent": scope.agent,
+        "platform": scope.platform,
+        "server_id": scope.server_id,
+        "channel_id": scope.channel_id,
+        "thread_id": scope.thread_id,
+        "query": "reference binding",
+    }
+    other_id = "22222222-2222-4222-8222-222222222222"
+
+    foreign_pointer = _server_reflex_envelope(arguments)
+    foreign_pointer["pointers"]["items"][0]["namespace"] = "foreign"
+
+    foreign_source_ref = _server_reflex_envelope(arguments)
+    foreign_source_ref["pointers"]["items"][0]["source_ref"]["namespace"] = "foreign"
+
+    mismatched_pointer_ref = _server_reflex_envelope(arguments)
+    mismatched_pointer_ref["pointers"]["items"][0]["source_ref"]["id"] = other_id
+
+    mismatched_citation_ref = _server_reflex_envelope(arguments)
+    mismatched_citation_ref["citations"][0]["source_ref"]["id"] = other_id
+
+    for envelope in (
+        foreign_pointer,
+        foreign_source_ref,
+        mismatched_pointer_ref,
+        mismatched_citation_ref,
+    ):
+        runtime = FirstClassMemoryRuntime(
+            runtime_config(), scope, client=EnvelopeReflexClient(envelope)
+        )
+        output = runtime.reflex("reference binding")
+        assert output.receipt.status is ReceiptStatus.FAILED
+        assert output.receipt.error == "reflex_result_invalid"
+        assert output.result == {}
+
+
+def test_reflex_rejects_duplicate_or_unbounded_allocation_order() -> None:
+    scope = runtime_scope()
+    arguments = {
+        "session_key": scope.session_key,
+        "agent": scope.agent,
+        "platform": scope.platform,
+        "server_id": scope.server_id,
+        "channel_id": scope.channel_id,
+        "thread_id": scope.thread_id,
+        "query": "allocation order",
+    }
+    duplicate = _server_reflex_envelope(arguments)
+    duplicate["budget"] = {
+        "whole_pack": {
+            "content_char_limit": 100,
+            "content_chars_used": 50,
+            "allocation_order": ["pointers", "pointers"],
+        }
+    }
+    amplified = _server_reflex_envelope(arguments)
+    amplified["budget"] = {
+        "whole_pack": {
+            "content_char_limit": 100,
+            "content_chars_used": 50,
+            "allocation_order": ["pointers"] * 10_001,
+        }
+    }
+
+    for envelope in (duplicate, amplified):
+        runtime = FirstClassMemoryRuntime(
+            runtime_config(), scope, client=EnvelopeReflexClient(envelope)
+        )
+        output = runtime.reflex("allocation order")
+        assert output.receipt.status is ReceiptStatus.FAILED
+        assert output.receipt.error == "reflex_result_invalid"
+        assert output.result == {}
 
 
 def test_reflex_rejects_broken_citation_bijection() -> None:

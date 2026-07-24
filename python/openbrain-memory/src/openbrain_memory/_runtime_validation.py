@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime
 from typing import Any, Protocol
+from uuid import UUID
 
 MAX_DISTILLED_CONTENT_BYTES = 16 * 1024
 MAX_REFLEX_QUERY_CHARS = 4_000
@@ -141,13 +144,27 @@ def validate_reflex_scope(
 REFLEX_STATUSES = {"ok", "degraded", "error"}
 REFLEX_POINTERS_LABEL = "pointers"
 REFLEX_CITATION_KIND = "pointer"
+REFLEX_NAMESPACE_SOURCE = "authorization"
+REFLEX_EMPTY_REASONS = {"whole_pack_budget"}
+REFLEX_TIERS = {"hot", "warm", "cold"}
+REFLEX_SOURCE_TYPES = {"thought", "decision", "relationship", "project", "session"}
+REFLEX_SOURCE_REF_SOURCE = "brain"
+REFLEX_ALLOCATION_ORDER = (
+    "working_set",
+    "recovery",
+    "durable_lane_context",
+    "durable_memory",
+    "profile_guidance",
+    "process_guidance",
+    "repo_facts",
+    "pointers",
+    "candidate_memory",
+)
 MAX_REFLEX_POINTER_ITEMS = 500
-MAX_TIER_CHARS = 100
 MAX_TIMESTAMP_CHARS = 100
-MAX_EMPTY_REASON_CHARS = 200
 MAX_STATUS_CHARS = 100
 MAX_REFLEX_WARNING_ITEMS = 200
-MAX_WARNING_SCALAR_CHARS = 200
+_ISO_TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$")
 
 _POINTER_ITEM_KEYS = {
     "id",
@@ -161,23 +178,13 @@ _POINTER_ITEM_KEYS = {
 }
 _CITATION_KEYS = {"id", "kind", "source_ref"}
 _WARNING_CHANNELS = ("scope_denials", "degraded_sources", "truncation")
-_CONTEXT_PACK_SECTION_NAMES = {
-    "working_set",
-    "recovery",
-    "durable_lane_context",
-    "durable_memory",
-    "profile_guidance",
-    "process_guidance",
-    "repo_facts",
-    "pointers",
-    "candidate_memory",
-}
 
 
 def project_reflex_result(
     result: Any,
     namespace: str,
     scope: RuntimeScopeCoordinates,
+    expected_query: str,
 ) -> dict[str, Any]:
     """Return a freshly built, body-free ``agent_reflex_pointers.v1`` envelope.
 
@@ -200,9 +207,15 @@ def project_reflex_result(
     if result.get("resolvable_reference_only") is not True:
         raise ValueError("agent_reflex_pointers resolvable_reference_only must be true")
     query = _bounded_text(result.get("query"), "query", MAX_REFLEX_QUERY_CHARS)
+    if query != expected_query:
+        raise ValueError("agent_reflex_pointers query does not match the request")
 
-    pointers, emitted_citation_ids = _project_reflex_pointers(result.get("pointers"))
-    citations = _project_reflex_citations(result.get("citations"), emitted_citation_ids)
+    pointers, emitted_references = _project_reflex_pointers(
+        result.get("pointers"), namespace
+    )
+    citations = _project_reflex_citations(
+        result.get("citations"), emitted_references, namespace
+    )
 
     scope_candidate = result.get("scope")
     assert isinstance(scope_candidate, Mapping)  # proven by validate_reflex_scope
@@ -217,7 +230,6 @@ def project_reflex_result(
         "warnings": _project_reflex_warnings(result.get("warnings")),
         "budget": _project_reflex_budget(result.get("budget")),
         "citations": citations,
-        "query": query,
     }
 
 
@@ -226,16 +238,18 @@ def _project_reflex_scope(
     namespace: str,
     scope: RuntimeScopeCoordinates,
 ) -> dict[str, Any]:
-    projected: dict[str, Any] = dict(exact_scope_fields(namespace, scope))
-    source = candidate.get("namespace_source")
-    if source is not None:
-        projected["namespace_source"] = _bounded_text(
-            source, "scope.namespace_source", MAX_WARNING_SCALAR_CHARS
-        )
-    return projected
+    if candidate.get("namespace_source") != REFLEX_NAMESPACE_SOURCE:
+        raise ValueError("agent_reflex_pointers namespace_source must be authorization")
+    return {
+        **exact_scope_fields(namespace, scope),
+        "namespace_source": REFLEX_NAMESPACE_SOURCE,
+    }
 
 
-def _project_reflex_pointers(value: Any) -> tuple[dict[str, Any], list[str]]:
+def _project_reflex_pointers(
+    value: Any,
+    namespace: str,
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
     if not isinstance(value, Mapping):
         raise ValueError("agent_reflex_pointers pointers section must be an object")
     if value.get("label") != REFLEX_POINTERS_LABEL:
@@ -254,20 +268,19 @@ def _project_reflex_pointers(value: Any) -> tuple[dict[str, Any], list[str]]:
         raise ValueError(f"pointers section exceeds {MAX_REFLEX_POINTER_ITEMS} items")
 
     items: list[dict[str, Any]] = []
-    citation_ids: list[str] = []
+    references: dict[str, dict[str, Any]] = {}
     for raw in raw_items:
-        item, citation_id = _project_pointer_item(raw)
+        item, citation_id, source_ref = _project_pointer_item(raw, namespace)
+        if citation_id in references:
+            raise ValueError("pointers section emitted duplicate citation ids")
         items.append(item)
-        citation_ids.append(citation_id)
+        references[citation_id] = source_ref
 
     item_count = value.get("item_count")
     if isinstance(item_count, bool) or not isinstance(item_count, int):
         raise ValueError("pointers section item_count must be an integer")
     if item_count != len(items):
         raise ValueError("pointers section item_count does not match emitted items")
-
-    if len(set(citation_ids)) != len(citation_ids):
-        raise ValueError("pointers section emitted duplicate citation ids")
 
     projected: dict[str, Any] = {
         "label": REFLEX_POINTERS_LABEL,
@@ -280,15 +293,17 @@ def _project_reflex_pointers(value: Any) -> tuple[dict[str, Any], list[str]]:
     if "empty_reason" in value:
         if items:
             raise ValueError("pointers section empty_reason set with emitted items")
-        projected["empty_reason"] = _bounded_text(
-            value.get("empty_reason"),
-            "pointers.empty_reason",
-            MAX_EMPTY_REASON_CHARS,
-        )
-    return projected, citation_ids
+        empty_reason = value.get("empty_reason")
+        if empty_reason not in REFLEX_EMPTY_REASONS:
+            raise ValueError("pointers section empty_reason is not published")
+        projected["empty_reason"] = empty_reason
+    return projected, references
 
 
-def _project_pointer_item(value: Any) -> tuple[dict[str, Any], str]:
+def _project_pointer_item(
+    value: Any,
+    namespace: str,
+) -> tuple[dict[str, Any], str, dict[str, Any]]:
     if not isinstance(value, Mapping):
         raise ValueError("pointer item must be an object")
     unknown = {str(key) for key in value if key not in _POINTER_ITEM_KEYS}
@@ -296,41 +311,50 @@ def _project_pointer_item(value: Any) -> tuple[dict[str, Any], str]:
         raise ValueError(
             "pointer item carries unsupported field(s): " + ", ".join(sorted(unknown))
         )
+    record_id = _uuid_text(value.get("id"), "pointer.id")
+    source_type = value.get("source_type")
+    if source_type not in REFLEX_SOURCE_TYPES:
+        raise ValueError("pointer.source_type is not a published brain source type")
+    pointer_namespace = value.get("namespace")
+    if pointer_namespace != namespace:
+        raise ValueError("pointer.namespace does not match the authorized namespace")
+    tier = value.get("tier")
+    if tier is not None and tier not in REFLEX_TIERS:
+        raise ValueError("pointer.tier is not a published tier")
     citation_id = _bounded_text(
         value.get("citation_id"), "pointer.citation_id", MAX_CITATION_ID_CHARS
     )
+    expected_citation_id = f"brain_record:{source_type}:{record_id}"
+    if citation_id != expected_citation_id:
+        raise ValueError("pointer.citation_id does not match pointer identity")
+    source_ref = _project_structural_source_ref(
+        value.get("source_ref"), "pointer.source_ref", namespace
+    )
+    if (
+        source_ref["source"] != REFLEX_SOURCE_REF_SOURCE
+        or source_ref["type"] != source_type
+        or source_ref["id"] != record_id
+    ):
+        raise ValueError("pointer.source_ref does not match pointer identity")
     item: dict[str, Any] = {
-        "id": _bounded_text(value.get("id"), "pointer.id", MAX_SOURCE_REF_ID_CHARS),
-        "source_type": _bounded_text(
-            value.get("source_type"),
-            "pointer.source_type",
-            MAX_SOURCE_REF_TYPE_CHARS,
-        ),
-        "namespace": _nullable_bounded_text(
-            value.get("namespace"),
-            "pointer.namespace",
-            MAX_SOURCE_REF_NAMESPACE_CHARS,
-        ),
-        "tier": _nullable_bounded_text(
-            value.get("tier"), "pointer.tier", MAX_TIER_CHARS
-        ),
-        "created_at": _bounded_text(
-            value.get("created_at"), "pointer.created_at", MAX_TIMESTAMP_CHARS
-        ),
-        "updated_at": _nullable_bounded_text(
-            value.get("updated_at"), "pointer.updated_at", MAX_TIMESTAMP_CHARS
+        "id": record_id,
+        "source_type": source_type,
+        "namespace": namespace,
+        "tier": tier,
+        "created_at": _iso_timestamp(value.get("created_at"), "pointer.created_at"),
+        "updated_at": _nullable_iso_timestamp(
+            value.get("updated_at"), "pointer.updated_at"
         ),
         "citation_id": citation_id,
-        "source_ref": _project_structural_source_ref(
-            value.get("source_ref"), "pointer.source_ref"
-        ),
+        "source_ref": source_ref,
     }
-    return item, citation_id
+    return item, citation_id, source_ref
 
 
 def _project_reflex_citations(
     value: Any,
-    emitted_citation_ids: Sequence[str],
+    emitted_references: Mapping[str, Mapping[str, Any]],
+    namespace: str,
 ) -> list[dict[str, Any]]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
         raise ValueError("agent_reflex_pointers citations must be an array")
@@ -347,22 +371,31 @@ def _project_reflex_citations(
         if raw.get("kind") != REFLEX_CITATION_KIND:
             raise ValueError("citation kind must be 'pointer'")
         citation_id = _bounded_text(raw.get("id"), "citation.id", MAX_CITATION_ID_CHARS)
+        if citation_id in citation_ids:
+            raise ValueError("citations contain a duplicate pointer id")
+        source_ref = _project_structural_source_ref(
+            raw.get("source_ref"), "citation.source_ref", namespace
+        )
+        if emitted_references.get(citation_id) != source_ref:
+            raise ValueError("citation source_ref does not match its emitted pointer")
         citations.append(
             {
                 "id": citation_id,
                 "kind": REFLEX_CITATION_KIND,
-                "source_ref": _project_structural_source_ref(
-                    raw.get("source_ref"), "citation.source_ref"
-                ),
+                "source_ref": source_ref,
             }
         )
         citation_ids.append(citation_id)
-    if sorted(citation_ids) != sorted(emitted_citation_ids):
+    if set(citation_ids) != set(emitted_references):
         raise ValueError("citations are not a bijection with the emitted pointer items")
     return citations
 
 
-def _project_structural_source_ref(value: Any, name: str) -> dict[str, Any]:
+def _project_structural_source_ref(
+    value: Any,
+    name: str,
+    namespace: str,
+) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise ValueError(f"{name} must be a structural object")
     unknown = {str(key) for key in value if key not in _SOURCE_REF_OBJECT_KEYS}
@@ -370,22 +403,21 @@ def _project_structural_source_ref(value: Any, name: str) -> dict[str, Any]:
         raise ValueError(
             f"{name} carries unsupported field(s): " + ", ".join(sorted(unknown))
         )
-    structural: dict[str, Any] = {
-        "source": _bounded_text(
-            value.get("source"), f"{name}.source", MAX_SOURCE_REF_SOURCE_CHARS
-        ),
-        "type": _bounded_text(
-            value.get("type"), f"{name}.type", MAX_SOURCE_REF_TYPE_CHARS
-        ),
-        "id": _bounded_text(value.get("id"), f"{name}.id", MAX_SOURCE_REF_ID_CHARS),
+    source = value.get("source")
+    if source != REFLEX_SOURCE_REF_SOURCE:
+        raise ValueError(f"{name}.source must be brain")
+    source_type = value.get("type")
+    if source_type not in REFLEX_SOURCE_TYPES:
+        raise ValueError(f"{name}.type is not a published brain source type")
+    source_namespace = value.get("namespace")
+    if source_namespace != namespace:
+        raise ValueError(f"{name}.namespace does not match authorization")
+    return {
+        "source": REFLEX_SOURCE_REF_SOURCE,
+        "type": source_type,
+        "id": _uuid_text(value.get("id"), f"{name}.id"),
+        "namespace": namespace,
     }
-    if "namespace" in value:
-        structural["namespace"] = _nullable_bounded_text(
-            value.get("namespace"),
-            f"{name}.namespace",
-            MAX_SOURCE_REF_NAMESPACE_CHARS,
-        )
-    return structural
 
 
 def _project_reflex_warnings(value: Any) -> dict[str, list[dict[str, Any]]]:
@@ -496,11 +528,9 @@ def _project_whole_pack_budget(value: Any) -> dict[str, Any]:
     order = value.get("allocation_order")
     if not isinstance(order, Sequence) or isinstance(order, (str, bytes)):
         raise ValueError("budget.whole_pack.allocation_order must be an array")
-    allocation_order = []
-    for entry in order:
-        if entry not in _CONTEXT_PACK_SECTION_NAMES:
-            raise ValueError("budget allocation order contains an unknown section")
-        allocation_order.append(entry)
+    allocation_order = list(order)
+    if tuple(allocation_order) != REFLEX_ALLOCATION_ORDER:
+        raise ValueError("budget allocation order does not match the published order")
     return {
         "content_char_limit": content_char_limit,
         "content_chars_used": content_chars_used,
@@ -514,10 +544,32 @@ def _bounded_nonnegative_int(value: Any, name: str) -> int:
     return value
 
 
-def _nullable_bounded_text(value: Any, name: str, maximum: int) -> str | None:
+def _uuid_text(value: Any, name: str) -> str:
+    text = _bounded_text(value, name, MAX_SOURCE_REF_ID_CHARS)
+    try:
+        canonical = str(UUID(text))
+    except ValueError as error:
+        raise ValueError(f"{name} must be a UUID") from error
+    if text.lower() != canonical:
+        raise ValueError(f"{name} must be a canonical UUID")
+    return canonical
+
+
+def _iso_timestamp(value: Any, name: str) -> str:
+    text = _bounded_text(value, name, MAX_TIMESTAMP_CHARS)
+    if not _ISO_TIMESTAMP.fullmatch(text):
+        raise ValueError(f"{name} must be a canonical UTC timestamp")
+    try:
+        datetime.fromisoformat(text.removesuffix("Z") + "+00:00")
+    except ValueError as error:
+        raise ValueError(f"{name} must be a valid UTC timestamp") from error
+    return text
+
+
+def _nullable_iso_timestamp(value: Any, name: str) -> str | None:
     if value is None:
         return None
-    return _bounded_text(value, name, maximum)
+    return _iso_timestamp(value, name)
 
 
 def reflex_query(value: Any) -> str:
