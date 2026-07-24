@@ -42,6 +42,16 @@ Open Brain is the **durable operational memory** for PAI agents. It stores:
 2. Update lane context via `lane_upsert` when the working state changes
 3. Link related entities via `link_entities`
 
+### Runtime Adapter Envelope Compatibility
+
+The `openbrain-memory` console request envelope is N-1 tolerant only for
+unknown optional top-level fields on a known operation. Such fields are
+projected away before dispatch and reported only through a content-free
+compatibility note and bounded count. Unknown operations, missing or invalid
+known fields, authority-bearing `scope` and `config` subobjects, reflex
+`prior_context` references, and server-response projections remain strict and
+fail closed.
+
 ### At Compaction
 1. Call `session_context` to gather current state
 2. Distill summary locally via LLM

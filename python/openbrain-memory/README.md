@@ -73,6 +73,16 @@ For deterministic host installs, pin the package to an exact version or reviewed
 wheel, or pin the git dependency to a reviewed commit or tag rather than a
 moving branch.
 
+Claude and Claudex adapters may use a compatible floor install while the
+N-1 console contract is maintained:
+
+```bash
+uv tool install --upgrade "openbrain-memory>=0.1.17"
+```
+
+The exact-version or reviewed-wheel guidance above remains preferred for host
+rollouts that require artifact pinning.
+
 Hermes deployments usually do not call `uv pip install` by hand. In
 `rtech-hermes`, set `openbrain_memory.package_spec` in the target agent manifest
 or set `OPENBRAIN_MEMORY_PACKAGE_SPEC` for an emergency override. Both paths
@@ -249,6 +259,13 @@ read one JSON object from stdin and emit one JSON object to stdout. Input is
 capped at 64 KiB, output at 1 MB, and distilled lifecycle content at 16 KiB.
 The `recall` and `reflex` operations read; capture, checkpoint, and wrap
 requests must include `"distilled": true`.
+
+The console is an N-1 tolerant reader for unknown optional top-level operation
+fields. It projects only recognized common and operation fields into dispatch,
+never forwards unknown fields, and adds a content-free compatibility note and
+bounded ignored-key count to the receipt. Unknown operations, missing or
+mistyped known fields, nested `scope`/`config` authority fields, and reflex
+`prior_context` references remain fail-closed.
 
 Optional mcp2cli fallback is disabled by default. Enable it with
 `OPENBRAIN_MCP2CLI_FALLBACK=1` or explicit config. Calls use an argv sequence,
