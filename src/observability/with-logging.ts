@@ -16,6 +16,34 @@
  * a fallback value is a decision the caller makes deliberately and documents.
  */
 import { logger } from "../logger.ts";
+import { SECRET_PATTERNS } from "../sharing.ts";
+
+/**
+ * Strip known secret material from a string bound for a log entry.
+ *
+ * Applies `SECRET_PATTERNS` — the same detector set that gates shared-kb
+ * promotion and the Python client's `policy.py` — rather than a second, weaker
+ * redaction fork.
+ *
+ * `redactText()` is deliberately NOT reused here: it emits a `logger.warn` when
+ * it changes something, and this function runs *inside* the log path, so that
+ * would recurse. The patterns are applied directly and the substitution is
+ * silent; the redaction marker in the output is the evidence.
+ */
+function redactForLog(value: string): string {
+  if (!value) return value;
+  let redacted = value;
+  for (const pattern of SECRET_PATTERNS) {
+    const flags = pattern.flags.includes("g")
+      ? pattern.flags
+      : `${pattern.flags}g`;
+    redacted = redacted.replace(
+      new RegExp(pattern.source, flags),
+      "[REDACTED]",
+    );
+  }
+  return redacted;
+}
 
 /**
  * Reduce an unknown thrown value to safe, loggable fields.
@@ -24,6 +52,15 @@ import { logger } from "../logger.ts";
  * attached request, response, config, or credential data (`err.request`,
  * `err.config`), and spreading leaks whatever happens to be on them. Only the
  * chosen subset below is emitted.
+ *
+ * **Every emitted field is redacted**, including `error_name`. That is not
+ * belt-and-braces: `err.name` is writable, and a caught error's name and
+ * message routinely carry the connection string that failed. A real leak was
+ * caught in review — an error thrown during a NATS-bridge context-pack build
+ * arrived with `name` set to `NatsError nats://user:pass@host` and reached
+ * stdout, the file sink, and Loki, because this wrapper logs at the throw site,
+ * *before* `src/nats-bridge.ts` can apply its `safeErrorType()` allowlist.
+ * A redactor at the boundary cannot help a logger that already emitted.
  *
  * `catch` binds `unknown`, and non-`Error` values are thrown in practice
  * (strings, `undefined`, rejected non-error promises), so every shape is
@@ -39,16 +76,20 @@ export function describeError(error: unknown): {
 } {
   if (error instanceof Error) {
     return {
-      error_name: error.name,
-      error_message: error.message,
-      ...(error.stack ? { error_stack: error.stack } : {}),
+      error_name: redactForLog(error.name),
+      error_message: redactForLog(error.message),
+      // The stack embeds the message on its first line, so it carries anything
+      // the message did.
+      ...(error.stack ? { error_stack: redactForLog(error.stack) } : {}),
     };
   }
   if (typeof error === "string") {
-    return { error_name: "ThrownString", error_message: error };
+    return { error_name: "ThrownString", error_message: redactForLog(error) };
   }
   return {
     error_name: "ThrownNonError",
+    // Object.prototype.toString yields a class tag like [object Object], never
+    // instance data, so there is nothing to redact.
     error_message: Object.prototype.toString.call(error),
   };
 }

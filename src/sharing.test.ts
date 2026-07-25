@@ -81,6 +81,15 @@ describe("containsSecret", () => {
     expect(containsSecret("HTTPS://admin:hunter2pw@host/x")).toBe(true);
   });
 
+  it("detects credentials in Open Brain's own transport schemes", () => {
+    // Regression: every service OB talks to was listed except the one it IS.
+    // A thrown error carrying `nats://user:pass@host` in its (mutable, writable)
+    // `name` reached stdout, the file sink, and Loki through the log path.
+    expect(containsSecret("nats://user:pass@broker.internal:4222")).toBe(true);
+    expect(containsSecret("tls://user:pass@broker.internal:4222")).toBe(true);
+    expect(containsSecret("wss://user:pass@host/socket")).toBe(true);
+  });
+
   it("scans large input in linear time (ReDoS regression)", () => {
     // The URL credential pattern once had an unanchored `[a-z][a-z0-9+.-]*://`
     // prefix that backtracked O(n^2) on long input with no `://`. A fixed scheme
@@ -92,17 +101,17 @@ describe("containsSecret", () => {
   });
 
   it("detects a labeled long secret value", () => {
-    expect(
-      containsSecret("client_secret=" + "Ab9".repeat(8) + "xyz"),
-    ).toBe(true);
+    expect(containsSecret("client_secret=" + "Ab9".repeat(8) + "xyz")).toBe(
+      true,
+    );
   });
 
   it("does NOT flag a bare hex content-hash / git SHA (no over-rejection)", () => {
     // 64-char hex content_hash and a 40-char git SHA are pervasive + legitimate.
     expect(containsSecret("content_hash " + "a1b2c3d4".repeat(8))).toBe(false);
-    expect(containsSecret("commit 4ba6c76e1f2a3b4c5d6e7f8091a2b3c4d5e6f708")).toBe(
-      false,
-    );
+    expect(
+      containsSecret("commit 4ba6c76e1f2a3b4c5d6e7f8091a2b3c4d5e6f708"),
+    ).toBe(false);
   });
 
   it("does NOT flag a plain URL without credentials (no over-rejection)", () => {
@@ -368,10 +377,7 @@ describe("classifyShareCandidate — share / manual-review", () => {
   it("honors a custom minLen", () => {
     const content = "short fact here";
     expect(
-      classifyShareCandidate(
-        { event_type: "fact", content },
-        { minLen: 4 },
-      ),
+      classifyShareCandidate({ event_type: "fact", content }, { minLen: 4 }),
     ).toBe("share");
   });
 });

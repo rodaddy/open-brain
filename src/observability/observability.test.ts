@@ -109,6 +109,43 @@ describe("shared envelope", () => {
   });
 });
 
+describe("describeError redaction", () => {
+  // Caught in adversarial review of the logging sweep, from a real failing run:
+  // an error thrown during a NATS-bridge context-pack build arrived with `name`
+  // set to `NatsError nats://user:pass@host`. `withLogging` logs at the THROW
+  // SITE, before src/nats-bridge.ts can apply its safeErrorType() allowlist, so
+  // a redactor at the boundary cannot help. Every emitted field is redacted.
+  it("redacts credentials from error_name, error_message, and error_stack", () => {
+    const secret = ["user", ":", "pass"].join("");
+    const url = `nats://${secret}@broker.internal:4222`;
+    const err = new Error(`working set exploded for ${url}`);
+    // `name` is writable, which is exactly why it cannot be trusted.
+    err.name = `NatsError ${url}`;
+
+    const fields = describeError(err);
+
+    expect(fields.error_name).not.toContain(secret);
+    expect(fields.error_message).not.toContain(secret);
+    expect(fields.error_stack ?? "").not.toContain(secret);
+    // Redacted, not dropped: the diagnostic shape must survive.
+    expect(fields.error_name).toContain("[REDACTED]");
+    expect(fields.error_message).toContain("working set exploded");
+  });
+
+  it("redacts a thrown string", () => {
+    const secret = ["user", ":", "pass"].join("");
+    const fields = describeError(`boom postgres://${secret}@db/x`);
+    expect(fields.error_name).toBe("ThrownString");
+    expect(fields.error_message).not.toContain(secret);
+  });
+
+  it("keeps ordinary errors fully readable", () => {
+    const fields = describeError(new TypeError("x is not a function"));
+    expect(fields.error_name).toBe("TypeError");
+    expect(fields.error_message).toBe("x is not a function");
+  });
+});
+
 describe("runtime log level", () => {
   // Restore whatever the process started at, so raising the level here cannot
   // leak into another suite in this shared process.
