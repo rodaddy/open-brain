@@ -1,0 +1,26 @@
+[project]
+name = "openbrain-python"
+version = "0.1.0"
+description = "Open Brain Python workspace: the memory client and the runtime lifecycle provider."
+readme = "README.md"
+requires-python = ">=3.13"
+# The root is a workspace container, not a shipped artifact. It declares no
+# runtime dependencies of its own; every dependency belongs to the member that
+# actually imports it.
+dependencies = []
+
+# Members keep their own [project], tool config, and build backend. The root
+# exists so siblings can share one resolution and one committed lock file
+# instead of drifting into separately-resolved environments -- the same failure
+# mode that let one event vocabulary exist in two copies (#412).
+#
+# Pattern follows fleet-bus, the proven in-fleet uv workspace.
+#
+# GLOB, not an explicit list. Measured while writing this: uv accepts a member
+# path that does not exist -- it resolves clean, writes no lock entry, and says
+# nothing. A hand-maintained list therefore cannot tell you whether a package
+# actually joined the workspace, so a new member could be built and silently
+# never be part of the resolution. The glob derives membership from the
+# filesystem, which cannot drift from it.
+[tool.uv.workspace]
+members = ["*"]

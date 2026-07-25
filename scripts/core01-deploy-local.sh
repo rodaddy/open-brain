@@ -127,6 +127,8 @@ tar \
   --exclude "./.DS_Store" \
   --exclude "./node_modules" \
   --exclude "./dist" \
+  --exclude "./python/.venv" \
+  --exclude "./python/dist" \
   --exclude "./python/openbrain-memory/.venv" \
   --exclude "./python/openbrain-memory/dist" \
   --exclude "./.env" \
