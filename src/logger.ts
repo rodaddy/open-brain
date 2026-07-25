@@ -1,3 +1,4 @@
+import os from "node:os";
 import {
   createRotatingFileSink,
   type RotatingFileSink,
@@ -11,7 +12,73 @@ function resolveLevel(): LogLevel {
   if (env in LOG_LEVELS) return env as LogLevel;
   return "info";
 }
-const MIN_LEVEL = resolveLevel();
+
+/**
+ * Active minimum level. Mutable, not a module-load constant.
+ *
+ * A frozen level means the only way to raise verbosity during an incident is a
+ * restart — which destroys the in-flight state being investigated, and is the
+ * one moment the logs matter most. `setLogLevel` lets an operator turn debug on
+ * against a running process (the dogfood default is `debug`; production runs
+ * `info` or `warn`).
+ */
+let minLevel: LogLevel = resolveLevel();
+
+/**
+ * Raise or lower the active log level at runtime.
+ *
+ * @param level One of debug, info, warn, error. An unknown value is rejected
+ *   rather than silently coerced, because silently staying at the old level
+ *   during an incident looks identical to the setting having worked.
+ * @returns The level now in effect.
+ * @throws {Error} If `level` is not a known level.
+ */
+export function setLogLevel(level: string): LogLevel {
+  const next = level.trim().toLowerCase();
+  if (!(next in LOG_LEVELS)) {
+    throw new Error(
+      `unknown log level ${JSON.stringify(level)}; expected one of ${Object.keys(LOG_LEVELS).join(", ")}`,
+    );
+  }
+  const previous = minLevel;
+  const target = next as LogLevel;
+  // Announce through whichever gate is more permissive, so the transition is
+  // never filtered by the change itself. Emitting after the swap loses the line
+  // when lowering verbosity (`info` -> `warn` hides its own `info` notice), and
+  // emitting before it loses the line when raising from a level that already
+  // suppressed `info` (`error` -> `debug`). Widening for this one line makes
+  // "when did the level change?" answerable from the log in both directions.
+  minLevel = LOG_LEVELS[previous] < LOG_LEVELS[target] ? previous : target;
+  log("info", "log_level_changed", { from: previous, to: target });
+  minLevel = target;
+  return minLevel;
+}
+
+/** The level currently in effect. */
+export function getLogLevel(): LogLevel {
+  return minLevel;
+}
+
+/**
+ * Host identity stamped onto every line.
+ *
+ * Required by the shared observability envelope
+ * (`_DOCS/CODING_STANDARDS.md`, `## Observability`): `service` and `host` are
+ * the only two fields that become Loki labels, so every emitter on the fleet
+ * must carry both or the per-host query surface has holes. Read once — a
+ * process does not change hosts.
+ */
+const HOST_NAME = (() => {
+  const configured = process.env.HOSTNAME?.trim() || process.env.HOST?.trim();
+  if (configured) return configured;
+  try {
+    return os.hostname();
+  } catch {
+    // Deliberate fail-open: an unavailable hostname must degrade one label,
+    // never prevent logging. Reporting it through the logger would recurse.
+    return "unknown";
+  }
+})();
 
 /**
  * Optional rolling file sink (OB issue #193). When `LOG_FILE` is set the
@@ -159,9 +226,15 @@ function contextFields(): Record<string, unknown> {
 /**
  * A single emitted line.
  *
- * `timestamp`, `level`, `message`, `service`, and `correlation_id` are the
- * shared envelope. The first four are always present; `correlation_id` appears
- * whenever the line was emitted inside a `withContext()` scope.
+ * `timestamp`, `level`, `message`, `service`, `host`, and `correlation_id` are
+ * the shared envelope. The first five are always present and are stamped here,
+ * never passed by a caller; `correlation_id` appears whenever the line was
+ * emitted inside a `withContext()` scope.
+ *
+ * `service` and `host` are the only two fields that become Loki labels
+ * (`_DOCS/CODING_STANDARDS.md`, `## Observability`) — everything else stays in
+ * the body, because Loki builds one index stream per unique label combination
+ * and a high-cardinality label produces unbounded streams.
  *
  * `message` is a stable event name (`lane_scope_miss`), never a sentence — event
  * names are what Loki filters on.
@@ -171,6 +244,7 @@ interface LogEntry {
   message: string;
   timestamp: string;
   service: string;
+  host: string;
   [key: string]: unknown;
 }
 
@@ -179,7 +253,7 @@ function log(
   message: string,
   extra?: Record<string, unknown>,
 ): void {
-  if (LOG_LEVELS[level] < LOG_LEVELS[MIN_LEVEL]) return;
+  if (LOG_LEVELS[level] < LOG_LEVELS[minLevel]) return;
 
   // Envelope fields are owned here and stamped last so a caller cannot
   // accidentally shadow them with a same-named field: callers that spell
@@ -191,6 +265,7 @@ function log(
     message,
     timestamp: new Date().toISOString(),
     service: SERVICE_NAME,
+    host: HOST_NAME,
     ...contextFields(),
   };
   const output = JSON.stringify(entry);

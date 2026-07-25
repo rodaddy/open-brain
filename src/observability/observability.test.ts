@@ -6,7 +6,7 @@
  * shapes.
  */
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { logger, addLogSink } from "../logger.ts";
+import { logger, addLogSink, setLogLevel, getLogLevel } from "../logger.ts";
 import { withContext, currentCorrelationId } from "./context.ts";
 import { withLogging, withFallback, describeError } from "./with-logging.ts";
 
@@ -72,9 +72,18 @@ describe("shared envelope", () => {
     expect(line!.message).toBe("thing_happened");
     expect(typeof line!.service).toBe("string");
     expect(String(line!.service).length).toBeGreaterThan(0);
+    // `host` is the second of the two Loki labels; a line missing it leaves a
+    // hole in the per-host query surface.
+    expect(typeof line!.host).toBe("string");
+    expect(String(line!.host).length).toBeGreaterThan(0);
     expect(typeof line!.timestamp).toBe("string");
     // caller fields survive alongside the envelope
     expect(line!.count).toBe(3);
+  });
+
+  it("does not let a caller field shadow host", () => {
+    logger.info("evt", { host: "impostor" });
+    expect(captured[0]!.host).not.toBe("impostor");
   });
 
   it("emits an ISO-8601 timestamp a log pipeline can parse", () => {
@@ -97,6 +106,73 @@ describe("shared envelope", () => {
   it("omits correlation_id outside any context scope", () => {
     logger.info("no_scope");
     expect(captured[0]!.correlation_id).toBeUndefined();
+  });
+});
+
+describe("runtime log level", () => {
+  // Restore whatever the process started at, so raising the level here cannot
+  // leak into another suite in this shared process.
+  const original = getLogLevel();
+  afterEach(() => {
+    setLogLevel(original);
+  });
+
+  it("drops debug lines at the default info level", () => {
+    setLogLevel("info");
+    captured.length = 0;
+    logger.debug("quiet_line");
+    expect(captured.some((l) => l.message === "quiet_line")).toBe(false);
+  });
+
+  it("emits debug lines once raised, without a restart", () => {
+    // The point of the setter: an incident is the worst moment to restart the
+    // process being investigated.
+    setLogLevel("debug");
+    captured.length = 0;
+    logger.debug("loud_line", { detail: 1 });
+
+    const line = captured.find((l) => l.message === "loud_line");
+    expect(line).toBeDefined();
+    expect(line!.level).toBe("debug");
+    expect(line!.detail).toBe(1);
+  });
+
+  it("announces the change so the transition is visible in the stream", () => {
+    setLogLevel("info");
+    captured.length = 0;
+    setLogLevel("warn");
+
+    const line = captured.find((l) => l.message === "log_level_changed");
+    expect(line).toBeDefined();
+    expect(line!.from).toBe("info");
+    expect(line!.to).toBe("warn");
+  });
+
+  it("announces the change in both directions, including up from error", () => {
+    // Both directions can swallow their own notice: emitting after the swap
+    // loses it when lowering verbosity, emitting before loses it when raising
+    // from a level that already suppressed info.
+    setLogLevel("error");
+    captured.length = 0;
+    setLogLevel("debug");
+
+    const line = captured.find((l) => l.message === "log_level_changed");
+    expect(line).toBeDefined();
+    expect(line!.from).toBe("error");
+    expect(line!.to).toBe("debug");
+  });
+
+  it("rejects an unknown level instead of silently keeping the old one", () => {
+    setLogLevel("warn");
+    // Silently ignoring a typo looks identical to the setting having worked,
+    // which is the failure mode this whole sweep exists to remove.
+    expect(() => setLogLevel("verbose")).toThrow(/unknown log level/);
+    expect(getLogLevel()).toBe("warn");
+  });
+
+  it("normalises case and surrounding whitespace", () => {
+    expect(setLogLevel("  DEBUG ")).toBe("debug");
+    expect(getLogLevel()).toBe("debug");
   });
 });
 
