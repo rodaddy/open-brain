@@ -1805,12 +1805,25 @@ def test_execute_json_does_not_close_caller_injected_client() -> None:
 def test_json_input_and_output_are_bounded() -> None:
     assert parse_json_input(b'{"operation":"recall"}') == {"operation": "recall"}
 
+    # A distilled operation stays bound at 64 KB. The payload must be valid
+    # JSON: the raw-lane ceiling admits the envelope first, so the distilled
+    # bound is now enforced against the decoded operation rather than the
+    # undecoded byte length.
+    oversized = (
+        b'{"operation":"capture","content":"'
+        + b"x" * MAX_JSON_INPUT_BYTES
+        + b'"}'
+    )
     try:
-        parse_json_input(b"x" * (MAX_JSON_INPUT_BYTES + 1))
+        parse_json_input(oversized)
     except ValueError as error:
         assert "exceeds" in str(error)
     else:
         raise AssertionError("oversized input was accepted")
+
+    # The raw lane is exempt: the same size under operation=ingest is admitted.
+    ingest = b'{"operation":"ingest","turns":["' + b"x" * MAX_JSON_INPUT_BYTES + b'"]}'
+    assert parse_json_input(ingest)["operation"] == "ingest"
 
     encoded = encode_json_output({"context": "x" * 1_000_001})
     decoded = json.loads(encoded)

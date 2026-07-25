@@ -174,6 +174,21 @@ class LaneAwareTransport:
                     "lane_created": False,
                 },
             )
+        elif tool == "ingest_raw_turn":
+            # The raw lane is namespace-scoped, not lane-scoped: it carries no
+            # exact-scope coordinates and is therefore not checked against a
+            # started lane. Mirrors the server's ingested/duplicates/filtered
+            # response shape.
+            turns = arguments["turns"]
+            return self._tool_result(
+                json_body["id"],
+                {
+                    "ingested": len(turns),
+                    "duplicates": 0,
+                    "filtered": 0,
+                    "namespace": arguments.get("namespace", "bilby"),
+                },
+            )
         elif tool == "agent_context_pack":
             lane = self.started_sessions.get(arguments["session_key"])
             exact = lane is not None and all(

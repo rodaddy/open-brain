@@ -1258,6 +1258,9 @@ class OpenBrainClient:
     def append_session_event(self, **arguments: Any) -> JSON:
         return self.call_tool("append_session_event", arguments)
 
+    def ingest_raw_turn(self, **arguments: Any) -> JSON:
+        return self.call_tool("ingest_raw_turn", arguments)
+
     def citation_recall(self, **arguments: Any) -> JSON:
         return self.call_tool("citation_recall", arguments)
 
