@@ -12,6 +12,10 @@ const LEASE_RENEW_DIVISOR = 3;
 // more than its available concurrency, but a direct caller must not be able to
 // drain or lock the whole table in one statement.
 const MAX_CLAIM_LIMIT = 256;
+// How often an IDLE runner re-proves it is alive. Long enough that a healthy
+// idle queue costs ~48 lines/day instead of ~17k at the 5s poll cadence, short
+// enough that a stalled runner is obvious within one window.
+const IDLE_LOG_INTERVAL_MS = 1_800_000;
 // Namespace token shape, mirroring the delegated-id/header-namespace path used
 // elsewhere so the queue cannot mint exotic namespaces. Queue mechanics never
 // infer a namespace; this only validates one a caller opts into.
@@ -631,6 +635,12 @@ export class MaintenanceQueueRunner {
   private interval: ReturnType<typeof setInterval> | null = null;
   private tickPromise: Promise<void> | null = null;
   private stopping = false;
+  // Liveness counters. `ticks` proves the poll loop is turning; `lastIdleLogAt`
+  // rate-limits the idle line so an alive-but-idle runner is visible without
+  // flooding the log. 0 means "not yet logged", so the first idle tick always
+  // emits and startup is provable immediately.
+  private ticks = 0;
+  private lastIdleLogAt = 0;
 
   constructor(private readonly options: MaintenanceQueueRunnerOptions) {
     this.concurrency = Math.min(
@@ -708,6 +718,41 @@ export class MaintenanceQueueRunner {
         error_category: safeMaintenanceErrorCategory(error),
       });
       return;
+    }
+
+    // Liveness signal. Without this, an idle runner and a dead runner are
+    // indistinguishable in the log: the only lines emitted were completion and
+    // failure, so "no output" meant either "polling normally, nothing to do" or
+    // "not polling at all". Silence must never be the only evidence.
+    //
+    // NOT one line per poll: at the 5s default that is ~17k lines/day of noise,
+    // which is its own way of hiding a signal. Instead a claim is always logged,
+    // and an empty poll is logged on the first tick and then only once per
+    // heartbeat window, so an idle runner still proves it is alive.
+    this.ticks += 1;
+    if (jobs.length > 0) {
+      this.options.logger.info("maintenance queue claimed jobs", {
+        claimed: jobs.length,
+        available,
+        active: this.active.size,
+        job_kinds: [...new Set(jobs.map((job) => job.kind))].join(","),
+        ticks_since_start: this.ticks,
+      });
+      this.lastIdleLogAt = 0;
+    } else {
+      const nowMs = this.now().getTime();
+      if (
+        this.lastIdleLogAt === 0 ||
+        nowMs - this.lastIdleLogAt >= IDLE_LOG_INTERVAL_MS
+      ) {
+        this.options.logger.info("maintenance queue idle", {
+          polls: this.ticks,
+          poll_interval_ms: this.pollIntervalMs,
+          concurrency: this.concurrency,
+          active: this.active.size,
+        });
+        this.lastIdleLogAt = nowMs;
+      }
     }
 
     // No mid-loop stopping guard: these rows are already leased to this runner,

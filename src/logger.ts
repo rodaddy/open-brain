@@ -77,10 +77,100 @@ function resolveFileSink(): RotatingFileSink | undefined {
 
 const FILE_SINK = resolveFileSink();
 
+/**
+ * Service identity stamped onto every line. Part of the shared observability
+ * envelope (`_DOCS/CODING_STANDARDS.md`, `## Observability`) so that logs from
+ * every emitter on the fleet — applications and infrastructure alike — share one
+ * queryable shape in Loki.
+ *
+ * Read once at module load. When more than one worker writes, the worker name is
+ * appended so lines are attributable to the process that emitted them, matching
+ * how `deriveWorkerLogPath` separates their files.
+ */
+const SERVICE_NAME = (() => {
+  const base = process.env.SERVICE_NAME?.trim() || "open-brain";
+  const worker = process.env.OPEN_BRAIN_WORKER_NAME?.trim();
+  return worker ? `${base}.${worker}` : base;
+})();
+
+/**
+ * Async-scoped context reader, installed by `observability/context.ts`.
+ *
+ * Set through a registration function rather than imported directly: the
+ * observability wrappers import this module, so a static import back the other
+ * way would be circular. It stays undefined until something opts in, which keeps
+ * the logger usable on its own (scripts, tests, early boot) with no context
+ * machinery loaded.
+ */
+type ContextReader = () => Record<string, unknown> | undefined;
+let contextReader: ContextReader | undefined;
+
+/**
+ * Register the reader supplying async-scoped envelope fields.
+ *
+ * Called once by `observability/context.ts`. Not part of the call-site surface.
+ */
+export function setLogContextReader(reader: ContextReader): void {
+  contextReader = reader;
+}
+
+/**
+ * Additional sinks receiving every emitted entry as a structured object.
+ *
+ * Exists so a consumer can observe emitted lines without depending on global
+ * `console` state — which tests must not do, since Bun runs all test files in
+ * one process and a suite that swaps `console.error` without restoring it would
+ * otherwise silently break unrelated assertions.
+ *
+ * Also the extension point for a genuine second destination later (a metrics
+ * counter, an in-process ring buffer for `operator-doctor`) without touching
+ * the call sites.
+ */
+type ExtraSink = (entry: Record<string, unknown>) => void;
+const extraSinks = new Set<ExtraSink>();
+
+/**
+ * Subscribe to every emitted log entry.
+ *
+ * @param sink Called with each entry after the envelope is applied.
+ * @returns An unsubscribe function. Callers must call it, or the sink leaks.
+ */
+export function addLogSink(sink: ExtraSink): () => void {
+  extraSinks.add(sink);
+  return () => {
+    extraSinks.delete(sink);
+  };
+}
+
+function contextFields(): Record<string, unknown> {
+  if (!contextReader) return {};
+  // DELIBERATE FAIL-OPEN, and the one place in this codebase where an unlogged
+  // catch is correct: this runs *inside* the log path, so reporting the failure
+  // through the logger would recurse. A broken context reader must degrade the
+  // line to "no correlation id" rather than prevent the line from being written
+  // at all — losing the whole line is strictly worse than losing one field.
+  try {
+    return contextReader() ?? {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * A single emitted line.
+ *
+ * `timestamp`, `level`, `message`, `service`, and `correlation_id` are the
+ * shared envelope. The first four are always present; `correlation_id` appears
+ * whenever the line was emitted inside a `withContext()` scope.
+ *
+ * `message` is a stable event name (`lane_scope_miss`), never a sentence — event
+ * names are what Loki filters on.
+ */
 interface LogEntry {
   level: string;
   message: string;
   timestamp: string;
+  service: string;
   [key: string]: unknown;
 }
 
@@ -91,14 +181,29 @@ function log(
 ): void {
   if (LOG_LEVELS[level] < LOG_LEVELS[MIN_LEVEL]) return;
 
+  // Envelope fields are owned here and stamped last so a caller cannot
+  // accidentally shadow them with a same-named field: callers that spell
+  // `service` or `correlation_id` differently per repo are how one query
+  // surface becomes several.
   const entry: LogEntry = {
+    ...extra,
     level,
     message,
     timestamp: new Date().toISOString(),
-    ...extra,
+    service: SERVICE_NAME,
+    ...contextFields(),
   };
   const output = JSON.stringify(entry);
   FILE_SINK?.write(output);
+  for (const sink of extraSinks) {
+    // A misbehaving observer must not silence the line for everyone else, and
+    // reporting through the logger from inside the logger would recurse.
+    try {
+      sink(entry);
+    } catch {
+      /* deliberate: see contextFields() */
+    }
+  }
   if (level === "error") {
     console.error(output);
   } else if (level === "warn") {
