@@ -311,6 +311,55 @@ jobs:
           TMPDIR: ${{ runner.temp }}
         run: uv build --python "${PYTHON_VERSION}"
 
+  python-provider:
+    runs-on: [self-hosted, Linux, rodaddy]
+    # Self-hosted runner: same trusted-source gate as `check`/`db-integration`.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    env:
+      PYTHON_VERSION: "3.13"
+    defaults:
+      run:
+        working-directory: python/openbrain-provider
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v8.2.0
+
+      - name: Install Python ${{ env.PYTHON_VERSION }}
+        run: uv python install "${PYTHON_VERSION}"
+
+      # Formatting is a gate here, unlike openbrain-memory: this package is new,
+      # so there is no pre-existing drift to reformat and no reason to let any
+      # accumulate.
+      - name: Check formatting
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: uv run --python "${PYTHON_VERSION}" ruff format --check src tests
+
+      - name: Lint provider package
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: uv run --python "${PYTHON_VERSION}" ruff check src tests
+
+      # Both trees, not just src: the tests carry type errors of their own and
+      # `strict = true` is only meaningful if everything it covers is checked.
+      - name: Typecheck provider package
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          uv run --python "${PYTHON_VERSION}" mypy src/openbrain_provider
+          uv run --python "${PYTHON_VERSION}" mypy tests
+
+      - name: Test provider package
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: uv run --python "${PYTHON_VERSION}" pytest -q
+
+      - name: Build provider package
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: uv build --python "${PYTHON_VERSION}"
+
   contract-parity:
     runs-on: [self-hosted, Linux, rodaddy]
     # Self-hosted runner: same trusted-source gate as the existing validation jobs.
@@ -378,7 +427,7 @@ jobs:
         run: uv run --python "${PYTHON_VERSION}" pytest -q tests/test_contract_fixtures.py
 
   deploy:
-    needs: [check, db-integration, python-package, contract-parity]
+    needs: [check, db-integration, python-package, python-provider, contract-parity]
     runs-on: [self-hosted, macOS, core01]
     if: |
       (github.event_name == 'workflow_dispatch' && inputs.deploy_core01 && github.ref == 'refs/heads/main') ||

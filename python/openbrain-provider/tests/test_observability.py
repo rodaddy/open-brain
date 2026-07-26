@@ -172,7 +172,7 @@ def test_service_name_is_overridable(tmp_path: Path) -> None:
 
 
 def test_unwritable_log_file_is_not_fatal(tmp_path: Path) -> None:
-    # §5.1: being unable to open LOG_FILE MUST NOT be fatal. The previous
+    # §5.1: being unable to open LOG_FILE MUST NOT be fatal. An earlier
     # revision raised OSError at init, which takes down the hook over a logging
     # problem -- the opposite of the contract's intent.
     config = ProviderConfig(
@@ -183,6 +183,47 @@ def test_unwritable_log_file_is_not_fatal(tmp_path: Path) -> None:
     configure_observability(config)
     logger.info("still running")
     logger.remove()
+
+
+def test_unwritable_explicit_log_file_does_not_leak_to_stdout() -> None:
+    # Review finding (HIGH, two lanes independently). resolve_log_file honored
+    # an operator-supplied path unchecked, so an unwritable LOG_FILE made
+    # rtech-obs install its stdout fallback -- redirecting every record onto the
+    # hook's machine-readable response channel. The old
+    # test_unwritable_log_file_is_not_fatal passed throughout because it never
+    # captured stdout. On the pre-fix code this leaks ~436 bytes.
+    config = ProviderConfig(
+        log=LogConfig(level="info", log_file=Path("/proc/nonexistent/x.jsonl")),
+        dispatch=load_config({}).dispatch,
+    )
+
+    captured = io.StringIO()
+    real_stdout = sys.stdout
+    sys.stdout = captured
+    try:
+        configure_observability(config)
+        logger.info("must not reach stdout")
+        logger.remove()
+    finally:
+        sys.stdout = real_stdout
+
+    assert captured.getvalue() == ""
+
+
+def test_unwritable_explicit_path_falls_back_to_a_writable_one() -> None:
+    resolved = resolve_log_file(Path("/proc/nonexistent/x.jsonl"), service="svc")
+
+    assert resolved != Path("/proc/nonexistent/x.jsonl")
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    resolved.write_text("")  # must really accept a write
+
+
+def test_writable_explicit_path_is_still_honored(tmp_path: Path) -> None:
+    # The fallback must not relocate a path that works. An operator who names a
+    # usable file gets exactly that file.
+    explicit = tmp_path / "chosen.jsonl"
+
+    assert resolve_log_file(explicit) == explicit
 
 
 def test_no_log_file_configured_still_never_uses_stdout() -> None:

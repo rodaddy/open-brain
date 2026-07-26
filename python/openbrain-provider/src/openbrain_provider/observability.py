@@ -80,8 +80,16 @@ def _usable_log_dir(path: Path) -> Path | None:
 def resolve_log_file(explicit: Path | None, *, service: str = SERVICE_NAME) -> Path:
     """Choose a log path that is actually writable.
 
-    An explicit path is honored as-is: the operator asked for it, and silently
-    relocating their logs would be worse than failing where they can see it.
+    An operator-supplied path is preferred but still probed. An earlier revision
+    returned it unchecked, reasoning that silently relocating an operator's logs
+    was worse than failing where they could see it. That reasoning was wrong
+    about the consequence: the failure is not visible. `rtech-obs` responds to an
+    unopenable file sink by adding a stdout sink even when `stdout=False`, so an
+    unwritable `LOG_FILE` did not surface an error, it quietly redirected every
+    log record onto the hook's machine-readable response channel. Falling back to
+    a writable path loses the operator's chosen location; not falling back
+    corrupts the hook's output. The second is worse, and `rtech-obs` still logs
+    the substitution, so it is not silent.
 
     Args:
         explicit: Operator-configured path, or None to resolve a default.
@@ -93,17 +101,25 @@ def resolve_log_file(explicit: Path | None, *, service: str = SERVICE_NAME) -> P
         its own words rather than this function inventing an error for a
         situation the caller can do nothing about.
     """
-    if explicit is not None:
-        return explicit
-
     filename = f"{datetime.now(UTC).strftime('%Y-%m-%d')}.jsonl"
     shared_dir = _CONTRACT_LOG_ROOT / service
 
-    # Shared location first, so this starts using /mnt/logs the day it exists
-    # with no code change. Local temp dir second: anywhere writable beats
-    # rtech-obs falling back to a stdout sink, because stdout is the hook's
-    # response channel.
-    for candidate in (shared_dir, Path(tempfile.gettempdir()) / f"{service}-logs"):
+    if explicit is not None:
+        if _usable_log_dir(explicit.parent) is not None:
+            return explicit
+        # Fall through to the defaults rather than hand rtech-obs a path it
+        # cannot open.
+        candidates: tuple[Path, ...] = (
+            Path(tempfile.gettempdir()) / f"{service}-logs",
+            shared_dir,
+        )
+    else:
+        # Shared location first, so this starts using /mnt/logs the day it
+        # exists with no code change. Local temp dir second: anywhere writable
+        # beats rtech-obs falling back to a stdout sink.
+        candidates = (shared_dir, Path(tempfile.gettempdir()) / f"{service}-logs")
+
+    for candidate in candidates:
         usable = _usable_log_dir(candidate)
         if usable is not None:
             return usable / filename

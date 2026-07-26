@@ -237,7 +237,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "openbrain-memory", editable = "openbrain-memory" },
-    { name = "rtech-obs", git = "ssh://git@github.com/rodaddy/rtech-standards.git?subdirectory=packages%2Fpython&rev=23252cdffc773f56e3f00780f46f67e0364a5e0a" },
+    { name = "rtech-obs", git = "https://github.com/rodaddy/rtech-standards.git?subdirectory=packages%2Fpython&rev=23252cdffc773f56e3f00780f46f67e0364a5e0a" },
 ]
 
 [package.metadata.requires-dev]
@@ -316,7 +316,7 @@ wheels = [
 [[package]]
 name = "rtech-obs"
 version = "1.1.0"
-source = { git = "ssh://git@github.com/rodaddy/rtech-standards.git?subdirectory=packages%2Fpython&rev=23252cdffc773f56e3f00780f46f67e0364a5e0a#23252cdffc773f56e3f00780f46f67e0364a5e0a" }
+source = { git = "https://github.com/rodaddy/rtech-standards.git?subdirectory=packages%2Fpython&rev=23252cdffc773f56e3f00780f46f67e0364a5e0a#23252cdffc773f56e3f00780f46f67e0364a5e0a" }
 dependencies = [
     { name = "loguru" },
     { name = "prometheus-client" },

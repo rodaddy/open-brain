@@ -213,6 +213,49 @@ def test_logging_env_vars_use_the_contract_names() -> None:
     assert load_config({"OPENBRAIN_PROVIDER_LOG_LEVEL": "error"}).log.level == "info"
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://alice:supersecret@example.com:notaport",
+        "https://alice:supersecret@example.com:99999",
+        "http://alice:supersecret@example.com ; rm -rf /",
+        "ftp://alice:supersecret@example.com",
+        "http://alice:supersecret@",
+        "alice:supersecret@example.com",
+    ],
+)
+def test_base_url_errors_do_not_leak_embedded_credentials(url: str) -> None:
+    # Review finding (MEDIUM, security lane). urlsplit accepts userinfo, and
+    # every validation error quoted the raw value. A config error at boot is
+    # exactly what gets printed to a terminal, captured by a service manager, or
+    # pasted into a bug report, so a malformed secret-bearing URL became
+    # credential disclosure.
+    with pytest.raises(ConfigError) as excinfo:
+        load_config({"OPENBRAIN_BASE_URL": url})
+
+    assert "supersecret" not in str(excinfo.value)
+
+
+def test_base_url_errors_still_identify_the_problem() -> None:
+    # Redaction must not make the message useless: the host has to survive, or
+    # an operator cannot tell which of several configured URLs was rejected.
+    with pytest.raises(ConfigError) as excinfo:
+        load_config({"OPENBRAIN_BASE_URL": "http://alice:supersecret@example.com:bad"})
+
+    message = str(excinfo.value)
+    assert "example.com" in message
+    assert "***" in message
+
+
+def test_credential_free_urls_are_reported_verbatim() -> None:
+    # No credentials means nothing to redact; the operator should see exactly
+    # what they configured.
+    with pytest.raises(ConfigError) as excinfo:
+        load_config({"OPENBRAIN_BASE_URL": "ftp://example.com:3100"})
+
+    assert "ftp://example.com:3100" in str(excinfo.value)
+
+
 def test_unknown_variables_are_ignored() -> None:
     # The real environment is full of unrelated variables. Reading it must not
     # turn a neighbouring name into a configuration error.

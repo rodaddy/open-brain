@@ -46,7 +46,14 @@ openbrain-memory = { workspace = true }
 # rtech-obs 1.0.0, whose init_observability() has no metrics_mode parameter,
 # and tracking a moving feature branch would let someone else's in-flight work
 # change this build. Repin when the observability work merges to main.
-rtech-obs = { git = "ssh://git@github.com/rodaddy/rtech-standards.git", rev = "23252cdffc773f56e3f00780f46f67e0364a5e0a", subdirectory = "packages/python" }
+#
+# HTTPS, not ssh://. An SSH URL requires a configured GitHub host key and
+# credentials, which a fresh clone does not imply: verified that an
+# HTTPS-cloned checkout with an empty cache fails this fetch with
+# "Host key verification failed". CI runners and new contributors are exactly
+# that case. The repository is reachable over HTTPS, so the SSH URL bought
+# nothing and cost every cold environment.
+rtech-obs = { git = "https://github.com/rodaddy/rtech-standards.git", rev = "23252cdffc773f56e3f00780f46f67e0364a5e0a", subdirectory = "packages/python" }
 
 [dependency-groups]
 dev = [

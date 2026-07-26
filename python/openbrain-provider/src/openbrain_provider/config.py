@@ -112,6 +112,40 @@ class DispatchConfig:
 _ALLOWED_URL_SCHEMES: Final[frozenset[str]] = frozenset({"http", "https"})
 
 
+def _safe_url(value: str) -> str:
+    """Return a URL with any embedded credentials replaced.
+
+    `urlsplit` accepts userinfo, so `http://alice:hunter2@host` is a valid base
+    URL. Every validation error below quotes the offending value, and a config
+    error at boot is exactly the thing that gets printed to a terminal, captured
+    by a service manager, or attached to a bug report -- so quoting the raw
+    value turns a malformed URL into credential disclosure.
+
+    Args:
+        value: The configured base URL, possibly malformed.
+
+    Returns:
+        The value with any `user:password@` portion replaced by `***@`. Falls
+        back to a fully redacted marker if the value cannot be parsed at all,
+        because an unparseable string is exactly where a naive regex would miss.
+    """
+    if "@" not in value:
+        return value
+
+    # Everything before the LAST '@' in the authority is userinfo. Operating on
+    # the raw string rather than parsed attributes keeps this correct for values
+    # too malformed to parse -- which is precisely when it is called. Reading
+    # `parsed.port` would itself raise on the invalid-port case being reported.
+    scheme, sep, rest = value.partition("://")
+    if not sep:
+        return "***"
+    authority, slash, path = rest.partition("/")
+    if "@" not in authority:
+        return value
+    hostport = authority.rsplit("@", 1)[1]
+    return f"{scheme}://***@{hostport}{slash}{path}"
+
+
 def _validate_base_url(value: str) -> None:
     """Reject a base URL that is not a usable HTTP(S) endpoint.
 
@@ -131,35 +165,39 @@ def _validate_base_url(value: str) -> None:
             control characters.
     """
     if value != value.strip() or any(c.isspace() for c in value):
-        raise ConfigError(f"base url must not contain whitespace, got {value!r}")
+        raise ConfigError(
+            f"base url must not contain whitespace, got {_safe_url(value)!r}"
+        )
 
     # C0/C1 control characters can smuggle a newline into a header or a log
     # line; neither belongs in a URL.
     if any(ord(c) < 0x20 or ord(c) == 0x7F for c in value):
         raise ConfigError(
-            f"base url must not contain control characters, got {value!r}"
+            f"base url must not contain control characters, got {_safe_url(value)!r}"
         )
 
     try:
         parsed = urlsplit(value)
     except ValueError as exc:
-        raise ConfigError(f"base url is not a valid URL: {value!r}") from exc
+        raise ConfigError(f"base url is not a valid URL: {_safe_url(value)!r}") from exc
 
     if parsed.scheme not in _ALLOWED_URL_SCHEMES:
         raise ConfigError(
             f"base url scheme must be one of {sorted(_ALLOWED_URL_SCHEMES)}, "
-            f"got {parsed.scheme!r} in {value!r}"
+            f"got {parsed.scheme!r} in {_safe_url(value)!r}"
         )
 
     if not parsed.hostname:
-        raise ConfigError(f"base url must include a host, got {value!r}")
+        raise ConfigError(f"base url must include a host, got {_safe_url(value)!r}")
 
     # urlsplit defers port parsing, so an invalid port only surfaces when the
     # attribute is read. Bind it so that read is unmistakably deliberate.
     try:
         _port = parsed.port
     except ValueError as exc:
-        raise ConfigError(f"base url has an invalid port: {value!r}") from exc
+        raise ConfigError(
+            f"base url has an invalid port: {_safe_url(value)!r}"
+        ) from exc
     del _port
 
 
