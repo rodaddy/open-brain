@@ -4,16 +4,26 @@ import {
   test,
   mock,
   beforeEach,
-  afterAll,
+  afterEach,
   spyOn,
 } from "bun:test";
 import type { Request, Response, NextFunction } from "express";
 import { logger } from "../logger.ts";
 import { requestLogger } from "./request-logger.ts";
 
-// Spy on logger.info instead of mock.module to avoid global module pollution
-const loggerInfoSpy = spyOn(logger, "info");
-const loggerWarnSpy = spyOn(logger, "warn");
+// Spy on logger.info instead of mock.module to avoid global module pollution.
+//
+// The spies are installed per-test rather than at module scope. `spyOn` mutates
+// the shared `logger` object, and module-scope installation takes effect the
+// moment Bun LOADS this file — before any test here runs, and for every suite
+// that runs afterward, since Bun executes all test files in one process. A
+// restore in `afterAll` does not close that window: it fires only after this
+// describe completes, so a suite loaded in between still sees a silenced
+// logger. `src/observability/observability.test.ts` asserts on lines the real
+// logger emits, and a swallowing spy left installed made all 20 of its tests
+// fail from a cause in this file.
+let loggerInfoSpy: ReturnType<typeof spyOn<typeof logger, "info">>;
+let loggerWarnSpy: ReturnType<typeof spyOn<typeof logger, "warn">>;
 
 // Helpers
 function mockReq(overrides: Partial<Record<string, unknown>> = {}) {
@@ -50,11 +60,13 @@ function lastInfoCall(): LogCall {
 
 describe("requestLogger middleware", () => {
   beforeEach(() => {
-    loggerInfoSpy.mockClear();
-    loggerWarnSpy.mockClear();
+    loggerInfoSpy = spyOn(logger, "info");
+    loggerWarnSpy = spyOn(logger, "warn");
   });
 
-  afterAll(() => {
+  afterEach(() => {
+    // Restore per test, not per file: the shared `logger` object must be intact
+    // for any suite that runs after this one.
     loggerInfoSpy.mockRestore();
     loggerWarnSpy.mockRestore();
   });

@@ -1,21 +1,43 @@
-import { describe, it, expect, mock, beforeEach } from "bun:test";
+import { describe, it, expect, mock, beforeEach, afterEach } from "bun:test";
 import type pg from "pg";
 import type { generateEmbedding } from "../src/embedding.ts";
+import { addLogSink } from "../src/logger.ts";
 
-// Only mock the logger -- pool and embedFn are injected directly into backfill()
+// Info lines are observed through the logger's own sink. Pool and embedFn are
+// injected directly into backfill(), so the logger is the only collaborator
+// that needs observing at all.
+//
+// NOT `mock.module("../src/logger.ts")`: that mock is process-wide and
+// permanent in Bun -- keyed by resolved specifier, never scoped to one file,
+// and not undone by `mock.restore()`. Stubbing the logger here replaced it for
+// every later suite in the run, and `src/observability/observability.test.ts`
+// asserts on lines the REAL logger emits. The stub silenced it, so all 20 of
+// its tests failed with an empty capture buffer and a stack pointing nowhere
+// near this file. The stub also predated `addLogSink`/`setLogContextReader`,
+// so it no longer exported the module's full surface.
+//
+// `addLogSink` observes emitted lines without replacing anything, so it
+// composes with other suites instead of overwriting them.
 const logInfoCalls: Array<[string, Record<string, unknown>?]> = [];
-mock.module("../src/logger.ts", () => ({
-  logger: {
-    info: (msg: string, extra?: Record<string, unknown>) => {
-      logInfoCalls.push([msg, extra]);
-    },
-    warn: () => {},
-    error: () => {},
-    debug: mock(() => {}),
-  },
-}));
+let unsubscribeLogSink: (() => void) | undefined;
 
-// Import after logger mock is set up
+beforeEach(() => {
+  logInfoCalls.length = 0;
+  unsubscribeLogSink = addLogSink((entry) => {
+    if (entry.level !== "info") return;
+    const { level, message, timestamp, service, ...extra } = entry;
+    void level;
+    void timestamp;
+    void service;
+    logInfoCalls.push([message as string, extra]);
+  });
+});
+
+afterEach(() => {
+  unsubscribeLogSink?.();
+  unsubscribeLogSink = undefined;
+});
+
 const { backfill } = await import("./backfill.ts");
 
 // Mock pool factory -- no mock.module needed since pool is injected
@@ -42,10 +64,6 @@ function createMockEmbedFn(impl?: (text: string) => Promise<number[] | null>) {
 // Default query impl: return empty rows for everything
 const defaultQueryImpl = async () => ({
   rows: [] as Record<string, unknown>[],
-});
-
-beforeEach(() => {
-  logInfoCalls.length = 0;
 });
 
 describe("backfill", () => {

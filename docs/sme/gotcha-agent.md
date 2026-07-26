@@ -685,3 +685,102 @@ against two healthy servers.
 - Can a gate that depends on a subsystem block the repair of that same
   subsystem? A context/policy gate needs a repair-mode escape or it deadlocks
   exactly when it is needed most.
+
+## [2026-07-26] A "fix" for an impossible case, and the test that could not fail
+
+**Provenance:** PR #424, SME lane. **Severity:** MEDIUM. **Status:** fixed.
+
+Self-review "fixed" an unguarded `FILE_SINK?.write` by wrapping it in
+`try/catch`, reasoning that a full disk must not take the log line down with it.
+The reasoning was sound; the guard was redundant.
+
+The SME lane applied this file's own instruction — *neuter the fix in place and
+measure* — and found **0 tests failed** with the guard removed, across 151 tests
+in every logger-touching suite. Two layers of why:
+
+1. The whole suite runs with `LOG_FILE` unset, so `FILE_SINK` is `undefined` and
+   `?.` short-circuits before reaching the guarded block.
+2. Deeper: `createRotatingFileSink` documents *"Never throws on write"* and
+   already wraps `appendFileSync` in its own `try/catch`. **The throw being
+   guarded cannot occur.**
+
+A guard for an impossible case is not free. It tells the next reader this sink
+can throw, which is false, and it is untestable by construction — so it reads as
+a coverage gap forever.
+
+What replaced it: the guard was removed with the rationale recorded inline, and
+a test was added for the behaviour *neither* version covered — an unwritable
+`LOG_FILE` must still produce the line on console. It runs through a subprocess,
+because `FILE_SINK` resolves once at module load and an in-process test can
+never reach it.
+
+### Review Questions
+
+- For each fix in a PR: **revert it in place and run the tests.** If nothing
+  fails, either the test is missing or the fix is unnecessary. Both are worth
+  knowing, and they are distinguishable only by looking.
+- Before guarding a call, check whether the callee already guarantees it does
+  not throw. Read the callee's contract, do not infer it from the call site.
+- Is the fixture even reachable? A module-level `const` resolved from env at
+  import time (`FILE_SINK`, `HOST_NAME`, `SERVICE_NAME`) cannot be exercised by
+  a suite that does not set that env — a subprocess is the honest way in.
+- Does the suite's default env silently disable the code path under test?
+
+## [2026-07-26] Four defects that three review passes all missed
+
+**Provenance:** PR #424, final independent gate. **Severity:** HIGH.
+**Status:** fixed.
+
+An author self-review and two swarm lanes all cleared `src/logger.ts`. A fourth
+independent pass found four more defects in the same file, all reproduced. What
+unites them is that every one is a **guard that was correct about its intent and
+wrong about its mechanism** — so reading the code, and the comment above it,
+confirms the intent and hides the flaw. Three passes read the intent.
+
+**1. A redactor that cannot see what it is redacting.** Every detector was
+value-shaped (`sk-…`, `ghp_…`, the literal text `password=…`). But a JSON
+logger hands its replacer each value *in isolation*, so `{"password":
+"hunter2driveway"}` emitted in clear. The pattern set already contained
+`json_labeled_secret`, which matches that exact pair — when given the pair as
+text. It was never shown the key. The detector list looked complete because it
+was; the call site never supplied the context the detectors needed.
+
+**2. A bound that manufactured the leak it existed to prevent.** Input was
+truncated at 16 KB *before* the patterns ran, so a DSN straddling the boundary
+was cut mid-credential, nothing matched the surviving head, and the tail went
+out readable. Truncating cannot create a secret, but it can destroy the evidence
+that one is present. Order of operations, not the operations.
+
+**3. Cycle detection that flagged non-cycles.** A `WeakSet` that only ever grew
+marked *any* object seen a second time as `"[Circular]"` — including one
+referenced from two sibling fields, which is not a cycle. Sharing one
+config/job/namespace object across fields is ordinary, so the false positive was
+the common case, silently dropping real data. "Seen before" and "is its own
+ancestor" are different questions; only the second one means circular.
+
+**4. A reentrancy guard keyed on a value that collides.** `minLevel === widened`
+cannot distinguish "my temporary value is still installed" from "a nested call
+deliberately chose that same value." An existing test covered nested
+`setLogLevel` and passed throughout — because its nested call picks a level that
+*differs* from the widened one. The colliding case inverted the result while
+telling the nested caller it had succeeded.
+
+### Review Questions
+
+- **Does this guard ever see the information it needs to decide?** A redactor
+  handed one value at a time cannot act on the field name; a validator handed a
+  parsed object cannot act on the raw bytes. Check the call site's data flow,
+  not the guard's logic.
+- **Does a sanitizer run before or after the thing that bounds it?** Truncate,
+  normalize, encode, and redact are all order-sensitive. Ask which one runs
+  first and what the other one can no longer see.
+- **Is "have I seen this?" standing in for "is this an ancestor?"** A
+  monotonically growing set answers the first. Cycle, recursion, and depth
+  guards need the second, and the difference only shows on a DAG — repeated
+  siblings, not loops.
+- **Does the guard's key have collisions?** Comparing a *value* to detect "did
+  someone else change this" fails whenever someone else picks the same value.
+  Identity tokens, generation counters, and sentinels do not collide; values do.
+- **Does the existing test for this exercise the colliding case?** A passing
+  reentrancy/idempotency test often picks distinct values precisely because
+  distinct values are easier to assert on. That is the case that cannot fail.

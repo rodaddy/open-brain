@@ -1,17 +1,40 @@
-import { describe, it, expect, mock, beforeEach } from "bun:test";
+import { describe, it, expect, mock, beforeEach, afterEach } from "bun:test";
 import type { EmbeddingError } from "./embedding.ts";
+import { addLogSink } from "./logger.ts";
 
-// Mock the logger so content-free warnings don't spam and can be asserted.
+// Warnings are observed through the logger's own sink, NOT `mock.module`.
+//
+// `mock.module` is process-wide and permanent in Bun: it is keyed by resolved
+// specifier, is not scoped to this file, is not undone between test files, and
+// `mock.restore()` does not undo it. Stubbing "./logger.ts" here therefore
+// replaced the logger for every later suite in the run — which silently broke
+// the observability tests, whose subject IS the real logger: they received the
+// stub's no-op `addLogSink`, so nothing was ever captured and all 18 of their
+// assertions failed with an empty array, from a cause in this file.
+//
+// `addLogSink` observes emitted lines without touching module or global state,
+// so it composes with other suites instead of overwriting them. It is also
+// stricter: assertions run against lines the real logger actually emitted,
+// envelope included, rather than against arguments handed to a fake.
 const warnCalls: Array<[string, Record<string, unknown>?]> = [];
-mock.module("./logger.ts", () => ({
-  logger: {
-    info: () => {},
-    warn: (msg: string, extra?: Record<string, unknown>) =>
-      warnCalls.push([msg, extra]),
-    error: () => {},
-    debug: () => {},
-  },
-}));
+let unsubscribeLogSink: (() => void) | undefined;
+
+beforeEach(() => {
+  warnCalls.length = 0;
+  unsubscribeLogSink = addLogSink((entry) => {
+    if (entry.level !== "warn") return;
+    const { level, message, timestamp, service, ...extra } = entry;
+    void level;
+    void timestamp;
+    void service;
+    warnCalls.push([message as string, extra]);
+  });
+});
+
+afterEach(() => {
+  unsubscribeLogSink?.();
+  unsubscribeLogSink = undefined;
+});
 
 const {
   selectStale,
@@ -74,10 +97,6 @@ function failEmbed(code: EmbeddingError["code"]) {
     error: { code, message: "x", attempts: 1 } as EmbeddingError,
   }));
 }
-
-beforeEach(() => {
-  warnCalls.length = 0;
-});
 
 describe("detectableReasons", () => {
   it("full-provenance table detects missing, model_drift, source_drift", () => {
