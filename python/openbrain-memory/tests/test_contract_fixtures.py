@@ -128,6 +128,7 @@ def test_python_consumes_memory_contract_fixture(
         "auto-drain-allowlist": _consume_auto_drain_allowlist,
         "receipt-shapes": _consume_receipt_shapes,
         "drain-receipts": _consume_drain_receipts,
+        "raw-turn-ingest": _consume_raw_turn_ingest,
     }
     handlers[fixture["capability"]](fixture, tmp_path)
 
@@ -141,9 +142,7 @@ def _consume_contract_declaration(
     assert CURRENT_CONTRACT_VERSION == request["contract_id"]
     assert CURRENT_CONTRACT_SCHEMA_VERSION == request["schema_version"]
     assert CURRENT_CONTRACT_SCHEMA_HASH == request["schema_hash"]
-    assert list(COMPATIBLE_CONTRACT_VERSIONS) == expectation[
-        "compatible_contract_ids"
-    ]
+    assert list(COMPATIBLE_CONTRACT_VERSIONS) == expectation["compatible_contract_ids"]
     assert CURRENT_CONTRACT_HEADER == expectation["client_header"]
 
 
@@ -195,6 +194,56 @@ def _consume_session_lifecycle(
     )
 
 
+def _consume_raw_turn_ingest(
+    fixture: dict[str, Any],
+    _tmp_path: Path,
+) -> None:
+    """Replay the full-send raw-turn lane and assert nothing is filtered.
+
+    The property under test is the absence of client-side judgment. Turns reach
+    the wire verbatim, both roles survive, and the batch is one call. Measured
+    failure this guards against (2026-07-25): client-side salience captured 21
+    user turns and ZERO assistant turns.
+    """
+    request = fixture["request"]
+    expectation = fixture["expectation"]
+    transport = LaneAwareTransport()
+    runtime = FirstClassMemoryRuntime(
+        runtime_config(),
+        runtime_scope(),
+        transport=transport,
+    )
+
+    method = getattr(runtime, request["entrypoint"].removeprefix("runtime."))
+    output = method(**request["arguments"])
+
+    calls = [
+        call["params"]
+        for call in tool_calls(transport)
+        if call["params"]["name"] != "get_contract"
+    ]
+    # One call for the whole batch, not one per turn.
+    ingest_calls = [c for c in calls if c["name"] == "ingest_raw_turn"]
+    assert len(ingest_calls) == len(expectation["tool_calls"])
+    for actual, expected in zip(ingest_calls, expectation["tool_calls"], strict=True):
+        _assert_contract_value(actual, expected)
+
+    # Every role in the fixture reaches the wire. A lane that silently drops
+    # assistant turns still satisfies a naive count assertion, so check roles.
+    sent_roles = {
+        turn["role"] for call in ingest_calls for turn in call["arguments"]["turns"]
+    }
+    assert sent_roles == {turn["role"] for turn in request["arguments"]["turns"]}
+
+    assert output.receipt.status.value == expectation["status"]
+    if "durable" in expectation:
+        assert output.receipt.durable is expectation["durable"]
+    assert all(
+        http_request["headers"]["X-OB-Contract"] == CURRENT_CONTRACT_HEADER
+        for http_request in transport.requests
+    )
+
+
 def _consume_exact_scope_proof(
     fixture: dict[str, Any],
     _tmp_path: Path,
@@ -217,9 +266,10 @@ def _consume_exact_scope_proof(
             runtime_scope(),
             client=ScopeProofClient(mismatched),
         ).recall_context(f"Mismatch fixture: {field}")
-        assert output.receipt.status.value == expectation[
-            "mismatch_status_without_fallback"
-        ]
+        assert (
+            output.receipt.status.value
+            == expectation["mismatch_status_without_fallback"]
+        )
         assert output.context == expectation["mismatch_context_without_fallback"]
 
 

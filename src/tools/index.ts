@@ -32,6 +32,7 @@ import { registerTierRecommendations } from "./tier-recommendations.ts";
 import { registerLaneUpsert } from "./lane-upsert.ts";
 import { registerLaneLoad } from "./lane-load.ts";
 import { registerAppendSessionEvent } from "./append-session-event.ts";
+import { registerIngestRawTurn } from "./ingest-raw-turn.ts";
 import { registerCitationRecall } from "./citation-recall.ts";
 import { registerSessionContext } from "./session-context.ts";
 import { registerSessionStart } from "./session-start.ts";
@@ -122,6 +123,7 @@ export function registerAllTools(server: McpServer, deps: ToolDeps): void {
   registerLaneUpsert(server, toolDeps);
   registerLaneLoad(server, toolDeps);
   registerAppendSessionEvent(server, toolDeps);
+  registerIngestRawTurn(server, toolDeps);
   registerCitationRecall(server, toolDeps);
   registerSessionContext(server, toolDeps);
   registerSessionStart(server, toolDeps);

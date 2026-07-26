@@ -128,6 +128,7 @@ _REPLAYABLE_SPOOL_OPERATIONS = frozenset(
         "lane_upsert",
         "upsert_repo_fact",
         "append_session_event",
+        "ingest_raw_turn",
         "log_thought",
         "log_decision",
         "session_wrap",
@@ -783,6 +784,49 @@ class FirstClassMemoryRuntime:
             ),
         )
 
+    def ingest_raw_turns(
+        self,
+        turns: Sequence[Mapping[str, Any]],
+        *,
+        namespace: str | None = None,
+    ) -> RuntimeOutput:
+        """Full-send raw turns. THE ONE CONTENT-BEARING LANE.
+
+        The distilled verbs (``capture``/``checkpoint``/``wrap``) never carry
+        raw content: they run ``_distilled_content`` and reject anything that
+        is not an already-summarized statement. This verb deliberately does
+        NOT, because raw turns ARE the transcript -- filtering them client-side
+        is the exact defect full-send exists to remove.
+
+        Validation here is STRUCTURAL only (is it a turn at all), never
+        salience. The server owns secret-value redaction, harness-noise
+        filtering, and de-duplication; keeping those server-side means one
+        implementation serves Claude, Codex, and Python instead of three
+        divergent client heuristics.
+        """
+        try:
+            if not isinstance(turns, Sequence) or isinstance(turns, str | bytes):
+                raise ValueError("turns must be a sequence of turn objects")
+            if not turns:
+                raise ValueError("turns must not be empty")
+            if len(turns) > _MAX_RAW_TURN_BATCH:
+                raise ValueError(
+                    f"turns must contain at most {_MAX_RAW_TURN_BATCH} entries"
+                )
+            safe_turns = [_raw_turn(turn, index) for index, turn in enumerate(turns)]
+            safe_namespace = (
+                _require_text(namespace, "namespace") if namespace is not None else None
+            )
+        except ValueError as error:
+            return _failed_write("ingest", error)
+        return self._write(
+            "ingest",
+            lambda: self._memory.ingest_raw_turns(
+                safe_turns,
+                namespace=safe_namespace,
+            ),
+        )
+
     def checkpoint(
         self,
         summary: str,
@@ -1130,6 +1174,96 @@ def _failed_write(operation: str, error: BaseException) -> RuntimeOutput:
 
 def _distilled_content(value: str, name: str) -> str:
     return _validate_distilled_content(value, name, _reject_secret_payload)
+
+
+# Mirrors the server's ingest_raw_turn Zod schema. Kept in step deliberately:
+# a client that ships a turn the server will reject wastes a round trip and
+# turns a structural bug into a runtime error the hook has to interpret.
+_MAX_RAW_TURN_BATCH = 100
+_MAX_RAW_TURN_CHARS = 200_000
+_RAW_TURN_ROLES = frozenset({"user", "assistant", "tool"})
+_RAW_TURN_TEXT_FIELDS = {
+    "turn_uuid": 200,
+    "parent_turn_uuid": 200,
+    "logical_parent_turn_uuid": 200,
+    "prompt_id": 200,
+    "session_ref": 500,
+    "repo": 200,
+    "git_branch": 300,
+    "runtime": 100,
+    "occurred_at": 100,
+}
+
+
+def _raw_turn(turn: Any, index: int) -> dict[str, Any]:
+    """Validate one raw turn STRUCTURALLY -- shape only, never salience.
+
+    Content is passed through untouched: no secret rejection, no length
+    judgment beyond the server's hard cap, no "is this worth keeping". A turn
+    is dropped only if it is not a turn.
+    """
+    where = f"turns[{index}]"
+    if not isinstance(turn, Mapping):
+        raise ValueError(f"{where} must be an object")
+
+    role = turn.get("role")
+    if role not in _RAW_TURN_ROLES:
+        raise ValueError(f"{where}.role must be one of user, assistant, tool")
+
+    content = turn.get("content")
+    if not isinstance(content, str):
+        raise ValueError(f"{where}.content must be a string")
+    if len(content) > _MAX_RAW_TURN_CHARS:
+        raise ValueError(
+            f"{where}.content exceeds {_MAX_RAW_TURN_CHARS} characters"
+        )
+
+    turn_index = turn.get("turn_index")
+    if not isinstance(turn_index, int) or isinstance(turn_index, bool):
+        raise ValueError(f"{where}.turn_index must be an integer")
+    if turn_index < 0:
+        raise ValueError(f"{where}.turn_index must be >= 0")
+
+    safe: dict[str, Any] = {
+        "role": role,
+        "content": content,
+        "turn_index": turn_index,
+    }
+
+    for name, limit in _RAW_TURN_TEXT_FIELDS.items():
+        value = turn.get(name)
+        if value is None:
+            continue
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{where}.{name} must be a non-empty string")
+        if len(value) > limit:
+            raise ValueError(f"{where}.{name} exceeds {limit} characters")
+        safe[name] = value
+
+    if "turn_uuid" not in safe:
+        raise ValueError(f"{where}.turn_uuid is required")
+
+    is_human_prompt = turn.get("is_human_prompt")
+    if is_human_prompt is not None:
+        if not isinstance(is_human_prompt, bool):
+            raise ValueError(f"{where}.is_human_prompt must be a boolean")
+        safe["is_human_prompt"] = is_human_prompt
+
+    token_estimate = turn.get("token_estimate")
+    if token_estimate is not None:
+        if not isinstance(token_estimate, int) or isinstance(token_estimate, bool):
+            raise ValueError(f"{where}.token_estimate must be an integer")
+        if token_estimate < 0:
+            raise ValueError(f"{where}.token_estimate must be >= 0")
+        safe["token_estimate"] = token_estimate
+
+    metadata = turn.get("metadata")
+    if metadata is not None:
+        if not isinstance(metadata, Mapping):
+            raise ValueError(f"{where}.metadata must be an object")
+        safe["metadata"] = dict(metadata)
+
+    return safe
 
 
 def _persisted_text(value: Any, name: str) -> str:

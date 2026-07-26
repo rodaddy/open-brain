@@ -61,6 +61,8 @@ class DirectClient(Protocol):
 
     def append_session_event(self, **arguments: Any) -> JSON: ...
 
+    def ingest_raw_turn(self, **arguments: Any) -> JSON: ...
+
     def lane_upsert(self, **arguments: Any) -> JSON: ...
 
     def upsert_repo_fact(self, **arguments: Any) -> JSON: ...
@@ -251,6 +253,13 @@ class RuntimeClientRouter:
 
     def append_session_event(self, **arguments: Any) -> JSON:
         return self._call("append_session_event", arguments)
+
+    def ingest_raw_turn(self, **arguments: Any) -> JSON:
+        # Direct-only: the mcp2cli fallback is a retired operator surface that
+        # does not carry this tool, and a raw turn that cannot be sent must
+        # spool for replay rather than silently take a second transport.
+        with self.direct_only():
+            return self._call("ingest_raw_turn", arguments)
 
     def lane_upsert(self, **arguments: Any) -> JSON:
         return self._call("lane_upsert", arguments)

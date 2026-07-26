@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol, cast
@@ -123,6 +123,8 @@ class MemoryClient(Protocol):
     def session_context(self, **arguments: Any) -> JSON: ...
 
     def append_session_event(self, **arguments: Any) -> JSON: ...
+
+    def ingest_raw_turn(self, **arguments: Any) -> JSON: ...
 
     def search_all(self, **arguments: Any) -> JSON: ...
 
@@ -584,6 +586,36 @@ class AgentMemory:
             "append_session_event",
             payload,
             self.client.append_session_event,
+            key=key,
+        )
+
+    def ingest_raw_turns(
+        self,
+        turns: Sequence[Mapping[str, Any]],
+        *,
+        namespace: str | None = None,
+    ) -> JSON:
+        """Full-send a batch of raw turns; the server owns every judgment.
+
+        This is the RAW lane and it is content-bearing BY DESIGN. Unlike
+        ``append_scoped_event`` and the other distilled writes, nothing here
+        classifies, scores, or decides whether a turn is worth keeping --
+        client-side salience was measured to fail exactly that way (21 user
+        turns and ZERO assistant turns captured on 2026-07-25). The server
+        redacts secret VALUES, drops harness scaffolding, and de-duplicates on
+        ``UNIQUE(namespace, turn_uuid)``, so a replayed batch is a no-op.
+        """
+        self._require_session("ingest_raw_turns")
+        if not turns:
+            raise ValueError("turns must not be empty")
+        key = idempotency_key()
+        payload: dict[str, Any] = {"turns": [dict(turn) for turn in turns]}
+        if namespace is not None:
+            payload["namespace"] = _required_str(namespace, "namespace")
+        return self._call_write(
+            "ingest_raw_turn",
+            payload,
+            self.client.ingest_raw_turn,
             key=key,
         )
 

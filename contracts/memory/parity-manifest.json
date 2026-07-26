@@ -11,6 +11,7 @@
     "lifecycle-session-start": "both",
     "lifecycle-wrap": "both",
     "python-drain-replay-quarantine-receipts": "both",
+    "python-raw-turn-ingest": "python",
     "python-runtime-and-agent-receipt-shapes": "both",
     "spool-line-cap-backpressure": "both",
     "spool-redact-before-persist": "both",
@@ -57,6 +58,12 @@
       "python": "implemented",
       "ts": "runtime-specific",
       "reason": "The TS client owns the bounded public error_category enum (clients/ts receipts, fixture ts-public-receipt-error-category-v1); the Python package exposes sanitized error text on its internal runtime receipt and does not own that taxonomy. The agent-receipt half of the shared receipt-shapes fixture exercises AgentMemory.record_receipt, which the TS client intentionally does not implement."
+    },
+    {
+      "capability": "raw-turn-ingest",
+      "python": "implemented",
+      "ts": "runtime-specific",
+      "reason": "Full-send raw turn ingest (open-brain#380) is a writer-side lane: the ingest_raw_turn MCP tool and the 032_raw_turns table are the contract, and the Python client wraps them because the agent runtimes that capture turns are Python. The TS client is a reader/lifecycle peer and has no turn-capture surface to wrap, so there is no matched call to hold parity against. If clients/ts ever gains a capture path this becomes 'both' and needs a shared fixture."
     }
   ],
   "not_yet_extracted": [

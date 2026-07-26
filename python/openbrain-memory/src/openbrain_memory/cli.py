@@ -18,7 +18,14 @@ from .runtime import (
     RuntimeScope,
 )
 
+MAX_IGNORED_OPTIONAL_KEY_COUNT = 65_535
+IGNORED_OPTIONAL_REQUEST_KEYS_NOTE = "ignored_optional_request_keys"
 MAX_JSON_INPUT_BYTES = 64 * 1024
+# The raw lane ships whole turns; 64 KB bounds a distilled record but would
+# silently refuse a long assistant turn, which is the exact failure full-send
+# exists to remove. The envelope is admitted at the larger bound and the
+# distilled operations keep their own 64 KB ceiling below.
+MAX_INGEST_JSON_INPUT_BYTES = 2 * 1024 * 1024
 MAX_JSON_OUTPUT_BYTES = 1_000_000
 MAX_IGNORED_OPTIONAL_KEY_COUNT = 65_535
 IGNORED_OPTIONAL_REQUEST_KEYS_NOTE = "ignored_optional_request_keys"
@@ -33,6 +40,9 @@ _OPERATION_KEYS = {
     },
     "reflex": {"max_latency_ms", "max_tokens", "prior_context", "query"},
     "capture": {"content", "distilled", "event_type"},
+    # The raw lane carries no "distilled" key by design: it is the one verb
+    # that ships the transcript rather than a summary of it.
+    "ingest": {"namespace", "turns"},
     "checkpoint": {
         "distilled",
         "key_decisions",
@@ -113,15 +123,22 @@ def failure_output(operation: str, error: BaseException | str) -> dict[str, Any]
 
 
 def parse_json_input(data: bytes) -> Mapping[str, Any]:
-    """Parse one bounded UTF-8 JSON object."""
-    if len(data) > MAX_JSON_INPUT_BYTES:
-        raise ValueError(f"JSON input exceeds {MAX_JSON_INPUT_BYTES} bytes")
+    """Parse one bounded UTF-8 JSON object.
+
+    The envelope is admitted at the raw-lane ceiling because the operation is
+    not known until it is parsed; the distilled 64 KB bound is then enforced
+    against the decoded operation, so only ``ingest`` may exceed it.
+    """
+    if len(data) > MAX_INGEST_JSON_INPUT_BYTES:
+        raise ValueError(f"JSON input exceeds {MAX_INGEST_JSON_INPUT_BYTES} bytes")
     try:
         decoded = json.loads(data.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError("input must be one UTF-8 JSON object") from error
     if not isinstance(decoded, dict):
         raise ValueError("input must be a JSON object")
+    if decoded.get("operation") != "ingest" and len(data) > MAX_JSON_INPUT_BYTES:
+        raise ValueError(f"JSON input exceeds {MAX_JSON_INPUT_BYTES} bytes")
     return cast(Mapping[str, Any], decoded)
 
 
@@ -171,6 +188,20 @@ def _dispatch(
         return runtime.capture_distilled(
             _mapping_text(payload, "content"),
             event_type=_mapping_default_text(payload, "event_type", "fact"),
+        )
+    if operation == "ingest":
+        # Deliberately NOT _require_distilled: this is the raw lane. Every
+        # other write verb asserts distilled=true because it carries a
+        # summarized statement; raw turns carry the transcript itself.
+        turns = _mapping_optional_object_list(payload, "turns")
+        if turns is None:
+            raise ValueError("turns must be a JSON array")
+        namespace = payload.get("namespace")
+        return runtime.ingest_raw_turns(
+            turns,
+            namespace=(
+                _mapping_text(payload, "namespace") if namespace is not None else None
+            ),
         )
     if operation == "checkpoint":
         _require_distilled(payload, operation)
