@@ -30,7 +30,7 @@ src/openbrain_provider/
   constants.py       bounds the provider enforces, each verified against
                      the adapter it replaces and cited by line
   config.py          the only place environment is read
-  observability.py   thin adapter over rtech-obs; hook-specific policy only
+  observability.py   the only place log sinks are installed
 ```
 
 Business logic arrives as small domain modules under the same package. The rule
@@ -49,26 +49,36 @@ injectable in tests without touching real environment variables. The adapter
 being replaced read `process.env` at scattered call sites; that is how a
 variable ends up spelled two ways.
 
-**Logging is `rtech-obs`, not a local logger.** `rtech-standards` and its
-`rtech-obs` package are infra's shared implementation — a first pass, not
-settled policy. The reason to use it does not rest on that: a second, divergent
-logger in this repo is worse than a shared one with rough edges, and being an
-early consumer is how those get found. An earlier revision of this package grew
-its own; it emitted loguru's internal `{"text":…, "record":{…}}` shape, with
-none of the five expected top-level fields, an uppercase level, and no `host`.
-Any query written against the shared envelope would have missed it.
-`observability.py` holds only the policy `rtech-obs` cannot know, and is small
-enough to replace if the shared package turns out wrong.
+**Logging writes the shared envelope, without the shared package.**
+`rtech-standards` ships `rtech-obs` as the reference implementation of
+`OBSERVABILITY_CONTRACT.md`, and it would be the right dependency — but that
+repo is **private** and this repo's CI passes no token, so no git URL can fetch
+it. SSH fails host-key verification; HTTPS fails with `could not read
+Username`. Both were tried, and the new `python-provider` CI job is what caught
+the second one.
+
+So `observability.py` writes the envelope directly: `timestamp`, `level`,
+`service`, `host`, `message` at the top level, everything else under `context`.
+The cost is real and worth naming — this is a second implementation of a shared
+envelope, which is the drift the contract exists to prevent. It is mitigated by
+being small, by using the contract's field names rather than a convenient
+approximation, and by tests that assert conformance directly rather than
+asserting whatever the code happens to emit. Swap in `rtech-obs` once it is
+installable here; the public surface is shaped for a drop-in replacement.
 
 **Nothing is written to stdout.** These are agent hooks: stdout is the
 machine-readable return channel, so a log line there is a corrupted response,
-not stray output. Two mechanisms are needed, not one. `stdout=False` handles the
-normal path; but §5.1 also requires that an unwritable `LOG_FILE` not be fatal,
-and `rtech-obs` honors that by adding a stdout sink — overriding `stdout=False`.
-Its default location `/mnt/logs/services/` **is not provisioned yet**, so that
-fallback would fire on every run today. `resolve_log_file()` guarantees a
-writable path (shared location if present, temp dir otherwise) so it never
-does, and needs no change when the mount eventually lands.
+not stray output. No sink in this module targets stdout, and §5.1's rule that an
+unwritable `LOG_FILE` must not be fatal is honored by falling back to **stderr**
+— the distinction that matters, since the obvious fallback is the one that
+breaks the caller.
+
+`resolve_log_file()` probes for a writable path — the contract location
+`/mnt/logs/services/` if it exists (it is **not provisioned yet**), a temp
+directory otherwise — and an operator-supplied path is probed too. An earlier
+revision honored an explicit path unchecked; an unwritable one then fell
+through to stdout and silently corrupted the hook's response. If no path works
+at all, the fallback sink is **stderr**, never stdout.
 
 **No inline magic numbers.** Every limit is a named constant in
 `constants.py`. A limit you cannot find is a limit nobody can tune when it

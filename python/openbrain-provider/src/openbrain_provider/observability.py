@@ -1,55 +1,75 @@
-"""Observability init, delegating the envelope to `rtech-obs`.
+"""Structured logging that emits the shared observability envelope.
 
-This module is deliberately thin. `rtech-standards/OBSERVABILITY_CONTRACT.md`
-and its `rtech-obs` package are infra's shared implementation -- a first pass,
-not settled policy -- but the reason to use them does not depend on their
-authority: a second, divergent logger in this repo is worse than a shared one
-that still has rough edges, and being an early consumer is how the rough edges
-get found. An earlier revision of this package grew its own logger; it emitted
-loguru's internal `{"text":..., "record":{...}}` shape, which has none of the
-five expected top-level fields, an uppercase level, and no `host` at all. Any
-query written against the shared envelope would have missed it entirely.
+The envelope is the one from `rtech-standards/OBSERVABILITY_CONTRACT.md`: a
+single-line JSON object carrying `timestamp`, `level`, `service`, `host`, and
+`message` at the top level, with everything else nested under `context`.
 
-The one thing this package knows that `rtech-obs` cannot: **these processes are
-agent hooks, so stdout is the machine-readable return channel.** A log line on
-stdout is not stray output, it is a corrupted response. `rtech-obs` defaults
-`LOG_STDOUT` to true, which is right for a service under journald and wrong
-here, so this module pins `stdout=False`.
+**This is deliberately not the `rtech-obs` package**, which is the shared
+implementation of that contract and would otherwise be the right dependency.
+`rtech-standards` is a private repository and this repo's CI passes no token, so
+no git URL can fetch it -- SSH fails on host-key verification, HTTPS fails with
+`could not read Username`. Both were tried, and the second failure is what the
+new CI gate caught. Publishing the package, or wiring a cross-repo checkout
+secret, is the real fix; until then a dependency CI cannot install is worse than
+a small local writer.
 
-That pin alone is not sufficient, which is the subtle part. §5.1 says an
-unwritable `LOG_FILE` must not be fatal, and `rtech-obs` honors that by adding a
-stdout sink when the file sink fails -- *overriding* `stdout=False`, by design.
-Its default log location is `/mnt/logs/services/<service>/`, and **that mount
-does not exist yet**, so today the fallback fires every time: a hook would
-silently start logging onto its own return channel. Both behaviors are
-individually reasonable; the collision is specific to processes whose stdout
-carries data.
+What that costs, stated plainly: this is a second implementation of a shared
+envelope, which is the drift the contract exists to prevent. It is mitigated
+only by being small, by writing the contract's field names rather than a
+convenient approximation, and by `test_observability.py` asserting conformance
+directly rather than asserting whatever this code happens to emit. Replace it
+with `rtech-obs` once that package is installable here; the public surface
+(`configure_observability`, `logger`) is shaped to make that a drop-in swap.
 
-Resolved by never letting the fallback trigger. `resolve_log_file` prefers the
-shared location and falls back to a writable temp directory, so the file sink
-always succeeds and no stdout sink is ever added. It needs no change when
-`/mnt/logs` is eventually provisioned -- it starts preferring the real location
-the day the mount appears.
+The one policy this module owns regardless of implementation: **these processes
+are agent hooks, so stdout is the machine-readable return channel.** A log line
+on stdout is not stray output, it is a corrupted response. Records go to a file,
+and to stderr if that file cannot be opened. Never stdout.
 """
 
 from __future__ import annotations
 
+import json
+import socket
+import sys
 import tempfile
+import traceback
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, Final
 
-from rtech_obs import ObservabilityConfig, init_observability, logger
+from loguru import logger
 
 from .config import ProviderConfig
 
-__all__ = ["SERVICE_NAME", "configure_observability", "logger", "resolve_log_file"]
+__all__ = [
+    "SERVICE_NAME",
+    "TOP_LEVEL_FIELDS",
+    "configure_observability",
+    "logger",
+    "resolve_log_file",
+]
 
 #: Catalog service name for every record this package emits.
 SERVICE_NAME = "openbrain-provider"
 
-#: Shared log location from the observability contract. Not provisioned yet, so
-#: this is aspirational today and the temp fallback is what actually runs.
+#: Contract §1.1: every record carries exactly these at the top level.
+TOP_LEVEL_FIELDS: Final[tuple[str, ...]] = (
+    "timestamp",
+    "level",
+    "service",
+    "host",
+    "message",
+)
+
+#: Shared log location from the contract. Not provisioned yet, so this is
+#: aspirational today and the temp fallback is what actually runs.
 _CONTRACT_LOG_ROOT = Path("/mnt/logs/services")
+
+#: Resolved once: `gethostname` is a syscall and cannot change usefully within
+#: the lifetime of a hook process.
+_HOSTNAME: Final[str] = socket.gethostname()
 
 
 def _usable_log_dir(path: Path) -> Path | None:
@@ -64,8 +84,7 @@ def _usable_log_dir(path: Path) -> Path | None:
         path: Candidate directory.
 
     Returns:
-        The path if a file was successfully created and removed in it,
-        otherwise None.
+        The path if a file was created and removed in it, otherwise None.
     """
     probe = path / ".write-probe"
     try:
@@ -83,41 +102,28 @@ def resolve_log_file(explicit: Path | None, *, service: str = SERVICE_NAME) -> P
     An operator-supplied path is preferred but still probed. An earlier revision
     returned it unchecked, reasoning that silently relocating an operator's logs
     was worse than failing where they could see it. That reasoning was wrong
-    about the consequence: the failure is not visible. `rtech-obs` responds to an
-    unopenable file sink by adding a stdout sink even when `stdout=False`, so an
-    unwritable `LOG_FILE` did not surface an error, it quietly redirected every
-    log record onto the hook's machine-readable response channel. Falling back to
-    a writable path loses the operator's chosen location; not falling back
-    corrupts the hook's output. The second is worse, and `rtech-obs` still logs
-    the substitution, so it is not silent.
+    about the consequence: the failure was not visible, it silently redirected
+    every log record onto the hook's response channel.
 
     Args:
         explicit: Operator-configured path, or None to resolve a default.
         service: Service name, used in the default path.
 
     Returns:
-        A path whose parent directory accepts writes. Falls back to the shared
-        location as a last resort, which lets `rtech-obs` report the failure in
-        its own words rather than this function inventing an error for a
-        situation the caller can do nothing about.
+        A path whose parent directory accepts writes.
     """
     filename = f"{datetime.now(UTC).strftime('%Y-%m-%d')}.jsonl"
     shared_dir = _CONTRACT_LOG_ROOT / service
+    temp_dir = Path(tempfile.gettempdir()) / f"{service}-logs"
 
     if explicit is not None:
         if _usable_log_dir(explicit.parent) is not None:
             return explicit
-        # Fall through to the defaults rather than hand rtech-obs a path it
-        # cannot open.
-        candidates: tuple[Path, ...] = (
-            Path(tempfile.gettempdir()) / f"{service}-logs",
-            shared_dir,
-        )
+        candidates: tuple[Path, ...] = (temp_dir, shared_dir)
     else:
         # Shared location first, so this starts using /mnt/logs the day it
-        # exists with no code change. Local temp dir second: anywhere writable
-        # beats rtech-obs falling back to a stdout sink.
-        candidates = (shared_dir, Path(tempfile.gettempdir()) / f"{service}-logs")
+        # exists with no code change.
+        candidates = (shared_dir, temp_dir)
 
     for candidate in candidates:
         usable = _usable_log_dir(candidate)
@@ -127,36 +133,133 @@ def resolve_log_file(explicit: Path | None, *, service: str = SERVICE_NAME) -> P
     return shared_dir / filename
 
 
+def _error_payload(exception: Any) -> dict[str, Any] | None:
+    """Build the contract's `error` object from a loguru exception record.
+
+    Args:
+        exception: The loguru record's exception tuple, or None.
+
+    Returns:
+        A dict with `type`, `message`, and `stacktrace`, or None if the record
+        carries no exception.
+    """
+    if exception is None or exception.type is None:
+        return None
+    payload: dict[str, Any] = {
+        "type": exception.type.__name__,
+        "message": str(exception.value),
+    }
+    if exception.traceback is not None:
+        payload["stacktrace"] = "".join(
+            traceback.format_exception(
+                exception.type, exception.value, exception.traceback
+            )
+        ).rstrip("\n")
+    return payload
+
+
+def _timestamp(moment: datetime) -> str:
+    """Render a timestamp in the contract's format.
+
+    Args:
+        moment: The record's time, in any timezone.
+
+    Returns:
+        RFC 3339 / ISO 8601 in UTC with millisecond precision and a Z suffix,
+        e.g. `2026-07-25T04:16:07.418Z`. Built explicitly rather than via
+        `isoformat()`, which emits microseconds and `+00:00`.
+    """
+    utc = moment.astimezone(UTC)
+    return f"{utc.strftime('%Y-%m-%dT%H:%M:%S')}.{utc.microsecond // 1000:03d}Z"
+
+
+def _format_record(record: Mapping[str, Any], *, service: str) -> str:
+    """Render one loguru record as a conforming single-line JSON envelope.
+
+    Args:
+        record: The loguru record mapping.
+        service: Catalog service name to stamp on the record.
+
+    Returns:
+        A single-line JSON string. `json.dumps` escapes any embedded newline, so
+        a multi-line message cannot break line-oriented collection.
+    """
+    extra = dict(record["extra"])
+    extra.pop("service", None)
+    extra.pop("_serialized", None)
+
+    envelope: dict[str, Any] = {
+        "timestamp": _timestamp(record["time"]),
+        "level": str(record["level"].name).lower(),
+        "service": service,
+        "host": _HOSTNAME,
+        "message": str(record["message"]),
+    }
+
+    for optional in ("correlation_id", "event", "duration_ms"):
+        value = extra.pop(optional, None)
+        if value is not None:
+            envelope[optional] = value
+
+    error = _error_payload(record.get("exception")) or extra.pop("error", None)
+    if error is not None:
+        envelope["error"] = error
+
+    context = extra.pop("context", None)
+    if isinstance(context, dict):
+        extra.update(context)
+    elif context is not None:
+        extra["context"] = context
+
+    # Anything left is caller-supplied and not a contract field, so it goes
+    # under `context` rather than polluting the indexed top level.
+    if extra:
+        envelope["context"] = extra
+
+    return json.dumps(envelope, separators=(",", ":"), default=str)
+
+
 def configure_observability(
     config: ProviderConfig, *, service: str = SERVICE_NAME
-) -> ObservabilityConfig:
-    """Install contract-conforming sinks for a hook process.
+) -> Path:
+    """Install the process's log sinks.
+
+    Idempotent: removes all existing sinks first, so calling it twice
+    reconfigures rather than duplicating output. A duplicated sink is silent --
+    the process still works, it just writes every line twice, and nobody notices
+    until a log-volume alarm fires.
 
     Args:
         config: Validated provider configuration.
         service: Catalog service name bound to every record.
 
     Returns:
-        The frozen `rtech-obs` configuration that was installed.
-
-    Raises:
-        rtech_obs.ConfigError: If the resolved level or service is invalid.
-            Configuration fails closed at init rather than degrading silently.
+        The log file that was actually opened, which may differ from the
+        configured one when that path was not writable.
     """
-    return init_observability(
-        {},
-        service=service,
-        # Lowercase is the contract spelling; `rtech-obs` validates it and
-        # raises on anything non-conforming, so a bad value cannot reach a sink.
-        level=config.log.level,
-        # Always a resolved, writable path. Passing None would let rtech-obs
-        # default to /mnt/logs and, where that is absent, fall back to a stdout
-        # sink -- onto the hook's response channel. See the module docstring.
-        log_file=str(resolve_log_file(config.log.log_file, service=service)),
-        # Never stdout. See the module docstring: this is the whole point.
-        stdout=False,
-        # Hooks are short-lived processes. An HTTP exposition endpoint would
-        # outlive nothing and a textfile write would race every other hook
-        # invocation, so metrics stay off until a slice needs them.
-        metrics_mode="off",
-    )
+    logger.remove()
+
+    log_file = resolve_log_file(config.log.log_file, service=service)
+    level = config.log.level.upper()
+
+    def sink_format(record: Mapping[str, Any]) -> str:
+        record["extra"]["_serialized"] = _format_record(record, service=service)
+        return "{extra[_serialized]}\n"
+
+    try:
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        logger.add(
+            str(log_file),
+            level=level,
+            format=sink_format,
+            enqueue=True,
+            rotation="100 MB",
+            retention="30 days",
+        )
+    except OSError:
+        # Contract §5.1: an unopenable log file must not stop the process. The
+        # fallback is stderr, NOT stdout -- stdout is the hook's response
+        # channel, the one place a log line must never land.
+        logger.add(sys.stderr, level=level, format=sink_format, enqueue=True)
+
+    return log_file

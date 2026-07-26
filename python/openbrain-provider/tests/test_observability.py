@@ -22,6 +22,7 @@ import pytest
 from openbrain_provider.config import LogConfig, ProviderConfig, load_config
 from openbrain_provider.observability import (
     SERVICE_NAME,
+    TOP_LEVEL_FIELDS,
     _usable_log_dir,
     configure_observability,
     logger,
@@ -29,6 +30,8 @@ from openbrain_provider.observability import (
 )
 
 #: OBSERVABILITY_CONTRACT.md §1.1. Every record MUST carry these at top level.
+#: Written out literally rather than imported, so a change to the module's own
+#: tuple cannot silently redefine what "conforming" means.
 REQUIRED_TOP_LEVEL_FIELDS = ("timestamp", "level", "service", "host", "message")
 
 #: §1.1 again: lowercase only. `warn`/`err`/`crit` are named non-conforming.
@@ -82,10 +85,7 @@ def test_level_is_lowercase_in_the_envelope(tmp_path: Path) -> None:
     logger.error("e")
 
     records = _read_records(log_file)
-    # rtech-obs emits its own `observability.init` debug record, so filter to
-    # this test's messages rather than asserting an exact count.
-    mine = [r for r in records if r["message"] in {"d", "w", "e"}]
-    assert [r["level"] for r in mine] == ["debug", "warning", "error"]
+    assert [r["level"] for r in records] == ["debug", "warning", "error"]
     assert all(r["level"] in CONFORMING_LEVELS for r in records)
 
 
@@ -103,9 +103,8 @@ def test_timestamp_is_rfc3339_utc(tmp_path: Path) -> None:
 
 def test_nothing_is_written_to_stdout(tmp_path: Path) -> None:
     # stdout is the hook's machine-readable return channel, so a log line there
-    # is a corrupted response. rtech-obs defaults LOG_STDOUT to true, which is
-    # right for a service under journald and fatal here; configure_observability
-    # pins stdout=False and this test is what holds that pin in place.
+    # is a corrupted response. Nothing in this module may ever add a stdout
+    # sink; this test is what holds that in place.
     config, log_file = _config(tmp_path, level="debug")
     captured = io.StringIO()
     real_stdout = sys.stdout
@@ -120,8 +119,8 @@ def test_nothing_is_written_to_stdout(tmp_path: Path) -> None:
         sys.stdout = real_stdout
 
     assert captured.getvalue() == ""
-    messages = {r["message"] for r in _read_records(log_file)}
-    assert {"d", "i", "e"} <= messages
+    messages = [r["message"] for r in _read_records(log_file)]
+    assert messages == ["d", "i", "e"]
 
 
 def test_every_record_is_a_single_json_line(tmp_path: Path) -> None:
@@ -187,11 +186,11 @@ def test_unwritable_log_file_is_not_fatal(tmp_path: Path) -> None:
 
 def test_unwritable_explicit_log_file_does_not_leak_to_stdout() -> None:
     # Review finding (HIGH, two lanes independently). resolve_log_file honored
-    # an operator-supplied path unchecked, so an unwritable LOG_FILE made
-    # rtech-obs install its stdout fallback -- redirecting every record onto the
-    # hook's machine-readable response channel. The old
+    # an operator-supplied path unchecked, so an unwritable LOG_FILE fell through
+    # to a stdout sink -- redirecting every record onto the hook's
+    # machine-readable response channel. The old
     # test_unwritable_log_file_is_not_fatal passed throughout because it never
-    # captured stdout. On the pre-fix code this leaks ~436 bytes.
+    # captured stdout. On the pre-fix code this leaked 436 bytes.
     config = ProviderConfig(
         log=LogConfig(level="info", log_file=Path("/proc/nonexistent/x.jsonl")),
         dispatch=load_config({}).dispatch,
@@ -300,3 +299,49 @@ def test_write_probe_leaves_nothing_behind(tmp_path: Path) -> None:
 
     assert _usable_log_dir(monkeypatch_dir) == monkeypatch_dir
     assert list(monkeypatch_dir.iterdir()) == []
+
+
+def test_module_field_list_matches_the_contract() -> None:
+    # The module exports its own tuple for callers; if it ever drifts from the
+    # contract's five fields, the envelope drifts with it.
+    assert TOP_LEVEL_FIELDS == REQUIRED_TOP_LEVEL_FIELDS
+
+
+def test_extra_fields_are_nested_under_context(tmp_path: Path) -> None:
+    # Contract: field names not in the envelope MUST go inside `context`, never
+    # at the top level, or they collide with indexed fields.
+    config, log_file = _config(tmp_path)
+    configure_observability(config)
+
+    logger.bind(namespace="shared-kb", attempt=2).info("bound")
+
+    record = _read_records(log_file)[0]
+    assert record["context"] == {"namespace": "shared-kb", "attempt": 2}
+    assert "namespace" not in record
+
+
+def test_known_contract_fields_stay_at_the_top_level(tmp_path: Path) -> None:
+    config, log_file = _config(tmp_path)
+    configure_observability(config)
+
+    logger.bind(correlation_id="abc123", event="hook.capture").info("e")
+
+    record = _read_records(log_file)[0]
+    assert record["correlation_id"] == "abc123"
+    assert record["event"] == "hook.capture"
+    assert "context" not in record
+
+
+def test_exceptions_are_recorded_as_a_structured_error(tmp_path: Path) -> None:
+    config, log_file = _config(tmp_path)
+    configure_observability(config)
+
+    try:
+        raise ValueError("boom")
+    except ValueError:
+        logger.opt(exception=True).error("failed")
+
+    record = _read_records(log_file)[0]
+    assert record["error"]["type"] == "ValueError"
+    assert record["error"]["message"] == "boom"
+    assert "stacktrace" in record["error"]

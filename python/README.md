@@ -9,11 +9,6 @@ virtual environment at `python/.venv`.
 | `openbrain-memory/` | Python client for the remote Open Brain memory service. |
 | `openbrain-provider/` | Runtime lifecycle provider: session start, capture, checkpoint, reflex. |
 
-`openbrain-provider` also depends on `rtech-obs` (the reference implementation
-of `rtech-standards/OBSERVABILITY_CONTRACT.md`), which is not published to
-PyPI. It resolves through a local path source for dev and CI on this checkout,
-the same convention `rtech-agents` uses for the fleet-bus packages and for
-`openbrain-memory` itself; deploys pin it as a git dependency.
 
 ## Why a workspace
 

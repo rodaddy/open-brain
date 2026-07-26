@@ -5,13 +5,12 @@ description = "Runtime lifecycle provider for Open Brain: session start, capture
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    # Reference implementation of rtech-standards/OBSERVABILITY_CONTRACT.md.
-    # That document is normative ("if an implementation and this document
-    # disagree, this document wins and the implementation is a bug") and ships
-    # this package so nine repos do not each grow their own logger. loguru is a
-    # transitive dep of it; depending on loguru directly is how a second,
-    # non-conforming logger gets written.
-    "rtech-obs>=1.1.0",
+    # loguru only. The shared rtech-obs package implements the same envelope
+    # and would be the right dependency, but rtech-standards is private and this
+    # repo's CI passes no token: SSH fails host-key verification, HTTPS fails
+    # with "could not read Username". See observability.py for the full note and
+    # the conditions for swapping back.
+    "loguru>=0.7",
     # The provider dispatches into this package's CLI and imports its domain
     # vocabulary rather than redeclaring it (#412). Workspace member, resolved
     # from source -- see [tool.uv.sources].
@@ -33,27 +32,6 @@ dependencies = [
 
 [tool.uv.sources]
 openbrain-memory = { workspace = true }
-# rtech-obs is not published to PyPI, so it resolves from git.
-#
-# NOT a relative path source. rtech-agents uses one for its sibling repos, but
-# that resolves against the CHECKOUT's location: it works in this working copy
-# and fails in any clone where the two repos are not siblings -- verified, a
-# cold clone under _tmp died with "Distribution not found at:
-# .../_tmp/open-brain/rtech-standards/packages/python". CI is exactly that case,
-# since actions/checkout fetches this repo alone.
-#
-# Pinned to an immutable commit rather than a branch: `main` currently carries
-# rtech-obs 1.0.0, whose init_observability() has no metrics_mode parameter,
-# and tracking a moving feature branch would let someone else's in-flight work
-# change this build. Repin when the observability work merges to main.
-#
-# HTTPS, not ssh://. An SSH URL requires a configured GitHub host key and
-# credentials, which a fresh clone does not imply: verified that an
-# HTTPS-cloned checkout with an empty cache fails this fetch with
-# "Host key verification failed". CI runners and new contributors are exactly
-# that case. The repository is reachable over HTTPS, so the SSH URL bought
-# nothing and cost every cold environment.
-rtech-obs = { git = "https://github.com/rodaddy/rtech-standards.git", rev = "23252cdffc773f56e3f00780f46f67e0364a5e0a", subdirectory = "packages/python" }
 
 [dependency-groups]
 dev = [
@@ -67,19 +45,6 @@ python_version = "3.13"
 strict = true
 warn_unused_ignores = true
 
-# rtech-obs is fully typed and builds under `strict = true`, but ships no
-# py.typed marker, so mypy cannot see any of its annotations from here. Scoped
-# to that one module rather than set globally: a blanket
-# ignore_missing_imports would hide a genuinely untyped dependency added later.
-#
-# Upstream fix is one empty file (`src/rtech_obs/py.typed`) plus its wheel
-# already including the package dir. Filed rather than patched here because
-# rtech-standards is mid-branch on feat/prom-loki-exporters and a drive-by
-# commit into another repo's feature branch is worse than a scoped override.
-# Remove this block once rtech-obs ships the marker.
-[[tool.mypy.overrides]]
-module = ["rtech_obs.*", "rtech_obs"]
-ignore_missing_imports = true
 
 [tool.ruff]
 target-version = "py313"
