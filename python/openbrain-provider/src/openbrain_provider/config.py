@@ -16,21 +16,31 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
+from urllib.parse import urlsplit
 
 from .constants import (
     MAX_CONTEXT_PACK_MAX_TOKENS,
+    MIN_CONTEXT_PACK_MAX_TOKENS,
     PACKAGE_TIMEOUT_SECONDS,
 )
 
-#: Conforming level spellings. `warn`, `err`, and `crit` are non-conforming:
-#: Loki matches level values literally, so an abbreviation splits the query
-#: surface for every dashboard that filters on level.
+#: Conforming level spellings, lowercase per OBSERVABILITY_CONTRACT.md §1.1.
+#: `warn`, `err`, and `crit` are explicitly non-conforming (§): Loki matches
+#: level values literally, so an abbreviation -- or a case variant -- splits the
+#: query surface for every dashboard that filters on level.
 LOG_LEVELS: Final[frozenset[str]] = frozenset(
-    {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+    {"debug", "info", "warning", "error", "critical"}
 )
 
-_ENV_LOG_LEVEL: Final[str] = "OPENBRAIN_PROVIDER_LOG_LEVEL"
-_ENV_LOG_FILE: Final[str] = "OPENBRAIN_PROVIDER_LOG_FILE"
+#: Logging variables are the contract's names (§5), not package-prefixed ones.
+#: A service that reads OPENBRAIN_PROVIDER_LOG_LEVEL is unconfigurable by the
+#: fleet-wide tooling that sets LOG_LEVEL, which is the entire reason the
+#: contract names them.
+_ENV_LOG_LEVEL: Final[str] = "LOG_LEVEL"
+_ENV_LOG_FILE: Final[str] = "LOG_FILE"
+
+#: Provider-specific settings keep the package prefix; they are not part of the
+#: observability contract.
 _ENV_BASE_URL: Final[str] = "OPENBRAIN_BASE_URL"
 _ENV_TIMEOUT: Final[str] = "OPENBRAIN_PROVIDER_TIMEOUT_SECONDS"
 _ENV_CONTEXT_PACK_MAX_TOKENS: Final[str] = "OPENBRAIN_CONTEXT_PACK_MAX_TOKENS"
@@ -56,7 +66,7 @@ class LogConfig:
             line there corrupts it.
     """
 
-    level: str = "INFO"
+    level: str = "info"
     log_file: Path | None = None
 
     def __post_init__(self) -> None:
@@ -96,6 +106,63 @@ class DispatchConfig:
             raise ConfigError(f"dispatch timeout must be positive, got {value!r}")
 
 
+#: The only schemes the provider will talk to. `file://` would turn a config
+#: value into a local file read, and a bare hostname with no scheme is
+#: ambiguous enough that different HTTP clients disagree on what it means.
+_ALLOWED_URL_SCHEMES: Final[frozenset[str]] = frozenset({"http", "https"})
+
+
+def _validate_base_url(value: str) -> None:
+    """Reject a base URL that is not a usable HTTP(S) endpoint.
+
+    The previous revision accepted anything, including `file:///etc/passwd`,
+    `javascript:alert(1)`, and `http://127.0.0.1:3100 ; rm -rf /`, while this
+    module's own docstring promised it failed closed. The value reaches an HTTP
+    client and a subprocess environment in later slices, so "we validate
+    everything except the one field that names a remote host" was the wrong
+    place to stop.
+
+    Args:
+        value: The configured base URL.
+
+    Raises:
+        ConfigError: If the URL is unparseable, has no host, uses a scheme
+            outside :data:`_ALLOWED_URL_SCHEMES`, or contains whitespace or
+            control characters.
+    """
+    if value != value.strip() or any(c.isspace() for c in value):
+        raise ConfigError(f"base url must not contain whitespace, got {value!r}")
+
+    # C0/C1 control characters can smuggle a newline into a header or a log
+    # line; neither belongs in a URL.
+    if any(ord(c) < 0x20 or ord(c) == 0x7F for c in value):
+        raise ConfigError(
+            f"base url must not contain control characters, got {value!r}"
+        )
+
+    try:
+        parsed = urlsplit(value)
+    except ValueError as exc:
+        raise ConfigError(f"base url is not a valid URL: {value!r}") from exc
+
+    if parsed.scheme not in _ALLOWED_URL_SCHEMES:
+        raise ConfigError(
+            f"base url scheme must be one of {sorted(_ALLOWED_URL_SCHEMES)}, "
+            f"got {parsed.scheme!r} in {value!r}"
+        )
+
+    if not parsed.hostname:
+        raise ConfigError(f"base url must include a host, got {value!r}")
+
+    # urlsplit defers port parsing, so an invalid port only surfaces when the
+    # attribute is read. Bind it so that read is unmistakably deliberate.
+    try:
+        _port = parsed.port
+    except ValueError as exc:
+        raise ConfigError(f"base url has an invalid port: {value!r}") from exc
+    del _port
+
+
 @dataclass(frozen=True)
 class ProviderConfig:
     """The complete provider configuration.
@@ -115,19 +182,25 @@ class ProviderConfig:
     context_pack_max_tokens: int | None = None
 
     def __post_init__(self) -> None:
-        """Validate the context-pack budget.
+        """Validate the base URL and the context-pack budget.
 
         Raises:
-            ConfigError: If the budget is not a positive int within bounds.
+            ConfigError: If the base URL is malformed or uses a non-HTTP scheme,
+                or the budget is not a positive int within bounds.
         """
+        if self.base_url is not None:
+            _validate_base_url(self.base_url)
+
         budget = self.context_pack_max_tokens
         if budget is None:
             return
-        if budget <= 0:
-            raise ConfigError(f"context pack budget must be positive, got {budget!r}")
-        if budget > MAX_CONTEXT_PACK_MAX_TOKENS:
+        # Both ends, matching the adapter. Only checking the ceiling would let a
+        # budget of 1 through here and be rejected by the TS path, which is the
+        # cross-runtime disagreement the port is supposed to eliminate.
+        if not MIN_CONTEXT_PACK_MAX_TOKENS <= budget <= MAX_CONTEXT_PACK_MAX_TOKENS:
             raise ConfigError(
-                f"context pack budget must be <= {MAX_CONTEXT_PACK_MAX_TOKENS}, "
+                f"context pack budget must be between "
+                f"{MIN_CONTEXT_PACK_MAX_TOKENS} and {MAX_CONTEXT_PACK_MAX_TOKENS}, "
                 f"got {budget!r}"
             )
 
@@ -197,7 +270,7 @@ def load_config(env: dict[str, str] | None = None) -> ProviderConfig:
     """
     source = dict(os.environ) if env is None else env
 
-    level = source.get(_ENV_LOG_LEVEL, "").strip().upper() or "INFO"
+    level = source.get(_ENV_LOG_LEVEL, "").strip().lower() or "info"
     log_file_raw = source.get(_ENV_LOG_FILE, "").strip()
     timeout = _optional_float(source, _ENV_TIMEOUT)
     base_url = source.get(_ENV_BASE_URL, "").strip() or None

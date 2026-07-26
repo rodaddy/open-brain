@@ -5,8 +5,13 @@ description = "Runtime lifecycle provider for Open Brain: session start, capture
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    # The one logging dependency, per the Development observability standard.
-    "loguru>=0.7",
+    # Reference implementation of rtech-standards/OBSERVABILITY_CONTRACT.md.
+    # That document is normative ("if an implementation and this document
+    # disagree, this document wins and the implementation is a bug") and ships
+    # this package so nine repos do not each grow their own logger. loguru is a
+    # transitive dep of it; depending on loguru directly is how a second,
+    # non-conforming logger gets written.
+    "rtech-obs>=1.1.0",
     # The provider dispatches into this package's CLI and imports its domain
     # vocabulary rather than redeclaring it (#412). Workspace member, resolved
     # from source -- see [tool.uv.sources].
@@ -28,6 +33,10 @@ dependencies = [
 
 [tool.uv.sources]
 openbrain-memory = { workspace = true }
+# rtech-obs is not published to PyPI. Local path source for dev/CI on this
+# checkout; deploys pin it as a git dep. Same convention rtech-agents uses for
+# the fleet-bus packages and for openbrain-memory itself.
+rtech-obs = { path = "../../../rtech-standards/packages/python", editable = true }
 
 [dependency-groups]
 dev = [
@@ -40,6 +49,20 @@ dev = [
 python_version = "3.13"
 strict = true
 warn_unused_ignores = true
+
+# rtech-obs is fully typed and builds under `strict = true`, but ships no
+# py.typed marker, so mypy cannot see any of its annotations from here. Scoped
+# to that one module rather than set globally: a blanket
+# ignore_missing_imports would hide a genuinely untyped dependency added later.
+#
+# Upstream fix is one empty file (`src/rtech_obs/py.typed`) plus its wheel
+# already including the package dir. Filed rather than patched here because
+# rtech-standards is mid-branch on feat/prom-loki-exporters and a drive-by
+# commit into another repo's feature branch is worse than a scoped override.
+# Remove this block once rtech-obs ships the marker.
+[[tool.mypy.overrides]]
+module = ["rtech_obs.*", "rtech_obs"]
+ignore_missing_imports = true
 
 [tool.ruff]
 target-version = "py313"

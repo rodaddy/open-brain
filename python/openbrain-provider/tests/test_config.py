@@ -21,6 +21,7 @@ from openbrain_provider.config import (
 )
 from openbrain_provider.constants import (
     MAX_CONTEXT_PACK_MAX_TOKENS,
+    MIN_CONTEXT_PACK_MAX_TOKENS,
     PACKAGE_TIMEOUT_SECONDS,
 )
 
@@ -28,7 +29,7 @@ from openbrain_provider.constants import (
 def test_empty_environment_yields_working_defaults() -> None:
     config = load_config({})
 
-    assert config.log.level == "INFO"
+    assert config.log.level == "info"
     assert config.log.log_file is None
     assert config.dispatch.timeout_seconds == PACKAGE_TIMEOUT_SECONDS
     assert config.base_url is None
@@ -38,15 +39,15 @@ def test_empty_environment_yields_working_defaults() -> None:
 def test_values_are_read_from_the_environment() -> None:
     config = load_config(
         {
-            "OPENBRAIN_PROVIDER_LOG_LEVEL": "debug",
-            "OPENBRAIN_PROVIDER_LOG_FILE": "/tmp/ob-provider.log",
+            "LOG_LEVEL": "debug",
+            "LOG_FILE": "/tmp/ob-provider.log",
             "OPENBRAIN_PROVIDER_TIMEOUT_SECONDS": "12.5",
             "OPENBRAIN_BASE_URL": "http://127.0.0.1:3100",
             "OPENBRAIN_CONTEXT_PACK_MAX_TOKENS": "8000",
         }
     )
 
-    assert config.log.level == "DEBUG"
+    assert config.log.level == "debug"
     assert config.log.log_file == Path("/tmp/ob-provider.log")
     assert config.dispatch.timeout_seconds == 12.5
     assert config.base_url == "http://127.0.0.1:3100"
@@ -58,15 +59,15 @@ def test_whitespace_only_values_are_treated_as_unset() -> None:
     # default, not a config object holding an empty string.
     config = load_config(
         {
-            "OPENBRAIN_PROVIDER_LOG_LEVEL": "  ",
-            "OPENBRAIN_PROVIDER_LOG_FILE": "   ",
+            "LOG_LEVEL": "  ",
+            "LOG_FILE": "   ",
             "OPENBRAIN_PROVIDER_TIMEOUT_SECONDS": "",
             "OPENBRAIN_BASE_URL": " ",
             "OPENBRAIN_CONTEXT_PACK_MAX_TOKENS": "  ",
         }
     )
 
-    assert config.log.level == "INFO"
+    assert config.log.level == "info"
     assert config.log.log_file is None
     assert config.dispatch.timeout_seconds == PACKAGE_TIMEOUT_SECONDS
     assert config.base_url is None
@@ -78,16 +79,16 @@ def test_non_conforming_log_levels_are_rejected(level: str) -> None:
     # `warn` in particular is the one that gets typed: it is valid in several
     # other stacks, and it silently splits the log pipeline's level queries.
     with pytest.raises(ConfigError):
-        load_config({"OPENBRAIN_PROVIDER_LOG_LEVEL": level})
+        load_config({"LOG_LEVEL": level})
 
 
 @pytest.mark.parametrize(
     "level", ["debug", "INFO", "Warning", "error", "CRITICAL", " info "]
 )
 def test_conforming_log_levels_are_accepted_case_insensitively(level: str) -> None:
-    config = load_config({"OPENBRAIN_PROVIDER_LOG_LEVEL": level})
+    config = load_config({"LOG_LEVEL": level})
 
-    assert config.log.level == level.strip().upper()
+    assert config.log.level == level.strip().lower()
 
 
 @pytest.mark.parametrize("raw", ["0", "-1", "-0.5", "nan", "inf", "-inf"])
@@ -151,9 +152,70 @@ def test_config_is_immutable() -> None:
         config.log.level = "DEBUG"  # type: ignore[misc]
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "not a url",
+        "file:///etc/passwd",
+        "javascript:alert(1)",
+        "$(whoami)",
+        "http://127.0.0.1:3100 ; rm -rf /",
+        "ftp://example.com",
+        "http://",
+        "//example.com",
+        "example.com:3100",
+        "http://example.com:notaport",
+        "http://exa\nmple.com",
+    ],
+)
+def test_unusable_base_urls_are_rejected(url: str) -> None:
+    # This field was previously accepted unvalidated while the module docstring
+    # promised it failed closed. It reaches an HTTP client and a subprocess
+    # environment in later slices.
+    with pytest.raises(ConfigError):
+        load_config({"OPENBRAIN_BASE_URL": url})
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://127.0.0.1:3100",
+        "https://open-brain.example.com",
+        "http://localhost",
+        "https://example.com/base/path",
+        "http://10.71.1.21:3100",
+    ],
+)
+def test_usable_base_urls_are_accepted(url: str) -> None:
+    config = load_config({"OPENBRAIN_BASE_URL": url})
+
+    assert config.base_url == url
+
+
+def test_context_pack_budget_below_the_adapter_floor_is_rejected() -> None:
+    # The TypeScript adapter enforces MIN_CONTEXT_PACK_MAX_TOKENS = 100. A
+    # Python provider that accepts 1 makes the two runtimes disagree about
+    # whether the same request is valid.
+    with pytest.raises(ConfigError):
+        load_config({"OPENBRAIN_CONTEXT_PACK_MAX_TOKENS": "1"})
+
+    at_floor = load_config(
+        {"OPENBRAIN_CONTEXT_PACK_MAX_TOKENS": str(MIN_CONTEXT_PACK_MAX_TOKENS)}
+    )
+    assert at_floor.context_pack_max_tokens == MIN_CONTEXT_PACK_MAX_TOKENS
+
+
+def test_logging_env_vars_use_the_contract_names() -> None:
+    # OBSERVABILITY_CONTRACT.md §5 names these. A package-prefixed variable is
+    # invisible to the fleet tooling that sets LOG_LEVEL, so the operator sets
+    # it and nothing changes.
+    assert load_config({"LOG_LEVEL": "error"}).log.level == "error"
+    assert load_config({"OPENBRAIN_PROVIDER_LOG_LEVEL": "error"}).log.level == "info"
+
+
 def test_unknown_variables_are_ignored() -> None:
     # The real environment is full of unrelated variables. Reading it must not
     # turn a neighbouring name into a configuration error.
     config = load_config({"PATH": "/usr/bin", "OPENBRAIN_SOMETHING_ELSE": "x"})
 
-    assert config.log.level == "INFO"
+    assert config.log.level == "info"
