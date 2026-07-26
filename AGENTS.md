@@ -6,6 +6,28 @@ MCP server providing a unified semantic brain over PostgreSQL + pgvector. TypeSc
 > Repo LAWs and workflow expectations are documented here for Codex and exposed to Claude through the `CLAUDE.md -> AGENTS.md` symlink.
 
 
+## Standards (in this repo)
+
+The Development standards that apply here are copied into `_DOCS/` so you do not
+have to leave the repo to read them. Read the ones relevant to your change
+before writing code:
+
+- `_DOCS/STANDARDS-core.md` — workspace hygiene, quality bar, minimal correct
+  change, secrets. **Includes the temp-workspace rules: never `/tmp`,
+  `$TMPDIR`, or `mktemp -d`; use `{temp_workspace}/open-brain/_scratch/`.**
+- `_DOCS/STANDARDS-observability.md` — the shared log envelope, required on
+  every emitter.
+- `_DOCS/STANDARDS-typescript.md`, `_DOCS/STANDARDS-python.md` — per-stack rules.
+- `_DOCS/STANDARDS-git.md`, `_DOCS/STANDARDS-ci-security.md`.
+
+These are **generated** from `/Volumes/ThunderBolt/Development/_DOCS/` and carry
+a `source-hash`. Never hand-edit them — a rule change goes in the source
+document, then `bun _ob/scripts/sync-repo-standards.ts open-brain` refreshes the
+copies. Run that same command when asked to bring this repo up to standards; it
+also creates the temp-workspace buckets.
+
+Repo-specific rules below this line override the copies when stricter.
+
 ## Stack
 
 - **Runtime:** Bun 1.3.13
