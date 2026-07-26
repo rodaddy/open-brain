@@ -18,6 +18,8 @@ from .runtime import (
     RuntimeScope,
 )
 
+MAX_IGNORED_OPTIONAL_KEY_COUNT = 65_535
+IGNORED_OPTIONAL_REQUEST_KEYS_NOTE = "ignored_optional_request_keys"
 MAX_JSON_INPUT_BYTES = 64 * 1024
 # The raw lane ships whole turns; 64 KB bounds a distilled record but would
 # silently refuse a long assistant turn, which is the exact failure full-send

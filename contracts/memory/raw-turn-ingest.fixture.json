@@ -1,0 +1,56 @@
+{
+  "id": "python-raw-turn-ingest",
+  "description": "Full-send raw turn ingest is content-bearing by design: the client batches turns onto the single ingest_raw_turn call and applies NO salience filtering, because the server owns redaction, noise-dropping, and dedupe on UNIQUE(namespace, turn_uuid).",
+  "capability": "raw-turn-ingest",
+  "runtime": "python",
+  "consumers": ["python"],
+  "request": {
+    "entrypoint": "runtime.ingest_raw_turns",
+    "arguments": {
+      "turns": [
+        {
+          "turn_uuid": "11111111-1111-4111-8111-111111111111",
+          "turn_index": 0,
+          "role": "user",
+          "content": "what broke the deploy"
+        },
+        {
+          "turn_uuid": "22222222-2222-4222-8222-222222222222",
+          "turn_index": 1,
+          "role": "assistant",
+          "content": "the migration ran twice"
+        }
+      ]
+    }
+  },
+  "expectation": {
+    "tool_calls": [
+      {
+        "name": "ingest_raw_turn",
+        "arguments": {
+          "turns": [
+            {
+              "turn_uuid": "11111111-1111-4111-8111-111111111111",
+              "turn_index": 0,
+              "role": "user",
+              "content": "what broke the deploy"
+            },
+            {
+              "turn_uuid": "22222222-2222-4222-8222-222222222222",
+              "turn_index": 1,
+              "role": "assistant",
+              "content": "the migration ran twice"
+            }
+          ]
+        }
+      }
+    ],
+    "status": "saved",
+    "durable": true
+  },
+  "notes": [
+    "Both roles survive. Client-side salience was measured failing exactly here on 2026-07-25: 21 user turns and ZERO assistant turns captured. An assistant turn reaching the wire unmodified is the property this fixture holds.",
+    "Content is passed through verbatim. This is the one lane where that is correct -- the distilled verbs (capture/checkpoint/wrap) reject non-summarized content, this one must not.",
+    "Batched into a SINGLE ingest_raw_turn call rather than one call per turn."
+  ]
+}

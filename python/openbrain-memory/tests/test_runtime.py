@@ -336,6 +336,24 @@ def test_json_adapter_recall_rejects_non_boolean_recovery_before_transport() -> 
             {"distilled": True, "summary": "distilled wrap"},
             "saved",
         ),
+        # The raw lane gets the same tolerance. It is the newest verb and the
+        # one an older adapter is most likely to call with a field this version
+        # has not seen, so leaving it out of this matrix is how it would drift
+        # back to fail-closed without anyone noticing.
+        (
+            "ingest",
+            {
+                "turns": [
+                    {
+                        "turn_uuid": "turn-0",
+                        "turn_index": 0,
+                        "role": "user",
+                        "content": "raw turn",
+                    }
+                ]
+            },
+            "saved",
+        ),
     ],
 )
 @pytest.mark.parametrize("unknown_key_count", [1, 2])
@@ -1810,9 +1828,7 @@ def test_json_input_and_output_are_bounded() -> None:
     # bound is now enforced against the decoded operation rather than the
     # undecoded byte length.
     oversized = (
-        b'{"operation":"capture","content":"'
-        + b"x" * MAX_JSON_INPUT_BYTES
-        + b'"}'
+        b'{"operation":"capture","content":"' + b"x" * MAX_JSON_INPUT_BYTES + b'"}'
     )
     try:
         parse_json_input(oversized)
