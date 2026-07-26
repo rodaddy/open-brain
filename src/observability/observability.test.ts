@@ -146,6 +146,43 @@ describe("describeError redaction", () => {
   });
 });
 
+describe("envelope ownership", () => {
+  it("does not let async context override service, host, or level", () => {
+    // `service` and `host` are the only two envelope fields that become Loki
+    // labels. A context reader that returns either -- by accident or by
+    // spreading a request object wholesale -- would silently split the query
+    // surface, and nothing in the emitted line would say so.
+    //
+    // The spread order is the whole fix: context used to land AFTER the
+    // envelope block that claims to own these names.
+    setLogLevel("info");
+    captured.length = 0;
+
+    // withContext merges arbitrary fields, so this is reachable without a
+    // hand-written reader: any caller that spreads a request object into the
+    // scope can carry a `service` key in without meaning to.
+    withContext(
+      {
+        correlation_id: "cid-1",
+        service: "not-open-brain",
+        host: "not-this-host",
+        level: "debug",
+      },
+      () => {
+        logger.info("owned_envelope");
+      },
+    );
+
+    const line = captured.find((l) => l.message === "owned_envelope");
+    expect(line).toBeDefined();
+    expect(line!.service).not.toBe("not-open-brain");
+    expect(line!.host).not.toBe("not-this-host");
+    expect(line!.level).toBe("info");
+    // Context still supplies what it is actually for.
+    expect(line!.correlation_id).toBe("cid-1");
+  });
+});
+
 describe("runtime log level", () => {
   // Restore whatever the process started at, so raising the level here cannot
   // leak into another suite in this shared process.
@@ -172,6 +209,46 @@ describe("runtime log level", () => {
     expect(line).toBeDefined();
     expect(line!.level).toBe("debug");
     expect(line!.detail).toBe(1);
+  });
+
+  it("reaches the target level even when the announce line throws", () => {
+    // The announce widens the gate temporarily so the transition cannot filter
+    // its own notice. `log` can throw for real -- FILE_SINK.write fails on a
+    // full or unwritable disk -- and without a `finally` the widened value is
+    // where minLevel stays.
+    //
+    // That inverts the intent on the one path this setter exists for: an
+    // operator raising verbosity mid-incident, on the box whose disk just
+    // filled, gets debug-volume logging from a call that reported failure.
+    // Go DOWN in verbosity (debug -> error). The widened gate is then "debug"
+    // and the target is "error", so the two differ and the assertion can tell
+    // a restored level from a stuck one. Raising instead would leave both at
+    // "debug" and pass either way.
+    setLogLevel("debug");
+
+    const realLog = console.log;
+    let armed = true;
+    console.log = ((...args: unknown[]) => {
+      if (armed) {
+        armed = false;
+        throw new Error("sink failure (full disk)");
+      }
+      return realLog(...(args as []));
+    }) as typeof console.log;
+
+    let threw = false;
+    try {
+      setLogLevel("error");
+    } catch {
+      threw = true;
+    } finally {
+      console.log = realLog;
+    }
+
+    expect(threw).toBe(true);
+    // Pre-fix: "debug" -- stuck at the widened gate, so the process keeps
+    // emitting debug volume after a call that reported failure.
+    expect(getLogLevel()).toBe("error");
   });
 
   it("announces the change so the transition is visible in the stream", () => {

@@ -49,8 +49,19 @@ export function setLogLevel(level: string): LogLevel {
   // suppressed `info` (`error` -> `debug`). Widening for this one line makes
   // "when did the level change?" answerable from the log in both directions.
   minLevel = LOG_LEVELS[previous] < LOG_LEVELS[target] ? previous : target;
-  log("info", "log_level_changed", { from: previous, to: target });
-  minLevel = target;
+  try {
+    log("info", "log_level_changed", { from: previous, to: target });
+  } finally {
+    // `finally`, not a plain assignment: the widened gate above is a temporary
+    // state that exists only for the announce line, and `log` can throw for
+    // real -- FILE_SINK.write fails on a full or unwritable disk. Without this,
+    // a throw leaves minLevel stuck at the WIDENED value while the caller sees
+    // an error and reasonably concludes nothing changed. That inverts the
+    // intent on the one path this function exists for: an operator raising
+    // verbosity mid-incident, on the box whose disk just filled, would silently
+    // get debug-volume logging from a call that reported failure.
+    minLevel = target;
+  }
   return minLevel;
 }
 
@@ -261,15 +272,30 @@ function log(
   // surface becomes several.
   const entry: LogEntry = {
     ...extra,
+    // Context spreads BEFORE the envelope, not after. It used to spread last,
+    // which meant a context reader returning `service`, `host`, or `level`
+    // silently overrode the fields this block claims to own -- and `service`
+    // and `host` are the only two that become Loki labels, so one mislabelled
+    // reader splits the query surface with nothing in the output saying so.
+    // Context supplies correlation fields; it does not get to rename the
+    // service.
+    ...contextFields(),
     level,
     message,
     timestamp: new Date().toISOString(),
     service: SERVICE_NAME,
     host: HOST_NAME,
-    ...contextFields(),
   };
   const output = JSON.stringify(entry);
-  FILE_SINK?.write(output);
+  try {
+    FILE_SINK?.write(output);
+  } catch {
+    // Deliberate, and the same reasoning as the extra sinks below: a full or
+    // unwritable disk must degrade to console-only, never take the line down
+    // with it. Unguarded, this threw before the console sinks ran, so the one
+    // failure most likely to coincide with an incident -- the disk filling --
+    // also blinded the operator investigating it.
+  }
   for (const sink of extraSinks) {
     // A misbehaving observer must not silence the line for everyone else, and
     // reporting through the logger from inside the logger would recurse.
