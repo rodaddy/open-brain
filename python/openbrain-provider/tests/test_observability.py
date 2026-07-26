@@ -131,8 +131,13 @@ def test_every_record_is_a_single_json_line(tmp_path: Path) -> None:
 
     logger.info("first line\nsecond line")
 
-    lines = [ln for ln in log_file.read_text().splitlines() if ln.strip()]
+    # Remove the sinks BEFORE reading. `enqueue=True` writes on a background
+    # thread, so reading first is a race: it passed locally and failed on the CI
+    # runner, which is the worst possible ordering for noticing. Every other
+    # test here flushes via _read_records; this one read the file directly.
     logger.remove()
+
+    lines = [ln for ln in log_file.read_text().splitlines() if ln.strip()]
     assert len(lines) == 1
     assert json.loads(lines[0])["message"] == "first line\nsecond line"
 
