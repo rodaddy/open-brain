@@ -32,6 +32,25 @@ logger = logging.getLogger(__name__)
 # (entities before concepts), first-seen wins.
 DERIVED_QUERY_MAX_KEYS = 8
 
+#: The session-event vocabulary. THE definition — every other surface imports or
+#: is checked against this one, never redeclares it (#412).
+#:
+#: The authority is ultimately the database: `ob_session_events.event_type`
+#: carries a CHECK constraint listing exactly these values. A value that is not
+#: in the constraint is rejected by Postgres, so a set that drifts *wider* than
+#: the constraint produces the failure this vocabulary was consolidated to
+#: prevent — the caller passes validation here, the insert is refused, and the
+#: symptom is a silent no-row write rather than a named error. `event_type:
+#: "finding"` did exactly that: exit 0, no output, no row.
+#:
+#: Because it is duplicated across languages by necessity (Python, the TS
+#: client, the TS server, and SQL cannot share one literal), the guard is a test
+#: rather than an import: `test_event_vocabulary.py` asserts every surface
+#: agrees, and fails if any one of them adds or drops a value.
+#:
+#: Widening this set therefore means widening the CHECK constraint in the same
+#: change. Adding a value here alone does not make it usable; it makes it
+#: silently unwritable.
 EVENT_TYPES = {
     "fact",
     "decision",
