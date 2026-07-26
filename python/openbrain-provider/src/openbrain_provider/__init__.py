@@ -16,14 +16,17 @@ from .config import (
     load_config,
 )
 from .observability import SERVICE_NAME, configure_observability, logger
+from .vocabulary import EVENT_TYPES, is_valid_event_type
 
 __all__ = [
+    "EVENT_TYPES",
     "SERVICE_NAME",
     "ConfigError",
     "DispatchConfig",
     "LogConfig",
     "ProviderConfig",
     "configure_observability",
+    "is_valid_event_type",
     "load_config",
     "logger",
 ]

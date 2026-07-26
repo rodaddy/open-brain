@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .agent import (
+    EVENT_TYPES,
     AgentMemory,
     MemoryClient,
     MemoryContext,
@@ -79,6 +80,7 @@ from .turn_concepts import (
 )
 
 __all__ = [
+    "EVENT_TYPES",
     "AgentMemory",
     "DEFAULT_MAX_KEYS",
     "TurnConcepts",
