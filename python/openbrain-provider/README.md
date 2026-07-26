@@ -73,6 +73,20 @@ unwritable `LOG_FILE` must not be fatal is honored by falling back to **stderr**
 — the distinction that matters, since the obvious fallback is the one that
 breaks the caller.
 
+**Logging is async, and the queue is drained on the way out.** The file sink
+runs with `enqueue=True`, so `logger.info()` returns before the bytes reach
+disk — a hook must not block on I/O to log. The cost is that the queue can
+outlive the process. loguru's `atexit` hook covers a clean exit (measured
+200/200 records), but nothing covered a signal: SIGTERM with no drain window
+landed **133 of 200 records**, and the 67 lost were the newest ones. For a hook
+that is exactly backwards, since the records worth having are the ones written
+just before something tore the process down.
+
+`configure_observability()` therefore installs a SIGTERM/SIGINT handler that
+drains the queue and then re-raises, so the process still dies the way the
+sender asked. It only claims a signal nobody else holds, and SIGINT keeps its
+`KeyboardInterrupt` semantics rather than being converted into a hard kill.
+
 `resolve_log_file()` probes for a writable path — the contract location
 `/mnt/logs/services/` if it exists (it is **not provisioned yet**), a temp
 directory otherwise — and an operator-supplied path is probed too. An earlier

@@ -11,6 +11,9 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import signal
+import subprocess
 import sys
 import tempfile
 from collections.abc import Iterator
@@ -23,8 +26,10 @@ from openbrain_provider.config import LogConfig, ProviderConfig, load_config
 from openbrain_provider.observability import (
     SERVICE_NAME,
     TOP_LEVEL_FIELDS,
+    _install_signal_flush,
     _usable_log_dir,
     configure_observability,
+    flush_logs,
     logger,
     resolve_log_file,
 )
@@ -40,8 +45,16 @@ CONFORMING_LEVELS = frozenset({"debug", "info", "warning", "error", "critical"})
 
 @pytest.fixture(autouse=True)
 def _isolate_sinks() -> Iterator[None]:
+    # Signal dispositions are restored as well as sinks. configure_observability
+    # installs a real SIGTERM/SIGINT handler on whatever process calls it, which
+    # here is the pytest process itself. Leaving one behind puts this module's
+    # handler in the path of a CI job cancellation, and of any later test that
+    # cares about signal state.
+    saved = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
     yield
     logger.remove()
+    for sig, disposition in saved.items():
+        signal.signal(sig, disposition)
 
 
 def _config(tmp_path: Path, level: str = "info") -> tuple[ProviderConfig, Path]:
@@ -335,6 +348,121 @@ def test_known_contract_fields_stay_at_the_top_level(tmp_path: Path) -> None:
     assert record["correlation_id"] == "abc123"
     assert record["event"] == "hook.capture"
     assert "context" not in record
+
+
+#: Written by the SIGTERM subprocess below. Logs a burst, signals the parent that
+#: it is ready, then blocks. The parent kills it mid-queue.
+#: The probe signals ITSELF, immediately after the last `logger.info` returns,
+#: so the writer thread gets no drain window at all.
+#:
+#: This shape matters. The first version of this test had the child write a
+#: `ready` file and sleep while the parent polled and then signalled. That
+#: handed the writer roughly ten milliseconds -- enough to finish the queue --
+#: so it reported 200/200 with the fix reverted and proved nothing. Verified:
+#: this shape gives 133/200 with `_install_signal_flush()` disabled and 200/200
+#: with it enabled.
+#:
+#: `%s` rather than str.format: the source contains dict literals, and every
+#: brace in them would have to be doubled to survive formatting.
+_SIGTERM_PROBE = """
+import os, signal, sys
+from openbrain_provider.config import load_config
+from openbrain_provider.observability import configure_observability, logger
+
+configure_observability(load_config({"LOG_LEVEL": "info", "LOG_FILE": sys.argv[1]}))
+for i in range(%s):
+    logger.info("record", record_index=i)
+os.kill(os.getpid(), signal.SIGTERM)
+"""
+
+
+def _run_sigterm_probe(tmp_path: Path, count: int) -> tuple[int, Path]:
+    """Run the self-signalling probe and return its exit status and log path.
+
+    Args:
+        tmp_path: Directory for the generated script and its log file.
+        count: How many records the probe logs before signalling itself.
+
+    Returns:
+        The probe's return code and the log file it wrote.
+    """
+    log_file = tmp_path / "signal.jsonl"
+    script = tmp_path / "probe.py"
+    script.write_text(_SIGTERM_PROBE % count)
+
+    env = dict(os.environ)
+    src = str(Path(__file__).resolve().parents[1] / "src")
+    env["PYTHONPATH"] = f"{src}{os.pathsep}{env.get('PYTHONPATH', '')}"
+
+    process = subprocess.Popen(
+        [sys.executable, str(script), str(log_file)],
+        env=env,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        returncode = process.wait(timeout=60)
+    finally:
+        if process.poll() is None:  # pragma: no cover - only on a hung probe
+            process.kill()
+            process.wait(timeout=10)
+    return returncode, log_file
+
+
+def test_queued_records_survive_sigterm(tmp_path: Path) -> None:
+    # Measured before this handler existed: 133 of 200 records reached disk on
+    # SIGTERM, the missing 67 being the newest ones still in the enqueue=True
+    # writer's queue. loguru's atexit hook covers a clean exit (200/200) and
+    # nothing covered a signal.
+    #
+    # For a hook process that is the wrong way round: the records worth having
+    # are the ones written just before something tore it down, and those are
+    # exactly the ones that were being dropped.
+    count = 200
+
+    _, log_file = _run_sigterm_probe(tmp_path, count)
+
+    records = [
+        json.loads(line) for line in log_file.read_text().splitlines() if line.strip()
+    ]
+    assert len(records) == count, f"lost {count - len(records)} of {count} records"
+    assert [r["context"]["record_index"] for r in records] == list(range(count))
+
+
+def test_sigterm_still_terminates_the_process(tmp_path: Path) -> None:
+    # Flushing must not swallow the signal. A handler that drains the queue and
+    # then returns turns a lost log line into a process that ignores shutdown --
+    # strictly worse, because a service manager escalates to SIGKILL and the
+    # flush buys nothing.
+    returncode, _ = _run_sigterm_probe(tmp_path, 1)
+
+    assert returncode == -signal.SIGTERM
+
+
+def test_a_caller_installed_signal_handler_is_not_replaced() -> None:
+    # This module runs inside someone else's process. Claiming a slot another
+    # component already owns would silently break their shutdown path, which is
+    # a worse failure than the dropped records this handler exists to prevent.
+    def caller_handler(_sig: int, _frame: object) -> None:  # pragma: no cover
+        pass
+
+    previous = signal.getsignal(signal.SIGTERM)
+    signal.signal(signal.SIGTERM, caller_handler)
+    try:
+        _install_signal_flush()
+
+        assert signal.getsignal(signal.SIGTERM) is caller_handler
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
+def test_flush_logs_drains_the_queue(tmp_path: Path) -> None:
+    config, log_file = _config(tmp_path)
+    configure_observability(config)
+
+    logger.info("queued")
+    flush_logs()
+
+    assert json.loads(log_file.read_text().splitlines()[0])["message"] == "queued"
 
 
 def test_exceptions_are_recorded_as_a_structured_error(tmp_path: Path) -> None:
