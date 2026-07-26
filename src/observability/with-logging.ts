@@ -15,35 +15,7 @@
  * The wrapper never swallows: it logs, then re-throws. Converting an error into
  * a fallback value is a decision the caller makes deliberately and documents.
  */
-import { logger } from "../logger.ts";
-import { SECRET_PATTERNS } from "../sharing.ts";
-
-/**
- * Strip known secret material from a string bound for a log entry.
- *
- * Applies `SECRET_PATTERNS` — the same detector set that gates shared-kb
- * promotion and the Python client's `policy.py` — rather than a second, weaker
- * redaction fork.
- *
- * `redactText()` is deliberately NOT reused here: it emits a `logger.warn` when
- * it changes something, and this function runs *inside* the log path, so that
- * would recurse. The patterns are applied directly and the substitution is
- * silent; the redaction marker in the output is the evidence.
- */
-function redactForLog(value: string): string {
-  if (!value) return value;
-  let redacted = value;
-  for (const pattern of SECRET_PATTERNS) {
-    const flags = pattern.flags.includes("g")
-      ? pattern.flags
-      : `${pattern.flags}g`;
-    redacted = redacted.replace(
-      new RegExp(pattern.source, flags),
-      "[REDACTED]",
-    );
-  }
-  return redacted;
-}
+import { logger, redactForLog } from "../logger.ts";
 
 /**
  * Reduce an unknown thrown value to safe, loggable fields.

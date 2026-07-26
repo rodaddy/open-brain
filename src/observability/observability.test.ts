@@ -146,6 +146,231 @@ describe("describeError redaction", () => {
   });
 });
 
+describe("the emit path never throws at the call site", () => {
+  // Review lane finding, both lanes independently, HIGH. `JSON.stringify(entry)`
+  // was the one unguarded step in `log()` -- every neighbour is deliberately
+  // fail-open. A cycle, a BigInt, or a throwing toJSON in ANY caller field or
+  // context field lost the line on all four destinations and threw into
+  // arbitrary application code.
+  const cyclic = () => {
+    const o: Record<string, unknown> = { name: "ctx" };
+    o.self = o;
+    return o;
+  };
+
+  it("emits a line for a cyclic field instead of throwing", () => {
+    captured.length = 0;
+
+    expect(() => logger.info("cyclic_field", { ctx: cyclic() })).not.toThrow();
+
+    const line = captured.find((l) => l.message === "cyclic_field");
+    expect(line).toBeDefined();
+  });
+
+  it("emits a line for a BigInt field instead of throwing", () => {
+    captured.length = 0;
+
+    expect(() => logger.info("bigint_field", { row_id: 7n })).not.toThrow();
+
+    const line = captured.find((l) => l.message === "bigint_field");
+    expect(line).toBeDefined();
+    expect(line!.row_id).toBe("7");
+  });
+
+  it("emits a line when a field's toJSON throws", () => {
+    captured.length = 0;
+    const hostile = {
+      toJSON() {
+        throw new Error("toJSON boom");
+      },
+    };
+
+    expect(() => logger.info("hostile_field", { hostile })).not.toThrow();
+
+    // The envelope-only fallback still lands, and says why it is thin.
+    const line = captured.find(
+      (l) => l.message === "hostile_field" || l.log_serialize_failed === true,
+    );
+    expect(line).toBeDefined();
+  });
+
+  it("still runs the wrapped operation at debug with an unserializable field", async () => {
+    // The worst consequence: `withLogging` emits its entry line at debug BEFORE
+    // calling fn. At info that line is gated out and fn runs; at debug the same
+    // call threw and fn was NEVER invoked. Raising the log level to investigate
+    // an incident silently stopped work from running -- the exact scenario
+    // setLogLevel exists for.
+    const original = getLogLevel();
+    setLogLevel("debug");
+    let ran = false;
+    try {
+      await withLogging(
+        "critical_op",
+        async () => {
+          ran = true;
+          return "ok";
+        },
+        { ctx: cyclic() },
+      );
+    } finally {
+      setLogLevel(original);
+    }
+
+    expect(ran).toBe(true);
+  });
+
+  it("re-throws the caller's original error by identity", async () => {
+    // `withLogging` documents "re-throws whatever fn throws, unchanged". A
+    // serializer throw from the logging wrapper replaced the real root cause.
+    const real = new Error("real root cause");
+    let caught: unknown;
+    try {
+      await withLogging(
+        "op",
+        async () => {
+          throw real;
+        },
+        { ctx: cyclic() },
+      );
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBe(real);
+  });
+
+  it("withFallback returns the fallback rather than throwing", async () => {
+    const result = await withFallback(
+      "cache_read",
+      async () => {
+        throw new Error("miss");
+      },
+      "FALLBACK",
+      { key: 1n },
+    );
+
+    expect(result).toBe("FALLBACK");
+  });
+});
+
+describe("redaction covers the whole entry", () => {
+  it("redacts caller-supplied fields, not just error_* fields", () => {
+    // Review lane finding, HIGH. `redactForLog` was applied only to
+    // error_name/error_message/error_stack, so the IDENTICAL credential went
+    // out redacted in error_message and in clear in a caller field on the same
+    // line. Redaction belongs at the envelope.
+    captured.length = 0;
+
+    logger.error("nats_connect_failed", {
+      dsn: "nats://user:hunter2@10.71.1.21:4222",
+    });
+
+    const line = captured.find((l) => l.message === "nats_connect_failed");
+    expect(line).toBeDefined();
+    expect(JSON.stringify(line)).not.toContain("hunter2");
+  });
+
+  it("redacts context fields too", () => {
+    captured.length = 0;
+
+    withContext(
+      { correlation_id: "cid-x", token: "Bearer AAAAAAAAAAAAAAAAAAAA" },
+      () => {
+        logger.info("ctx_secret");
+      },
+    );
+
+    const line = captured.find((l) => l.message === "ctx_secret");
+    expect(line).toBeDefined();
+    expect(JSON.stringify(line)).not.toContain("AAAAAAAAAAAAAAAAAAAA");
+  });
+
+  it("bounds the redaction input so a pathological string cannot stall the loop", () => {
+    // PRIVATE_KEY_BLOCK_RE is quadratic on repeated BEGIN markers with no END:
+    // measured 625 KB -> 3.9 s of blocked event loop. An unbounded string in a
+    // log line is its own problem regardless of the pattern.
+    captured.length = 0;
+    const pathological = "-----BEGIN PRIVATE KEY-----".repeat(20_000);
+
+    const started = Date.now();
+    logger.info("pathological", { blob: pathological });
+    const elapsed = Date.now() - started;
+
+    expect(elapsed).toBeLessThan(1_000);
+    const line = captured.find((l) => l.message === "pathological");
+    expect(line).toBeDefined();
+  });
+});
+
+describe("an unwritable file sink degrades to console", () => {
+  it("still emits the line when LOG_FILE cannot be written", async () => {
+    // Review lane finding, HIGH — against the TEST, not the code. A self-review
+    // "fix" had wrapped `FILE_SINK?.write` in try/catch, and the lane proved no
+    // test failed when that guard was reverted.
+    //
+    // Chasing that down showed the guard was defending against an impossible
+    // case: `createRotatingFileSink` documents "Never throws on write" and
+    // already wraps `appendFileSync` in its own try/catch. The guard is now
+    // gone; what remains worth pinning is the BEHAVIOUR both were aiming at,
+    // which nothing covered either way — an unwritable LOG_FILE must still
+    // produce the line on console.
+    //
+    // A subprocess is the only honest way in: FILE_SINK is resolved once at
+    // module load, so the suite (which runs with LOG_FILE unset) can never
+    // exercise it in-process.
+    const proc = Bun.spawn(
+      [
+        "bun",
+        "-e",
+        `const { logger } = await import("${import.meta.dir}/../logger.ts");
+         logger.error("disk_full_still_logs", { probe: 1 });`,
+      ],
+      {
+        env: {
+          ...process.env,
+          // A directory that cannot exist as a file's parent -> every write throws.
+          LOG_FILE: "/proc/nonexistent/open-brain.log",
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+
+    // The process must survive AND the line must reach console.error.
+    expect(exitCode).toBe(0);
+    expect(`${stdout}${stderr}`).toContain("disk_full_still_logs");
+  });
+});
+
+describe("sink registration", () => {
+  it("does not re-deliver a line to a sink that re-subscribes mid-emit", () => {
+    // `Set` iteration observes mutation, so a sink that disposes and re-adds
+    // itself landed back at the tail and was reached again by the same loop --
+    // one log line drove a sink 50,001 times before a circuit breaker stopped
+    // it. Inside the per-sink catch, so it presented as a silent hang.
+    let calls = 0;
+    let dispose: (() => void) | undefined;
+    const sink = () => {
+      calls += 1;
+      if (calls > 100) return; // circuit breaker, so a regression fails loudly
+      dispose?.();
+      dispose = addLogSink(sink);
+    };
+    dispose = addLogSink(sink);
+
+    logger.info("one_line");
+
+    dispose?.();
+    expect(calls).toBe(1);
+  });
+});
+
 describe("envelope ownership", () => {
   it("does not let async context override service, host, or level", () => {
     // `service` and `host` are the only two envelope fields that become Loki
@@ -249,6 +474,30 @@ describe("runtime log level", () => {
     // Pre-fix: "debug" -- stuck at the widened gate, so the process keeps
     // emitting debug volume after a call that reported failure.
     expect(getLogLevel()).toBe("error");
+  });
+
+  it("lets a nested setLogLevel from a sink win, and reports what took effect", () => {
+    // Review lane finding. The `finally` restore was unconditional, but the
+    // widened window runs sinks synchronously and one can reenter -- an
+    // auto-escalate-on-error sink is the documented extension point. The nested
+    // call set the level, returned its own target as though it stuck, and the
+    // outer `finally` then silently reverted it.
+    setLogLevel("info");
+    let nestedReturn = "";
+    const off = addLogSink((entry) => {
+      if (entry.message === "log_level_changed" && entry.to === "debug") {
+        nestedReturn = setLogLevel("error");
+      }
+    });
+
+    const outerReturn = setLogLevel("debug");
+    off();
+
+    expect(nestedReturn).toBe("error");
+    expect(getLogLevel()).toBe("error");
+    // The outer call must report what is actually in effect, not what it asked
+    // for -- otherwise a reentrant change is reported as the caller's own.
+    expect(outerReturn).toBe("error");
   });
 
   it("announces the change so the transition is visible in the stream", () => {

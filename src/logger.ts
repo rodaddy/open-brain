@@ -1,4 +1,5 @@
 import os from "node:os";
+import { SECRET_PATTERNS } from "./secret-patterns.ts";
 import {
   createRotatingFileSink,
   type RotatingFileSink,
@@ -48,7 +49,8 @@ export function setLogLevel(level: string): LogLevel {
   // emitting before it loses the line when raising from a level that already
   // suppressed `info` (`error` -> `debug`). Widening for this one line makes
   // "when did the level change?" answerable from the log in both directions.
-  minLevel = LOG_LEVELS[previous] < LOG_LEVELS[target] ? previous : target;
+  const widened = LOG_LEVELS[previous] < LOG_LEVELS[target] ? previous : target;
+  minLevel = widened;
   try {
     log("info", "log_level_changed", { from: previous, to: target });
   } finally {
@@ -60,8 +62,17 @@ export function setLogLevel(level: string): LogLevel {
     // intent on the one path this function exists for: an operator raising
     // verbosity mid-incident, on the box whose disk just filled, would silently
     // get debug-volume logging from a call that reported failure.
-    minLevel = target;
+    //
+    // Conditional, because the widened window runs registered sinks
+    // synchronously and one of them can reenter this function -- an
+    // auto-escalate-on-error sink is exactly the documented extension point. An
+    // unconditional restore silently reverted that nested change AND the nested
+    // call returned its own target as though it had taken effect. A later
+    // decision wins.
+    if (minLevel === widened) minLevel = target;
   }
+  // `minLevel`, not `target`: the returned value must be what is actually in
+  // effect, or a reentrant change is reported as the caller's own.
   return minLevel;
 }
 
@@ -259,6 +270,117 @@ interface LogEntry {
   [key: string]: unknown;
 }
 
+/**
+ * Strip known secret material from a string bound for a log entry.
+ *
+ * Applies `SECRET_PATTERNS` — the same detector set that gates shared-kb
+ * promotion and the Python client's `policy.py` — rather than a second, weaker
+ * redaction fork.
+ *
+ * `redactText()` is deliberately NOT reused here: it emits a `logger.warn` when
+ * it changes something, and this function runs *inside* the log path, so that
+ * would recurse. The patterns are applied directly and the substitution is
+ * silent; the redaction marker in the output is the evidence.
+ *
+ * Lives here, not in `observability/with-logging.ts` where it started, because
+ * review found it was applied only to `error_name`/`error_message`/`error_stack`
+ * — so the identical DSN went out redacted in `error_message` and in clear in a
+ * caller-supplied field on the same line. Redaction belongs at the envelope,
+ * which is here, and that also covers `contextFields()` output. `with-logging`
+ * imports it from this module; the reverse would be a cycle.
+ *
+ * The input is bounded first: `PRIVATE_KEY_BLOCK_RE` is quadratic on repeated
+ * `-----BEGIN` markers with no `END` (measured 625 KB -> 3.9 s of blocked event
+ * loop), and an unbounded string in a log line is its own problem regardless.
+ */
+const MAX_REDACT_INPUT_CHARS = 16_384;
+
+export function redactForLog(value: string): string {
+  if (!value) return value;
+  const bounded =
+    value.length > MAX_REDACT_INPUT_CHARS
+      ? `${value.slice(0, MAX_REDACT_INPUT_CHARS)}…[truncated ${value.length - MAX_REDACT_INPUT_CHARS} chars]`
+      : value;
+  let redacted = bounded;
+  for (const pattern of SECRET_PATTERNS) {
+    const flags = pattern.flags.includes("g")
+      ? pattern.flags
+      : `${pattern.flags}g`;
+    redacted = redacted.replace(
+      new RegExp(pattern.source, flags),
+      "[REDACTED]",
+    );
+  }
+  return redacted;
+}
+
+/**
+ * Serialize one entry without ever throwing, redacting every string it emits.
+ *
+ * Two review findings meet here, and both were reproduced.
+ *
+ * **It must not throw.** Every other step in `log()` is deliberately fail-open --
+ * `contextFields()` catches a throwing reader, the file sink is guarded, each
+ * extra sink is guarded -- but the bare `JSON.stringify(entry)` was not. A
+ * cycle, a `BigInt`, or a throwing `toJSON` in any caller field or context field
+ * lost the line on all four destinations *and* threw into arbitrary application
+ * code. The consequences went well past logging: `withLogging` replaced the real
+ * error with a serializer error on its failure path, `withFallback` threw
+ * instead of returning its fallback, and worst, at `debug` the entry line threw
+ * before `fn` was ever called -- so **raising the log level silently stopped
+ * work from running**. That is the exact scenario `setLogLevel` exists for.
+ * `src/audit-log.ts` already defends itself against "a cycle, a BigInt
+ * anywhere"; the shared envelope every emitter routes through did not.
+ *
+ * **It must redact the whole entry, not one contributor.** `redactForLog` was
+ * applied only to `error_name`/`error_message`/`error_stack`, so the identical
+ * DSN went out redacted in `error_message` and in clear in a caller field on the
+ * same line. Redacting at the envelope also covers `contextFields()` output,
+ * which nothing covered before.
+ *
+ * Values are handled rather than dropped: `bigint` becomes its digits, a cycle
+ * becomes `"[Circular]"`, a throwing getter becomes `"[Unserializable]"`. Losing
+ * one field is acceptable; losing the line during an incident is not.
+ */
+function serializeEntry(
+  entry: LogEntry,
+  level: LogLevel,
+  message: string,
+): string {
+  const seen = new WeakSet<object>();
+  try {
+    return JSON.stringify(entry, function replacer(_key, value: unknown) {
+      if (typeof value === "string") return redactForLog(value);
+      if (typeof value === "bigint") return value.toString();
+      if (typeof value === "function" || typeof value === "symbol") {
+        return `[${typeof value}]`;
+      }
+      if (typeof value === "object" && value !== null) {
+        if (seen.has(value)) return "[Circular]";
+        seen.add(value);
+      }
+      return value;
+    });
+  } catch {
+    // A throwing `toJSON`, or anything else the replacer could not tame. Emit
+    // the envelope alone so the line still lands and says why it is thin.
+    try {
+      return JSON.stringify({
+        level,
+        message: redactForLog(message),
+        timestamp: new Date().toISOString(),
+        service: SERVICE_NAME,
+        host: HOST_NAME,
+        log_serialize_failed: true,
+      });
+    } catch {
+      // Envelope-only serialization cannot realistically fail; if it somehow
+      // does, a hand-built string still beats losing the line.
+      return `{"level":"${level}","message":"log_serialize_failed","service":"${SERVICE_NAME}","host":"${HOST_NAME}"}`;
+    }
+  }
+}
+
 function log(
   level: LogLevel,
   message: string,
@@ -286,21 +408,42 @@ function log(
     service: SERVICE_NAME,
     host: HOST_NAME,
   };
-  const output = JSON.stringify(entry);
+  const output = serializeEntry(entry, level, message);
+  // Sinks receive the SERIALIZED-then-parsed entry, not the raw object. Review
+  // found that redacting only inside `serializeEntry` left every extra sink
+  // reading the unredacted original -- so a credential-bearing caller field went
+  // out in clear to any observer while the file and console saw `[REDACTED]`.
+  // Round-tripping guarantees all three destinations see byte-identical data,
+  // and it is the same object shape sinks already expected.
+  let delivered: LogEntry = entry;
   try {
-    FILE_SINK?.write(output);
+    delivered = JSON.parse(output) as LogEntry;
   } catch {
-    // Deliberate, and the same reasoning as the extra sinks below: a full or
-    // unwritable disk must degrade to console-only, never take the line down
-    // with it. Unguarded, this threw before the console sinks ran, so the one
-    // failure most likely to coincide with an incident -- the disk filling --
-    // also blinded the operator investigating it.
+    // serializeEntry never returns invalid JSON, but a sink getting the raw
+    // entry is still better than no line at all.
   }
-  for (const sink of extraSinks) {
+  // NOT wrapped in try/catch, deliberately. An earlier revision guarded this,
+  // reasoning that a full disk must not take the line down with it. The
+  // reasoning was right and the guard was redundant: `createRotatingFileSink`
+  // documents "Never throws on write" and already wraps its `appendFileSync` in
+  // a try/catch that re-syncs and continues (`rotating-file.ts`). A review lane
+  // caught that the guard had no test which failed when it was reverted; the
+  // reason it could not be tested is that the throw it caught cannot occur.
+  // Keeping a guard for an impossible case makes the next reader believe this
+  // sink is a throwing one.
+  FILE_SINK?.write(output);
+  // Snapshot, not the live Set. `Set` iteration observes mutation, so a sink
+  // that re-subscribes itself during an emit lands back at the tail and is
+  // reached again by the same loop -- one log line drove a sink 50,001 times in
+  // review before a circuit breaker stopped it. It is inside the per-sink
+  // catch, so it surfaces as a silent hang rather than an error. A snapshot
+  // also makes "a sink added mid-emit does not receive the in-flight line"
+  // defined rather than incidental.
+  for (const sink of [...extraSinks]) {
     // A misbehaving observer must not silence the line for everyone else, and
     // reporting through the logger from inside the logger would recurse.
     try {
-      sink(entry);
+      sink(delivered);
     } catch {
       /* deliberate: see contextFields() */
     }
