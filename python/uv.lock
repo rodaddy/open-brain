@@ -237,7 +237,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "openbrain-memory", editable = "openbrain-memory" },
-    { name = "rtech-obs", editable = "../../rtech-standards/packages/python" },
+    { name = "rtech-obs", git = "ssh://git@github.com/rodaddy/rtech-standards.git?subdirectory=packages%2Fpython&rev=23252cdffc773f56e3f00780f46f67e0364a5e0a" },
 ]
 
 [package.metadata.requires-dev]
@@ -316,23 +316,10 @@ wheels = [
 [[package]]
 name = "rtech-obs"
 version = "1.1.0"
-source = { editable = "../../rtech-standards/packages/python" }
+source = { git = "ssh://git@github.com/rodaddy/rtech-standards.git?subdirectory=packages%2Fpython&rev=23252cdffc773f56e3f00780f46f67e0364a5e0a#23252cdffc773f56e3f00780f46f67e0364a5e0a" }
 dependencies = [
     { name = "loguru" },
     { name = "prometheus-client" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "loguru", specifier = ">=0.7.3" },
-    { name = "prometheus-client", specifier = ">=0.21" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "mypy", specifier = ">=1.10" },
-    { name = "pytest", specifier = ">=8.0" },
-    { name = "ruff", specifier = ">=0.8" },
 ]
 
 [[package]]

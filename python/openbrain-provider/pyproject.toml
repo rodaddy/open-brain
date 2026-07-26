@@ -33,10 +33,20 @@ dependencies = [
 
 [tool.uv.sources]
 openbrain-memory = { workspace = true }
-# rtech-obs is not published to PyPI. Local path source for dev/CI on this
-# checkout; deploys pin it as a git dep. Same convention rtech-agents uses for
-# the fleet-bus packages and for openbrain-memory itself.
-rtech-obs = { path = "../../../rtech-standards/packages/python", editable = true }
+# rtech-obs is not published to PyPI, so it resolves from git.
+#
+# NOT a relative path source. rtech-agents uses one for its sibling repos, but
+# that resolves against the CHECKOUT's location: it works in this working copy
+# and fails in any clone where the two repos are not siblings -- verified, a
+# cold clone under _tmp died with "Distribution not found at:
+# .../_tmp/open-brain/rtech-standards/packages/python". CI is exactly that case,
+# since actions/checkout fetches this repo alone.
+#
+# Pinned to an immutable commit rather than a branch: `main` currently carries
+# rtech-obs 1.0.0, whose init_observability() has no metrics_mode parameter,
+# and tracking a moving feature branch would let someone else's in-flight work
+# change this build. Repin when the observability work merges to main.
+rtech-obs = { git = "ssh://git@github.com/rodaddy/rtech-standards.git", rev = "23252cdffc773f56e3f00780f46f67e0364a5e0a", subdirectory = "packages/python" }
 
 [dependency-groups]
 dev = [
