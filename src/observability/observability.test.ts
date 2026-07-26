@@ -300,6 +300,87 @@ describe("redaction covers the whole entry", () => {
     const line = captured.find((l) => l.message === "pathological");
     expect(line).toBeDefined();
   });
+
+  it("redacts a credential that straddles the truncation boundary", () => {
+    // Sol final-gate finding, HIGH. The bound was applied BEFORE the patterns
+    // ran, so a DSN crossing the 16 KB cut was split mid-credential, no pattern
+    // matched the surviving head, and the tail went out in clear. Truncating
+    // cannot create a secret but it can destroy the evidence of one, so
+    // redaction now runs first and the bound is applied to the result.
+    captured.length = 0;
+    const secret = "postgres://user:hunter2straddle@10.71.1.21:5432/openbrain";
+    const blob = `${"x".repeat(16_384 - 20)}${secret}`;
+
+    logger.info("straddling_secret", { blob });
+
+    const line = captured.find((l) => l.message === "straddling_secret");
+    expect(line).toBeDefined();
+    // Pre-fix: "postgres://user:hunter2s" survived the cut unredacted.
+    expect(JSON.stringify(line)).not.toContain("hunter2straddle");
+    expect(JSON.stringify(line)).not.toContain("postgres://user:");
+  });
+
+  it("redacts a value by its field name when the value has no secret shape", () => {
+    // Sol final-gate finding, HIGH. Every detector is value-shaped -- it
+    // recognizes `sk-…`, `ghp_…`, or the text `password=…`. But a JSON logger
+    // hands the replacer each value in ISOLATION, so an arbitrary passphrase
+    // under a field called `password` has nothing to match on and went out in
+    // clear. `json_labeled_secret` already describes this exact pair; it was
+    // simply never shown the key.
+    captured.length = 0;
+
+    logger.info("structured_secret", {
+      password: "hunter2driveway",
+      api_key: "plainvalue123",
+      db_dsn: "opaque-rotated-value",
+      // Control: a non-sensitive field must stay readable.
+      namespace: "shared-kb",
+    });
+
+    const line = captured.find((l) => l.message === "structured_secret");
+    expect(line).toBeDefined();
+    const serialized = JSON.stringify(line);
+    // Pre-fix: all three values appeared verbatim.
+    expect(serialized).not.toContain("hunter2driveway");
+    expect(serialized).not.toContain("plainvalue123");
+    expect(serialized).not.toContain("opaque-rotated-value");
+    expect(line?.namespace).toBe("shared-kb");
+  });
+});
+
+describe("serialization preserves data it is not required to drop", () => {
+  it("keeps a repeated non-circular object on both fields", () => {
+    // Sol final-gate finding, HIGH. Cycle detection used a WeakSet that only
+    // ever grew, so it flagged any object seen a SECOND time -- including one
+    // referenced from two sibling fields, which is not a cycle at all. Sharing
+    // a single config/job/namespace object across fields is ordinary, so the
+    // false positive was the common case and it silently dropped real data.
+    captured.length = 0;
+    const shared = { id: "abc" };
+
+    logger.info("repeated_object", { a: shared, b: shared });
+
+    const line = captured.find((l) => l.message === "repeated_object");
+    expect(line).toBeDefined();
+    // Pre-fix: b was the string "[Circular]".
+    expect(line?.a).toEqual({ id: "abc" });
+    expect(line?.b).toEqual({ id: "abc" });
+  });
+
+  it("still marks a genuine cycle rather than throwing", () => {
+    // The guard against over-correcting the finding above: a real self
+    // reference must still be caught, or the fix trades a data-loss bug for a
+    // RangeError that loses the whole line.
+    captured.length = 0;
+    const cyclic: Record<string, unknown> = { name: "root" };
+    cyclic.self = cyclic;
+
+    logger.info("true_cycle", { cyclic });
+
+    const line = captured.find((l) => l.message === "true_cycle");
+    expect(line).toBeDefined();
+    expect((line?.cyclic as Record<string, unknown>).self).toBe("[Circular]");
+  });
 });
 
 describe("an unwritable file sink degrades to console", () => {
@@ -498,6 +579,35 @@ describe("runtime log level", () => {
     // The outer call must report what is actually in effect, not what it asked
     // for -- otherwise a reentrant change is reported as the caller's own.
     expect(outerReturn).toBe("error");
+  });
+
+  it("lets a nested setLogLevel win even when it picks the widened level", () => {
+    // Sol final-gate finding. The restore guard was `minLevel === widened`,
+    // which cannot distinguish "my temporary widened value is still installed"
+    // from "a nested call deliberately chose that same value".
+    //
+    // Lowering debug -> error makes `widened` the PREVIOUS level, "debug". An
+    // auto-escalate sink that wants to stay at debug therefore sets exactly the
+    // widened value, the equality guard reads it as untouched, and the outer
+    // finally overwrites the nested decision. The test above passes with the
+    // old code because its nested call picks "error", which differs from the
+    // widened "debug"; only the colliding value exposes it.
+    setLogLevel("debug");
+    let nestedReturn = "";
+    const off = addLogSink((entry) => {
+      if (entry.message === "log_level_changed" && entry.to === "error") {
+        nestedReturn = setLogLevel("debug");
+      }
+    });
+
+    const outerReturn = setLogLevel("error");
+    off();
+
+    expect(nestedReturn).toBe("debug");
+    // Pre-fix: "error" -- the nested decision was silently reverted while the
+    // nested call had already reported "debug" as taking effect.
+    expect(getLogLevel()).toBe("debug");
+    expect(outerReturn).toBe("debug");
   });
 
   it("announces the change so the transition is visible in the stream", () => {

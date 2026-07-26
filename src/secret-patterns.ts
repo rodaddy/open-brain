@@ -137,3 +137,51 @@ export const SECRET_DETECTORS: readonly SecretPatternDetector[] = [
 export const SECRET_PATTERNS: readonly RegExp[] = SECRET_DETECTORS.map(
   ({ pattern }) => pattern,
 );
+
+/**
+ * Field names whose VALUE is sensitive regardless of what the value looks like.
+ *
+ * The detectors above are value-shaped: they recognize a secret by its own text
+ * (`sk-…`, `ghp_…`, `password=…`). That works on prose and on flat `key=value`
+ * strings, but a JSON logger serializes each value in isolation, so the
+ * replacer is handed `"hunter2driveway"` with no idea it came from a field
+ * called `password`. Review proved the gap — `{"password":"hunter2driveway"}`
+ * emitted in clear, even though `json_labeled_secret` matches that exact pair
+ * when it is given the pair as *text*. The pattern was never wrong; it was
+ * never shown the key.
+ *
+ * So sensitivity is carried by the key here. A value under one of these names
+ * is redacted on the name alone, because an arbitrary passphrase, a rotated
+ * opaque token, or a bare JWT has no distinguishing shape to match.
+ *
+ * Substring semantics (`db_password`, `X-Api-Key`, `refreshToken` all hit) —
+ * over-redacting a field named for a credential is the safe direction.
+ */
+const SENSITIVE_KEY_PARTS: readonly string[] = [
+  "password",
+  "passwd",
+  "secret",
+  "token",
+  "apikey",
+  "credential",
+  "authorization",
+  "authheader",
+  "privatekey",
+  "sessionid",
+  "dsn",
+  "connectionstring",
+];
+
+/**
+ * True when a field name marks its value as sensitive.
+ *
+ * Normalizes away `_`, `-`, and case first so `api_key`, `apiKey`, `API-KEY`,
+ * and `apikey` are one check rather than four patterns.
+ *
+ * @param key The object key the value was read from.
+ */
+export function isSensitiveKey(key: string): boolean {
+  if (!key) return false;
+  const normalized = key.toLowerCase().replace(/[_-]/g, "");
+  return SENSITIVE_KEY_PARTS.some((part) => normalized.includes(part));
+}

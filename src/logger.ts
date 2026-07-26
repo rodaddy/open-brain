@@ -1,5 +1,5 @@
 import os from "node:os";
-import { SECRET_PATTERNS } from "./secret-patterns.ts";
+import { isSensitiveKey, SECRET_PATTERNS } from "./secret-patterns.ts";
 import {
   createRotatingFileSink,
   type RotatingFileSink,
@@ -26,6 +26,16 @@ function resolveLevel(): LogLevel {
 let minLevel: LogLevel = resolveLevel();
 
 /**
+ * Monotonic token identifying the most recent `setLogLevel` decision.
+ *
+ * Exists so a call can tell "my temporary widened value is still installed"
+ * from "a nested call chose a value that happens to equal it" — see the restore
+ * in `setLogLevel`. Wraps harmlessly: only equality against a captured value is
+ * ever tested, never ordering.
+ */
+let levelGeneration = 0;
+
+/**
  * Raise or lower the active log level at runtime.
  *
  * @param level One of debug, info, warn, error. An unknown value is rejected
@@ -43,6 +53,14 @@ export function setLogLevel(level: string): LogLevel {
   }
   const previous = minLevel;
   const target = next as LogLevel;
+  // Claim a generation for this call. The restore below must fire only if
+  // nothing else assigned `minLevel` in the meantime, and "did anyone assign"
+  // is not answerable by comparing VALUES: a nested sink that deliberately
+  // sets exactly the widened level is indistinguishable from the widened level
+  // never having been touched. Review proved it -- a nested `setLogLevel`
+  // during a `debug -> error` transition asked for `debug`, was told `debug`,
+  // and the process ended at `error`. An identity token has no such collision.
+  const generation = ++levelGeneration;
   // Announce through whichever gate is more permissive, so the transition is
   // never filtered by the change itself. Emitting after the swap loses the line
   // when lowering verbosity (`info` -> `warn` hides its own `info` notice), and
@@ -69,7 +87,11 @@ export function setLogLevel(level: string): LogLevel {
     // unconditional restore silently reverted that nested change AND the nested
     // call returned its own target as though it had taken effect. A later
     // decision wins.
-    if (minLevel === widened) minLevel = target;
+    //
+    // Keyed on the generation, not on the value: a nested call bumps
+    // `levelGeneration`, so "someone else already decided" is detected even
+    // when they decided on the level this call had temporarily installed.
+    if (levelGeneration === generation) minLevel = target;
   }
   // `minLevel`, not `target`: the returned value must be what is actually in
   // effect, or a reentrant change is reported as the caller's own.
@@ -297,11 +319,17 @@ const MAX_REDACT_INPUT_CHARS = 16_384;
 
 export function redactForLog(value: string): string {
   if (!value) return value;
-  const bounded =
-    value.length > MAX_REDACT_INPUT_CHARS
-      ? `${value.slice(0, MAX_REDACT_INPUT_CHARS)}…[truncated ${value.length - MAX_REDACT_INPUT_CHARS} chars]`
-      : value;
-  let redacted = bounded;
+
+  // Redact FIRST, truncate second. The original order truncated first, which
+  // manufactured the leak it was meant to bound: a DSN straddling the 16 KB
+  // boundary was cut mid-credential, so no pattern matched the surviving head
+  // and `postgres://user:supe` went out in clear. Cutting a string cannot
+  // create a secret, but it can destroy the evidence that one is present.
+  //
+  // The quadratic `PRIVATE_KEY_BLOCK_RE` risk that motivated the bound still
+  // has to be handled, so the pathological input is capped before matching --
+  // see `boundForMatching` below -- rather than by truncating every input.
+  let redacted = boundForMatching(value);
   for (const pattern of SECRET_PATTERNS) {
     const flags = pattern.flags.includes("g")
       ? pattern.flags
@@ -311,7 +339,35 @@ export function redactForLog(value: string): string {
       "[REDACTED]",
     );
   }
-  return redacted;
+  return redacted.length > MAX_REDACT_INPUT_CHARS
+    ? `${redacted.slice(0, MAX_REDACT_INPUT_CHARS)}…[truncated ${redacted.length - MAX_REDACT_INPUT_CHARS} chars]`
+    : redacted;
+}
+
+/**
+ * Neutralize the one input shape that makes redaction itself expensive.
+ *
+ * `PRIVATE_KEY_BLOCK_RE` is quadratic on repeated `-----BEGIN` markers with no
+ * matching `-----END` (measured: 625 KB -> 3.9 s of blocked event loop). That
+ * is the only measured pathology, and it is driven by the *count of unmatched
+ * BEGIN markers*, not by length — so it is bounded directly instead of by
+ * truncating every long string, which is what split credentials before.
+ *
+ * Inputs with more BEGIN markers than could plausibly be real key blocks are
+ * collapsed to a marker-free summary; everything else is matched in full.
+ */
+const MAX_PRIVATE_KEY_MARKERS = 8;
+
+function boundForMatching(value: string): string {
+  if (value.length <= MAX_REDACT_INPUT_CHARS) return value;
+  const beginMarkers = value.match(/-----BEGIN /g)?.length ?? 0;
+  const endMarkers = value.match(/-----END /g)?.length ?? 0;
+  if (beginMarkers <= MAX_PRIVATE_KEY_MARKERS || beginMarkers === endMarkers) {
+    return value;
+  }
+  // Unbalanced and marker-dense: the quadratic case. Strip the markers so the
+  // block pattern cannot backtrack, and say so in the output.
+  return `${value.replace(/-----BEGIN /g, "[BEGIN] ")}…[key-marker dense input: ${beginMarkers} unmatched markers neutralized]`;
 }
 
 /**
@@ -347,17 +403,41 @@ function serializeEntry(
   level: LogLevel,
   message: string,
 ): string {
-  const seen = new WeakSet<object>();
+  // Ancestors along the CURRENT branch, not every object ever visited. A value
+  // is circular when it is its own ancestor; a `WeakSet` that only ever grows
+  // cannot express that, and review proved the consequence -- `{a: shared, b:
+  // shared}` with one plain non-circular object referenced twice serialized as
+  // `{"a":{"id":"abc"},"b":"[Circular]"}`, silently dropping real data. Sharing
+  // one `config`/`job`/`namespace` object across two fields is ordinary, so the
+  // false positive was the common case, not the edge case.
+  //
+  // `this` is the object currently being serialized, which `JSON.stringify`
+  // binds on each replacer call. Walking up from it gives the true ancestor
+  // chain, so the set shrinks again as serialization unwinds.
+  const ancestors: object[] = [];
   try {
-    return JSON.stringify(entry, function replacer(_key, value: unknown) {
+    return JSON.stringify(entry, function replacer(this: unknown, key, value) {
+      // Drop any ancestors we have finished with: everything after `this`.
+      const holderIndex = ancestors.indexOf(this as object);
+      if (holderIndex !== -1) ancestors.length = holderIndex + 1;
+
+      // The key decides before the value's own shape does. `redactForLog`
+      // recognizes secrets by their text, which cannot work for an arbitrary
+      // passphrase or an opaque rotated token; the field it arrived under is
+      // the only signal. This is the only place the key is in scope, which is
+      // exactly why the gap existed.
+      if (isSensitiveKey(key) && value !== null && value !== undefined) {
+        return "[REDACTED]";
+      }
+
       if (typeof value === "string") return redactForLog(value);
       if (typeof value === "bigint") return value.toString();
       if (typeof value === "function" || typeof value === "symbol") {
         return `[${typeof value}]`;
       }
       if (typeof value === "object" && value !== null) {
-        if (seen.has(value)) return "[Circular]";
-        seen.add(value);
+        if (ancestors.includes(value)) return "[Circular]";
+        ancestors.push(value);
       }
       return value;
     });
