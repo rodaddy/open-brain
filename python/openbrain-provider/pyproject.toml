@@ -13,11 +13,18 @@ dependencies = [
     "openbrain-memory",
 ]
 
-[project.scripts]
-# Stable command names. These replace hook entries that hardcoded absolute
-# paths into a content-addressed `sha256-<hash>` install directory (#420);
-# a console script has no version or path embedded in it.
-ob-memory-provider = "openbrain_provider.cli_provider:main"
+# [project.scripts] is deliberately absent until PROV-9 (#418) adds
+# `cli_provider.py`. A declared entry point whose target module does not exist
+# still installs an executable shim into .venv/bin; it just dies with
+# ModuleNotFoundError when anything runs it. No lint, type, or test gate looks
+# at entry-point targets, so a broken script ships green.
+#
+# Planned, once the module lands:
+#   [project.scripts]
+#   ob-memory-provider = "openbrain_provider.cli_provider:main"
+#
+# The stable command name is the point: it replaces hook entries that hardcode
+# absolute paths into a content-addressed `sha256-<hash>` install dir (#420).
 
 [tool.uv.sources]
 openbrain-memory = { workspace = true }

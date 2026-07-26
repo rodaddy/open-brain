@@ -16,6 +16,13 @@ Skeleton only (#411). Configuration and logging exist; request parsing,
 receipts, dispatch, reflex recall, observation export, and the hook entry
 points land in #412–#419.
 
+There is deliberately **no console script yet**. The `ob-memory-provider`
+command arrives with `cli_provider.py` in PROV-9 (#418). Declaring the entry
+point early does not fail loudly — it installs a working-looking executable
+into `.venv/bin` that dies on `ModuleNotFoundError`, and no lint, type, or test
+gate reads entry-point targets. `tests/test_packaging.py` now resolves every
+declared script so that cannot ship green again.
+
 ## Layout
 
 ```
