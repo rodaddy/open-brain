@@ -1,13 +1,14 @@
 """Observability init, delegating the envelope to `rtech-obs`.
 
 This module is deliberately thin. `rtech-standards/OBSERVABILITY_CONTRACT.md`
-is normative -- "if an implementation and this document disagree, this document
-wins and the implementation is a bug" -- and it ships `rtech-obs` as the
-reference implementation precisely so nine repos do not each grow their own
-logger. An earlier revision of this package DID grow its own; it emitted
+and its `rtech-obs` package are infra's shared implementation -- a first pass,
+not settled policy -- but the reason to use them does not depend on their
+authority: a second, divergent logger in this repo is worse than a shared one
+that still has rough edges, and being an early consumer is how the rough edges
+get found. An earlier revision of this package grew its own logger; it emitted
 loguru's internal `{"text":..., "record":{...}}` shape, which has none of the
-five required top-level fields, an uppercase level, and no `host` at all. Every
-contract Loki query missed it.
+five expected top-level fields, an uppercase level, and no `host` at all. Any
+query written against the shared envelope would have missed it entirely.
 
 The one thing this package knows that `rtech-obs` cannot: **these processes are
 agent hooks, so stdout is the machine-readable return channel.** A log line on
@@ -15,22 +16,24 @@ stdout is not stray output, it is a corrupted response. `rtech-obs` defaults
 `LOG_STDOUT` to true, which is right for a service under journald and wrong
 here, so this module pins `stdout=False`.
 
-That pin alone is not sufficient, which is the subtle part. Contract §5.1 says
-an unwritable `LOG_FILE` MUST NOT be fatal, and `rtech-obs` honors it by adding
-a stdout sink when the file sink fails -- *overriding* `stdout=False`, by
-design. On a box without the `/mnt/logs` mount that default path is unwritable,
-so a hook would silently start logging onto its own return channel. Both
-behaviors are individually right; the collision is specific to hooks.
+That pin alone is not sufficient, which is the subtle part. §5.1 says an
+unwritable `LOG_FILE` must not be fatal, and `rtech-obs` honors that by adding a
+stdout sink when the file sink fails -- *overriding* `stdout=False`, by design.
+Its default log location is `/mnt/logs/services/<service>/`, and **that mount
+does not exist yet**, so today the fallback fires every time: a hook would
+silently start logging onto its own return channel. Both behaviors are
+individually reasonable; the collision is specific to processes whose stdout
+carries data.
 
-Resolved by never letting the fallback trigger: this module resolves a log file
-it can actually write, preferring the contract's location, then falling back to
-a user-writable directory before handing the path to `rtech-obs`. The file sink
-succeeds, so no stdout sink is ever added.
+Resolved by never letting the fallback trigger. `resolve_log_file` prefers the
+shared location and falls back to a writable temp directory, so the file sink
+always succeeds and no stdout sink is ever added. It needs no change when
+`/mnt/logs` is eventually provisioned -- it starts preferring the real location
+the day the mount appears.
 """
 
 from __future__ import annotations
 
-import os
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -44,24 +47,34 @@ __all__ = ["SERVICE_NAME", "configure_observability", "logger", "resolve_log_fil
 #: Catalog service name for every record this package emits.
 SERVICE_NAME = "openbrain-provider"
 
-#: Contract §5 default log location, preferred when the mount exists.
+#: Shared log location from the observability contract. Not provisioned yet, so
+#: this is aspirational today and the temp fallback is what actually runs.
 _CONTRACT_LOG_ROOT = Path("/mnt/logs/services")
 
 
-def _is_writable_dir(path: Path) -> bool:
-    """Report whether a directory exists (or can be made) and accepts writes.
+def _usable_log_dir(path: Path) -> Path | None:
+    """Return the directory if a log file can actually be written there.
+
+    Creating the directory is not proof it is usable: it can exist and still
+    reject writes, and a read-only mount fails at `mkdir` while a
+    wrong-permissions one fails at open. Both are the same answer here, so this
+    tries the real operation rather than inspecting permission bits.
 
     Args:
-        path: Directory to test.
+        path: Candidate directory.
 
     Returns:
-        True if a log file could be created there.
+        The path if a file was successfully created and removed in it,
+        otherwise None.
     """
+    probe = path / ".write-probe"
     try:
         path.mkdir(parents=True, exist_ok=True)
+        probe.touch()
+        probe.unlink()
     except OSError:
-        return False
-    return os.access(path, os.W_OK)
+        return None
+    return path
 
 
 def resolve_log_file(explicit: Path | None, *, service: str = SERVICE_NAME) -> Path:
@@ -75,25 +88,27 @@ def resolve_log_file(explicit: Path | None, *, service: str = SERVICE_NAME) -> P
         service: Service name, used in the default path.
 
     Returns:
-        A path whose parent directory accepts writes.
+        A path whose parent directory accepts writes. Falls back to the shared
+        location as a last resort, which lets `rtech-obs` report the failure in
+        its own words rather than this function inventing an error for a
+        situation the caller can do nothing about.
     """
     if explicit is not None:
         return explicit
 
-    day = datetime.now(UTC).strftime("%Y-%m-%d")
-    filename = f"{day}.jsonl"
+    filename = f"{datetime.now(UTC).strftime('%Y-%m-%d')}.jsonl"
+    shared_dir = _CONTRACT_LOG_ROOT / service
 
-    contract_dir = _CONTRACT_LOG_ROOT / service
-    if _is_writable_dir(contract_dir):
-        return contract_dir / filename
+    # Shared location first, so this starts using /mnt/logs the day it exists
+    # with no code change. Local temp dir second: anywhere writable beats
+    # rtech-obs falling back to a stdout sink, because stdout is the hook's
+    # response channel.
+    for candidate in (shared_dir, Path(tempfile.gettempdir()) / f"{service}-logs"):
+        usable = _usable_log_dir(candidate)
+        if usable is not None:
+            return usable / filename
 
-    # No /mnt/logs on this box. Anywhere writable beats the stdout fallback,
-    # because stdout is the hook's response channel.
-    fallback = Path(tempfile.gettempdir()) / f"{service}-logs"
-    if _is_writable_dir(fallback):
-        return fallback / filename
-
-    return contract_dir / filename
+    return shared_dir / filename
 
 
 def configure_observability(

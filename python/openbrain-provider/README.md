@@ -49,23 +49,26 @@ injectable in tests without touching real environment variables. The adapter
 being replaced read `process.env` at scattered call sites; that is how a
 variable ends up spelled two ways.
 
-**Logging is `rtech-obs`, not a local logger.**
-`rtech-standards/OBSERVABILITY_CONTRACT.md` is normative — *"if an
-implementation and this document disagree, this document wins and the
-implementation is a bug"* — and it ships `rtech-obs` so nine repos do not each
-grow their own logger. An earlier revision of this package grew one anyway; it
-emitted loguru's internal `{"text":…, "record":{…}}` shape, which has none of
-the five required top-level fields, an uppercase level, and no `host`. Every
-contract Loki query missed it. `observability.py` now holds only the policy
-`rtech-obs` cannot know.
+**Logging is `rtech-obs`, not a local logger.** `rtech-standards` and its
+`rtech-obs` package are infra's shared implementation — a first pass, not
+settled policy. The reason to use it does not rest on that: a second, divergent
+logger in this repo is worse than a shared one with rough edges, and being an
+early consumer is how those get found. An earlier revision of this package grew
+its own; it emitted loguru's internal `{"text":…, "record":{…}}` shape, with
+none of the five expected top-level fields, an uppercase level, and no `host`.
+Any query written against the shared envelope would have missed it.
+`observability.py` holds only the policy `rtech-obs` cannot know, and is small
+enough to replace if the shared package turns out wrong.
 
 **Nothing is written to stdout.** These are agent hooks: stdout is the
 machine-readable return channel, so a log line there is a corrupted response,
 not stray output. Two mechanisms are needed, not one. `stdout=False` handles the
-normal path; but contract §5.1 also requires that an unwritable `LOG_FILE` not
-be fatal, and `rtech-obs` honors that by adding a stdout sink — overriding
-`stdout=False`. So `resolve_log_file()` guarantees a writable path (contract
-location first, temp dir second) and that fallback never fires.
+normal path; but §5.1 also requires that an unwritable `LOG_FILE` not be fatal,
+and `rtech-obs` honors that by adding a stdout sink — overriding `stdout=False`.
+Its default location `/mnt/logs/services/` **is not provisioned yet**, so that
+fallback would fire on every run today. `resolve_log_file()` guarantees a
+writable path (shared location if present, temp dir otherwise) so it never
+does, and needs no change when the mount eventually lands.
 
 **No inline magic numbers.** Every limit is a named constant in
 `constants.py`. A limit you cannot find is a limit nobody can tune when it

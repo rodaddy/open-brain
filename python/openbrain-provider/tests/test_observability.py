@@ -12,6 +12,7 @@ from __future__ import annotations
 import io
 import json
 import sys
+import tempfile
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,7 @@ import pytest
 from openbrain_provider.config import LogConfig, ProviderConfig, load_config
 from openbrain_provider.observability import (
     SERVICE_NAME,
+    _usable_log_dir,
     configure_observability,
     logger,
     resolve_log_file,
@@ -218,3 +220,42 @@ def test_resolve_log_file_defaults_to_somewhere_writable() -> None:
     resolved.write_text("")
     assert resolved.parent.is_dir()
     assert resolved.name.endswith(".jsonl")
+
+
+def test_resolve_log_file_falls_back_when_the_shared_root_is_unwritable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # /mnt/logs is not provisioned, so this is the path that actually runs
+    # today. Pointing the shared root at a location that cannot be created
+    # proves the fallback rather than assuming it.
+    monkeypatch.setattr(
+        "openbrain_provider.observability._CONTRACT_LOG_ROOT",
+        Path("/proc/nonexistent/services"),
+    )
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
+
+    resolved = resolve_log_file(None, service="svc")
+
+    assert tmp_path in resolved.parents
+    resolved.write_text("")  # the returned path must really accept a write
+
+
+def test_resolve_log_file_prefers_the_shared_root_when_it_works(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The day /mnt/logs exists, this must start using it with no code change.
+    shared = tmp_path / "shared"
+    monkeypatch.setattr("openbrain_provider.observability._CONTRACT_LOG_ROOT", shared)
+
+    resolved = resolve_log_file(None, service="svc")
+
+    assert resolved.parent == shared / "svc"
+
+
+def test_write_probe_leaves_nothing_behind(tmp_path: Path) -> None:
+    # The probe creates a file to prove writability; leaving it would litter a
+    # log directory with junk on every hook invocation.
+    monkeypatch_dir = tmp_path / "probe-target"
+
+    assert _usable_log_dir(monkeypatch_dir) == monkeypatch_dir
+    assert list(monkeypatch_dir.iterdir()) == []
