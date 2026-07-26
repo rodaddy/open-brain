@@ -26,10 +26,10 @@ from openbrain_provider.config import LogConfig, ProviderConfig, load_config
 from openbrain_provider.observability import (
     SERVICE_NAME,
     TOP_LEVEL_FIELDS,
-    _install_signal_flush,
     _usable_log_dir,
     configure_observability,
     flush_logs,
+    install_signal_flush,
     logger,
     resolve_log_file,
 )
@@ -359,7 +359,7 @@ def test_known_contract_fields_stay_at_the_top_level(tmp_path: Path) -> None:
 #: `ready` file and sleep while the parent polled and then signalled. That
 #: handed the writer roughly ten milliseconds -- enough to finish the queue --
 #: so it reported 200/200 with the fix reverted and proved nothing. Verified:
-#: this shape gives 133/200 with `_install_signal_flush()` disabled and 200/200
+#: this shape gives 133/200 with `install_signal_flush()` not called and 200/200
 #: with it enabled.
 #:
 #: `%s` rather than str.format: the source contains dict literals, and every
@@ -367,9 +367,15 @@ def test_known_contract_fields_stay_at_the_top_level(tmp_path: Path) -> None:
 _SIGTERM_PROBE = """
 import os, signal, sys
 from openbrain_provider.config import load_config
-from openbrain_provider.observability import configure_observability, logger
+from openbrain_provider.observability import (
+    configure_observability,
+    install_signal_flush,
+    logger,
+)
 
 configure_observability(load_config({"LOG_LEVEL": "info", "LOG_FILE": sys.argv[1]}))
+# An entrypoint opts in; the logging module never claims the signal itself.
+install_signal_flush()
 for i in range(%s):
     logger.info("record", record_index=i)
 os.kill(os.getpid(), signal.SIGTERM)
@@ -448,7 +454,7 @@ def test_a_caller_installed_signal_handler_is_not_replaced() -> None:
     previous = signal.getsignal(signal.SIGTERM)
     signal.signal(signal.SIGTERM, caller_handler)
     try:
-        _install_signal_flush()
+        install_signal_flush()
 
         assert signal.getsignal(signal.SIGTERM) is caller_handler
     finally:

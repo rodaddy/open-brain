@@ -50,6 +50,7 @@ __all__ = [
     "TOP_LEVEL_FIELDS",
     "configure_observability",
     "flush_logs",
+    "install_signal_flush",
     "logger",
     "resolve_log_file",
 ]
@@ -233,18 +234,24 @@ def flush_logs() -> None:
     logger.remove()
 
 
-def _install_signal_flush() -> None:
+def install_signal_flush() -> None:
     """Drain the log queue on SIGTERM and SIGINT before exiting.
 
-    loguru registers an `atexit` hook, which covers a clean exit: measured 200
-    of 200 records surviving. It does NOT cover a signal. Measured on SIGTERM
-    with no handler: **130 of 200 records reached disk**, the missing 70 being
-    the newest ones still queued.
+    **Call this from an entrypoint, not from library code.** It is deliberately
+    opt-in: `configure_observability` does not call it. Installing a
+    process-global signal handler is the entrypoint's decision, because the
+    entrypoint is the only layer that knows whether something else already owns
+    shutdown. `b1x-message-coordinator` -- a long-running loguru service that has
+    never had a logging problem -- puts its `signal_handler` in each service's
+    `__main__` and keeps the logging module free of signals. Same split here.
 
-    That is the wrong way round for a hook. The records worth having are the
-    ones written just before something tore the process down, and those are
-    exactly the ones sitting in the queue. A hook killed mid-session would lose
-    its own explanation.
+    Why a hook needs it when that service does not: loguru's `atexit` hook drains
+    the queue on a **clean** exit, which is how a daemon shutting down through
+    its own handler exits. Measured, with plain `enqueue=True` and no handler at
+    all: clean exit 200/200, abrupt SIGTERM ~100/200. A daemon never hits the
+    second case. A hook is a short-lived process the runtime can kill mid-run, so
+    it hits exactly that case, and the records it loses are the newest ones --
+    the ones explaining whatever killed it.
 
     Only installs a handler when none is set, and chains to any previous one, so
     this never silently overrides a caller's own shutdown logic. Signal handlers
@@ -333,8 +340,7 @@ def configure_observability(
         # channel, the one place a log line must never land.
         logger.add(sys.stderr, level=level, format=sink_format, enqueue=True)
 
-    # After the sink exists, so a signal arriving mid-configure drains a real
-    # queue rather than a sink that has not been attached yet.
-    _install_signal_flush()
-
+    # NOTE: no signal handler is installed here. Configuring logging must not
+    # claim a process-global signal on the caller's behalf -- see
+    # `install_signal_flush`, which an entrypoint calls explicitly.
     return log_file
