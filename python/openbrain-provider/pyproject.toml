@@ -1,0 +1,64 @@
+[project]
+name = "openbrain-provider"
+version = "0.1.0"
+description = "Runtime lifecycle provider for Open Brain: session start, capture, checkpoint, reflex, and the agent hooks that drive them."
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    # The one logging dependency, per the Development observability standard.
+    "loguru>=0.7",
+    # The provider dispatches into this package's CLI and imports its domain
+    # vocabulary rather than redeclaring it (#412). Workspace member, resolved
+    # from source -- see [tool.uv.sources].
+    "openbrain-memory",
+]
+
+[project.scripts]
+# Stable command names. These replace hook entries that hardcoded absolute
+# paths into a content-addressed `sha256-<hash>` install directory (#420);
+# a console script has no version or path embedded in it.
+ob-memory-provider = "openbrain_provider.cli_provider:main"
+
+[tool.uv.sources]
+openbrain-memory = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "mypy>=1.10",
+    "pytest>=8.0",
+    "ruff>=0.8",
+]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+warn_unused_ignores = true
+
+[tool.ruff]
+target-version = "py313"
+line-length = 88
+
+[tool.ruff.lint]
+# D = pydocstyle. Required for new Python per REPO_BOOTSTRAP.md: module (D100),
+# package (D104), and class/function (D101-D103) docstrings are gate failures,
+# not warnings.
+select = ["E", "F", "I", "W", "UP", "B", "D"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+# Tests document themselves through their names; a docstring on every test
+# function is noise that trains people to write empty ones.
+"tests/*" = ["D100", "D103"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/openbrain_provider"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

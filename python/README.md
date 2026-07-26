@@ -7,6 +7,7 @@ virtual environment at `python/.venv`.
 | Member | What it is |
 |---|---|
 | `openbrain-memory/` | Python client for the remote Open Brain memory service. |
+| `openbrain-provider/` | Runtime lifecycle provider: session start, capture, checkpoint, reflex. |
 
 ## Why a workspace
 
@@ -23,13 +24,20 @@ matching the `fleet-bus` layout.
 
 ```bash
 cd python
-uv sync                       # resolve the whole workspace
+uv sync --all-packages        # resolve AND install every member
 
 # gates, from the workspace root
 uv run --package openbrain-memory ruff check openbrain-memory/src openbrain-memory/tests
 uv run --package openbrain-memory mypy openbrain-memory/src/openbrain_memory
 uv run --package openbrain-memory pytest openbrain-memory/tests -q
 ```
+
+**Use `--all-packages`.** Bare `uv sync` at the workspace root syncs the root
+package only, and it *uninstalls* every member's dependencies and dev group to
+match — mypy, pytest, ruff, and the members themselves all disappear from
+`.venv`. It reports this as an ordinary "Uninstalled 13 packages" line, so the
+next gate command fails with a missing-tool error that looks nothing like its
+cause.
 
 Running the same commands from inside a member directory also works and is what
 CI does (`working-directory: python/openbrain-memory`, `uv run --python 3.13`).
