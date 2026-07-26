@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import re
 import subprocess
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -49,6 +49,15 @@ def _extract_quoted_block(source: str, anchor: str) -> set[str]:
     the thing it guards, and a malformed anchor fails loudly as an empty set
     rather than silently matching too much.
     """
+    if anchor not in source:
+        # A rename upstream is the likely cause, and a bare
+        # `ValueError: substring not found` from `str.index` does not say so.
+        # It fails either way -- the point of naming it is that the next reader
+        # knows the declaration moved rather than the vocabulary changed.
+        pytest.fail(
+            f"anchor {anchor!r} not found; the declaration was renamed or moved. "
+            "Update this guard to the new spelling -- do not delete the check."
+        )
     start = source.index(anchor)
     tail = source[start + len(anchor) :]
     end = min(
@@ -58,6 +67,17 @@ def _extract_quoted_block(source: str, anchor: str) -> set[str]:
     if end == -1:  # pragma: no cover - only on a malformed source file
         pytest.fail(f"no closing bracket after anchor: {anchor!r}")
     return set(re.findall(r'"([a-z_]+)"', tail[:end]))
+
+
+def _extract_union(source: str, anchor: str) -> set[str]:
+    """Return the quoted members of a TypeScript union starting at `anchor`."""
+    if anchor not in source:
+        pytest.fail(
+            f"anchor {anchor!r} not found; the union was renamed or moved. "
+            "Update this guard to the new spelling -- do not delete the check."
+        )
+    start = source.index(anchor)
+    return set(re.findall(r'"([a-z_]+)"', source[start : source.index(";", start)]))
 
 
 def _drift(surface: str, found: set[str]) -> str:
@@ -119,9 +139,7 @@ def test_mcp_tool_schema_matches_python() -> None:
 def test_tiering_union_matches_python() -> None:
     """`src/tiering.ts` `EventType` matches; it decides what gets promoted."""
     source = (REPO_ROOT / "src" / "tiering.ts").read_text()
-    start = source.index("export type EventType")
-    union = source[start : source.index(";", start)]
-    found = set(re.findall(r'"([a-z_]+)"', union))
+    found = _extract_union(source, "export type EventType")
     assert found == EVENT_TYPES, _drift("tiering EventType", found)
 
 
@@ -141,9 +159,7 @@ def test_typescript_server_union_type_matches_python() -> None:
     rather than a silent write, which is why it is checked separately.
     """
     source = (REPO_ROOT / "src" / "agent-memory.ts").read_text()
-    start = source.index("export type MemoryEventType")
-    union = source[start : source.index(";", start)]
-    found = set(re.findall(r'"([a-z_]+)"', union))
+    found = _extract_union(source, "export type MemoryEventType")
     assert found == EVENT_TYPES, _drift("MemoryEventType union", found)
 
 
@@ -185,12 +201,33 @@ def test_database_constraint_matches_python() -> None:
     )
 
 
+def _is_test_path(path: str) -> bool:
+    """True for a test file, matched on path COMPONENTS, not substrings.
+
+    `"test" in path` was the first version and it silently excluded
+    `latest.ts`, `manifest.ts`, and `attestation.ts` from the sweep below --
+    every one of which could hold a real declaration. A guard whose filter
+    hides files is worse than no guard, because it reports success over the
+    gap. Matched on segment boundaries instead.
+    """
+    parts = PurePosixPath(path).parts
+    return any(
+        part in {"tests", "__tests__"} or part.startswith(("test_", "test."))
+        for part in parts
+    ) or PurePosixPath(path).name.endswith((".test.ts", "_test.py"))
+
+
 def test_vocabulary_is_declared_exactly_where_expected() -> None:
-    """No fifth copy appears without this guard being updated to cover it.
+    """No seventh copy appears without this guard being updated to cover it.
 
     The point of the slice is one definition; a new redeclaration somewhere
     else would be invisible to the assertions above, which only compare the
     surfaces they already know about.
+
+    Scope note: `git grep` searches TRACKED files, so a brand-new untracked
+    file is not seen. That is the right boundary for CI (which runs on
+    committed code) but means this cannot catch a declaration mid-edit before
+    it is staged.
     """
     known = {
         "python/openbrain-memory/src/openbrain_memory/agent.py",
@@ -210,7 +247,7 @@ def test_vocabulary_is_declared_exactly_where_expected() -> None:
     found = {
         line
         for line in result.stdout.splitlines()
-        if line and "test" not in line and "_tmp" not in line
+        if line and not _is_test_path(line) and not line.startswith("_tmp/")
     }
     unexpected = found - known
     assert not unexpected, (
