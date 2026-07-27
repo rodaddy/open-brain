@@ -45,10 +45,13 @@
 > Refresh these copies with:
 > `bun /Volumes/ThunderBolt/Development/_ob/scripts/sync-repo-standards.ts open-brain`
 >
-> **When this repo is up to standard, delete this whole block** and leave the
-> one-line marker directly below it in place. It is a work item, not
-> documentation. The marker is what stops this banner coming back on the next
-> sync; a later rule change will raise a new one.
+> **When this repo is up to standard, close this work item by running:**
+> `bun /Volumes/ThunderBolt/Development/_ob/scripts/sync-repo-standards.ts --ack open-brain`
+>
+> That removes this block and leaves the one-line marker below it in place. Do
+> not hand-delete it: dropping the marker makes this banner return on the next
+> sync, and deleting past the end marker eats the top of this file. The marker
+> is what stops the banner coming back; a later rule change raises a new one.
 <!-- /STANDARDS-SYNC-BANNER -->
 <!-- standards-acknowledged: 44f96e3f7d04 -->
 
