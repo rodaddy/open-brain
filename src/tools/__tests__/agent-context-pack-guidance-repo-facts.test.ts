@@ -201,7 +201,7 @@ describe("defined empty and degraded states", () => {
     const pool = {
       query: async (sql: string) => {
         if (sql.includes("candidate_type")) {
-          throw new Error("connection reset to 10.71.20.49");
+          throw new Error("connection reset to db.internal.invalid");
         }
         return { rows: [] };
       },
@@ -217,7 +217,7 @@ describe("defined empty and degraded states", () => {
         reason: "database_unavailable",
       });
       // No dependency/error detail leaks into the envelope.
-      expect(raw).not.toContain("10.71.20.49");
+      expect(raw).not.toContain("db.internal.invalid");
       expect(raw).not.toContain("connection reset");
     } finally {
       await cleanup();
