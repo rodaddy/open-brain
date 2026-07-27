@@ -21,6 +21,15 @@ in the Open Brain corpus before this review.
 | License | **MIT** (read from `LICENSE`: "Copyright (c) 2026 Garry Tan") |
 | Code reuse | **No.** Idea only. MIT would permit code reuse with attribution; we are not exercising that. |
 
+### How this review was searched
+
+The first two drafts walked the tree by hand and missed things twice. The clones
+are indexed as one `research` qmd index — `qmd search "cycle lock" --index
+research` returns cross-repo hits in ~150ms, and `-c gbrain` narrows to one
+project. Use it; see the AGENTS.md bullet. The index lives in
+`~/.cache/qmd/research.sqlite`, never inside a checkout, so the clones stay
+pristine for `git pull`.
+
 ### A note on evidence quality
 
 gbrain's `README.md` is marketing-shaped — benchmark numbers, "strategic moat",
@@ -240,6 +249,10 @@ tokens. Nothing here informs our namespace security boundary.
    locks dying at a pooler) is still worth knowing.
 3. **Lock requirement declared per phase, derived from what that phase writes.**
    This is the part of gbrain's concurrency design we do not have.
+3b. **Lock granularity is a property of the storage engine, not the work** — the
+   same phase may need a coarser lock on one backend than another. Not
+   applicable to us today (one engine); recorded because it is invisible until
+   it corrupts something, and their test found it the hard way.
 4. **Heartbeat-aware steal grace** — a live-but-starved holder must not be stolen
    from; a dead one must eventually be reclaimed.
 5. **Cost cap *and* walltime cap** — two ceilings bounding different failure modes.
@@ -285,6 +298,8 @@ avoided that by construction and said so in a comment.
 | Stale holder | TTL + heartbeat steal grace + liveness class | `lease_expires_at` + attempt-capped dead-letter |
 | Per-phase requirement | `NEEDS_LOCK_PHASES` set | n/a — no phases exist yet |
 | Read-only skip | yes | n/a |
+| Granularity | **per source** (`cycleLockIdFor(sourceId?)`) | per job kind + idempotency key |
+| Granularity varies by engine | **yes** — global file lock ahead of the per-source DB lock under PGLite | no — one engine |
 
 **Verdict: our shape PRESERVES the property, by a different and arguably
 stronger mechanism.** Corrected 2026-07-27 — the first draft of this review
@@ -311,6 +326,54 @@ phase, whether it writes and therefore whether it needs the lock
 so there is nothing yet to declare. When DREAM adds phases, that per-phase
 write-declaration is the part to carry over — not the locking primitive, which
 we already have.
+
+### Borrow B, second correction — lock granularity is engine-dependent
+
+Added 2026-07-27 after the `research` qmd index surfaced two gbrain test files
+that the first two drafts of this review never opened. Recorded as a separate
+correction rather than folded in silently, because the pattern matters: this is
+the second time this review understated what existed, and both times the cause
+was the same — I searched narrowly, found nothing, and wrote down absence.
+
+Their lock is **per source**, not one global cycle lock
+(`test/cycle-lock-per-source.test.ts:1–40`). `cycleLockIdFor(sourceId?)` returns
+the legacy `gbrain-cycle` for `undefined` and `gbrain-cycle:<id>` otherwise. The
+test asserts distinct sources never share a lock row — its comment says "the
+whole point" — and separately that legacy and per-source IDs cannot collide, so
+old and new binaries coexist through a deploy window.
+
+The part worth carrying is what they do *under a different engine*
+(`test/cycle-pglite-lock-ordering.serial.test.ts:1–23`). PGLite is single-writer
+at the process layer, so per-source DB lock IDs alone would let two cycles for
+different sources run concurrently and **corrupt the single-writer invariant**.
+Their defense: acquire the global file lock (`~/.gbrain/cycle.lock`, no source
+suffix) *before* the per-source DB lock when `engine.kind === 'pglite'`, release
+the DB lock if the file lock fails, and release both in reverse order on exit.
+Postgres skips the file lock entirely, because there per-source IDs are full
+granularity.
+
+So the rule is: **the correct lock granularity is a property of the storage
+engine, not of the work.** The same phase needs a coarser lock on one engine
+than another. They found this the hard way (the test is labelled a regression,
+"codex r2 P0-C + P0-D") and pinned it with a test that spins a real engine.
+
+**Does this change our verdict? No — but it narrows what "we have it" means.**
+Our queue is per `(job_kind, idempotency_key)`, which is granularity by *work
+identity*. We run one engine, so we have never needed the engine-dependent
+axis, and adding it now would be speculative.
+
+It becomes live the moment either assumption breaks: a second storage backend,
+or a DREAM phase whose safe concurrency differs from its job identity — for
+example, two `graduate` jobs for different namespaces that are independent at
+the queue level but contend on a shared tier-count or ordering invariant. That
+is exactly the shape of bug their PGLite test exists to catch, and it would not
+be caught by an idempotency key.
+
+**Open, not answered:** whether any planned DREAM phase has a correctness
+invariant that spans jobs the queue considers independent. This review did not
+check; it is a question for #389 rather than a finding.
+
+### The PgBouncer note
 
 The PgBouncer detail (`cycle.ts:33–34`) is still worth recording:
 `pg_try_advisory_lock` is session-scoped and **silently** stops working through a
