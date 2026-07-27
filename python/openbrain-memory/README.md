@@ -114,9 +114,6 @@ export OPENBRAIN_BASE_URL="http://10.71.1.21:3100"
 export OPENBRAIN_ALLOW_INSECURE_HTTP="1"
 ```
 
-Do not use retained pre-cutover LXC snapshots such as `10.71.20.49` for current
-host canaries.
-
 For trusted lab-only HTTP endpoints, such as `http://10.71.1.21:3100`, opt in
 explicitly:
 
