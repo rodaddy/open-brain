@@ -1,42 +1,5 @@
 # Local Clone Dogfood
 
-## RESTART THE LOCAL CLONE (start here)
-
-If you saw `OB ✗ gate unavailable`, or
-`Open Brain lane memory unavailable`, or nothing is listening on
-`127.0.0.1:3100`, the clone is simply not running. **Do not create a clone, do
-not write a new `.env`, and do not invent tokens — they already exist.** Run:
-
-```zsh
-cd /Volumes/ThunderBolt/Development/open-brain
-set -a && source /Volumes/ThunderBolt/open-brain-local/local-clone.env && set +a
-bun run scripts/local-clone.ts --verify   # read-only preflight, must pass first
-bun run scripts/local-clone.ts --start
-```
-
-Then confirm: `curl -s http://127.0.0.1:3100/health` returns
-`"status":"healthy"` with `database.connected` and `embedding.connected` true.
-
-Facts worth knowing before you go looking for them:
-
-- The config is `/Volumes/ThunderBolt/open-brain-local/local-clone.env` (mode
-  600). It already holds the DB target and all six auth tokens.
-- The repo `.env` is **not** used for the local clone. Ignore it here.
-- `AUTH_TOKEN_USER_RICO` in that file is the same token the Claude memory
-  adapter sends, which is what makes `OB ✓ gate passed` work.
-- The clone DB is `open_brain_local_20260724`, owner `open_brain_local_clone`,
-  on local Postgres 18.
-- The MLX embedding server on `127.0.0.1:8791` must be up; the preflight fails
-  loudly if it is not.
-- Only two hosts are ever valid: this machine for dev, core01 when dev is done.
-- The launcher is the supported path. Starting `src/index.ts` by hand skips the
-  preflight that proves you are attached to the clone and not another database.
-
-The rest of this document is for **creating or refreshing** a clone from a
-backup set. You do not need it to restart one.
-
----
-
 This runbook creates and operates a loopback-only Open Brain clone from one
 encrypted, verified backup set. It is an operator procedure, not replication:
 the launcher never creates or drops a database, rotates tokens, reads a
