@@ -53,7 +53,7 @@
 > sync, and deleting past the end marker eats the top of this file. The marker
 > is what stops the banner coming back; a later rule change raises a new one.
 <!-- /STANDARDS-SYNC-BANNER -->
-<!-- standards-acknowledged: 44f96e3f7d04 -->
+<!-- standards-acknowledged: 4792c438c2f2 -->
 
 # Open Brain
 
@@ -91,7 +91,9 @@ Repo-specific rules below this line override the copies when stricter.
 - **Database:** PostgreSQL 18 + pgvector (halfvec 768)
 - **Embeddings:** Any OpenAI-compatible endpoint via `EMBEDDING_BASE_URL` (prod: local MLX server on 127.0.0.1:8791, `embeddinggemma-300m-8bit`). Hosted prod sets `EMBEDDING_WATCHDOG_RESTART_SCRIPT` so repeated provider failures bounce the local MLX embedding daemon.
 - **Auth:** Per-consumer Bearer tokens (admin, agent, discord, ob-admin, promoter, readonly)
-- **Deploy:** core01 Mac Mini via launchd `com.rico.open-brain` (10.71.1.21:3100). Source lives in `/Volumes/ThunderBolt/Development/open-brain`; the running app lives in `/Volumes/ThunderBolt/open-brain/app`; qmd runtime/index lives in `/Volumes/ThunderBolt/qmd`. LXC 208 decommissioned 2026-06-11; its Postgres (10.71.20.49) retained as a pre-cutover snapshot.
+- **Deploy:** core01 Mac Mini via launchd `com.rico.open-brain` (10.71.1.21:3100). Source lives in `/Volumes/ThunderBolt/Development/open-brain`; the running app lives in `/Volumes/ThunderBolt/open-brain/app`; qmd runtime/index lives in `/Volumes/ThunderBolt/qmd`.
+- **Hosts — there are exactly two.** This machine while developing, and core01 when the dev work is done. No other database or service host belongs to this project. Retired LXC hosts may still answer on the network and still hold old Open Brain data; that does not make them valid. Do not point config, docs, canaries, or tooling at one, and do not treat a successful connection as evidence a host is in scope.
+- **Retired hosts are out of scope, not worthless.** Earlier Open Brain attempts left databases that still hold real thinking — design specs, SOPs, and decisions that predate the current epics and were never carried forward as reasoning. Leave them alone: do not connect, query, migrate, or drop anything. They are not this repo's data, and reading them is not part of any task here. If a question genuinely needs that history, it is an explicit, operator-approved archaeology task with its own scope — never a side quest inside other work. The default is: this project does not touch them.
 
 ## Commands
 
