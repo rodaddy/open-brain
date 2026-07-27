@@ -234,9 +234,12 @@ tokens. Nothing here informs our namespace security boundary.
 
 1. **One-shot and scheduler as separate commands over one shared primitive** — so
    "what maintenance means" has exactly one definition.
-2. **A TTL cycle lock in a table row, not a session-scoped advisory lock** —
-   because the session-scoped kind dies at the connection pooler.
+2. ~~A TTL cycle lock in a table row~~ — **not borrowed; we already have a
+   pooler-safe equivalent** (`FOR UPDATE SKIP LOCKED` + leases). Kept in the
+   list as a recorded non-borrow: the hazard it avoids (session-scoped advisory
+   locks dying at a pooler) is still worth knowing.
 3. **Lock requirement declared per phase, derived from what that phase writes.**
+   This is the part of gbrain's concurrency design we do not have.
 4. **Heartbeat-aware steal grace** — a live-but-starved holder must not be stolen
    from; a dead one must eventually be reclaimed.
 5. **Cost cap *and* walltime cap** — two ceilings bounding different failure modes.
@@ -274,29 +277,47 @@ avoided that by construction and said so in a comment.
 
 ### Borrow B — concurrency control
 
-| | gbrain | Open Brain |
+| | gbrain | Open Brain (`src/maintenance-queue.ts`) |
 |---|---|---|
-| Mechanism | `gbrain_cycle_locks` row + 30-min TTL | none found |
-| Pooler-safe | yes, by design (`cycle.ts:33–34`) | n/a |
-| Per-phase requirement | `NEEDS_LOCK_PHASES` set | n/a |
-| Stale holder | TTL + heartbeat steal grace + liveness class | n/a |
+| Mechanism | `gbrain_cycle_locks` row + 30-min TTL | row lease + `FOR UPDATE SKIP LOCKED` (line 440) |
+| Pooler-safe | yes, by design (`cycle.ts:33–34`) | yes — transaction-scoped, not session-scoped |
+| No stacking | one job per interval, idempotency key | `ON CONFLICT (job_kind, idempotency_key) DO NOTHING` (line 370) |
+| Stale holder | TTL + heartbeat steal grace + liveness class | `lease_expires_at` + attempt-capped dead-letter |
+| Per-phase requirement | `NEEDS_LOCK_PHASES` set | n/a — no phases exist yet |
 | Read-only skip | yes | n/a |
 
-**Verdict: we have no equivalent, and that is the finding.** Today it is
-harmless — nothing schedules our maintenance, so nothing can race. The moment
-DREAM gains a scheduler, two overlapping runs of a mutating sweep become
-possible, and `graduateLaneEvent` is exactly the kind of promote-and-mark
-operation that double-runs badly.
+**Verdict: our shape PRESERVES the property, by a different and arguably
+stronger mechanism.** Corrected 2026-07-27 — the first draft of this review
+said "none found," which was wrong. It was written after searching for a *cycle
+lock* and not finding one, rather than searching for what we actually have. The
+repo-search standard (`_DOCS/STANDARDS-repo-search.md`) names this exact
+failure; the finding surfaced within minutes of using the index.
 
-The PgBouncer detail (`cycle.ts:33–34`) is worth carrying forward verbatim:
+The comparison worth drawing is that both projects converged on **idempotency
+keys to stop slow runs stacking** — gbrain at `autopilot.ts:5–11`, us at
+`maintenance-queue.ts:370`. Neither borrowed from the other. That convergence is
+a stronger signal that it is the right primitive than either instance alone.
+
+Where the mechanisms differ, ours is better suited: `FOR UPDATE SKIP LOCKED` is
+transaction-scoped, so it survives a transaction pooler for the same reason
+gbrain's table row does, without needing a TTL heartbeat or a liveness
+classifier. gbrain needs those because a *cycle* is long-running and
+externally-launched; a queue lease with an expiry and an attempt cap covers the
+same ground for a worker-drained job.
+
+**What we genuinely lack is the per-phase dimension.** gbrain declares, per
+phase, whether it writes and therefore whether it needs the lock
+(`NEEDS_LOCK_PHASES`, `cycle.ts:272–309`). We have one substrate and no phases,
+so there is nothing yet to declare. When DREAM adds phases, that per-phase
+write-declaration is the part to carry over — not the locking primitive, which
+we already have.
+
+The PgBouncer detail (`cycle.ts:33–34`) is still worth recording:
 `pg_try_advisory_lock` is session-scoped and **silently** stops working through a
-transaction pooler. That is a bug you ship, not one you catch locally. Recording
-it here is cheaper than rediscovering it in production.
-
-**UNVERIFIED:** whether our deployment sits behind a transaction pooler. This
-review did not check. It determines whether the advisory-lock approach is
-available to us at all, and should be settled before anyone picks a locking
-primitive.
+transaction pooler. That is a bug you ship, not one you catch locally. It is now
+a hazard to avoid rather than a decision to make — we already use
+`FOR UPDATE SKIP LOCKED`, which is transaction-scoped and immune. The note
+matters if anyone ever proposes "just take an advisory lock" as a simplification.
 
 ### Borrow C — autonomy boundary
 
@@ -361,9 +382,10 @@ Entered in `ATTRIBUTION.md`:
 
 ## Open questions this review did not settle
 
-1. **Is our deployment behind a transaction pooler?** Determines whether
-   `pg_try_advisory_lock` is usable at all, and therefore which locking primitive
-   DREAM should specify. Not checked.
+1. ~~Is our deployment behind a transaction pooler?~~ **Moot.** We use
+   `FOR UPDATE SKIP LOCKED`, which is transaction-scoped and pooler-safe either
+   way. The question only mattered under the false premise that we had no
+   locking primitive.
 2. **Does any DREAM phase modify something governing its own future behavior?**
    If yes, `dry_run` alone is the wrong guard — Borrow C applies.
 3. **Do manual `tier_lane` and a future scheduled sweep share one primitive?**
