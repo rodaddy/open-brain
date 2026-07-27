@@ -91,9 +91,7 @@ Repo-specific rules below this line override the copies when stricter.
 - **Database:** PostgreSQL 18 + pgvector (halfvec 768)
 - **Embeddings:** Any OpenAI-compatible endpoint via `EMBEDDING_BASE_URL` (prod: local MLX server on 127.0.0.1:8791, `embeddinggemma-300m-8bit`). Hosted prod sets `EMBEDDING_WATCHDOG_RESTART_SCRIPT` so repeated provider failures bounce the local MLX embedding daemon.
 - **Auth:** Per-consumer Bearer tokens (admin, agent, discord, ob-admin, promoter, readonly)
-- **Deploy:** core01 Mac Mini via launchd `com.rico.open-brain` (10.71.1.21:3100). Source lives in `/Volumes/ThunderBolt/Development/open-brain`; the running app lives in `/Volumes/ThunderBolt/open-brain/app`; qmd runtime/index lives in `/Volumes/ThunderBolt/qmd`.
-- **Hosts:** There are exactly two. This machine while developing, and core01 when the dev work is done. No other database or service host is valid for Open Brain — do not reintroduce retired LXC addresses.
-- **Local dogfood clone:** If you see `OB ✗ gate unavailable`, or nothing is listening on `127.0.0.1:3100`, the local clone is just not running. Read the restart section at the top of `docs/local-clone-dogfood.md` and run `bun run scripts/local-clone.ts --verify && bun run scripts/local-clone.ts --start` after sourcing `/Volumes/ThunderBolt/open-brain-local/local-clone.env`. The config and all six auth tokens already exist in that file — do not write a new `.env` or generate tokens, and do not use the repo `.env` for the clone.
+- **Deploy:** core01 Mac Mini via launchd `com.rico.open-brain` (10.71.1.21:3100). Source lives in `/Volumes/ThunderBolt/Development/open-brain`; the running app lives in `/Volumes/ThunderBolt/open-brain/app`; qmd runtime/index lives in `/Volumes/ThunderBolt/qmd`. LXC 208 decommissioned 2026-06-11; its Postgres (10.71.20.49) retained as a pre-cutover snapshot.
 
 ## Commands
 
