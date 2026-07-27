@@ -78,8 +78,8 @@ of vendor source never enters our git history. Read-only reference material.
 
 | Project | Review | State |
 |---|---|---|
-| graphiti | `graphiti.md` | not started |
-| cognee | `cognee.md` | not started |
+| graphiti | `graphiti.md` | **done** — borrow verified correct, half-dormant |
+| cognee | `cognee.md` | **done** — one confirmed shape mismatch (PreCompact direction) |
 | gbrain | `gbrain.md` | not started — never examined; 0 references in the corpus |
 | honcho | `honcho.md` | not started — 174 corpus references, AGPL, read-only |
 | mem0 | `mem0.md` | not started — prior finding was cautionary, needs re-verification |
