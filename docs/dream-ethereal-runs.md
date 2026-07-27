@@ -168,14 +168,88 @@ not design constraints that slow development now.
 1. **Does the ethereal candidate table adopt the `zz_test_candidate_memory`
    shape** as-is, or with changes? (`preference` in the type check is the part
    most in question, given finding 1 above.)
-2. **What is "good enough to promote"?** Review is currently a human judging
-   sampled rows. Whether that scales past a few runs is unresolved, and it is the
-   real bottleneck at 100 runs — not compute.
+2. ~~What is "good enough to promote"?~~ **ALREADY DECIDED 2026-07-24.** Filing
+   this as open was an error — see "Promotion criteria: already designed" below.
 3. **What happens to the ten existing `zz_test_*` tables?** Adopt, migrate, or
    drop. They are undocumented either way today.
 4. **Do runs share embeddings?** Re-embedding identical content across 100 runs
    is wasteful; a shared content-hash-keyed embedding cache outside the run
    schemas would avoid it.
+
+## Promotion criteria: already designed
+
+**This was settled 2026-07-24 as R3 in `docs/code-brain-design.md`.** It is not
+an open question and must not be re-derived. The doc is currently *reverted* —
+it merged as `75a85a5`, was reverted by `39e591e` in the #434 pull-back, and
+survives at commit `a659c4a`. Read it with:
+
+```bash
+git show a659c4a:docs/code-brain-design.md
+```
+
+Redoing that revert properly is outstanding work, tracked below.
+
+### The rule: precedence, not scoring
+
+| Tier | Source | Rule |
+|---|---|---|
+| **canon** | epic / issue / ratified decision doc | overrules |
+| **decided** | an explicit Rico decision | strong |
+| **observed** | what a session did or concluded | weak |
+
+A session finding can **never** outrank canon, no matter how recent or how
+repeated. It can only be *flagged as contradicting* canon — an operator
+question, never an automatic override.
+
+### Why scoring cannot work, in the design's own words
+
+Every other axis — decay, reinforcement, recency — asks only *how fresh* or
+*how repeated*. Under those alone, **drift is working as designed**:
+
+1. plan says X
+2. session infers Y, plausibly
+3. Y is captured
+4. next session recalls Y — newer, now repeated
+5. Y reinforces; X sits still and ages
+6. fifty sessions later Y has beaten X on every axis OB measures
+
+> Step 6 is the bug. The fix is not better detection — it is **precedence**.
+
+### Consequences for this design
+
+- **Authority is known at write time from the source, so it is Light work — no
+  model.** That closes the open design question in #390: the tag is a
+  provenance lookup at ingest, not a judgement.
+- **"Good enough to promote" is not a review-throughput problem.** I had filed
+  it as a human-judgement bottleneck at 100 runs. It is a provenance lookup.
+- **North star is the issue tracker, not published docs.** Issues carry
+  hierarchy, state, and linkage; a doc stays canon until someone remembers to
+  unpublish it. Authority flows down `epic → issue → PR/commit → session`;
+  evidence flows up. Forge-neutral via `source_kind` + `external_id`.
+- Reinforcement bumps `last_seen_at`, **never** `occurred_at`, and can never
+  resurrect an expired row. Repeated assertion of an expired fact is an
+  **operator alarm** — agents are running on stale context.
+
+### Why this was re-derived, and how to stop it happening again
+
+I filed "what is good enough to promote" as an open question in the first draft
+of this document. It had been answered a month prior. The retrieval chain that
+failed:
+
+1. The doc is not in the working tree (reverted), so `.qmd` — which indexes one
+   checkout — cannot see it. This is the **single-checkout blindness** already
+   written up in `docs/qmd-ob-layered-recall.md` (R4), hitting the person who
+   wrote it.
+2. Open Brain *did* have the pointer, in a 2026-07-25 correction naming the
+   file, the line count, and the commit. I read it earlier in the same session
+   and did not act on it.
+3. OB has also already named the meta-failure: *"DIDNT WE ALREADY DESIGN THAT —
+   the most repeated agent failure across sessions... ~15 occurrences. It is an
+   AGENT RETRIEVAL failure, not a memory-system failure."*
+
+The lesson is not "search harder." It is that **a reverted or unmerged design is
+invisible to every working-tree tool**, so OB is the only thing that can find
+it, and OB must be asked *first* — not after a tree search comes back empty.
 
 ## Relationship to open issues
 
@@ -190,3 +264,11 @@ not design constraints that slow development now.
 - **#389 DREAM epic** — the residual gap is 3,118 turns captured, 0 distilled,
   and no consumer of `ob_raw_turns` in `src/`. Ethereal runs are how that
   consumer gets built without risking the corpus.
+- **#408 code-brain design (MERGED then REVERTED)** — carries R3, the promotion
+  criteria this whole design depends on. Merged `75a85a5`, reverted `39e591e`
+  in the #434 pull-back pending real verification. **Redoing it properly is
+  outstanding**, and until it lands, the authority model exists only at commit
+  `a659c4a` where no working-tree tool can see it.
+- **#390 DREAM-1** — R3 answers its open design question: authority is a
+  write-time provenance lookup from the source, model-free, which is exactly
+  Light-stage work.
