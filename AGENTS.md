@@ -103,6 +103,33 @@ Repo-specific rules below this line override the copies when stricter.
 - **Hosts — there are exactly two.** This machine while developing, and core01 when the dev work is done. No other database or service host belongs to this project. Retired LXC hosts may still answer on the network and still hold old Open Brain data; that does not make them valid. Do not point config, docs, canaries, or tooling at one, and do not treat a successful connection as evidence a host is in scope.
 - **Retired hosts are out of scope, not worthless.** Earlier Open Brain attempts left databases that still hold real thinking — design specs, SOPs, and decisions that predate the current epics and were never carried forward as reasoning. Leave them alone: do not connect, query, migrate, or drop anything. They are not this repo's data, and reading them is not part of any task here. If a question genuinely needs that history, it is an explicit, operator-approved archaeology task with its own scope — never a side quest inside other work. The default is: this project does not touch them.
 - **Prior-art clones live at `/Volumes/ThunderBolt/open-brain-local/research/`** — `gbrain`, `cognee`, `cognee-integrations`, `graphiti`, `honcho`, `mem0`, as real git clones. Read prior art from **source, not marketing**; that is what made the existing borrow-list usable. Findings belong in `docs/prior-art/`, not in a scratch directory. Anything borrowed — code *or* idea — gets attribution: see `docs/prior-art/ATTRIBUTION.md`.
+- **Search that prior art with the `research` qmd index — do not grep six trees.** All six clones are indexed as one named index, so a single query crosses all of them, which is the whole point: the useful prior-art question is comparative ("how does each of these model X?"), and that is exactly what six separate searches answer badly.
+
+  ```bash
+  qmd query "how are temporal relationships modeled" --index research
+  qmd query "..." --index research -c graphiti    # one project only
+  qmd search "SearchConfig" --index research       # BM25, ~0.1s
+  qmd get "#df268b"                                # open a hit by docid
+  ```
+
+  Use `--index research`, never `INDEX_PATH`: that swaps only the database and
+  silently inherits the global collection list, mixing our own fleet code into
+  prior-art results. `-c <project>` narrows to one clone.
+
+  **The clones stay pristine.** The index lives in `~/.cache/qmd/research.sqlite`,
+  not in the checkouts — nothing is written into them, so `git pull` stays clean
+  and upstream diffs stay honest. Never run `qmd init` or `qmd collection add`
+  inside one.
+
+  Rebuild after pulling new upstream commits, or if the index is missing
+  (it is a cache, so it is expendable and rebuildable):
+
+  ```bash
+  /Volumes/ThunderBolt/Development/_ob/bin/qmd-reference-index
+  ```
+
+  Rebuilding re-embeds and is GPU-bound — minutes, not seconds. Only do it when
+  the sources have actually moved. Process notes: `_DOCS/QMD_INDEXES.md`.
 
 ## Commands
 
