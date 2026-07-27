@@ -86,6 +86,11 @@ not been done yet — not that nothing was taken.
 | graphiti | Bi-temporal fact modelling — separating when a fact was true in the world from when we learned it | idea | see `docs/prior-art/graphiti.md` |
 | cognee | Lifecycle capture wired across all six agent hook surfaces | idea | see `docs/prior-art/cognee.md` |
 | cognee | Idle detection as a detached process rather than an in-agent policy | idea | see `docs/prior-art/cognee.md` |
+| gbrain | One-shot and scheduler as separate commands over a single shared cycle primitive | idea | see `docs/prior-art/gbrain.md` |
+| gbrain | TTL table-row cycle lock (survives a transaction pooler), per-phase lock requirement, heartbeat-aware steal grace | idea | see `docs/prior-art/gbrain.md` |
+| gbrain | Paired cost *and* walltime caps on maintenance phases | idea | see `docs/prior-art/gbrain.md` |
+| gbrain | Autonomy boundary drawn at reversibility — self-modifying work proposes, does not apply | idea | see `docs/prior-art/gbrain.md` |
+| gbrain | Extractor version watermark that invalidates previously-derived rows | idea | see `docs/prior-art/gbrain.md` |
 | mem0 | *Cautionary.* Reviewed and deliberately not adopted — see `docs/prior-art/mem0.md` | — | not adopted |
 
 ## Local clones
