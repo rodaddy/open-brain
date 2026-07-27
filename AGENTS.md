@@ -8,6 +8,7 @@
 >   - `_DOCS/STANDARDS-observability.md`
 >   - `_DOCS/STANDARDS-testing.md`
 >   - `_DOCS/STANDARDS-git.md`
+>   - `_DOCS/STANDARDS-repo-search.md`
 >   - `_DOCS/STANDARDS-typescript.md`
 >   - `_DOCS/STANDARDS-python.md`
 >   - `_DOCS/STANDARDS-ci-security.md`
@@ -37,6 +38,13 @@
 > - **No coverage gates.** Coverage percentages and line/branch targets are not
 >   acceptance criteria. Write functional input/output tests at the function,
 >   class, or public boundary, and prove a new test can fail before trusting it.
+> - **You are in this repo, so you own it — search it before asking.** This repo
+>   has its own search index at `.qmd/`, scoped to it alone. Questions about
+>   this repo's code, config, or structure get a search first; asking the user
+>   how their own software works is a failure, not diligence. Know the word →
+>   `sqlite3 .qmd/index.sqlite` (fastest, needs nothing installed). Know the
+>   idea → `qmd query "..."` (semantic). Commands and the missing-index fix are
+>   in `_DOCS/STANDARDS-repo-search.md`.
 >
 > **Also outstanding in this repo** (reported by the sync, never auto-fixed):
 >   - no _githooks/ (tracked hooks, core.hooksPath)
@@ -53,7 +61,7 @@
 > sync, and deleting past the end marker eats the top of this file. The marker
 > is what stops the banner coming back; a later rule change raises a new one.
 <!-- /STANDARDS-SYNC-BANNER -->
-<!-- standards-acknowledged: 4792c438c2f2 -->
+<!-- standards-acknowledged: 7cbc03193fc6 -->
 
 # Open Brain
 

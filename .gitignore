@@ -50,3 +50,6 @@ _reports/
 
 # Added by ggshield
 .cache_ggshield
+
+# qmd project-local search index (rebuildable; never commit)
+.qmd/
