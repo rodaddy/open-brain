@@ -1,3 +1,60 @@
+<!-- STANDARDS-SYNC-BANNER (delete this block when done) -->
+> ## ⚠️ NEW/UPDATED STANDARDS — READ BEFORE WRITING CODE
+>
+> Development standards were synced into this repo. Read the ones relevant to
+> your change **before** writing code. They override habit and older repo prose.
+>
+>   - `_DOCS/STANDARDS-core.md`
+>   - `_DOCS/STANDARDS-observability.md`
+>   - `_DOCS/STANDARDS-testing.md`
+>   - `_DOCS/STANDARDS-git.md`
+>   - `_DOCS/STANDARDS-typescript.md`
+>   - `_DOCS/STANDARDS-python.md`
+>   - `_DOCS/STANDARDS-ci-security.md`
+>
+> Highlights that are commonly gotten wrong — read these even if you read
+> nothing else:
+>
+> - **NEVER `/tmp`, `$TMPDIR`, or `mktemp -d`. HARD RULE.** `/tmp` is process-
+>   and sandbox-local: a runner, a Codex sandbox, and the host each see a
+>   *different* one, so anything written there is invisible to everyone else and
+>   vanishes without notice. Use `{temp_workspace}/open-brain/_scratch/`. This gets
+>   broken by reflex — a one-line `> /tmp/foo.txt` inside an otherwise correct
+>   task — so treat any `/tmp` path in a command you are about to run as a bug,
+>   the same way you would treat `rm -rf`.
+> - **Commit in the repo that owns the files, and commit before you stop.** The
+>   git boundary is the responsibility boundary: you are responsible for this
+>   repo's git state and nothing else. If a task takes you into another repo, the
+>   work lands *there*, on that repo's branch, with its own message — never
+>   version repo A's artifact inside repo B, because it escapes A's history
+>   entirely. Uncommitted work is the expensive failure: dirty files carry no
+>   author and no reason, so they sit outside the audit trail that makes every
+>   other mistake cheap to undo. See `_DOCS/STANDARDS-git.md`.
+> - **Do not hand-roll solved problems.** Prefer an existing repo helper → a
+>   well-known maintained library → the standard library → custom code. An empty
+>   dependency list on a new repo is NOT a reason to write your own logger, HTTP
+>   client, retry, config loader, or validator.
+> - **No coverage gates.** Coverage percentages and line/branch targets are not
+>   acceptance criteria. Write functional input/output tests at the function,
+>   class, or public boundary, and prove a new test can fail before trusting it.
+>
+> **Also outstanding in this repo** (reported by the sync, never auto-fixed):
+>   - no _githooks/ (tracked hooks, core.hooksPath)
+>   - has .githooks/ -- hidden folder, migrate to _githooks/
+>
+> Refresh these copies with:
+> `bun /Volumes/ThunderBolt/Development/_ob/scripts/sync-repo-standards.ts open-brain`
+>
+> **When this repo is up to standard, close this work item by running:**
+> `bun /Volumes/ThunderBolt/Development/_ob/scripts/sync-repo-standards.ts --ack open-brain`
+>
+> That removes this block and leaves the one-line marker below it in place. Do
+> not hand-delete it: dropping the marker makes this banner return on the next
+> sync, and deleting past the end marker eats the top of this file. The marker
+> is what stops the banner coming back; a later rule change raises a new one.
+<!-- /STANDARDS-SYNC-BANNER -->
+<!-- standards-acknowledged: 44f96e3f7d04 -->
+
 # Open Brain
 
 MCP server providing a unified semantic brain over PostgreSQL + pgvector. TypeScript (Bun), with a Python client package at `python/openbrain-memory/`.
