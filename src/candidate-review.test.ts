@@ -815,6 +815,33 @@ describe("submitGradeBatch", () => {
     expect(db.seen).toHaveLength(0);
   });
 
+  it("validates every reason_code before opening the transaction", async () => {
+    // THE GUARANTEE THAT REPLACES A CHECK CONSTRAINT. 042 deliberately stores
+    // reason_code as unconstrained TEXT (042:36-42) so retiring a code stays an
+    // edit to grading-reasons.ts rather than a migration. That trade is only
+    // safe while the write path refuses an unknown code BEFORE any SQL runs, so
+    // this pins the property the missing CHECK would otherwise have provided:
+    // an injection-shaped code reaches neither a parameter nor a connection.
+    const db = fakeTxDb(batchResponder);
+    await expect(
+      submitGradeBatch(db, {
+        namespace: "rico",
+        gradedBy: "rico",
+        grades: [
+          { candidateId: CANDIDATE_ROW.id, action: "promoted" },
+          {
+            candidateId: OTHER_ID,
+            action: "rejected",
+            reasonCode: "x'; DROP TABLE candidate_grade; --",
+          },
+        ],
+      }),
+    ).rejects.toThrow(ReviewInputError);
+    // Not one statement issued -- not even BEGIN, so the valid first grade
+    // cannot land as a partial write either.
+    expect(db.seen).toHaveLength(0);
+  });
+
   it("names which item was bad so the operator can fix that one", async () => {
     const db = fakeTxDb(batchResponder);
     let message = "";
