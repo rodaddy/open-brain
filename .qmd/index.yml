@@ -5,6 +5,7 @@ collections:
       - "*.{ts,tsx,js,jsx,py,md,yaml,yml,json,toml,sh,zsh}"
       - _DOCS/*.{ts,tsx,js,jsx,py,md,yaml,yml,json,toml,sh,zsh}
       - _plans/*.{ts,tsx,js,jsx,py,md,yaml,yml,json,toml,sh,zsh}
+      - _plans/issues/*.{ts,tsx,js,jsx,py,md,yaml,yml,json,toml,sh,zsh}
       - .forgejo/workflows/*.{ts,tsx,js,jsx,py,md,yaml,yml,json,toml,sh,zsh}
       - .github/*.{ts,tsx,js,jsx,py,md,yaml,yml,json,toml,sh,zsh}
       - .github/workflows/*.{ts,tsx,js,jsx,py,md,yaml,yml,json,toml,sh,zsh}

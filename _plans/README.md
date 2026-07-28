@@ -30,10 +30,37 @@ Rejected alternatives stay in the file. The next session's most expensive
 mistake is re-proposing something already ruled out, and a plan that records
 only the winner cannot prevent it.
 
+## The markdown comes first
+
+Operator rule, 2026-07-28: **write the file, and that is what becomes the
+issue.** Not "file the issue, then remember to mirror it" — that ordering
+depends on a habit holding, and it did not hold. Compose the plan here, open the
+issue from it, then run the sync to pick up the discussion.
+
 ## Naming
 
-`<issue-number>-<slug>.md`, e.g. `435-dream-hosted-rem.md`. Plans written before
-the issue exists use `draft-<slug>.md` and get renamed when the number is known.
+`<issue-number>-<slug>.md`, e.g. `435-436-dream-hosted-rem.md`. Plans written
+before the issue exists use `draft-<slug>.md` and get renamed once the number is
+known.
+
+## `_plans/issues/` — generated mirrors, do not edit
+
+`bun run sync-issues` writes one file per issue into `_plans/issues/`, body plus
+full comment thread, and deletes files whose issue was retitled so a stale
+duplicate cannot keep answering searches. **Every file there is overwritten on
+each run.**
+
+Comments are the reason it exists. An issue body says what someone thought at
+the time; the comments carry the corrections that reshaped it. #390's body
+describes the Light stage, but the reasoning that made it model-free is in a
+comment.
+
+Everything is indexed — no substantive-vs-side-quest triage. Classifying by
+title misjudges, and a misfiled issue is invisible, which is the failure this is
+meant to fix. Noisier search beats lost context.
+
+Run the sync after filing or closing issues, then refresh the qmd index so new
+searches see them.
 
 ## Relationship to the other doc folders
 

@@ -9,6 +9,7 @@
     "start:two-worker": "bun run scripts/run-two-worker.ts",
     "migrate": "bun run scripts/migrate.ts",
     "db": "bun run --env-file=.env scripts/db.ts",
+    "sync-issues": "bun run scripts/sync-issues.ts",
     "test": "bun test",
     "typecheck": "bunx tsc --noEmit",
     "backfill": "bun run scripts/backfill.ts",
