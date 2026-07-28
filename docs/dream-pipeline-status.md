@@ -199,6 +199,45 @@ invented.
 its API returns real bundles, but keyboard flow, pagination at 1,104 items, and
 the inconclusive second pass have only been exercised by tests and curl.
 
+**9. Most candidates are weak in isolation — the surrounding turns carry them.**
+This is the honest limit on the value of the 1,104 rows, measured by reading a
+sample of them rather than inferred:
+
+| `length(content)` | Candidates |
+|---|---|
+| 1–99 chars | 424 (38%) |
+| 100–199 | 348 (32%) |
+| 200–298 | 119 |
+| 300–598 | 136 |
+| 600–4,009 | 77 |
+
+Roughly 70% of the corpus is under 200 characters, and the first ten rows by
+`created_at` include items like `Now the blocker — what's next and what's
+uncommitted.` and `Third count, in the manifest assertion.` Those are narration
+of work in progress, not durable memories: the rule-based distiller
+(`model = 'rule-based-distiller/v1'`) matches marker phrases, and a
+progress-report sentence matches the same markers a real fact does.
+
+Two things keep this from being a blocker on the grading surface itself:
+
+- `/api/queue` ships each candidate with its surrounding turns
+  (`context`), so a thin candidate is still *judgeable* — the operator reads it
+  in situ and hits `2`. Rejecting it is a correct, informative grade, and 0 of
+  the sampled items lacked context (the queue read logs `without_context` on
+  every call for exactly this reason).
+- Under "let everything pass", low precision at ingest is the intended
+  trade. The grades are the training data that tells a future distiller which
+  markers produce narration instead of memory.
+
+But it should be stated plainly: an operator grading this queue will spend most
+of their passes rejecting distiller noise, and the yield of durable memories will
+be well under 1,104. The queue is gradeable; it is not high-yield.
+
+**10. `candidate_reinforcement` is empty (0 rows).** Migration 038 created the
+table and 039 added `first_said_at`/`last_said_at`, but with 1 corroborated item
+and 0 near-dupe merges on this corpus there is nothing to record. #398 is
+structurally present and functionally unexercised.
+
 ## How the operator starts the grading server
 
 ```bash
@@ -237,7 +276,7 @@ Endpoints, verified live:
 
 | Endpoint | Result |
 |---|---|
-| `GET /` | 200, 16,379 bytes |
+| `GET /` | 200, 17,259 bytes |
 | `GET /api/stats` | `{"total":1104,"ungraded":1104,"graded":0,"uncertain_ungraded":830,...}` |
 | `GET /api/queue?limit=N` | candidate + surrounding turns + reinforcement receipt |
 | `POST /api/grade` | 403 if the body carries `machine_grade` |
@@ -245,19 +284,99 @@ Endpoints, verified live:
 
 The queue is capped at `MAX_QUEUE_LIMIT = 50`, default 20 — handing over all
 1,104 rows at once is the documented way to get zero of them graded
-(`dream-design.md:825-827`: 20 is reviewable, 200 gets skipped).
+(`dream-design.md:825-827`: 20 is reviewable, 200 gets skipped). Verified:
+`GET /api/queue?limit=9999` returns 50 items with `total: 1104`.
+
+**Operational hazard — a stale listener looks like a working one.** On
+2026-07-28 a server left running from an earlier commit was still holding 3417
+and answering `/health` with 200, but its `/api/stats` was missing
+`distinct_machine_grades` (added in `4e460ae`). `bun run grade` correctly refused
+to bind and printed the `--port` instruction, which is the only reason the stale
+process was noticed. If the page looks wrong after a pull, confirm you are
+talking to a listener started from current `HEAD` — the port being occupied by
+*something* is not evidence it is the right something.
+
+## Issue coverage — measured, not claimed
+
+The operator's acceptance criterion names "all of the open issues or issues that
+have been open in the last 3 days." Measured with `gh` on 2026-07-28:
+
+| | |
+|---|---|
+| Open issues, all | **54** |
+| Open issues updated since 2026-07-25 | **35** |
+| Issues this branch's commits reference | **6** (#380, #382, #390, #391, #394, #398) |
+| Of those, still open | **5** (#382, #390, #391, #394, #398) |
+
+So the branch substantively implements 6 of the 35 issues in the three-day
+window. It is one coherent vertical slice — capture → distill → Light → REM →
+Deep → grading page — not the window's contents.
+
+The 29 untouched issues in the window are not incidental; they are named work
+with their own acceptance criteria:
+
+- **DREAM epic remainder:** #392 (re-warm, partially present in `dream-rem.ts`),
+  #393 (drift detection), #395 (discard drain), #396 (supersession), #397
+  (concurrent-load proof), #399 (loop supervisor) — six of the ten DREAM issues
+  are unstarted.
+- **PROV epic (#409, #413–#420):** ten issues, the Python lifecycle-adapter port.
+  Nothing on this branch touches it.
+- **SHAPE epic (#400–#407):** eight product-shape questions. Unanswered by design
+  — they are decision tickets, not code.
+- **QMD (#386, #387, #388), INGEST (#381), and #422/#431/#433** are untouched.
+
+`#433` deserves a specific note because it contradicts the "self-driving" framing:
+`brain_answer` still cannot see session events, and nothing promotes them. This
+branch produces a *review queue*; it does not close the loop from a graded
+candidate back into recall. A promoted grade currently changes
+`candidate_memory.review_action` and nothing else — there is no writer that turns
+a passed candidate into a `thoughts` or `decisions` row. Verified by search:
+`review_action = 'promoted'` appears in `src/` at exactly two sites, a stats
+`FILTER` (`src/candidate-review.ts:823`) and a test fixture
+(`src/db/migrations/reinforcement-and-said-at.test.ts:102`). Nothing consumes a
+promoted grade.
 
 ## Verification state of this branch
 
 | Check | Result |
 |---|---|
 | `bunx tsc --noEmit` | clean |
-| `bun test` | 2,634 pass / 298 skip / **0 fail**, 184 files, ~30s |
+| `bun test` | 2,641 pass / 298 skip / **0 fail**, 2,939 tests across 184 files, 30.1s |
 | `bun run migrate` | 39 applied, no-op on re-run |
 | Full cycle on real DB | 1.3s, no row-count change |
 
 `src/source-sync.test.ts` (#422, full-suite-only failure) **did not reproduce**
 on this branch — it passes both standalone (24 pass) and in the full suite.
+
+## Acceptance check against the operator's stated criteria
+
+Re-run independently on 2026-07-28, trusting no prior report. The criterion was:
+
+> "a single branch that has gone from the beginning of the idea that we started
+> with through all of the open issues or issues that have been open in the last 3
+> days and then a full test suite against it and a website where I can go grade
+> the responses. Anything less than that is a failure."
+
+Four clauses, graded separately:
+
+| Clause | Verdict | Evidence |
+|---|---|---|
+| A single branch, idea → implementation | **MET** | `goal/dream-e2e-grading`, 31 commits ahead of `origin/main`, design docs through working code |
+| A full test suite against it | **MET** | `bunx tsc --noEmit` clean; `bun test` 2,641 pass / 0 fail / 298 skip |
+| A website to grade the responses | **MET** | `bun run grade`; `/`, `/api/queue`, `/api/stats`, `/api/grade`, `/api/ungrade` all 200 against 1,104 real candidates; grade→ungrade round-trip verified and reverted |
+| **All open issues / issues open in the last 3 days** | **NOT MET** | 6 of 35 issues in the window are implemented; 29 untouched, including the whole PROV epic (10) and six of ten DREAM issues |
+
+**Overall: NOT MET**, on the fourth clause alone.
+
+The honest summary is that this branch is a complete, working, tested vertical
+slice with a real operator surface, and it is *not* the three-day issue backlog.
+The three technical clauses are satisfied by measurement. The scope clause is
+not, and the gap is not a rounding error: it is roughly 29 issues, two of which
+are epics with their own multi-issue breakdowns.
+
+What would close the remaining clause is not more work on this pipeline. It is
+either implementing the other 29 issues, or the operator narrowing the criterion
+to the DREAM/DISTILL slice this branch actually targeted.
 
 ## Related
 
