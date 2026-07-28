@@ -201,10 +201,16 @@ export function parseReviewAction(value: unknown): ReviewAction {
  * not an allowlist of humans: an allowlist would reject a new human operator
  * (a silent lockout that looks like a bug), while a denylist that misses a
  * novel model name still leaves that grade attributed and auditable in
- * graded_by. The structural guarantee is elsewhere and is absolute -- no code
- * path in this module writes machine_grade, and REM's writer never writes
- * review_action -- so this check is defence in depth against a
- * misconfigured caller, not the primary control.
+ * graded_by. The structural guarantee is elsewhere and is absolute -- verified
+ * 2026-07-28: `review_action` is written at exactly two sites, both in this
+ * module (gradeCandidate and ungradeCandidate), and `machine_grade` at exactly
+ * one, src/dream-rem.ts:334. The two sets never intersect, so this check is
+ * defence in depth against a misconfigured caller, not the primary control.
+ *
+ * It is checked in TWO layers, because the substring list alone was measurably
+ * insufficient (see the 2026-07-28 note below): names first, then
+ * MACHINE_IDENTITY_PATTERNS for model-shaped identifiers whose family word is
+ * not yet known. Both stay denylists -- a human handle must never be locked out.
  */
 const MACHINE_IDENTITY_MARKERS = [
   "claude",
@@ -222,6 +228,52 @@ const MACHINE_IDENTITY_MARKERS = [
   "model:",
   "bot",
   "agent",
+  // Added 2026-07-28 after a review pass drove a grade through as "grok-4":
+  // the list only covered the families this repo runs, and every frontier
+  // family outside it was accepted in silence. Measured before the fix:
+  // grok-4, deepseek-v3 and kimi-k2 were all ACCEPTED.
+  "grok",
+  "deepseek",
+  "kimi",
+  "gemma",
+  "phi-",
+  "mixtral",
+  "command-r",
+  "copilot",
+  "cursor",
+  "devin",
+  "openai",
+  "anthropic",
+  "ollama",
+  "llm",
+  "assistant",
+  "grader",
+  "auto",
+];
+
+/**
+ * Shapes that mark a grader as a machine even when the family name is unknown.
+ *
+ * A substring list can only ever name families that already exist, which is the
+ * bypass above: the next model ships under a word nobody listed. These patterns
+ * catch the STRUCTURE of a model identity instead, which changes far more slowly
+ * than the names do.
+ *
+ * Kept narrow on purpose, because the design rejects locking out a human
+ * (:200-207): a bare human handle ("rico", "rico-m4", "jane.doe") matches none
+ * of these. What they match is a version-suffixed identifier -- the shape human
+ * handles do not have and model identifiers almost always do.
+ */
+const MACHINE_IDENTITY_PATTERNS: readonly RegExp[] = [
+  // name-v3, name-v3.1, name_v12 -- an explicit version suffix.
+  /[-_.]v\d/,
+  // name-4, name-4.5, name-70b, name-8x7b -- a trailing size/version number.
+  // Requires a separator AND a digit-led tail, so "core01" and "m4" are safe.
+  /[-_.]\d+(\.\d+)?[bkm]?$/,
+  // 70b / 8x7b parameter counts anywhere in the string.
+  /\d+x?\d*b\b/,
+  // provider/model and provider:model routing forms.
+  /[/:]/,
 ];
 
 /**
@@ -236,7 +288,9 @@ const MACHINE_IDENTITY_MARKERS = [
  */
 export function assertNotMachineIdentity(gradedBy: string): void {
   const lowered = gradedBy.toLowerCase();
-  const hit = MACHINE_IDENTITY_MARKERS.find((m) => lowered.includes(m));
+  const hit =
+    MACHINE_IDENTITY_MARKERS.find((m) => lowered.includes(m)) ??
+    MACHINE_IDENTITY_PATTERNS.find((p) => p.test(lowered))?.source;
   if (hit) {
     throw new ReviewInputError(
       `graded_by ${JSON.stringify(gradedBy)} looks like a machine identity (matched ${JSON.stringify(hit)}); ` +
@@ -714,11 +768,33 @@ export interface ReviewStats {
    * machine can be trusted, and that number only exists while the two stay
    * independent." Null until there is at least one comparable pair -- reporting
    * 0% from zero samples would read as "the machine is always wrong."
+   *
+   * `distinct_machine_grades` extends that same "do not report a number that
+   * reads as something it is not" rule to the DEGENERATE case, which is the
+   * live one: measured on the dogfood clone 2026-07-28, REM's heuristic grader
+   * assigned `inconclusive` to 1103 of 1104 candidates (99.91%). A constant
+   * predictor has no discrimination, so `rate` against it measures only the
+   * operator's own action mix -- grade everything `promoted` and the rate is 0%,
+   * grade everything `inconclusive` and it is 100%, and neither says anything
+   * about the machine. Exposing the count of distinct grades actually emitted
+   * lets the page say so rather than presenting a meaningless percentage as
+   * evidence. It is a description of the existing grader, NOT a fix to it: the
+   * missing signal is the one-off rule dream-design.md:817-821 marks as an open
+   * hole with an explicit "do not invent a rule for it during implementation."
    */
   machine_agreement: {
     compared: number;
     agreed: number;
     rate: number | null;
+    /**
+     * Distinct machine_grade values among THE COMPARED ROWS -- the same set
+     * `rate` is computed over, not the whole table. Scoping matters: the clone
+     * holds exactly one non-`inconclusive` machine grade, so a table-wide count
+     * reports 2 and hides the degeneracy until the operator happens to grade
+     * that single row. 1 means the grader was constant across everything
+     * compared, so `rate` is not a trust measurement.
+     */
+    distinct_machine_grades: number;
   };
 }
 
@@ -738,6 +814,7 @@ export async function fetchStats(
     inconclusive: string;
     compared: string;
     agreed: string;
+    distinct_machine_grades: string;
   }>(
     `SELECT count(*) AS total,
             count(*) FILTER (WHERE reviewed_at IS NULL) AS ungraded,
@@ -748,7 +825,9 @@ export async function fetchStats(
             count(*) FILTER (WHERE review_action = 'duplicate') AS duplicate,
             count(*) FILTER (WHERE review_action = 'inconclusive') AS inconclusive,
             count(*) FILTER (WHERE review_action IS NOT NULL AND machine_grade IS NOT NULL) AS compared,
-            count(*) FILTER (WHERE review_action IS NOT NULL AND machine_grade = review_action) AS agreed
+            count(*) FILTER (WHERE review_action IS NOT NULL AND machine_grade = review_action) AS agreed,
+            count(DISTINCT machine_grade) FILTER (WHERE review_action IS NOT NULL)
+              AS distinct_machine_grades
        FROM candidate_memory
       WHERE namespace = $1`,
     [options.namespace],
@@ -772,6 +851,7 @@ export async function fetchStats(
       compared,
       agreed,
       rate: compared === 0 ? null : agreed / compared,
+      distinct_machine_grades: Number(r.distinct_machine_grades),
     },
   };
 }

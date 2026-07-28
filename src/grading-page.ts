@@ -208,9 +208,24 @@ export const GRADING_PAGE_HTML = String.raw`<!doctype html>
     el("a-rejected").textContent = s.by_action.rejected;
     el("a-inconclusive").textContent = s.by_action.inconclusive;
     el("a-duplicate").textContent = s.by_action.duplicate;
-    el("agree").textContent = s.machine_agreement.compared === 0
-      ? "n/a"
-      : fmtPct(s.machine_agreement.rate) + " (" + s.machine_agreement.compared + ")";
+    // A constant grader makes the rate un-interpretable, so say that instead of
+    // showing a percentage that only reflects the operator's own action mix.
+    // Measured 2026-07-28: REM emitted one grade value for 1103 of 1104 rows.
+    var ma = s.machine_agreement;
+    if (ma.compared === 0) {
+      el("agree").textContent = "n/a";
+      el("agree").title = "no candidate has both a human and a machine grade yet";
+    } else if (ma.distinct_machine_grades <= 1) {
+      el("agree").textContent = fmtPct(ma.rate) + " (" + ma.compared +
+        ", machine is constant -- not a trust signal)";
+      el("agree").title =
+        "REM emitted only one distinct grade, so this rate measures your own " +
+        "action mix, not whether the machine can be trusted. The missing " +
+        "one-off rule is an open design hole (dream-design.md:817-821).";
+    } else {
+      el("agree").textContent = fmtPct(ma.rate) + " (" + ma.compared + ")";
+      el("agree").title = ma.distinct_machine_grades + " distinct machine grades compared";
+    }
     return s;
   }
 

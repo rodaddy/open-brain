@@ -29,6 +29,7 @@ import {
   isSpeech,
   type DistillTurn,
 } from "./distill-window.ts";
+import { NON_SPEECH_ROLES } from "./dream-light.ts";
 
 let idCounter = 0;
 function turn(over: Partial<DistillTurn> = {}): DistillTurn {
@@ -49,13 +50,48 @@ function turn(over: Partial<DistillTurn> = {}): DistillTurn {
 }
 
 describe("isSpeech", () => {
-  it("treats user and assistant as speech and everything else as evidence", () => {
+  it("treats user and assistant as speech and machine output as evidence", () => {
     expect(isSpeech("user")).toBe(true);
     expect(isSpeech("assistant")).toBe(true);
     // Tool output is the grounding a factual assistant turn rests on
     // (distill-window.ts:84-94), so it is context but never a source.
     expect(isSpeech("tool")).toBe(false);
     expect(isSpeech("system")).toBe(false);
+  });
+
+  it("counts an unrecognised role as speech rather than dropping it", () => {
+    // REGRESSION. This was an allowlist ({user, assistant}), which inverted
+    // Light's documented failure direction (dream-light.ts:126-142): a role no
+    // one had heard of yielded no candidate at all, silently and permanently.
+    // The denylist over-extracts instead, which the operator queue corrects.
+    expect(isSpeech("hermes")).toBe(true);
+    expect(isSpeech("operator")).toBe(true);
+    expect(isSpeech("")).toBe(true);
+  });
+
+  it("shares one role set with Light so the two stages cannot drift", () => {
+    // The bug was two private lists disagreeing in DIRECTION, so the fix that
+    // matters is the shared set, not the current membership.
+    for (const role of NON_SPEECH_ROLES) expect(isSpeech(role)).toBe(false);
+  });
+});
+
+describe("buildUnits — a new runtime's role still produces candidates", () => {
+  it("makes an unknown-role turn a CURRENT unit with tool output as context", () => {
+    const turns = [
+      turn({ role: "user", content: "design the thing" }),
+      turn({ role: "tool", content: "(Bash completed with no output)" }),
+      turn({ role: "hermes", content: "a NEW runtime said this" }),
+    ];
+    const units = buildUnits(turns);
+
+    const roles = units.map((u) => u.current.role);
+    expect(roles).toContain("hermes");
+    // Still not a source: the tool turn is grounding, not a claim.
+    expect(roles).not.toContain("tool");
+
+    const unknown = units.find((u) => u.current.role === "hermes")!;
+    expect(unknown.context.map((c) => c.role)).toEqual(["user", "tool"]);
   });
 });
 

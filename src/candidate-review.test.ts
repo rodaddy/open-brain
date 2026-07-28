@@ -175,6 +175,54 @@ describe("grader identity", () => {
     expect(() => parseGradedBy("   ")).toThrow(ReviewInputError);
     expect(() => parseGradedBy("x".repeat(201))).toThrow(ReviewInputError);
   });
+
+  it("refuses model families the original list never named", () => {
+    // REGRESSION. The denylist only covered the families this repo runs, so a
+    // review pass drove a real grade through as "grok-4" (HTTP 200, row written
+    // with graded_by=grok-4). Measured before the fix, all of these were
+    // ACCEPTED: grok-4, deepseek-v3, kimi-k2.
+    for (const m of [
+      "grok-4",
+      "deepseek-v3",
+      "kimi-k2",
+      "gemma-3",
+      "mixtral-8x7b",
+      "copilot",
+      "devin",
+    ]) {
+      expect(() => parseGradedBy(m)).toThrow(ReviewInputError);
+    }
+  });
+
+  it("refuses model-SHAPED names whose family word is unknown", () => {
+    // The structural layer: the next model ships under a word nobody listed, so
+    // the version/size shape is what has to catch it.
+    for (const m of [
+      "zephyrus-v2",
+      "newthing-4.5",
+      "unknown-70b",
+      "vendor/model",
+      "vendor:model",
+    ]) {
+      expect(() => parseGradedBy(m)).toThrow(ReviewInputError);
+    }
+  });
+
+  it("still accepts a human operator handle -- no silent lockout", () => {
+    // The design (candidate-review.ts:200-207) rejects an allowlist precisely
+    // because locking out a new human operator looks like a bug. Tightening the
+    // denylist must not acquire that failure mode by accident.
+    for (const h of [
+      "rico",
+      "Rico",
+      "rico-m4",
+      "jane.doe",
+      "operator",
+      "rico@bulkbridge.ai",
+    ]) {
+      expect(parseGradedBy(h)).toBe(h.trim());
+    }
+  });
 });
 
 describe("attention budget", () => {
@@ -387,12 +435,47 @@ describe("fetchStats", () => {
         inconclusive: "0",
         compared: "0",
         agreed: "0",
+        distinct_machine_grades: "0",
       },
     ]);
     const s = await fetchStats(db, { namespace: "rico" });
     expect(s.total).toBe(1104);
     expect(s.uncertain_ungraded).toBe(830);
-    expect(s.machine_agreement).toEqual({ compared: 0, agreed: 0, rate: null });
+    expect(s.machine_agreement).toEqual({
+      compared: 0,
+      agreed: 0,
+      rate: null,
+      distinct_machine_grades: 0,
+    });
+  });
+
+  it("flags a constant machine grader, whose rate is not a trust signal", async () => {
+    // dream-design.md:807-814 requires confidence be MEASURED, not claimed, and
+    // calls thresholds on a self-reported number theatre. Measured on the
+    // dogfood clone 2026-07-28, REM graded 1103 of 1104 candidates
+    // `inconclusive`; against a constant predictor the rate reflects only the
+    // operator's own action mix, so the degeneracy must be visible in the stat
+    // instead of hidden behind a plausible percentage. This asserts the
+    // disclosure, not a grader change -- the one-off promotion rule is still
+    // the open hole at dream-design.md:816-821.
+    const db = fakeDb(() => [
+      {
+        total: "1104",
+        ungraded: "1101",
+        graded: "3",
+        uncertain_ungraded: "829",
+        promoted: "3",
+        rejected: "0",
+        duplicate: "0",
+        inconclusive: "0",
+        compared: "3",
+        agreed: "0",
+        distinct_machine_grades: "1",
+      },
+    ]);
+    const s = await fetchStats(db, { namespace: "rico" });
+    expect(s.machine_agreement.rate).toBe(0);
+    expect(s.machine_agreement.distinct_machine_grades).toBe(1);
   });
 
   it("computes the agreement rate once there are comparable pairs", async () => {
@@ -408,10 +491,13 @@ describe("fetchStats", () => {
         inconclusive: "1",
         compared: "4",
         agreed: "3",
+        distinct_machine_grades: "3",
       },
     ]);
     const s = await fetchStats(db, { namespace: "rico" });
     expect(s.machine_agreement.rate).toBeCloseTo(0.75, 5);
+    // >1 distinct grade is what makes the rate meaningful at all.
+    expect(s.machine_agreement.distinct_machine_grades).toBe(3);
     expect(s.by_action).toEqual({
       promoted: 2,
       rejected: 1,

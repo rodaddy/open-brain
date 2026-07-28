@@ -42,6 +42,8 @@
 
 import type pg from "pg";
 
+import { NON_SPEECH_ROLES } from "./dream-light.ts";
+
 /** One raw turn as the distiller reads it. Content is already redacted at write. */
 export interface DistillTurn {
   id: string;
@@ -76,12 +78,13 @@ export interface DistillUnit {
 export const DEFAULT_CONTEXT_WINDOW = 3;
 
 /**
- * Roles whose content is SPEECH -- something a person or an agent actually
- * said, and therefore something that can make a claim.
+ * Is this turn SPEECH -- something a person or an agent actually said, and
+ * therefore something that can make a claim?
  *
- * This is the same distinction Light draws (src/dream-light.ts:106-137) and for
- * the same measured reason: `role='tool'` content is machine output. But the
- * two stages use it differently and that difference is deliberate:
+ * This is the same distinction Light draws, and it now uses the SAME SET
+ * (NON_SPEECH_ROLES, src/dream-light.ts:143) rather than a second private list.
+ * The two stages still USE the answer differently, and that difference is
+ * deliberate:
  *
  *   Light      does not COUNT tool output (it recurs meaninglessly).
  *   Distill    does not EXTRACT FROM tool output, but DOES pass it as context.
@@ -92,11 +95,19 @@ export const DEFAULT_CONTEXT_WINDOW = 3;
  * dropping tool turns from the window entirely would remove the grounding;
  * extracting from them would produce candidates out of `ls` output. Context,
  * not source, is the correct disposition for both.
+ *
+ * THE DIRECTION IS LOAD-BEARING, and this was previously wrong here. An earlier
+ * version declared an allowlist (`{user, assistant}`), which inverted Light's
+ * documented failure mode: an unrecognised role yielded NO CANDIDATE AT ALL --
+ * the silent, permanent drop that dream-light.ts:126-142 and the 2026-07-28
+ * "let everything pass" decision both forbid. Zero impact on today's corpus
+ * (assistant 2172 / tool 1360 / user 263 on the clone, so no unknown role
+ * exists yet) and total impact the first day a new runtime writes one. As a
+ * denylist an unknown role is treated as speech and over-extracts a little,
+ * which the operator queue and the tier system are there to correct.
  */
-const SPEECH_ROLES: ReadonlySet<string> = new Set(["user", "assistant"]);
-
 export function isSpeech(role: string): boolean {
-  return SPEECH_ROLES.has(role);
+  return !NON_SPEECH_ROLES.has(role);
 }
 
 /**

@@ -139,8 +139,18 @@ const UNCOUNTABLE: readonly RegExp[] = [
  * content that never entered has no usage history to be judged by and no path
  * back. The tier system is the precision filter; the write path must not try to
  * be one.
+ *
+ * EXPORTED so DISTILL consumes this exact set rather than declaring its own
+ * (src/distill-window.ts isSpeech). Two stages deciding "is this speech?" from
+ * two private lists is how the direction silently drifts: Distill originally
+ * had an allowlist, which inverted the failure above -- an unknown role there
+ * produced no candidate at all, the invisible drop this comment exists to
+ * forbid. One shared denylist makes that class of divergence unrepresentable.
  */
-const NON_SPEECH_ROLES: ReadonlySet<string> = new Set(["tool", "system"]);
+export const NON_SPEECH_ROLES: ReadonlySet<string> = new Set([
+  "tool",
+  "system",
+]);
 
 /**
  * Should Light count this content toward corroboration?

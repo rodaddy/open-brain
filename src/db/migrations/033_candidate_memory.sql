@@ -2,6 +2,31 @@
 --
 -- Spec: docs/dream-design.md (precondition 1), docs/dream-ethereal-runs.md.
 --
+-- NUMBER COLLISION WITH A PARALLEL BRANCH -- KNOWN, MEASURED, AND DELIBERATELY
+-- NOT RENUMBERED. The dogfood clone's _migrations ledger also holds
+-- 033_system_facts.sql and 034_memory_axes.sql (applied 2026-07-25 from another
+-- branch; neither file exists in this tree), against this branch's 033 and
+-- 034_content_occurrences.sql (applied 2026-07-27). All four are applied,
+-- because src/db/migrate.ts:29-34 keys the applied-set on the full FILENAME and
+-- not on the number.
+--
+-- Why renumbering to 040+ was rejected rather than done:
+--   1. It is not an ordering hazard in fact. The two pairs create DISJOINT
+--      objects -- verified 2026-07-28 on the clone: this pair creates
+--      candidate_memory and content_occurrences, the other creates a
+--      system-facts table and axes, and no statement in either pair reads or
+--      alters an object the other creates. With no shared object there is no
+--      order-dependent outcome to get wrong on a fresh database.
+--   2. These filenames are load-bearing PROVENANCE. 21 citations across
+--      src/*.ts, docs/decisions/*.md and README.md reference these migrations by
+--      exact name and line ("037:88-94", "033_candidate_memory.sql:88-91").
+--      Renumbering silently invalidates every one, which trades a hazard that
+--      does not exist for the loss of the reasoning trail that makes the design
+--      auditable.
+-- If a future migration ever does need to order against system_facts or
+-- memory_axes, that migration is the place to express the dependency
+-- explicitly -- not a rename of already-applied history.
+--
 -- Why this table exists: 3,303 raw turns are captured and 0 are distilled,
 -- because the distiller has nowhere to write. Measured 2026-07-27 on the local
 -- dogfood clone: ob_raw_turns 3,303 rows, every one with distilled_at IS NULL,
