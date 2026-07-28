@@ -98,25 +98,32 @@ const UNCOUNTABLE: readonly RegExp[] = [
 ];
 
 /**
- * KNOWN GAP — this filter is necessary but NOT sufficient. Measured on the full
- * 3,549-turn corpus, 2026-07-27: of the 14 cross-session results, ~11 were
- * machine chatter that passes every rule above —
+ * Roles whose content is SPEECH — something a person or an agent actually said.
+ *
+ * Corroboration is a claim being made again, so only speech can corroborate.
+ * `role='tool'` is machine output: it recurs constantly across unrelated
+ * sessions and means nothing when it does.
+ *
+ * MEASURED on the full 3,549-turn corpus, 2026-07-27. Counting every role, the
+ * top "corroborated facts" in the database were:
  *
  *   {"receipt":{"schema":"openbrain.runtime_receipt.v1", ...}}   10 sessions
  *   (Bash completed with no output)                               5 sessions
  *   The file <path> has been updated successfully                 2-3 sessions
  *
- * These are tool RESULTS rather than tool-call stubs: long enough to clear the
- * length floor, structurally varied enough to dodge the patterns, and identical
- * across unrelated sessions. Only two of the 14 were real corroboration.
+ * All 99 such turns are `role='tool'`, and ZERO leak into user/assistant — the
+ * separation the corpus already carried, unused. Restricting to speech and
+ * dropping the tool-call stubs leaves exactly one real cross-session result:
+ * "are we at a good stop point, this box needs to reboot", said in 5 distinct
+ * sessions. One survivor out of 3,549 turns is not a bug; corroboration is
+ * genuinely rare, which is what makes it evidence.
  *
- * Consequence: `session_count` is NOT yet safe as promotion's sole input. Feeding
- * it to #394 today would corroborate "the file was updated successfully" as a
- * durable fact. What is needed is a turn-level distinction between operator/agent
- * SPEECH and tool OUTPUT — which is a capture-side concern (`role`, or a
- * discriminator column on ob_raw_turns), not another regex here. Tracked as the
- * `[tool_use: X]` ingest-fidelity problem; see docs/dream-design.md.
+ * BOTH filters are required — role alone is not enough. `[tool_use: Bash]` is
+ * stored as `role='assistant'` (it is the assistant's ACTION, not its speech)
+ * and appears in 26 sessions. Role removes tool results; UNCOUNTABLE removes
+ * tool calls.
  */
+const SPEECH_ROLES: ReadonlySet<string> = new Set(["user", "assistant"]);
 
 /**
  * Should Light count this content toward corroboration?
@@ -124,7 +131,11 @@ const UNCOUNTABLE: readonly RegExp[] = [
  * Exported so the boundary is testable directly rather than only through a
  * database sweep.
  */
-export function isCountable(content: string): boolean {
+export function isCountable(content: string, role?: string): boolean {
+  // Only speech corroborates. An unknown role is treated as speech so a new
+  // runtime cannot silently drop real content — the failure mode to avoid here
+  // is losing evidence, not counting a little extra.
+  if (role !== undefined && !SPEECH_ROLES.has(role)) return false;
   const trimmed = content.trim();
   if (trimmed.length === 0) return false;
   // A handful of characters cannot corroborate anything; this also cheaply
@@ -161,6 +172,7 @@ interface SweepRow {
   content: string;
   content_hash: string;
   session_ref: string | null;
+  role: string | null;
   occurred_at: Date;
 }
 
@@ -190,7 +202,7 @@ export async function runLightSweep(
     // rather than serialising or double-counting. Same primitive the
     // maintenance queue uses to claim jobs (maintenance-queue.ts).
     const claimed = await client.query<SweepRow>(
-      `SELECT id, namespace, content, content_hash, session_ref, occurred_at
+      `SELECT id, namespace, content, content_hash, session_ref, role, occurred_at
          FROM ob_raw_turns
         WHERE light_swept_at IS NULL
         ORDER BY occurred_at ASC
@@ -214,7 +226,10 @@ export async function runLightSweep(
       // sweep, and must not inflate corroboration. Two separate reasons to
       // skip -- harness noise (which ingest should not have stored) and
       // uncountable-but-legitimate content like tool-call stubs.
-      if (isHarnessNoise(row.content) || !isCountable(row.content)) {
+      if (
+        isHarnessNoise(row.content) ||
+        !isCountable(row.content, row.role ?? undefined)
+      ) {
         summary.skipped_noise++;
         continue;
       }
