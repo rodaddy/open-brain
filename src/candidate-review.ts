@@ -85,6 +85,12 @@
  */
 
 import type pg from "pg";
+import {
+  AGENT_BEHAVIORS,
+  type AgentBehavior,
+  findReason,
+  REASON_CODES,
+} from "./grading-reasons.ts";
 
 /**
  * The review vocabulary, verbatim from
@@ -229,6 +235,69 @@ export function parseReviewAction(value: unknown): ReviewAction {
   if (!found) {
     throw new ReviewInputError(
       `unknown action ${JSON.stringify(value)}; expected one of ${REVIEW_ACTIONS.join(", ")}`,
+    );
+  }
+  return found;
+}
+
+/**
+ * Validate a canned reason code (migration 042).
+ *
+ * NULL/absent is legitimate and common: a grade with only free text, or with no
+ * note at all, carries no code. Anything present is checked against
+ * src/grading-reasons.ts and REJECTED if unknown, for the same reason
+ * parseReviewAction rejects "promote" -- a code the vocabulary does not contain
+ * is a client bug, and storing it would create a silent bucket that no GROUP BY
+ * names and no UI can explain.
+ *
+ * DELIBERATELY NOT CHECKED AGAINST `appliesTo`. A reason's action list is an
+ * attention aid for the page (show four relevant buttons, not twelve), not a
+ * data rule. Enforcing it server-side would mean the operator who picks
+ * "needs context", then changes his mind from `inconclusive` to `rejected`,
+ * loses the whole batch to a 400 -- punishing exactly the careful regrade the
+ * page is built to make easy. The pairing is recorded as it happened; if a
+ * combination turns out to be common, that is data about the vocabulary being
+ * wrong, and 042 stores the code as free TEXT so fixing it is an edit rather
+ * than a migration.
+ */
+export function parseReasonCode(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string") {
+    throw new ReviewInputError("reason_code must be a string");
+  }
+  const trimmed = value.trim();
+  if (trimmed === "") return null;
+  if (!findReason(trimmed)) {
+    throw new ReviewInputError(
+      `unknown reason_code ${JSON.stringify(trimmed)}; expected one of ${REASON_CODES.join(", ")}`,
+    );
+  }
+  return trimmed;
+}
+
+/**
+ * Validate the agent-behavior axis (migration 042).
+ *
+ * Optional by design, and the asymmetry with `action` is the point: grading the
+ * memory is the job, rating the agent is colour. Absent stays NULL rather than
+ * defaulting to 'neutral' -- 042's header has the argument, that a manufactured
+ * "the agent was fine" is indistinguishable in the counts from one the operator
+ * actually made.
+ *
+ * Rejects an unknown value rather than dropping it, so a caller that believes it
+ * recorded a behavior rating is told when it did not.
+ */
+export function parseAgentBehavior(value: unknown): AgentBehavior | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string") {
+    throw new ReviewInputError("agent_behavior must be a string");
+  }
+  const trimmed = value.trim();
+  if (trimmed === "") return null;
+  const found = AGENT_BEHAVIORS.find((b) => b === trimmed);
+  if (!found) {
+    throw new ReviewInputError(
+      `unknown agent_behavior ${JSON.stringify(trimmed)}; expected one of ${AGENT_BEHAVIORS.join(", ")}`,
     );
   }
   return found;
@@ -738,6 +807,10 @@ export interface GradeResult {
   batch_id: string;
   /** The candidate_grade row this one superseded, when it was a regrade. */
   superseded_grade_id: string | null;
+  /** The canned reason recorded, or null (migration 042). */
+  reason_code: string | null;
+  /** The optional agent-behavior rating, or null when not rated. */
+  agent_behavior: AgentBehavior | null;
 }
 
 /**
@@ -775,6 +848,8 @@ export async function gradeCandidate(
     action: ReviewAction;
     gradedBy: string;
     note?: string | null;
+    reasonCode?: string | null;
+    agentBehavior?: string | null;
   },
 ): Promise<GradeResult | null> {
   let submitted: BatchSubmitResult;
@@ -787,6 +862,11 @@ export async function gradeCandidate(
           candidateId: input.id,
           action: input.action,
           note: input.note ?? null,
+          // Forwarded rather than validated here: the batch writer is the single
+          // validation site, so the single and batch paths cannot accept
+          // different vocabularies.
+          reasonCode: input.reasonCode ?? null,
+          agentBehavior: input.agentBehavior ?? null,
         },
       ],
     });
@@ -812,6 +892,8 @@ export async function gradeCandidate(
     grade_id: result.grade_id,
     batch_id: submitted.batch_id,
     superseded_grade_id: result.superseded_grade_id,
+    reason_code: result.reason_code,
+    agent_behavior: result.agent_behavior,
   };
 }
 
@@ -858,6 +940,16 @@ export interface BatchGradeInput {
   candidateId: string;
   action: string;
   note?: string | null;
+  /**
+   * Which canned reason was picked, if any (migration 042).
+   *
+   * Independent of `note`. Clicking a reason seeds the note text, which the
+   * operator then edits freely; the code identifies the reason after the text
+   * has stopped matching it, which is the only reason to store both.
+   */
+  reasonCode?: string | null;
+  /** The optional second axis: was the AGENT's conduct worth repeating? */
+  agentBehavior?: string | null;
 }
 
 /** What happened to one item of a submitted batch. */
@@ -876,6 +968,15 @@ export interface BatchGradeResult {
    * every response body and therefore into anything that logs one.
    */
   has_note: boolean;
+  /**
+   * The canned reason recorded, or null. Echoed back UNLIKE the note, because a
+   * code is a closed-vocabulary label rather than operator prose about real
+   * dialogue -- it is safe in a response body and in a log line, which is what
+   * makes "counts by reason_code" observable without ever logging content.
+   */
+  reason_code: string | null;
+  /** The behavior rating recorded, or null when the operator did not rate it. */
+  agent_behavior: AgentBehavior | null;
   /**
    * When the grade row was written, as the transaction stamped it. Read back
    * from the INSERT rather than restated from the caller's clock, so the single
@@ -923,6 +1024,8 @@ function parseBatchGrade(
   candidateId: string;
   action: ReviewAction;
   note: string | null;
+  reasonCode: string | null;
+  agentBehavior: AgentBehavior | null;
 } {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new ReviewInputError(`grades[${index}] must be an object`);
@@ -959,7 +1062,38 @@ function parseBatchGrade(
       `grades[${index}].note must be ${MAX_NOTE_LENGTH} characters or fewer`,
     );
   }
-  return { candidateId: id.trim(), action, note: note === "" ? null : note };
+  // Both accepted in camelCase and snake_case, matching how candidateId already
+  // is: the page speaks camelCase and a curl or a script speaks the column name.
+  // Prefixing the index onto the failure is what makes a rejected batch
+  // actionable -- "unknown reason_code" alone does not say which of 40 items.
+  const reasonCode = withIndex(index, () =>
+    parseReasonCode(raw.reasonCode ?? raw.reason_code),
+  );
+  const agentBehavior = withIndex(index, () =>
+    parseAgentBehavior(raw.agentBehavior ?? raw.agent_behavior),
+  );
+  return {
+    candidateId: id.trim(),
+    action,
+    note: note === "" ? null : note,
+    reasonCode,
+    agentBehavior,
+  };
+}
+
+/** Re-throw a per-item validation failure naming the item it came from. */
+function withIndex<T>(index: number, run: () => T): T {
+  try {
+    return run();
+  } catch (err) {
+    if (err instanceof ReviewInputError) {
+      throw new ReviewInputError(
+        `grades[${index}]: ${err.message}`,
+        err.status,
+      );
+    }
+    throw err;
+  }
 }
 
 /**
@@ -1084,10 +1218,20 @@ export async function submitGradeBatch(
 
       const inserted = await client.query<{ id: string; created_at: Date }>(
         `INSERT INTO candidate_grade
-           (namespace, candidate_id, action, note, graded_by, batch_id)
-         VALUES ($1, $2, $3, $4, $5, $6)
+           (namespace, candidate_id, action, note, graded_by, batch_id,
+            reason_code, agent_behavior)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          RETURNING id, created_at`,
-        [input.namespace, g.candidateId, g.action, g.note, grader, batchId],
+        [
+          input.namespace,
+          g.candidateId,
+          g.action,
+          g.note,
+          grader,
+          batchId,
+          g.reasonCode,
+          g.agentBehavior,
+        ],
       );
 
       results.push({
@@ -1096,6 +1240,11 @@ export async function submitGradeBatch(
         action: g.action,
         superseded_grade_id: superseded.rows[0]?.id ?? null,
         has_note: g.note !== null,
+        // The code survives regardless of what the operator did to the note
+        // text. That independence is the requirement -- editing the inserted
+        // sentence must not erase which reason was chosen.
+        reason_code: g.reasonCode,
+        agent_behavior: g.agentBehavior,
         created_at: inserted.rows[0]!.created_at.toISOString(),
         machine_grade: candidate.machine_grade,
         agreed:
@@ -1262,6 +1411,13 @@ export interface GradeHistoryItem {
   candidate_id: string;
   action: ReviewAction;
   note: string | null;
+  /**
+   * The canned reason, or null (migration 042). Returned alongside the note the
+   * operator may have edited beyond recognition -- that is the whole point of
+   * keeping the code separately, so the history can still say WHY.
+   */
+  reason_code: string | null;
+  agent_behavior: AgentBehavior | null;
   graded_by: string;
   batch_id: string | null;
   created_at: string;
@@ -1315,6 +1471,8 @@ export async function fetchGradeHistory(
     candidate_id: string;
     action: ReviewAction;
     note: string | null;
+    reason_code: string | null;
+    agent_behavior: AgentBehavior | null;
     graded_by: string;
     batch_id: string | null;
     created_at: Date;
@@ -1326,6 +1484,7 @@ export async function fetchGradeHistory(
     machine_grade: string | null;
   }>(
     `SELECT g.id AS grade_id, g.candidate_id, g.action, g.note, g.graded_by,
+            g.reason_code, g.agent_behavior,
             g.batch_id, g.created_at, g.superseded_at,
             c.candidate_type, c.content, c.uncertain, c.uncertainty_reason,
             c.machine_grade
@@ -1360,6 +1519,8 @@ export async function fetchGradeHistory(
       candidate_id: r.candidate_id,
       action: r.action,
       note: r.note,
+      reason_code: r.reason_code,
+      agent_behavior: r.agent_behavior,
       graded_by: r.graded_by,
       batch_id: r.batch_id,
       created_at: r.created_at.toISOString(),
@@ -1423,6 +1584,32 @@ export interface ReviewStats {
      */
     distinct_machine_grades: number;
   };
+  /**
+   * Live grades per canned reason (migration 042). Keyed by code; codes never
+   * used are absent rather than zero, so the readout shows what the operator
+   * actually reaches for instead of a wall of zeroes across twelve buttons.
+   *
+   * This is the number the codes exist to produce. A high
+   * `needs-surrounding-context` on `exchange` rows says the re-cut in 041 is
+   * still cutting too small; a high `progress-narration` says the classifier is
+   * admitting transient status. Both are extraction defects that free-text notes
+   * could only ever suggest.
+   *
+   * Counted over LIVE grades only (superseded_at IS NULL), matching what
+   * `by_action` reports off candidate_memory: a superseded reason is a mind the
+   * operator changed, and counting it would double-count one judgement.
+   */
+  by_reason_code: Record<string, number>;
+  /**
+   * Live grades per behavior rating. Rating is optional, so the count of rated
+   * rows is deliberately NOT the graded count -- `rated` says how much of the
+   * second axis actually exists, which is the number that tells you whether the
+   * control is being used at all.
+   */
+  agent_behavior: {
+    rated: number;
+    by_value: Record<string, number>;
+  };
 }
 
 /** Counts for the progress readout. One query, one scan. */
@@ -1459,6 +1646,39 @@ export async function fetchStats(
       WHERE namespace = $1`,
     [options.namespace],
   );
+
+  // A SECOND QUERY, over candidate_grade rather than candidate_memory, because
+  // that is where 042 put these columns. Folding it into the scan above is not
+  // possible without a join that would multiply the FILTER counts by the number
+  // of grade rows per candidate -- a regrade would silently double every number
+  // in the readout. Two small scans that are each correct beat one that is
+  // subtly wrong the first time anyone changes their mind.
+  const axes = await db.query<{
+    reason_code: string | null;
+    agent_behavior: string | null;
+    n: string;
+  }>(
+    `SELECT reason_code, agent_behavior, count(*) AS n
+       FROM candidate_grade
+      WHERE namespace = $1 AND superseded_at IS NULL
+      GROUP BY reason_code, agent_behavior`,
+    [options.namespace],
+  );
+
+  const byReason: Record<string, number> = {};
+  const byBehavior: Record<string, number> = {};
+  let rated = 0;
+  for (const a of axes.rows) {
+    const n = Number(a.n);
+    if (a.reason_code !== null) {
+      byReason[a.reason_code] = (byReason[a.reason_code] ?? 0) + n;
+    }
+    if (a.agent_behavior !== null) {
+      byBehavior[a.agent_behavior] = (byBehavior[a.agent_behavior] ?? 0) + n;
+      rated += n;
+    }
+  }
+
   const r = rows[0]!;
   const compared = Number(r.compared);
   const agreed = Number(r.agreed);
@@ -1480,5 +1700,7 @@ export async function fetchStats(
       rate: compared === 0 ? null : agreed / compared,
       distinct_machine_grades: Number(r.distinct_machine_grades),
     },
+    by_reason_code: byReason,
+    agent_behavior: { rated, by_value: byBehavior },
   };
 }

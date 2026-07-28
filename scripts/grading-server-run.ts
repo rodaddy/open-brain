@@ -109,6 +109,15 @@ console.log("  keys         1 pass · 2 fail · 3 inconclusive · 4 duplicate");
 console.log(
   "               enter stage · ctrl+enter SEND · esc reset · n note · ←/→ move",
 );
+// Both new axes get a line, for the same reason the "u undo" line was removed:
+// the banner is the operator's only map of what the keys do, so an accelerator
+// that exists but is unnamed is as useless as a name bound to nothing.
+console.log(
+  "  reasons      q/w/e/r fill the note with a canned reason (editable, code kept)",
+);
+console.log(
+  "  agent axis   g good · b bad · v neutral -- SEPARATE from the grade, optional",
+);
 console.log("  undo/change  buttons on the page (nothing is sent until SEND)");
 console.log("  ------------------------------------------------------------");
 console.log("");

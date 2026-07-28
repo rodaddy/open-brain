@@ -47,7 +47,55 @@
  * a correctness requirement before it is a security one: `innerHTML` would render
  * a captured HTML snippet instead of showing it, which is the one thing a
  * reviewer must be able to read verbatim.
+ *
+ * THE OPERATOR'S WORDS LEAD THE CARD (migration 041). For an `exchange`, the
+ * operator's own turn is rendered at the TOP as the thing being graded, and the
+ * agent response and tool calls sit below it as the body. Operator, verbatim,
+ * 2026-07-28: "my part of the conversation should be the first thing, anything
+ * below that can be agent response and maybe tool calls to get there". This is
+ * not cosmetic ordering -- the defect it fixes was the operator being asked to
+ * grade the AGENT's middle sentence while his own turn sat in the context panel,
+ * which makes the grade a judgement of a fragment of his own conversation rather
+ * than of the interaction.
+ *
+ * CANNED REASONS INSERT TEXT, THEY DO NOT REPLACE THE NOTE (migration 042).
+ * Operator, verbatim: "so the can'd response if i click one, should allow me to
+ * put it into the notes for adjustment and/or the note section stays to allow me
+ * to add a little color". So a reason button APPENDS its sentence into the
+ * textarea, which stays editable and always visible; a second click appends
+ * rather than overwrites; and the reason_code is recorded beside whatever the
+ * note finally says, so editing the text cannot erase which reason was chosen.
+ *
+ * THE AGENT-BEHAVIOR CONTROL IS A SEPARATE AXIS AND IS DRAWN THAT WAY. It sits
+ * in its own bordered block with its own heading, below the memory grade, so it
+ * cannot be mistaken for a fifth grade value -- and it is optional, so nothing
+ * refuses to stage without it. 042's header has the argument for why the two
+ * must not be one control: a useless memory can come from excellent agent
+ * behavior and a valuable memory from the agent screwing up.
  */
+
+import { GRADING_REASON_PAYLOAD } from "./grading-reasons.ts";
+
+/**
+ * The reason vocabulary, inlined into the page.
+ *
+ * There is no bundler, so this is how the page and the server share ONE
+ * definition (src/grading-reasons.ts) instead of two lists that drift until the
+ * page offers a button the server 400s -- which, because a batch is one
+ * transaction, would roll back the operator's whole session's worth of grading
+ * at SEND.
+ *
+ * JSON.stringify is safe to interpolate here because the payload is entirely
+ * module-authored constants: no candidate content, no operator input, nothing
+ * from the database ever reaches this string. The one sequence that could break
+ * out of a <script> element is "</script" inside a string literal, which cannot
+ * occur in a set of hand-written kebab-case codes and plain-English labels --
+ * and the escape below removes even that possibility rather than relying on it.
+ */
+const REASON_PAYLOAD_JSON = JSON.stringify(GRADING_REASON_PAYLOAD).replace(
+  /<\//g,
+  "<\\/",
+);
 
 export const GRADING_PAGE_HTML = String.raw`<!doctype html>
 <html lang="en">
@@ -154,6 +202,54 @@ export const GRADING_PAGE_HTML = String.raw`<!doctype html>
     color: var(--fg); border: 1px solid var(--line); border-radius: 7px;
     padding: 9px 10px; font: inherit; font-size: 13.5px;
   }
+  /* THE OPERATOR'S OWN TURN, at the top of an exchange card and visibly the
+     thing being graded. Bigger, brighter, and accent-bordered so it reads as the
+     subject rather than as one more quoted turn -- 041 exists because the
+     operator was grading the agent's sentence while his own sat below. */
+  .op-lead {
+    border: 1px solid #33507d; border-left: 4px solid var(--accent);
+    background: #172033; border-radius: 8px; padding: 12px 14px;
+    margin-bottom: 12px;
+  }
+  .op-lead .who {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .7px;
+    color: var(--accent); margin-bottom: 5px; font-weight: 600;
+  }
+  .op-lead .body {
+    font-size: 16px; white-space: pre-wrap; word-break: break-word;
+    max-height: 300px; overflow: auto;
+  }
+  /* The agent side of the exchange, below the operator's words. Dimmer and
+     labelled, because it is the body of what is being graded, not the head. */
+  .agent-body { margin-top: 4px; }
+  .agent-body > h2 { margin-top: 12px; }
+  /* Canned reasons: small, scannable, one row. They insert text into the note;
+     they never submit and never replace the note. */
+  .reasons { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 8px; }
+  .reasons button { padding: 3px 9px; font-size: 12px; }
+  .reasons button.picked { border-color: var(--accent); color: #cfe3ff; background: #1d3a5c; }
+  .reasons .hint { color: var(--dim); font-size: 12px; align-self: center; }
+  /* The SECOND AXIS, in its own bordered block with its own heading so it can
+     never be read as a fifth grade value. Optional, and it says so. */
+  .behavior {
+    border: 1px dashed var(--line); border-radius: 8px; padding: 9px 11px;
+    margin-top: 12px; background: #171a22;
+  }
+  .behavior .axis-title {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .7px;
+    color: var(--dim); margin-bottom: 6px; font-weight: 600;
+  }
+  .behavior .opts { display: flex; gap: 7px; flex-wrap: wrap; align-items: center; }
+  .behavior label {
+    display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--panel2);
+    border-radius: 7px; padding: 5px 11px; font-size: 13px; user-select: none;
+  }
+  .behavior input { accent-color: var(--accent); margin: 0; }
+  .behavior label.b-good.on { border-color: var(--pass); color: var(--pass); background: #16281d; }
+  .behavior label.b-bad.on { border-color: var(--fail); color: var(--fail); background: #2b1818; }
+  .behavior label.b-neutral.on { border-color: var(--dim); color: var(--fg); background: var(--panel2); }
+  .behavior .clear { margin-left: 4px; }
   .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 11px; align-items: center; }
   .side { position: sticky; top: 58px; display: flex; flex-direction: column; gap: 14px; }
   .batch-list { max-height: 46vh; overflow: auto; display: flex; flex-direction: column; gap: 7px; }
@@ -215,6 +311,8 @@ export const GRADING_PAGE_HTML = String.raw`<!doctype html>
   <span class="stat">pass <b id="a-promoted">0</b> / fail <b id="a-rejected">0</b>
         / inc <b id="a-inconclusive">0</b> / dup <b id="a-duplicate">0</b></span>
   <span class="stat">machine agreement <b id="agree">n/a</b></span>
+  <span class="stat" title="The second axis: how the agent behaved, counted over live grades only.">agent good <b id="b-good">0</b> / bad <b id="b-bad">0</b>
+        / neutral <b id="b-neutral">0</b></span>
   <span class="stat" id="mode-label"></span>
 </header>
 
@@ -251,6 +349,8 @@ export const GRADING_PAGE_HTML = String.raw`<!doctype html>
   <span><kbd>Esc</kbd> reset form</span>
   <span><kbd>&larr;</kbd><kbd>&rarr;</kbd> move</span>
   <span><kbd>n</kbd> note</span>
+  <span><kbd>q</kbd><kbd>w</kbd><kbd>e</kbd><kbd>r</kbd> quick reason</span>
+  <span><kbd>g</kbd><kbd>b</kbd><kbd>v</kbd> agent good/bad/neutral</span>
   <span id="msg" class="msg"></span>
 </footer>
 
@@ -273,12 +373,31 @@ export const GRADING_PAGE_HTML = String.raw`<!doctype html>
   const ACTIONS = { "1": "promoted", "2": "rejected", "3": "inconclusive", "4": "duplicate" };
   const ORDER = ["promoted", "rejected", "inconclusive", "duplicate"];
   const LABELS = { promoted: "pass", rejected: "fail", inconclusive: "inconclusive", duplicate: "duplicate" };
+  // The canned reasons and the behavior vocabulary, inlined from
+  // src/grading-reasons.ts at build time. ONE definition shared with the server,
+  // so this page cannot offer a code the write path rejects at SEND.
+  const VOCAB = ${REASON_PAYLOAD_JSON};
+  const REASONS = VOCAB.reasons;
+  const BEHAVIORS = VOCAB.behaviors;
+  const BEHAVIOR_LABELS = VOCAB.behaviorLabels;
+  // Positional accelerators for the reason row (index into the OFFERED list,
+  // which depends on the selected grade) and fixed ones for the behavior axis.
+  // Chosen to sit under the left hand while 1-4 pick the grade, and to avoid
+  // the existing bindings: n (note), j/k (move).
+  const REASON_KEYS = { q: 0, w: 1, e: 2, r: 3, t: 4, y: 5 };
+  const BEHAVIOR_KEYS = { g: "good", b: "bad", v: "neutral" };
   // Versioned so a future shape change discards an incompatible saved batch
   // instead of half-reading it into the form.
   const STORE_KEY = "ob.grading.batch.v1";
   const LAST_BATCH_KEY = "ob.grading.lastBatch.v1";
 
   const el = (id) => document.getElementById(id);
+
+  /** Set a counter's text, tolerating an element that is not on the page. */
+  function setText(id, value) {
+    const n = el(id);
+    if (n) n.textContent = value;
+  }
 
   const state = {
     items: [],
@@ -294,7 +413,17 @@ export const GRADING_PAGE_HTML = String.raw`<!doctype html>
     mode: "queue",
     // The in-progress form, kept out of the DOM so a re-render (navigation,
     // reload of the page's queue) cannot silently lose a half-written note.
-    form: { action: null, note: "" },
+    //
+    // reasonCode and note are SEPARATE fields on purpose (042). Clicking a
+    // reason seeds the note text and sets the code; editing the text afterwards
+    // touches only the note text, so the code survives an edit -- which is the
+    // operator's stated requirement that a canned reason go "into the notes for
+    // adjustment" without ceasing to be an identifiable reason.
+    //
+    // agentBehavior is null until rated, and null is what gets sent. It is never
+    // defaulted to "neutral": an unrated item and an item rated unremarkable are
+    // different facts, and 042 keeps them apart in the column too.
+    form: { action: null, note: "", reasonCode: null, agentBehavior: null },
   };
 
   function say(text, kind) {
@@ -374,6 +503,17 @@ export const GRADING_PAGE_HTML = String.raw`<!doctype html>
     el("a-rejected").textContent = s.by_action.rejected;
     el("a-inconclusive").textContent = s.by_action.inconclusive;
     el("a-duplicate").textContent = s.by_action.duplicate;
+    // Guarded with a fallback: /api/stats is also served by an older deployment
+    // during a rolling restart, and a missing key would throw here and blank the
+    // whole readout rather than one counter.
+    const ab = (s.agent_behavior && s.agent_behavior.by_value) || {};
+    // setText, not a direct assignment: this is the LAST thing refreshStats
+    // does before render() is reached, so a null element here would throw and
+    // take the whole queue down with it -- a missing header counter is a
+    // cosmetic problem and must not be able to blank the page.
+    setText("b-good", ab.good || 0);
+    setText("b-bad", ab.bad || 0);
+    setText("b-neutral", ab.neutral || 0);
     // A constant grader makes the rate un-interpretable, so say that instead of
     // showing a percentage that only reflects the operator's own action mix.
     // Measured 2026-07-28: REM emitted one grade value for 1103 of 1104 rows.
@@ -444,7 +584,7 @@ export const GRADING_PAGE_HTML = String.raw`<!doctype html>
   }
 
   function resetForm() {
-    state.form = { action: null, note: "" };
+    state.form = { action: null, note: "", reasonCode: null, agentBehavior: null };
   }
 
   function makeForm(item) {
@@ -460,7 +600,15 @@ export const GRADING_PAGE_HTML = String.raw`<!doctype html>
       radio.name = "grade";
       radio.value = action;
       radio.checked = state.form.action === action;
-      radio.onchange = () => { state.form.action = action; paintGrades(); };
+      radio.onchange = () => {
+        state.form.action = action;
+        paintGrades();
+        // The reason buttons filter to the selected action, so changing the
+        // grade has to rebuild them. The note and the already-picked code are
+        // untouched -- switching from inconclusive to rejected must not throw
+        // away the sentence the operator just wrote.
+        paintReasons();
+      };
       const text = document.createElement("span");
       text.textContent = LABELS[action];
       const num = document.createElement("span");
@@ -471,11 +619,23 @@ export const GRADING_PAGE_HTML = String.raw`<!doctype html>
     });
     wrap.append(grades);
 
+    // Canned reasons. Rebuilt by paintReasons() whenever the action changes, so
+    // the container is created empty here and filled in one place.
+    const reasons = document.createElement("div");
+    reasons.className = "reasons";
+    reasons.id = "reasons";
+    wrap.append(reasons);
+
     const note = document.createElement("textarea");
     note.className = "note";
     note.id = "note";
-    note.placeholder = "note (optional) -- your own words; goes to candidate_grade.note, never over the distiller's reason";
+    note.placeholder = "note (optional) -- your own words, or click a reason above to start one; goes to candidate_grade.note, never over the distiller's reason";
     note.value = state.form.note;
+    // Typing edits ONLY the text. state.form.reasonCode is deliberately not
+    // cleared here: the operator's requirement is that a canned reason lands in
+    // the note "for adjustment", and adjusting it must not silently retract
+    // which reason was chosen -- the code is what stays queryable once the
+    // sentence has been rewritten.
     note.oninput = () => { state.form.note = note.value; };
     note.onkeydown = (e) => {
       // Ctrl/Cmd+Enter still sends from inside the note, because the note is
@@ -489,6 +649,52 @@ export const GRADING_PAGE_HTML = String.raw`<!doctype html>
       e.stopPropagation();
     };
     wrap.append(note);
+
+    // ---- the SECOND AXIS ----------------------------------------------------
+    // Deliberately separated: its own dashed block, its own heading naming the
+    // different question, and its own radio group. The grade above answers "is
+    // this worth remembering"; this answers "did the agent behave well". 042's
+    // header has the measurement for why they must not be one control.
+    const behavior = document.createElement("div");
+    behavior.className = "behavior";
+    behavior.id = "behavior";
+    const bTitle = document.createElement("div");
+    bTitle.className = "axis-title";
+    bTitle.textContent =
+      "separate question -- agent behavior (optional, not part of the grade)";
+    behavior.append(bTitle);
+    const opts = document.createElement("div");
+    opts.className = "opts";
+    BEHAVIORS.forEach((value) => {
+      const label = document.createElement("label");
+      label.className = "b-" + value +
+        (state.form.agentBehavior === value ? " on" : "");
+      const radio = document.createElement("input");
+      radio.type = "radio";
+      // A DIFFERENT radio group name from the grades. Sharing "grade" would let
+      // picking a behavior deselect the memory grade in a real browser.
+      radio.name = "agent-behavior";
+      radio.value = value;
+      radio.checked = state.form.agentBehavior === value;
+      radio.onchange = () => { state.form.agentBehavior = value; paintBehavior(); };
+      const text = document.createElement("span");
+      text.textContent = BEHAVIOR_LABELS[value];
+      label.append(radio, text);
+      opts.append(label);
+    });
+    // Rating is optional, so it must be un-ratable again. Without this an
+    // accidental click is permanent for the item, and the operator would learn
+    // to avoid the control entirely.
+    const clear = document.createElement("button");
+    clear.type = "button";
+    clear.className = "clear";
+    clear.id = "clear-behavior";
+    clear.textContent = "not rated";
+    clear.title = "Leave the agent unrated. Different from 'unremarkable'.";
+    clear.onclick = () => { state.form.agentBehavior = null; paintBehavior(); };
+    opts.append(clear);
+    behavior.append(opts);
+    wrap.append(behavior);
 
     const actions = document.createElement("div");
     actions.className = "actions";
@@ -513,6 +719,111 @@ export const GRADING_PAGE_HTML = String.raw`<!doctype html>
     wrap.append(actions);
 
     return wrap;
+  }
+
+  /**
+   * Rebuild the canned-reason buttons for the currently selected action.
+   *
+   * WHY FILTERED BY ACTION. Twelve buttons is a list that gets read once and
+   * then ignored; four is a list that gets used. "already known" under a
+   * promote is noise and "shows reasoning" under a duplicate is nonsense, so
+   * offering them costs attention with no possible gain -- and attention is the
+   * hard constraint here (dream-design.md:825-827, "20 is reviewable, 200 gets
+   * skipped") across 1,104 items.
+   *
+   * The FILTER IS A UI AID ONLY. The server does not enforce appliesTo (see
+   * parseReasonCode), so an operator who picks a reason and then changes the
+   * grade keeps the code rather than losing the batch to a 400.
+   */
+  function paintReasons() {
+    const box = el("reasons");
+    if (!box) return;
+    box.textContent = "";
+    if (!state.form.action) {
+      const hint = document.createElement("span");
+      hint.className = "hint";
+      hint.textContent = "pick a grade to see quick reasons";
+      box.append(hint);
+      return;
+    }
+    const offered = REASONS.filter(
+      (r) => r.appliesTo.indexOf(state.form.action) >= 0);
+    if (offered.length === 0) {
+      const hint = document.createElement("span");
+      hint.className = "hint";
+      hint.textContent = "no quick reasons for this grade -- type your own";
+      box.append(hint);
+      return;
+    }
+    for (const r of offered) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = state.form.reasonCode === r.code ? "picked" : "";
+      b.textContent = r.label;
+      b.title = r.text;
+      b.onclick = () => applyReason(r);
+      box.append(b);
+    }
+    // The picked code may belong to a reason no longer offered (the operator
+    // changed the grade after choosing it). Say so rather than showing nothing,
+    // because the code IS still being recorded and a silent one is a surprise
+    // in the history later.
+    if (state.form.reasonCode &&
+        !offered.some((r) => r.code === state.form.reasonCode)) {
+      const hint = document.createElement("span");
+      hint.className = "hint";
+      hint.textContent = "(recording reason: " + state.form.reasonCode + ")";
+      box.append(hint);
+    }
+  }
+
+  /**
+   * Click a canned reason: INSERT its text into the note, record its code.
+   *
+   * Operator, verbatim, 2026-07-28: "so the can'd response if i click one,
+   * should allow me to put it into the notes for adjustment and/or the note
+   * section stays to allow me to add a little color".
+   *
+   * So this APPENDS rather than replaces -- a second reason adds a second
+   * sentence instead of destroying the first one and whatever colour the
+   * operator had already typed after it. The textarea is left focused and fully
+   * editable, and nothing is submitted.
+   *
+   * The CODE is set to the most recently clicked reason. One column holds one
+   * code, so with two reasons clicked the last one wins as the label while both
+   * sentences survive in the note -- the note is the lossless record, the code
+   * is the coarse queryable one, and that asymmetry is 042's whole design.
+   */
+  function applyReason(reason) {
+    const note = el("note");
+    const current = state.form.note || "";
+    // Idempotent on the exact sentence: clicking the same button twice in a row
+    // is a mis-click, not a request for the sentence twice.
+    if (current.indexOf(reason.text) < 0) {
+      state.form.note = current.trim() === ""
+        ? reason.text
+        : current.replace(/\s*$/, "") + " " + reason.text;
+    }
+    state.form.reasonCode = reason.code;
+    if (note) {
+      note.value = state.form.note;
+      note.focus();
+    }
+    paintReasons();
+    say("reason added to the note -- edit it freely, the code is recorded either way");
+  }
+
+  /** Repaint the behavior radios without rebuilding the card. */
+  function paintBehavior() {
+    const box = el("behavior");
+    if (!box) return;
+    const labels = box.querySelectorAll("label");
+    labels.forEach((l) => {
+      const input = l.querySelector("input");
+      const on = input && input.value === state.form.agentBehavior;
+      l.classList.toggle("on", !!on);
+      if (input) input.checked = !!on;
+    });
   }
 
   /** Repaint only the selection state, so typing in the note is never interrupted. */
@@ -583,9 +894,47 @@ export const GRADING_PAGE_HTML = String.raw`<!doctype html>
     }
     card.append(row);
 
+    // ---- THE OPERATOR'S WORDS COME FIRST (migration 041) --------------------
+    // Operator, verbatim: "my part of the conversation should be the first
+    // thing, anything below that can be agent response and maybe tool calls to
+    // get there". For an exchange, his own turn heads the card as the thing
+    // being graded; the distilled claim and the agent activity follow as the
+    // body. A fragment has no operator head and must NOT be given one -- putting
+    // agent text in this position is precisely the defect 041 exists to fix.
+    if (it.unit_kind === "exchange" && it.operator_text) {
+      const lead = document.createElement("div");
+      lead.className = "op-lead";
+      const who = document.createElement("div");
+      who.className = "who";
+      who.textContent = "you asked";
+      const body = document.createElement("div");
+      body.className = "body";
+      body.textContent = it.operator_text;
+      lead.append(who, body);
+      card.append(lead);
+    } else if (it.unit_kind === "exchange") {
+      // An ORPHAN exchange: agent turns before the first operator turn of a
+      // session (17 of 289, measured 2026-07-28). Saying so is better than
+      // silently rendering it like an anchored one, because the missing head is
+      // the reason it is worth less of the operator's attention.
+      const orphan = document.createElement("div");
+      orphan.className = "empty";
+      orphan.textContent =
+        "No operator turn heads this exchange -- it is agent activity from " +
+        "before you said anything in that session.";
+      card.append(orphan);
+    }
+
     const content = document.createElement("div");
     content.className = "content";
     content.textContent = it.content;
+    // Labelled only when something sits above it, so the operator can tell the
+    // distilled claim apart from his own verbatim words directly above.
+    if (it.unit_kind === "exchange" && it.operator_text) {
+      const h = document.createElement("h2");
+      h.textContent = "what the distiller pulled out of this exchange";
+      card.append(h);
+    }
     card.append(content);
 
     if (it.uncertainty_reason) {
@@ -599,6 +948,10 @@ export const GRADING_PAGE_HTML = String.raw`<!doctype html>
 
     card.append(makeForm(it));
     stage.append(card);
+    // The reason row depends on the selected action, which makeForm does not
+    // know how to lay out on its own. Painted once here after the card is in
+    // the tree, then repainted by the action radios.
+    paintReasons();
 
     // A candidate with no visible source is ungradeable, and saying so is more
     // honest than presenting a bare claim for judgement. A regrade is exempt:
@@ -619,9 +972,17 @@ export const GRADING_PAGE_HTML = String.raw`<!doctype html>
     }
 
     const h2 = document.createElement("h2");
-    h2.textContent = "source turns and surrounding conversation";
+    // Named for what it IS on an exchange -- the body under the operator's head
+    // -- rather than the neutral "source turns", so the reading order the
+    // operator asked for is stated and not just implied by position.
+    h2.textContent = it.unit_kind === "exchange"
+      ? "what the agent did about it -- response and tool calls"
+      : "source turns and surrounding conversation";
     stage.append(h2);
-    for (const t of it.context) stage.append(makeTurn(t));
+    const body = document.createElement("div");
+    body.className = "agent-body";
+    for (const t of it.context) body.append(makeTurn(t));
+    stage.append(body);
   }
 
   function renderBatch() {
@@ -695,6 +1056,19 @@ export const GRADING_PAGE_HTML = String.raw`<!doctype html>
         note.textContent = "note: " + g.note;
         d.append(note);
       }
+      // Both axes are shown in the pending list because both are being sent,
+      // and the batch list is the operator's last look before SEND. A behavior
+      // rating attached to the wrong item is otherwise invisible until it is in
+      // the table.
+      if (g.reasonCode || g.agentBehavior) {
+        const axes = document.createElement("div");
+        axes.className = "stat";
+        const bits = [];
+        if (g.reasonCode) bits.push("reason: " + g.reasonCode);
+        if (g.agentBehavior) bits.push("agent: " + BEHAVIOR_LABELS[g.agentBehavior]);
+        axes.textContent = bits.join("  ·  ");
+        d.append(axes);
+      }
       list.append(d);
     });
   }
@@ -719,6 +1093,11 @@ export const GRADING_PAGE_HTML = String.raw`<!doctype html>
       candidateId: it.id,
       action: state.form.action,
       note: state.form.note.trim(),
+      // Recorded independently of the note text, so the operator editing the
+      // inserted sentence -- which is the point of inserting it -- cannot clear
+      // which reason was chosen.
+      reasonCode: state.form.reasonCode,
+      agentBehavior: state.form.agentBehavior,
       // Kept for display only, so the pending list reads as claims rather than
       // uuids. Stripped before the POST -- the server has the content already.
       content: it.content.slice(0, 400),
@@ -743,7 +1122,15 @@ export const GRADING_PAGE_HTML = String.raw`<!doctype html>
       const known = state.items.findIndex((it) => it.id === g.candidateId);
       if (known >= 0) {
         state.idx = known;
-        state.form = { action: g.action, note: g.note || "" };
+        state.form = {
+          action: g.action,
+          note: g.note || "",
+          // Restored, not dropped: pulling an item back to change the grade
+          // must not silently retract the reason and the behavior rating the
+          // operator already gave it.
+          reasonCode: g.reasonCode || null,
+          agentBehavior: g.agentBehavior || null,
+        };
         render();
         say("editing -- change it and add it back");
       } else if (g.regrade) {
@@ -770,7 +1157,12 @@ export const GRADING_PAGE_HTML = String.raw`<!doctype html>
           is_regrade: true,
           previous_action: g.regrade.previous_action,
         });
-        state.form = { action: g.action, note: g.note || "" };
+        state.form = {
+          action: g.action,
+          note: g.note || "",
+          reasonCode: g.reasonCode || null,
+          agentBehavior: g.agentBehavior || null,
+        };
         render();
         say("editing a regrade (was " + LABELS[g.regrade.previous_action] +
             ") -- change it and add it back");
@@ -811,6 +1203,12 @@ export const GRADING_PAGE_HTML = String.raw`<!doctype html>
       candidateId: g.candidateId,
       action: g.action,
       note: g.note || undefined,
+      // undefined rather than null so an unset field is simply absent from the
+      // JSON. The server treats absent and null identically, but an absent key
+      // cannot be mistaken for an explicit "no reason" by a future reader of a
+      // captured request body.
+      reasonCode: g.reasonCode || undefined,
+      agentBehavior: g.agentBehavior || undefined,
     }));
     try {
       const res = await api("/api/grade-batch", {
@@ -911,6 +1309,19 @@ export const GRADING_PAGE_HTML = String.raw`<!doctype html>
         const when = document.createElement("span");
         when.textContent = new Date(g.created_at).toLocaleString() + " by " + g.graded_by;
         meta.append(when);
+        // Shown even though the note is right above it: the note may have been
+        // edited past recognition, and the code is the part that still answers
+        // "why". That independence is the reason 042 stores both.
+        if (g.reason_code) {
+          const rc = document.createElement("span");
+          rc.textContent = "reason: " + g.reason_code;
+          meta.append(rc);
+        }
+        if (g.agent_behavior) {
+          const ab = document.createElement("span");
+          ab.textContent = "agent: " + BEHAVIOR_LABELS[g.agent_behavior];
+          meta.append(ab);
+        }
         if (g.machine_grade) {
           const m = document.createElement("span");
           m.textContent = "machine: " + g.machine_grade;
@@ -974,6 +1385,11 @@ export const GRADING_PAGE_HTML = String.raw`<!doctype html>
       candidateId: g.candidate_id,
       action: action,
       note: g.note || "",
+      // Carried forward from the grade being changed, so a regrade starts from
+      // what the operator already said rather than blank. He can clear or
+      // replace either one in the form before sending.
+      reasonCode: g.reason_code || null,
+      agentBehavior: g.agent_behavior || null,
       content: g.content.slice(0, 400),
       // A regrade's candidate is BY DEFINITION not in the ungraded queue
       // (/api/queue filters reviewed_at IS NULL), so "edit" cannot find it by
@@ -1015,6 +1431,40 @@ export const GRADING_PAGE_HTML = String.raw`<!doctype html>
       state.form.action = ACTIONS[e.key];
       paintGrades();
       say("selected " + LABELS[state.form.action] + " -- Enter to add to batch");
+      return;
+    }
+    // Quick reasons, positionally bound to the row currently on screen -- q is
+    // the first offered reason for the selected grade, w the second, and so on.
+    // Positional rather than per-code because the offered set changes with the
+    // action: a fixed key per code would leave most of them dead on any given
+    // card, and the operator would stop reaching for them.
+    //
+    // Like every other accelerator here these only SELECT. A reason key inserts
+    // text into the note and sets the code; it never stages and never sends.
+    if (REASON_KEYS[e.key] !== undefined) {
+      e.preventDefault();
+      if (!state.form.action) {
+        say("pick a grade first -- quick reasons depend on it", "err");
+        return;
+      }
+      const offered = REASONS.filter(
+        (r) => r.appliesTo.indexOf(state.form.action) >= 0);
+      const reason = offered[REASON_KEYS[e.key]];
+      if (!reason) { say("no quick reason on that key for this grade"); return; }
+      applyReason(reason);
+      return;
+    }
+    // The second axis, on its own keys. Pressing the same one twice clears it,
+    // because rating is optional and an accidental press must be undoable
+    // without reaching for the mouse.
+    if (BEHAVIOR_KEYS[e.key]) {
+      e.preventDefault();
+      const value = BEHAVIOR_KEYS[e.key];
+      state.form.agentBehavior = state.form.agentBehavior === value ? null : value;
+      paintBehavior();
+      say(state.form.agentBehavior
+        ? "agent behavior: " + BEHAVIOR_LABELS[value] + " (not part of the grade)"
+        : "agent behavior cleared -- not rated");
       return;
     }
     if (e.key === "Enter") { e.preventDefault(); stageCurrent(); return; }

@@ -52,7 +52,9 @@ import {
   fetchQueue,
   fetchStats,
   gradeCandidate,
+  parseAgentBehavior,
   parseGradedBy,
+  parseReasonCode,
   parseReviewAction,
   ReviewInputError,
   submitGradeBatch,
@@ -141,6 +143,23 @@ async function readJsonBody(req: Request): Promise<Record<string, unknown>> {
     throw new ReviewInputError("body must be a JSON object");
   }
   return raw as Record<string, unknown>;
+}
+
+/**
+ * Tally non-null values into a code -> count map for a log line.
+ *
+ * Nulls are dropped rather than counted under a "none" key: both fields are
+ * optional and unset is the normal case, so a `{"none": 47}` entry would
+ * dominate every log record while saying nothing the sibling `with_reason`
+ * count does not already say.
+ */
+function countBy(values: Array<string | null>): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const v of values) {
+    if (v === null) continue;
+    out[v] = (out[v] ?? 0) + 1;
+  }
+  return out;
 }
 
 function requireId(value: unknown): string {
@@ -270,6 +289,15 @@ export function makeGradingHandler(
         const id = requireId(body.id);
         const action = parseReviewAction(body.action);
         const note = typeof body.note === "string" ? body.note : null;
+        // Validated HERE as well as in the batch writer, even though the writer
+        // is the single validation site: this route names its own field, so an
+        // unknown code answers "unknown reason_code ..." rather than
+        // "grades[0]: unknown reason_code ...", which would name an array the
+        // caller never sent.
+        const reasonCode = parseReasonCode(body.reasonCode ?? body.reason_code);
+        const agentBehavior = parseAgentBehavior(
+          body.agentBehavior ?? body.agent_behavior,
+        );
         // Transactional, because a single grade is now a batch of one: it
         // writes candidate_grade and candidate_memory together, and the note
         // goes to candidate_grade.note instead of over the distiller's
@@ -280,6 +308,8 @@ export function makeGradingHandler(
           action,
           gradedBy: grader,
           note,
+          reasonCode,
+          agentBehavior,
         });
         if (!result) {
           log?.warn("grade target not found", { namespace, candidate_id: id });
@@ -296,6 +326,10 @@ export function makeGradingHandler(
           agreed: result.agreed,
           regrade: result.superseded_grade_id !== null,
           has_note: note !== null && note.trim() !== "",
+          // Both are closed-vocabulary labels, not operator prose, so they are
+          // safe in a log line where the note body never is.
+          reason_code: result.reason_code,
+          agent_behavior: result.agent_behavior,
           duration_ms: Math.round(performance.now() - started),
         });
         return json(result);
@@ -347,6 +381,17 @@ export function makeGradingHandler(
             .length,
           agreed: result.results.filter((r) => r.agreed === true).length,
           disagreed: result.results.filter((r) => r.agreed === false).length,
+          // Counts per code, not a list of codes with candidate ids beside
+          // them: the useful operational question is "is the vocabulary being
+          // used", and an aggregate answers it without pinning a judgement to
+          // an identifiable item in a log file.
+          with_reason: result.results.filter((r) => r.reason_code !== null)
+            .length,
+          reason_codes: countBy(result.results.map((r) => r.reason_code)),
+          behavior_rated: result.results.filter(
+            (r) => r.agent_behavior !== null,
+          ).length,
+          agent_behavior: countBy(result.results.map((r) => r.agent_behavior)),
           duration_ms: Math.round(performance.now() - started),
         });
         return json(result);

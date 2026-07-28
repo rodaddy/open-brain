@@ -132,19 +132,22 @@ function makeNode(tagName: string): StubNode {
     },
     querySelector: (sel: string) => node.querySelectorAll(sel)[0] ?? null,
     querySelectorAll: (sel: string) => {
-      // Supports only the two selectors the page uses: a bare tag name and
+      // Supports only the selectors the page uses: bare tag names and
       // ".grades label". Anything else is a test-stub gap, not a silent [].
+      // "label" (bare) was added for the agent-behavior block, whose radios the
+      // page repaints the same way it repaints the grade radios.
       const out: StubNode[] = [];
       const walk = (n: StubNode, underGrades: boolean): void => {
         for (const c of n.children) {
           const inGrades = underGrades || c.classList.contains("grades");
           if (sel === "input" && c.tagName === "INPUT") out.push(c);
+          else if (sel === "label" && c.tagName === "LABEL") out.push(c);
           else if (sel === ".grades label" && inGrades && c.tagName === "LABEL")
             out.push(c);
           walk(c, inGrades);
         }
       };
-      if (sel !== "input" && sel !== ".grades label") {
+      if (sel !== "input" && sel !== "label" && sel !== ".grades label") {
         throw new Error("stub DOM: unsupported selector " + sel);
       }
       walk(node, node.classList.contains("grades"));
@@ -161,6 +164,16 @@ function makeNode(tagName: string): StubNode {
     addEventListener: () => {},
   } as unknown as StubNode;
   return node;
+}
+
+/** Depth-first search for a node by id, over what the page has built. */
+function findById(node: StubNode, id: string): StubNode | null {
+  for (const c of node.children) {
+    if (c.id === id) return c;
+    const hit = findById(c, id);
+    if (hit) return hit;
+  }
+  return null;
 }
 
 interface PageHarness {
@@ -211,6 +224,9 @@ async function loadPage(
     "a-inconclusive",
     "a-duplicate",
     "agree",
+    "b-good",
+    "b-bad",
+    "b-neutral",
     "mode-label",
     "stage",
     "batch-n",
@@ -242,7 +258,14 @@ async function loadPage(
   root.append(...byId.values());
 
   const document = {
-    getElementById: (id: string) => byId.get(id) ?? null,
+    // Looks in the declared markup first, then in what the page BUILT. The card
+    // is created at render time and its inner controls (#note, #reasons,
+    // #behavior) are looked up by id afterwards -- exactly as they are in a
+    // browser, where the document sees an element the moment it is in the tree.
+    // Without this the reason row and the behavior radios are invisible to the
+    // page's own paint functions and every assertion about them would pass
+    // vacuously against a card that never wired them up.
+    getElementById: (id: string) => byId.get(id) ?? findById(root, id),
     createElement: (tag: string) => makeNode(tag),
     querySelectorAll: (sel: string) => root.querySelectorAll(sel),
     addEventListener: () => {},
@@ -270,6 +293,8 @@ async function loadPage(
             rate: null,
             distinct_machine_grades: 0,
           },
+          by_reason_code: {},
+          agent_behavior: { rated: 0, by_value: {} },
         }
       : path.startsWith("/api/history")
         ? {
@@ -339,7 +364,14 @@ async function loadPage(
   return {
     clickButton,
     pickGrade,
-    el: (id: string) => byId.get(id)!,
+    // Same fall-through as document.getElementById: declared markup first, then
+    // whatever the page BUILT. The card's own controls (#note, #reasons,
+    // #behavior) only exist after a render.
+    el: (id: string) => {
+      const found = byId.get(id) ?? findById(root, id);
+      if (!found) throw new Error("no element with id " + JSON.stringify(id));
+      return found;
+    },
     fetches,
     store,
     flush,
@@ -364,6 +396,11 @@ const GRADED_ITEM = {
 
 const QUEUE_ITEM = {
   id: "22222222-2222-4222-8222-222222222222",
+  // The original per-speech-turn unit (041). A fragment has no operator head,
+  // and the page must not invent one for it.
+  unit_kind: "fragment",
+  anchor_turn_id: null,
+  operator_text: null,
   candidate_type: "decision",
   content: "the distiller runs before Light",
   uncertain: false,
@@ -387,6 +424,78 @@ const QUEUE_ITEM = {
   ],
   reinforcement: null,
 };
+
+/**
+ * An operator-anchored EXCHANGE (migration 041), built from the real defect.
+ *
+ * The operator's turn is the one he actually typed; the agent sentence below is
+ * the one the old distiller made him grade instead. Using the real pair is what
+ * makes the ordering assertion mean something -- it is the exact screen he
+ * complained about.
+ */
+const EXCHANGE_ITEM = {
+  id: "44444444-4444-4444-8444-444444444444",
+  unit_kind: "exchange",
+  anchor_turn_id: "55555555-5555-4555-8555-555555555555",
+  operator_text:
+    "I can't decide whether the DreamEngine curation logic should move to " +
+    "TypeScript now or wait until after drizzle...",
+  candidate_type: "decision",
+  content:
+    "Drizzle isn't a dependency and there's no config -- planned, not in progress",
+  uncertain: false,
+  uncertainty_reason: null,
+  authority_tier: null,
+  model: null,
+  machine_grade: null,
+  source_turn_ids: ["55555555-5555-4555-8555-555555555555"],
+  context: [
+    {
+      id: "66666666-6666-4666-8666-666666666666",
+      role: "assistant",
+      content:
+        "Drizzle isn't a dependency and there's no config -- planned, not in progress",
+      session_ref: "s2",
+      session_seq: 9,
+      repo: "open-brain",
+      occurred_at: "2026-07-28T01:00:00.000Z",
+      is_human_prompt: false,
+      is_source: false,
+    },
+  ],
+  reinforcement: null,
+};
+
+/**
+ * Pick an agent-behavior rating by its visible label.
+ *
+ * Its own helper rather than a parameter on pickGrade, because the two are
+ * deliberately different controls in different radio groups -- a shared helper
+ * would be the test agreeing with a merge the design refuses.
+ */
+function pickBehavior(page: PageHarness, label: string): void {
+  const box = page.el("behavior");
+  const found = box
+    .querySelectorAll("label")
+    .filter((l) => l.textContent.includes(label));
+  if (found.length === 0) {
+    throw new Error("no behavior labelled " + JSON.stringify(label));
+  }
+  found[0]!.querySelector("input")!.onchange?.();
+}
+
+/** Collect every button label under a node, in document order. */
+function buttonLabels(node: StubNode): string[] {
+  const out: string[] = [];
+  const walk = (n: StubNode): void => {
+    for (const c of n.children) {
+      if (c.tagName === "BUTTON") out.push(c.textContent);
+      walk(c);
+    }
+  };
+  walk(node);
+  return out;
+}
 
 describe("nothing reaches the server until SEND", () => {
   it("stages a grade with no network write at all", async () => {
@@ -560,5 +669,253 @@ describe("reset", () => {
     page.clickButton(page.el("stage"), "Add to batch");
     expect(page.el("batch-n").textContent).toBe("0");
     expect(page.el("msg").textContent).toContain("pick a grade first");
+  });
+});
+
+describe("the operator's words lead an exchange", () => {
+  it("puts operator_text ABOVE the distilled claim and the agent turns", async () => {
+    // THE DEFECT 041 EXISTS FOR, stated as an ordering fact. The operator hit
+    // this live: he was asked to grade the AGENT's "Drizzle isn't a
+    // dependency..." while his own turn sat in the context panel below. His
+    // instruction was verbatim -- "my part of the conversation should be the
+    // first thing, anything below that can be agent response and maybe tool
+    // calls to get there" -- so position, not mere presence, is the assertion.
+    const page = await loadPage({ queue: [EXCHANGE_ITEM] });
+    const rendered = page.el("stage").textContent;
+
+    const opAt = rendered.indexOf("I can't decide whether the DreamEngine");
+    const claimAt = rendered.indexOf("Drizzle isn't a dependency");
+    expect(opAt).toBeGreaterThanOrEqual(0);
+    expect(claimAt).toBeGreaterThanOrEqual(0);
+    // Strictly above. Reversing the two blocks in render() fails here.
+    expect(opAt).toBeLessThan(claimAt);
+    // And it is labelled as his, not presented as one more quoted turn.
+    expect(rendered).toContain("you asked");
+    // The agent activity is named as the body of the exchange.
+    expect(rendered).toContain("what the agent did about it");
+  });
+
+  it("does NOT fabricate an operator head for a fragment", async () => {
+    // Putting agent text in the lead position is precisely the defect. A
+    // fragment has no operator turn, so the lead block must be absent rather
+    // than filled with whatever text is nearest.
+    const page = await loadPage({ queue: [QUEUE_ITEM] });
+    const rendered = page.el("stage").textContent;
+    expect(rendered).toContain("the distiller runs before Light");
+    expect(rendered).not.toContain("you asked");
+    expect(rendered).toContain("source turns and surrounding conversation");
+  });
+
+  it("says so when an exchange has no operator turn at its head", async () => {
+    // Orphan exchanges (17 of 289, measured 2026-07-28) are captured, not
+    // dropped. Rendering one exactly like an anchored exchange would hide that
+    // the head -- the reason it ranks lower -- is missing.
+    const orphan = {
+      ...EXCHANGE_ITEM,
+      anchor_turn_id: null,
+      operator_text: null,
+    };
+    const page = await loadPage({ queue: [orphan] });
+    expect(page.el("stage").textContent).toContain(
+      "No operator turn heads this exchange",
+    );
+  });
+});
+
+describe("canned reasons fill the note without replacing it", () => {
+  it("shows no reasons until a grade is picked, then only that grade's", async () => {
+    const page = await loadPage({ queue: [QUEUE_ITEM] });
+    expect(page.el("stage").textContent).toContain(
+      "pick a grade to see quick reasons",
+    );
+
+    page.pickGrade("fail");
+    const onReject = buttonLabels(page.el("stage"));
+    // 'progress narration' applies to rejected...
+    expect(onReject).toContain("progress narration");
+    // ...and 'fixes an issue' does not: it is a promote reason. Offering all
+    // twelve on every card is the version that gets ignored.
+    expect(onReject).not.toContain("fixes an issue");
+
+    page.pickGrade("pass");
+    const onPromote = buttonLabels(page.el("stage"));
+    expect(onPromote).toContain("fixes an issue");
+    expect(onPromote).not.toContain("progress narration");
+  });
+
+  it("INSERTS the reason text into the note, editable, and records the code", async () => {
+    // The operator's requirement, verbatim: "so the can'd response if i click
+    // one, should allow me to put it into the notes for adjustment and/or the
+    // note section stays to allow me to add a little color".
+    const page = await loadPage({ queue: [QUEUE_ITEM] });
+    page.pickGrade("pass");
+    page.clickButton(page.el("stage"), "states a fact");
+
+    const note = page.el("note");
+    // The text is IN the textarea, which still exists and is still editable.
+    expect(note.tagName).toBe("TEXTAREA");
+    expect(note.value).toContain("States a durable fact worth remembering.");
+
+    page.clickButton(page.el("stage"), "Add to batch");
+    const staged = JSON.parse(page.store.get("ob.grading.batch.v1")!) as Array<{
+      note: string;
+      reasonCode: string;
+    }>;
+    expect(staged[0]!.reasonCode).toBe("states-fact");
+    expect(staged[0]!.note).toContain("States a durable fact");
+  });
+
+  it("EDITING THE NOTE DOES NOT CLEAR THE CODE", async () => {
+    // The requirement the whole two-column design turns on. The operator clicks
+    // a reason to get a starting sentence, then rewrites it -- and the code must
+    // survive, because after the edit it is the only thing that still says why.
+    const page = await loadPage({ queue: [QUEUE_ITEM] });
+    page.pickGrade("pass");
+    page.clickButton(page.el("stage"), "states a fact");
+
+    const note = page.el("note");
+    note.value = "actually it's the deploy host that matters here";
+    note.oninput?.();
+
+    page.clickButton(page.el("stage"), "Add to batch");
+    const staged = JSON.parse(page.store.get("ob.grading.batch.v1")!) as Array<{
+      note: string;
+      reasonCode: string;
+    }>;
+    // The text is entirely the operator's...
+    expect(staged[0]!.note).toBe(
+      "actually it's the deploy host that matters here",
+    );
+    expect(staged[0]!.note).not.toContain("durable fact");
+    // ...and the code is still there.
+    expect(staged[0]!.reasonCode).toBe("states-fact");
+  });
+
+  it("APPENDS a second reason rather than replacing the first", async () => {
+    // Replacing would destroy both the first sentence and whatever colour the
+    // operator had already typed after it.
+    const page = await loadPage({ queue: [QUEUE_ITEM] });
+    page.pickGrade("pass");
+    page.clickButton(page.el("stage"), "states a fact");
+    page.clickButton(page.el("stage"), "shows reasoning");
+
+    const note = page.el("note");
+    expect(note.value).toContain("States a durable fact");
+    expect(note.value).toContain("Shows the logic behind the decision");
+  });
+
+  it("keeps the operator's own typing when a reason is added after it", async () => {
+    const page = await loadPage({ queue: [QUEUE_ITEM] });
+    page.pickGrade("pass");
+    const note = page.el("note");
+    note.value = "my own words first.";
+    note.oninput?.();
+    page.clickButton(page.el("stage"), "states a fact");
+    expect(page.el("note").value).toContain("my own words first.");
+    expect(page.el("note").value).toContain("States a durable fact");
+  });
+
+  it("sends the reason code to the server on the batch POST", async () => {
+    const page = await loadPage({ queue: [QUEUE_ITEM] });
+    page.pickGrade("fail");
+    page.clickButton(page.el("stage"), "progress narration");
+    page.clickButton(page.el("stage"), "Add to batch");
+    page.el("send").onclick?.();
+    await page.flush();
+
+    const post = page.fetches.find((f) => f.path === "/api/grade-batch")!;
+    const body = post.body as { grades: Array<Record<string, unknown>> };
+    expect(body.grades[0]!.reasonCode).toBe("progress-narration");
+  });
+
+  it("does not post anything when a reason is clicked", async () => {
+    // A reason is an accelerator, not a submitter -- the same rule the grade
+    // keys follow. Nothing reaches the server until SEND.
+    const page = await loadPage({ queue: [QUEUE_ITEM] });
+    page.pickGrade("pass");
+    page.clickButton(page.el("stage"), "states a fact");
+    expect(page.fetches.filter((f) => f.method === "POST")).toHaveLength(0);
+  });
+});
+
+describe("the agent-behavior axis is separate and optional", () => {
+  it("is present, labelled as a different question, and not part of the grade", async () => {
+    const page = await loadPage({ queue: [QUEUE_ITEM] });
+    const rendered = page.el("stage").textContent;
+    expect(rendered).toContain("separate question -- agent behavior");
+    expect(rendered).toContain("agent did well");
+    expect(rendered).toContain("agent did wrong");
+    expect(rendered).toContain("unremarkable");
+  });
+
+  it("stages WITHOUT a behavior rating -- it is optional", async () => {
+    // Grading the memory is the job; rating the agent is colour. A form that
+    // refused to stage without it would make the second axis a tax on the first.
+    const page = await loadPage({ queue: [QUEUE_ITEM] });
+    page.pickGrade("pass");
+    page.clickButton(page.el("stage"), "Add to batch");
+    const staged = JSON.parse(page.store.get("ob.grading.batch.v1")!) as Array<{
+      agentBehavior: string | null;
+    }>;
+    expect(staged).toHaveLength(1);
+    // Null, NOT "neutral". Unrated and rated-unremarkable are different facts.
+    expect(staged[0]!.agentBehavior).toBeNull();
+  });
+
+  it("records a rating when one is given, alongside an unrelated grade", async () => {
+    // THE COMBINATION ONE COLUMN COULD NOT EXPRESS: the memory is worth keeping
+    // AND the agent got it wrong. That pairing is why 042 split the axes.
+    const page = await loadPage({ queue: [QUEUE_ITEM] });
+    page.pickGrade("pass");
+    pickBehavior(page, "agent did wrong");
+    page.clickButton(page.el("stage"), "Add to batch");
+    const staged = JSON.parse(page.store.get("ob.grading.batch.v1")!) as Array<{
+      action: string;
+      agentBehavior: string;
+    }>;
+    expect(staged[0]!.action).toBe("promoted");
+    expect(staged[0]!.agentBehavior).toBe("bad");
+  });
+
+  it("can be un-rated again, because an accidental click must be undoable", async () => {
+    const page = await loadPage({ queue: [QUEUE_ITEM] });
+    page.pickGrade("pass");
+    pickBehavior(page, "agent did well");
+    page.clickButton(page.el("stage"), "not rated");
+    page.clickButton(page.el("stage"), "Add to batch");
+    const staged = JSON.parse(page.store.get("ob.grading.batch.v1")!) as Array<{
+      agentBehavior: string | null;
+    }>;
+    expect(staged[0]!.agentBehavior).toBeNull();
+  });
+
+  it("does not disturb the memory grade", async () => {
+    // Separate radio groups. Sharing the group name would let picking a
+    // behavior deselect the grade -- one control wearing two labels, which is
+    // exactly the merge 042 exists to prevent.
+    const page = await loadPage({ queue: [QUEUE_ITEM] });
+    page.pickGrade("inconclusive");
+    pickBehavior(page, "agent did well");
+    page.clickButton(page.el("stage"), "Add to batch");
+    const staged = JSON.parse(page.store.get("ob.grading.batch.v1")!) as Array<{
+      action: string;
+      agentBehavior: string;
+    }>;
+    expect(staged[0]!.action).toBe("inconclusive");
+    expect(staged[0]!.agentBehavior).toBe("good");
+  });
+
+  it("sends the rating on the batch POST and posts nothing before SEND", async () => {
+    const page = await loadPage({ queue: [QUEUE_ITEM] });
+    page.pickGrade("fail");
+    pickBehavior(page, "agent did wrong");
+    expect(page.fetches.filter((f) => f.method === "POST")).toHaveLength(0);
+
+    page.clickButton(page.el("stage"), "Add to batch");
+    page.el("send").onclick?.();
+    await page.flush();
+    const post = page.fetches.find((f) => f.path === "/api/grade-batch")!;
+    const body = post.body as { grades: Array<Record<string, unknown>> };
+    expect(body.grades[0]!.agentBehavior).toBe("bad");
   });
 });
