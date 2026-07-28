@@ -205,9 +205,17 @@ export interface DreamLightSummary {
 
 export interface DreamLightDeps {
   pool: Pool;
+  /**
+   * Content-free logger. `meta` is REQUIRED rather than optional so a
+   * MaintenanceQueueLogger (src/maintenance-queue.ts) satisfies this shape --
+   * that logger's `fields` parameter is non-optional, and an optional parameter
+   * here would make it structurally incompatible, which is what kept Light from
+   * being registrable in composeMaintenanceHandlers. Every call site in this
+   * module already passes meta.
+   */
   logger: {
-    info: (msg: string, meta?: Record<string, unknown>) => void;
-    warn: (msg: string, meta?: Record<string, unknown>) => void;
+    info: (msg: string, meta: Record<string, string | number>) => void;
+    warn: (msg: string, meta: Record<string, string | number>) => void;
   };
   batchSize?: number;
 }
@@ -374,5 +382,106 @@ export async function runLightSweep(
 export function makeDreamLightHandler(deps: DreamLightDeps) {
   return async function dreamLightHandler(): Promise<void> {
     await runLightSweep(deps);
+  };
+}
+
+/**
+ * MEASURED DELTA AGAINST docs/dream-design.md:230-239 -- Light counts, it does
+ * NOT gate.
+ *
+ * THE DOC'S PREMISE, verbatim (dream-design.md:232-234):
+ *
+ *     The occurrence count light maintains IS the corroboration signal that
+ *     promotion (#394) and supersession (#396) depend on. Things that actually
+ *     mattered get said more than once, across sessions.
+ *
+ * THAT PREMISE IS FALSE ON THIS CORPUS, and the measurement is not marginal.
+ * Over the full 3,558-turn sweep (2026-07-27, recorded at dream-light.ts:106-119
+ * and re-confirmed 2026-07-28 at 3,795 turns / 1,018 occurrence rows): after
+ * excluding tool output and tool-call stubs, exactly ONE piece of content
+ * appeared in more than one session -- "are we at a good stop point, this box
+ * needs to reboot", in 5 sessions. One in 3,558.
+ *
+ * The cause is not a bug in the counting. It is that the operator does not
+ * repeat himself: a decision is stated once, acted on, and never restated. The
+ * corpus is dense with exactly the content the doc's premise predicts would be
+ * repeated, and it is not repeated even once.
+ *
+ * WHAT THAT CHANGES, AND WHAT IT DOES NOT.
+ *
+ * It does NOT make the count worthless. When corroboration fires it is real
+ * evidence a model cannot manufacture, it costs nothing to maintain, and REM
+ * reads it as its strongest positive signal (src/dream-rem.ts, heuristicRemGrader).
+ * Light keeps counting exactly as before -- runLightSweep is unchanged.
+ *
+ * It DOES disqualify the count as a GATE. If REM only saw corroborated content,
+ * REM would see one item and the other 1,103 candidates would never reach the
+ * operator -- a 99.9% suppression rate produced by a premise that measurement
+ * has already falsified. That is precisely the failure the 2026-07-28 governing
+ * decision names (037:1-30): a filter tuned before there is graded data is
+ * tuned on nothing, and it destroys the evidence needed to tune it.
+ *
+ * So the ordering across stages is: Light COUNTS, REM READS THE COUNT AS ONE
+ * SIGNAL AMONG OTHERS, and nothing anywhere filters on it. This function is the
+ * queue Light publishes downstream, and its predicate is deliberately blind to
+ * occurrence data -- if a future change adds an occurrence predicate here, it
+ * is reintroducing the gate this delta exists to remove.
+ *
+ * This is recorded rather than silently contradicted, per dream-design.md:1363
+ * ("Do not invent answers to these during implementation -- if implementation
+ * forces a choice, record it as a decision with its reasoning"). The open
+ * question it touches is #1 in that table: how a genuine one-off gets promoted.
+ * No rule is invented here; the one-off simply is not suppressed.
+ */
+export interface LightQueueDepth {
+  /** Turns Light has not yet counted. */
+  unswept: number;
+  /** Turns not yet distilled -- the backlog REM's trigger actually watches. */
+  undistilled: number;
+  /** Distinct content rows Light has counted. */
+  occurrence_rows: number;
+  /** Occurrence rows with cross-session support. The rare, real signal. */
+  corroborated_rows: number;
+}
+
+/**
+ * Report what Light has produced and what is still owed downstream.
+ *
+ * Read-only. `undistilled` is the number #391's trigger watches -- per the #390
+ * correction (dream-design.md:244-255), "light backlog" means the
+ * `WHERE distilled_at IS NULL` count on ob_raw_turns, not a counter Light
+ * maintains. Both numbers are returned together so an operator can see that
+ * they move independently.
+ */
+export async function readLightQueueDepth(
+  pool: Pool,
+  namespace?: string,
+): Promise<LightQueueDepth> {
+  const q = await pool.query<{
+    unswept: string;
+    undistilled: string;
+    occurrence_rows: string;
+    corroborated_rows: string;
+  }>(
+    `SELECT
+       (SELECT count(*) FROM ob_raw_turns
+         WHERE light_swept_at IS NULL
+           AND ($1::text IS NULL OR namespace = $1))::text AS unswept,
+       (SELECT count(*) FROM ob_raw_turns
+         WHERE distilled_at IS NULL
+           AND ($1::text IS NULL OR namespace = $1))::text AS undistilled,
+       (SELECT count(*) FROM content_occurrences
+         WHERE ($1::text IS NULL OR namespace = $1))::text AS occurrence_rows,
+       (SELECT count(*) FROM content_occurrences
+         WHERE session_count > 1
+           AND ($1::text IS NULL OR namespace = $1))::text AS corroborated_rows`,
+    [namespace ?? null],
+  );
+  const r = q.rows[0]!;
+  return {
+    unswept: Number(r.unswept),
+    undistilled: Number(r.undistilled),
+    occurrence_rows: Number(r.occurrence_rows),
+    corroborated_rows: Number(r.corroborated_rows),
   };
 }

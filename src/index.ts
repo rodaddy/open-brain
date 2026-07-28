@@ -364,7 +364,8 @@ if (import.meta.main) {
   if (maintenanceQueueEnabled()) {
     maintenance = startMaintenanceQueue({ pool, logger });
     logger.info("maintenance queue started", {
-      handlers: "embedding.repair,graph.derive",
+      handlers:
+        "embedding.repair,graph.derive,memory.distill,dream.light,dream.rem",
     });
   } else {
     logger.info("maintenance queue disabled", {
