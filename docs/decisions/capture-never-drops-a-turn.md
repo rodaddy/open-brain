@@ -132,21 +132,58 @@ at the bottom of results, quiet and not wrong. A dropped turn is gone.
 Same day, same principle, different lane. `raw-turns.ts:188` defaulted to
 reading **8** transcript entries per `Stop` hook.
 
-Measured across 1,038 turns in all sessions since 2026-07-25 21:00:
+### CORRECTED MEASUREMENT — the first one measured the wrong interval
 
-| Entries in one turn | Turns exceeding | Share |
+A first pass measured entries between consecutive **operator messages** and
+reported that the `8` truncated 57.8% of turns. **That number is wrong and is
+retracted.** It assumed one conversational turn equals one `Stop`.
+
+`Stop` fires whenever the assistant stops emitting — including between every
+tool batch, not only when it finishes replying. In this session it fired 1,040
+times against 198 operator messages, roughly 5× more often than the first
+measurement assumed.
+
+Measured correctly, across **9,399 `Stop` events** in all sessions since
+2026-07-25 21:00 — entries accumulated between consecutive Stops:
+
+| | |
+|---|---|
+| median | **3** |
+| p90 | 5 |
+| p99 | 9 |
+| max | **17** |
+
+| Threshold | Stops with more unread entries | Share |
 |---|---|---|
-| 8 (the old default) | **600** | **57.8%** |
-| 30 | 277 | 26.7% |
-| 50 | 172 | 16.6% |
-| 100 (`MAX_BATCH`) | 69 | 6.6% |
-| 200 | 30 | 2.9% |
+| 8 (the old default) | **126** | **1.34%** |
+| 30 | 0 | 0% |
+| 100 (`MAX_BATCH`) | 0 | 0% |
 
-Median 12 entries per turn, p90 78, p99 303, **max 553**.
+**So the `8` was very nearly adequate: it failed 1.34% of the time, not 58%.**
+The window never had to span a whole turn, only the gap since the last Stop, and
+that gap is three entries.
 
-The `8` was truncating **58% of every turn taken**. It was also the only
-constant in that file with no comment justifying it — `MAX_CONTENT_CHARS`,
-`TAIL_BYTES`, and `MAX_BATCH` all explain themselves.
+The raise to 100 is still correct — it takes a real 1.34% to zero and costs
+nothing — but it was **not** the cause of the capture loss. The `8` was also the
+only constant in that file with no comment justifying it, which is what drew
+attention to it; being unexplained is not the same as being the culprit.
+
+### What this means for where the loss actually was
+
+The distilled lane is where the damage was: the length floor and the `SIGNALS`
+allowlist, both fixed above. The raw lane had neither, and at 3 entries per Stop
+it was inside its window essentially always.
+
+Verified after the backfill: this session shows **243 operator rows in
+`ob_raw_turns` against 198 typed in the transcript** — complete, with the
+difference explained by multi-block entries the two counters treat differently.
+The raw lane is now whole and self-maintaining.
+
+**Keep watching it.** The correct health check is the simple one, not hook
+mechanics: compare typed-in-transcript against `is_human_prompt` rows in
+`ob_raw_turns` for a live session. If those diverge again, the cause is
+something not yet identified, and the instinct to measure window sizes should be
+resisted — that is what produced the retracted 58%.
 
 It assumed one turn is a handful of entries. True for plain conversation, false
 with tool calls: every call and every result is its own transcript line. Worse,
@@ -172,6 +209,44 @@ The distilled lane gets noisier: every "ok" and "yeah" now lands as a `fact`.
 That was weighed and accepted. It is the same trade as
 `let-everything-pass-grading.md` — the tier system is the precision filter, and
 it is applied later and reversibly, where a dropped turn is neither.
+
+## OPEN — what counts as "the conversation"? Not decided.
+
+Settled: **everything on screen goes in.** The operator's words and the
+assistant's replies, in full, no length test, no phrasing allowlist.
+
+Not settled: **the machinery underneath.** Reasoning blocks, tool invocations,
+tool output, hook injections, subagent sidechains. `ob_raw_turns` currently
+holds all of it — 25,151 rows of which only 1,089 are operator turns, so tool
+and assistant volume is ~96% of the table.
+
+Operator, 2026-07-28, and the uncertainty is the point:
+
+> "we need to decide if any of this ... any of the back-end signals of you doing
+> thinking and talking and stuff actually needs to be brought in as well. I
+> think that's less likely and something that should be pushed out to somewhere
+> else, but I honestly at this point I don't know anymore."
+
+Earlier the same day he sketched the likely split — memory versus observability,
+with Langfuse/LangGraph named as the plausible home for execution traces. That
+is a direction, not a decision.
+
+**Do not resolve this by inference, and do not let it be resolved by accident.**
+The failure mode is a stage quietly starting to filter on `role` or on
+`metadata.kind` and calling it cleanup. Two things to hold until it is decided
+deliberately:
+
+1. Storage and use are different questions. Tool output can stay in
+   `ob_raw_turns` and be excluded from grading without being deleted — the
+   backfill already tags `metadata.kind` so a consumer can exclude without
+   re-deriving what a row was.
+2. Tool output is not inert context. `distill-window.ts` keeps `tool` turns as
+   context-only precisely so tool results can ground a claim, and the overnight
+   verifier confirmed that behavior. Removing it from the corpus would change
+   what the extractor can see, not just how much.
+
+Deciding this needs evidence that does not exist yet: grade a real batch, then
+look at whether the useful exchanges depended on surrounding tool output.
 
 ## Where this lives now, and where it must land
 
