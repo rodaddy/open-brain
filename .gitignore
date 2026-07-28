@@ -42,8 +42,24 @@ __pycache__/
 .planning/
 .reports/
 reports/
-.claude/
 .env.dev
+
+# .claude/ -- ignored by CONTENTS, not as a directory.
+#
+# `.claude/` on its own excludes the directory, and git then never descends into
+# it, so a later `!.claude/hooks/` re-include is silently ignored. Excluding
+# `.claude/*` instead leaves the directory walkable and makes the exceptions
+# below actually take effect. Verified with `git check-ignore -v`.
+.claude/*
+
+# EXCEPT the design-lookup gate. An untracked gate protects only the machine it
+# was written on: a runner box, a Codex worker, a fresh clone, or a worktree
+# gets no enforcement at all -- which is exactly where an unresearched edit is
+# most expensive and least visible. The gate and the settings that wire it up
+# are repo policy, not machine config, so they ship with the repo.
+# settings.local.json stays ignored: permissions and paths ARE machine-local.
+!.claude/hooks/
+!.claude/settings.json
 
 # Session report buffers are local-only, never committed (public repo)
 _reports/
