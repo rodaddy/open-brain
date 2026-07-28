@@ -293,9 +293,54 @@ describe("fetchQueue", () => {
       q.text.includes("FROM candidate_memory c"),
     )!;
     expect(page.text).toContain("reviewed_at IS NULL");
-    // uncertain reaches ORDER BY only -- it sorts, it never filters.
-    expect(page.text).toContain("ORDER BY c.uncertain DESC");
+    // uncertain reaches ORDER BY only -- it sorts, it never filters. It is no
+    // longer the FIRST sort key: migration 041 put unit_kind ahead of it so
+    // operator-anchored exchanges lead the page. The invariant under test is
+    // unchanged and is the one that matters -- uncertain appears in the sort and
+    // nowhere in the predicate.
+    expect(page.text).toContain("c.uncertain DESC");
     expect(page.text).not.toContain("WHERE c.uncertain");
+  });
+
+  it("ranks operator-anchored exchanges ahead of fragments, without filtering either", async () => {
+    // Migration 041. Measured 2026-07-28: 612 of the 1,104 fragment candidates
+    // are agent `fact` rows and not one traces to an operator turn, so ordering
+    // on `uncertain` alone fills the page with the agent's sentences -- which is
+    // the defect the operator hit live. Fragments stay IN the queue (8 are
+    // already graded, and fragment-vs-exchange grades are the measurement of
+    // whether the re-cut helped); they are ranked last, never excluded.
+    const db = fakeDb(queueResponder);
+    await fetchQueue(db, { namespace: "rico" });
+    const page = db.seen.find((q) =>
+      q.text.includes("FROM candidate_memory c"),
+    )!;
+
+    const orderBy = page.text.slice(page.text.indexOf("ORDER BY"));
+
+    // REGRESSION, caught on the live clone 2026-07-28. This was first written
+    // as `c.unit_kind DESC`, which sorts FRAGMENTS first -- 'f' comes after 'e',
+    // and DESC reverses it. The first real page came back as five fragments with
+    // no operator_text: the defect 041 exists to fix, reintroduced by assuming
+    // the alphabet agreed with the intent. Asserting the boolean expression is
+    // what pins the DIRECTION; asserting the column name alone did not.
+    expect(orderBy).toContain("(c.unit_kind <> 'exchange')");
+    expect(orderBy).not.toContain("c.unit_kind DESC");
+    // Orphan exchanges (no operator turn ahead of them) rank below anchored
+    // ones -- nobody asked for them.
+    expect(orderBy).toContain("(c.anchor_turn_id IS NULL)");
+    // unit_kind sorts and is SELECTed (the page needs it to know whether
+    // operator_text is a real head); it must never reach the predicate.
+    // Fragments stay in the queue -- 8 are already graded and the
+    // fragment-vs-exchange comparison is the point of keeping both.
+    const predicate = page.text.slice(
+      page.text.indexOf("WHERE"),
+      page.text.indexOf("ORDER BY"),
+    );
+    expect(predicate).not.toContain("unit_kind");
+    expect(predicate).not.toContain("anchor_turn_id");
+    expect(orderBy.indexOf("(c.unit_kind <> 'exchange')")).toBeLessThan(
+      orderBy.indexOf("c.uncertain DESC"),
+    );
   });
 
   it("tolerates an empty table -- day-one state", async () => {

@@ -157,6 +157,24 @@ export interface ReviewItem {
   created_at: string | null;
   source_turn_ids: string[];
   /**
+   * Which shape of unit produced this row (migration 041). 'exchange' is
+   * operator-anchored -- the operator's turn plus the agent activity answering
+   * it; 'fragment' is the original per-speech-turn unit. The page needs it to
+   * know whether `operator_text` is the head or the row has no head at all.
+   */
+  unit_kind: string;
+  /** The operator turn heading this exchange. Null for a fragment or an orphan. */
+  anchor_turn_id: string | null;
+  /**
+   * The operator's verbatim words, so the page can LEAD with them.
+   *
+   * Null means there is no operator turn at the head -- a fragment, or an orphan
+   * exchange. The UI must not substitute agent text into this position: doing so
+   * is the defect 041 exists to fix, where the operator was asked to grade the
+   * agent's middle sentence while his own turn sat in the context panel.
+   */
+  operator_text: string | null;
+  /**
    * Source turns plus surrounding conversation, in transcript order.
    *
    * A candidate with an empty array here is UNGRADEABLE and the UI must say so
@@ -351,7 +369,8 @@ export function parseGradedBy(value: unknown): string {
 const CANDIDATE_COLUMNS = `
   c.id, c.namespace, c.candidate_type, c.content, c.content_hash,
   c.uncertain, c.uncertainty_reason, c.authority_tier, c.model,
-  c.machine_grade, c.machine_grade_model, c.created_at, c.source_turn_ids
+  c.machine_grade, c.machine_grade_model, c.created_at, c.source_turn_ids,
+  c.unit_kind, c.anchor_turn_id, c.operator_text
 `;
 
 interface CandidateRow {
@@ -368,6 +387,9 @@ interface CandidateRow {
   machine_grade_model: string | null;
   created_at: Date | null;
   source_turn_ids: string[];
+  unit_kind: string;
+  anchor_turn_id: string | null;
+  operator_text: string | null;
 }
 
 type Queryable = Pick<pg.Pool, "query">;
@@ -556,6 +578,9 @@ async function hydrate(
     machine_grade_model: r.machine_grade_model,
     created_at: iso(r.created_at),
     source_turn_ids: r.source_turn_ids ?? [],
+    unit_kind: r.unit_kind ?? "fragment",
+    anchor_turn_id: r.anchor_turn_id,
+    operator_text: r.operator_text,
     context: context.get(r.id) ?? [],
     reinforcement: reinforcement.get(r.content_hash) ?? null,
   }));
@@ -589,11 +614,36 @@ export function clampOffset(value: unknown): number {
 }
 
 /**
- * The grading queue: unreviewed candidates, doubtful ones first.
+ * The grading queue: unreviewed candidates, OPERATOR-ANCHORED FIRST, then
+ * doubtful, then oldest.
  *
- * ORDER BY uncertain DESC, created_at matches idx_candidate_memory_uncertain_first
- * (037:141-143) exactly, so the partial index serves the page. The sort is the
- * ONLY thing `uncertain` is allowed to do here (037:59-63).
+ * WHY unit_kind LEADS THE SORT (migration 041). Measured on the live clone
+ * 2026-07-28: 612 of the 1,104 fragment candidates are agent `fact` rows and not
+ * one of them traces to an operator turn, while the operator's own 272 turns
+ * produced 167 candidates between them. Ordering only on `uncertain` therefore
+ * fills the page with the agent's sentences -- which is exactly what the
+ * operator hit live, being asked to grade the agent's "Drizzle isn't a
+ * dependency..." while his own turn sat unreviewed in the context panel.
+ *
+ * THE SORT KEY IS `(unit_kind <> 'exchange')`, NOT `unit_kind DESC`. An earlier
+ * version of this used `unit_kind DESC` and was WRONG IN THE WRONG DIRECTION --
+ * it put fragments first, because 'f' sorts after 'e' and DESC reverses that.
+ * Caught 2026-07-28 by reading the actual first page off the live clone, where
+ * the top five rows were all fragments with no operator_text. A boolean
+ * expression says what is meant ("exchange first") instead of depending on the
+ * alphabet happening to agree with the intent, and it stays correct if a third
+ * unit_kind is ever added.
+ *
+ * FRAGMENTS ARE NOT REMOVED FROM THE QUEUE, only ranked last. They are 1,104
+ * real candidates, 8 of them already graded, and the comparison between fragment
+ * grades and exchange grades is the measurement that says whether the re-cut
+ * helped. Filtering them out would destroy that, and `uncertain`/`unit_kind`
+ * are advisory-only by the same rule 037:59-63 sets: they sort the queue, never
+ * filter it.
+ *
+ * Within exchanges, orphans (anchor_turn_id IS NULL) sort after anchored ones:
+ * nobody asked for them, so they are worth less of the operator's attention --
+ * still gradeable, just later.
  */
 export async function fetchQueue(
   db: Queryable,
@@ -614,7 +664,10 @@ export async function fetchQueue(
     `SELECT ${CANDIDATE_COLUMNS}
        FROM candidate_memory c
       WHERE c.namespace = $1 AND c.reviewed_at IS NULL
-      ORDER BY c.uncertain DESC, c.created_at, c.id
+      ORDER BY (c.unit_kind <> 'exchange'),
+               (c.anchor_turn_id IS NULL),
+               c.uncertain DESC,
+               c.created_at, c.id
       LIMIT $2 OFFSET $3`,
     [options.namespace, limit, offset],
   );
