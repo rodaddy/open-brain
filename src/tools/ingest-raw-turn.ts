@@ -253,7 +253,10 @@ export function registerIngestRawTurn(server: McpServer, deps: ToolDeps): void {
 
         // valid_at mirrors occurred_at: a turn became true when it happened.
         // invalid_at/expired_at stay NULL until something retracts it.
-        const { rows } = await deps.pool.query(
+        const { rows } = await deps.pool.query<{
+          id: string;
+          session_ref: string | null;
+        }>(
           `INSERT INTO ob_raw_turns
              (namespace, turn_uuid, parent_turn_uuid, logical_parent_turn_uuid,
               prompt_id, session_ref, repo, git_branch, turn_index, role,
@@ -267,12 +270,65 @@ export function registerIngestRawTurn(server: McpServer, deps: ToolDeps): void {
                     content_hash, runtime, token_estimate, metadata,
                     redaction_applied, created_by, occurred_at)
            ON CONFLICT (namespace, turn_uuid) DO NOTHING
-           RETURNING id`,
+           RETURNING id, session_ref`,
           values,
         );
 
         const ingested = rows.length;
         const duplicates = kept.length - ingested;
+
+        // Assign session_seq server-side (migration 036). The client's
+        // turn_index cannot be trusted for ordering: it is a per-invocation
+        // counter, so every session in the corpus carried only 0..7 regardless
+        // of length. A client cannot fix this -- it sees one batch, retries,
+        // resumes, and several runtimes write the same session -- so the server
+        // owns the invariant its own schema declares.
+        //
+        // Recomputed for the whole affected session rather than appended to.
+        // Batches arrive out of order (spool replay, retries), so a late turn
+        // must be able to land in the MIDDLE of the sequence; appending would
+        // order by arrival instead of by when the turn happened. The
+        // (session_ref, occurred_at) pair is unique across the live corpus, and
+        // id breaks any tie deterministically.
+        //
+        // Failure here is logged, not fatal: the turn is already durably
+        // stored, and a NULL session_seq is repairable by re-running this
+        // statement. Losing captured conversation to a numbering error would be
+        // the far worse outcome.
+        const touchedSessions = [
+          ...new Set(
+            rows
+              .map((r) => r.session_ref)
+              .filter((s): s is string => s !== null),
+          ),
+        ];
+        if (touchedSessions.length > 0) {
+          try {
+            await deps.pool.query(
+              `WITH ordered AS (
+                 SELECT id,
+                        row_number() OVER (
+                          PARTITION BY session_ref
+                          ORDER BY occurred_at, id
+                        ) - 1 AS seq
+                   FROM ob_raw_turns
+                  WHERE session_ref = ANY($1::text[])
+               )
+               UPDATE ob_raw_turns t
+                  SET session_seq = o.seq
+                 FROM ordered o
+                WHERE t.id = o.id
+                  AND t.session_seq IS DISTINCT FROM o.seq`,
+              [touchedSessions],
+            );
+          } catch (seqErr) {
+            logger.warn("ingest_raw_turn_seq_failed", {
+              namespace: ns,
+              sessions: touchedSessions.length,
+              error: seqErr instanceof Error ? seqErr.message : String(seqErr),
+            });
+          }
+        }
 
         // Content-free telemetry: counts only, never turn text.
         logger.info("ingest_raw_turn_ok", {
