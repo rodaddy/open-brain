@@ -152,7 +152,8 @@ describe("decompose_entry", () => {
       connect: async () => ({
         query: async (sql: string, params?: unknown[]) => {
           writes.push({ sql, params });
-          if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql)) return { rows: [] };
+          if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql))
+            return { rows: [] };
           if (sql.includes("INSERT INTO thoughts")) {
             inserted += 1;
             return { rows: [{ id: `new-${inserted}` }] };
@@ -211,7 +212,75 @@ describe("decompose_entry", () => {
       expect(insertCalls.length).toBe(parsed.written_ids.length);
       expect(insertCalls[0]?.params?.[2]).toBe("bilby");
       expect(insertCalls[0]?.params?.[3]).toBe("bilby");
-      expect(insertCalls[0]?.params?.[9]).toBeNull();
+      // params[9] is parent_id. This assertion previously required it to be
+      // NULL, which encoded the defect rather than the contract: chunks were
+      // written with a chunk_index and no parent, so nothing could join a chunk
+      // back to what it was cut from and idx_thoughts_parent_id
+      // (011_chunking.sql:4, partial on parent_id IS NOT NULL) indexed nothing.
+      // A test asserting a broken link stays broken is why it survived.
+      expect(insertCalls[0]?.params?.[9]).toBe(SOURCE_ID);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("leaves parent_id null when the source is not a thought", async () => {
+    // parent_id REFERENCES thoughts(id) (011_chunking.sql:2), but this tool
+    // decomposes five tables. Writing a decision's id into that column would
+    // violate the foreign key at runtime -- a failure a mocked pool cannot
+    // surface, which is exactly why it is asserted here on the bound parameter
+    // instead. Non-thought sources keep their lineage in promoted_from only.
+    let inserted = 0;
+    const writes: Array<{ sql: string; params?: unknown[] }> = [];
+    const mockPool = {
+      query: async () => ({
+        rows: [
+          { id: SOURCE_ID, namespace: "bilby", content_text: longContent() },
+        ],
+      }),
+      connect: async () => ({
+        query: async (sql: string, params?: unknown[]) => {
+          writes.push({ sql, params });
+          if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql))
+            return { rows: [] };
+          if (sql.includes("INSERT INTO thoughts")) {
+            inserted += 1;
+            return { rows: [{ id: `new-${inserted}` }] };
+          }
+          return { rows: [] };
+        },
+        release: () => undefined,
+      }),
+    };
+    const auth: AuthInfo = { role: "agent", clientId: "bilby" };
+    const { client, cleanup } = await setupMcpClient(
+      registerDecomposeEntry,
+      mockPool,
+      createMockEmbed(),
+      auth,
+    );
+
+    try {
+      const result = await client.callTool({
+        name: "decompose_entry",
+        arguments: {
+          table: "decisions",
+          id: SOURCE_ID,
+          max_chunk_chars: 700,
+          overlap_chars: 50,
+          dry_run: false,
+          apply_mode: "write_replacements",
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const insertCalls = writes.filter((call) =>
+        call.sql.includes("INSERT INTO thoughts"),
+      );
+      expect(insertCalls.length).toBeGreaterThan(0);
+      for (const call of insertCalls) {
+        expect(call.params?.[9]).toBeNull();
+      }
     } finally {
       await cleanup();
     }
@@ -295,8 +364,10 @@ describe("decompose_entry", () => {
       connect: async () => ({
         query: async (sql: string) => {
           queries.push(sql);
-          if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql)) return { rows: [] };
-          if (sql.includes("INSERT INTO thoughts")) return { rows: [{ id: "new-1" }] };
+          if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql))
+            return { rows: [] };
+          if (sql.includes("INSERT INTO thoughts"))
+            return { rows: [{ id: "new-1" }] };
           return { rows: [] };
         },
         release: () => undefined,

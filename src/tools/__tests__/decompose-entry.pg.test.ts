@@ -101,7 +101,7 @@ dbDescribe("decompose_entry (live Postgres)", () => {
   /** Replacement rows only -- the ones this tool wrote, not the source. */
   async function readReplacements(): Promise<Array<Record<string, unknown>>> {
     const { rows } = await pool.query(
-      `SELECT id, content, namespace, chunk_index, tags, source, promoted_from
+      `SELECT id, content, namespace, chunk_index, parent_id, tags, source, promoted_from
          FROM thoughts
         WHERE created_by = $1 AND source = 'dreamengine-decomposition'
         ORDER BY chunk_index`,
@@ -229,7 +229,26 @@ dbDescribe("decompose_entry (live Postgres)", () => {
       expect(row.chunk_index as number).toBeGreaterThan(previousIndex);
       previousIndex = row.chunk_index as number;
       expect(row.promoted_from).toBeTruthy();
+      // THE JOINABLE PARENT LINK, not just the JSON provenance beside it.
+      // Originally this column was written as a literal null while chunk_index
+      // was populated, so a chunk recorded that it was Nth of something without
+      // recording of what -- and every assertion here passed anyway, because
+      // promoted_from carried the lineage in JSON. JSON provenance is not
+      // joinable, so no query could reassemble a decomposed entry from it.
+      expect(row.parent_id).toBe(id);
     }
+
+    // Reassembly is the whole point of the parent link: given only the source
+    // id, every chunk comes back in order. This is the query the partial index
+    // idx_thoughts_parent_id (011_chunking.sql:4) exists to serve, and it
+    // returned nothing at all while parent_id was null.
+    const { rows: reassembled } = await pool.query(
+      `SELECT content FROM thoughts
+        WHERE parent_id = $1
+        ORDER BY chunk_index`,
+      [id],
+    );
+    expect(reassembled).toHaveLength(rows.length);
 
     // The source row is untouched: decomposition proposes replacements, it
     // does not archive or delete what it decomposed.

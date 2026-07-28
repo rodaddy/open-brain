@@ -34,7 +34,10 @@ const SOURCE_CONTENT_SQL: Record<Table, string> = {
     " || CASE WHEN blockers IS NOT NULL AND array_length(blockers, 1) > 0 THEN E'\\nBlockers: ' || immutable_array_to_string(blockers, '; ') ELSE '' END",
 };
 
-export function registerDecomposeEntry(server: McpServer, deps: ToolDeps): void {
+export function registerDecomposeEntry(
+  server: McpServer,
+  deps: ToolDeps,
+): void {
   server.registerTool(
     "decompose_entry",
     {
@@ -42,7 +45,13 @@ export function registerDecomposeEntry(server: McpServer, deps: ToolDeps): void 
         "Plan dry-run-first decomposition of an oversized entry into smaller linked thoughts. " +
         "No writes occur unless dry_run=false and apply_mode=write_replacements.",
       inputSchema: {
-        table: z.enum(["thoughts", "decisions", "relationships", "projects", "sessions"]),
+        table: z.enum([
+          "thoughts",
+          "decisions",
+          "relationships",
+          "projects",
+          "sessions",
+        ]),
         id: z.string().uuid(),
         max_chunk_chars: z
           .number()
@@ -61,11 +70,15 @@ export function registerDecomposeEntry(server: McpServer, deps: ToolDeps): void 
         dry_run: z
           .boolean()
           .optional()
-          .describe("Defaults true. false requires apply_mode=write_replacements."),
+          .describe(
+            "Defaults true. false requires apply_mode=write_replacements.",
+          ),
         apply_mode: z
           .enum(["write_replacements"])
           .optional()
-          .describe("Required with dry_run=false to write replacement thoughts"),
+          .describe(
+            "Required with dry_run=false to write replacement thoughts",
+          ),
       },
       annotations: {
         title: "Decompose Entry",
@@ -79,7 +92,12 @@ export function registerDecomposeEntry(server: McpServer, deps: ToolDeps): void 
       const table = args.table as Table;
       if (!auth || !canRead(auth.role, table)) {
         return {
-          content: [{ type: "text" as const, text: `Permission denied: cannot read ${table}` }],
+          content: [
+            {
+              type: "text" as const,
+              text: `Permission denied: cannot read ${table}`,
+            },
+          ],
           isError: true,
         };
       }
@@ -94,8 +112,10 @@ export function registerDecomposeEntry(server: McpServer, deps: ToolDeps): void 
           isError: true,
         };
       }
-      const maxChunkChars = args.max_chunk_chars ?? DEFAULT_DECOMPOSITION_MAX_CHARS;
-      const overlapChars = args.overlap_chars ?? DEFAULT_DECOMPOSITION_OVERLAP_CHARS;
+      const maxChunkChars =
+        args.max_chunk_chars ?? DEFAULT_DECOMPOSITION_MAX_CHARS;
+      const overlapChars =
+        args.overlap_chars ?? DEFAULT_DECOMPOSITION_OVERLAP_CHARS;
       if (overlapChars >= maxChunkChars) {
         return {
           content: [
@@ -111,7 +131,9 @@ export function registerDecomposeEntry(server: McpServer, deps: ToolDeps): void 
       const row = await fetchSourceEntry(deps, auth, table, args.id);
       if (!row) {
         return {
-          content: [{ type: "text" as const, text: "Entry not found or archived" }],
+          content: [
+            { type: "text" as const, text: "Entry not found or archived" },
+          ],
           isError: true,
         };
       }
@@ -130,7 +152,12 @@ export function registerDecomposeEntry(server: McpServer, deps: ToolDeps): void 
         const applyCheck = canApplyReplacements(auth, namespace);
         if (!applyCheck.allowed) {
           return {
-            content: [{ type: "text" as const, text: `Permission denied: ${applyCheck.reason}` }],
+            content: [
+              {
+                type: "text" as const,
+                text: `Permission denied: ${applyCheck.reason}`,
+              },
+            ],
             isError: true,
           };
         }
@@ -159,7 +186,12 @@ export function registerDecomposeEntry(server: McpServer, deps: ToolDeps): void 
             ],
           };
         }
-        const applied = await writeReplacementThoughts(deps, auth, namespace, plan);
+        const applied = await writeReplacementThoughts(
+          deps,
+          auth,
+          namespace,
+          plan,
+        );
         const applySummary = buildApplySummary(plan, applied);
         return {
           content: [
@@ -213,7 +245,10 @@ function canApplyReplacements(
   }
   const namespaceCheck = canWriteNamespace(auth, namespace);
   if (!namespaceCheck.allowed) {
-    return { allowed: false, reason: namespaceCheck.reason ?? "namespace rejected" };
+    return {
+      allowed: false,
+      reason: namespaceCheck.reason ?? "namespace rejected",
+    };
   }
   return { allowed: true };
 }
@@ -262,7 +297,24 @@ async function writeReplacementThoughts(
           embedding ? new Date().toISOString() : null,
           embedding ? EMBEDDING_MODEL : null,
           JSON.stringify(proposal.provenance),
-          null,
+          // THE PARENT LINK. This was `null` from the original #247 implementation
+          // (cb04044) while `chunk_index` beside it was populated correctly, so
+          // every chunk knew it was Nth of something and nothing recorded of
+          // WHAT. Lineage lived only in the `promoted_from` JSON above -- which
+          // is real provenance but is not joinable, so no read path could ever
+          // reassemble a decomposed entry. `idx_thoughts_parent_id`
+          // (011_chunking.sql:4) is partial on `parent_id IS NOT NULL` and was
+          // therefore indexing zero rows while reporting healthy. A declared
+          // relation that is never populated is worse than a missing one: it
+          // typechecks, satisfies every constraint, and returns an empty result
+          // set that reads as "no chunks" rather than "broken link".
+          //
+          // ONLY FOR A `thoughts` SOURCE. The FK targets thoughts(id)
+          // (011_chunking.sql:2) but this tool decomposes five tables, so a
+          // decision's id in this column would violate it. A cross-table parent
+          // needs a schema change; until then the JSON provenance remains the
+          // only lineage for non-thought sources, exactly as before.
+          plan.source_ref.table === "thoughts" ? plan.source_ref.id : null,
           proposal.chunk_index,
         ],
       );
@@ -291,7 +343,10 @@ async function writeReplacementThoughts(
   }
 }
 
-function buildApplySummary(plan: DecompositionPlan, applied: ReplacementWriteResult): {
+function buildApplySummary(
+  plan: DecompositionPlan,
+  applied: ReplacementWriteResult,
+): {
   requested_writes: number;
   written_count: number;
   preexisting_duplicate_count: number;
