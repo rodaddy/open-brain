@@ -500,6 +500,14 @@ describe("isAskUserQuestionAnswer", () => {
     // feature must not be misfiled as an instance of it. Both halves matter --
     // an unanchored regex trips on the quote, and dropping the role check trips
     // on the operator typing the phrase at the very start of a line.
+    //
+    // The role assertions below CANNOT see the anchor. `role === 'tool'`
+    // short-circuits first (distill-exchange.ts:117-119), so with an operator
+    // turn the regex is never evaluated and deleting the `^` leaves them green
+    // -- measured: dropping the anchor kept this file at 48 pass / 0 fail. The
+    // tool() case underneath is the one that reaches the regex at all, so the
+    // anchor is only defended if the phrase is quoted mid-line by something the
+    // role gate lets through.
     expect(
       isAskUserQuestionAnswer(
         operator("when The user answered: appears we should badge it as AUQ"),
@@ -508,6 +516,11 @@ describe("isAskUserQuestionAnswer", () => {
     expect(
       isAskUserQuestionAnswer(
         operator("The user answered: is the prefix I want you to key on"),
+      ),
+    ).toBe(false);
+    expect(
+      isAskUserQuestionAnswer(
+        tool('grep found: The user answered: "Track it?"="No"'),
       ),
     ).toBe(false);
   });
