@@ -8,6 +8,7 @@
     "start": "bun run src/index.ts",
     "start:two-worker": "bun run scripts/run-two-worker.ts",
     "migrate": "bun run scripts/migrate.ts",
+    "db": "bun run --env-file=.env scripts/db.ts",
     "test": "bun test",
     "typecheck": "bunx tsc --noEmit",
     "backfill": "bun run scripts/backfill.ts",
