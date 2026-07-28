@@ -1,6 +1,6 @@
 {
   "env": {
-    "TMPDIR": "/Volumes/ThunderBolt/_tmp/open-brain/_scratch"
+    "TMPDIR": "/mnt/ThunderBolt/_tmp/open-brain/_scratch"
   },
   "hooks": {
     "PreToolUse": [
