@@ -145,13 +145,36 @@ function fullResponder(sql: string): unknown[] {
       },
     ];
   }
+  // POST /api/grade is a batch of one since 2026-07-28, so the single-item
+  // route needs the grade-row statements answered too. It no longer has an
+  // UPDATE of its own that could overwrite the distiller's uncertainty_reason.
+  if (sql.includes("gen_random_uuid() AS batch_id")) {
+    return [{ batch_id: BATCH_ID }];
+  }
+  if (sql.includes("UPDATE candidate_grade")) return [];
+  if (sql.includes("INSERT INTO candidate_grade")) {
+    return [
+      {
+        id: "99999999-9999-4999-8999-999999999999",
+        created_at: new Date("2026-07-28T06:00:00Z"),
+      },
+    ];
+  }
   return [];
 }
 
+/**
+ * Transactional by default.
+ *
+ * Every write route on this server now holds a transaction: the batch routes
+ * always did, and POST /api/grade joined them when it became a batch of one so
+ * that a note lands in candidate_grade.note instead of over the distiller's
+ * column. A query-only fake would answer 501 on all of them.
+ */
 function serverFor(
   responder: (sql: string, values: unknown[]) => unknown[] = fullResponder,
 ) {
-  const db = fakeDb(responder);
+  const db = fakeTxDb(responder);
   return {
     db,
     handle: makeGradingHandler({
@@ -249,20 +272,28 @@ describe("no route can write machine_grade", () => {
 
     expect(db.seen.length).toBeGreaterThan(5);
     for (const q of db.seen) {
-      // Only a SET clause is a write. `machine_grade = review_action` appears
-      // inside a count() FILTER on the stats query, which is the agreement
-      // measurement reading both columns -- exactly what they exist for.
-      const isWrite = /\bUPDATE\b|\bINSERT\b/.test(q.text);
-      if (!isWrite) continue;
-      const setClause = q.text.slice(
-        q.text.indexOf("SET "),
-        q.text.indexOf("WHERE"),
-      );
-      expect(setClause).not.toContain("machine_grade");
+      if (/\bUPDATE\b/.test(q.text)) {
+        // Only a SET clause is a write. `machine_grade = review_action` appears
+        // inside a count() FILTER on the stats query, which is the agreement
+        // measurement reading both columns -- exactly what they exist for.
+        const setClause = q.text.slice(
+          q.text.indexOf("SET "),
+          q.text.indexOf("WHERE"),
+        );
+        expect(setClause).not.toContain("machine_grade");
+      }
+      if (/\bINSERT\b/.test(q.text)) {
+        // Since 040 the grading surface DOES insert -- one row per act of
+        // judgement -- but only into candidate_grade, which has no
+        // machine_grade column at all. It must never insert into
+        // candidate_memory, which is the distiller's table.
+        expect(q.text).toContain("INSERT INTO candidate_grade");
+        expect(q.text).not.toContain("machine_grade");
+      }
+      // No path on this server may write the distiller's stated reason for
+      // doubt. POST /api/grade used to overwrite it with the operator's note.
+      expect(q.text).not.toContain("uncertainty_reason =");
     }
-    // And no statement of any kind is an INSERT: the grading surface only ever
-    // updates an existing candidate.
-    expect(db.seen.some((q) => /\bINSERT\b/.test(q.text))).toBe(false);
   });
 
   it("rejects a machine_grade in the body on grade, with 403", async () => {
@@ -301,8 +332,26 @@ describe("grading is namespace-scoped on every statement", () => {
     await handle(post("/api/ungrade", { id: ID }));
 
     expect(db.seen.length).toBeGreaterThan(0);
-    for (const q of db.seen) {
-      expect(q.text).toContain("namespace = $1");
+    // Transaction control and the batch-id generator address no table, so there
+    // is nothing for a namespace predicate to scope. Every statement that
+    // touches a row still carries one.
+    const scoped = db.seen.filter(
+      (q) =>
+        !["BEGIN", "COMMIT", "ROLLBACK"].includes(q.text) &&
+        !q.text.includes("gen_random_uuid() AS batch_id"),
+    );
+    expect(scoped.length).toBeGreaterThan(0);
+    for (const q of scoped) {
+      // The INSERT into candidate_grade carries the namespace as a written
+      // COLUMN rather than a predicate -- 040 stores it on the row precisely so
+      // later reads can scope without a join. Either way it is $1, which is the
+      // property that matters: the namespace is never optional and never later
+      // than the first parameter.
+      const scopedByPredicate = q.text.includes("namespace = $1");
+      const scopedByInsert =
+        q.text.includes("INSERT INTO candidate_grade") &&
+        q.text.includes("(namespace,");
+      expect(scopedByPredicate || scopedByInsert).toBe(true);
       expect(q.values[0]).toBe("rico");
     }
   });
@@ -555,7 +604,12 @@ function batchResponder(sql: string): unknown[] {
   }
   if (sql.includes("UPDATE candidate_grade")) return [];
   if (sql.includes("INSERT INTO candidate_grade")) {
-    return [{ id: "99999999-9999-4999-8999-999999999999" }];
+    return [
+      {
+        id: "99999999-9999-4999-8999-999999999999",
+        created_at: new Date("2026-07-28T06:00:00Z"),
+      },
+    ];
   }
   if (sql.includes("count(*) AS total FROM candidate_grade")) {
     return [{ total: "2" }];

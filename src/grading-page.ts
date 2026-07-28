@@ -184,6 +184,13 @@ export const GRADING_PAGE_HTML = String.raw`<!doctype html>
   .hist .item.superseded { opacity: .55; }
   .hist .meta { color: var(--dim); font-size: 11.5px; margin-top: 4px;
     display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  /* The regrade picker: one button per grade, coloured like the form's radios so
+     "change to fail" looks the same here as it does on the card. */
+  .hist .meta button { padding: 1px 8px; font-size: 11.5px; }
+  .hist .meta button.g-promoted:hover { border-color: var(--pass); color: var(--pass); }
+  .hist .meta button.g-rejected:hover { border-color: var(--fail); color: var(--fail); }
+  .hist .meta button.g-inconclusive:hover { border-color: var(--inc); color: var(--inc); }
+  .hist .meta button.g-duplicate:hover { border-color: var(--dup); color: var(--dup); }
   dialog {
     background: var(--panel); color: var(--fg); border: 1px solid var(--line);
     border-radius: 11px; padding: 0; max-width: 900px; width: 92vw; max-height: 84vh;
@@ -557,6 +564,10 @@ export const GRADING_PAGE_HTML = String.raw`<!doctype html>
     const row = document.createElement("div");
     row.className = "row";
     row.append(tag(it.candidate_type, "type"));
+    if (it.is_regrade) {
+      row.append(tag("regrade -- already graded " +
+        LABELS[it.previous_action], "machine"));
+    }
     if (it.uncertain) row.append(tag("uncertain", "uncertain"));
     if (it.authority_tier) row.append(tag(it.authority_tier));
     if (it.model) row.append(tag(it.model));
@@ -590,14 +601,19 @@ export const GRADING_PAGE_HTML = String.raw`<!doctype html>
     stage.append(card);
 
     // A candidate with no visible source is ungradeable, and saying so is more
-    // honest than presenting a bare claim for judgement.
+    // honest than presenting a bare claim for judgement. A regrade is exempt:
+    // it carries no context by design (the operator has already read this item
+    // and is changing an answer), so the warning would be a false alarm.
     if (!it.context || it.context.length === 0) {
       const w = document.createElement("div");
-      w.className = "warn";
+      w.className = it.is_regrade ? "empty" : "warn";
       w.style.marginTop = "14px";
-      w.textContent = "No source turns found for this candidate (" +
-        it.source_turn_ids.length + " referenced). It cannot be judged on its " +
-        "content alone -- grade it inconclusive unless you recognise it.";
+      w.textContent = it.is_regrade
+        ? "Regrade -- source turns are not reloaded. Pick the new grade, edit " +
+          "the note, and add it back to the batch."
+        : "No source turns found for this candidate (" +
+          it.source_turn_ids.length + " referenced). It cannot be judged on its " +
+          "content alone -- grade it inconclusive unless you recognise it.";
       stage.append(w);
       return;
     }
@@ -647,7 +663,11 @@ export const GRADING_PAGE_HTML = String.raw`<!doctype html>
       act.textContent = LABELS[g.action];
       const n = document.createElement("span");
       n.className = "stat";
-      n.textContent = "#" + (i + 1);
+      // A regrade reads differently from a first grade -- it will supersede an
+      // existing answer -- so the pending list says which it is.
+      n.textContent = g.regrade
+        ? "#" + (i + 1) + " regrade, was " + LABELS[g.regrade.previous_action]
+        : "#" + (i + 1);
       const btns = document.createElement("div");
       btns.className = "btns";
       const edit = document.createElement("button");
@@ -726,6 +746,34 @@ export const GRADING_PAGE_HTML = String.raw`<!doctype html>
         state.form = { action: g.action, note: g.note || "" };
         render();
         say("editing -- change it and add it back");
+      } else if (g.regrade) {
+        // A REGRADE. Its candidate is not in state.items and never will be --
+        // /api/queue filters "reviewed_at IS NULL" and this one is already
+        // graded -- so a findIndex lookup always missed and the operator fell
+        // through to a queue reload that dropped the item entirely. The staged
+        // entry carries the card, so put that card on screen instead.
+        state.items.splice(state.idx, 0, {
+          id: g.candidateId,
+          candidate_type: g.regrade.candidate_type,
+          content: g.regrade.content,
+          uncertain: g.regrade.uncertain,
+          uncertainty_reason: g.regrade.uncertainty_reason,
+          machine_grade: g.regrade.machine_grade,
+          authority_tier: null,
+          model: null,
+          source_turn_ids: [],
+          // No context is fetched for a regrade: the operator has already read
+          // this item once and is changing an answer, not making a first
+          // judgement. render() says so rather than showing a bare claim.
+          context: [],
+          reinforcement: null,
+          is_regrade: true,
+          previous_action: g.regrade.previous_action,
+        });
+        state.form = { action: g.action, note: g.note || "" };
+        render();
+        say("editing a regrade (was " + LABELS[g.regrade.previous_action] +
+            ") -- change it and add it back");
       } else {
         // It is no longer on the loaded page (staged before a reload). Reload
         // and let the queue bring it back rather than inventing a card.
@@ -876,11 +924,23 @@ export const GRADING_PAGE_HTML = String.raw`<!doctype html>
           s.textContent = "superseded " + new Date(g.superseded_at).toLocaleString();
           meta.append(s);
         } else {
-          const change = document.createElement("button");
-          change.type = "button";
-          change.textContent = "change this";
-          change.onclick = () => stageRegrade(g);
-          meta.append(change);
+          // One button per grade, so the operator picks the new answer directly.
+          // The current grade is shown but not offered: re-staging the same
+          // value would supersede a row with an identical one, which is history
+          // noise rather than a change of mind.
+          const changeTo = document.createElement("span");
+          changeTo.textContent = "change to:";
+          meta.append(changeTo);
+          for (const action of ORDER) {
+            if (action === g.action) continue;
+            const b = document.createElement("button");
+            b.type = "button";
+            b.className = "g-" + action;
+            b.textContent = LABELS[action];
+            b.title = "Stage a regrade of this item as " + LABELS[action];
+            b.onclick = () => stageRegrade(g, action);
+            meta.append(b);
+          }
         }
         d.append(meta);
         list.append(d);
@@ -892,29 +952,48 @@ export const GRADING_PAGE_HTML = String.raw`<!doctype html>
   }
 
   /**
-   * Re-grade a previously sent item.
+   * Re-grade a previously sent item: the operator PICKS the new grade.
    *
    * It goes through the SAME batch flow: staged locally, editable, sent with the
    * next Send. The server then supersedes the old grade row rather than
    * overwriting it. A separate "edit in place" path would be a second write
    * shape with different semantics, and the operator asked for one.
+   *
+   * WHY A PICKER AND NOT A ROTATION. This used to stage
+   * ORDER[(indexOf(action)+1) % 4] -- "change this" on a promoted item silently
+   * staged "rejected". That is not a change, it is a guess, and the operator's
+   * requirement was "a way to reset, undo, change i needed". The buttons below
+   * name every grade including the current one, so changing your mind means
+   * choosing the answer rather than cycling until the label happens to read right.
    */
-  function stageRegrade(g) {
+  function stageRegrade(g, action) {
     if (state.batch.some((b) => b.candidateId === g.candidate_id)) {
       say("already staged", "err"); return;
     }
-    const next = ORDER[(ORDER.indexOf(g.action) + 1) % ORDER.length];
     state.batch.push({
       candidateId: g.candidate_id,
-      action: next,
+      action: action,
       note: g.note || "",
       content: g.content.slice(0, 400),
+      // A regrade's candidate is BY DEFINITION not in the ungraded queue
+      // (/api/queue filters reviewed_at IS NULL), so "edit" cannot find it by
+      // looking in state.items. Carrying the card's own data here is what makes
+      // the staged entry editable at all -- without it the edit button fell
+      // through to a queue reload that dropped the item from view entirely.
+      regrade: {
+        candidate_type: g.candidate_type,
+        content: g.content,
+        uncertain: g.uncertain,
+        uncertainty_reason: g.uncertainty_reason,
+        machine_grade: g.machine_grade,
+        previous_action: g.action,
+      },
     });
     persist();
     renderBatch();
     el("history").close();
-    say("staged a regrade (currently " + LABELS[next] +
-        ") -- edit it in the batch list, then SEND", "ok");
+    say("staged a regrade of a " + LABELS[g.action] + " item as " + LABELS[action] +
+        " -- edit or remove it in the batch list, then SEND", "ok");
   }
 
   // ---- keyboard -------------------------------------------------------------

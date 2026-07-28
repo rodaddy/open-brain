@@ -101,9 +101,15 @@ console.log(
   "of",
   probe.rows[0]?.total ?? "0",
 );
+// Only bindings the page actually has. It used to advertise "u undo", which was
+// bound to nothing -- undo is a button behind a confirm dialog, deliberately, so
+// a single keystroke cannot retract a committed batch. A banner that names a key
+// that does nothing teaches the operator to distrust the whole line.
+console.log("  keys         1 pass · 2 fail · 3 inconclusive · 4 duplicate");
 console.log(
-  "  keys         1 pass · 2 fail · 3 inconclusive · 4 duplicate · u undo",
+  "               enter stage · ctrl+enter SEND · esc reset · n note · ←/→ move",
 );
+console.log("  undo/change  buttons on the page (nothing is sent until SEND)");
 console.log("  ------------------------------------------------------------");
 console.log("");
 

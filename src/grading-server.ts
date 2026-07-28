@@ -30,9 +30,12 @@
  * the info go'n to the server (NOT directly into the table(s))". So the page
  * stages grades locally and POSTs the whole submission to /api/grade-batch,
  * which is one transaction. /api/undo-batch reverses a submission and
- * /api/history is how the operator finds an item to change. /api/grade and
- * /api/ungrade remain for the single-item path and for callers already using
- * them; they write only candidate_memory and predate migration 040.
+ * /api/history is how the operator finds an item to change. /api/grade remains
+ * for the single-item path and for callers already using it, but it is now a
+ * batch of one through the SAME writer -- it used to have its own UPDATE that
+ * overwrote candidate_memory.uncertainty_reason with the operator's note,
+ * destroying the distiller's text (reproduced against the live clone
+ * 2026-07-28). The page never called it; the back door was open anyway.
  *
  * LOGGING IS CONTENT-FREE. Candidate content is real dialogue
  * (032_raw_turns.sql content-safety note) and grading is exactly the workload
@@ -267,7 +270,11 @@ export function makeGradingHandler(
         const id = requireId(body.id);
         const action = parseReviewAction(body.action);
         const note = typeof body.note === "string" ? body.note : null;
-        const result = await gradeCandidate(pool, {
+        // Transactional, because a single grade is now a batch of one: it
+        // writes candidate_grade and candidate_memory together, and the note
+        // goes to candidate_grade.note instead of over the distiller's
+        // uncertainty_reason (which this route used to destroy).
+        const result = await gradeCandidate(requireTransactional(), {
           namespace,
           id,
           action,
@@ -281,10 +288,13 @@ export function makeGradingHandler(
         log?.info("candidate graded", {
           namespace,
           candidate_id: result.id,
+          grade_id: result.grade_id,
+          batch_id: result.batch_id,
           action: result.review_action,
           graded_by: result.graded_by,
           machine_grade: result.machine_grade,
           agreed: result.agreed,
+          regrade: result.superseded_grade_id !== null,
           has_note: note !== null && note.trim() !== "",
           duration_ms: Math.round(performance.now() - started),
         });

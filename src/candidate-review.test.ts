@@ -309,17 +309,9 @@ describe("fetchQueue", () => {
   });
 });
 
-describe("gradeCandidate", () => {
-  const graded = {
-    id: CANDIDATE_ROW.id,
-    review_action: "promoted",
-    reviewed_at: new Date("2026-07-28T06:00:00Z"),
-    graded_by: "rico",
-    machine_grade: null,
-  };
-
+describe("gradeCandidate -- the single-item path", () => {
   it("writes the action, timestamp, and grader together", async () => {
-    const db = fakeDb(() => [graded]);
+    const db = fakeTxDb(batchResponder);
     const res = await gradeCandidate(db, {
       namespace: "rico",
       id: CANDIDATE_ROW.id,
@@ -329,34 +321,78 @@ describe("gradeCandidate", () => {
     expect(res).toMatchObject({
       review_action: "promoted",
       graded_by: "rico",
+      // Read back from the candidate_grade row the transaction wrote, not
+      // restated from the caller's clock.
       reviewed_at: "2026-07-28T06:00:00.000Z",
-      agreed: null,
     });
-    const sql = db.seen[0]!.text;
+    const update = db.committed.find((q) =>
+      q.text.includes("UPDATE candidate_memory"),
+    )!;
     // reviewed_at and review_action must move together or
     // candidate_memory_review_paired (033:104-105) rejects the write.
-    expect(sql).toContain("review_action = $3");
-    expect(sql).toContain("reviewed_at = now()");
-    expect(sql).toContain("graded_by = $4");
+    expect(update.text).toContain("review_action = $3");
+    expect(update.text).toContain("reviewed_at = now()");
+    expect(update.text).toContain("graded_by = $4");
+  });
+
+  it("puts the note in candidate_grade.note and NEVER over uncertainty_reason", async () => {
+    // THE DATA-DESTROYING DEFECT THIS TEST EXISTS FOR. Until 2026-07-28 this
+    // path ran `uncertainty_reason = COALESCE($5, uncertainty_reason)` with the
+    // note stamped as "[rico] ...". Reproduced against the live clone:
+    // candidate 2e756e13's distiller reason ("assistant turn with no clear
+    // outcome marker...") was REPLACED by the operator's sentence, and zero
+    // candidate_grade rows were written. 040 gave the note its own column.
+    const db = fakeTxDb(batchResponder);
+    const res = await gradeCandidate(db, {
+      namespace: "rico",
+      id: CANDIDATE_ROW.id,
+      action: "inconclusive",
+      gradedBy: "rico",
+      note: "cannot tell without the PR",
+    });
+
+    const insert = db.committed.find((q) =>
+      q.text.includes("INSERT INTO candidate_grade"),
+    )!;
+    // The operator's words, verbatim and unstamped: the column is already
+    // defined as theirs, so a "[rico]" prefix would be noise inside it.
+    expect(insert.values[3]).toBe("cannot tell without the PR");
+    // Not one statement on this path may name the distiller's column.
+    for (const q of db.seen) {
+      expect(q.text).not.toContain("uncertainty_reason");
+    }
+    // And it is a real, undoable grade row rather than a column edit.
+    expect(res!.grade_id).toBe("99999999-9999-4999-8999-999999999999");
+    expect(res!.batch_id).toBe(BATCH_ID);
   });
 
   it("NEVER names machine_grade in the update", async () => {
     // Invariant 2. 037:43-57 -- a machine writing there sets reviewed_at and
     // drops the item out of the human queue.
-    const db = fakeDb(() => [graded]);
+    const db = fakeTxDb(batchResponder);
     await gradeCandidate(db, {
       namespace: "rico",
       id: CANDIDATE_ROW.id,
       action: "rejected",
       gradedBy: "rico",
     });
-    const sql = db.seen[0]!.text;
-    expect(sql).not.toContain("machine_grade =");
-    expect(sql).not.toContain("machine_grade_model =");
+    for (const q of db.seen) {
+      expect(q.text).not.toContain("machine_grade =");
+      expect(q.text).not.toContain("machine_grade_model =");
+    }
   });
 
   it("scopes the write by namespace and reports a cross-namespace miss as not-found", async () => {
-    const db = fakeDb(() => []);
+    // The batch writer names the missing item with a 404 error; the single
+    // route's contract is null-for-not-found, and the translation must not turn
+    // a miss into a thrown 500.
+    const db = fakeTxDb((sql) => {
+      if (sql.includes("gen_random_uuid() AS batch_id")) {
+        return [{ batch_id: BATCH_ID }];
+      }
+      if (sql.includes("UPDATE candidate_memory")) return [];
+      return [];
+    });
     const res = await gradeCandidate(db, {
       namespace: "other",
       id: CANDIDATE_ROW.id,
@@ -364,36 +400,30 @@ describe("gradeCandidate", () => {
       gradedBy: "rico",
     });
     expect(res).toBeNull();
-    expect(db.seen[0]!.text).toContain("namespace = $1");
-    expect(db.seen[0]!.values[0]).toBe("other");
+    const update = db.seen.find((q) =>
+      q.text.includes("UPDATE candidate_memory"),
+    )!;
+    expect(update.text).toContain("namespace = $1");
+    expect(update.values[0]).toBe("other");
+    // A miss writes nothing -- the transaction rolled back.
+    expect(db.committed).toHaveLength(0);
   });
 
   it("reports agreement against a machine guess when one exists", async () => {
-    const db = fakeDb(() => [{ ...graded, machine_grade: "rejected" }]);
+    const db = fakeTxDb(batchResponder);
     const res = await gradeCandidate(db, {
       namespace: "rico",
       id: CANDIDATE_ROW.id,
       action: "promoted",
       gradedBy: "rico",
     });
+    // batchResponder's candidate carries machine_grade 'inconclusive'.
+    expect(res!.machine_grade).toBe("inconclusive");
     expect(res!.agreed).toBe(false);
-    expect(res!.machine_grade).toBe("rejected");
   });
 
-  it("stamps a note with the grader so it cannot be mistaken for a distiller reason", async () => {
-    const db = fakeDb(() => [graded]);
-    await gradeCandidate(db, {
-      namespace: "rico",
-      id: CANDIDATE_ROW.id,
-      action: "inconclusive",
-      gradedBy: "rico",
-      note: "cannot tell without the PR",
-    });
-    expect(db.seen[0]!.values[4]).toBe("[rico] cannot tell without the PR");
-  });
-
-  it("leaves uncertainty_reason untouched when there is no note", async () => {
-    const db = fakeDb(() => [graded]);
+  it("records no note at all when the note is whitespace", async () => {
+    const db = fakeTxDb(batchResponder);
     await gradeCandidate(db, {
       namespace: "rico",
       id: CANDIDATE_ROW.id,
@@ -401,8 +431,50 @@ describe("gradeCandidate", () => {
       gradedBy: "rico",
       note: "   ",
     });
-    expect(db.seen[0]!.values[4]).toBeNull();
-    expect(db.seen[0]!.text).toContain("COALESCE($5, uncertainty_reason)");
+    const insert = db.committed.find((q) =>
+      q.text.includes("INSERT INTO candidate_grade"),
+    )!;
+    expect(insert.values[3]).toBeNull();
+  });
+
+  it("supersedes an existing grade instead of overwriting it", async () => {
+    // A second single grade is a regrade, and 040 requires the first answer to
+    // survive as history rather than being replaced.
+    const db = fakeTxDb((sql) => {
+      if (sql.includes("UPDATE candidate_grade")) {
+        return [{ id: "77777777-7777-4777-8777-777777777777" }];
+      }
+      return batchResponder(sql);
+    });
+    const res = await gradeCandidate(db, {
+      namespace: "rico",
+      id: CANDIDATE_ROW.id,
+      action: "rejected",
+      gradedBy: "rico",
+    });
+    expect(res!.superseded_grade_id).toBe(
+      "77777777-7777-4777-8777-777777777777",
+    );
+    const supersede = db.committed.find((q) =>
+      q.text.includes("UPDATE candidate_grade"),
+    )!;
+    expect(supersede.text).toContain("superseded_at = now()");
+    // Never a DELETE: a changed mind is evidence.
+    expect(db.seen.some((q) => q.text.includes("DELETE"))).toBe(false);
+  });
+
+  it("refuses a machine grader identity", async () => {
+    const db = fakeTxDb(batchResponder);
+    await expect(
+      gradeCandidate(db, {
+        namespace: "rico",
+        id: CANDIDATE_ROW.id,
+        action: "promoted",
+        gradedBy: "claude-opus-5",
+      }),
+    ).rejects.toThrow(/machine identity/);
+    // Refused before the transaction opened.
+    expect(db.seen).toHaveLength(0);
   });
 });
 
@@ -584,7 +656,12 @@ function batchResponder(sql: string): unknown[] {
   // No live grade to supersede: a first grade on this candidate.
   if (sql.includes("UPDATE candidate_grade")) return [];
   if (sql.includes("INSERT INTO candidate_grade")) {
-    return [{ id: "99999999-9999-4999-8999-999999999999" }];
+    return [
+      {
+        id: "99999999-9999-4999-8999-999999999999",
+        created_at: new Date("2026-07-28T06:00:00Z"),
+      },
+    ];
   }
   return [];
 }
@@ -1177,7 +1254,21 @@ describe("HTTP boundary", () => {
   });
 
   it("returns 404 for an id that matches no row in this namespace", async () => {
-    const res = await handlerFor(() => [])(
+    // A transactional pool, because a single grade is now a batch of one: it
+    // writes candidate_grade beside candidate_memory rather than overwriting
+    // the distiller's uncertainty_reason. The row still matches nothing, so the
+    // answer is still 404 and nothing is committed.
+    const db = fakeTxDb((sql) =>
+      sql.includes("gen_random_uuid() AS batch_id")
+        ? [{ batch_id: BATCH_ID }]
+        : [],
+    );
+    const handler = makeGradingHandler({
+      pool: db,
+      namespace: "rico",
+      gradedBy: "rico",
+    });
+    const res = await handler(
       new Request("http://127.0.0.1/api/grade", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1185,6 +1276,7 @@ describe("HTTP boundary", () => {
       }),
     );
     expect(res.status).toBe(404);
+    expect(db.committed).toHaveLength(0);
   });
 
   it("rejects malformed JSON with 400, not 500", async () => {

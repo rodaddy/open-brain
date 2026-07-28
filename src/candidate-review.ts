@@ -30,7 +30,7 @@
  *
  *  2. NOTHING HERE WRITES machine_grade. It is REM's column. A grading UI that
  *     could write it would be the model grading its own training data
- *     (037:50-52). `gradeCandidate` names five columns in its UPDATE and
+ *     (037:50-52). The single grade writer names three columns in its UPDATE and
  *     machine_grade is not one of them; `assertNotMachineIdentity` refuses the
  *     write outright if the caller presents as a model.
  *
@@ -63,8 +63,10 @@
  *  - The NOTE goes to candidate_grade.note. It used to overwrite
  *    candidate_memory.uncertainty_reason, which is the DISTILLER's statement about
  *    its own doubt; that compromise existed only because there was nowhere else to
- *    put it (see gradeCandidate's header, kept for the legacy single-grade path).
- *    submitGradeBatch never touches uncertainty_reason.
+ *    put it. NO path here writes uncertainty_reason any more: submitGradeBatch
+ *    never did, and gradeCandidate -- which did, and destroyed distiller text in a
+ *    measured reproduction on 2026-07-28 -- is now a wrapper over it. There is
+ *    exactly one writer of a grade, so the two cannot drift apart again.
  *  - candidate_memory.review_action/reviewed_at/graded_by are still written, in
  *    the same transaction, because `reviewed_at IS NULL` remains the queue
  *    predicate. They are now a derived fast-path index of the live grade rather
@@ -223,7 +225,8 @@ export function parseReviewAction(value: unknown): ReviewAction {
  * novel model name still leaves that grade attributed and auditable in
  * graded_by. The structural guarantee is elsewhere and is absolute -- verified
  * 2026-07-28: `review_action` is written at exactly two sites, both in this
- * module (gradeCandidate and ungradeCandidate), and `machine_grade` at exactly
+ * module (submitGradeBatch, which gradeCandidate now delegates to, and
+ * ungradeCandidate plus undoBatch's reconcile), and `machine_grade` at exactly
  * one, src/dream-rem.ts:334. The two sets never intersect, so this check is
  * defence in depth against a misconfigured caller, not the primary control.
  *
@@ -673,35 +676,46 @@ export interface GradeResult {
   machine_grade: string | null;
   /** null when there was no machine guess to agree or disagree with. */
   agreed: boolean | null;
+  /** The candidate_grade row this judgement was recorded as (migration 040). */
+  grade_id: string;
+  /**
+   * The batch this single grade was submitted under. A single grade is a batch
+   * of one, so it is undoable through the same /api/undo-batch path.
+   */
+  batch_id: string;
+  /** The candidate_grade row this one superseded, when it was a regrade. */
+  superseded_grade_id: string | null;
 }
 
 /**
- * Record a human grade.
+ * Record a human grade for ONE candidate.
  *
- * COLUMNS WRITTEN: review_action, reviewed_at, graded_by, and -- only when a
- * note is supplied -- uncertainty_reason. NOT machine_grade, NOT
- * machine_grade_model, NOT uncertain. That list is the enforcement of invariant
- * 2, and it is enforced by the UPDATE statement itself rather than by a check,
- * because a column that is never named cannot be written by a malformed
- * request.
+ * THIS IS A THIN WRAPPER OVER submitGradeBatch, AND THAT IS THE FIX. Until
+ * 2026-07-28 this function had its own UPDATE that wrote the operator's note
+ * into candidate_memory.uncertainty_reason with
+ * `uncertainty_reason = COALESCE($5, uncertainty_reason)`. That is the DISTILLER's
+ * statement about its own doubt, and the write DESTROYED it -- measured against
+ * the live clone: candidate 2e756e13 held "assistant turn with no clear outcome
+ * marker..." and one POST /api/grade replaced it with the operator's sentence,
+ * writing zero candidate_grade rows in the process. Migration 040 exists
+ * precisely to end that compromise (040:10-15), but this route survived beside
+ * the batch path as an unguarded back door to the behavior 040 removed.
  *
- * reviewed_at and review_action are set in the SAME statement because
- * candidate_memory_review_paired (033:104-105) rejects either one alone -- a
- * half-written review would make "unreviewed" queries silently wrong.
+ * Delegating rather than repairing the UPDATE in place is deliberate: two write
+ * shapes for one act of judgement is how they drift, and the divergence above is
+ * that drift having already happened. There is now exactly ONE writer of a
+ * grade, so the supersede-don't-overwrite rule, the batch id, the note column,
+ * and the namespace predicate cannot differ between the single and batch paths.
  *
- * WHY A NOTE GOES TO uncertainty_reason. There is no operator-note column, and
- * inventing one would need a migration this agent does not own (the 038-039
- * range belongs to STAGES). uncertainty_reason is already free text describing
- * why an item is doubtful (037:76-77), which is exactly what a note on an
- * `inconclusive` grade is. The write is prefixed with the grader so a
- * distiller-written reason is never confused with an operator-written one.
+ * A single grade is submitted as a batch of one, so it gets its own batch_id and
+ * is undoable through the same /api/undo-batch path as anything else.
  *
  * @returns null when no row matched -- unknown id, or an id in another
  *   namespace. Both collapse to the same answer deliberately: distinguishing
  *   them would confirm the existence of a row the caller may not read.
  */
 export async function gradeCandidate(
-  db: Queryable,
+  db: TransactionalDb,
   input: {
     namespace: string;
     id: string;
@@ -710,39 +724,41 @@ export async function gradeCandidate(
     note?: string | null;
   },
 ): Promise<GradeResult | null> {
-  const note = typeof input.note === "string" ? input.note.trim() : "";
-  const stampedNote =
-    note === "" ? null : `[${input.gradedBy}] ${note}`.slice(0, 2000);
+  let submitted: BatchSubmitResult;
+  try {
+    submitted = await submitGradeBatch(db, {
+      namespace: input.namespace,
+      gradedBy: input.gradedBy,
+      grades: [
+        {
+          candidateId: input.id,
+          action: input.action,
+          note: input.note ?? null,
+        },
+      ],
+    });
+  } catch (err) {
+    // The batch writer reports an unknown or cross-namespace id as a 404
+    // ReviewInputError, because a batch names the item that failed. The single
+    // route's contract is null-for-not-found and the HTTP layer turns that into
+    // its own 404, so translate rather than letting the shapes diverge again.
+    if (err instanceof ReviewInputError && err.status === 404) return null;
+    throw err;
+  }
 
-  const { rows } = await db.query<{
-    id: string;
-    review_action: ReviewAction;
-    reviewed_at: Date;
-    graded_by: string;
-    machine_grade: string | null;
-  }>(
-    `UPDATE candidate_memory
-        SET review_action = $3,
-            reviewed_at = now(),
-            graded_by = $4,
-            uncertainty_reason = COALESCE($5, uncertainty_reason)
-      WHERE namespace = $1 AND id = $2
-      RETURNING id, review_action, reviewed_at, graded_by, machine_grade`,
-    [input.namespace, input.id, input.action, input.gradedBy, stampedNote],
-  );
-
-  const row = rows[0];
-  if (!row) return null;
+  const result = submitted.results[0]!;
   return {
-    id: row.id,
-    review_action: row.review_action,
-    reviewed_at: row.reviewed_at.toISOString(),
-    graded_by: row.graded_by,
-    machine_grade: row.machine_grade,
-    agreed:
-      row.machine_grade === null
-        ? null
-        : row.machine_grade === row.review_action,
+    id: result.candidate_id,
+    review_action: result.action,
+    // Read back from the row the transaction just wrote rather than restating
+    // the input: reviewed_at is now()'s value inside that transaction.
+    reviewed_at: result.created_at,
+    graded_by: submitted.graded_by,
+    machine_grade: result.machine_grade,
+    agreed: result.agreed,
+    grade_id: result.grade_id,
+    batch_id: submitted.batch_id,
+    superseded_grade_id: result.superseded_grade_id,
   };
 }
 
@@ -807,6 +823,12 @@ export interface BatchGradeResult {
    * every response body and therefore into anything that logs one.
    */
   has_note: boolean;
+  /**
+   * When the grade row was written, as the transaction stamped it. Read back
+   * from the INSERT rather than restated from the caller's clock, so the single
+   * -grade wrapper can report a reviewed_at that is the row's actual value.
+   */
+  created_at: string;
 }
 
 export interface BatchSubmitResult {
@@ -827,7 +849,7 @@ export interface BatchSubmitResult {
  */
 export const MAX_BATCH_SIZE = 200;
 
-/** Longest note accepted. Matches the truncation gradeCandidate already used. */
+/** Longest note accepted. Rejected rather than truncated -- see parseBatchGrade. */
 const MAX_NOTE_LENGTH = 2000;
 
 const UUID_RE =
@@ -1007,11 +1029,11 @@ export async function submitGradeBatch(
         [input.namespace, g.candidateId],
       );
 
-      const inserted = await client.query<{ id: string }>(
+      const inserted = await client.query<{ id: string; created_at: Date }>(
         `INSERT INTO candidate_grade
            (namespace, candidate_id, action, note, graded_by, batch_id)
          VALUES ($1, $2, $3, $4, $5, $6)
-         RETURNING id`,
+         RETURNING id, created_at`,
         [input.namespace, g.candidateId, g.action, g.note, grader, batchId],
       );
 
@@ -1021,6 +1043,7 @@ export async function submitGradeBatch(
         action: g.action,
         superseded_grade_id: superseded.rows[0]?.id ?? null,
         has_note: g.note !== null,
+        created_at: inserted.rows[0]!.created_at.toISOString(),
         machine_grade: candidate.machine_grade,
         agreed:
           candidate.machine_grade === null
