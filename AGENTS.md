@@ -106,6 +106,15 @@ Repo-specific rules below this line override the copies when stricter.
 - **Search that prior art with the `research` qmd index — do not grep six trees.** All six clones are indexed as one named index, so a single query crosses all of them, which is the whole point: the useful prior-art question is comparative ("how does each of these model X?"), and that is exactly what six separate searches answer badly.
 
   ```bash
+  aqmd research "how are temporal relationships modeled"   # all six clones
+  aqmd in graphiti "how are edges deduplicated"            # one clone
+  aqmd all "question"        # this fleet AND the clones, in one query
+  ```
+
+  `aqmd` resolves the index for you and refuses to run unscoped. The explicit
+  form still works and is what `aqmd` calls underneath:
+
+  ```bash
   qmd query "how are temporal relationships modeled" --index research
   qmd query "..." --index research -c graphiti    # one project only
   qmd search "SearchConfig" --index research       # BM25, ~0.1s
