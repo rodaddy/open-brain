@@ -127,6 +127,45 @@ Until then, a filter here is a guess, and a guess that drops data is
 unrecoverable. Recall quality is a *ranking* problem — a low-value memory sits
 at the bottom of results, quiet and not wrong. A dropped turn is gone.
 
+## The third mechanism: the raw lane's 8-entry window
+
+Same day, same principle, different lane. `raw-turns.ts:188` defaulted to
+reading **8** transcript entries per `Stop` hook.
+
+Measured across 1,038 turns in all sessions since 2026-07-25 21:00:
+
+| Entries in one turn | Turns exceeding | Share |
+|---|---|---|
+| 8 (the old default) | **600** | **57.8%** |
+| 30 | 277 | 26.7% |
+| 50 | 172 | 16.6% |
+| 100 (`MAX_BATCH`) | 69 | 6.6% |
+| 200 | 30 | 2.9% |
+
+Median 12 entries per turn, p90 78, p99 303, **max 553**.
+
+The `8` was truncating **58% of every turn taken**. It was also the only
+constant in that file with no comment justifying it — `MAX_CONTENT_CHARS`,
+`TAIL_BYTES`, and `MAX_BATCH` all explain themselves.
+
+It assumed one turn is a handful of entries. True for plain conversation, false
+with tool calls: every call and every result is its own transcript line. Worse,
+the collection loop walks **backward**, so the 8 kept are the *newest* — the
+tail of the agent's tool output — while the operator's message that opened the
+exchange is the oldest part, and the first thing cut.
+
+**Raised to `MAX_BATCH` (100)**, the server's Zod-validated cap
+(`src/tools/ingest-raw-turn.ts:150-152`), which exists so a batch "keeps the
+interactive turn unblocked." Defaulting to it costs nothing and stays inside the
+contract.
+
+**This is a stopgap, and the residual is not random.** 6.6% of turns still
+exceed 100 entries, and those are the heavy ones — a 553-entry turn is a long
+debugging session, exactly the material most worth keeping. The cap is also per
+hook invocation, not per session, so a hook that never fires still loses its
+window permanently. A window can only guess how far back to look; the
+per-session watermark in #418 knows. That is the real fix.
+
 ## Cost accepted
 
 The distilled lane gets noisier: every "ok" and "yeah" now lands as a `fact`.
