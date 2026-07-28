@@ -52,4 +52,8 @@ _reports/
 .cache_ggshield
 
 # qmd project-local search index (rebuildable; never commit)
-.qmd/
+
+# qmd project-local search index: the database is rebuildable
+# and never committed; the allowlist config is tracked.
+.qmd/*
+!.qmd/index.yml
