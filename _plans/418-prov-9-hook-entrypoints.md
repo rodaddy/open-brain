@@ -120,13 +120,51 @@ belong to #413–#417 and #419.
 - [ ] **A turn producing 30+ transcript entries loses nothing**, proven by a test
 - [ ] `uv run mypy` and `uv run ruff check` clean, matching the repo bar
 
-## Why not just patch the TypeScript
+## Why the port is still the real fix, even though the TypeScript was patched
 
-It was considered and rejected. #420 exists to delete that code; a patch there is
-thrown away, and the next wheel install overwrites the hash directory anyway.
-The enum has already drifted between the two copies (`#409`: *"openbrain_memory/
-agent.py declares 9 event types; the TS adapter declares 8 — missing
-`question`"*), which is what two hand-maintained copies of one vocabulary does.
+#420 exists to delete that code; a patch there is thrown away, and the next
+wheel install overwrites the hash directory. The enum has already drifted
+between the two copies (`#409`: *"openbrain_memory/agent.py declares 9 event
+types; the TS adapter declares 8 — missing `question`"*), which is what two
+hand-maintained copies of one vocabulary does.
+
+The patch below was applied anyway, because the loss was ongoing and the port is
+hours of work. That is a stopgap with a known expiry, not a change of plan.
+
+---
+
+## APPLIED 2026-07-28 to the deployed adapter (interim, ahead of the port)
+
+Full reasoning: `docs/decisions/capture-never-drops-a-turn.md`.
+
+| Change | File | Was | Now |
+|---|---|---|---|
+| Length floor | `turn-capture.ts:59,361` | `MIN_SIGNAL_CHARS = 24` | **deleted**; only an empty-string test remains |
+| Pattern gate | `turn-capture.ts:384-392` | allowlist, `return null` on no match | **inverted**; no match falls back to `event_type: "fact"` |
+
+The second defect was found ONLY because the first was fixed and then tested:
+removing the floor did not make "ok" capture, because `SIGNALS` was
+independently dropping anything its regexes did not match. Two mechanisms, one
+effect, and the length floor was hiding the allowlist behind it. Worth
+remembering during the port — fixing one filter is not evidence there is only
+one.
+
+Verified 9/9 (`scripts/__tests__/capture-floor-removal.check.ts`): `yes`, `ok`,
+`no do it`, `okay` capture as `fact`; `use postgres not sqlite` still classifies
+as `decision`; empty, whitespace-only, system-reminder-only, and a pasted
+terminal block still return null.
+
+**NOT fixed, still live:** `raw-turns.ts:188` `limit ?? 8` and
+`raw-turns.ts:31` `TAIL_BYTES`. Those are the raw lane and want the watermark,
+which is this issue's work.
+
+### Consequences for the port
+
+- The port MUST carry `capture-never-drops-a-turn.md` forward. If capture starts
+  silently shrinking after #418 lands, that decision did not survive.
+- The next wheel install overwrites the deployed file, reverting both fixes.
+- `scripts/__tests__/capture-floor-removal.check.ts` holds the nine cases. Port
+  them into the Python suite and delete the file.
 
 ## Rejected — do not re-propose
 
