@@ -401,6 +401,10 @@ const QUEUE_ITEM = {
   unit_kind: "fragment",
   anchor_turn_id: null,
   operator_text: null,
+  // NULL on a fragment (043): it has no head, so there is no authorship to
+  // describe. Present in the fixture so a page that starts requiring the field
+  // is caught here rather than on the operator's screen.
+  anchor_kind: null,
   candidate_type: "decision",
   content: "the distiller runs before Light",
   uncertain: false,
@@ -440,6 +444,7 @@ const EXCHANGE_ITEM = {
   operator_text:
     "I can't decide whether the DreamEngine curation logic should move to " +
     "TypeScript now or wait until after drizzle...",
+  anchor_kind: "typed",
   candidate_type: "decision",
   content:
     "Drizzle isn't a dependency and there's no config -- planned, not in progress",
@@ -714,11 +719,54 @@ describe("the operator's words lead an exchange", () => {
       ...EXCHANGE_ITEM,
       anchor_turn_id: null,
       operator_text: null,
+      anchor_kind: "orphan",
     };
     const page = await loadPage({ queue: [orphan] });
     expect(page.el("stage").textContent).toContain(
       "No operator turn heads this exchange",
     );
+  });
+
+  /**
+   * THE BADGE (migration 043). The operator asked for it by name: "with the
+   * exception of maybe AskUserQuestions sections, that's kind of a hybrid and
+   * should be treated more like it came from me i think, WITH THAT NOTE THAT IT
+   * IS AUQ". So an AUQ head renders in the operator's own position -- it IS him
+   * deciding -- while saying on its face that the options were the agent's.
+   */
+  it("badges an AskUserQuestion head as AUQ, in the operator's own position", async () => {
+    const chosen = {
+      ...EXCHANGE_ITEM,
+      anchor_kind: "askuserquestion",
+      operator_text:
+        "[AskUserQuestion -- the operator chose from options the agent offered]\n" +
+        "CHOSE: Wait until after drizzle\n(agent asked: Port it now?)",
+    };
+    const page = await loadPage({ queue: [chosen] });
+    const rendered = page.el("stage").textContent;
+
+    // The chip the operator asked for, naming whose options they were.
+    expect(rendered).toContain("AUQ -- chose from options I offered");
+    // And the head block says it too, so the qualification survives with the
+    // chip scrolled out of view.
+    expect(rendered).toContain("your choice, the agent's options");
+    // It is NOT demoted to an orphan: it still heads the card.
+    expect(rendered).not.toContain("No operator turn heads this exchange");
+    // Still above the distilled claim -- the 041 ordering property holds for
+    // this head kind too.
+    expect(rendered.indexOf("CHOSE: Wait until after drizzle")).toBeLessThan(
+      rendered.indexOf("Drizzle isn't a dependency"),
+    );
+  });
+
+  it("does not badge a typed head as AUQ", async () => {
+    // The badge must distinguish, not decorate. A typed turn showing the AUQ
+    // chip would make the distinction worthless -- and the two are not
+    // equivalent evidence, which is the whole reason 043 keeps them apart.
+    const page = await loadPage({ queue: [EXCHANGE_ITEM] });
+    const rendered = page.el("stage").textContent;
+    expect(rendered).toContain("you asked");
+    expect(rendered).not.toContain("AUQ -- chose from options I offered");
   });
 });
 

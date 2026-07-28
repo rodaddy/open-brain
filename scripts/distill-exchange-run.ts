@@ -138,6 +138,14 @@ async function dryRun(pool: Pool, show: number): Promise<void> {
   console.log("exchanges cut     :", exchanges.length);
   console.log("candidates        :", prepared.length);
   console.log("  operator-anchored:", anchored);
+  // 043. Called out separately because before it, ALL SIX AskUserQuestion turns
+  // on the live corpus headed nothing -- each swept into the agent body of
+  // whatever preceded it. A run reporting 0 here against a corpus that contains
+  // them is the regression, and it is invisible in every other line.
+  console.log(
+    "    of which AUQ   :",
+    prepared.filter((c) => c.anchor_kind === "askuserquestion").length,
+  );
   console.log("  orphans          :", prepared.length - anchored);
   console.log(
     "  uncertain        :",

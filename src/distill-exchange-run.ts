@@ -45,6 +45,13 @@ export interface ExchangeSweepSummary {
   exchanges: number;
   /** Exchanges headed by a real operator turn. */
   operator_anchored: number;
+  /**
+   * Of those, the ones headed by an AskUserQuestion answer (043) -- the operator
+   * choosing from options the agent wrote. Reported separately because before
+   * 043 all six of these headed NOTHING, so a run that produces zero of them
+   * against a corpus that contains them is the regression to catch.
+   */
+  auq_anchored: number;
   /** Exchanges with no operator turn ahead of them. */
   orphans: number;
   /** Rows newly written. */
@@ -77,6 +84,7 @@ function emptySummary(): ExchangeSweepSummary {
     sessions: 0,
     exchanges: 0,
     operator_anchored: 0,
+    auq_anchored: 0,
     orphans: 0,
     written: 0,
     duplicate: 0,
@@ -199,8 +207,8 @@ async function persist(
       `INSERT INTO candidate_memory (
          namespace, candidate_type, content, content_hash, source_turn_ids,
          model, embedding, uncertain, uncertainty_reason,
-         unit_kind, anchor_turn_id, operator_text
-       ) VALUES ($1, $2, $3, $4, $5::uuid[], $6, $7, $8, $9, $10, $11::uuid, $12)
+         unit_kind, anchor_turn_id, operator_text, anchor_kind
+       ) VALUES ($1, $2, $3, $4, $5::uuid[], $6, $7, $8, $9, $10, $11::uuid, $12, $13)
        ON CONFLICT (namespace, content_hash) DO NOTHING
        RETURNING id`,
       [
@@ -216,6 +224,10 @@ async function persist(
         candidate.unit_kind,
         candidate.anchor_turn_id,
         candidate.operator_text,
+        // 043. DO NOTHING on conflict means an existing row keeps whatever
+        // anchor_kind it already has, which is correct: the row the operator may
+        // have graded must not be silently relabelled underneath him.
+        candidate.anchor_kind,
       ],
     );
 
@@ -356,6 +368,9 @@ export async function runExchangeSweep(
   summary.operator_anchored = candidates.filter(
     (c) => c.anchor_turn_id !== null,
   ).length;
+  summary.auq_anchored = candidates.filter(
+    (c) => c.anchor_kind === "askuserquestion",
+  ).length;
   summary.orphans = summary.exchanges - summary.operator_anchored;
 
   // Outside the transaction: the provider is an 8s-per-attempt network call and
@@ -392,6 +407,7 @@ export async function runExchangeSweep(
     sessions: summary.sessions,
     exchanges: summary.exchanges,
     operator_anchored: summary.operator_anchored,
+    auq_anchored: summary.auq_anchored,
     orphans: summary.orphans,
     written: summary.written,
     duplicate: summary.duplicate,

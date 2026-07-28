@@ -72,6 +72,30 @@ const CANDIDATE_ROW = {
   machine_grade_model: null,
   created_at: new Date("2026-07-28T00:00:00Z"),
   source_turn_ids: ["22222222-2222-4222-8222-222222222222"],
+  // A fragment: no head, so no authorship to describe (043).
+  unit_kind: "fragment",
+  anchor_turn_id: null,
+  operator_text: null,
+  anchor_kind: null,
+};
+
+/**
+ * An exchange headed by an AskUserQuestion answer (043).
+ *
+ * The row shape the re-cut produces for the 6 turns that headed NOTHING before
+ * it -- the operator choosing from options the agent wrote, which is him
+ * deciding but not equivalent evidence to a typed sentence.
+ */
+const AUQ_ROW = {
+  ...CANDIDATE_ROW,
+  id: "44444444-4444-4444-8444-444444444444",
+  content_hash: "hash-auq",
+  unit_kind: "exchange",
+  anchor_turn_id: "55555555-5555-4555-8555-555555555555",
+  operator_text:
+    "[AskUserQuestion -- the operator chose from options the agent offered]\n" +
+    "CHOSE: (none of the options offered)\nNOTED: we DO NOT track .claude",
+  anchor_kind: "askuserquestion",
 };
 
 function queueResponder(sql: string): unknown[] {
@@ -341,6 +365,45 @@ describe("fetchQueue", () => {
     expect(orderBy.indexOf("(c.unit_kind <> 'exchange')")).toBeLessThan(
       orderBy.indexOf("c.uncertain DESC"),
     );
+  });
+
+  it("carries anchor_kind through to the item so the page can badge it", async () => {
+    // 043. The page cannot distinguish "the operator typed this" from "the
+    // operator picked one of my options" without it, and the operator asked for
+    // that distinction by name. A fragment stays NULL rather than being
+    // defaulted to 'typed' -- badging a headless row as operator-typed is the
+    // one claim the badge exists to make honestly.
+    const db = fakeDb((sql) =>
+      sql.includes("FROM candidate_memory c")
+        ? [AUQ_ROW, CANDIDATE_ROW]
+        : queueResponder(sql),
+    );
+    const res = await fetchQueue(db, { namespace: "rico" });
+    expect(res.items[0]!.anchor_kind).toBe("askuserquestion");
+    expect(res.items[0]!.operator_text).toContain("we DO NOT track .claude");
+    expect(res.items[1]!.anchor_kind).toBeNull();
+  });
+
+  it("selects anchor_kind and does not rank AUQ below typed", async () => {
+    // Both are the operator deciding, so both sort ahead of orphans and
+    // fragments and NEITHER ahead of the other. Ranking a menu choice last would
+    // bury the six densest decision rows in the corpus behind 272 typed ones.
+    const db = fakeDb(queueResponder);
+    await fetchQueue(db, { namespace: "rico" });
+    const page = db.seen.find((q) =>
+      q.text.includes("FROM candidate_memory c"),
+    )!;
+    expect(page.text).toContain("c.anchor_kind");
+    const orderBy = page.text.slice(page.text.indexOf("ORDER BY"));
+    // No tiebreak on the VALUE of anchor_kind anywhere in the sort.
+    expect(orderBy).not.toContain("anchor_kind");
+    // And it never reaches the predicate: it describes a row, it does not
+    // filter one, the same rule 037:59-63 sets for `uncertain`.
+    const predicate = page.text.slice(
+      page.text.indexOf("WHERE"),
+      page.text.indexOf("ORDER BY"),
+    );
+    expect(predicate).not.toContain("anchor_kind");
   });
 
   it("tolerates an empty table -- day-one state", async () => {
@@ -626,6 +689,85 @@ describe("fetchStats", () => {
       duplicate: 0,
       inconclusive: 1,
     });
+  });
+
+  it("breaks the queue down by anchor_kind, naming NULL as 'fragment'", async () => {
+    // The readout that says whether the 043 fix landed. Before it, all 6
+    // AskUserQuestion turns in the corpus headed NOTHING -- and that is
+    // invisible in every other number here, because they were silently body
+    // text inside otherwise-healthy typed exchanges.
+    const db = fakeDb((sql) => {
+      if (sql.includes("GROUP BY anchor_kind")) {
+        return [
+          { anchor_kind: "typed", total: "272", ungraded: "270" },
+          { anchor_kind: "askuserquestion", total: "6", ungraded: "6" },
+          { anchor_kind: "orphan", total: "17", ungraded: "17" },
+          { anchor_kind: null, total: "1104", ungraded: "1096" },
+        ];
+      }
+      if (sql.includes("FROM candidate_grade")) return [];
+      return [
+        {
+          total: "1399",
+          ungraded: "1389",
+          graded: "10",
+          uncertain_ungraded: "0",
+          promoted: "0",
+          rejected: "0",
+          duplicate: "0",
+          inconclusive: "0",
+          compared: "0",
+          agreed: "0",
+          distinct_machine_grades: "0",
+        },
+      ];
+    });
+    const s = await fetchStats(db, { namespace: "rico" });
+
+    expect(s.by_anchor_kind.askuserquestion).toEqual({ total: 6, ungraded: 6 });
+    expect(s.by_anchor_kind.typed).toEqual({ total: 272, ungraded: 270 });
+    expect(s.by_anchor_kind.orphan).toEqual({ total: 17, ungraded: 17 });
+    // NULL is named, not dropped: a fragment has no head, and keeping the
+    // bucket is what makes the four sum to `total` so a reader can tell "no AUQ
+    // rows exist" from "the breakdown lost some rows".
+    expect(s.by_anchor_kind.fragment).toEqual({ total: 1104, ungraded: 1096 });
+    const summed = Object.values(s.by_anchor_kind).reduce(
+      (n, v) => n + v.total,
+      0,
+    );
+    expect(summed).toBe(s.total);
+  });
+
+  it("scopes the anchor_kind breakdown to the caller's namespace", async () => {
+    // Namespace is a security boundary on EVERY query in this module, including
+    // a counting one -- a cross-namespace count still discloses that rows exist.
+    const db = fakeDb((sql) => {
+      if (sql.includes("GROUP BY anchor_kind")) {
+        return [{ anchor_kind: "typed", total: "1", ungraded: "1" }];
+      }
+      if (sql.includes("FROM candidate_grade")) return [];
+      return [
+        {
+          total: "1",
+          ungraded: "1",
+          graded: "0",
+          uncertain_ungraded: "0",
+          promoted: "0",
+          rejected: "0",
+          duplicate: "0",
+          inconclusive: "0",
+          compared: "0",
+          agreed: "0",
+          distinct_machine_grades: "0",
+        },
+      ];
+    });
+    await fetchStats(db, { namespace: "rico" });
+    const grouped = db.seen.find((s) =>
+      s.text.includes("GROUP BY anchor_kind"),
+    );
+    expect(grouped?.text).toContain("namespace = $1");
+    expect(grouped?.values).toEqual(["rico"]);
   });
 });
 
@@ -1147,6 +1289,7 @@ describe("fetchGradeHistory", () => {
     uncertain: true,
     uncertainty_reason: "bare ack",
     machine_grade: "inconclusive",
+    anchor_kind: "askuserquestion",
   };
 
   function historyResponder(sql: string): unknown[] {
@@ -1185,6 +1328,11 @@ describe("fetchGradeHistory", () => {
       q.text.includes("FROM candidate_grade g"),
     )!;
     expect(page.text).toContain("ORDER BY g.created_at DESC");
+    // 043: the history says WHICH KIND of head was graded. Without it, a typed
+    // grade and a menu-choice grade are indistinguishable after the fact, and
+    // comparing them is the whole reason the two are kept apart.
+    expect(page.text).toContain("c.anchor_kind");
+    expect(res.items[0]!.anchor_kind).toBe("askuserquestion");
   });
 
   it("scopes the join on BOTH sides so content cannot cross a namespace", async () => {
@@ -1370,6 +1518,58 @@ describe("HTTP boundary", () => {
     expect(res.headers.get("cache-control")).toBe("no-store");
     const body = (await res.json()) as { items: Array<{ context: unknown[] }> };
     expect(body.items[0]!.context).toHaveLength(2);
+  });
+
+  it("puts anchor_kind in the /api/queue JSON, so the page can badge AUQ", async () => {
+    // The round trip that matters: the column exists, candidate-review selects
+    // it, and it survives serialization. The page reads ONLY this JSON, so a
+    // field lost anywhere in that chain silently removes the badge and nothing
+    // fails -- the row just quietly reads as though the operator typed it.
+    const res = await handlerFor((sql) =>
+      sql.includes("FROM candidate_memory c") ? [AUQ_ROW] : queueResponder(sql),
+    )(new Request("http://127.0.0.1/api/queue?limit=5"));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      items: Array<{
+        anchor_kind: string | null;
+        operator_text: string | null;
+      }>;
+    };
+    expect(body.items[0]!.anchor_kind).toBe("askuserquestion");
+    // And the operator's CHOICE leads the head text, not the harness wrapper.
+    expect(body.items[0]!.operator_text).not.toContain("The user answered:");
+  });
+
+  it("puts the anchor_kind breakdown in the /api/stats JSON", async () => {
+    const res = await handlerFor((sql) => {
+      if (sql.includes("GROUP BY anchor_kind")) {
+        return [{ anchor_kind: "askuserquestion", total: "6", ungraded: "6" }];
+      }
+      if (sql.includes("FROM candidate_grade")) return [];
+      return [
+        {
+          total: "6",
+          ungraded: "6",
+          graded: "0",
+          uncertain_ungraded: "0",
+          promoted: "0",
+          rejected: "0",
+          duplicate: "0",
+          inconclusive: "0",
+          compared: "0",
+          agreed: "0",
+          distinct_machine_grades: "0",
+        },
+      ];
+    })(new Request("http://127.0.0.1/api/stats"));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      by_anchor_kind: Record<string, { total: number; ungraded: number }>;
+    };
+    expect(body.by_anchor_kind.askuserquestion).toEqual({
+      total: 6,
+      ungraded: 6,
+    });
   });
 
   it("404s an unknown route", async () => {

@@ -138,6 +138,14 @@ export const GRADING_PAGE_HTML = String.raw`<!doctype html>
   .tag.uncertain { color: var(--inc); border-color: #6b5310; }
   .tag.machine { color: var(--dup); border-color: #4a3d78; }
   .tag.reinforced { color: var(--pass); border-color: #26603d; }
+  /* The AskUserQuestion chip (043). Filled rather than outlined, because it is
+     the one tag that changes how the operator should READ the head above it --
+     the others describe the row, this one qualifies his own authorship. Amber,
+     which is already the page's "hedge this" colour (uncertain, inconclusive),
+     rather than a seventh hue nobody has a meaning for. */
+  .tag.auq {
+    color: #ffd98a; border-color: #7a5f1c; background: #2a2312; font-weight: 600;
+  }
   .content {
     background: var(--panel2); border: 1px solid var(--line); border-radius: 8px;
     padding: 13px; font-size: 15.5px; white-space: pre-wrap; word-break: break-word;
@@ -215,6 +223,13 @@ export const GRADING_PAGE_HTML = String.raw`<!doctype html>
     font-size: 11px; text-transform: uppercase; letter-spacing: .7px;
     color: var(--accent); margin-bottom: 5px; font-weight: 600;
   }
+  /* An AUQ head keeps the operator's block -- it IS him deciding -- but recolours
+     its edge to the hedge amber so the qualification is visible at a glance even
+     with the chip scrolled out of view. Deliberately a re-tint of the SAME block
+     rather than a different one: demoting it visually would contradict the
+     operator's own "treated more like it came from me". */
+  .op-lead.auq { border-color: #7a5f1c; border-left-color: #d9a520; background: #241f14; }
+  .op-lead.auq .who { color: #ffd98a; }
   .op-lead .body {
     font-size: 16px; white-space: pre-wrap; word-break: break-word;
     max-height: 300px; overflow: auto;
@@ -313,6 +328,8 @@ export const GRADING_PAGE_HTML = String.raw`<!doctype html>
   <span class="stat">machine agreement <b id="agree">n/a</b></span>
   <span class="stat" title="The second axis: how the agent behaved, counted over live grades only.">agent good <b id="b-good">0</b> / bad <b id="b-bad">0</b>
         / neutral <b id="b-neutral">0</b></span>
+  <span class="stat" title="Ungraded rows by how the operator authored the head (043). AUQ counts the AskUserQuestion answers -- before 043 every one of them headed nothing.">heads typed <b id="k-typed">0</b> / AUQ <b id="k-auq">0</b>
+        / orphan <b id="k-orphan">0</b> / fragment <b id="k-fragment">0</b></span>
   <span class="stat" id="mode-label"></span>
 </header>
 
@@ -514,6 +531,15 @@ export const GRADING_PAGE_HTML = String.raw`<!doctype html>
     setText("b-good", ab.good || 0);
     setText("b-bad", ab.bad || 0);
     setText("b-neutral", ab.neutral || 0);
+    // Ungraded, not total: the header counts what is still in front of the
+    // operator. Same rolling-restart fallback as the behavior counters -- an
+    // older /api/stats has no by_anchor_kind and must not blank the readout.
+    const ak = s.by_anchor_kind || {};
+    const akn = (k) => (ak[k] && ak[k].ungraded) || 0;
+    setText("k-typed", akn("typed"));
+    setText("k-auq", akn("askuserquestion"));
+    setText("k-orphan", akn("orphan"));
+    setText("k-fragment", akn("fragment"));
     // A constant grader makes the rate un-interpretable, so say that instead of
     // showing a percentage that only reflects the operator's own action mix.
     // Measured 2026-07-28: REM emitted one grade value for 1103 of 1104 rows.
@@ -902,11 +928,26 @@ export const GRADING_PAGE_HTML = String.raw`<!doctype html>
     // body. A fragment has no operator head and must NOT be given one -- putting
     // agent text in this position is precisely the defect 041 exists to fix.
     if (it.unit_kind === "exchange" && it.operator_text) {
+      // AUQ IS BADGED, NOT MERGED (migration 043). Operator, verbatim: "with the
+      // exception of maybe AskUserQuestions sections, that's kind of a hybrid
+      // and should be treated more like it came from me i think, with that note
+      // that it is AUQ". So it renders in the operator position -- it IS him
+      // deciding -- but says on its face that the options were the agent's,
+      // because a menu choice is bounded by what was offered and a typed
+      // sentence is not. One chip, in the header row where every other
+      // provenance marker already lives, so it is unmissable without adding a
+      // second visual language to the card.
+      const auq = it.anchor_kind === "askuserquestion";
+      if (auq) {
+        row.append(tag("AUQ -- chose from options I offered", "auq"));
+      }
       const lead = document.createElement("div");
-      lead.className = "op-lead";
+      lead.className = "op-lead" + (auq ? " auq" : "");
       const who = document.createElement("div");
       who.className = "who";
-      who.textContent = "you asked";
+      who.textContent = auq
+        ? "you answered an AskUserQuestion -- your choice, the agent's options"
+        : "you asked";
       const body = document.createElement("div");
       body.className = "body";
       body.textContent = it.operator_text;

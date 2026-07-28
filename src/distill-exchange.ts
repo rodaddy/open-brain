@@ -75,11 +75,260 @@ export interface Exchange {
   body: readonly DistillTurn[];
   /** Which session this was cut from. Carried so a caller can group without re-reading turns. */
   session_ref: string | null;
+  /**
+   * How the operator authored the head (migration 043).
+   *
+   * Derived from `anchor` by `anchorKindOf` and carried on the struct rather
+   * than recomputed at each use, because `prepareExchange` may DEGRADE an
+   * unusable anchor to an orphan -- and after that degrade the original turn is
+   * gone, so a late recompute would report 'orphan' for a row whose anchor was
+   * dropped and 'typed' for one whose anchor survived, with no way to tell the
+   * two apart. Computing it once beside the anchor keeps the two in step.
+   */
+  anchor_kind: AnchorKind;
 }
 
-/** Is this the operator speaking? */
+/**
+ * An AskUserQuestion answer: the operator CHOSE rather than typed.
+ *
+ * The runtime delivers it as a `tool_result`, so it lands with `role='tool'` and
+ * `is_human_prompt=false` -- indistinguishable, by those columns alone, from
+ * command output. Measured 2026-07-28: 6 such turns in the corpus, every one
+ * `role='tool'`, every one `is_human_prompt=false`.
+ *
+ * Left alone they become body text under whatever preceded them, so an explicit
+ * operator decision reads as agent chatter. One of the six is the instruction to
+ * leave `.claude/` untracked, which was acted on -- a decision by any definition.
+ *
+ * That is exactly the failure `tools/ingest-raw-turn.ts:23-25` records: capture
+ * "had never once captured an AskUserQuestion answer -- the densest decision
+ * content in the corpus".
+ *
+ * MATCHED ON CONTENT, and that is a known weakness. The prefix is a harness
+ * string, not a contract, so a runtime that rewords it stops being detected.
+ * `metadata` carries no marker for this shape today (checked 2026-07-28), so
+ * there is nothing sturdier to key on yet. When ingest grows an explicit flag,
+ * key on that and delete this. The prefix is anchored so operator prose merely
+ * quoting the phrase mid-sentence cannot trip it.
+ */
+const AUQ_ANSWER_PREFIX = /^The user answered:/;
+
+export function isAskUserQuestionAnswer(turn: DistillTurn): boolean {
+  return (
+    turn.role === "tool" && AUQ_ANSWER_PREFIX.test(turn.content.trimStart())
+  );
+}
+
+/**
+ * Is this the operator speaking?
+ *
+ * Two ways it can be true, and they are NOT equivalent evidence:
+ *   - typed          the operator wrote it unprompted
+ *   - askuserquestion the operator picked from options the AGENT authored
+ *
+ * Both head an exchange, because both are the operator deciding. They are told
+ * apart by `anchorKindOf` rather than merged, since a menu choice is bounded by
+ * the choices offered while a typed sentence is not -- the operator asked for
+ * the distinction to stay visible: "that's kind of a hybrid and should be
+ * treated more like it came from me i think, with that note that it is AUQ".
+ */
 function isOperatorTurn(turn: DistillTurn): boolean {
-  return turn.is_human_prompt;
+  return turn.is_human_prompt || isAskUserQuestionAnswer(turn);
+}
+
+/** How the operator authored this head. Null anchor means an orphan unit. */
+export type AnchorKind = "typed" | "askuserquestion" | "orphan";
+
+export function anchorKindOf(anchor: DistillTurn | null): AnchorKind {
+  if (anchor === null) return "orphan";
+  return anchor.is_human_prompt ? "typed" : "askuserquestion";
+}
+
+// --------------------------------------------------------------------------
+// AskUserQuestion rendering
+// --------------------------------------------------------------------------
+
+/**
+ * Trailing harness instruction on every AskUserQuestion tool_result.
+ *
+ * Verified byte-for-byte against all 6 live turns 2026-07-28 -- every one ends
+ * with this exact sentence, em dashes and all. It is addressed to the AGENT, not
+ * written by the operator, so leaving it in the rendered unit puts words in the
+ * operator's mouth on the one row type that exists to carry HIS decision.
+ */
+const AUQ_TRAILER =
+  /\s*Read the answers carefully\s*(?:--|—)\s*they may request clarification, changes, or that you not proceed\s*(?:--|—)\s*and follow what they actually say\.\s*$/;
+
+/**
+ * One question the AGENT asked and what the operator answered.
+ *
+ * `answer` is null when the operator picked nothing -- the harness writes the
+ * literal `(no option selected)` there, which happens on 2 of the 6 live turns
+ * and is a REAL answer ("none of your options"), not a missing one.
+ */
+interface AuqPair {
+  question: string;
+  answer: string | null;
+  notes: string | null;
+}
+
+/**
+ * The harness's own answer sentinel for "the operator chose no option".
+ * Matched literally because the harness emits it literally, unquoted, which is
+ * exactly what tells it apart from a quoted choice the operator actually made.
+ */
+const AUQ_NO_OPTION = "(no option selected)";
+
+/**
+ * Split an AskUserQuestion tool_result into its question/answer pairs.
+ *
+ * THE SHAPE, read off all 6 live turns rather than guessed (2026-07-28):
+ *
+ *   The user answered: "<question>"=<answer>[ notes: <free text>][, "<q2>"=<a2>…]
+ *   Read the answers carefully -- ... -- and follow what they actually say.
+ *
+ * where `<answer>` is either a double-quoted option the agent authored or the
+ * bare sentinel `(no option selected)`, and `notes:` carries free text the
+ * operator TYPED. Two of the six carry only notes; one carries two pairs, the
+ * second of which is a paragraph of the operator's own prose.
+ *
+ * PARSED RATHER THAN REGEX-STRIPPED because the pieces have different authors
+ * and the whole point of the AUQ badge is that the reader can tell them apart:
+ * the question is the AGENT's framing, the choice is bounded by options the
+ * AGENT wrote, and only `notes:` is unbounded operator text. Rendering them
+ * undifferentiated would collapse exactly the distinction the operator asked to
+ * keep visible.
+ *
+ * Returns an empty array when the content does not parse -- the caller then
+ * falls back to the raw text rather than inventing structure. A harness reword
+ * degrades to "renders the wrapper", never to "loses the operator's words".
+ */
+export function parseAskUserQuestion(content: string): AuqPair[] {
+  const trimmed = content.trimStart();
+  const withoutPrefix = trimmed.replace(AUQ_ANSWER_PREFIX, "");
+  if (withoutPrefix === trimmed) return [];
+  const body = withoutPrefix.replace(AUQ_TRAILER, "").trim();
+  if (body.length === 0) return [];
+
+  const pairs: AuqPair[] = [];
+  // Walk the string rather than splitting on `,` or `"`: an operator note can
+  // and does contain both (live turn b37f553a carries a comma-rich paragraph
+  // and turn 4404d155's answer is shouted prose). Only a scan that knows a
+  // question is quoted and an `=` follows it can tell a separator from content.
+  let i = 0;
+  while (i < body.length) {
+    const qStart = body.indexOf('"', i);
+    if (qStart === -1) break;
+    const qEnd = body.indexOf('"', qStart + 1);
+    if (qEnd === -1) break;
+    if (body[qEnd + 1] !== "=") {
+      // Not a question/answer boundary -- a stray quote inside prose. Skip past
+      // it rather than abandoning the parse, so one odd character in an operator
+      // note cannot silently drop the pairs that follow it.
+      i = qEnd + 1;
+      continue;
+    }
+    const question = body.slice(qStart + 1, qEnd);
+
+    let answer: string | null = null;
+    let cursor = qEnd + 2;
+    if (body[cursor] === '"') {
+      const aEnd = body.indexOf('"', cursor + 1);
+      if (aEnd === -1) break;
+      answer = body.slice(cursor + 1, aEnd);
+      cursor = aEnd + 1;
+    } else if (body.startsWith(AUQ_NO_OPTION, cursor)) {
+      cursor += AUQ_NO_OPTION.length;
+    } else {
+      // An unrecognised answer form. Take everything up to the next `, "` pair
+      // boundary so a harness that stops quoting still surfaces the answer.
+      const next = body.indexOf(', "', cursor);
+      const stop = next === -1 ? body.length : next;
+      answer = body.slice(cursor, stop).trim() || null;
+      cursor = stop;
+    }
+
+    let notes: string | null = null;
+    const rest = body.slice(cursor);
+    const notesMatch = /^\s*notes:\s*/.exec(rest);
+    if (notesMatch) {
+      const after = rest.slice(notesMatch[0].length);
+      const next = after.indexOf(', "');
+      notes = (next === -1 ? after : after.slice(0, next)).trim() || null;
+      cursor += notesMatch[0].length + (next === -1 ? after.length : next);
+    }
+
+    pairs.push({ question, answer, notes });
+    const nextPair = body.indexOf(', "', cursor);
+    if (nextPair === -1) break;
+    i = nextPair + 2;
+  }
+
+  return pairs;
+}
+
+/**
+ * Render an AskUserQuestion answer so THE OPERATOR'S DECISION LEADS.
+ *
+ * The raw content opens `The user answered: "<question the agent wrote>"=...`,
+ * so rendering it verbatim puts the AGENT's question in the position every other
+ * exchange gives to the operator's own words -- the same inversion 041 exists to
+ * fix, one layer down. What the operator actually contributed is the choice and
+ * the notes; the question is context for it.
+ *
+ * So: choice and notes first, the agent's question after and labelled as the
+ * agent's. The AUQ marker is stated in the text as well as carried in
+ * `anchor_kind`, because the row is read in two places -- the page, which has
+ * the column, and anything reading `content` alone, which does not.
+ *
+ * Falls back to the raw text when the parse finds nothing, which is the safe
+ * direction: an unrendered wrapper is ugly, a dropped decision is data loss. The
+ * fallback still strips the harness prefix and trailer, so a turn that is
+ * NOTHING BUT wrapper renders empty and prepareExchange degrades it to an orphan
+ * -- otherwise "The user answered:" alone would count as operator words and
+ * 041's candidate_memory_anchor_has_text would be satisfied by boilerplate.
+ */
+export function renderAskUserQuestionHead(content: string): string {
+  const pairs = parseAskUserQuestion(content);
+  if (pairs.length === 0) {
+    return normalizeWhitespace(
+      content
+        .trimStart()
+        .replace(AUQ_ANSWER_PREFIX, "")
+        .replace(AUQ_TRAILER, ""),
+    );
+  }
+
+  const blocks = pairs.map((pair) => {
+    const lines: string[] = [];
+    // The choice is the decision, so it is first even when it is "none of the
+    // above" -- refusing every option offered is itself an answer, and 2 of the
+    // 6 live turns are exactly that.
+    lines.push(`CHOSE: ${pair.answer ?? "(none of the options offered)"}`);
+    if (pair.notes) lines.push(`NOTED: ${pair.notes}`);
+    // Attributed to the agent explicitly. Without the label a reader takes the
+    // question for the operator's, which is the misattribution this whole
+    // module is about.
+    lines.push(`(agent asked: ${pair.question})`);
+    return lines.join("\n");
+  });
+
+  return normalizeWhitespace(
+    `[AskUserQuestion -- the operator chose from options the agent offered]\n${blocks.join("\n\n")}`,
+  );
+}
+
+/**
+ * The operator's words from a head turn, however it was authored.
+ *
+ * One function so the rendered `content` and the stored `operator_text` cannot
+ * disagree about what the operator said -- they are read side by side on the
+ * page, and a divergence there reads as the page lying about the row.
+ */
+export function operatorTextOf(anchor: DistillTurn): string {
+  return isAskUserQuestionAnswer(anchor)
+    ? renderAskUserQuestionHead(anchor.content)
+    : normalizeWhitespace(anchor.content);
 }
 
 /**
@@ -116,6 +365,7 @@ export function buildExchanges(turns: readonly DistillTurn[]): Exchange[] {
       anchor: current.anchor,
       body: current.body,
       session_ref: currentSession,
+      anchor_kind: anchorKindOf(current.anchor),
     });
     current = null;
   };
@@ -215,10 +465,12 @@ function bodyLabel(turn: DistillTurn): string {
  * "judge a fragment of your own conversation" failure this module exists to fix.
  */
 export function renderExchange(exchange: Exchange): string {
+  // operatorTextOf, not raw content: an AskUserQuestion head arrives wrapped in
+  // harness boilerplate that opens with the AGENT's question, so rendering it
+  // verbatim would put agent text in the operator's position -- the exact
+  // inversion this module exists to fix.
   const head =
-    exchange.anchor === null
-      ? null
-      : normalizeWhitespace(exchange.anchor.content);
+    exchange.anchor === null ? null : operatorTextOf(exchange.anchor);
 
   const lines: string[] = [];
   if (head !== null && head.length > 0) {
@@ -321,6 +573,14 @@ interface Classified {
  *
  * An orphan has no operator turn to classify from, so it is `fact` and uncertain
  * -- the honest answer, since nothing in it states an intent.
+ *
+ * AN AskUserQuestion HEAD IS CLASSIFIED FROM ITS RENDERED FORM, NOT ITS RAW
+ * CONTENT (043). The raw string opens with the question THE AGENT WROTE, and
+ * agent questions are dense in DECISION_RE stems ("Should services ever run
+ * as...", "how should the registry schema express it?", "Track it?") -- so
+ * matching the raw text classifies the exchange from the agent's framing, which
+ * is the same misattribution 041 exists to end, one layer down. operatorTextOf
+ * has already stripped the wrapper down to the choice and the notes.
  */
 function classifyExchange(exchange: Exchange): Classified {
   if (exchange.anchor === null) {
@@ -332,7 +592,7 @@ function classifyExchange(exchange: Exchange): Classified {
     };
   }
 
-  const text = normalizeWhitespace(exchange.anchor.content);
+  const text = operatorTextOf(exchange.anchor);
 
   if (ACK_RE.test(text)) {
     // The body is what was authorized, and it is IN the content already -- which
@@ -390,6 +650,12 @@ export interface PreparedExchangeCandidate {
   anchor_turn_id: string | null;
   /** The operator's verbatim words, for 041's operator_text column. Null for an orphan. */
   operator_text: string | null;
+  /**
+   * 043's anchor_kind. Persisted so the page can badge an AskUserQuestion head
+   * apart from a typed one without re-parsing `content` -- the two are not
+   * equivalent evidence and the operator asked for the distinction by name.
+   */
+  anchor_kind: AnchorKind;
   uncertain: boolean;
   uncertainty_reason?: string;
   unit_kind: "exchange";
@@ -420,8 +686,7 @@ export function prepareExchange(
 ): PreparedExchangeCandidate | null {
   const anchor = exchange.anchor;
 
-  const operatorText =
-    anchor === null ? null : normalizeWhitespace(anchor.content);
+  const operatorText = anchor === null ? null : operatorTextOf(anchor);
 
   // An anchor whose content is empty or pure harness scaffolding cannot head
   // anything -- 041's candidate_memory_anchor_has_text would reject the row, and
@@ -435,7 +700,16 @@ export function prepareExchange(
 
   const effective: Exchange = anchorUsable
     ? exchange
-    : { anchor: null, body: exchange.body, session_ref: exchange.session_ref };
+    : {
+        anchor: null,
+        body: exchange.body,
+        session_ref: exchange.session_ref,
+        // The kind is re-derived from the DEGRADED anchor, not carried over: a
+        // row whose head was dropped genuinely has no operator turn, and
+        // reporting it as 'typed' would promise the page an operator_text that
+        // the same branch just set to null.
+        anchor_kind: "orphan",
+      };
 
   // Nothing to write at all. Only reachable for an unusable anchor with an empty
   // body -- an anchored exchange always renders its head.
@@ -487,6 +761,7 @@ export function prepareExchange(
     source_turn_ids: sourceTurnIds,
     anchor_turn_id: effective.anchor?.id ?? null,
     operator_text: effective.anchor ? operatorText : null,
+    anchor_kind: effective.anchor_kind,
     uncertain: classified.uncertain,
     ...(classified.reason ? { uncertainty_reason: classified.reason } : {}),
     unit_kind: "exchange",

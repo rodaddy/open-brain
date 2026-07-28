@@ -181,6 +181,19 @@ export interface ReviewItem {
    */
   operator_text: string | null;
   /**
+   * How the operator authored the head (migration 043): 'typed', when he wrote
+   * it unprompted; 'askuserquestion', when he picked from options THE AGENT
+   * wrote; 'orphan', when nothing of his heads the row. NULL on a fragment,
+   * which has no head at all.
+   *
+   * Carried to the page rather than inferred there because the two operator
+   * kinds are NOT equivalent evidence -- a menu choice is bounded by the options
+   * offered -- and the operator asked for that to stay visible: "that's kind of
+   * a hybrid and should be treated more like it came from me i think, with that
+   * note that it is AUQ".
+   */
+  anchor_kind: string | null;
+  /**
    * Source turns plus surrounding conversation, in transcript order.
    *
    * A candidate with an empty array here is UNGRADEABLE and the UI must say so
@@ -439,7 +452,7 @@ const CANDIDATE_COLUMNS = `
   c.id, c.namespace, c.candidate_type, c.content, c.content_hash,
   c.uncertain, c.uncertainty_reason, c.authority_tier, c.model,
   c.machine_grade, c.machine_grade_model, c.created_at, c.source_turn_ids,
-  c.unit_kind, c.anchor_turn_id, c.operator_text
+  c.unit_kind, c.anchor_turn_id, c.operator_text, c.anchor_kind
 `;
 
 interface CandidateRow {
@@ -459,6 +472,7 @@ interface CandidateRow {
   unit_kind: string;
   anchor_turn_id: string | null;
   operator_text: string | null;
+  anchor_kind: string | null;
 }
 
 type Queryable = Pick<pg.Pool, "query">;
@@ -650,6 +664,10 @@ async function hydrate(
     unit_kind: r.unit_kind ?? "fragment",
     anchor_turn_id: r.anchor_turn_id,
     operator_text: r.operator_text,
+    // NOT defaulted. A NULL here means "this row predates 043 or is a fragment",
+    // and coercing it to 'typed' would badge a row as operator-typed on no
+    // evidence -- the one claim the badge exists to make honestly.
+    anchor_kind: r.anchor_kind ?? null,
     context: context.get(r.id) ?? [],
     reinforcement: reinforcement.get(r.content_hash) ?? null,
   }));
@@ -713,6 +731,14 @@ export function clampOffset(value: unknown): number {
  * Within exchanges, orphans (anchor_turn_id IS NULL) sort after anchored ones:
  * nobody asked for them, so they are worth less of the operator's attention --
  * still gradeable, just later.
+ *
+ * `typed` AND `askuserquestion` RANK EQUALLY (043). Both are the operator
+ * deciding, so both sort ahead of orphans and fragments and neither ahead of the
+ * other. The rank key stays `anchor_turn_id IS NULL` rather than becoming a
+ * three-way CASE over anchor_kind for exactly that reason -- a CASE would invite
+ * someone to number the two operator kinds differently, and demoting a menu
+ * choice below a typed sentence would bury the six densest decision rows in the
+ * corpus (tools/ingest-raw-turn.ts:23-25) behind 272 typed ones.
  */
 export async function fetchQueue(
   db: Queryable,
@@ -1427,6 +1453,13 @@ export interface GradeHistoryItem {
   uncertain: boolean;
   uncertainty_reason: string | null;
   machine_grade: string | null;
+  /**
+   * How the graded row's head was authored (043). In the history because "which
+   * kind of head did I actually grade?" is the question that makes these grades
+   * comparable -- a typed anchor and a menu choice are different evidence, and
+   * without the column the history cannot tell them apart after the fact.
+   */
+  anchor_kind: string | null;
 }
 
 export interface GradeHistoryResult {
@@ -1482,12 +1515,13 @@ export async function fetchGradeHistory(
     uncertain: boolean;
     uncertainty_reason: string | null;
     machine_grade: string | null;
+    anchor_kind: string | null;
   }>(
     `SELECT g.id AS grade_id, g.candidate_id, g.action, g.note, g.graded_by,
             g.reason_code, g.agent_behavior,
             g.batch_id, g.created_at, g.superseded_at,
             c.candidate_type, c.content, c.uncertain, c.uncertainty_reason,
-            c.machine_grade
+            c.machine_grade, c.anchor_kind
        FROM candidate_grade g
        JOIN candidate_memory c
          ON c.id = g.candidate_id AND c.namespace = $1
@@ -1530,6 +1564,7 @@ export async function fetchGradeHistory(
       uncertain: r.uncertain,
       uncertainty_reason: r.uncertainty_reason,
       machine_grade: r.machine_grade,
+      anchor_kind: r.anchor_kind ?? null,
     })),
     total: Number(counts.rows[0]?.total ?? 0),
     batches: batches.rows.map((b) => ({
@@ -1610,6 +1645,21 @@ export interface ReviewStats {
     rated: number;
     by_value: Record<string, number>;
   };
+  /**
+   * Rows per anchor_kind (043), split ungraded/graded.
+   *
+   * This is the readout that says whether the AskUserQuestion fix actually
+   * landed. Before 043 all 6 AUQ turns in the corpus headed NOTHING -- each was
+   * swept into the agent body of the preceding exchange -- so an
+   * `askuserquestion` count of 0 against a corpus known to contain them is the
+   * regression, and it is invisible in every other number here.
+   *
+   * Keyed by the value, with 'fragment' standing in for SQL NULL: a fragment has
+   * no head at all, and a JSON object cannot key on null. Naming it rather than
+   * dropping it keeps the four buckets summing to `total`, so a reader can tell
+   * "no AUQ rows exist" from "the breakdown lost some rows".
+   */
+  by_anchor_kind: Record<string, { total: number; ungraded: number }>;
 }
 
 /** Counts for the progress readout. One query, one scan. */
@@ -1665,6 +1715,37 @@ export async function fetchStats(
     [options.namespace],
   );
 
+  // A THIRD scan, over candidate_memory again rather than folded into the first.
+  // GROUP BY anchor_kind cannot coexist with the ungrouped FILTER counts above in
+  // one statement, and adding a GROUPING SETS to that query would make every
+  // existing number in the readout depend on getting a new clause right. A second
+  // count(*) over the same table is cheap; a subtly wrong `graded` is not.
+  const anchors = await db.query<{
+    anchor_kind: string | null;
+    total: string;
+    ungraded: string;
+  }>(
+    `SELECT anchor_kind,
+            count(*) AS total,
+            count(*) FILTER (WHERE reviewed_at IS NULL) AS ungraded
+       FROM candidate_memory
+      WHERE namespace = $1
+      GROUP BY anchor_kind`,
+    [options.namespace],
+  );
+
+  const byAnchorKind: Record<string, { total: number; ungraded: number }> = {};
+  for (const a of anchors.rows) {
+    // NULL is a fragment: 041 gave every exchange row a kind, and 043 backfilled
+    // the ones that predate it, so the only rows left NULL are the 1,104
+    // fragments that have no head to describe.
+    const key = a.anchor_kind ?? "fragment";
+    const entry = byAnchorKind[key] ?? { total: 0, ungraded: 0 };
+    entry.total += Number(a.total);
+    entry.ungraded += Number(a.ungraded);
+    byAnchorKind[key] = entry;
+  }
+
   const byReason: Record<string, number> = {};
   const byBehavior: Record<string, number> = {};
   let rated = 0;
@@ -1702,5 +1783,6 @@ export async function fetchStats(
     },
     by_reason_code: byReason,
     agent_behavior: { rated, by_value: byBehavior },
+    by_anchor_kind: byAnchorKind,
   };
 }
