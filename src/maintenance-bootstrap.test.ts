@@ -37,6 +37,9 @@ import type {
 import type { EmbedWithMetaFn } from "./embedding-repair.ts";
 import type { AuthInfo } from "./types.ts";
 import { sharedNamespaceConfig } from "./shared-namespace.ts";
+import { MEMORY_DISTILL_JOB_KIND } from "./distill-handler.ts";
+import { DREAM_LIGHT_JOB_KIND } from "./dream-light.ts";
+import { DREAM_REM_JOB_KIND } from "./dream-rem.ts";
 
 const silentLogger: MaintenanceQueueLogger = {
   info: () => {},
@@ -248,16 +251,92 @@ describe("startMaintenanceQueue wiring", () => {
 describe("composeMaintenanceHandlers", () => {
   const fakeDbPool = { query: async () => ({ rows: [], rowCount: 0 }) } as any;
 
-  it("registers both embedding.repair and graph.derive under their kinds", () => {
+  it("registers every dispatchable kind and nothing else", () => {
+    // The Map is the ONLY dispatch surface: a kind absent from it can never be
+    // claimed, however many jobs are enqueued under it. Asserting the exact set
+    // rather than a count is what makes an accidental removal visible -- the
+    // failure mode is jobs that queue, retry, and dead-letter in silence, which
+    // is exactly what happened to dream.light between #390 and this build.
     const handlers = composeMaintenanceHandlers({
       pool: fakeDbPool,
       logger: silentLogger,
       embedFn: stubEmbed,
       graphAuth: MAINTENANCE_GRAPH_AUTH,
     });
-    expect(handlers.has(EMBEDDING_REPAIR_JOB_KIND)).toBe(true);
-    expect(handlers.has(GRAPH_DERIVATION_JOB_KIND)).toBe(true);
-    expect(handlers.size).toBe(2);
+    expect([...handlers.keys()].sort()).toEqual(
+      [
+        EMBEDDING_REPAIR_JOB_KIND,
+        GRAPH_DERIVATION_JOB_KIND,
+        MEMORY_DISTILL_JOB_KIND,
+        DREAM_LIGHT_JOB_KIND,
+        DREAM_REM_JOB_KIND,
+      ].sort(),
+    );
+  });
+
+  it("registers the DREAM pipeline: distill -> light -> rem", () => {
+    // dream.light in particular: DREAM_LIGHT_JOB_KIND and makeDreamLightHandler
+    // existed from #390 but were referenced nowhere outside their own module,
+    // so a `dream.light` job could be enqueued, matched no handler, and burned
+    // its retries into the dead-letter state.
+    const handlers = composeMaintenanceHandlers({
+      pool: fakeDbPool,
+      logger: silentLogger,
+      embedFn: stubEmbed,
+      graphAuth: MAINTENANCE_GRAPH_AUTH,
+    });
+    for (const kind of [
+      MEMORY_DISTILL_JOB_KIND,
+      DREAM_LIGHT_JOB_KIND,
+      DREAM_REM_JOB_KIND,
+    ]) {
+      expect(handlers.get(kind)).toBeTypeOf("function");
+    }
+  });
+
+  it("does NOT register Deep -- it has no output for a worker to consume", () => {
+    // src/dream-deep.ts is a read-only bundle builder whose result is a page an
+    // operator reads. A job kind for it would compute a result and discard it.
+    const handlers = composeMaintenanceHandlers({
+      pool: fakeDbPool,
+      logger: silentLogger,
+      embedFn: stubEmbed,
+      graphAuth: MAINTENANCE_GRAPH_AUTH,
+    });
+    expect(handlers.has("dream.deep")).toBe(false);
+  });
+
+  it("every registered kind matches the queue's kind regex", () => {
+    // src/maintenance-queue.ts:269. A kind that fails this can be registered
+    // but never enqueued, which is a silent dead end.
+    const handlers = composeMaintenanceHandlers({
+      pool: fakeDbPool,
+      logger: silentLogger,
+      embedFn: stubEmbed,
+      graphAuth: MAINTENANCE_GRAPH_AUTH,
+    });
+    for (const kind of handlers.keys()) {
+      expect(kind).toMatch(/^[a-z][a-z0-9_.-]{0,127}$/);
+    }
+  });
+
+  it("registration enqueues nothing -- dispatch only", async () => {
+    // The maintenance queue has no recurrence primitive. A DREAM cycle starts
+    // from an explicit producer, never from the bootstrap having been imported.
+    const statements: string[] = [];
+    const recording = {
+      query: async (sql: string) => {
+        statements.push(sql);
+        return { rows: [], rowCount: 0 };
+      },
+    } as any;
+    composeMaintenanceHandlers({
+      pool: recording,
+      logger: silentLogger,
+      embedFn: stubEmbed,
+      graphAuth: MAINTENANCE_GRAPH_AUTH,
+    });
+    expect(statements).toEqual([]);
   });
 
   it("refuses to register without a clear auth identity (fail closed)", () => {
