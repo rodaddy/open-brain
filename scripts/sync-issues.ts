@@ -144,6 +144,7 @@ console.log(
     `${comments} comments -> ${OUT_DIR}/` +
     (stale ? `, removed ${stale} stale` : ""),
 );
-console.log(
-  "Run `qmd sync` (or the repo's index refresh) to make these searchable.",
-);
+// Two steps, both required: `update` re-indexes the files, `embed` builds the
+// vectors semantic search needs. Skipping embed leaves the new files findable
+// by keyword and invisible to `qmd query`.
+console.log("Now run: qmd update -c open-brain && qmd embed");
