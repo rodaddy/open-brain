@@ -123,7 +123,24 @@ const UNCOUNTABLE: readonly RegExp[] = [
  * and appears in 26 sessions. Role removes tool results; UNCOUNTABLE removes
  * tool calls.
  */
-const SPEECH_ROLES: ReadonlySet<string> = new Set(["user", "assistant"]);
+/**
+ * Roles known NOT to be speech. This is a DENYLIST, deliberately, not an
+ * allowlist of speech roles.
+ *
+ * An allowlist rejects every role it has not heard of, so the day a new runtime
+ * writes turns under an unfamiliar role, all of its content is dropped -- and
+ * dropped invisibly, because a turn that was never counted leaves no trace of
+ * having been skipped. A denylist fails the other way: an unrecognised role is
+ * treated as speech and over-counts a little until someone notices.
+ *
+ * That asymmetry is the whole point. Over-counting is self-correcting -- an
+ * entry nothing ever references drifts cold through the tiers and ages out on
+ * its own evidence (`code-brain-design.md` §4). Under-counting is permanent:
+ * content that never entered has no usage history to be judged by and no path
+ * back. The tier system is the precision filter; the write path must not try to
+ * be one.
+ */
+const NON_SPEECH_ROLES: ReadonlySet<string> = new Set(["tool", "system"]);
 
 /**
  * Should Light count this content toward corroboration?
@@ -132,15 +149,44 @@ const SPEECH_ROLES: ReadonlySet<string> = new Set(["user", "assistant"]);
  * database sweep.
  */
 export function isCountable(content: string, role?: string): boolean {
-  // Only speech corroborates. An unknown role is treated as speech so a new
-  // runtime cannot silently drop real content — the failure mode to avoid here
-  // is losing evidence, not counting a little extra.
-  if (role !== undefined && !SPEECH_ROLES.has(role)) return false;
+  // Only speech corroborates, but this rejects only roles KNOWN not to be
+  // speech. An unrecognised role is counted, so a new runtime cannot silently
+  // drop real content -- see NON_SPEECH_ROLES for why the denylist direction is
+  // load-bearing rather than incidental.
+  if (role !== undefined && NON_SPEECH_ROLES.has(role)) return false;
   const trimmed = content.trim();
   if (trimmed.length === 0) return false;
-  // A handful of characters cannot corroborate anything; this also cheaply
-  // excludes "ok", "yes", "done" answers that recur constantly across sessions.
-  if (trimmed.length < 16) return false;
+  // NO LENGTH FLOOR, AND NO SHORT-WORD LIST. An earlier version dropped
+  // anything under 16 characters to cheaply exclude "ok"/"yes"/"done". That is
+  // wrong twice over.
+  //
+  // First, length is a proxy for "meaningful in isolation", which is the wrong
+  // question: nothing here is meaningful in isolation. A few characters can be
+  // the whole decision -- they convert a proposal into an authorization, so
+  // they carry MORE weight than the paragraphs around them. Dropping them does
+  // not lose a row, it decapitates the record: a proposal survives with no
+  // evidence anyone approved it.
+  //
+  // Second, and this is the part a list of "obviously worthless" short strings
+  // gets wrong: the SAME short string is not always the same act. "okay" is
+  // assent after one turn and doubt after another; only the surrounding turns
+  // distinguish them. Any rule keyed on the string alone must therefore guess,
+  // and guessing wrong 5-20% of the time is 5-20% of real decisions silently
+  // deleted before anything can look at them.
+  //
+  // So the standing trade is RECALL OVER PRECISION, and the reason is
+  // structural rather than a preference: THE TIER SYSTEM IS ALREADY THE
+  // PRECISION FILTER. Something inaccurate that gets in is referenced rarely,
+  // drifts cold on its own access record, and ages out at the ~6-month tier
+  // (`code-brain-design.md` §4). That is a reversible judgement made with
+  // evidence, months of it. A write-path filter makes the opposite kind of
+  // judgement: permanent, immediate, and with no information beyond the
+  // characters in front of it. Content that never entered has no usage history
+  // to be judged by and no path back.
+  //
+  // Judging what a turn meant belongs to a stage that can read its neighbours,
+  // or to the tiers that watch whether anyone ever uses it -- never to a
+  // model-free character count in the write path.
   return !UNCOUNTABLE.some((p) => p.test(trimmed));
 }
 
