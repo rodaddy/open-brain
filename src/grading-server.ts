@@ -25,6 +25,15 @@
  * is how a loopback-only service ends up on 0.0.0.0 during a debugging session
  * and stays there.
  *
+ * THE WRITE PATH IS BATCHED. Operator decision, 2026-07-28: "i would expect i
+ * fill it out and hit send or something, that takes the current page out with
+ * the info go'n to the server (NOT directly into the table(s))". So the page
+ * stages grades locally and POSTs the whole submission to /api/grade-batch,
+ * which is one transaction. /api/undo-batch reverses a submission and
+ * /api/history is how the operator finds an item to change. /api/grade and
+ * /api/ungrade remain for the single-item path and for callers already using
+ * them; they write only candidate_memory and predate migration 040.
+ *
  * LOGGING IS CONTENT-FREE. Candidate content is real dialogue
  * (032_raw_turns.sql content-safety note) and grading is exactly the workload
  * that would tempt a "log what was graded" line. Every log record here carries
@@ -35,6 +44,7 @@ import type pg from "pg";
 import {
   clampLimit,
   clampOffset,
+  fetchGradeHistory,
   fetchInconclusive,
   fetchQueue,
   fetchStats,
@@ -42,6 +52,9 @@ import {
   parseGradedBy,
   parseReviewAction,
   ReviewInputError,
+  submitGradeBatch,
+  type TransactionalDb,
+  undoBatch,
   ungradeCandidate,
 } from "./candidate-review.ts";
 import { GRADING_PAGE_HTML } from "./grading-page.ts";
@@ -73,7 +86,18 @@ export const GRADING_BIND_HOST = "127.0.0.1";
 export const DEFAULT_GRADING_PORT = 3417;
 
 export interface GradingServerOptions {
-  pool: Pick<pg.Pool, "query">;
+  /**
+   * The database handle.
+   *
+   * Typed as query-only with an OPTIONAL `connect`, because that is the honest
+   * shape of what the routes need: the reads want only `query`, and the two
+   * batch routes want a connection they can hold a transaction on. A real
+   * `pg.Pool` satisfies both. Requiring `connect` outright would force every
+   * read-only test to fake a connection-checkout protocol it never uses; the
+   * routes that need it check for it and answer 501 rather than throwing a
+   * TypeError at the operator.
+   */
+  pool: Pick<pg.Pool, "query"> & Partial<Pick<TransactionalDb, "connect">>;
   /**
    * The namespace every read and write is scoped to. Required, with no
    * default: a grading surface that silently picked a namespace could show one
@@ -148,6 +172,24 @@ export function makeGradingHandler(
   // the first grade -- after the operator has already read the item and made
   // the call -- wastes the only scarce resource here (dream-design.md:825-827).
   const grader = parseGradedBy(gradedBy);
+
+  /**
+   * The batch routes need a pool they can check a connection out of.
+   *
+   * A `pg.Pool` always can. This exists for the query-only fakes read tests use:
+   * without it, a batch request against one would throw `pool.connect is not a
+   * function` and surface as a bare 500, which reads to the operator as "your
+   * grades might have landed". 501 with a reason cannot be misread that way.
+   */
+  const requireTransactional = (): TransactionalDb => {
+    if (typeof pool.connect !== "function") {
+      throw new ReviewInputError(
+        "batch grading needs a transactional pool; this server was constructed with a query-only handle",
+        501,
+      );
+    }
+    return pool as TransactionalDb;
+  };
 
   return async function handle(req: Request): Promise<Response> {
     const url = new URL(req.url);
@@ -244,6 +286,82 @@ export function makeGradingHandler(
           machine_grade: result.machine_grade,
           agreed: result.agreed,
           has_note: note !== null && note.trim() !== "",
+          duration_ms: Math.round(performance.now() - started),
+        });
+        return json(result);
+      }
+
+      if (req.method === "GET" && path === "/api/history") {
+        const limit = clampLimit(url.searchParams.get("limit"));
+        const offset = clampOffset(url.searchParams.get("offset"));
+        const result = await fetchGradeHistory(pool, {
+          namespace,
+          limit,
+          offset,
+        });
+        log?.info("grading history read", {
+          namespace,
+          returned: result.items.length,
+          total: result.total,
+          batches: result.batches.length,
+          duration_ms: Math.round(performance.now() - started),
+        });
+        return json(result);
+      }
+
+      if (req.method === "POST" && path === "/api/grade-batch") {
+        const body = await readJsonBody(req);
+        // Rejected at the envelope as well as per item: a caller that put
+        // machine_grade beside `grades` rather than inside one gets the same
+        // answer, because the mistake is the same mistake.
+        if ("machine_grade" in body || "machine_grade_model" in body) {
+          throw new ReviewInputError(
+            "machine_grade is not writable through the grading API -- it is REM's column (037:43-57); this endpoint writes only the human judgement",
+            403,
+          );
+        }
+        const result = await submitGradeBatch(requireTransactional(), {
+          namespace,
+          gradedBy: grader,
+          grades: body.grades,
+        });
+        log?.info("grade batch committed", {
+          namespace,
+          batch_id: result.batch_id,
+          graded_by: result.graded_by,
+          size: result.results.length,
+          // Counts only. A note body is operator prose about real dialogue and
+          // never reaches a log line.
+          with_note: result.results.filter((r) => r.has_note).length,
+          regrades: result.results.filter((r) => r.superseded_grade_id !== null)
+            .length,
+          agreed: result.results.filter((r) => r.agreed === true).length,
+          disagreed: result.results.filter((r) => r.agreed === false).length,
+          duration_ms: Math.round(performance.now() - started),
+        });
+        return json(result);
+      }
+
+      if (req.method === "POST" && path === "/api/undo-batch") {
+        const body = await readJsonBody(req);
+        const batchId = body.batchId ?? body.batch_id;
+        if (typeof batchId !== "string" || batchId.trim() === "") {
+          throw new ReviewInputError("batchId is required");
+        }
+        const result = await undoBatch(requireTransactional(), {
+          namespace,
+          batchId: batchId.trim(),
+          gradedBy: grader,
+        });
+        if (!result) {
+          return json({ error: "batch not found in this namespace" }, 404);
+        }
+        log?.info("grade batch undone", {
+          namespace,
+          batch_id: result.batch_id,
+          removed: result.removed,
+          restored: result.restored,
+          candidates: result.candidates,
           duration_ms: Math.round(performance.now() - started),
         });
         return json(result);

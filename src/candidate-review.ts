@@ -55,6 +55,26 @@
  * :709-712, "0.3 baseline, reinforced three times across sessions" instead of
  * an unexplained number.
  *
+ * THE OPERATOR JUDGEMENT LIVES IN candidate_grade (migration 040), NOT IN
+ * candidate_memory. Operator decision, 2026-07-28: "i think we leave the output
+ * into its own table for now and figure that out when i'm done." Two consequences
+ * run through this module:
+ *
+ *  - The NOTE goes to candidate_grade.note. It used to overwrite
+ *    candidate_memory.uncertainty_reason, which is the DISTILLER's statement about
+ *    its own doubt; that compromise existed only because there was nowhere else to
+ *    put it (see gradeCandidate's header, kept for the legacy single-grade path).
+ *    submitGradeBatch never touches uncertainty_reason.
+ *  - candidate_memory.review_action/reviewed_at/graded_by are still written, in
+ *    the same transaction, because `reviewed_at IS NULL` remains the queue
+ *    predicate. They are now a derived fast-path index of the live grade rather
+ *    than the record itself.
+ *
+ * GRADES ARRIVE IN BATCHES, NOT KEYSTROKES. Operator decision, same session: the
+ * page stages judgements locally and one Send commits them all. submitGradeBatch
+ * is the whole submission in one transaction, undoBatch reverses one, and
+ * fetchGradeHistory is how the operator finds something to change.
+ *
  * NAMESPACE IS A SECURITY BOUNDARY, applied on every single query in this file
  * including the writes, per the repo standing rule that any ID-based read or
  * mutation carries an auth-derived namespace predicate. A grade addressed to an
@@ -751,6 +771,537 @@ export async function ungradeCandidate(
     [input.namespace, input.id],
   );
   return rows[0] ?? null;
+}
+
+/**
+ * A `pg` connection that can hold a transaction: the same `query` surface plus
+ * `release`. `Queryable` alone is not enough for the batch writer -- a
+ * `Pool.query` call takes an arbitrary connection from the pool, so BEGIN and
+ * COMMIT issued through it can land on different sockets and the "all or
+ * nothing" guarantee silently evaporates.
+ */
+export interface TransactionalDb extends Queryable {
+  connect: () => Promise<Queryable & { release: (destroy?: boolean) => void }>;
+}
+
+/** One grade as the operator staged it in the page's local batch. */
+export interface BatchGradeInput {
+  candidateId: string;
+  action: string;
+  note?: string | null;
+}
+
+/** What happened to one item of a submitted batch. */
+export interface BatchGradeResult {
+  candidate_id: string;
+  /** The candidate_grade row id this act of judgement was recorded as. */
+  grade_id: string;
+  action: ReviewAction;
+  /** The candidate_grade row this one superseded, when it was a regrade. */
+  superseded_grade_id: string | null;
+  machine_grade: string | null;
+  agreed: boolean | null;
+  /**
+   * Whether a note was recorded, NOT the note itself. The page already has the
+   * text; echoing it back would put operator prose about real dialogue into
+   * every response body and therefore into anything that logs one.
+   */
+  has_note: boolean;
+}
+
+export interface BatchSubmitResult {
+  batch_id: string;
+  graded_by: string;
+  results: BatchGradeResult[];
+}
+
+/**
+ * Hard ceiling on one submitted batch.
+ *
+ * The page holds staged grades in localStorage, so a batch can grow without
+ * bound across sessions until the operator hits Send. One transaction holding
+ * row locks on 1,104 candidates is not the failure mode to discover mid-slog,
+ * and an operator who has staged 200 items without sending has lost the
+ * review-before-commit property the batch exists for. Well above a working
+ * session's realistic staging depth, well below "the whole table".
+ */
+export const MAX_BATCH_SIZE = 200;
+
+/** Longest note accepted. Matches the truncation gradeCandidate already used. */
+const MAX_NOTE_LENGTH = 2000;
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Validate one staged grade into its normalized form.
+ *
+ * Runs BEFORE the transaction opens, for every item, so a batch whose fifth
+ * item carries a bad action never issues a single write. Validating inside the
+ * transaction would work -- the rollback would clean up -- but it would burn a
+ * connection and take row locks to discover a client bug.
+ */
+function parseBatchGrade(
+  value: unknown,
+  index: number,
+): {
+  candidateId: string;
+  action: ReviewAction;
+  note: string | null;
+} {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new ReviewInputError(`grades[${index}] must be an object`);
+  }
+  const raw = value as Record<string, unknown>;
+  const id = raw.candidateId ?? raw.candidate_id;
+  if (typeof id !== "string" || !UUID_RE.test(id.trim())) {
+    throw new ReviewInputError(`grades[${index}].candidateId must be a uuid`);
+  }
+  // Rejected rather than ignored: a caller that believes it recorded a machine
+  // opinion here has to be told it did not. Same rule the single-grade route
+  // applies, restated per item because a batch is where one bad element hides.
+  if ("machine_grade" in raw || "machine_grade_model" in raw) {
+    throw new ReviewInputError(
+      `grades[${index}] carries machine_grade, which this API never writes -- it is REM's column (037:43-57)`,
+      403,
+    );
+  }
+  let action: ReviewAction;
+  try {
+    action = parseReviewAction(raw.action);
+  } catch (err) {
+    if (err instanceof ReviewInputError) {
+      throw new ReviewInputError(
+        `grades[${index}]: ${err.message}`,
+        err.status,
+      );
+    }
+    throw err;
+  }
+  const note = typeof raw.note === "string" ? raw.note.trim() : "";
+  if (note.length > MAX_NOTE_LENGTH) {
+    throw new ReviewInputError(
+      `grades[${index}].note must be ${MAX_NOTE_LENGTH} characters or fewer`,
+    );
+  }
+  return { candidateId: id.trim(), action, note: note === "" ? null : note };
+}
+
+/**
+ * Submit a whole batch of operator judgements in ONE transaction.
+ *
+ * WHY BATCHED AT ALL. Operator decision, 2026-07-28: "i would expect i fill it
+ * out and hit send or something, that takes the current page out with the info
+ * go'n to the server (NOT directly into the table(s))". The previous page wrote
+ * on every keypress, which has no review-before-commit step -- a mis-hit key was
+ * already in the table. Staging locally and sending once puts a deliberate
+ * checkpoint between judgement and durability.
+ *
+ * WHY ONE TRANSACTION. A partially-applied batch is the worst possible outcome:
+ * the operator sent 20 grades, some number landed, and the page cannot tell them
+ * which. All-or-nothing means the answer to "did it work" is always yes or
+ * always no, and a failure is retryable by pressing Send again.
+ *
+ * WHY A REGRADE SUPERSEDES INSTEAD OF OVERWRITING. 040's partial unique index
+ * (idx_candidate_grade_current) permits exactly one live grade per candidate, so
+ * a second grade MUST mark the first superseded or the INSERT violates the
+ * index. That is the constraint doing the work the migration's rationale asks
+ * for: "a regrade is a new row rather than an overwrite, so changing your mind
+ * is recorded rather than erased."
+ *
+ * WHY candidate_memory IS STILL UPDATED. `reviewed_at IS NULL` is the queue
+ * predicate fetchQueue uses (037:23-29). If only candidate_grade were written,
+ * every graded item would come straight back on the next page load. The two
+ * move together inside the same transaction so they cannot disagree.
+ *
+ * WHAT IS NOT WRITTEN. machine_grade and machine_grade_model, ever -- invariant
+ * 2. And candidate_memory.uncertainty_reason, which the pre-040 single-grade
+ * path overwrote as a documented compromise for having nowhere to put a note.
+ * 040 gave the note its own column, so the distiller's stated reason for doubt
+ * now survives the operator grading the row.
+ */
+export async function submitGradeBatch(
+  db: TransactionalDb,
+  input: {
+    namespace: string;
+    gradedBy: string;
+    grades: unknown;
+  },
+): Promise<BatchSubmitResult> {
+  const grader = parseGradedBy(input.gradedBy);
+
+  if (!Array.isArray(input.grades)) {
+    throw new ReviewInputError("grades must be an array");
+  }
+  if (input.grades.length === 0) {
+    throw new ReviewInputError("grades must not be empty");
+  }
+  if (input.grades.length > MAX_BATCH_SIZE) {
+    throw new ReviewInputError(
+      `a batch may hold at most ${MAX_BATCH_SIZE} grades; received ${input.grades.length}`,
+    );
+  }
+
+  const parsed = input.grades.map(parseBatchGrade);
+
+  // A batch that grades the same candidate twice would have the second INSERT
+  // collide with the first through the partial unique index -- inside the
+  // transaction, so it would fail the whole submission with a constraint error
+  // the operator cannot act on. Caught here, it names the duplicate.
+  const seen = new Set<string>();
+  for (const g of parsed) {
+    if (seen.has(g.candidateId)) {
+      throw new ReviewInputError(
+        `candidate ${g.candidateId} appears twice in one batch; grade it once`,
+      );
+    }
+    seen.add(g.candidateId);
+  }
+
+  const client = await db.connect();
+  try {
+    await client.query("BEGIN");
+
+    const batch = await client.query<{ batch_id: string }>(
+      "SELECT gen_random_uuid() AS batch_id",
+    );
+    const batchId = batch.rows[0]!.batch_id;
+
+    const results: BatchGradeResult[] = [];
+    for (const g of parsed) {
+      // The candidate_memory update comes FIRST and is the existence check: it
+      // is namespace-scoped, so an id in another namespace matches zero rows and
+      // the whole batch aborts. Doing it after the INSERT would let a
+      // cross-namespace candidate_grade row be written and then rolled back --
+      // correct, but it would have taken the write.
+      const updated = await client.query<{
+        id: string;
+        machine_grade: string | null;
+      }>(
+        `UPDATE candidate_memory
+            SET review_action = $3,
+                reviewed_at = now(),
+                graded_by = $4
+          WHERE namespace = $1 AND id = $2
+          RETURNING id, machine_grade`,
+        [input.namespace, g.candidateId, g.action, grader],
+      );
+      const candidate = updated.rows[0];
+      if (!candidate) {
+        // Named, so the operator can remove the offending item and resend
+        // rather than being told "something failed".
+        throw new ReviewInputError(
+          `candidate ${g.candidateId} not found in this namespace; the whole batch was rolled back`,
+          404,
+        );
+      }
+
+      // Supersede the live grade before inserting the new one. Both statements
+      // are namespace-scoped even though candidate_id alone would match: the
+      // predicate must not depend on the FK relationship staying correct.
+      const superseded = await client.query<{ id: string }>(
+        `UPDATE candidate_grade
+            SET superseded_at = now()
+          WHERE namespace = $1 AND candidate_id = $2 AND superseded_at IS NULL
+          RETURNING id`,
+        [input.namespace, g.candidateId],
+      );
+
+      const inserted = await client.query<{ id: string }>(
+        `INSERT INTO candidate_grade
+           (namespace, candidate_id, action, note, graded_by, batch_id)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING id`,
+        [input.namespace, g.candidateId, g.action, g.note, grader, batchId],
+      );
+
+      results.push({
+        candidate_id: g.candidateId,
+        grade_id: inserted.rows[0]!.id,
+        action: g.action,
+        superseded_grade_id: superseded.rows[0]?.id ?? null,
+        has_note: g.note !== null,
+        machine_grade: candidate.machine_grade,
+        agreed:
+          candidate.machine_grade === null
+            ? null
+            : candidate.machine_grade === g.action,
+      });
+    }
+
+    await client.query("COMMIT");
+    return { batch_id: batchId, graded_by: grader, results };
+  } catch (err) {
+    // Best-effort: if the connection is already broken the ROLLBACK throws too,
+    // and the original error is the one worth surfacing.
+    try {
+      await client.query("ROLLBACK");
+    } catch {
+      /* the transaction is gone either way */
+    }
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+export interface UndoBatchResult {
+  batch_id: string;
+  /** candidate_grade rows removed. */
+  removed: number;
+  /** Previously-superseded rows restored to live. */
+  restored: number;
+  /** candidate_memory rows whose review columns were cleared or reverted. */
+  candidates: number;
+}
+
+/**
+ * Reverse a whole submitted batch. The operator's "undo".
+ *
+ * WHY WHOLE-BATCH AND NOT PER-ITEM. A batch is what the operator sent, so it is
+ * the unit they remember. "Undo the last thing I did" after a Send means the
+ * Send, not one card inside it -- and 040 added batch_id specifically so a
+ * submission is reconstructable as a unit.
+ *
+ * WHY IT DELETES RATHER THAN SUPERSEDES. This is the one place rows leave
+ * candidate_grade, and it is bounded: only rows carrying the given batch_id, in
+ * the caller's namespace. Superseding them instead would leave the mistaken
+ * batch permanently in the history as judgement the operator explicitly retracted
+ * -- a batch sent by accident is not a changed mind, and recording it as one
+ * poisons the very ground truth this table exists to collect. The append-only
+ * property of 040 is about REGRADES; an undo is the operator saying "that did
+ * not happen".
+ *
+ * RESTORING WHAT THE BATCH SUPERSEDED is what makes undo actually reversing.
+ * If the batch was a regrade, its rows superseded earlier live grades; deleting
+ * them without un-superseding would leave those candidates with a full grade
+ * history and no live grade at all, which no other path can produce.
+ *
+ * candidate_memory is then reconciled from whatever grade is live afterwards --
+ * the restored one if there was one, NULL if the batch was the first grade. That
+ * is stronger than blindly clearing: a regrade undo puts the previous answer
+ * back on the row, not an empty queue entry.
+ */
+export async function undoBatch(
+  db: TransactionalDb,
+  input: { namespace: string; batchId: string; gradedBy?: string },
+): Promise<UndoBatchResult | null> {
+  if (
+    typeof input.batchId !== "string" ||
+    !UUID_RE.test(input.batchId.trim())
+  ) {
+    throw new ReviewInputError("batchId must be a uuid");
+  }
+  const batchId = input.batchId.trim();
+  // Undo is a write, so it carries the same identity guard as a grade: a
+  // machine must not be able to retract the human's labels either.
+  if (input.gradedBy !== undefined) parseGradedBy(input.gradedBy);
+
+  const client = await db.connect();
+  try {
+    await client.query("BEGIN");
+
+    const removed = await client.query<{
+      id: string;
+      candidate_id: string;
+      created_at: Date;
+    }>(
+      `DELETE FROM candidate_grade
+        WHERE namespace = $1 AND batch_id = $2
+        RETURNING id, candidate_id, created_at`,
+      [input.namespace, batchId],
+    );
+
+    if (removed.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+
+    const candidateIds = [...new Set(removed.rows.map((r) => r.candidate_id))];
+
+    // Un-supersede the most recent surviving grade per candidate. DISTINCT ON
+    // picks it: several regrades in a row leave several superseded rows, and
+    // restoring more than one would violate idx_candidate_grade_current.
+    const restored = await client.query<{ id: string }>(
+      `WITH latest AS (
+         SELECT DISTINCT ON (candidate_id) id
+           FROM candidate_grade
+          WHERE namespace = $1
+            AND candidate_id = ANY($2::uuid[])
+            AND superseded_at IS NOT NULL
+          ORDER BY candidate_id, created_at DESC, id DESC
+       )
+       UPDATE candidate_grade g
+          SET superseded_at = NULL
+         FROM latest
+        WHERE g.id = latest.id
+      RETURNING g.id`,
+      [input.namespace, candidateIds],
+    );
+
+    // Reconcile candidate_memory from whatever grade is live now. The LEFT JOIN
+    // is what makes this work for both cases in one statement: a restored grade
+    // supplies the old answer, and no live grade sets the row back to unreviewed
+    // so it returns to the queue.
+    const reconciled = await client.query<{ id: string }>(
+      `UPDATE candidate_memory c
+          SET review_action = live.action,
+              reviewed_at   = live.created_at,
+              graded_by     = live.graded_by
+         FROM (
+           SELECT ids.id AS candidate_id, g.action, g.created_at, g.graded_by
+             FROM unnest($2::uuid[]) AS ids(id)
+             LEFT JOIN candidate_grade g
+               ON g.candidate_id = ids.id
+              AND g.namespace = $1
+              AND g.superseded_at IS NULL
+         ) live
+        WHERE c.namespace = $1 AND c.id = live.candidate_id
+      RETURNING c.id`,
+      [input.namespace, candidateIds],
+    );
+
+    await client.query("COMMIT");
+    return {
+      batch_id: batchId,
+      removed: removed.rows.length,
+      restored: restored.rows.length,
+      candidates: reconciled.rows.length,
+    };
+  } catch (err) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {
+      /* the transaction is gone either way */
+    }
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/** One entry of the grading history, with enough content to recognise the item. */
+export interface GradeHistoryItem {
+  grade_id: string;
+  candidate_id: string;
+  action: ReviewAction;
+  note: string | null;
+  graded_by: string;
+  batch_id: string | null;
+  created_at: string;
+  superseded_at: string | null;
+  candidate_type: string;
+  content: string;
+  uncertain: boolean;
+  uncertainty_reason: string | null;
+  machine_grade: string | null;
+}
+
+export interface GradeHistoryResult {
+  items: GradeHistoryItem[];
+  total: number;
+  /** Batches newest-first, so the page can offer "undo the last one". */
+  batches: Array<{
+    batch_id: string;
+    size: number;
+    created_at: string;
+    /** False once any row of the batch has been superseded or removed. */
+    live: boolean;
+  }>;
+}
+
+/**
+ * Recent grades, newest first, with the candidate content beside them.
+ *
+ * This is the "change" surface. Finding an item to re-grade by candidate id is
+ * not something an operator can do; finding it by reading the claim they graded
+ * ten minutes ago is. Content is joined in for that reason alone, and the join
+ * is namespace-scoped on BOTH sides -- the grade row and the candidate -- so a
+ * mismatched pair cannot leak content across a namespace boundary.
+ *
+ * Superseded rows are INCLUDED and flagged. Seeing that an item was graded twice,
+ * and what the first answer was, is exactly the history 040 exists to keep.
+ */
+export async function fetchGradeHistory(
+  db: Queryable,
+  options: { namespace: string; limit?: number; offset?: number },
+): Promise<GradeHistoryResult> {
+  const limit = clampLimit(options.limit);
+  const offset = clampOffset(options.offset);
+
+  const counts = await db.query<{ total: string }>(
+    `SELECT count(*) AS total FROM candidate_grade WHERE namespace = $1`,
+    [options.namespace],
+  );
+
+  const { rows } = await db.query<{
+    grade_id: string;
+    candidate_id: string;
+    action: ReviewAction;
+    note: string | null;
+    graded_by: string;
+    batch_id: string | null;
+    created_at: Date;
+    superseded_at: Date | null;
+    candidate_type: string;
+    content: string;
+    uncertain: boolean;
+    uncertainty_reason: string | null;
+    machine_grade: string | null;
+  }>(
+    `SELECT g.id AS grade_id, g.candidate_id, g.action, g.note, g.graded_by,
+            g.batch_id, g.created_at, g.superseded_at,
+            c.candidate_type, c.content, c.uncertain, c.uncertainty_reason,
+            c.machine_grade
+       FROM candidate_grade g
+       JOIN candidate_memory c
+         ON c.id = g.candidate_id AND c.namespace = $1
+      WHERE g.namespace = $1
+      ORDER BY g.created_at DESC, g.id DESC
+      LIMIT $2 OFFSET $3`,
+    [options.namespace, limit, offset],
+  );
+
+  const batches = await db.query<{
+    batch_id: string;
+    size: string;
+    created_at: Date;
+    live_rows: string;
+  }>(
+    `SELECT batch_id, count(*) AS size, max(created_at) AS created_at,
+            count(*) FILTER (WHERE superseded_at IS NULL) AS live_rows
+       FROM candidate_grade
+      WHERE namespace = $1 AND batch_id IS NOT NULL
+      GROUP BY batch_id
+      ORDER BY max(created_at) DESC
+      LIMIT 20`,
+    [options.namespace],
+  );
+
+  return {
+    items: rows.map((r) => ({
+      grade_id: r.grade_id,
+      candidate_id: r.candidate_id,
+      action: r.action,
+      note: r.note,
+      graded_by: r.graded_by,
+      batch_id: r.batch_id,
+      created_at: r.created_at.toISOString(),
+      superseded_at: iso(r.superseded_at),
+      candidate_type: r.candidate_type,
+      content: r.content,
+      uncertain: r.uncertain,
+      uncertainty_reason: r.uncertainty_reason,
+      machine_grade: r.machine_grade,
+    })),
+    total: Number(counts.rows[0]?.total ?? 0),
+    batches: batches.rows.map((b) => ({
+      batch_id: b.batch_id,
+      size: Number(b.size),
+      created_at: b.created_at.toISOString(),
+      live: Number(b.live_rows) === Number(b.size),
+    })),
+  };
 }
 
 export interface ReviewStats {

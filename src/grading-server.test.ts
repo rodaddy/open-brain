@@ -489,6 +489,340 @@ describe("errors are surfaced as the client's fault or hidden, never leaked", ()
   });
 });
 
+/**
+ * A transactional fake for the batch routes.
+ *
+ * Mirrors the one in candidate-review.test.ts: statements after BEGIN are
+ * provisional until COMMIT, so "the batch rolled back" is an observable outcome
+ * rather than something inferred from SQL text.
+ */
+function fakeTxDb(responder: (sql: string, values: unknown[]) => unknown[]) {
+  const seen: Recorded[] = [];
+  const committed: Recorded[] = [];
+  let pending: Recorded[] = [];
+  let inTx = false;
+
+  const query = (async (text: string, values: unknown[] = []) => {
+    const rec = { text, values };
+    seen.push(rec);
+    if (text === "BEGIN") {
+      inTx = true;
+      pending = [];
+      return { rows: [] };
+    }
+    if (text === "COMMIT") {
+      committed.push(...pending);
+      pending = [];
+      inTx = false;
+      return { rows: [] };
+    }
+    if (text === "ROLLBACK") {
+      pending = [];
+      inTx = false;
+      return { rows: [] };
+    }
+    if (inTx && /\bUPDATE\b|\bINSERT\b|\bDELETE\b/.test(text))
+      pending.push(rec);
+    return { rows: responder(text, values) };
+  }) as unknown as pg.Pool["query"];
+
+  return {
+    seen,
+    committed,
+    query,
+    connect: async () => ({ query, release: () => {} }),
+  };
+}
+
+const BATCH_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const SECOND_ID = "55555555-5555-4555-8555-555555555555";
+
+function batchResponder(sql: string): unknown[] {
+  if (sql.includes("gen_random_uuid() AS batch_id")) {
+    return [{ batch_id: BATCH_ID }];
+  }
+  if (sql.includes("UPDATE candidate_memory")) {
+    return [{ id: ID, machine_grade: "inconclusive" }];
+  }
+  if (sql.includes("DELETE FROM candidate_grade")) {
+    return [
+      {
+        id: "99999999-9999-4999-8999-999999999999",
+        candidate_id: ID,
+        created_at: new Date("2026-07-28T06:00:00Z"),
+      },
+    ];
+  }
+  if (sql.includes("UPDATE candidate_grade")) return [];
+  if (sql.includes("INSERT INTO candidate_grade")) {
+    return [{ id: "99999999-9999-4999-8999-999999999999" }];
+  }
+  if (sql.includes("count(*) AS total FROM candidate_grade")) {
+    return [{ total: "2" }];
+  }
+  if (sql.includes("GROUP BY batch_id")) {
+    return [
+      {
+        batch_id: BATCH_ID,
+        size: "2",
+        created_at: new Date("2026-07-28T06:00:00Z"),
+        live_rows: "2",
+      },
+    ];
+  }
+  if (sql.includes("FROM candidate_grade g")) {
+    return [
+      {
+        grade_id: "99999999-9999-4999-8999-999999999999",
+        candidate_id: ID,
+        action: "promoted",
+        note: "clear call",
+        graded_by: "rico",
+        batch_id: BATCH_ID,
+        created_at: new Date("2026-07-28T06:00:00Z"),
+        superseded_at: null,
+        candidate_type: "decision",
+        content: "switched both",
+        uncertain: true,
+        uncertainty_reason: "bare ack",
+        machine_grade: "inconclusive",
+      },
+    ];
+  }
+  return fullResponder(sql);
+}
+
+function batchServer(
+  responder: (sql: string, values: unknown[]) => unknown[] = batchResponder,
+) {
+  const db = fakeTxDb(responder);
+  return {
+    db,
+    handle: makeGradingHandler({
+      pool: db,
+      namespace: "rico",
+      gradedBy: "rico",
+    }),
+  };
+}
+
+describe("POST /api/grade-batch -- form and send, not keystroke and write", () => {
+  const grades = [
+    { candidateId: ID, action: "promoted", note: "clear call" },
+    { candidateId: SECOND_ID, action: "rejected" },
+  ];
+
+  it("commits a whole batch and returns the batch id", async () => {
+    // The operator's model, verbatim: "i fill it out and hit send or something,
+    // that takes the current page out with the info go'n to the server".
+    const { handle, db } = batchServer();
+    const res = await handle(post("/api/grade-batch", { grades }));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      batch_id: string;
+      results: Array<{ action: string }>;
+    };
+    expect(body.batch_id).toBe(BATCH_ID);
+    expect(body.results.map((r) => r.action)).toEqual(["promoted", "rejected"]);
+    expect(
+      db.committed.filter((q) => q.text.includes("INSERT INTO")),
+    ).toHaveLength(2);
+  });
+
+  it("rolls the whole batch back and answers 404 when one item is unknown", async () => {
+    // A partial batch is the worst outcome: the operator cannot tell what landed.
+    const { handle, db } = batchServer((sql, values) =>
+      sql.includes("UPDATE candidate_memory") && values[1] === SECOND_ID
+        ? []
+        : batchResponder(sql),
+    );
+    const res = await handle(post("/api/grade-batch", { grades }));
+    expect(res.status).toBe(404);
+    expect(db.committed).toHaveLength(0);
+    expect(db.seen.some((q) => q.text === "ROLLBACK")).toBe(true);
+  });
+
+  it("puts the note in candidate_grade and never in uncertainty_reason", async () => {
+    const { handle, db } = batchServer();
+    await handle(post("/api/grade-batch", { grades }));
+    const insert = db.committed.find((q) => q.text.includes("INSERT INTO"))!;
+    expect(insert.values[3]).toBe("clear call");
+    for (const q of db.seen) expect(q.text).not.toContain("uncertainty_reason");
+  });
+
+  it("writes machine_grade on no statement, and rejects it in the body with 403", async () => {
+    const { handle, db } = batchServer();
+    await handle(post("/api/grade-batch", { grades }));
+    for (const q of db.seen) {
+      if (!/\bUPDATE\b|\bINSERT\b/.test(q.text)) continue;
+      expect(q.text).not.toContain("machine_grade =");
+      expect(q.text).not.toContain("machine_grade,");
+    }
+    expect(
+      (
+        await handle(
+          post("/api/grade-batch", { grades, machine_grade: "rejected" }),
+        )
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await handle(
+          post("/api/grade-batch", {
+            grades: [
+              { candidateId: ID, action: "promoted", machine_grade: "x" },
+            ],
+          }),
+        )
+      ).status,
+    ).toBe(403);
+  });
+
+  it("scopes every statement to the configured namespace", async () => {
+    const { handle, db } = batchServer();
+    await handle(post("/api/grade-batch", { grades }));
+    for (const q of db.seen) {
+      if (["BEGIN", "COMMIT", "ROLLBACK"].includes(q.text)) continue;
+      if (q.text.includes("gen_random_uuid() AS batch_id")) continue;
+      expect(q.values[0]).toBe("rico");
+    }
+  });
+
+  it("400s a malformed body with a named reason, never a 500", async () => {
+    const { handle } = batchServer();
+    const cases: Array<[unknown, string]> = [
+      [{}, "grades must be an array"],
+      [{ grades: [] }, "must not be empty"],
+      [{ grades: "nope" }, "must be an array"],
+      [{ grades: [{ candidateId: "not-a-uuid", action: "promoted" }] }, "uuid"],
+      [{ grades: [{ candidateId: ID, action: "pass" }] }, "grades[0]"],
+      [{ grades: [{ candidateId: ID }] }, "grades[0]"],
+      [{ grades: [null] }, "must be an object"],
+    ];
+    for (const [body, fragment] of cases) {
+      const res = await handle(post("/api/grade-batch", body));
+      expect(res.status).toBe(400);
+      const err = (await res.json()) as { error: string };
+      expect(err.error).toContain(fragment);
+    }
+  });
+
+  it("400s an over-long note rather than silently truncating the operator's words", async () => {
+    const { handle } = batchServer();
+    const res = await handle(
+      post("/api/grade-batch", {
+        grades: [
+          { candidateId: ID, action: "promoted", note: "x".repeat(2001) },
+        ],
+      }),
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("501s rather than 500s when the pool cannot hold a transaction", async () => {
+    // A bare TypeError would surface as "internal error", which reads to the
+    // operator as "your grades might have landed".
+    const handle = makeGradingHandler({
+      pool: fakeDb(fullResponder),
+      namespace: "rico",
+      gradedBy: "rico",
+    });
+    const res = await handle(post("/api/grade-batch", { grades }));
+    expect(res.status).toBe(501);
+  });
+});
+
+describe("POST /api/undo-batch -- the operator's undo", () => {
+  it("reverses a submitted batch and reports what moved", async () => {
+    const { handle, db } = batchServer();
+    const res = await handle(post("/api/undo-batch", { batchId: BATCH_ID }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      batch_id: BATCH_ID,
+      removed: 1,
+      candidates: 1,
+    });
+    expect(
+      db.committed.some((q) => q.text.includes("DELETE FROM candidate_grade")),
+    ).toBe(true);
+  });
+
+  it("404s an unknown or cross-namespace batch without writing", async () => {
+    const { handle, db } = batchServer((sql) =>
+      sql.includes("DELETE FROM candidate_grade") ? [] : batchResponder(sql),
+    );
+    const res = await handle(post("/api/undo-batch", { batchId: BATCH_ID }));
+    expect(res.status).toBe(404);
+    expect(db.committed).toHaveLength(0);
+  });
+
+  it("400s a missing or malformed batch id before reaching the database", async () => {
+    const { handle, db } = batchServer();
+    for (const body of [
+      {},
+      { batchId: "" },
+      { batchId: 5 },
+      { batchId: "nope" },
+    ]) {
+      expect((await handle(post("/api/undo-batch", body))).status).toBe(400);
+    }
+    expect(db.seen).toHaveLength(0);
+  });
+
+  it("touches no machine_grade on the way back out", async () => {
+    const { handle, db } = batchServer();
+    await handle(post("/api/undo-batch", { batchId: BATCH_ID }));
+    for (const q of db.seen) expect(q.text).not.toContain("machine_grade");
+  });
+});
+
+describe("GET /api/history -- find something to change", () => {
+  it("serves recent grades with the candidate content beside them", async () => {
+    const { handle } = batchServer();
+    const res = await handle(new Request("http://127.0.0.1/api/history"));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    const body = (await res.json()) as {
+      total: number;
+      items: Array<{ content: string; action: string }>;
+      batches: Array<{ batch_id: string; live: boolean }>;
+    };
+    expect(body.total).toBe(2);
+    expect(body.items[0]!.content).toBe("switched both");
+    expect(body.batches[0]!.batch_id).toBe(BATCH_ID);
+  });
+
+  it("clamps the page to the same attention budget as the queue", async () => {
+    const { handle, db } = batchServer();
+    await handle(new Request("http://127.0.0.1/api/history?limit=999"));
+    const page = db.seen.find((q) =>
+      q.text.includes("FROM candidate_grade g"),
+    )!;
+    expect(page.values[1]).toBe(MAX_QUEUE_LIMIT);
+  });
+});
+
+describe("the page is a form, not a keystroke writer", () => {
+  it("stages locally and sends only on demand", async () => {
+    // The rebuild's governing property. The previous page POSTed inside its
+    // grade keyhandler; this one must not.
+    const { handle } = serverFor();
+    const html = await (await handle(new Request("http://127.0.0.1/"))).text();
+    expect(html).toContain("Candidate grading");
+    expect(html).toContain("SEND BATCH");
+    expect(html).toContain("/api/grade-batch");
+    expect(html).toContain("/api/undo-batch");
+    expect(html).toContain("/api/history");
+    // Keys select; they do not submit.
+    expect(html).toContain(
+      '"1": "promoted", "2": "rejected", "3": "inconclusive", "4": "duplicate"',
+    );
+    // The pending batch survives a reload, which is what makes staging safe
+    // across 1,104 items.
+    expect(html).toContain("localStorage");
+  });
+});
+
 describe("the bind posture is loopback and not configurable", () => {
   it("pins the host so a debugging session cannot leave it on 0.0.0.0", () => {
     expect(GRADING_BIND_HOST).toBe("127.0.0.1");
