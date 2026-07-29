@@ -253,11 +253,29 @@ try {
     for (const t of batch) {
       const hash = createHash("sha256").update(t.content).digest("hex");
       const r = await pool.query(
+        // occurred_at IS THE ORDERING KEY AND MUST BE WRITTEN.
+        //
+        // The first version named only created_at and bound the transcript
+        // timestamp to it, leaving occurred_at NULL on all 20,535 backfilled
+        // rows -- 77% of the table. Nothing failed: the insert succeeded and the
+        // row counts looked right. The rows were simply invisible to every
+        // time-windowed query, and 036:60 derives session_seq by
+        // `ORDER BY occurred_at, id`, so 17,554 rows also came out with no
+        // sequence. Measured 2026-07-28.
+        //
+        // 032:158-161 states the contract this violated: "occurred_at is
+        // Graphiti's reference_time: when the turn HAPPENED... created_at would
+        // silently scramble the conversation." A backfill is exactly the case it
+        // describes -- three days of history stored in one minute -- so writing
+        // only created_at dates the whole corpus to the moment the script ran.
+        //
+        // Both are written, deliberately: occurred_at = when it was said, from
+        // the transcript; created_at = when it was stored.
         `INSERT INTO ob_raw_turns
            (namespace, turn_uuid, parent_turn_uuid, session_ref, repo, turn_index,
             role, is_human_prompt, content, metadata, content_hash, runtime,
-            redaction_applied, created_by, retention_tier, created_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'{}'::jsonb,$13,'live',$14)
+            redaction_applied, created_by, retention_tier, occurred_at, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'{}'::jsonb,$13,'live',$14,$14)
          ON CONFLICT (namespace, turn_uuid) DO NOTHING
          RETURNING id`,
         [
