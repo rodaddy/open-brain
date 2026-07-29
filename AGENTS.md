@@ -149,6 +149,26 @@ bun run migrate                 # run migrations
 bun test                        # run tests
 ```
 
+### Querying the dogfood database
+
+`.env` carries the standard libpq vars (`PGHOST`/`PGPORT`/`PGDATABASE`/`PGUSER`)
+alongside the app's `DB_*` ones, so **`psql` needs no connection arguments**:
+
+```bash
+set -a; . ./.env; set +a
+psql -At -c "select count(*) from ob_session_events;"
+```
+
+Do NOT hand-build a connection. There is no `DATABASE_URL` in this repo, the app
+reads `DB_*` and `psql` does not, and bare `psql` defaults to a `rico` database
+that does not exist. Deriving it by hand cost five failed calls every time,
+repeatedly, until the libpq vars were added on 2026-07-29.
+
+The dogfood database is `open_brain_local_20260724` on `127.0.0.1` — the real one
+for this machine while in dev/dogfood mode. Note that `bun test` Postgres tests
+SKIP SILENTLY without `OPENBRAIN_TEST_DATABASE_URL`, so a green run may have
+tested nothing.
+
 ## Codex Durable Memory
 
 Codex memory protocol and rollout guidance lives in
