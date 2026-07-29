@@ -194,6 +194,63 @@ const cases: Array<{
     mutation: { tool: "AskUserQuestion", input: { questions: [] } },
     blocked: true,
   },
+
+  // --- the shared volume is not scratch (2026-07-29) --------------------
+  // 37 files from this repo were archived out of /Volumes/collab's root. No
+  // lookup exempts these: it is a boundary, not a research question.
+  {
+    name: "COLLAB: Write to the shared volume blocks",
+    lookups: [bash('aqmd search "bakeoff"')],
+    mutation: {
+      tool: "Write",
+      input: { file_path: "/Volumes/collab/out.json" },
+    },
+    blocked: true,
+  },
+  {
+    name: "COLLAB: /mnt spelling blocks the same",
+    lookups: [bash('aqmd search "bakeoff"')],
+    mutation: { tool: "Write", input: { file_path: "/mnt/collab/out.json" } },
+    blocked: true,
+  },
+  {
+    name: "COLLAB: redirect into the share blocks",
+    lookups: [bash('aqmd search "bakeoff"')],
+    mutation: bash('psql -c "select 1" > /Volumes/collab/probe.log'),
+    blocked: true,
+  },
+  {
+    name: "COLLAB: Bun.write into the share blocks",
+    lookups: [bash('aqmd search "bakeoff"')],
+    mutation: bash("bun -e 'Bun.write(\"/Volumes/collab/x.json\", d)'"),
+    blocked: true,
+  },
+  {
+    name: "COLLAB: reading the share is allowed",
+    lookups: [],
+    mutation: bash("ls -la /Volumes/collab/"),
+    blocked: false,
+  },
+  {
+    name: "COLLAB: writing a review is still allowed",
+    lookups: [bash('aqmd search "reviews"')],
+    mutation: {
+      tool: "Write",
+      input: { file_path: "/Volumes/collab/reviews/open-brain/PR123/notes.md" },
+    },
+    blocked: false,
+  },
+  {
+    name: "COLLAB: the repo scratch bucket is allowed",
+    lookups: [bash('aqmd search "items"')],
+    mutation: {
+      tool: "Write",
+      input: {
+        file_path: "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/items.json",
+      },
+    },
+    blocked: false,
+  },
 ];
 
 let pass = 0;

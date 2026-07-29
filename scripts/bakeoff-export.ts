@@ -10,7 +10,13 @@
 
 import { createPool } from "../src/db/pool.ts";
 
-const OUT = "/Volumes/collab/rem-bakeoff-items.json";
+// NEVER /Volumes/collab. That is the SHARED volume: its README documents a
+// 3-folder-per-agent structure, and root-level scratch is not part of it. This
+// line wrote `/Volumes/collab/rem-bakeoff-items.json` and was one of 37 files
+// this repo left in that root -- which the operator, in a sandboxed session,
+// could not even `ls` to find out what was going on. Nothing here runs remotely;
+// there was never a reason to use the share. Local work, local scratch.
+const OUT = `${process.env.TMPDIR ?? "/Volumes/ThunderBolt/_tmp/open-brain/_scratch"}/rem-bakeoff-items.json`;
 const TARGET = 50;
 
 const pool = createPool();

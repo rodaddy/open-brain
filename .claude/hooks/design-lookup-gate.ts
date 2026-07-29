@@ -465,6 +465,68 @@ if (event === "post-tool-use") {
 // pre-tool-use
 
 /**
+ * NOTHING FROM THIS REPO WRITES TO THE SHARED VOLUME.
+ *
+ * /Volumes/collab (= /mnt/collab on Linux) is shared storage between agents and
+ * humans. Its own README documents a 3-folder-per-agent structure; root-level
+ * scratch is not part of it. This repo left 37 files in that root -- probe
+ * scripts, .bak copies of its own source, grading logs, bake-off JSON -- and
+ * the operator hit them from a sandboxed session where he could not even `ls`
+ * the directory to find out what was going on.
+ *
+ * There is no remote leg here. This repo runs local, against a local Postgres,
+ * with a local scratch bucket already configured as TMPDIR in .claude/settings.
+ * The share was never needed; it was just the first path that came to mind.
+ *
+ * READS ARE FINE -- reviews genuinely live there (reviews/open-brain/PR#/).
+ * This blocks WRITES only, and it fails closed: no lookup exempts it, because
+ * this is not a "did you research it" question. It is a boundary.
+ */
+const COLLAB_PATH = /(\/Volumes\/collab|\/mnt\/collab)\b/;
+
+/** Reviews genuinely live on the share -- that is what it is FOR. */
+const COLLAB_ALLOWED =
+  /(\/Volumes\/collab|\/mnt\/collab)\/(reviews|_archive)\b/;
+
+function writesToCollab(tool: string, input: Record<string, unknown>): boolean {
+  if (tool === "Write" || tool === "Edit" || tool === "NotebookEdit") {
+    const path = String(input.file_path ?? input.notebook_path ?? "");
+    return COLLAB_PATH.test(path) && !COLLAB_ALLOWED.test(path);
+  }
+  if (tool !== "Bash") return false;
+  const cmd = String(input.command ?? "");
+  if (!COLLAB_PATH.test(cmd) || COLLAB_ALLOWED.test(cmd)) return false;
+  // Writing verbs only. `ls`, `cat`, and a read-only Bun script are legitimate.
+  return /(^|[;&|]\s*)(mv|cp|tee|touch|mkdir|dd|rsync|install)\b|>\s*["']?(\/Volumes\/collab|\/mnt\/collab)|Bun\.write|writeFileSync|createWriteStream|open\([^)]*["']w/.test(
+    cmd,
+  );
+}
+
+if (writesToCollab(tool, toolInput)) {
+  process.stderr.write(
+    [
+      "BLOCKED by design-lookup-gate: this repo does not write to /Volumes/collab.",
+      "",
+      `Target: ${mutationSubject(tool, toolInput).slice(0, 120)}`,
+      "",
+      "collab is the SHARED volume between agents and humans. This repo runs",
+      "entirely local -- local Postgres, local models, local scratch -- so there",
+      "is no reason for anything here to land there. 37 files from this repo were",
+      "archived out of its root on 2026-07-29 after the operator found them from",
+      "a sandboxed session where he could not even list the directory.",
+      "",
+      "Write here instead:",
+      "",
+      "  $TMPDIR                      # already set to the repo scratch bucket",
+      "  {temp_workspace}/open-brain/_scratch/",
+      "",
+      "Reading from collab is fine, and reviews/ still lives there.",
+    ].join("\n"),
+  );
+  process.exit(2);
+}
+
+/**
  * Tree search before any index lookup: block, and name the replacement.
  *
  * A bare "permission denied" is what produced four escalating grep attempts on
