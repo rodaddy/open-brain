@@ -3,6 +3,18 @@
     "TMPDIR": "/mnt/ThunderBolt/_tmp/open-brain/_scratch"
   },
   "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run python \"$HOME/.claude/skills/brain/resume.py\" --limit 200 2>/dev/null || true",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Write|Edit|NotebookEdit|Bash|Grep|Glob|AskUserQuestion",
