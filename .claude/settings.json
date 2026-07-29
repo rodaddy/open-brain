@@ -9,7 +9,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv run python \"$HOME/.claude/skills/brain/resume.py\" --limit 200 2>/dev/null || true",
+            "command": "\"$HOME/.claude/skills/brain/resume.py\" --limit 200 2>/dev/null || true",
             "timeout": 30
           }
         ]
