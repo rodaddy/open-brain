@@ -55,6 +55,44 @@
  * be an 80-95% match. It needs to be close enough to be worth correcting. The
  * operator reviews every interaction on the page regardless; a wrong guess
  * costs a click, and the disagreement it produces is training data.
+ *
+ * ADDED AFTER ROUND TWO, and NOT measured by it — the asymmetry the operator
+ * named on 2026-07-29. Round two measured p1/p4/p6 as scoring prompts; tasks 4
+ * and 5 below are new, so the composition as a whole is UNVERIFIED against a
+ * bake-off. That is an argument for the 50-item pilot before the full 1,827,
+ * not against the change.
+ *
+ *   THE TOOL CHAIN IS ASYMMETRIC. Terra reads all of it; the operator reads
+ *   none of it. "I just need a synopsis. I don't need the entire tool called
+ *   chain, but Terra on the other hand can take the entire tool called chain
+ *   and make something useful of it. I'm not going to read it." So the earlier
+ *   "ignore tool: lines" instruction was removed — it told the grader to
+ *   discard exactly what it is best placed to use — and the synopsis exists to
+ *   be what the operator reads in its place.
+ *
+ *   CANNED REPLIES ARE A TYPING-COST FIX, NOT A CORRECTNESS FIX. "I don't need
+ *   Terra to be right or you to be right. I just need options that make logical
+ *   sense in the pre-canned things, so I don't have to sit here and manually
+ *   type out sentence after sentence." They are therefore spread across the
+ *   plausible reactions rather than argued for one, and they became REQUIRED
+ *   (min 3) rather than optional.
+ *
+ * HOW THESE RELATE TO THE FIXED reason_code VOCABULARY (`grading-reasons.ts`,
+ * migration 042) — they are different axes and both are kept:
+ *
+ *   reason_code   why the OPERATOR disagrees. Fixed list, stable code, so
+ *                 "which defect does he hit most" is a GROUP BY. 042's header
+ *                 has the measurement: his 8 real notes were five sentences
+ *                 expressing three ideas, retyped with a typo and a new
+ *                 phrasing each time, sharing not one word — ungreppable.
+ *   canned_replies why TERRA scored it that way. Generated per item, prose,
+ *                 NO code — they are a starting point for his note, never an
+ *                 aggregation key. Generating codes here would reintroduce
+ *                 exactly the 1,827-unique-strings problem 042 killed.
+ *
+ * Both fill the same editable note textarea on click, which is the interaction
+ * 042 already established at his request: "so the can'd response if i click
+ * one, should allow me to put it into the notes for adjustment".
  */
 
 /**
@@ -74,12 +112,19 @@
 const UNIT_SHAPE = `Each item is one INTERACTION, in this order:
   1. the OPERATOR's turn -- what he typed, or the option he chose
   2. "agent:" lines -- what the agent put on his screen in reply
-  3. "tool:" lines -- tool calls used to get there, if any
+  3. "tool:" lines -- the tool calls used to get there
 
 An item marked [AskUserQuestion] is an OPERATOR turn, not an agent turn. The
 agent had to stop and ask; the operator had to choose. The choice is his, and
 it is a decision by construction -- score it as operator speech unless the
-answer was an explicit non-answer.`;
+answer was an explicit non-answer.
+
+READ THE ENTIRE TOOL CHAIN. You get it in full because you can use it and the
+operator will not read it. Operator, 2026-07-29: "Terra on the other hand can
+take the entire tool called chain and make something useful of it. I'm not
+going to read it." What the agent actually DID lives in those calls -- "I
+verified X" with a query behind it is a different event from the same sentence
+with nothing behind it. Your synopsis is what the operator reads instead.`;
 
 /**
  * The anchored scale, verbatim from round two's p1.
@@ -117,7 +162,7 @@ use these ONLY to phrase the canned replies, never to set the score:
 /** The instruction block sent with every batch. */
 export const REM_GRADING_PROMPT = `${UNIT_SHAPE}
 
-Do four things for each item, in order.
+Do six things for each item, in order.
 
 1. QUOTE: find the single most important sentence the OPERATOR said. If he said
    nothing substantive, use an empty string.
@@ -127,9 +172,32 @@ Do four things for each item, in order.
    ${ANCHORS}
    The score must be justified by the quote and the label. Do not score high
    without a quote that supports it.
-4. CANNED REPLIES: 2-4 short phrases the operator could click to record WHY he
-   agrees or disagrees with your score. They must be specific to THIS item, not
-   generic, and written as he would say them, terse.
+4. SYNOPSIS: ONE line -- what the agent actually did in response, read off the
+   tool chain. This replaces the chain for the operator, so it must carry what
+   he would have learned by reading it: what was run, what came back, whether
+   the agent's claims are backed by it. "Ran three greps, found nothing, said
+   it was missing" is useful. "Investigated the issue" is not -- that is the
+   agent's own summary restated, which he can already see.
+5. AGENT_BEHAVIOR: "good", "bad", or "neutral" -- did the agent do the right
+   thing? good = it did what was asked, or correctly pushed back. bad = the
+   operator is visibly frustrated, correcting a mistake, or the agent did the
+   wrong thing. neutral = routine. This is INDEPENDENT of the score: a
+   high-value memory often records BAD agent behavior, and those are among the
+   most worth keeping because they record what not to repeat.
+6. CANNED REPLIES: 3-4 short phrases the operator clicks INSTEAD OF TYPING.
+
+   THE JOB IS TO SAVE HIM TYPING, NOT TO BE RIGHT. Operator, 2026-07-29: "I
+   don't need Terra to be right or you to be right. I just need options that
+   make logical sense in the pre-canned things, so I don't have to sit here and
+   manually type out sentence after sentence." He types only when the options
+   are bad or he wants to say something with force.
+
+   So SPREAD them across the plausible reactions to THIS item -- do not write
+   three phrasings of the same opinion:
+     - one for agreeing with your score, naming the reason
+     - one or two for the obvious ways your score is wrong (too high, too low)
+     - one for "this matters, but for a different reason than you gave"
+   Terse, specific to this item, in his register. Not generic.
    Examples of the shape wanted:
      ["keeps a rule I'd forget", "already covered elsewhere", "only mattered that day"]
      ["agent got this wrong, worth keeping", "my ask was vague", "fine, routine"]
@@ -140,8 +208,8 @@ RULES:
 - Grade every item you are given, using the ids from the input.
 - Use the FULL 0-10 range where warranted. Do not compress toward one value and
   do not spread artificially -- report what you actually judge.
-- Ignore lines beginning "tool:" when scoring, unless the operator's turn is
-  only intelligible with them.
+- Read the whole tool chain. Score the OPERATOR's words; use the chain to write
+  the synopsis and to judge agent_behavior.
 - Return everything through the structured output. Do NOT write files.`;
 
 /**
@@ -166,7 +234,15 @@ export const REM_GRADING_SCHEMA = {
       description: "One entry per input item, same order, same ids",
       items: {
         type: "object",
-        required: ["id", "score", "label", "quote"],
+        required: [
+          "id",
+          "score",
+          "label",
+          "quote",
+          "synopsis",
+          "agent_behavior",
+          "canned_replies",
+        ],
         properties: {
           id: { type: "string" },
           score: { type: "integer", minimum: 0, maximum: 10 },
@@ -181,10 +257,23 @@ export const REM_GRADING_SCHEMA = {
             ],
           },
           quote: { type: "string" },
+          /** One line: what the agent DID, read off the tool chain. */
+          synopsis: { type: "string" },
+          /** Matches candidate_grade.agent_behavior (migration 042). */
+          agent_behavior: {
+            type: "string",
+            enum: ["good", "bad", "neutral"],
+          },
+          /**
+           * REQUIRED, and at least three. Optional in round two, where a model
+           * that skipped them cost nothing. Here they are the operator's
+           * click-instead-of-type path, so an item returning none is an item he
+           * has to hand-write -- which is the exact cost this exists to remove.
+           */
           canned_replies: {
             type: "array",
             items: { type: "string" },
-            minItems: 2,
+            minItems: 3,
             maxItems: 4,
           },
         },
