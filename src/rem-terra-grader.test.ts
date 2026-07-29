@@ -167,7 +167,9 @@ describe("Terra grader", () => {
         sent.push({ count: items.length, model, effort });
         // The instructions that were measured must actually travel.
         expect(prompt).toContain("SYNOPSIS");
-        expect(prompt).toContain("CANNED REPLIES");
+        expect(prompt).toContain("REASONS");
+        // The priors only work if their framing travels with them.
+        expect(prompt).toContain("turn_count");
         expect(prompt).toContain("READ THE ENTIRE TOOL CHAIN");
         expect(schema).toBeDefined();
         return items.map((i) => judgement(i.id, 7));
