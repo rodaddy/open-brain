@@ -1,0 +1,23 @@
+# Reference clones for open-brain — read-only upstream code studied here.
+#
+# These are memory/context systems open-brain is prior art against. They are
+# NOT dependencies and nothing here is edited: qmd indexes them with zero writes
+# into the sources, so `git pull` in a clone stays clean.
+#
+# Scoped to THIS repo (Rico, 2026-07-29). They used to live in one global
+# `research` index, which meant ai-agents searching its own references competed
+# against all seven of these, and vice versa. `aqmd research` now resolves from
+# whichever repo you are standing in.
+#
+# Built on demand into the `ref-open-brain` index by `aqmd research`.
+
+root: /Volumes/ThunderBolt/open-brain-local/research
+
+clones:
+  - cognee
+  - cognee-integrations
+  - gbrain
+  - graphiti
+  - honcho
+  - mem0
+  - openhuman
