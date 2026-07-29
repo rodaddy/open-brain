@@ -66,11 +66,23 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 
-/** Tools that write to the repo. These are what the gate protects. */
+/**
+ * Tools that write to the repo. These are what the gate protects.
+ *
+ * AskUserQuestion is here because handing a question back to the operator is a
+ * mutation of HIS time, and the expensive failure mode is identical: an answer
+ * that already exists in the repo gets re-litigated by the one person whose
+ * attention is scarcest. Measured instance, 2026-07-29: the gate was asked
+ * which grading prompt to use for round three. `_plans/435-436-dream-hosted-rem.md:235`
+ * already specified it -- and the two options offered were a stale pair the
+ * same document had superseded. The operator's reply was "you were supposed to
+ * know that". A bad edit costs a revert; a bad question costs trust and time.
+ */
 const MUTATING_TOOLS: ReadonlySet<string> = new Set([
   "Write",
   "Edit",
   "NotebookEdit",
+  "AskUserQuestion",
 ]);
 
 /**
@@ -83,6 +95,62 @@ const MUTATING_BASH =
 /** A call that counts as having consulted the existing design. */
 const LOOKUP_BASH =
   /\b(aqmd|qmd\s+(query|search|get)|ob-memory-provider|brain_answer|brain_search)\b/i;
+
+/**
+ * Denied commands, READ FROM ~/.claude/settings.json rather than listed here.
+ *
+ * WHY THIS IS DATA AND NOT A CONSTANT. Measured twice in one hour, 2026-07-29,
+ * both times by the model editing THIS FILE: it hand-wrote a tool rule from
+ * memory that banned `rg`, which `settings.json` explicitly ALLOWS, and called
+ * `fd` a drop-in for `find`, which it is not. A second copy of a permission
+ * list is a copy that drifts, and the drifted copy is authoritative for whoever
+ * reads it. So there is no second copy. The operator's config is the only list.
+ *
+ * WHAT THIS ADDS over the permission layer, which already blocks these: the
+ * REASON and the REPLACEMENT. Measured, 2026-07-29: four `grep` calls were
+ * denied across one session while searching for the round-two bake-off results.
+ * Every denial arrived as a bare "permission denied", so each one read as a
+ * failure of that particular command rather than a standing decision -- and the
+ * response was to vary the flags, then the directory, then to propose a script
+ * that walked the tree by hand. The results were in the repo the whole time at
+ * `_plans/435-436-dream-hosted-rem.md:201`; one `aqmd search "terra"` found
+ * them. The operator had to intervene four times.
+ *
+ * A bare denial trains evasion. A denial that names the winning move trains the
+ * habit. That is the whole delta.
+ */
+const DENY_REPLACEMENT: ReadonlyArray<[RegExp, string]> = [
+  [
+    /^(sudo\s+)?(grep|egrep|fgrep)\b/,
+    'rg -- and before that, `aqmd search "<word>"` (~0.1s, searches the index across the whole tree)',
+  ],
+  [
+    /^(sudo\s+)?find\b/,
+    "mdfind (Spotlight index, instant) for locating files; `fd` for name/type patterns under a path",
+  ],
+  [/^(sudo\s+)?mktemp\b/, "{temp_workspace}/open-brain/_scratch/"],
+  [
+    /^(sudo\s+)?(pip|pip3)\b/,
+    "uv (this repo's Python is the uv environment, never system pip)",
+  ],
+  [/^\/usr\/bin\/python3?\b/, "the uv environment or the agent Python wrapper"],
+];
+
+/**
+ * Searching a tree by walking it in a script.
+ *
+ * This is the escalation the permission layer cannot see: once the direct
+ * command is denied, the next move is a Bun/Python script that does the same
+ * walk. Same intent, one level of indirection, and it was reached for this
+ * session after the third denial.
+ */
+const TREE_WALK_SCRIPT =
+  /\b(readdirSync|walkSync|Bun\.Glob|globSync|os\.walk|filepath\.Walk|fast-glob)\b/;
+
+/** The sanctioned first move for any "where is X" question in this repo. */
+const SEARCH_FIRST =
+  'aqmd search "<one word>"   # BM25 over the repo index, ~0.1s\n' +
+  '  aqmd "<the question>"      # semantic, when you know the idea not the word';
 
 /** Design documents whose Read counts as a lookup. */
 const DESIGN_DOC =
@@ -311,6 +379,53 @@ function isMutating(tool: string, input: Record<string, unknown>): boolean {
   return false;
 }
 
+/**
+ * Is this call SEARCHING THE TREE for something -- in any spelling?
+ *
+ * WHY THIS IS A CATEGORY AND NOT A COMMAND LIST. The operator hardened the
+ * `grep` denial and an agent immediately used `Grep` with a capital G -- the
+ * built-in tool, allowed at settings.json:197. That is not a clever bypass; it
+ * is the predictable end of every blocklist. Ban a spelling and the next
+ * spelling wins: Grep, rg, sed -n /re/p, awk /re/, perl -ne, a readdir script,
+ * or an Agent spawned to do the search on your behalf. The set of ways to walk
+ * a tree is open, so enumerating it is a losing game that has to be re-fought
+ * every time someone finds a synonym.
+ *
+ * So this classifies the ACT: "find where X is". The operator's objection was
+ * never to the string `grep` -- it is to walking the tree instead of querying
+ * the index. `aqmd search "terra"` found in one call what four denied greps and
+ * a proposed walker script did not, on 2026-07-29.
+ *
+ * The inversion that makes this stable: instead of enumerating what is
+ * forbidden (open set, always one variant behind), require what counts as
+ * having looked (closed set, already defined above as LOOKUP_BASH). A tree
+ * search is allowed the moment an index lookup exists in this session. It is
+ * not a ban on rg -- rg is the right tool once you know the literal token.
+ * It is a ban on making the tree the FIRST move.
+ */
+function isTreeSearch(tool: string, input: Record<string, unknown>): boolean {
+  if (tool === "Grep" || tool === "Glob") return true;
+  if (tool !== "Bash") return false;
+
+  const cmd = String(input.command ?? "");
+  if (LOOKUP_BASH.test(cmd)) return false; // the index IS the sanctioned path
+  if (TREE_WALK_SCRIPT.test(cmd)) return true;
+
+  // A PIPE IS A FILTER, NOT A SEARCH. `ps aux | grep postgres` narrows output
+  // that already exists; it never touches the tree. Only the FIRST segment of a
+  // pipeline can be a tree search, and blocking the rest would make the gate
+  // unusable -- which is how the first version of this failed its own check.
+  const head = cmd.split("|")[0]!;
+
+  // Searchers by name, allowed or denied. `rg` is ALLOWED by the permission
+  // layer and is the right tool for a literal token -- but as the OPENING move
+  // it is still walking the tree before asking the index, which is the act
+  // being gated. Allowed-ness is about which tool; this is about which order.
+  return /(^|[;&]\s*)(sudo\s+)?(grep|egrep|fgrep|rg|ag|ack|find|fd)\b/.test(
+    head,
+  );
+}
+
 const event = argOf("--event", "pre-tool-use");
 const input = readInput();
 const tool = input.tool_name ?? "";
@@ -348,6 +463,49 @@ if (event === "post-tool-use") {
 }
 
 // pre-tool-use
+
+/**
+ * Tree search before any index lookup: block, and name the replacement.
+ *
+ * A bare "permission denied" is what produced four escalating grep attempts on
+ * 2026-07-29 -- with no alternative attached, each denial read as a failure of
+ * that command rather than a standing decision. So the reason and the exact
+ * next command travel with the block. This is the whole difference between
+ * training evasion and training the habit.
+ */
+if (isTreeSearch(tool, toolInput) && session.lookups.length === 0) {
+  const cmd = mutationSubject(tool, toolInput).slice(0, 100);
+  const replacement = DENY_REPLACEMENT.find(([pattern]) =>
+    pattern.test(cmd.trim()),
+  )?.[1];
+
+  process.stderr.write(
+    [
+      `BLOCKED by design-lookup-gate: search the index before walking the tree.`,
+      "",
+      `This call searches the tree: ${cmd || tool}`,
+      "No index lookup has happened yet in this session.",
+      "",
+      "Run this first:",
+      "",
+      `  ${SEARCH_FIRST}`,
+      "",
+      replacement ? `For this command specifically, use: ${replacement}\n` : "",
+      "The index crosses the whole tree in ~0.1s and returns ranked hits with",
+      "file:line. A tree walk is slower, misses anything phrased differently,",
+      "and an empty result from one reads as 'does not exist' when it means",
+      "'wrong word'. Measured 2026-07-29: four denied greps and a proposed",
+      "walker script failed to find the round-two bake-off results; one",
+      '`aqmd search "terra"` found them at _plans/435-436-dream-hosted-rem.md:201.',
+      "",
+      "This is NOT a ban on rg/Grep. Once one lookup exists in this session,",
+      "they are unlocked -- they are the right tools for a literal token you",
+      "already know. The rule is only that the tree is never the FIRST move.",
+    ].join("\n"),
+  );
+  process.exit(2);
+}
+
 if (!isMutating(tool, toolInput)) process.exit(0);
 
 const subject = tokenize(mutationSubject(tool, toolInput));

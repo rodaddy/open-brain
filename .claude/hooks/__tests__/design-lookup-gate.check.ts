@@ -146,6 +146,54 @@ const cases: Array<{
     mutation: bash("git status"),
     blocked: false,
   },
+
+  // --- tree search must not be the first move (2026-07-29) ---------------
+  // The operator hardened the `grep` denial and an agent used `Grep` with a
+  // capital G. Ban a spelling, the next spelling wins. These pin the ACT.
+  {
+    name: "SPELLING: capital-G Grep tool blocks like grep does",
+    lookups: [],
+    mutation: { tool: "Grep", input: { pattern: "terra" } },
+    blocked: true,
+  },
+  {
+    name: "SPELLING: rg blocks as the first move",
+    lookups: [],
+    mutation: bash('rg -l "terra" /Volumes/collab'),
+    blocked: true,
+  },
+  {
+    name: "SPELLING: a readdir walker script blocks too",
+    lookups: [],
+    mutation: bash('bun -e "readdirSync(dir).forEach(f => ...)"'),
+    blocked: true,
+  },
+  {
+    name: "an index lookup unlocks rg for the literal token",
+    lookups: [bash('aqmd search "terra"')],
+    mutation: bash('rg -l "terra" /Volumes/collab'),
+    blocked: false,
+  },
+  {
+    name: "aqmd itself is never treated as a tree search",
+    lookups: [],
+    mutation: bash('aqmd search "bake-off"'),
+    blocked: false,
+  },
+  {
+    name: "grep in a pipe filters output, not the tree",
+    lookups: [],
+    mutation: bash("ps aux | grep postgres"),
+    blocked: false,
+  },
+
+  // --- asking the operator is a mutation of his time (2026-07-29) --------
+  {
+    name: "AskUserQuestion without a lookup blocks",
+    lookups: [],
+    mutation: { tool: "AskUserQuestion", input: { questions: [] } },
+    blocked: true,
+  },
 ];
 
 let pass = 0;
