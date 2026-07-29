@@ -125,11 +125,15 @@ async function readTurns(pool: Pool, limit: number): Promise<DistillTurn[]> {
 async function dryRun(pool: Pool, show: number): Promise<void> {
   const turns = await readTurns(pool, 200_000);
   const exchanges = buildExchanges(turns);
-  const prepared = exchanges
-    .map(prepareExchange)
-    .filter((c): c is NonNullable<typeof c> => c !== null);
+  // flatMap, not map: an over-length exchange prepares as SEVERAL rows now (044),
+  // so the candidate count legitimately exceeds the exchange count. The gap
+  // between those two lines below is the split, and it should be non-zero on any
+  // corpus with long exchanges -- 154 of 963 carried a truncation marker before
+  // this changed.
+  const prepared = exchanges.flatMap(prepareExchange);
 
   const anchored = prepared.filter((c) => c.anchor_turn_id !== null).length;
+  const parts = prepared.filter((c) => c.chunk_index !== null).length;
   console.log("turns read        :", turns.length);
   console.log(
     "sessions          :",
@@ -137,6 +141,11 @@ async function dryRun(pool: Pool, show: number): Promise<void> {
   );
   console.log("exchanges cut     :", exchanges.length);
   console.log("candidates        :", prepared.length);
+  console.log(
+    "  continuation parts:",
+    parts,
+    "(044 split; 0 = nothing was too long)",
+  );
   console.log("  operator-anchored:", anchored);
   // 043. Called out separately because before it, ALL SIX AskUserQuestion turns
   // on the live corpus headed nothing -- each swept into the agent body of

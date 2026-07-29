@@ -459,10 +459,15 @@ function bodyLabel(turn: DistillTurn): string {
 /**
  * Render one exchange as the operator will read it: HIS WORDS FIRST.
  *
- * The head is never truncated away. If the whole rendering exceeds
- * MAX_CANDIDATE_CHARS, the BODY is cut and says so -- the operator's own
- * sentence is the thing being graded, and clipping it would recreate exactly the
- * "judge a fragment of your own conversation" failure this module exists to fix.
+ * SINGLE-PART RENDER. This produces the ONE row form and still bounds the body,
+ * because most exchanges fit and a bounded render is what the review page shows.
+ * When the body does not fit, renderExchangeParts below splits instead -- this
+ * function's truncation marker is then never reached, and remains only for the
+ * pathological head case it documents at the bottom.
+ *
+ * The head is never truncated away. The operator's own sentence is the thing
+ * being graded, and clipping it would recreate exactly the "judge a fragment of
+ * your own conversation" failure this module exists to fix.
  */
 export function renderExchange(exchange: Exchange): string {
   // operatorTextOf, not raw content: an AskUserQuestion head arrives wrapped in
@@ -527,6 +532,118 @@ export function renderExchange(exchange: Exchange): string {
   // at the END of the string, so the operator's opening words survive.
   if (out.length <= MAX_CANDIDATE_CHARS) return out;
   return `${out.slice(0, MAX_CANDIDATE_CHARS - 16).trimEnd()} […truncated]`;
+}
+
+/**
+ * Render one exchange across AS MANY PARTS AS ITS TURNS NEED. Nothing is cut.
+ *
+ * THE DEFECT THIS REPLACES, measured on the live clone 2026-07-28: 154 of 963
+ * exchanges carried "[N further turn(s) omitted for length]", dropping 1,579
+ * turns between them. The count was honest and the turns were still gone.
+ *
+ * WHY NOT JUST RAISE MAX_CANDIDATE_CHARS. Tried first, rejected by the operator:
+ * "It's there so if something's too big it can split it up over multiple entries
+ * properly. That's the whole reason why I set it up that way." A bigger cap
+ * moves the cliff. Worse, src/embedding.ts:265 returns null WITHOUT calling the
+ * provider above 32,000 chars, so a cap high enough to stop truncating is a cap
+ * high enough to start writing candidates with no embedding -- invisible to
+ * dedupe and to semantic search, which is a quieter failure than truncation.
+ *
+ * WHY NOT chunkText(). src/chunking.ts splits on sentence boundaries with
+ * overlap, which is right for prose and wrong here: it would cut mid-turn,
+ * duplicate text across parts, and produce a part whose first line is half of
+ * somebody's sentence with no speaker label. The unit that must stay intact is
+ * the TURN -- that is what bodyLabel names and what the operator skims. So this
+ * packs whole turns into parts, and only a single over-long turn is clipped, by
+ * the same MAX_BODY_TURN_CHARS rule the one-part render already applies.
+ *
+ * EVERY PART REPEATS THE HEAD. Deliberate, and the reason is 041's whole thesis:
+ * the operator's words are what anchors the interaction, and a part that opens
+ * with mid-conversation agent output is the exact "judge a fragment of your own
+ * conversation" failure. It also satisfies candidate_memory_anchor_has_text
+ * (041:119-121) for every part rather than only the first, so no part can exist
+ * that claims an anchor while holding none of his words.
+ */
+export function renderExchangeParts(exchange: Exchange): string[] {
+  const head =
+    exchange.anchor === null ? null : operatorTextOf(exchange.anchor);
+  const rawHeadLine =
+    head !== null && head.length > 0
+      ? `OPERATOR: ${head}`
+      : "OPERATOR: (no operator turn -- agent activity before the first prompt of this session)";
+
+  // THE HEAD IS REPEATED ON EVERY PART, SO IT MUST BE BOUNDED.
+  //
+  // Measured 2026-07-28 on the live corpus: one exchange has a 15,430-char
+  // operator turn (the ingest cap is 200,000). Repeating it verbatim made every
+  // part ~15,600 chars -- nearly 4x MAX_CANDIDATE_CHARS -- and left no budget at
+  // all, so the packing loop fell to its one-line floor and emitted 350 parts
+  // for 350 turns. That is the truncation defect inverted: nothing is lost, and
+  // the output is unusable.
+  //
+  // HEAD_RESERVE is the same bound the single-part render budgets against, and
+  // the cut lands at the END so the operator's opening words -- the thing being
+  // graded -- always survive. The full head is still in ob_raw_turns via
+  // anchor_turn_id, and in operator_text on the row.
+  const headLine =
+    rawHeadLine.length > HEAD_RESERVE
+      ? `${rawHeadLine.slice(0, HEAD_RESERVE - 16).trimEnd()} […truncated]`
+      : rawHeadLine;
+
+  // Rendered body lines, whole turns, in order. Empty turns are dropped here
+  // rather than counted: an empty turn has nothing to show in any part.
+  const bodyLines: string[] = [];
+  for (const turn of exchange.body) {
+    const text = normalizeWhitespace(turn.content);
+    if (text.length === 0) continue;
+    const clipped =
+      text.length > MAX_BODY_TURN_CHARS
+        ? `${text.slice(0, MAX_BODY_TURN_CHARS).trimEnd()} […]`
+        : text;
+    bodyLines.push(`${bodyLabel(turn)}: ${clipped}`);
+  }
+
+  if (bodyLines.length === 0) return [headLine];
+
+  // Budget per part, computed against the head this exchange actually has. The
+  // continuation marker is reserved for too, so appending it can never push a
+  // part back over the ceiling -- the bug that would reintroduce truncation at
+  // the boundary.
+  const MARKER_RESERVE = 64;
+  const budget = Math.max(
+    // Floor of one line per part: a head so long that nothing fits would
+    // otherwise loop forever emitting empty parts.
+    1,
+    MAX_CANDIDATE_CHARS - headLine.length - 2 - MARKER_RESERVE,
+  );
+
+  const parts: string[] = [];
+  let current: string[] = [];
+  let used = 0;
+  for (const line of bodyLines) {
+    // A single line longer than the whole budget still gets its own part rather
+    // than being dropped. MAX_BODY_TURN_CHARS (600) makes this unreachable in
+    // practice; it is here so the loop cannot silently discard a line.
+    if (used > 0 && used + line.length + 1 > budget) {
+      parts.push(current.join("\n"));
+      current = [];
+      used = 0;
+    }
+    current.push(line);
+    used += line.length + 1;
+  }
+  if (current.length > 0) parts.push(current.join("\n"));
+
+  // Single part: identical to the one-row render, no continuation marker.
+  if (parts.length === 1) return [`${headLine}\n\n${parts[0]}`];
+
+  return parts.map((body, index) => {
+    // Says WHICH part and OF HOW MANY, so a reader landing on part 3 knows both
+    // that there is more and how much. 041 kept the omitted-count visible for
+    // the same reason: a reviewer must never mistake a piece for the whole.
+    const marker = `[part ${index + 1} of ${parts.length}]`;
+    return `${headLine}\n\n${marker}\n${body}`;
+  });
 }
 
 // --------------------------------------------------------------------------
@@ -661,6 +778,14 @@ export interface PreparedExchangeCandidate {
   unit_kind: "exchange";
   model: string;
   session_ref: string | null;
+  /**
+   * Position within a split exchange, or null when the exchange fits in one row
+   * (044). The HEAD of a split carries null too -- it is the row the other parts
+   * point at, and 044's candidate_memory_chunk_pair enforces that parent_id and
+   * chunk_index are set together, so a head with an index and no parent cannot
+   * be written. Parts are numbered from 1, since 0 is the head's position.
+   */
+  chunk_index: number | null;
 }
 
 /** Names the producer in candidate_memory.model, so exchange and fragment rows are attributable apart. */
@@ -683,7 +808,7 @@ export const EXCHANGE_DISTILLER_NAME = "exchange-distiller/v1";
  */
 export function prepareExchange(
   exchange: Exchange,
-): PreparedExchangeCandidate | null {
+): PreparedExchangeCandidate[] {
   const anchor = exchange.anchor;
 
   const operatorText = anchor === null ? null : operatorTextOf(anchor);
@@ -716,10 +841,15 @@ export function prepareExchange(
   const hasBodyContent = effective.body.some(
     (t) => normalizeWhitespace(t.content).length > 0,
   );
-  if (effective.anchor === null && !hasBodyContent) return null;
+  if (effective.anchor === null && !hasBodyContent) return [];
 
-  const content = renderExchange(effective);
-  if (content.trim().length === 0) return null;
+  // AS MANY ROWS AS THE TURNS NEED. One for an exchange that fits, N for one
+  // that does not -- 044. The previous single-render call truncated instead,
+  // dropping 1,579 turns across 154 exchanges on the live clone.
+  const contents = renderExchangeParts(effective).filter(
+    (part) => part.trim().length > 0,
+  );
+  if (contents.length === 0) return [];
 
   const classified = classifyExchange(effective);
 
@@ -727,7 +857,7 @@ export function prepareExchange(
   // it is a security boundary, and a candidate must live in the namespace its
   // evidence does. The anchor is authoritative when present.
   const namespace = effective.anchor?.namespace ?? effective.body[0]?.namespace;
-  if (namespace === undefined) return null;
+  if (namespace === undefined) return [];
 
   // EVERY turn in the exchange, head first then body in order. This is what
   // makes "the surrounding agent calls should almost always auto go in"
@@ -740,7 +870,7 @@ export function prepareExchange(
     ...effective.body.map((t) => t.id),
   ];
   // candidate_memory_source_turns_check requires cardinality > 0.
-  if (sourceTurnIds.length === 0) return null;
+  if (sourceTurnIds.length === 0) return [];
 
   // Defence in depth against a type that would violate
   // candidate_memory_type_check -- coerced rather than dropped, so a
@@ -751,12 +881,20 @@ export function prepareExchange(
     ? classified.type
     : "decision";
 
-  return {
+  // EVERY PART NAMES EVERY TURN. Provenance is a property of the interaction,
+  // not of the slice: asking "which turns did this come from" of part 3 must not
+  // answer "only the ones that happened to land in part 3", because the grade on
+  // the head covers the whole exchange and the reverse-provenance index
+  // (idx_candidate_memory_source_turns) is how a turn finds the exchange it
+  // belongs to. Splitting is a rendering concern; attribution is not.
+  return contents.map((content, index) => ({
     namespace,
     candidate_type: type,
     content,
     // The SAME hash function ingest and Light apply, so an exchange hash is
-    // directly comparable to a turn hash in content_occurrences.
+    // directly comparable to a turn hash in content_occurrences. Each part
+    // hashes its own text, so the (namespace, content_hash) dedupe stays exact
+    // and a re-run collides part-for-part rather than all-or-nothing.
     content_hash: contentHash(content),
     source_turn_ids: sourceTurnIds,
     anchor_turn_id: effective.anchor?.id ?? null,
@@ -764,10 +902,13 @@ export function prepareExchange(
     anchor_kind: effective.anchor_kind,
     uncertain: classified.uncertain,
     ...(classified.reason ? { uncertainty_reason: classified.reason } : {}),
-    unit_kind: "exchange",
+    unit_kind: "exchange" as const,
     model: EXCHANGE_DISTILLER_NAME,
     session_ref: effective.session_ref,
-  };
+    // Null for the head (index 0) so 044's chunk_pair constraint holds: the head
+    // has no parent, therefore no index. Parts number from 1.
+    chunk_index: contents.length === 1 || index === 0 ? null : index,
+  }));
 }
 
 /** Cut and prepare in one call. The whole extractor, over an ordered turn list. */
@@ -776,8 +917,9 @@ export function extractExchanges(
 ): PreparedExchangeCandidate[] {
   const out: PreparedExchangeCandidate[] = [];
   for (const exchange of buildExchanges(turns)) {
-    const prepared = prepareExchange(exchange);
-    if (prepared !== null) out.push(prepared);
+    // Parts stay ADJACENT and in order, so the writer can link each part to the
+    // head it follows without a second pass or a lookup table.
+    out.push(...prepareExchange(exchange));
   }
   return out;
 }

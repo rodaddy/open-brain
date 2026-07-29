@@ -28,7 +28,9 @@ import {
   prepareExchange,
   renderAskUserQuestionHead,
   renderExchange,
+  renderExchangeParts,
   EXCHANGE_DISTILLER_NAME,
+  type PreparedExchangeCandidate,
   type Exchange,
 } from "./distill-exchange.ts";
 import { MAX_CANDIDATE_CHARS } from "./distiller.ts";
@@ -230,6 +232,99 @@ describe("renderExchange", () => {
     expect(content).toContain("further turn(s) omitted for length");
   });
 
+  it("SPLITS an over-length exchange instead of dropping its tail", () => {
+    // The 044 defect in one assertion. Measured on the live clone 2026-07-28:
+    // 154 of 963 exchanges carried the omitted-for-length marker, and 1,579
+    // turns went with it. Every one of those turns must now land in some part.
+    const parts = renderExchangeParts(
+      ex({
+        anchor: operator("decide this"),
+        body: Array.from({ length: 60 }, (_, i) =>
+          agent(`reply ${i} ${"y".repeat(500)}`),
+        ),
+        session_ref: "s1",
+      }),
+    );
+
+    expect(parts.length).toBeGreaterThan(1);
+    // NOTHING IS OMITTED. Not "fewer omissions" -- none.
+    for (const part of parts) {
+      expect(part).not.toContain("omitted for length");
+      expect(part.length).toBeLessThanOrEqual(MAX_CANDIDATE_CHARS);
+      // Every part leads with the operator, so no part reads as agent text the
+      // operator is being asked to own.
+      expect(part.startsWith("OPERATOR: decide this")).toBe(true);
+    }
+    // Every single body turn is present SOMEWHERE across the parts.
+    const joined = parts.join("\n");
+    for (let i = 0; i < 60; i++) {
+      expect(joined).toContain(`reply ${i} `);
+    }
+  });
+
+  it("does not split an exchange that fits, and adds no part marker", () => {
+    const parts = renderExchangeParts(
+      ex({
+        anchor: operator("small ask"),
+        body: [agent("small reply")],
+        session_ref: "s1",
+      }),
+    );
+    expect(parts).toHaveLength(1);
+    expect(parts[0]).not.toContain("[part ");
+    // Identical to the single-row render, so the common case is unchanged.
+    expect(parts[0]).toBe(
+      renderExchange(
+        ex({
+          anchor: operator("small ask"),
+          body: [agent("small reply")],
+          session_ref: "s1",
+        }),
+      ),
+    );
+  });
+
+  it("bounds the repeated head, so a huge operator turn cannot blow every part", () => {
+    // Measured on the live corpus 2026-07-28: a 15,430-char operator turn. The
+    // head is repeated on EVERY part, so an unbounded head produced 350 parts of
+    // ~15,600 chars each -- every one of them ~4x over the ceiling, with the
+    // packing loop starved down to one turn per part. Nothing was lost and the
+    // output was useless, which is the truncation defect inverted.
+    const parts = renderExchangeParts(
+      ex({
+        anchor: operator(`START-MARKER ${"z".repeat(20_000)}`),
+        body: Array.from({ length: 30 }, (_, i) =>
+          agent(`reply ${i} ${"y".repeat(400)}`),
+        ),
+        session_ref: "s1",
+      }),
+    );
+
+    for (const part of parts) {
+      expect(part.length).toBeLessThanOrEqual(MAX_CANDIDATE_CHARS);
+      // The operator's OPENING words survive: the cut lands at the end.
+      expect(part.startsWith("OPERATOR: START-MARKER")).toBe(true);
+    }
+    // And the body still packs many turns per part rather than one each.
+    expect(parts.length).toBeLessThan(30);
+  });
+
+  it("numbers the parts so a reader knows a piece is a piece", () => {
+    const parts = renderExchangeParts(
+      ex({
+        anchor: operator("go"),
+        body: Array.from({ length: 40 }, (_, i) =>
+          agent(`turn ${i} ${"q".repeat(500)}`),
+        ),
+        session_ref: "s1",
+      }),
+    );
+    expect(parts.length).toBeGreaterThan(1);
+    parts.forEach((part, index) => {
+      expect(part).toContain(`[part ${index + 1} of ${parts.length}]`);
+    });
+  });
+
   it("keeps the operator's opening words even when the head alone is enormous", () => {
     // The ingest cap is 200,000 chars, so a single pathological operator turn
     // must still not violate the embedding limit -- and the cut must land at the
@@ -260,12 +355,29 @@ describe("renderExchange", () => {
   });
 });
 
+/**
+ * The FIRST prepared row for an exchange, or undefined when nothing was
+ * emitted.
+ *
+ * prepareExchange returns a LIST since 044 -- an over-length exchange splits
+ * across rows instead of truncating. Every assertion below that reads one field
+ * (classification, provenance, anchor) is about the exchange as a whole, and
+ * those fields are identical on every part, so reading the head is exact rather
+ * than a convenience. Tests that are specifically about splitting call
+ * prepareExchange directly and assert on the whole list.
+ */
+function firstPart(
+  exchange: Parameters<typeof prepareExchange>[0],
+): PreparedExchangeCandidate | undefined {
+  return prepareExchange(exchange)[0];
+}
+
 describe("prepareExchange", () => {
   it("names every turn of the exchange as a source, head first", () => {
     const anchor = operator("do the thing");
     const a = agent("doing it");
     const t = tool("[tool_use: Bash]");
-    const prepared = prepareExchange(
+    const prepared = firstPart(
       ex({
         anchor,
         body: [a, t],
@@ -285,7 +397,7 @@ describe("prepareExchange", () => {
     // report -- the fragment unit called it `fact`, which is how `fact` reached
     // 612 with zero operator-anchored rows. The operator asked a question, so
     // the exchange is a decision context.
-    const prepared = prepareExchange(
+    const prepared = firstPart(
       ex({
         anchor: operator("I can't decide whether to move it now or wait"),
         body: [agent("Drizzle isn't a dependency and there's no config.")],
@@ -296,7 +408,7 @@ describe("prepareExchange", () => {
   });
 
   it("classifies a correction from the operator's own words", () => {
-    const prepared = prepareExchange(
+    const prepared = firstPart(
       ex({
         anchor: operator("no, that's not what I said -- revert it"),
         body: [agent("Reverted.")],
@@ -307,7 +419,7 @@ describe("prepareExchange", () => {
   });
 
   it("classifies a stated preference", () => {
-    const prepared = prepareExchange(
+    const prepared = firstPart(
       ex({
         anchor: operator("I prefer the batched form over per-keystroke writes"),
         body: [],
@@ -321,7 +433,7 @@ describe("prepareExchange", () => {
   it("emits a bare acknowledgement, uncertain, with the authorized work in it", () => {
     // Under the fragment unit this read "Operator approved: 'go for it'" and the
     // reviewer had to go find what was approved. Here the body IS the content.
-    const prepared = prepareExchange(
+    const prepared = firstPart(
       ex({
         anchor: operator("go for it"),
         body: [agent("Migrating the schema now."), tool("[tool_use: Bash]")],
@@ -337,7 +449,7 @@ describe("prepareExchange", () => {
   it("emits a short operator turn with no length floor", () => {
     // dream-light.ts:161-176: a 2-character turn can be the whole decision, and
     // 037 removed every pre-filter. "Everything passes" is asserted, not assumed.
-    const prepared = prepareExchange(
+    const prepared = firstPart(
       ex({
         anchor: operator("go"),
         body: [],
@@ -349,7 +461,7 @@ describe("prepareExchange", () => {
   });
 
   it("flags an orphan uncertain and gives it no anchor or operator text", () => {
-    const prepared = prepareExchange(
+    const prepared = firstPart(
       ex({
         anchor: null,
         body: [agent("session resumed")],
@@ -365,7 +477,7 @@ describe("prepareExchange", () => {
   it("degrades an unusable anchor to an orphan rather than dropping the body", () => {
     // 041's candidate_memory_anchor_has_text would reject a row claiming an
     // anchor with no operator_text. The agent activity below it is still real.
-    const prepared = prepareExchange(
+    const prepared = firstPart(
       ex({
         anchor: operator("[Request interrupted by user]"),
         body: [agent("real work happened here")],
@@ -377,9 +489,10 @@ describe("prepareExchange", () => {
     expect(prepared.content).toContain("real work happened here");
   });
 
-  it("returns null only when there is nothing at all to write", () => {
+  it("emits nothing only when there is nothing at all to write", () => {
     // Not a salience judgement -- candidate_memory_content_check. An orphan whose
-    // every body turn is empty has no content to store.
+    // every body turn is empty has no content to store. Empty list rather than
+    // null since 044; the rejection itself is unchanged.
     expect(
       prepareExchange(
         ex({
@@ -388,11 +501,11 @@ describe("prepareExchange", () => {
           session_ref: "s1",
         }),
       ),
-    ).toBeNull();
+    ).toEqual([]);
   });
 
   it("takes the namespace from the turns, never from a caller argument", () => {
-    const prepared = prepareExchange(
+    const prepared = firstPart(
       ex({
         anchor: operator("scoped", { namespace: "shared-kb" }),
         body: [],
@@ -403,14 +516,14 @@ describe("prepareExchange", () => {
   });
 
   it("gives two different exchanges two different content hashes", () => {
-    const a = prepareExchange(
+    const a = firstPart(
       ex({
         anchor: operator("first ask"),
         body: [agent("first reply")],
         session_ref: "s1",
       }),
     )!;
-    const b = prepareExchange(
+    const b = firstPart(
       ex({
         anchor: operator("second ask"),
         body: [agent("second reply")],
@@ -422,7 +535,7 @@ describe("prepareExchange", () => {
 
   it("gives an identical exchange the same hash, so a re-run dedupes", () => {
     const build = () =>
-      prepareExchange(
+      firstPart(
         ex({
           anchor: operator("same ask", {
             id: "22222222-2222-4222-8222-222222222222",
@@ -681,13 +794,13 @@ describe("AskUserQuestion answers head their own exchange", () => {
   });
 
   it("carries anchor_kind onto the prepared candidate for every kind", () => {
-    const typed = prepareExchange(
+    const typed = firstPart(
       ex({ anchor: operator("typed"), body: [], session_ref: "s1" }),
     )!;
-    const chosen = prepareExchange(
+    const chosen = firstPart(
       ex({ anchor: auq('"Q?"="A"'), body: [], session_ref: "s1" }),
     )!;
-    const orphan = prepareExchange(
+    const orphan = firstPart(
       ex({ anchor: null, body: [agent("resumed")], session_ref: "s1" }),
     )!;
     expect(typed.anchor_kind).toBe("typed");
@@ -699,7 +812,7 @@ describe("AskUserQuestion answers head their own exchange", () => {
     // operator_text is what the page puts in the operator's own position. The
     // wrapper opens with the AGENT's question, so storing it raw would put agent
     // words there -- 041's defect, one layer down.
-    const prepared = prepareExchange(
+    const prepared = firstPart(
       ex({
         anchor: auq('"Port it now?"="Wait until after drizzle"'),
         body: [],
@@ -716,7 +829,7 @@ describe("AskUserQuestion answers head their own exchange", () => {
     // Agent questions are dense in DECISION_RE stems ("Should we...", "must",
     // "use "). Classifying from the raw string would let the agent's framing
     // decide what the operator's answer WAS.
-    const prepared = prepareExchange(
+    const prepared = firstPart(
       ex({
         anchor: auq(
           '"Should we always use the batched form?"="no, that is wrong -- revert it"',
@@ -733,7 +846,7 @@ describe("AskUserQuestion answers head their own exchange", () => {
     // its raw text, so it remains a real head. Degrading it to an orphan would
     // throw away an operator decision because a harness reworded its own
     // punctuation, which is the failure 043 exists to end -- not repeat.
-    const prepared = prepareExchange(
+    const prepared = firstPart(
       ex({
         anchor: tool("The user answered: something unexpected"),
         body: [agent("real work")],
@@ -748,7 +861,7 @@ describe("AskUserQuestion answers head their own exchange", () => {
   it("degrades an AUQ head with no words in it at all to an orphan", () => {
     // candidate_memory_anchor_has_text would reject a row claiming an anchor
     // with no operator_text, so an empty head must not claim to be one.
-    const prepared = prepareExchange(
+    const prepared = firstPart(
       ex({
         anchor: tool("The user answered:   "),
         body: [agent("real work")],

@@ -200,15 +200,45 @@ async function persist(
   embeddings: ReadonlyMap<string, number[] | null>,
   summary: ExchangeSweepSummary,
 ): Promise<void> {
+  // THE HEAD OF THE SPLIT CURRENTLY BEING WRITTEN.
+  //
+  // extractExchanges emits the parts of one exchange adjacent and in order, so
+  // the head is simply the last row written with chunk_index === null. Tracking
+  // it here is what makes parent_id REAL rather than declared-and-null -- the
+  // 011_chunking.sql failure this whole change exists downstream of, where a
+  // perfectly good FK sat unpopulated for months because nothing bound a value
+  // to it. 044's candidate_memory_chunk_pair now rejects the half-written row,
+  // so that specific mistake cannot recur silently, but the link still has to be
+  // written on purpose.
+  //
+  // Reset to null on a head, so a part can never attach to a PREVIOUS
+  // exchange's head if its own head was deduped away.
+  let headId: string | null = null;
+
   for (const candidate of candidates) {
     const vector = embeddings.get(candidate.content_hash) ?? null;
+    const isPart = candidate.chunk_index !== null;
 
-    const inserted = await client.query(
+    // A part whose head was not written this run (deduped, or failed) has no
+    // parent to point at. Writing it with a null parent_id would violate
+    // chunk_pair; writing it as a head would put a mid-conversation fragment in
+    // the review queue as though the operator had asked for it. Skip it: the
+    // head that owns it already exists from the earlier run, and this run's
+    // ON CONFLICT is about to skip its content anyway.
+    if (isPart && headId === null) {
+      summary.duplicate++;
+      continue;
+    }
+
+    // Annotated because headId is assigned FROM this result and read back on the
+    // next iteration, which is a circular inference TypeScript cannot resolve.
+    const inserted: pg.QueryResult<{ id: string }> = await client.query(
       `INSERT INTO candidate_memory (
          namespace, candidate_type, content, content_hash, source_turn_ids,
          model, embedding, uncertain, uncertainty_reason,
-         unit_kind, anchor_turn_id, operator_text, anchor_kind
-       ) VALUES ($1, $2, $3, $4, $5::uuid[], $6, $7, $8, $9, $10, $11::uuid, $12, $13)
+         unit_kind, anchor_turn_id, operator_text, anchor_kind,
+         parent_id, chunk_index
+       ) VALUES ($1, $2, $3, $4, $5::uuid[], $6, $7, $8, $9, $10, $11::uuid, $12, $13, $14::uuid, $15)
        ON CONFLICT (namespace, content_hash) DO NOTHING
        RETURNING id`,
       [
@@ -228,14 +258,28 @@ async function persist(
         // anchor_kind it already has, which is correct: the row the operator may
         // have graded must not be silently relabelled underneath him.
         candidate.anchor_kind,
+        // 044. Both null for a whole exchange or for the head of a split; both
+        // set for a part. chunk_pair enforces they move together.
+        isPart ? headId : null,
+        candidate.chunk_index,
       ],
     );
 
     if (inserted.rowCount && inserted.rowCount > 0) {
+      // Remember the head so the parts that follow can point at it. A part never
+      // becomes the head for the NEXT exchange -- only a chunk_index === null row
+      // reassigns this.
+      if (!isPart) {
+        headId = inserted.rows[0]?.id ?? null;
+      }
       summary.written++;
       if (vector === null) summary.embeddings_missing++;
       if (candidate.uncertain) summary.uncertain++;
     } else {
+      // A head that deduped leaves its parts with nothing to attach to. Clearing
+      // it is what makes the skip above fire, instead of silently hanging this
+      // exchange's parts off whatever head happened to be written last.
+      if (!isPart) headId = null;
       // The dedupe fired. Not an error: this run is idempotent by design and the
       // same exchange re-extracted is one exchange.
       summary.duplicate++;

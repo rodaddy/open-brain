@@ -54,9 +54,10 @@ import type { MaintenanceQueueLogger } from "./maintenance-queue.ts";
 
 /**
  * Cosine DISTANCE at or below which two candidates are the same claim.
- * 0.09 distance = 0.91 similarity, matching the standing rule carried over from
- * LiteLLM semantic caching -- two independent arrivals at ~0.91 for "is this
- * close enough to be the same thing" (docs/dream-design.md:631-649).
+ * 0.09 distance = 0.91 similarity, the operator's standing threshold for "is
+ * this close enough to be the same thing" (docs/dream-design.md:631-649). It
+ * is worth keeping because two independent lines of work landed on ~0.91 for
+ * the same judgement, not because of where it was first observed.
  *
  * Risk direction, stated in the doc and preserved here: too loose merges
  * genuinely distinct facts, too tight leaves dupes. The history table makes the
