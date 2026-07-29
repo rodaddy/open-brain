@@ -68,7 +68,9 @@
 MCP server providing a unified semantic brain over PostgreSQL + pgvector. TypeScript (Bun), with a Python client package at `python/openbrain-memory/`.
 
 
-> Repo LAWs and workflow expectations are documented here for Codex and exposed to Claude through the `CLAUDE.md -> AGENTS.md` symlink.
+> Repo LAWs and workflow expectations are documented here and apply to every
+> runtime. `CLAUDE.md` is a thin router that points here and carries only
+> Claude-specific deltas; this file wins unless a rule there is stricter.
 
 
 ## Standards (in this repo)
