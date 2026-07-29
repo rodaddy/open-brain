@@ -76,7 +76,29 @@ export interface TerraJudgement {
   quote: string;
   synopsis: string;
   agent_behavior: "good" | "bad" | "neutral";
-  canned_replies: string[];
+  /**
+   * Terra's own angles on why it scored this way. RAW MATERIAL: a separate
+   * distillation pass reads every judgement in a run and composes the
+   * operator's click-options from these. Terra cannot see across items, so it
+   * cannot write the options itself.
+   */
+  reasons: string[];
+}
+
+/**
+ * The interaction's shape, passed as DATA rather than left to be inferred.
+ *
+ * Terra receives one exchange and cannot count what it cannot see. The
+ * operator's priors depend on exactly this: "if it comes from me it probably
+ * should be saved. That's especially if it's a long interaction, or what I say
+ * is long, and your response is long, and there's more than one back and
+ * forth." `source_turn_ids` already carries the turn count, so supplying it is
+ * a cardinality() rather than a guess.
+ */
+export interface InteractionShape {
+  turn_count: number;
+  operator_chars: number;
+  agent_chars: number;
 }
 
 /**
@@ -92,7 +114,7 @@ export type TerraTransport = (request: {
   effort: string;
   prompt: string;
   schema: unknown;
-  items: Array<{ id: string; content: string }>;
+  items: Array<{ id: string; content: string } & InteractionShape>;
 }) => Promise<TerraJudgement[]>;
 
 export interface TerraGraderOptions {
@@ -108,6 +130,41 @@ export interface TerraGraderOptions {
 }
 
 export const DEFAULT_TERRA_BATCH = 50;
+
+/**
+ * Derive the interaction's shape from the stored exchange text.
+ *
+ * Read off `content` rather than `source_turn_ids` deliberately: RemCandidate
+ * does not carry the id array, and widening that shared interface to reach one
+ * count would touch every grader. The text already holds the structure the
+ * distiller wrote into it -- `feat(041)` heads each exchange with the operator
+ * turn and prefixes every following turn with "agent:" or "tool:" -- so the
+ * count is a property of the unit, not a second query.
+ *
+ * turn_count counts CONVERSATIONAL turns: the operator's, plus each agent
+ * reply. Tool lines are excluded because "more than one back and forth" is
+ * about exchange, and an agent that ran six greps in one reply has not gone
+ * back and forth six times.
+ */
+export function interactionShape(content: string): InteractionShape {
+  const agentSplit = content.split(/^agent:/m);
+  const operatorPart = agentSplit[0] ?? "";
+  const agentParts = agentSplit.slice(1);
+
+  const agentChars = agentParts
+    .join("")
+    .split("\n")
+    .filter((line) => !line.startsWith("tool:"))
+    .join("\n").length;
+
+  return {
+    // Operator turn plus each agent reply. Never below 1: an exchange with no
+    // agent response is still one operator turn.
+    turn_count: 1 + agentParts.length,
+    operator_chars: operatorPart.replace(/^OPERATOR:\s*/, "").trim().length,
+    agent_chars: agentChars,
+  };
+}
 
 /**
  * The grader itself.
@@ -146,7 +203,11 @@ export function createTerraGrader(
             effort: REM_EFFORT,
             prompt: REM_GRADING_PROMPT,
             schema: REM_GRADING_SCHEMA,
-            items: slice.map((c) => ({ id: c.id, content: c.content })),
+            items: slice.map((c) => ({
+              id: c.id,
+              content: c.content,
+              ...interactionShape(c.content),
+            })),
           });
           for (const j of judgements) {
             // An id Terra invented is not a candidate. Round two measured

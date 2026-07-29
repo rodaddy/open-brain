@@ -10,6 +10,7 @@
 import { describe, expect, it } from "bun:test";
 import {
   createTerraGrader,
+  interactionShape,
   PROMOTE_AT,
   type TerraJudgement,
 } from "./rem-terra-grader.ts";
@@ -44,7 +45,11 @@ function judgement(
     quote: "a thing the operator said",
     synopsis: "ran two greps, found the file, said so",
     agent_behavior: "good",
-    canned_replies: ["keeps a rule", "too high", "wrong reason"],
+    reasons: [
+      "keeps a rule",
+      "restates a standing rule",
+      "the correction is the durable part",
+    ],
     ...over,
   };
 }
@@ -192,6 +197,50 @@ describe("Terra grader", () => {
     await grader.prime([candidate("second")]);
     expect(grader.judgementFor("first")).toBeUndefined();
     expect((await grader.grade(first)).grade).toBe("inconclusive");
+  });
+
+  it("counts back-and-forth turns, not tool calls", () => {
+    // "more than one back and forth" is about exchange. An agent that ran six
+    // greps inside one reply has not gone back and forth six times, so tool
+    // lines must not inflate the count the operator's prior depends on.
+    const shape = interactionShape(
+      [
+        "OPERATOR: fix the thing",
+        "agent: checking first",
+        "tool: 15 matches",
+        "tool: 3 matches",
+        "agent: found it, fixed",
+      ].join("\n"),
+    );
+
+    expect(shape.turn_count).toBe(3); // operator + 2 agent replies
+    expect(shape.operator_chars).toBe("fix the thing".length);
+    // Tool output is excluded from the agent's own volume.
+    expect(shape.agent_chars).toBeLessThan(40);
+  });
+
+  it("treats an exchange with no agent reply as a single turn", () => {
+    const shape = interactionShape("OPERATOR: just a thought");
+    expect(shape.turn_count).toBe(1);
+    expect(shape.agent_chars).toBe(0);
+  });
+
+  it("sends the interaction shape alongside each item", async () => {
+    let seen: Array<Record<string, unknown>> = [];
+    const grader = createTerraGrader({
+      transport: async ({ items }) => {
+        seen = items as unknown as Array<Record<string, unknown>>;
+        return items.map((i) => judgement(i.id, 6));
+      },
+    });
+
+    await grader.prime([
+      candidate("a", { content: "OPERATOR: a long ask\nagent: a reply" }),
+    ]);
+
+    // Terra cannot count what it cannot see; the priors depend on these.
+    expect(seen[0]!.turn_count).toBe(2);
+    expect(seen[0]!.operator_chars).toBe("a long ask".length);
   });
 
   it("keeps the synopsis as the reason, since that is what explains placement", async () => {

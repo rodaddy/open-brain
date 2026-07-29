@@ -124,7 +124,24 @@ operator will not read it. Operator, 2026-07-29: "Terra on the other hand can
 take the entire tool called chain and make something useful of it. I'm not
 going to read it." What the agent actually DID lives in those calls -- "I
 verified X" with a query behind it is a different event from the same sentence
-with nothing behind it. Your synopsis is what the operator reads instead.`;
+with nothing behind it. Your synopsis is what the operator reads instead.
+
+THE SHAPE OF THE INTERACTION IS GIVEN TO YOU, not inferred. Each item carries
+turn_count, operator_chars and agent_chars. Use them as PRIORS, in the
+operator's own framing, 2026-07-29:
+
+  "if it comes from me it probably should be saved. That's especially if it's
+   a long interaction, or what I say is long, and your response is long, and
+   there's more than one back and forth."
+
+So: it is his speech -- lean toward keeping. A long operator turn, a long
+response, and several turns back and forth is a real exchange and scores
+higher than a one-line aside. These are priors, NOT a formula: a two-word
+correction can outrank a long ramble, because "sometimes me saying okay is the
+equivalent of doubt" and length is never the measure on its own.
+
+The counts are supplied because you receive ONE exchange and cannot see across
+them. Anything needing the whole corpus belongs to a later stage, not to you.`;
 
 /**
  * The anchored scale, verbatim from round two's p1.
@@ -184,23 +201,19 @@ Do six things for each item, in order.
    wrong thing. neutral = routine. This is INDEPENDENT of the score: a
    high-value memory often records BAD agent behavior, and those are among the
    most worth keeping because they record what not to repeat.
-6. CANNED REPLIES: 3-4 short phrases the operator clicks INSTEAD OF TYPING.
+6. REASONS: 3-4 short phrases saying WHY you scored it that way -- the angles
+   that led you there. Differing facets of your own read, not arguments against
+   it. Terse, specific to this item, in his register.
 
-   THE JOB IS TO SAVE HIM TYPING, NOT TO BE RIGHT. Operator, 2026-07-29: "I
-   don't need Terra to be right or you to be right. I just need options that
-   make logical sense in the pre-canned things, so I don't have to sit here and
-   manually type out sentence after sentence." He types only when the options
-   are bad or he wants to say something with force.
-
-   So SPREAD them across the plausible reactions to THIS item -- do not write
-   three phrasings of the same opinion:
-     - one for agreeing with your score, naming the reason
-     - one or two for the obvious ways your score is wrong (too high, too low)
-     - one for "this matters, but for a different reason than you gave"
-   Terse, specific to this item, in his register. Not generic.
+   THESE ARE RAW MATERIAL, NOT BUTTONS. A separate pass reads every judgement
+   in the run at once and composes the operator's actual click-options from
+   them. That pass can see what you cannot from inside one item: that three
+   exchanges are the same rule restated, that a phrasing recurs, that a whole
+   session trends one way. So do not try to write the UI here. Write what you
+   thought, and let the distillation shape it.
    Examples of the shape wanted:
-     ["keeps a rule I'd forget", "already covered elsewhere", "only mattered that day"]
-     ["agent got this wrong, worth keeping", "my ask was vague", "fine, routine"]
+     ["keeps a rule I'd forget", "restates a standing scratch-path rule", "the correction is the durable part"]
+     ["agent verified before answering", "operator pushed back and was right", "routine once the check landed"]
 
 ${OPERATOR_VOICE}
 
@@ -241,7 +254,7 @@ export const REM_GRADING_SCHEMA = {
           "quote",
           "synopsis",
           "agent_behavior",
-          "canned_replies",
+          "reasons",
         ],
         properties: {
           id: { type: "string" },
@@ -265,12 +278,12 @@ export const REM_GRADING_SCHEMA = {
             enum: ["good", "bad", "neutral"],
           },
           /**
-           * REQUIRED, and at least three. Optional in round two, where a model
-           * that skipped them cost nothing. Here they are the operator's
-           * click-instead-of-type path, so an item returning none is an item he
-           * has to hand-write -- which is the exact cost this exists to remove.
+           * REQUIRED, at least three. These are the raw material the
+           * distillation pass reads to compose the operator's click-options;
+           * an item returning none contributes nothing to that pass and lands
+           * on the page with no options behind it.
            */
-          canned_replies: {
+          reasons: {
             type: "array",
             items: { type: "string" },
             minItems: 3,
