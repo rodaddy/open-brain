@@ -1,0 +1,81 @@
+[project]
+name = "openbrain"
+version = "0.1.0"
+description = "Open Brain: the shared core, configuration, models, and capability modules that every Open Brain Python process is built from."
+# The package README is GENERATED from the src/openbrain/__init__.py docstring
+# by scripts/pytools/generate_package_docs.py. Pointing at the generated file
+# rather than a hand-written one at the package root keeps a single source:
+# a second README here would drift from the docstring immediately, and nothing
+# would detect it.
+readme = "src/openbrain/README.md"
+requires-python = ">=3.13"
+dependencies = [
+    # Pydantic owns configuration and models: one validated, typed object rather
+    # than a dict passed around. `docs/CODING_STANDARDS.md` section 3.
+    #
+    # This is a NEW dependency for this repo -- neither openbrain-memory nor
+    # openbrain-provider uses it; both hand-roll frozen dataclasses with
+    # __post_init__ validation. That works, but every package re-implements the
+    # coercion and error-message logic, which is the duplication this tree
+    # exists to stop.
+    "pydantic>=2.9",
+    # BaseSettings moved out of pydantic core in v2 and is its own package.
+    "pydantic-settings>=2.5",
+    # loguru, matching openbrain-provider. The shared rtech-obs package
+    # implements the same envelope and would be the right dependency, but
+    # rtech-standards is private and this repo's CI passes no token. See
+    # openbrain-provider/pyproject.toml for the full note.
+    "loguru>=0.7",
+]
+
+# [project.scripts] is deliberately absent. A declared entry point whose target
+# module does not exist still installs an executable shim into .venv/bin and
+# dies with ModuleNotFoundError when anything runs it -- and no lint, type, or
+# test gate inspects entry-point targets, so a broken script ships green. The
+# same trap as a mypy path that does not resolve. Entry points get declared when
+# `cli/` has something to point at.
+
+[dependency-groups]
+dev = [
+    "mypy>=1.10",
+    "pytest>=8.0",
+    "ruff>=0.8",
+]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+warn_unused_ignores = true
+
+[tool.ruff]
+target-version = "py313"
+line-length = 88
+
+[tool.ruff.lint]
+# D = pydocstyle. Module (D100), package (D104), and class/function (D101-D103)
+# docstrings are gate failures, not warnings. The package-level rule is what the
+# docs generator depends on: `scripts/pytools/generate_package_docs.py` reads
+# the __init__.py docstring, so an absent one has to fail here too.
+select = ["E", "F", "I", "W", "UP", "B", "D"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+# Tests document themselves through their names; a docstring on every test
+# function is noise that trains people to write empty ones. D102 covers test
+# methods inside a grouping class, which are the same thing as D103 functions.
+# The grouping CLASS still needs its docstring (D101 stays on): a test class is
+# a claim about a behaviour, and that claim is worth stating.
+"tests/*" = ["D100", "D102", "D103"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/openbrain"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
