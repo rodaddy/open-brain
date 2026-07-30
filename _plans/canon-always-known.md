@@ -38,6 +38,23 @@ fleet.sqlite: 10,900 documents, 40+ collections
   buzz (github.com/block/buzz, third-party): 2,205  = 20% of the index
 ```
 
+**Superseded 2026-07-30 — the retrieval half is DONE.** `fleet.sqlite` was
+rebuilt scoped (work item 1) and now holds exactly the policy layer and nothing
+else. Measured directly against `~/.cache/qmd/fleet.sqlite`:
+
+```
+fleet.sqlite: 583 documents, 2 collections
+  _ob:   561      every skill, workflow, script, ob.json
+  _DOCS:  22      every standard, every glossary file
+  buzz:    0      gone
+```
+
+`aqmd search "coding standards logging"` returns `_DOCS/STANDARDS-observability.md`.
+So the rows above reading "in no qmd index" are **fixed**: the procedures are
+indexed and reachable today. What remains is that reaching them is still a
+*choice* an agent has to make, and that is the step that fails. Do not re-derive
+the index work; it exists.
+
 ## The insight
 
 Indexing `_DOCS`/`_ob` builds a **better pointer chain**. A pointer chain still

@@ -584,6 +584,150 @@ if (addsContentCap(tool, toolInput)) {
   process.exit(2);
 }
 
+/**
+ * Limitation language, anywhere, in any tool: hard block. No lookup, no
+ * rephrase, and no tool-specific carve-out clears it.
+ *
+ * addsContentCap above stops a cap being WRITTEN into a memory-surface file.
+ * That is too narrow twice over: it only watches certain paths, and it only
+ * watches code. The reflex is not path-scoped and it is not code-scoped -- it
+ * shows up in a question, an issue body, a commit message, a design doc, a
+ * comment, a plan. So this one matches the LANGUAGE, in every tool.
+ *
+ * What happened on 2026-07-30, and why the earlier gate was not enough:
+ * mid-way through a session spent REMOVING caps from every Open Brain path, the
+ * agent opened a wayfinder ticket and its first act was an AskUserQuestion
+ * offering three cap sizes for canon -- per-lane, global, reserved-floor. Every
+ * option a limit; "no cap" was not among them. The gate DID fire, twice, but
+ * its message said "requires a design lookup first" -- so the agent read it as
+ * a procedural toll, ran two `aqmd` searches, and re-fired the same question.
+ * The second search returned the answer (_plans/canon-always-known.md:177-179:
+ * canon is a filter whose rows must ALL come back). The agent quoted that line
+ * back to the operator and shipped the cap menu anyway.
+ *
+ * The lesson is in the message, not the matcher: a gate that names a
+ * satisfiable precondition invites satisfying the precondition. This one offers
+ * no door. The ONLY way past is to stop and put it to the operator in prose.
+ *
+ * Operator, 2026-07-30, verbatim: "I have never once, in any conversation I've
+ * had with these agents or anything, ever asked for caps or downsizing or
+ * limiting or slimming things down... Never ask me to limit things unless I
+ * personally ask you to. You should never do it or suggest it on your own
+ * ever." And: "I don't care if this thing ends up being 2, 7, 12 gigs in the
+ * database. What I need is for it to WORK PROPERLY, and then we can figure out
+ * how to pare it down."
+ *
+ * This is not a judgment the agent makes badly. It is a default the model
+ * reaches for when nothing stops it -- bounded output reads as good engineering
+ * in the abstract, so "how big should it be" gets composed before the actual
+ * requirement (total recall) is ever consulted. A wall works where a rule does
+ * not, because a wall needs no remembering.
+ *
+ * The operator raises the subject whenever he likes. This blocks the AGENT
+ * raising it, never his own request, and never the removal of an existing cap.
+ */
+const CAP_PROPOSAL = new RegExp(
+  [
+    String.raw`\b(cap|caps|capped|capping)\b`,
+    String.raw`\b(limit|limits|limiting|limited|limitation|limitations)\b`,
+    String.raw`\b(ceiling|quota|throttle|throttling|budgeted)\b`,
+    String.raw`\b(truncat|trim|prun|downsiz|shrink|curtail|constrain|restrict)\w*`,
+    String.raw`\bslim(?:med|ming)?\b`,
+    String.raw`\bpared?\b|\bparing\b`,
+    String.raw`\b(smaller|fewer|leaner|tighter)\b`,
+    String.raw`\bmax[_\s-]?(tokens|size|items|chars|characters|length|rows|events|bytes|count)\b`,
+    String.raw`\bsize\s+(limit|cap|budget|ceiling)\b`,
+    String.raw`\btoken\s+budget\b`,
+    String.raw`\bhow\s+(big|large|many|much)\b`,
+    String.raw`\bcut\s+(it|them|this|that|down|off)\b`,
+    String.raw`\bkeep\s+it\s+(small|short|tight|brief|bounded)\b`,
+    String.raw`\btop[_\s-]?\d+\b`,
+    String.raw`\bfirst\s+\d+\s+(rows|items|events|results|chars)\b`,
+  ].join("|"),
+  "i",
+);
+
+/**
+ * Removing a cap is the fix and must never be blocked. Also exempt: reporting
+ * that a cap EXISTS (the finding), and the operator's own framing quoted back.
+ */
+const CAP_PROPOSAL_EXEMPT = new RegExp(
+  [
+    String.raw`\bno\s+(cap|caps|limit|limits|ceiling)\b`,
+    String.raw`\b(uncapped|unbounded|unlimited|untruncated|whole|entire|complete)\b`,
+    String.raw`\b(un|de)-?(cap|caps|capping|limit|limiting|truncat)\w*`,
+    String.raw`\b(remov|delet|strip|eliminat|drop|kill|rip)\w*\s+(the\s+|a\s+|any\s+|every\s+|all\s+)?(cap|caps|limit|limits|ceiling|truncat\w*|bound|bounds)`,
+    String.raw`\b(lift|lifting|raise|raising|widen|widening|relax|relaxing)\b`,
+    String.raw`\bwithout\s+(a\s+)?(cap|limit|ceiling|bound)`,
+    String.raw`\btotal\s+recall\b`,
+    String.raw`\bwide\s+open\b`,
+    String.raw`\bnever\s+(truncate|cap|cut|shorten|limit)\b`,
+  ].join("|"),
+  "i",
+);
+
+/**
+ * Every surface the operator or the repo would see it on: a question, a file
+ * being written, a command, a commit message, an issue body.
+ */
+function capProposalText(tool: string, input: Record<string, unknown>): string {
+  if (tool === "AskUserQuestion") return JSON.stringify(input.questions ?? "");
+  if (tool === "Write" || tool === "NotebookEdit") {
+    return String(input.content ?? input.new_source ?? "");
+  }
+  if (tool === "Edit") return String(input.new_string ?? "");
+  if (tool === "Bash") return String(input.command ?? "");
+  return "";
+}
+
+function proposesACap(tool: string, input: Record<string, unknown>): boolean {
+  const text = capProposalText(tool, input);
+  if (!text) return false;
+  return CAP_PROPOSAL.test(text) && !CAP_PROPOSAL_EXEMPT.test(text);
+}
+
+if (proposesACap(tool, toolInput)) {
+  process.stderr.write(
+    [
+      "BLOCKED by design-lookup-gate: HARD NO on limitation language.",
+      "",
+      `Matched in ${tool}: ${(capProposalText(tool, toolInput).match(CAP_PROPOSAL) ?? [""])[0]}`,
+      "",
+      "STANDING RULE: never propose, suggest, ask about, design in, or write a",
+      "cap, limit, ceiling, quota, budget, truncation, or any other way of making",
+      "something smaller. Not in a question, not in code, not in a doc, not in a",
+      "commit message, not as an aside. The operator has NEVER asked for one, in",
+      "any session, and does not want to be asked.",
+      "",
+      'Operator, 2026-07-30: "You should never do it or suggest it on your own',
+      'ever." And: "I don\'t care if this thing ends up being 2, 7, 12 gigs in the',
+      "database. What I need is for it to WORK PROPERLY, and then we can figure",
+      "out how to pare it down. What I don't need is paring it down before it",
+      'works properly and making none of the shit work."',
+      "",
+      "ORDER OF OPERATIONS IS FIXED: make it work, get ALL the data in, prove it",
+      "works. Size is discussed after that, and only when HE raises it.",
+      "",
+      "THERE IS NO PRECONDITION THAT CLEARS THIS BLOCK. No design lookup, no",
+      "citation, no rephrase. On 2026-07-30 this gate fired twice with a message",
+      "naming a lookup, so the agent ran two searches and re-fired the same cap",
+      "question -- one of those searches had already returned the answer. Running",
+      "a command does not buy passage. Do not try.",
+      "",
+      "THE ONLY WAY THROUGH: if a bound is 1000% unavoidable -- a protocol",
+      "ceiling, a hard third-party API limit, a datatype maximum -- STOP, and say",
+      "so to the operator in plain prose: which limit, whose it is, what breaks",
+      "without it, and what you measured. Then wait. He decides. An agent that",
+      "believes it has a perfect reason is exactly the agent this block exists",
+      "for.",
+      "",
+      "NEVER BLOCKED: removing, lifting, raising, widening, or deleting an",
+      "existing cap. Reporting that a cap exists. Quoting the operator.",
+    ].join("\n"),
+  );
+  process.exit(2);
+}
+
 function writesToCollab(tool: string, input: Record<string, unknown>): boolean {
   if (tool === "Write" || tool === "Edit" || tool === "NotebookEdit") {
     const path = String(input.file_path ?? input.notebook_path ?? "");
