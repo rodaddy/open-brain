@@ -251,6 +251,97 @@ const cases: Array<{
     },
     blocked: false,
   },
+
+  // --- never cap remembered content (2026-07-30) -------------------------
+  // Three self-inflicted truncations in one day, all silent. The worst turned
+  // into a false claim to the operator about what the DATABASE stores.
+  {
+    name: "CAP: reintroducing resume.py's [:200] blocks",
+    lookups: [bash('aqmd search "resume"')],
+    mutation: {
+      tool: "Edit",
+      input: {
+        file_path:
+          "/Volumes/ThunderBolt/Development/_ob/skills/brain/scripts/resume.py",
+        new_string: 'body = (event.get("content") or "")[:200]',
+      },
+    },
+    blocked: true,
+  },
+  {
+    name: "CAP: a 500-char slice on a lane read blocks",
+    lookups: [bash('aqmd search "provider"')],
+    mutation: {
+      tool: "Edit",
+      input: {
+        file_path:
+          "/Volumes/ThunderBolt/Development/_ob/scripts/ob-memory-provider.ts",
+        new_string: "return value.trim().slice(0, 500);",
+      },
+    },
+    blocked: true,
+  },
+  {
+    name: "CAP: a Zod ceiling on turn content blocks",
+    lookups: [bash('aqmd search "ingest"')],
+    mutation: {
+      tool: "Edit",
+      input: {
+        file_path: "src/tools/ingest-raw-turn.ts",
+        new_string: "content: z.string().max(200000),",
+      },
+    },
+    blocked: true,
+  },
+  {
+    name: "CAP: naming a MAX_*_CHARS constant into existence blocks",
+    lookups: [bash('aqmd search "capture"')],
+    mutation: {
+      tool: "Edit",
+      input: {
+        file_path: "src/tools/turn-capture.ts",
+        new_string: "const MAX_CONTENT_CHARS = 200_000;",
+      },
+    },
+    blocked: true,
+  },
+  {
+    name: "CAP: REMOVING a cap is the fix, never blocked",
+    lookups: [bash('aqmd search "resume"')],
+    mutation: {
+      tool: "Edit",
+      input: {
+        file_path:
+          "/Volumes/ThunderBolt/Development/_ob/skills/brain/scripts/resume.py",
+        new_string: 'body = " ".join((event.get("content") or "").split())',
+      },
+    },
+    blocked: false,
+  },
+  {
+    name: "CAP: a uuid/hash prefix is an identifier, not content",
+    lookups: [bash('aqmd search "lane-load"')],
+    mutation: {
+      tool: "Edit",
+      input: {
+        file_path: "src/tools/lane-load.ts",
+        new_string: "const short = turn_uuid.slice(0, 12);",
+      },
+    },
+    blocked: false,
+  },
+  {
+    name: "CAP: a cap outside the memory surface is not this gate's business",
+    lookups: [bash('aqmd search "render-html-report"')],
+    mutation: {
+      tool: "Edit",
+      input: {
+        file_path: "scripts/render-html-report.ts",
+        new_string: "const label = title.slice(0, 80);",
+      },
+    },
+    blocked: false,
+  },
 ];
 
 let pass = 0;

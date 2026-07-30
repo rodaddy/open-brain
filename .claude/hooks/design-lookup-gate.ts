@@ -488,6 +488,102 @@ const COLLAB_PATH = /(\/Volumes\/collab|\/mnt\/collab)\b/;
 const COLLAB_ALLOWED =
   /(\/Volumes\/collab|\/mnt\/collab)\/(reviews|_archive)\b/;
 
+/**
+ * Adding a cap on remembered content: block, always, no lookup exempts it.
+ *
+ * This repo is a memory system. Recall means TOTAL recall, and how big the
+ * database gets is the operator's decision, never an agent's. Storage already
+ * solved size -- src/chunking.ts chunks ONLY so embeddings work, and the full
+ * text stays whole on the parent row -- so a cap added anywhere downstream is
+ * an agent re-litigating a settled design and losing data to do it.
+ *
+ * Measured on 2026-07-30, all self-inflicted, all silent:
+ *   - resume.py printed content at [:200]. A reading agent in another repo hit
+ *     that and told the operator Open Brain "stores messages truncated to ~200
+ *     chars". It does not: 7,437 rows exceed 205, the longest is 6,837. A cut
+ *     in a READER became a false claim about the DATABASE.
+ *   - boundedContextLine cut every line to 500 across seven read paths --
+ *     lane events, checkpoint, durable memory, profile_guidance, repo_facts.
+ *     Canon would have arrived pre-truncated before a canon row existed.
+ *   - ingest_raw_turn REJECTED turns over 200k, losing 100% instead of the
+ *     overflow, and failing the whole 100-turn batch with it.
+ *
+ * Operator, 2026-07-30: "It's my decision if I want this Open Brain database to
+ * be 17,000 gigs because all of the data is there... I'm not asking you to do
+ * any of this cutting and making things smaller. I've never asked you to do
+ * that. If I ever do ask you to do that, ask me if I turned crazy."
+ *
+ * Scope: content headed for or coming out of memory. Identifier bounds
+ * (uuid/token/hash/slug/prefix), display width, and timestamp slicing are not
+ * content loss and are not matched.
+ */
+const CONTENT_CAP = new RegExp(
+  [
+    // .slice(0, N) / .substring(0, N) / [:N] with N >= 20 -- below that it is a
+    // hash prefix or an id, not prose.
+    String.raw`\.slice\(\s*0\s*,\s*\d{2,}\s*\)`,
+    String.raw`\.substring\(\s*0\s*,\s*\d{2,}\s*\)`,
+    String.raw`\[\s*:\s*\d{2,}\s*\]`,
+    // Zod / validator ceilings on a content field.
+    String.raw`\.max\(\s*\d{3,}\s*\)`,
+    // Naming a cap into existence.
+    String.raw`\b(MAX|LIMIT)_[A-Z_]*(CHARS|CHARACTERS|LEN|LENGTH|BYTES|SIZE)\b`,
+    String.raw`\btruncate[A-Za-z]*\s*\(`,
+  ].join("|"),
+);
+
+/** Identifier/formatting bounds are legitimate: a uuid is not a memory. */
+const CAP_EXEMPT =
+  /uuid|token|hash|sha|slug|prefix|digest|\bid\b|width|indent|created_at|occurred_at|timestamp|ISOString|padEnd|padStart/i;
+
+/** Only files that carry memory content. A cap in a UI or a test is not this. */
+const MEMORY_SURFACE =
+  /(resume\.py|ob-memory-provider|agent-context-pack|session-context|ingest-raw-turn|raw-turns|turn-capture|lane|recall|chunking|capture|distill|guidance|repo-facts)/i;
+
+function addsContentCap(tool: string, input: Record<string, unknown>): boolean {
+  const target = String(
+    input.file_path ?? input.notebook_path ?? input.command ?? "",
+  );
+  if (!MEMORY_SURFACE.test(target)) return false;
+  // Only the text being written matters; an Edit that REMOVES a cap is the fix.
+  const added = String(input.new_string ?? input.content ?? "");
+  if (!added) return false;
+  return CONTENT_CAP.test(added) && !CAP_EXEMPT.test(added);
+}
+
+if (addsContentCap(tool, toolInput)) {
+  process.stderr.write(
+    [
+      "BLOCKED by design-lookup-gate: you are adding a cap on remembered content.",
+      "",
+      `Target: ${mutationSubject(tool, toolInput).slice(0, 120)}`,
+      "",
+      "STANDING RULE: never truncate, cap, cut, or shorten anything on an Open",
+      "Brain read or write path. Recall means TOTAL recall. Database size is the",
+      "operator's decision alone -- he has never asked for content to be made",
+      "smaller, and if you think you hear that request, ASK HIM IF HE HAS GONE",
+      "CRAZY before writing a single character.",
+      "",
+      "Storage already solved size. src/chunking.ts chunks ONLY so embeddings",
+      "work; the full text stays whole on the parent row. A cap downstream is",
+      "re-litigating a settled design and losing data to do it.",
+      "",
+      "This exact reflex, three times on 2026-07-30 alone:",
+      "  resume.py [:200]        -> an agent told the operator the DATABASE",
+      "                             truncates at 200 chars. It does not.",
+      "  boundedContextLine 500  -> silently cut seven read paths, canon included.",
+      "  ingest_raw_turn 200k    -> REJECTED the turn whole, and its 99 batch-mates.",
+      "",
+      "If a bound is genuinely required (a protocol ceiling, a real API limit),",
+      "ASK THE OPERATOR FIRST and say which limit and whose it is.",
+      "",
+      "Identifier bounds (uuid/token/hash/slug), display width, and timestamp",
+      "slicing are not content loss and are not blocked.",
+    ].join("\n"),
+  );
+  process.exit(2);
+}
+
 function writesToCollab(tool: string, input: Record<string, unknown>): boolean {
   if (tool === "Write" || tool === "Edit" || tool === "NotebookEdit") {
     const path = String(input.file_path ?? input.notebook_path ?? "");

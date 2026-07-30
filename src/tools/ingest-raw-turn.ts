@@ -26,7 +26,24 @@ import type { ToolDeps } from "./index.ts";
  */
 
 const MAX_BATCH = 100;
-const MAX_CONTENT_CHARS = 200_000;
+
+// NO CONTENT CEILING. `content` was `z.string().max(200_000)`, which REJECTED an
+// oversized turn outright -- losing 100% of it rather than the overflow, and
+// (because the client mirrors this check and fails the batch closed) taking up
+// to 99 good turns with it.
+//
+// Never fired in practice: measured 2026-07-30, 31,045 stored turns, largest
+// 51,283 chars, zero above 100k. But the ceiling was sized for TEXT. Change the
+// encoder to take images or video and 200k stops being a generous bound and
+// starts being a data-loss bug on ordinary input.
+//
+// Size is not this layer's decision. Postgres `text` has no practical limit,
+// and chunking (src/chunking.ts) already exists for embedding oversized content
+// while the full text stays whole on the parent row.
+//
+// Operator, 2026-07-30: "It's my decision if I want this Open Brain database to
+// be 17,000 gigs because all of the data is there... If I ever do ask you to
+// [make things smaller], ask me if I turned crazy."
 
 type IngestErrorClass = "retryable_outage" | "auth_denied" | "scope_validation";
 
@@ -89,7 +106,7 @@ const rawTurnSchema = z.object({
   turn_index: z.number().int().min(0),
   role: z.enum(["user", "assistant", "tool"]),
   is_human_prompt: z.boolean().optional(),
-  content: z.string().max(MAX_CONTENT_CHARS),
+  content: z.string(),
   runtime: z.string().trim().min(1).max(100).nullish(),
   token_estimate: z.number().int().min(0).nullish(),
   occurred_at: z.string().datetime({ offset: true }).nullish(),
