@@ -676,14 +676,65 @@ function capProposalText(tool: string, input: Record<string, unknown>): string {
     return String(input.content ?? input.new_source ?? "");
   }
   if (tool === "Edit") return String(input.new_string ?? "");
-  if (tool === "Bash") return String(input.command ?? "");
+  if (tool === "Bash") {
+    const cmd = String(input.command ?? "");
+    // A read cannot bound anything. Searching for the word is how you find the
+    // thing to delete, and blocking that made this gate an obstacle to its own
+    // purpose -- the first two commands after it shipped were an `rg` for these
+    // constants and an `rg` for a test name, and both were refused.
+    return BASH_READ_ONLY.test(cmd) ? "" : cmd;
+  }
   return "";
 }
 
+/** Read-only verbs. Judged on the leading verb; `rg ... | head` is still a read. */
+const BASH_READ_ONLY =
+  /^\s*(rg|fd|ls|cat|head|tail|wc|jq|sort|uniq|diff|stat|file|which|mdfind|aqmd|qmd|bat|tree|du|df|ps|env|printenv|echo|pwd|date|sqlite3|psql\s+-[tAcl]|git\s+(log|show|diff|status|blame|branch|remote|rev-parse|ls-files)|gh\s+(issue|pr)\s+(view|list|status)|gh\s+api|bun\s+(test|run\s+\S*(test|check)\S*))\b/;
+
+/**
+ * Counts how much ceiling-shaped text a string carries. Comparing the count
+ * before and after an edit is what separates the fix from the defect.
+ */
+function capWeight(text: string): number {
+  return (text.match(new RegExp(CAP_PROPOSAL.source, "gi")) ?? []).length;
+}
+
+/**
+ * Removal is ALWAYS allowed. Addition is NEVER allowed.
+ *
+ * Operator, 2026-07-30: "You should be allowed to undo fucking caps and stupid
+ * shit. You just shouldn't be allowed to do stupid caps and shit."
+ *
+ * The first cut of this block judged an Edit on `new_string` alone, so it could
+ * not tell deleting a ceiling from adding one -- and it promptly blocked the
+ * sweep that was tearing the ceilings out, because every such edit necessarily
+ * names the thing it deletes. An Edit carries `old_string` too, so the honest
+ * test is directional: if the replacement carries no more ceiling-shaped text
+ * than the text it replaces, the edit is removing or holding steady, and it
+ * passes. Only a net INCREASE is a proposal.
+ */
 function proposesACap(tool: string, input: Record<string, unknown>): boolean {
   const text = capProposalText(tool, input);
   if (!text) return false;
-  return CAP_PROPOSAL.test(text) && !CAP_PROPOSAL_EXEMPT.test(text);
+  if (CAP_PROPOSAL_EXEMPT.test(text)) return false;
+  if (!CAP_PROPOSAL.test(text)) return false;
+  if (tool === "Edit") {
+    // Net-new ceiling text only. Deleting or rewording an existing one passes.
+    return capWeight(text) > capWeight(String(input.old_string ?? ""));
+  }
+  if (tool === "Write") {
+    // A Write replaces the whole file, so the prior weight is whatever is on
+    // disk today -- zero for a new file, which makes any ceiling in it net-new.
+    let prior = "";
+    try {
+      const path = String(input.file_path ?? "");
+      if (path) prior = readFileSync(path, "utf8");
+    } catch {
+      prior = "";
+    }
+    return capWeight(text) > capWeight(prior);
+  }
+  return true;
 }
 
 if (proposesACap(tool, toolInput)) {
