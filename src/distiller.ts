@@ -212,28 +212,24 @@ const NARRATION_RE =
   /^(?:let me|i'?ll|i am going to|i'?m going to|now |next,? |checking|running|testing|looking|reading|trying|writing|building|starting|verifying)\b/i;
 
 /**
- * Upper bound on a candidate's stored content.
+ * How much one rendered part holds before ANOTHER PART BEGINS.
  *
- * Two independent reasons, both hard: src/embedding.ts:265 refuses any input
- * over 32,000 characters WITHOUT calling the provider (so an over-long
- * candidate would silently never get an embedding), and a candidate is meant to
- * be a claim a human can read on a review page, not a transcript. 4,000 is
- * comfortably inside the embedding limit and still holds the longest real
- * operator turn in the corpus.
+ * renderExchangeParts (distill-exchange.ts) packs whole turns up to this size
+ * and then starts the next part, so a large exchange becomes several linked
+ * parts and keeps every turn. Per the operator: "It's there so if something's
+ * too big it can split it up over multiple entries properly. That's the whole
+ * reason why I set it up that way."
+ *
+ * Renamed on 2026-07-30, when the helper beside it that shortened a
+ * candidate's stored text and appended a marker was deleted. That helper
+ * justified itself by saying src/embedding.ts refused input over 32,000
+ * characters; measurement that day showed the configured embedder accepts far
+ * more, and long text is now embedded in overlapping segments instead. On the
+ * live clone, 740 of 5,434 stored candidates carried that helper's marker.
+ *
+ * Rendering decides how a review page is laid out. Storage keeps what was said.
  */
-export const MAX_CANDIDATE_CHARS = 4000;
-
-/** Truncate on a word boundary where possible, and say so in the text. */
-function boundContent(text: string): string {
-  if (text.length <= MAX_CANDIDATE_CHARS) return text;
-  const cut = text.slice(0, MAX_CANDIDATE_CHARS);
-  const lastSpace = cut.lastIndexOf(" ");
-  const body =
-    lastSpace > MAX_CANDIDATE_CHARS * 0.8 ? cut.slice(0, lastSpace) : cut;
-  // The marker is part of the stored content deliberately: a reviewer must be
-  // able to tell a complete claim from a clipped one without checking lengths.
-  return `${body.trimEnd()} […truncated]`;
-}
+export const CANDIDATE_PART_CHARS = 4000;
 
 /** Collapse the whitespace a transcript carries so a review page reads cleanly. */
 function normalizeWhitespace(text: string): string {
@@ -302,7 +298,7 @@ export const ruleBasedDistiller: NamedDistillModel = {
       candidates: [
         {
           candidate_type: classified.type,
-          content: boundContent(classified.content),
+          content: classified.content,
           source_turn_ids: [turn.id],
           uncertain: classified.uncertain,
           ...(classified.reason
@@ -457,7 +453,6 @@ export async function runDistillUnit(
     const content = normalizeWhitespace(candidate.content ?? "");
     if (content.length === 0) continue;
 
-    const bounded = boundContent(content);
     const type: CandidateType = (CANDIDATE_TYPES as readonly string[]).includes(
       candidate.candidate_type,
     )
@@ -469,11 +464,11 @@ export async function runDistillUnit(
     out.push({
       namespace: unit.current.namespace,
       candidate_type: type,
-      content: bounded,
+      content,
       // contentHash is the SAME function ingest applies to turns
       // (src/tools/ingest-raw-turn.ts:125) and the one content_occurrences
       // keys on, so a candidate hash and a turn hash are directly comparable.
-      content_hash: contentHash(bounded),
+      content_hash: contentHash(content),
       // Forced, not trusted -- see the provenance guard note above.
       source_turn_ids: [unit.current.id],
       uncertain: Boolean(candidate.uncertain),

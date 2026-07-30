@@ -22,7 +22,7 @@
 import { describe, expect, it } from "bun:test";
 import {
   CANDIDATE_TYPES,
-  MAX_CANDIDATE_CHARS,
+  CANDIDATE_PART_CHARS,
   RULE_BASED_DISTILLER_NAME,
   ruleBasedDistiller,
   runDistillUnit,
@@ -96,25 +96,26 @@ describe("nothing is suppressed — every turn shape yields a candidate", () => 
     });
   }
 
-  it("emits a 10,000-character turn, bounded but never dropped", async () => {
+  it("stores a 10,000-character turn WHOLE", async () => {
+    // This test previously asserted the opposite: that the candidate was cut to
+    // ~4,000 and carried a "truncated" marker. The stated reason was that
+    // src/embedding.ts refused input over 32,000 characters. It no longer does
+    // -- long text is embedded in overlapping segments -- so there is nothing
+    // left for the cut to protect, and the operator's words are kept.
     const long = "x".repeat(10_000);
     const [candidate] = await extract(long);
     expect(candidate).toBeDefined();
-    // Bounded so it stays under src/embedding.ts:265's 32,000-char refusal --
-    // an over-long candidate would silently never get an embedding.
-    expect(candidate!.content.length).toBeLessThanOrEqual(
-      MAX_CANDIDATE_CHARS + 32,
-    );
-    // And the clipping is VISIBLE, so a reviewer can tell a complete claim from
-    // a truncated one without checking lengths.
-    expect(candidate!.content).toContain("truncated");
+    expect(candidate!.content).toHaveLength(10_000);
+    expect(candidate!.content).not.toContain("truncated");
   });
 
-  it("does not truncate anything that fits", async () => {
-    const fits = "a".repeat(MAX_CANDIDATE_CHARS - 10);
-    const [candidate] = await extract(fits);
+  it("stores a turn far larger than one rendered part WHOLE", async () => {
+    // 51,283 is the longest turn actually captured in the live dogfood clone
+    // (open_brain_local_20260724, ob_raw_turns, measured 2026-07-30).
+    const huge = "z".repeat(51_283);
+    const [candidate] = await extract(huge);
+    expect(candidate!.content).toHaveLength(51_283);
     expect(candidate!.content).not.toContain("truncated");
-    expect(candidate!.content).toHaveLength(MAX_CANDIDATE_CHARS - 10);
   });
 });
 

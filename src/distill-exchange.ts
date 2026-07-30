@@ -56,7 +56,7 @@ import { isHarnessNoise } from "./tools/ingest-raw-turn.ts";
 import type { DistillTurn } from "./distill-window.ts";
 import {
   CANDIDATE_TYPES,
-  MAX_CANDIDATE_CHARS,
+  CANDIDATE_PART_CHARS,
   type CandidateType,
 } from "./distiller.ts";
 
@@ -419,31 +419,60 @@ function normalizeWhitespace(text: string): string {
 }
 
 /**
- * How much of the rendered exchange the BODY may occupy.
+ * Head size assumed when working out how much body fits alongside it.
  *
- * MAX_CANDIDATE_CHARS (4,000, distiller.ts:214-224) is a hard ceiling for two
- * independent reasons: src/embedding.ts refuses input over 32,000 characters
- * without calling the provider, and a candidate is meant to be a claim a human
- * reads, not a transcript. Exchanges are far larger than fragments -- mean 13.4
- * turns, max 208, measured 2026-07-28 -- so truncation is the NORMAL case here
- * rather than the exception, and WHAT gets truncated is the load-bearing choice.
+ * The head -- the operator's own words -- is REPEATED ON EVERY PART, so its
+ * length has to be accounted for when packing turns into parts. This is that
+ * accounting figure, and nothing more: a head longer than this is still
+ * rendered in full, it simply leaves less room beside it, which pushes the
+ * remaining turns into the next part rather than removing them.
  *
- * The operator's words are never what gets cut. This budget is what is left for
- * the body after the head and the labels are laid down; if the head alone
- * exceeds the ceiling the body is dropped entirely rather than the head clipped.
+ * Until 2026-07-30 this value also CUT the head, appending a marker to any
+ * operator turn past it -- measured that day, one real turn of 15,430
+ * characters was stored as 1,200. Nothing that the operator said is shortened
+ * here any more; his words are the thing being graded.
  */
-const HEAD_RESERVE = 1200;
+const HEAD_PACKING_ESTIMATE = 1200;
 
 /**
- * Longest single body turn rendered before it is clipped.
+ * Turns are rendered WHOLE.
  *
- * Without a per-turn bound, one 200KB tool result (the ingest cap is 200,000
- * chars) consumes the entire body budget and the other 200 turns of a large
- * exchange render as nothing. Clipping per turn keeps the SHAPE of what the
- * agent did visible -- which is what the operator grades -- rather than one
- * turn's full text.
+ * Until 2026-07-30 a single turn longer than 600 characters was shortened here
+ * and given a marker, on the reasoning that one huge tool result would
+ * otherwise fill a part and crowd out the rest of the exchange. Measured on the
+ * live clone that day: 3,789 of 5,434 stored candidates -- 70% -- carried that
+ * marker, so the normal case was a damaged turn rather than a rescued one.
+ *
+ * Crowding is not solved by shortening, it is solved by SPLITTING, which
+ * renderExchangeParts below already does: a turn that fills a part simply gets
+ * its own part and the next turn starts the following one. Nothing is lost and
+ * the sequence still reads in order.
  */
-const MAX_BODY_TURN_CHARS = 600;
+
+/**
+ * A short SIGNPOST for parts 2..N of one exchange.
+ *
+ * NOT STORAGE, and not a shortened copy of anything. Part 1 of the same
+ * exchange carries the operator's words in full, every part links to the same
+ * anchor_turn_id, and operator_text on the row holds them as well. This exists
+ * so a reader landing on part 4 can see whose exchange it belongs to.
+ *
+ * Uses the opening SENTENCE where the head has one, or the opening LINE
+ * otherwise. When it has neither -- one unbroken run of characters, which is
+ * what a pasted blob looks like -- there is no natural signpost inside it, so
+ * the label names the exchange instead of quoting an arbitrary piece of it.
+ */
+function continuationSignpost(line: string): string {
+  const sentence = /^.*?[.!?](?:\s|$)/.exec(line);
+  if (sentence && sentence[0].length <= HEAD_PACKING_ESTIMATE) {
+    return sentence[0].replace(/\s+$/, "");
+  }
+  const firstLine = line.split("\n", 1)[0]!;
+  if (firstLine.length <= HEAD_PACKING_ESTIMATE) {
+    return firstLine.replace(/\s+$/, "");
+  }
+  return "(operator's words in full on part 1)";
+}
 
 /** Label a body turn by what it is, so the operator can skim the shape of the reply. */
 function bodyLabel(turn: DistillTurn): string {
@@ -489,49 +518,28 @@ export function renderExchange(exchange: Exchange): string {
     );
   }
 
-  // Budget the body against what the head actually took, not against a guess.
-  const headCost = lines[0]!.length + 2;
-  const bodyBudget = Math.max(0, MAX_CANDIDATE_CHARS - Math.max(headCost, 0));
-
+  // Every turn, whole, in order. This render used to drop turns that did not
+  // fit a body budget and record them in a trailing "[N further turn(s)
+  // omitted for length]" note -- honest about the loss, but the turns were
+  // still gone. Measured on the live clone 2026-07-28: 154 of 963 exchanges
+  // carried that note, between them dropping 1,579 turns.
+  //
+  // Nothing is dropped here now. An exchange too large to read comfortably in
+  // one row is what renderExchangeParts is for -- it splits across linked
+  // parts instead, which is the operator's design and the path production
+  // uses (line 849).
   const rendered: string[] = [];
-  let used = 0;
-  let omitted = 0;
-
   for (const turn of exchange.body) {
     const text = normalizeWhitespace(turn.content);
-    if (text.length === 0) {
-      omitted++;
-      continue;
-    }
-    const clipped =
-      text.length > MAX_BODY_TURN_CHARS
-        ? `${text.slice(0, MAX_BODY_TURN_CHARS).trimEnd()} […]`
-        : text;
-    const line = `${bodyLabel(turn)}: ${clipped}`;
-    if (used + line.length + 1 > bodyBudget) {
-      omitted++;
-      continue;
-    }
-    rendered.push(line);
-    used += line.length + 1;
+    if (text.length === 0) continue;
+    rendered.push(`${bodyLabel(turn)}: ${text}`);
   }
 
   if (rendered.length > 0) {
     lines.push("", ...rendered);
   }
-  if (omitted > 0) {
-    // Counted, not silent. A reviewer must be able to tell a complete exchange
-    // from one whose tail did not fit, without going back to ob_raw_turns.
-    lines.push("", `[${omitted} further turn(s) omitted for length]`);
-  }
 
-  const out = lines.join("\n");
-  // Final backstop. The head reserve makes this unreachable for any realistic
-  // head, but a single pathological operator turn (the ingest cap is 200,000
-  // chars) must still not violate the embedding limit. Even here the cut lands
-  // at the END of the string, so the operator's opening words survive.
-  if (out.length <= MAX_CANDIDATE_CHARS) return out;
-  return `${out.slice(0, MAX_CANDIDATE_CHARS - 16).trimEnd()} […truncated]`;
+  return lines.join("\n");
 }
 
 /**
@@ -541,21 +549,17 @@ export function renderExchange(exchange: Exchange): string {
  * exchanges carried "[N further turn(s) omitted for length]", dropping 1,579
  * turns between them. The count was honest and the turns were still gone.
  *
- * WHY NOT JUST RAISE MAX_CANDIDATE_CHARS. Tried first, rejected by the operator:
- * "It's there so if something's too big it can split it up over multiple entries
- * properly. That's the whole reason why I set it up that way." A bigger cap
- * moves the cliff. Worse, src/embedding.ts:265 returns null WITHOUT calling the
- * provider above 32,000 chars, so a cap high enough to stop truncating is a cap
- * high enough to start writing candidates with no embedding -- invisible to
- * dedupe and to semantic search, which is a quieter failure than truncation.
+ * WHY SPLIT RATHER THAN STORE ONE ENORMOUS ROW. The operator's design: "It's
+ * there so if something's too big it can split it up over multiple entries
+ * properly. That's the whole reason why I set it up that way."
  *
  * WHY NOT chunkText(). src/chunking.ts splits on sentence boundaries with
  * overlap, which is right for prose and wrong here: it would cut mid-turn,
  * duplicate text across parts, and produce a part whose first line is half of
  * somebody's sentence with no speaker label. The unit that must stay intact is
  * the TURN -- that is what bodyLabel names and what the operator skims. So this
- * packs whole turns into parts, and only a single over-long turn is clipped, by
- * the same MAX_BODY_TURN_CHARS rule the one-part render already applies.
+ * packs WHOLE turns into parts; a turn larger than one part simply gets a part
+ * to itself, and is never shortened to make it fit.
  *
  * EVERY PART REPEATS THE HEAD. Deliberate, and the reason is 041's whole thesis:
  * the operator's words are what anchors the interaction, and a part that opens
@@ -572,23 +576,28 @@ export function renderExchangeParts(exchange: Exchange): string[] {
       ? `OPERATOR: ${head}`
       : "OPERATOR: (no operator turn -- agent activity before the first prompt of this session)";
 
-  // THE HEAD IS REPEATED ON EVERY PART, SO IT MUST BE BOUNDED.
+  // THE HEAD IS NEVER SHORTENED. It is the operator's own words, and it is what
+  // the exchange is being graded on.
   //
-  // Measured 2026-07-28 on the live corpus: one exchange has a 15,430-char
-  // operator turn (the ingest cap is 200,000). Repeating it verbatim made every
-  // part ~15,600 chars -- nearly 4x MAX_CANDIDATE_CHARS -- and left no budget at
-  // all, so the packing loop fell to its one-line floor and emitted 350 parts
-  // for 350 turns. That is the truncation defect inverted: nothing is lost, and
-  // the output is unusable.
+  // It is repeated on every part, though, which is what the previous code was
+  // reacting to. Measured 2026-07-28: one exchange has a 15,430-char operator
+  // turn, and repeating it verbatim made every part ~15,600 chars and left no
+  // room beside it, so the packing loop fell to its one-line floor and emitted
+  // 350 parts for 350 turns. Real problem -- the answer was to cut his words,
+  // which is the wrong half to give up.
   //
-  // HEAD_RESERVE is the same bound the single-part render budgets against, and
-  // the cut lands at the END so the operator's opening words -- the thing being
-  // graded -- always survive. The full head is still in ob_raw_turns via
-  // anchor_turn_id, and in operator_text on the row.
-  const headLine =
-    rawHeadLine.length > HEAD_RESERVE
-      ? `${rawHeadLine.slice(0, HEAD_RESERVE - 16).trimEnd()} […truncated]`
-      : rawHeadLine;
+  // Instead: PART 1 CARRIES THE HEAD IN FULL, and later parts carry a
+  // continuation line naming the exchange. Every part still opens with operator
+  // context rather than mid-conversation agent output (the "judge a fragment of
+  // your own conversation" failure this module exists to fix), no part is
+  // mostly a repeated header, and no character of what he said is discarded.
+  const headLine = rawHeadLine;
+  const headIsLong = rawHeadLine.length > HEAD_PACKING_ESTIMATE;
+  // Later parts get a short reference back to the head instead of a second copy
+  // of a very long one. For an ordinary head, repeating it is still clearest.
+  const continuationHead = headIsLong
+    ? `OPERATOR (continued): ${continuationSignpost(rawHeadLine)}`
+    : rawHeadLine;
 
   // Rendered body lines, whole turns, in order. Empty turns are dropped here
   // rather than counted: an empty turn has nothing to show in any part.
@@ -596,34 +605,28 @@ export function renderExchangeParts(exchange: Exchange): string[] {
   for (const turn of exchange.body) {
     const text = normalizeWhitespace(turn.content);
     if (text.length === 0) continue;
-    const clipped =
-      text.length > MAX_BODY_TURN_CHARS
-        ? `${text.slice(0, MAX_BODY_TURN_CHARS).trimEnd()} […]`
-        : text;
-    bodyLines.push(`${bodyLabel(turn)}: ${clipped}`);
+    bodyLines.push(`${bodyLabel(turn)}: ${text}`);
   }
 
   if (bodyLines.length === 0) return [headLine];
 
-  // Budget per part, computed against the head this exchange actually has. The
-  // continuation marker is reserved for too, so appending it can never push a
-  // part back over the ceiling -- the bug that would reintroduce truncation at
-  // the boundary.
+  // How much body sits in one part, measured against the head that parts 2..N
+  // actually carry -- the continuation line, which is why a very long head no
+  // longer squeezes every part down to a single turn.
   const MARKER_RESERVE = 64;
   const budget = Math.max(
-    // Floor of one line per part: a head so long that nothing fits would
-    // otherwise loop forever emitting empty parts.
+    // Floor of one line per part, so the loop cannot spin emitting empty parts.
     1,
-    MAX_CANDIDATE_CHARS - headLine.length - 2 - MARKER_RESERVE,
+    CANDIDATE_PART_CHARS - continuationHead.length - 2 - MARKER_RESERVE,
   );
 
   const parts: string[] = [];
   let current: string[] = [];
   let used = 0;
   for (const line of bodyLines) {
-    // A single line longer than the whole budget still gets its own part rather
-    // than being dropped. MAX_BODY_TURN_CHARS (600) makes this unreachable in
-    // practice; it is here so the loop cannot silently discard a line.
+    // A turn longer than a whole part gets its OWN part rather than being cut.
+    // Now that turns are rendered whole this is a normal case, not a
+    // theoretical one, and it is exactly how a large tool result is kept.
     if (used > 0 && used + line.length + 1 > budget) {
       parts.push(current.join("\n"));
       current = [];
@@ -642,7 +645,9 @@ export function renderExchangeParts(exchange: Exchange): string[] {
     // that there is more and how much. 041 kept the omitted-count visible for
     // the same reason: a reviewer must never mistake a piece for the whole.
     const marker = `[part ${index + 1} of ${parts.length}]`;
-    return `${headLine}\n\n${marker}\n${body}`;
+    // Part 1 carries the operator's words in full; later parts carry the
+    // continuation line, which is identical to the head unless it is very long.
+    return `${index === 0 ? headLine : continuationHead}\n\n${marker}\n${body}`;
   });
 }
 

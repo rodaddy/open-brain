@@ -33,7 +33,7 @@ import {
   type PreparedExchangeCandidate,
   type Exchange,
 } from "./distill-exchange.ts";
-import { MAX_CANDIDATE_CHARS } from "./distiller.ts";
+import { CANDIDATE_PART_CHARS } from "./distiller.ts";
 import type { DistillTurn } from "./distill-window.ts";
 
 let idCounter = 0;
@@ -211,10 +211,10 @@ describe("renderExchange", () => {
     expect(content).toContain("agent: 2695 pass, 0 fail");
   });
 
-  it("truncates the BODY and never the operator's head", () => {
-    // The load-bearing property. Exchanges run to 208 turns on the live corpus,
-    // so truncation is the normal case -- and cutting the head would recreate
-    // exactly the "grade a fragment of your own conversation" defect.
+  it("keeps the operator's head AND every body turn", () => {
+    // This test used to assert the tail was dropped and the loss noted. The
+    // note was honest and the turns were still gone -- 1,579 of them across
+    // 154 exchanges on the live clone. Both halves are kept now.
     const head = `decide this: ${"x".repeat(800)}`;
     const content = renderExchange(
       ex({
@@ -226,10 +226,12 @@ describe("renderExchange", () => {
       }),
     );
 
-    expect(content.length).toBeLessThanOrEqual(MAX_CANDIDATE_CHARS);
     expect(content.startsWith(`OPERATOR: ${head}`)).toBe(true);
-    // And it says so, rather than silently losing the tail.
-    expect(content).toContain("further turn(s) omitted for length");
+    expect(content).not.toContain("further turn(s) omitted for length");
+    // Every one of the 60 body turns is present, in full.
+    for (let i = 0; i < 60; i++) {
+      expect(content).toContain(`reply ${i} ${"y".repeat(500)}`);
+    }
   });
 
   it("SPLITS an over-length exchange instead of dropping its tail", () => {
@@ -250,7 +252,9 @@ describe("renderExchange", () => {
     // NOTHING IS OMITTED. Not "fewer omissions" -- none.
     for (const part of parts) {
       expect(part).not.toContain("omitted for length");
-      expect(part.length).toBeLessThanOrEqual(MAX_CANDIDATE_CHARS);
+      // Turns here are small enough to pack normally; a turn larger than a
+      // whole part would get its own part rather than being shortened.
+      expect(part.length).toBeLessThanOrEqual(CANDIDATE_PART_CHARS);
       // Every part leads with the operator, so no part reads as agent text the
       // operator is being asked to own.
       expect(part.startsWith("OPERATOR: decide this")).toBe(true);
@@ -300,12 +304,16 @@ describe("renderExchange", () => {
       }),
     );
 
+    // PART 1 CARRIES HIS WORDS IN FULL -- all 20,000 characters of them.
+    expect(parts[0]!).toContain("z".repeat(20_000));
     for (const part of parts) {
-      expect(part.length).toBeLessThanOrEqual(MAX_CANDIDATE_CHARS);
-      // The operator's OPENING words survive: the cut lands at the end.
-      expect(part.startsWith("OPERATOR: START-MARKER")).toBe(true);
+      // Every part still opens with operator context, so no part reads as
+      // agent text the operator is being asked to own.
+      expect(part.startsWith("OPERATOR")).toBe(true);
     }
-    // And the body still packs many turns per part rather than one each.
+    // Later parts carry a continuation line rather than a second copy of a
+    // 20,000-char head, which is what starved the packing loop into one turn
+    // per part and produced 350 parts for 350 turns.
     expect(parts.length).toBeLessThan(30);
   });
 
@@ -325,10 +333,10 @@ describe("renderExchange", () => {
     });
   });
 
-  it("keeps the operator's opening words even when the head alone is enormous", () => {
-    // The ingest cap is 200,000 chars, so a single pathological operator turn
-    // must still not violate the embedding limit -- and the cut must land at the
-    // END, not the start.
+  it("keeps ALL of the operator's words when the head alone is enormous", () => {
+    // This asserted the head was cut at ~1,200 characters. A real 15,430-char
+    // operator turn on the live corpus was being stored as 1,200. His words are
+    // the thing being graded; they are kept.
     const content = renderExchange(
       ex({
         anchor: operator(`START-MARKER ${"z".repeat(50_000)}`),
@@ -336,8 +344,9 @@ describe("renderExchange", () => {
         session_ref: "s1",
       }),
     );
-    expect(content.length).toBeLessThanOrEqual(MAX_CANDIDATE_CHARS);
     expect(content.startsWith("OPERATOR: START-MARKER")).toBe(true);
+    expect(content).toContain("z".repeat(50_000));
+    expect(content).not.toContain("truncated");
   });
 
   it("says plainly when there is no operator turn instead of promoting agent text", () => {
