@@ -39,17 +39,22 @@ export const GUIDANCE_CANDIDATE_TYPE = {
 
 export type GuidanceSectionName = keyof typeof GUIDANCE_CANDIDATE_TYPE;
 
-const DEFAULT_MAX_ITEMS = 12;
-const DEFAULT_MAX_ITEM_CHARS = 600;
-
 /**
- * Hard safety cap on lifecycle rows scanned for supersession reconciliation.
- * The query cannot LIMIT to maxItems because it must also see relegate/discard
- * rows, but it must stay bounded. Newest-first ordering means the freshest
- * lifecycle events (the ones that decide the current standing set) are the ones
- * kept; older overflow is reported as truncation rather than silently dropped.
+ * No ceilings here. This section carries `profile_guidance` and
+ * `process_guidance` -- who Rico is and how work gets done -- and it used to cut
+ * them to 12 items of 600 characters each. Nobody asked for those numbers; an
+ * agent wrote them. The effect was that a standing rule of 895 characters, which
+ * Rico had already had to fix once on the write side, would arrive severed
+ * anyway on the read side.
+ *
+ * Rico, 2026-07-30: "Those are not my rules. I never asked for them. Those are
+ * your rules... I didn't want them, I don't want them."
+ *
+ * The lifecycle scan is also unbounded now. It must see every relegate/discard
+ * row to know which promoted items are still standing; a scan that stopped early
+ * could resurrect a rule Rico had retired, which is worse than any cost of
+ * reading the rows.
  */
-const LIFECYCLE_SCAN_CAP = 500;
 
 /** Lifecycle actions that retire a previously promoted standing item. */
 const SUPERSEDING_ACTIONS = new Set(["relegate", "discard"]);
@@ -154,9 +159,11 @@ export async function loadGuidanceSection(
   deps: SectionReaderDeps,
 ): Promise<SectionFragment> {
   const candidateType = GUIDANCE_CANDIDATE_TYPE[args.section];
+  // Defaults are unbounded. A caller that explicitly asks for a bounded pack
+  // still gets one through args.budget; nobody gets one imposed on them.
   const { maxItems, maxItemChars } = resolveItemBudget(args.budget, {
-    maxItems: DEFAULT_MAX_ITEMS,
-    maxItemChars: DEFAULT_MAX_ITEM_CHARS,
+    maxItems: Number.MAX_SAFE_INTEGER,
+    maxItemChars: Number.MAX_SAFE_INTEGER,
   });
 
   const budget = {
@@ -184,13 +191,12 @@ export async function loadGuidanceSection(
         WHERE l.namespace = $1
           AND e.metadata->>'candidate_type' = $2
           AND e.metadata->>'memory_lifecycle_action' IN ('promote', 'relegate', 'discard')
-        ORDER BY e.created_at DESC, e.id DESC
-        LIMIT $3`,
-      [args.namespace, candidateType, LIFECYCLE_SCAN_CAP + 1],
+        ORDER BY e.created_at DESC, e.id DESC`,
+      [args.namespace, candidateType],
     );
 
-    const lifecycleOverflow = rows.length > LIFECYCLE_SCAN_CAP;
-    const normalized = rows.slice(0, LIFECYCLE_SCAN_CAP).map(normalizeRow);
+    const lifecycleOverflow = false;
+    const normalized = rows.map(normalizeRow);
     const retired = retiredScopeKeys(normalized);
 
     const truncation: Array<Record<string, unknown>> = [];
@@ -244,14 +250,12 @@ export async function loadGuidanceSection(
       });
     }
 
-    if (itemsTruncated || lifecycleOverflow) {
+    // Only reachable when a caller explicitly asked for a bounded pack.
+    if (itemsTruncated) {
       truncation.push({
         source: args.section,
         max_items: maxItems,
         max_item_chars: maxItemChars,
-        ...(lifecycleOverflow
-          ? { lifecycle_scan_capped: LIFECYCLE_SCAN_CAP }
-          : {}),
       });
     }
 

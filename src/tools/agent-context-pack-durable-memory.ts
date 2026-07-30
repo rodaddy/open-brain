@@ -5,6 +5,7 @@ import { canRead } from "../permissions.ts";
 import { namespaceFilterFor } from "../read-policy.ts";
 import { ALL_TABLES } from "./table-constants.ts";
 import { executeSearch, type SearchRow } from "./search-brain.ts";
+import { logger } from "../logger.ts";
 import {
   CONTEXT_PACK_ENVELOPE_CHAR_RESERVE,
   boundedText,
@@ -14,9 +15,13 @@ import {
   type PriorContextReference,
 } from "../prior-context-suppression.ts";
 
-const DURABLE_MEMORY_MAX_CONTENT_CHARS = 8_000;
-const DURABLE_MEMORY_MAX_ITEMS = 8;
-const DURABLE_MEMORY_MAX_ITEM_CHARS = 1_000;
+// Unbounded by default. These were 8,000 content chars / 8 items / 1,000 chars
+// per item -- numbers an agent wrote, never asked for. A caller that explicitly
+// passes budget.max_tokens still gets a bounded pack; absent that, recall means
+// total recall.
+const DURABLE_MEMORY_MAX_CONTENT_CHARS = Number.MAX_SAFE_INTEGER;
+const DURABLE_MEMORY_MAX_ITEMS = Number.MAX_SAFE_INTEGER;
+const DURABLE_MEMORY_MAX_ITEM_CHARS = Number.MAX_SAFE_INTEGER;
 
 /**
  * Extra recall rows fetched beyond {@link DURABLE_MEMORY_MAX_ITEMS} so the
@@ -256,23 +261,74 @@ export async function loadDurableMemoryContext(
       deps,
       accessibleTables,
       query,
-      // Over-fetch a bounded pool so the pointers section (#329) can draw from
-      // net-new rows this SAME recall already authorized, without a second
-      // retrieval stack. durable_memory still emits only its own top
-      // DURABLE_MEMORY_MAX_ITEMS; the surplus feeds pointers as references only.
-      DURABLE_MEMORY_MAX_ITEMS + DURABLE_MEMORY_POINTER_OVERFETCH,
+      // Everything the query matches. The pointers section (#329) draws its
+      // net-new references from this SAME already-authorized pool, so no second
+      // retrieval stack is needed and no over-fetch arithmetic is required.
+      // Guard the addition: MAX_SAFE_INTEGER + 20 is no longer an exact integer
+      // and Postgres rejects it, so an unbounded ask is passed through as-is.
+      Number.isSafeInteger(
+        DURABLE_MEMORY_MAX_ITEMS + DURABLE_MEMORY_POINTER_OVERFETCH,
+      )
+        ? DURABLE_MEMORY_MAX_ITEMS + DURABLE_MEMORY_POINTER_OVERFETCH
+        : DURABLE_MEMORY_MAX_ITEMS,
       "hybrid",
       undefined,
       0,
       namespaceFilter,
       false,
     );
-  } catch {
+  } catch (error) {
     // Recall was explicitly requested for this section but the search failed.
     // Return a truthful empty durable_memory envelope (not an omitted section) so
     // the caller can tell "requested, recall failed" apart from "not requested".
     // The degraded_sources warning stays content-free — no dependency/error
     // detail is leaked into the envelope or the warning.
+    //
+    // But the reason is NOT thrown away. This catch used to swallow the error
+    // entirely, so a failed recall was indistinguishable from an empty one and
+    // the only evidence left was `empty_reason: "recall_failed"` with nothing
+    // to act on. Fail loudly in the log, stay content-free in the envelope.
+    //
+    // Two lines on purpose. ERROR says what broke, briefly, so it is visible at
+    // the default level. DEBUG carries the whole autopsy -- every input that
+    // shaped this call, the full stack, the driver's own error fields -- because
+    // when this is being read months from now the alternative is reconstructing
+    // it from nothing. Sifting a large log is future-Rico's problem; having no
+    // log at all is future-Rico's disaster.
+    const err = error instanceof Error ? error : undefined;
+    logger.error("durable_memory recall failed", {
+      client_id: auth.clientId,
+      error: err?.message ?? String(error),
+    });
+    logger.debug("durable_memory recall failure detail", {
+      client_id: auth.clientId,
+      agent_id: auth.agentId ?? null,
+      role: auth.role,
+      agent: args.agent,
+      platform: args.platform,
+      session_key: args.session_key,
+      repo: args.repo ?? null,
+      query,
+      query_chars: query.length,
+      accessible_tables: accessibleTables,
+      accessible_table_count: accessibleTables.length,
+      namespace_filter: namespaceFilter,
+      requested_max_tokens: args.budget?.max_tokens ?? null,
+      max_items: DURABLE_MEMORY_MAX_ITEMS,
+      max_item_chars: DURABLE_MEMORY_MAX_ITEM_CHARS,
+      pointer_overfetch: DURABLE_MEMORY_POINTER_OVERFETCH,
+      error_name: err?.name ?? typeof error,
+      error_message: err?.message ?? String(error),
+      // pg surfaces code/detail/hint/constraint on its own error objects; they
+      // are the difference between "it failed" and knowing which query and why.
+      pg_code: (error as { code?: unknown })?.code ?? null,
+      pg_detail: (error as { detail?: unknown })?.detail ?? null,
+      pg_hint: (error as { hint?: unknown })?.hint ?? null,
+      pg_constraint: (error as { constraint?: unknown })?.constraint ?? null,
+      pg_routine: (error as { routine?: unknown })?.routine ?? null,
+      stack: err?.stack ?? null,
+      cause: err?.cause ? String(err.cause) : null,
+    });
     return {
       section: {
         label: "durable_memory",

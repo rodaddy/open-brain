@@ -93,24 +93,38 @@ describe("agent_context_pack durable lane context", () => {
       expect(pack.isError).toBeFalsy();
       const payload = JSON.parse((pack.content as any)[0].text);
       const durable = payload.sections.durable_lane_context;
-      // The whole-pack budget bounds the *serialized* section, so under a 10800
-      // whole-pack budget the loader's 5-event content selection is re-fit down
-      // to the newest events whose serialized wrappers also fit. Newest events
-      // are preserved; the oldest are dropped.
+      // THIS caller asked for a bound (budget.max_tokens: 3000), so it gets one
+      // -- that path is unchanged. What changed on 2026-07-30 is what the bound
+      // spends its room on. Previously a fixed 6,000-char checkpoint ceiling and
+      // a 1,000-char-per-event ceiling meant three events arrived, each severed
+      // mid-content. Now the checkpoint takes at most half the allocation and
+      // the events that fit arrive WHOLE: fewer events, none of them mutilated.
+      // An event the caller can read beats three it cannot.
       expect(durable).toMatchObject({
         label: "durable_lane_context",
         exact_scope_required: true,
-        event_count: 3,
+        event_count: 2,
         truncated: true,
       });
       expect(durable.events.map((e: any) => e.id)).toEqual([
-        "event-7",
         "event-8",
         "event-9",
       ]);
-      expect(durable.lane.current_context_md).toHaveLength(6000);
+      // Checkpoint bounded to half the allocation, not to a hardcoded 6000.
+      // Slightly under half after the whole-pack fitter charges serialization
+      // framing; the assertion is the share, not an exact byte count.
+      const halfAllocation = Math.floor((3000 * 4 - 1200) / 2);
+      expect(durable.lane.current_context_md.length).toBeLessThanOrEqual(
+        halfAllocation,
+      );
+      expect(durable.lane.current_context_md.length).toBeGreaterThan(
+        halfAllocation - 100,
+      );
+      // No per-event ceiling is applied any more. The old 1,000-char cut is
+      // gone, so retained bodies run past it -- the last one is bounded only by
+      // whatever allocation remains, not by a fixed number.
       expect(
-        durable.events.every((event: any) => event.content.length <= 1000),
+        durable.events.every((event: any) => event.content.length > 1000),
       ).toBe(true);
       // The whole serialized section stays within the whole-pack budget.
       expect(JSON.stringify(durable).length).toBeLessThanOrEqual(
@@ -120,14 +134,20 @@ describe("agent_context_pack durable lane context", () => {
       expect(JSON.stringify(durable)).not.toContain("RAW TOOL OUTPUT");
       expect(JSON.stringify(durable)).not.toContain("must not escape");
       expect(payload.warnings.truncation).not.toEqual([]);
-      // content_chars_used is reconciled to the retained content body (checkpoint
-      // 6000 + 3 events x 1000), not the loader's pre-refit selection.
-      expect(payload.budget.durable_lane_context).toMatchObject({
-        content_chars_used: 9000,
-        max_events: 8,
-      });
-      // One lane citation plus one per retained event, none for dropped events.
-      expect(payload.citations).toHaveLength(4);
+      // Reconciled to what was actually retained -- the halved checkpoint plus
+      // the whole events that fit -- and reported as unbounded, because no
+      // per-section ceiling exists any more.
+      const laneBudget = payload.budget.durable_lane_context;
+      expect(laneBudget.max_events).toBe(Number.MAX_SAFE_INTEGER);
+      expect(laneBudget.max_event_chars).toBe(Number.MAX_SAFE_INTEGER);
+      expect(laneBudget.content_chars_used).toBeGreaterThan(
+        halfAllocation + 3000,
+      );
+      expect(laneBudget.content_chars_used).toBeLessThanOrEqual(
+        laneBudget.content_char_limit,
+      );
+      // One lane citation plus one per retained event.
+      expect(payload.citations).toHaveLength(3);
 
       expect(queries[0]!.sql).toContain("WHERE namespace = $1");
       expect(queries[0]!.sql).toContain("AND session_key = $2");
@@ -209,7 +229,13 @@ describe("agent_context_pack durable lane context", () => {
       expect(pack.isError).toBeFalsy();
       const payload = JSON.parse((pack.content as any)[0].text);
       const durable = payload.sections.durable_lane_context;
+      // No budget was requested, so every event in the lane comes back whole.
+      // This used to expect events 1..8 and `truncated: true` -- event-0 was
+      // dropped by the 8-event ceiling and the caller was told the lane had
+      // been shortened. Both the ceiling and the marker are gone as of
+      // 2026-07-30; the oldest event is no longer the price of a full read.
       expect(durable.events.map((event: any) => event.id)).toEqual([
+        "event-0",
         "event-1",
         "event-2",
         "event-3",
@@ -219,13 +245,8 @@ describe("agent_context_pack durable lane context", () => {
         "event-7",
         "event-8",
       ]);
-      expect(durable).toMatchObject({ event_count: 8, truncated: true });
-      expect(payload.warnings.truncation).toContainEqual({
-        source: "durable_lane_context.events",
-        max_events: 8,
-        max_event_chars: 1000,
-        content_char_limit: 12000,
-      });
+      expect(durable).toMatchObject({ event_count: 9, truncated: false });
+      expect(payload.warnings.truncation).toEqual([]);
     } finally {
       await cleanup();
     }

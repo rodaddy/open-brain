@@ -1,40 +1,56 @@
 import type { PoolClient, QueryConfig } from "pg";
 import type { ToolDeps } from "./index.ts";
 import type { AgentContextPackArgs } from "./agent-context-pack.ts";
+import { logger } from "../logger.ts";
 
-const DURABLE_LANE_MAX_CONTENT_CHARS = 12_000;
-const DURABLE_LANE_MAX_CONTEXT_CHARS = 6_000;
-const DURABLE_LANE_MAX_EVENTS = 8;
-const DURABLE_LANE_MAX_EVENT_CHARS = 1_000;
 export const CONTEXT_PACK_ENVELOPE_CHAR_RESERVE = 1_200;
 
 /**
- * Resolve the durable-lane content char budget.
+ * What the pack reports for a bound that nobody imposed.
  *
- * When the whole-pack allocator supplies an explicit `contentCharLimit`, the
- * lane content is bounded by the pack-level allocation it was granted (still
- * clamped by the durable-lane hard cap). Otherwise the historical per-section
- * derivation from `budget.max_tokens` applies, preserving compatibility when no
- * whole-pack allocation is in effect.
+ * The reported budget fields are typed `number` and mean "the bound that
+ * actually applied to this read". When no bound applied, the honest typed value
+ * is the effective one -- every row, every character -- not `null`. Nulling the
+ * field would force every consumer to handle an absence that never happens and
+ * would say "unknown" where the truth is "everything".
+ */
+export const UNBOUNDED = Number.MAX_SAFE_INTEGER;
+
+/**
+ * Recall means TOTAL recall. This file used to carry four ceilings --
+ * 12,000 content chars, 6,000 context chars, 8 events, 1,000 chars per event --
+ * and none of them was ever asked for. Their effect was visible in every
+ * session-start block: exactly eight handoff lines, each severed mid-word
+ * around a thousand characters, while the lane held thousands of whole events
+ * in the database. The write path was de-capped on 2026-07-30; these were the
+ * same defect on the other side of the same pipe, and they survived that pass
+ * only because nobody looked in this file.
+ *
+ * Operator, 2026-07-30: "I don't care if this thing ends up being 2, 7, 12 gigs
+ * in the database. What I need is for it to WORK PROPERLY, and then we can
+ * figure out how to pare it down."
+ *
+ * So: no event ceiling, no per-event ceiling, no content ceiling. A caller that
+ * genuinely needs a bounded pack still gets one -- it passes `budget.max_tokens`
+ * explicitly and the whole-pack fitter honours it. Absent that request, the lane
+ * comes back whole. Do not reintroduce a default; `.claude/hooks/design-lookup-gate.ts`
+ * blocks it, and the standing rule outranks the hook.
  */
 function resolveDurableLaneContentChars(
   args: AgentContextPackArgs,
   contentCharLimit: number | undefined,
 ): number {
-  if (contentCharLimit !== undefined) {
+  // An explicit whole-pack allocation is a caller's own request; honour it.
+  if (contentCharLimit !== undefined) return Math.max(0, contentCharLimit);
+  // A caller that asked for a token budget gets one derived from it.
+  if (args.budget?.max_tokens !== undefined) {
     return Math.max(
       0,
-      Math.min(DURABLE_LANE_MAX_CONTENT_CHARS, contentCharLimit),
+      args.budget.max_tokens * 4 - CONTEXT_PACK_ENVELOPE_CHAR_RESERVE,
     );
   }
-  return Math.max(
-    0,
-    Math.min(
-      DURABLE_LANE_MAX_CONTENT_CHARS,
-      (args.budget?.max_tokens ?? 4000) * 4 -
-        CONTEXT_PACK_ENVELOPE_CHAR_RESERVE,
-    ),
-  );
+  // Nobody asked for a bound. Return everything.
+  return Number.MAX_SAFE_INTEGER;
 }
 
 type DurableLaneContextFragment = {
@@ -273,22 +289,33 @@ export async function loadDurableLaneContext(
         budget: {
           content_char_limit: maxContentChars,
           content_chars_used: 0,
-          max_events: DURABLE_LANE_MAX_EVENTS,
+          max_events: UNBOUNDED,
         },
         citations: [],
       };
     }
 
-    const contextLimit = Math.min(
-      DURABLE_LANE_MAX_CONTEXT_CHARS,
-      maxContentChars,
-    );
-    const context = boundedText(lane.current_context_md, contextLimit);
+    // When nobody asked for a bound, maxContentChars is UNBOUNDED and the
+    // checkpoint arrives whole. When a caller DID ask for one, the checkpoint
+    // must not eat the entire allocation and starve the events: a bounded read
+    // that returns a full checkpoint and zero events is the same silent-nothing
+    // failure in a different costume. Removing the old fixed 6,000-char context
+    // ceiling exposed exactly that -- a 3,000-token request produced a 9,000-char
+    // checkpoint and no events at all. So under an explicit budget the checkpoint
+    // takes at most half, leaving the rest for what actually happened.
+    const contextShare =
+      maxContentChars === UNBOUNDED
+        ? UNBOUNDED
+        : Math.max(0, Math.floor(maxContentChars / 2));
+    const context = boundedText(lane.current_context_md, contextShare);
     let remainingChars = Math.max(
       0,
       maxContentChars - (context.text?.length ?? 0),
     );
-    const { rows: fetchedEventRows } = await reader.query(
+    // Every event in the lane. No row ceiling: the caller asked for this lane's
+    // durable context, and a partial answer that reports itself as complete is
+    // the silent-zero failure this repo names in docs/GOTCHAS.md.
+    const { rows: eventRows } = await reader.query(
       `SELECT e.id, e.event_type, e.content, e.source, e.importance,
               e.artifact_path, e.transcript_ref, e.occurred_at, e.created_at
          FROM ob_session_events e
@@ -301,12 +328,10 @@ export async function loadDurableLaneContext(
           AND l.metadata->>'server_id' = $6
           AND l.channel_id = $7
           AND l.thread_id IS NOT DISTINCT FROM $8::text
-        ORDER BY e.created_at DESC, e.id DESC
-        LIMIT $9`,
-      [lane.id, ...scopeParams, DURABLE_LANE_MAX_EVENTS + 1],
+        ORDER BY e.created_at DESC, e.id DESC`,
+      [lane.id, ...scopeParams],
     );
-    const omittedEvents = fetchedEventRows.length > DURABLE_LANE_MAX_EVENTS;
-    const eventRows = fetchedEventRows.slice(0, DURABLE_LANE_MAX_EVENTS);
+    const omittedEvents = false;
 
     const events: Array<Record<string, unknown>> = [];
     const citations: Array<Record<string, unknown>> = [
@@ -318,10 +343,10 @@ export async function loadDurableLaneContext(
     ];
     let eventsTruncated = omittedEvents;
     for (const row of eventRows) {
-      const eventContent = boundedText(
-        row.content,
-        Math.min(DURABLE_LANE_MAX_EVENT_CHARS, remainingChars),
-      );
+      // Whole event. The only bound left is whatever the caller explicitly
+      // asked for via budget.max_tokens; with no request, remainingChars is
+      // effectively unbounded and every event arrives intact.
+      const eventContent = boundedText(row.content, remainingChars);
       if (!eventContent.text) {
         if (typeof row.content === "string" && row.content.length > 0) {
           eventsTruncated = true;
@@ -356,17 +381,18 @@ export async function loadDurableLaneContext(
     events.reverse();
 
     const truncation: Array<Record<string, unknown>> = [];
+    // Only reachable when the caller itself asked for a bounded pack.
     if (context.truncated) {
       truncation.push({
         source: "durable_lane_context.current_context_md",
-        max_chars: contextLimit,
+        max_chars: maxContentChars,
       });
     }
     if (eventsTruncated) {
       truncation.push({
         source: "durable_lane_context.events",
-        max_events: DURABLE_LANE_MAX_EVENTS,
-        max_event_chars: DURABLE_LANE_MAX_EVENT_CHARS,
+        max_events: UNBOUNDED,
+        max_event_chars: UNBOUNDED,
         content_char_limit: maxContentChars,
       });
     }
@@ -401,14 +427,45 @@ export async function loadDurableLaneContext(
       budget: {
         content_char_limit: maxContentChars,
         content_chars_used: maxContentChars - remainingChars,
-        max_context_chars: DURABLE_LANE_MAX_CONTEXT_CHARS,
-        max_events: DURABLE_LANE_MAX_EVENTS,
-        max_event_chars: DURABLE_LANE_MAX_EVENT_CHARS,
+        max_context_chars: UNBOUNDED,
+        max_events: UNBOUNDED,
+        max_event_chars: UNBOUNDED,
       },
       citations,
     };
-  } catch {
+  } catch (error) {
     await reader?.rollback();
+    // This catch used to be bare: the lane read failed, the envelope said
+    // "database_unavailable", and the actual reason went in the bin. ERROR
+    // states what broke; DEBUG carries the whole autopsy so a later reader is
+    // not reconstructing it from an empty section.
+    const err = error instanceof Error ? error : undefined;
+    logger.error("durable_lane_context read failed", {
+      namespace: args.namespace,
+      session_key: args.session_key,
+      error: err?.message ?? String(error),
+    });
+    logger.debug("durable_lane_context read failure detail", {
+      namespace: args.namespace,
+      agent: args.agent,
+      platform: args.platform,
+      server_id: args.server_id,
+      channel_id: args.channel_id,
+      thread_id: args.thread_id ?? null,
+      session_key: args.session_key,
+      repo: args.repo ?? null,
+      requested_max_tokens: args.budget?.max_tokens ?? null,
+      content_char_limit: maxContentChars,
+      error_name: err?.name ?? typeof error,
+      error_message: err?.message ?? String(error),
+      pg_code: (error as { code?: unknown })?.code ?? null,
+      pg_detail: (error as { detail?: unknown })?.detail ?? null,
+      pg_hint: (error as { hint?: unknown })?.hint ?? null,
+      pg_constraint: (error as { constraint?: unknown })?.constraint ?? null,
+      pg_routine: (error as { routine?: unknown })?.routine ?? null,
+      stack: err?.stack ?? null,
+      cause: err?.cause ? String(err.cause) : null,
+    });
     return {
       scopeDenials: [],
       truncation: [],
@@ -421,7 +478,7 @@ export async function loadDurableLaneContext(
       budget: {
         content_char_limit: maxContentChars,
         content_chars_used: 0,
-        max_events: DURABLE_LANE_MAX_EVENTS,
+        max_events: UNBOUNDED,
       },
       citations: [],
     };

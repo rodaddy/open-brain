@@ -336,8 +336,12 @@ describe("guidance budgets, order, and degradation", () => {
     expect(frag.section?.truncated).toBe(true);
   });
 
-  it("flags lifecycle-scan overflow as truncation without silently dropping", async () => {
-    // 502 rows > the 500-row scan cap (query fetches cap+1 to detect overflow).
+  it("scans every lifecycle row, however many there are", async () => {
+    // This used to assert a 500-row scan ceiling and a `lifecycle_scan_capped`
+    // marker. The ceiling came out on 2026-07-30: the scan exists to decide
+    // which promoted rules are STILL standing (#161 supersession), so stopping
+    // it early could resurrect a rule Rico had already retired -- a wrong answer
+    // delivered as a complete one. 502 rows in, 502 reconciled, none dropped.
     const rows = Array.from({ length: 502 }, (_, i) =>
       eventRow({
         id: `e${i}`,
@@ -346,9 +350,9 @@ describe("guidance budgets, order, and degradation", () => {
       }),
     );
     const frag = await loadProfile(rows);
-    const t = frag.truncation[0] as Row;
-    expect(t.lifecycle_scan_capped).toBe(500);
-    expect(frag.section?.truncated).toBe(true);
+    expect((frag.section?.items as Row[]).length).toBe(502);
+    expect(frag.truncation.length).toBe(0);
+    expect(frag.section?.truncated).toBe(false);
   });
 
   it("degrades content-free when the database query throws", async () => {
