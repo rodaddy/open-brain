@@ -24,6 +24,20 @@ poisons whatever you build on top of it.
 When you add something to this repo, ask: *if this fails, how will anyone
 know?* If the answer is "an empty result set" or "exit 0", that is the bug.
 
+**The second pattern: inferring what one command would have told you.**
+On 2026-07-30 an agent got seven separate calls wrong in one session and every
+single one was a fact that was already checkable — the chunking design
+(`aqmd search "chunking"`), the lane scope (one psql query), the promotion cap
+(a 30-second test that overturned its own claim), core01's worker topology
+(`curl .../health`), the deploy host (`AGENTS.md:104`, already written down).
+None were judgment calls. Each was a lookup skipped in favour of a plausible
+answer, and the plausible answer disagreed with reality every time.
+
+The failure has a signature: **reasoning that sounds sound and cites nothing.**
+Live infrastructure counts here as much as design docs do — a running service
+answers questions about itself faster than you can theorise about it, and it
+answers them correctly.
+
 ---
 
 ## Infrastructure
