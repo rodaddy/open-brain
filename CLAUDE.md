@@ -1,3 +1,5 @@
+@AGENTS.md
+
 # Open Brain — Claude Router
 
 READ `AGENTS.md` FIRST (this repo, alongside this file). It is the shared agent
