@@ -131,6 +131,51 @@ OPENBRAIN_TEST_DATABASE_URL="postgres://rico@127.0.0.1:5432/open_brain_local_202
 
 The clone database is named in `.env` (`DB_NAME`). `psql -lt` lists them if not.
 
+### Bare `psql` connects to the wrong database
+
+**Measured 2026-07-30 — and the operator counted it as roughly the twentieth
+time.** A plain `psql -c "..."` fails with:
+
+```
+FATAL:  database "rico" does not exist
+```
+
+Postgres defaults the database name to the OS user. The connection settings live
+in `.env` (gitignored), and a fresh shell has not loaded them.
+
+**Always source `.env` first, in the same command:**
+
+```bash
+set -a && . ./.env && set +a && psql -t -A -c "select count(*) from ob_session_events;"
+```
+
+`set -a` exports every variable the file defines, so `PGHOST`/`PGPORT`/
+`PGDATABASE`/`PGUSER` reach the `psql` child process. Without it the shell
+assigns them and exports nothing, which fails identically to not sourcing at all.
+A subshell (`cd`, a new Bash tool call) does not inherit them — re-source every
+time.
+
+### Every `dev:*` lane is scope-bound; a mismatched write is refused
+
+**Measured 2026-07-30.** Appending to `dev:open-brain` as a different agent
+returns, and writes nothing:
+
+```json
+{"error": "scope_validation", "conflicts": ["agent", "platform"],
+ "message": "Existing lane scope does not match requested append scope",
+ "retryable": false}
+```
+
+Every `dev:*` lane in the clone is bound to `agent=shared`, `source=development`
+(`select session_key, agent, source from ob_session_lanes where session_key like
+'dev:%'`). The lane owns its scope; the caller does not get to pick one.
+
+This is a good error — it names the conflicting fields and says
+`retryable: false`. Contrast the retired bridge, which collapsed every failure
+into a bare `{ ok: false }` and produced backfill receipts reading only
+`"session summary citation persistence failed"`. **When a write path swallows
+the server's reason, the next person debugging it starts from zero.**
+
 ### A test can assert the bug
 
 **Measured 2026-07-28:** `decompose-entry.test.ts` asserted
