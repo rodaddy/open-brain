@@ -161,26 +161,49 @@ async function withTimeout<T>(
   }
 }
 
-async function probeUrl(
+/**
+ * Is an HTTP endpoint answering OK? Exported because `/health` in `src/index.ts`
+ * asks the same question of the same provider and had its own byte-identical
+ * private copy -- including the bare `catch { return false }` this one no longer
+ * has. A REST sibling drifting from the module that owns the logic is the exact
+ * shape of the PR #277 failure recorded in docs/sme/correctness.md:475, so the
+ * two call sites now share one implementation instead of two.
+ *
+ * Reports only a boolean by design; which of DNS failure, refused connection,
+ * or timeout it was goes to the log, because that is the whole diagnosis.
+ *
+ * `timeoutMs` is a parameter rather than a shared constant because the two
+ * callers genuinely differ and neither should silently inherit the other's
+ * value: the doctor allows 2s for an optional-dependency probe, `/health`
+ * allowed 3s. Sharing the implementation must not quietly change either one.
+ */
+export async function probeUrl(
   url: string,
   headers: Record<string, string>,
+  timeoutMs = OPTIONAL_TIMEOUT_MS,
 ): Promise<boolean> {
   try {
     const resp = await fetch(url, {
       headers,
-      signal: AbortSignal.timeout(OPTIONAL_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (!resp.ok) {
       // A reachable endpoint answering 401 or 503 is a different problem from
       // an unreachable one, and `false` says neither.
-      logger.debug("doctor_probe_not_ok", { status: resp.status });
+      logger.debug("doctor_probe_not_ok", {
+        status: resp.status,
+        timeout_ms: timeoutMs,
+      });
     }
     return resp.ok;
   } catch (error) {
-    // DNS failure, connection refused, or the 2s timeout firing. The doctor
-    // reports only a boolean by design; which of the three it was belongs in
-    // the log, because that is the whole diagnosis.
-    logger.debug("doctor_probe_failed", describeError(error));
+    // DNS failure, connection refused, or the timeout firing. The caller gets
+    // only a boolean by design; which of the three it was belongs in the log,
+    // because that is the whole diagnosis.
+    logger.debug("doctor_probe_failed", {
+      timeout_ms: timeoutMs,
+      ...describeError(error),
+    });
     return false;
   }
 }
@@ -445,6 +468,24 @@ export async function getOperatorDoctorStatus(
     .then((value) => {
       doctorCache = { value, expiresAt: now() + ttlMs };
       return value;
+    })
+    .catch((error: unknown) => {
+      // Logged HERE, at the owning boundary, and then re-thrown unchanged.
+      //
+      // Every consumer of this function converts the rejection into a
+      // deliberately content-free response -- the REST route in src/index.ts
+      // sends `{ error: "operator doctor status unavailable" }` and the MCP tool
+      // sends the same string -- because a raw doctor error can carry paths and
+      // env detail. That is right for the RESPONSE and left alone. But it meant
+      // the reason existed nowhere: the diagnostic surface is gone at exactly
+      // the moment it is needed, and the only trace was a 500 in an access log.
+      //
+      // Logging at this single point covers both consumers at once, and it is
+      // the only place that can: the in-flight promise below is shared, so one
+      // rejection is handed to every concurrent caller, and a per-caller catch
+      // would report the same failure once per waiter.
+      logger.error("doctor_status_build_failed", describeError(error));
+      throw error;
     })
     .finally(() => {
       doctorInFlight = null;
