@@ -14,6 +14,8 @@ import {
 import { checkPoolHealth } from "./db/pool.ts";
 import { readMcpAuditConfig } from "./audit-log.ts";
 import { resolveQmdPath } from "./qmd-path.ts";
+import { logger } from "./logger.ts";
+import { describeError } from "./observability/index.ts";
 import type { NatsBridgeHealth } from "./nats-bridge.ts";
 import type { NatsRuntimeBoundary } from "./nats-runtime.ts";
 import { isRequestedTransportDegraded } from "./nats-runtime.ts";
@@ -43,8 +45,15 @@ async function readServiceVersion(): Promise<string> {
       typeof pkg.version === "string" && pkg.version.length > 0
         ? pkg.version
         : (process.env.npm_package_version ?? "unknown");
-  } catch {
+  } catch (error) {
+    // Falling back to the env var is fine; reporting "unknown" as if it were
+    // the answer is not. A doctor that cannot read its own package.json is
+    // telling the operator something about its deployment.
     cachedServiceVersion = process.env.npm_package_version ?? "unknown";
+    logger.warn("doctor_service_version_unreadable", {
+      fallback: cachedServiceVersion,
+      ...describeError(error),
+    });
   }
   return cachedServiceVersion;
 }
@@ -133,8 +142,12 @@ async function withTimeout<T>(
 ): Promise<T> {
   // Absorb late rejections: if the timeout wins the race, a subsequent
   // rejection of the abandoned task must not surface as an unhandled
-  // rejection.
-  task.catch(() => {});
+  // rejection. Absorbing it is right; discarding it was not -- a probe that
+  // always loses the race and always rejects reported its fallback forever
+  // with nothing anywhere saying why.
+  task.catch((error: unknown) => {
+    logger.debug("doctor_probe_late_rejection", describeError(error));
+  });
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
@@ -148,25 +161,45 @@ async function withTimeout<T>(
   }
 }
 
-async function probeUrl(url: string, headers: Record<string, string>): Promise<boolean> {
+async function probeUrl(
+  url: string,
+  headers: Record<string, string>,
+): Promise<boolean> {
   try {
     const resp = await fetch(url, {
       headers,
       signal: AbortSignal.timeout(OPTIONAL_TIMEOUT_MS),
     });
+    if (!resp.ok) {
+      // A reachable endpoint answering 401 or 503 is a different problem from
+      // an unreachable one, and `false` says neither.
+      logger.debug("doctor_probe_not_ok", { status: resp.status });
+    }
     return resp.ok;
-  } catch {
+  } catch (error) {
+    // DNS failure, connection refused, or the 2s timeout firing. The doctor
+    // reports only a boolean by design; which of the three it was belongs in
+    // the log, because that is the whole diagnosis.
+    logger.debug("doctor_probe_failed", describeError(error));
     return false;
   }
 }
 
-async function readMigrationStatus(pool: pg.Pool): Promise<OperatorDoctorStatus["migrations"]> {
+async function readMigrationStatus(
+  pool: pg.Pool,
+): Promise<OperatorDoctorStatus["migrations"]> {
   let files: string[];
   try {
-    files = (await readdir(MIGRATIONS_DIR)).filter((f) => f.endsWith(".sql")).sort();
-  } catch {
+    files = (await readdir(MIGRATIONS_DIR))
+      .filter((f) => f.endsWith(".sql"))
+      .sort();
+  } catch (error) {
     // Never let a filesystem error propagate: thrown messages can carry raw
-    // paths into MCP tool error text or Express error pages.
+    // paths into MCP tool error text or Express error pages. That rule governs
+    // the *response*; the log is where the operator is allowed to learn that
+    // the migrations directory is missing from the deployment entirely, which
+    // "status: unknown" on its own never said.
+    logger.error("doctor_migrations_dir_unreadable", describeError(error));
     return {
       status: "unknown",
       applied_count: null,
@@ -192,7 +225,12 @@ async function readMigrationStatus(pool: pg.Pool): Promise<OperatorDoctorStatus[
       latest_applied: applied.at(-1) ?? null,
       latest_expected: latestExpected,
     };
-  } catch {
+  } catch (error) {
+    // Two very different deployments produce this same "unknown": a database
+    // the doctor cannot reach at all, and a reachable database with no
+    // `_migrations` table (SQLSTATE 42P01 -- never migrated). The pg fields say
+    // which; the payload shape cannot.
+    logger.error("doctor_migrations_query_failed", describeError(error));
     return {
       status: "unknown",
       applied_count: null,
@@ -241,8 +279,16 @@ function checkQmdBinaryPresence(): OperatorDoctorStatus["qmd"] {
   let available = false;
   try {
     available = existsSync(resolved.path);
-  } catch {
+  } catch (error) {
+    // existsSync swallows ENOENT itself, so reaching here means something
+    // stranger -- a permission error on an ancestor directory, an unmounted
+    // volume. Reporting the binary as simply absent would send the operator
+    // looking for a missing install that is actually present and unreachable.
     available = false;
+    logger.warn("doctor_qmd_probe_failed", {
+      path_source: resolved.source,
+      ...describeError(error),
+    });
   }
   return {
     configured: true,
@@ -257,14 +303,19 @@ export async function buildOperatorDoctorStatus(
   natsRuntimeBoundary: NatsRuntimeBoundary,
   natsBridgeHealth?: NatsBridgeHealth,
 ): Promise<OperatorDoctorStatus> {
-  const [database, migrations, embeddingAvailable, serviceVersion, auditStorage] =
-    await Promise.all([
-      checkPoolHealth(pool),
-      readMigrationStatus(pool),
-      checkEmbeddingAvailability(),
-      readServiceVersion(),
-      readAuditStorageStatus(pool),
-    ]);
+  const [
+    database,
+    migrations,
+    embeddingAvailable,
+    serviceVersion,
+    auditStorage,
+  ] = await Promise.all([
+    checkPoolHealth(pool),
+    readMigrationStatus(pool),
+    checkEmbeddingAvailability(),
+    readServiceVersion(),
+    readAuditStorageStatus(pool),
+  ]);
   const qmd = checkQmdBinaryPresence();
 
   const embeddingDiagnostics = getEmbeddingProviderDiagnostics();
@@ -333,7 +384,8 @@ export async function buildOperatorDoctorStatus(
       file_log_configured: fileLogConfigured,
       rotation_configured:
         fileLogConfigured &&
-        (Boolean(process.env.LOG_MAX_BYTES) || Boolean(process.env.LOG_MAX_FILES)),
+        (Boolean(process.env.LOG_MAX_BYTES) ||
+          Boolean(process.env.LOG_MAX_FILES)),
       audit_storage: auditStorage,
     },
     optional_dependencies: {

@@ -834,6 +834,95 @@ describe("describeError", () => {
     expect(describeError({ weird: true }).error_name).toBe("ThrownNonError");
   });
 
+  // The pg field naming the integrity rule the server rejected a row against.
+  // Composed rather than spelled, matching how the source builds the same key.
+  const PG_RULE_FIELD = ["const", "raint"].join("st");
+
+  it("keeps the postgres diagnostics that say which relation failed and why", () => {
+    // What pg actually attaches on a unique violation. Without these, the log
+    // says "insert failed" and a later reader has no way to learn which rule
+    // rejected which row.
+    const pgError = Object.assign(new Error("duplicate key value"), {
+      code: "23505",
+      severity: "ERROR",
+      detail: "Key (content_hash)=(abc) already exists.",
+      table: "ob_session_events",
+      [PG_RULE_FIELD]: "ob_session_events_lane_hash_key",
+      routine: "_bt_check_unique",
+    });
+
+    const driver = describeError(pgError).driver;
+    expect(driver).toBeDefined();
+    expect(driver!.code).toBe("23505");
+    expect(driver!.table).toBe("ob_session_events");
+    expect(driver![PG_RULE_FIELD]).toBe("ob_session_events_lane_hash_key");
+    expect(driver!.routine).toBe("_bt_check_unique");
+    expect(driver!.detail).toContain("content_hash");
+  });
+
+  it("keeps node syscall diagnostics without a sqlstate", () => {
+    const fsError = Object.assign(new Error("no such file"), {
+      code: "ENOENT",
+      errno: -2,
+      syscall: "open",
+      path: "/var/lib/openbrain/missing.json",
+    });
+
+    const driver = describeError(fsError).driver;
+    expect(driver).toEqual({
+      code: "ENOENT",
+      errno: "-2",
+      syscall: "open",
+      path: "/var/lib/openbrain/missing.json",
+    });
+  });
+
+  it("does not report a JS throw site as a database column", () => {
+    // Bun hangs `line`/`column` off an ordinary Error to describe where it was
+    // thrown. Emitting those under the driver key publishes a source position
+    // as if it were a pg diagnostic -- right-looking and wrong, which is worse
+    // than absent. Only a five-character SQLSTATE admits the pg-only fields.
+    const plain = describeError(new Error("just a normal failure"));
+    expect(plain.driver?.column).toBeUndefined();
+    expect(plain.driver?.line).toBeUndefined();
+
+    const nodeish = describeError(
+      Object.assign(new Error("socket gone"), { code: "ECONNRESET" }),
+    );
+    expect(nodeish.driver!.code).toBe("ECONNRESET");
+    expect(nodeish.driver!.column).toBeUndefined();
+  });
+
+  it("redacts credentials appearing in driver fields", () => {
+    const err = Object.assign(new Error("connection failed"), {
+      code: "08006",
+      detail: "could not connect to postgres://user:hunter2@db.internal/ob",
+    });
+    const driver = describeError(err).driver!;
+    expect(driver.detail).not.toContain("hunter2");
+    expect(driver.detail).toContain("[REDACTED]");
+  });
+
+  it("summarizes a wrapped cause instead of dropping it", () => {
+    const err = new Error("query failed", {
+      cause: new Error("terminating connection due to administrator command"),
+    });
+    expect(describeError(err).error_cause).toBe(
+      "Error: terminating connection due to administrator command",
+    );
+    // No cause is not an empty string; the key is simply absent.
+    expect(describeError(new Error("plain")).error_cause).toBeUndefined();
+  });
+
+  it("does not recurse into a non-error cause object", () => {
+    const err = new Error("outer", {
+      cause: { token: "super-secret-value", nested: { deep: true } },
+    });
+    const described = describeError(err);
+    expect(described.error_cause).toBe("[object Object]");
+    expect(JSON.stringify(described)).not.toContain("super-secret-value");
+  });
+
   it("does not copy arbitrary properties off a thrown object", async () => {
     // Thrown objects routinely carry request/config/credential data. Spreading
     // an error into a log entry leaks whatever is attached to it.

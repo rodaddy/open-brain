@@ -23,6 +23,7 @@
 // every promotable user_preference/process_rule so the current standing set is
 // deterministically derivable) is reported alongside the change.
 
+import { describeError, logger } from "../observability/index.ts";
 import {
   boundedItemText,
   databaseUnavailableFragment,
@@ -280,7 +281,28 @@ export async function loadGuidanceSection(
       budget: { ...budget, items_included: items.length },
       citations,
     };
-  } catch {
+  } catch (error) {
+    // ERROR says what broke, at the default level. DEBUG carries the autopsy:
+    // every input that shaped the call plus the driver's own fields, because a
+    // "database_unavailable" envelope on its own tells a later reader nothing.
+    const detail = describeError(error);
+    logger.error("guidance_section_failed", {
+      section: args.section,
+      namespace: args.namespace,
+      error_name: detail.error_name,
+      error_message: detail.error_message,
+    });
+    // Everything needed to reconstruct the call, at debug. A
+    // "database_unavailable" envelope on its own tells a later reader nothing,
+    // and by then the inputs that produced it are gone.
+    logger.debug("guidance_section_failed_detail", {
+      section: args.section,
+      candidate_type: candidateType,
+      namespace: args.namespace,
+      requested_budget: args.budget,
+      resolved_budget: budget,
+      ...detail,
+    });
     return databaseUnavailableFragment(args.section, budget);
   }
 }

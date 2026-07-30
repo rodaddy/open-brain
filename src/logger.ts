@@ -524,8 +524,13 @@ function log(
     // reporting through the logger from inside the logger would recurse.
     try {
       sink(delivered);
-    } catch {
-      /* deliberate: see contextFields() */
+    } catch (error) {
+      // Deliberate fail-open on the delivery (see contextFields()), but not a
+      // silent one. A sink that throws on every line -- a forwarder whose
+      // endpoint is gone -- was previously invisible forever: the process kept
+      // logging, the observer received nothing, and nothing anywhere said so.
+      // stderr is the one channel that cannot recurse back into here.
+      reportSinkThrow(error);
     }
   }
   if (level === "error") {
@@ -536,6 +541,42 @@ function log(
     console.debug(output);
   } else {
     console.log(output);
+  }
+}
+
+/**
+ * Report a throwing extra sink on stderr, which cannot recurse into `log()`.
+ *
+ * One line per distinct failure, not per occurrence: a sink whose endpoint is
+ * down throws on every line, and a report per line would multiply the very
+ * traffic that is failing. The first of each kind is emitted and the rest are
+ * counted, so a persistent failure costs one line plus a periodic tally.
+ */
+const sinkThrowCounts = new Map<string, number>();
+const SINK_THROW_REPORT_EVERY = 1000;
+
+function reportSinkThrow(error: unknown): void {
+  try {
+    const err = error instanceof Error ? error : undefined;
+    const kind = `${err?.name ?? typeof error}: ${err?.message ?? String(error)}`;
+    const seen = (sinkThrowCounts.get(kind) ?? 0) + 1;
+    sinkThrowCounts.set(kind, seen);
+    if (seen !== 1 && seen % SINK_THROW_REPORT_EVERY !== 0) return;
+    process.stderr.write(
+      `${JSON.stringify({
+        level: "error",
+        message: "log_sink_threw",
+        service: SERVICE_NAME,
+        host: HOST_NAME,
+        occurrences: seen,
+        error_name: redactForLog(err?.name ?? typeof error),
+        error_message: redactForLog(err?.message ?? String(error)),
+        timestamp: new Date().toISOString(),
+      })}\n`,
+    );
+  } catch {
+    // stderr is gone too. There is no fourth channel, and throwing here would
+    // let a broken observer take down the caller that merely logged a line.
   }
 }
 

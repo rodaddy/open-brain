@@ -6,6 +6,7 @@ import { constants as fsConstants } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import type { AuthInfo } from "./types.ts";
 import { logger } from "./logger.ts";
+import { describeError } from "./observability/index.ts";
 import { canWriteNamespace } from "./namespace-policy.ts";
 import { physicalNamespace } from "./shared-namespace.ts";
 import {
@@ -418,6 +419,31 @@ export async function discoverFiles(
   // bound, or depth pruning). Any of these means the folder was not fully drained.
   let stopped = false;
 
+  // Why entries did not make it into the result. The walk runs over untrusted
+  // input and skips are ordinary -- a broken symlink, a directory the service
+  // user cannot read -- so a line per entry would be noise, and the previous
+  // behavior of a bare `catch { continue }` was no signal at all. An operator
+  // whose files "just did not show up" had nothing to look at. Counted here and
+  // emitted once per discovery, so the tally is proportional to scans, not to
+  // tree size.
+  const skips = {
+    unreadable_dir: 0,
+    unresolvable_entry: 0,
+    unstattable_entry: 0,
+    escaped_root: 0,
+    close_failed: 0,
+  };
+  // One representative errno per skip class, for the operator who has to guess
+  // between EACCES and ENOENT. Never a path: the walk deliberately does not
+  // surface filesystem paths from an untrusted tree.
+  const skipCodes: Record<string, string> = {};
+
+  function noteSkip(kind: keyof typeof skips, error: unknown): void {
+    skips[kind] += 1;
+    const code = (error as { code?: unknown } | null)?.code;
+    if (typeof code === "string" && !skipCodes[kind]) skipCodes[kind] = code;
+  }
+
   function consider(file: DiscoveredFile): void {
     // Binary-search insertion point by relPath.
     let lo = 0;
@@ -448,8 +474,11 @@ export async function discoverFiles(
       // symlink-to-dir vs file is decided after confinement, not from the dirent
       // type.
       handle = await opendir(dir);
-    } catch {
-      return; // Unreadable directory: skip, never surface the path.
+    } catch (error) {
+      // Unreadable directory: skip, never surface the path. Counted so the
+      // whole subtree going unread is not indistinguishable from it being empty.
+      noteSkip("unreadable_dir", error);
+      return;
     }
     try {
       for await (const dirent of handle) {
@@ -466,7 +495,8 @@ export async function discoverFiles(
         let realChild: string;
         try {
           realChild = await realpath(childAbs, { encoding: "utf8" });
-        } catch {
+        } catch (error) {
+          noteSkip("unresolvable_entry", error);
           if (stopped) return;
           continue; // Broken symlink or vanished entry: skip.
         }
@@ -474,13 +504,18 @@ export async function discoverFiles(
         // single check rejects both `..` traversal and symlink escape, for files
         // and directories alike.
         if (realChild !== realRoot && !realChild.startsWith(rootPrefix)) {
+          // Not an error -- an entry pointing outside the approved root is
+          // correctly excluded -- but an operator wondering why their symlinked
+          // file never ingested deserves to see that this is why.
+          skips.escaped_root += 1;
           if (stopped) return;
           continue;
         }
         let st: Awaited<ReturnType<typeof stat>>;
         try {
           st = await stat(realChild);
-        } catch {
+        } catch (error) {
+          noteSkip("unstattable_entry", error);
           if (stopped) return;
           continue;
         }
@@ -514,13 +549,35 @@ export async function discoverFiles(
       // double-close or an already-consumed handle must not throw.
       try {
         await handle.close();
-      } catch {
-        // Already closed / closing: ignore.
+      } catch (error) {
+        // Ordinarily a double-close on an already-consumed iterator, which is
+        // harmless. Counted anyway: a rising count is how a descriptor leak
+        // would announce itself instead of appearing as an unrelated EMFILE.
+        noteSkip("close_failed", error);
       }
     }
   }
 
   await walk(realRoot, 0);
+
+  const skipped = Object.values(skips).reduce((sum, n) => sum + n, 0);
+  if (skipped > 0) {
+    // Warning, not info: every one of these is a file or subtree the operator
+    // put in the folder that this scan did not ingest.
+    logger.warn("drop_discover_entries_skipped", {
+      source_kind: DROP_SOURCE_KIND,
+      entries_inspected: entriesInspected,
+      skipped_total: skipped,
+      ...skips,
+      skip_codes: skipCodes,
+    });
+  } else {
+    logger.debug("drop_discover_scanned", {
+      source_kind: DROP_SOURCE_KIND,
+      entries_inspected: entriesInspected,
+      retained: buf.length,
+    });
+  }
   // Retain at most `limit`; a full buffer (limit + 1) means truncation. Any early
   // stop (sentinel, scan bound, depth prune) also means the tree was not drained.
   const files = buf.length > limit ? buf.slice(0, limit) : buf;
@@ -575,7 +632,25 @@ export async function readConfinedFile(
       file.realPath,
       fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW,
     );
-  } catch {
+  } catch (error) {
+    // The caller only ever learns "unreadable", which is correct -- it must not
+    // learn anything about the filesystem. But collapsing every cause into that
+    // one word also hid the case this defense exists for: ELOOP here means the
+    // final component was swapped to a symlink between discovery and read, an
+    // active TOCTOU attempt, and it looked exactly like a missing file.
+    const code = (error as { code?: unknown } | null)?.code;
+    const suspicious = code === "ELOOP";
+    const fields = {
+      source_kind: DROP_SOURCE_KIND,
+      // The opaque discovery token, not a filesystem path.
+      rel_path: file.relPath,
+      errno: typeof code === "string" ? code : "unknown",
+    };
+    if (suspicious) {
+      logger.warn("drop_read_nofollow_rejected", fields);
+    } else {
+      logger.debug("drop_read_open_failed", fields);
+    }
     return { ok: false, reason: "unreadable" };
   }
   try {
@@ -584,6 +659,17 @@ export async function readConfinedFile(
     // discovery validated under the confined root. A dev/ino mismatch means an
     // ancestor/path replacement redirected the name; reject without reading.
     if (!fst.isFile() || fst.dev !== file.dev || fst.ino !== file.ino) {
+      // The descriptor is not the file discovery validated. Either an ancestor
+      // directory was replaced between the two steps, or the entry stopped
+      // being a regular file. Both are the attack this check exists for, and
+      // both returned silently before.
+      logger.warn("drop_read_identity_mismatch", {
+        source_kind: DROP_SOURCE_KIND,
+        rel_path: file.relPath,
+        still_regular_file: fst.isFile(),
+        // Whether identity moved, never the inode numbers themselves.
+        identity_changed: fst.dev !== file.dev || fst.ino !== file.ino,
+      });
       return { ok: false, reason: "unreadable" };
     }
     // Fast reject when the current descriptor size already exceeds the per-file
@@ -618,10 +704,25 @@ export async function readConfinedFile(
     }
     const content = buf.toString("utf8", 0, filled);
     return { ok: true, content, byteLength: filled };
-  } catch {
+  } catch (error) {
+    // An I/O error mid-read (EIO on a failing disk, ESTALE on an NFS mount).
+    // The caller still learns only "unreadable"; the operator learns which.
+    logger.warn("drop_read_failed", {
+      source_kind: DROP_SOURCE_KIND,
+      rel_path: file.relPath,
+      ...describeError(error),
+    });
     return { ok: false, reason: "unreadable" };
   } finally {
-    await fh.close().catch(() => {});
+    await fh.close().catch((error: unknown) => {
+      // Closing is not allowed to change the read's outcome, but a descriptor
+      // that will not close is how a leak starts.
+      logger.debug("drop_read_close_failed", {
+        source_kind: DROP_SOURCE_KIND,
+        rel_path: file.relPath,
+        ...describeError(error),
+      });
+    });
   }
 }
 
@@ -827,9 +928,17 @@ export async function collectDropFolder(
     if (!rootStat.isDirectory()) {
       throw new Error("root is not a directory");
     }
-  } catch {
-    logger.info("drop_collect_root_unavailable", {
+  } catch (error) {
+    // "Root unavailable" is the answer to the most common operator question
+    // about this feature, and it used to arrive with no reason attached:
+    // a folder that does not exist, one the service user cannot traverse, and
+    // a path that turned out to be a file all produced the same line.
+    // Warning, not info -- an approved source that ingests nothing is degraded.
+    logger.warn("drop_collect_root_unavailable", {
       source_kind: DROP_SOURCE_KIND,
+      // The configured root is operator-supplied server-side registry state,
+      // not untrusted tree content, so naming its errno is safe and necessary.
+      ...describeError(error),
     });
     return { ok: false, eligible: true, code: "root_unavailable", namespace };
   }

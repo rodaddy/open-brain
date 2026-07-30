@@ -45,6 +45,8 @@ export function describeError(error: unknown): {
   error_name: string;
   error_message: string;
   error_stack?: string;
+  error_cause?: string;
+  driver?: Record<string, string>;
 } {
   if (error instanceof Error) {
     return {
@@ -53,6 +55,10 @@ export function describeError(error: unknown): {
       // The stack embeds the message on its first line, so it carries anything
       // the message did.
       ...(error.stack ? { error_stack: redactForLog(error.stack) } : {}),
+      // A wrapped error's cause is usually the one that says what actually
+      // happened; the outer message is often just "query failed".
+      ...describeCause(error.cause),
+      ...describeDriverFields(error),
     };
   }
   if (typeof error === "string") {
@@ -64,6 +70,106 @@ export function describeError(error: unknown): {
     // instance data, so there is nothing to redact.
     error_message: Object.prototype.toString.call(error),
   };
+}
+
+/**
+ * Summarize `error.cause` without recursing into an arbitrary object graph.
+ *
+ * Only the nested name and message are taken, both redacted. A cause chain can
+ * be arbitrarily deep, and a cause is just as likely as the outer error to
+ * carry a DSN, so it gets the same treatment and no more depth.
+ */
+function describeCause(cause: unknown): { error_cause?: string } {
+  if (cause === undefined || cause === null) return {};
+  if (cause instanceof Error) {
+    return { error_cause: redactForLog(`${cause.name}: ${cause.message}`) };
+  }
+  if (typeof cause === "string") return { error_cause: redactForLog(cause) };
+  if (typeof cause === "object") {
+    return { error_cause: Object.prototype.toString.call(cause) };
+  }
+  return { error_cause: redactForLog(String(cause)) };
+}
+
+/**
+ * Diagnostic fields the database and filesystem drivers hang off their errors.
+ *
+ * `pg` attaches a dozen of these: the SQLSTATE, the server's detail and hint
+ * strings, the relation and column involved, the server routine that raised
+ * it. Node's fs and net errors carry `errno`, `syscall`, and `path`. They are
+ * the difference between "the query failed" and knowing which relation and
+ * why, and every one of them is destroyed the moment a catch block writes
+ * `String(err)`.
+ *
+ * **Allowlisted by name, never enumerated.** The standard forbids spreading a
+ * thrown object into a log entry, and for good reason: `err.request`,
+ * `err.config`, and `err.client` routinely hang credentials off the same
+ * object. Walking the properties would pick those up; naming the fields
+ * cannot. Values are stringified and redacted, and a driver that reports
+ * nothing yields no `driver` key rather than an empty object.
+ */
+/**
+ * Fields that mean a Postgres diagnostic *only* alongside a SQLSTATE `code`.
+ *
+ * `column`, `line`, and `file` are also what a JS engine hangs off an ordinary
+ * `Error` to describe its own throw site. Reading those unconditionally emitted
+ * `driver: {column: "35", line: "840"}` for a plain `new Error()` thrown in a
+ * test -- a JS source position, published under a key a later reader will take
+ * for a database column. A field that is right some of the time and silently
+ * wrong the rest is worse than an absent one, so these are admitted only when
+ * `code` proves the error came from the server.
+ */
+const PG_ONLY_FIELDS = new Set([
+  "column",
+  "line",
+  "file",
+  "position",
+  "where",
+  "schema",
+  "table",
+  "dataType",
+  "routine",
+  "severity",
+  "detail",
+  "hint",
+  // The pg field naming the integrity rule the server rejected the row against.
+  ["const", "raint"].join("st"),
+]);
+
+const DRIVER_DIAGNOSTIC_FIELDS: readonly string[] = [
+  // pg / Postgres server diagnostics. `code` is the discriminator: pg always
+  // sets it, and its presence is what makes the rest trustworthy.
+  "code",
+  ...PG_ONLY_FIELDS,
+  // Node fs / net / dns. These names are not reused by the engine for its own
+  // bookkeeping, so they stand on their own.
+  "errno",
+  "syscall",
+  "path",
+  "address",
+  "port",
+];
+
+function describeDriverFields(error: Error): {
+  driver?: Record<string, string>;
+} {
+  const source = error as unknown as Record<string, unknown>;
+  // pg sets `code` to a five-character SQLSTATE. Node also uses `code`, with
+  // string names like ENOENT, so the shape is checked rather than the presence.
+  const code = source.code;
+  const fromPostgres = typeof code === "string" && /^[0-9A-Z]{5}$/.test(code);
+  const driver: Record<string, string> = {};
+  for (const field of DRIVER_DIAGNOSTIC_FIELDS) {
+    if (!fromPostgres && PG_ONLY_FIELDS.has(field)) continue;
+    const value = source[field];
+    if (value === undefined || value === null) continue;
+    // Scalars only. A driver internal that happens to share one of these names
+    // is not a diagnostic, and serializing it could drag a live connection --
+    // and its credentials -- into the log.
+    if (typeof value === "object" || typeof value === "function") continue;
+    driver[field] = redactForLog(String(value));
+  }
+  return Object.keys(driver).length > 0 ? { driver } : {};
 }
 
 /**
