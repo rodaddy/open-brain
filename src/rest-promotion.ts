@@ -99,23 +99,34 @@ export function createPromotionRouter(deps: RestDeps): Router {
         },
       );
     } catch (err) {
-      const statusCode =
-        typeof (err as any)?.statusCode === "number"
-          ? (err as any).statusCode
-          : 500;
+      // `promotion-service.ts` marks every DELIBERATE rejection with a
+      // statusCode and a curated message ("Source entry not found or archived",
+      // "Target namespace read access denied", ...). Those are the contract and
+      // are echoed unchanged -- callers parse them.
+      //
+      // An error WITHOUT a statusCode is an unexpected throw: a pg error, a bug.
+      // Echoing its message published raw driver text -- relation names,
+      // connection detail, and the parameter values pg quotes back -- to any
+      // caller who could reach this route, which is the leak the doctor route in
+      // index.ts already refuses to allow. The status stays 500 either way, so
+      // no caller loses a distinction it previously had.
+      const declared = (err as { statusCode?: unknown }).statusCode;
+      const statusCode = typeof declared === "number" ? declared : 500;
+      const deliberate = typeof declared === "number";
       // A promotion that fails wrote nothing, and this route recorded nothing
       // either: the only trace was a status code in an access log. The driver
       // fields say which relation refused it, and why.
       logger.error("rest_promote_failed", {
         status_code: statusCode,
         namespace: resolvedTargetNamespace,
+        deliberate,
         ...describeError(err),
       });
-      // NOTE: this echoes err.message into the response body, unlike the doctor
-      // route in index.ts which withholds raw messages because they can carry
-      // paths and env detail. Left as-is here because callers parse it, and
-      // changing it is a caller-visible contract change, not a logging fix.
-      res.status(statusCode).json({ error: (err as Error).message });
+      res.status(statusCode).json({
+        error: deliberate
+          ? (err as Error).message
+          : "Promotion failed due to an internal error",
+      });
       return;
     }
 
@@ -224,11 +235,9 @@ export function createPromotionRouter(deps: RestDeps): Router {
       return;
     }
     if (!canReadNamespace(auth, resolvedTargetNamespace)) {
-      res
-        .status(403)
-        .json({
-          error: "Permission denied: target namespace read access denied",
-        });
+      res.status(403).json({
+        error: "Permission denied: target namespace read access denied",
+      });
       return;
     }
 

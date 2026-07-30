@@ -149,7 +149,10 @@ describe("promotion REST API", () => {
       ],
       [],
     ]);
-    const app = buildApp({ role: "admin", clientId: "openbrain-promoter" }, pool);
+    const app = buildApp(
+      { role: "admin", clientId: "openbrain-promoter" },
+      pool,
+    );
 
     const { status, json } = await req(app, "post", "/api/v1/promote", {
       table: "thoughts",
@@ -189,7 +192,9 @@ describe("promotion REST API", () => {
       thread_id: null,
     });
     expect(pool.calls.length).toBe(2);
-    expect(pool.calls.some((call) => call.sql.includes("INSERT INTO"))).toBe(false);
+    expect(pool.calls.some((call) => call.sql.includes("INSERT INTO"))).toBe(
+      false,
+    );
   });
 
   it("records delegated promoter token identity in promotion provenance", async () => {
@@ -232,7 +237,9 @@ describe("promotion REST API", () => {
       promoted_by: "openbrain-promoter",
     });
     expect(json.provenance.promoted_by).not.toBe("shared-kb");
-    expect(pool.calls.some((call) => call.sql.includes("INSERT INTO"))).toBe(false);
+    expect(pool.calls.some((call) => call.sql.includes("INSERT INTO"))).toBe(
+      false,
+    );
   });
 
   it("blocks mutating promotion when the kill switch is enabled", async () => {
@@ -252,7 +259,10 @@ describe("promotion REST API", () => {
         ],
         [],
       ]);
-      const app = buildApp({ role: "admin", clientId: "openbrain-promoter" }, pool);
+      const app = buildApp(
+        { role: "admin", clientId: "openbrain-promoter" },
+        pool,
+      );
 
       const { status, json } = await req(app, "post", "/api/v1/promote", {
         table: "thoughts",
@@ -263,7 +273,9 @@ describe("promotion REST API", () => {
       expect(status).toBe(503);
       expect(json.error).toContain("OPENBRAIN_PROMOTION_KILL_SWITCH");
       expect(pool.calls.length).toBe(2);
-      expect(pool.calls.some((call) => call.sql.includes("INSERT INTO"))).toBe(false);
+      expect(pool.calls.some((call) => call.sql.includes("INSERT INTO"))).toBe(
+        false,
+      );
     } finally {
       if (previous === undefined) {
         delete process.env.OPENBRAIN_PROMOTION_KILL_SWITCH;
@@ -562,5 +574,49 @@ describe("promotion REST API", () => {
         created_at: "2026-06-09T00:00:00.000Z",
       },
     ]);
+  });
+
+  describe("error bodies", () => {
+    it("echoes a deliberate rejection's curated message and status", async () => {
+      // promotion-service marks its own rejections with a statusCode. Those are
+      // the contract callers parse, so they must pass through unchanged.
+      const pool = createSequencePool([[]]); // no source row -> curated 404
+      const app = buildApp({ role: "admin", clientId: "rico" }, pool);
+
+      const { status, json } = await req(app, "post", "/api/v1/promote", {
+        table: "thoughts",
+        id: "11111111-1111-4111-8111-111111111111",
+      });
+
+      expect(status).toBe(404);
+      expect(json.error).toBe("Source entry not found or archived");
+    });
+
+    it("does not echo raw driver text for an unexpected throw", async () => {
+      // A pg error carries the relation, the connection, and the parameter
+      // values it quotes back. Echoing err.message published all of it to any
+      // caller who could reach this route.
+      const leak =
+        'relation "decisions" does not exist at postgres://ob:hunter2@db.internal:5432/open_brain';
+      const pool = {
+        calls: [],
+        query: async () => {
+          throw new Error(leak);
+        },
+      } as unknown as ReturnType<typeof createSequencePool>;
+      const app = buildApp({ role: "admin", clientId: "rico" }, pool);
+
+      const { status, json } = await req(app, "post", "/api/v1/promote", {
+        table: "thoughts",
+        id: "11111111-1111-4111-8111-111111111111",
+      });
+
+      expect(status).toBe(500);
+      expect(json.error).toBe("Promotion failed due to an internal error");
+      const body = JSON.stringify(json);
+      expect(body).not.toContain("hunter2");
+      expect(body).not.toContain("db.internal");
+      expect(body).not.toContain("does not exist");
+    });
   });
 });

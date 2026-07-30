@@ -12,7 +12,10 @@
  * implementation both sides call, so a formula can only change in a single place.
  *
  * Keep every function here pure and free of DB/provider imports so both the
- * registry and the tool handlers can import it without cycles.
+ * registry and the tool handlers can import it without cycles. That rule is why
+ * this module reports nothing itself; where a value cannot be decoded, it
+ * exposes a predicate (`undecidableStringArray`) so the callers that do have a
+ * logger can report it. See coerceStringArray for the one case that matters.
  */
 
 /**
@@ -23,24 +26,31 @@
  * throws: anything that is not a usable array of strings collapses to `[]` so
  * the caller degrades to "no optional field".
  *
- * NOT LOGGED, AND THAT IS A KNOWN GAP, NOT A JUDGEMENT THAT IT DOES NOT MATTER.
- * This module is deliberately pure and import-free (see the file header) so the
- * repair registry and the tool handlers can both import it without a cycle;
- * pulling in the logger here would create exactly that cycle.
+ * ONE COLLAPSE IS NOT BENIGN, AND IT IS NOT SILENT ANY MORE.
  *
- * The gap is real, and the file header understates it: collapsing to `[]` is
- * described above as degrading "rather than corrupting the hash", but a dropped
- * `alternatives` array CHANGES the embed text, which changes `content_hash`. A
- * legacy row holding malformed JSON therefore hashes differently here than the
- * writer computed for the same row -- the drift-detection corruption this
- * module exists to prevent. Silently.
+ * The other collapses are honest: `null`, a number, or an object genuinely
+ * carries no strings, so `[]` is the true answer and the hash built from it is
+ * the right hash. But a value that is a non-empty STRING which fails to parse is
+ * different -- it may well be an array whose text is damaged, and collapsing it
+ * drops content that belongs in the canonical text. Since the canonical text is
+ * what `content_hash` is baked from, that row then hashes differently here than
+ * its writer computed, which the embedding-repair registry reads as
+ * `source_drift`: it regenerates a different vector and rewrites the dedup key,
+ * every pass, forever. That is the exact corruption this module exists to
+ * prevent, and the header's claim that collapsing degrades "rather than
+ * corrupting the hash" was wrong for this one case.
  *
- * Fixing it properly means returning a discriminated result the callers can
- * report on (`{ ok: false, reason: "unparseable" }`) rather than a bare array,
- * which changes every call site. That is a larger change than this sweep, and
- * inventing a logger import to paper over it would break the no-cycle rule the
- * header sets. Recorded here so the next reader sees a known gap instead of
- * concluding, as the header currently implies, that it is harmless.
+ * This module cannot log it: the file header requires it stay pure and
+ * import-free so the repair registry and the tool handlers can both import it
+ * without a cycle. So instead of logging, the case is made DETECTABLE --
+ * `undecidableStringArray()` below answers the same question without a logger,
+ * and `src/embedding-repair.ts` consults it and reports before it can be
+ * mistaken for drift.
+ *
+ * It also deliberately does NOT throw. `target.sourceHash(row)` is called inside
+ * the drift-detection loop with no try/catch, so throwing here would abort an
+ * entire repair scan on one damaged legacy row -- turning a one-row problem into
+ * a total outage. Detectable-and-reported is the correct shape; fail-fast is not.
  */
 export function coerceStringArray(value: unknown): string[] {
   let v = value;
@@ -54,6 +64,51 @@ export function coerceStringArray(value: unknown): string[] {
   }
   if (!Array.isArray(v)) return [];
   return v.filter((item): item is string => typeof item === "string");
+}
+
+/**
+ * Would `coerceStringArray(value)` drop content it could not decide about?
+ *
+ * True ONLY for a non-empty string that is not parseable JSON -- the one input
+ * whose collapse to `[]` may lose real content and therefore change the
+ * canonical text and its hash. Every other collapse (`null`, a number, an
+ * object, a parseable non-array) is an honest empty answer and returns false.
+ *
+ * Pure and import-free, like everything else here, so the callers that DO have a
+ * logger can ask the question and report it. Keeping the predicate next to the
+ * coercion is what stops the two from drifting apart.
+ */
+export function undecidableStringArray(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  if (value.trim().length === 0) return false;
+  try {
+    JSON.parse(value);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Which fields of a row would silently lose content on the way into the
+ * canonical text. Empty means the canonical text is trustworthy.
+ *
+ * The repair path calls this before treating a hash mismatch as `source_drift`,
+ * so a damaged legacy row is reported as damaged instead of being re-embedded
+ * and re-keyed on every pass.
+ */
+export function undecidableCanonicalFields(
+  source: Record<string, unknown>,
+): string[] {
+  // Every field either builder feeds through coerceStringArray.
+  const fields = [
+    "alternatives",
+    "tags",
+    "key_decisions",
+    "next_steps",
+    "blockers",
+  ];
+  return fields.filter((field) => undecidableStringArray(source[field]));
 }
 
 export interface DecisionSource {

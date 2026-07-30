@@ -61,6 +61,7 @@ import {
   type TargetRow,
 } from "./embedding-targets.ts";
 import { logger } from "./logger.ts";
+import { undecidableCanonicalFields } from "./embedding-canonical.ts";
 
 /** Minimal queryable surface -- a pg.Pool or pg.PoolClient both satisfy this. */
 export type Queryable = Pick<pg.Pool | pg.PoolClient, "query">;
@@ -356,7 +357,27 @@ export async function selectStale(
         const storedHash = (row.content_hash as string | null) ?? null;
         const freshHash = target.sourceHash(row);
         if (storedHash !== null && storedHash !== freshHash) {
-          reasons.push("source_drift");
+          // A mismatch is only drift if the canonical text can be trusted. When
+          // a text[]/jsonb field arrives as damaged JSON text, coerceStringArray
+          // collapses it to [] and the recomputed hash is missing content the
+          // writer hashed -- so the mismatch is an artifact of the damage, not
+          // evidence the source changed. Treating it as drift re-embedded and
+          // re-keyed the row on every pass, forever, and never said why.
+          const undecidable = undecidableCanonicalFields(
+            row as Record<string, unknown>,
+          );
+          if (undecidable.length > 0) {
+            logger.warn("embedding_repair_row_undecodable", {
+              table,
+              id: String(row[target.idColumn]),
+              // Field NAMES only -- the values are the row's own content.
+              undecidable_fields: undecidable,
+              detail:
+                "hash mismatch not treated as source_drift; canonical text is incomplete",
+            });
+          } else {
+            reasons.push("source_drift");
+          }
         }
       }
     }

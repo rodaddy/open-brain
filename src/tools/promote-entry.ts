@@ -95,8 +95,22 @@ export function registerPromoteEntry(server: McpServer, deps: ToolDeps): void {
           dry_run: args.dry_run ?? false,
           ...describeError(err),
         });
+        // Same split as the REST twin in rest-promotion.ts: promotion-service
+        // marks deliberate rejections with a statusCode and a curated message,
+        // and those are the contract. An error without one is an unexpected
+        // throw whose message is raw driver text (relation names, connection
+        // detail, quoted parameter values) and must not reach a caller.
+        const deliberate =
+          typeof (err as { statusCode?: unknown }).statusCode === "number";
         return {
-          content: [{ type: "text" as const, text: (err as Error).message }],
+          content: [
+            {
+              type: "text" as const,
+              text: deliberate
+                ? (err as Error).message
+                : "Promotion failed due to an internal error",
+            },
+          ],
           isError: true,
         };
       }
