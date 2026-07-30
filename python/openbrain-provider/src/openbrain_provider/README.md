@@ -1,4 +1,7 @@
-"""
+# openbrain_provider
+
+<!-- generated from __init__.py -- do not edit by hand -->
+
 openbrain_provider - the runtime lifecycle provider for Open Brain.
 
 Purpose:
@@ -55,29 +58,9 @@ See Also:
     - ``openbrain_memory`` - the client this provider dispatches through
     - ``docs/memory-contract.md`` - the durable memory protocol
     - ``docs/CODING_STANDARDS.md`` - section 4 observability, section 5 errors
-"""
 
-from __future__ import annotations
+---
 
-from .config import (
-    ConfigError,
-    DispatchConfig,
-    LogConfig,
-    ProviderConfig,
-    load_config,
-)
-from .observability import SERVICE_NAME, configure_observability, logger
-from .vocabulary import EVENT_TYPES, is_valid_event_type
-
-__all__ = [
-    "EVENT_TYPES",
-    "SERVICE_NAME",
-    "ConfigError",
-    "DispatchConfig",
-    "LogConfig",
-    "ProviderConfig",
-    "configure_observability",
-    "is_valid_event_type",
-    "load_config",
-    "logger",
-]
+Generated from the module docstring in `__init__.py`. To change this
+file, edit that docstring and run
+`python scripts/pytools/generate_package_docs.py --write`.
