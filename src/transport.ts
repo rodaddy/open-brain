@@ -6,8 +6,32 @@ import type { Request, Response } from "express";
 import type { AuthInfo } from "./types.ts";
 import { logger } from "./logger.ts";
 
-const SESSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
-const SWEEP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+// An idle session holds a slot against a hard cap, and the two costs are not
+// comparable. Measured 2026-07-30 against the local service: re-initializing on
+// a live connection is 6 ms, and a warm tool call is ~20 ms. Exhausting the pool
+// is a 429 that stops every client until slots free.
+//
+// This was 30 minutes, with the safety-net sweeper at 2x -- so a client that
+// made one call and vanished held a slot for up to an hour. A backfill leaked
+// 100 sessions in ~45 seconds and the service refused all new connections; the
+// cap was reached long before a single session had aged out.
+//
+// 30 seconds is sized for the CONCURRENT case, which is the one that breaks.
+// The single-client math is easy -- during bulk work the gap between calls is
+// milliseconds and the slowest measured step (read + strip a 256 MB transcript)
+// was 603 ms. The case that matters is core01 with 60-70 clients: every one of
+// them idling inside the TTL window holds a slot simultaneously, and nothing is
+// malfunctioning when that fills the pool. At a 30 s hold, 70 clients leave real
+// headroom in 100 slots; at 60 s they do not.
+//
+// The timer resets on every request (resetTimer), so this bounds IDLE time, not
+// session lifetime. A busy client is never expired mid-work, and a client that
+// does go quiet pays one 6 ms handshake on its next call.
+const SESSION_TTL_MS =
+  readPositiveInt(process.env.OPEN_BRAIN_SESSION_TTL_SECONDS, 30) * 1000;
+// Sweep often enough that the safety net (2x TTL) is a backstop rather than the
+// effective policy.
+const SWEEP_INTERVAL_MS = 30 * 1000; // 30 seconds
 const CLOSE_TIMEOUT_MS = 5_000; // 5 seconds max for transport.close()
 const DEFAULT_MAX_SESSIONS = 100;
 const DEFAULT_SESSION_RETRY_AFTER_SECONDS = 2;
@@ -24,10 +48,7 @@ interface SessionEntry {
 const sessions: Map<string, SessionEntry> = new Map();
 let pendingInitializes = 0;
 
-function readPositiveInt(
-  value: string | undefined,
-  fallback: number,
-): number {
+function readPositiveInt(value: string | undefined, fallback: number): number {
   if (!value) return fallback;
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
