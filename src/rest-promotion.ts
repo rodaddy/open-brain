@@ -6,7 +6,11 @@ import type { AuthInfo, Table } from "./types.ts";
 import { ALL_TABLES } from "./tools/search-brain.ts";
 import type { generateEmbedding } from "./embedding.ts";
 import { promoteEntry } from "./promotion-service.ts";
-import { appendReadNamespacePredicate, canReadNamespace } from "./read-policy.ts";
+import { describeError, logger } from "./observability/index.ts";
+import {
+  appendReadNamespacePredicate,
+  canReadNamespace,
+} from "./read-policy.ts";
 import { appendWriteNamespacePredicate } from "./namespace-policy.ts";
 import {
   canonicalNamespace,
@@ -95,20 +99,43 @@ export function createPromotionRouter(deps: RestDeps): Router {
         },
       );
     } catch (err) {
-      const statusCode = typeof (err as any)?.statusCode === "number"
-        ? (err as any).statusCode
-        : 500;
+      const statusCode =
+        typeof (err as any)?.statusCode === "number"
+          ? (err as any).statusCode
+          : 500;
+      // A promotion that fails wrote nothing, and this route recorded nothing
+      // either: the only trace was a status code in an access log. The driver
+      // fields say which relation refused it, and why.
+      logger.error("rest_promote_failed", {
+        status_code: statusCode,
+        namespace: resolvedTargetNamespace,
+        ...describeError(err),
+      });
+      // NOTE: this echoes err.message into the response body, unlike the doctor
+      // route in index.ts which withholds raw messages because they can carry
+      // paths and env detail. Left as-is here because callers parse it, and
+      // changing it is a caller-visible contract change, not a logging fix.
       res.status(statusCode).json({ error: (err as Error).message });
       return;
     }
 
-    res.status(result.status === "duplicate" ? 409 : result.status === "dry_run" ? 200 : 201).json(result);
+    res
+      .status(
+        result.status === "duplicate"
+          ? 409
+          : result.status === "dry_run"
+            ? 200
+            : 201,
+      )
+      .json(result);
   });
 
   router.post("/demote", async (req: Request, res: Response) => {
     const auth = getAuth(req);
     if (!auth || (auth.role !== "admin" && auth.role !== "ob-admin")) {
-      res.status(403).json({ error: "Permission denied: admin or ob-admin role required" });
+      res
+        .status(403)
+        .json({ error: "Permission denied: admin or ob-admin role required" });
       return;
     }
 
@@ -131,7 +158,9 @@ export function createPromotionRouter(deps: RestDeps): Router {
       return;
     }
     if (!rows[0].promoted_from) {
-      res.status(400).json({ error: "Entry was not promoted -- cannot demote" });
+      res
+        .status(400)
+        .json({ error: "Entry was not promoted -- cannot demote" });
       return;
     }
 
@@ -185,13 +214,21 @@ export function createPromotionRouter(deps: RestDeps): Router {
     const resolvedTargetNamespace =
       target_namespace ?? sharedNamespaceConfig().sharedNamespace;
     const targetPhysicalNamespace = physicalNamespace(resolvedTargetNamespace);
-    const targetCanonicalNamespace = canonicalNamespace(targetPhysicalNamespace);
+    const targetCanonicalNamespace = canonicalNamespace(
+      targetPhysicalNamespace,
+    );
     if (!canReadNamespace(auth, namespace.data)) {
-      res.status(403).json({ error: "Permission denied: namespace read access denied" });
+      res
+        .status(403)
+        .json({ error: "Permission denied: namespace read access denied" });
       return;
     }
     if (!canReadNamespace(auth, resolvedTargetNamespace)) {
-      res.status(403).json({ error: "Permission denied: target namespace read access denied" });
+      res
+        .status(403)
+        .json({
+          error: "Permission denied: target namespace read access denied",
+        });
       return;
     }
 

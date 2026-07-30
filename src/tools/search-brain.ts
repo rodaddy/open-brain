@@ -18,6 +18,7 @@ import {
 import type { AuthInfo, LinkRelation, Table, Tier } from "../types.ts";
 import type { ToolDeps } from "./index.ts";
 import { logger } from "../logger.ts";
+import { describeError } from "../observability/index.ts";
 import {
   ALL_TABLES,
   SOURCE_LABELS,
@@ -1656,6 +1657,15 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
               { enableGraph: true, ftsConfig },
             );
       } catch (err) {
+        // "An empty result set" is this repo's named anti-pattern
+        // (docs/GOTCHAS.md): a failed search and a search that found nothing
+        // were indistinguishable in the logs. The pg fields exist only here.
+        logger.error("search_brain_failed", {
+          namespace,
+          mode,
+          tier,
+          ...describeError(err),
+        });
         const message = err instanceof Error ? err.message : String(err);
         return {
           content: [{ type: "text" as const, text: message }],
