@@ -490,7 +490,19 @@ class FirstClassMemoryRuntime:
                     delegate_namespace=False,
                 )
             except Exception as error:
+                # Threaded into the router, which surfaces it on the first call
+                # as a RuntimeCallError -- so it is not lost. It is logged here
+                # anyway because this is the moment the process stops having a
+                # direct client at all: without a line, "running against the
+                # real service" and "silently on the fallback for the rest of
+                # this process" look identical at startup. Error class only; the
+                # message can carry the base URL and its credentials.
                 setup_error = error
+                logger.warning(
+                    "Direct Open Brain client construction failed; "
+                    "this lane will use fallback or spool only",
+                    extra={"error_class": type(error).__name__},
+                )
         fallback = None
         if config.fallback_enabled:
             fallback = Mcp2CliFallback(
