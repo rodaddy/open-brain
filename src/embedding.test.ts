@@ -217,7 +217,9 @@ describe("embedding watchdog", () => {
 
   function fakeSpawnProcess(
     options: { mode?: "success" | "error" | "exit-nonzero" } = {},
-  ): ReturnType<Parameters<typeof __setEmbeddingWatchdogRestartSpawnerForTests>[0]> {
+  ): ReturnType<
+    Parameters<typeof __setEmbeddingWatchdogRestartSpawnerForTests>[0]
+  > {
     const mode = options.mode ?? "success";
     return {
       once: (event: string, handler: (...args: unknown[]) => void) => {
@@ -499,11 +501,128 @@ describe("generateEmbeddingWithMetadata", () => {
     expect(result.error!.lastStatus).toBe(500);
   });
 
-  it("returns input_invalid error for empty text", async () => {
+  it("embeds text far longer than the old 32,000 rejection instead of returning null", async () => {
+    // 51,283 is the longest turn actually captured in the live clone
+    // (open_brain_local_20260724, ob_raw_turns, measured 2026-07-30). Under the
+    // previous behaviour this exact real artifact stored embedding=null and was
+    // unreachable by semantic search.
+    const realWorldLongest = "The operator asked a long question. ".repeat(
+      1425,
+    );
+    expect(realWorldLongest.length).toBeGreaterThan(51_283);
+
+    let requests = 0;
+    mockFetch(async (_url, init) => {
+      requests++;
+      const sent = JSON.parse(String((init as RequestInit).body)) as {
+        input: string;
+      };
+      // Every request must carry real text, never an empty tail segment.
+      expect(sent.input.length).toBeGreaterThan(0);
+      return new Response(
+        JSON.stringify({ data: [{ embedding: make768() }] }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    });
+
     const result = await generateEmbeddingWithMetadata(
-      "",
+      realWorldLongest,
       "http://fake:4000",
     );
+
+    expect(result.error).toBeUndefined();
+    expect(result.embedding).not.toBeNull();
+    expect(result.embedding).toHaveLength(768);
+    // Segmented, not sent whole and not refused.
+    expect(requests).toBeGreaterThan(1);
+  });
+
+  it("sends every character of a long input to the provider", async () => {
+    // The property that matters: nothing is dropped on the floor. Overlap means
+    // the concatenation is LONGER than the source, never shorter, and every
+    // source character appears in at least one segment.
+    const marker = "ZEBRAMARMALADE";
+    const body = "filler sentence for the segmenting path. ".repeat(400);
+    const text = `${body}${marker}${body}`;
+
+    const sentInputs: string[] = [];
+    mockFetch(async (_url, init) => {
+      const sent = JSON.parse(String((init as RequestInit).body)) as {
+        input: string;
+      };
+      sentInputs.push(sent.input);
+      return new Response(
+        JSON.stringify({ data: [{ embedding: make768() }] }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    });
+
+    const result = await generateEmbeddingWithMetadata(
+      text,
+      "http://fake:4000",
+    );
+    expect(result.embedding).not.toBeNull();
+
+    // The marker sits in the middle -- exactly where an end-cut would lose it.
+    expect(sentInputs.some((input) => input.includes(marker))).toBe(true);
+    // The tail survives too.
+    const tail = text.slice(-200).trim();
+    expect(sentInputs.some((input) => input.includes(tail))).toBe(true);
+  });
+
+  it("fails the whole embedding when one segment fails, rather than combining a partial", async () => {
+    // A vector built from surviving segments would represent only part of the
+    // text while reporting success -- a wrong answer shaped like a right one.
+    let call = 0;
+    mockFetch(async () => {
+      call++;
+      if (call === 2) return new Response("nope", { status: 400 });
+      return new Response(
+        JSON.stringify({ data: [{ embedding: make768() }] }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    });
+
+    const result = await generateEmbeddingWithMetadata(
+      "sentence. ".repeat(3000),
+      "http://fake:4000",
+    );
+    expect(result.embedding).toBeNull();
+    expect(result.error).toBeDefined();
+  });
+
+  it("returns a unit-length vector when segments are combined", async () => {
+    // These vectors are compared by cosine distance, which assumes unit length.
+    mockFetch(
+      async () =>
+        new Response(
+          JSON.stringify({ data: [{ embedding: makeEmbedding(768) }] }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+
+    const result = await generateEmbeddingWithMetadata(
+      "sentence for combining. ".repeat(1000),
+      "http://fake:4000",
+    );
+    expect(result.embedding).not.toBeNull();
+    const norm = Math.sqrt(
+      result.embedding!.reduce((sum, value) => sum + value * value, 0),
+    );
+    expect(norm).toBeCloseTo(1, 6);
+  });
+
+  it("returns input_invalid error for empty text", async () => {
+    const result = await generateEmbeddingWithMetadata("", "http://fake:4000");
     expect(result.embedding).toBeNull();
     expect(result.error).toBeDefined();
     expect(result.error!.code).toBe("input_invalid");
@@ -523,7 +642,6 @@ describe("generateEmbeddingWithMetadata", () => {
       if (origEmbeddingUrl !== undefined) {
         process.env.EMBEDDING_BASE_URL = origEmbeddingUrl;
       }
-
     }
   });
 
@@ -649,10 +767,13 @@ describe("configurable embedding dimensions", () => {
 
     mockFetch(
       async () =>
-        new Response(JSON.stringify({ data: [{ embedding: makeEmbedding(4) }] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
+        new Response(
+          JSON.stringify({ data: [{ embedding: makeEmbedding(4) }] }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
     );
 
     const result = await module.generateEmbeddingWithMetadata(
