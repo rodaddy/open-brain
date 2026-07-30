@@ -41,15 +41,21 @@ import type { ToolDeps } from "./index.ts";
 const CONVERSATION_FACT_EVENT_TYPES = ["fact", "decision", "receipt"] as const;
 type ConversationFactEventType = (typeof CONVERSATION_FACT_EVENT_TYPES)[number];
 
-// Hard cap on units per call. This is a distillation contract, not a bulk
-// dump: a large array is a signal the caller is trying to spill a transcript,
-// so we bound it low and reject anything larger before any write.
-const MAX_FACTS_PER_CALL = 20;
-
-// Per-unit content bound. A distilled fact/decision/receipt is a single bounded
-// statement, far smaller than the 50k a raw event body allows. Anything larger
-// is treated as a probable transcript/message dump and rejected.
-const MAX_FACT_CONTENT_CHARS = 4000;
+// No count or size ceiling on a write. These were 20 units per call and 4,000
+// characters per unit, and both REJECTED -- so a caller distilling 21 facts, or
+// one careful 4,100-character decision, lost the entire call and stored nothing.
+// That is the defect ingest_raw_turn carried (it rejected turns over 200k and
+// failed their 99 batch-mates with them), fixed there on 2026-07-30 and still
+// live here.
+//
+// docs/conversation-facts-contract.md named both as the guard against bulk
+// dumps. Size was always a proxy for the real question: what makes a payload a
+// transcript dump is its SHAPE, not its length. Step 4 of that contract tests
+// shape directly -- RAW_TRANSCRIPT_KEYS below, plus the strict schema and the
+// runtime scan -- and all of it stays. The size bound caught only honest
+// callers with long content, and the database chunks for embeddings on its own.
+const MAX_FACTS_PER_CALL = Number.MAX_SAFE_INTEGER;
+const MAX_FACT_CONTENT_CHARS = Number.MAX_SAFE_INTEGER;
 
 // Keys that indicate a raw transcript / turn array / message dump was supplied.
 // Their PRESENCE anywhere in the request or a unit is a hard reject, regardless

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { logger } from "../logger.ts";
 
 export const WORKING_SET_LABEL = "working_context" as const;
 export const WORKING_SET_SCHEMA = "openbrain.working_set.v1" as const;
@@ -401,10 +402,24 @@ function requireScopePart(value: string, field: string): string {
   return trimmed;
 }
 
+/**
+ * Serialized length, or null when the value cannot be serialized at all.
+ *
+ * The caller treats null as over-budget, which is a real mismatch: a cycle or a
+ * BigInt in metadata is a *shape* fault, and the caller is told
+ * `metadata_too_large` about a value whose size was never the problem.
+ * Correcting that label means changing the public result reason, so it is not
+ * done here -- but the true cause is recorded instead of discarded.
+ */
 function serializedJsonLength(value: unknown): number | null {
   try {
     return JSON.stringify(value).length;
-  } catch {
+  } catch (error) {
+    logger.warn("working_set_metadata_unserializable", {
+      value_type: typeof value,
+      error_name: error instanceof Error ? error.name : typeof error,
+      error_message: error instanceof Error ? error.message : String(error),
+    });
     return null;
   }
 }

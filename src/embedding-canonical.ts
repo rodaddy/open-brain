@@ -21,7 +21,26 @@
  * into a JS value, so a healthy row arrives as an array; but a legacy row could
  * hold a JSON-encoded string, `null`, or a non-array jsonb scalar. This never
  * throws: anything that is not a usable array of strings collapses to `[]` so
- * the caller degrades to "no optional field" rather than corrupting the hash.
+ * the caller degrades to "no optional field".
+ *
+ * NOT LOGGED, AND THAT IS A KNOWN GAP, NOT A JUDGEMENT THAT IT DOES NOT MATTER.
+ * This module is deliberately pure and import-free (see the file header) so the
+ * repair registry and the tool handlers can both import it without a cycle;
+ * pulling in the logger here would create exactly that cycle.
+ *
+ * The gap is real, and the file header understates it: collapsing to `[]` is
+ * described above as degrading "rather than corrupting the hash", but a dropped
+ * `alternatives` array CHANGES the embed text, which changes `content_hash`. A
+ * legacy row holding malformed JSON therefore hashes differently here than the
+ * writer computed for the same row -- the drift-detection corruption this
+ * module exists to prevent. Silently.
+ *
+ * Fixing it properly means returning a discriminated result the callers can
+ * report on (`{ ok: false, reason: "unparseable" }`) rather than a bare array,
+ * which changes every call site. That is a larger change than this sweep, and
+ * inventing a logger import to paper over it would break the no-cycle rule the
+ * header sets. Recorded here so the next reader sees a known gap instead of
+ * concluding, as the header currently implies, that it is harmless.
  */
 export function coerceStringArray(value: unknown): string[] {
   let v = value;

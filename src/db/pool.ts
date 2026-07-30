@@ -1,6 +1,7 @@
 import pg from "pg";
 import pgvector from "pgvector/pg";
 import { logger } from "../logger.ts";
+import { describeError } from "../observability/index.ts";
 import type { PoolHealth } from "../types.ts";
 
 function parsePositiveInt(value: string | undefined, fallback: number): number {
@@ -33,16 +34,20 @@ export function createPool(overrides?: Partial<pg.PoolConfig>): pg.Pool {
     try {
       await pgvector.registerTypes(client);
     } catch (err) {
-      logger.error(
-        "pgvector registration failed — vector operations will not work. " +
-          "Ensure the pgvector extension is installed (CREATE EXTENSION vector)",
-        { error: err instanceof Error ? err.message : String(err) },
-      );
+      // Stable event name, not a sentence: Loki filters on `message`, so the
+      // remediation text moves into a field where it does not fragment the
+      // query surface. The pg fields come along now -- an extension that is
+      // absent and one the role may not use report different SQLSTATEs.
+      logger.error("pgvector_registration_failed", {
+        impact: "vector operations will not work",
+        remediation: "install the pgvector extension (CREATE EXTENSION vector)",
+        ...describeError(err),
+      });
     }
   });
 
   pool.on("error", (err) => {
-    logger.error("Unexpected pool error", { error: err.message });
+    logger.error("pool_error", describeError(err));
   });
 
   return pool;
@@ -57,7 +62,27 @@ export async function checkPoolHealth(pool: pg.Pool): Promise<PoolHealth> {
       idle: pool.idleCount,
       waiting: pool.waitingCount,
     };
-  } catch {
-    return { connected: false, total: 0, idle: 0, waiting: 0 };
+  } catch (error) {
+    // The most-consulted health signal in the system, and it threw away the one
+    // fact anybody wants: WHY. "connected: false" was returned identically for a
+    // refused connection, a password failure, an exhausted pool, and a database
+    // in recovery. The pg fields distinguish all four.
+    //
+    // The returned shape stays as it was -- callers and the doctor contract
+    // depend on it -- except that the counts are reported as observed rather
+    // than as zeros. A pool with 10 connections and a failing probe has 10
+    // connections; claiming 0 invented a fact.
+    logger.error("pool_health_check_failed", {
+      total: pool.totalCount,
+      idle: pool.idleCount,
+      waiting: pool.waitingCount,
+      ...describeError(error),
+    });
+    return {
+      connected: false,
+      total: pool.totalCount,
+      idle: pool.idleCount,
+      waiting: pool.waitingCount,
+    };
   }
 }

@@ -468,25 +468,57 @@ export const GRADING_PAGE_HTML = String.raw`<!doctype html>
     }
   }
 
+  // Every failure below is announced. The batch "is not a cache" (see the file
+  // header): staged judgement across 1,104 items is the expensive thing, and a
+  // silent return here made losing it look exactly like a first run.
   function restore() {
     let raw = null;
-    try { raw = localStorage.getItem(STORE_KEY); } catch { return; }
+    try {
+      raw = localStorage.getItem(STORE_KEY);
+    } catch (e) {
+      // Private mode or a storage-blocking policy. persist() fails the same way
+      // and warns -- but only once something is staged. Said up front instead.
+      console.warn("grading: local storage unreadable", e);
+      say("local storage unavailable -- staged work will not survive a reload", "err");
+      return;
+    }
     if (!raw) return;
     let parsed;
-    try { parsed = JSON.parse(raw); } catch { return; }
-    if (!Array.isArray(parsed)) return;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (e) {
+      console.error("grading: stored batch is not valid JSON", e);
+      say("saved batch could not be read and was not restored -- it is still in storage, not overwritten", "err");
+      return;
+    }
+    if (!Array.isArray(parsed)) {
+      console.error("grading: stored batch is not an array");
+      say("saved batch had an unexpected shape and was not restored", "err");
+      return;
+    }
     // Re-validate rather than trusting storage: a stale or hand-edited entry
     // must not be able to put an action the server will reject into a batch the
     // operator then sends as a unit.
     state.batch = parsed.filter((g) =>
       g && typeof g.candidateId === "string" && ORDER.indexOf(g.action) >= 0);
+    if (state.batch.length < parsed.length) {
+      // The dropped entries are the operator's own staged decisions. Rejecting
+      // them is right; dropping them without a word is not.
+      const dropped = parsed.length - state.batch.length;
+      console.warn("grading: dropped " + dropped + " unrestorable staged entries");
+      say(dropped + " saved item(s) could not be restored and were dropped", "err");
+    }
     try {
       const lb = JSON.parse(localStorage.getItem(LAST_BATCH_KEY) || "null");
       if (lb && typeof lb.batch_id === "string") {
         state.lastBatchId = lb.batch_id;
         state.lastBatchSize = lb.size || 0;
       }
-    } catch { /* no last batch is the normal first-run case */ }
+    } catch (e) {
+      // No last batch is the normal first-run case, so this is not operator
+      // facing -- but a corrupt value means undo silently will not be offered.
+      console.warn("grading: last-batch marker unreadable, undo unavailable", e);
+    }
   }
 
   function rememberLastBatch(id, size) {
@@ -495,7 +527,10 @@ export const GRADING_PAGE_HTML = String.raw`<!doctype html>
     try {
       localStorage.setItem(LAST_BATCH_KEY,
         id === null ? "null" : JSON.stringify({ batch_id: id, size: size }));
-    } catch { /* undo still works this session without it */ }
+    } catch (e) {
+      // Undo still works this session without it; it will not survive a reload.
+      console.warn("grading: could not persist last-batch marker", e);
+    }
   }
 
   // ---- server ---------------------------------------------------------------
@@ -503,7 +538,14 @@ export const GRADING_PAGE_HTML = String.raw`<!doctype html>
   async function api(path, options) {
     const res = await fetch(path, options);
     let body = null;
-    try { body = await res.json(); } catch { /* a non-JSON error page is still an error */ }
+    try {
+      body = await res.json();
+    } catch (e) {
+      // A non-JSON error page is still an error, and the throw below reports
+      // the status. But a 200 whose body will not parse is a different bug --
+      // the caller gets null and behaves as if the server said nothing.
+      console.warn("grading: response body was not JSON (HTTP " + res.status + ")", e);
+    }
     if (!res.ok) {
       const err = new Error((body && body.error) || ("HTTP " + res.status));
       err.status = res.status;

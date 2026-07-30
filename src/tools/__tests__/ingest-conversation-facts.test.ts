@@ -326,10 +326,13 @@ describe("ingest_conversation_facts contract", () => {
     }
   });
 
-  it("rejects a bulk conversation payload exceeding the per-call cap", async () => {
+  // A transcript dump is recognised by its SHAPE -- see the raw-key tests
+  // below -- so these two now assert that an honest caller with a lot to say
+  // gets everything stored. 2026-07-30.
+  it("stores 21 distilled units in one call", async () => {
     const { client, cleanup } = await setupToolClient(makePool(), agentAuth);
     try {
-      const tooMany = Array.from({ length: 21 }, (_, i) => ({
+      const many = Array.from({ length: 21 }, (_, i) => ({
         event_type: "fact" as const,
         content: `fact ${i}`,
       }));
@@ -338,16 +341,16 @@ describe("ingest_conversation_facts contract", () => {
         arguments: {
           scope: VALID_SCOPE,
           source_ref: VALID_SOURCE_REF,
-          facts: tooMany,
+          facts: many,
         },
       });
-      expect(result.isError).toBe(true);
+      expect(result.isError).toBeFalsy();
     } finally {
       await cleanup();
     }
   });
 
-  it("rejects an oversized distilled unit (likely a message dump)", async () => {
+  it("stores a 4001-character distilled unit whole", async () => {
     const { client, cleanup } = await setupToolClient(makePool(), agentAuth);
     try {
       const result = await client.callTool({
@@ -358,7 +361,7 @@ describe("ingest_conversation_facts contract", () => {
           facts: [{ event_type: "fact", content: "x".repeat(4001) }],
         },
       });
-      expect(result.isError).toBe(true);
+      expect(result.isError).toBeFalsy();
     } finally {
       await cleanup();
     }

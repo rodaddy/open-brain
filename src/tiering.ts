@@ -2,6 +2,8 @@ import type pg from "pg";
 import { toSql } from "pgvector/pg";
 import { contentHash, EMBEDDING_MODEL } from "./embedding.ts";
 import type { generateEmbedding } from "./embedding.ts";
+import { logger } from "./logger.ts";
+import { describeError } from "./observability/index.ts";
 
 /**
  * Lane → own-durable memory tiering (Issue #160).
@@ -337,8 +339,19 @@ export async function tierLaneEvent(
   let embedding: number[] | null = null;
   try {
     embedding = await opts.embedFn(event.content);
-  } catch {
+  } catch (error) {
     embedding = null;
+    // The degradation is deliberate (hash-only dedup still works, and the
+    // adversarial SME checklist requires it keep working). The silence was not:
+    // a thought graduated without a vector is invisible to semantic recall
+    // afterwards, permanently, and nothing said the provider was down. This is
+    // the standard's degraded path, so it is a warning, not a debug line.
+    logger.warn("tier_embedding_degraded", {
+      namespace: opts.namespace,
+      event_id: event.id,
+      dedup_mode: "hash_only",
+      ...describeError(error),
+    });
   }
 
   const hash = event.content_hash ?? contentHash(event.content);

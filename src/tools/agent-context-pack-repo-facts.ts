@@ -10,6 +10,7 @@
 // the repo from source files or conversation.
 
 import { STALENESS_POLICIES } from "./repo-facts.ts";
+import { describeError, logger } from "../observability/index.ts";
 
 /** Local mirror of the write-side staleness_policy enum (repo-facts.ts). */
 type FactStalenessPolicy = (typeof STALENESS_POLICIES)[number];
@@ -242,7 +243,24 @@ export async function loadRepoFactsSection(
       budget: { ...budget, items_included: items.length },
       citations,
     };
-  } catch {
+  } catch (error) {
+    // Same shape as the guidance section: a "database_unavailable" envelope on
+    // its own tells a later reader nothing, and by then the inputs that produced
+    // it are gone. ERROR names what broke; DEBUG carries the whole call.
+    const detail = describeError(error);
+    logger.error("repo_facts_section_failed", {
+      repo,
+      namespace: args.namespace,
+      error_name: detail.error_name,
+      error_message: detail.error_message,
+    });
+    logger.debug("repo_facts_section_failed_detail", {
+      repo,
+      namespace: args.namespace,
+      requested_budget: args.budget,
+      resolved_budget: budget,
+      ...detail,
+    });
     return databaseUnavailableFragment("repo_facts", budget);
   }
 }

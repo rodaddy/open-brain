@@ -91,6 +91,8 @@ import {
   findReason,
   REASON_CODES,
 } from "./grading-reasons.ts";
+import { logger } from "./logger.ts";
+import { describeError } from "./observability/index.ts";
 
 /**
  * The review vocabulary, verbatim from
@@ -1283,12 +1285,27 @@ export async function submitGradeBatch(
     await client.query("COMMIT");
     return { batch_id: batchId, graded_by: grader, results };
   } catch (err) {
-    // Best-effort: if the connection is already broken the ROLLBACK throws too,
-    // and the original error is the one worth surfacing.
+    // The original error is the one worth surfacing, so it is what gets
+    // re-thrown -- but it is also worth recording here, because the caller
+    // may convert it into a generic message and this is the only place the
+    // driver's own fields are still attached.
+    // The batch id is generated inside the transaction, so it is deliberately
+    // not logged here -- it does not exist yet if the failure was early, and a
+    // rolled-back id refers to nothing. The grader and the item count are what
+    // identify this attempt.
+    logger.error("grade_batch_failed", {
+      graded_by: grader,
+      grades_submitted: parsed.length,
+      ...describeError(err),
+    });
+    // Best-effort: if the connection is already broken the ROLLBACK throws too.
     try {
       await client.query("ROLLBACK");
-    } catch {
-      /* the transaction is gone either way */
+    } catch (rollbackError) {
+      // Usually a dead connection, where the transaction is gone either way.
+      // A failure for any other reason leaves the transaction's fate unknown,
+      // and that was previously unrecorded anywhere.
+      logger.debug("grade_batch_rollback_failed", describeError(rollbackError));
     }
     throw err;
   } finally {
@@ -1420,10 +1437,18 @@ export async function undoBatch(
       candidates: reconciled.rows.length,
     };
   } catch (err) {
+    // Undo is the operation an operator reaches for when something already went
+    // wrong. An undo that itself fails silently, with only a re-thrown error
+    // the caller may generalize, is the worst time to have no record.
+    logger.error("undo_batch_failed", {
+      batch_id: batchId,
+      ...describeError(err),
+    });
     try {
       await client.query("ROLLBACK");
-    } catch {
-      /* the transaction is gone either way */
+    } catch (rollbackError) {
+      // Usually a dead connection, where the transaction is gone either way.
+      logger.debug("undo_batch_rollback_failed", describeError(rollbackError));
     }
     throw err;
   } finally {
