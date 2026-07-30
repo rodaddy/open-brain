@@ -884,12 +884,15 @@ def test_wrap_receipt_refs_are_encoded_as_server_supported_next_steps():
         },
     )
 
-    with pytest.raises(ValueError, match="at most 20"):
-        memory.wrap_session(
-            "Too much.",
-            next_steps=["step"],
-            receipt_refs=[f"receipt-{index}" for index in range(20)],
-        )
+    # Quantity is not a reason to refuse a wrap: this used to raise and lose
+    # the entire session record over the 21st item. TYPE validation below is
+    # untouched -- that is the real guarantee and it still fails closed.
+    memory.wrap_session(
+        "Plenty.",
+        next_steps=["step"],
+        receipt_refs=[f"receipt-{index}" for index in range(20)],
+    )
+    assert len(client.calls[-1][1]["next_steps"]) == 21
 
     with pytest.raises(ValueError, match="key_decisions"):
         memory.wrap_session("Bad decisions.", key_decisions="not-list")
@@ -920,12 +923,18 @@ def test_checkpoint_receipt_refs_share_wrap_schema_normalization():
     )
     assert "receipt_refs" not in client.calls[-1][1]
 
-    with pytest.raises(ValueError, match="at most 20"):
-        memory.checkpoint(
-            "Too much.",
-            next_steps=["step"],
-            receipt_refs=[f"receipt-{index}" for index in range(20)],
-        )
+    # A step plus twenty receipt refs used to raise "at most 20", failing the
+    # whole checkpoint -- so citing receipts cost the session its next steps.
+    # All 21 are now handed to the server intact.
+    memory.checkpoint(
+        "Plenty.",
+        next_steps=["step"],
+        receipt_refs=[f"receipt-{index}" for index in range(20)],
+    )
+    encoded = client.calls[-1][1]["next_steps"]
+    assert len(encoded) == 21
+    assert encoded[0] == "step"
+    assert encoded[-1] == "Receipt ref: receipt-19"
 
 
 def test_export_disclosure_bundle_matches_ts_feature_shape():

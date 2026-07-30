@@ -2,14 +2,23 @@
 
 from __future__ import annotations
 
-import json
 import re
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from typing import Any, Protocol
 from uuid import UUID
 
-MAX_DISTILLED_CONTENT_BYTES = 16 * 1024
+# Was 16 * 1024, which REJECTED the whole write rather than storing it. The
+# server it writes to accepts 50_000 (src/tools/append-session-event.ts:991), so
+# this side was three times stricter than the thing receiving the data: a 20 KB
+# distilled decision was refused locally and never reached a server that would
+# have taken it. A distilled statement is already the short form of something
+# longer; refusing it stores nothing at all.
+#
+# Kept as MAX_SAFE-style sentinel rather than deleted because the name is
+# exported (runtime.py:94) and asserted in tests; the value no longer turns
+# anything away, and Postgres `text` is the real bound.
+MAX_DISTILLED_CONTENT_BYTES = 2**53 - 1
 MAX_REFLEX_QUERY_CHARS = 4_000
 MAX_CITATION_ID_CHARS = 500
 MAX_SOURCE_REF_CHARS = 1_000
@@ -714,13 +723,10 @@ def wrap_metadata(
         distilled = [
             distilled_content(value, name, reject_secret_payload) for value in values
         ]
-        if len(distilled) > 20:
-            raise ValueError(f"{name} must contain at most 20 items")
-        encoded = json.dumps(distilled, separators=(",", ":")).encode("utf-8")
-        if len(encoded) > MAX_DISTILLED_CONTENT_BYTES:
-            raise ValueError(
-                f"{name} exceeds {MAX_DISTILLED_CONTENT_BYTES} UTF-8 bytes"
-            )
+        # No count check. A checkpoint carrying 21 key decisions used to lose
+        # the ENTIRE checkpoint over the 21st -- the same shape as the server's
+        # MAX_FACTS_PER_CALL, already removed for the same reason. The number of
+        # decisions a session produced is a fact about the session, not a knob.
         metadata[name] = distilled
     return metadata
 

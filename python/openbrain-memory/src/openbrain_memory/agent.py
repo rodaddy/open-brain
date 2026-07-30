@@ -1309,20 +1309,27 @@ def _validation_list(value: Any) -> list[dict[str, Any]]:
 
 
 def _session_wrap_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
+    """Shape session-wrap metadata. Validates TYPE, never quantity.
+
+    Three count rejections used to live here: 20 key_decisions, 20 next_steps,
+    and -- worst -- 20 for next_steps and receipt_refs COMBINED, so citing
+    receipts silently cost a session its next steps. Each raised, which failed
+    the entire wrap and stored nothing, over the 21st item.
+
+    How many decisions a session produced is a fact about that session. The
+    server stores what it is given, and this client's job is to hand it over
+    intact, not to decide the session was too productive.
+    """
     payload = dict(metadata)
     if "key_decisions" in payload:
         payload["key_decisions"] = _str_list(
             payload["key_decisions"],
             "key_decisions",
         )
-        if len(payload["key_decisions"]) > 20:
-            raise ValueError("key_decisions must contain at most 20 items")
     if payload.get("next_steps") is None:
         payload.pop("next_steps", None)
     elif "next_steps" in payload:
         payload["next_steps"] = _str_list(payload["next_steps"], "next_steps")
-        if len(payload["next_steps"]) > 20:
-            raise ValueError("next_steps must contain at most 20 items")
     receipt_refs = payload.pop("receipt_refs", None)
     if receipt_refs is not None:
         next_steps = payload.get("next_steps", [])
@@ -1332,12 +1339,7 @@ def _session_wrap_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
         receipt_next_steps = [
             f"Receipt ref: {item}" for item in _str_list(receipt_refs, "receipt_refs")
         ]
-        next_steps = [*next_steps, *receipt_next_steps]
-        if len(next_steps) > 20:
-            raise ValueError(
-                "next_steps plus receipt_refs must contain at most 20 items"
-            )
-        payload["next_steps"] = next_steps
+        payload["next_steps"] = [*next_steps, *receipt_next_steps]
     return payload
 
 

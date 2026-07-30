@@ -1737,25 +1737,52 @@ def test_all_distilled_write_fields_fail_safely_before_persistence() -> None:
 
     secret_capture = runtime.capture_distilled("token=super-secret-value")
     whitespace_only = runtime.capture_distilled(" \t\n")
-    oversized_summary = runtime.checkpoint("x" * (MAX_DISTILLED_CONTENT_BYTES + 1))
     secret_auxiliary = runtime.wrap(
         "Distilled summary",
         next_steps=["password=super-secret-value"],
-    )
-    oversized_list = runtime.checkpoint(
-        "Distilled summary",
-        key_decisions=["x" * 9000, "y" * 9000],
     )
 
     for output in (
         secret_capture,
         whitespace_only,
-        oversized_summary,
         secret_auxiliary,
-        oversized_list,
     ):
         assert output.receipt.status is ReceiptStatus.FAILED
     assert tool_calls(transport) == []
+
+
+def test_large_distilled_writes_are_persisted_not_refused() -> None:
+    """Size is not a reason to refuse a distilled write.
+
+    This previously asserted the opposite: a summary one byte over 16 KiB, and a
+    key_decisions list of two 9 KB entries, both had to FAIL. That client bound
+    was three times stricter than the server it writes to
+    (src/tools/append-session-event.ts:991 accepts 50_000), so a long distilled
+    decision was refused locally and never reached a server that would have
+    stored it. Refusing stores nothing; the write is the whole point.
+
+    The secret and whitespace rejections above are untouched -- those are the
+    real safety properties and they still fail closed.
+    """
+    transport = LaneAwareTransport()
+    runtime = FirstClassMemoryRuntime(
+        runtime_config(), runtime_scope(), transport=transport
+    )
+
+    large_summary = runtime.checkpoint("x" * (16 * 1024 + 1))
+    large_list = runtime.checkpoint(
+        "Distilled summary",
+        key_decisions=["x" * 9000, "y" * 9000],
+    )
+    many_decisions = runtime.checkpoint(
+        "Distilled summary",
+        key_decisions=[f"decision {i}" for i in range(21)],
+    )
+
+    for output in (large_summary, large_list, many_decisions):
+        assert output.receipt.status is ReceiptStatus.SAVED
+        assert output.receipt.durable is True
+    assert tool_calls(transport) != []
 
 
 def test_json_adapter_requires_distilled_for_every_write() -> None:
