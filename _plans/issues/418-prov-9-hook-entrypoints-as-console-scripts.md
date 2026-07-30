@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: none
 Created: 2026-07-25T23:36:38Z
-Updated: 2026-07-25T23:37:27Z
+Updated: 2026-07-28T20:05:16Z
 
 ---
 
@@ -28,3 +28,47 @@ Port the hook entrypoints as console scripts: `ob-memory-provider`, `ob-claude-h
 
 ## Non-goals
 Editing `settings.json` - that is PROV-11.
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-07-28T20:05:16Z
+
+## This is no longer a routine port — it is the fix for a measured, ongoing data loss
+
+Local plan with full reasoning: `_plans/418-prov-9-hook-entrypoints.md`
+
+**Measured 2026-07-28.** Since 2026-07-25 21:00 the transcripts hold 1,236 operator messages. `ob_raw_turns` held **329 — 27%**. This session alone: 228 typed, 61 stored.
+
+A backfill (`9e7f242`) recovered history — 4,571 → 25,151 turns, 329 → 1,089 operator messages, 1 → 18 repos. That is a stopgap. **The live hook keeps dropping turns until this issue lands.**
+
+### The defects, in code running right now
+
+Deployed adapter `sha256-cd5fb4e4...` (2026-07-25 15:30), which `settings.json` points at:
+
+| Defect | File:line | Effect |
+|---|---|---|
+| `MIN_SIGNAL_CHARS = 24` | `turn-capture.ts:59`, enforced `:361` | Operator turns under 24 chars return null before classification |
+| `limit ?? 8` | `raw-turns.ts:188` | Each Stop hook reads only the last EIGHT transcript entries |
+| `TAIL_BYTES = 1MB` | `raw-turns.ts:31` | Long transcripts cannot be fully re-read |
+| no watermark | absent | No cursor/offset/queue anywhere — verified by search. A missed entry is missed permanently |
+
+**The 8-entry window is the big one.** `raw-turns.ts:15-17` assumed one turn ≈ a few entries. With tool calls, each call and each result is its own line — a turn with six commands is 13+ entries, so the operator's message scrolls out of the window before the hook reads it.
+
+### Changes this issue now carries
+
+- **The 24-char floor is deleted entirely** (operator decision, 2026-07-28). Not lowered, not configurable. It contradicts the standing rule *"sometimes me saying okay is the equivalent of doubt"* — a two-word turn carries the whole signal when you know what it answers.
+- **The pasted-output rejector stays** (`turn-capture.ts:62-71`). Different mechanism, different failure: it rejects on shape (UI glyphs, box-drawing), and length could never have caught the measured 1,035-char terminal paste stored as a `decision`.
+- **A per-session watermark replaces the 8-entry window.** Last transcript byte-offset per session; each Stop reads from there to EOF. Nothing skipped regardless of entry count; a missed hook self-heals. Retires `TAIL_BYTES` too.
+- **No filtering on short turns** while grading rules are still being learned. Tightening is a later decision made from evidence.
+
+### Added acceptance criteria
+
+- [ ] No length floor exists anywhere in the capture path — a one-character operator turn is captured, proven by test
+- [ ] The pasted-terminal rejector still rejects, proven against the measured 1,035-char case
+- [ ] A turn producing 30+ transcript entries loses nothing, proven by test
+
+### Why not patch the TypeScript
+
+#420 exists to delete it, and the next wheel install overwrites the hash directory. The enum has already drifted between the two copies (#409: *"agent.py declares 9 event types; the TS adapter declares 8"*).
