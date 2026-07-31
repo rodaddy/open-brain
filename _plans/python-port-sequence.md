@@ -1,6 +1,7 @@
 # The Python port, in order
 
-**Status:** PLAN. Steps 0-2 are DONE and committed; 3 onward are not built.
+**Status:** PLAN. Steps 0-2, 4, 5, 6 are DONE and committed; step 3 is
+WITHDRAWN; 7 onward are not built.
 **Measured:** 2026-07-30 against the deployed adapter
 (`~/.local/share/openbrain-memory/adapters/versions/sha256-cd5fb4e4.../`),
 `src/tools/ingest-raw-turn.ts`, and `python/openbrain/`.
@@ -393,9 +394,29 @@ to guess how far back to look. A missed hook self-heals on the next one.
 
 **`MAX_CONTENT_CHARS` does not come across** (defect #2 — the server dropped it).
 
+**DONE** — commit below. Built as specified, three modules, 55 tests.
+
+**The worst case in this plan was low.** Measured 2026-07-31 against a live
+26.5 MB transcript: **225 of 234 operator turns (96%)** produced more entries
+than the 8-entry window reads, and the largest turn produced **1,646** entries,
+not 553. The window was the normal path failing.
+
+**Four record-shape assumptions were wrong**, all of them the obvious guess —
+`type == "user"` is mostly tool results, `userType` separates nothing,
+`message.content` has two shapes, and the first three lines of every transcript
+carry no `uuid`. `promptSource` ∈ {`typed`, `queued`} is the discriminator.
+Full table in `docs/GOTCHAS.md`. Reading the real file cost one `jq` pipeline;
+inferring the shape would have shipped a capture path storing command output as
+operator turns.
+
+**Non-obvious requirement found while building:** the offset advances only to
+the last **newline**, never to EOF. A hook can fire mid-write, so the tail may
+be half a JSON object; committing that position corrupts every later read.
+
 **Tests:**
 - a turn producing 30+ transcript entries loses nothing (#418 acceptance)
-- a 553-entry turn — the measured worst case — loses nothing
+- a 553-entry turn — the plan's worst case — loses nothing
+- a 1,646-entry turn — the measured worst case — loses nothing
 - a skipped hook is recovered by the next one
 - **input length is preserved exactly, at every size tried**, pinning defect #2.
   Same shape as step 5: parameterised across sizes bracketing the old 200,000

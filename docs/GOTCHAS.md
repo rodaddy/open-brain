@@ -433,3 +433,80 @@ already open:
 unable to cite the design is the signal to read, not to start typing. Compare
 names and shapes against `docs/standards/*-exemplar/` as a step, not as a
 reaction to being asked.
+
+### The transcript record shape: four assumptions that are all wrong
+
+**Measured 2026-07-31** against a live 26.5 MB session transcript in
+`~/.claude/projects/`, while writing `apps/capture/records.py`. Every one of
+these is the obvious guess, and every one of them is wrong.
+
+| assumption | measured |
+|---|---|
+| `type == "user"` means the operator | 2,561 user records, **234** typed by a person. The rest are tool results replayed as user-role messages. |
+| `userType` distinguishes them | reads `"external"` on **all 2,563**, tool results included. Looks like the answer, separates nothing. |
+| `message.content` is a string | `str` on 256 records, **`list` on 2,305**. Operator turns are always `str`; the list shape is tool results. |
+| every record has a `uuid` | the **first three lines of every transcript** (`last-prompt`, `mode`, `permission-mode`) have none. Requiring it crashes on line 1. |
+
+**`promptSource` is the discriminator.** Three values: `typed` (206), `queued`
+(28), `system` (2). The first two are the operator; `system` is injected text
+they never wrote. Tool results carry the key not at all.
+
+Reading the real file took one `jq` pipeline. Inferring the shape from the
+adapter being replaced would have produced a capture path that silently stored
+command output as operator turns.
+
+### The 8-entry window was the normal path failing, not an edge case
+
+`raw-turns.ts:188` reads the last eight transcript entries per `Stop` hook.
+Measured on this repo's own session transcript, 2026-07-31:
+
+- **225 of 234 operator turns (96%)** produced more entries than that window reads
+- the largest single turn produced **1,646** entries
+
+`_plans/418-prov-9-hook-entrypoints.md` estimated 553 as the worst case. The
+real one is three times that. A window sized for "one exchange" was never
+reading a whole turn once tool calls existed.
+
+**The watermark's non-obvious requirement:** advance the offset only to the last
+**newline**, never to end-of-file. A hook can fire while Claude Code is mid-write,
+so the tail may be half a JSON object; committing that position parks the next
+read inside a record and corrupts every read after it. Leave the partial tail
+unconsumed and the next read picks it up whole.
+
+### A test that passes while the code is broken
+
+While proving the step-6 guards, the live-transcript split test passed with the
+watermark **entirely disabled** (`start = 0`). It asserted `>=` on a count and a
+subset on a set of ids -- both true no matter what the reader did.
+
+Rewritten to the exact property (`head.turns + tail.turns == whole.turns`,
+split at three points), it fails at all three the moment the watermark is
+ignored.
+
+**The check:** a guard is proven by removing it and watching the suite go red.
+Same defect class as ruff `PLR1702` without `preview`, `aqmd up` on an
+unenumerated directory, and `bun test` without `OPENBRAIN_TEST_DATABASE_URL` --
+a check that examines nothing reports success.
+
+### `git stash` to answer a question puts conflict markers in your next commit
+
+**2026-07-31.** To check whether two doctest failures predated a change, the
+files were stashed, the test re-run, and the stash popped. The pop printed
+*"The stash entry is kept in case you need it again"* -- which reads like a
+courtesy and is actually **"the pop conflicted."** `.gitignore` came back with
+six conflict markers in it, staged and one command from being committed.
+
+Two separate mistakes:
+
+1. **The question did not need a stash.** "Do these failures predate my work?"
+   is answered by `git stash list`-free means: run the failing doctests, read
+   the error. They were `DatabaseSettings` validation errors -- visibly nothing
+   to do with the new modules.
+2. **The pop's output was skimmed.** In a repo with unrelated dirty files, a
+   pop can conflict in a file you never touched. `.gitignore` here carries the
+   `secrets/` allowlist, so committing markers would have broken a boundary
+   that decides what reaches git.
+
+**The check:** after any `stash pop`, run `git diff --diff-filter=U --name-only`
+before staging. And prefer reading over mutating the working tree when the
+question is "was this already true" -- `git stash` is a mutation.
