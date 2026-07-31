@@ -15,9 +15,10 @@ Key Components:
     - dispatch: a table from a verified event name to its module's entrypoint.
       Nothing else lives here -- no branching, no per-event logic.
     - session_start, user_prompt, session_end, pre_tool_use, post_tool_use,
-      subagent_stop, pre_compact: explicit stubs. Each parses stdin and exits 0,
-      and its docstring names the open question -- what capability it should
-      serve is NOT decided for the Python app (``_plans/rewrite-gotchas.md``).
+      subagent_stop, pre_compact, post_compact: explicit stubs. Each parses stdin
+      and exits 0, and its docstring names the open question -- what capability it
+      should serve is NOT decided for the Python app
+      (``_plans/rewrite-gotchas.md``).
 
 Architecture:
     ONE MODULE PER EVENT, not one dispatcher holding a branch per event. The
@@ -36,8 +37,9 @@ Pattern/Convention:
     The verified event set comes from CAPTURED stdin
     (``tests/fixtures/captured_hooks/``), not from docs prose. A module is
     added here only when a real fixture proves the event fires and names its
-    fields. ``PostCompact`` has no module because it was never captured -- the
-    one ``/compact`` run had too little to compact
+    fields. ``PostCompact`` was the last event to be captured -- a real
+    compaction was forced on 2026-07-31 and it fired, so it now has a module
+    like every other verified event
     (``tests/fixtures/captured_hooks/README.md``).
 
     An entrypoint NEVER raises to its exit code on a capture failure. Empty

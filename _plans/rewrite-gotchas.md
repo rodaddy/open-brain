@@ -17,12 +17,6 @@ This file is only the OPEN questions.
 
 ## Open
 
-- **`PostCompact` stdin/stdout.** Only `PostCompact` remains uncaptured: a real
-  compaction must complete for it to fire, and the one `/compact` run fired
-  `PreCompact` then reported "Not enough messages to compact", so it never ran.
-  Forcing a real compaction is a large, memory-polluting run out of proportion
-  to a nice-to-have. Capture it if step 8 ends up serving `PostCompact`.
-
 ### Step 8 stub capabilities — what each hook should DO for the Python app
 
 Step 8 (2026-07-31) landed `apps/hooks/` with `stop.py` real (delivers through
@@ -54,11 +48,28 @@ read). One open question per stub:
   namespace, or nowhere is undecided.
 - **`PreCompact` — flush before context is discarded?** The spine already
   captures every `Stop`, so turns survive compaction regardless. Whether this
-  needs to act is undecided. (Its sibling `PostCompact` has no module at all —
-  see above.)
+  needs to act is undecided.
+- **`PostCompact` — record the `compact_summary`, or nothing?** Now that the
+  event is captured (2026-07-31), it has a stub module like the others. It
+  carries `compact_summary`, the generated summary that replaces the discarded
+  context; the spine already made the pre-compaction turns durable on `Stop`, so
+  whether this hook should also record the summary is undecided.
 
 ## Answered
 
+- **`PostCompact` stdin/stdout** (was open above). A REAL completed compaction
+  was forced on 2026-07-31 against Claude Code 2.1.220: a fixed-`--session-id`
+  headless session (cheapest model, `claude-haiku-4-5-20251001`) was filled with
+  several `claude -p --resume` turns, then `/compact` was invoked over the same
+  session. Compaction COMPLETED (the transcript carries `"isCompactSummary":true`;
+  no "not enough messages"), and **`PostCompact` fired**. Captured byte-exact at
+  `python/openbrain/tests/fixtures/captured_hooks/PostCompact.json`; it carries
+  `trigger` (`"manual"`) and `compact_summary`. **Bonus:** a second
+  `SessionStart` with **`source":"compact"`** fired in the same run (carrying
+  `prompt_id` and `model`, which the `"startup"` variant lacks) — the documented
+  post-compaction alternative, now observed. Step 8 gained a `post_compact.py`
+  stub, a dispatch entry, and the fixture-driven test; the response answer holds
+  — empty stdout + exit 0 was accepted for `PostCompact` too.
 - **Exact stdout bytes per hook event** (was: verify the real event-name set,
   then capture real I/O). Captured 2026-07-31 against Claude Code 2.1.220 as
   byte-exact fixtures in `python/openbrain/tests/fixtures/captured_hooks/` (one

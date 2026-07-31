@@ -14,10 +14,10 @@ Pattern/Convention:
     OPEN QUESTION -- compaction discards context, so a flush before it might be
     wanted; but the spine already captures every ``Stop``, so the turns are
     durable independently of the window being compacted. Whether ``PreCompact``
-    needs to do anything is undecided. NOTE its sibling ``PostCompact`` has no
-    module at all: it was never captured (the one ``/compact`` run had too
-    little to compact), so its stdin shape is unknown and inventing it is
-    forbidden (``_plans/rewrite-gotchas.md``, the one still-open question).
+    needs to do anything is undecided. Its sibling ``PostCompact`` now has a
+    module too: a real compaction was forced on 2026-07-31 and it fired, so its
+    stdin shape is captured (``tests/fixtures/captured_hooks/PostCompact.json``)
+    rather than invented.
 
 Example:
     >>> import io

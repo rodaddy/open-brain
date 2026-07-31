@@ -14,9 +14,10 @@ Architecture:
 
 Pattern/Convention:
     THE KEYS ARE THE VERIFIED EVENT SET. Every name here has a captured fixture
-    proving the event fires (``tests/fixtures/captured_hooks/README.md``); a
-    documented-but-uncaptured event (``PostCompact``) has no key, because its
-    stdin shape is unknown and a table entry would be a guess.
+    proving the event fires (``tests/fixtures/captured_hooks/README.md``).
+    ``PostCompact`` was the last uncaptured event; a real compaction was forced
+    on 2026-07-31, it fired, and its fixture now proves its stdin shape -- so it
+    has a key like every other verified event.
 
     Only ``Stop`` runs real work; the rest are stubs that drain stdin and exit
     0. The distinction is in the modules, not here -- this file treats them
@@ -27,7 +28,7 @@ Example:
     >>> ENTRYPOINTS["Stop"](io.StringIO("{}"))
     0
     >>> sorted(ENTRYPOINTS)[0]
-    'PreCompact'
+    'PostCompact'
 
 See Also:
     - ``tests/fixtures/captured_hooks/README.md`` - the verified event set
@@ -39,6 +40,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from openbrain.apps.hooks import (
+    post_compact,
     post_tool_use,
     pre_compact,
     pre_tool_use,
@@ -67,4 +69,5 @@ ENTRYPOINTS: dict[str, Callable[[TextIO], int]] = {
     "PostToolUse": post_tool_use.main,
     "SubagentStop": subagent_stop.main,
     "PreCompact": pre_compact.main,
+    "PostCompact": post_compact.main,
 }

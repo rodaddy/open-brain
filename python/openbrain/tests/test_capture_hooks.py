@@ -47,8 +47,9 @@ if TYPE_CHECKING:
 
 FIXTURES = Path(__file__).parent / "fixtures" / "captured_hooks"
 
-#: The verified events with a fixture and an entrypoint. ``PostCompact`` is
-#: absent because it was never captured (fixtures README); its stdin is unknown.
+#: The verified events with a fixture and an entrypoint. ``PostCompact`` is now
+#: present: a real compaction was forced on 2026-07-31, it fired, and its stdin
+#: is captured (fixtures README) rather than unknown.
 CAPTURED_EVENTS = (
     "SessionStart",
     "UserPromptSubmit",
@@ -58,6 +59,7 @@ CAPTURED_EVENTS = (
     "PostToolUse",
     "SubagentStop",
     "PreCompact",
+    "PostCompact",
 )
 
 
@@ -91,10 +93,29 @@ class TestEveryEntrypointAcceptsItsCapturedInput:
         """A key with no fixture, or a fixture with no key, is a drift bug."""
         assert set(ENTRYPOINTS) == set(CAPTURED_EVENTS)
 
-    def test_postcompact_has_no_entrypoint(self) -> None:
-        """The uncaptured event must not have been invented a stdin shape."""
-        assert "PostCompact" not in ENTRYPOINTS
-        assert not (FIXTURES / "PostCompact.json").exists()
+    def test_postcompact_now_has_an_entrypoint_and_a_fixture(self) -> None:
+        """The last uncaptured event fired on 2026-07-31 -- it is verified now.
+
+        Its stdin was captured (not invented) by forcing a real compaction, so
+        it earns a dispatch entry and a byte-exact fixture like every other
+        verified event. The old ``must not exist`` assertion is inverted to the
+        new truth.
+        """
+        assert "PostCompact" in ENTRYPOINTS
+        assert (FIXTURES / "PostCompact.json").exists()
+
+    def test_postcompact_fixture_carries_the_compact_summary(self) -> None:
+        """The field that distinguishes PostCompact from PreCompact is present.
+
+        ``compact_summary`` is the generated summary that replaces the discarded
+        context -- the real payload field a parser must expect, proven by the
+        captured bytes, not docs.
+        """
+        payload = json.loads(fixture_bytes("PostCompact"))
+        assert payload["hook_event_name"] == "PostCompact"
+        assert payload["trigger"] == "manual"
+        assert isinstance(payload["compact_summary"], str)
+        assert payload["compact_summary"] != ""
 
 
 class TestStubsDrainAndExitZero:
