@@ -14,12 +14,13 @@ import os
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from openbrain.apps.capture.records import raw_turn_from_line
 from openbrain.apps.capture.transcript import read_since
 from openbrain.apps.capture.watermark import (
     BEGINNING_OF_FILE,
-    NegativeOffsetError,
+    FileIdentity,
     WatermarkRegressionError,
     WatermarkStore,
 )
@@ -303,24 +304,24 @@ class TestWatermarkStore:
 
     def test_an_unknown_session_starts_at_the_beginning(self, tmp_path: Path) -> None:
         """Not at the end: a new session must have its whole transcript read."""
-        store = WatermarkStore(tmp_path / "w.json")
+        store = WatermarkStore(tmp_path / "w.db")
 
         assert store.offset_for("never-seen") == BEGINNING_OF_FILE
 
     def test_an_advanced_offset_is_remembered(self, tmp_path: Path) -> None:
-        store = WatermarkStore(tmp_path / "w.json")
+        store = WatermarkStore(tmp_path / "w.db")
         store.advance("s1", 4096)
 
         assert store.offset_for("s1") == 4096
 
     def test_it_survives_a_new_store_object(self, tmp_path: Path) -> None:
-        path = tmp_path / "w.json"
+        path = tmp_path / "w.db"
         WatermarkStore(path).advance("s1", 99)
 
         assert WatermarkStore(path).offset_for("s1") == 99
 
     def test_sessions_do_not_share_an_offset(self, tmp_path: Path) -> None:
-        store = WatermarkStore(tmp_path / "w.json")
+        store = WatermarkStore(tmp_path / "w.db")
         store.advance("s1", 10)
         store.advance("s2", 20)
 
@@ -329,14 +330,14 @@ class TestWatermarkStore:
 
     def test_moving_backward_is_refused(self, tmp_path: Path) -> None:
         """Backward means re-ingesting turns already stored."""
-        store = WatermarkStore(tmp_path / "w.json")
+        store = WatermarkStore(tmp_path / "w.db")
         store.advance("s1", 100)
 
         with pytest.raises(WatermarkRegressionError):
             store.advance("s1", 50)
 
     def test_a_refused_move_leaves_the_offset_untouched(self, tmp_path: Path) -> None:
-        store = WatermarkStore(tmp_path / "w.json")
+        store = WatermarkStore(tmp_path / "w.db")
         store.advance("s1", 100)
 
         with pytest.raises(WatermarkRegressionError):
@@ -345,35 +346,114 @@ class TestWatermarkStore:
         assert store.offset_for("s1") == 100
 
     def test_a_negative_offset_is_refused(self, tmp_path: Path) -> None:
-        store = WatermarkStore(tmp_path / "w.json")
+        """A byte offset is never negative; pydantic enforces it at the field."""
+        store = WatermarkStore(tmp_path / "w.db")
 
-        with pytest.raises(NegativeOffsetError):
+        with pytest.raises(ValidationError):
             store.advance("s1", -1)
 
     def test_advancing_to_the_same_position_is_allowed(self, tmp_path: Path) -> None:
         """A read with nothing new re-commits the position it already held."""
-        store = WatermarkStore(tmp_path / "w.json")
+        store = WatermarkStore(tmp_path / "w.db")
         store.advance("s1", 10)
         store.advance("s1", 10)
 
         assert store.offset_for("s1") == 10
 
-    def test_a_corrupt_store_reads_as_the_beginning(self, tmp_path: Path) -> None:
-        """Re-reading duplicates turns; trusting garbage loses them."""
-        path = tmp_path / "w.json"
-        path.write_text("{ this is not json", encoding="utf-8")
+    def test_a_position_carries_the_file_it_belongs_to(self, tmp_path: Path) -> None:
+        """An offset without an identity cannot be resumed safely."""
+        store = WatermarkStore(tmp_path / "w.db")
+        identity = FileIdentity(device=1, inode=2)
+        store.advance("s1", 100, identity)
 
-        assert WatermarkStore(path).offset_for("s1") == BEGINNING_OF_FILE
+        assert store.position_for("s1").identity == identity
 
-    def test_no_staging_file_is_left_behind(self, tmp_path: Path) -> None:
-        path = tmp_path / "w.json"
-        WatermarkStore(path).advance("s1", 5)
+    def test_a_replaced_file_may_rewind_the_offset(self, tmp_path: Path) -> None:
+        """Forward-only applies WITHIN a file, not across two of them.
 
-        assert sorted(item.name for item in tmp_path.iterdir()) == ["w.json"]
+        A new file has its own positions, so refusing a lower offset here would
+        wedge the session permanently after any rotation.
+        """
+        store = WatermarkStore(tmp_path / "w.db")
+        store.advance("s1", 5_000, FileIdentity(device=1, inode=2))
+
+        store.advance("s1", 10, FileIdentity(device=1, inode=999))
+
+        assert store.offset_for("s1") == 10
+
+    def test_writes_from_two_connections_do_not_lose_a_session(
+        self, tmp_path: Path
+    ) -> None:
+        """The reason for SQLite: core01 runs two workers.
+
+        Two separate store objects are two connections to one database. Under
+        the JSON store this replaced, whole-file read-modify-write meant the
+        second writer erased the first session's position entirely.
+        """
+        path = tmp_path / "w.db"
+        WatermarkStore(path).advance("worker-1-session", 111)
+        WatermarkStore(path).advance("worker-2-session", 222)
+
+        reader = WatermarkStore(path)
+        assert reader.offset_for("worker-1-session") == 111
+        assert reader.offset_for("worker-2-session") == 222
 
 
 class TestAReplacedTranscript:
-    """A stored offset can outlive the file it pointed into."""
+    """A stored offset can outlive the file it pointed into.
+
+    Two distinct failures needing two distinct checks -- see `_start_position`.
+    The rename/create case below was a LIVE DEFECT in commit 1ff077d, found by
+    searching how log shippers solve this rather than by testing.
+    """
+
+    def test_a_replaced_file_is_read_whole_even_when_it_is_larger(
+        self, tmp_path: Path
+    ) -> None:
+        """The measured defect: 3 of 9 turns silently skipped.
+
+        rename/create rotation gives the new file a NEW INODE, and its size can
+        be anything. A size-only check passes, the reader resumes mid-file, and
+        every turn before the old offset is lost with no error and no trace.
+        """
+        path = tmp_path / "t.jsonl"
+        write_lines(path, [operator_line(f"u{i}", f"original {i}") for i in range(3)])
+
+        first = read_since(path, BEGINNING_OF_FILE)
+        assert first.identity is not None
+
+        # Replaced by a DIFFERENT file that is LARGER than the old offset.
+        path.unlink()
+        write_lines(
+            path, [operator_line(f"n{i}", f"replacement {i}") for i in range(9)]
+        )
+        assert path.stat().st_size > first.next_offset, "test must exercise the bug"
+
+        second = read_since(path, first.next_offset, first.identity)
+
+        assert [turn.content for turn in second.turns] == [
+            f"replacement {index}" for index in range(9)
+        ]
+
+    def test_the_identity_travels_with_the_read(self, tmp_path: Path) -> None:
+        """A caller cannot store an offset against a file without being told it."""
+        path = tmp_path / "t.jsonl"
+        write_lines(path, [operator_line("u1", "text")])
+
+        result = read_since(path, BEGINNING_OF_FILE)
+
+        assert result.identity == FileIdentity.of(path)
+
+    def test_an_unchanged_file_still_resumes(self, tmp_path: Path) -> None:
+        """The identity check must not make every read start over."""
+        path = tmp_path / "t.jsonl"
+        write_lines(path, [operator_line("u1", "first")])
+        first = read_since(path, BEGINNING_OF_FILE)
+
+        write_lines(path, [operator_line("u1", "first"), operator_line("u2", "second")])
+        second = read_since(path, first.next_offset, first.identity)
+
+        assert [turn.content for turn in second.turns] == ["second"]
 
     def test_a_shortened_file_is_read_from_the_beginning(
         self, tmp_path: Path
@@ -409,7 +489,7 @@ class TestModuleIndependence:
 
     def test_the_watermark_never_touches_a_transcript(self, tmp_path: Path) -> None:
         """It stores an integer; whether a file exists is not its business."""
-        store = WatermarkStore(tmp_path / "w.json")
+        store = WatermarkStore(tmp_path / "w.db")
         store.advance("/a/path/that/does/not/exist.jsonl", 1_000_000)
 
         assert store.offset_for("/a/path/that/does/not/exist.jsonl") == 1_000_000
@@ -514,22 +594,20 @@ class TestAgainstARealTranscript:
             assert isinstance(turn.content, str)
 
 
-def test_the_staging_file_is_replaced_atomically(tmp_path: Path) -> None:
-    """os.replace is atomic, so a reader sees old or new, never truncated."""
-    path = tmp_path / "w.json"
-    store = WatermarkStore(path)
-    store.advance("s1", 1)
-    before = path.read_text(encoding="utf-8")
+def test_the_store_survives_a_process_that_never_closed_it(tmp_path: Path) -> None:
+    """A hook process can be killed at any moment.
 
-    store.advance("s1", 2)
+    SQLite's own durability replaces the hand-written staging-file dance: a
+    committed write is on disk whether or not anything closed the connection.
+    """
+    path = tmp_path / "w.db"
+    WatermarkStore(path).advance("s1", 4_096)
 
-    assert before != path.read_text(encoding="utf-8")
-    assert json.loads(path.read_text(encoding="utf-8")) == {"s1": 2}
-    assert not any(item.name.endswith(".staging") for item in tmp_path.iterdir())
+    assert WatermarkStore(path).offset_for("s1") == 4_096
 
 
 def test_the_store_creates_its_parent_directory(tmp_path: Path) -> None:
-    path = tmp_path / "nested" / "deeper" / "w.json"
+    path = tmp_path / "nested" / "deeper" / "w.db"
     WatermarkStore(path).advance("s1", 7)
 
     assert path.is_file()

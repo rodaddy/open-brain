@@ -6,14 +6,19 @@ Purpose:
     and if so, what did they say.
 
 Architecture:
-    One job. It does not open files, hold an offset, strip wrappers, redact, or
-    classify -- those are :mod:`~openbrain.apps.capture.transcript`,
-    :mod:`~openbrain.apps.capture.watermark`, and the four modules composed by
-    :mod:`~openbrain.apps.capture.signal`.
+    **Pydantic owns the shape; this module owns the meaning.** The record is
+    parsed into a declared model, so field presence, types, and null-vs-absent
+    are handled by a library thousands of services exercise rather than by a
+    chain of ``isinstance`` checks.
 
-    Every rule below was MEASURED against a live 26.5 MB transcript on
-    2026-07-31, not inferred from the adapter being replaced. The measurements
-    are recorded beside each rule because each one contradicts the obvious
+    That split matters because the first version of this module hand-wrote the
+    validation -- in a package whose first dependency is pydantic, and against
+    ``_DOCS/STANDARDS-core.md:208``, which names "schema validator" on the
+    do-not-write list. The knowledge below is genuinely ours and no library
+    knows it; the *validation* never was.
+
+    Every rule was MEASURED against a live 26.5 MB transcript on 2026-07-31,
+    not inferred from the adapter being replaced. Each contradicts the obvious
     assumption:
 
     ``type == "user"`` DOES NOT MEAN THE OPERATOR.
@@ -63,45 +68,95 @@ See Also:
 
 from __future__ import annotations
 
-import json
+from enum import StrEnum
 from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from openbrain.models.turn import RawTurn
 
 #: The record type carrying a message, whoever authored it.
 #:
 #: Necessary but nowhere near sufficient: 2,561 records matched this and only
-#: 234 were the operator. See OPERATOR_PROMPT_SOURCES.
+#: 234 were the operator. See :class:`PromptSource`.
 USER_RECORD_TYPE = "user"
 
-#: ``promptSource`` values meaning a person typed this.
-#:
-#: ``typed`` is the operator at the keyboard; ``queued`` is the operator's
-#: message submitted while a turn was already running. Both are things they
-#: chose to say.
-#:
-#: ``system`` is EXCLUDED deliberately: it is text injected into the prompt
-#: position that the operator never wrote. Two such records were observed in the
-#: measured transcript.
-OPERATOR_PROMPT_SOURCES = frozenset({"typed", "queued"})
 
+class PromptSource(StrEnum):
+    """Where a prompt-position message came from.
 
-def _operator_text(message: Any) -> str | None:
-    """Return what the operator typed, or ``None`` if this is not their message.
+    ``TYPED`` is the operator at the keyboard; ``QUEUED`` is their message
+    submitted while a turn was already running. Both are things they chose to
+    say. ``SYSTEM`` is text injected into the prompt position that the operator
+    never wrote.
 
-    ``message.content`` is a ``str`` for operator turns and a ``list`` of
-    structured blocks for tool results. Only the ``str`` shape is a person
-    speaking, so the list shape is declined here rather than flattened -- a
-    flattened tool result reads exactly like a very long operator turn.
+    Declared as an enum so an unrecognised value fails validation loudly here,
+    rather than being silently mis-typed as operator input somewhere downstream.
     """
-    if not isinstance(message, dict):
-        return None
 
-    content = message.get("content")
-    if isinstance(content, str):
-        return content
+    TYPED = "typed"
+    QUEUED = "queued"
+    SYSTEM = "system"
 
-    return None
+
+#: The sources that mean a person chose to say this.
+OPERATOR_PROMPT_SOURCES = frozenset({PromptSource.TYPED, PromptSource.QUEUED})
+
+
+class TranscriptMessage(BaseModel):
+    """The ``message`` object on a transcript record.
+
+    ``content`` is typed as ``Any`` deliberately: it is a ``str`` for operator
+    turns and a ``list`` of structured blocks for tool results, and BOTH are
+    valid records. Narrowing it here would reject tool results as malformed
+    rather than declining them as not-the-operator, which is a different thing
+    and would hide format changes.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    content: Any = None
+
+
+class TranscriptRecord(BaseModel):
+    """One line of a Claude Code transcript, as far as capture cares.
+
+    ``extra="ignore"`` because a transcript record carries up to seventeen
+    fields and this module has an interest in six. Ignoring the rest means a new
+    field upstream is not a parse failure.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    record_type: str | None = Field(default=None, alias="type")
+    uuid: str | None = None
+    prompt_source: PromptSource | None = Field(default=None, alias="promptSource")
+    message: TranscriptMessage | None = None
+    parent_uuid: str | None = Field(default=None, alias="parentUuid")
+    session_id: str | None = Field(default=None, alias="sessionId")
+    cwd: str | None = None
+
+    @property
+    def is_operator_turn(self) -> bool:
+        """Whether a person chose to say this."""
+        return (
+            self.record_type == USER_RECORD_TYPE
+            and self.prompt_source in OPERATOR_PROMPT_SOURCES
+        )
+
+    @property
+    def operator_text(self) -> str | None:
+        """What the operator typed, or ``None`` if this is not their message.
+
+        Only the ``str`` shape is a person speaking, so the list shape is
+        declined rather than flattened -- a flattened tool result reads exactly
+        like a very long operator turn.
+        """
+        if self.message is None:
+            return None
+
+        content = self.message.content
+        return content if isinstance(content, str) else None
 
 
 def raw_turn_from_line(line: str) -> RawTurn | None:
@@ -128,42 +183,22 @@ def raw_turn_from_line(line: str) -> RawTurn | None:
         return None
 
     try:
-        record = json.loads(stripped)
-    except json.JSONDecodeError:
+        record = TranscriptRecord.model_validate_json(stripped)
+    except ValidationError:
         return None
 
-    if not isinstance(record, dict):
+    if not record.is_operator_turn:
         return None
 
-    if record.get("type") != USER_RECORD_TYPE:
-        return None
-
-    if record.get("promptSource") not in OPERATOR_PROMPT_SOURCES:
-        return None
-
-    content = _operator_text(record.get("message"))
-    if content is None:
-        return None
-
-    turn_uuid = record.get("uuid")
-    if not isinstance(turn_uuid, str) or not turn_uuid:
+    content = record.operator_text
+    if content is None or not record.uuid:
         return None
 
     return RawTurn(
-        turn_uuid=turn_uuid,
+        turn_uuid=record.uuid,
         content=content,
         is_human_prompt=True,
-        parent_turn_uuid=_optional_str(record.get("parentUuid")),
-        session_ref=_optional_str(record.get("sessionId")),
-        repo=_optional_str(record.get("cwd")),
+        parent_turn_uuid=record.parent_uuid or None,
+        session_ref=record.session_id or None,
+        repo=record.cwd or None,
     )
-
-
-def _optional_str(value: Any) -> str | None:
-    """Return ``value`` when it is a non-empty string, otherwise ``None``.
-
-    Transcript records carry ``null`` for absent fields -- ``parentUuid`` is
-    ``null`` on the first turn of every session -- so an absent value and a
-    present-but-null one must reach the model identically.
-    """
-    return value if isinstance(value, str) and value else None

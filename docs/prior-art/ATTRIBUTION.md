@@ -92,6 +92,20 @@ not been done yet — not that nothing was taken.
 | gbrain | Autonomy boundary drawn at reversibility — self-modifying work proposes, does not apply | idea | see `docs/prior-art/gbrain.md` |
 | gbrain | Extractor version watermark that invalidates previously-derived rows | idea | see `docs/prior-art/gbrain.md` |
 | mem0 | *Cautionary.* Reviewed and deliberately not adopted — see `docs/prior-art/mem0.md` | — | not adopted |
+| ponytail (`linsomniac/ponytail`) | Replaced-file detection by `(device, inode)` rather than size, so rename/create rotation is noticed | idea | `python/openbrain/src/openbrain/apps/capture/transcript.py` (`_start_position`) |
+| OpenTelemetry filelog receiver | Naming the two rotation cases separately — rename/create vs copytruncate — and reading the whole file on either, because re-reading is recoverable and skipping is not | idea | same |
+| logtail2 / pygtail | The offset-file model itself: read forward from a stored position instead of guessing how far back to look | idea | `python/openbrain/src/openbrain/apps/capture/watermark.py` |
+
+**Not adopted, and why.** `pygtail` is the best-known implementation of this
+idea and was rejected on licence: it is **GPL v2**, and this repo's standing
+posture (see Honcho above) is that copyleft reaching a hosted deployment is not
+acceptable. `ponytail` matches the use case most closely but has two releases
+total and unverified licence and typing — `_DOCS/STANDARDS-core.md:225` warns
+against trading a hand-rolled bug for an unmaintained dependency. `diskcache`
+was rejected for the watermark store on evidence: it pickles values, manages a
+filesystem directory beside the database, has had no release since 2023, and its
+only typed helpers come from one author with no production signal, one of which
+documents itself as untested. The ideas were taken; the dependencies were not.
 
 ## Local clones
 

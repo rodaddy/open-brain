@@ -60,6 +60,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from openbrain.apps.capture.records import raw_turn_from_line
+from openbrain.apps.capture.watermark import BEGINNING_OF_FILE, FileIdentity
 from openbrain.models.turn import RawTurn
 
 #: The byte that ends a complete record.
@@ -75,18 +76,27 @@ class TranscriptRead:
             ``next_offset``, in the order written.
         next_offset: The byte position to read from next time -- the end of the
             last COMPLETE record, which is at or before the end of the file.
+        identity: Which file was read, so the caller stores the offset against
+            it. ``None`` when the file does not exist.
     """
 
     turns: tuple[RawTurn, ...]
     next_offset: int
+    identity: FileIdentity | None = None
 
 
-def read_since(path: Path, offset: int) -> TranscriptRead:
+def read_since(
+    path: Path, offset: int, identity: FileIdentity | None = None
+) -> TranscriptRead:
     """Read every operator turn written to ``path`` since ``offset``.
 
     Args:
         path: The transcript file.
         offset: The byte position already consumed. ``0`` reads the whole file.
+        identity: Which file ``offset`` was recorded against. When it does not
+            match the file now at ``path``, the file was REPLACED and the whole
+            of the new one is read. Omit it to fall back to the size check
+            alone, which catches a shortened file but NOT a replaced one.
 
     Returns:
         A :class:`TranscriptRead`. For a missing file, an empty result whose
@@ -104,7 +114,8 @@ def read_since(path: Path, offset: int) -> TranscriptRead:
     except OSError:
         return TranscriptRead(turns=(), next_offset=offset)
 
-    start = offset if offset <= size else 0
+    current = FileIdentity.of(path)
+    start = _start_position(offset, size, identity, current)
 
     try:
         with path.open("rb") as handle:
@@ -121,7 +132,39 @@ def read_since(path: Path, offset: int) -> TranscriptRead:
         is not None
     )
 
-    return TranscriptRead(turns=turns, next_offset=start + consumed)
+    return TranscriptRead(
+        turns=turns, next_offset=start + consumed, identity=current
+    )
+
+
+def _start_position(
+    offset: int,
+    size: int,
+    recorded: FileIdentity | None,
+    current: FileIdentity | None,
+) -> int:
+    """Decide where to begin reading, given what the offset was recorded against.
+
+    Two ways a stored offset can be meaningless, and they need different checks:
+
+    **rename/create** -- the file was replaced by a different one, so the inode
+    changes and the size can be anything. Only the identity check catches this.
+    Measured 2026-07-31: without it, replacing a 3-turn transcript with a 9-turn
+    one silently skipped the new file's first 3 turns.
+
+    **copytruncate** -- the same file was emptied and rewritten, so the identity
+    is unchanged and only the size reveals it.
+
+    Either way the answer is to read the whole file. Re-reading duplicates turns,
+    which is recoverable downstream; skipping them loses them permanently, which
+    is not. Design follows ``ponytail`` and the OpenTelemetry filelog receiver --
+    see ``docs/prior-art/ATTRIBUTION.md``.
+    """
+    replaced = recorded is not None and current is not None and recorded != current
+    if replaced or offset > size:
+        return BEGINNING_OF_FILE
+
+    return offset
 
 
 def _complete_records(payload: bytes) -> tuple[bytes, int]:

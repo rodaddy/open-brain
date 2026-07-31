@@ -510,3 +510,106 @@ Two separate mistakes:
 **The check:** after any `stash pop`, run `git diff --diff-filter=U --name-only`
 before staging. And prefer reading over mutating the working tree when the
 question is "was this already true" -- `git stash` is a mutation.
+
+### Reading a growing file from a saved offset is LOG SHIPPING, not a novel design
+
+**2026-07-31.** `apps/capture/watermark.py` + `transcript.py` were written from
+first principles as if resumable file reading were a new problem. It is not. It
+is the oldest problem in log processing, with dedicated libraries, a formal
+spec, and twenty years of prior art:
+
+| prior art | what it is |
+|---|---|
+| `logtail2` (logcheck) | the original, ~2001 |
+| `pygtail` | Python port of logtail2; offset file, rotation, `--paranoid` |
+| `ponytail` | truncation + rename detection, straggler reads, offset file |
+| OpenTelemetry filelog receiver | the formal spec for truncation policy |
+| Vector / Fluent Bit / NXLog | production implementations |
+
+**The search cost one query. Not searching cost a hand-rolled implementation
+with a real bug in it (below).** Searching the local repo index and the
+prior-art clones is NOT the same as searching the ecosystem: the clones are all
+graph/memory systems, so none of them read log files, and their absence proved
+nothing.
+
+**The rule:** when about to write a process, search the Python ecosystem for it
+BEFORE writing. Repo search answers "does this project already do it"; web
+search answers "has the world already solved it". Both are required.
+
+### Detecting a replaced file by SIZE is wrong; use (st_dev, st_ino)
+
+**A live defect in `transcript.py`, found by searching rather than by testing.**
+
+The committed check is `start = offset if offset <= size else 0` -- it only
+notices a file that got SMALLER. The industry-standard detection is the
+device+inode pair:
+
+- **copytruncate** rotation: same inode, size shrinks -> size check catches it
+- **rename/create** rotation: **new inode, size can be anything** -> size check
+  MISSES IT ENTIRELY
+
+If a transcript is replaced and the new one grows past the old offset before the
+next hook fires, the size check passes and the reader **silently skips every
+turn in between** -- the exact permanent-loss failure the watermark exists to
+prevent.
+
+Also insufficient on its own: inode numbers are REUSED after delete, so a new
+file can inherit the old one's inode. Robust readers pair `(st_dev, st_ino)`
+with a fingerprint of the first N bytes.
+
+**No test caught this** because every test writes to the same inode. A test
+suite built on the same assumption as the code cannot find the assumption.
+
+### Search the ECOSYSTEM before writing a mechanism, not just the repo
+
+**2026-07-31, operator:** *"Every time you come up with a process that you should
+be doing, you should go out and do a web search to see if there's a well-known
+Python package that can do it."*
+
+Repo search and web search answer DIFFERENT questions:
+
+| search | answers |
+|---|---|
+| `aqmd` / `rg` in this repo | does this project already do it |
+| prior-art clones (`aqmd research`) | do comparable systems do it |
+| **web** | **has the world already solved it** |
+
+Only the third would have found that resumable file reading is log shipping.
+The clones are all graph/memory systems, so none of them read log files, and
+their silence proved nothing. Two of three searches ran; the missing one was
+the one that mattered.
+
+**Standing rule now:** any mechanism (storage, parsing, retry, scheduling,
+detection, formatting) gets an ecosystem search BEFORE the first line is
+written, and hand-rolling requires stating in the code why each candidate was
+unsuitable -- which `_DOCS/STANDARDS-core.md:215` already required.
+
+**But a package is not automatically the answer.** Operator, same session:
+*"not just throw-in package for package sake."* The evaluation is well-known,
+commonly used, highly rated -- and a package that does only PART of the job well
+is still worth taking. Three candidates were rejected here on evidence:
+`pygtail` (GPL v2, no type hints, possibly discontinued), `ponytail` (2 releases,
+unverified licence), `diskcache` (pickles values, no release since 2023, typed
+helpers by one author, one self-documented as untested). Their DESIGNS were
+taken instead, with attribution.
+
+### WAL does not give you concurrent writers
+
+Believed before checking, and wrong: `PRAGMA journal_mode=WAL` was assumed to
+make multi-process writing safe. It does not. **SQLite allows one writer at a
+time in every mode.** WAL only lets readers run alongside that writer.
+
+What actually prevents `database is locked` is the **busy timeout**, and it must
+be set explicitly. In Python, `sqlite3.connect(path, timeout=N)` is the busy
+timeout; the C-library default is 0, which produces rare-but-constant failures
+under load rather than an obvious break.
+
+Two more that cost a test cycle each:
+
+- **`PRAGMA journal_mode=WAL` cannot run inside a transaction.** With
+  `autocommit=False` (the modern, recommended form) a transaction is already
+  open at connect, so the pragma raises *"cannot change into wal mode from
+  within a transaction"*. WAL is a persistent property of the database FILE, so
+  set it once at creation in autocommit mode, never per connection.
+- **`with connection:` commits but does NOT close.** It is a transaction context
+  manager, not a resource one. Pair it with `contextlib.closing` or leak handles.
