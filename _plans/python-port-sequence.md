@@ -125,15 +125,76 @@ The assertion is always `len(stored) == len(given)`, parameterised over a spread
 of sizes, so any reintroduced shortening fails some case regardless of where it
 sits. One fixed size would prove only that one size survives.
 
-**Every step runs the same four gates**, and a step is not done until all four
+**Every step runs the same five gates**, and a step is not done until all five
 pass:
 
 ```bash
-uv run mypy src/openbrain          # types
-uv run ruff check --no-cache src tests   # incl. PLR1702 nesting law
-uv run pytest -q                   # behaviour
+uv run mypy src/openbrain                 # types
+uv run ruff check --no-cache src tests    # incl. PLR1702 nesting law
+uv run pytest -q                          # behaviour, in-process
+OPENBRAIN_TEST_DATABASE_URL=postgres://.../open_brain_local_play \
+  uv run pytest -q -m live                # behaviour, REAL Postgres
 python scripts/pytools/generate_package_docs.py --check --path ...   # docs
 ```
+
+### The live gate — against the playground, every step
+
+`open_brain_local_play` exists for this: a real 3.8 GB clone of the dogfood
+database, with live's schema, ownership, and data shape. In-process tests prove
+the logic; they cannot prove a write survives a round trip through Postgres.
+
+**Every step that touches a write path gets a live test**, not just the last one.
+A capture that stores whole text in memory and gets shortened by the column
+type, the driver, or an encoding is still data loss, and only the round trip
+finds it.
+
+The TS side already does this — `src/graph-derivation.live.test.ts:22` and
+`scripts/promote-lane-shared.test.ts:31` both gate on
+`OPENBRAIN_TEST_DATABASE_URL`.
+
+**But copy the pattern, not its defect.** `AGENTS.md:172`: those tests *"SKIP
+SILENTLY without OPENBRAIN_TEST_DATABASE_URL, so a green run may have tested
+nothing."* That is the same class as ruff's `preview` warning and the qmd index
+reporting `0 new` — a check that reports success while examining nothing.
+
+So the Python live tests are marked `-m live` and **the marker is what makes the
+skip loud**: `pytest -m live` with no database URL set FAILS with the reason,
+rather than passing having run zero tests. A step's live gate is only satisfied
+by a run that reports collected tests actually executing.
+
+Playground rules that already exist and still apply
+(`docs/local-playground.md`): re-pull with `scripts/local-clone-db.sh` when a
+fresh snapshot is wanted; **never merge playground data back into live**; the
+clone is disposable and rebuildable in ~3 minutes.
+
+### Code review, on a schedule — not only at the end
+
+Reviewing 1,800 ported lines at the end finds the wrong things: by then every
+shortcut has callers and removing one is a refactor.
+
+**After each step lands**, before the next begins, a review pass over that step's
+diff alone, answering four questions:
+
+1. **Did any bound come across that was not proven structural?** The standing
+   check from `_plans/418-prov-9-hook-entrypoints.md:145` — *"fixing one filter
+   is not evidence there is only one."*
+2. **Is anything here a second implementation of something that already exists?**
+   `_plans/consolidation-2026-07-30.md:99` — a second implementation is a defect
+   on sight, even when it is correct today.
+3. **What complexity is here that the behaviour does not require?** An
+   abstraction with one caller, a parameter nothing varies, a wrapper that only
+   forwards, a class that could be a function. Delete it now, while it has one
+   caller.
+4. **Would a reader learn the rule, or only the mechanism?** A comment saying
+   what the code does is noise; one saying why the obvious alternative is wrong
+   is the thing that stops it being reintroduced.
+
+Findings that generalise go to `docs/sme/` per `AGENTS.md`, so the next review
+starts smarter. A finding fixed but not recorded gets rediscovered.
+
+At steps 5 and 7 — the two largest — the review is a **fresh-context** pass, per
+the repo's PR gate, because by then the author has stopped being able to see the
+code.
 
 ### ✅ Step 0 — the floor (`dc8f34a`, DONE)
 
@@ -153,26 +214,63 @@ Found and fixed a real precedence inversion: sections were each their own
 
 ### ✅ Step 2 — this plan
 
-### Step 3 — `utils/admission.py`: ONE definition, imported everywhere
+### Step 3 — ~~`utils/admission.py`~~ WITHDRAWN. Build from decisions instead.
 
-**The keystone of the whole port.** Nothing that carries a bound is written
-until this exists, because otherwise each ported module invents its own again
-and the port recreates the census.
+**This step was wrong and is deleted, not deferred.** It proposed a new module
+to own "what may be accepted". Three checks killed it, all under a minute:
 
-States what may be accepted, in one module:
-- Structural bounds only, each named with what it is and **whose** it is
-  (a pipe read size is the OS's; a Postgres column type is Postgres's).
-- **No content bound.** Text is stored whole; `src/chunking.ts` already exists
-  for embedding oversized content while the full text stays on the parent row.
-- Every rejection returns a **reason**, never a silent `null` — the
-  `ob-memory-provider.ts:146 -> :1912` failure was `return null`, exit 0.
+- **Neither exemplar has one.** `python-exemplar/utils/` and
+  `typescript-exemplar/utils/` are each three files — datetime, http, logging.
+  A fourth concept with no precedent in either is exactly the invented
+  complexity this rewrite is supposed to remove.
+- **This repo already owns that boundary**: `src/contract.ts`,
+  `src/contract-schemas.ts`, `src/validation-errors.ts`, `src/chunk-write.ts`,
+  `src/chunking.ts`.
+- **`docs/decisions/contract-is-the-agent-surface.md`** already decided WHERE
+  refusals are declared — the contract, because a contract-driven agent's entire
+  knowledge is what `get_contract` returns. A refusal declared in a Python
+  module is unreachable by the agents that need it.
 
-**Tests:** a >64 KB payload is accepted and produces a receipt; a >200 KB one
-too; every rejection path names its reason; no function in the module cuts a
-string.
+**What replaces it: nothing.** There is no content bound to centralise, because
+there is no content bound. `docs/CODING_STANDARDS.md:160` settles it, and
+`src/tools/ingest-raw-turn.ts:30` already removed the server's. Structural
+facts (a pipe read size, a column type) are named at the one place they apply,
+with whose rule it is, if and when one actually appears.
 
-**Proves the defect is gone:** a test that greps the built package for
-`[:MAX_` slicing patterns on content paths and fails if any exist.
+The property that mattered still gets proven, but as a test rather than a
+module: **no function on a write path shortens a string.** That assertion lives
+with the code it guards, in steps 5 and 6.
+
+### The rule this withdrawal establishes
+
+**Build from the decisions, not from the old file.**
+
+Operator, 2026-07-30: *"I don't think you should be ingesting shit from the old
+TypeScript files. You should either be doing that stuff directly in Python, or
+you should stub it out until the new TypeScript applications are properly
+written."*
+
+Reading a 423-line module to rewrite it makes every constant in it a judgment
+call, decided deep into the file under momentum. That is how
+`MAX_CAPTURE_CHARS = 1_500` and a `MAX_CONTENT_CHARS` mirroring a deleted server
+rule both survive.
+
+So the inputs to every step below are:
+
+| source | what it supplies |
+|---|---|
+| `docs/decisions/` | what must be TRUE |
+| `_plans/418-prov-9-hook-entrypoints.md` | acceptance criteria |
+| `docs/CODING_STANDARDS.md` | the rules |
+| `docs/standards/*-exemplar/` | the shape to build in |
+
+The old adapter is **not** on that list. Where it is the only source of a fact —
+the exact bytes Claude Code expects on stdout per hook event — the step writes a
+**stub**, records the question in `_plans/rewrite-gotchas.md`, and asks. It does
+not import the answer out of a file scheduled for deletion.
+
+`src/` is the same application being rewritten; building the new Python against
+`src/contract.ts` (936 lines) couples the new thing to the old thing's shape.
 
 ### Step 4 — `models/turn.py`: the shapes, typed once
 
@@ -185,9 +283,15 @@ copy: 10 `Protocol` classes vs **0** named typed contracts in TS.
 **Tests:** round-trip a real transcript record; a malformed one fails naming the
 field.
 
-### Step 5 — `apps/capture/`: port `turn-capture.ts` (423 lines)
+### Step 5 — `apps/capture/`: written from the capture decision
 
-Surface: `last_user_message`, `classify_turn`, `turn_signal`.
+**Built from `docs/decisions/capture-never-drops-a-turn.md`, not from
+`turn-capture.ts`.** That decision states the required behaviour completely;
+the old file is only one implementation of it, and a defective one.
+
+Surface: `last_user_message`, `classify_turn`, `turn_signal` — three functions,
+matching what the behaviour needs rather than what the old module happened to
+export.
 
 Carries forward, per `docs/decisions/capture-never-drops-a-turn.md`:
 - **No length floor.** Not lowered — absent.
@@ -209,7 +313,11 @@ ported to pytest, plus:
   A single fixed size would only ever prove that one number survives, and a cut
   placed above it would pass.
 
-### Step 6 — `apps/capture/transcript.py`: port `raw-turns.ts` + the watermark
+### Step 6 — `apps/capture/transcript.py`: the watermark, written fresh
+
+**Built from #418's acceptance criteria, not from `raw-turns.ts`.** The
+watermark REPLACES that module's approach rather than porting it, so reading it
+supplies nothing except the two constants that must not come across.
 
 Surface: `repo_from_cwd`, `read_recent_turns`.
 

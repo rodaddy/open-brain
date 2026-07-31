@@ -298,3 +298,112 @@ as having consulted authority.
 `/mnt` is a root symlink to `/Volumes` on this Mac (verified: both report
 filesystem ID `100001d0000001a`) and is the real path on the Linux boxes. Using
 `/mnt` in anything tracked or shared costs nothing here and works there.
+
+### Rewriting from the old code carries its defects across
+
+**Symptom:** the new implementation contains a constant nobody chose, with a
+comment explaining a reason that is no longer true.
+
+Operator, 2026-07-30: *"I don't think you should be ingesting shit from the old
+TypeScript files. You should either be doing that stuff directly in Python, or
+you should stub it out."*
+
+The mechanism is momentum. Reading a 423-line file to rewrite it makes every
+constant a judgment call, and those get made deep into the file by someone who
+has stopped reading critically. Two survived that process in the deployed
+adapter:
+
+- `turn-capture.ts:386` — `redact(cleaned).slice(0, 1_500)` shortens every
+  distilled capture. No error, no receipt. Violates the never-shorten rule in
+  `docs/CODING_STANDARDS.md:160`.
+- `raw-turns.ts:268` — shortens at 200,000, commented *"Mirrors the server's
+  per-turn cap"*. **The server deleted that rule.**
+  `src/tools/ingest-raw-turn.ts:30` records it rejected whole turns and took up
+  to 99 good ones with them.
+
+**A mirrored rule outlives the rule it mirrors**, and the duplicate looks
+correct because it cites a reason. That is the argument against porting by
+reading.
+
+**The check:** build from `docs/decisions/` and acceptance criteria — what must
+be TRUE — not from the file. Where the old code is the only source of a fact
+(the exact bytes a hook must emit), stub it and ask.
+
+Corroborating evidence that these were never one idea: `MAX_CONTEXT_CHARS` is
+**3,000** in `qmd-startup.ts` and **12,000** in `takeover.ts`. Same name, 4×
+apart, nothing linking them.
+
+### A pydantic settings section must not be its own `BaseSettings`
+
+**Symptom:** a committed config file silently beats an exported environment
+variable, with nothing logged. Measured 2026-07-30:
+
+```
+db.host = from-json.example     (the environment said from-env.example)
+```
+
+**Cause:** each section carried `env_prefix` as its own `BaseSettings`, so each
+ran an INDEPENDENT environment source *while being constructed* — before the
+parent consulted its source chain. The parent then saw an already-built object
+and the JSON layer outranked it.
+
+**Fix:** sections are plain `BaseModel`; only the top-level `Settings` is a
+`BaseSettings`. Both exemplars are built that way.
+
+**The check:** test the DIRECTION, not just that config loads.
+`docs/standards/typescript-exemplar/src/exemplar/config.ts:29` warns about this
+exact failure in the sibling exemplar: *"documented precedence that nothing
+verified. A comment is not a guarantee."*
+
+Related traps found in the same work:
+
+- `validation_alias` REPLACES the field name, so a JSON layer spelling `{"host":
+  ...}` is rejected as an extra while pydantic reports the alias missing. Needs
+  `populate_by_name=True`.
+- A parent `BaseSettings` does NOT read a nested `BaseModel` field's own alias —
+  verified: with `DB_HOST` set, `S().database.host` returned the field default.
+- `extra="forbid"` does NOT catch a typo'd prefixed environment variable;
+  pydantic-settings only collects variables matching a declared field, so
+  `OPENBRAIN_NOPE=1` loads clean. Needs an explicit scan.
+- A field declaring no alias has NO environment spelling at all — it exists in
+  the model and no operator can set it.
+
+### Check whether the thing already exists before building it
+
+**Symptom:** a new module that duplicates a boundary the repo already owns.
+
+`utils/admission.py` was planned as the keystone of a port. Three checks, all
+under a minute, killed it:
+
+- **Neither exemplar has one.** Both `utils/` are three files — datetime, http,
+  logging. A fourth concept with no precedent is complexity for its own sake.
+- **This repo has five modules covering it**: `src/contract.ts`,
+  `contract-schemas.ts`, `validation-errors.ts`, `chunk-write.ts`,
+  `chunking.ts`.
+- **`docs/decisions/contract-is-the-agent-surface.md`** already decides where
+  refusals are declared: the contract, because a contract-driven agent cannot
+  read a code comment.
+
+This entry exists because the same session ALSO nearly created a third gotchas
+file while `docs/GOTCHAS.md` and `docs/sme/gotcha-agent.md` both already
+existed. `aqmd search` found it in 0.1s.
+
+### Finding a problem mid-implementation is a miss, not a save
+
+**Symptom:** every time the operator asks a question, a new problem surfaces.
+
+Operator, 2026-07-30: *"every time I poke at you you find something new that's
+a problem."* Three in one session, all checkable BEFORE writing, with the files
+already open:
+
+| the question | what one check would have shown |
+|---|---|
+| "why is there TS in my Python" | the source being read was never stated |
+| "what's with the 5,000 character thing" | a number written without saying it was an input size |
+| "can the config be shared" | `diff` of section names: ours `log`, exemplar `logging` |
+
+**The check:** before writing, state what the existing design says with
+`file:line`, what is about to be written, and how it will be proven wrong. Being
+unable to cite the design is the signal to read, not to start typing. Compare
+names and shapes against `docs/standards/*-exemplar/` as a step, not as a
+reaction to being asked.
