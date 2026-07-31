@@ -1,10 +1,10 @@
 # Local playground — a disposable Open Brain you can break
 
-**Status:** RUNNING. Built and verified 2026-07-30.
+**Status:** RUNNING. Built and verified 2026-07-30/31.
 
 Two Open Brain services on this machine, fully isolated:
 
-| | live | playground |
+| | real | playground |
 |---|---|---|
 | port | 3100 | 3101 |
 | database | `open_brain_local_20260724` | `open_brain_local_play` |
@@ -12,30 +12,47 @@ Two Open Brain services on this machine, fully isolated:
 | env | `open-brain-local/local-clone.env` | `open-brain-local/play.env` |
 | WAL | `state/recovery.wal` | `state/recovery-play.wal` |
 | log | `log/open-brain.log` | `log/open-brain-play.log` |
+| launchd | `com.rico.open-brain-local-clone` | started by hand |
 | purpose | Claude's real memory | break it freely |
+
+**Both now run from `open-brain-local`, from committed revisions.** The dev
+checkout serves nothing.
 
 ---
 
 ## Why this exists
 
-Measured 2026-07-30: the live dogfood service was running `bun run src/index.ts`
+Measured 2026-07-30: the real dogfood service was running `bun run src/index.ts`
 with **cwd set to the dev checkout** (pid 79427, cwd
 `/Volumes/ThunderBolt/Development/open-brain`). Every uncommitted edit was one
 restart away from being the running memory service.
 
-`scripts/local-clone-autostart.sh:17` sets
-`REPO_DIR=/Volumes/ThunderBolt/Development/open-brain` and
+`scripts/local-clone-autostart.sh` set
+`REPO_DIR=/Volumes/ThunderBolt/Development/open-brain` and then `cd`'d into it;
 `scripts/local-clone.ts:397-398` spawns with `cwd: process.cwd()`, so the
 running code was whatever was in the working tree at restart time.
 
-The playground removes the pressure entirely: rebuild work targets a database
-and a runtime that can be destroyed and re-pulled at will.
+**Fixed 2026-07-31.** The launcher now uses `RUNTIME_DIR`, defaulting to
+`<clone root>/app`, populated by `scripts/local-clone-deploy.sh` from a
+committed revision. The launchd plist runs the launcher from that runtime too,
+so nothing in the boot path reads the working tree.
+
+Verified after the swap: pid 46396, `cwd=/Volumes/ThunderBolt/open-brain-local/app`,
+serving `a06f7ca`, turn count unchanged at 35,577 across the restart, and the
+runtime contains **no `.git`** — it cannot drift, only be redeployed.
 
 ---
 
 ## Daily use
 
 ```bash
+# --- the REAL service ---------------------------------------------
+scripts/local-clone-deploy.sh                # deploy HEAD to app/
+scripts/local-clone-deploy.sh <ref>          # deploy any commit
+launchctl kickstart -k gui/$(id -u)/com.rico.open-brain-local-clone
+scripts/local-clone-deploy.sh --rollback     # restore .previous
+
+# --- the PLAYGROUND ------------------------------------------------
 # deploy a COMMITTED revision into the playground
 OPENBRAIN_RUNTIME_NAME=app-play \
 OPENBRAIN_CLONE_ENV_FILE=/Volumes/ThunderBolt/open-brain-local/play.env \
@@ -171,15 +188,25 @@ that would actually cost something.
 
 ---
 
-## Verified 2026-07-30
+## Verified 2026-07-30/31
 
+Playground isolation:
 - Both services healthy simultaneously: `:3100` and `:3101`
-- `pg_stat_activity`: 1 connection to live, 2 to playground — **no crossover**
+- `pg_stat_activity`: 1 connection to real, 2 to playground — **no crossover**
 - Wrote a marker row into the playground: present in play (1), **absent from
-  live (0)**
-- Live service undisturbed across four clone cycles
-- Guards refuse: dropping live, cloning to a non-disposable name, deploying a
-  non-existent ref, creating an unservable name
+  real (0)**
+- Real service undisturbed across four clone cycles
+- Guards refuse: dropping the real DB, cloning to a non-disposable name,
+  deploying a non-existent ref, creating an unservable name
+
+Runtime repoint (2026-07-31):
+- Before: pid 79427, `cwd=/Volumes/ThunderBolt/Development/open-brain`
+- After: pid 46396, `cwd=/Volumes/ThunderBolt/open-brain-local/app`, `a06f7ca`
+- `ob_raw_turns` = 35,577 before and after — **no data loss across the restart**
+- Maintenance queue restarted with all five handlers
+  (`embedding.repair, graph.derive, memory.distill, dream.light, dream.rem`)
+- Runtime carries **no `.git`**, so it cannot be edited into drift
+- Plist backed up to `_backups/com.rico.open-brain-local-clone.plist.bak-20260731`
 
 ---
 
