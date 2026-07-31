@@ -69,7 +69,7 @@ openbrain-memory = { workspace = true }
 dev = [
     "mypy>=1.10",
     "pytest>=8.0",
-    # Async tests, per docs/standards/STANDARDS-python.md:951. `asyncio_mode`
+    # Async tests, per _DOCS/STANDARDS-python.md:1036. `asyncio_mode`
     # below is set to "auto" as that standard requires, so an `async def test_`
     # runs without a per-test decorator -- and, more to the point, a coroutine
     # test cannot be silently collected-and-never-awaited, which passes while
@@ -121,6 +121,12 @@ select = [
     "DTZ",    # flake8-datetimez -- naive datetimes
     "T20",    # flake8-print -- no stray print() in library code
     "SIM",    # flake8-simplify
+    # ABSOLUTE-IMPORTS LAW (_DOCS/STANDARDS-python.md ## Typing: "ABSOLUTE imports
+    # everywhere, including siblings and __init__.py"). TID252 is the mechanism --
+    # it refuses `from .x`/`from ..x` so the rule fails ruff instead of relying on
+    # review. Selected as the rule code, not the "TID" family, to keep only the
+    # banned-relative-import check and not TID251's banned-api config.
+    "TID252", # flake8-tidy-imports -- no relative imports
     # D = pydocstyle. Module (D100), package (D104), and class/function
     # (D101-D103) docstrings are gate failures, not warnings. The package rule
     # is what the docs generator depends on:
@@ -128,7 +134,7 @@ select = [
     # docstring, so an absent one has to fail here too.
     "D",
     # Control-flow shape. The LAW is "flat control flow"
-    # (docs/standards/STANDARDS-python.md). Prose does not hold; PLR1702 is what
+    # (_DOCS/STANDARDS-python.md). Prose does not hold; PLR1702 is what
     # actually refuses.
     #
     # Named INDIVIDUALLY, not as the `PL` family. Selecting `PL` wholesale drags
@@ -142,6 +148,25 @@ select = [
     "C901",     # mccabe complexity -- many small branches, collectively untestable
     "RET",      # flake8-return -- else-after-return, the usual cause of nesting
     "TRY",      # tryceratops -- try/except antipatterns
+    # Size and comment hygiene. The size LAW is "tight, single-purpose code"
+    # (_DOCS/STANDARDS-python.md ## LAW: tight, single-purpose code). ruff has no
+    # line-count rule at all (there is no too-many-lines/max-lines in
+    # `ruff rule --all`), so these are the FUNCTION-size and dead-comment PROXIES
+    # ruff can express; the file-level 500-code-line ceiling has no mechanism
+    # here yet -- see the note by [tool.ruff.lint.pylint].
+    "PLR0915",  # too-many-statements -- function-size proxy (STATEMENTS, not lines)
+    "PLR0913",  # too-many-arguments -- the 4-param ceiling, expressed as 5 (see below)
+    "ERA001",   # eradicate -- commented-out code. Select ERA001, NOT "eradicate":
+                # the family string is an unknown selector that ruff SKIPS at exit 0.
+    "PLR2044",  # empty comment -- the bare `#` half of the fluff-comment rule
+    # Named exceptions and no secrets in source. Both are in the standard's
+    # pre-commit enforcement table (_DOCS/STANDARDS-python.md ## What pre-commit
+    # enforces).
+    "BLE",      # flake8-blind-except -- bare `except:` and `except Exception`
+    "S105",     # hardcoded password string
+    "S106",     # hardcoded password as an argument
+    "S107",     # hardcoded password as a default
+    "T10",      # flake8-debugger -- no pdb/ipdb/set_trace left in source
 ]
 
 ignore = [
@@ -154,6 +179,15 @@ ignore = [
     "D203",
     "D213",
 ]
+
+[tool.ruff.lint.flake8-tidy-imports]
+# TID252 without this bans only `from ..`/parent imports (ruff's default is
+# "parents"), so a SIBLING `from .config import X` slips through -- and the
+# absolute-imports LAW is "absolute everywhere, INCLUDING siblings"
+# (_DOCS/STANDARDS-python.md ## Typing). "all" is what makes TID252 refuse every
+# relative import; verified 2026-07-31 that "parents" left `from .config` clean
+# and "all" flags it.
+ban-relative-imports = "all"
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
@@ -169,6 +203,35 @@ convention = "google"
 #
 # 3 still refuses `if` inside `if` inside `if`, which is the actual target.
 max-nested-blocks = 3
+
+# FUNCTION-SIZE and PARAM caps, mirroring the standard's table
+# (_DOCS/STANDARDS-python.md ## LAW: tight, single-purpose code).
+#
+# max-statements = 25 is the PLR0915 leg. It is NOT the 50-code-line ceiling --
+# ruff has no line count. Statements run ~1/3 of code lines here, so 50 would map
+# to ~150 code lines and never fire; 25 sits above the busiest legitimate
+# function the standard measured (18 statements) and still refuses genuine
+# pile-up. The file-level 500-code-line ceiling and the true 50-code-line
+# per-function ceiling have NO mechanism in this repo: the standard's own
+# enforcer (scripts/dev/check_code_size.py) is not shipped by the python-exemplar
+# yet, and this repo does not hand-roll a substitute. When the standard ships the
+# script, wire it here; until then PLR0915/PLR0913 are the closest available
+# proxies and the code-line ceilings are review calls.
+max-statements = 25
+
+# max-args = 5 is PLR0913. ruff excludes self/cls AND **kwargs, so 5 = five real
+# positional/keyword params -- the standard's 4-param ceiling expressed in ruff's
+# counting convention (its worked example, pydantic's 5-param
+# settings_customise_sources, sits exactly at the line and passes).
+max-args = 5
+
+# max-branches = 12 (PLR0912) and max-complexity = 10 (mccabe/C901, below) are
+# ruff's defaults, set explicitly so a future ruff default change cannot silently
+# loosen the flat-control-flow LAW.
+max-branches = 12
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
 
 [tool.ruff.lint.per-file-ignores]
 # Tests document themselves through their names; a docstring on every test
@@ -191,7 +254,7 @@ packages = ["src/openbrain"]
 testpaths = ["tests"]
 pythonpath = ["src"]
 
-# docs/standards/STANDARDS-python.md:951. "auto" means an `async def test_`
+# _DOCS/STANDARDS-python.md:1036. "auto" means an `async def test_`
 # is awaited without a marker. Under the default "strict" mode an unmarked
 # coroutine test is COLLECTED, NOT AWAITED, and reported as passing -- the
 # same defect class as ruff PLR1702 without `preview` and as a mypy path that

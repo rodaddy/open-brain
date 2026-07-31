@@ -19,9 +19,10 @@ session is the entrypoint's job (``_plans/python-port-sequence.md``, step 8).
 
 import asyncio
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
+
+from pydantic import BaseModel, ConfigDict
 
 from openbrain.apps.capture.transcript import read_since
 from openbrain.apps.capture.watermark import WatermarkStore
@@ -41,8 +42,7 @@ class RawLane(Protocol):
         ...
 
 
-@dataclass(frozen=True)
-class Delivery:
+class Delivery(BaseModel):
     """What one delivery did: the turns moved, and where reading resumes.
 
     Attributes:
@@ -51,6 +51,8 @@ class Delivery:
             hook firing twice.
         next_offset: The byte position the session's watermark now holds.
     """
+
+    model_config = ConfigDict(frozen=True)
 
     delivered: int
     next_offset: int

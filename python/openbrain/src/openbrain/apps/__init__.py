@@ -33,5 +33,5 @@ Example:
     <EventType.FACT: 'fact'>
 
 See Also:
-    - ``docs/standards/STANDARDS-python.md`` - the apps/ layout
+    - ``_DOCS/STANDARDS-python.md`` - the apps/ layout
 """

@@ -148,7 +148,9 @@ def test_non_positive_port_is_rejected() -> None:
 
 def test_password_does_not_appear_in_repr() -> None:
     """A SecretStr keeps the credential out of reprs, logs, and tracebacks."""
-    settings = _load(DB_PASSWORD="hunter2-should-never-print")
+    # noqa: S106 -- this literal IS the test subject. The test proves a SecretStr
+    # keeps exactly this value out of reprs; it is not a real credential.
+    settings = _load(DB_PASSWORD="hunter2-should-never-print")  # noqa: S106
 
     assert "hunter2-should-never-print" not in repr(settings)
     assert "hunter2-should-never-print" not in repr(settings.database)
@@ -239,7 +241,7 @@ class TestFileLayers:
         When each section was its own BaseSettings it ran an independent
         environment source during construction, so a committed config.json
         silently outranked an exported DB_HOST -- the reverse of the documented
-        order, with nothing logged. See STANDARDS-python.md on config.py.
+        order, with nothing logged. See _DOCS/STANDARDS-python.md on config.py.
         """
         self._write(
             tmp_path,

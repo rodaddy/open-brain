@@ -58,7 +58,7 @@ Example:
 
 See Also:
     - ``openbrain.config`` - the only caller of setup_logging
-    - ``docs/standards/STANDARDS-python.md`` - the logging section
+    - ``_DOCS/STANDARDS-python.md`` - the logging section
     - ``docs/CODING_STANDARDS.md`` - the shared log envelope
 """
 

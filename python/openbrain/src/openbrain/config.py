@@ -60,7 +60,7 @@ Example:
 See Also:
     - ``docs/CONFIG_REFERENCE.md`` - every variable, and where it is read today
     - ``docs/CODING_STANDARDS.md`` - section 3 typing, section 6 recall
-    - ``docs/standards/STANDARDS-python.md`` - the keystone pattern
+    - ``_DOCS/STANDARDS-python.md`` - the keystone pattern
     - ``openbrain.utils.logging_config`` - the sinks this module starts
 """
 
@@ -202,7 +202,7 @@ class _Base(BaseModel):
     constructed -- before :class:`Settings` ever consulted its own chain. A
     ``config.json`` supplying ``database.host`` then beat ``DB_HOST`` in the
     environment, which is the exact inversion
-    ``docs/standards/STANDARDS-python.md:177`` documents:
+    ``_DOCS/STANDARDS-python.md:182`` documents:
 
         db.host = from-json.example     (env said from-env.example)
 
@@ -650,7 +650,7 @@ class Settings(BaseSettings):
     ``Settings(**values)`` is the documented failure this avoids: init kwargs
     are pydantic's HIGHEST-priority source, so the files would silently outrank
     the environment -- the exact reverse of the order above, with nothing
-    logged. See ``docs/standards/STANDARDS-python.md`` on config.py.
+    logged. See ``_DOCS/STANDARDS-python.md`` on config.py.
     """
 
     #: Where the JSON layers live, and which environment's layer to load. Set by

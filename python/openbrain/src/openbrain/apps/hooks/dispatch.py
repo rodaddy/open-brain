@@ -6,7 +6,7 @@ Purpose:
 
 Architecture:
     A dict from ``hook_event_name`` to a ``Callable[[TextIO], int]``, the shape
-    ``docs/standards/STANDARDS-python.md`` prefers over a chain of
+    ``_DOCS/STANDARDS-python.md`` prefers over a chain of
     ``if event == ...`` branches. It holds no event logic of its own -- each
     value is another module's entrypoint. This is the whole file, so a change
     for one event cannot reach another's code by sharing this namespace, which

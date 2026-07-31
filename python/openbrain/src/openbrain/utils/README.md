@@ -39,7 +39,7 @@ Example:
 
 See Also:
     - ``openbrain.config`` - the keystone that calls into logging_config
-    - ``docs/standards/STANDARDS-python.md`` - the utils/ contract
+    - ``_DOCS/STANDARDS-python.md`` - the utils/ contract
 
 ---
 

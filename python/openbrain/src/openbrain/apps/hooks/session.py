@@ -45,18 +45,14 @@ See Also:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, SkipValidation
 
 from openbrain.apps.capture.deliver import Delivery, RawLane, deliver_new_turns
 from openbrain.apps.capture.watermark import WatermarkStore
 from openbrain.config import CaptureSettings, ConfigurationError
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
 
 #: The Stop harness deadline, in seconds. NOT a content bound -- this is a TIME
 #: budget tied to an EXTERNAL limit: Claude Code kills a Stop hook that has not
@@ -116,8 +112,7 @@ class StopHook(BaseModel):
     session_id: str | None = None
 
 
-@dataclass(frozen=True)
-class StartedLane:
+class StartedLane(BaseModel):
     """A raw lane with its server session started, and how to release it.
 
     The spine (``deliver``) needs only :class:`RawLane`, one call. But a real
@@ -136,7 +131,25 @@ class StartedLane:
             client's ``close``.
     """
 
-    lane: RawLane
+    # This model is a CARRIER: it moves two already-constructed, already-typed
+    # objects from the factory to the spine, not a boundary that parses untrusted
+    # input, so there is nothing for pydantic to validate at construction.
+    #
+    # ``lane`` is a :class:`RawLane`, a bare (non-runtime_checkable) ``Protocol``.
+    # pydantic cannot build an isinstance validator for one -- with a plain field
+    # it raises ``SchemaError: 'cls' must be valid as the first argument to
+    # 'isinstance'`` at class-definition time. Two settings together make it hold
+    # the value untouched: ``arbitrary_types_allowed`` lets pydantic accept a type
+    # it cannot coerce, and :data:`~pydantic.SkipValidation` drops the isinstance
+    # check it would otherwise emit for such a type. The declared type stays
+    # ``RawLane``, so mypy and readers still see the exact contract. ``close`` is a
+    # plain ``Callable``, which pydantic validates natively, so it needs no wrapper.
+    #
+    # ``frozen`` preserves the immutability the replaced ``@dataclass(frozen=True)``
+    # gave, satisfying the No-bare-dataclasses LAW without a behaviour change.
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    lane: SkipValidation[RawLane]
     close: Callable[[], None]
 
 

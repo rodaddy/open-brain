@@ -61,7 +61,7 @@ See Also:
 
 from __future__ import annotations
 
-from .config import Settings, load_settings
+from openbrain.config import Settings, load_settings
 
 __all__ = [
     "Settings",

@@ -59,8 +59,9 @@ See Also:
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
 from pathlib import Path
+
+from pydantic import BaseModel, ConfigDict
 
 from openbrain.apps.capture.records import raw_turn_from_line
 from openbrain.apps.capture.watermark import BEGINNING_OF_FILE, FileIdentity
@@ -70,8 +71,7 @@ from openbrain.models.turn import RawTurn
 RECORD_TERMINATOR = b"\n"
 
 
-@dataclass(frozen=True)
-class TranscriptRead:
+class TranscriptRead(BaseModel):
     """Everything one read produced: the turns, and where to resume.
 
     Attributes:
@@ -82,6 +82,8 @@ class TranscriptRead:
         identity: Which file was read, so the caller stores the offset against
             it. ``None`` when the file does not exist.
     """
+
+    model_config = ConfigDict(frozen=True)
 
     turns: tuple[RawTurn, ...]
     next_offset: int

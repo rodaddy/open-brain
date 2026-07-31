@@ -39,7 +39,7 @@ Example:
 
 See Also:
     - ``docs/decisions/capture-never-drops-a-turn.md`` - what capture may not do
-    - ``docs/standards/STANDARDS-python.md`` - the models/ contract
+    - ``_DOCS/STANDARDS-python.md`` - the models/ contract
 
 ---
 
