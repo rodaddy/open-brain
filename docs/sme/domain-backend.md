@@ -573,3 +573,58 @@ should fail.
   hand-copied literal?
 - Is the change classified under `docs/downstream-rollout.md` before the PR is
   called complete?
+
+## [2026-07-31] A hook entrypoint must load only its own settings section
+
+**Severity:** HIGH
+**Source:** Step-8 review swarm (Sol terminal audit), fixed in `967a3be`
+**Scope:** `python/openbrain/src/openbrain/config.py`,
+`python/openbrain/src/openbrain/apps/hooks/`
+**Status:** active
+
+### Pattern
+
+The Stop entrypoint called the full `load_settings()`, which constructs
+required Database/Embedding sections. A hook environment sets only the two
+capture vars, so every invocation failed validation on config it never uses --
+and the entrypoint's swallow turned that into SILENT zero capture on every
+turn. A swallow-everything contract makes config coupling invisible; the
+loader an entrypoint uses must resolve only the section it needs
+(`load_capture_settings`), with a functional test running the real loading
+path on the minimal environment.
+
+### Review Questions
+
+- Does any entrypoint (which swallows failures by contract) load settings
+  sections it does not use?
+- Is there a test that loads settings with ONLY that entrypoint's documented
+  env vars set, everything else scrubbed?
+
+## [2026-07-31] Client defaults must fit inside the harness deadline; sessions must be closed
+
+**Severity:** HIGH (timeout) / MEDIUM (session leak)
+**Source:** Step-8 review swarm (Sol terminal audit), fixed in `967a3be`
+**Scope:** `python/openbrain/src/openbrain/apps/hooks/session.py`,
+`python/openbrain-memory` client construction sites
+**Status:** active
+
+### Pattern
+
+Constructing `OpenBrainClient` without a timeout inherits the sibling's 30s
+default inside a 5s Stop-hook deadline: a stalled-but-accepting endpoint
+blocks past the deadline and the harness kills the process -- the always-
+exit-0 contract dies with it, unlogged. And a client that is never `close()`d
+leaks a server session slot (100/worker) until idle expiry; a Stop burst can
+exhaust the cap. The fix names the structural TIME budget
+(`STOP_HOOK_DEADLINE_SECONDS`, a bound on an external harness deadline, NOT a
+content bound), pins retries so worst-case wall time fits, and closes the
+client in a `finally` on both paths.
+
+### Review Questions
+
+- Does every client constructed on a deadline-bound path receive an explicit
+  timeout and retry budget whose worst case fits the deadline, with a
+  stalled-endpoint test proving it?
+- Is `close()` guaranteed on success AND failure? Fake-client test?
+- Is any new numeric limit documented as whose deadline it is, so it cannot be
+  mistaken for a content bound?

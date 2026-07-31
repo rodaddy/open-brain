@@ -1,9 +1,10 @@
 # The Python port, in order
 
-**Status:** PLAN. Steps 0-2, 4, 5, 6, 7, 9 are DONE and committed; step 3 is
-WITHDRAWN; **step 8 is a first slice** — `stop.py` is real and live-proven,
-every other verified event is an explicit stub (see the step); step 10 is not
-built. **The spine is live-proven 2026-07-31:**
+**Status:** PLAN. Steps 0-2, 4, 5, 6, 7, 9, 10 are DONE and committed; step 3
+is WITHDRAWN; **step 8 is a first slice** — `stop.py` is real, live-proven,
+review-swarmed (3 lanes incl. a Sol terminal audit; six findings fixed in
+`967a3be`, delta-verified), every other verified event is an explicit stub
+(see the step). **The spine is live-proven 2026-07-31:**
 a turn round-trips transcript → watermark → `ingest_raw_turns` → playground
 Postgres row, whole (300,024 chars intact), ordered (`occurred_at` set), and
 replay-safe. The live gate caught two contract facts in-process tests could
@@ -652,12 +653,19 @@ untracked `.git/hooks` — so **the reviewable hook is not the hook git runs**.
 The exemplar's `_githooks/` is **empty**, so there is nothing to copy; this is
 written from the standard's description.
 
-### Step 10 — console scripts, then hand off to #420
+### ✅ Step 10 — console scripts, then hand off to #420 — DONE (`e499d1f`)
 
-`[project.scripts]` declared only once targets exist. Currently absent
-deliberately: a declared entry point whose module does not exist still installs
-a shim and dies at runtime, and **no lint, type, or test gate inspects entry-point
-targets** — so a broken script ships green.
+Landed 2026-07-31: one script, `openbrain-capture-stop = openbrain.apps.hooks.
+stop:main` — the only entrypoint doing real work; the stubs earn scripts when
+they earn behavior. The missing gate now exists: `test_console_scripts.py`
+parses `[project.scripts]` from the shipped pyproject and imports every
+declared `module:attr`, so a broken declaration fails pytest instead of
+shipping a shim that dies at runtime. `settings.json` wiring stays #420's.
+
+`[project.scripts]` declared only once targets exist — a declared entry point
+whose module does not exist still installs a shim and dies at runtime, and
+before this step **no lint, type, or test gate inspected entry-point
+targets** — so a broken script shipped green.
 
 Editing `settings.json` is #420, explicitly out of scope here.
 
