@@ -38,17 +38,18 @@
 > - **No coverage gates.** Coverage percentages and line/branch targets are not
 >   acceptance criteria. Write functional input/output tests at the function,
 >   class, or public boundary, and prove a new test can fail before trusting it.
-> - **You are in this repo, so you own it — search it before asking.** This repo
->   has its own search index at `.qmd/`, scoped to it alone. Questions about
->   this repo's code, config, or structure get a search first; asking the user
->   how their own software works is a failure, not diligence. Know the word →
->   `sqlite3 .qmd/index.sqlite` (fastest, needs nothing installed). Know the
->   idea → `qmd query "..."` (semantic). Commands and the missing-index fix are
->   in `_DOCS/STANDARDS-repo-search.md`.
->
-> **Also outstanding in this repo** (reported by the sync, never auto-fixed):
->   - no _githooks/ (tracked hooks, core.hooksPath)
->   - has .githooks/ -- hidden folder, migrate to _githooks/
+> - **You are in this repo, so you own it — search it before asking.** Asking
+>   the user how their own software works is a failure, not diligence. One
+>   command does all of it, from any repo:
+>   `aqmd "question"` (this repo, with the shared `_DOCS`/`_ob` policy
+>   appended) · `aqmd up` (refresh after you write files) ·
+>   `aqmd -r <repo> "question"` (one named repo, without leaving this one;
+>   repeatable as `-r a -r b` or `-r a,b` for several, one labelled block
+>   each) · `aqmd internal "question"` (the shared policy only) ·
+>   `aqmd research "question"` (prior art only). Never `cd` to another repo
+>   to search it and `cd` back. Know the exact word instead of the idea →
+>   `sqlite3 .qmd/index.sqlite` is faster and needs nothing installed. Details
+>   and the missing-index fix are in `_DOCS/STANDARDS-repo-search.md`.
 >
 > Refresh these copies with:
 > `bun /Volumes/ThunderBolt/Development/_ob/scripts/sync-repo-standards.ts open-brain`
@@ -61,7 +62,7 @@
 > sync, and deleting past the end marker eats the top of this file. The marker
 > is what stops the banner coming back; a later rule change raises a new one.
 <!-- /STANDARDS-SYNC-BANNER -->
-<!-- standards-acknowledged: 7cbc03193fc6 -->
+<!-- standards-acknowledged: 8dbb71a098de -->
 
 # Open Brain
 
