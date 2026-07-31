@@ -36,12 +36,28 @@ dependencies = [
     "openbrain-memory",
 ]
 
-# [project.scripts] is deliberately absent. A declared entry point whose target
-# module does not exist still installs an executable shim into .venv/bin and
-# dies with ModuleNotFoundError when anything runs it -- and no lint, type, or
-# test gate inspects entry-point targets, so a broken script ships green. The
-# same trap as a mypy path that does not resolve. Entry points get declared when
-# `cli/` has something to point at.
+# The console scripts. Step 10 of `_plans/python-port-sequence.md`: declare an
+# entry point ONLY once its target exists, because a declared entry point whose
+# module does not exist still installs an executable shim into .venv/bin and dies
+# with ModuleNotFoundError when anything runs it -- and no lint, type, or test
+# gate inspects entry-point targets, so a broken script would ship green. The
+# same trap as a mypy path that does not resolve.
+#
+# So exactly ONE script is declared: `stop`, the one hook entrypoint that does
+# real work (`apps/hooks/stop.py:main`). The other seven event modules are
+# explicit stubs whose capabilities are undecided (`_plans/rewrite-gotchas.md`),
+# and `dispatch.py` is a table with no stdin-reading entrypoint of its own -- so
+# there is nothing else to point a real, non-shim script at yet. The remaining
+# events, and any dispatch front-door, get a script when they do real work.
+#
+# `test_console_scripts.py` is the gate the comment above says does not exist by
+# default: it parses this table and imports every declared `module:attr`, so a
+# target that stops resolving fails pytest instead of shipping a dead shim.
+#
+# Harness wiring (settings.json pointing Claude Code's Stop hook at this script)
+# is #420, out of scope here.
+[project.scripts]
+openbrain-capture-stop = "openbrain.apps.hooks.stop:main"
 
 # Resolve the sibling from this uv workspace rather than PyPI, matching
 # openbrain-provider. The editable install is what makes the live gate's
