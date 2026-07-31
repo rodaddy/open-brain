@@ -14,8 +14,20 @@ set -euo pipefail
 
 CLONE_ROOT="${OPENBRAIN_LOCAL_CLONE_ROOT:-/Volumes/ThunderBolt/open-brain-local}"
 ENV_FILE="${CLONE_ROOT}/local-clone.env"
-REPO_DIR="${OPENBRAIN_REPO_DIR:-/Volumes/ThunderBolt/Development/open-brain}"
 BUN_BIN="${BUN_BIN:-/opt/homebrew/bin/bun}"
+
+# The DEPLOYED runtime, not the dev checkout.
+#
+# Until 2026-07-30 this was REPO_DIR=/Volumes/ThunderBolt/Development/open-brain,
+# and `cd "${REPO_DIR}"` below meant the clone served whatever was in the working
+# tree at restart time -- verified live: pid 79427 ran `bun run src/index.ts`
+# with cwd set to the dev checkout. Every uncommitted edit was one restart away
+# from being the running memory service.
+#
+# scripts/local-clone-deploy.sh populates this directory from a COMMITTED
+# revision via `git archive`, so what runs here is always something that exists
+# in git history. Editing the checkout can no longer change the running service.
+RUNTIME_DIR="${OPENBRAIN_RUNTIME_DIR:-${CLONE_ROOT}/app}"
 
 log() { printf '%s local-clone-autostart: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1"; }
 
@@ -50,7 +62,25 @@ if [[ "${OPENBRAIN_LOCAL_CLONE:-0}" != "1" ]]; then
   exit 1
 fi
 
-cd "${REPO_DIR}"
+if [[ ! -f "${RUNTIME_DIR}/src/index.ts" ]]; then
+  log "FATAL: no deployed runtime at ${RUNTIME_DIR}"
+  log "deploy one first: scripts/local-clone-deploy.sh [<ref>]"
+  exit 1
+fi
+
+cd "${RUNTIME_DIR}"
+
+# Shell builtins only: launchd runs with a minimal PATH, and a log line is not
+# worth a hard dependency that could fail the service at boot.
+if [[ -r "${RUNTIME_DIR}/.deployed-revision" ]]; then
+  deployed_sha=""
+  while IFS='=' read -r key value; do
+    [[ "$key" == "short_sha" ]] && deployed_sha="$value"
+  done < "${RUNTIME_DIR}/.deployed-revision"
+  log "serving ${deployed_sha:-unknown} from ${RUNTIME_DIR}"
+else
+  log "WARN: ${RUNTIME_DIR} carries no .deployed-revision stamp"
+fi
 
 # Read-only preflight. Proves database identity, Postgres 18, pgvector, and a
 # healthy embedding provider before any server process starts.
