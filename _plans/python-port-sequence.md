@@ -115,6 +115,44 @@ bound at all.
 Each step is independently landable, independently testable, and reverts alone.
 No step begins until the previous one's gates are green.
 
+### Tight units — applies to EVERY step below
+
+Operator, 2026-07-30: *"keep functions, classes, files, sub modules and modules
+really tight, single purpose as much as possible."*
+
+This is not a style preference; it is the mechanism that makes the rest of the
+plan work. `_plans/418-prov-9-hook-entrypoints.md:145` records what one mixed
+module cost: removing the length floor did not make `ok` capture, because
+`SIGNALS` was independently dropping it. **Two mechanisms in one file, one
+effect, and the first hid the second.** Separate files could not have hidden
+each other that way.
+
+Applied to every step:
+
+- **One module, one job**, named for the job. If the module docstring needs
+  "and" to say what it does, it is two modules. `turn-capture.ts` was 423 lines
+  doing four jobs — strip wrappers, reject pasted output, redact secrets,
+  classify — which is why it gets built here as four files.
+- **One function, one decision.** A function that both computes and writes is
+  two functions; the caller composes them. This is what makes each testable
+  without fixtures.
+- **A module states what it does NOT do.** The wrapper stripper does not decide
+  whether the result is worth keeping. Writing the non-goal down is what stops
+  the next edit quietly adding it.
+- **No module imports a sibling to borrow one helper.** That helper belongs in
+  `utils/` or it belongs duplicated — and if it is duplicated twice, it belongs
+  in `utils/`. Sibling imports are how the star topology becomes a mesh.
+- **The 500-line rule** from `docs/standards/STANDARDS-python.md`, with
+  `config.py` the sole documented exception. A file approaching it is answering
+  more than one question.
+- **PLR1702 at 3** is the mechanical half of this, already enforced and proven
+  to fail a 4-deep function.
+
+The review pass after each step asks the complexity question directly (see
+"Code review, on a schedule" below): an abstraction with one caller, a
+parameter nothing varies, a wrapper that only forwards, a class that could be a
+function. Delete it then, while it has one caller.
+
 **A number in a test is an INPUT SIZE, never a bound.** The tests below feed
 text of various lengths and assert every character comes back. Those sizes are
 what the test writes; they are not thresholds, and nothing in the port measures
@@ -289,9 +327,26 @@ field.
 `turn-capture.ts`.** That decision states the required behaviour completely;
 the old file is only one implementation of it, and a defective one.
 
-Surface: `last_user_message`, `classify_turn`, `turn_signal` — three functions,
-matching what the behaviour needs rather than what the old module happened to
-export.
+**FOUR modules, because the decision names four distinct jobs** — and the old
+423-line file mixing them is exactly what let one filter hide another:
+
+| module | its one job | the decision says |
+|---|---|---|
+| `wrappers.py` | remove system-injected blocks | `:97` machinery the operator never typed |
+| `paste.py` | reject on SHAPE — UI glyphs | `:87` *"different mechanism, different failure"* |
+| `redaction.py` | mask secret VALUES, keep the statement | never drop a turn for holding a credential |
+| `classify.py` | assign an `EventType` | `:14` may TYPE, may never DROP |
+
+`:87` is explicit that paste-rejection is not a length test and must survive
+independently of the removed floor. In separate files that independence is
+structural rather than remembered.
+
+`signal.py` composes them into `turn_signal`, and is the only module here that
+imports the other four. Same star topology as the modules being replaced.
+
+Non-goals, stated per module so the next edit does not add them: the wrapper
+stripper does not judge worth; the redactor does not drop; the classifier does
+not filter.
 
 Carries forward, per `docs/decisions/capture-never-drops-a-turn.md`:
 - **No length floor.** Not lowered — absent.
@@ -319,7 +374,17 @@ ported to pytest, plus:
 watermark REPLACES that module's approach rather than porting it, so reading it
 supplies nothing except the two constants that must not come across.
 
-Surface: `repo_from_cwd`, `read_recent_turns`.
+**THREE modules**, splitting what the old file did in one:
+
+| module | its one job |
+|---|---|
+| `watermark.py` | remember and advance a per-session byte offset |
+| `transcript.py` | read records from an offset to EOF |
+| `records.py` | turn one transcript line into a `RawTurn` |
+
+The watermark is separated because it is the only part holding STATE. Mixing a
+cursor into the reader is how "read the last N entries" became untestable
+without a real transcript, and why the `8` was never noticed.
 
 **Replaces the window with a per-session byte watermark.** Store the last
 transcript offset ingested; each `Stop` reads from there to EOF. Retires both
@@ -337,11 +402,27 @@ to guess how far back to look. A missed hook self-heals on the next one.
   cut and continuing past it, asserting `len(stored) == len(given)`. Input
   sizes, not bounds.
 
-### Step 7 — `apps/hooks/`: port the three remaining leaves
+### Step 7 — `apps/hooks/`: one module per event, written from behaviour
 
-`takeover.ts` (381), `qmd-startup.ts` (137), and the `claude-hook.ts` event
-dispatch (633; six events: SessionStart, UserPromptSubmit, PreCompact,
-PostCompact, SessionEnd, Stop).
+**ONE MODULE PER EVENT**, not one dispatcher holding six branches:
+
+```
+apps/hooks/session_start.py   apps/hooks/pre_compact.py    apps/hooks/stop.py
+apps/hooks/user_prompt.py     apps/hooks/post_compact.py   apps/hooks/session_end.py
+apps/hooks/dispatch.py        <- maps an event name to one of the above. Nothing else.
+```
+
+A 633-line file with six `if event === "..."` branches is six jobs sharing a
+namespace: every branch can reach every helper, so a change for one event
+silently reaches the others. Six files cannot do that. `dispatch.py` is a table
+from name to callable — the enum+table shape
+`docs/standards/STANDARDS-python.md` prefers over a branch chain, and small
+enough to read in one screen.
+
+`docs/standards/typescript-exemplar/src/exemplar/apps/hook/main.ts` is the
+reference for what an entrypoint contains: parse stdin, call one capability,
+write stdout. `_plans/418-prov-9-hook-entrypoints.md:111` — *"No business logic
+in an entrypoint module."*
 
 `claude-hook` lands **last** because it is the only module importing the others,
 and by now all of them exist and are proven.
