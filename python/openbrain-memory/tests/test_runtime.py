@@ -25,7 +25,6 @@ from openbrain_memory import (
 )
 from openbrain_memory._runtime_spool import PARKED_NAMESPACE_KEY, TrackingSpool
 from openbrain_memory.cli import (
-    MAX_JSON_INPUT_BYTES,
     encode_json_output,
     execute_json,
     parse_json_input,
@@ -1850,22 +1849,18 @@ def test_execute_json_does_not_close_caller_injected_client() -> None:
 def test_json_input_and_output_are_bounded() -> None:
     assert parse_json_input(b'{"operation":"recall"}') == {"operation": "recall"}
 
-    # A distilled operation stays bound at 64 KB. The payload must be valid
-    # JSON: the raw-lane ceiling admits the envelope first, so the distilled
-    # bound is now enforced against the decoded operation rather than the
-    # undecoded byte length.
-    oversized = (
-        b'{"operation":"capture","content":"' + b"x" * MAX_JSON_INPUT_BYTES + b'"}'
-    )
-    try:
-        parse_json_input(oversized)
-    except ValueError as error:
-        assert "exceeds" in str(error)
-    else:
-        raise AssertionError("oversized input was accepted")
+    # EVERY OPERATION IS ADMITTED AT THE SAME SIZE. This previously asserted the
+    # opposite: a distilled verb was refused above 64 KB while the identical
+    # text went through as a raw turn. The refusal was total -- a ValueError
+    # loses the whole capture, not the excess -- so a long decision written by
+    # an agent simply never reached the server that would have stored it.
+    large_capture = b'{"operation":"capture","content":"' + b"x" * 200_000 + b'"}'
+    assert parse_json_input(large_capture)["operation"] == "capture"
 
-    # The raw lane is exempt: the same size under operation=ingest is admitted.
-    ingest = b'{"operation":"ingest","turns":["' + b"x" * MAX_JSON_INPUT_BYTES + b'"]}'
+    large_checkpoint = b'{"operation":"checkpoint","summary":"' + b"x" * 200_000 + b'"}'
+    assert parse_json_input(large_checkpoint)["operation"] == "checkpoint"
+
+    ingest = b'{"operation":"ingest","turns":["' + b"x" * 200_000 + b'"]}'
     assert parse_json_input(ingest)["operation"] == "ingest"
 
     encoded = encode_json_output({"context": "x" * 1_000_001})

@@ -7,7 +7,6 @@ import sys
 from collections.abc import Sequence
 
 from .cli import (
-    MAX_JSON_INPUT_BYTES,
     encode_json_output,
     execute_json,
     failure_output,
@@ -26,7 +25,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         sys.stdout.buffer.write(encode_json_output(output))
         return 2
-    data = sys.stdin.buffer.read(MAX_JSON_INPUT_BYTES + 1)
+    # Read stdin to EOF. Reading a fixed count instead handed parse_json_input a
+    # payload cut mid-object, which then failed as "not valid JSON" -- an error
+    # naming the wrong cause and pointing the reader away from the size. Reading
+    # it all means an oversized envelope is reported as oversized, by size.
+    data = sys.stdin.buffer.read()
     try:
         payload = parse_json_input(data)
         output = execute_json(payload)
