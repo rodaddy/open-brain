@@ -670,6 +670,16 @@ const CAP_PROPOSAL_EXEMPT = new RegExp(
  * Every surface the operator or the repo would see it on: a question, a file
  * being written, a command, a commit message, an issue body.
  */
+/**
+ * Read-only verbs. Judged on the leading verb; `rg ... | head` is still a read.
+ *
+ * MUST stay declared above capProposalText. `const` is not hoisted, so when
+ * this sat below its caller the reference threw at call time and every search
+ * was refused -- including the sweep that was removing the ceilings.
+ */
+const BASH_READ_ONLY =
+  /^\s*(rg|fd|ls|cat|head|tail|wc|jq|sort|uniq|diff|stat|file|which|mdfind|aqmd|qmd|bat|tree|du|df|ps|env|printenv|echo|pwd|date|sqlite3|psql\s+-[tAcl]|git\s+(log|show|diff|status|blame|branch|remote|rev-parse|ls-files)|gh\s+(issue|pr)\s+(view|list|status)|gh\s+api|bun\s+(test|run\s+\S*(test|check)\S*))\b/;
+
 function capProposalText(tool: string, input: Record<string, unknown>): string {
   if (tool === "AskUserQuestion") return JSON.stringify(input.questions ?? "");
   if (tool === "Write" || tool === "NotebookEdit") {
@@ -686,10 +696,6 @@ function capProposalText(tool: string, input: Record<string, unknown>): string {
   }
   return "";
 }
-
-/** Read-only verbs. Judged on the leading verb; `rg ... | head` is still a read. */
-const BASH_READ_ONLY =
-  /^\s*(rg|fd|ls|cat|head|tail|wc|jq|sort|uniq|diff|stat|file|which|mdfind|aqmd|qmd|bat|tree|du|df|ps|env|printenv|echo|pwd|date|sqlite3|psql\s+-[tAcl]|git\s+(log|show|diff|status|blame|branch|remote|rev-parse|ls-files)|gh\s+(issue|pr)\s+(view|list|status)|gh\s+api|bun\s+(test|run\s+\S*(test|check)\S*))\b/;
 
 /**
  * Counts how much ceiling-shaped text a string carries. Comparing the count
