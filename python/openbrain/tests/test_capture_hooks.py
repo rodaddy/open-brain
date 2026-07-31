@@ -18,6 +18,8 @@ import json
 import socket
 import threading
 import time
+from collections.abc import Mapping
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -465,3 +467,313 @@ def asyncio_run(coro: object) -> object:
     import asyncio
 
     return asyncio.run(coro)  # type: ignore[arg-type]
+
+
+def _make_scripted_handler(
+    server: _ScriptedMCPServer,
+) -> type[BaseHTTPRequestHandler]:
+    """Build a request handler bound to one scripted server.
+
+    The handler is a thin adapter: it reads the body, pays the configured delay,
+    asks the server for the reply, and writes it. All routing choices live on the
+    server, so this stays trivial and the server holds the test-visible state.
+    """
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args: object) -> None:  # noqa: D401 - silence logs
+            return
+
+        def _write(self, reply: _ScriptedReply) -> None:
+            status, body, headers = reply
+            self.send_response(status)
+            for key, value in headers.items():
+                self.send_header(key, value)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_DELETE(self) -> None:  # noqa: N802 - http.server naming
+            server.delay()
+            self._write(server.delete_reply())
+
+        def do_POST(self) -> None:  # noqa: N802 - http.server naming
+            server.delay()
+            length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(length) if length else b""
+            try:
+                payload = json.loads(raw or b"{}")
+            except json.JSONDecodeError:
+                payload = {}
+            self._write(server.reply_for(payload))
+
+    return Handler
+
+
+#: One scripted reply: the HTTP status, the JSON body, and any extra headers.
+_ScriptedReply = tuple[int, bytes, dict[str, str]]
+
+
+def _jsonrpc_ok(request_id: object, result: dict[str, object]) -> bytes:
+    return json.dumps({"jsonrpc": "2.0", "id": request_id, "result": result}).encode()
+
+
+def _tool_ok_body(request_id: object) -> bytes:
+    return _jsonrpc_ok(
+        request_id,
+        {"content": [{"type": "text", "text": json.dumps({"ok": 1})}]},
+    )
+
+
+class _ScriptedMCPServer:
+    """A real localhost MCP endpoint that speaks the five-request lifecycle.
+
+    The stalling endpoint above proves the timeout on a socket that answers
+    NOTHING; these tests need one that answers, and can be told HOW: return a 429
+    with ``Retry-After`` on ``session_start``, or add a real per-request delay to
+    every leg. It drives the REAL ``_started_memory`` factory end to end, so what
+    it observes is proof about the factory's own wiring -- both retry policies,
+    the close on the startup path -- not about a stubbed lane.
+
+    It counts each request kind and records whether the ``DELETE`` (session
+    close) ever arrived, so a test can assert on exactly-once calls and on
+    slot release. ``request_delay_seconds`` sleeps inside EVERY handler, so the
+    worst-case wall time is the whole lifecycle paying the delay, which is what
+    the per-request-timeout budget is sized against.
+
+    The routing lives on the server (``reply_for``/``delete_reply``), not in the
+    nested handler, so the handler stays a thin adapter: read, delay, delegate,
+    write.
+    """
+
+    def __init__(
+        self,
+        *,
+        session_start_status: int = 200,
+        session_start_retry_after: str | None = None,
+        request_delay_seconds: float = 0.0,
+    ) -> None:
+        self.session_start_status = session_start_status
+        self.session_start_retry_after = session_start_retry_after
+        self.request_delay_seconds = request_delay_seconds
+        self.counts: dict[str, int] = {}
+        self.deleted = False
+        self._lock = threading.Lock()
+
+        self._server = ThreadingHTTPServer(
+            ("127.0.0.1", 0), _make_scripted_handler(self)
+        )
+        self.port = self._server.server_address[1]
+        self._thread = threading.Thread(
+            target=self._server.serve_forever, daemon=True
+        )
+        self._thread.start()
+
+    def _bump(self, name: str) -> None:
+        with self._lock:
+            self.counts[name] = self.counts.get(name, 0) + 1
+
+    def delay(self) -> None:
+        if self.request_delay_seconds > 0:
+            time.sleep(self.request_delay_seconds)
+
+    def delete_reply(self) -> _ScriptedReply:
+        with self._lock:
+            self.deleted = True
+        self._bump("delete")
+        return 200, b"{}", {}
+
+    def reply_for(self, payload: Mapping[str, object]) -> _ScriptedReply:
+        method = payload.get("method")
+        request_id = payload.get("id")
+        if method == "initialize":
+            self._bump("initialize")
+            body = _jsonrpc_ok(
+                request_id,
+                {
+                    "protocolVersion": "2025-03-26",
+                    "capabilities": {},
+                    "serverInfo": {"name": "scripted", "version": "0"},
+                },
+            )
+            return 200, body, {"Mcp-Session-Id": "scripted-sess"}
+        if method == "notifications/initialized":
+            self._bump("initialized")
+            return 202, b"", {}
+        if method == "tools/call":
+            return self._reply_for_tool(payload, request_id)
+        return 200, b"{}", {}
+
+    def _reply_for_tool(
+        self, payload: Mapping[str, object], request_id: object
+    ) -> _ScriptedReply:
+        params = payload.get("params")
+        tool = params.get("name") if isinstance(params, Mapping) else None
+        self._bump(f"tool:{tool}")
+        if tool == "session_start" and self.session_start_status != 200:
+            headers = (
+                {"Retry-After": self.session_start_retry_after}
+                if self.session_start_retry_after is not None
+                else {}
+            )
+            body = json.dumps({"error": "rate limited"}).encode()
+            return self.session_start_status, body, headers
+        return 200, _tool_ok_body(request_id), {}
+
+    @property
+    def base_url(self) -> str:
+        return f"http://127.0.0.1:{self.port}"
+
+    def count(self, name: str) -> int:
+        with self._lock:
+            return self.counts.get(name, 0)
+
+    def close(self) -> None:
+        self._server.shutdown()
+        self._server.server_close()
+        self._thread.join(timeout=2.0)
+
+
+def _scripted_settings(server: _ScriptedMCPServer, watermark: Path) -> CaptureSettings:
+    return CaptureSettings(
+        base_url=server.base_url,
+        token="tok",  # noqa: S106 -- not a real secret
+        watermark_path=watermark,
+    )
+
+
+class TestSessionStart429MakesExactlyOneCall:
+    """R1: a 429+Retry-After on session_start fires ONE call, under the deadline.
+
+    Before the fix, AgentMemory kept the sibling default of two attempts, so a
+    single 429 on session_start independently retried -- two calls -- while the
+    client had already been pinned to one. This drives the REAL factory, so the
+    single call it observes is proof AgentMemory received attempts=1 too. And
+    because attempts=1 means with_retry never sleeps, the Retry-After header is
+    never honoured, so the process cannot be parked past the budget.
+    """
+
+    def test_one_call_and_under_deadline(
+        self, capsys: pytest.CaptureFixture[str], tmp_path: Path
+    ) -> None:
+        server = _ScriptedMCPServer(
+            session_start_status=429,
+            # A large Retry-After: if it were ever honoured, the wall time would
+            # blow the deadline. attempts=1 means it is not.
+            session_start_retry_after="30",
+        )
+        try:
+            transcript = tmp_path / "t.jsonl"
+            write_lines(
+                transcript, [operator_line("u1", "one call only", session="sess")]
+            )
+            watermark = tmp_path / "wm.sqlite"
+            settings = _scripted_settings(server, watermark)
+            payload = json.dumps(
+                {"transcript_path": str(transcript), "session_id": "sess"}
+            )
+
+            start = time.monotonic()
+            stop.capture_stop_with(io.StringIO(payload), settings)
+            elapsed = time.monotonic() - start
+
+            # Exactly one session_start attempt -- the retry pinning held on BOTH
+            # the client and AgentMemory.
+            assert server.count("tool:session_start") == 1
+            # The Retry-After was NOT slept on: well under the deadline.
+            assert elapsed < STOP_HOOK_DEADLINE_SECONDS
+            assert capsys.readouterr().out == ""
+            # The turn was not delivered (session_start failed), so the watermark
+            # never advanced -- the next Stop re-reads it.
+            assert asyncio_run(WatermarkStore(watermark).offset_for("sess")) == 0
+        finally:
+            server.close()
+
+
+class TestEveryRequestDelayedStillFitsTheDeadline:
+    """R1: a delay on EVERY leg of the lifecycle still exits 0 under the deadline.
+
+    The old comment sized the budget against four calls and 1.0 s each; the real
+    lifecycle is five requests including the closing DELETE. This puts a real
+    per-request delay on all five and proves the whole run still finishes under
+    the deadline with the watermark unmoved -- the arithmetic the constant block
+    documents, exercised rather than asserted on paper.
+    """
+
+    def test_all_five_legs_delayed_exits_zero_fast(
+        self, capsys: pytest.CaptureFixture[str], tmp_path: Path
+    ) -> None:
+        # A delay on every request. Five legs at 0.2 s is 1.0 s of pure network
+        # wait, well under the per-request timeout on each and under the whole
+        # deadline -- the point is that the delay lands on EVERY leg, DELETE
+        # included, not just initialize.
+        server = _ScriptedMCPServer(request_delay_seconds=0.2)
+        try:
+            transcript = tmp_path / "t.jsonl"
+            write_lines(
+                transcript, [operator_line("u1", "delayed everywhere", session="sess")]
+            )
+            watermark = tmp_path / "wm.sqlite"
+            settings = _scripted_settings(server, watermark)
+            payload = json.dumps(
+                {"transcript_path": str(transcript), "session_id": "sess"}
+            )
+
+            start = time.monotonic()
+            stop.capture_stop_with(io.StringIO(payload), settings)
+            elapsed = time.monotonic() - start
+
+            assert elapsed < STOP_HOOK_DEADLINE_SECONDS
+            assert capsys.readouterr().out == ""
+            # Every leg was reached, DELETE included -- the delay hit all five.
+            assert server.count("initialize") == 1
+            assert server.count("tool:session_start") == 1
+            assert server.count("tool:ingest_raw_turn") == 1
+            assert server.count("delete") == 1
+            # A full clean delivery: this run succeeded, so the watermark advanced
+            # to EOF -- the delay never broke the write, it only slowed it.
+            stored = asyncio_run(WatermarkStore(watermark).offset_for("sess"))
+            assert stored == transcript.stat().st_size
+        finally:
+            server.close()
+
+
+class TestStartupFailureReleasesTheSessionSlot:
+    """R2: session_start failing AFTER initialize still closes the server session.
+
+    initialize allocates the slot; if session_start then raises, the factory has
+    not returned the StartedLane whose close run_stop's finally would call, so
+    the slot would leak on the STARTUP path -- the same leak the delivery-path
+    close() fix addressed, one step earlier. The factory now closes the client
+    and re-raises. Proof: the DELETE arrives even though session_start failed.
+    """
+
+    def test_delete_is_issued_when_session_start_fails(
+        self, capsys: pytest.CaptureFixture[str], tmp_path: Path
+    ) -> None:
+        server = _ScriptedMCPServer(session_start_status=500)
+        try:
+            transcript = tmp_path / "t.jsonl"
+            write_lines(
+                transcript, [operator_line("u1", "no leak", session="sess")]
+            )
+            watermark = tmp_path / "wm.sqlite"
+            settings = _scripted_settings(server, watermark)
+            payload = json.dumps(
+                {"transcript_path": str(transcript), "session_id": "sess"}
+            )
+
+            stop.capture_stop_with(io.StringIO(payload), settings)
+
+            # initialize opened the slot, session_start failed, and the factory's
+            # cleanup released the slot on the way out.
+            assert server.count("initialize") == 1
+            assert server.count("tool:session_start") == 1
+            assert server.deleted is True
+            # ingest never ran -- the lane was never returned to the spine.
+            assert server.count("tool:ingest_raw_turn") == 0
+            # Entrypoint swallowed it: exit contract held.
+            assert capsys.readouterr().out == ""
+            assert asyncio_run(WatermarkStore(watermark).offset_for("sess")) == 0
+        finally:
+            server.close()

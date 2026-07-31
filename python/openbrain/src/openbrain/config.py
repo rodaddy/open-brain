@@ -939,8 +939,28 @@ def load_capture_settings(
         The validated :class:`CaptureSettings`. ``base_url`` and ``token`` are
         ``None`` when unset, exactly as under the full load -- the requirement is
         enforced at use time in ``apps.hooks.session``, not here.
+
+    Raises:
+        UnknownEnvironmentVariableError: When a prefixed variable matches no
+            declared setting -- a typo like ``OPENBRAIN_CAPTURE_BASE_RUL``. This
+            is the same check ``load_settings`` runs; without it, capture's own
+            resolver simply does not see the misspelled name, so ``base_url``
+            resolves to ``None`` and every ``Stop`` DECLINES capture while the
+            operator believes the endpoint is set -- a silent zero capture. The
+            entrypoint swallows this into its content-free log path (only the
+            error CLASS name is logged, never a value); the raised error names
+            the misspelled VARIABLE, which is safe metadata, never its value.
     """
     source = os.environ if environ is None else environ
+
+    # Validate BEFORE resolving, mirroring load_settings. A typo'd capture
+    # variable is worse than a rejected one: the resolver ignores what it does
+    # not recognise, so a misspelling loads clean as an unset endpoint and the
+    # hook silently records nothing.
+    unknown = unknown_prefixed_variables(source)
+    if unknown:
+        raise UnknownEnvironmentVariableError(unknown)
+
     values = _resolve_section_from_env(CaptureSettings, source)
     # Keyed by field NAME (``base_url``), not alias -- ``_Base`` sets
     # ``populate_by_name``, so ``model_validate`` accepts the names. A splat would

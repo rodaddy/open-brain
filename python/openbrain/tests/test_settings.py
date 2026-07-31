@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from openbrain.config import (
     _SECTION_MODELS,
     Settings,
+    UnknownEnvironmentVariableError,
     load_capture_settings,
     load_settings,
     unknown_prefixed_variables,
@@ -418,3 +419,45 @@ class TestCaptureOnlyLoader:
         }
 
         assert unknown_prefixed_variables(environ) == ("OPENBRAIN_AAA", "OPENBRAIN_ZZZ")
+
+    def test_a_misspelled_capture_variable_is_rejected_by_name(self) -> None:
+        """R3: a typo'd OPENBRAIN_CAPTURE_* is caught, not silently ignored.
+
+        Before the fix, load_capture_settings skipped the unknown-prefixed check,
+        so a misspelling like ``OPENBRAIN_CAPTURE_BASE_RUL`` resolved to nothing:
+        base_url stayed None and every Stop declined capture while the operator
+        believed the endpoint was set. The loader now runs the same check
+        load_settings does. The error names the misspelled VARIABLE (safe
+        metadata); the VALUE never appears in it.
+
+        The typo transposes real letters (URL -> RUL) rather than only changing
+        case: the check compares uppercased names, so a case-only slip is not a
+        distinct variable at all -- a transposition is a typo the check must
+        actually catch.
+        """
+        misspelled = "OPENBRAIN_CAPTURE_BASE_RUL"
+        endpoint_value = "http://operator-thinks-this-is-set.example"
+        environ = {
+            misspelled: endpoint_value,
+            "OPENBRAIN_TOKEN": "tok",
+        }
+
+        with pytest.raises(UnknownEnvironmentVariableError) as excinfo:
+            load_capture_settings(environ=environ)
+
+        # The misspelled NAME is named -- that is how the operator finds the typo.
+        assert misspelled in str(excinfo.value)
+        # The VALUE is not: the error is safe to log.
+        assert endpoint_value not in str(excinfo.value)
+
+    def test_the_correct_capture_spelling_still_loads(self) -> None:
+        """The fix rejects only typos; the correct name resolves as before."""
+        environ = {
+            "OPENBRAIN_CAPTURE_BASE_URL": "http://specific.example",
+            "OPENBRAIN_TOKEN": "tok",
+        }
+
+        capture = load_capture_settings(environ=environ)
+
+        assert capture.base_url == "http://specific.example"
+        assert capture.token is not None

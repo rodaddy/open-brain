@@ -61,17 +61,57 @@ from openbrain.config import CaptureSettings, ConfigurationError
 #: STANDARDS.md:160``); this bounds only how long we will wait on the network.
 STOP_HOOK_DEADLINE_SECONDS = 5.0
 
-#: Per-request network timeout for the capture client, in seconds. A Stop that
-#: reaches the lane makes up to four sequential HTTP calls -- ``initialize``,
-#: the initialized notification, ``session_start``, and ``ingest_raw_turn`` --
-#: so the worst-case wall time is four of these, and 4 * 1.0 = 4.0 s sits safely
-#: under STOP_HOOK_DEADLINE_SECONDS with headroom. Retry is pinned to a single
-#: attempt (see ``_started_memory``) precisely so no retryable timeout can double
-#: a call and blow that budget. When a call times out, ``ingest_raw_turns``
-#: raises, ``deliver_new_turns`` never reaches its watermark advance, and the
-#: same turns are re-read next Stop -- the unadvanced watermark is the retry, so
-#: a timeout leaves the batch durable-by-replay, never half-delivered.
-CAPTURE_REQUEST_TIMEOUT_SECONDS = 1.0
+#: The number of sequential HTTP requests one live Stop capture makes, counted
+#: so the per-request timeout below is derived from the WHOLE lifecycle, not a
+#: single call. The full path is FIVE round trips, in order:
+#:
+#:   1. ``initialize``               (client ``_ensure_session`` on first tool call)
+#:   2. ``notifications/initialized`` (same ``_ensure_session``)
+#:   3. ``session_start``            (``AgentMemory.start_session`` in the factory)
+#:   4. ``ingest_raw_turn``          (the spine's one write through the lane)
+#:   5. ``DELETE`` on ``mcp``        (``client.close`` in ``run_stop``'s finally)
+#:
+#: An earlier count said four and missed the ``DELETE``: ``close`` is called on
+#: every path, so the slot-release round trip is part of the worst-case wall
+#: time and MUST be in the budget. The prior 4 * 1.0 = 4.0 s arithmetic was
+#: therefore wrong twice over -- five requests, not four, and at 1.0 s each that
+#: is 5 * 1.0 = 5.0 s, which equals the whole deadline before a single byte of
+#: process startup, imports, or the SQLite watermark is paid.
+CAPTURE_LIFECYCLE_REQUESTS = 5
+
+#: A conservative reserve, in seconds, for everything that is NOT a network wait:
+#: interpreter start, the sibling ``openbrain_memory`` import graph, and the
+#: SQLite watermark read. Measured cold on 2026-07-31 at ~0.12-0.16 s for a
+#: direct subprocess doing all imports plus the watermark open; 0.5 s is that
+#: rounded up several-fold so a slow first run or a cold disk still fits.
+CAPTURE_PROCESS_OVERHEAD_SECONDS = 0.5
+
+#: Per-request network timeout for the capture client, in seconds. Derived, not
+#: guessed: the five-request lifecycle plus the process-overhead reserve must sit
+#: under STOP_HOOK_DEADLINE_SECONDS with real headroom, so
+#:
+#:   CAPTURE_LIFECYCLE_REQUESTS * timeout + CAPTURE_PROCESS_OVERHEAD_SECONDS
+#:       = 5 * 0.7 + 0.5 = 4.0 s  <  5.0 s  (STOP_HOOK_DEADLINE_SECONDS)
+#:
+#: leaving a full 1.0 s of headroom for scheduling jitter. Retry is pinned to a
+#: SINGLE attempt on BOTH the client and ``AgentMemory`` (see ``_started_memory``)
+#: precisely so no retryable 429/5xx can add a second call, and a single attempt
+#: also means ``with_retry`` never sleeps -- it re-raises on the first failure,
+#: so a ``Retry-After`` header can never park the process past this budget. When
+#: a call times out, ``ingest_raw_turns`` raises, ``deliver_new_turns`` never
+#: reaches its watermark advance, and the same turns are re-read next Stop -- the
+#: unadvanced watermark is the retry, so a timeout leaves the batch
+#: durable-by-replay, never half-delivered.
+CAPTURE_REQUEST_TIMEOUT_SECONDS = 0.7
+
+# The derivation is enforced, not just documented: if a later edit widens the
+# per-request timeout or the request count past what the deadline allows, this
+# fails at import time rather than in production against the harness's kill.
+assert (
+    CAPTURE_LIFECYCLE_REQUESTS * CAPTURE_REQUEST_TIMEOUT_SECONDS
+    + CAPTURE_PROCESS_OVERHEAD_SECONDS
+    < STOP_HOOK_DEADLINE_SECONDS
+), "capture lifecycle budget must fit under the Stop deadline with headroom"
 
 
 class CaptureNotConfiguredError(ConfigurationError):
@@ -225,6 +265,16 @@ def _started_memory(settings: CaptureSettings, session_key: str) -> StartedLane:
     from openbrain_memory.client import OpenBrainClient
     from openbrain_memory.policy import RetryPolicy
 
+    # One attempt, everywhere. The client and AgentMemory each carry their OWN
+    # retry policy: the client retries session INITIALIZE (initialize + the
+    # initialized notification), AgentMemory retries session_START. Pinning only
+    # the client would leave AgentMemory on the sibling default of two attempts,
+    # so a single 429 on session_start would independently fire a second call --
+    # measured by the reviewer -- and blow the five-request budget. The same
+    # single attempt is what stops ``with_retry`` from ever sleeping, so a
+    # ``Retry-After`` header can never hold the process past the deadline.
+    single_attempt = RetryPolicy(attempts=1)
+
     client = OpenBrainClient(
         base_url=settings.base_url,
         token=settings.token.get_secret_value(),
@@ -238,15 +288,29 @@ def _started_memory(settings: CaptureSettings, session_key: str) -> StartedLane:
         agent_id=settings.agent_id,
         # The structural time budget: bound every request so the worst-case wall
         # time stays under Claude Code's 5 s Stop deadline, and pin retry to one
-        # attempt so a retryable timeout cannot double a call past it. See
+        # attempt so a retryable 429/5xx cannot double a call past it. See
         # CAPTURE_REQUEST_TIMEOUT_SECONDS.
         timeout=CAPTURE_REQUEST_TIMEOUT_SECONDS,
-        retry_policy=RetryPolicy(attempts=1),
+        retry_policy=single_attempt,
     )
     # Annotated to RawLane, the Protocol the spine needs, which AgentMemory
     # structurally satisfies. start_session is not part of that Protocol -- it is
     # session lifecycle, not the write call -- so calling it here needs the
     # ignore; the narrowing is deliberate, not a cast around a missing type.
-    memory: RawLane = AgentMemory(client, agent=settings.agent_id)
-    memory.start_session(session_key)  # type: ignore[attr-defined]
+    memory: RawLane = AgentMemory(
+        client, agent=settings.agent_id, retry_policy=single_attempt
+    )
+    # start_session allocates the SERVER session (initialize opens the slot). If
+    # it then RAISES -- a 429 on session_start, a timeout -- the slot is already
+    # held, and this factory has not yet returned the StartedLane whose ``close``
+    # run_stop's finally relies on. So the cleanup owner does not exist yet, and
+    # without this the slot would leak on the startup path -- the exact leak the
+    # close() fix closed on the delivery path, reopened one step earlier. Close
+    # the client and re-raise; ``close`` is content-free and swallows its own
+    # transport errors, so it cannot mask the original failure.
+    try:
+        memory.start_session(session_key)  # type: ignore[attr-defined]
+    except BaseException:
+        client.close()
+        raise
     return StartedLane(lane=memory, close=client.close)
