@@ -453,7 +453,7 @@ class ServerSettings(_Base):
 _SECTION_MODELS: tuple[tuple[str, type[BaseModel]], ...] = (
     ("database", DatabaseSettings),
     ("embedding", EmbeddingSettings),
-    ("log", LogSettings),
+    ("logging", LogSettings),
     ("server", ServerSettings),
 )
 
@@ -609,7 +609,7 @@ class Settings(BaseSettings):
     # OPENBRAIN_DB_HOST.
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)  # type: ignore[arg-type]
     embedding: EmbeddingSettings = Field(default_factory=EmbeddingSettings)  # type: ignore[arg-type]
-    log: LogSettings = Field(default_factory=LogSettings)
+    logging: LogSettings = Field(default_factory=LogSettings)
     server: ServerSettings = Field(default_factory=ServerSettings)
 
     @classmethod
@@ -820,5 +820,5 @@ def load_settings(
     settings = Settings()
 
     if configure_logging:
-        setup_logging(settings.log)
+        setup_logging(settings.logging)
     return settings

@@ -82,6 +82,13 @@ everything* for why that is a law and not a preference.
 `_githooks/` holds real, executable hooks. They are **WRITTEN, not RUNNING**
 here, because there is no `.git/` in this directory for them to attach to.
 
+They ARE proven, though. Last run 2026-07-30: **15 of 15 checks passed** --
+every hook observed rejecting its own violation, and a clean commit observed
+passing. Each assertion also verifies the rejection came from THIS hook rather
+than from any other gate on the machine: an earlier run reported five false
+passes because Rico's global protected-branch hook was refusing the commits
+before these hooks ever ran.
+
 That distinction is the entire point of the standard, so it is stated rather
 than glossed. To prove they actually block:
 

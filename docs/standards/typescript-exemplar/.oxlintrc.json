@@ -1,0 +1,123 @@
+// oxlint -- the control-flow enforcement STANDARDS-typescript.md names.
+//
+// This file is JSONC: oxlint parses comments here. It rejects unknown KEYS
+// (including the `"//"` convention that works in package.json), so every note
+// below is a real comment.
+//
+// WHY oxlint AND NOT eslint + typescript-eslint (measured 2026-07-30):
+// The repo set pins typescript ^7.0.2 (commit b9f6630). typescript-eslint
+// 8.65.0, the latest release, declares `typescript: >=4.8.4 <6.1.0` and does
+// not merely warn -- it THROWS on load: typescript-eslint does not support
+// TS 7. Tracking issue typescript-eslint#10940. Five approaches were tried and
+// all failed: the rules package, the parser alone, a side-by-side TS 6.0.0-beta
+// (estree API mismatch), TS 5.9.3 via nested symlink (estree still resolved
+// 7.0.2), and npm-style overrides (bun ignores them for nested resolution).
+//
+// oxlint has NO typescript peer dependency -- its optional companion wants
+// >=7.0.2001, i.e. it targets TS 7 rather than lagging it. It parses TS
+// natively in Rust.
+//
+// ADD ESLINT BACK ALONGSIDE THIS when typescript-eslint ships TS 7 support.
+// Running both is the normal arrangement and is wanted here -- the only reason
+// it is not the case today is that eslint cannot LOAD, and a lint script that
+// always throws teaches people to ignore the linter. What eslint adds back is
+// the TYPE-AWARE rules oxlint cannot do without a type checker, chiefly
+// no-floating-promises and no-misused-promises.
+//
+// PARITY WITH PYTHON -- deliberately the same numbers. A repo stricter in one
+// language than the other teaches that the rule is arbitrary.
+//   ruff C901    (max-complexity = 10)   -> complexity 10
+//   ruff PLR1702 (max-nested-blocks = 3) -> max-depth 3
+//   ruff RET505                          -> no-else-return
+//   ruff B012 / E722                     -> no-empty, allowEmptyCatch off
+//
+// EVERY RULE BELOW WAS OBSERVED FIRING against TS 7 source before being written
+// here. A configured rule is not an enforced rule: ruff's PLR1702 silently did
+// nothing until `preview = true` was set, and that is the defect this file
+// exists to avoid. tests/enforcement.test.ts re-asserts it on every run.
+{
+  "plugins": ["unicorn", "typescript", "oxc"],
+
+  "categories": {
+    "correctness": "error"
+  },
+
+  "rules": {
+    // CYCLOMATIC COMPLEXITY = decision points + 1. Each of these adds one:
+    // if, else-if, every switch case, for/while/do/for-of, catch, && || ??,
+    // a ternary, an optional chain. A straight-line function scores 1.
+    //
+    // 10 is McCabe's original 1976 threshold and matches ruff C901.
+    //
+    // THE ARGUMENT IS NOT AESTHETIC. Complexity N means N independent paths,
+    // so full branch coverage needs N test cases. Nobody writes 11 test cases
+    // for one function -- so above the threshold the uncovered paths are
+    // exactly where the bugs live, and they are invisible because the file has
+    // tests.
+    //
+    // LIMIT: this counts BRANCHING, not SIZE. A 400-line function that
+    // branches three times scores 4 and passes. It is a floor against tangled
+    // control flow, not a ceiling on sprawl.
+    "complexity": ["error", { "max": 10 }],
+
+    // Nesting depth, which complexity does NOT capture -- a function can score
+    // 8 (passing) while nested five levels deep (failing). You need both rules
+    // or one leaks. 3 forces guard clauses and early returns, which is the
+    // mechanical fix rather than a stylistic preference.
+    "max-depth": ["error", { "max": 3 }],
+
+    // `if (x) return a; else return b;` -> `if (x) return a; return b;`.
+    // Removes one nesting level for free, which is why it sits next to
+    // max-depth rather than in a style section.
+    "no-else-return": "error",
+
+    // An empty `catch {}` is a swallowed error: the failure still happened,
+    // but nothing above ever learns of it. allowEmptyCatch is OFF on purpose --
+    // if a throw really is expected, say so with a comment and a logged debug
+    // line, not with silence.
+    "no-empty": ["error", { "allowEmptyCatch": false }],
+    "no-useless-catch": "error",
+
+    // Structured logs or nothing. console.log bypasses the correlation id, the
+    // level filter, and every sink in utils/logging.ts, so the one line you
+    // most want during an incident is the one that is not in the file.
+    "no-console": "error",
+
+    "eqeqeq": ["error", "always", { "null": "ignore" }],
+    "no-var": "error",
+    "prefer-const": "error",
+
+    "typescript/no-explicit-any": "error",
+    "typescript/no-non-null-assertion": "error"
+  },
+
+  "overrides": [
+    // The logging module IS the thing that wraps console.
+    {
+      "files": ["src/exemplar/utils/logging.ts"],
+      "rules": { "no-console": "off" }
+    },
+    // Entry points report a fatal error when the logger may be what failed.
+    {
+      "files": ["src/exemplar/apps/*/main.ts"],
+      "rules": { "no-console": "off" }
+    },
+    // Scripts are CLIs; printing is their job.
+    {
+      "files": ["scripts/**/*.ts"],
+      "rules": { "no-console": "off" }
+    },
+    // Tests print diagnostics and construct deliberately-wrong values.
+    {
+      "files": ["tests/**/*.ts"],
+      "rules": { "no-console": "off", "typescript/no-explicit-any": "off" }
+    },
+    // Package index files are documentation surfaces; some only re-export.
+    {
+      "files": ["src/exemplar/apps/index.ts"],
+      "rules": { "unicorn/no-empty-file": "off" }
+    }
+  ],
+
+  "ignorePatterns": ["node_modules/**", "dist/**", "coverage/**", "data/**"]
+}

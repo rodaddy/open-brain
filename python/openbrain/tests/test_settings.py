@@ -85,7 +85,7 @@ def test_minimal_environment_loads_with_documented_defaults(
     assert settings.database.pool_max == 10
     assert settings.embedding.model == "embeddinggemma-300m-8bit"
     assert settings.embedding.dimensions == 768
-    assert settings.log.level == "INFO"
+    assert settings.logging.level == "INFO"
     assert settings.server.port == 3100
     assert settings.server.run_migrations is True
 
@@ -103,7 +103,7 @@ def test_legacy_flat_aliases_are_accepted() -> None:
 
     assert settings.database.port == 6000
     assert settings.database.name == "other"
-    assert settings.log.level == "DEBUG"
+    assert settings.logging.level == "DEBUG"
     assert settings.server.port == 9999
 
 
@@ -188,8 +188,8 @@ def test_rotation_without_a_file_sink_is_rejected() -> None:
 def test_rotation_with_a_file_sink_is_accepted() -> None:
     settings = _load(LOG_FILE="/var/log/ob.log", LOG_MAX_FILES="7")
 
-    assert settings.log.max_files == 7
-    assert settings.log.file == "/var/log/ob.log"
+    assert settings.logging.max_files == 7
+    assert settings.logging.file == "/var/log/ob.log"
 
 
 class TestSectionRegistry:
@@ -267,17 +267,17 @@ class TestFileLayers:
             {
                 "database": {"host": "base.example", "user": "base_user"},
                 "embedding": {"base_url": "http://base/v1"},
-                "log": {"level": "INFO", "service_name": "open-brain"},
+                "logging": {"level": "INFO", "service_name": "open-brain"},
             },
         )
-        self._write(tmp_path, "config.prod.json", {"log": {"level": "ERROR"}})
+        self._write(tmp_path, "config.prod.json", {"logging": {"level": "ERROR"}})
 
         settings = load_settings(
             environ={}, secrets_dir=tmp_path, env="prod", configure_logging=False
         )
 
-        assert settings.log.level == "ERROR"
-        assert settings.log.service_name == "open-brain"
+        assert settings.logging.level == "ERROR"
+        assert settings.logging.service_name == "open-brain"
         assert settings.database.host == "base.example"
 
     def test_a_missing_layer_is_not_an_error(self, tmp_path: Path) -> None:

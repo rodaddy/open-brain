@@ -1,0 +1,68 @@
+{
+  // tsconfig.json -- the TypeScript half of what `mypy --strict` does on the
+  // Python side.
+  //
+  // `strict: true` alone is NOT the equivalent. It omits four checks that catch
+  // the defects that actually reach production, so each is turned on explicitly
+  // below with the reason. A config that says `strict` and stops there looks
+  // rigorous and permits `arr[10]` on a three-element array.
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+
+    // Type-check only. Node 22+ strips types at runtime
+    // (--experimental-strip-types), so there is no build step to keep in sync
+    // with the source -- and no dist/ that can silently go stale.
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+
+    "strict": true,
+
+    // --- BEYOND strict ----------------------------------------------------
+
+    // Indexing an array or record hands back T, not T | undefined, under plain
+    // `strict`. That single default is responsible for a large share of
+    // real-world "cannot read property of undefined": the type system asserts
+    // a value is there and the runtime disagrees.
+    "noUncheckedIndexedAccess": true,
+
+    // An unused local is usually a rename that half-happened or a deleted call
+    // whose setup survived. Cheap to fix at the moment it appears.
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+
+    // Fall-through between switch cases is almost always a missing `break`,
+    // and the intentional case is rare enough to deserve a comment.
+    "noFallthroughCasesInSwitch": true,
+
+    // A function that returns a value on some paths and nothing on others has
+    // an implicit undefined the caller does not expect.
+    "noImplicitReturns": true,
+
+    // `override` must be written when overriding. Otherwise a base-class
+    // rename silently orphans the subclass method, which still compiles.
+    "noImplicitOverride": true,
+
+    // Optional property `a?: string` means "may be absent", not "may be
+    // undefined". Without this they are conflated and a explicit `undefined`
+    // passes where the API meant omission.
+    "exactOptionalPropertyTypes": true,
+
+    // Every file is its own module. Required for the type-stripping runtime,
+    // and it is what makes `const enum` unusable -- which is one reason the
+    // standard says string-literal unions instead of TS `enum`.
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+
+    "resolveJsonModule": true,
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts", "tests/**/*.ts", "scripts/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

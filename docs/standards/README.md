@@ -59,27 +59,60 @@ names `utils.logging_config` as *"the only consumer of LoggingSettings"* — so
 the keystone rule (config sets up logging, nothing else does) is real in code,
 not aspiration.
 
-## What the standard describes but the exemplar does not have
+## Both exemplars are now complete — RE-COPIED 2026-07-30
 
-Checked 2026-07-31 with `fd -H -t f`:
+An earlier note here said the Python exemplar's `_githooks/` was empty and that
+`.github/`, `docs/`, `tests/`, and the folder-docs generator were absent. **That
+is no longer true; the note is retracted.** Both exemplars were rebuilt upstream
+and re-copied, and each now carries:
 
-- **`_githooks/`** — the directory exists and is **empty**. No `pre-commit`,
-  no `commit-msg`, no `install.sh`.
-- **`.github/workflows/`** — absent entirely.
-- **`scripts/dev/generate_folder_docs.py`** — the generator the standard calls
-  the whole trick is **not in the exemplar**.
-- **`docs/`** — absent.
-- **`tests/`** — absent, despite the layout showing it.
+- `_githooks/` — `pre-commit`, `commit-msg`, `pre-push`, `post-merge`,
+  `install.sh`, all executable and non-trivial (the TS `pre-commit` is 8.5 KB)
+- `.github/workflows/ci.yml`
+- `scripts/dev/` — `generate_folder_docs.py` / `generate-folder-docs.ts`
+- `secrets/` — `config.example.json`, plus `config.test.json` for Python
+- `tests/`, `docs/`
 
-This is the same pattern `STANDARDS-python.md` itself documents about
-`b1x-message-coordinator`: *"the mechanism the documentation calls automatic
-is, in the repo that invented it, entirely manual."* The exemplar is a good
-reference for **layout, config, models, and utils**; it is not evidence that
-the hooks exist anywhere.
+Check before trusting this paragraph: `ls docs/standards/*-exemplar/`.
 
-**Open Brain's blocking generator is real and runs:**
+**Open Brain's own blocking generator is real and runs:**
 `scripts/pytools/generate_package_docs.py`, proven to fail on a missing
 docstring, a short docstring, a missing README, and a hand-edited README.
+
+## The two exemplars agree, and that is the point
+
+`python-exemplar/` and `typescript-exemplar/` are the SAME application in two
+languages: same layout (a `config` keystone, `db/`, `models/`, `utils/`,
+`apps/`), the same `secrets/config.example.json` section names, the same
+precedence.
+
+**One `secrets/config.json` is meant to serve both runtimes.** The matching
+section names are the design, not a coincidence.
+
+`typescript-exemplar/src/exemplar/config.ts:18-31` states the order both sides
+implement:
+
+```
+1. explicit overrides passed to loadSettings()   (tests)
+2. environment variables                         (deployment)
+3. secrets/config.{env}.json                     (per-environment)
+4. secrets/config.json                           (shared)
+5. schema defaults                               (the floor)
+```
+
+> *"Environment above files is the deliberate choice: a container sets env vars
+> and cannot easily edit a file baked into an image."*
+
+And the warning this repo already paid for, verbatim from that file:
+
+> *"This ORDER IS TESTED (`tests/config.test.ts`). The Python exemplar's
+> docstring once described the opposite of what its code did — documented
+> precedence that nothing verified. **A comment is not a guarantee.**"*
+
+Open Brain hit that same inversion on 2026-07-30 and fixed it in `2791915`: a
+`config.json` beat an exported `DB_HOST` because each config section was its own
+`BaseSettings` carrying an independent environment source. Pinned now by
+`test_environment_beats_a_file`.
 
 ## Deltas against `docs/CODING_STANDARDS.md`, 2026-07-31
 

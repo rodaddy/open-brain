@@ -1,0 +1,74 @@
+# CI runs the SAME commands as _githooks/pre-commit and _githooks/pre-push.
+#
+# That duplication is the point, not an oversight. A hook is bypassable with
+# --no-verify and is not installed at all on a fresh clone until someone runs
+# _githooks/install.sh; CI is the boundary nobody can skip. A check that exists
+# in only one of the two places is a check with a hole in it:
+#   - hook only  -> --no-verify walks straight past it
+#   - CI only    -> the failure is found after a push, one round trip too late
+#
+# If you add a check to the hook, add it here in the same commit.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  # A new push to the same ref makes the in-flight run irrelevant.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          # 22 is the floor: node:sqlite (db/database.ts) and native type
+          # stripping both land there. Pinning the major rather than 'latest'
+          # keeps a Node release from turning into a surprise CI failure.
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install the project
+        # `npm ci` fails if package-lock.json disagrees with package.json,
+        # rather than silently resolving something different from what anyone
+        # tested. `npm install` would quietly rewrite the lockfile here.
+        run: npm ci
+
+      # --- the same three the pre-commit hook runs -----------------------
+      - name: prettier --check
+        run: npm run format:check
+
+      - name: oxlint
+        run: npm run lint
+
+      - name: tsc --noEmit
+        run: npm run typecheck
+
+      # --- the same one the pre-push hook runs ---------------------------
+      - name: node --test
+        run: npm test
+
+      # --- and the hooks themselves ---------------------------------------
+      - name: Prove the hooks still block what they claim to
+        # Without this, the hooks rot: someone edits pre-commit, breaks a check,
+        # and nothing notices because CI was running the tools directly rather
+        # than through the hook. This asserts each hook rejects its violation.
+        #
+        # Invoked through `bash` explicitly: the scripts carry a
+        # /opt/homebrew/bin/bash shebang because that is the correct interpreter
+        # on the machines this repo set runs on (Apple's /bin/bash is 3.2 from
+        # 2007), and that path does not exist on a GitHub runner. The runner's
+        # own bash is 5.x, so the script's semantics are satisfied.
+        run: bash ./scripts/dev/demo-hooks.sh
+        env:
+          DEMO_WORK_ROOT: ${{ runner.temp }}/validation-runs
+          HOOK_SCRATCH_ROOT: ${{ runner.temp }}/hook-scratch

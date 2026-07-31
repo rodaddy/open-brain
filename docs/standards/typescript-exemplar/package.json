@@ -1,0 +1,37 @@
+{
+  "name": "exemplar",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Worked example for _DOCS/STANDARDS-typescript.md -- four apps on one shared floor",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "check": "npm run lint && npm run typecheck && npm run test",
+    "lint": "oxlint --deny-warnings",
+    "lint:fix": "oxlint --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --experimental-strip-types 'tests/**/*.test.ts'",
+    "docs:check": "node --experimental-strip-types scripts/dev/generate-folder-docs.ts --check",
+    "hooks:install": "./_githooks/install.sh",
+    "hooks:demo": "./scripts/dev/demo-hooks.sh",
+    "monitor": "node --experimental-strip-types src/exemplar/apps/monitor/main.ts",
+    "watch": "node --experimental-strip-types src/exemplar/apps/watch/main.ts",
+    "hook": "node --experimental-strip-types src/exemplar/apps/hook/main.ts",
+    "stats": "node --experimental-strip-types src/exemplar/apps/stats/main.ts"
+  },
+  "dependencies": {
+    "zod": "^3.24.1",
+    "pino": "^9.6.0",
+    "pino-pretty": "^13.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "oxlint": "^1.76.0",
+    "prettier": "^3.4.2",
+    "typescript": "^7.0.2"
+  }
+}

@@ -63,7 +63,7 @@ def log_settings(monkeypatch: pytest.MonkeyPatch, **values: str) -> LogSettings:
     return load_settings(
         secrets_dir=Path("/nonexistent-so-no-file-layer"),
         configure_logging=False,
-    ).log
+    ).logging
 
 
 @pytest.fixture(autouse=True)
@@ -233,7 +233,7 @@ class TestKeystone:
         monkeypatch.setenv("OPENBRAIN_SERIALIZE", "false")
 
         settings = load_settings()
-        assert settings.log.file == str(target)
+        assert settings.logging.file == str(target)
 
         logger.info("CAPTURE: after load_settings")
         logger.complete()

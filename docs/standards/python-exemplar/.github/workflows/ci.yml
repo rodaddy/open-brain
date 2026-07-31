@@ -1,0 +1,63 @@
+# CI runs the SAME commands as _githooks/pre-commit and _githooks/pre-push.
+#
+# That duplication is the point, not an oversight. A hook is bypassable with
+# --no-verify and is not installed at all on a fresh clone until someone runs
+# _githooks/install.sh; CI is the boundary nobody can skip. A check that exists
+# in only one of the two places is a check with a hole in it:
+#   - hook only  -> --no-verify walks straight past it
+#   - CI only    -> the failure is found after a push, one round trip too late
+#
+# If you add a check to the hook, add it here in the same commit.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  # A new push to the same ref makes the in-flight run irrelevant.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install the project
+        # --frozen fails if uv.lock disagrees with pyproject.toml, rather than
+        # silently resolving something different from what anyone tested.
+        run: uv sync --dev --frozen
+
+      # --- the same three the pre-commit hook runs -----------------------
+      - name: ruff format --check
+        run: uv run ruff format --check .
+
+      - name: ruff check
+        run: uv run ruff check --output-format github .
+
+      - name: mypy --strict
+        run: uv run mypy
+
+      # --- the same one the pre-push hook runs ---------------------------
+      - name: pytest
+        run: uv run pytest -q
+
+      # --- and the hooks themselves ---------------------------------------
+      - name: Prove the hooks still block what they claim to
+        # Without this, the hooks rot: someone edits pre-commit, breaks a check,
+        # and nothing notices because CI was running the tools directly rather
+        # than through the hook. This asserts each hook rejects its violation.
+        run: ./scripts/dev/demo-hooks.sh
+        env:
+          DEMO_WORK_ROOT: ${{ runner.temp }}
