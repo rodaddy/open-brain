@@ -67,12 +67,32 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from typing import Annotated
+from pathlib import Path
+from typing import Annotated, ClassVar
 
-from pydantic import AliasChoices, Field, SecretStr, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    model_validator,
+)
+from pydantic.fields import FieldInfo
+from pydantic_settings import (
+    BaseSettings,
+    JsonConfigSettingsSource,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+)
 
 from openbrain.utils.logging_config import setup_logging
+
+#: Repository root, derived from this file's location:
+#: src/openbrain/config.py -> src/openbrain -> src -> <package root>.
+#: Derived rather than configured, because a configurable path to the config is
+#: a bootstrap problem.
+PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 
 #: Environment prefix for the nested form (``OPENBRAIN_DATABASE__HOST``).
 #:
@@ -166,24 +186,44 @@ class UnknownEnvironmentVariableError(ConfigurationError):
         )
 
 
-class _Base(BaseSettings):
-    """Shared settings behaviour.
+class _Base(BaseModel):
+    """Shared behaviour for every settings section.
 
-    ``extra="forbid"`` rejects an unrecognised key passed to the constructor.
+    ``BaseModel``, deliberately NOT ``BaseSettings``. Only :class:`Settings` is
+    a ``BaseSettings``, and it holds the single environment source for the whole
+    tree. This is the exemplar's shape
+    (``docs/standards/python-exemplar/src/exemplar/config.py:131``) and the
+    reason its documented precedence is true.
 
-    It does NOT reject an unrecognised environment variable carrying the prefix.
-    Measured 2026-07-30: with ``env_prefix="OPENBRAIN_"`` and ``extra="forbid"``,
-    ``OPENBRAIN_NOPE=1`` loads clean. pydantic-settings only collects variables
-    matching a declared field, so a typo is invisible to the model. Catching
-    that needs an explicit scan of the environment -- see
-    :func:`unknown_prefixed_variables`.
+    MEASURED 2026-07-30, and the whole reason this is not ``BaseSettings``:
+    when each section was its own ``BaseSettings`` with ``env_prefix``, each got
+    an INDEPENDENT environment source that ran while the section was being
+    constructed -- before :class:`Settings` ever consulted its own chain. A
+    ``config.json`` supplying ``database.host`` then beat ``DB_HOST`` in the
+    environment, which is the exact inversion
+    ``docs/standards/STANDARDS-python.md:177`` documents:
+
+        db.host = from-json.example     (env said from-env.example)
+
+    Sections are plain models; the environment reaches them through
+    :class:`LegacyFlatEnvSource` and the nested delimiter, both of which sit in
+    ``Settings``' source chain where they can be ordered against the files.
+
+    ``extra="forbid"`` rejects an unrecognised key in a config layer, so a typo
+    in ``config.json`` fails loudly rather than sitting inert.
     """
 
-    model_config = SettingsConfigDict(
-        env_prefix=ENV_PREFIX,
-        env_nested_delimiter=ENV_NESTED_DELIMITER,
+    model_config = ConfigDict(
         extra="forbid",
         frozen=True,
+        # A `validation_alias` REPLACES the field name rather than adding to it,
+        # so without this a JSON layer would have to spell keys `OPENBRAIN_DB_HOST`
+        # instead of `host`, and `{"host": ...}` would be rejected as an extra.
+        # Measured 2026-07-30, both errors at once:
+        #
+        #   database.OPENBRAIN_DB_HOST  Field required
+        #   database.host               Extra inputs are not permitted
+        populate_by_name=True,
     )
 
 
@@ -270,8 +310,24 @@ class EmbeddingSettings(_Base):
             "OPENBRAIN_EMBEDDING_TIMEOUT_MS", "EMBEDDING_TIMEOUT_MS"
         ),
     )
-    segment_chars: PositiveInt = Field(default=6_000)
-    segment_overlap_chars: int = Field(default=1_200, ge=0)
+    # Aliased like every other field. Without a declared alias a setting has no
+    # environment spelling at all: LegacyFlatEnvSource maps by alias, so the
+    # field exists in the model and cannot be set by an operator. Found
+    # 2026-07-30 when a test tried to set them.
+    segment_chars: PositiveInt = Field(
+        default=6_000,
+        validation_alias=AliasChoices(
+            "OPENBRAIN_EMBEDDING_SEGMENT_CHARS", "EMBEDDING_SEGMENT_CHARS"
+        ),
+    )
+    segment_overlap_chars: int = Field(
+        default=1_200,
+        ge=0,
+        validation_alias=AliasChoices(
+            "OPENBRAIN_EMBEDDING_SEGMENT_OVERLAP_CHARS",
+            "EMBEDDING_SEGMENT_OVERLAP_CHARS",
+        ),
+    )
 
     @model_validator(mode="after")
     def _overlap_fits_within_segment(self) -> EmbeddingSettings:
@@ -383,47 +439,290 @@ class ServerSettings(_Base):
     )
 
 
-class Settings(_Base):
+#: The sections of :class:`Settings`, paired with the attribute each populates.
+#:
+#: ONE declaration, read by both :class:`LegacyFlatEnvSource` (which maps flat
+#: variables onto these paths) and :func:`_accepted_variable_names` (which
+#: decides whether a prefixed variable is a typo). Two hand-maintained lists
+#: would drift, and the drift would present as "my setting does nothing" with
+#: no error to search for.
+#:
+#: A section added to :class:`Settings` and not added here gets no flat
+#: variables and no typo checking, silently -- so this tuple is asserted against
+#: ``Settings.model_fields`` in ``tests/test_settings.py``.
+_SECTION_MODELS: tuple[tuple[str, type[BaseModel]], ...] = (
+    ("database", DatabaseSettings),
+    ("embedding", EmbeddingSettings),
+    ("log", LogSettings),
+    ("server", ServerSettings),
+)
+
+
+class LegacyFlatEnvSource(PydanticBaseSettingsSource):
+    """Map this repo's flat environment variables onto nested settings paths.
+
+    ``DB_HOST`` becomes ``database.host``; ``PORT`` becomes ``server.port``.
+
+    WHY THIS EXISTS. The flat spellings are the contract the running service
+    already uses -- ``docs/CONFIG_REFERENCE.md`` records all 61 variables read
+    across the codebase, and every one is flat. ``.env``,
+    ``open-brain-local/local-clone.env``, ``play.env``, and the launchd plists
+    all carry them. Requiring ``OPENBRAIN_DATABASE__HOST`` instead would mean
+    rewriting every one of those before the Python service could start, so the
+    flat names are kept and adapted here.
+
+    A parent ``BaseSettings`` does NOT consult a nested ``BaseModel`` field's
+    own ``validation_alias``. Measured 2026-07-30: with ``DB_HOST=env.example``
+    set and ``Db.host`` declaring that alias, ``S().database.host`` returned the
+    field default. The alias is only honoured when the section itself does the
+    reading -- which is what made each section its own ``BaseSettings``, which
+    is what broke precedence. This source is how the aliases are honoured
+    without giving any section an independent environment source.
+
+    The map is DERIVED from the field declarations rather than hand-written, so
+    it cannot drift from them: adding an alias to a field is all it takes for
+    that spelling to work here.
+    """
+
+    def __init__(
+        self,
+        settings_cls: type[BaseSettings],
+        environ: Mapping[str, str],
+    ) -> None:
+        """Capture the environment to read.
+
+        Args:
+            settings_cls: The settings class being built.
+            environ: Environment to read. Passed explicitly rather than taken
+                from ``os.environ`` so the source is testable without mutating
+                the process.
+        """
+        super().__init__(settings_cls)
+        self._environ = environ
+
+    def get_field_value(
+        self, field: FieldInfo, field_name: str
+    ) -> tuple[object, str, bool]:
+        """Unused: this source supplies whole sections, not single fields.
+
+        Required by the ``PydanticBaseSettingsSource`` interface. Returning
+        "not found" is correct -- ``__call__`` below does the actual work.
+        """
+        return None, field_name, False
+
+    def __call__(self) -> dict[str, object]:
+        """Collect every flat variable present, grouped by section.
+
+        Returns:
+            A nested mapping of section name to the fields this source found.
+            Sections with nothing set are omitted entirely, so this source never
+            overrides a field it has no value for.
+        """
+        collected: dict[str, object] = {}
+
+        for section_name, model in _SECTION_MODELS:
+            values = self._section_values(model)
+            if values:
+                collected[section_name] = values
+
+        return collected
+
+    def _section_values(self, model: type[BaseModel]) -> dict[str, object]:
+        """Read one section's fields out of the environment by their aliases.
+
+        The first alias that is present wins, in declaration order, so
+        ``OPENBRAIN_DB_HOST`` takes precedence over the older ``DB_HOST`` when
+        both are set.
+        """
+        values: dict[str, object] = {}
+
+        for field_name, field in model.model_fields.items():
+            for candidate in _alias_names(field):
+                if candidate in self._environ:
+                    values[field_name] = self._environ[candidate]
+                    break
+
+        return values
+
+
+class Settings(BaseSettings):
     """The complete configuration, composed from its parts.
 
     Every module receives this object. Construct it once, at process start,
     through :func:`load_settings`.
+
+    LOAD ORDER, highest precedence first:
+
+    1. Keyword arguments passed to ``Settings(...)`` -- tests only.
+    2. ``OPENBRAIN_``-prefixed environment variables, and the legacy flat
+       spellings each field declares as a validation alias.
+    3. ``secrets/config.<env>.json`` -- the per-environment layer.
+    4. ``secrets/config.json`` -- the shared base layer.
+    5. Field defaults declared above.
+
+    A reader must never have to trace code to learn whether an environment
+    variable beats a file. It does, and that is a property of the source chain
+    in :meth:`settings_customise_sources` rather than a claim in prose.
+
+    The two JSON layers are deep-merged by pydantic-settings, so a
+    per-environment file that sets only ``log.level`` leaves its sibling log
+    fields intact. Merging them by hand and passing the result to
+    ``Settings(**values)`` is the documented failure this avoids: init kwargs
+    are pydantic's HIGHEST-priority source, so the files would silently outrank
+    the environment -- the exact reverse of the order above, with nothing
+    logged. See ``docs/standards/STANDARDS-python.md`` on config.py.
     """
 
-    database: DatabaseSettings
-    embedding: EmbeddingSettings
+    #: Where the JSON layers live, and which environment's layer to load. Set by
+    #: :func:`load_settings` immediately before construction, read by
+    #: :meth:`settings_customise_sources`.
+    #:
+    #: ClassVar so pydantic treats these as plain class attributes rather than
+    #: model fields. Without the annotation they become settable config keys,
+    #: and ``extra="forbid"`` starts rejecting perfectly good files that happen
+    #: not to mention them.
+    model_config = SettingsConfigDict(
+        env_prefix=ENV_PREFIX,
+        env_nested_delimiter=ENV_NESTED_DELIMITER,
+        extra="forbid",
+        frozen=True,
+        populate_by_name=True,
+    )
+
+    _secrets_dir: ClassVar[Path] = PACKAGE_ROOT / "secrets"
+    _env_name: ClassVar[str] = "local"
+    #: Environment read by :class:`LegacyFlatEnvSource`. Set by
+    #: :func:`load_settings` so the source is testable without mutating the
+    #: process environment.
+    _environ: ClassVar[Mapping[str, str]] = os.environ
+
+    # Every submodel carries a default_factory, INCLUDING the two holding
+    # required fields, matching the exemplar
+    # (docs/standards/python-exemplar/src/exemplar/config.py:299).
+    #
+    # Without one, pydantic demands a `database` key be present in some source
+    # before the submodel can be built at all -- and a deployment configured
+    # purely through the flat environment, which is how the live service runs
+    # (.env carries DB_HOST, PORT, EMBEDDING_BASE_URL), supplies no such key.
+    # The factory lets each submodel build itself from its own env aliases.
+    # Required fields still fail loudly when genuinely absent, naming
+    # OPENBRAIN_DB_HOST.
+    database: DatabaseSettings = Field(default_factory=DatabaseSettings)  # type: ignore[arg-type]
+    embedding: EmbeddingSettings = Field(default_factory=EmbeddingSettings)  # type: ignore[arg-type]
     log: LogSettings = Field(default_factory=LogSettings)
     server: ServerSettings = Field(default_factory=ServerSettings)
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        """Declare the source chain, highest precedence first.
+
+        This is the mechanism behind the load order in the class docstring, and
+        the reason that order is true rather than merely claimed.
+        pydantic-settings walks the returned tuple and takes the first source
+        supplying each value.
+
+        It also removes any need for a hand-written recursive merge: passing a
+        LIST of files with ``deep_merge=True`` makes the library layer them.
+
+        Args:
+            settings_cls: The settings class being built. Passed to the JSON
+                source, which reads ``model_config`` from it.
+            init_settings: Keyword arguments passed to ``Settings(...)``.
+            env_settings: ``OPENBRAIN_``-prefixed environment variables.
+            dotenv_settings: ``.env`` file. Deliberately unused -- the layers
+                live in ``secrets/``, and two competing file conventions is one
+                too many. The repo's own ``.env`` is for libpq and tooling.
+            file_secret_settings: Docker-style secrets directory. Unused; the
+                JSON layers cover the same need explicitly.
+
+        Returns:
+            Sources in descending precedence.
+        """
+        # Read from the class because this hook is a classmethod and
+        # pydantic-settings offers no per-call channel to reach it.
+        # `load_settings` is the only sanctioned constructor precisely so this
+        # coupling has exactly one place to go wrong.
+        directory = cls._secrets_dir
+        env = cls._env_name
+
+        return (
+            init_settings,
+            # The nested spelling: OPENBRAIN_DATABASE__HOST.
+            env_settings,
+            # The flat spelling the running deployment actually uses: DB_HOST.
+            # ABOVE the JSON layers, so an operator exporting a variable
+            # overrides a committed file -- which is the documented order, and
+            # was measurably inverted before this source existed.
+            LegacyFlatEnvSource(settings_cls, cls._environ),
+            # Both layers as ONE source, listed lowest-precedence FIRST:
+            # deep_merge applies each file over the previous, so the
+            # per-environment file has to come last to win.
+            #
+            # A missing file is not an error here. The base layer is optional by
+            # design -- a deployment configured entirely through the environment
+            # is valid, and is how the current service runs.
+            JsonConfigSettingsSource(
+                settings_cls,
+                json_file=[
+                    directory / "config.json",
+                    directory / f"config.{env}.json",
+                ],
+                deep_merge=True,
+            ),
+        )
+
+
+def _alias_names(field: FieldInfo) -> tuple[str, ...]:
+    """Every environment spelling a field declares, in declaration order.
+
+    Order matters: :class:`LegacyFlatEnvSource` takes the first one present, so
+    a field declaring ``AliasChoices("OPENBRAIN_DB_HOST", "DB_HOST")`` prefers
+    the prefixed spelling when both are set.
+
+    Args:
+        field: The field to inspect.
+
+    Returns:
+        The declared alias names. Empty when the field declares none.
+    """
+    alias = field.validation_alias
+
+    if isinstance(alias, str):
+        return (alias,)
+
+    if isinstance(alias, AliasChoices):
+        return tuple(
+            choice for choice in alias.choices if isinstance(choice, str)
+        )
+
+    return ()
 
 
 def _accepted_variable_names() -> frozenset[str]:
     """Every environment variable name the settings models recognise.
 
-    Collects each field's declared aliases plus its prefixed default spelling,
-    across every settings model. This is derived from the models themselves, so
-    it cannot drift from them the way a hand-maintained list would.
+    Collects each field's declared aliases, its prefixed flat spelling, and the
+    nested spelling the delimiter produces. Derived from the models themselves,
+    so it cannot drift from them the way a hand-maintained list would.
     """
     names: set[str] = set()
 
-    for model in (
-        DatabaseSettings,
-        EmbeddingSettings,
-        LogSettings,
-        ServerSettings,
-    ):
-        prefix = model.model_config.get("env_prefix", "")
+    for section_name, model in _SECTION_MODELS:
         for field_name, field in model.model_fields.items():
-            names.add(f"{prefix}{field_name}".upper())
-
-            alias = field.validation_alias
-            if isinstance(alias, str):
-                names.add(alias.upper())
-            elif isinstance(alias, AliasChoices):
-                names.update(
-                    choice.upper()
-                    for choice in alias.choices
-                    if isinstance(choice, str)
-                )
+            # The nested form the delimiter binds: OPENBRAIN_DATABASE__HOST.
+            names.add(
+                f"{ENV_PREFIX}{section_name}{ENV_NESTED_DELIMITER}{field_name}".upper()
+            )
+            # The prefixed flat form: OPENBRAIN_HOST.
+            names.add(f"{ENV_PREFIX}{field_name}".upper())
+            names.update(name.upper() for name in _alias_names(field))
 
     return frozenset(names)
 
@@ -451,7 +750,13 @@ def unknown_prefixed_variables(environ: Mapping[str, str]) -> tuple[str, ...]:
     )
 
 
-def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
+def load_settings(
+    environ: Mapping[str, str] | None = None,
+    *,
+    env: str = "local",
+    secrets_dir: Path | None = None,
+    configure_logging: bool = True,
+) -> Settings:
     """Read the configuration, validate it, and start logging. Once, at start.
 
     The order is the point: settings are validated first, so a configuration
@@ -459,19 +764,32 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
     half-configured logger; then logging starts, so everything after this call
     logs into the configured sinks.
 
+    This is the only sanctioned way to build :class:`Settings`. Constructing it
+    directly skips the environment typo check and leaves the JSON layers bound
+    to whatever a previous call set.
+
     Args:
         environ: Environment to read for the unknown-variable check. Defaults to
             the live process environment. The models themselves always read the
             live environment; this argument exists so the check is testable.
+        env: Which per-environment JSON layer to load, as
+            ``secrets/config.<env>.json``.
+        secrets_dir: Directory holding the JSON layers. Defaults to
+            ``secrets/`` beside the package.
+        configure_logging: Start the logging sinks. Tests that do not want the
+            session's sinks reconfigured pass ``False``.
 
     Returns:
-        The validated settings, with logging already configured.
+        The validated settings, with logging configured unless opted out.
 
     Raises:
         UnknownEnvironmentVariableError: When a prefixed variable matches no
             setting.
         pydantic.ValidationError: On any missing or malformed setting, naming
             the field. Raised here, at start, rather than at first use.
+        json.JSONDecodeError: When a config layer exists but is not valid JSON.
+            Deliberately not caught: a malformed config silently falling back to
+            defaults is how a deployment runs on settings nobody chose.
     """
     source = os.environ if environ is None else environ
 
@@ -479,10 +797,28 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
     if unknown:
         raise UnknownEnvironmentVariableError(unknown)
 
-    settings = Settings(
-        database=DatabaseSettings(),  # type: ignore[call-arg]
-        embedding=EmbeddingSettings(),  # type: ignore[call-arg]
+    # Bind the JSON layers before construction. `settings_customise_sources` is
+    # a classmethod and reads these off the class; see the note there for why
+    # the coupling exists and why this function is the only place allowed to
+    # create it.
+    Settings._secrets_dir = (
+        secrets_dir if secrets_dir is not None else PACKAGE_ROOT / "secrets"
     )
+    Settings._env_name = env
+    Settings._environ = source
 
-    setup_logging(settings.log)
+    # No submodel is constructed here, and that is load-bearing rather than
+    # tidy. Building `DatabaseSettings()` eagerly and passing it in makes it an
+    # init kwarg -- pydantic's HIGHEST-priority source -- so the JSON layers
+    # could never supply `database` or `embedding` at all. Measured 2026-07-30:
+    # with a config.json naming database.host, that spelling raised
+    # "OPENBRAIN_DB_HOST Field required" because the submodel had already been
+    # built from the environment alone, before Settings ran its source chain.
+    #
+    # Letting Settings build them means every source in the chain applies to
+    # nested fields too, which is what makes the documented load order true.
+    settings = Settings()
+
+    if configure_logging:
+        setup_logging(settings.log)
     return settings

@@ -43,17 +43,27 @@ def _clean_environment(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def log_settings(monkeypatch: pytest.MonkeyPatch, **values: str) -> LogSettings:
-    """Build LogSettings the way production does -- from the environment.
+    """Build LogSettings the way production does -- through the source chain.
 
-    Field names cannot be passed as constructor kwargs: every field here
-    declares a ``validation_alias``, and pydantic-settings then treats the field
-    name itself as an unexpected extra. Setting the environment instead is both
-    the only working path and the one that exercises the alias wiring a
-    deployment actually depends on.
+    A section is a plain ``BaseModel`` and reads no environment of its own; the
+    environment is resolved by ``Settings`` via ``LegacyFlatEnvSource``. So this
+    goes through ``load_settings``, which is both the only path that honours the
+    flat spellings and the one a deployment actually uses.
+
+    ``configure_logging=False`` because each test calls ``setup_logging``
+    itself with the result -- letting the loader do it too would configure the
+    sinks twice and make the idempotence test meaningless.
     """
     for name, value in values.items():
         monkeypatch.setenv(name, value)
-    return LogSettings()
+
+    for required, value in MINIMAL_ENV.items():
+        monkeypatch.setenv(required, value)
+
+    return load_settings(
+        secrets_dir=Path("/nonexistent-so-no-file-layer"),
+        configure_logging=False,
+    ).log
 
 
 @pytest.fixture(autouse=True)

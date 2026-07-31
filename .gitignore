@@ -73,3 +73,23 @@ _reports/
 # and never committed; the allowlist config is tracked.
 .qmd/*
 !.qmd/index.yml
+
+# Secrets and file-based config layers: ALLOWLIST, never a blocklist.
+#
+# The structure is tracked, the values are not. A blocklist of known-bad names
+# (`*.secret.json`, `credentials.json`) only ever catches the spellings someone
+# thought of; the first file named something new lands in git. Ignoring the
+# whole directory and re-admitting named exceptions inverts that: a new file is
+# ignored by default and has to be deliberately allowed.
+#
+# The committed *.example.json files carry the full key structure with
+# placeholder values, so a fresh clone shows exactly what is required without a
+# real value ever entering git.
+#
+# An ignored file is still a file on disk. Check what is already sitting in
+# secrets/ before assuming this has covered you.
+secrets/*
+!secrets/.gitkeep
+!secrets/README.md
+!secrets/*.example
+!secrets/*.example.json
