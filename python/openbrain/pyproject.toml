@@ -50,16 +50,84 @@ warn_unused_ignores = true
 [tool.ruff]
 target-version = "py313"
 line-length = 88
+src = ["src", "tests"]    # so isort knows what "first party" means
+
+# REQUIRED for PLR1702. Without it, ruff prints "Selection PLR1702 has no effect
+# because preview is not enabled" and EXITS 0 -- the rule sits in `select`, the
+# config looks right, and the nesting law never runs. Verified against
+# docs/standards/python-exemplar/pyproject.toml:134.
+#
+# Same defect class as a mypy path that resolves to nothing, and as the qmd
+# index enumerating directories that no longer describe the tree: a check that
+# reports success while examining nothing. Do not remove this line to quiet a
+# warning.
+preview = true
 
 [tool.ruff.lint]
-# D = pydocstyle. Module (D100), package (D104), and class/function (D101-D103)
-# docstrings are gate failures, not warnings. The package-level rule is what the
-# docs generator depends on: `scripts/pytools/generate_package_docs.py` reads
-# the __init__.py docstring, so an absent one has to fail here too.
-select = ["E", "F", "I", "W", "UP", "B", "D"]
+# Named rule families, each with a reason. `select = ["ALL"]` is a trap -- it
+# enables rules that contradict each other and rules that fight the formatter,
+# and the noise trains people to write blanket ignores.
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes -- unused imports, undefined names
+    "I",      # isort -- import ordering
+    "N",      # pep8-naming
+    "UP",     # pyupgrade -- keeps syntax current with the 3.13 floor
+    "B",      # flake8-bugbear -- real bug patterns, e.g. mutable default args
+    "A",      # flake8-builtins -- shadowing `id`, `type`, `list`
+    "C4",     # flake8-comprehensions
+    "DTZ",    # flake8-datetimez -- naive datetimes
+    "T20",    # flake8-print -- no stray print() in library code
+    "SIM",    # flake8-simplify
+    # D = pydocstyle. Module (D100), package (D104), and class/function
+    # (D101-D103) docstrings are gate failures, not warnings. The package rule
+    # is what the docs generator depends on:
+    # `scripts/pytools/generate_package_docs.py` reads the __init__.py
+    # docstring, so an absent one has to fail here too.
+    "D",
+    # Control-flow shape. The LAW is "flat control flow"
+    # (docs/standards/STANDARDS-python.md). Prose does not hold; PLR1702 is what
+    # actually refuses.
+    #
+    # Named INDIVIDUALLY, not as the `PL` family. Selecting `PL` wholesale drags
+    # in ~40 unrelated pylint rules (magic-value-comparison, too-many-arguments,
+    # import-outside-top-level, ...) with nothing to do with control flow. Ten
+    # of them fired on the exemplar's own correct code. That is how a rule set
+    # becomes noise and people start writing blanket ignores. Add a rule when it
+    # is wanted, not because it shares a prefix.
+    "PLR1702",  # too-many-nested-blocks -- THE nested-block enforcement
+    "PLR0912",  # too-many-branches -- the long if/elif chain
+    "C901",     # mccabe complexity -- many small branches, collectively untestable
+    "RET",      # flake8-return -- else-after-return, the usual cause of nesting
+    "TRY",      # tryceratops -- try/except antipatterns
+]
+
+ignore = [
+    # The formatter owns line wrapping. Leaving E501 on makes `ruff format` and
+    # `ruff check` disagree about the same line, which is unwinnable.
+    "E501",
+    # D203/D213 conflict with D211/D212 -- pydocstyle ships mutually exclusive
+    # pairs and one side must be chosen. Taking "no blank line before class
+    # docstring" and "summary on the first line".
+    "D203",
+    "D213",
+]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
+
+[tool.ruff.lint.pylint]
+# NESTING LAW -- how deeply blocks may be indented before ruff refuses. ruff's
+# default is 5, which permits exactly the arrow-shaped pyramid the standard bans.
+#
+# 3, not 2, and the reason matters: PLR1702 counts EVERY block type, not just
+# conditionals. A legitimate `try:` -> `async for` -> `with` is three deep and
+# contains no branching at all. Requiring 2 would refuse correct structural code
+# and train people to add noqa, which is how a rule stops meaning anything.
+#
+# 3 still refuses `if` inside `if` inside `if`, which is the actual target.
+max-nested-blocks = 3
 
 [tool.ruff.lint.per-file-ignores]
 # Tests document themselves through their names; a docstring on every test
@@ -68,6 +136,8 @@ convention = "google"
 # The grouping CLASS still needs its docstring (D101 stays on): a test class is
 # a claim about a behaviour, and that claim is worth stating.
 "tests/*" = ["D100", "D102", "D103"]
+# Scripts are CLIs; printing is their job.
+"scripts/**" = ["T20"]
 
 [build-system]
 requires = ["hatchling"]
