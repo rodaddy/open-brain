@@ -103,6 +103,58 @@ def started_memory(live_env: dict[str, str], session: str) -> Any:
     return memory
 
 
+#: INPUT SIZES, never bounds -- the character counts each turn below carries,
+#: chosen to BRACKET the two shortenings this port buried and go past them:
+#: 1,499/1,501 straddle the old `MAX_CAPTURE_CHARS = 1_500` cut, 200,001 sits
+#: one past the old `MAX_CONTENT_CHARS = 200_000` server ceiling, and 300,001 is
+#: well beyond both. 1 is the one-character turn of #418's acceptance criteria.
+#: The assertion is `len(stored) == len(given)` at every size, so a reintroduced
+#: cut at any threshold makes some row fail; nothing here measures content
+#: length or imposes one (`docs/CODING_STANDARDS.md:160`,
+#: `_plans/python-port-sequence.md` "A number in a test is an INPUT SIZE").
+SPREAD_SIZES = (1, 1_499, 1_501, 10_000, 200_001, 300_001)
+
+
+class TestSizeSpreadOneDelivery:
+    """One delivery of many sizes; every row whole, straddling both buried cuts."""
+
+    async def test_every_size_reaches_ob_raw_turns_whole_in_one_delivery(
+        self, live_env: dict[str, str], tmp_path: Path
+    ) -> None:
+        # ONE transcript, ONE delivery carrying every size -- not N round trips.
+        # A per-size delivery would prove each size survives alone; a mixed batch
+        # is what the live path actually sends, and it is where an off-by-one in
+        # per-turn `turn_index` or ordering would surface.
+        session = f"spine-spread-{uuid.uuid4()}"
+        # A distinct id per size, and the exact text each is expected to hold.
+        turns = {
+            size: (f"u-{uuid.uuid4()}", "x" * size) for size in SPREAD_SIZES
+        }
+        path = tmp_path / "spread.jsonl"
+        path.write_text(
+            "".join(
+                operator_line(turn_uuid, text, session) + "\n"
+                for turn_uuid, text in turns.values()
+            ),
+            encoding="utf-8",
+        )
+        store = WatermarkStore(tmp_path / "wm.sqlite")
+        memory = started_memory(live_env, session)
+
+        result = await deliver_new_turns(path, session, store, memory)
+        assert result.delivered == len(SPREAD_SIZES)
+
+        database_url = live_env["OPENBRAIN_TEST_DATABASE_URL"]
+        for size, (turn_uuid, text) in turns.items():
+            row = fetch_row(database_url, turn_uuid)
+            assert row is not None, f"size {size}: no row -- a turn was dropped"
+            # Whole in TWO senses: same length (no cut) and identical bytes (no
+            # re-encoding). Length alone would pass a same-length corruption.
+            assert len(row[0]) == size, f"size {size}: stored {len(row[0])} chars"
+            assert row[0] == text, f"size {size}: content changed in the round trip"
+            assert row[1] is not None, f"size {size}: occurred_at NULL, unorderable"
+
+
 class TestOneTurnEndToEnd:
     """#418's added acceptance criterion: the row exists, and it is whole."""
 
