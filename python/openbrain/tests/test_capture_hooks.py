@@ -15,17 +15,28 @@ from __future__ import annotations
 
 import io
 import json
+import socket
+import threading
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
 
-from conftest import RecordingLane, UnreachableLane, operator_line, write_lines
+from conftest import (
+    ClosingRecorder,
+    RecordingLane,
+    UnreachableLane,
+    operator_line,
+    write_lines,
+)
 from openbrain.apps.capture.watermark import WatermarkStore
 from openbrain.apps.hooks import stop
 from openbrain.apps.hooks.dispatch import ENTRYPOINTS
 from openbrain.apps.hooks.session import (
+    STOP_HOOK_DEADLINE_SECONDS,
     CaptureNotConfiguredError,
+    StartedLane,
     StopHook,
     run_stop,
 )
@@ -109,6 +120,16 @@ class TestStopParsesTheCapturedPayload:
         assert str(payload.transcript_path) == captured["transcript_path"]
 
 
+def started(lane: object, close: object = None) -> StartedLane:
+    """Wrap a recorder as the :class:`StartedLane` a ``lane_factory`` returns.
+
+    The injected factory now hands back a lane PLUS its closer; a recorder holds
+    no session slot, so its close defaults to a no-op unless the test wants to
+    observe it.
+    """
+    return StartedLane(lane=lane, close=close or (lambda: None))  # type: ignore[arg-type]
+
+
 def capture_settings(watermark_path: Path) -> CaptureSettings:
     """A CaptureSettings pointed at a temp watermark; endpoint values are inert.
 
@@ -139,7 +160,9 @@ class TestStopDeliversThroughTheSpine:
         lane = RecordingLane()
         payload = StopHook(transcript_path=transcript, session_id="sess")
 
-        result = await run_stop(payload, settings, lane_factory=lambda _s, _k: lane)
+        result = await run_stop(
+            payload, settings, lane_factory=lambda _s, _k: started(lane)
+        )
 
         assert result is not None
         assert result.delivered == 1
@@ -157,7 +180,7 @@ class TestStopDeliversThroughTheSpine:
         payload = StopHook(session_id="sess")  # no transcript_path
 
         result = await run_stop(
-            payload, settings, lane_factory=lambda _s, _k: RecordingLane()
+            payload, settings, lane_factory=lambda _s, _k: started(RecordingLane())
         )
 
         assert result is None
@@ -174,10 +197,58 @@ class TestStopDeliversThroughTheSpine:
         payload = StopHook(transcript_path=transcript, session_id="sess")
 
         with pytest.raises(RuntimeError):
-            await run_stop(payload, settings, lane_factory=lambda _s, _k: broken)
+            await run_stop(
+                payload, settings, lane_factory=lambda _s, _k: started(broken)
+            )
 
         assert broken.calls == 1
         assert await WatermarkStore(watermark).offset_for("sess") == 0
+
+
+class TestStopReleasesTheSessionSlot:
+    """run_stop closes the lane on BOTH paths -- a slot left open exhausts the cap.
+
+    The server caps sessions per worker; a Stop that opens one and never frees it
+    lets a burst hit ``session_cap_exceeded``. ``run_stop`` owns the close in a
+    ``finally``, so it happens whether the delivery returned or raised.
+    """
+
+    async def test_close_is_called_after_a_successful_delivery(
+        self, tmp_path: Path
+    ) -> None:
+        transcript = tmp_path / "t.jsonl"
+        write_lines(transcript, [operator_line("u1", "kept", session="sess")])
+        settings = capture_settings(tmp_path / "wm.sqlite")
+        recorder = ClosingRecorder()
+        payload = StopHook(transcript_path=transcript, session_id="sess")
+
+        result = await run_stop(
+            payload,
+            settings,
+            lane_factory=lambda _s, _k: started(recorder, recorder.close),
+        )
+
+        assert result is not None
+        assert result.delivered == 1
+        assert recorder.closed == 1
+
+    async def test_close_is_called_even_when_the_send_fails(
+        self, tmp_path: Path
+    ) -> None:
+        transcript = tmp_path / "t.jsonl"
+        write_lines(transcript, [operator_line("u1", "boom", session="sess")])
+        settings = capture_settings(tmp_path / "wm.sqlite")
+        recorder = ClosingRecorder(fail=True)
+        payload = StopHook(transcript_path=transcript, session_id="sess")
+
+        with pytest.raises(RuntimeError):
+            await run_stop(
+                payload,
+                settings,
+                lane_factory=lambda _s, _k: started(recorder, recorder.close),
+            )
+
+        assert recorder.closed == 1
 
 
 class TestStopEntrypointNeverDisruptsTheSession:
@@ -192,6 +263,37 @@ class TestStopEntrypointNeverDisruptsTheSession:
     def test_main_returns_zero(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr("sys.stdin", io.StringIO("{not json"))
         assert stop.main() == 0
+
+    def test_stdin_content_never_reaches_the_log(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A sentinel in a malformed payload must not appear in any log output.
+
+        loguru's ``diagnose`` renders an exception's locals -- and a pydantic
+        ``ValidationError`` from a bad Stop payload carries its ``input_value``,
+        which is the hook's raw stdin. The failure log must be content-free by
+        construction, so it holds even against a sink with diagnose turned ON
+        (the default for the stderr handler a hook actually logs to).
+        """
+        from loguru import logger
+
+        sink = io.StringIO()
+        sink_id = logger.add(sink, backtrace=True, diagnose=True, level="WARNING")
+        try:
+            # session_id is a list, so pydantic raises a ValidationError whose
+            # input_value embeds SECRET-CONTENT-SENTINEL verbatim.
+            payload = '{"session_id": ["SECRET-CONTENT-SENTINEL"], '
+            payload += '"transcript_path": "/x"}'
+            stop.capture_stop(io.StringIO(payload))
+        finally:
+            logger.remove(sink_id)
+
+        captured = capsys.readouterr()
+        assert "SECRET-CONTENT-SENTINEL" not in sink.getvalue()
+        assert "SECRET-CONTENT-SENTINEL" not in captured.err
+        assert "SECRET-CONTENT-SENTINEL" not in captured.out
+        # The failure WAS logged -- content-free, by class name.
+        assert "Stop capture failed" in sink.getvalue()
 
 
 class TestUnconfiguredCaptureFailsAtUseNotAtLoad:
@@ -235,3 +337,110 @@ class TestUnconfiguredCaptureFailsAtUseNotAtLoad:
 def _unconfigured_settings() -> CaptureSettings:
     """A CaptureSettings with no endpoint or token -- capture is not set up."""
     return CaptureSettings()
+
+
+class _StallingEndpoint:
+    """A TCP listener that accepts a connection and never answers it.
+
+    This is the failure the timeout budget exists for: an endpoint that is up
+    enough to accept the socket but never sends a byte back. Without a client
+    timeout the request blocks on the read until the OS gives up, far past the
+    5-second Stop deadline, and Claude Code kills the process mid-capture.
+    """
+
+    def __init__(self) -> None:
+        self._server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._server.bind(("127.0.0.1", 0))
+        self._server.listen(8)
+        self.port = self._server.getsockname()[1]
+        self._accepted: list[socket.socket] = []
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._accept_and_hold, daemon=True)
+        self._thread.start()
+
+    def _accept_and_hold(self) -> None:
+        self._server.settimeout(0.25)
+        while not self._stop.is_set():
+            try:
+                conn, _addr = self._server.accept()
+            except OSError:
+                continue
+            # Hold the connection open and send nothing -- the client's read
+            # blocks until ITS timeout fires, which is the whole point.
+            self._accepted.append(conn)
+
+    @property
+    def base_url(self) -> str:
+        return f"http://127.0.0.1:{self.port}"
+
+    def close(self) -> None:
+        self._stop.set()
+        self._thread.join(timeout=2.0)
+        for conn in self._accepted:
+            conn.close()
+        self._server.close()
+
+
+@pytest.fixture
+def stalling_endpoint() -> object:
+    """A stalling TCP endpoint, torn down after the test."""
+    endpoint = _StallingEndpoint()
+    try:
+        yield endpoint
+    finally:
+        endpoint.close()
+
+
+class TestStopSurvivesAStalledEndpointWithinTheDeadline:
+    """The structural time budget: a stalled endpoint cannot outlast the deadline.
+
+    Drives the REAL ``_started_memory`` factory (no injected lane) against a
+    socket that accepts and never responds. The client's per-request timeout,
+    with retry pinned to one attempt, bounds the worst-case wall time under
+    Claude Code's 5-second Stop deadline. The turn is not lost: the watermark is
+    left unmoved, so the next Stop re-reads it.
+    """
+
+    def test_main_returns_zero_fast_and_leaves_the_watermark_unmoved(
+        self,
+        capsys: pytest.CaptureFixture[str],
+        tmp_path: Path,
+        stalling_endpoint: _StallingEndpoint,
+    ) -> None:
+        transcript = tmp_path / "t.jsonl"
+        write_lines(
+            transcript, [operator_line("u1", "held hostage", session="sess")]
+        )
+        watermark = tmp_path / "wm.sqlite"
+        settings = CaptureSettings(
+            base_url=stalling_endpoint.base_url,
+            token="tok",  # noqa: S106 -- not a real secret
+            watermark_path=watermark,
+        )
+        payload = json.dumps(
+            {"transcript_path": str(transcript), "session_id": "sess"}
+        )
+
+        start = time.monotonic()
+        # capture_stop_with(settings=...) reaches the real factory and dials the
+        # stalling endpoint, then swallows the timeout.
+        stop.capture_stop_with(io.StringIO(payload), settings)
+        elapsed = time.monotonic() - start
+
+        # Under the deadline, with headroom -- the harness would not have killed
+        # it. This is the acceptance criterion the budget exists to satisfy.
+        assert elapsed < STOP_HOOK_DEADLINE_SECONDS
+        # The Stop contract held: empty stdout, and no exception escaped.
+        assert capsys.readouterr().out == ""
+        # The turn was NOT delivered, so the watermark never advanced -- the next
+        # Stop re-reads it. No watermark file, or a zero offset, both prove it.
+        store = WatermarkStore(watermark)
+        assert asyncio_run(store.offset_for("sess")) == 0
+
+
+def asyncio_run(coro: object) -> object:
+    """Run a coroutine to completion -- a tiny shim so the sync test can await."""
+    import asyncio
+
+    return asyncio.run(coro)  # type: ignore[arg-type]

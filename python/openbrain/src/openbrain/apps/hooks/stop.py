@@ -45,7 +45,7 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from openbrain.apps.hooks.session import StopHook, run_stop
-from openbrain.config import load_settings
+from openbrain.config import load_capture_settings
 
 if TYPE_CHECKING:
     from typing import TextIO
@@ -86,16 +86,28 @@ def capture_stop_with(stream: TextIO, settings: CaptureSettings | None) -> None:
         payload = StopHook.model_validate_json(raw)
         capture = settings if settings is not None else _loaded_capture()
         asyncio.run(run_stop(payload, capture))
-    except Exception:  # noqa: BLE001 -- an observer must never break its subject
-        # No content on this line: a failing capture path can hold transcript
-        # text or a token in the exception, and this log is not the place for
-        # either. The class and traceback are enough to find the fault.
-        logger.opt(exception=True).warning("Stop capture failed; turn left for retry")
+    except Exception as error:  # noqa: BLE001 -- an observer must never break its subject
+        # Content-free BY CONSTRUCTION, not by handler config. The exception can
+        # hold transcript text or a token -- a pydantic ValidationError carries
+        # its `input_value`, which for a malformed Stop payload IS the hook's raw
+        # stdin. `logger.opt(exception=True)` renders that through loguru's
+        # diagnose, whose DEFAULT is on for the stderr handler a hook logs to.
+        # So only the class name is passed, and no exception object reaches the
+        # sink: there are no locals to render, whatever any handler is set to.
+        logger.warning(
+            "Stop capture failed ({}); turn left for retry", type(error).__name__
+        )
 
 
 def _loaded_capture() -> CaptureSettings:
-    """The ``capture`` section from a full settings load, without touching sinks."""
-    return load_settings(configure_logging=False).capture
+    """The ``capture`` section, resolved without the DB/embedding sections.
+
+    ``load_capture_settings`` builds only :class:`CaptureSettings`; the full
+    ``load_settings`` would require ``OPENBRAIN_DB_HOST`` and the embedding
+    endpoint, which a hook process does not set -- and that validation failure,
+    swallowed here, is a silent zero capture on every ``Stop``.
+    """
+    return load_capture_settings()
 
 
 def main(stream: TextIO | None = None) -> int:

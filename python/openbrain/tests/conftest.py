@@ -59,6 +59,30 @@ class UnreachableLane:
         raise LaneUnreachableError
 
 
+@dataclass
+class ClosingRecorder:
+    """A ``RawLane`` whose close is observable -- proves ``run_stop`` releases it.
+
+    ``run_stop`` builds a :class:`~openbrain.apps.hooks.session.StartedLane` and
+    frees its session slot in a ``finally``. A test recorder is content only; the
+    slot it stands in for is a server resource, so it records that close was
+    called on both the success and the failure path.
+    """
+
+    batches: list[list[dict[str, Any]]] = field(default_factory=list)
+    closed: int = 0
+    fail: bool = False
+
+    def ingest_raw_turns(self, turns: Any) -> object:
+        self.batches.append([dict(turn) for turn in turns])
+        if self.fail:
+            raise LaneUnreachableError
+        return {"ingested": len(self.batches[-1])}
+
+    def close(self) -> None:
+        self.closed += 1
+
+
 def operator_line(
     uuid: str, content: str, *, session: str = "s1", timestamp: str = TIMESTAMP
 ) -> str:

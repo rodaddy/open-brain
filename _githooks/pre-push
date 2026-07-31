@@ -3,6 +3,10 @@ set -eu
 
 # Open Brain pre-push gate.
 # Preserve the existing full validation and add path-sensitive Python/parity gates.
+# The repo holds TWO Python packages: python/openbrain-memory and python/openbrain.
+# Each is gated on its own paths with its own validation, so a push touching only
+# one still runs that one's mypy/ruff/pytest -- a push touching only
+# python/openbrain used to skip every Python check entirely.
 
 echo "pre-push: running Open Brain validation..."
 
@@ -16,6 +20,7 @@ PARITY_PATHS=("${(f)$(cat "$ROOT/contracts/parity-paths.txt")}")
 ZERO_SHA=0000000000000000000000000000000000000000
 SAW_RANGE=no
 CHANGED_PYTHON=no
+CHANGED_OPENBRAIN=no
 CHANGED_PARITY=no
 
 while read -r _local_ref local_sha _remote_ref remote_sha; do
@@ -38,6 +43,12 @@ while read -r _local_ref local_sha _remote_ref remote_sha; do
   if [ -n "$(git diff --name-only "$base_sha" "$local_sha" -- python/openbrain-memory)" ]; then
     CHANGED_PYTHON=yes
   fi
+  # `python/openbrain` is a distinct path from `python/openbrain-memory`: a git
+  # pathspec matches whole path components, so this leading-dir filter never
+  # catches the sibling package. Each package gets its own gate on its own paths.
+  if [ -n "$(git diff --name-only "$base_sha" "$local_sha" -- python/openbrain)" ]; then
+    CHANGED_OPENBRAIN=yes
+  fi
   if [ -n "$(git diff --name-only "$base_sha" "$local_sha" -- "${PARITY_PATHS[@]}")" ]; then
     CHANGED_PARITY=yes
   fi
@@ -55,6 +66,9 @@ if [ "$SAW_RANGE" = no ]; then
   fi
   if [ -n "$(git diff --name-only "$BASE" HEAD -- python/openbrain-memory)" ]; then
     CHANGED_PYTHON=yes
+  fi
+  if [ -n "$(git diff --name-only "$BASE" HEAD -- python/openbrain)" ]; then
+    CHANGED_OPENBRAIN=yes
   fi
   if [ -n "$(git diff --name-only "$BASE" HEAD -- "${PARITY_PATHS[@]}")" ]; then
     CHANGED_PARITY=yes
@@ -87,6 +101,30 @@ if [ "$CHANGED_PYTHON" = yes ]; then
   )
 else
   echo "  Python package unchanged; skipping Python package gate"
+fi
+
+if [ "$CHANGED_OPENBRAIN" = yes ]; then
+  echo "  openbrain package changed; running openbrain validation ..."
+  (
+    cd python/openbrain
+    echo "    uv run mypy src/openbrain ..."
+    uv run mypy src/openbrain
+    echo "    ✓ mypy passed"
+
+    echo "    uv run ruff check src tests ..."
+    uv run ruff check src tests
+    echo "    ✓ ruff passed"
+
+    echo "    uv run pytest -q ..."
+    uv run pytest -q
+    echo "    ✓ pytest passed"
+
+    echo "    uv run generate_package_docs --check ..."
+    uv run python ../../scripts/pytools/generate_package_docs.py --check --path src/openbrain
+    echo "    ✓ package docs in sync"
+  )
+else
+  echo "  openbrain package unchanged; skipping openbrain package gate"
 fi
 
 if [ "$CHANGED_PARITY" = yes ]; then

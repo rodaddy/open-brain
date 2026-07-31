@@ -26,9 +26,12 @@ Pattern/Convention:
     watermark rule. This module only composes the two, so a change that reaches
     for a queue or a batch cap belongs to one of those owners, not here.
 
-    The namespace this requests is ADVISORY. The server derives the real one
-    from the token (``src/tools/ingest-raw-turn.ts``), so ``CaptureSettings``'
-    value is provenance, not authorisation.
+    This factory transmits NO namespace. The client emits ``X-Namespace`` only
+    when built with ``delegate_namespace=True`` (default off), and it passes no
+    per-call namespace, so the server writes to the token's own namespace
+    (``src/tools/ingest-raw-turn.ts``: ``args.namespace ?? auth.clientId``). A
+    ``CaptureSettings.namespace`` field would have been dead config -- declared,
+    never sent -- so it is deliberately absent.
 
 Example:
     >>> from openbrain.apps.hooks.session import StopHook
@@ -42,6 +45,7 @@ See Also:
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -53,6 +57,25 @@ from openbrain.config import CaptureSettings, ConfigurationError
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+#: The Stop harness deadline, in seconds. NOT a content bound -- this is a TIME
+#: budget tied to an EXTERNAL limit: Claude Code kills a Stop hook that has not
+#: exited within 5 seconds, and a killed process cannot honour the exit-0
+#: contract or log why it died. Content is never bounded (``docs/CODING_
+#: STANDARDS.md:160``); this bounds only how long we will wait on the network.
+STOP_HOOK_DEADLINE_SECONDS = 5.0
+
+#: Per-request network timeout for the capture client, in seconds. A Stop that
+#: reaches the lane makes up to four sequential HTTP calls -- ``initialize``,
+#: the initialized notification, ``session_start``, and ``ingest_raw_turn`` --
+#: so the worst-case wall time is four of these, and 4 * 1.0 = 4.0 s sits safely
+#: under STOP_HOOK_DEADLINE_SECONDS with headroom. Retry is pinned to a single
+#: attempt (see ``_started_memory``) precisely so no retryable timeout can double
+#: a call and blow that budget. When a call times out, ``ingest_raw_turns``
+#: raises, ``deliver_new_turns`` never reaches its watermark advance, and the
+#: same turns are re-read next Stop -- the unadvanced watermark is the retry, so
+#: a timeout leaves the batch durable-by-replay, never half-delivered.
+CAPTURE_REQUEST_TIMEOUT_SECONDS = 1.0
 
 
 class CaptureNotConfiguredError(ConfigurationError):
@@ -93,11 +116,35 @@ class StopHook(BaseModel):
     session_id: str | None = None
 
 
+@dataclass(frozen=True)
+class StartedLane:
+    """A raw lane with its server session started, and how to release it.
+
+    The spine (``deliver``) needs only :class:`RawLane`, one call. But a real
+    lane also holds a SERVER session slot, and the server caps those per worker
+    (``DEFAULT_MAX_SESSIONS = 100``, ``src/transport.ts``); leaving one
+    allocated on every Stop lets a burst exhaust the cap and get 429s. So the
+    factory returns the lane the spine writes through PLUS the closer that frees
+    the slot -- keeping ``RawLane`` narrow (it does not gain a ``close``) while
+    ``run_stop`` still owns the lifecycle, the same shape as ``start_session``
+    being called here rather than named on the write Protocol.
+
+    Attributes:
+        lane: The write path handed to :func:`deliver_new_turns`.
+        close: Releases the server-side session. A no-op for injected test
+            recorders, which hold no slot; the real factory wires it to the
+            client's ``close``.
+    """
+
+    lane: RawLane
+    close: Callable[[], None]
+
+
 async def run_stop(
     payload: StopHook,
     settings: CaptureSettings,
     *,
-    lane_factory: Callable[[CaptureSettings, str], RawLane] | None = None,
+    lane_factory: Callable[[CaptureSettings, str], StartedLane] | None = None,
 ) -> Delivery | None:
     """Deliver the turns written since the watermark for one ``Stop`` payload.
 
@@ -105,8 +152,8 @@ async def run_stop(
         payload: The parsed ``Stop`` hook fields.
         settings: The ``capture`` configuration section: endpoint, token,
             identity, and the watermark store path.
-        lane_factory: Builds the raw lane for a session key. Injected so tests
-            hand in a recorder; defaults to a real ``openbrain_memory``
+        lane_factory: Builds the :class:`StartedLane` for a session key. Injected
+            so tests hand in a recorder; defaults to a real ``openbrain_memory``
             client with its session started.
 
     Returns:
@@ -123,15 +170,22 @@ async def run_stop(
         return None
 
     build = lane_factory if lane_factory is not None else _started_memory
-    lane = build(settings, payload.session_id)
+    started = build(settings, payload.session_id)
     store = WatermarkStore(settings.watermark_path)
 
-    return await deliver_new_turns(
-        payload.transcript_path, payload.session_id, store, lane
-    )
+    try:
+        return await deliver_new_turns(
+            payload.transcript_path, payload.session_id, store, started.lane
+        )
+    finally:
+        # Success or failure, the session slot is released here -- the one place
+        # that owns the lane's lifecycle. The closer is content-free and swallows
+        # its own transport errors (``openbrain_memory.client.close``), so it
+        # cannot itself break the delivery's outcome.
+        started.close()
 
 
-def _started_memory(settings: CaptureSettings, session_key: str) -> RawLane:
+def _started_memory(settings: CaptureSettings, session_key: str) -> StartedLane:
     """Construct a real ``openbrain_memory`` client with its session started.
 
     The one non-test lane factory. The sibling is imported here rather than at
@@ -156,12 +210,25 @@ def _started_memory(settings: CaptureSettings, session_key: str) -> RawLane:
 
     from openbrain_memory.agent import AgentMemory
     from openbrain_memory.client import OpenBrainClient
+    from openbrain_memory.policy import RetryPolicy
 
     client = OpenBrainClient(
         base_url=settings.base_url,
         token=settings.token.get_secret_value(),
-        namespace=settings.namespace,
+        # Never transmitted on this path: the client sends X-Namespace only with
+        # delegate_namespace=True (default False), and this factory passes no
+        # per-call namespace. The server then writes to the token's own namespace
+        # (``src/tools/ingest-raw-turn.ts``: ``args.namespace ?? auth.clientId``).
+        # This value is required by the constructor but inert here; agent_id is
+        # reused so nothing invents a second identity string.
+        namespace=settings.agent_id,
         agent_id=settings.agent_id,
+        # The structural time budget: bound every request so the worst-case wall
+        # time stays under Claude Code's 5 s Stop deadline, and pin retry to one
+        # attempt so a retryable timeout cannot double a call past it. See
+        # CAPTURE_REQUEST_TIMEOUT_SECONDS.
+        timeout=CAPTURE_REQUEST_TIMEOUT_SECONDS,
+        retry_policy=RetryPolicy(attempts=1),
     )
     # Annotated to RawLane, the Protocol the spine needs, which AgentMemory
     # structurally satisfies. start_session is not part of that Protocol -- it is
@@ -169,4 +236,4 @@ def _started_memory(settings: CaptureSettings, session_key: str) -> RawLane:
     # ignore; the narrowing is deliberate, not a cast around a missing type.
     memory: RawLane = AgentMemory(client, agent=settings.agent_id)
     memory.start_session(session_key)  # type: ignore[attr-defined]
-    return memory
+    return StartedLane(lane=memory, close=client.close)

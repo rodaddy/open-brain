@@ -347,10 +347,17 @@ class EmbeddingSettings(_Base):
 class CaptureSettings(_Base):
     """Where a hook sends captured turns, and who it says it is.
 
-    The live capture adapter (``apps/hooks/stop.py``) needs four coordinates to
+    The live capture adapter (``apps/hooks/stop.py``) needs three coordinates to
     reach the raw lane through ``openbrain_memory``, plus one local path for its
     watermark store. None of them bounds content; they are endpoint, credential,
     identity, and a file location.
+
+    There is no namespace field. The capture factory transmits no namespace --
+    the client sends ``X-Namespace`` only under ``delegate_namespace=True``, and
+    passes no per-call namespace -- so the server writes to the token's own
+    namespace (``src/tools/ingest-raw-turn.ts``: ``args.namespace ??
+    auth.clientId``). A field the factory never sends would be dead config, so
+    the namespace is not configurable here.
 
     ``base_url`` and ``token`` are OPTIONAL here, and the reason is the same one
     ``database`` uses a factory for: a process that never runs a hook -- the
@@ -368,15 +375,9 @@ class CaptureSettings(_Base):
         token: The bearer token, held as a ``SecretStr`` so it never reaches a
             log line, repr, or traceback, or ``None`` when capture is not
             configured.
-        agent_id: How this capturer identifies itself to the server. The server
-            derives the namespace from the TOKEN, not from this
-            (``src/tools/ingest-raw-turn.ts``), so this is identity for
-            attribution, not authorisation.
-        namespace: The namespace the client REQUESTS. Advisory only -- the
-            server re-derives the real one from the token
-            (``openbrain_memory.client``: *"payload.namespace is ADVISORY"*), so
-            this is recorded for provenance and does not decide where a row
-            lands.
+        agent_id: How this capturer identifies itself to the server. This is
+            identity for attribution, not authorisation -- the row lands in the
+            token's namespace regardless (``src/tools/ingest-raw-turn.ts``).
         watermark_path: The SQLite file holding each session's read offset. A
             hook is a short-lived process, so this position must survive between
             invocations on disk; it is the one piece of local state capture
@@ -400,10 +401,6 @@ class CaptureSettings(_Base):
         validation_alias=AliasChoices(
             "OPENBRAIN_CAPTURE_AGENT_ID", "OPENBRAIN_CAPTURE_AGENT"
         ),
-    )
-    namespace: str = Field(
-        default="agent",
-        validation_alias=AliasChoices("OPENBRAIN_CAPTURE_NAMESPACE"),
     )
     watermark_path: Path = Field(
         default=PACKAGE_ROOT / "data" / "capture-watermarks.sqlite",
@@ -603,15 +600,29 @@ class LegacyFlatEnvSource(PydanticBaseSettingsSource):
         ``OPENBRAIN_DB_HOST`` takes precedence over the older ``DB_HOST`` when
         both are set.
         """
-        values: dict[str, object] = {}
+        return _resolve_section_from_env(model, self._environ)
 
-        for field_name, field in model.model_fields.items():
-            for candidate in _alias_names(field):
-                if candidate in self._environ:
-                    values[field_name] = self._environ[candidate]
-                    break
 
-        return values
+def _resolve_section_from_env(
+    model: type[BaseModel], environ: Mapping[str, str]
+) -> dict[str, object]:
+    """Map one section model's fields from the environment by their aliases.
+
+    The first alias present wins, in declaration order, so ``OPENBRAIN_DB_HOST``
+    takes precedence over the older ``DB_HOST`` when both are set. Shared by
+    :class:`LegacyFlatEnvSource` (which does this for every section) and
+    :func:`load_capture_settings` (which does it for capture alone, without
+    building the rest of the tree), so the two cannot drift.
+    """
+    values: dict[str, object] = {}
+
+    for field_name, field in model.model_fields.items():
+        for candidate in _alias_names(field):
+            if candidate in environ:
+                values[field_name] = environ[candidate]
+                break
+
+    return values
 
 
 class Settings(BaseSettings):
@@ -896,3 +907,42 @@ def load_settings(
     if configure_logging:
         setup_logging(settings.logging)
     return settings
+
+
+def load_capture_settings(
+    environ: Mapping[str, str] | None = None,
+) -> CaptureSettings:
+    """Resolve ONLY the ``capture`` section, without the rest of the tree.
+
+    The ``Stop`` hook needs capture's coordinates and nothing else, and it runs
+    in a process configured for exactly that: ``OPENBRAIN_BASE_URL`` and
+    ``OPENBRAIN_TOKEN`` set, and the database and embedding variables that a
+    server process carries absent. ``load_settings`` cannot serve it -- that
+    builds the whole :class:`Settings`, and :class:`DatabaseSettings` and
+    :class:`EmbeddingSettings` have required fields (``OPENBRAIN_DB_HOST``,
+    ``OPENBRAIN_EMBEDDING_BASE_URL``), so a hook with only the two capture
+    variables set fails validation on config it never uses. Swallowed by the
+    entrypoint, that failure is a SILENT ZERO CAPTURE on every ``Stop``.
+
+    This reads capture's own aliases (``OPENBRAIN_CAPTURE_*`` and the
+    ``OPENBRAIN_BASE_URL`` / ``OPENBRAIN_TOKEN`` shorthands) directly, through
+    the same resolver :class:`LegacyFlatEnvSource` uses, so the aliases and their
+    precedence match the full load exactly. It does NOT read the JSON layers:
+    capture is an environment-configured hook concern, and the layers carry the
+    server's settings, not a hook's.
+
+    Args:
+        environ: Environment to read. Defaults to the live process environment;
+            the argument exists so the resolver is testable without mutating it.
+
+    Returns:
+        The validated :class:`CaptureSettings`. ``base_url`` and ``token`` are
+        ``None`` when unset, exactly as under the full load -- the requirement is
+        enforced at use time in ``apps.hooks.session``, not here.
+    """
+    source = os.environ if environ is None else environ
+    values = _resolve_section_from_env(CaptureSettings, source)
+    # Keyed by field NAME (``base_url``), not alias -- ``_Base`` sets
+    # ``populate_by_name``, so ``model_validate`` accepts the names. A splat would
+    # not type-check the heterogeneous mapping against each field's type.
+    return CaptureSettings.model_validate(values)

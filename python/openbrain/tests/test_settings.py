@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from openbrain.config import (
     _SECTION_MODELS,
     Settings,
+    load_capture_settings,
     load_settings,
     unknown_prefixed_variables,
 )
@@ -334,6 +335,72 @@ class TestUnknownVariableDetection:
         }
 
         assert unknown_prefixed_variables(environ) == ()
+
+
+class TestCaptureOnlyLoader:
+    """load_capture_settings resolves capture WITHOUT the DB/embedding sections.
+
+    A Stop hook sets only the two capture variables. The full load builds
+    DatabaseSettings and EmbeddingSettings, which have required fields, so it
+    raises on config the hook never uses -- and the entrypoint swallows that,
+    making it a silent zero capture on every Stop. This loader is the fix; the
+    tests prove it loads on exactly the hook's environment.
+    """
+
+    def test_loads_with_only_the_two_capture_variables(self) -> None:
+        # ONLY the capture shorthands -- no DB_HOST, no EMBEDDING_BASE_URL. The
+        # autouse fixture has already scrubbed the developer's shell, so this is
+        # the whole environment the loader sees.
+        environ = {
+            "OPENBRAIN_BASE_URL": "http://127.0.0.1:3101",
+            "OPENBRAIN_TOKEN": "capture-token",
+        }
+
+        capture = load_capture_settings(environ=environ)
+
+        assert capture.base_url == "http://127.0.0.1:3101"
+        assert capture.token is not None
+        assert capture.token.get_secret_value() == "capture-token"
+
+    def test_the_full_load_still_fails_on_the_same_environment(self) -> None:
+        """Proves the loader is NECESSARY: the full path raises where it loads.
+
+        If ``load_settings`` succeeded here, the capture-only loader would be
+        redundant. It does not -- it demands OPENBRAIN_DB_HOST -- which is exactly
+        why the hook needs its own path.
+        """
+        environ = {
+            "OPENBRAIN_BASE_URL": "http://127.0.0.1:3101",
+            "OPENBRAIN_TOKEN": "capture-token",
+        }
+
+        with pytest.raises(ValidationError):
+            load_settings(
+                environ=environ, secrets_dir=NO_FILE_LAYERS, configure_logging=False
+            )
+
+        # The capture-only loader loads on that same environment.
+        assert load_capture_settings(environ=environ).base_url is not None
+
+    def test_capture_specific_aliases_win_over_the_shorthand(self) -> None:
+        environ = {
+            "OPENBRAIN_BASE_URL": "http://shorthand.example",
+            "OPENBRAIN_CAPTURE_BASE_URL": "http://specific.example",
+            "OPENBRAIN_TOKEN": "tok",
+        }
+
+        capture = load_capture_settings(environ=environ)
+
+        # OPENBRAIN_CAPTURE_BASE_URL is declared first in AliasChoices, so it
+        # wins -- the same precedence the full LegacyFlatEnvSource applies.
+        assert capture.base_url == "http://specific.example"
+
+    def test_unconfigured_capture_loads_as_none(self) -> None:
+        """No capture vars set -> None coordinates, not an error (use-time check)."""
+        capture = load_capture_settings(environ={})
+
+        assert capture.base_url is None
+        assert capture.token is None
 
     def test_unprefixed_variables_are_ignored(self) -> None:
         """Only the Open Brain namespace is ours to police."""
