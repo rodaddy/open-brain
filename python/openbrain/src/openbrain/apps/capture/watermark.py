@@ -72,14 +72,23 @@ from pydantic import BaseModel, ConfigDict, Field
 #: so the default has to be the position that reads everything.
 BEGINNING_OF_FILE = 0
 
-#: Seconds a writer waits for another process's lock before giving up.
+#: How long a writer is willing to wait for another process's lock.
 #:
 #: SQLite allows ONE writer at a time even in WAL mode -- WAL lets readers run
 #: alongside a writer, it does not make writes concurrent. The busy timeout is
-#: what actually prevents `database is locked` under two workers, and a zero
-#: timeout produces rare-but-constant failures under load. Generous on purpose:
-#: a hook writing one integer holds its lock for microseconds, so a long timeout
-#: costs nothing and removes the failure mode.
+#: what prevents `database is locked` under two workers.
+#:
+#: IT ONLY APPLIES IF THE TRANSACTION IS OPENED CORRECTLY. A deferred
+#: read-then-write transaction fails in 0ms no matter what this value is -- see
+#: :meth:`WatermarkStore._advance`. Setting this number is not the same as being
+#: protected by it, which is why a test holds a real lock from a real second
+#: process rather than trusting the constant.
+#:
+#: Generous on purpose, and it is not a delay: the wait ends the instant the
+#: lock frees, SQLite hands it to the OS scheduler rather than polling, CPython
+#: releases the GIL around it, and it runs inside `asyncio.to_thread`. A hook
+#: writing one integer holds its lock for microseconds, so this duration is
+#: almost never approached.
 LOCK_WAIT_SECONDS = 30.0
 
 _SCHEMA = """
@@ -269,46 +278,86 @@ class WatermarkStore:
         return Position(offset=offset, identity=identity)
 
     def _advance(self, session_key: str, proposed: Position) -> None:
-        """Write a validated position, blocking. Called on a worker thread."""
+        """Write a validated position, blocking. Called on a worker thread.
+
+        Opens with ``BEGIN IMMEDIATE`` because this is a read-then-write
+        transaction: it SELECTs the stored offset to enforce the forward-only
+        rule, then writes.
+
+        A DEFERRED transaction (sqlite3's default) takes a READ lock on the
+        SELECT and then must UPGRADE it to a write lock -- and SQLite refuses to
+        WAIT on an upgrade, because two readers each waiting to write is a
+        deadlock it cannot resolve. It returns `database is locked` INSTANTLY,
+        ignoring the busy timeout completely.
+
+        Measured 2026-07-31 against two real processes: the deferred form failed
+        in 0ms, while a plain single write to the same database waited 659ms and
+        succeeded. The timeout added for core01's two workers was doing nothing
+        on the one path it existed to protect.
+
+        Taking the write lock up front costs nothing -- this transaction is
+        microseconds long -- and makes the timeout apply as intended.
+        """
         identity = proposed.identity
 
-        with closing(self._connect()) as connection, connection:
-            row = connection.execute(
-                "SELECT offset, device, inode FROM watermark WHERE session_key = ?",
-                (session_key,),
-            ).fetchone()
+        # COMMIT and ROLLBACK are issued as SQL, not via connection.commit():
+        # with autocommit=True the Python-level commit()/rollback() are no-ops,
+        # so an explicitly-begun transaction would never be committed and would
+        # be discarded on close. Verified 2026-07-31 -- every write silently did
+        # nothing and offset_for returned 0.
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                self._write_position(connection, session_key, proposed, identity)
+            except BaseException:
+                connection.execute("ROLLBACK")
+                raise
+            connection.execute("COMMIT")
 
-            if row is not None:
-                stored_offset, device, inode = row
-                stored_identity = (
-                    FileIdentity(device=device, inode=inode)
-                    if device is not None and inode is not None
-                    else None
-                )
-                same_file = (
-                    identity is None
-                    or stored_identity is None
-                    or stored_identity == identity
-                )
-                if same_file and proposed.offset < stored_offset:
-                    raise WatermarkRegressionError(
-                        session_key, stored_offset, proposed.offset
-                    )
+    def _write_position(
+        self,
+        connection: sqlite3.Connection,
+        session_key: str,
+        proposed: Position,
+        identity: FileIdentity | None,
+    ) -> None:
+        """Check the forward-only rule and write, inside an open transaction."""
+        row = connection.execute(
+            "SELECT offset, device, inode FROM watermark WHERE session_key = ?",
+            (session_key,),
+        ).fetchone()
 
-            connection.execute(
-                "INSERT INTO watermark (session_key, offset, device, inode) "
-                "VALUES (?, ?, ?, ?) "
-                "ON CONFLICT(session_key) DO UPDATE SET "
-                "offset = excluded.offset, "
-                "device = excluded.device, "
-                "inode = excluded.inode",
-                (
-                    session_key,
-                    proposed.offset,
-                    identity.device if identity else None,
-                    identity.inode if identity else None,
-                ),
+        if row is not None:
+            stored_offset, device, inode = row
+            stored_identity = (
+                FileIdentity(device=device, inode=inode)
+                if device is not None and inode is not None
+                else None
             )
+            same_file = (
+                identity is None
+                or stored_identity is None
+                or stored_identity == identity
+            )
+            if same_file and proposed.offset < stored_offset:
+                raise WatermarkRegressionError(
+                    session_key, stored_offset, proposed.offset
+                )
+
+        connection.execute(
+            "INSERT INTO watermark (session_key, offset, device, inode) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(session_key) DO UPDATE SET "
+            "offset = excluded.offset, "
+            "device = excluded.device, "
+            "inode = excluded.inode",
+            (
+                session_key,
+                proposed.offset,
+                identity.device if identity else None,
+                identity.inode if identity else None,
+            ),
+        )
 
     def _connect(self) -> sqlite3.Connection:
         """Open a configured connection, preparing the database on first use.
@@ -321,8 +370,12 @@ class WatermarkStore:
         if not self._ready:
             self._prepare()
 
+        # autocommit=True so the CALLER decides where a transaction begins.
+        # With autocommit=False sqlite3 opens a DEFERRED transaction at connect,
+        # which cannot be upgraded under contention (see _advance) and makes an
+        # explicit `BEGIN IMMEDIATE` an error. Reads need no transaction at all.
         return sqlite3.connect(
-            self._path, timeout=LOCK_WAIT_SECONDS, autocommit=False
+            self._path, timeout=LOCK_WAIT_SECONDS, autocommit=True
         )
 
     def _prepare(self) -> None:

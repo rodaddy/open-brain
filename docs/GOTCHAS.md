@@ -669,3 +669,50 @@ form of precisely what they do, with no dependency. Converting local file reads
 buys an `await` keyword and a consistent boundary -- NOT concurrency. It is
 worth doing because the boundary is what later callers (the OB HTTP client,
 Postgres writes) genuinely need, not because it makes a hook faster.
+
+### A busy timeout that never applies: SQLite will not wait on a lock UPGRADE
+
+**A live defect in `1f6e586`, found only because the operator asked whether a
+blocking wait was really unavoidable.**
+
+`WatermarkStore._advance` does `SELECT` (enforce forward-only) then `INSERT`.
+Under sqlite3's DEFAULT deferred transaction that takes a READ lock and then
+tries to UPGRADE to a write lock. **SQLite refuses to wait on an upgrade** --
+two readers each waiting to write is an unresolvable deadlock -- so it returns
+`database is locked` in **0ms**, ignoring `busy_timeout` entirely.
+
+Measured 2026-07-31, two real processes, same database:
+
+| form | result |
+|---|---|
+| deferred read-then-write (what shipped) | **FAILED in 0ms** |
+| plain single write | waited 659ms, succeeded |
+| `BEGIN IMMEDIATE` read-then-write (the fix) | waited 712ms, succeeded |
+
+`LOCK_WAIT_SECONDS = 30.0` was set, verified as `PRAGMA busy_timeout = 30000`,
+and **doing nothing on the one path it existed to protect** -- the two-worker
+contention on core01 it was added for.
+
+**Setting a timeout is not the same as being protected by one.** The constant
+looked right, the pragma read back right, and the behaviour was wrong. Only a
+test that holds a real lock from a real SECOND PROCESS shows it: SQLite resolves
+same-connection and in-process contention immediately and correctly, so an
+in-process "holder" proves nothing. Same family as every other entry here -- a
+check that examines nothing reports success.
+
+**Two more traps in the fix itself:**
+
+- **`connection.commit()` is a NO-OP under `autocommit=True`.** An explicitly
+  begun transaction is then never committed and is discarded on close. Every
+  write silently did nothing and `offset_for` returned 0. Issue `COMMIT` and
+  `ROLLBACK` as SQL when managing transactions by hand.
+- `autocommit=False` opens a deferred transaction at connect, which makes an
+  explicit `BEGIN IMMEDIATE` an error. Managing transactions explicitly requires
+  `autocommit=True`.
+
+**The wait itself was never the problem.** Measured: the contended write waited
+712ms while the worst event-loop stall was 11.3ms (the probe's own tick). SQLite
+hands the wait to the OS scheduler rather than polling, CPython releases the GIL
+around `sqlite3_step()`, and the call runs inside `asyncio.to_thread`. The GIL
+was never what slowed this down, and a free-threaded build would not have fixed
+it -- the bug was a transaction that refused to wait at all.

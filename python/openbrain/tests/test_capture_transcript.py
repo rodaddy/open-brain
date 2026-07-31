@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -31,6 +33,26 @@ from openbrain.apps.capture.watermark import (
 #: machine -- but on a developer's machine they run against the real thing,
 #: which is what caught every wrong assumption about record shape on 2026-07-31.
 LIVE_TRANSCRIPT_DIR = Path.home() / ".claude" / "projects"
+
+#: A second process that takes the write lock, announces it, and holds briefly.
+#:
+#: Must be a real process. SQLite resolves same-connection and in-process
+#: contention immediately, so an in-process "holder" tests nothing about the
+#: busy timeout -- which is how a timeout that failed in 0ms looked healthy.
+LOCK_HOLDER = """
+import sqlite3, sys, time
+connection = sqlite3.connect(sys.argv[1], timeout=30, autocommit=True)
+connection.execute("BEGIN IMMEDIATE")
+connection.execute(
+    "INSERT INTO watermark (session_key, offset, device, inode)"
+    " VALUES ('lock-holder', 1, NULL, NULL)"
+    " ON CONFLICT(session_key) DO UPDATE SET offset = excluded.offset"
+)
+print("held", flush=True)
+time.sleep(0.4)
+connection.commit()
+connection.close()
+"""
 
 
 def operator_line(uuid: str, content: str, *, source: str = "typed") -> str:
@@ -380,6 +402,39 @@ class TestWatermarkStore:
         await store.advance("s1", 10, FileIdentity(device=1, inode=999))
 
         assert await store.offset_for("s1") == 10
+
+    async def test_a_write_waits_for_another_process_holding_the_lock(
+        self, tmp_path: Path
+    ) -> None:
+        """The busy timeout, proven against a REAL second process.
+
+        This is the test the constant alone could not give. Measured 2026-07-31:
+        with a deferred read-then-write transaction the store failed in 0ms with
+        `database is locked` while LOCK_WAIT_SECONDS was 30 -- the timeout was
+        set, and doing nothing, because SQLite will not wait on a lock UPGRADE.
+
+        Holding the lock in-process would not exercise it: SQLite answers
+        same-connection contention immediately and correctly. It takes another
+        process.
+        """
+        path = tmp_path / "w.db"
+        store = WatermarkStore(path)
+        await store.advance("s1", 1)
+
+        holder = subprocess.Popen(
+            [sys.executable, "-c", LOCK_HOLDER, str(path)],
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            assert holder.stdout is not None
+            assert holder.stdout.readline().strip() == "held", "lock never taken"
+
+            await store.advance("s1", 2)
+        finally:
+            holder.wait(timeout=30)
+
+        assert await store.offset_for("s1") == 2
 
     async def test_writes_from_two_connections_do_not_lose_a_session(
         self, tmp_path: Path
