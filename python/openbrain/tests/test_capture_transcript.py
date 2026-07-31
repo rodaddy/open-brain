@@ -439,11 +439,13 @@ class TestWatermarkStore:
     async def test_writes_from_two_connections_do_not_lose_a_session(
         self, tmp_path: Path
     ) -> None:
-        """The reason for SQLite: core01 runs two workers.
+        """Two sessions must not erase each other's position.
 
-        Two separate store objects are two connections to one database. Under
-        the JSON store this replaced, whole-file read-modify-write meant the
-        second writer erased the first session's position entirely.
+        NOT the expected case -- a `Stop` hook is one process per session, and
+        two sessions have different keys. It is tested because the JSON store
+        this replaced got it WRONG: whole-file read-modify-write meant the
+        second writer erased the first session's row entirely, and the cost of
+        being wrong about concurrency is a permanently lost turn.
         """
         path = tmp_path / "w.db"
         await WatermarkStore(path).advance("worker-1-session", 111)

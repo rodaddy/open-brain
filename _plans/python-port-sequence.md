@@ -111,6 +111,46 @@ bound at all.
 
 ---
 
+## TWO APPLICATIONS, NOT ONE
+
+Operator, 2026-07-31, after catching a format factory being designed into the
+live hook path: *"those are distinctly different applications."*
+
+| | **live adapter** — `apps/capture/` | **bulk ingester** — not yet built |
+|---|---|---|
+| what it is | the Python that sits inside Claude Code / Code / Pi, replacing the MCP Open Brain | a separate app that sucks in giant session files from anywhere |
+| trigger | a `Stop` hook, once per turn | an operator runs it, rarely |
+| reads | watermark → EOF: a few KB | a whole file: 27 MB measured |
+| deadline | **5 seconds, hard** (`~/.claude/settings.json`) | none |
+| watermark | the entire point | irrelevant; it wants everything |
+| formats | **ONE** — whichever harness it is attached to | many: Claude, Code (base64 images), Hermes (no fixed shape) |
+| failure | must never block the session | may retry, quarantine, resume |
+
+**The live adapter must never see any of this.** No format factory, no
+whole-file read, no bulk staging, no Hermes. A hook attached to one harness only
+ever sees that harness's format, so format dispatch on the deadline-critical
+path is complexity for a case that cannot occur.
+
+**The bulk ingester REUSES the live ingester's parts** — operator: *"reuse
+already working code, good."* `records.py` and the four `signal.py` modules are
+pure functions over a line or a string, with no I/O and no state, so the bulk
+app imports them directly and adds only its own format adapters. The factory
+keyed on input type belongs THERE.
+
+This split already exists in the TypeScript being ported:
+`scripts/backfill-transcripts.ts` is a separate script
+(`_plans/418-prov-9-hook-entrypoints.md:183`), not a mode of the hook.
+
+**Measured 2026-07-31, and it shows the two shapes are not interchangeable:**
+`read_since(27.4 MB, offset=0)` returned 244 turns in 58ms but peaked at
+**+90 MB RSS to extract 85 KB of operator text** — a ~1000x amplification, and
+one transcript line was 1.28 MB on its own. That is the BULK call signature. A
+live `Stop` hook reads from its watermark and touches a few KB. Testing the
+live adapter through the bulk call proves the wrong thing: 18 of the current
+tests read from offset 0 and only 8 resume from a watermark, which is inverted.
+
+---
+
 ## Sequence
 
 Each step is independently landable, independently testable, and reverts alone.

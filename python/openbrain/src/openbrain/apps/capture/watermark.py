@@ -11,11 +11,29 @@ Architecture:
         pydantic           the shape of a position, validated at the boundary
 
     The first version of this module stored JSON and hand-wrote an atomic write
-    (staging file + ``os.replace``) with a corrupt-file fallback. That is
-    ~60 lines of storage mechanics owned by us, and it is WRONG under the
-    deployment that actually exists: ``AGENTS.md`` records core01 running two
-    workers, and two processes doing read-modify-write on one JSON file lose a
-    session's position to last-writer-wins. SQLite serializes writers properly.
+    (staging file + ``os.replace``) with a corrupt-file fallback -- ~60 lines of
+    storage mechanics owned by us to keep one integer per session. SQLite is
+    stdlib, typed, durable, and inspectable with the `sqlite3` CLI, and it
+    deletes all of it.
+
+    **How this is actually invoked, verified 2026-07-31:** a `Stop` hook is a
+    per-session command with a 5-second timeout in `~/.claude/settings.json`.
+    One process, one session, fired when that session's turn ends. Two
+    concurrent sessions have DIFFERENT transcripts and DIFFERENT session keys,
+    so they write different rows. Read one turn's worth, write, exit.
+
+    An earlier version of this docstring justified SQLite by citing core01's two
+    workers. That was WRONG and is corrected here: those workers
+    (`open-brain-worker-1`/`-2`, `src/transport.ts`) are the TypeScript HTTP
+    service holding MCP sessions -- a different process on a different host from
+    a hook running beside a developer's transcript. ``AGENTS.md:105`` warns in
+    that exact line not to size concurrency for one against the other, and this
+    module did precisely that.
+
+    Same-key contention is therefore not the expected case. The store is still
+    written to survive it, because being wrong about that costs a lost turn and
+    the correctness is free -- but nothing here should be read as "this is a
+    contention point".
 
     Chosen over ``diskcache`` deliberately, on evidence rather than taste:
     diskcache pickles values and manages a filesystem directory beside the
@@ -76,7 +94,7 @@ BEGINNING_OF_FILE = 0
 #:
 #: SQLite allows ONE writer at a time even in WAL mode -- WAL lets readers run
 #: alongside a writer, it does not make writes concurrent. The busy timeout is
-#: what prevents `database is locked` under two workers.
+#: what prevents `database is locked` when two processes do write at once.
 #:
 #: IT ONLY APPLIES IF THE TRANSACTION IS OPENED CORRECTLY. A deferred
 #: read-then-write transaction fails in 0ms no matter what this value is -- see
@@ -292,8 +310,8 @@ class WatermarkStore:
 
         Measured 2026-07-31 against two real processes: the deferred form failed
         in 0ms, while a plain single write to the same database waited 659ms and
-        succeeded. The timeout added for core01's two workers was doing nothing
-        on the one path it existed to protect.
+        succeeded. The timeout was doing nothing on the one path it existed to
+        protect.
 
         Taking the write lock up front costs nothing -- this transaction is
         microseconds long -- and makes the timeout apply as intended.
@@ -363,7 +381,7 @@ class WatermarkStore:
         """Open a configured connection, preparing the database on first use.
 
         WAL lets a reader run alongside a writer; the busy timeout is what
-        prevents `database is locked` when two workers write at once. Both are
+        prevents `database is locked` when two processes write at once. Both are
         needed -- WAL alone does not make writes concurrent, it only stops
         readers blocking on one.
         """
