@@ -37,16 +37,18 @@ Pattern/Convention:
     the last newline is parsed.
 
 Example:
-    >>> import tempfile, pathlib
-    >>> with tempfile.TemporaryDirectory() as directory:
-    ...     path = pathlib.Path(directory) / "t.jsonl"
-    ...     record = (
-    ...         '{"type":"user","uuid":"u1","promptSource":"typed",'
-    ...         '"message":{"content":"ok"}}'
-    ...     )
-    ...     _ = path.write_text(record + chr(10))
-    ...     result = read_since(path, 0)
-    ...     len(result.turns), result.turns[0].content
+    >>> import asyncio, tempfile, pathlib
+    >>> async def demo() -> tuple[int, str]:
+    ...     with tempfile.TemporaryDirectory() as directory:
+    ...         path = pathlib.Path(directory) / "t.jsonl"
+    ...         record = (
+    ...             '{"type":"user","uuid":"u1","promptSource":"typed",'
+    ...             '"message":{"content":"ok"}}'
+    ...         )
+    ...         _ = path.write_text(record + chr(10))
+    ...         result = await read_since(path, 0)
+    ...         return len(result.turns), result.turns[0].content
+    >>> asyncio.run(demo())
     (1, 'ok')
 
 See Also:
@@ -56,6 +58,7 @@ See Also:
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -85,7 +88,7 @@ class TranscriptRead:
     identity: FileIdentity | None = None
 
 
-def read_since(
+async def read_since(
     path: Path, offset: int, identity: FileIdentity | None = None
 ) -> TranscriptRead:
     """Read every operator turn written to ``path`` since ``offset``.
@@ -104,8 +107,10 @@ def read_since(
         exists, and that is not a failure.
 
     Example:
-        >>> import pathlib
-        >>> result = read_since(pathlib.Path("/nonexistent/t.jsonl"), 7)
+        >>> import asyncio, pathlib
+        >>> result = asyncio.run(
+        ...     read_since(pathlib.Path("/nonexistent/t.jsonl"), 7)
+        ... )
         >>> result.turns, result.next_offset
         ((), 7)
     """
@@ -118,9 +123,7 @@ def read_since(
     start = _start_position(offset, size, identity, current)
 
     try:
-        with path.open("rb") as handle:
-            handle.seek(start)
-            payload = handle.read()
+        payload = await asyncio.to_thread(_read_from, path, start)
     except OSError:
         return TranscriptRead(turns=(), next_offset=offset)
 
@@ -135,6 +138,20 @@ def read_since(
     return TranscriptRead(
         turns=turns, next_offset=start + consumed, identity=current
     )
+
+
+def _read_from(path: Path, start: int) -> bytes:
+    """Read ``path`` from ``start`` to the end, blocking.
+
+    Separated so the blocking call is one named thing handed to a worker
+    thread. There is no true async file I/O in Python: ``aiofiles`` and
+    ``anyio`` both run this same blocking read in a thread pool, so a
+    dependency would buy syntax rather than concurrency. ``asyncio.to_thread``
+    is the stdlib form of exactly what they do.
+    """
+    with path.open("rb") as handle:
+        handle.seek(start)
+        return handle.read()
 
 
 def _start_position(

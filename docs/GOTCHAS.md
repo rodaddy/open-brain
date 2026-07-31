@@ -613,3 +613,59 @@ Two more that cost a test cycle each:
   set it once at creation in autocommit mode, never per connection.
 - **`with connection:` commits but does NOT close.** It is a transaction context
   manager, not a resource one. Pair it with `contextlib.closing` or leak handles.
+
+### Pull the package source; secondhand judgment gets facts wrong
+
+**2026-07-31, operator:** *"if the Python packages are all open source, you can
+go pull the repos down and see what the fuck they do."*
+
+`AGENTS.md` already says prior art is read **"from source, not marketing"** --
+but that rule was being applied only to the six graph/memory clones, not to
+packages under evaluation. Cloning `ponytail`, `pygtail`, and `diskcache` took
+one command and immediately produced five things no amount of doc-reading gave:
+
+1. **A factual error in a committed artifact.** `ponytail` was recorded in
+   `ATTRIBUTION.md` and a commit message as "unverified licence". Its LICENSE
+   file says **CC0 1.0** -- public domain, the most permissive there is. The
+   rejection reasoning was published before the fact was checked.
+2. **Independent confirmation of the design.** `_has_file_rotated` checks
+   `dev_no` then `inode_no`; `_load_offset` discards the offset when inode, dev,
+   OR `offset > size` disagree. Same three conditions arrived at separately.
+3. **The staging-file pattern it uses** (`.tmp` + `os.rename`) is the one we
+   removed in favour of sqlite3 -- confirming the pattern was right and that
+   sqlite3 is a real improvement for multi-process use, not a lateral move.
+4. **A gap in our code**, visible only in source: on rotation ponytail keeps the
+   OLD file handle open for `watch_rotated_file_seconds` (default 300) and
+   drains stragglers. Ours abandons it. Measured: a line appended to the old
+   inode before rotation is lost, and sits unread on disk.
+5. **Why it is not a drop-in anyway:** `readlines()` is an infinite generator
+   built for a daemon. A `Stop` hook runs once and exits.
+
+**Straggler gap: real but currently unreachable.** Verified 2026-07-31 -- Claude
+Code names each transcript by session UUID and never rotates; no `.1`, `.old`,
+or `.bak` artifact exists anywhere under `~/.claude/projects/`. Recorded rather
+than fixed, so it is not rediscovered from scratch, and so it is fixed the day
+transcripts do rotate.
+
+### Async is the house style; `time.sleep` is not the alternative
+
+**Operator, 2026-07-31:** *"you should never be using time.sleep. That's just
+fucking bad practice. We should be async only."*
+
+`docs/standards/STANDARDS-python.md` already assumes async throughout:
+`pytest-asyncio` with `asyncio_mode = "auto"` (:951), `AsyncMock` never
+`MagicMock` (:952), `asyncio.CancelledError` caught separately (:855).
+
+**`asyncio_mode` must be `"auto"`, and it is the same defect class as everything
+else in this file.** Under the default `"strict"`, an unmarked `async def test_`
+is COLLECTED, NOT AWAITED, and REPORTED AS PASSING. A check that examines
+nothing reports success -- exactly like ruff `PLR1702` without `preview` and a
+mypy path that resolves to nothing.
+
+**What async does NOT buy here, stated so nobody claims otherwise later:**
+there is no true async file I/O in Python. `aiofiles` and `anyio` both run the
+same blocking `read()` in a worker thread, so `asyncio.to_thread` is the stdlib
+form of precisely what they do, with no dependency. Converting local file reads
+buys an `await` keyword and a consistent boundary -- NOT concurrency. It is
+worth doing because the boundary is what later callers (the OB HTTP client,
+Postgres writes) genuinely need, not because it makes a hook faster.

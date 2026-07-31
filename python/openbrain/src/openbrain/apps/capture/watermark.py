@@ -41,14 +41,15 @@ Pattern/Convention:
     alone. See :class:`FileIdentity`.
 
 Example:
-    >>> import tempfile, pathlib
-    >>> with tempfile.TemporaryDirectory() as directory:
-    ...     store = WatermarkStore(pathlib.Path(directory) / "marks.db")
-    ...     store.offset_for("session-a")
-    ...     store.advance("session-a", 4096)
-    ...     store.offset_for("session-a")
-    0
-    4096
+    >>> import asyncio, tempfile, pathlib
+    >>> async def demo() -> tuple[int, int]:
+    ...     with tempfile.TemporaryDirectory() as directory:
+    ...         store = WatermarkStore(pathlib.Path(directory) / "marks.db")
+    ...         before = await store.offset_for("session-a")
+    ...         await store.advance("session-a", 4096)
+    ...         return before, await store.offset_for("session-a")
+    >>> asyncio.run(demo())
+    (0, 4096)
 
 See Also:
     - ``openbrain.apps.capture.transcript`` - the reader that consumes an offset
@@ -58,6 +59,7 @@ See Also:
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 from contextlib import closing
 from pathlib import Path
@@ -171,12 +173,14 @@ class WatermarkStore:
         path: The database file. Its parent directory is created on first use.
 
     Example:
-        >>> import tempfile, pathlib
-        >>> with tempfile.TemporaryDirectory() as directory:
-        ...     store = WatermarkStore(pathlib.Path(directory) / "w.db")
-        ...     store.advance("s", 10)
-        ...     store.advance("s", 25)
-        ...     store.offset_for("s")
+        >>> import asyncio, tempfile, pathlib
+        >>> async def demo() -> int:
+        ...     with tempfile.TemporaryDirectory() as directory:
+        ...         store = WatermarkStore(pathlib.Path(directory) / "w.db")
+        ...         await store.advance("s", 10)
+        ...         await store.advance("s", 25)
+        ...         return await store.offset_for("s")
+        >>> asyncio.run(demo())
         25
     """
 
@@ -185,7 +189,7 @@ class WatermarkStore:
         self._path = path
         self._ready = False
 
-    def offset_for(self, session_key: str) -> int:
+    async def offset_for(self, session_key: str) -> int:
         """Return the byte offset already read for a session.
 
         Args:
@@ -196,9 +200,48 @@ class WatermarkStore:
             The stored offset, or :data:`BEGINNING_OF_FILE` for a session never
             seen.
         """
-        return self.position_for(session_key).offset
+        position = await self.position_for(session_key)
+        return position.offset
 
-    def position_for(self, session_key: str) -> Position:
+    async def position_for(self, session_key: str) -> Position:
+        """Return the full stored position, identity included.
+
+        Args:
+            session_key: Identifies the session.
+
+        Returns:
+            The stored :class:`Position`, or one at the beginning of the file
+            with no identity when the session is unknown.
+        """
+        return await asyncio.to_thread(self._position_for, session_key)
+
+    async def advance(
+        self,
+        session_key: str,
+        offset: int,
+        identity: FileIdentity | None = None,
+    ) -> None:
+        """Move a session's watermark forward to ``offset``.
+
+        Args:
+            session_key: Identifies the session.
+            offset: The new position, at or beyond the current one.
+            identity: Which file the offset is into. When it differs from the
+                stored identity the file was REPLACED, so ``offset`` is
+                accepted at any value -- a new file has its own positions and
+                the forward-only rule does not span two files.
+
+        Raises:
+            WatermarkRegressionError: ``offset`` is behind the stored position
+                for the same file.
+            pydantic.ValidationError: ``offset`` is negative.
+        """
+        # Validate BEFORE handing off to a thread, so a bad value raises from
+        # the caller's own frame rather than out of a worker.
+        position = Position(offset=offset, identity=identity)
+        await asyncio.to_thread(self._advance, session_key, position)
+
+    def _position_for(self, session_key: str) -> Position:
         """Return the full stored position, identity included.
 
         Args:
@@ -225,28 +268,9 @@ class WatermarkStore:
         )
         return Position(offset=offset, identity=identity)
 
-    def advance(
-        self,
-        session_key: str,
-        offset: int,
-        identity: FileIdentity | None = None,
-    ) -> None:
-        """Move a session's watermark forward to ``offset``.
-
-        Args:
-            session_key: Identifies the session.
-            offset: The new position, at or beyond the current one.
-            identity: Which file the offset is into. When it differs from the
-                stored identity the file was REPLACED, so ``offset`` is
-                accepted at any value -- a new file has its own positions and
-                the forward-only rule does not span two files.
-
-        Raises:
-            WatermarkRegressionError: ``offset`` is behind the stored position
-                for the same file.
-            pydantic.ValidationError: ``offset`` is negative.
-        """
-        proposed = Position(offset=offset, identity=identity)
+    def _advance(self, session_key: str, proposed: Position) -> None:
+        """Write a validated position, blocking. Called on a worker thread."""
+        identity = proposed.identity
 
         with closing(self._connect()) as connection, connection:
             row = connection.execute(
@@ -266,9 +290,9 @@ class WatermarkStore:
                     or stored_identity is None
                     or stored_identity == identity
                 )
-                if same_file and offset < stored_offset:
+                if same_file and proposed.offset < stored_offset:
                     raise WatermarkRegressionError(
-                        session_key, stored_offset, offset
+                        session_key, stored_offset, proposed.offset
                     )
 
             connection.execute(

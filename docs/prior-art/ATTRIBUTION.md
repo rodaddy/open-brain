@@ -96,16 +96,39 @@ not been done yet — not that nothing was taken.
 | OpenTelemetry filelog receiver | Naming the two rotation cases separately — rename/create vs copytruncate — and reading the whole file on either, because re-reading is recoverable and skipping is not | idea | same |
 | logtail2 / pygtail | The offset-file model itself: read forward from a stored position instead of guessing how far back to look | idea | `python/openbrain/src/openbrain/apps/capture/watermark.py` |
 
-**Not adopted, and why.** `pygtail` is the best-known implementation of this
-idea and was rejected on licence: it is **GPL v2**, and this repo's standing
-posture (see Honcho above) is that copyleft reaching a hosted deployment is not
-acceptable. `ponytail` matches the use case most closely but has two releases
-total and unverified licence and typing — `_DOCS/STANDARDS-core.md:225` warns
-against trading a hand-rolled bug for an unmaintained dependency. `diskcache`
-was rejected for the watermark store on evidence: it pickles values, manages a
-filesystem directory beside the database, has had no release since 2023, and its
-only typed helpers come from one author with no production signal, one of which
-documents itself as untested. The ideas were taken; the dependencies were not.
+**Not adopted, and why.** Licences below were read from each project's own
+LICENSE file after cloning it, on 2026-07-31 — not from PyPI metadata.
+
+`pygtail` is the best-known implementation of this idea and was rejected on
+licence: **GPL v2**, and this repo's standing posture (see Honcho above) is that
+copyleft reaching a hosted deployment is not acceptable.
+
+`ponytail` is **CC0 1.0** — public domain dedication, no obligations at all.
+
+> **Correction, 2026-07-31.** An earlier version of this entry recorded
+> ponytail's licence as "unverified" and used that as grounds for rejection.
+> That was wrong: the claim was published without reading the LICENSE file
+> sitting in the repository. Reading it took one clone. The rejection stands on
+> its remaining reason alone, and the licence was never a problem.
+
+It is not adopted because its **shape** does not fit: `readlines()` is an
+infinite generator that sleeps between polls, built for a long-lived daemon
+following syslog. A `Stop` hook runs once and exits. Its rotation *detection*
+is what we needed, and that is what was borrowed.
+
+`diskcache` was rejected for the watermark store on evidence: it pickles values,
+manages a filesystem directory beside the database, has had no release since
+2023, and its only typed helpers come from one author with no production signal,
+one of which documents itself as untested.
+
+**Read from source, one gap found.** ponytail keeps the old file handle open
+after rotation (`watch_rotated_file_seconds`, default 300) to drain lines
+written to it late; our reader does not, and a line appended to the old inode
+before rotation is lost. Verified 2026-07-31 as currently unreachable — Claude
+Code names each transcript by session UUID and never rotates — so it is recorded
+here rather than fixed, and named in `docs/GOTCHAS.md`.
+
+The ideas were taken; the dependencies were not.
 
 ## Local clones
 

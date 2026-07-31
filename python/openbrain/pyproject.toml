@@ -39,6 +39,12 @@ dependencies = [
 dev = [
     "mypy>=1.10",
     "pytest>=8.0",
+    # Async tests, per docs/standards/STANDARDS-python.md:951. `asyncio_mode`
+    # below is set to "auto" as that standard requires, so an `async def test_`
+    # runs without a per-test decorator -- and, more to the point, a coroutine
+    # test cannot be silently collected-and-never-awaited, which passes while
+    # proving nothing.
+    "pytest-asyncio>=0.24",
     "ruff>=0.8",
 ]
 
@@ -149,3 +155,10 @@ packages = ["src/openbrain"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+# docs/standards/STANDARDS-python.md:951. "auto" means an `async def test_`
+# is awaited without a marker. Under the default "strict" mode an unmarked
+# coroutine test is COLLECTED, NOT AWAITED, and reported as passing -- the
+# same defect class as ruff PLR1702 without `preview` and as a mypy path that
+# resolves to nothing: a check that examines nothing reports success.
+asyncio_mode = "auto"

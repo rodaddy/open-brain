@@ -76,7 +76,7 @@ class TestNothingIsLostRegardlessOfEntryCount:
     """#418 acceptance: the entry count of a turn stops mattering."""
 
     @pytest.mark.parametrize("entries", [30, 553, 1_646])
-    def test_a_turn_producing_many_entries_loses_nothing(
+    async def test_a_turn_producing_many_entries_loses_nothing(
         self, tmp_path: Path, entries: int
     ) -> None:
         """30+ is #418's bar, 553 was the plan's worst case, 1,646 is measured.
@@ -90,12 +90,12 @@ class TestNothingIsLostRegardlessOfEntryCount:
         lines += [assistant_line(f"a{index}") for index in range(entries)]
         write_lines(path, lines)
 
-        result = read_since(path, BEGINNING_OF_FILE)
+        result = await read_since(path, BEGINNING_OF_FILE)
 
         assert len(result.turns) == 1
         assert result.turns[0].content == "the turn that started it"
 
-    def test_every_operator_turn_across_many_turns_arrives(
+    async def test_every_operator_turn_across_many_turns_arrives(
         self, tmp_path: Path
     ) -> None:
         """Fifty turns, each burying the last under tool traffic."""
@@ -106,7 +106,7 @@ class TestNothingIsLostRegardlessOfEntryCount:
             lines += [assistant_line(f"a{turn}-{i}") for i in range(20)]
         write_lines(path, lines)
 
-        result = read_since(path, BEGINNING_OF_FILE)
+        result = await read_since(path, BEGINNING_OF_FILE)
 
         assert [turn.content for turn in result.turns] == [
             f"turn {index}" for index in range(50)
@@ -116,13 +116,13 @@ class TestNothingIsLostRegardlessOfEntryCount:
 class TestASkippedHookSelfHeals:
     """#418 acceptance: a missed hook costs nothing permanently."""
 
-    def test_the_next_read_recovers_what_the_skipped_one_would_have_seen(
+    async def test_the_next_read_recovers_what_the_skipped_one_would_have_seen(
         self, tmp_path: Path
     ) -> None:
         path = tmp_path / "t.jsonl"
         write_lines(path, [operator_line("u1", "first")])
 
-        first = read_since(path, BEGINNING_OF_FILE)
+        first = await read_since(path, BEGINNING_OF_FILE)
 
         # Two more turns arrive; the hook that should have run between them does
         # not fire at all.
@@ -135,23 +135,23 @@ class TestASkippedHookSelfHeals:
             ],
         )
 
-        second = read_since(path, first.next_offset)
+        second = await read_since(path, first.next_offset)
 
         assert [turn.content for turn in second.turns] == ["second", "third"]
 
-    def test_a_read_with_nothing_new_returns_nothing_and_holds_position(
+    async def test_a_read_with_nothing_new_returns_nothing_and_holds_position(
         self, tmp_path: Path
     ) -> None:
         path = tmp_path / "t.jsonl"
         write_lines(path, [operator_line("u1", "only")])
 
-        first = read_since(path, BEGINNING_OF_FILE)
-        second = read_since(path, first.next_offset)
+        first = await read_since(path, BEGINNING_OF_FILE)
+        second = await read_since(path, first.next_offset)
 
         assert second.turns == ()
         assert second.next_offset == first.next_offset
 
-    def test_no_turn_is_delivered_twice_across_consecutive_reads(
+    async def test_no_turn_is_delivered_twice_across_consecutive_reads(
         self, tmp_path: Path
     ) -> None:
         path = tmp_path / "t.jsonl"
@@ -162,7 +162,7 @@ class TestASkippedHookSelfHeals:
         for batch in range(5):
             lines.append(operator_line(f"u{batch}", f"turn {batch}"))
             write_lines(path, lines)
-            result = read_since(path, offset)
+            result = await read_since(path, offset)
             seen += [turn.content for turn in result.turns]
             offset = result.next_offset
 
@@ -173,17 +173,17 @@ class TestASkippedHookSelfHeals:
 class TestAPartiallyWrittenRecord:
     """A hook can fire mid-write. The tail must survive to the next read."""
 
-    def test_a_half_written_record_is_not_consumed(self, tmp_path: Path) -> None:
+    async def test_a_half_written_record_is_not_consumed(self, tmp_path: Path) -> None:
         path = tmp_path / "t.jsonl"
         complete = operator_line("u1", "complete")
         path.write_text(f"{complete}\n" + '{"type":"user","uuid":"u2"', encoding="utf-8")
 
-        result = read_since(path, BEGINNING_OF_FILE)
+        result = await read_since(path, BEGINNING_OF_FILE)
 
         assert [turn.content for turn in result.turns] == ["complete"]
         assert result.next_offset == len(complete) + 1
 
-    def test_the_next_read_sees_the_completed_record_whole(
+    async def test_the_next_read_sees_the_completed_record_whole(
         self, tmp_path: Path
     ) -> None:
         path = tmp_path / "t.jsonl"
@@ -191,19 +191,19 @@ class TestAPartiallyWrittenRecord:
         partial = operator_line("u2", "was still being written")
         path.write_text(f"{complete}\n{partial[:20]}", encoding="utf-8")
 
-        first = read_since(path, BEGINNING_OF_FILE)
+        first = await read_since(path, BEGINNING_OF_FILE)
         path.write_text(f"{complete}\n{partial}\n", encoding="utf-8")
-        second = read_since(path, first.next_offset)
+        second = await read_since(path, first.next_offset)
 
         assert [turn.content for turn in second.turns] == ["was still being written"]
 
-    def test_a_file_of_only_a_partial_record_yields_nothing(
+    async def test_a_file_of_only_a_partial_record_yields_nothing(
         self, tmp_path: Path
     ) -> None:
         path = tmp_path / "t.jsonl"
         path.write_text('{"type":"user"', encoding="utf-8")
 
-        result = read_since(path, BEGINNING_OF_FILE)
+        result = await read_since(path, BEGINNING_OF_FILE)
 
         assert result.turns == ()
         assert result.next_offset == BEGINNING_OF_FILE
@@ -219,21 +219,21 @@ class TestContentIsPreservedExactly:
     @pytest.mark.parametrize(
         "size", [1, 24, 1_500, 199_999, 200_000, 200_001, 500_000]
     )
-    def test_length_is_unchanged(self, tmp_path: Path, size: int) -> None:
+    async def test_length_is_unchanged(self, tmp_path: Path, size: int) -> None:
         path = tmp_path / "t.jsonl"
         content = "a" * size
         write_lines(path, [operator_line("u1", content)])
 
-        result = read_since(path, BEGINNING_OF_FILE)
+        result = await read_since(path, BEGINNING_OF_FILE)
 
         assert len(result.turns[0].content) == size
 
-    def test_content_is_byte_identical(self, tmp_path: Path) -> None:
+    async def test_content_is_byte_identical(self, tmp_path: Path) -> None:
         path = tmp_path / "t.jsonl"
         content = "line one\n  indented\ttabbed\nunicode: 你好 \U0001f600\n"
         write_lines(path, [operator_line("u1", content)])
 
-        result = read_since(path, BEGINNING_OF_FILE)
+        result = await read_since(path, BEGINNING_OF_FILE)
 
         assert result.turns[0].content == content
 
@@ -241,32 +241,32 @@ class TestContentIsPreservedExactly:
 class TestOnlyTheOperatorIsCaptured:
     """Measured 2026-07-31: `type == "user"` is mostly NOT the operator."""
 
-    def test_a_tool_result_is_not_an_operator_turn(self) -> None:
+    async def test_a_tool_result_is_not_an_operator_turn(self) -> None:
         assert raw_turn_from_line(tool_result_line("t1")) is None
 
-    def test_an_assistant_record_is_not_an_operator_turn(self) -> None:
+    async def test_an_assistant_record_is_not_an_operator_turn(self) -> None:
         assert raw_turn_from_line(assistant_line("a1")) is None
 
     @pytest.mark.parametrize("source", ["typed", "queued"])
-    def test_typed_and_queued_are_both_the_operator(self, source: str) -> None:
+    async def test_typed_and_queued_are_both_the_operator(self, source: str) -> None:
         turn = raw_turn_from_line(operator_line("u1", "hello", source=source))
 
         assert turn is not None
         assert turn.content == "hello"
         assert turn.is_human_prompt is True
 
-    def test_injected_system_text_is_not_the_operator(self) -> None:
+    async def test_injected_system_text_is_not_the_operator(self) -> None:
         """`promptSource: "system"` is text the operator never wrote."""
         assert raw_turn_from_line(operator_line("u1", "policy", source="system")) is None
 
-    def test_a_record_with_no_prompt_source_is_declined(self) -> None:
+    async def test_a_record_with_no_prompt_source_is_declined(self) -> None:
         line = json.dumps(
             {"type": "user", "uuid": "u1", "message": {"content": "text"}}
         )
 
         assert raw_turn_from_line(line) is None
 
-    def test_the_headers_every_transcript_opens_with_are_declined(self) -> None:
+    async def test_the_headers_every_transcript_opens_with_are_declined(self) -> None:
         """The first three lines of a real transcript carry no uuid at all."""
         for line in (
             '{"type":"last-prompt","leafUuid":"x","sessionId":"s"}',
@@ -276,14 +276,14 @@ class TestOnlyTheOperatorIsCaptured:
             assert raw_turn_from_line(line) is None
 
     @pytest.mark.parametrize("line", ["", "   ", "{not json", "[]", "null"])
-    def test_unusable_lines_are_declined_without_raising(self, line: str) -> None:
+    async def test_unusable_lines_are_declined_without_raising(self, line: str) -> None:
         assert raw_turn_from_line(line) is None
 
 
 class TestFieldsCarriedThrough:
     """A turn arrives with the identity that lets it be threaded to its session."""
 
-    def test_identity_and_provenance_survive(self) -> None:
+    async def test_identity_and_provenance_survive(self) -> None:
         turn = raw_turn_from_line(operator_line("u42", "text"))
 
         assert turn is not None
@@ -291,7 +291,7 @@ class TestFieldsCarriedThrough:
         assert turn.session_ref == "s1"
         assert turn.repo == "/repo"
 
-    def test_a_null_parent_arrives_as_none(self) -> None:
+    async def test_a_null_parent_arrives_as_none(self) -> None:
         """`parentUuid` is null on the first turn of every session."""
         turn = raw_turn_from_line(operator_line("u1", "first"))
 
@@ -302,86 +302,86 @@ class TestFieldsCarriedThrough:
 class TestWatermarkStore:
     """One job: hold an integer per session, and only ever let it move forward."""
 
-    def test_an_unknown_session_starts_at_the_beginning(self, tmp_path: Path) -> None:
+    async def test_an_unknown_session_starts_at_the_beginning(self, tmp_path: Path) -> None:
         """Not at the end: a new session must have its whole transcript read."""
         store = WatermarkStore(tmp_path / "w.db")
 
-        assert store.offset_for("never-seen") == BEGINNING_OF_FILE
+        assert await store.offset_for("never-seen") == BEGINNING_OF_FILE
 
-    def test_an_advanced_offset_is_remembered(self, tmp_path: Path) -> None:
+    async def test_an_advanced_offset_is_remembered(self, tmp_path: Path) -> None:
         store = WatermarkStore(tmp_path / "w.db")
-        store.advance("s1", 4096)
+        await store.advance("s1", 4096)
 
-        assert store.offset_for("s1") == 4096
+        assert await store.offset_for("s1") == 4096
 
-    def test_it_survives_a_new_store_object(self, tmp_path: Path) -> None:
+    async def test_it_survives_a_new_store_object(self, tmp_path: Path) -> None:
         path = tmp_path / "w.db"
-        WatermarkStore(path).advance("s1", 99)
+        await WatermarkStore(path).advance("s1", 99)
 
-        assert WatermarkStore(path).offset_for("s1") == 99
+        assert await WatermarkStore(path).offset_for("s1") == 99
 
-    def test_sessions_do_not_share_an_offset(self, tmp_path: Path) -> None:
+    async def test_sessions_do_not_share_an_offset(self, tmp_path: Path) -> None:
         store = WatermarkStore(tmp_path / "w.db")
-        store.advance("s1", 10)
-        store.advance("s2", 20)
+        await store.advance("s1", 10)
+        await store.advance("s2", 20)
 
-        assert store.offset_for("s1") == 10
-        assert store.offset_for("s2") == 20
+        assert await store.offset_for("s1") == 10
+        assert await store.offset_for("s2") == 20
 
-    def test_moving_backward_is_refused(self, tmp_path: Path) -> None:
+    async def test_moving_backward_is_refused(self, tmp_path: Path) -> None:
         """Backward means re-ingesting turns already stored."""
         store = WatermarkStore(tmp_path / "w.db")
-        store.advance("s1", 100)
+        await store.advance("s1", 100)
 
         with pytest.raises(WatermarkRegressionError):
-            store.advance("s1", 50)
+            await store.advance("s1", 50)
 
-    def test_a_refused_move_leaves_the_offset_untouched(self, tmp_path: Path) -> None:
+    async def test_a_refused_move_leaves_the_offset_untouched(self, tmp_path: Path) -> None:
         store = WatermarkStore(tmp_path / "w.db")
-        store.advance("s1", 100)
+        await store.advance("s1", 100)
 
         with pytest.raises(WatermarkRegressionError):
-            store.advance("s1", 50)
+            await store.advance("s1", 50)
 
-        assert store.offset_for("s1") == 100
+        assert await store.offset_for("s1") == 100
 
-    def test_a_negative_offset_is_refused(self, tmp_path: Path) -> None:
+    async def test_a_negative_offset_is_refused(self, tmp_path: Path) -> None:
         """A byte offset is never negative; pydantic enforces it at the field."""
         store = WatermarkStore(tmp_path / "w.db")
 
         with pytest.raises(ValidationError):
-            store.advance("s1", -1)
+            await store.advance("s1", -1)
 
-    def test_advancing_to_the_same_position_is_allowed(self, tmp_path: Path) -> None:
+    async def test_advancing_to_the_same_position_is_allowed(self, tmp_path: Path) -> None:
         """A read with nothing new re-commits the position it already held."""
         store = WatermarkStore(tmp_path / "w.db")
-        store.advance("s1", 10)
-        store.advance("s1", 10)
+        await store.advance("s1", 10)
+        await store.advance("s1", 10)
 
-        assert store.offset_for("s1") == 10
+        assert await store.offset_for("s1") == 10
 
-    def test_a_position_carries_the_file_it_belongs_to(self, tmp_path: Path) -> None:
+    async def test_a_position_carries_the_file_it_belongs_to(self, tmp_path: Path) -> None:
         """An offset without an identity cannot be resumed safely."""
         store = WatermarkStore(tmp_path / "w.db")
         identity = FileIdentity(device=1, inode=2)
-        store.advance("s1", 100, identity)
+        await store.advance("s1", 100, identity)
 
-        assert store.position_for("s1").identity == identity
+        assert (await store.position_for("s1")).identity == identity
 
-    def test_a_replaced_file_may_rewind_the_offset(self, tmp_path: Path) -> None:
+    async def test_a_replaced_file_may_rewind_the_offset(self, tmp_path: Path) -> None:
         """Forward-only applies WITHIN a file, not across two of them.
 
         A new file has its own positions, so refusing a lower offset here would
         wedge the session permanently after any rotation.
         """
         store = WatermarkStore(tmp_path / "w.db")
-        store.advance("s1", 5_000, FileIdentity(device=1, inode=2))
+        await store.advance("s1", 5_000, FileIdentity(device=1, inode=2))
 
-        store.advance("s1", 10, FileIdentity(device=1, inode=999))
+        await store.advance("s1", 10, FileIdentity(device=1, inode=999))
 
-        assert store.offset_for("s1") == 10
+        assert await store.offset_for("s1") == 10
 
-    def test_writes_from_two_connections_do_not_lose_a_session(
+    async def test_writes_from_two_connections_do_not_lose_a_session(
         self, tmp_path: Path
     ) -> None:
         """The reason for SQLite: core01 runs two workers.
@@ -391,12 +391,12 @@ class TestWatermarkStore:
         second writer erased the first session's position entirely.
         """
         path = tmp_path / "w.db"
-        WatermarkStore(path).advance("worker-1-session", 111)
-        WatermarkStore(path).advance("worker-2-session", 222)
+        await WatermarkStore(path).advance("worker-1-session", 111)
+        await WatermarkStore(path).advance("worker-2-session", 222)
 
         reader = WatermarkStore(path)
-        assert reader.offset_for("worker-1-session") == 111
-        assert reader.offset_for("worker-2-session") == 222
+        assert await reader.offset_for("worker-1-session") == 111
+        assert await reader.offset_for("worker-2-session") == 222
 
 
 class TestAReplacedTranscript:
@@ -407,7 +407,7 @@ class TestAReplacedTranscript:
     searching how log shippers solve this rather than by testing.
     """
 
-    def test_a_replaced_file_is_read_whole_even_when_it_is_larger(
+    async def test_a_replaced_file_is_read_whole_even_when_it_is_larger(
         self, tmp_path: Path
     ) -> None:
         """The measured defect: 3 of 9 turns silently skipped.
@@ -419,7 +419,7 @@ class TestAReplacedTranscript:
         path = tmp_path / "t.jsonl"
         write_lines(path, [operator_line(f"u{i}", f"original {i}") for i in range(3)])
 
-        first = read_since(path, BEGINNING_OF_FILE)
+        first = await read_since(path, BEGINNING_OF_FILE)
         assert first.identity is not None
 
         # Replaced by a DIFFERENT file that is LARGER than the old offset.
@@ -429,47 +429,47 @@ class TestAReplacedTranscript:
         )
         assert path.stat().st_size > first.next_offset, "test must exercise the bug"
 
-        second = read_since(path, first.next_offset, first.identity)
+        second = await read_since(path, first.next_offset, first.identity)
 
         assert [turn.content for turn in second.turns] == [
             f"replacement {index}" for index in range(9)
         ]
 
-    def test_the_identity_travels_with_the_read(self, tmp_path: Path) -> None:
+    async def test_the_identity_travels_with_the_read(self, tmp_path: Path) -> None:
         """A caller cannot store an offset against a file without being told it."""
         path = tmp_path / "t.jsonl"
         write_lines(path, [operator_line("u1", "text")])
 
-        result = read_since(path, BEGINNING_OF_FILE)
+        result = await read_since(path, BEGINNING_OF_FILE)
 
         assert result.identity == FileIdentity.of(path)
 
-    def test_an_unchanged_file_still_resumes(self, tmp_path: Path) -> None:
+    async def test_an_unchanged_file_still_resumes(self, tmp_path: Path) -> None:
         """The identity check must not make every read start over."""
         path = tmp_path / "t.jsonl"
         write_lines(path, [operator_line("u1", "first")])
-        first = read_since(path, BEGINNING_OF_FILE)
+        first = await read_since(path, BEGINNING_OF_FILE)
 
         write_lines(path, [operator_line("u1", "first"), operator_line("u2", "second")])
-        second = read_since(path, first.next_offset, first.identity)
+        second = await read_since(path, first.next_offset, first.identity)
 
         assert [turn.content for turn in second.turns] == ["second"]
 
-    def test_a_shortened_file_is_read_from_the_beginning(
+    async def test_a_shortened_file_is_read_from_the_beginning(
         self, tmp_path: Path
     ) -> None:
         """A smaller file was replaced, so the stored offset means nothing."""
         path = tmp_path / "t.jsonl"
         write_lines(path, [operator_line(f"u{i}", f"turn {i}") for i in range(10)])
-        stale = read_since(path, BEGINNING_OF_FILE).next_offset
+        stale = (await read_since(path, BEGINNING_OF_FILE)).next_offset
 
         write_lines(path, [operator_line("new", "the replacement")])
-        result = read_since(path, stale)
+        result = await read_since(path, stale)
 
         assert [turn.content for turn in result.turns] == ["the replacement"]
 
-    def test_a_missing_file_is_not_an_error(self, tmp_path: Path) -> None:
-        result = read_since(tmp_path / "absent.jsonl", 42)
+    async def test_a_missing_file_is_not_an_error(self, tmp_path: Path) -> None:
+        result = await read_since(tmp_path / "absent.jsonl", 42)
 
         assert result.turns == ()
         assert result.next_offset == 42
@@ -478,23 +478,23 @@ class TestAReplacedTranscript:
 class TestModuleIndependence:
     """The three jobs must not be able to hide each other."""
 
-    def test_the_reader_holds_no_state_between_calls(self, tmp_path: Path) -> None:
+    async def test_the_reader_holds_no_state_between_calls(self, tmp_path: Path) -> None:
         """Same arguments, same answer -- the cursor lives outside the reader."""
         path = tmp_path / "t.jsonl"
         write_lines(path, [operator_line("u1", "text")])
 
-        assert read_since(path, BEGINNING_OF_FILE) == read_since(
+        assert await read_since(path, BEGINNING_OF_FILE) == await read_since(
             path, BEGINNING_OF_FILE
         )
 
-    def test_the_watermark_never_touches_a_transcript(self, tmp_path: Path) -> None:
+    async def test_the_watermark_never_touches_a_transcript(self, tmp_path: Path) -> None:
         """It stores an integer; whether a file exists is not its business."""
         store = WatermarkStore(tmp_path / "w.db")
-        store.advance("/a/path/that/does/not/exist.jsonl", 1_000_000)
+        await store.advance("/a/path/that/does/not/exist.jsonl", 1_000_000)
 
-        assert store.offset_for("/a/path/that/does/not/exist.jsonl") == 1_000_000
+        assert await store.offset_for("/a/path/that/does/not/exist.jsonl") == 1_000_000
 
-    def test_record_parsing_never_touches_the_filesystem(self) -> None:
+    async def test_record_parsing_never_touches_the_filesystem(self) -> None:
         """A line is parsed from a string, so a reader bug cannot mask one here."""
         assert raw_turn_from_line(operator_line("u1", "x")) is not None
 
@@ -521,12 +521,12 @@ class TestAgainstARealTranscript:
             return None
         return max(candidates, key=lambda path: path.stat().st_size)
 
-    def test_operator_turns_are_found_and_tool_results_are_not(self) -> None:
+    async def test_operator_turns_are_found_and_tool_results_are_not(self) -> None:
         path = self.largest_transcript()
         if path is None:
             pytest.skip("no non-empty transcript found")
 
-        result = read_since(path, BEGINNING_OF_FILE)
+        result = await read_since(path, BEGINNING_OF_FILE)
         user_records = sum(
             1
             for line in path.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -540,7 +540,7 @@ class TestAgainstARealTranscript:
         )
 
     @pytest.mark.parametrize("split_at", [0.1, 0.5, 0.9])
-    def test_reading_in_two_parts_matches_reading_in_one(
+    async def test_reading_in_two_parts_matches_reading_in_one(
         self, tmp_path: Path, split_at: float
     ) -> None:
         """The watermark's core promise, stated exactly, against real bytes.
@@ -558,8 +558,8 @@ class TestAgainstARealTranscript:
         path = tmp_path / "real.jsonl"
         path.write_bytes(live.read_bytes())
 
-        whole = read_since(path, BEGINNING_OF_FILE)
-        assert read_since(path, whole.next_offset).turns == (), (
+        whole = await read_since(path, BEGINNING_OF_FILE)
+        assert (await read_since(path, whole.next_offset)).turns == (), (
             "a full read left bytes unconsumed"
         )
 
@@ -570,45 +570,45 @@ class TestAgainstARealTranscript:
         head_path = tmp_path / "head.jsonl"
         head_path.write_bytes(path.read_bytes()[:boundary])
 
-        head = read_since(head_path, BEGINNING_OF_FILE)
-        tail = read_since(path, head.next_offset)
+        head = await read_since(head_path, BEGINNING_OF_FILE)
+        tail = await read_since(path, head.next_offset)
 
         assert head.turns + tail.turns == whole.turns
 
-    def test_no_turn_uuid_is_duplicated(self) -> None:
+    async def test_no_turn_uuid_is_duplicated(self) -> None:
         path = self.largest_transcript()
         if path is None:
             pytest.skip("no non-empty transcript found")
 
-        turns = read_since(path, BEGINNING_OF_FILE).turns
+        turns = (await read_since(path, BEGINNING_OF_FILE)).turns
         uuids = [turn.turn_uuid for turn in turns]
 
         assert len(uuids) == len(set(uuids))
 
-    def test_every_captured_turn_has_content(self) -> None:
+    async def test_every_captured_turn_has_content(self) -> None:
         path = self.largest_transcript()
         if path is None:
             pytest.skip("no non-empty transcript found")
 
-        for turn in read_since(path, BEGINNING_OF_FILE).turns:
+        for turn in (await read_since(path, BEGINNING_OF_FILE)).turns:
             assert isinstance(turn.content, str)
 
 
-def test_the_store_survives_a_process_that_never_closed_it(tmp_path: Path) -> None:
+async def test_the_store_survives_a_process_that_never_closed_it(tmp_path: Path) -> None:
     """A hook process can be killed at any moment.
 
     SQLite's own durability replaces the hand-written staging-file dance: a
     committed write is on disk whether or not anything closed the connection.
     """
     path = tmp_path / "w.db"
-    WatermarkStore(path).advance("s1", 4_096)
+    await WatermarkStore(path).advance("s1", 4_096)
 
-    assert WatermarkStore(path).offset_for("s1") == 4_096
+    assert await WatermarkStore(path).offset_for("s1") == 4_096
 
 
-def test_the_store_creates_its_parent_directory(tmp_path: Path) -> None:
+async def test_the_store_creates_its_parent_directory(tmp_path: Path) -> None:
     path = tmp_path / "nested" / "deeper" / "w.db"
-    WatermarkStore(path).advance("s1", 7)
+    await WatermarkStore(path).advance("s1", 7)
 
     assert path.is_file()
     assert os.access(path, os.R_OK)
