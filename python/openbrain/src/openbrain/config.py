@@ -26,6 +26,7 @@ Architecture:
 Key Components:
     - DatabaseSettings: connection coordinates and pool size
     - EmbeddingSettings: provider endpoint, model, and segmentation
+    - CaptureSettings: where a hook sends turns, and its watermark store
     - LogSettings: level, sinks, and rotation
     - ServerSettings: bind address, port, and origins
     - Settings: the composed object every module receives
@@ -343,6 +344,73 @@ class EmbeddingSettings(_Base):
         return self
 
 
+class CaptureSettings(_Base):
+    """Where a hook sends captured turns, and who it says it is.
+
+    The live capture adapter (``apps/hooks/stop.py``) needs four coordinates to
+    reach the raw lane through ``openbrain_memory``, plus one local path for its
+    watermark store. None of them bounds content; they are endpoint, credential,
+    identity, and a file location.
+
+    ``base_url`` and ``token`` are OPTIONAL here, and the reason is the same one
+    ``database`` uses a factory for: a process that never runs a hook -- the
+    HTTP server, a migration -- must load without capture being configured. The
+    requirement is enforced at USE time, in ``apps.hooks.session``, where a
+    missing value raises a named error the entrypoint swallows. A required field
+    here would instead fail every unrelated process at startup, and there is no
+    correct default for either: a default endpoint sends a developer's turns to
+    the wrong brain, and a default token is a credential in source.
+
+    Attributes:
+        base_url: The Open Brain service this hook writes to, or ``None`` when
+            capture is not configured. Never hardcode a host
+            (``open-brain/CLAUDE.md``).
+        token: The bearer token, held as a ``SecretStr`` so it never reaches a
+            log line, repr, or traceback, or ``None`` when capture is not
+            configured.
+        agent_id: How this capturer identifies itself to the server. The server
+            derives the namespace from the TOKEN, not from this
+            (``src/tools/ingest-raw-turn.ts``), so this is identity for
+            attribution, not authorisation.
+        namespace: The namespace the client REQUESTS. Advisory only -- the
+            server re-derives the real one from the token
+            (``openbrain_memory.client``: *"payload.namespace is ADVISORY"*), so
+            this is recorded for provenance and does not decide where a row
+            lands.
+        watermark_path: The SQLite file holding each session's read offset. A
+            hook is a short-lived process, so this position must survive between
+            invocations on disk; it is the one piece of local state capture
+            keeps.
+    """
+
+    base_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "OPENBRAIN_CAPTURE_BASE_URL", "OPENBRAIN_BASE_URL"
+        ),
+    )
+    token: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "OPENBRAIN_CAPTURE_TOKEN", "OPENBRAIN_TOKEN"
+        ),
+    )
+    agent_id: str = Field(
+        default="openbrain-capture",
+        validation_alias=AliasChoices(
+            "OPENBRAIN_CAPTURE_AGENT_ID", "OPENBRAIN_CAPTURE_AGENT"
+        ),
+    )
+    namespace: str = Field(
+        default="agent",
+        validation_alias=AliasChoices("OPENBRAIN_CAPTURE_NAMESPACE"),
+    )
+    watermark_path: Path = Field(
+        default=PACKAGE_ROOT / "data" / "capture-watermarks.sqlite",
+        validation_alias=AliasChoices("OPENBRAIN_CAPTURE_WATERMARK_PATH"),
+    )
+
+
 class LogSettings(_Base):
     """Structured logging configuration.
 
@@ -453,6 +521,7 @@ class ServerSettings(_Base):
 _SECTION_MODELS: tuple[tuple[str, type[BaseModel]], ...] = (
     ("database", DatabaseSettings),
     ("embedding", EmbeddingSettings),
+    ("capture", CaptureSettings),
     ("logging", LogSettings),
     ("server", ServerSettings),
 )
@@ -609,6 +678,11 @@ class Settings(BaseSettings):
     # OPENBRAIN_DB_HOST.
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)  # type: ignore[arg-type]
     embedding: EmbeddingSettings = Field(default_factory=EmbeddingSettings)  # type: ignore[arg-type]
+    # No required fields -- capture is optional so a non-hook process loads
+    # without it (see CaptureSettings). The factory is still used for the same
+    # reason the others are: it lets the submodel build from its own env aliases
+    # when no source supplies a `capture` key.
+    capture: CaptureSettings = Field(default_factory=CaptureSettings)
     logging: LogSettings = Field(default_factory=LogSettings)
     server: ServerSettings = Field(default_factory=ServerSettings)
 

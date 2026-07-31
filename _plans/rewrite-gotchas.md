@@ -23,6 +23,40 @@ This file is only the OPEN questions.
   Forcing a real compaction is a large, memory-polluting run out of proportion
   to a nice-to-have. Capture it if step 8 ends up serving `PostCompact`.
 
+### Step 8 stub capabilities — what each hook should DO for the Python app
+
+Step 8 (2026-07-31) landed `apps/hooks/` with `stop.py` real (delivers through
+the spine) and one stub per other VERIFIED event. Each stub parses stdin and
+exits 0; what capability it should serve is NOT decided and must not be invented
+from the old TypeScript (`takeover.ts`, `qmd-startup.ts` are out of scope to
+read). One open question per stub:
+
+- **`SessionStart` — inject startup context, and if so what?** The old adapter's
+  `qmd-startup.ts` did. Whether the Python app reproduces that, and from where,
+  is undecided.
+- **`UserPromptSubmit` — capture the prompt here too, or leave it to `Stop`?**
+  The spine already stores operator turns from the transcript on `Stop`; also
+  capturing on this event risks double-storing. Undecided.
+- **`SessionEnd` — final flush, session close, or nothing?** The watermark
+  advances on every `Stop`, so turns are durable without a close. Whether a hook
+  should call the client's `close` (releasing the server session) is separate
+  and undecided.
+- **`PreToolUse` — observation or enforcement?** This event can GATE a tool call
+  (a policy hook), a different job from capture. Whether the capture app owns any
+  `PreToolUse` behaviour, or a separate guard does, is undecided.
+- **`PostToolUse` — capture the tool stream, and where?** Tool input/output is
+  the ~96% of `ob_raw_turns` that `capture-never-drops-a-turn.md` explicitly
+  leaves UNDECIDED (memory vs observability). Resolving this here would resolve
+  that open decision by accident.
+- **`SubagentStop` — drive the spine against the subagent transcript?** A
+  subagent carries its own `agent_transcript_path`, so this could run the same
+  delivery. Whether subagent turns belong in the same lane, a different
+  namespace, or nowhere is undecided.
+- **`PreCompact` — flush before context is discarded?** The spine already
+  captures every `Stop`, so turns survive compaction regardless. Whether this
+  needs to act is undecided. (Its sibling `PostCompact` has no module at all —
+  see above.)
+
 ## Answered
 
 - **Exact stdout bytes per hook event** (was: verify the real event-name set,

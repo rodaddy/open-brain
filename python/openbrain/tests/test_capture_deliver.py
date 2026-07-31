@@ -6,74 +6,21 @@ dedupe -- is ``test_capture_deliver_live.py``, and only that file proves a
 write survives; these prove the ORDER and the composition.
 """
 
-import json
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 import pytest
 
+from conftest import (
+    LaneUnreachableError,
+    RecordingLane,
+    UnreachableLane,
+    append_lines,
+    assistant_line,
+    operator_line,
+    write_lines,
+)
 from openbrain.apps.capture.deliver import deliver_new_turns
 from openbrain.apps.capture.watermark import WatermarkStore
-
-
-def operator_line(uuid: str, content: str) -> str:
-    """Build one transcript line in the shape Claude Code actually writes."""
-    return json.dumps(
-        {
-            "type": "user",
-            "uuid": uuid,
-            "promptSource": "typed",
-            "sessionId": "s1",
-            "cwd": "/repo",
-            "parentUuid": None,
-            "timestamp": "2026-07-31T06:00:00.000Z",
-            "message": {"role": "user", "content": content},
-        }
-    )
-
-
-def assistant_line(uuid: str) -> str:
-    return json.dumps({"type": "assistant", "uuid": uuid, "message": {"content": []}})
-
-
-def write_lines(path: Path, lines: list[str]) -> None:
-    path.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
-
-
-def append_lines(path: Path, lines: list[str]) -> None:
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write("".join(f"{line}\n" for line in lines))
-
-
-class LaneUnreachableError(RuntimeError):
-    """The send failed outright -- server gone, spool broken."""
-
-
-@dataclass
-class RecordingLane:
-    """A ``RawLane`` that remembers every batch it was handed."""
-
-    batches: list[list[dict[str, Any]]] = field(default_factory=list)
-
-    def ingest_raw_turns(self, turns: Any) -> object:
-        self.batches.append([dict(turn) for turn in turns])
-        return {"ingested": len(self.batches[-1])}
-
-    @property
-    def turns(self) -> list[dict[str, Any]]:
-        return [turn for batch in self.batches for turn in batch]
-
-
-@dataclass
-class UnreachableLane:
-    """A ``RawLane`` that raises :class:`LaneUnreachableError` on every send."""
-
-    calls: int = 0
-
-    def ingest_raw_turns(self, turns: Any) -> object:
-        self.calls += 1
-        raise LaneUnreachableError
 
 
 class TestDeliveryReachesTheLane:

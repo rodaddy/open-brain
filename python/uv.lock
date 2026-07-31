@@ -206,6 +206,7 @@ version = "0.1.0"
 source = { editable = "openbrain" }
 dependencies = [
     { name = "loguru" },
+    { name = "openbrain-memory" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
 ]
@@ -222,6 +223,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "loguru", specifier = ">=0.7" },
+    { name = "openbrain-memory", editable = "openbrain-memory" },
     { name = "pydantic", specifier = ">=2.9" },
     { name = "pydantic-settings", specifier = ">=2.5" },
 ]

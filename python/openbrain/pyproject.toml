@@ -26,6 +26,14 @@ dependencies = [
     # rtech-standards is private and this repo's CI passes no token. See
     # openbrain-provider/pyproject.toml for the full note.
     "loguru>=0.7",
+    # The SIBLING that owns every write this package makes. Declared as a runtime
+    # dependency starting with step 8 (`_plans/python-port-sequence.md`): the
+    # hook entrypoint (`apps/hooks/session`) is the first place this package
+    # imports the sibling to build a real client and send a turn. Before it, the
+    # only reference was a doc/test cross-check of the shared vocabulary; now it
+    # is a live import, so the dependency is real and is stated here. Resolved
+    # from the workspace, not PyPI -- see `[tool.uv.sources]`.
+    "openbrain-memory",
 ]
 
 # [project.scripts] is deliberately absent. A declared entry point whose target
@@ -34,6 +42,12 @@ dependencies = [
 # test gate inspects entry-point targets, so a broken script ships green. The
 # same trap as a mypy path that does not resolve. Entry points get declared when
 # `cli/` has something to point at.
+
+# Resolve the sibling from this uv workspace rather than PyPI, matching
+# openbrain-provider. The editable install is what makes the live gate's
+# `openbrain_memory` import work from this member's environment.
+[tool.uv.sources]
+openbrain-memory = { workspace = true }
 
 [dependency-groups]
 dev = [
