@@ -115,6 +115,16 @@ bound at all.
 Each step is independently landable, independently testable, and reverts alone.
 No step begins until the previous one's gates are green.
 
+**A number in a test is an INPUT SIZE, never a bound.** The tests below feed
+text of various lengths and assert every character comes back. Those sizes are
+what the test writes; they are not thresholds, and nothing in the port measures
+content length at all. `docs/CODING_STANDARDS.md:160` is the rule these tests
+exist to prove compliance with.
+
+The assertion is always `len(stored) == len(given)`, parameterised over a spread
+of sizes, so any reintroduced shortening fails some case regardless of where it
+sits. One fixed size would prove only that one size survives.
+
 **Every step runs the same four gates**, and a step is not done until all four
 pass:
 
@@ -190,7 +200,14 @@ Carries forward, per `docs/decisions/capture-never-drops-a-turn.md`:
 ported to pytest, plus:
 - a one-character turn is captured (#418 acceptance)
 - the measured 1,035-char pasted block is still rejected (#418 acceptance)
-- **a 5,000-char turn is stored whole** — the new one, pinning defect #1
+- **input length is preserved exactly, at every size tried** — the new one,
+  pinning defect #1. Parameterised over a spread of input sizes that brackets
+  the old 1,500 cut and keeps going well past it, asserting
+  `len(stored) == len(given)` each time. These are INPUT sizes, not bounds:
+  the test says "whatever you give it comes back whole", and the numbers only
+  exist so a reintroduced cut at any threshold makes some case fail.
+  A single fixed size would only ever prove that one number survives, and a cut
+  placed above it would pass.
 
 ### Step 6 — `apps/capture/transcript.py`: port `raw-turns.ts` + the watermark
 
@@ -207,7 +224,10 @@ to guess how far back to look. A missed hook self-heals on the next one.
 - a turn producing 30+ transcript entries loses nothing (#418 acceptance)
 - a 553-entry turn — the measured worst case — loses nothing
 - a skipped hook is recovered by the next one
-- **a 250 KB turn is stored whole**, pinning defect #2
+- **input length is preserved exactly, at every size tried**, pinning defect #2.
+  Same shape as step 5: parameterised across sizes bracketing the old 200,000
+  cut and continuing past it, asserting `len(stored) == len(given)`. Input
+  sizes, not bounds.
 
 ### Step 7 — `apps/hooks/`: port the three remaining leaves
 
