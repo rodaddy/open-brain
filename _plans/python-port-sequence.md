@@ -1,7 +1,9 @@
 # The Python port, in order
 
-**Status:** PLAN. Steps 0-2, 4, 5, 6, 7 are DONE and committed; step 3 is
-WITHDRAWN; 8 onward are not built. **The spine is live-proven 2026-07-31:**
+**Status:** PLAN. Steps 0-2, 4, 5, 6, 7, 9 are DONE and committed; step 3 is
+WITHDRAWN; **step 8 is a first slice** — `stop.py` is real and live-proven,
+every other verified event is an explicit stub (see the step); step 10 is not
+built. **The spine is live-proven 2026-07-31:**
 a turn round-trips transcript → watermark → `ingest_raw_turns` → playground
 Postgres row, whole (300,024 chars intact), ordered (`occurred_at` set), and
 replay-safe. The live gate caught two contract facts in-process tests could
@@ -592,6 +594,17 @@ Environment: the local dogfood service and the playground clone
 
 ### Step 8 — `apps/hooks/`: one module per event, written from behaviour
 
+**FIRST SLICE LANDED 2026-07-31** (`6c7822e` fixtures, `64d37b0` entrypoints):
+the real event-name set was captured from the live harness (2.1.220) into
+`tests/fixtures/captured_hooks/` — 8 events; `PostCompact` never fired and has
+no module (Open in `_plans/rewrite-gotchas.md`). `stop.py` is REAL and invokes
+the spine through `session.py` (client construction lives there, so the
+entrypoint stays a parse-and-exit shell); `dispatch.py` is the table; the other
+seven events are explicit stubs whose capabilities are recorded as Open
+questions, not invented. Live gate: a Stop payload round-trips into
+`ob_raw_turns` (`test_capture_hooks_live.py`). REMAINING: real capabilities
+for the stubbed events, and `PostCompact` if it exists in practice.
+
 **ONE MODULE PER EVENT**, not one dispatcher holding six branches:
 
 ```
@@ -622,9 +635,17 @@ module."* The entrypoint parses stdin, calls into a capability, writes stdout.
 byte-compatible with what Claude Code expects, proven against **captured real
 input**, not a fixture someone wrote from the docs.
 
-### Step 9 — `_githooks/` + `install.sh`
+### ✅ Step 9 — `_githooks/` + `install.sh` — DONE (`49f47cd`)
 
-`core.hooksPath` points there. Closes #311, which is half-landed: `.githooks/`
+Landed 2026-07-31: `pre-push` moved tracked (`git mv`, byte-identical) into
+`_githooks/`, with `_githooks/install.sh` idempotently setting repo-local
+`core.hooksPath` to the relative `_githooks`. Proven in a working checkout:
+`git rev-parse --git-path hooks` resolves there and a dry pre-push executed
+through it. The direct-pointer model was chosen over the python-exemplar's
+copy-into-`.git/hooks` installer, which recreates exactly the
+reviewable-vs-running divergence #311 fixes.
+
+`core.hooksPath` points there. Closes #311, which was half-landed: `.githooks/`
 is tracked but holds only `pre-push`, and `core.hooksPath` currently points at
 untracked `.git/hooks` — so **the reviewable hook is not the hook git runs**.
 
