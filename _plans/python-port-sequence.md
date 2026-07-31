@@ -666,6 +666,7 @@ And from this measurement:
 
 ## See Also
 
+- `docs/architecture.md` — the application map: who writes through what, with states
 - `_plans/418-prov-9-hook-entrypoints.md` — scope and acceptance criteria
 - `_plans/consolidation-2026-07-30.md` — the census, and the reuse rule
 - `docs/decisions/capture-never-drops-a-turn.md` — what capture may never do
