@@ -46,6 +46,11 @@ dev = [
     # proving nothing.
     "pytest-asyncio>=0.24",
     "ruff>=0.8",
+    # The live gate's row verification: after a write goes through the real
+    # client and service, the test reads the row straight out of Postgres.
+    # Verifying through the same client that wrote would prove the client
+    # agrees with itself, not that the data survived.
+    "psycopg[binary]>=3.2",
 ]
 
 [tool.mypy]
@@ -162,3 +167,14 @@ pythonpath = ["src"]
 # same defect class as ruff PLR1702 without `preview` and as a mypy path that
 # resolves to nothing: a check that examines nothing reports success.
 asyncio_mode = "auto"
+
+# `live` tests write through the real client into the playground service and
+# read the row back out of the playground database. Deselected by default so
+# `pytest -q` stays in-process; `pytest -m live` runs them, and their fixture
+# FAILS (never skips) when the environment is missing -- the plan's rule that
+# a live gate must not pass having run nothing (_plans/python-port-sequence.md,
+# "The live gate").
+markers = [
+    "live: round-trips through the playground service and database",
+]
+addopts = "-m 'not live'"

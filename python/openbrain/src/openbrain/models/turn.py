@@ -6,9 +6,10 @@ Purpose:
     whose keys are discovered by reading the code that built it.
 
 Architecture:
-    Three types, and keeping them separate is the design:
+    Four types, and keeping them separate is the design:
 
         EventType    vocabulary  -- the closed set a signal may be typed as
+        TurnRole     vocabulary  -- the closed set of who produced a turn
         TurnSignal   judgement   -- what a capture concluded about one turn
         RawTurn      observation -- one transcript record, as it was written
 
@@ -20,6 +21,7 @@ Architecture:
 
 Key Components:
     - EventType: the nine accepted event types
+    - TurnRole: who produced a turn -- user, assistant, or tool
     - TurnSignal: an event type plus the content it was derived from
     - RawTurn: a transcript record bound for the raw lane
 
@@ -53,6 +55,20 @@ from __future__ import annotations
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+class TurnRole(StrEnum):
+    """Who produced a raw turn: the server's closed set, mirrored once.
+
+    The authority is ``src/tools/ingest-raw-turn.ts`` --
+    ``z.enum(["user", "assistant", "tool"])``. Declared here for the same
+    reason ``EventType`` is: the server rejects anything else, and a mirror
+    with a drift test beats nine call sites each writing a string.
+    """
+
+    USER = "user"
+    ASSISTANT = "assistant"
+    TOOL = "tool"
 
 
 class EmptyTurnContentError(ValueError):
@@ -176,9 +192,18 @@ class RawTurn(BaseModel):
     Attributes:
         turn_uuid: The transcript's own identifier for this record.
         content: The record's text, WHOLE.
+        role: Who produced the record -- the server's closed set. A tool
+            result arrives with transcript ``type: user`` but role ``tool``;
+            the two are different facts, which is why this is not derived
+            from ``is_human_prompt``.
         is_human_prompt: Whether a person typed this, as opposed to the
             assistant or a tool. Used for the health check that compares typed
             turns against stored ones.
+        occurred_at: The transcript's own timestamp, verbatim. THE ORDERING
+            KEY: the server sequences a session by ``(session_ref,
+            occurred_at)`` and distrusts client-side counters
+            (``src/tools/ingest-raw-turn.ts``, migration 036). Leaving it
+            unset once left 20,535 backfilled rows unorderable.
         parent_turn_uuid: The preceding record, when the transcript names one.
         session_ref: The session this belongs to.
         repo: The repository the turn happened in, when derivable.
@@ -188,7 +213,9 @@ class RawTurn(BaseModel):
 
     turn_uuid: str = Field(min_length=1)
     content: str
+    role: TurnRole = TurnRole.USER
     is_human_prompt: bool = False
+    occurred_at: str | None = None
     parent_turn_uuid: str | None = None
     session_ref: str | None = None
     repo: str | None = None

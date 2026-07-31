@@ -8,20 +8,30 @@ Purpose:
     The capture path. One message in, one signal or nothing out.
 
 Key Components:
-    - signal: the entry point, composing the four below
+    - deliver: THE SPINE -- read since the watermark, send to the raw lane
+      through ``openbrain_memory``, advance only after the send returns
+    - watermark: remember and advance a per-session byte offset
+    - transcript: read records from an offset to EOF
+    - records: turn one transcript line into a ``RawTurn``
+    - signal: the distilled lane's entry point, composing the four below
     - wrappers: remove system-injected text
     - paste: recognise machine output by its shape
     - redaction: mask secret values, keep the statement
     - classify: assign an event type
 
 Architecture:
-    FOUR single-purpose modules plus one that composes them. The old
-    implementation did all four jobs in one 423-line file, and that is exactly
-    how one filter came to hide another: removing a length floor did not make
+    Two lanes, single-purpose modules, and composition at the edges. The RAW
+    lane (``deliver`` composing ``watermark``/``transcript``/``records``)
+    sends turns whole and untouched -- the server owns redaction, scaffolding
+    drop, and dedupe. The DISTILLED lane (``signal`` composing the four
+    below it) types what the operator said. The old implementation did the
+    distilled lane's four jobs in one 423-line file, and that is exactly how
+    one filter came to hide another: removing a length floor did not make
     "ok" capture, because a separate phrasing allowlist was independently
     dropping it. Two mechanisms, one effect, one namespace.
 
-    Only ``signal`` imports the others. They import nothing from each other.
+    Only the two composers import their parts. Parts import nothing from each
+    other, and nothing here writes anywhere except through ``deliver``'s lane.
 
 Pattern/Convention:
     THIS PACKAGE NEVER DROPS A TURN FOR ITS SIZE OR ITS PHRASING. A message is

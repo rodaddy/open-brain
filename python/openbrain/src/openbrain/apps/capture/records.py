@@ -73,7 +73,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from openbrain.models.turn import RawTurn
+from openbrain.models.turn import RawTurn, TurnRole
 
 #: The record type carrying a message, whoever authored it.
 #:
@@ -135,6 +135,7 @@ class TranscriptRecord(BaseModel):
     parent_uuid: str | None = Field(default=None, alias="parentUuid")
     session_id: str | None = Field(default=None, alias="sessionId")
     cwd: str | None = None
+    timestamp: str | None = None
 
     @property
     def is_operator_turn(self) -> bool:
@@ -197,7 +198,14 @@ def raw_turn_from_line(line: str) -> RawTurn | None:
     return RawTurn(
         turn_uuid=record.uuid,
         content=content,
+        # Explicit, not the model default: only the typed-shape path reaches
+        # here, so USER is a fact about this line, not a fallback.
+        role=TurnRole.USER,
         is_human_prompt=True,
+        # The transcript's own clock, verbatim. The server orders a session by
+        # (session_ref, occurred_at); a backfill that dropped this left 20,535
+        # rows unorderable (scripts/backfill-transcripts.ts:256).
+        occurred_at=record.timestamp or None,
         parent_turn_uuid=record.parent_uuid or None,
         session_ref=record.session_id or None,
         repo=record.cwd or None,

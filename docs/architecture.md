@@ -114,10 +114,12 @@ durability.
 
 ## [A] Live adapter — `python/openbrain/`, `apps/`
 
-**State: WRITTEN, does not yet write anywhere.** Steps 0–6 of
-`_plans/python-port-sequence.md` are committed (config, models, four capture
-modules, watermark reader); **step 7 — the spine, the first database write —
-is NEXT**, and outranks everything after it.
+**State: WRITTEN; the spine is live-proven.** Steps 0–7 of
+`_plans/python-port-sequence.md` are committed. The spine
+(`apps/capture/deliver.py`) round-tripped a real turn into the playground's
+`ob_raw_turns` on 2026-07-31 — whole, ordered, replay-safe — through [C],
+via the `-m live` gate. The hook entrypoints (step 8) are not built, so
+nothing invokes it in production yet.
 
 The application that sits inside Claude Code / Codex / Pi as a `Stop`-hook
 (and later the other events, one module per event): read the transcript from

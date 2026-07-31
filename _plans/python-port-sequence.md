@@ -1,8 +1,12 @@
 # The Python port, in order
 
-**Status:** PLAN. Steps 0-2, 4, 5, 6 are DONE and committed; step 3 is
-WITHDRAWN; **step 7 (the spine — first database write) is NEXT**; 8 onward are
-not built. Nothing in `python/openbrain/` writes anywhere yet.
+**Status:** PLAN. Steps 0-2, 4, 5, 6, 7 are DONE and committed; step 3 is
+WITHDRAWN; 8 onward are not built. **The spine is live-proven 2026-07-31:**
+a turn round-trips transcript → watermark → `ingest_raw_turns` → playground
+Postgres row, whole (300,024 chars intact), ordered (`occurred_at` set), and
+replay-safe. The live gate caught two contract facts in-process tests could
+not: the server requires `role` + `turn_index`, and namespace is TOKEN-derived
+(a client-requested namespace is not what lands).
 **Measured:** 2026-07-30 against the deployed adapter
 (`~/.local/share/openbrain-memory/adapters/versions/sha256-cd5fb4e4.../`),
 `src/tools/ingest-raw-turn.ts`, and `python/openbrain/`.
@@ -537,7 +541,14 @@ be half a JSON object; committing that position corrupts every later read.
   cut and continuing past it, asserting `len(stored) == len(given)`. Input
   sizes, not bounds.
 
-### Step 7 — THE SPINE: one turn in the database, end to end. **NEXT.**
+### ✅ Step 7 — THE SPINE: one turn in the database, end to end. **DONE, live-proven.**
+
+Landed as `apps/capture/deliver.py` (~100 lines, composition only) plus the
+contract fields the live gate exposed: `TurnRole` + `occurred_at` on
+`RawTurn` (`models/turn.py`), `timestamp` parsed in `records.py`,
+`turn_index` assigned per send in `deliver.py` because the server treats it
+as a per-invocation counter and orders by `(session_ref, occurred_at)`
+(`src/tools/ingest-raw-turn.ts`, migration 036).
 
 **This step outranks everything after it, and every polish task before it.**
 The failure it corrects, measured 2026-07-31: 8 modules and 184 tests with

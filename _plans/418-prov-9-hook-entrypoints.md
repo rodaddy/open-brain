@@ -119,7 +119,9 @@ belong to #413–#417 and #419.
       measured 1,035-char failure case
 - [ ] **A turn producing 30+ transcript entries loses nothing**, proven by a test
 - [ ] `uv run mypy` and `uv run ruff check` clean, matching the repo bar
-- [ ] **A real turn reaches `ob_raw_turns` end to end** — transcript file →
+- [x] **A real turn reaches `ob_raw_turns` end to end** *(live-proven
+      2026-07-31 against the playground — whole at 300,024 chars, ordered,
+      replay-safe)* — transcript file →
       watermark → `openbrain_memory.AgentMemory.ingest_raw_turns` → row in the
       playground clone, proven by a `-m live` test. Added 2026-07-31 after a
       session produced 184 tests and zero database writes. No write path may
