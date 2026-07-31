@@ -1,7 +1,8 @@
 # The Python port, in order
 
 **Status:** PLAN. Steps 0-2, 4, 5, 6 are DONE and committed; step 3 is
-WITHDRAWN; 7 onward are not built.
+WITHDRAWN; **step 7 (the spine — first database write) is NEXT**; 8 onward are
+not built. Nothing in `python/openbrain/` writes anywhere yet.
 **Measured:** 2026-07-30 against the deployed adapter
 (`~/.local/share/openbrain-memory/adapters/versions/sha256-cd5fb4e4.../`),
 `src/tools/ingest-raw-turn.ts`, and `python/openbrain/`.
@@ -10,6 +11,37 @@ WITHDRAWN; 7 onward are not built.
 The governing plan is `_plans/418-prov-9-hook-entrypoints.md` — scope, acceptance
 criteria, and a rejected-list that stays rejected. This file is the **sequence**:
 what lands in what order, what proves each step, and what must not come back.
+
+---
+
+## EXECUTION CONTRACT — read first, every session
+
+Every rule here was violated by a prior session and cost operator time. The
+capture times are the lane events (`ob_session_events`, lane `dev:open-brain`).
+
+1. **No new bounds, ever.** Nothing in this package shortens, floors, or
+   bounds content — see "A number in a test is an INPUT SIZE" below. A
+   5,000-character bound was proposed 2026-07-30 22:15 AFTER the rule was
+   already written. `docs/CODING_STANDARDS.md:160` settles it; do not ask.
+2. **Never read the old TypeScript adapter** (22:39). Inputs are
+   `docs/decisions/`, the 418 acceptance criteria, and `docs/standards/`. A fact
+   only the old code holds → write a **stub**, record the question in
+   `_plans/rewrite-gotchas.md`, and ask. Do not import the answer.
+3. **Web-search before building any mechanism** (2026-07-31 01:06). Existing
+   repo helper → well-known maintained library → stdlib → custom, in that
+   order. Hand-rolling a solved problem is a defect.
+4. **Never write a database or HTTP write path in this package.** The sibling
+   package already owns it — see "The write path already exists" below. A
+   second implementation is a defect on sight
+   (`_plans/consolidation-2026-07-30.md:99`).
+5. **End-to-end before hardening.** Measured 2026-07-31: 7 commits, 8 modules,
+   184 tests — and zero database writes. Components hardened in isolation
+   while the application did not exist. Step 7 (the spine) outranks every
+   polish, refactor, or coverage task until a turn round-trips.
+6. **A decision made in conversation is written into a file the same session**
+   (20:07 — *"you said parked it, but you didn't write a file... it's gonna be
+   fucking forgotten"*). Plans and decision records are the durable copy; the
+   chat is not.
 
 ---
 
@@ -141,6 +173,48 @@ This split already exists in the TypeScript being ported:
 `scripts/backfill-transcripts.ts` is a separate script
 (`_plans/418-prov-9-hook-entrypoints.md:183`), not a mode of the hook.
 
+**Staging store for the bulk side — decided 2026-07-31 02:15, recorded here
+the same day:** the bulk ingester may load the whole giant file into SQLite
+and yield each turn to its caller. Operator: *"big file goes in, SQLite...
+rejiggers it into the proper manner and then pops off and yields each output."*
+This belongs to the BULK app only; the live adapter never stages. (The
+measurement above — +90 MB RSS to extract 85 KB — is why staging exists.)
+
+---
+
+## THE WRITE PATH ALREADY EXISTS — route through it, never rebuild it
+
+Discovered late, 2026-07-31, after 7 commits of building components that had
+nowhere to write: **`python/openbrain-memory/` is a finished, tested client
+that already owns every write this application makes.** Nothing in
+`python/openbrain/` talks to Postgres or HTTP. Verified: the only
+`openbrain_memory` reference in the package today is a vocabulary import in
+`models/turn.py`.
+
+| lane | client call | server tool | the server already owns |
+|---|---|---|---|
+| **raw** (whole turns) | `AgentMemory.ingest_raw_turns` — `agent.py:611` | `src/tools/ingest-raw-turn.ts` | secret-value redaction (`:137`), scaffolding drop (`:205`), dedupe on `UNIQUE(namespace, turn_uuid)` (`agent.py:625`), no content ceiling (`:30`) |
+| **distilled** (classified events) | `AgentMemory.append_event` — `agent.py:542` | `src/tools/append-session-event.ts` | lane resolution, embedding, content hashing (`:7`, `:137-190`) |
+
+Both calls carry **spool durability** (`openbrain_memory/spool.py`): a send
+that cannot reach the server is spooled and replayed, so a returned call is a
+kept turn even with the service down — which is what lets a `Stop` hook meet
+its 5-second deadline without ever dropping anything.
+
+Consequences, so the next session does not re-derive them:
+
+- **Which modules feed which lane.** `watermark`/`transcript`/`records` feed
+  the RAW lane; `wrappers`/`paste`/`redaction`/`classify`/`signal` feed the
+  DISTILLED lane. The raw lane sends the turn **untouched** — no client-side
+  stripping, redacting, or classifying, because the server owns that judgment
+  and client-side salience already failed once (`agent.py:619-625`: *"21 user
+  turns and ZERO assistant turns captured on 2026-07-25"*).
+- **Session lifecycle comes from `AgentMemory` too** (`agent.py:222`,
+  `_require_session`). Do not invent one.
+- **If a needed call shape is missing from the client**, that is a change to
+  `python/openbrain-memory/` with its own tests — not a bypass from this
+  package.
+
 **Measured 2026-07-31, and it shows the two shapes are not interchangeable:**
 `read_since(27.4 MB, offset=0)` returned 244 turns in 58ms but peaked at
 **+90 MB RSS to extract 85 KB of operator text** — a ~1000x amplification, and
@@ -271,7 +345,7 @@ diff alone, answering four questions:
 Findings that generalise go to `docs/sme/` per `AGENTS.md`, so the next review
 starts smarter. A finding fixed but not recorded gets rediscovered.
 
-At steps 5 and 7 — the two largest — the review is a **fresh-context** pass, per
+At steps 5 and 8 — the two largest — the review is a **fresh-context** pass, per
 the repo's PR gate, because by then the author has stopped being able to see the
 code.
 
@@ -463,7 +537,49 @@ be half a JSON object; committing that position corrupts every later read.
   cut and continuing past it, asserting `len(stored) == len(given)`. Input
   sizes, not bounds.
 
-### Step 7 — `apps/hooks/`: one module per event, written from behaviour
+### Step 7 — THE SPINE: one turn in the database, end to end. **NEXT.**
+
+**This step outranks everything after it, and every polish task before it.**
+The failure it corrects, measured 2026-07-31: 8 modules and 184 tests with
+zero database writes — hardening in isolation while the application did not
+exist.
+
+One composition, in `apps/capture/`, and nothing new underneath it:
+
+```
+transcript file → read_since(watermark) → records → RawTurn
+  → AgentMemory.ingest_raw_turns          (the sibling package, as-is)
+  → row in ob_raw_turns                   (playground database)
+  → watermark advances
+```
+
+**The watermark advances only after `ingest_raw_turns` returns.** A returned
+call is a kept turn — the spool makes a failed send durable
+(`openbrain_memory/spool.py`) — so advancing then never walks past an
+unwritten turn. Advancing before the call is dropping
+(`docs/decisions/capture-never-drops-a-turn.md`).
+
+**No new mechanism.** This step is composition only: if it seems to need a
+retry loop, a queue, a batch manager, or a config knob, that is the sibling
+package's job and it already does it. See the write-path section above.
+
+**Proof — the live gate is the point of this step:**
+- `-m live` test: one real transcript turn round-trips through the client into
+  `ob_raw_turns` on the playground clone; the row exists; every field survives.
+- `len(stored) == len(given)` at the DB boundary, parameterised over the same
+  size spread as steps 5–6 — the column, driver, and encoding are the last
+  places a shortening can hide, and only this test looks there.
+- a replayed batch is a no-op (server dedupe, `agent.py:625`).
+- the reader-test emphasis rebalances here: the LIVE call shape is
+  watermark → EOF, and the suite currently reads from offset 0 far more often
+  than it resumes (24 `BEGINNING_OF_FILE` reads vs 14 resumes, counted
+  2026-07-31 in `test_capture_transcript.py`). New tests assert the resume
+  shape first; offset-0 is the bulk app's shape.
+
+Environment: the local dogfood service and the playground clone
+(`docs/local-playground.md`) — never merge playground data back into live.
+
+### Step 8 — `apps/hooks/`: one module per event, written from behaviour
 
 **ONE MODULE PER EVENT**, not one dispatcher holding six branches:
 
@@ -495,7 +611,7 @@ module."* The entrypoint parses stdin, calls into a capability, writes stdout.
 byte-compatible with what Claude Code expects, proven against **captured real
 input**, not a fixture someone wrote from the docs.
 
-### Step 8 — `_githooks/` + `install.sh`
+### Step 9 — `_githooks/` + `install.sh`
 
 `core.hooksPath` points there. Closes #311, which is half-landed: `.githooks/`
 is tracked but holds only `pre-push`, and `core.hooksPath` currently points at
@@ -504,7 +620,7 @@ untracked `.git/hooks` — so **the reviewable hook is not the hook git runs**.
 The exemplar's `_githooks/` is **empty**, so there is nothing to copy; this is
 written from the standard's description.
 
-### Step 9 — console scripts, then hand off to #420
+### Step 10 — console scripts, then hand off to #420
 
 `[project.scripts]` declared only once targets exist. Currently absent
 deliberately: a declared entry point whose module does not exist still installs

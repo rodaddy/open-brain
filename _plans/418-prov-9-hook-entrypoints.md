@@ -119,6 +119,13 @@ belong to #413–#417 and #419.
       measured 1,035-char failure case
 - [ ] **A turn producing 30+ transcript entries loses nothing**, proven by a test
 - [ ] `uv run mypy` and `uv run ruff check` clean, matching the repo bar
+- [ ] **A real turn reaches `ob_raw_turns` end to end** — transcript file →
+      watermark → `openbrain_memory.AgentMemory.ingest_raw_turns` → row in the
+      playground clone, proven by a `-m live` test. Added 2026-07-31 after a
+      session produced 184 tests and zero database writes. No write path may
+      exist inside `python/openbrain/` itself; the sibling package owns all
+      writes (`_plans/python-port-sequence.md`, "The write path already
+      exists").
 
 ## Why the port is still the real fix, even though the TypeScript was patched
 
