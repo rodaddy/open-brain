@@ -388,6 +388,32 @@ This entry exists because the same session ALSO nearly created a third gotchas
 file while `docs/GOTCHAS.md` and `docs/sme/gotcha-agent.md` both already
 existed. `aqmd search` found it in 0.1s.
 
+### A fake credential in a test fixture blocks your own commit
+
+**Symptom:** `gitleaks` reports `leaks found: 1` on a file you know contains no
+real secret, and the commit is refused.
+
+Measured 2026-07-31: a redaction test used the literal
+`ghp_abcdefghij0123456789` to prove masking works. gitleaks matched it as
+`generic-api-key` (entropy 4.4) and blocked the commit.
+
+The finding was a false positive — but the fixture is still wrong. A literal
+that *looks* like a token trips the scanner on every commit, every CI run, and
+every future scan. **A fixture that cries wolf teaches people to reach for
+`--no-verify`**, which is far more expensive than the fixture being slightly
+indirect.
+
+**The check:** assemble fake credentials from parts at runtime, so nothing
+token-shaped exists on disk:
+
+```python
+_FAKE_BODY = "0123456789" + "abcdefghij"
+FAKE_GITHUB_TOKEN = "ghp" + "_" + _FAKE_BODY
+```
+
+The redaction patterns are still genuinely exercised — the value is
+token-shaped when the test runs, just not when the scanner reads the file.
+
 ### Finding a problem mid-implementation is a miss, not a save
 
 **Symptom:** every time the operator asks a question, a new problem surfaces.
