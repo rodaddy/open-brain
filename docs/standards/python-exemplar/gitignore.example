@@ -1,0 +1,19 @@
+# Runtime artifacts. Regenerated on every run; never committed.
+.venv/
+data/
+logs/
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+
+# Secrets: allowlist, never blocklist. The example files carry the full key
+# structure with placeholder values so a new developer or agent can see exactly
+# what is required, while no real value ever enters git.
+secrets/*
+!secrets/.gitkeep
+!secrets/*.example
+!secrets/*.example.json
+!secrets/README.md
