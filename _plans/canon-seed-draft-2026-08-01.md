@@ -1,6 +1,6 @@
 # Canon seed set — candidate draft for #444
 
-**Status:** PROPOSED draft for #444 veto — nothing here is seeded.
+**Status:** PROPOSED v2 — operator veto notes applied 2026-08-01, unlisted entries KEEP.
 
 This is a concrete artifact for the operator to cut and veto, **not a decision**.
 #444 is HITL grilling ("Rico decides; do not answer this one alone"). This is the
@@ -38,7 +38,7 @@ sanctioned two (this dev machine, core01); anything that contradicts current
 `AGENTS.md`. Rows I am genuinely unsure belong in canon are marked
 **UNCERTAIN — operator call**.
 
-Lane counts: profile_guidance **8** · process_guidance **13** · repo_facts[open-brain] **7**.
+Lane counts (v2, after veto round 1): profile_guidance **10** · process_guidance **14** · repo_facts[open-brain] **7**. (v1 was 8 · 13 · 7; +2 profile entries for people/contacts and contexts, +1 process entry for the glossary pointer.)
 
 ---
 
@@ -47,29 +47,67 @@ Lane counts: profile_guidance **8** · process_guidance **13** · repo_facts[ope
 ### 1. Rico profile
 - **scope key:** `profile.identity`
 - **rule:** Rico is the architect-level creator/maintainer of PAI and Open Brain;
-  builds MCP servers, infra tooling, Proxmox clusters, and AI pipelines.
-  Knowledge management is a core priority. Prefers brevity, no filler, no
-  hand-holding; frame suggestions as trade-offs, not tutorials.
+  builds MCP servers, infra tooling, Proxmox clusters, and AI pipelines, and runs
+  King Capital / Rodaddy as the surrounding businesses. Knowledge management is a
+  core priority; he thinks in systems and enforcement mechanisms, not one-off
+  fixes. Prefers brevity, no filler, no hand-holding; frame suggestions as
+  trade-offs, not tutorials, and never coach him on tools he built.
 - **source:** migrated event "Rico profile (user)" (OB, 2026-08-01);
   `user_rico_profile.md`.
 - **lane:** user_preference
 
+### 1a. People, contacts, and other users are first-class canon
+- **scope key:** `profile.people_contacts`
+- **rule:** The USER lane is not only Rico — the people, contacts, and other users
+  Rico works with (business partners, collaborators, named agents/personas, the
+  humans behind King Capital / Rodaddy / Discord) are first-class canon candidates,
+  carried forward like any other durable fact. This is the dimension most other
+  "second brains" carry as their *only* payload; canon must not drop it. Each
+  person/contact seeds as its own `profile.person.<slug>` row once identified, with
+  who they are and how Rico relates to them.
+- **source:** operator veto note 1 (2026-08-01); `user_rico_profile.md` (identity
+  scope, extended to the people dimension).
+- **lane:** user_preference
+- **note:** NEW entry from veto round 1. Individual `profile.person.<slug>` rows are
+  seeded as the specific people are named by the operator — this row is the standing
+  rule that they belong in canon at all.
+
+### 1b. Contexts and relationships are canon, not just facts
+- **scope key:** `profile.contexts`
+- **rule:** Beyond individual people, the *contexts* Rico operates in — which
+  business a piece of work belongs to, which project or repo owns a decision, which
+  relationships gate an action — are canon-carried alongside identity. An agent that
+  knows the rules but not the context (who this is for, which world it lives in)
+  still acts wrong; context is the connective tissue other second brains keep and
+  rule-only canon would lose.
+- **source:** operator veto note 1 (2026-08-01) — "all the other things that are the
+  ONLY thing most other second brains carry forward".
+- **lane:** user_preference
+- **note:** NEW entry from veto round 1.
+
 ### 2. Never speedrun — discussion is the default
 - **scope key:** `profile.never_speedrun`
-- **rule:** Discussion, explanation, and ideas are the DEFAULT mode. Editing,
-  committing, pushing, and opening PRs each require explicit, unambiguous
-  authorization for THAT specific action, every time — authorization never
-  generalizes across actions and silence mid-turn is not consent. Hedged phrasing
-  (possibly, maybe, we could, thoughts?) means DISCUSS, not GO.
+- **rule:** Discussion, explanation, and ideas are the DEFAULT mode. This guards
+  both directions: (a) do NOT speedrun — editing, committing, pushing, and opening
+  PRs each require explicit, unambiguous authorization for THAT specific action,
+  every time; authorization never generalizes and silence mid-turn is not consent;
+  hedged phrasing (possibly, maybe, we could, thoughts?) means DISCUSS, not GO; and
+  (b) do NOT barrel on without guidance — when direction runs out, stop and ask,
+  don't just keep going. Both failures are the same defect: acting past what Rico
+  actually authorized.
 - **source:** migrated event "NEVER speedrun" (OB, 2026-08-01);
-  `feedback_never_speedrun.md`.
+  `feedback_never_speedrun.md`; operator veto note 19 (2026-08-01, no-barreling-on
+  guard).
 - **lane:** user_preference
 
 ### 3. No unrequested suggestions
 - **scope key:** `profile.no_unrequested_suggestions`
-- **rule:** Do the task asked and stop. Unprompted ideas are almost always wrong
-  against what the repo already designed; state the work and its result, do not
-  offer follow-on work.
+- **rule:** Do the task asked and stop. Do NOT tell Rico it is time to sleep, that
+  he has been at this too long, or comment on the hour or his state; and do NOT do
+  work that was not asked for — unrequested work is where an agent breaks things
+  that are planned but not yet fully documented. Unprompted ideas are almost always
+  wrong against what the repo already designed; state the work and its result, do
+  not offer follow-on work.
 - **source:** `feedback_no_unrequested_suggestions.md`; reinforced by LAW 17
   (`~/.claude/docs/laws.md`).
 - **lane:** user_preference
@@ -107,17 +145,18 @@ Lane counts: profile_guidance **8** · process_guidance **13** · repo_facts[ope
   workflow rule), not a profile fact. Included under profile because it is stored
   as a Rico operating preference; reassign if the lane feels wrong.
 
-### 7. No flash/haiku for extraction
+### 7. Lowest-tier models only when every step is given and the outcome is concrete
 - **scope key:** `profile.no_flash_extraction`
-- **rule:** Never use flash/haiku-tier models for LLM extraction, summarization,
-  or metadata tasks — Sonnet minimum, Opus when quality matters. Flash produced
-  identical outputs across different inputs; Sonnet fixed it immediately.
+- **rule:** The lowest-tier models (flash/haiku) are usable ONLY when the
+  instructions leave no room for thinking — every step fully specified and a
+  concrete outcome set. The moment a task requires judgment, inference, or
+  interpretation (extraction, summarization, metadata, anything open-ended), it is
+  Sonnet minimum, Opus when quality matters. Flash produced identical outputs across
+  different inputs precisely because the task had room to think and it did not.
 - **source:** migrated event "no flash model" (OB, 2026-08-01);
-  `feedback_no_flash_model.md`.
+  `feedback_no_flash_model.md`; operator veto note 7 (2026-08-01, resolves the
+  UNCERTAIN call).
 - **lane:** user_preference
-- **note:** UNCERTAIN — operator call. Passes the inclusion test (an agent that
-  doesn't know this wires flash into an EXTRACTION_MODEL confidently), but it is
-  narrow. Keep if extraction pipelines are common; cut to the index if rare.
 
 ### 8. No pre-prod key rotation ceremony
 - **scope key:** `profile.no_preprod_rotation`
@@ -141,9 +180,13 @@ Lane counts: profile_guidance **8** · process_guidance **13** · repo_facts[ope
   inherits the weakest state in its chain. Never say done/complete/fixed/working/
   deployed for anything below RUNNING; say "written, not deployed" / "merged,
   unverified" / "proposed". Do not certify your own work; a subagent's confident
-  output is PROPOSED until verified. Full text: `~/.claude/docs/laws.md` LAW 0.
+  output is PROPOSED until verified. Say what you mean and mean what you say — and
+  GIVE RECEIPTS: back every claim of state with the evidence that proves it (the
+  command run, the file read, the response seen), not an assertion. Full text:
+  `~/.claude/docs/laws.md` LAW 0.
 - **source:** `~/.claude/docs/laws.md` LAW 0; Development `AGENTS.md`
-  ("SAY WHICH KIND OF TRUE IT IS").
+  ("SAY WHICH KIND OF TRUE IT IS"); operator veto note 9 (2026-08-01, receipts
+  requirement).
 - **lane:** process_rule
 
 ### 10. Never work on main
@@ -236,6 +279,9 @@ Lane counts: profile_guidance **8** · process_guidance **13** · repo_facts[ope
 - **source:** migrated event "reviews/runner-box lifecycles belong in a delegated
   node" (OB, 2026-08-01); `feedback_delegate_runner_lifecycle.md`.
 - **lane:** process_rule
+- **note:** KEEP (veto note 18). Formalize this more fully as the software factory
+  and its new processes are fully stood up — the delegation shape here is the seed,
+  not the finished contract.
 
 ### 19. OB is Claude's durable memory — direct provider only, never mcp2cli
 - **scope key:** `process.ob_durable_memory_provider`
@@ -259,8 +305,10 @@ Lane counts: profile_guidance **8** · process_guidance **13** · repo_facts[ope
 - **source:** Development `AGENTS.md` (Open Brain Process Memory / repo-local
   capture rule).
 - **lane:** process_rule
-- **note:** UNCERTAIN — operator call. Behavior rule about OB itself; keep if the
-  loader should nudge capture, cut if that is loader-driven rather than canon.
+- **note:** UNCERTAIN — operator call (veto note 20). Stays open, and the open
+  question is the *reason* itself: what is the reason a capture-when-learned rule
+  belongs in canon versus being loader-driven? That rationale is the thing to be
+  worked out before this resolves; the row stays UNCERTAIN until it is.
 
 ### 21. Do not hand-roll solved problems
 - **scope key:** `process.no_hand_rolling`
@@ -269,6 +317,21 @@ Lane counts: profile_guidance **8** · process_guidance **13** · repo_facts[ope
   write your own logger, HTTP client, retry, config loader, or validator.
 - **source:** open-brain `AGENTS.md` standards banner; `_DOCS/STANDARDS-core.md`.
 - **lane:** process_rule
+
+### 21a. The glossary is the shared, authoritative vocabulary — use it and maintain it
+- **scope key:** `process.glossary_authoritative`
+- **rule:** `_DOCS/GLOSSARY.md` is the authoritative shared vocabulary: it is real,
+  it is kept, and it exists so both the agents and Rico mean the same thing by the
+  same term. Read it when domain language, PAI terms, infra names, shorthand, or
+  workflow terms matter (it routes to topic glossary files for detail), and
+  maintain it — when Rico clarifies reusable language, an alias, a repo mapping, or
+  a workflow/infra term, update the glossary so the definition is durable. Full
+  index: `_DOCS/GLOSSARY.md`.
+- **source:** operator veto note "Glossary" (2026-08-01, "real and should be
+  used/kept but correctly so both the agents and myself know what terms mean");
+  Development `AGENTS.md` (glossary routing + Session Wrap glossary-update rule).
+- **lane:** process_rule
+- **note:** NEW entry from veto round 1 (pointer rule → `_DOCS/GLOSSARY.md`).
 
 ---
 
@@ -287,21 +350,33 @@ Lane counts: profile_guidance **8** · process_guidance **13** · repo_facts[ope
 
 ### 23. Never hardcode a host — the env is the only source
 - **scope key:** `repo.no_hardcoded_host`
-- **rule:** Endpoint and token come from `$OPENBRAIN_BASE_URL` /
-  `$OPENBRAIN_TOKEN`. Never hardcode a host — not `10.71.1.21`, not `127.0.0.1`,
-  not `10.71.1.21:3100`. A hardcoded host is wrong on both machines and goes stale
-  the moment a port moves.
+- **rule:** Vars are always better than hardcoding once past an initial
+  proof-of-concept — endpoints, tokens, hosts, ports, paths all come from
+  configuration, not literals. Here specifically: endpoint and token come from
+  `$OPENBRAIN_BASE_URL` / `$OPENBRAIN_TOKEN`; never hardcode a host — not
+  `10.71.1.21`, not `127.0.0.1`, not `10.71.1.21:3100`. A hardcoded value is wrong
+  on the other machine and goes stale the moment a port or host moves; a throwaway
+  concept sketch is the only place a literal is acceptable, and it stops being one
+  the moment the code is kept.
 - **source:** open-brain `CLAUDE.md` (Claude deltas); `_plans/canon-always-known.md`
-  (Rejected — hardcoding any endpoint).
+  (Rejected — hardcoding any endpoint); operator veto note 23 (2026-08-01,
+  generalize to vars-over-hardcoding).
 - **lane:** repo_fact
 
-### 24. The dogfood database
+### 24. The dogfood database and its LAN-bound service
 - **scope key:** `repo.dogfood_db`
-- **rule:** The dogfood database is `open_brain_local_20260724` on `127.0.0.1` —
-  the real durable memory for this machine while in dev/dogfood mode, not
-  mcp2cli/core01.
+- **rule:** The dogfood database is `open_brain_local_20260724` — the real durable
+  memory for this machine while in dev/dogfood mode, not mcp2cli/core01. As of
+  2026-08-01 the local service binds `0.0.0.0` (`OPEN_BRAIN_BIND_HOST=0.0.0.0` in
+  `local-clone.env`), not loopback-only, so it is reachable across the LAN: the Air
+  (`10.71.1.26`) is a sanctioned client of THIS dogfood brain, reaching it at
+  `10.71.1.20:3100`. This does not resurrect any retired host — the two-host scope
+  still holds; the Air is a client of the dev brain, not a new database host.
 - **source:** open-brain `AGENTS.md` (Querying the dogfood database);
-  `reference_openbrain_test_db.md`.
+  `reference_openbrain_test_db.md`; operator veto note 24 (2026-08-01, stale
+  loopback wording); verified live 2026-08-01 in
+  `/Volumes/ThunderBolt/open-brain-local/local-clone.env` line 3
+  (`OPEN_BRAIN_BIND_HOST=0.0.0.0`).
 - **lane:** repo_fact
 
 ### 25. `psql` needs no connection arguments
@@ -374,3 +449,52 @@ row above, or only matter mid-task. Listed so the veto pass sees the boundary.
   canon-shaped and the plan calls persona a canon layer, but it is loaded by the
   persona/loader path (#446), not the three guidance lanes. Recorded here so the
   operator decides whether it seeds as a `process_rule` or stays loader-owned.
+
+---
+
+## Veto round 1 — operator notes applied 2026-08-01
+
+Each row: veto note number → scope key it mapped to → what changed. Entries the
+operator did NOT mention were KEPT as written (operator said "all filled out and"
+then listed only the deviations below). The number→scope-key mapping is the
+`type="application/json"` `canon-data` block in
+`_reviews/canon-seed-veto-2026-08-01.html` (n=1..28).
+
+| note | scope key | change |
+|------|-----------|--------|
+| 1 | `profile.identity` (+ new `profile.people_contacts`, `profile.contexts`) | Expanded who-Rico-is (businesses, systems thinking); added TWO new profile entries — people/contacts and contexts/relationships as first-class canon, the dimension other second brains carry as their only payload. |
+| 3 | `profile.no_unrequested_suggestions` | Rationale now names the offenses: no "time to sleep" / "been at this too long" / hour-or-state commentary, and no unrequested work — which is where an agent breaks things that are planned but not fully documented. |
+| 7 | `profile.no_flash_extraction` | UNCERTAIN resolved to KEEP + reworded: lowest-tier models are usable ONLY when every step is fully given and a concrete outcome is set; never where the task has room to think. Retitled. |
+| 9 | `process.law0_say_what_you_mean` | Appended the receipts requirement to LAW 0 — "say what you mean, mean what you say, and give receipts": back every state claim with the evidence that proves it. |
+| 18 | `process.delegate_reviews_runners` | KEPT; added note to formalize the delegation contract more fully as the software factory and its new processes are fully stood up. |
+| 19 | `profile.never_speedrun` | Strengthened to guard BOTH directions: (a) no speedrun without per-action authorization AND (b) no barreling on without guidance — stop and ask when direction runs out. See mapping note below: note 19's number maps to `process.ob_durable_memory_provider`, not this entry. |
+| 20 | `process.capture_when_learned` | Stays UNCERTAIN; the open question is reframed as the *reason* itself — what makes capture-when-learned canon vs loader-driven is the thing to be worked out. |
+| 23 | `repo.no_hardcoded_host` | Generalized to the standing rule: vars are always better than hardcoding once past an initial proof-of-concept (endpoints, tokens, hosts, ports, paths), with the OB endpoint/token as the specific instance. |
+| 24 | `repo.dogfood_db` | Stale loopback/two-machine wording corrected to the LAN-bind + Air reality: the local service binds `0.0.0.0` (verified live), and the Air (`10.71.1.26`) is a sanctioned client of this dogfood brain at `10.71.1.20:3100`. Two-host scope preserved; no retired host resurrected. |
+| Glossary | `process.glossary_authoritative` (NEW) | New SOUL/process pointer entry: `_DOCS/GLOSSARY.md` is the authoritative shared vocabulary; agents read it when terms matter and maintain it when Rico clarifies language, so both sides mean the same thing by the same term. |
+
+### Mapping divergence recorded (note 19)
+
+The authoritative `canon-data` numbering maps **n=19 → `process.ob_durable_memory_provider`**
+(OB-is-durable-memory, direct-provider-only). Veto note 19's text — *"yeah, and
+stop all that, and stop don't just keep go'n without any guidance"* — is about a
+behavioral guard on the agent (no barreling on without direction), which does not
+fit the OB-memory-provider entry. The head's confirmed interpretation adjudicated
+note 19 to `profile.never_speedrun` (the speedrun/authorization entry), where the
+"keep going without guidance" guard belongs. Applied there per that
+interpretation; `process.ob_durable_memory_provider` was left as written. Recorded
+here as the one number→text divergence rather than stopping, because the head
+already resolved it.
+
+### Still UNCERTAIN after round 1 (operator call carried forward)
+
+- **`process.capture_when_learned` (note 20)** — the reason a capture-when-learned
+  rule belongs in canon vs being loader-driven is still to be worked out; that
+  rationale is the open question.
+- **`profile.no_sleep_polling` (#6)** — unlisted by the operator, so KEPT, but its
+  own UNCERTAIN lane note (profile vs process) still stands and was not resolved
+  this round.
+- **`repo.standards_generated` (#28)** — unlisted, KEPT, its UNCERTAIN keep-vs-cut
+  note still stands.
+- **Cut-list `SAS terminology / pai repo naming` and `Persona always-keep line`** —
+  unlisted UNCERTAINs in the cut section, carried forward unchanged.
