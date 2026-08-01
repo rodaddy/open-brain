@@ -45,7 +45,13 @@ capture times are the lane events (`ob_session_events`, lane `dev:open-brain`).
    184 tests — and zero database writes. Components hardened in isolation
    while the application did not exist. Step 7 (the spine) outranks every
    polish, refactor, or coverage task until a turn round-trips.
-6. **A decision made in conversation is written into a file the same session**
+6. **Testing budget (operator, 2026-07-31).** The goal is all pieces DONE, not
+   each piece tested to death: after-the-fact testing stays well under 30% of
+   the coding time per piece. The five fast gates stay; per-step review swarms,
+   live-gate expansion, and test-forging cycles are deferred to ONE hard-testing
+   pass when every piece exists. Not NO testing — cheap gates per step, hard
+   testing once at the end.
+7. **A decision made in conversation is written into a file the same session**
    (20:07 — *"you said parked it, but you didn't write a file... it's gonna be
    fucking forgotten"*). Plans and decision records are the durable copy; the
    chat is not.
