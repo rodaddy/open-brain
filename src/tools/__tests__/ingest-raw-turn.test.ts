@@ -300,6 +300,64 @@ dbDescribe("ingest_raw_turn (live Postgres)", () => {
     expect(await seq(nsAlice, "alice-1")).toBe(0);
   });
 
+  it("repairs a NULL session_seq on an ordinary duplicate replay (F5)", async () => {
+    // The recompute is derived from the whole validated payload, not only from
+    // the INSERT's RETURNING rows. So a session left with session_seq = NULL --
+    // e.g. by a prior call whose recompute failed transiently -- is repaired by
+    // an ordinary replay of the same turn_uuids, even though that replay inserts
+    // zero new rows. Keying the recompute off RETURNING alone would skip it.
+    const sref = "repair-session";
+    await ingest([
+      turn({
+        turn_uuid: "rep-1",
+        session_ref: sref,
+        occurred_at: "2026-07-25T09:00:00Z",
+      }),
+      turn({
+        turn_uuid: "rep-2",
+        session_ref: sref,
+        occurred_at: "2026-07-25T09:05:00Z",
+        turn_index: 1,
+      }),
+    ]);
+
+    // Simulate a prior transient recompute failure: blank the seq back to NULL.
+    await pool.query(
+      "UPDATE ob_raw_turns SET session_seq = NULL WHERE namespace = $1 AND session_ref = $2",
+      [nsAlice, sref],
+    );
+    const before = await pool.query(
+      "SELECT count(*)::int AS n FROM ob_raw_turns WHERE namespace = $1 AND session_ref = $2 AND session_seq IS NULL",
+      [nsAlice, sref],
+    );
+    expect(before.rows[0].n).toBe(2);
+
+    // Replay the identical batch: zero new rows insert (ON CONFLICT DO NOTHING),
+    // but the recompute still runs for the payload's session_ref and re-numbers.
+    const replay = await ingest([
+      turn({
+        turn_uuid: "rep-1",
+        session_ref: sref,
+        occurred_at: "2026-07-25T09:00:00Z",
+      }),
+      turn({
+        turn_uuid: "rep-2",
+        session_ref: sref,
+        occurred_at: "2026-07-25T09:05:00Z",
+        turn_index: 1,
+      }),
+    ]);
+    expect(replay.ingested).toBe(0);
+    expect(replay.duplicates).toBe(2);
+
+    const after = await pool.query(
+      "SELECT turn_uuid, session_seq FROM ob_raw_turns WHERE namespace = $1 AND session_ref = $2 ORDER BY session_seq",
+      [nsAlice, sref],
+    );
+    expect(after.rows.map((r) => r.session_seq)).toEqual([0, 1]);
+    expect(after.rows.map((r) => r.turn_uuid)).toEqual(["rep-1", "rep-2"]);
+  });
+
   it("denies an unauthenticated caller", async () => {
     const res = await handler({ turns: [turn()] }, {});
     expect(res.isError).toBe(true);

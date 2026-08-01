@@ -134,8 +134,20 @@ export const runTerraBatch: TerraTransport = async ({
   const timer = setTimeout(() => proc.kill(), TIMEOUT_MS);
   let stdout: string;
   try {
-    stdout = await new Response(proc.stdout).text();
-    await proc.exited;
+    // Drain BOTH pipes concurrently. `codex exec` writes reasoning/progress
+    // diagnostics to stderr; if the parent reads only stdout, a stderr pipe
+    // that fills its OS buffer (~64 KB) blocks the child mid-write -- it never
+    // flushes stdout's EOF and never exits, so both the stdout read and
+    // `proc.exited` hang until the ten-minute kill timer fires and the whole
+    // batch falls back to heuristic grading. Consuming stderr in parallel keeps
+    // the child unblocked; the drained text is discarded (it is diagnostics,
+    // and this sink never surfaces model output through the error channel).
+    const [out] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    stdout = out;
   } finally {
     clearTimeout(timer);
   }

@@ -6,6 +6,7 @@ import { namespaceFilterFor } from "../read-policy.ts";
 import { ALL_TABLES } from "./table-constants.ts";
 import { executeSearch, type SearchRow } from "./search-brain.ts";
 import { logger } from "../logger.ts";
+import { describeError } from "../observability/index.ts";
 import {
   CONTEXT_PACK_ENVELOPE_CHAR_RESERVE,
   boundedText,
@@ -47,9 +48,14 @@ const DURABLE_MEMORY_POINTER_OVERFETCH = 20;
  *
  * When the whole-pack allocator supplies an explicit `contentCharLimit`, the
  * recall content is bounded by the pack-level allocation it was granted (still
- * clamped by the durable-memory hard cap). Otherwise the historical per-section
- * derivation from `budget.max_tokens` applies, preserving compatibility when no
- * whole-pack allocation is in effect.
+ * clamped by the durable-memory hard cap). When a caller explicitly passes
+ * `budget.max_tokens`, that request is honoured with the historical per-section
+ * derivation. Absent BOTH, recall means total recall: this mirrors the
+ * durable-lane resolver (`resolveDurableLaneContentChars`) instead of applying
+ * an undeclared `4000`-token default. That default silently imposed a ~14,800
+ * char ceiling on a pack whose own contract (see the constants above) says an
+ * absent budget returns everything, so a large durable recall was truncated
+ * exactly where the header promised it would not be.
  */
 function resolveDurableMemoryContentChars(
   args: AgentContextPackArgs,
@@ -61,14 +67,18 @@ function resolveDurableMemoryContentChars(
       Math.min(DURABLE_MEMORY_MAX_CONTENT_CHARS, contentCharLimit),
     );
   }
-  return Math.max(
-    0,
-    Math.min(
-      DURABLE_MEMORY_MAX_CONTENT_CHARS,
-      (args.budget?.max_tokens ?? 4000) * 4 -
-        CONTEXT_PACK_ENVELOPE_CHAR_RESERVE,
-    ),
-  );
+  // A caller that asked for a token budget gets one derived from it.
+  if (args.budget?.max_tokens !== undefined) {
+    return Math.max(
+      0,
+      Math.min(
+        DURABLE_MEMORY_MAX_CONTENT_CHARS,
+        args.budget.max_tokens * 4 - CONTEXT_PACK_ENVELOPE_CHAR_RESERVE,
+      ),
+    );
+  }
+  // Nobody asked for a bound. Return everything (the hard cap IS everything).
+  return DURABLE_MEMORY_MAX_CONTENT_CHARS;
 }
 
 export type DurableMemoryContextFragment = {
@@ -295,11 +305,19 @@ export async function loadDurableMemoryContext(
     // when this is being read months from now the alternative is reconstructing
     // it from nothing. Sifting a large log is future-Rico's problem; having no
     // log at all is future-Rico's disaster.
-    const err = error instanceof Error ? error : undefined;
+    // Error fields go through describeError, the content-safe boundary: it
+    // allowlists pg's code/detail/hint/constraint/routine by name and redacts
+    // every value, so the diagnostics survive without a raw driver string
+    // leaking query fragments into the log.
     logger.error("durable_memory recall failed", {
       client_id: auth.clientId,
-      error: err?.message ?? String(error),
+      ...describeError(error),
     });
+    // The raw recall `query` is NOT logged. It is arbitrary caller content -- a
+    // private name, incident text, anything the caller searched for -- that
+    // secret-pattern redaction cannot make safe because it is not shaped like a
+    // credential. query_chars keeps the one diagnostic that matters (an empty or
+    // pathological query) without writing the body.
     logger.debug("durable_memory recall failure detail", {
       client_id: auth.clientId,
       agent_id: auth.agentId ?? null,
@@ -308,7 +326,6 @@ export async function loadDurableMemoryContext(
       platform: args.platform,
       session_key: args.session_key,
       repo: args.repo ?? null,
-      query,
       query_chars: query.length,
       accessible_tables: accessibleTables,
       accessible_table_count: accessibleTables.length,
@@ -317,17 +334,7 @@ export async function loadDurableMemoryContext(
       max_items: DURABLE_MEMORY_MAX_ITEMS,
       max_item_chars: DURABLE_MEMORY_MAX_ITEM_CHARS,
       pointer_overfetch: DURABLE_MEMORY_POINTER_OVERFETCH,
-      error_name: err?.name ?? typeof error,
-      error_message: err?.message ?? String(error),
-      // pg surfaces code/detail/hint/constraint on its own error objects; they
-      // are the difference between "it failed" and knowing which query and why.
-      pg_code: (error as { code?: unknown })?.code ?? null,
-      pg_detail: (error as { detail?: unknown })?.detail ?? null,
-      pg_hint: (error as { hint?: unknown })?.hint ?? null,
-      pg_constraint: (error as { constraint?: unknown })?.constraint ?? null,
-      pg_routine: (error as { routine?: unknown })?.routine ?? null,
-      stack: err?.stack ?? null,
-      cause: err?.cause ? String(err.cause) : null,
+      ...describeError(error),
     });
     return {
       section: {

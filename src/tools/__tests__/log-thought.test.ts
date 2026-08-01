@@ -424,6 +424,85 @@ describe("log_thought", () => {
     });
   });
 
+  describe("chunk-write failure is distinguishable from not-chunked (F4)", () => {
+    // Sol cross-family finding: on a chunk-write failure the parent is already
+    // committed, so the entry is not lost -- but the response must SAY chunking
+    // failed. Without the signal, the failure omits the chunk fields entirely,
+    // byte-identical to a short entry that was never chunked, and the comment
+    // promising the caller can tell them apart is false. A merge on retry skips
+    // chunking, so this signal is the only in-band notice the parent needs a
+    // chunk-repair pass.
+    it("returns chunking_status: failed when the parent commits but chunks throw", async () => {
+      // The parent INSERT (its RETURNING carries is_new) succeeds; every
+      // subsequent chunk INSERT throws.
+      const mockPool = {
+        query: async (sql: string) => {
+          if (sql.includes("is_new")) {
+            return { rows: [{ id: "parent-uuid", is_new: true }] };
+          }
+          // A chunk INSERT (no is_new in its SQL): fail it.
+          throw new Error("simulated chunk insert failure");
+        },
+      };
+      const auth: AuthInfo = { role: "admin", clientId: "test-client" };
+      const { client, cleanup } = await setupToolClient(
+        mockPool,
+        createMockEmbed(),
+        auth,
+      );
+
+      try {
+        const result = await client.callTool({
+          name: "log_thought",
+          // Long enough to be chunked (CHUNK_THRESHOLD = 2000).
+          arguments: { content: "Z".repeat(5000) },
+        });
+
+        // The parent committed, so the call is NOT an error, but it is honest
+        // that chunking failed.
+        expect(result.isError).toBeFalsy();
+        const parsed = JSON.parse((result.content as any)[0].text);
+        expect(parsed.id).toBe("parent-uuid");
+        expect(parsed.chunking_status).toBe("failed");
+        // The success-shaped chunk counters are absent on failure.
+        expect(parsed.chunks_written).toBeUndefined();
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("omits chunking_status when chunking succeeds (short entry, zero chunks)", async () => {
+      // The control: a short entry chunks to zero rows WITHOUT failing, so it
+      // must NOT carry the failure signal -- proving chunking_status means
+      // 'failed', not merely 'chunk fields present'. A short entry still returns
+      // a ChunkWriteResult (written: 0), so chunks_written: 0 is expected; what
+      // must be absent is chunking_status.
+      const mockPool = createMockPool([{ id: "short-uuid", is_new: true }]);
+      const auth: AuthInfo = { role: "admin", clientId: "test-client" };
+      const { client, cleanup } = await setupToolClient(
+        mockPool,
+        createMockEmbed(),
+        auth,
+      );
+
+      try {
+        const result = await client.callTool({
+          name: "log_thought",
+          arguments: { content: "short thought" },
+        });
+
+        expect(result.isError).toBeFalsy();
+        const parsed = JSON.parse((result.content as any)[0].text);
+        // No failure signal on a successful (even if zero-chunk) write.
+        expect(parsed.chunking_status).toBeUndefined();
+        // A successful chunk pass reports its counters; only a FAILURE omits them.
+        expect(parsed.chunks_written).toBe(0);
+      } finally {
+        await cleanup();
+      }
+    });
+  });
+
   describe("permission denied", () => {
     it("returns isError: true when role cannot write thoughts", async () => {
       const mockPool = createMockPool();

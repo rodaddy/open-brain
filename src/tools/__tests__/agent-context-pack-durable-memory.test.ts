@@ -4,6 +4,7 @@ import {
   AGENT_CONTEXT_PACK_SCOPE as SCOPE,
   setupAgentContextPackToolClient as setupToolClient,
 } from "./agent-context-pack-test-helpers.ts";
+import { addLogSink, getLogLevel, setLogLevel } from "../../logger.ts";
 
 /**
  * The durable_memory section is a query-driven hybrid-RRF recall over the
@@ -677,6 +678,105 @@ describe("agent_context_pack durable_memory", () => {
     }
   });
 
+  it("never logs the raw recall query on the failure path, only its length (F2)", async () => {
+    // Sol cross-family finding: the recall-failure detail record logged the raw
+    // caller `query`. A query is arbitrary private content (a name, incident
+    // text) that credential-shaped redaction cannot make safe. The fix drops the
+    // query body from both failure records and keeps only query_chars on the
+    // detail line, routing error fields through describeError.
+    //
+    // This is a STRUCTURAL guard on the source rather than a runtime log capture:
+    // the detail line is a debug line whose emission depends on the process-wide
+    // log level, which sibling test files move, making a sink-capture assertion
+    // order-dependent and flaky. Reading the source is deterministic and fails
+    // the instant a bare `query:` is reintroduced into either failure log call.
+    const source = await Bun.file(
+      new URL("../agent-context-pack-durable-memory.ts", import.meta.url),
+    ).text();
+
+    // Isolate the catch block that handles a failed recall (between the two
+    // logger calls and the returned recall_failed envelope).
+    // Bound the block to the two LOGGER calls only -- from logger.error to the
+    // end of the logger.debug detail call -- NOT the returned recall_failed
+    // envelope, whose `query` field is a legitimate echo asserted elsewhere.
+    const failStart = source.indexOf(
+      'logger.error("durable_memory recall failed"',
+    );
+    const debugStart = source.indexOf(
+      'logger.debug("durable_memory recall failure detail"',
+      failStart,
+    );
+    // The logger.debug object closes at the first `});` after it starts.
+    const failEnd = source.indexOf("});", debugStart);
+    expect(failStart).toBeGreaterThan(-1);
+    expect(debugStart).toBeGreaterThan(failStart);
+    expect(failEnd).toBeGreaterThan(debugStart);
+    const failureBlock = source.slice(failStart, failEnd);
+
+    // The length is recorded...
+    expect(failureBlock).toContain("query_chars: query.length");
+    // ...error fields go through the content-safe boundary...
+    expect(failureBlock).toContain("describeError(error)");
+    // ...and NO bare `query,` (the raw body) is logged on the failure path. A
+    // `query_chars:` line contains the substring "query" but never the bare
+    // shorthand `query,` that would log the whole string.
+    expect(/(^|[^_])query,\s*$/m.test(failureBlock)).toBe(false);
+    // Nor the older raw pg-field spread that echoed query fragments via detail.
+    expect(failureBlock).not.toContain("pg_detail:");
+    expect(failureBlock).not.toContain("pg_hint:");
+  });
+
+  it("keeps recall failure content-free at runtime and reports query length", async () => {
+    // The behavioral companion to the structural guard: when a sink DOES observe
+    // the failure records (debug forced here), the raw query is absent and the
+    // length is present. Scoped to this call's durable records and guarded so a
+    // sibling file that suppresses the debug line cannot flake it.
+    const secretQuery = `PRIVATE-INCIDENT-${Math.random().toString(36).slice(2)}-jane-doe`;
+    const captured: Array<Record<string, unknown>> = [];
+    const removeSink = addLogSink((entry) => captured.push(entry));
+    const savedLevel = getLogLevel();
+    setLogLevel("debug");
+    const auth: AuthInfo = { role: "admin", clientId: "rico" };
+    const { client, cleanup } = await setupToolClient(auth, {
+      query: async () => {
+        throw new Error("db down");
+      },
+    });
+    try {
+      await client.callTool({
+        name: "agent_context_pack",
+        arguments: {
+          ...SCOPE,
+          query: secretQuery,
+          requested_sections: ["durable_memory"],
+        },
+      });
+      const durableRecords = captured.filter(
+        (r) =>
+          r.message === "durable_memory recall failed" ||
+          r.message === "durable_memory recall failure detail",
+      );
+      // The raw query body appears in none of this call's durable records.
+      expect(JSON.stringify(durableRecords)).not.toContain(secretQuery);
+      for (const r of durableRecords) {
+        expect(r.query).toBeUndefined();
+      }
+      const detail = durableRecords.find(
+        (r) => r.message === "durable_memory recall failure detail",
+      );
+      // Only assert length when the debug detail line was actually observed;
+      // its emission depends on the effective level, which is not this test's
+      // to guarantee against sibling files.
+      if (detail) {
+        expect(detail.query_chars).toBe(secretQuery.length);
+      }
+    } finally {
+      await cleanup();
+      removeSink();
+      setLogLevel(savedLevel);
+    }
+  });
+
   it("omits durable_memory entirely (no recall_failed envelope) when the section is not requested even if recall would fail", async () => {
     // Behavior must stay distinct from "requested": an unrequested durable_memory
     // section is absent from the pack. No recall runs, so no recall_failed
@@ -1091,5 +1191,94 @@ describe("agent_context_pack durable_memory", () => {
     );
     expect(first.budget.durable_memory).toEqual(second.budget.durable_memory);
     expect(first.warnings.truncation).toEqual(second.warnings.truncation);
+  });
+
+  it("recalls a large body WHOLE when no budget is supplied (absent budget = total recall)", async () => {
+    // Regression for the Sol cross-family finding: with neither an explicit
+    // whole-pack allocation nor a caller budget.max_tokens, the section MUST
+    // return everything, matching the durable-lane resolver and the section's
+    // own 'unbounded by default' contract. The prior code applied an undeclared
+    // 4000-token default -> ~14,800 char ceiling, silently truncating any
+    // larger single record. This body is far past that ceiling and must survive
+    // intact, with the reported content_char_limit being the unbounded cap.
+    const bigBody = "Z".repeat(60_000);
+    const { pool } = searchPool([
+      brainRecord({
+        id: "big-1",
+        source_type: "decision",
+        content_preview: bigBody,
+      }),
+    ]);
+    const auth: AuthInfo = { role: "admin", clientId: "rico" };
+    const { client, cleanup } = await setupToolClient(auth, pool);
+    try {
+      const pack = await client.callTool({
+        name: "agent_context_pack",
+        arguments: {
+          ...SCOPE,
+          query: "big durable record",
+          requested_sections: ["durable_memory"],
+          // Deliberately NO budget: this is the total-recall path.
+        },
+      });
+      const payload = JSON.parse((pack.content as any)[0].text);
+      expect(pack.isError).toBeFalsy();
+      const section = payload.sections.durable_memory;
+      expect(section.items.length).toBe(1);
+      // The body survives whole -- not clipped at the old ~14,800 ceiling.
+      expect(section.items[0].content.length).toBe(bigBody.length);
+      expect(section.items[0].content).toBe(bigBody);
+      expect(section.truncated).toBe(false);
+      // The reported per-section char limit is the unbounded cap, not 14,800.
+      expect(payload.budget.durable_memory.content_char_limit).toBe(
+        Number.MAX_SAFE_INTEGER,
+      );
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("still bounds the section when an explicit budget.max_tokens is supplied", async () => {
+    // The no-default fix must not disable explicit budgeting: a caller that
+    // asks for a small token budget still gets a derived char ceiling that
+    // truncates an oversized body. This keeps the total-recall default from
+    // silently ignoring a real request.
+    const bigBody = "Y".repeat(60_000);
+    const { pool } = searchPool([
+      brainRecord({
+        id: "bounded-1",
+        source_type: "decision",
+        content_preview: bigBody,
+      }),
+    ]);
+    const auth: AuthInfo = { role: "admin", clientId: "rico" };
+    const { client, cleanup } = await setupToolClient(auth, pool);
+    try {
+      const maxTokens = 500;
+      const pack = await client.callTool({
+        name: "agent_context_pack",
+        arguments: {
+          ...SCOPE,
+          query: "bounded durable record",
+          requested_sections: ["durable_memory"],
+          budget: { max_tokens: maxTokens },
+        },
+      });
+      const payload = JSON.parse((pack.content as any)[0].text);
+      expect(pack.isError).toBeFalsy();
+      const section = payload.sections.durable_memory;
+      // The reported limit derives from the explicit budget, not the unbounded
+      // cap -- so an explicit budget is honoured, not bypassed by the default.
+      expect(payload.budget.durable_memory.content_char_limit).toBeLessThan(
+        Number.MAX_SAFE_INTEGER,
+      );
+      // The oversized body is truncated to fit the explicit budget.
+      if (section.items.length > 0) {
+        expect(section.items[0].content.length).toBeLessThan(bigBody.length);
+      }
+      expect(section.truncated).toBe(true);
+    } finally {
+      await cleanup();
+    }
   });
 });

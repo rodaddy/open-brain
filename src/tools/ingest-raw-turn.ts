@@ -312,10 +312,21 @@ export function registerIngestRawTurn(server: McpServer, deps: ToolDeps): void {
         // stored, and a NULL session_seq is repairable by re-running this
         // statement. Losing captured conversation to a numbering error would be
         // the far worse outcome.
+        //
+        // Affected sessions are derived from the whole validated `kept` payload,
+        // NOT only from the INSERT's RETURNING rows. If a prior call stored the
+        // turns but its seq recompute failed transiently, those rows carry
+        // session_seq = NULL; a replay of the same turn_uuids returns zero
+        // RETURNING rows (ON CONFLICT DO NOTHING), so keying off RETURNING alone
+        // would skip the recompute and the NULLs would never repair. Keying off
+        // the payload's session_refs makes an ordinary replay the repair path
+        // the comment above promises. The recompute is idempotent
+        // (`session_seq IS DISTINCT FROM o.seq` updates only rows that change),
+        // so re-running it for an already-numbered session is a no-op.
         const touchedSessions = [
           ...new Set(
-            rows
-              .map((r) => r.session_ref)
+            kept
+              .map((p) => p.turn.session_ref ?? null)
               .filter((s): s is string => s !== null),
           ),
         ];
