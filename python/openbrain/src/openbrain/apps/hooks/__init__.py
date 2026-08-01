@@ -1,12 +1,13 @@
-"""The Claude Code hook entrypoints -- one module per event, three that are real.
+"""The Claude Code hook entrypoints -- one module per event, four that are real.
 
 Purpose:
     Claude Code runs a command per lifecycle event and hands it the event as
     JSON on stdin. This package is that command's Python side: one module per
     VERIFIED event (the set the fixtures actually captured), each reading stdin
-    and exiting. Three of them do real work today -- ``stop`` and
+    and exiting. Four of them do real work today -- ``stop`` and
     ``subagent_stop`` invoke the capture spine, ``session_end`` releases the
-    server session slot.
+    server session slot, and ``post_compact`` records the compaction summary the
+    Stop spine drops.
 
 Key Components:
     - stop: THE MAIN CAPTURE. On every ``Stop`` it delivers the turns written
@@ -16,14 +17,18 @@ Key Components:
     - session_end: closes the session through the client lifecycle, freeing the
       finite per-worker server slot. It delivers nothing -- turns are already
       durable on each ``Stop``.
+    - post_compact: records the ``compact_summary`` a compaction generates. That
+      summary's transcript record carries ``isCompactSummary:true`` and no
+      ``promptSource``, so the Stop spine walks past it -- this is the only place
+      it is recorded.
     - dispatch: a table from a verified event name to its module's entrypoint.
       Nothing else lives here -- no branching, no per-event logic.
-    - session_start, user_prompt, pre_tool_use, post_tool_use, pre_compact,
-      post_compact: explicit stubs. Each parses stdin and exits 0, and its
-      docstring names the open question -- what capability it should serve is NOT
-      decided for the Python app (``_plans/rewrite-gotchas.md``).
+    - session_start, user_prompt, pre_tool_use, post_tool_use, pre_compact:
+      explicit stubs. Each parses stdin and exits 0, and its docstring names the
+      open question -- what capability it should serve is NOT decided for the
+      Python app (``_plans/rewrite-gotchas.md``).
 
-    All three real entrypoints can never block or break a session, so every
+    All four real entrypoints can never block or break a session, so every
     failure is logged content-free and swallowed and the process always exits 0
     with empty stdout.
 
