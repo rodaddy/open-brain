@@ -45,25 +45,28 @@ dependencies = [
 #
 # So a script is declared only for the hook entrypoints that do REAL work:
 # `stop` (delivers the main transcript), `subagent-stop` (the same spine over the
-# subagent transcript), `session-end` (releases the server session slot), and
+# subagent transcript), `session-end` (releases the server session slot),
 # `post-compact` (records the compaction summary the Stop spine drops --
-# `_plans/rewrite-gotchas.md`). The remaining event modules are explicit stubs
-# whose capabilities are undecided, and `dispatch.py` is a table with no
-# stdin-reading entrypoint of its own -- so there is nothing else to point a
-# real, non-shim script at yet. A stub, or any dispatch front-door, gets a script
-# when it does real work.
+# `_plans/rewrite-gotchas.md`), and `session-start` (injects the CANON pack at
+# session open -- the operator ruling 2026-08-01 that superseded its "stays stub"
+# row, so the module now does real work and earns a script). The remaining event
+# modules are explicit stubs whose capabilities are undecided, and `dispatch.py`
+# is a table with no stdin-reading entrypoint of its own -- so there is nothing
+# else to point a real, non-shim script at yet. A stub, or any dispatch
+# front-door, gets a script when it does real work.
 #
 # `test_console_scripts.py` is the gate the comment above says does not exist by
 # default: it parses this table and imports every declared `module:attr`, so a
 # target that stops resolving fails pytest instead of shipping a dead shim.
 #
-# Harness wiring (settings.json pointing Claude Code's Stop hook at this script)
-# is #420, out of scope here.
+# Harness wiring (settings.json pointing Claude Code's hooks at these scripts)
+# is #420.
 [project.scripts]
 openbrain-capture-stop = "openbrain.apps.hooks.stop:main"
 openbrain-capture-subagent-stop = "openbrain.apps.hooks.subagent_stop:main"
 openbrain-session-end = "openbrain.apps.hooks.session_end:main"
 openbrain-post-compact = "openbrain.apps.hooks.post_compact:main"
+openbrain-session-start = "openbrain.apps.hooks.session_start:main"
 
 # Resolve the sibling from this uv workspace rather than PyPI, matching
 # openbrain-provider. The editable install is what makes the live gate's

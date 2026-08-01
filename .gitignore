@@ -72,6 +72,13 @@ _reports/
 .qmd/*
 !.qmd/index.yml
 
+# Capture watermark store: the Python capture hooks default their SQLite
+# read-offset store to PACKAGE_ROOT/data/capture-watermarks.sqlite
+# (openbrain.config CaptureSettings.watermark_path), so running a hook from the
+# source tree creates this dir. It is per-machine runtime state, rebuildable by
+# re-reading transcripts, and never belongs in git.
+python/openbrain/data/
+
 # Secrets and file-based config layers: ALLOWLIST, never a blocklist.
 #
 # The structure is tracked, the values are not. A blocklist of known-bad names
