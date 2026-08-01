@@ -241,3 +241,35 @@ Ordered by dependency. Each mutation needs explicit operator authorization.
   machines and goes stale the moment a port moves.
 - **Auto-loading episodic context** — contaminates unrelated work and forecloses
   a deliberate fresh start.
+
+## Cold-loader fixes (2026-08-01, #450)
+
+The #450 prototype ran the cold-session test: content passed, the *mechanism*
+failed twice. Both were loader-transport bugs, not canon-content bugs.
+
+1. **Canon pack was diverted to a preview.** `openbrain-session-start` dumped
+   the raw `agent_context_pack` JSON envelope (~30 KB of nested items, ids,
+   citations, confidences, warnings) into `additionalContext`, and Claude Code
+   persisted a payload that large to a file it surfaced as only a ~2 KB preview
+   — the session saw 2–3 of 31 items and could not name the sections. **Fix:**
+   `session_start.render_pack` now renders plain text — a one-line header
+   (schema, namespace, per-section counts) then every item on its own line
+   (`[<lane>] <scope-key>: <rule text in full>`), all 31 items, whole rule text.
+   This is formatting (dropping the JSON envelope/metadata bulk), **not** content
+   reduction; the rules still arrive whole. The plain-text render of the real
+   31-item pack is a few KB, small enough to land inline.
+
+2. **Episodic history was injected at startup, against the canon-only ruling.**
+   The 57.8 KB `Lane: dev:open-brain (200 events)` block at SessionStart was
+   **not** from the repo canon hook. It came from a *second* SessionStart hook in
+   this repo's own `.claude/settings.json`, matching `startup|resume|clear` and
+   running `_ob/skills/brain/scripts/resume.py --limit 200`. That directly
+   violates canon-only. **Fix:** the `SessionStart` block was removed from
+   `.claude/settings.json`; lane history is no longer injected at startup.
+
+**Episodic is now explicit-on-request — the recap vocabulary is the door.** To
+pull lane history deliberately, run the resume flow: `resume.py` directly
+(`"$RESUME"`, `--brief` for a human), or say "session recap" / "where were we" /
+"continue" to trigger the `brain` skill's resume. Canon (rules/profile/repo
+facts) still auto-loads every session via `openbrain-session-start`; only the
+back-history stopped auto-loading.

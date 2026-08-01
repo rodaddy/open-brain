@@ -1231,26 +1231,147 @@ def _write_injection(pack: object, out: io.StringIO) -> None:
     out.write(session_start._injection_envelope(pack))
 
 
+#: A fixture pack shaped exactly like the live ``agent_context_pack.v1``: the two
+#: real item shapes (guidance items with ``scope_key``/``guidance``/
+#: ``candidate_type``; fact items with ``subject``/``fact``/``fact_type``) and the
+#: envelope fields the renderer reads. Every rule text is a distinct sentinel so a
+#: test can assert it survived verbatim.
+_FIXTURE_PACK = {
+    "schema": "openbrain.agent_context_pack.v1",
+    "scope": {"namespace": "rico", "agent": "claude"},
+    "sections": {
+        "profile_guidance": {
+            "label": "profile_guidance",
+            "item_count": 2,
+            "items": [
+                {
+                    "scope_key": "profile.who",
+                    "guidance": "Rico is the operator; PROFILE-RULE-ONE in full.",
+                    "candidate_type": "profile_fact",
+                },
+                {
+                    "scope_key": "profile.adhd",
+                    "guidance": "Lead with the next action; PROFILE-RULE-TWO in full.",
+                    "candidate_type": "profile_fact",
+                },
+            ],
+        },
+        "process_guidance": {
+            "label": "process_guidance",
+            "item_count": 1,
+            "items": [
+                {
+                    "scope_key": "process.no_tmp",
+                    "guidance": "Never /tmp; PROCESS-RULE-ONE in full.",
+                    "candidate_type": "process_rule",
+                },
+            ],
+        },
+        "repo_facts": {
+            "label": "repo_facts",
+            "item_count": 1,
+            "items": [
+                {
+                    "subject": "repo.two_hosts",
+                    "fact": "Exactly two hosts; REPO-FACT-ONE in full.",
+                    "fact_type": "gotcha",
+                },
+            ],
+        },
+    },
+    "warnings": {"scope_denials": [], "degraded_sources": [], "truncation": []},
+}
+
+
+class TestSessionStartRendersCanonAsPlainText:
+    """render_pack renders every rule WHOLE as plain text -- no JSON envelope."""
+
+    def test_every_items_rule_text_appears_verbatim(self) -> None:
+        rendered = session_start.render_pack(_FIXTURE_PACK)
+        # Every rule sentinel from every section survives, IN FULL.
+        for section in _FIXTURE_PACK["sections"].values():
+            for item in section["items"]:
+                text = item.get("guidance") or item.get("fact")
+                assert text in rendered
+
+    def test_every_scope_key_and_lane_appears(self) -> None:
+        rendered = session_start.render_pack(_FIXTURE_PACK)
+        assert "profile.who" in rendered
+        assert "process.no_tmp" in rendered
+        assert "repo.two_hosts" in rendered  # a fact item keys on ``subject``
+        # The lane is the item's candidate/fact type, rendered as a ``[lane]`` tag.
+        assert "[process_rule]" in rendered
+        assert "[gotcha]" in rendered
+
+    def test_the_counts_line_is_correct(self) -> None:
+        rendered = session_start.render_pack(_FIXTURE_PACK)
+        header = rendered.splitlines()[0]
+        # The header names the schema, namespace, and per-section counts.
+        assert "openbrain.agent_context_pack.v1" in header
+        assert "namespace=rico" in header
+        assert "profile_guidance=2" in header
+        assert "process_guidance=1" in header
+        assert "repo_facts=1" in header
+
+    def test_one_line_per_item_after_the_header(self) -> None:
+        rendered = session_start.render_pack(_FIXTURE_PACK)
+        lines = rendered.splitlines()
+        # header, blank, then exactly one line per item (4 items here).
+        assert lines[1] == ""
+        item_lines = [ln for ln in lines[2:] if ln]
+        total = sum(len(s["items"]) for s in _FIXTURE_PACK["sections"].values())
+        assert len(item_lines) == total == 4
+
+    def test_the_raw_json_envelope_is_gone(self) -> None:
+        rendered = session_start.render_pack(_FIXTURE_PACK)
+        # The metadata bulk that diverted the injection to a preview must not be
+        # in the rendered text: no citation/confidence keys, no warnings block.
+        assert "citation_id" not in rendered
+        assert "candidate_type" not in rendered  # rendered as a lane tag, not a key
+        assert "scope_denials" not in rendered
+
+    def test_a_non_dict_pack_renders_empty(self) -> None:
+        assert session_start.render_pack("not a pack") == ""
+        assert session_start.render_pack(None) == ""
+
+    def test_a_missing_field_does_not_raise(self) -> None:
+        # A partial pack (no scope, an item missing its key) still renders its
+        # rule text rather than raising.
+        partial = {"sections": {"process_guidance": {"items": [{"guidance": "R"}]}}}
+        rendered = session_start.render_pack(partial)
+        assert "R" in rendered
+
+
 class TestSessionStartEntrypointWritesTheInjection:
-    """The additionalContext envelope carries the pack, WHOLE, on the happy path."""
+    """The additionalContext envelope carries the rendered canon on the happy path."""
 
     def test_the_envelope_shape_is_the_sessionstart_contract(self) -> None:
-        pack = {"sections": {"repo_facts": {"items": [{"fact": "two hosts only"}]}}}
         out = io.StringIO()
-        _write_injection(pack, out)
+        _write_injection(_FIXTURE_PACK, out)
 
         envelope = json.loads(out.getvalue())
         assert set(envelope) == {"hookSpecificOutput"}
         specific = envelope["hookSpecificOutput"]
         assert specific["hookEventName"] == "SessionStart"
-        # additionalContext is a STRING carrying the pack verbatim.
+        # additionalContext is a STRING carrying the RENDERED canon, not raw JSON.
         assert isinstance(specific["additionalContext"], str)
-        assert json.loads(specific["additionalContext"]) == pack
+        assert specific["additionalContext"] == session_start.render_pack(
+            _FIXTURE_PACK
+        )
+        # And it is plain text, not a re-parseable pack object.
+        with pytest.raises(json.JSONDecodeError):
+            json.loads(specific["additionalContext"])
 
-    def test_the_injected_pack_is_whole(self) -> None:
-        # A large section body survives into additionalContext with no bound.
+    def test_the_injected_rule_text_is_whole(self) -> None:
+        # A large rule body survives into additionalContext with no bound.
         big = "y" * 20000
-        pack = {"sections": {"process_guidance": {"items": [big]}}}
+        pack = {
+            "sections": {
+                "process_guidance": {
+                    "items": [{"scope_key": "big", "guidance": big}]
+                }
+            }
+        }
         out = io.StringIO()
         _write_injection(pack, out)
 
@@ -1261,8 +1382,7 @@ class TestSessionStartEntrypointWritesTheInjection:
         # inject_canon_with, real path but injected factory via monkeypatch-free
         # override of the module factory would be heavier; drive the capability's
         # own return through the envelope by pointing the real factory at a reader.
-        pack = {"sections": {"profile_guidance": {"items": ["Rico"]}}}
-        reader = CanonPackReader(pack=pack)
+        reader = CanonPackReader(pack=_FIXTURE_PACK)
         import openbrain.apps.hooks.session as session_mod
 
         original = session_mod._canon_context
@@ -1276,9 +1396,10 @@ class TestSessionStartEntrypointWritesTheInjection:
             session_mod._canon_context = original  # type: ignore[assignment]
 
         envelope = json.loads(out.getvalue())
-        assert json.loads(
+        assert (
             envelope["hookSpecificOutput"]["additionalContext"]
-        ) == pack
+            == session_start.render_pack(_FIXTURE_PACK)
+        )
 
 
 class TestSessionStartEntrypointNeverDisruptsTheSession:
