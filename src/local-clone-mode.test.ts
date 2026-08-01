@@ -67,6 +67,28 @@ describe("validateLocalCloneMode", () => {
     ).toEqual({ enabled: true, bindHost: "::1" });
   });
 
+  it("accepts a 0.0.0.0 bind host under the LAN dogfood opt-in", () => {
+    expect(
+      validateLocalCloneMode(
+        validCloneEnv({ OPEN_BRAIN_BIND_HOST: "0.0.0.0" }),
+      ),
+    ).toEqual({ enabled: true, bindHost: "0.0.0.0" });
+  });
+
+  it("rejects a non-loopback non-0.0.0.0 bind host", () => {
+    expect(() =>
+      validateLocalCloneMode(
+        validCloneEnv({ OPEN_BRAIN_BIND_HOST: "10.71.1.21" }),
+      ),
+    ).toThrow("literal loopback");
+  });
+
+  it("rejects a 0.0.0.0 DB_HOST", () => {
+    expect(() =>
+      validateLocalCloneMode(validCloneEnv({ DB_HOST: "0.0.0.0" })),
+    ).toThrow("literal loopback");
+  });
+
   it.each([
     ["OPEN_BRAIN_BIND_HOST", "localhost"],
     ["OPEN_BRAIN_BIND_HOST", "[::1]"],
