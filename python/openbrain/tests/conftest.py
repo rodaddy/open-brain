@@ -59,6 +59,65 @@ class UnreachableLane:
         raise LaneUnreachableError
 
 
+class BatchTooLargeError(RuntimeError):
+    """A send exceeded what the server's Zod validator accepts in one call.
+
+    Stands in for the real ``ingest_raw_turn`` rejection: the request schema
+    declares ``turns`` as an array the server refuses above ``MAX_BATCH`` (100,
+    ``src/tools/ingest-raw-turn.ts``). A recorder that never crossed that bound
+    was green against a fake the real server would have refused (gotcha #275),
+    so this lane enforces the same bound the server does.
+    """
+
+
+@dataclass
+class BoundedRecordingLane:
+    """A ``RawLane`` that records batches but rejects one larger than the server.
+
+    Attributes:
+        accepts: The most turns one call may carry, matching the server's own
+            ``MAX_BATCH``. A call over it raises :class:`BatchTooLargeError`
+            before recording anything, exactly as the server rejects the whole
+            batch before writing a row.
+    """
+
+    accepts: int = 100
+    batches: list[list[dict[str, Any]]] = field(default_factory=list)
+
+    def ingest_raw_turns(self, turns: Any) -> object:
+        batch = [dict(turn) for turn in turns]
+        if len(batch) > self.accepts:
+            raise BatchTooLargeError
+        self.batches.append(batch)
+        return {"ingested": len(batch)}
+
+    @property
+    def turns(self) -> list[dict[str, Any]]:
+        return [turn for batch in self.batches for turn in batch]
+
+
+@dataclass
+class FailAfterNBatchesLane:
+    """A ``RawLane`` that takes the first ``fail_on`` batches, then raises.
+
+    Proves a mid-delivery failure never advances the watermark past turns that
+    did not land: the send is split into successive calls, and if a later call
+    raises, the whole region must re-read next time.
+
+    Attributes:
+        fail_on: The 1-based call number that raises. Earlier calls record.
+    """
+
+    fail_on: int = 2
+    batches: list[list[dict[str, Any]]] = field(default_factory=list)
+
+    def ingest_raw_turns(self, turns: Any) -> object:
+        self.batches.append([dict(turn) for turn in turns])
+        if len(self.batches) >= self.fail_on:
+            raise LaneUnreachableError
+        return {"ingested": len(self.batches[-1])}
+
+
 @dataclass
 class ClosingRecorder:
     """A ``RawLane`` whose close is observable -- proves ``run_stop`` releases it.

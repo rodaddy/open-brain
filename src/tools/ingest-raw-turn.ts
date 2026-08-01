@@ -321,6 +321,17 @@ export function registerIngestRawTurn(server: McpServer, deps: ToolDeps): void {
         ];
         if (touchedSessions.length > 0) {
           try {
+            // Scoped to `ns`. session_ref is client-supplied and is NOT unique
+            // across namespaces -- the only uniqueness on the table is
+            // (namespace, turn_uuid) (migration 032). Two namespaces can carry
+            // the same session_ref, so a recompute partitioned by session_ref
+            // alone would renumber another namespace's rows by interleaving
+            // this write's occurred_at values into their ordering. Adding
+            // `namespace = $2` to both the ordering window's source and the
+            // UPDATE keeps each namespace's session_seq computed only from its
+            // own turns, which is what the per-namespace isolation boundary
+            // requires (AGENTS.md: any ID-based mutation carries an
+            // auth-derived namespace predicate).
             await deps.pool.query(
               `WITH ordered AS (
                  SELECT id,
@@ -329,14 +340,16 @@ export function registerIngestRawTurn(server: McpServer, deps: ToolDeps): void {
                           ORDER BY occurred_at, id
                         ) - 1 AS seq
                    FROM ob_raw_turns
-                  WHERE session_ref = ANY($1::text[])
+                  WHERE namespace = $2
+                    AND session_ref = ANY($1::text[])
                )
                UPDATE ob_raw_turns t
                   SET session_seq = o.seq
                  FROM ordered o
                 WHERE t.id = o.id
+                  AND t.namespace = $2
                   AND t.session_seq IS DISTINCT FROM o.seq`,
-              [touchedSessions],
+              [touchedSessions, ns],
             );
           } catch (seqErr) {
             logger.warn("ingest_raw_turn_seq_failed", {

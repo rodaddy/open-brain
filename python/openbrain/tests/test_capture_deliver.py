@@ -11,6 +11,9 @@ from pathlib import Path
 import pytest
 
 from conftest import (
+    BatchTooLargeError,
+    BoundedRecordingLane,
+    FailAfterNBatchesLane,
     LaneUnreachableError,
     RecordingLane,
     UnreachableLane,
@@ -19,7 +22,7 @@ from conftest import (
     operator_line,
     write_lines,
 )
-from openbrain.apps.capture.deliver import deliver_new_turns
+from openbrain.apps.capture.deliver import SERVER_BATCH, deliver_new_turns
 from openbrain.apps.capture.watermark import WatermarkStore
 
 
@@ -136,6 +139,99 @@ class TestFailureNeverDrops:
 
         assert result.delivered == 1
         assert lane.turns[0]["content"] == "must not be lost"
+
+
+class TestLargeRegionsAreDeliveredWhole:
+    """More turns than one server call takes still all land, in order, once.
+
+    The server refuses a call carrying more than ``SERVER_BATCH`` turns
+    (``ingest_raw_turn``'s ``turns`` array, max 100). A first Stop on a busy
+    session, or any read that resumes from offset 0, produces more than that in
+    one region. Handing them over in one call would wedge the session forever;
+    these prove the spine sends in runs the server accepts and never loses one.
+    """
+
+    async def test_more_than_one_call_worth_all_land_across_batches(
+        self, tmp_path: Path
+    ) -> None:
+        count = SERVER_BATCH * 2 + 5
+        path = tmp_path / "t.jsonl"
+        write_lines(
+            path,
+            [operator_line(f"u{i}", f"turn {i}") for i in range(count)],
+        )
+        store = WatermarkStore(tmp_path / "wm.sqlite")
+        lane = BoundedRecordingLane(accepts=SERVER_BATCH)
+
+        result = await deliver_new_turns(path, "s1", store, lane)
+
+        assert result.delivered == count
+        # Every turn landed, in order, exactly once.
+        assert [turn["turn_uuid"] for turn in lane.turns] == [
+            f"u{i}" for i in range(count)
+        ]
+        # No single call exceeded what the server accepts.
+        assert all(len(batch) <= SERVER_BATCH for batch in lane.batches)
+        assert len(lane.batches) == 3
+        # The watermark advanced to end-of-file: the whole region is consumed.
+        assert await store.offset_for("s1") == result.next_offset
+        assert result.next_offset == path.stat().st_size
+
+    async def test_a_bounded_lane_rejects_an_unsplit_oversized_send(
+        self, tmp_path: Path
+    ) -> None:
+        """Guard the guard: a single over-large call really would be refused.
+
+        If the spine ever stopped splitting, this lane (like the server) raises
+        on the oversized call and the assertion in the sibling test would fail.
+        Proving the fake can fail is what keeps it honest (#275).
+        """
+        oversized = [
+            {"turn_uuid": f"u{i}", "role": "user", "content": "x", "turn_index": i}
+            for i in range(SERVER_BATCH + 1)
+        ]
+        lane = BoundedRecordingLane(accepts=SERVER_BATCH)
+
+        with pytest.raises(BatchTooLargeError):
+            lane.ingest_raw_turns(oversized)
+
+        assert lane.batches == []
+
+    async def test_a_mid_delivery_failure_advances_nothing(
+        self, tmp_path: Path
+    ) -> None:
+        """A later chunk failing must not bank the earlier ones' offset.
+
+        The watermark advances only after the WHOLE delivery returns. If a
+        second call raises, the region re-reads next Stop, and the server's
+        (namespace, turn_uuid) dedupe makes the already-landed first call a
+        no-op -- no turn is lost and none is stored twice.
+        """
+        count = SERVER_BATCH + 10
+        path = tmp_path / "t.jsonl"
+        write_lines(
+            path,
+            [operator_line(f"u{i}", f"turn {i}") for i in range(count)],
+        )
+        store = WatermarkStore(tmp_path / "wm.sqlite")
+        failing = FailAfterNBatchesLane(fail_on=2)
+
+        with pytest.raises(LaneUnreachableError):
+            await deliver_new_turns(path, "s1", store, failing)
+
+        # The first call went out; the second raised. Watermark unmoved.
+        assert len(failing.batches) == 2
+        assert await store.offset_for("s1") == 0
+
+        # The retry (an unadvanced watermark) re-reads the whole region and
+        # this time every turn lands, in order.
+        lane = BoundedRecordingLane(accepts=SERVER_BATCH)
+        result = await deliver_new_turns(path, "s1", store, lane)
+        assert result.delivered == count
+        assert [turn["turn_uuid"] for turn in lane.turns] == [
+            f"u{i}" for i in range(count)
+        ]
+        assert await store.offset_for("s1") == path.stat().st_size
 
 
 class TestContentSurvivesWhole:
