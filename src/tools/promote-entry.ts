@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AuthInfo, Table } from "../types.ts";
 import { logger } from "../logger.ts";
+import { describeError } from "../observability/index.ts";
 import { promoteEntry } from "../promotion-service.ts";
 import { sharedNamespaceConfig } from "../shared-namespace.ts";
 import type { ToolDeps } from "./index.ts";
@@ -14,9 +15,21 @@ export function registerPromoteEntry(server: McpServer, deps: ToolDeps): void {
         "Promote an entry from an agent namespace to shared-kb or another target namespace. " +
         "Copies the entry with provenance tracking and detects duplicate target rows.",
       inputSchema: {
-        table: z.enum(["thoughts", "decisions", "relationships", "projects", "sessions"]).describe("Source table"),
+        table: z
+          .enum([
+            "thoughts",
+            "decisions",
+            "relationships",
+            "projects",
+            "sessions",
+          ])
+          .describe("Source table"),
         id: z.string().uuid().describe("Source entry UUID"),
-        reason: z.string().max(1000).optional().describe("Why this entry is being promoted"),
+        reason: z
+          .string()
+          .max(1000)
+          .optional()
+          .describe("Why this entry is being promoted"),
         target_namespace: z
           .string()
           .min(1)
@@ -26,7 +39,9 @@ export function registerPromoteEntry(server: McpServer, deps: ToolDeps): void {
         dry_run: z
           .boolean()
           .optional()
-          .describe("Return a promotion report without inserting into the target namespace"),
+          .describe(
+            "Return a promotion report without inserting into the target namespace",
+          ),
       },
       annotations: {
         title: "Promote Entry",
@@ -69,8 +84,33 @@ export function registerPromoteEntry(server: McpServer, deps: ToolDeps): void {
           },
         );
       } catch (err) {
+        // promote_entry_ok is logged on the success path below; the failure path
+        // logged nothing, so a promotion that never happened left no trace while
+        // a successful one did. Silence meaning failure is exactly backwards.
+        logger.error("promote_entry_failed", {
+          table,
+          source_id: args.id,
+          target_namespace:
+            args.target_namespace ?? sharedNamespaceConfig().sharedNamespace,
+          dry_run: args.dry_run ?? false,
+          ...describeError(err),
+        });
+        // Same split as the REST twin in rest-promotion.ts: promotion-service
+        // marks deliberate rejections with a statusCode and a curated message,
+        // and those are the contract. An error without one is an unexpected
+        // throw whose message is raw driver text (relation names, connection
+        // detail, quoted parameter values) and must not reach a caller.
+        const deliberate =
+          typeof (err as { statusCode?: unknown }).statusCode === "number";
         return {
-          content: [{ type: "text" as const, text: (err as Error).message }],
+          content: [
+            {
+              type: "text" as const,
+              text: deliberate
+                ? (err as Error).message
+                : "Promotion failed due to an internal error",
+            },
+          ],
           isError: true,
         };
       }
@@ -86,10 +126,12 @@ export function registerPromoteEntry(server: McpServer, deps: ToolDeps): void {
       });
 
       return {
-        content: [{
-          type: "text" as const,
-          text: JSON.stringify(result),
-        }],
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(result),
+          },
+        ],
       };
     },
   );

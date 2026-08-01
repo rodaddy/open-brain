@@ -295,9 +295,11 @@ export OPENBRAIN_BASE_URL="http://10.71.1.21:3100"
 export OPENBRAIN_ALLOW_INSECURE_HTTP=1
 ```
 
-`10.71.20.49` is a retained pre-cutover snapshot, not the active production
-Open Brain endpoint. Use `https://open-brain.rodaddy.live` or direct
-`10.71.1.21:3100` for current host canaries.
+Use `https://open-brain.rodaddy.live` or direct `10.71.1.21:3100` for current
+host canaries. Only two hosts belong to this project: this machine while
+developing, and core01 when the dev work is done. A retired host may still
+answer and still hold old Open Brain data — a successful connection is not
+evidence it is in scope.
 
 For full package usage, schema helper, live canary, and Hermes integration
 guidance, see [`python/openbrain-memory/README.md`](../python/openbrain-memory/README.md).

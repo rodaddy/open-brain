@@ -6,8 +6,11 @@ virtual environment at `python/.venv`.
 
 | Member | What it is |
 |---|---|
-| `openbrain-memory/` | Python client for the remote Open Brain memory service. |
+| `openbrain/` | Shared Python foundation plus the harness applications: the live capture adapter (`apps/capture/`, hook entrypoints) and, later, the bulk ingester. |
+| `openbrain-memory/` | Python client for the remote Open Brain memory service. **The only write path** — the other members write through it, never around it. |
 | `openbrain-provider/` | Runtime lifecycle provider: session start, capture, checkpoint, reflex. |
+
+Who does what, with states and boundaries: `docs/architecture.md`.
 
 
 ## Why a workspace

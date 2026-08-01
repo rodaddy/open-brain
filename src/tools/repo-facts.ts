@@ -54,6 +54,18 @@ function isPrivateOrLocalHost(hostname: string): boolean {
   return false;
 }
 
+/**
+ * SSRF allowlist for a caller-supplied source URL.
+ *
+ * A predicate, not an operation: `false` IS the reported outcome, and the
+ * `.refine()` below turns it into a caller-visible validation message. So the
+ * catch is not a swallowed failure -- an unparseable URL is the same verdict as
+ * a disallowed one, reached the same way, and reported by the same message.
+ *
+ * Deliberately not logged here: the input is untrusted and unbounded, so a line
+ * per rejection would let a caller drive log volume, and the boundary that
+ * knows which call it belonged to is already telling them.
+ */
 function isTrustedSourceUrl(rawUrl: string): boolean {
   try {
     const parsed = new URL(rawUrl);
@@ -64,10 +76,23 @@ function isTrustedSourceUrl(rawUrl: string): boolean {
       parsed.hostname.toLowerCase(),
     );
   } catch {
+    // Unparseable URL: not trusted, same as any other rejection above.
     return false;
   }
 }
 
+/**
+ * Does the source URL actually point at the repo/path/commit it claims?
+ *
+ * Another predicate whose `false` is the reported outcome, surfaced by the
+ * `.refine()` on the caller side, so the catch is not a swallowed failure.
+ *
+ * One case inside is worth naming: `decodeURIComponent` throws on a malformed
+ * percent escape, which lands here as "does not match" -- the same answer a
+ * genuinely mismatched pointer gets. The verdict is right either way (a URL
+ * that cannot be decoded cannot be proven to match), but the two are not the
+ * same fault, so the shape is recorded content-free below.
+ */
 function sourceUrlMatchesSource(
   rawUrl: string,
   repo: string,
@@ -78,7 +103,11 @@ function sourceUrlMatchesSource(
     const parsed = new URL(rawUrl);
     const decodedPath = decodeURIComponent(parsed.pathname).replace(/^\/+/, "");
     const normalizedPath = path.replace(/^\/+/, "");
-    const repoSlug = repo.replace(/^\/+|\/+$/g, "").split("/").at(-1) ?? repo;
+    const repoSlug =
+      repo
+        .replace(/^\/+|\/+$/g, "")
+        .split("/")
+        .at(-1) ?? repo;
     const pathParts = normalizedPath.split("/");
     const repoRelativePath =
       pathParts[0] === repoSlug && pathParts.length > 1
@@ -98,7 +127,8 @@ function sourceUrlMatchesSource(
     }
 
     if (parsed.hostname.toLowerCase() === "raw.githubusercontent.com") {
-      const [owner, urlRepo, urlCommit, ...sourceParts] = decodedPath.split("/");
+      const [owner, urlRepo, urlCommit, ...sourceParts] =
+        decodedPath.split("/");
       void owner;
       return (
         urlRepo === repoSlug &&
@@ -108,7 +138,14 @@ function sourceUrlMatchesSource(
     }
 
     return false;
-  } catch {
+  } catch (error) {
+    // A malformed percent escape (URIError) is a different fault from an honest
+    // mismatch, and the boolean cannot say which. Recorded content-free -- the
+    // error class only, never the caller's URL -- so a pointer that is being
+    // rejected for a decoding reason is diagnosable instead of just "wrong".
+    logger.debug("repo_fact_source_url_undecodable", {
+      error_name: error instanceof Error ? error.name : typeof error,
+    });
     return false;
   }
 }
@@ -117,7 +154,8 @@ const sourceUrl = z
   .string()
   .url()
   .refine(isTrustedSourceUrl, {
-    message: "source_url must be an HTTPS GitHub source URL without credentials",
+    message:
+      "source_url must be an HTTPS GitHub source URL without credentials",
   })
   .describe("HTTPS GitHub source URL for the verified source pointer.");
 
@@ -450,7 +488,10 @@ function mergeRepoFactFallbackRows(
   return [...primary, ...legacy.slice(0, limit - primary.length)];
 }
 
-export function registerUpsertRepoFact(server: McpServer, deps: ToolDeps): void {
+export function registerUpsertRepoFact(
+  server: McpServer,
+  deps: ToolDeps,
+): void {
   server.registerTool(
     "upsert_repo_fact",
     {

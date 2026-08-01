@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import tomllib
 from collections.abc import Callable, Mapping
@@ -20,6 +21,8 @@ from .nats_wire import (
     build_request_envelope,
 )
 from .policy import RetryPolicy, redact_text, with_retry
+
+logger = logging.getLogger(__name__)
 
 JSON = dict[str, Any]
 MCP_PROTOCOL_VERSION = "2025-03-26"
@@ -268,8 +271,21 @@ class UrllibTransport:
                     headers=error_headers,
                     expected_response_id=expected_response_id,
                 ).decode("utf-8", errors="replace")
-            except OSError:
+            except OSError as read_error:
+                # The error body could not be read, so the caller gets the status
+                # code with an empty body -- indistinguishable from a server that
+                # sent no body at all. The status code is still the primary
+                # signal, so this degrades rather than raising, but an empty body
+                # now has a recorded reason. Error class only; a body that WAS
+                # readable is never logged here.
                 body = ""
+                logger.debug(
+                    "Could not read Open Brain error response body",
+                    extra={
+                        "status_code": exc.code,
+                        "error_class": type(read_error).__name__,
+                    },
+                )
             return TransportResponse(
                 status_code=exc.code,
                 headers=error_headers,
@@ -1156,6 +1172,16 @@ class OpenBrainClient:
         return payload
 
     def close(self) -> None:
+        """Release the server-side MCP session.
+
+        Failing to close is not fatal for this process -- the local session id
+        is dropped either way -- but it leaves a session allocated on the
+        server, and both failure paths returned in silence. A server slowly
+        accumulating abandoned sessions had no local evidence of why.
+
+        Content-free: the status code or the error class, never the URL (it
+        carries the base URL) and never a response body.
+        """
         session_id = self._session_id
         if not session_id:
             return
@@ -1166,8 +1192,18 @@ class OpenBrainClient:
                 timeout=self.timeout,
             )
             if response.status_code < 200 or response.status_code >= 300:
+                logger.warning(
+                    "Open Brain session close was rejected; "
+                    "the server-side session may remain allocated",
+                    extra={"status_code": response.status_code},
+                )
                 return
-        except Exception:
+        except Exception as error:
+            logger.warning(
+                "Open Brain session close failed; "
+                "the server-side session may remain allocated",
+                extra={"error_class": type(error).__name__},
+            )
             return
         finally:
             self._session_id = None
@@ -1788,6 +1824,18 @@ def _redact_json_value(value: Any, *, depth: int = 0) -> Any:
 
 
 def _redact_json_text(text: str) -> str | None:
+    """Structurally redact a JSON document, or None if it is not JSON.
+
+    Both handlers are answers, not swallowed failures, and neither may log:
+    this function's whole input is the thing being made safe to log, so
+    reporting its own failure is the one place that could emit the unredacted
+    original.
+
+    `None` means "not JSON, so key-name redaction does not apply". `_redact`
+    falls back to the raw text and still runs the pattern redactor and the
+    explicit token/session substitution over it, so a non-JSON body is never
+    emitted unredacted -- it just skips the structural pass that cannot apply.
+    """
     try:
         parsed = json.loads(text)
     except RecursionError:

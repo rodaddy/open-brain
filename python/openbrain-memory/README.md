@@ -114,8 +114,10 @@ export OPENBRAIN_BASE_URL="http://10.71.1.21:3100"
 export OPENBRAIN_ALLOW_INSECURE_HTTP="1"
 ```
 
-Do not use retained pre-cutover LXC snapshots such as `10.71.20.49` for current
-host canaries.
+Do not point canaries at a retired LXC host. Only two hosts belong to this
+project: this machine while developing, and core01 when the dev work is done. A
+retired host may still answer and still hold old Open Brain data — reachability
+is not scope.
 
 For trusted lab-only HTTP endpoints, such as `http://10.71.1.21:3100`, opt in
 explicitly:

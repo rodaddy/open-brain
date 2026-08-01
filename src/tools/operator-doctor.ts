@@ -2,9 +2,13 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AuthInfo } from "../types.ts";
 import { canReadDoctor, getOperatorDoctorStatus } from "../operator-doctor.ts";
 import { readNatsRuntimeBoundary } from "../nats-runtime.ts";
+import { describeError, logger } from "../observability/index.ts";
 import type { ToolDeps } from "./index.ts";
 
-export function registerOperatorDoctor(server: McpServer, deps: ToolDeps): void {
+export function registerOperatorDoctor(
+  server: McpServer,
+  deps: ToolDeps,
+): void {
   server.registerTool(
     "operator_doctor",
     {
@@ -46,9 +50,12 @@ export function registerOperatorDoctor(server: McpServer, deps: ToolDeps): void 
             },
           ],
         };
-      } catch {
-        // Never surface raw error messages (they can carry paths or env
-        // detail) through MCP tool error text.
+      } catch (error) {
+        // Never surface raw error messages (they can carry paths or env detail)
+        // through MCP tool error text. That governs the RESPONSE; when the
+        // doctor throws there is no payload, so the diagnostic surface is gone
+        // exactly when it is needed and the reason was recorded nowhere.
+        logger.error("doctor_tool_failed", describeError(error));
         return {
           content: [
             {

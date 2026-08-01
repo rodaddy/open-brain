@@ -815,9 +815,14 @@ describe("agent_context_pack whole-pack budget", () => {
       expect(payload.budget.requested).toBeNull();
       // Working set retains its full item.
       expect(payload.sections.working_set.item_count).toBe(1);
-      // Durable lane uses its historical per-section 12000-char default.
+      // No max_tokens was requested, so the durable lane reports an unbounded
+      // allocation -- which is what the contract already said should happen
+      // ("Absent max_tokens, there is no whole-pack bound",
+      // docs/agent-context-pack-contract.md). This asserted the historical
+      // 12,000-char per-section default until 2026-07-30; that default was
+      // never asked for and contradicted the contract above it.
       expect(payload.budget.durable_lane_context.content_char_limit).toBe(
-        12000,
+        Number.MAX_SAFE_INTEGER,
       );
       // No whole-pack truncation markers when unbounded.
       expect(

@@ -820,11 +820,26 @@ class JsonlSpool:
 
     @staticmethod
     def _quarantine_envelope(line: str) -> dict[str, Any] | None:
+        """Is this sidecar line a quarantine envelope? None means "no".
+
+        A discriminator, not an operation: a blank line, a record line, and an
+        unparseable line all correctly answer None, so returning it is the
+        reported outcome rather than a swallowed failure.
+
+        The corrupt case is still worth a line, because it is not inert here:
+        `_quarantine_lines_without` carries a `dropping` flag across lines, so
+        an unparseable line inherits the previous envelope's drop decision. A
+        corrupt sidecar can therefore change which records survive, and that
+        decision was previously invisible.
+        """
         if not line.strip():
             return None
         try:
             value = json.loads(line)
         except json.JSONDecodeError:
+            logger.warning(
+                "Skipping unparseable spool quarantine sidecar line",
+            )
             return None
         if (
             isinstance(value, dict)
@@ -857,7 +872,15 @@ class JsonlSpool:
         return json.dumps([group_id, list(record_keys)], separators=(",", ":"))
 
     def _load_retry_state(self) -> _RetryState:
-        """Load retry metadata; corruption degrades to empty (counts only)."""
+        """Load retry metadata; corruption degrades to empty (counts only).
+
+        Degrading is right -- unreadable backoff bookkeeping must not stop the
+        spool from draining. Degrading *silently* was not: a reset retry state
+        makes every unit look like a first attempt, so a unit stuck in a retry
+        loop restarts its backoff on every load and the file that caused it is
+        never mentioned. Content-free: path and error class only, never the
+        payloads the state refers to.
+        """
         empty = _RetryState(last_success_at=None, units={})
         if not self.retry_state_path.exists():
             return empty
@@ -866,9 +889,20 @@ class JsonlSpool:
             raw = json.loads(
                 self.retry_state_path.read_text(encoding="utf-8")
             )
-        except (OSError, json.JSONDecodeError):
+        except (OSError, json.JSONDecodeError) as error:
+            logger.warning(
+                "Spool retry state unreadable; retry bookkeeping reset",
+                extra={
+                    "retry_state_path": str(self.retry_state_path),
+                    "error_class": type(error).__name__,
+                },
+            )
             return empty
         if not isinstance(raw, dict) or not isinstance(raw.get("units"), dict):
+            logger.warning(
+                "Spool retry state has unexpected shape; retry bookkeeping reset",
+                extra={"retry_state_path": str(self.retry_state_path)},
+            )
             return empty
         last_success_at = raw.get("last_success_at")
         units: dict[str, _UnitRetryState] = {}

@@ -45,6 +45,12 @@ import {
   GRAPH_DERIVATION_JOB_KIND,
   makeGraphDerivationHandler,
 } from "./graph-derivation-handler.ts";
+import { DREAM_LIGHT_JOB_KIND, makeDreamLightHandler } from "./dream-light.ts";
+import { DREAM_REM_JOB_KIND, makeDreamRemHandler } from "./dream-rem.ts";
+import {
+  MEMORY_DISTILL_JOB_KIND,
+  makeMemoryDistillHandler,
+} from "./distill-handler.ts";
 
 /**
  * The deliberate, server-owned identity the graph-derivation handler derives
@@ -150,6 +156,50 @@ export function composeMaintenanceHandlers(input: {
       auth: input.graphAuth,
     }),
   );
+
+  // The DREAM pipeline: distill -> light -> rem. Registered here because this
+  // Map is the only dispatch surface -- a kind that is not in it can never be
+  // claimed, however many jobs are enqueued under it.
+  //
+  // THIS CLOSES A LIVE WIRING GAP. DREAM_LIGHT_JOB_KIND and
+  // makeDreamLightHandler have existed since #390 (src/dream-light.ts:58, :374)
+  // and were referenced nowhere outside their own module and test -- so
+  // `dream.light` jobs could be enqueued, would be claimed by no handler, and
+  // would burn their retries into the dead-letter state. Light only ever ran
+  // through the manual entrypoint scripts/dream-light-run.ts.
+  //
+  // NONE OF THESE ENQUEUE ANYTHING. Registration is dispatch only. The
+  // maintenance queue has no recurrence primitive (see the module note above),
+  // so a DREAM cycle still starts from an explicit producer -- an operator
+  // running scripts/dream-cycle.ts, or a future scheduler (#347).
+  handlers.set(
+    MEMORY_DISTILL_JOB_KIND,
+    makeMemoryDistillHandler({
+      pool: input.pool,
+      logger: input.logger,
+      embedFn: input.embedFn,
+      auth: input.graphAuth,
+    }),
+  );
+  handlers.set(
+    DREAM_LIGHT_JOB_KIND,
+    makeDreamLightHandler({
+      pool: input.pool,
+      logger: input.logger,
+    }),
+  );
+  handlers.set(
+    DREAM_REM_JOB_KIND,
+    makeDreamRemHandler({
+      pool: input.pool,
+      logger: input.logger,
+    }),
+  );
+
+  // Deep (#394) is deliberately ABSENT. It is a read-only bundle builder whose
+  // output is a page an operator reads (src/dream-deep.ts), so there is nothing
+  // for a background worker to dispatch -- registering it would create a job
+  // kind whose only effect is to compute a result and discard it.
   return handlers;
 }
 

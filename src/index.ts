@@ -25,7 +25,11 @@ import {
 } from "./nats-bridge.ts";
 import type { ToolDeps } from "./tools/index.ts";
 import type { AuthInfo, HealthStatus } from "./types.ts";
-import { canReadDoctor, getOperatorDoctorStatus } from "./operator-doctor.ts";
+import {
+  canReadDoctor,
+  getOperatorDoctorStatus,
+  probeUrl,
+} from "./operator-doctor.ts";
 import {
   startMaintenanceQueue,
   maintenanceQueueEnabled,
@@ -43,20 +47,13 @@ function serverIps(): string[] {
   return ["unknown"];
 }
 
-async function probeUrl(
-  url: string,
-  headers: Record<string, string>,
-): Promise<boolean> {
-  try {
-    const resp = await fetch(url, {
-      headers,
-      signal: AbortSignal.timeout(3000),
-    });
-    return resp.ok;
-  } catch {
-    return false;
-  }
-}
+/**
+ * `/health`'s probe timeout, preserved from the private copy this file used to
+ * carry. The doctor's own probes allow 2s; `/health` allowed 3s. Sharing one
+ * implementation must not silently change either, so the value is passed rather
+ * than inherited.
+ */
+const HEALTH_PROBE_TIMEOUT_MS = 3000;
 
 export function createApp(
   pool: pg.Pool,
@@ -100,6 +97,7 @@ export function createApp(
         ? probeUrl(
             `${EMBEDDING_BASE_URL.replace(/\/$/, "")}/models`,
             embeddingHeaders,
+            HEALTH_PROBE_TIMEOUT_MS,
           )
         : Promise.resolve(false),
     ]);
@@ -160,9 +158,21 @@ export function createApp(
         // Mirror /health: monitoring that alarms on status code must see a
         // non-200 whenever the body is not fully healthy.
         res.status(status.status === "healthy" ? 200 : 503).json(status);
-      } catch {
-        // Never surface raw error messages (they can carry paths or env
-        // detail); the doctor payload itself is the diagnostic surface.
+      } catch (error) {
+        // Never surface raw error messages in the RESPONSE (they can carry paths
+        // or env detail); the doctor payload itself is the diagnostic surface,
+        // and when it is missing the caller gets a fixed string.
+        //
+        // getOperatorDoctorStatus already logged the cause at the owning
+        // boundary -- it must, because its in-flight promise is shared and a
+        // per-caller catch would report one failure once per waiter. This line
+        // adds only what that one cannot know: that the failure reached the REST
+        // route, and which caller saw the 500.
+        logger.error("doctor_route_failed", {
+          route: "/api/v1/operator/doctor",
+          client_id: authInfo?.clientId,
+          error_name: error instanceof Error ? error.name : typeof error,
+        });
         res.status(500).json({ error: "operator doctor status unavailable" });
       }
     },
@@ -364,7 +374,8 @@ if (import.meta.main) {
   if (maintenanceQueueEnabled()) {
     maintenance = startMaintenanceQueue({ pool, logger });
     logger.info("maintenance queue started", {
-      handlers: "embedding.repair,graph.derive",
+      handlers:
+        "embedding.repair,graph.derive,memory.distill,dream.light,dream.rem",
     });
   } else {
     logger.info("maintenance queue disabled", {

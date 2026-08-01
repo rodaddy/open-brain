@@ -1,0 +1,292 @@
+# pyproject.toml -- single source of truth for dependencies AND tool config.
+#
+# WHY EVERYTHING IS IN THIS ONE FILE
+# ----------------------------------
+# ruff, mypy, and pytest all read their configuration from here. They could each
+# read a separate file (.ruff.toml, mypy.ini, pytest.ini) and the reference repo
+# does exactly that -- b1x-message-coordinator has a standalone mypy.ini sitting
+# next to a pyproject.toml, which means the Python version floor is declared in
+# two places and can silently disagree.
+#
+# One file, one declaration of each fact. When the Python floor moves, it moves
+# in three lines that are visible together on one screen.
+
+[project]
+name = "exemplar"
+version = "0.1.0"
+description = "Worked example for _DOCS/STANDARDS-python.md -- three apps on one shared floor"
+readme = "README.md"
+
+# The floor is declared here, in [tool.ruff], and in [tool.mypy]. All three must
+# agree; a mismatch means the linter permits syntax the interpreter rejects.
+requires-python = ">=3.13"
+
+dependencies = [
+    # Config and models. Pydantic v2 -- validation happens at construction, at
+    # the boundary, so a bad value fails with the field name instead of
+    # surfacing 200 lines later as an AttributeError on None.
+    "pydantic>=2.10",
+    "pydantic-settings>=2.7",
+    # Logging. loguru rather than stdlib logging: sinks, rotation, retention,
+    # and JSON serialization are constructor arguments instead of a handler
+    # hierarchy assembled by hand at every entry point.
+    "loguru>=0.7.3",
+    # HTTP. httpx rather than requests -- this application is async throughout,
+    # and requests would block the event loop on every check.
+    "httpx>=0.28",
+    # HTTP surface.
+    "fastapi>=0.115",
+    "uvicorn>=0.34",
+    # Numeric work. NumPy rather than hand-rolled loops over lists: percentiles,
+    # rolling windows, and outlier detection are one vectorised call each, and
+    # the hand-written versions are where off-by-one and empty-input bugs live.
+    # Used by the stats app. See STANDARDS-python.md on not hand-rolling solved
+    # problems -- this is that rule with a concrete subject.
+    "numpy>=2.5",
+    # Database. SQLAlchemy 2.x typed API, NOT hand-built SQL strings: string
+    # concatenation is how injection happens and how a schema change becomes a
+    # search-and-replace across the codebase.
+    #
+    # SQLite as the engine so the exemplar runs from a clean clone with no
+    # server to install. The SQLAlchemy layer means the same code runs against
+    # Postgres by changing one URL -- which is the actual argument for using it
+    # over sqlite3 directly.
+    "sqlalchemy>=2.0",
+    # Async SQLite driver, so database work matches the async style used
+    # everywhere else rather than blocking the event loop.
+    "aiosqlite>=0.22",
+    # Migrations. Alembic exists because "how does a schema change reach an
+    # existing database" is a question every real application hits, and the
+    # usual example project skips it -- leaving the reader to invent a worse
+    # answer later.
+    "alembic>=1.18",
+    "tenacity>=9.1.4",
+]
+
+[dependency-groups]
+# uv reads this group by default for local work and skips it for `uv export
+# --no-dev`, which is what generates the production requirements file.
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.25",
+    "mypy>=1.14",
+    "ruff>=0.9",
+]
+
+[project.scripts]
+# FOUR callable applications, one package, one shared floor.
+#
+# This is the reason the exemplar is not a single app. A shared `utils/` and a
+# shared `config.py` are trivially "correct" when exactly one caller uses them --
+# any layout works when there is nothing to share with. Four independent
+# consumers is where the design is actually tested: if `utils/` is the wrong
+# shape, or config assumes one app's needs, or a helper really belonged to one
+# app and not the floor, several callers expose it immediately and one never
+# will.
+#
+# Each app is real and runnable, and each exercises a different problem domain,
+# chosen so that between them they cover what a Python application in this repo set
+# is actually likely to need:
+#
+#   monitor  async HTTP, retry with backoff, a periodic scheduler with graceful
+#            shutdown, persistence, and a FastAPI surface. The "network service"
+#            shape.
+#   watch    filesystem polling, validation, batch transform, manifest output.
+#            No network at all, so its tests are fully deterministic -- the
+#            shape most internal tooling actually has.
+#   hook     an HTTP receiver: schema-validated payloads, dict dispatch to
+#            handlers, idempotency/dedupe, forwarding downstream with retry.
+#            Closest to the reference repos this standard was derived from.
+#   stats    reads what monitor recorded and computes percentiles, rolling
+#            averages, and outliers with NumPy, over SQLAlchemy. The "numeric
+#            work against a database" shape -- and it consumes another app's
+#            data, which is what makes the shared floor demonstrably shared
+#            rather than merely asserted.
+#
+# `python -m exemplar.<app>` works with no install step and is what the docs
+# use. These console scripts are the installed spelling, and they exist here to
+# demonstrate that a package can expose several entry points from one build.
+exemplar-monitor = "exemplar.apps.monitor.__main__:main"
+exemplar-watch = "exemplar.apps.watch.__main__:main"
+exemplar-hook = "exemplar.apps.hook.__main__:main"
+exemplar-stats = "exemplar.apps.stats.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/exemplar"]
+
+
+# ---------------------------------------------------------------------------
+# ruff -- formatter AND linter. Replaces black, flake8, isort, and pylint.
+# ---------------------------------------------------------------------------
+[tool.ruff]
+target-version = "py313"
+line-length = 88          # black's default; keeps diffs comparable to the repo set
+src = ["src", "tests"]    # so isort knows what "first party" means
+
+# Required for PLR1702 (too-many-nested-blocks), which is the mechanical
+# enforcement of the no-nested-conditionals LAW. Without preview, selecting it
+# silently does nothing -- ruff warns "has no effect because preview is not
+# enabled" and exits 0, which is the failure mode this repo's standard is about.
+preview = true
+
+[tool.ruff.lint]
+# Selected rule families, each with a reason. A bare `select = ["ALL"]` is a
+# trap: it enables rules that contradict each other and rules that fight the
+# formatter, and the noise trains people to add blanket ignores.
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes -- unused imports, undefined names
+    "I",      # isort -- import ordering
+    "N",      # pep8-naming
+    "UP",     # pyupgrade -- keeps syntax current with the 3.13 floor
+    "B",      # flake8-bugbear -- real bug patterns, e.g. mutable default args
+    "A",      # flake8-builtins -- shadowing `id`, `type`, `list`
+    "C4",     # flake8-comprehensions
+    "DTZ",    # flake8-datetimez -- THE naive-datetime family. See below.
+    "T20",    # flake8-print -- no stray print() in library code
+    "SIM",    # flake8-simplify
+    "PTH",    # flake8-use-pathlib -- os.path.join -> Path
+    "RUF",    # ruff's own rules
+    "D",      # pydocstyle -- docstrings are a LAW here, so they are linted
+    "ANN",    # flake8-annotations -- every function fully typed
+    "ASYNC",  # flake8-async -- blocking calls inside async functions
+    "S",      # flake8-bandit -- security patterns
+    "BLE",    # flake8-blind-except -- bare `except:` and `except Exception`
+    # Control-flow shape. Rico's LAW: no nested if/else, no long if/elif chains.
+    # These are the mechanism -- see STANDARDS-python.md "## LAW: flat control
+    # flow". Prose alone does not hold; PLR1702 is what actually refuses.
+    #
+    # Named INDIVIDUALLY, not as the whole `PL` family. Selecting `PL` wholesale
+    # drags in ~40 unrelated pylint rules (magic-value-comparison,
+    # too-many-arguments, import-outside-top-level, ...) that have nothing to do
+    # with control flow. Ten of them fired on this repo's own correct code. That
+    # is how a rule set becomes noise and people start writing blanket ignores --
+    # the failure this document's thesis is about. Add a rule when it is wanted,
+    # not because it shares a prefix.
+    "too-many-nested-blocks",  # too-many-nested-blocks -- THE nested-if enforcement
+    "too-many-branches",  # too-many-branches -- the long if/elif chain
+    "complex-structure",     # mccabe complexity -- many small branches, collectively untestable
+    "RET",      # flake8-return -- else-after-return, the usual cause of nesting
+    "TRY",      # tryceratops -- try/except antipatterns
+]
+
+ignore = [
+    # The formatter owns line wrapping. Leaving E501 on makes ruff format and
+    # ruff check disagree about the same line, which is unwinnable.
+    "line-too-long",
+    # D203/D213 conflict with D211/D212 -- pydocstyle ships mutually exclusive
+    # pairs and you must pick one side. We take "no blank line before class
+    # docstring" and "summary on the first line".
+    "incorrect-blank-line-before-class",
+    "multi-line-summary-second-line",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests may assert on private helpers and do not need module docstrings for
+# every fixture file. They still require type annotations -- an untyped test is
+# where a wrong-shaped mock hides.
+"tests/**" = ["undocumented-public-module", "undocumented-public-function", "assert"]   # S101 = assert, which is the point of a test
+"scripts/**" = ["T20"]                   # scripts are CLIs; printing is their job
+
+# test_enforcement.py SHELLS OUT to ruff on purpose -- that is the only way to
+# prove the linter rejects what the standard says it rejects. The command is a
+# fixed list with sys.executable, never a string and never user input, so the
+# injection risk S603/S404 warn about does not exist here.
+"tests/test_enforcement.py" = [
+    "undocumented-public-module", "undocumented-public-function", "assert",
+    "suspicious-subprocess-import",         # S404
+    "subprocess-without-shell-equals-true", # S603
+]
+
+# test_datetime_helpers.py constructs NAIVE datetimes deliberately: they are the
+# inputs that prove ensure_aware() attaches a timezone. Banning them here would
+# make the timezone rule untestable, which is how a rule stops being verified.
+"tests/test_datetime_helpers.py" = [
+    "undocumented-public-module", "undocumented-public-function", "assert",
+    "call-datetime-without-tzinfo",         # DTZ001
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.pylint]
+# NESTING LAW. ruff's default is 5, which permits exactly the pyramid Rico bans.
+#
+# Set to 3, not 2, and the reason matters: PLR1702 counts EVERY block type, not
+# just conditionals. A legitimate `try:` -> `async for` -> `with` is three levels
+# deep and contains no branching at all (see utils/http.py's tenacity loop --
+# that shape is the library's required API, measured at 3 on 2026-07-30). A limit
+# of 2 would ban correct structural code and train people to add noqa, which is
+# how a rule stops meaning anything.
+#
+# 3 still refuses `if` inside `if` inside `if`, which is the actual target.
+max-nested-blocks = 3
+
+# Branch-count ceiling per function. A function with 13+ branches is the long
+# if/elif chain the LAW replaces with dict dispatch or match.
+max-branches = 12
+
+[tool.ruff.lint.mccabe]
+# Total cyclomatic complexity. Catches the case max-branches misses: many small
+# conditionals that individually look fine and collectively make a function
+# untestable -- every branch is an input/output pair that needs a test.
+max-complexity = 10
+
+[tool.ruff.lint.flake8-annotations]
+# `-> None` on every function including __init__. Omitting it is how a function
+# that quietly returns something ends up undocumented.
+mypy-init-return = false
+suppress-none-returning = false
+
+
+# ---------------------------------------------------------------------------
+# mypy -- strict. See _DOCS/STANDARDS-python.md ## Typing.
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.13"
+strict = true
+
+# Beyond strict: these catch code that is dead or silently ignored.
+warn_unreachable = true
+warn_unused_configs = true
+warn_redundant_casts = true
+
+# Force every `# type: ignore` to name the error it silences, so a stale one
+# becomes an error instead of quietly covering a new problem.
+enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
+
+# Paths, not the whole tree. Verify this matches the real package name -- a hook
+# copied between repos will typecheck a directory that does not exist and pass
+# every time. b1x-message-coordinator's pre-commit runs mypy against
+# `src/b1x_telegram_listener/`, which is not the package in that repo, so that
+# check has never examined a file.
+files = ["src/exemplar", "tests"]
+
+# NO blanket ignore_missing_imports. When a dependency genuinely ships no stubs,
+# add a narrow per-module override here naming that package and why. There are
+# none right now, and that is the intended steady state.
+
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+# `auto` means async tests need no per-test decorator. Without it, an async test
+# missing its marker is COLLECTED, SKIPPED, and reported green -- a test that
+# never ran and never said so.
+asyncio_mode = "auto"
+
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+# -ra shows the reason for every non-passing outcome, including skips. A silent
+# skip is the most common way a suite reports success while proving nothing.
+addopts = "-ra --strict-markers --strict-config"
+
+# NO coverage threshold. Deliberate: see _DOCS/STANDARDS-python.md ## Testing.
+# A percentage is satisfiable without asserting anything that matters.

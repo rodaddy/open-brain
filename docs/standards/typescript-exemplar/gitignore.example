@@ -1,0 +1,13 @@
+node_modules/
+dist/
+coverage/
+data/
+logs/
+*.tsbuildinfo
+
+# Secrets: everything EXCEPT the example and the readme, same deny-with-
+# exceptions shape as the Python exemplar and the qmd allowlist.
+secrets/*
+!secrets/*.example.json
+!secrets/README.md
+!secrets/.gitkeep

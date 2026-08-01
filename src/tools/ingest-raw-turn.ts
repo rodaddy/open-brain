@@ -26,7 +26,24 @@ import type { ToolDeps } from "./index.ts";
  */
 
 const MAX_BATCH = 100;
-const MAX_CONTENT_CHARS = 200_000;
+
+// NO CONTENT CEILING. `content` was `z.string().max(200_000)`, which REJECTED an
+// oversized turn outright -- losing 100% of it rather than the overflow, and
+// (because the client mirrors this check and fails the batch closed) taking up
+// to 99 good turns with it.
+//
+// Never fired in practice: measured 2026-07-30, 31,045 stored turns, largest
+// 51,283 chars, zero above 100k. But the ceiling was sized for TEXT. Change the
+// encoder to take images or video and 200k stops being a generous bound and
+// starts being a data-loss bug on ordinary input.
+//
+// Size is not this layer's decision. Postgres `text` has no practical limit,
+// and chunking (src/chunking.ts) already exists for embedding oversized content
+// while the full text stays whole on the parent row.
+//
+// Operator, 2026-07-30: "It's my decision if I want this Open Brain database to
+// be 17,000 gigs because all of the data is there... If I ever do ask you to
+// [make things smaller], ask me if I turned crazy."
 
 type IngestErrorClass = "retryable_outage" | "auth_denied" | "scope_validation";
 
@@ -89,7 +106,7 @@ const rawTurnSchema = z.object({
   turn_index: z.number().int().min(0),
   role: z.enum(["user", "assistant", "tool"]),
   is_human_prompt: z.boolean().optional(),
-  content: z.string().max(MAX_CONTENT_CHARS),
+  content: z.string(),
   runtime: z.string().trim().min(1).max(100).nullish(),
   token_estimate: z.number().int().min(0).nullish(),
   occurred_at: z.string().datetime({ offset: true }).nullish(),
@@ -253,7 +270,10 @@ export function registerIngestRawTurn(server: McpServer, deps: ToolDeps): void {
 
         // valid_at mirrors occurred_at: a turn became true when it happened.
         // invalid_at/expired_at stay NULL until something retracts it.
-        const { rows } = await deps.pool.query(
+        const { rows } = await deps.pool.query<{
+          id: string;
+          session_ref: string | null;
+        }>(
           `INSERT INTO ob_raw_turns
              (namespace, turn_uuid, parent_turn_uuid, logical_parent_turn_uuid,
               prompt_id, session_ref, repo, git_branch, turn_index, role,
@@ -267,12 +287,89 @@ export function registerIngestRawTurn(server: McpServer, deps: ToolDeps): void {
                     content_hash, runtime, token_estimate, metadata,
                     redaction_applied, created_by, occurred_at)
            ON CONFLICT (namespace, turn_uuid) DO NOTHING
-           RETURNING id`,
+           RETURNING id, session_ref`,
           values,
         );
 
         const ingested = rows.length;
         const duplicates = kept.length - ingested;
+
+        // Assign session_seq server-side (migration 036). The client's
+        // turn_index cannot be trusted for ordering: it is a per-invocation
+        // counter, so every session in the corpus carried only 0..7 regardless
+        // of length. A client cannot fix this -- it sees one batch, retries,
+        // resumes, and several runtimes write the same session -- so the server
+        // owns the invariant its own schema declares.
+        //
+        // Recomputed for the whole affected session rather than appended to.
+        // Batches arrive out of order (spool replay, retries), so a late turn
+        // must be able to land in the MIDDLE of the sequence; appending would
+        // order by arrival instead of by when the turn happened. The
+        // (session_ref, occurred_at) pair is unique across the live corpus, and
+        // id breaks any tie deterministically.
+        //
+        // Failure here is logged, not fatal: the turn is already durably
+        // stored, and a NULL session_seq is repairable by re-running this
+        // statement. Losing captured conversation to a numbering error would be
+        // the far worse outcome.
+        //
+        // Affected sessions are derived from the whole validated `kept` payload,
+        // NOT only from the INSERT's RETURNING rows. If a prior call stored the
+        // turns but its seq recompute failed transiently, those rows carry
+        // session_seq = NULL; a replay of the same turn_uuids returns zero
+        // RETURNING rows (ON CONFLICT DO NOTHING), so keying off RETURNING alone
+        // would skip the recompute and the NULLs would never repair. Keying off
+        // the payload's session_refs makes an ordinary replay the repair path
+        // the comment above promises. The recompute is idempotent
+        // (`session_seq IS DISTINCT FROM o.seq` updates only rows that change),
+        // so re-running it for an already-numbered session is a no-op.
+        const touchedSessions = [
+          ...new Set(
+            kept
+              .map((p) => p.turn.session_ref ?? null)
+              .filter((s): s is string => s !== null),
+          ),
+        ];
+        if (touchedSessions.length > 0) {
+          try {
+            // Scoped to `ns`. session_ref is client-supplied and is NOT unique
+            // across namespaces -- the only uniqueness on the table is
+            // (namespace, turn_uuid) (migration 032). Two namespaces can carry
+            // the same session_ref, so a recompute partitioned by session_ref
+            // alone would renumber another namespace's rows by interleaving
+            // this write's occurred_at values into their ordering. Adding
+            // `namespace = $2` to both the ordering window's source and the
+            // UPDATE keeps each namespace's session_seq computed only from its
+            // own turns, which is what the per-namespace isolation boundary
+            // requires (AGENTS.md: any ID-based mutation carries an
+            // auth-derived namespace predicate).
+            await deps.pool.query(
+              `WITH ordered AS (
+                 SELECT id,
+                        row_number() OVER (
+                          PARTITION BY session_ref
+                          ORDER BY occurred_at, id
+                        ) - 1 AS seq
+                   FROM ob_raw_turns
+                  WHERE namespace = $2
+                    AND session_ref = ANY($1::text[])
+               )
+               UPDATE ob_raw_turns t
+                  SET session_seq = o.seq
+                 FROM ordered o
+                WHERE t.id = o.id
+                  AND t.namespace = $2
+                  AND t.session_seq IS DISTINCT FROM o.seq`,
+              [touchedSessions, ns],
+            );
+          } catch (seqErr) {
+            logger.warn("ingest_raw_turn_seq_failed", {
+              namespace: ns,
+              sessions: touchedSessions.length,
+              error: seqErr instanceof Error ? seqErr.message : String(seqErr),
+            });
+          }
+        }
 
         // Content-free telemetry: counts only, never turn text.
         logger.info("ingest_raw_turn_ok", {

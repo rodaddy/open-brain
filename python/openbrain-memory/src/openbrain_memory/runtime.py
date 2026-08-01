@@ -490,7 +490,19 @@ class FirstClassMemoryRuntime:
                     delegate_namespace=False,
                 )
             except Exception as error:
+                # Threaded into the router, which surfaces it on the first call
+                # as a RuntimeCallError -- so it is not lost. It is logged here
+                # anyway because this is the moment the process stops having a
+                # direct client at all: without a line, "running against the
+                # real service" and "silently on the fallback for the rest of
+                # this process" look identical at startup. Error class only; the
+                # message can carry the base URL and its credentials.
                 setup_error = error
+                logger.warning(
+                    "Direct Open Brain client construction failed; "
+                    "this lane will use fallback or spool only",
+                    extra={"error_class": type(error).__name__},
+                )
         fallback = None
         if config.fallback_enabled:
             fallback = Mcp2CliFallback(
@@ -1179,8 +1191,17 @@ def _distilled_content(value: str, name: str) -> str:
 # Mirrors the server's ingest_raw_turn Zod schema. Kept in step deliberately:
 # a client that ships a turn the server will reject wastes a round trip and
 # turns a structural bug into a runtime error the hook has to interpret.
+#
+# The content check is GONE, matching src/tools/ingest-raw-turn.ts:30 where the
+# server's was removed. That removal note names this client mirror as half the
+# defect: an oversized turn lost all of itself rather than the excess, and
+# "because the client mirrors this check and fails the batch closed" it took up
+# to 99 good turns with it. Deleting it server-side alone left that intact --
+# this side still refused writes the server would now accept.
+#
+# The batch count stays: the server enforces the same one, and it turns nothing
+# away -- a caller sends more turns across more calls.
 _MAX_RAW_TURN_BATCH = 100
-_MAX_RAW_TURN_CHARS = 200_000
 _RAW_TURN_ROLES = frozenset({"user", "assistant", "tool"})
 _RAW_TURN_TEXT_FIELDS = {
     "turn_uuid": 200,
@@ -1213,11 +1234,6 @@ def _raw_turn(turn: Any, index: int) -> dict[str, Any]:
     content = turn.get("content")
     if not isinstance(content, str):
         raise ValueError(f"{where}.content must be a string")
-    if len(content) > _MAX_RAW_TURN_CHARS:
-        raise ValueError(
-            f"{where}.content exceeds {_MAX_RAW_TURN_CHARS} characters"
-        )
-
     turn_index = turn.get("turn_index")
     if not isinstance(turn_index, int) or isinstance(turn_index, bool):
         raise ValueError(f"{where}.turn_index must be an integer")

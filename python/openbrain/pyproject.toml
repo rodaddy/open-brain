@@ -1,0 +1,287 @@
+[project]
+name = "openbrain"
+version = "0.1.0"
+description = "Open Brain: the shared core, configuration, models, and capability modules that every Open Brain Python process is built from."
+# The package README is GENERATED from the src/openbrain/__init__.py docstring
+# by scripts/pytools/generate_package_docs.py. Pointing at the generated file
+# rather than a hand-written one at the package root keeps a single source:
+# a second README here would drift from the docstring immediately, and nothing
+# would detect it.
+readme = "src/openbrain/README.md"
+requires-python = ">=3.13"
+dependencies = [
+    # Pydantic owns configuration and models: one validated, typed object rather
+    # than a dict passed around. `docs/CODING_STANDARDS.md` section 3.
+    #
+    # This is a NEW dependency for this repo -- neither openbrain-memory nor
+    # openbrain-provider uses it; both hand-roll frozen dataclasses with
+    # __post_init__ validation. That works, but every package re-implements the
+    # coercion and error-message logic, which is the duplication this tree
+    # exists to stop.
+    "pydantic>=2.9",
+    # BaseSettings moved out of pydantic core in v2 and is its own package.
+    "pydantic-settings>=2.5",
+    # loguru, matching openbrain-provider. The shared rtech-obs package
+    # implements the same envelope and would be the right dependency, but
+    # rtech-standards is private and this repo's CI passes no token. See
+    # openbrain-provider/pyproject.toml for the full note.
+    "loguru>=0.7",
+    # The SIBLING that owns every write this package makes. Declared as a runtime
+    # dependency starting with step 8 (`_plans/python-port-sequence.md`): the
+    # hook entrypoint (`apps/hooks/session`) is the first place this package
+    # imports the sibling to build a real client and send a turn. Before it, the
+    # only reference was a doc/test cross-check of the shared vocabulary; now it
+    # is a live import, so the dependency is real and is stated here. Resolved
+    # from the workspace, not PyPI -- see `[tool.uv.sources]`.
+    "openbrain-memory",
+]
+
+# The console scripts. Step 10 of `_plans/python-port-sequence.md`: declare an
+# entry point ONLY once its target exists, because a declared entry point whose
+# module does not exist still installs an executable shim into .venv/bin and dies
+# with ModuleNotFoundError when anything runs it -- and no lint, type, or test
+# gate inspects entry-point targets, so a broken script would ship green. The
+# same trap as a mypy path that does not resolve.
+#
+# So a script is declared only for the hook entrypoints that do REAL work:
+# `stop` (delivers the main transcript), `subagent-stop` (the same spine over the
+# subagent transcript), `session-end` (releases the server session slot),
+# `post-compact` (records the compaction summary the Stop spine drops --
+# `_plans/rewrite-gotchas.md`), and `session-start` (injects the CANON pack at
+# session open -- the operator ruling 2026-08-01 that superseded its "stays stub"
+# row, so the module now does real work and earns a script). The remaining event
+# modules are explicit stubs whose capabilities are undecided, and `dispatch.py`
+# is a table with no stdin-reading entrypoint of its own -- so there is nothing
+# else to point a real, non-shim script at yet. A stub, or any dispatch
+# front-door, gets a script when it does real work.
+#
+# `test_console_scripts.py` is the gate the comment above says does not exist by
+# default: it parses this table and imports every declared `module:attr`, so a
+# target that stops resolving fails pytest instead of shipping a dead shim.
+#
+# Harness wiring (settings.json pointing Claude Code's hooks at these scripts)
+# is #420.
+[project.scripts]
+openbrain-capture-stop = "openbrain.apps.hooks.stop:main"
+openbrain-capture-subagent-stop = "openbrain.apps.hooks.subagent_stop:main"
+openbrain-session-end = "openbrain.apps.hooks.session_end:main"
+openbrain-post-compact = "openbrain.apps.hooks.post_compact:main"
+openbrain-session-start = "openbrain.apps.hooks.session_start:main"
+# The bulk ingester (#454): the second application, operator-run over a giant
+# session file. Its module does REAL work -- stage a whole file, yield every
+# turn to the raw lane -- so it earns a script by the same rule the hook
+# entrypoints do (`_plans/python-port-sequence.md` step 10).
+openbrain-bulk-ingest = "openbrain.apps.bulk.run:main"
+
+# Resolve the sibling from this uv workspace rather than PyPI, matching
+# openbrain-provider. The editable install is what makes the live gate's
+# `openbrain_memory` import work from this member's environment.
+[tool.uv.sources]
+openbrain-memory = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "mypy>=1.10",
+    "pytest>=8.0",
+    # Async tests, per _DOCS/STANDARDS-python.md:1036. `asyncio_mode`
+    # below is set to "auto" as that standard requires, so an `async def test_`
+    # runs without a per-test decorator -- and, more to the point, a coroutine
+    # test cannot be silently collected-and-never-awaited, which passes while
+    # proving nothing.
+    "pytest-asyncio>=0.24",
+    "ruff>=0.8",
+    # The live gate's row verification: after a write goes through the real
+    # client and service, the test reads the row straight out of Postgres.
+    # Verifying through the same client that wrote would prove the client
+    # agrees with itself, not that the data survived.
+    "psycopg[binary]>=3.2",
+]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+warn_unused_ignores = true
+
+[tool.ruff]
+target-version = "py313"
+line-length = 88
+src = ["src", "tests"]    # so isort knows what "first party" means
+
+# REQUIRED for PLR1702. Without it, ruff prints "Selection PLR1702 has no effect
+# because preview is not enabled" and EXITS 0 -- the rule sits in `select`, the
+# config looks right, and the nesting law never runs. Verified against
+# docs/standards/python-exemplar/pyproject.toml:134.
+#
+# Same defect class as a mypy path that resolves to nothing, and as the qmd
+# index enumerating directories that no longer describe the tree: a check that
+# reports success while examining nothing. Do not remove this line to quiet a
+# warning.
+preview = true
+
+[tool.ruff.lint]
+# Named rule families, each with a reason. `select = ["ALL"]` is a trap -- it
+# enables rules that contradict each other and rules that fight the formatter,
+# and the noise trains people to write blanket ignores.
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes -- unused imports, undefined names
+    "I",      # isort -- import ordering
+    "N",      # pep8-naming
+    "UP",     # pyupgrade -- keeps syntax current with the 3.13 floor
+    "B",      # flake8-bugbear -- real bug patterns, e.g. mutable default args
+    "A",      # flake8-builtins -- shadowing `id`, `type`, `list`
+    "C4",     # flake8-comprehensions
+    "DTZ",    # flake8-datetimez -- naive datetimes
+    "T20",    # flake8-print -- no stray print() in library code
+    "SIM",    # flake8-simplify
+    # ABSOLUTE-IMPORTS LAW (_DOCS/STANDARDS-python.md ## Typing: "ABSOLUTE imports
+    # everywhere, including siblings and __init__.py"). TID252 is the mechanism --
+    # it refuses `from .x`/`from ..x` so the rule fails ruff instead of relying on
+    # review. Selected as the rule code, not the "TID" family, to keep only the
+    # banned-relative-import check and not TID251's banned-api config.
+    "TID252", # flake8-tidy-imports -- no relative imports
+    # D = pydocstyle. Module (D100), package (D104), and class/function
+    # (D101-D103) docstrings are gate failures, not warnings. The package rule
+    # is what the docs generator depends on:
+    # `scripts/pytools/generate_package_docs.py` reads the __init__.py
+    # docstring, so an absent one has to fail here too.
+    "D",
+    # Control-flow shape. The LAW is "flat control flow"
+    # (_DOCS/STANDARDS-python.md). Prose does not hold; PLR1702 is what
+    # actually refuses.
+    #
+    # Named INDIVIDUALLY, not as the `PL` family. Selecting `PL` wholesale drags
+    # in ~40 unrelated pylint rules (magic-value-comparison, too-many-arguments,
+    # import-outside-top-level, ...) with nothing to do with control flow. Ten
+    # of them fired on the exemplar's own correct code. That is how a rule set
+    # becomes noise and people start writing blanket ignores. Add a rule when it
+    # is wanted, not because it shares a prefix.
+    "PLR1702",  # too-many-nested-blocks -- THE nested-block enforcement
+    "PLR0912",  # too-many-branches -- the long if/elif chain
+    "C901",     # mccabe complexity -- many small branches, collectively untestable
+    "RET",      # flake8-return -- else-after-return, the usual cause of nesting
+    "TRY",      # tryceratops -- try/except antipatterns
+    # Size and comment hygiene. The size LAW is "tight, single-purpose code"
+    # (_DOCS/STANDARDS-python.md ## LAW: tight, single-purpose code). ruff has no
+    # line-count rule at all (there is no too-many-lines/max-lines in
+    # `ruff rule --all`), so these are the FUNCTION-size and dead-comment PROXIES
+    # ruff can express; the file-level 500-code-line ceiling has no mechanism
+    # here yet -- see the note by [tool.ruff.lint.pylint].
+    "PLR0915",  # too-many-statements -- function-size proxy (STATEMENTS, not lines)
+    "PLR0913",  # too-many-arguments -- the 4-param ceiling, expressed as 5 (see below)
+    "ERA001",   # eradicate -- commented-out code. Select ERA001, NOT "eradicate":
+                # the family string is an unknown selector that ruff SKIPS at exit 0.
+    "PLR2044",  # empty comment -- the bare `#` half of the fluff-comment rule
+    # Named exceptions and no secrets in source. Both are in the standard's
+    # pre-commit enforcement table (_DOCS/STANDARDS-python.md ## What pre-commit
+    # enforces).
+    "BLE",      # flake8-blind-except -- bare `except:` and `except Exception`
+    "S105",     # hardcoded password string
+    "S106",     # hardcoded password as an argument
+    "S107",     # hardcoded password as a default
+    "T10",      # flake8-debugger -- no pdb/ipdb/set_trace left in source
+]
+
+ignore = [
+    # The formatter owns line wrapping. Leaving E501 on makes `ruff format` and
+    # `ruff check` disagree about the same line, which is unwinnable.
+    "E501",
+    # D203/D213 conflict with D211/D212 -- pydocstyle ships mutually exclusive
+    # pairs and one side must be chosen. Taking "no blank line before class
+    # docstring" and "summary on the first line".
+    "D203",
+    "D213",
+]
+
+[tool.ruff.lint.flake8-tidy-imports]
+# TID252 without this bans only `from ..`/parent imports (ruff's default is
+# "parents"), so a SIBLING `from .config import X` slips through -- and the
+# absolute-imports LAW is "absolute everywhere, INCLUDING siblings"
+# (_DOCS/STANDARDS-python.md ## Typing). "all" is what makes TID252 refuse every
+# relative import; verified 2026-07-31 that "parents" left `from .config` clean
+# and "all" flags it.
+ban-relative-imports = "all"
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.pylint]
+# NESTING LAW -- how deeply blocks may be indented before ruff refuses. ruff's
+# default is 5, which permits exactly the arrow-shaped pyramid the standard bans.
+#
+# 3, not 2, and the reason matters: PLR1702 counts EVERY block type, not just
+# conditionals. A legitimate `try:` -> `async for` -> `with` is three deep and
+# contains no branching at all. Requiring 2 would refuse correct structural code
+# and train people to add noqa, which is how a rule stops meaning anything.
+#
+# 3 still refuses `if` inside `if` inside `if`, which is the actual target.
+max-nested-blocks = 3
+
+# FUNCTION-SIZE and PARAM caps, mirroring the standard's table
+# (_DOCS/STANDARDS-python.md ## LAW: tight, single-purpose code).
+#
+# max-statements = 25 is the PLR0915 leg. It is NOT the 50-code-line ceiling --
+# ruff has no line count. Statements run ~1/3 of code lines here, so 50 would map
+# to ~150 code lines and never fire; 25 sits above the busiest legitimate
+# function the standard measured (18 statements) and still refuses genuine
+# pile-up. The file-level 500-code-line ceiling and the true 50-code-line
+# per-function ceiling have NO mechanism in this repo: the standard's own
+# enforcer (scripts/dev/check_code_size.py) is not shipped by the python-exemplar
+# yet, and this repo does not hand-roll a substitute. When the standard ships the
+# script, wire it here; until then PLR0915/PLR0913 are the closest available
+# proxies and the code-line ceilings are review calls.
+max-statements = 25
+
+# max-args = 5 is PLR0913. ruff excludes self/cls AND **kwargs, so 5 = five real
+# positional/keyword params -- the standard's 4-param ceiling expressed in ruff's
+# counting convention (its worked example, pydantic's 5-param
+# settings_customise_sources, sits exactly at the line and passes).
+max-args = 5
+
+# max-branches = 12 (PLR0912) and max-complexity = 10 (mccabe/C901, below) are
+# ruff's defaults, set explicitly so a future ruff default change cannot silently
+# loosen the flat-control-flow LAW.
+max-branches = 12
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.per-file-ignores]
+# Tests document themselves through their names; a docstring on every test
+# function is noise that trains people to write empty ones. D102 covers test
+# methods inside a grouping class, which are the same thing as D103 functions.
+# The grouping CLASS still needs its docstring (D101 stays on): a test class is
+# a claim about a behaviour, and that claim is worth stating.
+"tests/*" = ["D100", "D102", "D103"]
+# Scripts are CLIs; printing is their job.
+"scripts/**" = ["T20"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/openbrain"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+# _DOCS/STANDARDS-python.md:1036. "auto" means an `async def test_`
+# is awaited without a marker. Under the default "strict" mode an unmarked
+# coroutine test is COLLECTED, NOT AWAITED, and reported as passing -- the
+# same defect class as ruff PLR1702 without `preview` and as a mypy path that
+# resolves to nothing: a check that examines nothing reports success.
+asyncio_mode = "auto"
+
+# `live` tests write through the real client into the playground service and
+# read the row back out of the playground database. Deselected by default so
+# `pytest -q` stays in-process; `pytest -m live` runs them, and their fixture
+# FAILS (never skips) when the environment is missing -- the plan's rule that
+# a live gate must not pass having run nothing (_plans/python-port-sequence.md,
+# "The live gate").
+markers = [
+    "live: round-trips through the playground service and database",
+]
+addopts = "-m 'not live'"

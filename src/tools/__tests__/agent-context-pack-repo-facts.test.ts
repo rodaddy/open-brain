@@ -245,7 +245,7 @@ describe("repo_facts budgets, order, and degradation", () => {
       { namespace: "rico", repo: "rodaddy/open-brain", nowMs: NOW },
       {
         query: async () => {
-          throw new Error("statement timeout on 10.71.20.49");
+          throw new Error("statement timeout on db.internal.invalid");
         },
       },
     );
@@ -253,6 +253,6 @@ describe("repo_facts budgets, order, and degradation", () => {
     expect(frag.degradedSources).toEqual([
       { source: "repo_facts", reason: "database_unavailable" },
     ]);
-    expect(JSON.stringify(frag)).not.toContain("10.71.20.49");
+    expect(JSON.stringify(frag)).not.toContain("db.internal.invalid");
   });
 });

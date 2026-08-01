@@ -1,0 +1,10 @@
+{"type":"last-prompt","content":"ignored: no uuid, first-of-file marker"}
+{"type":"mode","mode":"normal"}
+{"type":"permission-mode","permissionMode":"default"}
+{"type":"user","uuid":"op-1","promptSource":"typed","sessionId":"bulk-fixture","cwd":"/repo/bulk","parentUuid":null,"timestamp":"2026-08-01T06:00:00.000Z","message":{"role":"user","content":"port the bulk ingester from the spec"}}
+{"type":"assistant","uuid":"as-1","parentUuid":"op-1","message":{"role":"assistant","content":[{"type":"text","text":"working on it"}]}}
+{"type":"user","uuid":"tr-1","userType":"external","parentUuid":"as-1","message":{"role":"user","content":[{"type":"tool_result","content":"command output that is NOT an operator turn"}]}}
+{"type":"user","uuid":"op-2","promptSource":"queued","sessionId":"bulk-fixture","cwd":"/repo/bulk","parentUuid":"tr-1","timestamp":"2026-08-01T06:01:00.000Z","message":{"role":"user","content":"y"}}
+{"type":"user","uuid":"sys-1","promptSource":"system","sessionId":"bulk-fixture","message":{"role":"user","content":"injected system text the operator never typed"}}
+{"type":"user","uuid":"op-3","promptSource":"typed","sessionId":"bulk-fixture","cwd":"/repo/bulk","parentUuid":"op-2","timestamp":"2026-08-01T06:02:00.000Z","message":{"role":"user","content":"use SQLite staging, not an in-memory list, and yield each turn whole"}}
+{"type":"summary","uuid":"sum-1","isCompactSummary":true,"message":{"role":"assistant","content":"a compaction summary the Stop spine drops"}}

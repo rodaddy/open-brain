@@ -10,6 +10,7 @@ import {
   resetOperatorDoctorCache,
 } from "./operator-doctor.ts";
 import { readNatsRuntimeBoundary } from "./nats-runtime.ts";
+import { addLogSink } from "./logger.ts";
 
 const originalFetch = globalThis.fetch;
 const THIS_FILE = fileURLToPath(import.meta.url);
@@ -402,6 +403,57 @@ describe("operator doctor cache", () => {
 
     expect(probeCycles).toBe(1);
     expect(first).toBe(second);
+  });
+
+  it("logs a build failure at the owning boundary and still re-throws", async () => {
+    // Both consumers -- the REST route in src/index.ts and the MCP tool --
+    // convert this rejection into a deliberately content-free response, so the
+    // reason existed nowhere: a 500 in an access log and nothing else. It is
+    // logged here, once, because the in-flight promise is shared across
+    // concurrent callers.
+    resetOperatorDoctorCache();
+    const lines: Array<Record<string, unknown>> = [];
+    const detach = addLogSink((entry) => lines.push(entry));
+    // Each individual probe inside buildOperatorDoctorStatus catches its own
+    // failure and degrades -- that is deliberate and stays. Reaching the outer
+    // rejection therefore needs a fault OUTSIDE those guards: here the pool's
+    // own count accessor throws, which checkPoolHealth reads before its try.
+    const pool = {
+      get totalCount(): number {
+        throw Object.assign(new Error("pool handle destroyed"), {
+          code: "53300",
+        });
+      },
+      idleCount: 0,
+      waitingCount: 0,
+      query: async () => ({ rows: [{ ok: 1 }] }),
+    } as any;
+    const boundary = readNatsRuntimeBoundary({});
+
+    try {
+      // Two concurrent callers share one in-flight build, so one failure must
+      // produce exactly one line -- not one per waiter.
+      const results = await Promise.allSettled([
+        getOperatorDoctorStatus(pool, boundary),
+        getOperatorDoctorStatus(pool, boundary),
+      ]);
+      // Re-thrown unchanged: callers still decide what the response says.
+      expect(results.every((r) => r.status === "rejected")).toBe(true);
+
+      const failures = lines.filter(
+        (l) => l.message === "doctor_status_build_failed",
+      );
+      expect(failures.length).toBe(1);
+      expect(failures[0]!.level).toBe("error");
+      expect(failures[0]!.error_message).toContain("pool handle destroyed");
+      // The pg SQLSTATE survives to the log, which is the whole point.
+      expect((failures[0]!.driver as Record<string, string>).code).toBe(
+        "53300",
+      );
+    } finally {
+      detach();
+      resetOperatorDoctorCache();
+    }
   });
 
   it("serves cached results within the TTL and rebuilds after expiry", async () => {

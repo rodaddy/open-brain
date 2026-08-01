@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable, Mapping
 from typing import Any, cast
 
@@ -18,14 +19,25 @@ from .runtime import (
     RuntimeScope,
 )
 
+_LOGGER = logging.getLogger(__name__)
+
 MAX_IGNORED_OPTIONAL_KEY_COUNT = 65_535
 IGNORED_OPTIONAL_REQUEST_KEYS_NOTE = "ignored_optional_request_keys"
-MAX_JSON_INPUT_BYTES = 64 * 1024
-# The raw lane ships whole turns; 64 KB bounds a distilled record but would
-# silently refuse a long assistant turn, which is the exact failure full-send
-# exists to remove. The envelope is admitted at the larger bound and the
-# distilled operations keep their own 64 KB ceiling below.
-MAX_INGEST_JSON_INPUT_BYTES = 2 * 1024 * 1024
+# One admission size for EVERY operation.
+#
+# Until 2026-07-30 the distilled verbs -- capture, checkpoint, wrap -- were held
+# to 64 KB while only `ingest` was allowed more. The reasoning for exempting
+# ingest was already written here: 64 KB "would silently refuse a long assistant
+# turn, which is the exact failure full-send exists to remove." That is equally
+# true of a long decision or a long checkpoint, and the refusal was total -- a
+# ValueError loses the whole write, not the excess.
+#
+# This is a stdin READ SIZE, not a rule about what may be remembered. It has to
+# be finite because __main__ reads a fixed number of bytes from a pipe, and it
+# is set far above anything measured: the largest turn in the live clone is
+# 51,283 characters, roughly 1,300x smaller.
+MAX_INGEST_JSON_INPUT_BYTES = 64 * 1024 * 1024
+MAX_JSON_INPUT_BYTES = MAX_INGEST_JSON_INPUT_BYTES
 MAX_JSON_OUTPUT_BYTES = 1_000_000
 MAX_IGNORED_OPTIONAL_KEY_COUNT = 65_535
 IGNORED_OPTIONAL_REQUEST_KEYS_NOTE = "ignored_optional_request_keys"
@@ -123,11 +135,12 @@ def failure_output(operation: str, error: BaseException | str) -> dict[str, Any]
 
 
 def parse_json_input(data: bytes) -> Mapping[str, Any]:
-    """Parse one bounded UTF-8 JSON object.
+    """Parse one UTF-8 JSON envelope.
 
-    The envelope is admitted at the raw-lane ceiling because the operation is
-    not known until it is parsed; the distilled 64 KB bound is then enforced
-    against the decoded operation, so only ``ingest`` may exceed it.
+    EVERY OPERATION IS ADMITTED AT THE SAME SIZE. The distilled verbs used to
+    be held to 64 KB while ``ingest`` was not, so a long decision or checkpoint
+    was refused outright -- losing the whole write rather than any excess --
+    while the identical text went through as a raw turn.
     """
     if len(data) > MAX_INGEST_JSON_INPUT_BYTES:
         raise ValueError(f"JSON input exceeds {MAX_INGEST_JSON_INPUT_BYTES} bytes")
@@ -137,8 +150,13 @@ def parse_json_input(data: bytes) -> Mapping[str, Any]:
         raise ValueError("input must be one UTF-8 JSON object") from error
     if not isinstance(decoded, dict):
         raise ValueError("input must be a JSON object")
-    if decoded.get("operation") != "ingest" and len(data) > MAX_JSON_INPUT_BYTES:
-        raise ValueError(f"JSON input exceeds {MAX_JSON_INPUT_BYTES} bytes")
+    _LOGGER.debug(
+        "cli_input_parsed",
+        extra={
+            "operation": decoded.get("operation"),
+            "input_bytes": len(data),
+        },
+    )
     return cast(Mapping[str, Any], decoded)
 
 

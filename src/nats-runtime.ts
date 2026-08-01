@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { SECTION_NAMES } from "./tools/agent-context-pack.ts";
 import { obContextPackSubject } from "./nats-subjects.ts";
+import { logger } from "./logger.ts";
 
 // ============================================================================
 // CROSS-LANGUAGE WIRE CONTRACT (source of truth for the Python client lane)
@@ -128,7 +129,9 @@ export const requestPayloadSchema = z.object({
   namespace: z.string().min(1).max(500).optional(),
 });
 
-export type NatsContextPackRequestPayload = z.infer<typeof requestPayloadSchema>;
+export type NatsContextPackRequestPayload = z.infer<
+  typeof requestPayloadSchema
+>;
 
 // ---------------------------------------------------------------------------
 // Fleet Envelope — TS mirror of fleet_nats.envelope.Envelope.
@@ -266,10 +269,7 @@ export function envelopeFromBytes(
   let payload: Record<string, unknown>;
   if (rawPayload === undefined || rawPayload === null) {
     payload = {};
-  } else if (
-    typeof rawPayload === "object" &&
-    !Array.isArray(rawPayload)
-  ) {
+  } else if (typeof rawPayload === "object" && !Array.isArray(rawPayload)) {
     payload = rawPayload as Record<string, unknown>;
   } else {
     throw new EnvelopeError(
@@ -421,6 +421,12 @@ export function summarizeNatsUrlForLog(url: string | null): NatsUrlLogSummary {
       local: LOCAL_NATS_HOSTS.has(normalizeNatsHostname(parsed.hostname)),
     };
   } catch {
+    // Deliberately unlogged: this function exists to make a possibly
+    // credential-bearing URL safe to log, so reporting its own failure is the
+    // one place that could leak the very string being sanitized. The returned
+    // shape is already the honest answer -- null protocol and null locality
+    // mean "unknown", not "fine" -- and `contains_credentials` still errs
+    // toward true on a bare `@`.
     return {
       configured: true,
       protocol: null,
@@ -437,9 +443,21 @@ function isNatsUrlAllowedForRuntime(
   if (!url) return false;
   try {
     const parsed = new URL(url);
-    if (LOCAL_NATS_HOSTS.has(normalizeNatsHostname(parsed.hostname))) return true;
-    return env.OPENBRAIN_NATS_ALLOW_INSECURE_REMOTE?.trim().toLowerCase() === "true";
-  } catch {
+    if (LOCAL_NATS_HOSTS.has(normalizeNatsHostname(parsed.hostname)))
+      return true;
+    return (
+      env.OPENBRAIN_NATS_ALLOW_INSECURE_REMOTE?.trim().toLowerCase() === "true"
+    );
+  } catch (error) {
+    // Fail closed, per docs/sme/security.md:285 -- an auth-bearing plaintext
+    // transport allows only local endpoints unless the remote override is
+    // explicitly set. But a MALFORMED NATS_URL and a deliberately remote one
+    // both produced this same silent "not available", so a typo in the broker
+    // URL was indistinguishable from a configuration choice. The error class
+    // only: the URL may carry credentials and is never logged.
+    logger.warn("nats_url_unparseable", {
+      error_name: error instanceof Error ? error.name : typeof error,
+    });
     return false;
   }
 }
@@ -476,9 +494,7 @@ export function readNatsRuntimeBoundary(
   env: NodeJS.ProcessEnv,
 ): NatsRuntimeBoundary {
   const requestedTransport =
-    env.OPENBRAIN_TRANSPORT?.trim().toLowerCase() === "nats"
-      ? "nats"
-      : "http";
+    env.OPENBRAIN_TRANSPORT?.trim().toLowerCase() === "nats" ? "nats" : "http";
   const url = trimEnv(env.OPENBRAIN_NATS_URL);
   const bridgeEnabled =
     env.OPENBRAIN_NATS_ENABLE_BRIDGE?.trim().toLowerCase() === "true";
@@ -494,7 +510,8 @@ export function readNatsRuntimeBoundary(
     env.OPENBRAIN_NATS_REQUIRE_AUTH?.trim().toLowerCase() === "true";
   const allowNamespaceOverride =
     !requireAuth &&
-    env.OPENBRAIN_NATS_ALLOW_NAMESPACE_OVERRIDE?.trim().toLowerCase() !== "false";
+    env.OPENBRAIN_NATS_ALLOW_NAMESPACE_OVERRIDE?.trim().toLowerCase() !==
+      "false";
 
   return {
     requested_transport: requestedTransport,
@@ -503,7 +520,8 @@ export function readNatsRuntimeBoundary(
       availability: runtimeAvailable ? "available" : "not_runtime_available",
       url,
       context_pack_subject: resolveContextPackSubject(env),
-      fallback_http: env.OPENBRAIN_NATS_FALLBACK_HTTP?.trim().toLowerCase() !== "false",
+      fallback_http:
+        env.OPENBRAIN_NATS_FALLBACK_HTTP?.trim().toLowerCase() !== "false",
       require_auth: requireAuth,
       allow_namespace_override: allowNamespaceOverride,
     },
@@ -515,11 +533,15 @@ export function planNatsContextPackBridge(
   input: NatsBridgePlanInput,
 ): NatsBridgePlan {
   if (boundary.nats.availability !== "not_runtime_available") {
-    throw new Error("NATS runtime is available; HTTP/MCP fallback plan is not used");
+    throw new Error(
+      "NATS runtime is available; HTTP/MCP fallback plan is not used",
+    );
   }
 
   if (!boundary.nats.fallback_http) {
-    throw new Error("NATS runtime is unavailable and HTTP/MCP fallback is disabled");
+    throw new Error(
+      "NATS runtime is unavailable and HTTP/MCP fallback is disabled",
+    );
   }
 
   if (input.subject !== boundary.nats.context_pack_subject) {

@@ -14,6 +14,8 @@ import {
 import { checkPoolHealth } from "./db/pool.ts";
 import { readMcpAuditConfig } from "./audit-log.ts";
 import { resolveQmdPath } from "./qmd-path.ts";
+import { logger } from "./logger.ts";
+import { describeError } from "./observability/index.ts";
 import type { NatsBridgeHealth } from "./nats-bridge.ts";
 import type { NatsRuntimeBoundary } from "./nats-runtime.ts";
 import { isRequestedTransportDegraded } from "./nats-runtime.ts";
@@ -43,8 +45,15 @@ async function readServiceVersion(): Promise<string> {
       typeof pkg.version === "string" && pkg.version.length > 0
         ? pkg.version
         : (process.env.npm_package_version ?? "unknown");
-  } catch {
+  } catch (error) {
+    // Falling back to the env var is fine; reporting "unknown" as if it were
+    // the answer is not. A doctor that cannot read its own package.json is
+    // telling the operator something about its deployment.
     cachedServiceVersion = process.env.npm_package_version ?? "unknown";
+    logger.warn("doctor_service_version_unreadable", {
+      fallback: cachedServiceVersion,
+      ...describeError(error),
+    });
   }
   return cachedServiceVersion;
 }
@@ -133,8 +142,12 @@ async function withTimeout<T>(
 ): Promise<T> {
   // Absorb late rejections: if the timeout wins the race, a subsequent
   // rejection of the abandoned task must not surface as an unhandled
-  // rejection.
-  task.catch(() => {});
+  // rejection. Absorbing it is right; discarding it was not -- a probe that
+  // always loses the race and always rejects reported its fallback forever
+  // with nothing anywhere saying why.
+  task.catch((error: unknown) => {
+    logger.debug("doctor_probe_late_rejection", describeError(error));
+  });
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
@@ -148,25 +161,68 @@ async function withTimeout<T>(
   }
 }
 
-async function probeUrl(url: string, headers: Record<string, string>): Promise<boolean> {
+/**
+ * Is an HTTP endpoint answering OK? Exported because `/health` in `src/index.ts`
+ * asks the same question of the same provider and had its own byte-identical
+ * private copy -- including the bare `catch { return false }` this one no longer
+ * has. A REST sibling drifting from the module that owns the logic is the exact
+ * shape of the PR #277 failure recorded in docs/sme/correctness.md:475, so the
+ * two call sites now share one implementation instead of two.
+ *
+ * Reports only a boolean by design; which of DNS failure, refused connection,
+ * or timeout it was goes to the log, because that is the whole diagnosis.
+ *
+ * `timeoutMs` is a parameter rather than a shared constant because the two
+ * callers genuinely differ and neither should silently inherit the other's
+ * value: the doctor allows 2s for an optional-dependency probe, `/health`
+ * allowed 3s. Sharing the implementation must not quietly change either one.
+ */
+export async function probeUrl(
+  url: string,
+  headers: Record<string, string>,
+  timeoutMs = OPTIONAL_TIMEOUT_MS,
+): Promise<boolean> {
   try {
     const resp = await fetch(url, {
       headers,
-      signal: AbortSignal.timeout(OPTIONAL_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
+    if (!resp.ok) {
+      // A reachable endpoint answering 401 or 503 is a different problem from
+      // an unreachable one, and `false` says neither.
+      logger.debug("doctor_probe_not_ok", {
+        status: resp.status,
+        timeout_ms: timeoutMs,
+      });
+    }
     return resp.ok;
-  } catch {
+  } catch (error) {
+    // DNS failure, connection refused, or the timeout firing. The caller gets
+    // only a boolean by design; which of the three it was belongs in the log,
+    // because that is the whole diagnosis.
+    logger.debug("doctor_probe_failed", {
+      timeout_ms: timeoutMs,
+      ...describeError(error),
+    });
     return false;
   }
 }
 
-async function readMigrationStatus(pool: pg.Pool): Promise<OperatorDoctorStatus["migrations"]> {
+async function readMigrationStatus(
+  pool: pg.Pool,
+): Promise<OperatorDoctorStatus["migrations"]> {
   let files: string[];
   try {
-    files = (await readdir(MIGRATIONS_DIR)).filter((f) => f.endsWith(".sql")).sort();
-  } catch {
+    files = (await readdir(MIGRATIONS_DIR))
+      .filter((f) => f.endsWith(".sql"))
+      .sort();
+  } catch (error) {
     // Never let a filesystem error propagate: thrown messages can carry raw
-    // paths into MCP tool error text or Express error pages.
+    // paths into MCP tool error text or Express error pages. That rule governs
+    // the *response*; the log is where the operator is allowed to learn that
+    // the migrations directory is missing from the deployment entirely, which
+    // "status: unknown" on its own never said.
+    logger.error("doctor_migrations_dir_unreadable", describeError(error));
     return {
       status: "unknown",
       applied_count: null,
@@ -192,7 +248,12 @@ async function readMigrationStatus(pool: pg.Pool): Promise<OperatorDoctorStatus[
       latest_applied: applied.at(-1) ?? null,
       latest_expected: latestExpected,
     };
-  } catch {
+  } catch (error) {
+    // Two very different deployments produce this same "unknown": a database
+    // the doctor cannot reach at all, and a reachable database with no
+    // `_migrations` table (SQLSTATE 42P01 -- never migrated). The pg fields say
+    // which; the payload shape cannot.
+    logger.error("doctor_migrations_query_failed", describeError(error));
     return {
       status: "unknown",
       applied_count: null,
@@ -241,8 +302,16 @@ function checkQmdBinaryPresence(): OperatorDoctorStatus["qmd"] {
   let available = false;
   try {
     available = existsSync(resolved.path);
-  } catch {
+  } catch (error) {
+    // existsSync swallows ENOENT itself, so reaching here means something
+    // stranger -- a permission error on an ancestor directory, an unmounted
+    // volume. Reporting the binary as simply absent would send the operator
+    // looking for a missing install that is actually present and unreachable.
     available = false;
+    logger.warn("doctor_qmd_probe_failed", {
+      path_source: resolved.source,
+      ...describeError(error),
+    });
   }
   return {
     configured: true,
@@ -257,14 +326,19 @@ export async function buildOperatorDoctorStatus(
   natsRuntimeBoundary: NatsRuntimeBoundary,
   natsBridgeHealth?: NatsBridgeHealth,
 ): Promise<OperatorDoctorStatus> {
-  const [database, migrations, embeddingAvailable, serviceVersion, auditStorage] =
-    await Promise.all([
-      checkPoolHealth(pool),
-      readMigrationStatus(pool),
-      checkEmbeddingAvailability(),
-      readServiceVersion(),
-      readAuditStorageStatus(pool),
-    ]);
+  const [
+    database,
+    migrations,
+    embeddingAvailable,
+    serviceVersion,
+    auditStorage,
+  ] = await Promise.all([
+    checkPoolHealth(pool),
+    readMigrationStatus(pool),
+    checkEmbeddingAvailability(),
+    readServiceVersion(),
+    readAuditStorageStatus(pool),
+  ]);
   const qmd = checkQmdBinaryPresence();
 
   const embeddingDiagnostics = getEmbeddingProviderDiagnostics();
@@ -333,7 +407,8 @@ export async function buildOperatorDoctorStatus(
       file_log_configured: fileLogConfigured,
       rotation_configured:
         fileLogConfigured &&
-        (Boolean(process.env.LOG_MAX_BYTES) || Boolean(process.env.LOG_MAX_FILES)),
+        (Boolean(process.env.LOG_MAX_BYTES) ||
+          Boolean(process.env.LOG_MAX_FILES)),
       audit_storage: auditStorage,
     },
     optional_dependencies: {
@@ -393,6 +468,24 @@ export async function getOperatorDoctorStatus(
     .then((value) => {
       doctorCache = { value, expiresAt: now() + ttlMs };
       return value;
+    })
+    .catch((error: unknown) => {
+      // Logged HERE, at the owning boundary, and then re-thrown unchanged.
+      //
+      // Every consumer of this function converts the rejection into a
+      // deliberately content-free response -- the REST route in src/index.ts
+      // sends `{ error: "operator doctor status unavailable" }` and the MCP tool
+      // sends the same string -- because a raw doctor error can carry paths and
+      // env detail. That is right for the RESPONSE and left alone. But it meant
+      // the reason existed nowhere: the diagnostic surface is gone at exactly
+      // the moment it is needed, and the only trace was a 500 in an access log.
+      //
+      // Logging at this single point covers both consumers at once, and it is
+      // the only place that can: the in-flight promise below is shared, so one
+      // rejection is handed to every concurrent caller, and a per-caller catch
+      // would report the same failure once per waiter.
+      logger.error("doctor_status_build_failed", describeError(error));
+      throw error;
     })
     .finally(() => {
       doctorInFlight = null;

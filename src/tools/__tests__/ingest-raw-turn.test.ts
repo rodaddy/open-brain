@@ -58,6 +58,12 @@ dbDescribe("ingest_raw_turn (live Postgres)", () => {
     namespaceSource: "token",
   };
 
+  const bob: AuthInfo = {
+    role: "agent",
+    clientId: nsBob,
+    namespaceSource: "token",
+  };
+
   // Minimal MCP server double: capture the registered handler and call it the
   // way the real server would.
   type Handler = (
@@ -231,6 +237,125 @@ dbDescribe("ingest_raw_turn (live Postgres)", () => {
       [nsBob],
     );
     expect(rows[0].n).toBe(0);
+  });
+
+  it("computes session_seq per namespace, never across the boundary", async () => {
+    // session_ref is client-supplied and NOT unique across namespaces (the only
+    // uniqueness is (namespace, turn_uuid), migration 032). Two namespaces can
+    // legitimately carry the same session_ref. The post-insert session_seq
+    // recompute must partition within a namespace: a write in one namespace
+    // must never renumber another namespace's rows by folding its occurred_at
+    // values into their ordering.
+    const shared = "shared-session-ref";
+
+    // Bob writes two turns whose occurred_at straddle Alice's later write.
+    await ingest(
+      [
+        turn({
+          turn_uuid: "bob-1",
+          session_ref: shared,
+          occurred_at: "2026-07-25T10:00:00Z",
+        }),
+        turn({
+          turn_uuid: "bob-2",
+          session_ref: shared,
+          occurred_at: "2026-07-25T12:00:00Z",
+          turn_index: 1,
+        }),
+      ],
+      bob,
+      nsBob,
+    );
+
+    async function seq(
+      namespace: string,
+      uuid: string,
+    ): Promise<number | null> {
+      const { rows } = await pool.query(
+        "SELECT session_seq FROM ob_raw_turns WHERE namespace = $1 AND turn_uuid = $2",
+        [namespace, uuid],
+      );
+      return rows[0]?.session_seq ?? null;
+    }
+
+    // Bob's own two-turn session is numbered 0, 1 by occurred_at.
+    expect(await seq(nsBob, "bob-1")).toBe(0);
+    expect(await seq(nsBob, "bob-2")).toBe(1);
+
+    // Alice now writes a turn on the SAME session_ref whose occurred_at falls
+    // BETWEEN Bob's two. If the recompute ignored namespace, it would insert
+    // Alice's row into Bob's ordering and push bob-2 from seq 1 to seq 2.
+    await ingest([
+      turn({
+        turn_uuid: "alice-1",
+        session_ref: shared,
+        occurred_at: "2026-07-25T11:00:00Z",
+      }),
+    ]);
+
+    // Bob's sequence is untouched by Alice's write.
+    expect(await seq(nsBob, "bob-1")).toBe(0);
+    expect(await seq(nsBob, "bob-2")).toBe(1);
+    // Alice's own session is numbered independently, from zero.
+    expect(await seq(nsAlice, "alice-1")).toBe(0);
+  });
+
+  it("repairs a NULL session_seq on an ordinary duplicate replay (F5)", async () => {
+    // The recompute is derived from the whole validated payload, not only from
+    // the INSERT's RETURNING rows. So a session left with session_seq = NULL --
+    // e.g. by a prior call whose recompute failed transiently -- is repaired by
+    // an ordinary replay of the same turn_uuids, even though that replay inserts
+    // zero new rows. Keying the recompute off RETURNING alone would skip it.
+    const sref = "repair-session";
+    await ingest([
+      turn({
+        turn_uuid: "rep-1",
+        session_ref: sref,
+        occurred_at: "2026-07-25T09:00:00Z",
+      }),
+      turn({
+        turn_uuid: "rep-2",
+        session_ref: sref,
+        occurred_at: "2026-07-25T09:05:00Z",
+        turn_index: 1,
+      }),
+    ]);
+
+    // Simulate a prior transient recompute failure: blank the seq back to NULL.
+    await pool.query(
+      "UPDATE ob_raw_turns SET session_seq = NULL WHERE namespace = $1 AND session_ref = $2",
+      [nsAlice, sref],
+    );
+    const before = await pool.query(
+      "SELECT count(*)::int AS n FROM ob_raw_turns WHERE namespace = $1 AND session_ref = $2 AND session_seq IS NULL",
+      [nsAlice, sref],
+    );
+    expect(before.rows[0].n).toBe(2);
+
+    // Replay the identical batch: zero new rows insert (ON CONFLICT DO NOTHING),
+    // but the recompute still runs for the payload's session_ref and re-numbers.
+    const replay = await ingest([
+      turn({
+        turn_uuid: "rep-1",
+        session_ref: sref,
+        occurred_at: "2026-07-25T09:00:00Z",
+      }),
+      turn({
+        turn_uuid: "rep-2",
+        session_ref: sref,
+        occurred_at: "2026-07-25T09:05:00Z",
+        turn_index: 1,
+      }),
+    ]);
+    expect(replay.ingested).toBe(0);
+    expect(replay.duplicates).toBe(2);
+
+    const after = await pool.query(
+      "SELECT turn_uuid, session_seq FROM ob_raw_turns WHERE namespace = $1 AND session_ref = $2 ORDER BY session_seq",
+      [nsAlice, sref],
+    );
+    expect(after.rows.map((r) => r.session_seq)).toEqual([0, 1]);
+    expect(after.rows.map((r) => r.turn_uuid)).toEqual(["rep-1", "rep-2"]);
   });
 
   it("denies an unauthenticated caller", async () => {

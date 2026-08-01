@@ -1,6 +1,8 @@
 import { describe, it, expect } from "bun:test";
 import {
   coerceStringArray,
+  undecidableCanonicalFields,
+  undecidableStringArray,
   decisionCanonicalText,
   sessionEmbedText,
   sessionSourceHashInput,
@@ -82,6 +84,76 @@ describe("coerceStringArray", () => {
   });
   it("drops non-string entries defensively", () => {
     expect(coerceStringArray(["a", 1, null, "b"])).toEqual(["a", "b"]);
+  });
+});
+
+describe("undecidableStringArray separates lost content from an honest empty", () => {
+  it("flags a non-empty string that is not parseable JSON", () => {
+    // The one case whose collapse to [] may drop real content, changing the
+    // canonical text and therefore content_hash.
+    expect(undecidableStringArray("not json")).toBe(true);
+    expect(undecidableStringArray('["a","b"')).toBe(true);
+    expect(undecidableStringArray("{broken")).toBe(true);
+  });
+
+  it("does not flag values whose empty answer is the true answer", () => {
+    expect(undecidableStringArray(null)).toBe(false);
+    expect(undecidableStringArray(undefined)).toBe(false);
+    expect(undecidableStringArray(42)).toBe(false);
+    expect(undecidableStringArray({ a: 1 })).toBe(false);
+    expect(undecidableStringArray([])).toBe(false);
+    expect(undecidableStringArray(["a"])).toBe(false);
+    // Parseable, just not an array: coerce gives [] and that is correct.
+    expect(undecidableStringArray('{"a":1}')).toBe(false);
+    expect(undecidableStringArray('"plain"')).toBe(false);
+    // Blank text carries nothing to lose.
+    expect(undecidableStringArray("")).toBe(false);
+    expect(undecidableStringArray("   ")).toBe(false);
+  });
+
+  it("agrees with coerceStringArray about which inputs lose content", () => {
+    // The predicate must never claim loss where coercion actually kept data,
+    // and never miss a case where coercion emptied a non-empty string.
+    const inputs: unknown[] = [
+      ["a", "b"],
+      '["a","b"]',
+      "not json",
+      '["a",',
+      null,
+      42,
+      { a: 1 },
+      '{"a":1}',
+      "",
+      "  ",
+    ];
+    for (const value of inputs) {
+      const coerced = coerceStringArray(value);
+      const flagged = undecidableStringArray(value);
+      if (flagged) {
+        // Flagged means: was a non-empty string, and yielded nothing.
+        expect(typeof value).toBe("string");
+        expect(coerced).toEqual([]);
+      }
+    }
+  });
+
+  it("names every canonical field that would lose content", () => {
+    expect(
+      undecidableCanonicalFields({
+        alternatives: '["kept"]',
+        tags: "broken[",
+        key_decisions: null,
+        next_steps: "also broken{",
+        blockers: ["fine"],
+      }),
+    ).toEqual(["tags", "next_steps"]);
+
+    expect(
+      undecidableCanonicalFields({
+        alternatives: ["a"],
+        tags: ["b"],
+      }),
+    ).toEqual([]);
   });
 });
 

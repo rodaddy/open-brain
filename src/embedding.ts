@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
+import { chunkText } from "./chunking.ts";
 import { logger } from "./logger.ts";
 
 const rawTimeout = parseInt(process.env.EMBEDDING_TIMEOUT_MS ?? "8000", 10);
@@ -82,7 +83,8 @@ function isTransient(err: unknown, status?: number): boolean {
 }
 
 function classifyError(err: unknown, status?: number): EmbeddingError["code"] {
-  if (err instanceof DOMException && err.name === "AbortError") return "timeout";
+  if (err instanceof DOMException && err.name === "AbortError")
+    return "timeout";
   if (status !== undefined && status >= 500) return "server_error";
   if (err instanceof Error) return "network";
   return "network";
@@ -101,7 +103,10 @@ function watchdogFailureThreshold(): number {
 }
 
 function watchdogCooldownMs(): number {
-  const raw = parseInt(process.env.EMBEDDING_WATCHDOG_COOLDOWN_MS ?? "300000", 10);
+  const raw = parseInt(
+    process.env.EMBEDDING_WATCHDOG_COOLDOWN_MS ?? "300000",
+    10,
+  );
   return Number.isNaN(raw) || raw < 0 ? 300000 : raw;
 }
 
@@ -257,13 +262,79 @@ export function embeddingApiKey(): string | undefined {
   return process.env.EMBEDDING_API_KEY;
 }
 
+/**
+ * Longest text sent to the provider in ONE request.
+ *
+ * A REQUEST-SHAPING number, not an acceptance rule. Text longer than this is
+ * embedded in segments and combined; nothing is refused and nothing is cut.
+ *
+ * WHAT THIS REPLACES, and why the old number described nothing. The previous
+ * `text.length > 32000` branch returned {embedding: null} for the WHOLE input,
+ * so a caller stored a row no semantic search could ever reach. Measured
+ * 2026-07-30 against the embedder actually configured here
+ * (embeddinggemma-300m-8bit at EMBEDDING_BASE_URL, .env:24): the server accepts
+ * 64,000 characters and answers HTTP 200 with a valid 768-dim vector, so 32,000
+ * was not its limit. Two upstream modules (distiller.ts, distill-exchange.ts)
+ * cut their own content citing that number as a hard provider constraint.
+ *
+ * WHY SEGMENT AT ALL, since the server accepts long input. The same measurement
+ * embedded `<filler> + <distinct tail>` at increasing filler lengths and
+ * compared the two vectors: cosine rose 0.79 (8k) -> 0.96 (16k) -> 0.995 (30k)
+ * -> exactly 1.000000000 (60k). At 60,000 the tail stops changing the vector at
+ * all -- the server truncates internally and still returns 200. Below that the
+ * tail is not lost but is increasingly diluted. Segmenting keeps every part of
+ * the text at full weight in its own vector instead of drowned in one.
+ */
+const EMBEDDING_SEGMENT_CHARS = 6000;
+
+/**
+ * Overlap between adjacent segments, in characters.
+ *
+ * 20% of a segment. A claim that straddles a seam appears whole in both
+ * neighbours, so it is embedded in context at least once rather than split
+ * across two vectors that each hold half of it. Matches the ratio
+ * src/chunking.ts already uses for its own defaults (200 of 2000).
+ */
+const EMBEDDING_SEGMENT_OVERLAP = 1200;
+
+/**
+ * Combine segment vectors into the one vector stored for the whole text.
+ *
+ * Length-weighted so a 6,000-char segment is not outvoted by a 400-char
+ * remainder, then L2-normalised because these vectors are compared by cosine
+ * distance, which assumes unit length.
+ */
+function combineEmbeddings(
+  segments: readonly { embedding: number[]; weight: number }[],
+): number[] {
+  const summed = new Array<number>(EMBEDDING_DIMENSIONS).fill(0);
+  let totalWeight = 0;
+  for (const segment of segments) {
+    totalWeight += segment.weight;
+    for (let i = 0; i < EMBEDDING_DIMENSIONS; i++) {
+      summed[i]! += (segment.embedding[i] ?? 0) * segment.weight;
+    }
+  }
+  if (totalWeight > 0) {
+    for (let i = 0; i < EMBEDDING_DIMENSIONS; i++) summed[i]! /= totalWeight;
+  }
+  let norm = 0;
+  for (const value of summed) norm += value * value;
+  norm = Math.sqrt(norm);
+  // A zero vector has no direction to normalise. Returning it unchanged is
+  // correct -- it is what the provider produced, and inventing a direction
+  // would silently place the row somewhere in the space it does not belong.
+  if (norm === 0) return summed;
+  return summed.map((value) => value / norm);
+}
+
 export async function generateEmbeddingWithMetadata(
   text: string,
   embeddingUrl?: string,
   options: EmbeddingOptions = {},
 ): Promise<EmbeddingResult> {
-  if (!text || text.trim().length === 0 || text.length > 32000) {
-    const msg = "Embedding text empty or too long";
+  if (!text || text.trim().length === 0) {
+    const msg = "Embedding text empty";
     logger.warn(msg, { length: text?.length ?? 0 });
     return {
       embedding: null,
@@ -275,6 +346,52 @@ export async function generateEmbeddingWithMetadata(
     };
   }
 
+  // LONG TEXT IS EMBEDDED, NOT REFUSED AND NOT CUT. chunkText splits on
+  // sentence boundaries with overlap, so no segment begins mid-sentence and
+  // the seam between two segments appears in both.
+  if (text.length > EMBEDDING_SEGMENT_CHARS) {
+    const segments = chunkText(
+      text,
+      EMBEDDING_SEGMENT_CHARS,
+      EMBEDDING_SEGMENT_OVERLAP,
+    );
+    logger.info("embedding_segmented", {
+      length: text.length,
+      segments: segments.length,
+    });
+    const embedded: { embedding: number[]; weight: number }[] = [];
+    for (const segment of segments) {
+      const result = await embedOnce(segment.text, embeddingUrl, options);
+      // One failed segment fails the whole embedding. Combining the survivors
+      // would return a vector silently representing only PART of the text --
+      // a wrong answer wearing the shape of a right one, which is the failure
+      // mode this whole change exists to remove.
+      if (result.embedding === null) {
+        logger.error("embedding_segment_failed", {
+          segment_index: segment.index,
+          segments: segments.length,
+          length: text.length,
+          code: result.error?.code ?? "unknown",
+        });
+        return result;
+      }
+      embedded.push({
+        embedding: result.embedding,
+        weight: segment.text.length,
+      });
+    }
+    return { embedding: combineEmbeddings(embedded) };
+  }
+
+  return embedOnce(text, embeddingUrl, options);
+}
+
+/** Embed one text that already fits in a single provider request. */
+async function embedOnce(
+  text: string,
+  embeddingUrl?: string,
+  options: EmbeddingOptions = {},
+): Promise<EmbeddingResult> {
   const baseUrl = embeddingBaseUrl(embeddingUrl);
   if (!baseUrl) {
     const msg = "No embedding URL configured";
@@ -315,7 +432,10 @@ export async function generateEmbeddingWithMetadata(
         once: true,
       });
     }
-    const timeoutId = setTimeout(() => controller.abort(), EMBEDDING_TIMEOUT_MS);
+    const timeoutId = setTimeout(
+      () => controller.abort(),
+      EMBEDDING_TIMEOUT_MS,
+    );
     const start = Date.now();
 
     try {
@@ -345,10 +465,10 @@ export async function generateEmbeddingWithMetadata(
             attempts: attempt,
           });
           return embeddingFailure({
-              code,
-              message: msg,
-              attempts: attempt,
-              lastStatus: response.status,
+            code,
+            message: msg,
+            attempts: attempt,
+            lastStatus: response.status,
           });
         }
 
@@ -371,10 +491,10 @@ export async function generateEmbeddingWithMetadata(
           attempts: attempt,
         });
         return embeddingFailure({
-            code: "server_error",
-            message: `Embedding provider returned ${response.status} after ${attempt} attempt(s)`,
-            attempts: attempt,
-            lastStatus: response.status,
+          code: "server_error",
+          message: `Embedding provider returned ${response.status} after ${attempt} attempt(s)`,
+          attempts: attempt,
+          lastStatus: response.status,
         });
       }
 
@@ -384,7 +504,10 @@ export async function generateEmbeddingWithMetadata(
 
       const embedding = json.data?.[0]?.embedding;
 
-      if (!Array.isArray(embedding) || embedding.length !== EMBEDDING_DIMENSIONS) {
+      if (
+        !Array.isArray(embedding) ||
+        embedding.length !== EMBEDDING_DIMENSIONS
+      ) {
         const msg = "Embedding provider returned malformed embedding";
         logger.error(msg, {
           hasData: !!json.data,
@@ -393,10 +516,10 @@ export async function generateEmbeddingWithMetadata(
           attempts: attempt,
         });
         return embeddingFailure({
-            code: "malformed_response",
-            message: msg,
-            attempts: attempt,
-            lastStatus: response.status,
+          code: "malformed_response",
+          message: msg,
+          attempts: attempt,
+          lastStatus: response.status,
         });
       }
 
@@ -416,10 +539,10 @@ export async function generateEmbeddingWithMetadata(
           attempts: attempt,
         });
         return embeddingFailure({
-            code,
-            message: msg,
-            attempts: attempt,
-            lastStatus,
+          code,
+          message: msg,
+          attempts: attempt,
+          lastStatus,
         });
       }
 
@@ -445,10 +568,10 @@ export async function generateEmbeddingWithMetadata(
         attempts: attempt,
       });
       return embeddingFailure({
-          code,
-          message: `${msg} after ${attempt} attempt(s)`,
-          attempts: attempt,
-          lastStatus,
+        code,
+        message: `${msg} after ${attempt} attempt(s)`,
+        attempts: attempt,
+        lastStatus,
       });
     } finally {
       clearTimeout(timeoutId);
@@ -459,10 +582,10 @@ export async function generateEmbeddingWithMetadata(
   // Should never reach here, but TypeScript needs it
   const code = classifyError(lastError);
   return embeddingFailure({
-      code,
-      message: "Unexpected: exhausted all attempts",
-      attempts: totalAttempts,
-      lastStatus,
+    code,
+    message: "Unexpected: exhausted all attempts",
+    attempts: totalAttempts,
+    lastStatus,
   });
 }
 
@@ -475,7 +598,11 @@ export async function generateEmbedding(
   embeddingUrl?: string,
   options: EmbeddingOptions = {},
 ): Promise<number[] | null> {
-  const result = await generateEmbeddingWithMetadata(text, embeddingUrl, options);
+  const result = await generateEmbeddingWithMetadata(
+    text,
+    embeddingUrl,
+    options,
+  );
   return result.embedding;
 }
 

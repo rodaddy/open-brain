@@ -1,0 +1,135 @@
+#!/opt/homebrew/bin/bash
+# pre-commit -- block the commit when the staged tree violates the standard.
+#
+# Runs against STAGED CONTENT ONLY, via a temporary index checkout. Checking the
+# working tree instead is the single most common way a hook lies: you stage a
+# fix, leave a broken edit unstaged, and the hook passes on code that is not
+# what you are committing.
+#
+# Every check here is also in .github/workflows/ci.yml, running the same
+# command. A hook that CI does not repeat is bypassable with --no-verify; a CI
+# check the hook does not run wastes a push round-trip to discover.
+#
+# FAIL CLOSED. A missing tool is a failure, not a skip. Three of the mechanisms
+# this standard was derived from "passed" because the thing they invoked was
+# absent or pointed at a path that did not exist.
+
+set -uo pipefail
+
+fail=0
+note() { printf '  %s\n' "$*"; }
+step() { printf '\n[pre-commit] %s\n' "$*"; }
+
+require() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    step "MISSING TOOL: $1"
+    note "This hook fails closed. Install it, do not bypass."
+    note "  uv sync --dev"
+    exit 1
+  fi
+}
+
+require uv
+
+# Staged Python files, filtered to those that still exist (a delete stages a
+# path that is gone; running ruff on it errors out for the wrong reason).
+mapfile -t staged < <(git diff --cached --name-only --diff-filter=ACMR -- '*.py')
+existing=()
+for f in "${staged[@]}"; do
+  [[ -f "$f" ]] && existing+=("$f")
+done
+
+if [[ ${#existing[@]} -eq 0 ]]; then
+  step "no staged Python files -- nothing to check"
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Check the STAGED content, not the working tree.
+#
+# git stash --keep-index is the usual trick and it is dangerous here: it touches
+# the working tree, and an interrupted hook can leave the user's uncommitted
+# work in a stash they did not ask for. Checking the index out into a scratch
+# tree is read-only with respect to what the developer has open.
+# ---------------------------------------------------------------------------
+repo_root="$(git rev-parse --show-toplevel)"
+scratch="$(git rev-parse --git-dir)/pre-commit-staged"
+mkdir -p "$scratch"
+trap 'rm -rf "$scratch"' EXIT
+git checkout-index --prefix="$scratch/" -af
+
+# Tools are INVOKED from the repo root (that is where .venv and pyproject.toml
+# live) but POINTED AT the staged copies under $scratch. Running them with cwd
+# inside $scratch instead means `uv run --no-sync` finds no environment there
+# and dies with "Failed to spawn: ruff" -- which the hook then reports as a
+# violation, so every commit fails for a reason that has nothing to do with the
+# code. Observed on the first demo-hooks run, 2026-07-30.
+staged_paths=()
+for f in "${existing[@]}"; do
+  staged_paths+=("$scratch/$f")
+done
+
+cd "$repo_root" || exit 1
+
+step "ruff format --check (staged content)"
+if ! uv run --no-sync ruff format --check "${staged_paths[@]}" 2>&1 | sed 's/^/  /'; then
+  note "FAILED. Fix with: uv run ruff format ."
+  fail=1
+fi
+
+step "ruff check (staged content)"
+if ! uv run --no-sync ruff check "${staged_paths[@]}" 2>&1 | sed 's/^/  /'; then
+  note "FAILED. Some are auto-fixable: uv run ruff check --fix ."
+  note "PLR1702 (nested blocks) and C901 (complexity) are NOT auto-fixable --"
+  note "they mean the function needs restructuring, which is the point."
+  fail=1
+fi
+
+# mypy runs over the whole configured package, not just staged files: a change
+# in one module breaks type contracts in its callers, and per-file mypy cannot
+# see that. `files` in pyproject.toml governs the scope.
+step "mypy --strict (whole package)"
+if ! uv run --no-sync mypy 2>&1 | sed 's/^/  /'; then
+  note "FAILED. Type errors block the commit."
+  fail=1
+fi
+
+# ---------------------------------------------------------------------------
+# Standard-specific checks that no off-the-shelf linter performs.
+# ---------------------------------------------------------------------------
+
+step "relative imports (the standard requires absolute)"
+if rel=$(rg -n "^\\s*from\\s+\\." "${staged_paths[@]}" 2>/dev/null); then
+  printf '%s\n' "$rel" | sed 's/^/  /'
+  note "FAILED. Use absolute imports: from exemplar.utils.http import ..."
+  note "Relative chains break when a module moves and hide where a name lives."
+  fail=1
+fi
+
+step "naive datetime (must be timezone-aware)"
+if naive=$(rg -n 'datetime\.now\(\s*\)|datetime\.utcnow\(' "${staged_paths[@]}" 2>/dev/null); then
+  printf '%s\n' "$naive" | sed 's/^/  /'
+  note "FAILED. Use exemplar.utils.datetime_helpers (aware, UTC)."
+  note "Receipts: naive datetime.now() shipped in committed code at"
+  note "threads.py:70 and poster_service.py:90 in the source repos."
+  fail=1
+fi
+
+step "bare except / silent swallow"
+if bare=$(rg -n 'except\s*:|except\s+Exception\s*:\s*$' -A1 "${staged_paths[@]}" 2>/dev/null | rg -B1 '^.*\d+-\s*(pass|\.\.\.)\s*$'); then
+  printf '%s\n' "$bare" | sed 's/^/  /'
+  note "FAILED. Catch a specific exception and either handle or re-raise."
+  note "A bare 'except: pass' is how ~1,100 silent failures accumulated while"
+  note "CI stayed green."
+  fail=1
+fi
+
+if [[ $fail -ne 0 ]]; then
+  printf '\n[pre-commit] BLOCKED. Nothing was committed.\n'
+  printf '  Fix the above, re-stage, and commit again.\n'
+  printf '  --no-verify is not an approved workaround in a durable repo.\n\n'
+  exit 1
+fi
+
+printf '\n[pre-commit] all checks passed\n'
+exit 0

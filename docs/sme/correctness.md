@@ -1456,3 +1456,78 @@ The test named the right input and the wrong consequence.
   write? Verify it is not the caller's data channel.
 - Does the test capture the stream it claims to protect (`capsys`, an
   `io.StringIO` swap), or does it only inspect the happy-path destination?
+
+## [2026-07-27] Acceptance is a real-database run and observed rows, not a green test
+
+**Severity:** HIGH
+**Source:** Open Brain dogfood post-mortem; migrated from Claude harness private
+memory 2026-08-01.
+**Scope:** any lane/tool/pipeline where "done" is claimed
+**Status:** active
+
+### Pattern
+
+The entire Open Brain dogfood quicksand traces to code that was unit-tested
+correct while it had never executed against production. `graduateLaneEvent` is
+correct and tested and has **never written a row** in the database's history,
+while thousands of events sat eligible — every layer above it (recall,
+`brain_answer`'s table list, the dream stages) was built assuming promotion
+happens. All of them were broken by one step with no caller. A passing test file
+is not evidence the thing runs; a green CI check is not a receipt.
+
+Three standing rules follow:
+
+1. **Pull back bad work before moving on.** Anything landed incorrectly gets
+   reverted and redone; no new work starts on top of a bad landing in `main`.
+2. **A building block is "known good" only when proven to actually run**, not
+   when the code is written and not when tests pass.
+3. **Adding a layer re-tests the whole ladder against the REAL database**, bottom
+   to top, every level, every time — not unit-test files, not mocks, not a
+   stubbed pool.
+
+### Review Questions
+
+- Is acceptance "does this function behave when called" (weak) or "did this run
+  end to end against a real Postgres and did the expected rows appear" (required)?
+- Before a change builds on an existing component, is there evidence that
+  component has actually run — its output in the data, not its tests in the repo?
+- If the claim cannot be demonstrated against live data, is it labeled
+  UNVERIFIED rather than asserted as done?
+
+## [2026-08-01] A client send whose length the server's schema refuses wedges the session forever
+
+**Severity:** HIGH
+**Source:** PR #455 adversarial lane, fixed on `rewrite/420-settings-cutover`
+**Scope:** `python/openbrain/src/openbrain/apps/capture/deliver.py`, any client
+path that hands a variable-length array to a server whose Zod schema validates
+its length
+**Status:** active
+
+### Pattern
+
+`deliver_new_turns` built one payload from EVERY unread turn and sent it in a
+single `ingest_raw_turn` call. The server's request schema validates the
+`turns` array length (`MAX_BATCH = 100`, `src/tools/ingest-raw-turn.ts`) and
+refuses the whole call above it before writing a row. A single live transcript
+held 234 operator turns; a first Stop, or any read that resumes from offset 0
+after a file replacement, produces more than one call carries. The refusal
+raised, the watermark advanced only after a returning call, so the same region
+re-read and re-failed on every subsequent Stop — a permanently wedged session,
+every new turn silently lost, the exact failure the rewrite exists to end.
+
+The in-process recorder tests were green because a fake that never crossed 100
+accepts what the real server refuses (the #275 fake-vs-real gap). The fix sends
+in successive full calls the server accepts, advancing the watermark only after
+the whole delivery returns; a mid-delivery failure re-reads the region and the
+server's `UNIQUE(namespace, turn_uuid)` dedupe makes the already-landed calls a
+no-op. Nothing is dropped and nothing is stored twice.
+
+### Review Questions
+
+- When a client hands a server a variable-length array, does a test drive MORE
+  than the server's own schema accepts in one call, through a fake that enforces
+  the same length rule the server does — or only small fixtures?
+- Does the fake used in a green test reject what the real server rejects? If it
+  cannot fail on the oversized input, it is not proving the path.
+- On a send failure, does the watermark (or any resume cursor) stay put so the
+  region re-reads, and is the re-send idempotent on the server's dedupe key?

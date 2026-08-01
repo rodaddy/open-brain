@@ -86,9 +86,12 @@ describe("agent_context_pack pointers + candidate_memory (#329)", () => {
       expect(pack.isError).toBeFalsy();
       const durable = payload.sections.durable_memory;
       const pointers = payload.sections.pointers;
-      expect(durable.item_count).toBe(8); // hard durable cap
-      // The 2 rows beyond the cap are pointers; none of the retained durable
-      // rows re-appear as a pointer.
+      // Every authorized row comes back with a body. This asserted 8 -- the
+      // "hard durable cap" -- until 2026-07-30, when the ceilings came out of
+      // the read path; the fixture holds 10 rows and the caller asked for
+      // durable_memory, so it gets all 10. The invariant this test actually
+      // guards is the one below: no identity appears in both sections.
+      expect(durable.item_count).toBe(10);
       const durableIds = new Set(
         durable.items.map((i: any) => i.citation_id as string),
       );
@@ -107,8 +110,12 @@ describe("agent_context_pack pointers + candidate_memory (#329)", () => {
         expect(item.citation_id).toBe(canonical(item.source_type, item.id));
         expect(item.citation_id).toBe(`brain_record:decision:${item.id}`);
       }
-      // The rows beyond the cap surface as pointers.
-      expect(pointers.item_count).toBe(2);
+      // Pointers exist to surface rows durable_memory could NOT include. With
+      // the durable ceiling gone (2026-07-30) every authorized row arrives with
+      // a body, so there is no surplus left to point at -- and the dedupe
+      // invariant above holds trivially because the pointer set is empty. When
+      // a caller explicitly requests a bounded pack, the surplus reappears.
+      expect(pointers.item_count).toBe(0);
     } finally {
       await cleanup();
     }

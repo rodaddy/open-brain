@@ -343,6 +343,56 @@ describe("selectStale classification", () => {
     expect(res.length).toBe(1);
     expect(res[0]!.reasons).toContain("model_drift");
   });
+
+  it("does NOT call a damaged-jsonb row source_drift", async () => {
+    // A legacy decisions row whose `alternatives` jsonb surfaced as damaged
+    // text. coerceStringArray collapses it to [], so the recomputed canonical
+    // text is missing content the writer hashed and the hashes can never match
+    // again -- repeated repair passes cannot converge. Labelling that
+    // `source_drift` re-embedded and re-keyed the row on every pass, silently.
+    const row = {
+      id: "d1",
+      title: "T",
+      rationale: "R",
+      context: null,
+      alternatives: '["a","b"',
+      tags: [],
+      namespace: "n",
+      __embedding_missing: false,
+      content_hash: contentHash("whatever the writer stored"),
+      embedding_model: EMBEDDING_MODEL,
+    };
+    const { db } = mockDb({ selectRows: [row] });
+    const res = await selectStale(db, "decisions", {
+      reasons: ["source_drift"],
+      scope: NS,
+    });
+    expect(res).toEqual([]);
+  });
+
+  it("still calls a genuinely drifted decisions row source_drift", async () => {
+    // Same shape, but every field decodes. A hash mismatch here IS real drift,
+    // so the undecidable check must not swallow it.
+    const row = {
+      id: "d2",
+      title: "T",
+      rationale: "R",
+      context: null,
+      alternatives: ["a", "b"],
+      tags: [],
+      namespace: "n",
+      __embedding_missing: false,
+      content_hash: contentHash("stale text"),
+      embedding_model: EMBEDDING_MODEL,
+    };
+    const { db } = mockDb({ selectRows: [row] });
+    const res = await selectStale(db, "decisions", {
+      reasons: ["source_drift"],
+      scope: NS,
+    });
+    expect(res.length).toBe(1);
+    expect(res[0]!.reasons).toContain("source_drift");
+  });
 });
 
 describe("selectStale batch caps", () => {

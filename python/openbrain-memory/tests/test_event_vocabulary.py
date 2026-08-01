@@ -236,6 +236,17 @@ def test_vocabulary_is_declared_exactly_where_expected() -> None:
         "src/contract-schemas.ts",
         "src/tiering.ts",
         "src/tools/table-constants.ts",
+        # The port target's `EventType` StrEnum -- a seventh language-boundary
+        # surface, sanctioned by `_plans/python-port-sequence.md` (THE WRITE
+        # PATH: "the only openbrain_memory reference in the package today is a
+        # vocabulary import in models/turn.py"). pydantic needs a StrEnum for
+        # boundary validation, which cannot BE the `set[str]` in agent.py, so it
+        # is mirrored like the six above -- and its equality to the authority is
+        # enforced by `python/openbrain/tests/test_turn_models.py`
+        # (test_matches_the_authoritative_list_exactly), the same way each
+        # surface above has its own per-surface drift test. Listed here so the
+        # census still trips on an EIGHTH, undocumented declaration.
+        "python/openbrain/src/openbrain/models/turn.py",
     }
     result = subprocess.run(
         ["git", "grep", "-l", "-E", r'"blocker"', "--", "*.py", "*.ts"],

@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "saved_at": "2026-07-30T23:01:55.197534+00:00",
+  "statuses": {
+    "example-com": {
+      "target_name": "example-com",
+      "state": "healthy",
+      "consecutive_failures": 0,
+      "consecutive_successes": 6,
+      "last_checked_at": "2026-07-30T23:01:53.970410Z",
+      "last_ok_at": "2026-07-30T23:01:53.970410Z",
+      "last_error": null,
+      "total_checks": 6,
+      "total_failures": 0
+    },
+    "this-host-does-not-exist-9f2a-invalid": {
+      "target_name": "this-host-does-not-exist-9f2a-invalid",
+      "state": "unhealthy",
+      "consecutive_failures": 6,
+      "consecutive_successes": 0,
+      "last_checked_at": "2026-07-30T23:01:55.197295Z",
+      "last_ok_at": null,
+      "last_error": "https://this-host-does-not-exist-9f2a.invalid/ unreachable after 2 attempt(s): ConnectError: [Errno 8] nodename nor servname provided, or not known",
+      "total_checks": 6,
+      "total_failures": 6
+    }
+  }
+}

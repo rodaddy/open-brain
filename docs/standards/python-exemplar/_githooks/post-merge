@@ -1,0 +1,45 @@
+#!/opt/homebrew/bin/bash
+# post-merge -- tell the developer when a merge changed something that requires
+# an action they will otherwise forget.
+#
+# Advisory by design: a post-merge hook cannot block anything, the merge has
+# already happened. Its whole job is to convert a silent state change into a
+# visible one. The failure it prevents is the afternoon spent debugging an
+# ImportError that a `uv sync` would have fixed.
+
+set -uo pipefail
+
+changed() {
+  git diff-tree -r --name-only --no-commit-id ORIG_HEAD HEAD 2>/dev/null \
+    | grep -qE "$1"
+}
+
+acted=0
+
+if changed '^(pyproject\.toml|uv\.lock)$'; then
+  printf '\n[post-merge] dependencies changed -- run:\n'
+  printf '    uv sync --dev\n'
+  acted=1
+fi
+
+if changed '^_githooks/'; then
+  printf '\n[post-merge] the hooks themselves changed -- reinstall them:\n'
+  printf '    ./_githooks/install.sh\n'
+  printf '  Git does not version .git/hooks, so your installed copies are stale.\n'
+  acted=1
+fi
+
+if changed '^(alembic/|.*/migrations/)'; then
+  printf '\n[post-merge] migrations changed -- run:\n'
+  printf '    uv run alembic upgrade head\n'
+  acted=1
+fi
+
+if changed '^secrets/.*\.example$'; then
+  printf '\n[post-merge] a secrets example changed -- your local secrets/ may be\n'
+  printf '  missing a new key. Diff it against the .example file.\n'
+  acted=1
+fi
+
+[[ $acted -eq 1 ]] && printf '\n'
+exit 0

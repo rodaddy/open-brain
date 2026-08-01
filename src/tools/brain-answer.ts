@@ -15,6 +15,7 @@ import {
   type SourceRef,
 } from "./search-brain.ts";
 import { isSharedNamespace } from "../shared-namespace.ts";
+import { describeError, logger } from "../observability/index.ts";
 import {
   sourceScopeAuthorizationError,
   sourceScopeSchema,
@@ -82,10 +83,7 @@ function normalizeUseTarget(target: string): string {
     .trim();
 }
 
-function useTargets(
-  text: string,
-  pattern: RegExp,
-): Set<string> {
+function useTargets(text: string, pattern: RegExp): Set<string> {
   const targets = new Set<string>();
   for (const match of text.matchAll(pattern)) {
     const target = normalizeUseTarget(match[1] ?? "");
@@ -273,6 +271,15 @@ export function registerBrainAnswer(server: McpServer, deps: ToolDeps): void {
                 { enableGraph: true },
               );
       } catch (err) {
+        // Retrieval failed, so the answer is empty for a reason the caller sees
+        // as a message and the operator saw not at all. The pg fields survive
+        // only here; by the time this is a text response they are gone.
+        logger.error("brain_answer_retrieval_failed", {
+          namespace,
+          mode,
+          tier,
+          ...describeError(err),
+        });
         const message = err instanceof Error ? err.message : String(err);
         return {
           content: [{ type: "text" as const, text: message }],
@@ -380,10 +387,10 @@ export function registerBrainAnswer(server: McpServer, deps: ToolDeps): void {
         content: [
           {
             type: "text" as const,
-              text: JSON.stringify({
-                query,
-                answer,
-                evidence_count: evidence.length,
+            text: JSON.stringify({
+              query,
+              answer,
+              evidence_count: evidence.length,
               citations,
               known_gaps: knownGaps,
               uncertainty,

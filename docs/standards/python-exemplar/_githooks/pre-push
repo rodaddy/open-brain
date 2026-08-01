@@ -1,0 +1,43 @@
+#!/opt/homebrew/bin/bash
+# pre-push -- run the test suite before anything leaves the machine.
+#
+# Split from pre-commit deliberately. Tests are too slow to run on every commit
+# (people stop committing in small steps, which is worse for review than a slow
+# push), but a push is a shared-state change and is the right boundary for
+# "does this actually work".
+#
+# Reads the refs being pushed on stdin: <local ref> <local sha> <remote ref>
+# <remote sha>, one line per ref.
+
+set -uo pipefail
+
+require() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    printf '\n[pre-push] MISSING TOOL: %s -- failing closed.\n\n' "$1"
+    exit 1
+  fi
+}
+require uv
+
+z40='0000000000000000000000000000000000000000'
+deleting_only=1
+while read -r _local_ref local_sha _remote_ref _remote_sha; do
+  [[ "$local_sha" == "$z40" ]] || deleting_only=0
+done
+
+# A branch deletion pushes no content; running tests would be theatre.
+if [[ $deleting_only -eq 1 ]]; then
+  printf '[pre-push] deletion only -- no content to test\n'
+  exit 0
+fi
+
+printf '\n[pre-push] pytest\n'
+if ! uv run --no-sync pytest -q 2>&1 | sed 's/^/  /'; then
+  printf '\n[pre-push] BLOCKED: tests failed. Nothing was pushed.\n'
+  printf '  Fix them, or if a test is genuinely wrong, change the test in its\n'
+  printf '  own commit so the change is reviewable.\n\n'
+  exit 1
+fi
+
+printf '\n[pre-push] tests passed\n'
+exit 0

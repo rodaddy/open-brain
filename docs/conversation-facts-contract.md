@@ -18,9 +18,10 @@ small bounded distilled units bound to an already-approved conversation source.
 - `source_ref` — a structural reference to the conversation source the facts
   were distilled from: `{ source_kind: "conversation", external_id }`.
   Identity-only; never a body.
-- `facts` — 1..20 distilled units, each `{ event_type, content, source_locator?,
-  importance? }`. `event_type` is one of `fact | decision | receipt`. `content`
-  is a single bounded statement (≤ 4000 chars).
+- `facts` — one or more distilled units, each `{ event_type, content,
+  source_locator?, importance? }`. `event_type` is one of
+  `fact | decision | receipt`. `content` is a single distilled statement, of
+  whatever length that statement runs to.
 
 ## Server-side gates (all enforced before any write)
 
@@ -51,8 +52,12 @@ small bounded distilled units bound to an already-approved conversation source.
      raw-transcript key (`transcript`, `turns`, `messages`, `conversation`,
      `history`, `raw`, …) should a future permissive field ever carry one
      nested. It is no longer the sole or primary defense.
-   - A low per-call cap (20 units) and a per-unit content bound (4000 chars)
-     reject bulk dumps and probable message pastes.
+   - Shape, not size, is what identifies a dump. Until 2026-07-30 this step also
+     rejected any call carrying more than 20 units or any unit longer than 4000
+     characters. Those guards caught honest callers — 21 distilled facts, or one
+     careful 4100-character decision, lost the whole call and stored nothing —
+     while a real transcript dump is already caught by its keys above, long
+     before its length. Both are gone; the shape checks are the defense.
 5. **Secret rejection.** Every distilled unit's content and locator are checked
    with `containsSecret`; a credential-bearing unit is rejected. Content is
    never logged.

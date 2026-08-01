@@ -1,3 +1,13 @@
 [test]
 coverage = true
 coverageThreshold = { line = 80, function = 80, statement = 80 }
+# docs/standards/*-exemplar are standalone reference projects: each has its own
+# package.json, pinned deps (Zod v3), and runner (`npm install && npm run check`,
+# node --test). They are NOT part of the Open Brain runtime and must not be
+# collected by the repo's `bun test`. Run under the repo-root Zod v4 they hoist,
+# their v3-only `.default()` object semantics regress and `logging.level` comes
+# back undefined, and their fixtures use os.tmpdir() which is correct only inside
+# their own isolated run. Verified 2026-08-01: sweeping them added 6 red to an
+# otherwise-green suite. Exclude them here so plain `bun test` (CI, `npm test`)
+# stays green; the exemplars are still exercised by their own `npm run check`.
+pathIgnorePatterns = ["**/docs/standards/**"]

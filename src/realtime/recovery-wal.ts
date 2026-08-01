@@ -6,6 +6,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname } from "node:path";
+import { logger } from "../logger.ts";
+import { describeError } from "../observability/index.ts";
 import {
   compareWorkingSetScope,
   normalizeWorkingSetScope,
@@ -514,7 +516,9 @@ export class RecoveryWalStore {
   }
 
   private isPendingAt(item: RecoveryWalItem, nowMs: number): boolean {
-    return PENDING_STATUSES.has(item.status) && Date.parse(item.expires_at) > nowMs;
+    return (
+      PENDING_STATUSES.has(item.status) && Date.parse(item.expires_at) > nowMs
+    );
   }
 
   private loadWal(): void {
@@ -523,14 +527,41 @@ export class RecoveryWalStore {
       .split("\n")
       .map((line) => line.trim())
       .filter(Boolean);
+    // Skipping a malformed row instead of crashing startup is the design
+    // (docs/sme/gotcha-agent.md: "does one malformed-but-valid JSON row get
+    // skipped/quarantined instead of crashing startup?"). Skipping it without
+    // saying so was not: a journal that replayed 3 of 400 rows and one that
+    // replayed all 400 produced identical startups, so a corrupt WAL looked
+    // exactly like a clean one and the recovery items were simply gone.
+    let unparseable = 0;
+    let unapplicable = 0;
+    let firstApplyError: unknown;
     for (const row of rows) {
       const record = parseWalRecord(row);
-      if (!record) continue;
-      try {
-        this.applyWalRecord(record);
-      } catch {
+      if (!record) {
+        unparseable += 1;
         continue;
       }
+      try {
+        this.applyWalRecord(record);
+      } catch (error) {
+        unapplicable += 1;
+        if (firstApplyError === undefined) firstApplyError = error;
+        continue;
+      }
+    }
+    if (unparseable > 0 || unapplicable > 0) {
+      logger.warn("recovery_wal_rows_skipped", {
+        rows_total: rows.length,
+        rows_unparseable: unparseable,
+        rows_unapplicable: unapplicable,
+        // One representative cause; the rest are almost always the same fault.
+        ...(firstApplyError === undefined
+          ? {}
+          : describeError(firstApplyError)),
+      });
+    } else {
+      logger.debug("recovery_wal_replayed", { rows_total: rows.length });
     }
     this.enforceReplayBudgets();
     this.compactWal();
@@ -730,10 +761,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+/**
+ * Serialized length, or null when the value cannot be serialized at all.
+ *
+ * Both callers treat null as over-budget, which is a real mismatch: a cycle or
+ * a BigInt in metadata is a *shape* fault, and the caller is told
+ * `metadata_too_large` about a value whose size was never the problem.
+ * Correcting that label means changing `RecoveryWalAppendResult.reason`, which
+ * `get-contract.test.ts` locks, so it is not done here. Logging the true cause
+ * at least makes the misleading verdict diagnosable.
+ */
 function serializedJsonLength(value: unknown): number | null {
   try {
     return JSON.stringify(value).length;
-  } catch {
+  } catch (error) {
+    logger.warn("recovery_wal_metadata_unserializable", {
+      value_type: typeof value,
+      ...describeError(error),
+    });
     return null;
   }
 }

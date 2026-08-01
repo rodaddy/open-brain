@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# post-merge -- tell the developer when a merge changed something that requires
+# an action they will otherwise forget.
+#
+# Advisory by design: a post-merge hook cannot block anything, the merge has
+# already happened. Its whole job is to convert a silent state change into a
+# visible one. The failure it prevents is the afternoon spent debugging a
+# MODULE_NOT_FOUND that an `npm install` would have fixed.
+
+set -uo pipefail
+
+changed() {
+  git diff-tree -r --name-only --no-commit-id ORIG_HEAD HEAD 2>/dev/null \
+    | rg -q "$1"
+}
+
+acted=0
+
+if changed '^(package\.json|package-lock\.json)$'; then
+  printf '\n[post-merge] dependencies changed -- run:\n'
+  printf '    npm install\n'
+  acted=1
+fi
+
+if changed '^_githooks/'; then
+  printf '\n[post-merge] the hooks themselves changed -- reinstall them:\n'
+  printf '    ./_githooks/install.sh\n'
+  printf '  Git does not version .git/hooks, so your installed copies are stale.\n'
+  acted=1
+fi
+
+# A tsconfig or lint-config change alters what passes, so a tree that was clean
+# before the merge may not be now -- and the developer finds out at their next
+# commit, blaming their own edit.
+if changed '^(tsconfig.*\.json|\.oxlintrc\.json|\.prettierrc.*)$'; then
+  printf '\n[post-merge] compiler or lint config changed -- re-verify:\n'
+  printf '    npm run check\n'
+  printf '  Code that passed before the merge may not pass now.\n'
+  acted=1
+fi
+
+if changed '^secrets/.*\.example\.json$'; then
+  printf '\n[post-merge] a secrets example changed -- your local secrets/ may be\n'
+  printf '  missing a new key. Diff it against the .example.json file.\n'
+  acted=1
+fi
+
+[[ $acted -eq 1 ]] && printf '\n'
+exit 0

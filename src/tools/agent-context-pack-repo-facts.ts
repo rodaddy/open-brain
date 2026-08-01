@@ -10,6 +10,7 @@
 // the repo from source files or conversation.
 
 import { STALENESS_POLICIES } from "./repo-facts.ts";
+import { describeError, logger } from "../observability/index.ts";
 
 /** Local mirror of the write-side staleness_policy enum (repo-facts.ts). */
 type FactStalenessPolicy = (typeof STALENESS_POLICIES)[number];
@@ -22,8 +23,11 @@ import {
   type SectionReaderDeps,
 } from "./agent-context-pack-sections.ts";
 
-const DEFAULT_MAX_ITEMS = 20;
-const DEFAULT_MAX_ITEM_CHARS = 2000;
+// Unbounded by default. These are this repo's own curated truths; there is no
+// version of "the caller wanted the repo facts, but only twenty of them" that
+// anyone asked for. A caller that explicitly passes a budget still gets one.
+const DEFAULT_MAX_ITEMS = Number.MAX_SAFE_INTEGER;
+const DEFAULT_MAX_ITEM_CHARS = Number.MAX_SAFE_INTEGER;
 
 /**
  * Refresh horizon (ms) for the two verified_at-sensitive policies. A fact
@@ -153,14 +157,13 @@ export async function loadRepoFactsSection(
           AND archived_at IS NULL
           AND namespace = $1
           AND metadata->>'repo' = $2
-        ORDER BY updated_at DESC, id DESC
-        LIMIT $3`,
-      [args.namespace, repo, maxItems + 1],
+        ORDER BY updated_at DESC, id DESC`,
+      [args.namespace, repo],
     );
 
     const truncation: Array<Record<string, unknown>> = [];
     let itemsTruncated = rows.length > maxItems;
-    const capped = rows.slice(0, maxItems);
+    const capped = itemsTruncated ? rows.slice(0, maxItems) : rows;
 
     const items: Array<Record<string, unknown>> = [];
     const citations: Array<Record<string, unknown>> = [];
@@ -240,7 +243,24 @@ export async function loadRepoFactsSection(
       budget: { ...budget, items_included: items.length },
       citations,
     };
-  } catch {
+  } catch (error) {
+    // Same shape as the guidance section: a "database_unavailable" envelope on
+    // its own tells a later reader nothing, and by then the inputs that produced
+    // it are gone. ERROR names what broke; DEBUG carries the whole call.
+    const detail = describeError(error);
+    logger.error("repo_facts_section_failed", {
+      repo,
+      namespace: args.namespace,
+      error_name: detail.error_name,
+      error_message: detail.error_message,
+    });
+    logger.debug("repo_facts_section_failed_detail", {
+      repo,
+      namespace: args.namespace,
+      requested_budget: args.budget,
+      resolved_budget: budget,
+      ...detail,
+    });
     return databaseUnavailableFragment("repo_facts", budget);
   }
 }

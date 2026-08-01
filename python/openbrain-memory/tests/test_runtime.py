@@ -25,7 +25,6 @@ from openbrain_memory import (
 )
 from openbrain_memory._runtime_spool import PARKED_NAMESPACE_KEY, TrackingSpool
 from openbrain_memory.cli import (
-    MAX_JSON_INPUT_BYTES,
     encode_json_output,
     execute_json,
     parse_json_input,
@@ -1737,25 +1736,52 @@ def test_all_distilled_write_fields_fail_safely_before_persistence() -> None:
 
     secret_capture = runtime.capture_distilled("token=super-secret-value")
     whitespace_only = runtime.capture_distilled(" \t\n")
-    oversized_summary = runtime.checkpoint("x" * (MAX_DISTILLED_CONTENT_BYTES + 1))
     secret_auxiliary = runtime.wrap(
         "Distilled summary",
         next_steps=["password=super-secret-value"],
-    )
-    oversized_list = runtime.checkpoint(
-        "Distilled summary",
-        key_decisions=["x" * 9000, "y" * 9000],
     )
 
     for output in (
         secret_capture,
         whitespace_only,
-        oversized_summary,
         secret_auxiliary,
-        oversized_list,
     ):
         assert output.receipt.status is ReceiptStatus.FAILED
     assert tool_calls(transport) == []
+
+
+def test_large_distilled_writes_are_persisted_not_refused() -> None:
+    """Size is not a reason to refuse a distilled write.
+
+    This previously asserted the opposite: a summary one byte over 16 KiB, and a
+    key_decisions list of two 9 KB entries, both had to FAIL. That client bound
+    was three times stricter than the server it writes to
+    (src/tools/append-session-event.ts:991 accepts 50_000), so a long distilled
+    decision was refused locally and never reached a server that would have
+    stored it. Refusing stores nothing; the write is the whole point.
+
+    The secret and whitespace rejections above are untouched -- those are the
+    real safety properties and they still fail closed.
+    """
+    transport = LaneAwareTransport()
+    runtime = FirstClassMemoryRuntime(
+        runtime_config(), runtime_scope(), transport=transport
+    )
+
+    large_summary = runtime.checkpoint("x" * (16 * 1024 + 1))
+    large_list = runtime.checkpoint(
+        "Distilled summary",
+        key_decisions=["x" * 9000, "y" * 9000],
+    )
+    many_decisions = runtime.checkpoint(
+        "Distilled summary",
+        key_decisions=[f"decision {i}" for i in range(21)],
+    )
+
+    for output in (large_summary, large_list, many_decisions):
+        assert output.receipt.status is ReceiptStatus.SAVED
+        assert output.receipt.durable is True
+    assert tool_calls(transport) != []
 
 
 def test_json_adapter_requires_distilled_for_every_write() -> None:
@@ -1823,22 +1849,18 @@ def test_execute_json_does_not_close_caller_injected_client() -> None:
 def test_json_input_and_output_are_bounded() -> None:
     assert parse_json_input(b'{"operation":"recall"}') == {"operation": "recall"}
 
-    # A distilled operation stays bound at 64 KB. The payload must be valid
-    # JSON: the raw-lane ceiling admits the envelope first, so the distilled
-    # bound is now enforced against the decoded operation rather than the
-    # undecoded byte length.
-    oversized = (
-        b'{"operation":"capture","content":"' + b"x" * MAX_JSON_INPUT_BYTES + b'"}'
-    )
-    try:
-        parse_json_input(oversized)
-    except ValueError as error:
-        assert "exceeds" in str(error)
-    else:
-        raise AssertionError("oversized input was accepted")
+    # EVERY OPERATION IS ADMITTED AT THE SAME SIZE. This previously asserted the
+    # opposite: a distilled verb was refused above 64 KB while the identical
+    # text went through as a raw turn. The refusal was total -- a ValueError
+    # loses the whole capture, not the excess -- so a long decision written by
+    # an agent simply never reached the server that would have stored it.
+    large_capture = b'{"operation":"capture","content":"' + b"x" * 200_000 + b'"}'
+    assert parse_json_input(large_capture)["operation"] == "capture"
 
-    # The raw lane is exempt: the same size under operation=ingest is admitted.
-    ingest = b'{"operation":"ingest","turns":["' + b"x" * MAX_JSON_INPUT_BYTES + b'"]}'
+    large_checkpoint = b'{"operation":"checkpoint","summary":"' + b"x" * 200_000 + b'"}'
+    assert parse_json_input(large_checkpoint)["operation"] == "checkpoint"
+
+    ingest = b'{"operation":"ingest","turns":["' + b"x" * 200_000 + b'"]}'
     assert parse_json_input(ingest)["operation"] == "ingest"
 
     encoded = encode_json_output({"context": "x" * 1_000_001})
@@ -1908,3 +1930,59 @@ def test_module_entry_point_returns_nonzero_for_lost_write() -> None:
     output = json.loads(completed.stdout)
     assert output["receipt"]["status"] == "lost"
     assert output["receipt"]["durable"] is False
+
+
+def test_module_entry_point_rejects_finding_event_type_loudly() -> None:
+    """A literal ``event_type: "finding"`` is refused, named, and non-zero.
+
+    This seals the 2026-07-30 silent-discard defect. Then, sending an event
+    the write path did not know about produced *exit 0, no output, and no row*
+    (`_plans/front-of-mind-decisions.md`, "Known broken"): four captures were
+    lost before the cause was found, because a memory write that returns
+    success and persists nothing is the worst possible failure.
+
+    The behavior is already proven by composition -- the vocabulary set lives in
+    `EVENT_TYPES`, `capture_distilled` (runtime.py) raises
+    ``Unsupported event_type: finding`` for anything outside it, and the console
+    entry point maps a FAILED receipt to a non-zero exit. This one end-to-end
+    assertion pins the whole chain through the real ``python -m openbrain_memory``
+    console path -- one literal in, one refusal out.
+
+    EXIT CODE, observed not assumed: the rejection is caught inside
+    `capture_distilled` and returned as a FAILED receipt, so the console maps it
+    to exit **1** (`__main__.main`: FAILED/LOST -> 1). Exit 2 is reserved for an
+    exception that escapes `execute_json` entirely -- malformed input, an
+    oversized envelope -- as `test_module_entry_point_emits_json_for_malformed_input`
+    shows. A `finding` capture is a structured FAILED receipt, not an escaped
+    raise, so its code is 1. What seals the dead defect is the pair the silent
+    version could never satisfy: a NAMED error and a NON-ZERO exit, never 0.
+    """
+    payload = request_payload(
+        "capture",
+        distilled=True,
+        content="distilled finding event",
+        event_type="finding",
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-m", "openbrain_memory"],
+        input=json.dumps(payload),
+        text=True,
+        capture_output=True,
+        check=False,
+        cwd=Path(__file__).resolve().parents[1],
+    )
+
+    # The silent defect returned 0; the seal is that it never can again.
+    assert completed.returncode != 0
+    assert completed.returncode == 1
+    assert completed.stderr == ""
+    output = json.loads(completed.stdout)
+    assert output["receipt"]["status"] == "failed"
+    assert output["receipt"]["durable"] is False
+    # The named error is the other half of the seal: the caller is TOLD why,
+    # rather than handed a success with an empty output.
+    assert output["receipt"]["error"] == "Unsupported event_type: finding"
+    # No network was attempted -- the vocabulary refusal is client-side, before
+    # any send, so this seal needs no live server and cannot flake on one.
+    assert output["receipt"]["direct_attempted"] is False

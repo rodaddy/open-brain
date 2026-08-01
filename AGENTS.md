@@ -8,6 +8,7 @@
 >   - `_DOCS/STANDARDS-observability.md`
 >   - `_DOCS/STANDARDS-testing.md`
 >   - `_DOCS/STANDARDS-git.md`
+>   - `_DOCS/STANDARDS-repo-search.md`
 >   - `_DOCS/STANDARDS-typescript.md`
 >   - `_DOCS/STANDARDS-python.md`
 >   - `_DOCS/STANDARDS-ci-security.md`
@@ -37,10 +38,18 @@
 > - **No coverage gates.** Coverage percentages and line/branch targets are not
 >   acceptance criteria. Write functional input/output tests at the function,
 >   class, or public boundary, and prove a new test can fail before trusting it.
->
-> **Also outstanding in this repo** (reported by the sync, never auto-fixed):
->   - no _githooks/ (tracked hooks, core.hooksPath)
->   - has .githooks/ -- hidden folder, migrate to _githooks/
+> - **You are in this repo, so you own it — search it before asking.** Asking
+>   the user how their own software works is a failure, not diligence. One
+>   command does all of it, from any repo:
+>   `aqmd "question"` (this repo, with the shared `_DOCS`/`_ob` policy
+>   appended) · `aqmd up` (refresh after you write files) ·
+>   `aqmd -r <repo> "question"` (one named repo, without leaving this one;
+>   repeatable as `-r a -r b` or `-r a,b` for several, one labelled block
+>   each) · `aqmd internal "question"` (the shared policy only) ·
+>   `aqmd research "question"` (prior art only). Never `cd` to another repo
+>   to search it and `cd` back. Know the exact word instead of the idea →
+>   `sqlite3 .qmd/index.sqlite` is faster and needs nothing installed. Details
+>   and the missing-index fix are in `_DOCS/STANDARDS-repo-search.md`.
 >
 > Refresh these copies with:
 > `bun /Volumes/ThunderBolt/Development/_ob/scripts/sync-repo-standards.ts open-brain`
@@ -53,14 +62,16 @@
 > sync, and deleting past the end marker eats the top of this file. The marker
 > is what stops the banner coming back; a later rule change raises a new one.
 <!-- /STANDARDS-SYNC-BANNER -->
-<!-- standards-acknowledged: 44f96e3f7d04 -->
+<!-- standards-acknowledged: 8dbb71a098de -->
 
 # Open Brain
 
 MCP server providing a unified semantic brain over PostgreSQL + pgvector. TypeScript (Bun), with a Python client package at `python/openbrain-memory/`.
 
 
-> Repo LAWs and workflow expectations are documented here for Codex and exposed to Claude through the `CLAUDE.md -> AGENTS.md` symlink.
+> Repo LAWs and workflow expectations are documented here and apply to every
+> runtime. `CLAUDE.md` is a thin router that points here and carries only
+> Claude-specific deltas; this file wins unless a rule there is stricter.
 
 
 ## Standards (in this repo)
@@ -91,7 +102,47 @@ Repo-specific rules below this line override the copies when stricter.
 - **Database:** PostgreSQL 18 + pgvector (halfvec 768)
 - **Embeddings:** Any OpenAI-compatible endpoint via `EMBEDDING_BASE_URL` (prod: local MLX server on 127.0.0.1:8791, `embeddinggemma-300m-8bit`). Hosted prod sets `EMBEDDING_WATCHDOG_RESTART_SCRIPT` so repeated provider failures bounce the local MLX embedding daemon.
 - **Auth:** Per-consumer Bearer tokens (admin, agent, discord, ob-admin, promoter, readonly)
-- **Deploy:** core01 Mac Mini via launchd `com.rico.open-brain` (10.71.1.21:3100). Source lives in `/Volumes/ThunderBolt/Development/open-brain`; the running app lives in `/Volumes/ThunderBolt/open-brain/app`; qmd runtime/index lives in `/Volumes/ThunderBolt/qmd`. LXC 208 decommissioned 2026-06-11; its Postgres (10.71.20.49) retained as a pre-cutover snapshot.
+- **Deploy:** core01 Mac Mini via launchd `com.rico.open-brain` (10.71.1.21:3100). Source lives in `/Volumes/ThunderBolt/Development/open-brain`; the running app lives in `/Volumes/ThunderBolt/open-brain/app`; qmd runtime/index lives in `/Volumes/ThunderBolt/qmd`.
+- **core01 runs multiple workers; this machine runs one.** `10.71.1.21:3100` is a front over `open-brain-worker-1` (3101) and `open-brain-worker-2` (3102) — confirmed 2026-07-30 from the `workers` array in `/health`, which the single-process local service does not emit. Session caps are **per worker** (`DEFAULT_MAX_SESSIONS = 100`, `src/transport.ts`), so core01 has ~200 slots and load balancing while local has 100 and neither. **Do not size capacity or concurrency against the local service and assume it transfers.** `curl -s http://10.71.1.21:3100/health` answers this in under a second; guessing at it produced a wrong conclusion once already.
+- **Hosts — there are exactly two.** This machine while developing, and core01 when the dev work is done. No other database or service host belongs to this project. Retired LXC hosts may still answer on the network and still hold old Open Brain data; that does not make them valid. Do not point config, docs, canaries, or tooling at one, and do not treat a successful connection as evidence a host is in scope.
+- **Retired hosts are out of scope, not worthless.** Earlier Open Brain attempts left databases that still hold real thinking — design specs, SOPs, and decisions that predate the current epics and were never carried forward as reasoning. Leave them alone: do not connect, query, migrate, or drop anything. They are not this repo's data, and reading them is not part of any task here. If a question genuinely needs that history, it is an explicit, operator-approved archaeology task with its own scope — never a side quest inside other work. The default is: this project does not touch them.
+- **Prior-art clones live at `/Volumes/ThunderBolt/open-brain-local/research/`** — `gbrain`, `cognee`, `cognee-integrations`, `graphiti`, `honcho`, `mem0`, as real git clones. Read prior art from **source, not marketing**; that is what made the existing borrow-list usable. Findings belong in `docs/prior-art/`, not in a scratch directory. Anything borrowed — code *or* idea — gets attribution: see `docs/prior-art/ATTRIBUTION.md`.
+- **Search that prior art with the `research` qmd index — do not grep six trees.** All six clones are indexed as one named index, so a single query crosses all of them, which is the whole point: the useful prior-art question is comparative ("how does each of these model X?"), and that is exactly what six separate searches answer badly.
+
+  ```bash
+  aqmd research "how are temporal relationships modeled"   # all six clones
+  aqmd in graphiti "how are edges deduplicated"            # one clone
+  aqmd all "question"        # this fleet AND the clones, in one query
+  ```
+
+  `aqmd` resolves the index for you and refuses to run unscoped. The explicit
+  form still works and is what `aqmd` calls underneath:
+
+  ```bash
+  qmd query "how are temporal relationships modeled" --index research
+  qmd query "..." --index research -c graphiti    # one project only
+  qmd search "SearchConfig" --index research       # BM25, ~0.1s
+  qmd get "#df268b"                                # open a hit by docid
+  ```
+
+  Use `--index research`, never `INDEX_PATH`: that swaps only the database and
+  silently inherits the global collection list, mixing our own fleet code into
+  prior-art results. `-c <project>` narrows to one clone.
+
+  **The clones stay pristine.** The index lives in `~/.cache/qmd/research.sqlite`,
+  not in the checkouts — nothing is written into them, so `git pull` stays clean
+  and upstream diffs stay honest. Never run `qmd init` or `qmd collection add`
+  inside one.
+
+  Rebuild after pulling new upstream commits, or if the index is missing
+  (it is a cache, so it is expendable and rebuildable):
+
+  ```bash
+  /Volumes/ThunderBolt/Development/_ob/bin/qmd-reference-index
+  ```
+
+  Rebuilding re-embeds and is GPU-bound — minutes, not seconds. Only do it when
+  the sources have actually moved. Process notes: `_DOCS/QMD_INDEXES.md`.
 
 ## Commands
 
@@ -101,6 +152,26 @@ bunx tsc --noEmit               # typecheck
 bun run migrate                 # run migrations
 bun test                        # run tests
 ```
+
+### Querying the dogfood database
+
+`.env` carries the standard libpq vars (`PGHOST`/`PGPORT`/`PGDATABASE`/`PGUSER`)
+alongside the app's `DB_*` ones, so **`psql` needs no connection arguments**:
+
+```bash
+set -a; . ./.env; set +a
+psql -At -c "select count(*) from ob_session_events;"
+```
+
+Do NOT hand-build a connection. There is no `DATABASE_URL` in this repo, the app
+reads `DB_*` and `psql` does not, and bare `psql` defaults to a `rico` database
+that does not exist. Deriving it by hand cost five failed calls every time,
+repeatedly, until the libpq vars were added on 2026-07-29.
+
+The dogfood database is `open_brain_local_20260724` on `127.0.0.1` — the real one
+for this machine while in dev/dogfood mode. Note that `bun test` Postgres tests
+SKIP SILENTLY without `OPENBRAIN_TEST_DATABASE_URL`, so a green run may have
+tested nothing.
 
 ## Codex Durable Memory
 
