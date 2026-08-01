@@ -83,6 +83,42 @@ class ClosingRecorder:
         self.closed += 1
 
 
+@dataclass
+class CanonPackReader:
+    """A canon factory stand-in: records the settings it was asked for, returns a pack.
+
+    ``run_session_start`` takes a ``canon_factory`` that reads
+    ``agent_context_pack`` and returns a
+    :class:`~openbrain.apps.hooks.session.CanonContext`. This recorder captures
+    the :class:`CanonSettings` handed to it -- so a test can assert exactly which
+    sections and scope were requested -- and hands back a fixed pack plus an
+    observable close, without building a client or reaching a server.
+
+    Attributes:
+        pack: The payload to return as the assembled canon.
+        requested: Every settings object the factory was called with, in order.
+        closed: How many times the returned slot closer was called.
+        fail: When true, raise :class:`LaneUnreachableError` instead of returning
+            -- the unreachable-brain path.
+    """
+
+    pack: Any = field(default_factory=lambda: {"sections": {}})
+    requested: list[Any] = field(default_factory=list)
+    closed: int = 0
+    fail: bool = False
+
+    def __call__(self, settings: Any) -> Any:
+        from openbrain.apps.hooks.session import CanonContext
+
+        self.requested.append(settings)
+        if self.fail:
+            raise LaneUnreachableError
+        return CanonContext(pack=self.pack, close=self._close)
+
+    def _close(self) -> None:
+        self.closed += 1
+
+
 def operator_line(
     uuid: str, content: str, *, session: str = "s1", timestamp: str = TIMESTAMP
 ) -> str:

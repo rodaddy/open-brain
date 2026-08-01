@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from conftest import (
+    CanonPackReader,
     ClosingRecorder,
     RecordingLane,
     UnreachableLane,
@@ -33,27 +34,36 @@ from conftest import (
     write_lines,
 )
 from openbrain.apps.capture.watermark import WatermarkStore
-from openbrain.apps.hooks import post_compact, session_end, stop, subagent_stop
+from openbrain.apps.hooks import (
+    post_compact,
+    session_end,
+    session_start,
+    stop,
+    subagent_stop,
+)
 from openbrain.apps.hooks.dispatch import ENTRYPOINTS
 from openbrain.apps.hooks.session import (
     STOP_HOOK_DEADLINE_SECONDS,
+    CanonNotConfiguredError,
     CaptureNotConfiguredError,
     PostCompactHook,
     SessionEndHook,
+    SessionStartHook,
     StartedLane,
     StopHook,
     SubagentStopHook,
     run_post_compact,
     run_session_end,
+    run_session_start,
     run_stop,
     run_subagent_stop,
 )
-from openbrain.config import CaptureSettings
+from openbrain.config import CanonSettings, CaptureSettings
 
 #: The events whose entrypoints do REAL work and reach settings/the client, so
 #: the shared "run it through the table" tests below skip them and each gets its
 #: own focused coverage. Every other event is a drain-and-exit stub.
-REAL_EVENTS = ("Stop", "SubagentStop", "SessionEnd", "PostCompact")
+REAL_EVENTS = ("SessionStart", "Stop", "SubagentStop", "SessionEnd", "PostCompact")
 
 if TYPE_CHECKING:
     from typing import TextIO
@@ -1100,3 +1110,270 @@ class TestStartupFailureReleasesTheSessionSlot:
             assert asyncio_run(WatermarkStore(watermark).offset_for("sess")) == 0
         finally:
             server.close()
+
+
+#: The canon-only default the ruling mandates: exactly the three
+#: structured-guidance sections, nothing episodic.
+CANON_DEFAULT_SECTIONS = ("profile_guidance", "process_guidance", "repo_facts")
+
+#: Sections that are BACK-HISTORY -- auto-loading any of these on session start
+#: is exactly what the ruling forbids. The default must contain none of them.
+EPISODIC_SECTIONS = (
+    "working_set",
+    "durable_memory",
+    "durable_lane_context",
+    "recovery",
+    "candidate_memory",
+    "pointers",
+)
+
+
+def canon_settings(**overrides: object) -> CanonSettings:
+    """A configured CanonSettings; endpoint values are inert under an injected factory.
+
+    ``run_session_start`` with an injected ``canon_factory`` never builds a real
+    client, so ``base_url``/``token`` here are never dialed. They exist because a
+    configured canon carries them, not because the test reaches a service.
+    """
+    values: dict[str, object] = {
+        "base_url": "http://127.0.0.1:0",
+        "token": "unused-in-injected-canon-tests",  # noqa: S106 -- not a real secret
+    }
+    values.update(overrides)
+    return CanonSettings(**values)
+
+
+class TestSessionStartParsesTheCapturedPayload:
+    """The SessionStart fixture yields the source and session id canon reads."""
+
+    def test_source_and_session_are_read_from_the_real_bytes(self) -> None:
+        payload = SessionStartHook.model_validate_json(fixture_bytes("SessionStart"))
+        captured = json.loads(fixture_bytes("SessionStart"))
+        assert payload.session_id == captured["session_id"]
+        assert payload.source == captured["source"]
+
+    def test_the_startup_fixture_is_the_startup_source(self) -> None:
+        # The stored fixture is a fresh session -- source "startup". The other
+        # variants (resume/compact/clear/fork) are the same do-canon path.
+        payload = SessionStartHook.model_validate_json(fixture_bytes("SessionStart"))
+        assert payload.source == "startup"
+
+
+class TestSessionStartRequestsCanonOnly:
+    """run_session_start requests the always-known layer and NOTHING episodic."""
+
+    async def test_the_default_requests_exactly_the_three_canon_sections(self) -> None:
+        reader = CanonPackReader()
+        payload = SessionStartHook(session_id="sess", source="startup")
+
+        await run_session_start(payload, canon_settings(), canon_factory=reader)
+
+        # The factory was handed settings whose sections are canon-only.
+        assert len(reader.requested) == 1
+        assert reader.requested[0].sections == CANON_DEFAULT_SECTIONS
+
+    def test_the_settings_default_is_canon_only(self) -> None:
+        # Grounded in canon.md: profile_guidance (User), process_guidance (Soul:
+        # rules/LAWs/standards/persona), repo_facts (this repo, scope-bound).
+        assert CanonSettings().sections == CANON_DEFAULT_SECTIONS
+
+    def test_no_episodic_section_is_in_the_default(self) -> None:
+        # The whole ruling: back-history poisons a fresh start, so none of it is
+        # auto-loaded. This is the regression guard on that invariant.
+        default = set(CanonSettings().sections)
+        assert default.isdisjoint(EPISODIC_SECTIONS)
+
+    async def test_the_read_slot_is_released(self) -> None:
+        reader = CanonPackReader()
+        payload = SessionStartHook(session_id="sess", source="startup")
+
+        await run_session_start(payload, canon_settings(), canon_factory=reader)
+
+        assert reader.closed == 1
+
+    async def test_an_empty_sections_override_reads_nothing(self) -> None:
+        # An explicit empty override means "inject nothing" -- no factory call,
+        # no pack, no injection. The default is canon-only, never empty.
+        reader = CanonPackReader()
+        payload = SessionStartHook(session_id="sess", source="startup")
+
+        pack = await run_session_start(
+            payload, canon_settings(sections=()), canon_factory=reader
+        )
+
+        assert pack is None
+        assert reader.requested == []
+        assert reader.closed == 0
+
+    async def test_the_whole_pack_is_returned_untouched(self) -> None:
+        # No truncation, shortening, or reshaping anywhere -- the pack the server
+        # assembled is what the capability returns, byte-for-byte.
+        pack = {
+            "schema": "openbrain.agent_context_pack.v1",
+            "sections": {
+                "profile_guidance": {"items": ["x" * 5000]},
+                "process_guidance": {"items": ["rule"]},
+                "repo_facts": {"items": []},
+            },
+        }
+        reader = CanonPackReader(pack=pack)
+        payload = SessionStartHook(session_id="sess", source="startup")
+
+        returned = await run_session_start(
+            payload, canon_settings(), canon_factory=reader
+        )
+
+        assert returned is pack
+
+
+def _write_injection(pack: object, out: io.StringIO) -> None:
+    """Serialise a pack through the entrypoint's own envelope builder."""
+    out.write(session_start._injection_envelope(pack))
+
+
+class TestSessionStartEntrypointWritesTheInjection:
+    """The additionalContext envelope carries the pack, WHOLE, on the happy path."""
+
+    def test_the_envelope_shape_is_the_sessionstart_contract(self) -> None:
+        pack = {"sections": {"repo_facts": {"items": [{"fact": "two hosts only"}]}}}
+        out = io.StringIO()
+        _write_injection(pack, out)
+
+        envelope = json.loads(out.getvalue())
+        assert set(envelope) == {"hookSpecificOutput"}
+        specific = envelope["hookSpecificOutput"]
+        assert specific["hookEventName"] == "SessionStart"
+        # additionalContext is a STRING carrying the pack verbatim.
+        assert isinstance(specific["additionalContext"], str)
+        assert json.loads(specific["additionalContext"]) == pack
+
+    def test_the_injected_pack_is_whole(self) -> None:
+        # A large section body survives into additionalContext with no bound.
+        big = "y" * 20000
+        pack = {"sections": {"process_guidance": {"items": [big]}}}
+        out = io.StringIO()
+        _write_injection(pack, out)
+
+        envelope = json.loads(out.getvalue())
+        assert big in envelope["hookSpecificOutput"]["additionalContext"]
+
+    def test_the_entrypoint_writes_the_envelope_end_to_end(self) -> None:
+        # inject_canon_with, real path but injected factory via monkeypatch-free
+        # override of the module factory would be heavier; drive the capability's
+        # own return through the envelope by pointing the real factory at a reader.
+        pack = {"sections": {"profile_guidance": {"items": ["Rico"]}}}
+        reader = CanonPackReader(pack=pack)
+        import openbrain.apps.hooks.session as session_mod
+
+        original = session_mod._canon_context
+        session_mod._canon_context = reader  # type: ignore[assignment]
+        try:
+            out = io.StringIO()
+            session_start.inject_canon_with(
+                io.StringIO(fixture_bytes("SessionStart")), out, canon_settings()
+            )
+        finally:
+            session_mod._canon_context = original  # type: ignore[assignment]
+
+        envelope = json.loads(out.getvalue())
+        assert json.loads(
+            envelope["hookSpecificOutput"]["additionalContext"]
+        ) == pack
+
+
+class TestSessionStartEntrypointNeverDisruptsTheSession:
+    """inject_canon fails open: every fault leaves stdout empty and the session opens."""
+
+    def test_a_malformed_payload_is_swallowed_with_empty_stdout(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        out = io.StringIO()
+        session_start.inject_canon(io.StringIO("{not json"), out)
+        assert out.getvalue() == ""
+        assert capsys.readouterr().out == ""
+
+    def test_an_unconfigured_canon_is_swallowed_with_empty_stdout(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # The real fixture carries a session_id, so the real factory is reached;
+        # an unconfigured canon raises CanonNotConfiguredError, which the
+        # entrypoint must eat and write nothing.
+        out = io.StringIO()
+        session_start.inject_canon_with(
+            io.StringIO(fixture_bytes("SessionStart")), out, CanonSettings()
+        )
+        assert out.getvalue() == ""
+        assert capsys.readouterr().out == ""
+
+    def test_main_returns_zero(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("sys.stdin", io.StringIO("{not json"))
+        assert session_start.main() == 0
+
+    def test_stdin_content_never_reaches_the_log(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A sentinel in a malformed payload must not appear in any log output.
+
+        Same content-free-by-construction guarantee the Stop entrypoint proves:
+        a pydantic ValidationError carries its input_value (the raw stdin), and
+        loguru's diagnose would render it. Only the class name is logged.
+        """
+        from loguru import logger
+
+        sink = io.StringIO()
+        sink_id = logger.add(sink, backtrace=True, diagnose=True, level="WARNING")
+        try:
+            payload = '{"session_id": ["SECRET-CANON-SENTINEL"], "source": "startup"}'
+            session_start.inject_canon(io.StringIO(payload), io.StringIO())
+        finally:
+            logger.remove(sink_id)
+
+        assert "SECRET-CANON-SENTINEL" not in sink.getvalue()
+        assert "SECRET-CANON-SENTINEL" not in capsys.readouterr().err
+        assert "SessionStart canon injection failed" in sink.getvalue()
+
+
+class TestSessionStartUnreachableCanonFailsOpen:
+    """An unreachable brain leaves the session opening with no injection."""
+
+    async def test_a_failed_read_raises_from_the_capability(self) -> None:
+        # The capability surfaces the failure (its tests see it); the entrypoint
+        # is what swallows it.
+        reader = CanonPackReader(fail=True)
+        payload = SessionStartHook(session_id="sess", source="startup")
+
+        with pytest.raises(RuntimeError):
+            await run_session_start(payload, canon_settings(), canon_factory=reader)
+
+    def test_the_entrypoint_swallows_it_and_writes_nothing(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # Point the real module factory at an unreachable read; inject_canon_with
+        # must eat it with empty stdout.
+        reader = CanonPackReader(fail=True)
+        import openbrain.apps.hooks.session as session_mod
+
+        original = session_mod._canon_context
+        session_mod._canon_context = reader  # type: ignore[assignment]
+        try:
+            out = io.StringIO()
+            session_start.inject_canon_with(
+                io.StringIO(fixture_bytes("SessionStart")), out, canon_settings()
+            )
+        finally:
+            session_mod._canon_context = original  # type: ignore[assignment]
+
+        assert out.getvalue() == ""
+        assert capsys.readouterr().out == ""
+
+
+class TestUnconfiguredCanonFailsAtUseNotAtLoad:
+    """base_url/token are optional so a non-hook process loads; a hook needs both."""
+
+    async def test_run_session_start_raises_when_no_endpoint_or_token(self) -> None:
+        # No canon_factory: run_session_start uses the real _canon_context, which
+        # checks config before importing or dialing anything.
+        payload = SessionStartHook(session_id="sess", source="startup")
+
+        with pytest.raises(CanonNotConfiguredError):
+            await run_session_start(payload, CanonSettings())

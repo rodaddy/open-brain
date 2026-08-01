@@ -54,12 +54,13 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, SkipValidation
 
 from openbrain.apps.capture.deliver import Delivery, RawLane, deliver_new_turns
 from openbrain.apps.capture.watermark import WatermarkStore
-from openbrain.config import CaptureSettings, ConfigurationError
+from openbrain.config import CanonSettings, CaptureSettings, ConfigurationError
 from openbrain.models.turn import RawTurn, TurnRole
 
 #: The Stop harness deadline, in seconds. NOT a content bound -- this is a TIME
@@ -141,6 +142,51 @@ class CaptureNotConfiguredError(ConfigurationError):
             f"OPENBRAIN_TOKEN aliases) to the Open Brain service this hook "
             f"writes to."
         )
+
+
+class CanonNotConfiguredError(ConfigurationError):
+    """A ``SessionStart`` fired but canon has no endpoint or token to read from.
+
+    ``base_url`` and ``token`` are optional on ``CanonSettings`` so a non-hook
+    process loads without them; a session-start hook that actually injects needs
+    both. Raised here rather than at settings load, and swallowed by the
+    entrypoint -- an unconfigured canon must not break the session it opens, only
+    decline to inject.
+    """
+
+    def __init__(self, missing: str) -> None:
+        """Name which canon coordinates were absent."""
+        super().__init__(
+            f"canon is not configured: {missing} unset. "
+            f"ACTION REQUIRED: set OPENBRAIN_CANON_BASE_URL and "
+            f"OPENBRAIN_CANON_TOKEN (or the OPENBRAIN_BASE_URL / "
+            f"OPENBRAIN_TOKEN aliases) to the Open Brain service this hook "
+            f"reads canon from."
+        )
+
+
+class SessionStartHook(BaseModel):
+    """The fields a ``SessionStart`` payload carries that canon injection needs.
+
+    Modelled from the captured fixture (``tests/fixtures/captured_hooks/
+    SessionStart.json``): ``source`` is the trigger
+    (``startup``/``resume``/``clear``/``compact``/``fork``) and ``session_id``
+    keys the server session the pack is read under. Both optional -- a hook can
+    fire before either exists, a do-nothing-special outcome, not a parse failure
+    -- and ``extra="ignore"`` drops the payload's other fields
+    (``transcript_path``, ``cwd``, and, on the ``compact`` variant, ``prompt_id``
+    and ``model``) canon has no interest in.
+
+    ``source`` is READ but does not gate injection: the ruling is that canon --
+    the always-known layer -- loads on every session start regardless of trigger.
+    Back-history is what varies by source, and back-history is explicit-on-request
+    (the resume flow), never auto-loaded here.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    session_id: str | None = None
+    source: str | None = None
 
 
 class StopHook(BaseModel):
@@ -555,3 +601,149 @@ def _started_memory(settings: CaptureSettings, session_key: str) -> StartedLane:
         client.close()
         raise
     return StartedLane(lane=memory, close=client.close)
+
+
+#: The per-request network timeout for the canon read, in seconds. Unlike the
+#: capture path this is NOT tied to the 5-second Stop deadline -- SessionStart
+#: has a far larger harness allowance -- but a session start must not hang on an
+#: unreachable brain, so the read is still bounded and retry is pinned to one
+#: attempt. On timeout the entrypoint swallows and the session opens with no
+#: injection, exactly the fail-open contract every hook carries.
+CANON_REQUEST_TIMEOUT_SECONDS = 5.0
+
+
+#: A canon read against ``agent_context_pack``, and how to release its slot. The
+#: pack payload is the server's assembled canon (schema
+#: ``openbrain.agent_context_pack.v1``: ``scope``, ``sections``, ``warnings``);
+#: ``close`` frees the MCP session the read opened.
+class CanonContext(BaseModel):
+    """The canon pack a session-start read produced, plus its slot closer.
+
+    Attributes:
+        pack: The decoded ``agent_context_pack`` payload -- the canon sections
+            the server assembled. Whatever the server returned, carried WHOLE:
+            nothing here bounds, shortens, or reshapes it.
+        close: Releases the server-side MCP session the read allocated. A no-op
+            for an injected test recorder; the real factory wires it to the
+            client's ``close``.
+    """
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    pack: SkipValidation[Any]
+    close: Callable[[], None]
+
+
+async def run_session_start(
+    payload: SessionStartHook,
+    settings: CanonSettings,
+    *,
+    canon_factory: Callable[[CanonSettings], CanonContext] | None = None,
+) -> Any | None:
+    """Read the CANON-tier context pack for one ``SessionStart`` payload.
+
+    Args:
+        payload: The parsed ``SessionStart`` hook fields. ``source`` is read but
+            does not gate the read -- canon loads on every session start.
+        settings: The ``canon`` configuration: endpoint, token, and the scope and
+            section list the pack is requested under.
+        canon_factory: Reads the pack for the given settings and returns it with
+            its slot closer. Injected so tests hand in a recorder; defaults to a
+            real ``openbrain_memory`` client issuing ``agent_context_pack``.
+
+    Returns:
+        The decoded ``agent_context_pack`` payload -- the assembled canon
+        sections -- carried WHOLE, or ``None`` when canon is configured to
+        request no sections (an explicit empty override, nothing to inject).
+
+    Canon is the ALWAYS-KNOWN layer and NOTHING episodic: the default
+    ``settings.sections`` is exactly ``profile_guidance`` (who Rico is, the User
+    layer), ``process_guidance`` (the rules, LAWs, coding/git standards, persona
+    -- the Soul layer), and ``repo_facts`` (this repo's truths, scope-bound). No
+    lane events, working set, durable recall, recovery, or pointers are requested
+    by default, because auto-loading back-history poisons a fresh start; that
+    history is explicit-on-request via the resume flow
+    (``_ob/skills/brain/workflows/canon.md`` "Default: canon only";
+    ``_plans/canon-always-known.md`` "The three lanes already exist"). An
+    operator may widen or narrow the sections via ``OPENBRAIN_CANON_SECTIONS``,
+    but the DEFAULT is canon-only.
+
+    Raises:
+        Whatever the factory raises (e.g. :class:`CanonNotConfiguredError`). The
+        ENTRYPOINT swallows these; a failed read leaves the session opening with
+        no injection and must never break it.
+    """
+    if not settings.sections:
+        return None
+    build = canon_factory if canon_factory is not None else _canon_context
+    context = build(settings)
+    try:
+        return context.pack
+    finally:
+        # The read holds a server session slot; release it on every path, the
+        # same lifecycle rule the capture capabilities own. The closer is
+        # content-free and swallows its own transport errors.
+        context.close()
+
+
+def _canon_context(settings: CanonSettings) -> CanonContext:
+    """Read the canon pack from a real ``openbrain_memory`` client.
+
+    The one non-test canon factory. Requests exactly ``settings.sections`` from
+    ``agent_context_pack`` under the configured scope, binding ``repo_facts`` to
+    ``settings.repo`` exactly (the server never falls back to another repo). The
+    sibling is imported here, not at module top, so its import graph is not paid
+    by a test that injects the pack, matching ``_started_memory``.
+
+    Raises:
+        CanonNotConfiguredError: When no endpoint or token is set. The entrypoint
+            swallows it -- an unconfigured hook declines to inject, it does not
+            fail the session.
+    """
+    if settings.base_url is None or settings.token is None:
+        missing = ", ".join(
+            name
+            for name, value in (
+                ("base_url", settings.base_url),
+                ("token", settings.token),
+            )
+            if value is None
+        )
+        raise CanonNotConfiguredError(missing)
+
+    from openbrain_memory.client import OpenBrainClient
+    from openbrain_memory.policy import RetryPolicy
+
+    # One attempt: a session start must not be parked by a retryable 429/5xx or a
+    # Retry-After sleep. A failed read simply opens the session without injection.
+    client = OpenBrainClient(
+        base_url=settings.base_url,
+        token=settings.token.get_secret_value(),
+        # Read-only: the client sends X-Namespace only under
+        # delegate_namespace=True (default off), and this passes no per-call
+        # namespace, so the server scopes the pack to the token's own namespace.
+        # agent is reused as the required-but-inert client namespace so nothing
+        # invents a second identity string.
+        namespace=settings.agent,
+        agent_id=settings.agent,
+        timeout=CANON_REQUEST_TIMEOUT_SECONDS,
+        retry_policy=RetryPolicy(attempts=1),
+    )
+    try:
+        pack = client.agent_context_pack(
+            agent=settings.agent,
+            platform=settings.platform,
+            server_id=settings.server_id,
+            channel_id=settings.channel_id,
+            session_key=settings.session_key,
+            repo=settings.repo,
+            requested_sections=list(settings.sections),
+        )
+    except BaseException:
+        # agent_context_pack lazily opens the MCP session (``_ensure_session``);
+        # if the call then raises after the slot was allocated, close it so the
+        # read path does not leak a slot -- the same leak the capture factory
+        # guards on its startup path.
+        client.close()
+        raise
+    return CanonContext(pack=pack, close=client.close)

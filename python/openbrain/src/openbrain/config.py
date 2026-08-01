@@ -77,6 +77,7 @@ from pydantic import (
     ConfigDict,
     Field,
     SecretStr,
+    field_validator,
     model_validator,
 )
 from pydantic.fields import FieldInfo
@@ -408,6 +409,117 @@ class CaptureSettings(_Base):
     )
 
 
+class CanonSettings(_Base):
+    """Where the ``SessionStart`` hook reads canon from, and the scope it reads under.
+
+    Canon is the always-known layer -- who Rico is, the rules, this repo's facts
+    -- that the ``SessionStart`` hook injects at the top of every session. It is
+    the DEFAULT of ``agent_context_pack``: exactly the three structured-guidance
+    sections (``profile_guidance``, ``process_guidance``, ``repo_facts``) and
+    NOTHING episodic. Back-history -- lane events, working set, durable recall --
+    is explicit-on-request (the resume flow) precisely because auto-loading it
+    contaminates a fresh start (``_plans/canon-always-known.md`` "Default: canon
+    only"; ``_ob/skills/brain/workflows/canon.md``).
+
+    ``base_url`` and ``token`` share the SAME aliases capture uses
+    (``OPENBRAIN_BASE_URL`` / ``OPENBRAIN_TOKEN``) because both reach the one
+    Open Brain service the environment already points at; a canon-specific
+    endpoint is a separate override for the rare case they diverge. They are
+    OPTIONAL for the same reason capture's are: a non-hook process must load
+    without them, and the requirement is enforced at use time in
+    ``apps.hooks.session`` where a missing value raises a named error the
+    entrypoint swallows -- an unconfigured canon declines to inject, it does not
+    break the session it opens.
+
+    The scope coordinates carry canon.md's own defaults verbatim
+    (``platform=claude-code``, ``server_id=local``, ``channel_id=cli``,
+    ``session_key=dev:open-brain``, ``repo=open-brain``). ``repo`` binds
+    ``repo_facts`` EXACTLY -- the server never falls back to another repository
+    (``src/tools/agent-context-pack.ts``), which is the "scoped, never falls back"
+    property the canon model requires.
+
+    ``sections`` is the override the ruling permits: it may widen or narrow the
+    requested sections explicitly, but its DEFAULT is canon-only. Nothing here
+    bounds content -- there is no size, truncation, or token field, by design.
+
+    Attributes:
+        base_url: The Open Brain service the hook reads canon from, or ``None``
+            when unconfigured. Never hardcode a host (``open-brain/CLAUDE.md``).
+        token: The bearer token, held as a ``SecretStr``, or ``None`` when
+            unconfigured.
+        agent: The agent identity sent as the pack's ``agent`` scope field.
+        platform: The runtime platform scope field.
+        server_id: The server/workspace scope field.
+        channel_id: The channel scope field.
+        session_key: The stable active-session scope field.
+        repo: The repository slug ``repo_facts`` binds to exactly.
+        sections: The sections to request. The canon-only default is the three
+            structured-guidance sections; an operator may override it.
+    """
+
+    base_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "OPENBRAIN_CANON_BASE_URL", "OPENBRAIN_BASE_URL"
+        ),
+    )
+    token: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("OPENBRAIN_CANON_TOKEN", "OPENBRAIN_TOKEN"),
+    )
+    agent: str = Field(
+        default="claude",
+        validation_alias=AliasChoices("OPENBRAIN_CANON_AGENT"),
+    )
+    platform: str = Field(
+        default="claude-code",
+        validation_alias=AliasChoices("OPENBRAIN_CANON_PLATFORM"),
+    )
+    server_id: str = Field(
+        default="local",
+        validation_alias=AliasChoices("OPENBRAIN_CANON_SERVER_ID"),
+    )
+    channel_id: str = Field(
+        default="cli",
+        validation_alias=AliasChoices("OPENBRAIN_CANON_CHANNEL_ID"),
+    )
+    session_key: str = Field(
+        default="dev:open-brain",
+        validation_alias=AliasChoices("OPENBRAIN_CANON_SESSION_KEY"),
+    )
+    repo: str = Field(
+        default="open-brain",
+        validation_alias=AliasChoices("OPENBRAIN_CANON_REPO"),
+    )
+    #: The canon-only default: exactly the three structured-guidance sections the
+    #: canon model names (``_plans/canon-always-known.md`` "The three lanes
+    #: already exist"). NO episodic section -- no working_set, durable_memory,
+    #: durable_lane_context, recovery, candidate_memory, or pointers -- because
+    #: auto-loading back-history poisons a fresh start.
+    sections: tuple[str, ...] = Field(
+        default=("profile_guidance", "process_guidance", "repo_facts"),
+        validation_alias=AliasChoices("OPENBRAIN_CANON_SECTIONS"),
+    )
+
+    @field_validator("sections", mode="before")
+    @classmethod
+    def _split_sections(cls, value: object) -> object:
+        """Accept a comma- or space-separated string for the section override.
+
+        The environment layer hands ``sections`` in as a plain string
+        (``OPENBRAIN_CANON_SECTIONS=profile_guidance,repo_facts``); pydantic's
+        default tuple coercion would treat that string as an iterable of
+        characters. Split it on commas and whitespace, dropping empties, so the
+        env override behaves like the CSV an operator writes. A tuple or list
+        passed in code (as tests and the default do) is returned untouched.
+        """
+        if isinstance(value, str):
+            return tuple(
+                part for chunk in value.split(",") for part in chunk.split() if part
+            )
+        return value
+
+
 class LogSettings(_Base):
     """Structured logging configuration.
 
@@ -519,6 +631,7 @@ _SECTION_MODELS: tuple[tuple[str, type[BaseModel]], ...] = (
     ("database", DatabaseSettings),
     ("embedding", EmbeddingSettings),
     ("capture", CaptureSettings),
+    ("canon", CanonSettings),
     ("logging", LogSettings),
     ("server", ServerSettings),
 )
@@ -694,6 +807,10 @@ class Settings(BaseSettings):
     # reason the others are: it lets the submodel build from its own env aliases
     # when no source supplies a `capture` key.
     capture: CaptureSettings = Field(default_factory=CaptureSettings)
+    # No required fields -- canon is optional like capture, so a non-hook process
+    # loads without it. The SessionStart hook enforces base_url/token at use time
+    # (see CanonSettings and apps.hooks.session).
+    canon: CanonSettings = Field(default_factory=CanonSettings)
     logging: LogSettings = Field(default_factory=LogSettings)
     server: ServerSettings = Field(default_factory=ServerSettings)
 
@@ -966,3 +1083,50 @@ def load_capture_settings(
     # ``populate_by_name``, so ``model_validate`` accepts the names. A splat would
     # not type-check the heterogeneous mapping against each field's type.
     return CaptureSettings.model_validate(values)
+
+
+def load_canon_settings(
+    environ: Mapping[str, str] | None = None,
+) -> CanonSettings:
+    """Resolve ONLY the ``canon`` section, without the rest of the tree.
+
+    The ``SessionStart`` hook needs canon's endpoint, token, scope, and section
+    list and nothing else, and it runs in the same environment-configured hook
+    process ``Stop`` does: ``OPENBRAIN_BASE_URL`` and ``OPENBRAIN_TOKEN`` set,
+    the database and embedding variables a server process carries absent. The
+    full ``load_settings`` cannot serve it -- that builds the whole
+    :class:`Settings`, and :class:`DatabaseSettings` / :class:`EmbeddingSettings`
+    have required fields a hook does not set, so a canon hook with only the two
+    shared variables would fail validation on config it never uses. Swallowed by
+    the entrypoint, that is a SILENT NO INJECTION on every session start.
+
+    This mirrors :func:`load_capture_settings` exactly: it validates the whole
+    prefixed environment for typos first (so a misspelled ``OPENBRAIN_CANON_*``
+    is rejected rather than loading clean as an unset endpoint and declining
+    canon silently), then resolves canon's own aliases through the same resolver
+    :class:`LegacyFlatEnvSource` uses. It does NOT read the JSON layers: canon is
+    an environment-configured hook concern.
+
+    Args:
+        environ: Environment to read. Defaults to the live process environment;
+            the argument exists so the resolver is testable without mutating it.
+
+    Returns:
+        The validated :class:`CanonSettings`. ``base_url`` and ``token`` are
+        ``None`` when unset, exactly as under the full load -- the requirement is
+        enforced at use time in ``apps.hooks.session``, not here.
+
+    Raises:
+        UnknownEnvironmentVariableError: When a prefixed variable matches no
+            declared setting -- the same check ``load_settings`` runs. Without
+            it, a typo like ``OPENBRAIN_CANON_REP_O`` loads clean, canon reads
+            its default scope, and the operator's override is silently ignored.
+    """
+    source = os.environ if environ is None else environ
+
+    unknown = unknown_prefixed_variables(source)
+    if unknown:
+        raise UnknownEnvironmentVariableError(unknown)
+
+    values = _resolve_section_from_env(CanonSettings, source)
+    return CanonSettings.model_validate(values)
