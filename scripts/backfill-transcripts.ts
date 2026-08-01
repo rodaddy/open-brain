@@ -74,7 +74,7 @@ type Turn = {
 function repoOf(dir: string): string | null {
   const m = dir.match(/^-Volumes-ThunderBolt-Development-(.+)$/);
   return m
-    ? m[1]
+    ? (m[1] ?? null)
     : dir === "-Volumes-ThunderBolt-Development"
       ? "Development"
       : null;
