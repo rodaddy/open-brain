@@ -1930,3 +1930,59 @@ def test_module_entry_point_returns_nonzero_for_lost_write() -> None:
     output = json.loads(completed.stdout)
     assert output["receipt"]["status"] == "lost"
     assert output["receipt"]["durable"] is False
+
+
+def test_module_entry_point_rejects_finding_event_type_loudly() -> None:
+    """A literal ``event_type: "finding"`` is refused, named, and non-zero.
+
+    This seals the 2026-07-30 silent-discard defect. Then, sending an event
+    the write path did not know about produced *exit 0, no output, and no row*
+    (`_plans/front-of-mind-decisions.md`, "Known broken"): four captures were
+    lost before the cause was found, because a memory write that returns
+    success and persists nothing is the worst possible failure.
+
+    The behavior is already proven by composition -- the vocabulary set lives in
+    `EVENT_TYPES`, `capture_distilled` (runtime.py) raises
+    ``Unsupported event_type: finding`` for anything outside it, and the console
+    entry point maps a FAILED receipt to a non-zero exit. This one end-to-end
+    assertion pins the whole chain through the real ``python -m openbrain_memory``
+    console path -- one literal in, one refusal out.
+
+    EXIT CODE, observed not assumed: the rejection is caught inside
+    `capture_distilled` and returned as a FAILED receipt, so the console maps it
+    to exit **1** (`__main__.main`: FAILED/LOST -> 1). Exit 2 is reserved for an
+    exception that escapes `execute_json` entirely -- malformed input, an
+    oversized envelope -- as `test_module_entry_point_emits_json_for_malformed_input`
+    shows. A `finding` capture is a structured FAILED receipt, not an escaped
+    raise, so its code is 1. What seals the dead defect is the pair the silent
+    version could never satisfy: a NAMED error and a NON-ZERO exit, never 0.
+    """
+    payload = request_payload(
+        "capture",
+        distilled=True,
+        content="distilled finding event",
+        event_type="finding",
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-m", "openbrain_memory"],
+        input=json.dumps(payload),
+        text=True,
+        capture_output=True,
+        check=False,
+        cwd=Path(__file__).resolve().parents[1],
+    )
+
+    # The silent defect returned 0; the seal is that it never can again.
+    assert completed.returncode != 0
+    assert completed.returncode == 1
+    assert completed.stderr == ""
+    output = json.loads(completed.stdout)
+    assert output["receipt"]["status"] == "failed"
+    assert output["receipt"]["durable"] is False
+    # The named error is the other half of the seal: the caller is TOLD why,
+    # rather than handed a success with an empty output.
+    assert output["receipt"]["error"] == "Unsupported event_type: finding"
+    # No network was attempted -- the vocabulary refusal is client-side, before
+    # any send, so this seal needs no live server and cannot flake on one.
+    assert output["receipt"]["direct_attempted"] is False
