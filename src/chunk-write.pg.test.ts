@@ -24,7 +24,15 @@ import { toSql } from "pgvector/pg";
 const DB_URL = process.env.OPENBRAIN_TEST_DATABASE_URL;
 const dbDescribe = DB_URL ? describe : describe.skip;
 
-const NS = "ns-chunk-write-test";
+// Per-process namespace so concurrent CI runs cannot collide. The `check` job
+// runs against a SHARED, persistent Postgres on the runner (unlike the
+// ephemeral per-run container in `db-integration`), and `push` + `pull_request`
+// fire two runs at once. With a static namespace, one run's afterEach
+// `DELETE ... WHERE namespace = $1` deletes another run's parent row mid
+// chunk-insert -> `thoughts_parent_id_fkey` violation and a stalled statement
+// (observed as a 5s timeout in run 30691948496). `process.pid` isolates each
+// run, matching the durable-lane and guidance-repo-facts live tests.
+const NS = `ns-chunk-write-test-${process.pid}`;
 const CREATED_BY = "chunk-write-test";
 
 const stubEmbed = async (): Promise<number[]> =>

@@ -644,7 +644,7 @@ dbDescribe("agent_context_pack durable lane reads (live Postgres)", () => {
     await pool.end();
   });
 
-  it("selects equal-timestamp events by UUID and returns the eight recent events chronologically", async () => {
+  it("orders equal-timestamp events by UUID and returns the whole lane chronologically", async () => {
     await cleanupDatabaseRows();
     try {
       await insertLane();
@@ -663,20 +663,28 @@ dbDescribe("agent_context_pack durable lane reads (live Postgres)", () => {
       const payload = JSON.parse((pack.content as any)[0].text);
       expect(pack.isError).toBeFalsy();
       expect(payload.sections.durable_lane_context).toBeDefined();
+      // No budget was requested, so the whole lane comes back whole. All nine
+      // events share one timestamp, so the `created_at DESC, id DESC` tie-break
+      // is what makes the order deterministic; after the chronological reverse
+      // that surfaces as UUID ascending. This used to expect only the eight
+      // "recent" events and `truncated: true`, dropping ...0001 to the 8-event
+      // ceiling. That ceiling and its truncation marker are gone as of
+      // 2026-07-30 (see agent-context-pack-durable-lane.ts) -- the oldest event
+      // is no longer the price of a full read.
       expect(
         payload.sections.durable_lane_context.events.map(
           (event: Record<string, unknown>) => event.id,
         ),
       ).toEqual(
         Array.from(
-          { length: 8 },
+          { length: 9 },
           (_, index) =>
-            `00000000-0000-0000-0000-${String(index + 2).padStart(12, "0")}`,
+            `00000000-0000-0000-0000-${String(index + 1).padStart(12, "0")}`,
         ),
       );
       expect(payload.sections.durable_lane_context).toMatchObject({
-        event_count: 8,
-        truncated: true,
+        event_count: 9,
+        truncated: false,
       });
     } finally {
       await cleanupDatabaseRows();

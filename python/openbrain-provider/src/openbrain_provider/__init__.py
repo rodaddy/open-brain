@@ -1,5 +1,4 @@
-"""
-openbrain_provider - the runtime lifecycle provider for Open Brain.
+"""openbrain_provider - the runtime lifecycle provider for Open Brain.
 
 Purpose:
     The adapter an agent runtime invokes at session start, capture, checkpoint,
