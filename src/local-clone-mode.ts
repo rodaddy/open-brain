@@ -129,7 +129,12 @@ export function validateLocalCloneMode(
   }
 
   const bindHost = requireValue(env, "OPEN_BRAIN_BIND_HOST");
-  requireLiteralLoopback(bindHost, "OPEN_BRAIN_BIND_HOST");
+  // LAN dogfood opt-in (Rico, 2026-07-31): the bind host alone may open to all
+  // interfaces so a second machine can reach this brain; DB, embeddings, and
+  // every other clone-mode guard stay loopback-locked.
+  if (bindHost !== "0.0.0.0") {
+    requireLiteralLoopback(bindHost, "OPEN_BRAIN_BIND_HOST");
+  }
   requireLiteralLoopback(requireValue(env, "DB_HOST"), "DB_HOST");
 
   const embeddingBaseUrl = requireValue(env, "EMBEDDING_BASE_URL");
