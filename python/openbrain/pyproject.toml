@@ -58,6 +58,8 @@ dependencies = [
 # is #420, out of scope here.
 [project.scripts]
 openbrain-capture-stop = "openbrain.apps.hooks.stop:main"
+openbrain-capture-subagent-stop = "openbrain.apps.hooks.subagent_stop:main"
+openbrain-session-end = "openbrain.apps.hooks.session_end:main"
 
 # Resolve the sibling from this uv workspace rather than PyPI, matching
 # openbrain-provider. The editable install is what makes the live gate's

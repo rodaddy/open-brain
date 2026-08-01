@@ -19,9 +19,11 @@ Pattern/Convention:
     on 2026-07-31, it fired, and its fixture now proves its stdin shape -- so it
     has a key like every other verified event.
 
-    Only ``Stop`` runs real work; the rest are stubs that drain stdin and exit
-    0. The distinction is in the modules, not here -- this file treats them
-    identically, which is the point of a table.
+    ``Stop``, ``SubagentStop``, and ``SessionEnd`` run real work -- the two
+    captures deliver through the spine, the close releases the server slot; the
+    rest are stubs that drain stdin and exit 0. The distinction is in the
+    modules, not here -- this file treats them identically, which is the point
+    of a table.
 
 Example:
     >>> import io
@@ -58,8 +60,9 @@ if TYPE_CHECKING:
 #: Every verified event name, mapped to the entrypoint that handles it.
 #:
 #: A ``Callable[[TextIO], int]`` per event: given the hook's stdin, run and
-#: return the exit code. ``Stop`` delivers to the raw lane; every other value is
-#: a stub. The names match ``hook_event_name`` exactly, as the harness sends it.
+#: return the exit code. ``Stop`` and ``SubagentStop`` deliver to the raw lane
+#: and ``SessionEnd`` releases the server slot; every other value is a stub. The
+#: names match ``hook_event_name`` exactly, as the harness sends it.
 ENTRYPOINTS: dict[str, Callable[[TextIO], int]] = {
     "SessionStart": session_start.main,
     "UserPromptSubmit": user_prompt.main,

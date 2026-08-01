@@ -1,9 +1,15 @@
-"""Build the raw-lane client from settings and run one capture delivery.
+"""Build the raw-lane client from settings and run the lifecycle capabilities.
 
 Purpose:
-    The capability the ``stop`` entrypoint calls. It turns a parsed ``Stop``
-    payload plus the settings keystone into a delivered batch: construct the
-    ``openbrain_memory`` client, start its session, and hand off to the spine.
+    The capabilities the ``stop``, ``subagent_stop``, and ``session_end``
+    entrypoints call. Each turns a parsed hook payload plus the settings
+    keystone into an action against the same ``openbrain_memory`` client that
+    this module constructs and starts: ``run_stop`` delivers the main
+    transcript's new turns, ``run_subagent_stop`` delivers a subagent
+    transcript's new turns under its own watermark key, and ``run_session_end``
+    starts and closes a session to release the server slot without delivering.
+    All three share one factory (``_started_memory``) so the client, its
+    session lifecycle, and the close are wired in exactly one place.
 
 Architecture:
     This is where the sibling package is CONSTRUCTED, which the spine
@@ -152,6 +158,56 @@ class StopHook(BaseModel):
     session_id: str | None = None
 
 
+class SubagentStopHook(BaseModel):
+    """The fields a ``SubagentStop`` payload carries that capture needs.
+
+    Modelled from the captured fixture (``tests/fixtures/captured_hooks/
+    SubagentStop.json``). A subagent carries its OWN transcript
+    (``agent_transcript_path``) and its own ``agent_id`` under the parent's
+    ``session_id``; the spine reads that transcript against a watermark keyed to
+    that subagent, exactly as ``Stop`` does for the main one. All are optional --
+    a hook can fire before a field exists, which is a do-nothing outcome, not a
+    parse failure -- and ``extra="ignore"`` drops the payload's many other fields
+    (``agent_type``, ``last_assistant_message``, ...) capture has no use for.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    agent_transcript_path: Path | None = None
+    agent_id: str | None = None
+    session_id: str | None = None
+
+    def watermark_key(self) -> str | None:
+        """The per-subagent watermark key: parent session plus subagent id.
+
+        A subagent's transcript is its own byte stream, so it needs its own read
+        position -- never the parent ``session_id``'s, which the main ``Stop``
+        owns. ``session_id:agent_id`` is unique per subagent and stable across
+        that subagent's repeated Stops, so a missed hook self-heals on the next
+        one exactly as the main path does. ``None`` when either half is absent:
+        there is no transcript to resume then, so there is nothing to key.
+        """
+        if self.session_id is None or self.agent_id is None:
+            return None
+        return f"{self.session_id}:{self.agent_id}"
+
+
+class SessionEndHook(BaseModel):
+    """The fields a ``SessionEnd`` payload carries that the close needs.
+
+    Modelled from the captured fixture (``tests/fixtures/captured_hooks/
+    SessionEnd.json``). Only ``session_id`` matters: it is the key the client's
+    session lifecycle is started under so the closing ``DELETE`` releases the
+    right server slot. Optional -- a hook can fire with no session, which is a
+    do-nothing outcome -- and ``extra="ignore"`` drops ``reason``, ``cwd``, and
+    the rest.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    session_id: str | None = None
+
+
 class StartedLane(BaseModel):
     """A raw lane with its server session started, and how to release it.
 
@@ -236,6 +292,85 @@ async def run_stop(
         # its own transport errors (``openbrain_memory.client.close``), so it
         # cannot itself break the delivery's outcome.
         started.close()
+
+
+async def run_subagent_stop(
+    payload: SubagentStopHook,
+    settings: CaptureSettings,
+    *,
+    lane_factory: Callable[[CaptureSettings, str], StartedLane] | None = None,
+) -> Delivery | None:
+    """Deliver the subagent's unread turns, keyed to its own transcript.
+
+    Args:
+        payload: The parsed ``SubagentStop`` hook fields.
+        settings: The ``capture`` configuration section.
+        lane_factory: Builds the :class:`StartedLane`; injected for tests,
+            defaults to the real ``openbrain_memory`` client.
+
+    Returns:
+        The :class:`~openbrain.apps.capture.deliver.Delivery`, or ``None`` when
+        the payload named no subagent transcript or no watermark key.
+
+    This is the SAME spine as :func:`run_stop`, run against
+    ``agent_transcript_path`` under a per-subagent watermark key
+    (:meth:`SubagentStopHook.watermark_key`) instead of the main transcript and
+    session. It adds no lane, no namespace, and no ordering rule of its own: it
+    maps the subagent fields onto a :class:`StopHook` and defers entirely to
+    ``run_stop``, so the watermark, the close, and the "advance only after the
+    lane returns" rule are inherited unchanged. Namespace stays token-derived
+    server-side (``src/tools/ingest-raw-turn.ts``); nothing here sets one.
+    """
+    key = payload.watermark_key()
+    if payload.agent_transcript_path is None or key is None:
+        return None
+    return await run_stop(
+        StopHook(transcript_path=payload.agent_transcript_path, session_id=key),
+        settings,
+        lane_factory=lane_factory,
+    )
+
+
+async def run_session_end(
+    payload: SessionEndHook,
+    settings: CaptureSettings,
+    *,
+    lane_factory: Callable[[CaptureSettings, str], StartedLane] | None = None,
+) -> bool:
+    """Release the server session slot for one ``SessionEnd`` payload.
+
+    Args:
+        payload: The parsed ``SessionEnd`` hook fields.
+        settings: The ``capture`` configuration section.
+        lane_factory: Builds the :class:`StartedLane`; injected for tests,
+            defaults to the real ``openbrain_memory`` client.
+
+    Returns:
+        ``True`` when a session was started and then closed, ``False`` when the
+        payload named no session -- there is no slot to release then.
+
+    There is NO delivery here: capture already made every turn durable on each
+    ``Stop`` (``docs/decisions/capture-never-drops-a-turn.md``), so ``SessionEnd``
+    only frees the finite per-worker server slot the session held
+    (``DEFAULT_MAX_SESSIONS``, ``src/transport.ts``). It reuses the exact
+    lifecycle ``run_stop`` owns -- the same factory builds the client, starts the
+    session under ``session_id``, and returns the closer -- then closes it in a
+    ``finally`` without ever writing. Reusing the factory is deliberate: the
+    close only reaches the server slot the ``initialize``/``start_session`` legs
+    allocated, so the session must be started before it can be closed.
+
+    Raises:
+        Whatever the factory raises (e.g. :class:`CaptureNotConfiguredError`).
+        The ENTRYPOINT swallows these; a failed close leaks nothing this process
+        can lose -- the slot ages out server-side -- and must never break the
+        session it is ending.
+    """
+    if payload.session_id is None:
+        return False
+    build = lane_factory if lane_factory is not None else _started_memory
+    started = build(settings, payload.session_id)
+    started.close()
+    return True
 
 
 def _started_memory(settings: CaptureSettings, session_key: str) -> StartedLane:

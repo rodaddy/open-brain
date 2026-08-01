@@ -33,16 +33,25 @@ from conftest import (
     write_lines,
 )
 from openbrain.apps.capture.watermark import WatermarkStore
-from openbrain.apps.hooks import stop
+from openbrain.apps.hooks import session_end, stop, subagent_stop
 from openbrain.apps.hooks.dispatch import ENTRYPOINTS
 from openbrain.apps.hooks.session import (
     STOP_HOOK_DEADLINE_SECONDS,
     CaptureNotConfiguredError,
+    SessionEndHook,
     StartedLane,
     StopHook,
+    SubagentStopHook,
+    run_session_end,
     run_stop,
+    run_subagent_stop,
 )
 from openbrain.config import CaptureSettings
+
+#: The events whose entrypoints do REAL work and reach settings/the client, so
+#: the shared "run it through the table" tests below skip them and each gets its
+#: own focused coverage. Every other event is a drain-and-exit stub.
+REAL_EVENTS = ("Stop", "SubagentStop", "SessionEnd")
 
 if TYPE_CHECKING:
     from typing import TextIO
@@ -82,12 +91,12 @@ class TestEveryEntrypointAcceptsItsCapturedInput:
     def test_the_dispatch_table_runs_the_captured_event(
         self, event: str, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        # Stop reaches load_settings, which needs capture config; the stubs do
-        # not. Test Stop's real behaviour separately -- here, only that a
+        # The real entrypoints reach load_settings and the client; the stubs do
+        # not. Test the real ones' behaviour separately -- here, only that a
         # dispatch entry exists and the stubs run clean over real input.
         entrypoint = ENTRYPOINTS[event]
         assert callable(entrypoint)
-        if event != "Stop":
+        if event not in REAL_EVENTS:
             assert entrypoint(stream_for(event)) == 0
             assert capsys.readouterr().out == ""
 
@@ -123,7 +132,7 @@ class TestEveryEntrypointAcceptsItsCapturedInput:
 class TestStubsDrainAndExitZero:
     """A stub consumes its payload and acts on nothing."""
 
-    STUB_EVENTS = tuple(e for e in CAPTURED_EVENTS if e != "Stop")
+    STUB_EVENTS = tuple(e for e in CAPTURED_EVENTS if e not in REAL_EVENTS)
 
     @pytest.mark.parametrize("event", STUB_EVENTS)
     def test_a_stub_returns_zero_and_reads_its_input(self, event: str) -> None:
@@ -272,6 +281,186 @@ class TestStopReleasesTheSessionSlot:
             )
 
         assert recorder.closed == 1
+
+
+class TestSubagentStopParsesTheCapturedPayload:
+    """The SubagentStop fixture yields the subagent transcript and a distinct key."""
+
+    def test_fields_are_read_from_the_real_bytes(self) -> None:
+        payload = SubagentStopHook.model_validate_json(fixture_bytes("SubagentStop"))
+        captured = json.loads(fixture_bytes("SubagentStop"))
+        assert str(payload.agent_transcript_path) == captured["agent_transcript_path"]
+        assert payload.agent_id == captured["agent_id"]
+        assert payload.session_id == captured["session_id"]
+
+    def test_the_watermark_key_is_per_subagent_not_the_parent_session(self) -> None:
+        # The key must NOT collide with the main Stop's watermark for the same
+        # session_id -- the subagent transcript is its own byte stream.
+        payload = SubagentStopHook.model_validate_json(fixture_bytes("SubagentStop"))
+        captured = json.loads(fixture_bytes("SubagentStop"))
+        key = payload.watermark_key()
+        assert key == f"{captured['session_id']}:{captured['agent_id']}"
+        assert key != captured["session_id"]
+
+    def test_missing_agent_id_has_no_key(self) -> None:
+        payload = SubagentStopHook(session_id="s", agent_transcript_path=Path("/x"))
+        assert payload.watermark_key() is None
+
+
+class TestSubagentStopDeliversThroughTheSpine:
+    """run_subagent_stop is the same spine as run_stop, over the subagent transcript."""
+
+    async def test_turns_are_delivered_under_the_per_subagent_key(
+        self, tmp_path: Path
+    ) -> None:
+        # The subagent's OWN transcript, and its own watermark keyed to it.
+        transcript = tmp_path / "sub.jsonl"
+        write_lines(
+            transcript,
+            [operator_line("a1", "subagent turn one", session="sub-key")],
+        )
+        watermark = tmp_path / "wm.sqlite"
+        settings = capture_settings(watermark)
+        lane = RecordingLane()
+        payload = SubagentStopHook(
+            agent_transcript_path=transcript,
+            agent_id="agent-xyz",
+            session_id="parent-sess",
+        )
+
+        result = await run_subagent_stop(
+            payload, settings, lane_factory=lambda _s, _k: started(lane)
+        )
+
+        assert result is not None
+        assert result.delivered == 1
+        assert lane.turns[0]["content"] == "subagent turn one"
+        # Advanced under the per-subagent key, not the parent session_id.
+        stored = await WatermarkStore(watermark).offset_for("parent-sess:agent-xyz")
+        assert stored == result.next_offset
+        # The parent session's own key is untouched by a subagent stop.
+        assert await WatermarkStore(watermark).offset_for("parent-sess") == 0
+
+    async def test_no_transcript_delivers_nothing(self, tmp_path: Path) -> None:
+        settings = capture_settings(tmp_path / "wm.sqlite")
+        payload = SubagentStopHook(agent_id="a", session_id="s")  # no transcript
+
+        result = await run_subagent_stop(
+            payload, settings, lane_factory=lambda _s, _k: started(RecordingLane())
+        )
+
+        assert result is None
+
+    async def test_a_failed_lane_leaves_the_subagent_watermark_unmoved(
+        self, tmp_path: Path
+    ) -> None:
+        transcript = tmp_path / "sub.jsonl"
+        write_lines(transcript, [operator_line("a1", "keep me", session="k")])
+        watermark = tmp_path / "wm.sqlite"
+        settings = capture_settings(watermark)
+        broken = UnreachableLane()
+        payload = SubagentStopHook(
+            agent_transcript_path=transcript, agent_id="a", session_id="s"
+        )
+
+        with pytest.raises(RuntimeError):
+            await run_subagent_stop(
+                payload, settings, lane_factory=lambda _s, _k: started(broken)
+            )
+
+        assert broken.calls == 1
+        assert await WatermarkStore(watermark).offset_for("s:a") == 0
+
+
+class TestSubagentStopEntrypointNeverDisruptsTheSession:
+    """capture_subagent_stop swallows everything and exits 0 with empty stdout."""
+
+    def test_a_malformed_payload_is_swallowed(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        subagent_stop.capture_subagent_stop(io.StringIO("{not json"))
+        assert capsys.readouterr().out == ""
+
+    def test_the_captured_fixture_runs_clean_through_the_entrypoint(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # The real fixture names a transcript that does not exist on this box, so
+        # the spine finds nothing to read -- the swallow keeps it exit-0 either
+        # way, with an unconfigured or an unreachable capture.
+        subagent_stop.capture_subagent_stop_with(
+            io.StringIO(fixture_bytes("SubagentStop")), _unconfigured_settings()
+        )
+        assert capsys.readouterr().out == ""
+
+    def test_main_returns_zero(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("sys.stdin", io.StringIO("{not json"))
+        assert subagent_stop.main() == 0
+
+
+class TestSessionEndReleasesTheServerSlot:
+    """run_session_end starts and closes the session -- no delivery, slot freed."""
+
+    async def test_it_closes_the_session_and_delivers_nothing(
+        self, tmp_path: Path
+    ) -> None:
+        settings = capture_settings(tmp_path / "wm.sqlite")
+        recorder = ClosingRecorder()
+        payload = SessionEndHook(session_id="sess")
+
+        released = await run_session_end(
+            payload,
+            settings,
+            lane_factory=lambda _s, _k: started(recorder, recorder.close),
+        )
+
+        assert released is True
+        assert recorder.closed == 1
+        # No delivery on SessionEnd -- turns were durable on each Stop already.
+        assert recorder.batches == []
+
+    async def test_no_session_id_is_a_no_op(self, tmp_path: Path) -> None:
+        settings = capture_settings(tmp_path / "wm.sqlite")
+        recorder = ClosingRecorder()
+        payload = SessionEndHook()  # no session_id
+
+        released = await run_session_end(
+            payload,
+            settings,
+            lane_factory=lambda _s, _k: started(recorder, recorder.close),
+        )
+
+        assert released is False
+        assert recorder.closed == 0
+
+    def test_the_session_id_is_read_from_the_real_bytes(self) -> None:
+        payload = SessionEndHook.model_validate_json(fixture_bytes("SessionEnd"))
+        captured = json.loads(fixture_bytes("SessionEnd"))
+        assert payload.session_id == captured["session_id"]
+
+
+class TestSessionEndEntrypointNeverDisruptsTheSession:
+    """close_session swallows everything and exits 0 with empty stdout."""
+
+    def test_a_malformed_payload_is_swallowed(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        session_end.close_session(io.StringIO("{not json"))
+        assert capsys.readouterr().out == ""
+
+    def test_an_unconfigured_capture_is_swallowed(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # The real fixture carries a session_id, so the real factory would be
+        # reached; an unconfigured capture raises CaptureNotConfiguredError,
+        # which the entrypoint must eat.
+        session_end.close_session_with(
+            io.StringIO(fixture_bytes("SessionEnd")), _unconfigured_settings()
+        )
+        assert capsys.readouterr().out == ""
+
+    def test_main_returns_zero(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("sys.stdin", io.StringIO("{not json"))
+        assert session_end.main() == 0
 
 
 class TestStopEntrypointNeverDisruptsTheSession:
