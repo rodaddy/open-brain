@@ -74,6 +74,56 @@ read). One open question per stub:
 
 ## Answered
 
+- **`PostCompact` re-fire / second-compaction `prompt_id` — FRESH per
+  compaction, and that is CORRECT, not a double-store** (was the Item-3 residual
+  in `_plans/hard-pass-2026-08-01.md`: "whether a real harness PostCompact
+  re-fire assigns a fresh `prompt_id` per compaction — latent double-store if
+  so"). Measured 2026-08-01 against Claude Code 2.1.220 (`claude --version`)
+  with the proven fixture method: one fixed `--session-id`
+  (`b77f15a3-31c8-414d-b91a-a841d4c631c0`, cheapest model
+  `claude-haiku-4-5-20251001`), filled with `claude -p --resume` turns plus a
+  large `cat`, `/compact` forced, refilled, `/compact` forced a SECOND time over
+  the SAME session. A capture-hook `.claude/settings.json` appended each event's
+  stdin byte-exact.
+  - **Two completed compactions** (transcript
+    `-scratch-postcompact-refire-...-hookcap/b77f15a3-...jsonl` carries two
+    `"isCompactSummary":true` lines). Both `PostCompact` events carry the SAME
+    `session_id` but DIFFERENT `prompt_id`:
+    - compaction 1 → `prompt_id = bcf319bf-cbc4-44a8-ae2a-248d497fa354`, summary
+      3969 chars, `trigger":"manual"`
+    - compaction 2 → `prompt_id = d8e8c536-7a39-4dd4-9d23-3249a978b1d5`, summary
+      7197 chars, `trigger":"manual"`
+  - **`prompt_id` IS the compaction summary turn's own identity.** Each
+    `"isCompactSummary":true` transcript line carries `promptId` EXACTLY equal to
+    its `PostCompact` event's `prompt_id` (line 1 → `bcf319bf…`, line 2 →
+    `d8e8c536…`), and the matching `SessionStart source":"compact"` events carry
+    the same two ids. So a fresh `prompt_id` appears ONLY when there is a
+    genuinely NEW, different summary — which SHOULD be a new row.
+  - **A genuine re-fire of the SAME compaction was NOT observed.** A plain
+    `--resume` turn AFTER the compactions (no `/compact`) fired `SessionStart`
+    but did NOT re-fire `PostCompact` (stayed at 2). `PostCompact` fires once
+    per compaction event. IF the harness ever re-fired the same compaction, it
+    would carry that compaction's own (stable) `promptId`, so the server
+    `UNIQUE(namespace, turn_uuid)` dedup on `prompt_id` collapses it to 1 row —
+    the case the dedup key exists to guard.
+  - **Live DB row evidence (dogfood, the instrument here).** The repo's REAL
+    Python `PostCompact` hook fired for this session (user-level `~/.claude`
+    hooks stacked on top of the scratch `--settings`) and wrote to the dogfood
+    DB `open_brain_local_20260724`. `ob_raw_turns` for
+    `session_ref='b77f15a3-…'`: exactly TWO rows, `turn_uuid` = each fresh
+    `prompt_id`, `role='assistant'`, `length(content)` 3969 and 7197 — matching
+    the two captured summaries. `count(*)` per `turn_uuid` = 1 each (no
+    accidental duplicates). Row 1 content is byte-identical to captured
+    summary#1 (`len==3969`, `stored==given`), whole, no truncation.
+  - **VERDICT: dedup holds; no double-store defect; NO code change.** A "double
+    store" would require the SAME summary written twice under two ids, or a
+    re-fire of one compaction under two ids. Neither occurs: a re-fire reuses
+    the compaction's own id (server dedups → 1 row), and a fresh id only appears
+    with a genuinely different summary that belongs in the store. The Item-3
+    concern is resolved — `run_post_compact` (`apps/hooks/session.py`) keying
+    `turn_uuid = prompt_id` is correct. Byte-exact captures under
+    `/Volumes/ThunderBolt/_tmp/open-brain/_scratch/postcompact-refire-20260801-025859/`
+    (temp, no persistence guarantee).
 - **`PostCompact` stdin/stdout** (was open above). A REAL completed compaction
   was forced on 2026-07-31 against Claude Code 2.1.220: a fixed-`--session-id`
   headless session (cheapest model, `claude-haiku-4-5-20251001`) was filled with
