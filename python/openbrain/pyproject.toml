@@ -67,6 +67,11 @@ openbrain-capture-subagent-stop = "openbrain.apps.hooks.subagent_stop:main"
 openbrain-session-end = "openbrain.apps.hooks.session_end:main"
 openbrain-post-compact = "openbrain.apps.hooks.post_compact:main"
 openbrain-session-start = "openbrain.apps.hooks.session_start:main"
+# The bulk ingester (#454): the second application, operator-run over a giant
+# session file. Its module does REAL work -- stage a whole file, yield every
+# turn to the raw lane -- so it earns a script by the same rule the hook
+# entrypoints do (`_plans/python-port-sequence.md` step 10).
+openbrain-bulk-ingest = "openbrain.apps.bulk.run:main"
 
 # Resolve the sibling from this uv workspace rather than PyPI, matching
 # openbrain-provider. The editable install is what makes the live gate's

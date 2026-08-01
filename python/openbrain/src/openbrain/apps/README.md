@@ -13,6 +13,9 @@ Key Components:
     - capture: turn an operator message into a durable signal, and deliver it
     - hooks: the harness entrypoints -- one module per event, parse stdin and
       exit; ``stop`` invokes the capture spine
+    - bulk: the second application (#454) -- an operator-run ingester that stages
+      a giant session file into SQLite and yields every turn to the raw lane,
+      reusing ``capture``'s pure parts by import
 
 Architecture:
     Capabilities do not import each other SIDEWAYS. When two need the same
