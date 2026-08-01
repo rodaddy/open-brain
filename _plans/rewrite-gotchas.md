@@ -17,7 +17,24 @@ This file is only the OPEN questions.
 
 ## Open
 
-### Step 8 stub capabilities — what each hook should DO for the Python app
+### Step 8 stub capabilities — RESOLVED 2026-07-31, defaults grounded in existing design
+
+Operator directive 2026-07-31 ("get all of this done"): proceed on grounded
+defaults, operator veto stands. Testing budget per the same directive: fast
+mechanical gates per step; heavy testing deferred to one end pass.
+
+| event | ruling | grounded in |
+|---|---|---|
+| `SessionStart` | **stays stub** | the package-owned ob-memory-provider already injects SessionStart hydration today; a second injection is a second implementation (`_plans/consolidation-2026-07-30.md:99`) |
+| `UserPromptSubmit` | **stays stub** | Stop already captures operator turns from the transcript; capturing here double-stores |
+| `PreToolUse` | **stays stub** | gating is enforcement, not capture; policy hooks own it |
+| `PostToolUse` | **stays stub** | deciding it here would resolve the open memory-vs-observability decision by accident (this file, above) |
+| `PreCompact` | **stays stub** | turns are durable on every Stop; nothing to flush |
+| `PostCompact` | **GAP — implement 2026-07-31** | the compact summary record (transcript line, `isCompactSummary:true`) has no `promptSource`, so `is_operator_turn` is False and `raw_turn_from_line` returns None (`apps/capture/records.py`); the Stop spine reads forward over it and drops it, so the summary is never captured — `post_compact` must record it |
+| `SessionEnd` | **implement: close the session** | lifecycle belongs to `AgentMemory` (`agent.py:222`); closing releases a finite per-worker session slot |
+| `SubagentStop` | **implement: same spine over `agent_transcript_path`** | namespace is TOKEN-derived (`_plans/python-port-sequence.md:11`), so the lane question answers itself; `capture-never-drops-a-turn.md` says turns get captured |
+
+### Original questions (kept for the record)
 
 Step 8 (2026-07-31) landed `apps/hooks/` with `stop.py` real (delivers through
 the spine) and one stub per other VERIFIED event. Each stub parses stdin and
