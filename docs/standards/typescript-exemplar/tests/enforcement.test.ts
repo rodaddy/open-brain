@@ -123,12 +123,12 @@ function typecheck(source: string): string {
       "npx",
       [
         "tsc",
-        // TS 7 errors (TS5112) rather than silently ignoring a discovered
-        // tsconfig.json when files are also named on the command line. The
-        // flags below therefore have to state the settings under test
-        // explicitly -- which is arguably better for a test that exists to
-        // prove a specific setting is doing something.
-        "--ignoreConfig",
+        // When files are named on the command line, tsc does NOT discover a
+        // project tsconfig.json (that lookup only happens when no files are
+        // given), so the settings under test have to be stated explicitly on
+        // the command line below -- which is arguably better for a test that
+        // exists to prove a specific setting is doing something. (There is no
+        // "ignore the config" flag in tsc 5.9; naming the file IS the ignore.)
         "--noEmit",
         "--strict",
         "--noUncheckedIndexedAccess",
