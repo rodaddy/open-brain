@@ -43,12 +43,15 @@ dependencies = [
 # gate inspects entry-point targets, so a broken script would ship green. The
 # same trap as a mypy path that does not resolve.
 #
-# So exactly ONE script is declared: `stop`, the one hook entrypoint that does
-# real work (`apps/hooks/stop.py:main`). The other seven event modules are
-# explicit stubs whose capabilities are undecided (`_plans/rewrite-gotchas.md`),
-# and `dispatch.py` is a table with no stdin-reading entrypoint of its own -- so
-# there is nothing else to point a real, non-shim script at yet. The remaining
-# events, and any dispatch front-door, get a script when they do real work.
+# So a script is declared only for the hook entrypoints that do REAL work:
+# `stop` (delivers the main transcript), `subagent-stop` (the same spine over the
+# subagent transcript), `session-end` (releases the server session slot), and
+# `post-compact` (records the compaction summary the Stop spine drops --
+# `_plans/rewrite-gotchas.md`). The remaining event modules are explicit stubs
+# whose capabilities are undecided, and `dispatch.py` is a table with no
+# stdin-reading entrypoint of its own -- so there is nothing else to point a
+# real, non-shim script at yet. A stub, or any dispatch front-door, gets a script
+# when it does real work.
 #
 # `test_console_scripts.py` is the gate the comment above says does not exist by
 # default: it parses this table and imports every declared `module:attr`, so a
@@ -60,6 +63,7 @@ dependencies = [
 openbrain-capture-stop = "openbrain.apps.hooks.stop:main"
 openbrain-capture-subagent-stop = "openbrain.apps.hooks.subagent_stop:main"
 openbrain-session-end = "openbrain.apps.hooks.session_end:main"
+openbrain-post-compact = "openbrain.apps.hooks.post_compact:main"
 
 # Resolve the sibling from this uv workspace rather than PyPI, matching
 # openbrain-provider. The editable install is what makes the live gate's

@@ -33,15 +33,17 @@ from conftest import (
     write_lines,
 )
 from openbrain.apps.capture.watermark import WatermarkStore
-from openbrain.apps.hooks import session_end, stop, subagent_stop
+from openbrain.apps.hooks import post_compact, session_end, stop, subagent_stop
 from openbrain.apps.hooks.dispatch import ENTRYPOINTS
 from openbrain.apps.hooks.session import (
     STOP_HOOK_DEADLINE_SECONDS,
     CaptureNotConfiguredError,
+    PostCompactHook,
     SessionEndHook,
     StartedLane,
     StopHook,
     SubagentStopHook,
+    run_post_compact,
     run_session_end,
     run_stop,
     run_subagent_stop,
@@ -51,7 +53,7 @@ from openbrain.config import CaptureSettings
 #: The events whose entrypoints do REAL work and reach settings/the client, so
 #: the shared "run it through the table" tests below skip them and each gets its
 #: own focused coverage. Every other event is a drain-and-exit stub.
-REAL_EVENTS = ("Stop", "SubagentStop", "SessionEnd")
+REAL_EVENTS = ("Stop", "SubagentStop", "SessionEnd", "PostCompact")
 
 if TYPE_CHECKING:
     from typing import TextIO
@@ -461,6 +463,138 @@ class TestSessionEndEntrypointNeverDisruptsTheSession:
     def test_main_returns_zero(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr("sys.stdin", io.StringIO("{not json"))
         assert session_end.main() == 0
+
+
+class TestPostCompactParsesTheCapturedPayload:
+    """The PostCompact fixture yields the summary and the ids capture needs."""
+
+    def test_summary_and_ids_are_read_from_the_real_bytes(self) -> None:
+        payload = PostCompactHook.model_validate_json(fixture_bytes("PostCompact"))
+        captured = json.loads(fixture_bytes("PostCompact"))
+        assert payload.compact_summary == captured["compact_summary"]
+        assert payload.session_id == captured["session_id"]
+        assert payload.prompt_id == captured["prompt_id"]
+
+
+class TestPostCompactRecordsTheSummary:
+    """run_post_compact records the summary the Stop spine drops, WHOLE."""
+
+    async def test_the_whole_summary_is_sent_as_one_raw_turn(
+        self, tmp_path: Path
+    ) -> None:
+        # The real captured payload, so the summary shape is what the harness
+        # actually sent -- not a hand-written stand-in.
+        payload = PostCompactHook.model_validate_json(fixture_bytes("PostCompact"))
+        captured = json.loads(fixture_bytes("PostCompact"))
+        settings = capture_settings(tmp_path / "wm.sqlite")
+        recorder = ClosingRecorder()
+
+        recorded = await run_post_compact(
+            payload,
+            settings,
+            lane_factory=lambda _s, _k: started(recorder, recorder.close),
+        )
+
+        assert recorded is True
+        # One batch, one turn, and its content is the summary BYTE FOR BYTE -- no
+        # bound, no shortening.
+        assert len(recorder.batches) == 1
+        assert len(recorder.batches[0]) == 1
+        turn = recorder.batches[0][0]
+        assert turn["content"] == captured["compact_summary"]
+        # Dedup key is the compaction's own prompt_id, so a re-fired hook is a
+        # server-side no-op.
+        assert turn["turn_uuid"] == captured["prompt_id"]
+        assert turn["session_ref"] == captured["session_id"]
+        # The slot is released even though nothing read a transcript.
+        assert recorder.closed == 1
+
+    async def test_no_summary_is_a_no_op(self, tmp_path: Path) -> None:
+        settings = capture_settings(tmp_path / "wm.sqlite")
+        recorder = ClosingRecorder()
+        payload = PostCompactHook(session_id="sess", prompt_id="p")  # no summary
+
+        recorded = await run_post_compact(
+            payload,
+            settings,
+            lane_factory=lambda _s, _k: started(recorder, recorder.close),
+        )
+
+        assert recorded is False
+        assert recorder.batches == []
+        assert recorder.closed == 0
+
+    async def test_a_whitespace_only_summary_is_a_no_op(self, tmp_path: Path) -> None:
+        settings = capture_settings(tmp_path / "wm.sqlite")
+        recorder = ClosingRecorder()
+        payload = PostCompactHook(
+            session_id="sess", prompt_id="p", compact_summary="   \n  "
+        )
+
+        recorded = await run_post_compact(
+            payload,
+            settings,
+            lane_factory=lambda _s, _k: started(recorder, recorder.close),
+        )
+
+        assert recorded is False
+        assert recorder.batches == []
+
+    async def test_no_session_id_is_a_no_op(self, tmp_path: Path) -> None:
+        settings = capture_settings(tmp_path / "wm.sqlite")
+        recorder = ClosingRecorder()
+        payload = PostCompactHook(prompt_id="p", compact_summary="a summary")
+
+        recorded = await run_post_compact(
+            payload,
+            settings,
+            lane_factory=lambda _s, _k: started(recorder, recorder.close),
+        )
+
+        assert recorded is False
+        assert recorder.batches == []
+
+    async def test_a_failed_lane_still_releases_the_slot(self, tmp_path: Path) -> None:
+        settings = capture_settings(tmp_path / "wm.sqlite")
+        recorder = ClosingRecorder(fail=True)
+        payload = PostCompactHook(
+            session_id="sess", prompt_id="p", compact_summary="a summary"
+        )
+
+        with pytest.raises(RuntimeError):
+            await run_post_compact(
+                payload,
+                settings,
+                lane_factory=lambda _s, _k: started(recorder, recorder.close),
+            )
+
+        # The slot is freed on the failure path too -- the finally owns it.
+        assert recorder.closed == 1
+
+
+class TestPostCompactEntrypointNeverDisruptsTheSession:
+    """record_compact_summary swallows everything and exits 0 with empty stdout."""
+
+    def test_a_malformed_payload_is_swallowed(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        post_compact.record_compact_summary(io.StringIO("{not json"))
+        assert capsys.readouterr().out == ""
+
+    def test_an_unconfigured_capture_is_swallowed(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # The real fixture carries a summary and a session, so the real factory
+        # would be reached; an unconfigured capture raises
+        # CaptureNotConfiguredError, which the entrypoint must eat.
+        post_compact.record_compact_summary_with(
+            io.StringIO(fixture_bytes("PostCompact")), _unconfigured_settings()
+        )
+        assert capsys.readouterr().out == ""
+
+    def test_main_returns_zero(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("sys.stdin", io.StringIO("{not json"))
+        assert post_compact.main() == 0
 
 
 class TestStopEntrypointNeverDisruptsTheSession:

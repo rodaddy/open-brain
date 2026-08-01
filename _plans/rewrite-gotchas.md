@@ -30,7 +30,7 @@ mechanical gates per step; heavy testing deferred to one end pass.
 | `PreToolUse` | **stays stub** | gating is enforcement, not capture; policy hooks own it |
 | `PostToolUse` | **stays stub** | deciding it here would resolve the open memory-vs-observability decision by accident (this file, above) |
 | `PreCompact` | **stays stub** | turns are durable on every Stop; nothing to flush |
-| `PostCompact` | **GAP — implement 2026-07-31** | the compact summary record (transcript line, `isCompactSummary:true`) has no `promptSource`, so `is_operator_turn` is False and `raw_turn_from_line` returns None (`apps/capture/records.py`); the Stop spine reads forward over it and drops it, so the summary is never captured — `post_compact` must record it |
+| `PostCompact` | **implemented `64cba18` 2026-07-31** | the compact summary record (transcript line, `isCompactSummary:true`) has no `promptSource`, so `is_operator_turn` is False and `raw_turn_from_line` returns None (`apps/capture/records.py`); the Stop spine reads forward over it and drops it. `post_compact` now records it: `run_post_compact` (`apps/hooks/session.py`) builds one `RawTurn` from `compact_summary` and sends it through the SAME `_started_memory` factory + `RawLane.ingest_raw_turns` the Stop spine uses, keyed on `prompt_id` for server-side dedup, WHOLE (no bound), fail-open |
 | `SessionEnd` | **implement: close the session** | lifecycle belongs to `AgentMemory` (`agent.py:222`); closing releases a finite per-worker session slot |
 | `SubagentStop` | **implement: same spine over `agent_transcript_path`** | namespace is TOKEN-derived (`_plans/python-port-sequence.md:11`), so the lane question answers itself; `capture-never-drops-a-turn.md` says turns get captured |
 

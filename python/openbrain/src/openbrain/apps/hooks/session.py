@@ -51,6 +51,7 @@ See Also:
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from pathlib import Path
 
@@ -59,6 +60,7 @@ from pydantic import BaseModel, ConfigDict, SkipValidation
 from openbrain.apps.capture.deliver import Delivery, RawLane, deliver_new_turns
 from openbrain.apps.capture.watermark import WatermarkStore
 from openbrain.config import CaptureSettings, ConfigurationError
+from openbrain.models.turn import RawTurn, TurnRole
 
 #: The Stop harness deadline, in seconds. NOT a content bound -- this is a TIME
 #: budget tied to an EXTERNAL limit: Claude Code kills a Stop hook that has not
@@ -206,6 +208,35 @@ class SessionEndHook(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     session_id: str | None = None
+
+
+class PostCompactHook(BaseModel):
+    """The fields a ``PostCompact`` payload carries that capture needs.
+
+    Modelled from the captured fixture (``tests/fixtures/captured_hooks/
+    PostCompact.json``). ``compact_summary`` is the generated summary that
+    replaces the discarded context; ``session_id`` keys the server session the
+    write goes through; ``prompt_id`` is this compaction's own identifier, reused
+    as the turn's uuid so a re-fired hook de-duplicates on the server's
+    ``UNIQUE(namespace, turn_uuid)`` instead of writing the same summary twice.
+
+    THE COMPACTION SUMMARY IS THE ONE TRANSCRIPT RECORD THE STOP SPINE DROPS. Its
+    transcript line carries ``isCompactSummary:true`` and NO ``promptSource``, so
+    ``records.is_operator_turn`` is False and ``raw_turn_from_line`` returns None
+    (``_plans/rewrite-gotchas.md`` rulings table); the Stop spine reads forward
+    over it. ``PostCompact`` is therefore the only place the summary can be
+    recorded, and it takes it straight from this payload rather than the
+    transcript. All fields optional -- a hook can fire before one exists, a
+    do-nothing outcome, not a parse failure -- and ``extra="ignore"`` drops
+    ``trigger``, ``cwd``, and the rest.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    compact_summary: str | None = None
+    session_id: str | None = None
+    prompt_id: str | None = None
+    timestamp: str | None = None
 
 
 class StartedLane(BaseModel):
@@ -370,6 +401,81 @@ async def run_session_end(
     build = lane_factory if lane_factory is not None else _started_memory
     started = build(settings, payload.session_id)
     started.close()
+    return True
+
+
+async def run_post_compact(
+    payload: PostCompactHook,
+    settings: CaptureSettings,
+    *,
+    lane_factory: Callable[[CaptureSettings, str], StartedLane] | None = None,
+) -> bool:
+    """Record one ``PostCompact`` payload's compaction summary as a raw turn.
+
+    Args:
+        payload: The parsed ``PostCompact`` hook fields.
+        settings: The ``capture`` configuration section: endpoint, token, and
+            identity.
+        lane_factory: Builds the :class:`StartedLane`; injected for tests,
+            defaults to the real ``openbrain_memory`` client with its session
+            started.
+
+    Returns:
+        ``True`` when a summary was sent, ``False`` when the payload carried no
+        summary or no session -- there is nothing to record then.
+
+    This does NOT run the Stop spine. The compaction summary is not read back
+    from a transcript: its transcript record carries ``isCompactSummary:true``
+    and no ``promptSource``, so the reader's operator filter drops it
+    (``apps/capture/records.py``) and the Stop spine walks past it. The summary
+    lives ONLY on this payload, so this capability builds one :class:`RawTurn`
+    from ``compact_summary`` and hands it to the SAME lane the Stop spine writes
+    through (``RawLane.ingest_raw_turns``), reusing the one factory
+    (:func:`_started_memory`) that ``run_stop`` and ``run_session_end`` reuse --
+    no second client, no second lifecycle.
+
+    There is no watermark. A watermark remembers a read position in a growing
+    byte stream; a summary is a single payload field with no stream to resume, so
+    the replay-safety a watermark gives is provided instead by the server's
+    dedupe: ``prompt_id`` is reused as the turn uuid, and the server drops a
+    replayed ``UNIQUE(namespace, turn_uuid)``, so a re-fired ``PostCompact`` is a
+    no-op. The content is carried WHOLE -- no bound, no shortening -- exactly as
+    ``capture-never-drops-a-turn.md`` requires.
+
+    Namespace stays token-derived server-side (``src/tools/ingest-raw-turn.ts``);
+    nothing here sets one. ``turn_index`` is assigned per send, matching the
+    spine's rule that the server recomputes real order from ``occurred_at``.
+
+    Raises:
+        Whatever the factory or the lane raises. The ENTRYPOINT swallows these; a
+        failed record must never break the session it observes.
+    """
+    if payload.session_id is None or payload.prompt_id is None:
+        return False
+    if payload.compact_summary is None or not payload.compact_summary.strip():
+        return False
+
+    turn = RawTurn(
+        turn_uuid=payload.prompt_id,
+        content=payload.compact_summary,
+        role=TurnRole.ASSISTANT,
+        is_human_prompt=False,
+        occurred_at=payload.timestamp or None,
+        session_ref=payload.session_id,
+    )
+
+    build = lane_factory if lane_factory is not None else _started_memory
+    started = build(settings, payload.session_id)
+    try:
+        await asyncio.to_thread(
+            started.lane.ingest_raw_turns,
+            [{**turn.model_dump(exclude_none=True), "turn_index": 0}],
+        )
+    finally:
+        # The lane holds a server session slot; release it on every path, the
+        # same lifecycle rule run_stop and run_session_end own. The closer
+        # swallows its own transport errors, so it cannot mask a send failure.
+        started.close()
     return True
 
 
