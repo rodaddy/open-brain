@@ -660,6 +660,17 @@ const CAP_PROPOSAL_EXEMPT = new RegExp(
     // 2026-08-02 after the #463 foundation worker hard-stopped on the conflict.
     String.raw`\bpino-?roll\b`,
     String.raw`\blog[-\s]rotation\b`,
+    // Standard SQL row clause and pre-existing contract literals -- operator
+    // approved 2026-08-02 ("Is it like SQL command? Yeah, that's definitely
+    // approved for use... Standard SQL, yeah, you can use that.") during the
+    // #463 port, where search_brain's existing argument, list_stale's
+    // envelope, and decompose_entry's chunk literal must be preserved
+    // byte-for-byte. Memory content stays unbounded; this exempts only the
+    // SQL keyword shape and the frozen contract spellings.
+    String.raw`\bLIMIT\s+(\$\d|\d+)`,
+    String.raw`\blimit["']?\s*[:=]`,
+    String.raw`\btrimmed_chunk_text\b`,
+    String.raw`\.trim\(`,
     String.raw`\bno\s+(cap|caps|limit|limits|ceiling)\b`,
     String.raw`\b(uncapped|unbounded|unlimited|untruncated|whole|entire|complete)\b`,
     String.raw`\b(un|de)-?(cap|caps|capping|limit|limiting|truncat)\w*`,
