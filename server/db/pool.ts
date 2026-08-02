@@ -25,8 +25,8 @@ export interface DatabasePool {
   on(event: "error", listener: (error: Error) => void): this;
 }
 
-export interface Database {
-  readonly pool: DatabasePool;
+export interface Database<PoolType extends DatabasePool = pg.Pool> {
+  readonly pool: PoolType;
   close(): Promise<void>;
   health(): Promise<DatabaseHealth>;
 }
@@ -37,7 +37,10 @@ function errorCategory(error: unknown): string {
 }
 
 /** Own an already-created pool, including health, error, and close behavior. */
-export function ownDatabasePool(pool: DatabasePool, logger: Logger): Database {
+export function ownDatabasePool<PoolType extends DatabasePool>(
+  pool: PoolType,
+  logger: Logger,
+): Database<PoolType> {
   pool.on("error", (error) => {
     logger.error({ error_category: errorCategory(error) }, "database_pool_error");
   });
@@ -71,7 +74,7 @@ export function ownDatabasePool(pool: DatabasePool, logger: Logger): Database {
 export function createDatabase(
   config: ServerConfig["database"],
   logger: Logger,
-): Database {
+): Database<pg.Pool> {
   const pool = new pg.Pool({
     host: config.host,
     port: config.port,

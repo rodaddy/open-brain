@@ -66,7 +66,8 @@ describe("structured logging boundary", () => {
   it("emits entry, result, duration, and failure through the operation wrapper", async () => {
     const capture = captureLogger();
     await withOperation({ logger: capture.logger, name: "ok", work: async () => 7 });
-    await expect(withOperation({ logger: capture.logger, name: "bad", work: async () => { throw new TypeError("boom"); } })).rejects.toThrow("boom");
+    const sensitiveMessage = randomUUID();
+    await expect(withOperation({ logger: capture.logger, name: "bad", work: async () => { throw new TypeError(sensitiveMessage); } })).rejects.toThrow(sensitiveMessage);
     expect(capture.entries().map((entry) => entry.message)).toEqual([
       "operation_entry",
       "operation_result",
@@ -74,7 +75,8 @@ describe("structured logging boundary", () => {
       "operation_failure",
     ]);
     expect(capture.entries()[1]?.duration_ms).toBeNumber();
-    expect(capture.entries()[3]?.error).toEqual({ type: "TypeError", message: "boom" });
+    expect(capture.entries()[3]?.error).toEqual({ type: "TypeError" });
+    expect(JSON.stringify(capture.entries())).not.toContain(sensitiveMessage);
   });
 
   it("derives a separate file path for every worker", () => {

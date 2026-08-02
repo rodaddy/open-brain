@@ -43,7 +43,7 @@ describe("assert-db-tests-ran anti-skip guard", () => {
   it("passes when every required live-Postgres suite executed cleanly", () => {
     const result = evaluateJunit(wrap(allSuitesGreen()));
     expect(result.errors).toEqual([]);
-    expect(result.executedLiveTestcases).toBe(28);
+    expect(result.executedLiveTestcases).toBe(32);
     expect(
       result.executedLiveTestcasesBySuite.get(
         "search_brain language-aware FTS ranking (live Postgres)",
@@ -268,7 +268,7 @@ describe("assert-db-tests-ran anti-skip guard", () => {
     }).join("\n");
 
     const result = evaluateJunit(wrap(suites));
-    expect(result.executedLiveTestcases).toBe(28);
+    expect(result.executedLiveTestcases).toBe(32);
     expect(
       result.errors.some((e) =>
         e.includes(
@@ -308,5 +308,34 @@ describe("assert-db-tests-ran anti-skip guard", () => {
         error.includes(`SKIPPED tests in "${name}"`),
       ),
     ).toBe(true);
+  });
+
+  it("fails when the server foundation boundary suite is missing", () => {
+    const name = "server ID queries enforce namespace isolation (live Postgres)";
+    const xml = wrap(
+      REQUIRED_SUITES.filter((suite) => suite.name !== name)
+        .map((suite) => suiteXml(suite.name, { tests: suite.minTests }))
+        .join("\n"),
+    );
+    const result = evaluateJunit(xml);
+    expect(result.errors.some((error) => error.includes(`MISSING suite "${name}"`))).toBe(true);
+  });
+
+  it("fails when the server foundation boundary suite is skipped", () => {
+    const name = "server ID queries enforce namespace isolation (live Postgres)";
+    const suites = REQUIRED_SUITES.map((suite) =>
+      suite.name === name
+        ? suiteXml(name, {
+            tests: suite.minTests,
+            skipped: suite.minTests,
+            testcases: Array.from(
+              { length: suite.minTests },
+              (_, index) => `<testcase name="case ${index}" classname="${name}"><skipped /></testcase>`,
+            ).join("\n"),
+          })
+        : suiteXml(suite.name, { tests: suite.minTests }),
+    ).join("\n");
+    const result = evaluateJunit(wrap(suites));
+    expect(result.errors.some((error) => error.includes(`SKIPPED tests in "${name}"`))).toBe(true);
   });
 });

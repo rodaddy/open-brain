@@ -81,9 +81,12 @@ databaseDescribe("server ID queries enforce namespace isolation (live Postgres)"
     await database.close();
   });
 
-  it("applies append-only SQL files once and persists their result", async () => {
-    expect(await runMigrations(scoped, fixtureDirectory, testLogger)).toEqual(["001_foundation_fixture.sql"]);
-    expect(await runMigrations(scoped, fixtureDirectory, testLogger)).toEqual([]);
+  it("serializes concurrent migration runners and applies each SQL file once", async () => {
+    const results = await Promise.all([
+      runMigrations(scoped, fixtureDirectory, testLogger),
+      runMigrations(scoped, fixtureDirectory, testLogger),
+    ]);
+    expect(results.flat()).toEqual(["001_foundation_fixture.sql"]);
     const result = await scoped.query("SELECT value FROM foundation_migration_fixture WHERE id = $1", [1]);
     expect(result.rows[0]?.value).toBe("applied");
   });

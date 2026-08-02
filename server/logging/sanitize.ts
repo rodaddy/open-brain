@@ -59,7 +59,7 @@ export function sanitizeValue(value: unknown, depth = 0): unknown {
       ? `${value.slice(0, 200)}…[${value.length - 200} characters omitted]`
       : value;
   }
-  if (value instanceof Error) return { type: value.name, message: sanitizeValue(value.message, depth + 1) };
+  if (value instanceof Error) return { type: value.name || "Error" };
   if (typeof value === "bigint") return value.toString();
   if (typeof value === "function" || typeof value === "symbol") return { type: typeof value };
   if (typeof value !== "object" || value === null) return value;

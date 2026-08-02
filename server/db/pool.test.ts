@@ -5,7 +5,8 @@
  */
 import { describe, expect, it } from "bun:test";
 import pino from "pino";
-import { ownDatabasePool, type DatabasePool } from "./pool.ts";
+import { createDatabase, ownDatabasePool, type DatabasePool } from "./pool.ts";
+import { selectById } from "./query.ts";
 
 class FakePool implements DatabasePool {
   readonly totalCount = 3;
@@ -30,8 +31,15 @@ class FakePool implements DatabasePool {
 }
 
 const logger = pino({ level: "silent" });
+const OWNED_POOL_IS_QUERYABLE: ReturnType<typeof createDatabase>["pool"] extends Parameters<typeof selectById>[0]
+  ? true
+  : false = true;
 
 describe("database pool ownership", () => {
+  it("exposes the created pool to the parameterized query boundary", () => {
+    expect(OWNED_POOL_IS_QUERYABLE).toBe(true);
+  });
+
   it("reports observed pool health and closes the owned pool", async () => {
     const pool = new FakePool();
     const database = ownDatabasePool(pool, logger);
