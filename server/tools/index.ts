@@ -12,6 +12,7 @@ import { registerReportingTools } from "./reporting.ts";
 import { registerResolveEntryTool } from "./resolve-entry.ts";
 import { registerUpdateEntryTool } from "./update-entry.ts";
 import { registerSessionEventTool } from "./session-events.ts";
+import { registerSourceRegistryTools } from "./source-registry.ts";
 import { registerSessionLifecycleTools } from "./session-lifecycle.ts";
 import { registerSessionSaveLoadTools } from "./session-save-load.ts";
 import { registerTieringTools } from "./tiering.ts";
@@ -42,6 +43,7 @@ export function registerMemoryTools(
   registerReportingTools(server, dependencies);
   registerEntityTools(server, dependencies);
   registerPeopleTools(server, dependencies);
+  registerSourceRegistryTools(server, dependencies);
 }
 
 export type { MemoryToolDependencies } from "./types.ts";

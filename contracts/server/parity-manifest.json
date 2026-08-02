@@ -28,6 +28,7 @@
     "server-search-brain-arms",
     "server-session-lifecycle",
     "server-session-save-load",
+    "server-source-registry",
     "server-tier-recommendations",
     "server-tier-tools"
   ],
@@ -54,6 +55,7 @@
     "search-brain-arms",
     "session-lifecycle-server",
     "session-save-load",
+    "source-registry",
     "tier-recommendations",
     "tier-tools"
   ],
@@ -82,7 +84,8 @@
       "entry-listing": "implemented",
       "access-reporting": "implemented",
       "graph-relations": "implemented",
-      "people": "implemented"
+      "people": "implemented",
+      "source-registry": "implemented"
     },
     "server-rewrite-scaffold": {
       "auth-error-shapes": "scaffold-declared",
@@ -108,7 +111,8 @@
       "entry-listing": "implemented",
       "access-reporting": "implemented",
       "graph-relations": "implemented",
-      "people": "implemented"
+      "people": "implemented",
+      "source-registry": "implemented"
     }
   }
 }
