@@ -1,6 +1,6 @@
 export const SERVER_REWRITE_STATE = {
   law0: "WRITTEN",
-  phase: "scaffold-only",
+  phase: "partial-implementation",
   servesTraffic: false,
   cutoverStarted: false,
 } as const;

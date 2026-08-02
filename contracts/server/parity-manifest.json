@@ -1,6 +1,6 @@
 {
   "id": "openbrain.server.contract-parity.v1",
-  "description": "Observed current-src MCP behavior declared for the current implementation and server rewrite scaffold.",
+  "description": "Observed current-src behavior and explicit implementation state for the server rewrite provider.",
   "providers": ["current-src", "server-rewrite-scaffold"],
   "expected_fixture_ids": [
     "server-auth-and-validation-errors",
@@ -37,5 +37,43 @@
     "session-lifecycle-server",
     "session-save-load",
     "tier-tools"
-  ]
+  ],
+  "provider_capability_status": {
+    "current-src": {
+      "auth-error-shapes": "implemented",
+      "brain-answer": "implemented",
+      "capture-ingest-checkpoint": "implemented",
+      "citation-recall": "implemented",
+      "context-pack-sections": "implemented",
+      "conversation-ingest-gate": "implemented",
+      "curation": "implemented",
+      "curation-operations": "implemented",
+      "raw-turn-ingest-server": "implemented",
+      "namespace-denial": "implemented",
+      "realtime-working-recovery": "implemented",
+      "reflex-pointers": "implemented",
+      "search-brain-arms": "implemented",
+      "session-lifecycle-server": "implemented",
+      "session-save-load": "implemented",
+      "tier-tools": "implemented"
+    },
+    "server-rewrite-scaffold": {
+      "auth-error-shapes": "scaffold-declared",
+      "brain-answer": "scaffold-declared",
+      "capture-ingest-checkpoint": "implemented",
+      "citation-recall": "scaffold-declared",
+      "context-pack-sections": "scaffold-declared",
+      "conversation-ingest-gate": "scaffold-declared",
+      "curation": "scaffold-declared",
+      "curation-operations": "scaffold-declared",
+      "raw-turn-ingest-server": "implemented",
+      "namespace-denial": "implemented",
+      "realtime-working-recovery": "scaffold-declared",
+      "reflex-pointers": "scaffold-declared",
+      "search-brain-arms": "scaffold-declared",
+      "session-lifecycle-server": "implemented",
+      "session-save-load": "implemented",
+      "tier-tools": "scaffold-declared"
+    }
+  }
 }

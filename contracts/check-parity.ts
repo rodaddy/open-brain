@@ -45,11 +45,14 @@ interface ServerFixture {
   }>;
 }
 
+type ServerCapabilityStatus = "implemented" | "scaffold-declared";
+
 interface ServerParityManifest {
   id: string;
   expected_fixture_ids: string[];
   providers: string[];
   capabilities: string[];
+  provider_capability_status: Record<string, Record<string, ServerCapabilityStatus>>;
 }
 
 interface ServerToolGap {
@@ -342,6 +345,23 @@ if (JSON.stringify(serverManifest.providers) !== JSON.stringify(providerIds)) {
 }
 const expectedServerFixtureIds = new Set(serverManifest.expected_fixture_ids ?? []);
 const serverCapabilities = new Set(serverManifest.capabilities ?? []);
+for (const providerId of providerIds) {
+  const statuses = serverManifest.provider_capability_status?.[providerId];
+  if (!statuses) {
+    errors.push(`server/parity-manifest.json: missing capability status for '${providerId}'`);
+    continue;
+  }
+  const declaredCapabilities = Object.keys(statuses).sort();
+  const expectedCapabilities = [...serverCapabilities].sort();
+  if (JSON.stringify(declaredCapabilities) !== JSON.stringify(expectedCapabilities)) {
+    errors.push(`server/parity-manifest.json: '${providerId}' must declare every capability exactly once`);
+  }
+  for (const [capability, status] of Object.entries(statuses)) {
+    if (status !== "implemented" && status !== "scaffold-declared") {
+      errors.push(`server/parity-manifest.json: '${providerId}' capability '${capability}' has invalid status '${String(status)}'`);
+    }
+  }
+}
 const observedServerFixtureIds = new Set<string>();
 const observedServerCapabilities = new Set<string>();
 const observedServerTools = new Set<string>();

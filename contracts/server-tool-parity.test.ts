@@ -1,10 +1,12 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import pino from "pino";
 import { Pool } from "pg";
 import { createBrainServer } from "../src/server.ts";
 import { registerAllTools } from "../src/tools/index.ts";
 import type { AuthInfo } from "../src/types.ts";
+import { registerMemoryTools } from "../server/tools/index.ts";
 
 interface FixtureStep {
   tool: string;
@@ -16,11 +18,14 @@ interface FixtureStep {
   };
 }
 
+type ProviderId = "current-src" | "server-rewrite-scaffold";
+type CapabilityStatus = "implemented" | "scaffold-declared";
+
 interface ServerFixture {
   id: string;
   description: string;
   capability: string;
-  providers: string[];
+  providers: ProviderId[];
   auth: {
     role: AuthInfo["role"];
     client_id: string;
@@ -43,6 +48,10 @@ for await (const name of fixtureGlob.scan({
   fixtures.push((await Bun.file(new URL(name, fixtureDir)).json()) as ServerFixture);
 }
 fixtures.sort((a, b) => a.id.localeCompare(b.id));
+const parityManifest = (await Bun.file(new URL("./server/parity-manifest.json", import.meta.url)).json()) as {
+  provider_capability_status: Record<ProviderId, Record<string, CapabilityStatus>>;
+};
+const providers: ProviderId[] = ["current-src", "server-rewrite-scaffold"];
 
 function replacePlaceholders(value: unknown, replacements: Record<string, string>): unknown {
   if (typeof value === "string") {
@@ -97,22 +106,32 @@ function expectObserved(actual: unknown, expected: unknown): void {
   expect(actual).toEqual(expected);
 }
 
-async function createClient(auth: AuthInfo): Promise<{
+async function createClient(provider: ProviderId, auth: AuthInfo): Promise<{
   client: Client;
   close: () => Promise<void>;
 }> {
   if (!pool) throw new Error("OPENBRAIN_TEST_DATABASE_URL is required");
   const server = createBrainServer();
-  registerAllTools(server, {
-    pool,
-    embedFn: async () => Array(768).fill(0.01),
-    mcpAuditConfig: {
-      enabled: false,
-      retentionDays: 30,
-      cleanupIntervalMs: 86_400_000,
-      writeTimeoutMs: 250,
-    },
-  });
+  if (provider === "current-src") {
+    registerAllTools(server, {
+      pool,
+      embedFn: async () => Array(768).fill(0.01),
+      mcpAuditConfig: {
+        enabled: false,
+        retentionDays: 30,
+        cleanupIntervalMs: 86_400_000,
+        writeTimeoutMs: 250,
+      },
+    });
+  }
+  if (provider === "server-rewrite-scaffold") {
+    registerMemoryTools(server, {
+      pool,
+      embedFn: async () => Array(768).fill(0.01),
+      logger: pino({ level: "silent" }),
+      embeddingModel: "parity-fixture",
+    });
+  }
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const originalSend = clientTransport.send.bind(clientTransport);
   clientTransport.send = (message, options) =>
@@ -134,37 +153,41 @@ async function createClient(auth: AuthInfo): Promise<{
   };
 }
 
-dbDescribe("current-src server parity fixtures (live Postgres)", () => {
-  for (const fixture of fixtures) {
-    test(fixture.id, async () => {
-      const namespace = `${fixture.auth.client_id}-${process.pid}`;
-      const replacements = {
-        "{{namespace}}": namespace,
-        "{{other_namespace}}": `${namespace}-other`,
-      };
-      const auth: AuthInfo = {
-        role: fixture.auth.role,
-        clientId: namespace,
-        namespaceSource: fixture.auth.namespace_source ?? "token",
-      };
-      const { client, close } = await createClient(auth);
-      try {
-        for (const step of fixture.steps) {
-          const args = replacePlaceholders(step.arguments, replacements) as Record<string, unknown>;
-          const expected = replacePlaceholders(step.expectation, replacements) as FixtureStep["expectation"];
-          const result = await client.callTool({ name: step.tool, arguments: args });
-          const text = (result.content as Array<{ text: string }>)[0]?.text ?? "";
-          if (process.env.PARITY_OBSERVE === "1") {
-            process.stdout.write(`${fixture.id} ${step.tool}: ${JSON.stringify({ is_error: result.isError === true, text })}\n`);
+dbDescribe("server parity fixtures by implemented provider capability (live Postgres)", () => {
+  for (const provider of providers) {
+    for (const fixture of fixtures) {
+      if (parityManifest.provider_capability_status[provider][fixture.capability] !== "implemented") continue;
+      test(`${provider}: ${fixture.id}`, async () => {
+        const providerSlug = provider.replaceAll("-", "_");
+        const namespace = `${fixture.auth.client_id}-${providerSlug}-${process.pid}`;
+        const replacements = {
+          "{{namespace}}": namespace,
+          "{{other_namespace}}": `${namespace}-other`,
+        };
+        const auth: AuthInfo = {
+          role: fixture.auth.role,
+          clientId: namespace,
+          namespaceSource: fixture.auth.namespace_source ?? "token",
+        };
+        const { client, close } = await createClient(provider, auth);
+        try {
+          for (const step of fixture.steps) {
+            const args = replacePlaceholders(step.arguments, replacements) as Record<string, unknown>;
+            const expected = replacePlaceholders(step.expectation, replacements) as FixtureStep["expectation"];
+            const result = await client.callTool({ name: step.tool, arguments: args });
+            const text = (result.content as Array<{ text: string }>)[0]?.text ?? "";
+            if (process.env.PARITY_OBSERVE === "1") {
+              process.stdout.write(`${provider} ${fixture.id} ${step.tool}: ${JSON.stringify({ is_error: result.isError === true, text })}\n`);
+            }
+            expect(result.isError === true).toBe(expected.is_error);
+            if (expected.text !== undefined) expect(text).toBe(expected.text);
+            if (expected.json !== undefined) expectObserved(JSON.parse(text), expected.json);
           }
-          expect(result.isError === true).toBe(expected.is_error);
-          if (expected.text !== undefined) expect(text).toBe(expected.text);
-          if (expected.json !== undefined) expectObserved(JSON.parse(text), expected.json);
+        } finally {
+          await close();
         }
-      } finally {
-        await close();
-      }
-    });
+      });
+    }
   }
 });
 

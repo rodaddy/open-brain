@@ -3,7 +3,7 @@ import { SERVER_CONTRACT_DECLARATION } from "../server/contracts/declaration.ts"
 
 export interface ContractDeclarationProvider {
   id: "current-src" | "server-rewrite-scaffold";
-  state: "running-implementation" | "scaffold-only";
+  state: "running-implementation" | "partial-implementation" | "scaffold-only";
   declaration(generatedAt: string): {
     contractVersion: string;
     schemaHash: string;
@@ -24,7 +24,7 @@ export const SERVER_CONTRACT_PROVIDERS: readonly ContractDeclarationProvider[] =
   },
   {
     id: "server-rewrite-scaffold",
-    state: "scaffold-only",
+    state: "partial-implementation",
     declaration() {
       return SERVER_CONTRACT_DECLARATION;
     },
