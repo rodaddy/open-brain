@@ -10,15 +10,15 @@ describe("server contract provider harness", () => {
     ]);
   });
 
-  test("does not mistake scaffold parity for a serving implementation", () => {
+  test("does not mistake partial tool parity for a serving implementation", () => {
     const rewrite = SERVER_CONTRACT_PROVIDERS.find(
       (provider) => provider.id === "server-rewrite-scaffold",
     );
 
-    expect(rewrite?.state).toBe("scaffold-only");
+    expect(rewrite?.state).toBe("partial-implementation");
     expect(SERVER_REWRITE_STATE).toEqual({
       law0: "WRITTEN",
-      phase: "scaffold-only",
+      phase: "partial-implementation",
       servesTraffic: false,
       cutoverStarted: false,
     });
