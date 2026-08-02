@@ -74,6 +74,12 @@ openbrain-session-start-remaining = "openbrain.apps.hooks.session_start:main_rem
 # turn to the raw lane -- so it earns a script by the same rule the hook
 # entrypoints do (`_plans/python-port-sequence.md` step 10).
 openbrain-bulk-ingest = "openbrain.apps.bulk.run:main"
+# The canon reconciler (#443/#445): the third application, operator-run over a
+# declared canon pack file. Its module does REAL work -- parse the pack, read the
+# live pack, diff them, and optionally write the missing rules -- so it earns a
+# script by the same rule the hook entrypoints do
+# (`_plans/python-port-sequence.md` step 10).
+openbrain-canon-reconcile = "openbrain.apps.canon.run:main"
 
 # Resolve the sibling from this uv workspace rather than PyPI, matching
 # openbrain-provider. The editable install is what makes the live gate's

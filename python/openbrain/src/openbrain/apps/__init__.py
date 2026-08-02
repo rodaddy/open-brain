@@ -12,6 +12,9 @@ Key Components:
     - bulk: the second application (#454) -- an operator-run ingester that stages
       a giant session file into SQLite and yields every turn to the raw lane,
       reusing ``capture``'s pure parts by import
+    - canon: the third application (#443/#445) -- an operator-run reconciler that
+      diffs a declared canon pack FILE against the canon Open Brain serves and
+      reports the drift, writing only the missing rules and only when told to
 
 Architecture:
     Capabilities do not import each other SIDEWAYS. When two need the same

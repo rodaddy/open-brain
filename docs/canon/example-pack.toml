@@ -1,0 +1,66 @@
+# An EXAMPLE canon pack. Not the seed set, and not authored canon.
+#
+# WHAT THIS IS: a runnable demonstration of the file format that
+# `openbrain.apps.canon.pack` parses, so the shape is legible without reading
+# the pydantic models. Point the reconciler at it to see a report:
+#
+#     openbrain-canon-reconcile docs/canon/example-pack.toml
+#
+# WHAT THIS IS NOT: the decision about what canon contains. That is #444, an
+# OPEN HITL grilling ticket whose own text reads "Rico decides; do not answer
+# this one alone", and the candidate seed set lives in PR #462 awaiting his veto
+# pass. Every rule below is quoted from `AGENTS.md`, which is already authority
+# in this repo, precisely so this file adds no new claim about what canon says.
+# Applying it would promote these three into the standing set, which is why
+# `--apply` exists and is not the default.
+#
+# THE FIELDS
+#   kind     what this pack declares. Only `canon` is accepted today. `lens`
+#            (#452) is deliberately not a member -- see apps/canon/__init__.py.
+#   key      the stable `candidate_scope.key`. REQUIRED. It is the only handle a
+#            later `relegate`/`discard` has, so a rule without one can never be
+#            retired (#445). Retiring a rule means writing a newer relegate on
+#            this key -- never deleting a line from this file, which would only
+#            make the row `undeclared` and leave it standing.
+#   lane     `profile_guidance` (who Rico is), `process_guidance` (the rules), or
+#            `repo_facts` (this repo's truths, bound to the repo exactly).
+#   text     the rule, WHOLE. There is no length limit and none may be added.
+#   source   where the rule is cited from, so a reviewer can check it against
+#            live authority. It rides into `candidate_reason` on the write.
+#   subject  repo_facts only; `upsert_repo_fact` requires it.
+
+kind = "canon"
+
+[[entries]]
+key = "process.no_tmp"
+lane = "process_guidance"
+text = """
+Never /tmp, $TMPDIR, or mktemp -d. They are sandbox-local -- a runner, a Codex \
+sandbox, and the host each see a different one, so anything written there is \
+invisible to everyone else and vanishes silently. Use \
+{temp_workspace}/{repo}/_scratch/.\
+"""
+source = "AGENTS.md ## Core Rules"
+
+[[entries]]
+key = "process.no_recursive_delete"
+lane = "process_guidance"
+text = """
+An agent never runs a recursive or forced delete, anywhere, for any reason. \
+Not rm -rf, not rm -r, not rm -f, not find -delete. The agent's cleanup verb is \
+mv, into the matching _archive/. Print the command and stop; Rico decides.\
+"""
+source = "AGENTS.md ## Core Rules"
+
+[[entries]]
+key = "repo.two_hosts"
+lane = "repo_facts"
+subject = "open-brain hosts"
+fact_type = "gotcha"
+text = """
+There are exactly two hosts: this machine while developing, and core01 when the \
+dev work is done. Retired LXC hosts may still answer on the network and still \
+hold old Open Brain data; a successful connection is not evidence a host is in \
+scope. Do not point config, docs, canaries, or tooling at one.\
+"""
+source = "AGENTS.md ## Stack"
