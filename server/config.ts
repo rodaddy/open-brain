@@ -50,6 +50,15 @@ const environmentSchema = z
     LOG_FILE: nonEmpty,
     SERVICE_NAME: nonEmpty.default("open-brain-server"),
     OPEN_BRAIN_WORKER_NAME: nonEmpty.default("worker"),
+    OPEN_BRAIN_SERVER_IP: nonEmpty.optional(),
+    OPEN_BRAIN_SESSION_TTL_SECONDS: positiveInteger.default(30),
+    OPEN_BRAIN_MAX_SESSIONS: positiveInteger.default(100),
+    OPEN_BRAIN_SESSION_RETRY_AFTER_SECONDS: positiveInteger.default(2),
+    OPEN_BRAIN_SESSION_CLOSE_TIMEOUT_MS: positiveInteger.default(5_000),
+    OPEN_BRAIN_SESSION_SWEEP_INTERVAL_MS: positiveInteger.default(30_000),
+    OPEN_BRAIN_HEALTH_PROBE_TIMEOUT_MS: positiveInteger.default(3_000),
+    EMBEDDING_BASE_URL: z.string().url().optional(),
+    EMBEDDING_API_KEY: optionalSecret,
     SHARED_NAMESPACE_CANONICAL: z.literal("shared-kb").default("shared-kb"),
     AUTH_TOKEN_ADMIN: optionalSecret,
     AUTH_TOKEN_AGENT: optionalSecret,
@@ -85,6 +94,17 @@ export interface ServerConfig {
     readonly workerName: string;
   };
   readonly authTokens: readonly AuthTokenConfig[];
+  readonly transport: {
+    readonly serverIp: string;
+    readonly sessionTtlMs: number;
+    readonly maxSessions: number;
+    readonly retryAfterSeconds: number;
+    readonly closeTimeoutMs: number;
+    readonly sweepIntervalMs: number;
+    readonly healthProbeTimeoutMs: number;
+    readonly embeddingBaseUrl?: string;
+    readonly embeddingApiKey?: string;
+  };
   readonly sharedNamespace: "shared-kb";
 }
 
@@ -152,6 +172,21 @@ function buildConfig(parsed: ParsedEnvironment, userTokens: AuthTokenConfig[]): 
       workerName: parsed.OPEN_BRAIN_WORKER_NAME,
     },
     authTokens: [...roleTokenConfig(parsed), ...userTokens],
+    transport: {
+      serverIp: parsed.OPEN_BRAIN_SERVER_IP ?? "unknown",
+      sessionTtlMs: parsed.OPEN_BRAIN_SESSION_TTL_SECONDS * 1_000,
+      maxSessions: parsed.OPEN_BRAIN_MAX_SESSIONS,
+      retryAfterSeconds: parsed.OPEN_BRAIN_SESSION_RETRY_AFTER_SECONDS,
+      closeTimeoutMs: parsed.OPEN_BRAIN_SESSION_CLOSE_TIMEOUT_MS,
+      sweepIntervalMs: parsed.OPEN_BRAIN_SESSION_SWEEP_INTERVAL_MS,
+      healthProbeTimeoutMs: parsed.OPEN_BRAIN_HEALTH_PROBE_TIMEOUT_MS,
+      ...(parsed.EMBEDDING_BASE_URL
+        ? { embeddingBaseUrl: parsed.EMBEDDING_BASE_URL }
+        : {}),
+      ...(parsed.EMBEDDING_API_KEY
+        ? { embeddingApiKey: parsed.EMBEDDING_API_KEY }
+        : {}),
+    },
     sharedNamespace: parsed.SHARED_NAMESPACE_CANONICAL,
   };
 }
