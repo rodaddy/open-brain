@@ -32,10 +32,31 @@ interface ParityManifest {
   }>;
 }
 
+interface ServerFixture {
+  id: string;
+  description: string;
+  capability: string;
+  providers: string[];
+  auth: Record<string, unknown>;
+  steps: Array<{
+    tool: string;
+    arguments: Record<string, unknown>;
+    expectation: Record<string, unknown>;
+  }>;
+}
+
+interface ServerParityManifest {
+  id: string;
+  expected_fixture_ids: string[];
+  providers: string[];
+  capabilities: string[];
+}
+
 const PLACEHOLDER_REASONS = new Set(["-", "n/a", "na", "none", "todo", "tbd"]);
 const CONSUMER_ALLOWLIST = new Set(["python", "ts"]);
 
 const fixtureDir = new URL("./memory/", import.meta.url);
+const serverFixtureDir = new URL("./server/", import.meta.url);
 const errors: string[] = [];
 
 function isPlaceholderReason(value: string | undefined): boolean {
@@ -57,6 +78,9 @@ async function readJson<T>(url: URL): Promise<T> {
 
 const manifest = await readJson<ParityManifest>(
   new URL("parity-manifest.json", fixtureDir),
+);
+const serverManifest = await readJson<ServerParityManifest>(
+  new URL("parity-manifest.json", serverFixtureDir),
 );
 if (!Array.isArray(manifest.capabilities)) {
   errors.push("parity-manifest.json: capabilities must be an array");
@@ -291,6 +315,61 @@ for (const pending of manifest.not_yet_extracted ?? []) {
   }
 }
 
+const providerIds = serverDeclarations.map(({ provider }) => provider.id);
+if (JSON.stringify(serverManifest.providers) !== JSON.stringify(providerIds)) {
+  errors.push(
+    `server/parity-manifest.json: providers must be ${JSON.stringify(providerIds)}`,
+  );
+}
+const expectedServerFixtureIds = new Set(serverManifest.expected_fixture_ids ?? []);
+const serverCapabilities = new Set(serverManifest.capabilities ?? []);
+const observedServerFixtureIds = new Set<string>();
+const observedServerCapabilities = new Set<string>();
+let serverFixtureCount = 0;
+const serverFixtureGlob = new Bun.Glob("*.fixture.json");
+for await (const name of serverFixtureGlob.scan({
+  cwd: serverFixtureDir.pathname,
+  onlyFiles: true,
+})) {
+  serverFixtureCount += 1;
+  const fixture = await readJson<ServerFixture>(new URL(name, serverFixtureDir));
+  const prefix = `server/${name}:`;
+  observedServerFixtureIds.add(fixture.id);
+  observedServerCapabilities.add(fixture.capability);
+  if (!expectedServerFixtureIds.has(fixture.id)) {
+    errors.push(`${prefix} fixture id '${fixture.id}' is absent from the server manifest`);
+  }
+  if (!serverCapabilities.has(fixture.capability)) {
+    errors.push(`${prefix} capability '${fixture.capability}' is absent from the server manifest`);
+  }
+  if (JSON.stringify(fixture.providers) !== JSON.stringify(providerIds)) {
+    errors.push(`${prefix} providers must declare current-src and server-rewrite-scaffold`);
+  }
+  if (!fixture.description) errors.push(`${prefix} description must be non-empty`);
+  if (!isRecord(fixture.auth)) errors.push(`${prefix} auth must be an object`);
+  if (!Array.isArray(fixture.steps) || fixture.steps.length === 0) {
+    errors.push(`${prefix} steps must contain an observed current-src call`);
+    continue;
+  }
+  for (const [index, step] of fixture.steps.entries()) {
+    if (!step.tool) errors.push(`${prefix} step ${index} tool must be non-empty`);
+    if (!isRecord(step.arguments)) errors.push(`${prefix} step ${index} arguments must be an object`);
+    if (!isRecord(step.expectation) || !("is_error" in step.expectation)) {
+      errors.push(`${prefix} step ${index} expectation must declare is_error`);
+    }
+  }
+}
+for (const id of expectedServerFixtureIds) {
+  if (!observedServerFixtureIds.has(id)) {
+    errors.push(`server/parity-manifest.json: expected fixture id '${id}' has no fixture file`);
+  }
+}
+for (const capability of serverCapabilities) {
+  if (!observedServerCapabilities.has(capability)) {
+    errors.push(`server/parity-manifest.json: capability '${capability}' has no fixture`);
+  }
+}
+
 if (errors.length > 0) {
   console.error(
     `Contract parity check failed with ${errors.length} violation(s):`,
@@ -300,5 +379,5 @@ if (errors.length > 0) {
 }
 
 console.log(
-  `Contract parity check passed: ${fixtureCount} fixtures across ${capabilityMap.size} capabilities and ${serverDeclarations.length} server providers.`,
+  `Contract parity check passed: ${fixtureCount + serverFixtureCount} fixtures across ${capabilityMap.size + serverCapabilities.size} capabilities and ${serverDeclarations.length} server providers.`,
 );

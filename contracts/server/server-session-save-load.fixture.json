@@ -1,0 +1,59 @@
+{
+  "id": "server-session-save-load",
+  "description": "Save and load the legacy session summary surface through current-src.",
+  "capability": "session-save-load",
+  "providers": [
+    "current-src",
+    "server-rewrite-scaffold"
+  ],
+  "auth": {
+    "role": "agent",
+    "client_id": "parity-save",
+    "namespace_source": "token"
+  },
+  "steps": [
+    {
+      "tool": "session_save",
+      "arguments": {
+        "summary": "Observed saved session",
+        "project": "parity",
+        "session_id": "parity-session-id",
+        "tags": [
+          "parity"
+        ]
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "id": "<uuid>",
+          "namespace": "{{namespace}}",
+          "session_id": "parity-session-id",
+          "embedded": true,
+          "merged": false
+        }
+      }
+    },
+    {
+      "tool": "session_load",
+      "arguments": {
+        "project": "parity"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "id": "<uuid>",
+          "project": "parity",
+          "summary": "Observed saved session",
+          "tags": [
+            "parity"
+          ],
+          "blockers": [],
+          "next_steps": [],
+          "key_decisions": [],
+          "created_by": "{{namespace}}",
+          "created_at": "<iso-date>"
+        }
+      }
+    }
+  ]
+}
