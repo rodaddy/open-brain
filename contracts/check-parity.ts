@@ -41,6 +41,7 @@ interface ServerFixture {
   steps: Array<{
     tool: string;
     arguments: Record<string, unknown>;
+    capture?: Record<string, unknown>;
     expectation: Record<string, unknown>;
   }>;
 }
@@ -397,6 +398,21 @@ for await (const name of serverFixtureGlob.scan({
     if (!isRecord(step.arguments)) errors.push(`${prefix} step ${index} arguments must be an object`);
     if (!isRecord(step.expectation) || !("is_error" in step.expectation)) {
       errors.push(`${prefix} step ${index} expectation must declare is_error`);
+    }
+    // `capture` binds a value out of this step's response for later steps to
+    // substitute. Each entry must be a dot path string; anything else would be
+    // silently ignored by the harness and leave the fixture asserting less than
+    // it appears to.
+    if (step.capture !== undefined) {
+      if (!isRecord(step.capture)) {
+        errors.push(`${prefix} step ${index} capture must be an object`);
+      } else {
+        for (const [name, path] of Object.entries(step.capture)) {
+          if (typeof path !== "string" || path.length === 0) {
+            errors.push(`${prefix} step ${index} capture '${name}' must be a non-empty path`);
+          }
+        }
+      }
     }
   }
 }

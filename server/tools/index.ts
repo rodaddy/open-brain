@@ -10,9 +10,12 @@ import { registerCaptureTools } from "./capture.ts";
 import { registerCurationTools } from "./curation.ts";
 import { registerDecomposeEntryTool } from "./decompose-entry.ts";
 import { registerEntityTools } from "./entities.ts";
+import { registerGetContractTool } from "./get-contract.ts";
+import { registerGetEntryTool } from "./get-entry.ts";
 import { registerIngestRawTurnTool } from "./ingest-raw-turn.ts";
 import { registerLaneTools } from "./lanes.ts";
 import { registerListRecentTool } from "./list-recent.ts";
+import { registerOperatorDoctorTool } from "./operator-doctor.ts";
 import { registerPeopleTools } from "./people.ts";
 import { registerPromotionTools } from "./promotion.ts";
 import { registerReportingTools } from "./reporting.ts";
@@ -47,7 +50,11 @@ export function registerMemoryTools(
   registerCurationTools(server, dependencies);
   registerDecomposeEntryTool(server, dependencies);
   registerUpdateEntryTool(server, dependencies);
+  // `resolve_entry` hands back a `get_entry` fetch path, so the two register
+  // together: a resolve result that names a tool this server does not answer is
+  // a dangling pointer the caller only discovers on the follow-up call.
   registerResolveEntryTool(server, dependencies);
+  registerGetEntryTool(server, dependencies);
   registerTieringTools(server, dependencies);
   registerReportingTools(server, dependencies);
   registerEntityTools(server, dependencies);
@@ -68,6 +75,13 @@ export function registerMemoryTools(
   // `agent_context_pack`, not a second implementation of it.
   registerAgentContextPackTool(server, dependencies);
   registerAgentReflexPointersTool(server, dependencies);
+  // Service-metadata surfaces. Neither is namespaced memory: `get_contract`
+  // reports what this server promises downstream clients, `operator_doctor`
+  // reports how the deployment is doing, and both reuse the single existing
+  // builder so the rewrite cannot answer either question differently from the
+  // contract and payload locks that already police it.
+  registerGetContractTool(server, dependencies);
+  registerOperatorDoctorTool(server, dependencies);
 }
 
 export type { MemoryToolDependencies } from "./types.ts";

@@ -11,6 +11,19 @@ import { registerMemoryTools } from "../server/tools/index.ts";
 interface FixtureStep {
   tool: string;
   arguments: Record<string, unknown>;
+  /**
+   * Bind values out of THIS step's response JSON for later steps to substitute.
+   *
+   * Maps a placeholder name to a dot path into the parsed response, e.g.
+   * `{ "source_id": "source.id" }` makes `{{source_id}}` usable downstream.
+   *
+   * Mutations keyed by a server-generated id (`update_source`, `remove_source`)
+   * cannot be expressed without this: their `id` does not exist until a prior
+   * step creates the row, and the namespace placeholders are known before the
+   * run. Capturing the id from the observed response keeps the fixture a
+   * recording of real behavior rather than a hand-written guess at an id.
+   */
+  capture?: Record<string, string>;
   expectation: {
     is_error: boolean;
     text?: string;
@@ -72,6 +85,18 @@ function replacePlaceholders(value: unknown, replacements: Record<string, string
     );
   }
   return value;
+}
+
+/**
+ * Read a dot path out of a parsed tool response.
+ *
+ * @returns The value at that path, or `undefined` when any segment is missing.
+ */
+function valueAtPath(source: unknown, path: string): unknown {
+  return path.split(".").reduce<unknown>((current, segment) => {
+    if (current === null || typeof current !== "object") return undefined;
+    return (current as Record<string, unknown>)[segment];
+  }, source);
 }
 
 function expectObserved(actual: unknown, expected: unknown): void {
@@ -206,7 +231,9 @@ dbDescribe("server parity fixtures by implemented provider capability (live Post
       test(`${provider}: ${fixture.id}`, async () => {
         const providerSlug = provider.replaceAll("-", "_");
         const namespace = `${fixture.auth.client_id}-${providerSlug}-${process.pid}`;
-        const replacements = {
+        // Captured ids are added to this same map as steps run, so a fixture
+        // substitutes namespace tokens and prior-step ids through one mechanism.
+        const replacements: Record<string, string> = {
           "{{namespace}}": namespace,
           "{{other_namespace}}": `${namespace}-other`,
         };
@@ -229,6 +256,18 @@ dbDescribe("server parity fixtures by implemented provider capability (live Post
             if (expected.text !== undefined) expect(text).toBe(expected.text);
             if (expected.json !== undefined) expectObserved(JSON.parse(text), expected.json);
 
+            for (const [name, path] of Object.entries(step.capture ?? {})) {
+              const captured = valueAtPath(JSON.parse(text), path);
+              // A capture that silently resolved to undefined would substitute
+              // the literal string "undefined" into the next step's arguments,
+              // turning a broken fixture into a confusing validation error
+              // several steps later. Fail here, where the cause is visible.
+              expect(
+                typeof captured === "string" && captured.length > 0,
+                `${fixture.id} step ${step.tool}: capture '${name}' found nothing at '${path}'`,
+              ).toBe(true);
+              replacements[`{{${name}}}`] = captured as string;
+            }
           }
         } finally {
           await close();

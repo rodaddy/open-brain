@@ -1,0 +1,82 @@
+{
+  "id": "server-graph-archive",
+  "description": "Freeze archive_entity against a captured entity id: an admin archive reports its link cascade, a repeat archive collapses to the same non-error string as an unknown id, and the archived entity stops being readable.",
+  "capability": "graph-archive",
+  "providers": [
+    "current-src",
+    "server-rewrite-scaffold"
+  ],
+  "auth": {
+    "role": "admin",
+    "client_id": "parity-graph-archive",
+    "namespace_source": "token"
+  },
+  "steps": [
+    {
+      "tool": "upsert_entity",
+      "arguments": {
+        "entity_type": "host",
+        "name": "parity-archive-target",
+        "canonical_id": "host:parity-archive-target"
+      },
+      "capture": {
+        "entity_id": "id"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "id": "<uuid>",
+          "entity_type": "host",
+          "name": "parity-archive-target",
+          "namespace": "{{namespace}}",
+          "is_new": true
+        }
+      }
+    },
+    {
+      "tool": "archive_entity",
+      "arguments": {
+        "id": "{{entity_id}}"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "id": "{{entity_id}}",
+          "namespace": "{{namespace}}",
+          "archived": true,
+          "links_archived": 0
+        }
+      }
+    },
+    {
+      "tool": "archive_entity",
+      "arguments": {
+        "id": "{{entity_id}}"
+      },
+      "expectation": {
+        "is_error": false,
+        "text": "Already archived or not found"
+      }
+    },
+    {
+      "tool": "get_entity",
+      "arguments": {
+        "id": "{{entity_id}}"
+      },
+      "expectation": {
+        "is_error": true,
+        "text": "Entity not found"
+      }
+    },
+    {
+      "tool": "archive_entity",
+      "arguments": {
+        "id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+      },
+      "expectation": {
+        "is_error": false,
+        "text": "Already archived or not found"
+      }
+    }
+  ]
+}

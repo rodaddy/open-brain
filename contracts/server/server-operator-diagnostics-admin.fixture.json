@@ -1,0 +1,37 @@
+{
+  "id": "server-operator-diagnostics-admin",
+  "description": "Freeze the operator_doctor payload IDENTITY for an admin identity: the doctor contract version and its section shape. Environment-dependent values (migration counts, provider reachability, pool numbers) are deliberately not asserted -- those are facts about the machine the suite runs on, and freezing them would record an accident of this database rather than the contract.",
+  "capability": "operator-diagnostics",
+  "providers": [
+    "current-src",
+    "server-rewrite-scaffold"
+  ],
+  "auth": {
+    "role": "admin",
+    "client_id": "parity-operator-diagnostics-admin",
+    "namespace_source": "token"
+  },
+  "steps": [
+    {
+      "tool": "operator_doctor",
+      "arguments": {},
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "contract_version": "2026-07-08.operator-doctor.v2",
+          "generated_at": "<iso-date>",
+          "runtime": {
+            "service": "open-brain",
+            "version": "<non-empty-string>",
+            "contract_version": "2026-07-23.memory-tools.v23",
+            "contract_schema_version": 1
+          },
+          "embedding_provider": {
+            "model": "<non-empty-string>",
+            "dimensions": 768
+          }
+        }
+      }
+    }
+  ]
+}

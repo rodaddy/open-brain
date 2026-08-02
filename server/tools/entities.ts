@@ -568,6 +568,90 @@ export function registerEntityTools(
       return textResult({ matched: rows.length, hydrated, failed });
     },
   );
+
+  server.registerTool(
+    "archive_entity",
+    {
+      description:
+        "Soft-delete a graph entity by setting ob_entities.archived_at and archiving active ob_links that reference it.",
+      inputSchema: {
+        id: graphUuid.describe("Entity UUID to archive"),
+      },
+      annotations: {
+        title: "Archive Entity",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+      },
+    },
+    async (args, extra) => {
+      const identity = authIdentity(extra.authInfo);
+      if (!identity || !canDelete(identity.role, "sessions")) {
+        return errorResult("Permission denied: cannot archive entities");
+      }
+
+      // Entity and link archival are ONE transaction. A half-applied archive
+      // leaves live links pointing at a dead node, which reads as a graph edge
+      // to every traversal while the node it names is gone.
+      const client = await dependencies.pool.connect();
+      try {
+        await client.query("BEGIN");
+
+        // The mutation predicate is applied to the UPDATE itself, not checked
+        // beforehand: an ID-based write that authorizes in a separate statement
+        // is the isolation bug class this repo's rules name explicitly.
+        const entityPredicate = namespacePredicate(identity, "delete", 2);
+        const { rows } = await client.query(
+          `UPDATE ob_entities
+              SET archived_at = NOW(), updated_at = NOW()
+            WHERE id = $1 AND archived_at IS NULL${entityPredicate.clause}
+            RETURNING id, namespace`,
+          [args.id, ...entityPredicate.values],
+        );
+
+        if (rows.length === 0) {
+          // Already-archived and unreadable-namespace collapse to ONE non-error
+          // string. Distinguishing them would let a caller probe which entity
+          // ids exist in namespaces it has no authority over.
+          await client.query("COMMIT");
+          return textResult("Already archived or not found");
+        }
+
+        // The link sweep matches on the namespace the entity was actually found
+        // in, taken from the RETURNING row rather than re-derived from the
+        // caller, so the cascade cannot reach a neighbouring namespace.
+        const { rowCount } = await client.query(
+          `UPDATE ob_links
+              SET archived_at = NOW(), updated_at = NOW()
+            WHERE archived_at IS NULL
+              AND ((from_type = 'entity' AND from_id = $1) OR (to_type = 'entity' AND to_id = $1))
+              AND namespace = $2`,
+          [args.id, rows[0].namespace],
+        );
+
+        await client.query("COMMIT");
+
+        const result = {
+          id: rows[0].id,
+          namespace: rows[0].namespace,
+          archived: true,
+          links_archived: rowCount ?? 0,
+        };
+        dependencies.logger.info({ tool: "archive_entity", ...result }, "tool_result");
+        return textResult(result);
+      } catch (error) {
+        await client.query("ROLLBACK");
+        const message = error instanceof Error ? error.message : String(error);
+        dependencies.logger.error(
+          { tool: "archive_entity", id: args.id, error: message },
+          "tool_error",
+        );
+        return errorResult(`Transaction failed: ${message}`);
+      } finally {
+        client.release();
+      }
+    },
+  );
 }
 
 /**
