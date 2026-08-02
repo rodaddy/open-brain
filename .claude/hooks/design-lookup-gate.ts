@@ -698,6 +698,12 @@ const CAP_PROPOSAL_EXEMPT = new RegExp(
     // make something smaller are still blocked.
     String.raw`\bCHECK\s*\(`,
     String.raw`\bCONSTRAINTS?\b`,
+    // Same operator-approved class, further member: the git subcommand that
+    // clears stale worktree REGISTRATIONS. AGENTS.md mandates running it at
+    // cleanup; on 2026-08-02 the cap wall refused it mid-wave (the "prun" stem
+    // is limitation vocabulary, but this is a command name, not a proposal).
+    // Memory content stays unbounded; only the exact git spelling is exempt.
+    String.raw`\bgit\s+worktree\s+prune\b`,
     String.raw`\bno\s+(cap|caps|limit|limits|ceiling)\b`,
     String.raw`\b(uncapped|unbounded|unlimited|untruncated|whole|entire|complete)\b`,
     String.raw`\b(un|de)-?(cap|caps|capping|limit|limiting|truncat)\w*`,
