@@ -6,18 +6,30 @@ import { canRead, canWrite } from "../auth/permissions.ts";
 import type { MemoryToolDependencies } from "./types.ts";
 import { errorResult } from "./types.ts";
 
-export const EVENT_TYPES = [
-  "fact",
-  "decision",
-  "blocker",
-  "action",
-  "artifact",
-  "receipt",
-  "question",
-  "correction",
-  "handoff",
-] as const;
-export const IMPORTANCE_LEVELS = ["hot", "warm", "cold"] as const;
+/**
+ * The session-event vocabulary, re-exported from the single existing declaration.
+ *
+ * This file previously hand-copied the nine event types and three importance
+ * levels. That made it an EIGHTH redeclaration of a frozen cross-language
+ * vocabulary, and `python/openbrain-memory/tests/test_event_vocabulary.py`
+ * (`test_vocabulary_is_declared_exactly_where_expected`) failed on it by design
+ * -- the guard exists precisely to stop a new copy appearing where no
+ * per-surface drift test watches it.
+ *
+ * Adding this file to the guard's `known` set was the wrong fix: the guard is a
+ * census, and silencing it would have kept the copy while removing the alarm.
+ * The vocabulary is authoritative in Python (`openbrain_memory.EVENT_TYPES`) and
+ * mirrored in exactly the surfaces that have their own equality tests. The
+ * rewrite needs no new mirror -- it needs the one `src/` already declares, which
+ * `src/tools/append-session-event.ts` consumes the same way. Re-exporting keeps
+ * `z.enum(EVENT_TYPES)` in `session-events.ts` byte-identical in behavior while
+ * collapsing two declarations back to one.
+ *
+ * This is the same cross-boundary reuse the rest of this wave already does
+ * (`server/tools/repo-facts.ts`, `get-contract.ts`, `promotion.ts` all import
+ * their builders from `src/`), so it introduces no new coupling direction.
+ */
+export { EVENT_TYPES, IMPORTANCE_LEVELS } from "../../src/tools/table-constants.ts";
 
 export function contentHash(value: string): string {
   return createHash("sha256").update(value).digest("hex");

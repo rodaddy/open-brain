@@ -39,11 +39,25 @@ function wrap(inner: string): string {
   return `<?xml version="1.0" encoding="UTF-8"?>\n<testsuites>\n${inner}\n</testsuites>`;
 }
 
+/**
+ * The total an all-green run contributes, derived rather than hardcoded.
+ *
+ * This was the literal `32`, which meant every addition to `REQUIRED_SUITES`
+ * failed this file for a reason that had nothing to do with the guard's
+ * behavior -- the number was a restatement of the table, so the two could only
+ * ever drift apart. Deriving it keeps the assertion meaningful (the guard really
+ * does count every executed live testcase) while letting the table grow.
+ */
+const ALL_GREEN_TOTAL = REQUIRED_SUITES.reduce(
+  (total, suite) => total + suite.minTests,
+  0,
+);
+
 describe("assert-db-tests-ran anti-skip guard", () => {
   it("passes when every required live-Postgres suite executed cleanly", () => {
     const result = evaluateJunit(wrap(allSuitesGreen()));
     expect(result.errors).toEqual([]);
-    expect(result.executedLiveTestcases).toBe(32);
+    expect(result.executedLiveTestcases).toBe(ALL_GREEN_TOTAL);
     expect(
       result.executedLiveTestcasesBySuite.get(
         "search_brain language-aware FTS ranking (live Postgres)",
@@ -262,13 +276,22 @@ describe("assert-db-tests-ran anti-skip guard", () => {
         });
       }
       if (s.name === extraName) {
-        return suiteXml(s.name, { tests: s.minTests + 2 });
+        // Pad by exactly what the skipped suite withheld, so the global floor is
+        // met and only the per-suite check can fail. Derived from the table
+        // rather than written as a literal `+2`, which silently stops being the
+        // right amount if `lane_upsert`'s `minTests` ever changes.
+        const withheld =
+          REQUIRED_SUITES.find((suite) => suite.name === skippedName)?.minTests ?? 0;
+        return suiteXml(s.name, { tests: s.minTests + withheld });
       }
       return suiteXml(s.name, { tests: s.minTests });
     }).join("\n");
 
     const result = evaluateJunit(wrap(suites));
-    expect(result.executedLiveTestcases).toBe(32);
+    // The padding above adds back exactly what skipping `lane_upsert` removed,
+    // so the global total is untouched -- which is the premise of this test: the
+    // per-suite check must still trip even when the floor alone is satisfied.
+    expect(result.executedLiveTestcases).toBe(ALL_GREEN_TOTAL);
     expect(
       result.errors.some((e) =>
         e.includes(
