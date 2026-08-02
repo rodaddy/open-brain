@@ -20,6 +20,28 @@ import type { MemoryToolDependencies } from "../tools/types.ts";
  * Registration is pure name/schema/handler bookkeeping -- no handler runs and
  * nothing touches the pool -- so the dependencies are never dereferenced.
  */
+let cached: readonly string[] | undefined;
+
+/**
+ * Resolved on FIRST CALL, never at module load.
+ *
+ * This module and `../tools/get-contract.ts` import each other: get-contract
+ * needs the registered set to report a shortfall, and the registry walk needs
+ * the tool module that registers it. Computing this eagerly made the value a
+ * module-init constant, so whichever side of the cycle loaded second saw the
+ * other's binding still in its temporal dead zone -- `ReferenceError: Cannot
+ * access 'REWRITE_REGISTERED_TOOLS' before initialization`, which took down
+ * `registerMemoryTools` and with it 69 server tests in CI while passing locally
+ * on a luckier module order.
+ *
+ * Deferring to call time breaks the cycle without breaking the layering: by the
+ * time anything asks, both modules are fully evaluated.
+ */
+export function rewriteRegisteredTools(): readonly string[] {
+  cached ??= collectRegisteredTools();
+  return cached;
+}
+
 function collectRegisteredTools(): string[] {
   const names: string[] = [];
   const recorder = {
@@ -56,6 +78,3 @@ function collectRegisteredTools(): string[] {
   }
   return unique;
 }
-
-export const REWRITE_REGISTERED_TOOLS: readonly string[] =
-  collectRegisteredTools();

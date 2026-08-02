@@ -1,5 +1,5 @@
 import { buildContract } from "../../src/contract.ts";
-import { REWRITE_REGISTERED_TOOLS } from "./registered-tools.ts";
+import { rewriteRegisteredTools } from "./registered-tools.ts";
 
 export interface ServerContractDeclaration {
   contractVersion: string;
@@ -86,6 +86,6 @@ export function rewriteContractSatisfaction(
 ): RewriteContractSatisfaction {
   return evaluateRewriteContractSatisfaction(
     contractRequiredTools(buildContract(generatedAt)),
-    REWRITE_REGISTERED_TOOLS,
+    rewriteRegisteredTools(),
   );
 }

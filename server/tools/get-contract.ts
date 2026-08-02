@@ -38,7 +38,7 @@ import {
   contractRequiredTools,
   evaluateRewriteContractSatisfaction,
 } from "../contracts/declaration.ts";
-import { REWRITE_REGISTERED_TOOLS } from "../contracts/registered-tools.ts";
+import { rewriteRegisteredTools } from "../contracts/registered-tools.ts";
 import { authIdentity, errorResult, textResult, type MemoryToolDependencies } from "./types.ts";
 
 export function registerGetContractTool(
@@ -70,7 +70,7 @@ export function registerGetContractTool(
       const contract = buildContract();
       const satisfaction = evaluateRewriteContractSatisfaction(
         contractRequiredTools(contract),
-        REWRITE_REGISTERED_TOOLS,
+        rewriteRegisteredTools(),
       );
       if (!satisfaction.satisfied) {
         // Warn, do not fail: `get_contract` answering honestly is more useful to

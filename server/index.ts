@@ -4,7 +4,7 @@ export {
   rewriteContractSatisfaction,
   serverContractDeclaration,
 } from "./contracts/declaration.ts";
-export { REWRITE_REGISTERED_TOOLS } from "./contracts/registered-tools.ts";
+export { rewriteRegisteredTools } from "./contracts/registered-tools.ts";
 export { DATABASE_BOUNDARY } from "./db/index.ts";
 export { DOMAIN_BOUNDARY } from "./domain/index.ts";
 export { OBSERVABILITY_BOUNDARY } from "./observability/index.ts";

@@ -16,7 +16,7 @@ import {
   rewriteContractSatisfaction,
   serverContractDeclaration,
 } from "./declaration.ts";
-import { REWRITE_REGISTERED_TOOLS } from "./registered-tools.ts";
+import { rewriteRegisteredTools } from "./registered-tools.ts";
 
 const GENERATED_AT = "1970-01-01T00:00:00.000Z";
 
@@ -103,11 +103,28 @@ describe("the live rewrite registry", () => {
     // the tool name on the same line as `registerTool(` while `server/tools`
     // puts it on the next, so the src-side single-line pattern finds ZERO
     // rewrite tools -- and a shortfall check over an empty set reports success.
-    expect(REWRITE_REGISTERED_TOOLS.length).toBeGreaterThan(50);
-    expect(REWRITE_REGISTERED_TOOLS).toContain("get_contract");
-    expect(new Set(REWRITE_REGISTERED_TOOLS).size).toBe(
-      REWRITE_REGISTERED_TOOLS.length,
-    );
+    const registered = rewriteRegisteredTools();
+    expect(registered.length).toBeGreaterThan(50);
+    expect(registered).toContain("get_contract");
+    expect(new Set(registered).size).toBe(registered.length);
+  });
+
+  test("resolves through the get_contract import cycle without a TDZ error", () => {
+    // `registered-tools` and `tools/get-contract` import each other. Computing
+    // the set at module load made whichever side loaded second read the other's
+    // binding while still in its temporal dead zone -- 69 server tests failed in
+    // CI on `Cannot access 'REWRITE_REGISTERED_TOOLS' before initialization`
+    // while passing locally on a luckier module order. Importing the tool module
+    // FIRST here reproduces the order that broke, so this fails if the walk ever
+    // goes eager again.
+    const registrar = require("../tools/get-contract.ts");
+    expect(typeof registrar.registerGetContractTool).toBe("function");
+    expect(() => rewriteRegisteredTools()).not.toThrow();
+    expect(rewriteRegisteredTools()).toContain("get_contract");
+  });
+
+  test("caches the walk instead of re-running the registrar per call", () => {
+    expect(rewriteRegisteredTools()).toBe(rewriteRegisteredTools());
   });
 
   test("registers every contract-required tool whose port has landed", () => {
