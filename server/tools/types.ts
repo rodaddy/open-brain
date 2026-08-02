@@ -8,6 +8,17 @@ export interface MemoryToolDependencies {
   readonly embedFn: (text: string) => Promise<number[] | null>;
   readonly logger: Logger;
   readonly embeddingModel?: string;
+  /**
+   * Resolved qmd entry point for `search_all`'s file-index arm.
+   *
+   * Injected so a test can federate against a stub without spawning anything,
+   * and so the resolution rule lives at the composition root rather than being
+   * re-derived inside a handler. Absent means qmd federation is off, and
+   * `search_all` says so in its log rather than quietly returning brain-only
+   * results (`docs/qmd-ob-layered-recall.md` records the silent-degradation
+   * defect this avoids).
+   */
+  readonly qmdPath?: string;
 }
 
 export interface McpAuthInfo {

@@ -1,9 +1,13 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ServerModuleBoundary } from "../module.ts";
+import { registerAdjacentContextTool } from "./adjacent-context.ts";
+import { registerBrainAnswerTool } from "./brain-answer.ts";
 import { registerCaptureTools } from "./capture.ts";
 import { registerIngestRawTurnTool } from "./ingest-raw-turn.ts";
 import { registerLaneTools } from "./lanes.ts";
-import { registerNamespaceGuardTool } from "./namespace-guard.ts";
+import { registerListRecentTool } from "./list-recent.ts";
+import { registerSearchAllTool } from "./search-all.ts";
+import { registerSearchBrainTool } from "./search-brain.ts";
 import { registerSessionEventTool } from "./session-events.ts";
 import { registerSessionLifecycleTools } from "./session-lifecycle.ts";
 import { registerSessionSaveLoadTools } from "./session-save-load.ts";
@@ -25,7 +29,14 @@ export function registerMemoryTools(
   registerSessionEventTool(server, dependencies);
   registerSessionSaveLoadTools(server, dependencies);
   registerIngestRawTurnTool(server, dependencies);
-  registerNamespaceGuardTool(server, dependencies);
+  // The search/recall family. `search_brain` was previously a namespace-denial
+  // stub registered by this wave's predecessor so the isolation boundary stayed
+  // observable while the body was unowned; the real handler replaces it here.
+  registerSearchBrainTool(server, dependencies);
+  registerSearchAllTool(server, dependencies);
+  registerBrainAnswerTool(server, dependencies);
+  registerListRecentTool(server, dependencies);
+  registerAdjacentContextTool(server, dependencies);
 }
 
 export type { MemoryToolDependencies } from "./types.ts";

@@ -65,7 +65,7 @@
     },
     "server-rewrite-scaffold": {
       "auth-error-shapes": "scaffold-declared",
-      "brain-answer": "scaffold-declared",
+      "brain-answer": "implemented",
       "capture-ingest-checkpoint": "implemented",
       "citation-recall": "scaffold-declared",
       "context-pack-sections": "scaffold-declared",
@@ -76,7 +76,7 @@
       "namespace-denial": "implemented",
       "realtime-working-recovery": "scaffold-declared",
       "reflex-pointers": "scaffold-declared",
-      "search-brain-arms": "scaffold-declared",
+      "search-brain-arms": "implemented",
       "session-lifecycle-server": "implemented",
       "session-save-load": "implemented",
       "tier-tools": "scaffold-declared",
