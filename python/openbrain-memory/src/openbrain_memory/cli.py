@@ -42,32 +42,62 @@ MAX_JSON_OUTPUT_BYTES = 1_000_000
 MAX_IGNORED_OPTIONAL_KEY_COUNT = 65_535
 IGNORED_OPTIONAL_REQUEST_KEYS_NOTE = "ignored_optional_request_keys"
 _COMMON_KEYS = {"config", "operation", "scope"}
-_OPERATION_KEYS = {
-    "recall": {
-        "include_unreviewed_recovery",
-        "max_latency_ms",
-        "max_tokens",
-        "query",
-        "requested_sections",
-    },
-    "reflex": {"max_latency_ms", "max_tokens", "prior_context", "query"},
-    "capture": {"content", "distilled", "event_type"},
+_OPERATION_SPECS = {
+    "help": ("List provider operations and an example request.", set()),
+    "recall": (
+        "Load context for a query.",
+        {
+            "include_unreviewed_recovery",
+            "max_latency_ms",
+            "max_tokens",
+            "query",
+            "requested_sections",
+        },
+    ),
+    "reflex": (
+        "Load body-free reflex pointers for a query.",
+        {"max_latency_ms", "max_tokens", "prior_context", "query"},
+    ),
+    "capture": (
+        "Persist one distilled memory event.",
+        {"content", "distilled", "event_type"},
+    ),
     # The raw lane carries no "distilled" key by design: it is the one verb
     # that ships the transcript rather than a summary of it.
-    "ingest": {"namespace", "turns"},
-    "checkpoint": {
-        "distilled",
-        "key_decisions",
-        "next_steps",
-        "receipt_refs",
-        "summary",
-    },
-    "wrap": {
-        "distilled",
-        "key_decisions",
-        "next_steps",
-        "receipt_refs",
-        "summary",
+    "ingest": ("Persist raw conversation turns.", {"namespace", "turns"}),
+    "checkpoint": (
+        "Persist distilled session progress.",
+        {
+            "distilled",
+            "key_decisions",
+            "next_steps",
+            "receipt_refs",
+            "summary",
+        },
+    ),
+    "wrap": (
+        "Persist a distilled session wrap.",
+        {
+            "distilled",
+            "key_decisions",
+            "next_steps",
+            "receipt_refs",
+            "summary",
+        },
+    ),
+}
+_OPERATION_KEYS = {name: keys for name, (_, keys) in _OPERATION_SPECS.items()}
+_OPERATION_NAMES = tuple(_OPERATION_SPECS)
+_OPERATION_VOCABULARY = ", ".join(_OPERATION_NAMES)
+_HELP_EXAMPLE = {
+    "operation": "recall",
+    "query": "current task",
+    "scope": {
+        "agent": "agent-name",
+        "channel_id": "channel-id",
+        "platform": "runtime-name",
+        "server_id": "server-id",
+        "session_key": "session-key",
     },
 }
 
@@ -86,24 +116,27 @@ def execute_json(
     runtime: FirstClassMemoryRuntime | None = None
     ignored_optional_key_count = 0
     try:
-        operation = _mapping_text(payload, "operation")
+        operation = _operation_text(payload)
         projected, ignored_optional_key_count = _project_request(payload, operation)
-        scope_value = projected.get("scope")
-        config_value = projected.get("config", {})
-        if not isinstance(scope_value, Mapping):
-            raise ValueError("scope must be a JSON object")
-        if not isinstance(config_value, Mapping):
-            raise ValueError("config must be a JSON object")
-        runtime = FirstClassMemoryRuntime(
-            RuntimeConfig.from_sources(config_value, environ=environ),
-            RuntimeScope.from_mapping(scope_value),
-            transport=transport,
-            client=client,
-            client_factory=client_factory,
-            fallback_runner=fallback_runner,
-            spool=spool,
-        )
-        output = _dispatch(runtime, operation, projected).as_dict()
+        if operation == "help":
+            output = usage_output()
+        else:
+            scope_value = projected.get("scope")
+            config_value = projected.get("config", {})
+            if not isinstance(scope_value, Mapping):
+                raise ValueError("scope must be a JSON object")
+            if not isinstance(config_value, Mapping):
+                raise ValueError("config must be a JSON object")
+            runtime = FirstClassMemoryRuntime(
+                RuntimeConfig.from_sources(config_value, environ=environ),
+                RuntimeScope.from_mapping(scope_value),
+                transport=transport,
+                client=client,
+                client_factory=client_factory,
+                fallback_runner=fallback_runner,
+                spool=spool,
+            )
+            output = _dispatch(runtime, operation, projected).as_dict()
     except Exception as error:
         output = failure_output(_safe_operation(payload.get("operation")), error)
     _attach_compatibility_receipt(output, ignored_optional_key_count)
@@ -132,6 +165,31 @@ def failure_output(operation: str, error: BaseException | str) -> dict[str, Any]
             error=error_text,
         )
     ).as_dict()
+
+
+def usage_output() -> dict[str, Any]:
+    """Build the structured provider operation reference."""
+    return RuntimeOutput(
+        receipt=RuntimeReceipt(
+            operation="help",
+            status=ReceiptStatus.DIRECT,
+            durable=False,
+            direct_attempted=False,
+            fallback_attempted=False,
+        ),
+        result={
+            "operations": [
+                {"name": name, "description": description}
+                for name, (description, _) in _OPERATION_SPECS.items()
+            ],
+            "example": _HELP_EXAMPLE,
+        },
+    ).as_dict()
+
+
+def operation_names() -> tuple[str, ...]:
+    """Return every operation accepted by the JSON router."""
+    return _OPERATION_NAMES
 
 
 def parse_json_input(data: bytes) -> Mapping[str, Any]:
@@ -237,7 +295,10 @@ def _dispatch(
             next_steps=_mapping_optional_str_list(payload, "next_steps"),
             receipt_refs=_mapping_optional_str_list(payload, "receipt_refs"),
         )
-    raise ValueError(f"unsupported operation: {_safe_text(operation)}")
+    raise ValueError(
+        f"unsupported operation: {_safe_text(operation)}; "
+        f"valid operations: {_OPERATION_VOCABULARY}"
+    )
 
 
 def _project_request(
@@ -246,7 +307,10 @@ def _project_request(
 ) -> tuple[dict[str, Any], int]:
     allowed = _OPERATION_KEYS.get(operation)
     if allowed is None:
-        raise ValueError(f"unsupported operation: {_safe_text(operation)}")
+        raise ValueError(
+            f"unsupported operation: {_safe_text(operation)}; "
+            f"valid operations: {_OPERATION_VOCABULARY}"
+        )
     known_keys = _COMMON_KEYS | allowed
     projected = {key: value for key, value in payload.items() if key in known_keys}
     ignored_count = min(
@@ -272,6 +336,16 @@ def _attach_compatibility_receipt(
 def _require_distilled(payload: Mapping[str, Any], operation: str) -> None:
     if payload.get("distilled") is not True:
         raise ValueError(f"{operation} requires distilled=true")
+
+
+def _operation_text(value: Mapping[str, Any]) -> str:
+    item = value.get("operation")
+    if not isinstance(item, str) or not item.strip():
+        raise ValueError(
+            "operation must be a non-empty string; "
+            f"valid operations: {_OPERATION_VOCABULARY}"
+        )
+    return item.strip()
 
 
 def _mapping_text(value: Mapping[str, Any], name: str) -> str:
