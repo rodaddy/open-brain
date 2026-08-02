@@ -7,9 +7,10 @@ The bulk ingester: suck a whole giant session file in, lose none of it.
 Purpose:
     The SECOND application (#454, `_plans/python-port-sequence.md` §TWO
     APPLICATIONS). An operator runs it, rarely, over a giant session file -- 27
-    MB measured -- from anywhere: a Claude transcript first, later Claude Code
-    (base64 images) and Hermes (no fixed shape). It has no deadline, no
-    watermark, and every turn in the file goes to the raw lane whole.
+    MB measured -- from anywhere. Claude transcripts and observed Codex rollout
+    JSONL are built; Hermes remains unbuilt until an observed contract is
+    charted. It has no deadline, no watermark, and every normalized turn in the
+    file goes to the raw lane whole.
 
 Architecture:
     This is a DISTINCT application from the live adapter (`apps/capture/`), and
@@ -32,8 +33,8 @@ Architecture:
 
     Key Components:
         - formats: the FACTORY keyed on input type. It belongs HERE, not on the
-          deadline-critical live path. Claude transcript first; Code and Hermes
-          are follow-on tickets that raise loudly until built.
+          deadline-critical live path. Claude reuses the capture parser; Codex
+          validates observed rollout events; Hermes raises loudly until charted.
         - staging: the SQLite staging store. The whole file goes in, is
           rejiggered into RawTurns, and each one pops off and yields -- the
           store decided 2026-07-31 02:15. It also carries the resume and
