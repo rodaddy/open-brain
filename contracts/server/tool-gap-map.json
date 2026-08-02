@@ -3,8 +3,8 @@
   "description": "Complete current-src MCP registration inventory split by observed server fixture coverage.",
   "source": "src/tools/**/*.ts server.registerTool literal registrations",
   "registered_tool_count": 63,
-  "fixture_covered_tool_count": 49,
-  "without_parity_fixture_count": 14,
+  "fixture_covered_tool_count": 53,
+  "without_parity_fixture_count": 10,
   "fixture_covered_tools": [
     "access_report",
     "agent_context_pack",
@@ -29,11 +29,14 @@
     "lane_upsert",
     "link_entities",
     "list_entities",
+    "list_namespaces",
+    "list_repo_facts",
     "list_sources",
     "list_stale",
     "log_decision",
     "log_thought",
     "promote_entry",
+    "promote_shared",
     "rate_entry",
     "recovery_wal_append",
     "recovery_wal_mark",
@@ -54,6 +57,7 @@
     "update_entry",
     "upsert_entity",
     "upsert_person",
+    "upsert_repo_fact",
     "working_set_append"
   ],
   "without_parity_fixture": [
@@ -83,28 +87,13 @@
       "reason": "No observed current-src server fixture has been extracted for this tool yet."
     },
     {
-      "tool": "list_namespaces",
-      "capability": "namespace-discovery",
-      "reason": "No observed current-src server fixture has been extracted for this tool yet."
-    },
-    {
       "tool": "list_recent",
       "capability": "entry-listing",
       "reason": "No observed current-src server fixture has been extracted for this tool yet."
     },
     {
-      "tool": "list_repo_facts",
-      "capability": "repo-facts",
-      "reason": "No observed current-src server fixture has been extracted for this tool yet."
-    },
-    {
       "tool": "operator_doctor",
       "capability": "operator-diagnostics",
-      "reason": "No observed current-src server fixture has been extracted for this tool yet."
-    },
-    {
-      "tool": "promote_shared",
-      "capability": "promotion",
       "reason": "No observed current-src server fixture has been extracted for this tool yet."
     },
     {
@@ -121,11 +110,6 @@
       "tool": "update_source",
       "capability": "source-registry",
       "reason": "Mutation requires an id captured from a prior step; the shared fixture harness substitutes namespace tokens only. Covered by seeded live-Postgres tests instead."
-    },
-    {
-      "tool": "upsert_repo_fact",
-      "capability": "repo-facts",
-      "reason": "No observed current-src server fixture has been extracted for this tool yet."
     }
   ]
 }

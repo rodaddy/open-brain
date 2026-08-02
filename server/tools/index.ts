@@ -8,7 +8,9 @@ import { registerIngestRawTurnTool } from "./ingest-raw-turn.ts";
 import { registerLaneTools } from "./lanes.ts";
 import { registerNamespaceGuardTool } from "./namespace-guard.ts";
 import { registerPeopleTools } from "./people.ts";
+import { registerPromotionTools } from "./promotion.ts";
 import { registerReportingTools } from "./reporting.ts";
+import { registerRepoFactTools } from "./repo-facts.ts";
 import { registerResolveEntryTool } from "./resolve-entry.ts";
 import { registerUpdateEntryTool } from "./update-entry.ts";
 import { registerSessionEventTool } from "./session-events.ts";
@@ -44,6 +46,8 @@ export function registerMemoryTools(
   registerEntityTools(server, dependencies);
   registerPeopleTools(server, dependencies);
   registerSourceRegistryTools(server, dependencies);
+  registerRepoFactTools(server, dependencies);
+  registerPromotionTools(server, dependencies);
 }
 
 export type { MemoryToolDependencies } from "./types.ts";

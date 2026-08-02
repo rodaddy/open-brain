@@ -22,9 +22,12 @@
     "server-graph-relations",
     "server-ingest-raw-turn",
     "server-namespace-denial",
+    "server-namespace-discovery",
     "server-people",
+    "server-promotion",
     "server-realtime-working-recovery",
     "server-reflex-pointers-empty",
+    "server-repo-facts",
     "server-search-brain-arms",
     "server-session-lifecycle",
     "server-session-save-load",
@@ -48,10 +51,13 @@
     "graph-entities",
     "graph-relations",
     "namespace-denial",
+    "namespace-discovery",
     "people",
+    "promotion",
     "raw-turn-ingest-server",
     "realtime-working-recovery",
     "reflex-pointers",
+    "repo-facts",
     "search-brain-arms",
     "session-lifecycle-server",
     "session-save-load",
@@ -85,7 +91,10 @@
       "access-reporting": "implemented",
       "graph-relations": "implemented",
       "people": "implemented",
-      "source-registry": "implemented"
+      "source-registry": "implemented",
+      "namespace-discovery": "implemented",
+      "repo-facts": "implemented",
+      "promotion": "implemented"
     },
     "server-rewrite-scaffold": {
       "auth-error-shapes": "scaffold-declared",
@@ -112,7 +121,10 @@
       "access-reporting": "implemented",
       "graph-relations": "implemented",
       "people": "implemented",
-      "source-registry": "implemented"
+      "source-registry": "implemented",
+      "namespace-discovery": "implemented",
+      "repo-facts": "implemented",
+      "promotion": "implemented"
     }
   }
 }

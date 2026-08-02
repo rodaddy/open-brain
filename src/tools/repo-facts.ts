@@ -347,7 +347,7 @@ export const REPO_FACT_VALIDATION_CONTRACT = {
   },
 } as const;
 
-function slugPart(value: string): string {
+export function slugPart(value: string): string {
   return value
     .toLowerCase()
     .replace(/[^a-z0-9._/-]+/g, "-")
@@ -356,11 +356,11 @@ function slugPart(value: string): string {
     .slice(0, 180);
 }
 
-function factSubject(metadata: RepoFactMetadata): string {
+export function factSubject(metadata: RepoFactMetadata): string {
   return metadata.symbol ?? metadata.subject ?? metadata.path;
 }
 
-function canonicalId(metadata: RepoFactMetadata): string {
+export function canonicalId(metadata: RepoFactMetadata): string {
   const tuple = [
     metadata.source_system,
     metadata.repo,
@@ -382,11 +382,11 @@ function canonicalId(metadata: RepoFactMetadata): string {
   ].join(":");
 }
 
-function entityName(metadata: RepoFactMetadata): string {
+export function entityName(metadata: RepoFactMetadata): string {
   return `${metadata.repo}:${metadata.path}:${factSubject(metadata)}:${metadata.fact_type}`;
 }
 
-function looksLikeRawCodeDump(fact: string): boolean {
+export function looksLikeRawCodeDump(fact: string): boolean {
   const lines = fact.split(/\r?\n/);
   if (lines.length > 6) return true;
 
@@ -410,7 +410,7 @@ function looksLikeRawCodeDump(fact: string): boolean {
   return codeSignals.filter((re) => re.test(fact)).length >= 1;
 }
 
-function containsSecretLikeValue(fact: string): boolean {
+export function containsSecretLikeValue(fact: string): boolean {
   const secretSignals = [
     /\b(?:token|password|passwd|secret|api[_-]?key|authorization)\s*[:=]\s*\S{8,}/i,
     /\bAKIA[0-9A-Z]{16}\b/,
@@ -433,7 +433,7 @@ function namespaceClause(
     : ` AND namespace = $${params.length}`;
 }
 
-function canonicalizeRepoFactRows(rows: Record<string, unknown>[]) {
+export function canonicalizeRepoFactRows(rows: Record<string, unknown>[]) {
   return rows.map((row) => ({
     ...row,
     namespace:
@@ -443,7 +443,7 @@ function canonicalizeRepoFactRows(rows: Record<string, unknown>[]) {
   }));
 }
 
-function repoFactDedupeKey(row: Record<string, unknown>) {
+export function repoFactDedupeKey(row: Record<string, unknown>) {
   const metadata =
     row.metadata && typeof row.metadata === "object"
       ? (row.metadata as Record<string, unknown>)
@@ -457,7 +457,7 @@ function repoFactDedupeKey(row: Record<string, unknown>) {
   );
 }
 
-function dedupeRepoFactRows(rows: Record<string, unknown>[]) {
+export function dedupeRepoFactRows(rows: Record<string, unknown>[]) {
   const seen = new Set<unknown>();
   const deduped: Record<string, unknown>[] = [];
   for (const row of rows) {
@@ -469,7 +469,7 @@ function dedupeRepoFactRows(rows: Record<string, unknown>[]) {
   return deduped;
 }
 
-function mergeRepoFactFallbackRows(
+export function mergeRepoFactFallbackRows(
   primaryRows: Record<string, unknown>[],
   legacyRows: Record<string, unknown>[],
   limit: number,
