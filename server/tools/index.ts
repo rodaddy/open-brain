@@ -10,6 +10,7 @@ import { registerUpdateEntryTool } from "./update-entry.ts";
 import { registerSessionEventTool } from "./session-events.ts";
 import { registerSessionLifecycleTools } from "./session-lifecycle.ts";
 import { registerSessionSaveLoadTools } from "./session-save-load.ts";
+import { registerTieringTools } from "./tiering.ts";
 import type { MemoryToolDependencies } from "./types.ts";
 
 export const TOOLS_BOUNDARY: ServerModuleBoundary = {
@@ -32,6 +33,7 @@ export function registerMemoryTools(
   registerCurationTools(server, dependencies);
   registerUpdateEntryTool(server, dependencies);
   registerResolveEntryTool(server, dependencies);
+  registerTieringTools(server, dependencies);
 }
 
 export type { MemoryToolDependencies } from "./types.ts";

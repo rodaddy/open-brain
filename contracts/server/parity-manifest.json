@@ -22,6 +22,7 @@
     "server-search-brain-arms",
     "server-session-lifecycle",
     "server-session-save-load",
+    "server-tier-recommendations",
     "server-tier-tools"
   ],
   "capabilities": [
@@ -41,6 +42,7 @@
     "search-brain-arms",
     "session-lifecycle-server",
     "session-save-load",
+    "tier-recommendations",
     "tier-tools"
   ],
   "provider_capability_status": {
@@ -61,7 +63,8 @@
       "session-lifecycle-server": "implemented",
       "session-save-load": "implemented",
       "tier-tools": "implemented",
-      "entry-revision": "implemented"
+      "entry-revision": "implemented",
+      "tier-recommendations": "implemented"
     },
     "server-rewrite-scaffold": {
       "auth-error-shapes": "scaffold-declared",
@@ -80,7 +83,8 @@
       "session-lifecycle-server": "implemented",
       "session-save-load": "implemented",
       "tier-tools": "scaffold-declared",
-      "entry-revision": "implemented"
+      "entry-revision": "implemented",
+      "tier-recommendations": "implemented"
     }
   }
 }
