@@ -3,6 +3,8 @@ import type { Logger } from "pino";
 import { natsHealthFromConfig, type ServerConfig } from "../config.ts";
 import type { Database } from "../db/pool.ts";
 import type { ServerModuleBoundary } from "../module.ts";
+import { createMaintenanceRuntime } from "../maintenance/index.ts";
+import type { MaintenanceJobHandler } from "../../src/maintenance-queue.ts";
 import {
   createSingleWorkerTransportApp,
   createSessionTransportHandlers,
@@ -42,6 +44,30 @@ export interface ShadowApplicationInput {
    * only to CALL it, and to call it before the database goes away.
    */
   readonly backgroundRuntimes?: readonly BackgroundRuntime[];
+  /**
+   * Job kinds this process can dispatch. Supplying it composes the maintenance
+   * queue runner from `config.maintenance` and appends it to the shutdown order.
+   *
+   * This is what turned the `backgroundRuntimes` port from a declared shape into
+   * a wired one: before it, the port's only suppliers were test fakes, so the
+   * ordered shutdown above was proven against runtimes that had no leases to
+   * drain. Composing here rather than making every caller assemble a queue keeps
+   * "maintenance is running" and "maintenance is in the shutdown order" the same
+   * decision — they cannot disagree, which is the failure the drain exists to
+   * prevent.
+   *
+   * Omitted means this process dispatches nothing, which is correct for a test
+   * composition and for any worker deliberately not running maintenance. It is
+   * NOT the same as `config.maintenance.enabled: false`, which is an operator
+   * opting a process out; both end with no runtime in the shutdown order.
+   */
+  readonly maintenanceHandlers?: ReadonlyMap<string, MaintenanceJobHandler>;
+  /**
+   * Start maintenance polling immediately (default true). `false` composes the
+   * runner and its shutdown wiring without a timer, for tests that drive ticks
+   * deterministically.
+   */
+  readonly maintenanceAutoStart?: boolean;
 }
 
 /**
@@ -59,6 +85,13 @@ export interface BackgroundRuntime {
 export interface ShadowApplication {
   readonly app: Express;
   readonly sessions: SessionTransportHandlers;
+  /**
+   * Everything this application will stop on close, in the order it will stop
+   * it. Exposed so a caller (and a test) can see the composed shutdown order
+   * rather than infer it — a runtime that is running but absent from this list
+   * is the abandoned-lease bug, and it should be observable, not silent.
+   */
+  readonly backgroundRuntimes: readonly BackgroundRuntime[];
   close(): Promise<void>;
 }
 
@@ -104,10 +137,35 @@ export function createShadowApplication(
     health,
     logger: transportLogger,
   });
+  // Compose maintenance BEFORE returning, so the runner and its place in the
+  // shutdown order are created together. `createMaintenanceRuntime` returns
+  // undefined when the operator disabled maintenance for this process, and a
+  // process that dispatches no job kinds composes none at all.
+  //
+  // Caller-supplied runtimes stop first, then maintenance. The queue runner is
+  // the drain that needs the database longest -- it must finish jobs it has
+  // already leased -- so it sits closest to the database in the ordering.
+  const maintenance = input.maintenanceHandlers
+    ? createMaintenanceRuntime({
+        config: input.config.maintenance,
+        logger: input.logger.child({ component: "maintenance" }),
+        pool: input.database.pool,
+        handlers: input.maintenanceHandlers,
+        ...(input.maintenanceAutoStart !== undefined
+          ? { autoStart: input.maintenanceAutoStart }
+          : {}),
+      })
+    : undefined;
+  const backgroundRuntimes: readonly BackgroundRuntime[] = [
+    ...(input.backgroundRuntimes ?? []),
+    ...(maintenance ? [maintenance] : []),
+  ];
+
   return {
     app,
     sessions,
-    close: () => closeInOrder(input, sessions),
+    backgroundRuntimes,
+    close: () => closeInOrder(input.logger, sessions, backgroundRuntimes),
   };
 }
 
@@ -121,7 +179,9 @@ export function createShadowApplication(
  * BACKGROUND RUNTIMES SECOND, and they are drained BEFORE the caller closes the
  * database, because a claim-then-dispatch runner needs its pool to finish the
  * jobs it has already leased. Killing the pool first turns an orderly drain
- * into the exact abandoned-lease failure the drain exists to prevent.
+ * into the exact abandoned-lease failure the drain exists to prevent. The
+ * composed maintenance runner is last in this list for that reason: it is the
+ * runtime that needs the database for the longest.
  *
  * EVERY runtime is stopped even if an earlier one throws. A shutdown path that
  * abandons the remaining runtimes on the first failure leaks precisely when
@@ -131,18 +191,19 @@ export function createShadowApplication(
  * clean one.
  */
 async function closeInOrder(
-  input: ShadowApplicationInput,
+  logger: Logger,
   sessions: SessionTransportHandlers,
+  backgroundRuntimes: readonly BackgroundRuntime[],
 ): Promise<void> {
   await sessions.close();
   let firstFailure: unknown;
-  for (const runtime of input.backgroundRuntimes ?? []) {
+  for (const runtime of backgroundRuntimes) {
     try {
       await runtime.stop();
-      input.logger.info({ runtime: runtime.name }, "background_runtime_stopped");
+      logger.info({ runtime: runtime.name }, "background_runtime_stopped");
     } catch (error: unknown) {
       firstFailure ??= error;
-      input.logger.error(
+      logger.error(
         {
           runtime: runtime.name,
           error_category: error instanceof Error ? error.name : typeof error,
