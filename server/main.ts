@@ -1,11 +1,16 @@
 /**
- * The rewrite's process entrypoint: the charter's Phase 5 candidate assembly.
+ * The rewrite's process entrypoint, and since the Phase 6 cutover, THE serving
+ * entrypoint for the local dogfood clone.
  *
- * Design authority: `_plans/463-server-rewrite-charter.md` §4 Phase 5 —
- * "compose all new boundaries into a candidate entrypoint that is still not the
- * package default". Nothing in `package.json` starts this file, and
- * `server/state.ts` keeps `servesTraffic: false`. The flip is Phase 6 and is a
- * separate, operator-gated decision.
+ * Design authority: `_plans/463-server-rewrite-charter.md` §4 Phase 5 built this
+ * file as a candidate "still not the package default"; §4 Phase 6 made it the
+ * default. `package.json` `start` and the local-clone launcher's spawn target
+ * now name this file, and `server/state.ts` reads `servesTraffic: true`.
+ *
+ * ROLLBACK IS `src/index.ts`, BYTE-UNTOUCHED. The charter's strangler rule
+ * retires an old module only after the candidate is proven RUNNING, so the
+ * previous server is still present and still starts. Reverting the spawn target
+ * is the whole rollback; there is no code to restore.
  *
  * WHAT THIS FILE IS FOR. Every boundary under `server/` was previously reachable
  * only from a test that hand-assembled it. `createShadowApplication` takes a

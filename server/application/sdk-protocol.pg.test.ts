@@ -43,10 +43,12 @@
  * The fixture comparator is imported rather than reimplemented, so "equals the
  * recorded shape" means the same thing here as it does in the parity suite.
  *
- * STATE. `SERVER_REWRITE_STATE.servesTraffic` stays false and is asserted below.
- * This test composes its own instance on an ephemeral port; it changes no
- * production flag and no start script. Passing here means the candidate answers
- * the real protocol correctly -- it does NOT mean it serves traffic.
+ * STATE. `SERVER_REWRITE_STATE.servesTraffic` is now true (charter §4 Phase 6)
+ * and is asserted below. This test still composes its own instance on an
+ * ephemeral port and still touches no start script; what the flip changed is
+ * which implementation the deployed chain spawns, not what this file drives.
+ * Passing here means the rewrite answers the real protocol correctly -- proof
+ * that it is RUNNING comes from `/health` on the deployed clone, not from here.
  *
  * DATABASE. Skips loudly (`describe.skip`) without
  * `OPENBRAIN_TEST_DATABASE_URL`, which must point at an isolated test/playground
@@ -394,9 +396,9 @@ dbDescribe("rewrite candidate over the real MCP SDK and real HTTP transport (liv
     process.env.SHARED_NAMESPACE_PHYSICAL = SHARED_ISOLATION;
   });
 
-  test("composing and proving protocol behavior does not make the candidate serve traffic", () => {
-    expect(SERVER_REWRITE_STATE.servesTraffic).toBe(false);
-    expect(SERVER_REWRITE_STATE.cutoverStarted).toBe(false);
+  test("proves protocol behavior for the implementation the cutover made the serving target", () => {
+    expect(SERVER_REWRITE_STATE.servesTraffic).toBe(true);
+    expect(SERVER_REWRITE_STATE.cutoverStarted).toBe(true);
   });
 
   test("completes a real initialize handshake and issues an Mcp-Session-Id", async () => {
