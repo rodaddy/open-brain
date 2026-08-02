@@ -67,8 +67,12 @@ import type { ShadowApplication } from "./index.ts";
 import { parseServerConfig } from "../config.ts";
 import type { ServerConfig } from "../config.ts";
 import type { Database, DatabaseHealth } from "../db/pool.ts";
+import { RecoveryWalStore } from "../realtime/recovery-wal.ts";
+import { WorkingSetStore } from "../realtime/working-set.ts";
 import { SERVER_REWRITE_STATE } from "../state.ts";
 import { registerMemoryTools } from "../tools/index.ts";
+import { createWorkerProxyHandler } from "../transport/index.ts";
+import type { AggregateHealth, SingleWorkerHealth } from "../transport/index.ts";
 import { silentLogger } from "../transport/testing/silent-logger.ts";
 import { expectRecordedShape, loadServerFixture } from "../../contracts/fixture-shape.ts";
 
@@ -190,16 +194,67 @@ interface LiveHarness {
 const live: Partial<LiveHarness> = {};
 
 /**
- * Compose the real stack, bind an ephemeral port, and connect a real SDK client.
+ * Extra applications and listeners a single test composed for itself.
  *
- * `serverFactory` is the whole point: it builds a REAL `McpServer` and registers
- * the REAL tool boundary, where `shadow-application.test.ts` passes a stub. The
- * factory runs per initialize, matching production, so each session gets its own
- * server instance bound to the shared pool.
+ * The `live` harness above holds ONE of each, which is right for the tests that
+ * drive a single client. The two-worker front needs three at once (two workers
+ * plus the front), so they are tracked here and torn down by the same
+ * `afterEach`. Without this they would leak a listener per run, and a leaked
+ * listener is the failure that shows up as an unrelated later test hanging.
  */
-async function connectRealClient(): Promise<Client> {
+const extraApplications: ShadowApplication[] = [];
+const extraServers: Server[] = [];
+
+/**
+ * Realtime stores, injected per composed application rather than inherited.
+ *
+ * The realtime fixture records `id: "ws-1"` / `"rw-1"`, and those ids come from
+ * a MONOTONIC counter that lives as long as the store does. `realtime-stores.ts`
+ * falls back to a MODULE-scoped store when a composition root injects none --
+ * correct, and deliberately so, because a store rebuilt per request would report
+ * a permanent zero. But Bun runs every test file in ONE process, so an
+ * uninjected suite shares that fallback with every other suite in the run:
+ * measured on this branch, `contracts/server-tool-parity.test.ts` exercises the
+ * same three tools first and this suite then observed `ws-2`, passing alone and
+ * failing in file order.
+ *
+ * Injecting is not a test workaround; it is what a composition root does. The
+ * store is per APPLICATION here, matching one server process owning its own
+ * realtime state, which is exactly the lifetime the fixture recorded against.
+ */
+function freshRealtimeStores(): {
+  workingSetStore: WorkingSetStore;
+  recoveryWalStore: RecoveryWalStore;
+} {
+  return {
+    workingSetStore: new WorkingSetStore({ logger: pino({ level: "silent" }) }),
+    // `walPath: null` keeps this RAM-only. A path would make the suite replay
+    // whatever a previous run left on disk, reintroducing the same cross-run
+    // contamination one layer down.
+    recoveryWalStore: new RecoveryWalStore({
+      walPath: null,
+      logger: pino({ level: "silent" }),
+    }),
+  };
+}
+
+/**
+ * Compose one real single-worker application and bind it to an ephemeral port.
+ *
+ * Factored out of `connectRealClient` because the two-worker proof needs REAL
+ * worker processes-equivalents behind the front -- the whole point of that test
+ * is that the aggregate reads a genuine `/health` body off a genuine socket
+ * rather than a hand-written `{status}` object from an injected `fetch`.
+ */
+async function startWorkerApplication(): Promise<{
+  application: ShadowApplication;
+  server: Server;
+  port: number;
+}> {
   if (!pool) throw new Error("OPENBRAIN_TEST_DATABASE_URL is required");
-  freshNamespace();
+  // One store pair per APPLICATION, shared by every session it serves -- the
+  // realtime state belongs to the process, not to a connection.
+  const realtime = freshRealtimeStores();
   const application = createShadowApplication({
     config: testConfig(),
     logger: silentLogger(),
@@ -213,6 +268,48 @@ async function connectRealClient(): Promise<Client> {
         embedFn: async () => Array(768).fill(0.01) as number[],
         logger: pino({ level: "silent" }),
         embeddingModel: "sdk-protocol-proof",
+        ...realtime,
+      });
+      return server;
+    },
+  });
+  const server = await new Promise<Server>((resolve) => {
+    const listener = application.app.listen(0, "127.0.0.1", () => resolve(listener));
+  });
+  const { port } = server.address() as AddressInfo;
+  extraApplications.push(application);
+  extraServers.push(server);
+  return { application, server, port };
+}
+
+/**
+ * Compose the real stack, bind an ephemeral port, and connect a real SDK client.
+ *
+ * `serverFactory` is the whole point: it builds a REAL `McpServer` and registers
+ * the REAL tool boundary, where `shadow-application.test.ts` passes a stub. The
+ * factory runs per initialize, matching production, so each session gets its own
+ * server instance bound to the shared pool.
+ */
+async function connectRealClient(): Promise<Client> {
+  if (!pool) throw new Error("OPENBRAIN_TEST_DATABASE_URL is required");
+  freshNamespace();
+  // One store pair per APPLICATION, shared by every session it serves -- the
+  // realtime state belongs to the process, not to a connection.
+  const realtime = freshRealtimeStores();
+  const application = createShadowApplication({
+    config: testConfig(),
+    logger: silentLogger(),
+    database: fakeHealthDatabase(),
+    authenticate: bearerAuth(),
+    parseRequestBody: express.json(),
+    serverFactory: () => {
+      const server = new McpServer({ name: "open-brain-rewrite", version: "1.0.0" });
+      registerMemoryTools(server, {
+        pool,
+        embedFn: async () => Array(768).fill(0.01) as number[],
+        logger: pino({ level: "silent" }),
+        embeddingModel: "sdk-protocol-proof",
+        ...realtime,
       });
       return server;
     },
@@ -268,6 +365,13 @@ afterEach(async () => {
   if (live.application) {
     await live.application.close();
     live.application = undefined;
+  }
+  while (extraServers.length > 0) {
+    const server = extraServers.pop()!;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+  while (extraApplications.length > 0) {
+    await extraApplications.pop()!.close();
   }
 });
 
@@ -461,5 +565,215 @@ dbDescribe("rewrite candidate over the real MCP SDK and real HTTP transport (liv
     await expect(client.connect(transport)).rejects.toThrow();
     // Nothing was admitted: the session boundary stayed empty.
     expect(application.sessions.sessionCount()).toBe(0);
+  });
+
+  test("appends realtime working-set and recovery state against the recorded shapes", async () => {
+    // The realtime WRITE half only became reachable in this wave. Before it, the
+    // fixture was marked `scaffold-declared` for the rewrite provider: the
+    // stores existed and the context pack READ them, but no tool could put
+    // anything in, so every recorded shape here was asserted against
+    // `current-src` alone.
+    const client = await connectRealClient();
+    const fixture = await loadServerFixture("server-realtime-working-recovery");
+    const sessionKey = `sdk-proof/realtime-${Date.now()}`;
+
+    for (const step of fixture.steps) {
+      const observed = await callTool(client, step.tool, {
+        ...step.arguments,
+        session_key: sessionKey,
+      });
+      expect(observed.isError).toBe(step.expectation.is_error);
+      expectRecordedShape(observed.body, step.expectation.json, {
+        "{{namespace}}": NAMESPACE,
+        "parity/realtime": sessionKey,
+      });
+    }
+  });
+
+  test("a working-set append is visible to the context pack that reads the same store", async () => {
+    // This is the join the two halves share and neither one proves alone. The
+    // stores are RAM-only and process-lifetime, so a write that landed in a
+    // DIFFERENT store object than the pack reads would still return
+    // `accepted: true` and then be invisible forever -- and nothing durable
+    // would ever contradict it, because nothing about this state is durable.
+    // Asserting the append's own response cannot catch that; only reading it
+    // back through the other tool can.
+    const client = await connectRealClient();
+    const sessionKey = `sdk-proof/join-${Date.now()}`;
+    const scope = {
+      agent: "fixture-agent",
+      platform: "test",
+      server_id: "server-1",
+      channel_id: "channel-1",
+      session_key: sessionKey,
+    };
+    const content = `working-set join proof ${Date.now()}`;
+
+    const appended = await callTool(client, "working_set_append", {
+      ...scope,
+      kind: "current_intent",
+      content,
+    });
+    expect(appended.isError).toBe(false);
+    expect((appended.body as { accepted: boolean }).accepted).toBe(true);
+
+    const pack = await callTool(client, "agent_context_pack", {
+      ...scope,
+      requested_sections: ["working_set"],
+    });
+    expect(pack.isError).toBe(false);
+    // The exact content must come back, not merely a non-empty section: a
+    // section that happened to be populated by anything else would pass a
+    // count-only assertion while proving nothing about THIS write.
+    expect(pack.text).toContain(content);
+  });
+
+  test("the two-worker front aggregates real worker health off real sockets", async () => {
+    // Charter section 1.5: core01 runs the aggregate front and each nested
+    // worker body must be preserved. `server/transport/worker-proxy.test.ts`
+    // proves the aggregation logic, but only against an injected `fetch` that
+    // returns a hand-written `{status}` object -- so the thing it never checks
+    // is that a REAL single-worker `/health` payload survives nesting. That is
+    // the join, and this binds two real listeners to prove it.
+    const workerOne = await startWorkerApplication();
+    const workerTwo = await startWorkerApplication();
+    const workers = [
+      {
+        name: "open-brain-worker-1",
+        port: workerOne.port,
+        baseUrl: `http://127.0.0.1:${workerOne.port}`,
+      },
+      {
+        name: "open-brain-worker-2",
+        port: workerTwo.port,
+        baseUrl: `http://127.0.0.1:${workerTwo.port}`,
+      },
+    ];
+    const front = createWorkerProxyHandler({
+      workers,
+      serverIp: "127.0.0.1",
+      healthProbeTimeoutMs: 2_000,
+      logger: silentLogger(),
+    });
+
+    const response = await front(new Request("http://127.0.0.1/health"));
+    const aggregate = (await response.json()) as AggregateHealth;
+
+    expect(response.status).toBe(200);
+    expect(aggregate.status).toBe("healthy");
+    expect(aggregate.workers.map((worker) => worker.name)).toEqual([
+      "open-brain-worker-1",
+      "open-brain-worker-2",
+    ]);
+    // Every nested body is a REAL single-worker payload, not a stub: it carries
+    // the fields the charter freezes for the single-worker surface.
+    for (const worker of aggregate.workers) {
+      expect(worker.ok).toBe(true);
+      const body = worker.body as SingleWorkerHealth;
+      expect(body.status).toBe("healthy");
+      expect(body.database.connected).toBe(true);
+      expect(body.nats.requested_transport).toBe("http");
+      expect(typeof body.timestamp).toBe("string");
+    }
+  });
+
+  test("the two-worker front pins one MCP session to one worker", async () => {
+    // Session affinity is the reason the front exists at all: sessions live in
+    // a PROCESS-LOCAL map per worker (charter 1.5), so a follow-up request
+    // routed to the other worker finds no session and the client breaks. Proven
+    // over real sockets with a real SDK handshake, because the session id being
+    // pinned is one the SDK server assigned, not one the test made up.
+    const workerOne = await startWorkerApplication();
+    const workerTwo = await startWorkerApplication();
+    const front = createWorkerProxyHandler({
+      workers: [
+        {
+          name: "open-brain-worker-1",
+          port: workerOne.port,
+          baseUrl: `http://127.0.0.1:${workerOne.port}`,
+        },
+        {
+          name: "open-brain-worker-2",
+          port: workerTwo.port,
+          baseUrl: `http://127.0.0.1:${workerTwo.port}`,
+        },
+      ],
+      serverIp: "127.0.0.1",
+      healthProbeTimeoutMs: 2_000,
+      logger: silentLogger(),
+    });
+    freshNamespace();
+
+    const initialize = await front(
+      new Request("http://127.0.0.1/mcp", {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${TEST_TOKEN}`,
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-06-18",
+            capabilities: {},
+            clientInfo: { name: "two-worker-affinity", version: "1.0.0" },
+          },
+        }),
+      }),
+    );
+    expect(initialize.status).toBe(200);
+    const sessionId = initialize.headers.get("mcp-session-id");
+    expect(sessionId).toBeString();
+
+    // Exactly one worker admitted the session; the other saw nothing. That
+    // asymmetry is what makes affinity load-bearing rather than cosmetic.
+    const admitted = [workerOne, workerTwo].filter(
+      (worker) => worker.application.sessions.sessionCount() === 1,
+    );
+    expect(admitted.length).toBe(1);
+
+    // Each follow-up must SUCCEED, and success is the assertion that matters.
+    //
+    // The obvious version of this test compares the front's own
+    // `x-open-brain-worker` value across requests -- and it proves nothing: that
+    // header is set on the OUTBOUND request the front sends to a worker, never
+    // on the response handed back, so reading it here yields `null` on every
+    // request and `null === null` passes with affinity deliberately broken.
+    // Measured on this branch: disabling the `sessionWorkers` lookup outright
+    // left that version 12/12 green.
+    //
+    // Reaching the wrong worker is instead observable in the only place it is
+    // real -- the session map is PROCESS-LOCAL, so the other worker has never
+    // heard of this session id and answers a JSON-RPC error rather than a
+    // result. Asserting on the answered payload cannot be satisfied by routing
+    // to the wrong process.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const followUp = await front(
+        new Request("http://127.0.0.1/mcp", {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${TEST_TOKEN}`,
+            "content-type": "application/json",
+            accept: "application/json, text/event-stream",
+            "mcp-session-id": sessionId!,
+          },
+          body: JSON.stringify({ jsonrpc: "2.0", id: attempt + 2, method: "tools/list" }),
+        }),
+      );
+      expect(followUp.status).toBe(200);
+      const answered = await followUp.text();
+      expect(answered).toContain('"result"');
+      expect(answered).toContain("working_set_append");
+      expect(answered).not.toContain("Session not found");
+    }
+    // Still exactly one session in the fleet: affinity routed, it did not
+    // create a second session on the other worker.
+    expect(
+      workerOne.application.sessions.sessionCount() +
+        workerTwo.application.sessions.sessionCount(),
+    ).toBe(1);
   });
 });

@@ -18,6 +18,7 @@ import { registerListRecentTool } from "./list-recent.ts";
 import { registerOperatorDoctorTool } from "./operator-doctor.ts";
 import { registerPeopleTools } from "./people.ts";
 import { registerPromotionTools } from "./promotion.ts";
+import { registerRealtimeAppendTools } from "./realtime-append.ts";
 import { registerReportingTools } from "./reporting.ts";
 import { registerRepoFactTools } from "./repo-facts.ts";
 import { registerResolveEntryTool } from "./resolve-entry.ts";
@@ -75,6 +76,12 @@ export function registerMemoryTools(
   // `agent_context_pack`, not a second implementation of it.
   registerAgentContextPackTool(server, dependencies);
   registerAgentReflexPointersTool(server, dependencies);
+  // The realtime WRITE half. It registers alongside the pack deliberately: both
+  // halves resolve their stores through `realtime-stores.ts`, so an append and
+  // the `working_set`/`recovery` sections that read it always address one
+  // object. Registering the writes without the pack would accept content
+  // nothing could ever read back.
+  registerRealtimeAppendTools(server, dependencies);
   // Service-metadata surfaces. Neither is namespaced memory: `get_contract`
   // reports what this server promises downstream clients, `operator_doctor`
   // reports how the deployment is doing, and both reuse the single existing

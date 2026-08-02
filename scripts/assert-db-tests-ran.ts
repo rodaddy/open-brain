@@ -65,15 +65,17 @@ export const REQUIRED_SUITES: ReadonlyArray<{
   // HTTP -- and the job would stay green while proving nothing.
   {
     name: "rewrite candidate over the real MCP SDK and real HTTP transport (live Postgres)",
-    minTests: 8,
+    minTests: 12,
   },
 ];
 
 // Absolute floor on total executed (non-skipped) live-Postgres testcases,
 // independent of the per-suite breakdown above. Tracks the sum of the
 // `minTests` values above (32 before the Phase 5 real-SDK protocol suite added
-// its 8), so the global floor cannot silently fall behind the per-suite one.
-export const MIN_TOTAL_LIVE_TESTCASES = 40;
+// its 8, then 12 once that suite also covered the realtime append tools and the
+// two-worker front), so the global floor cannot silently fall behind the
+// per-suite one.
+export const MIN_TOTAL_LIVE_TESTCASES = 44;
 
 export interface SuiteStats {
   tests: number;

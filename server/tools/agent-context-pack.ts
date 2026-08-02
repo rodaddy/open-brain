@@ -33,12 +33,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AuthIdentity } from "../auth/types.ts";
 import { canRead } from "../auth/permissions.ts";
+import type { RecoveryWalContextPackFragment } from "../realtime/recovery-wal.ts";
 import {
-  RecoveryWalStore,
-  type RecoveryWalContextPackFragment,
-} from "../realtime/recovery-wal.ts";
-import {
-  WorkingSetStore,
   normalizeWorkingSetScope,
   type WorkingSetContextPackFragment,
   type WorkingSetScope,
@@ -83,6 +79,7 @@ import {
 import { loadRepoFactsSection } from "./context-pack-repo-facts.ts";
 import type { SectionFragment } from "./context-pack-sections.ts";
 import { canReadNamespace } from "./read-scope.ts";
+import { recoveryWalStoreFor, workingSetStoreFor } from "./realtime-stores.ts";
 import { physicalNamespace } from "./shared-namespace.ts";
 import { authIdentity, errorResult, textResult } from "./types.ts";
 import type { MemoryToolDependencies } from "./types.ts";
@@ -93,39 +90,6 @@ export { CONTEXT_PACK_SECTION_PRIORITY };
 export interface AgentContextPackBuildResult {
   payload: unknown;
   isError: boolean;
-}
-
-/**
- * Process-lifetime store fallbacks.
- *
- * When a composition root registers no realtime stores, the pack still has to
- * emit its defined `working_set`/`recovery` envelopes. These module-level
- * defaults give it stable, empty ones. They are module-scoped rather than
- * per-call for the same reason the injected stores exist: a store rebuilt on
- * every request reports a permanent zero that looks exactly like real emptiness.
- */
-let fallbackWorkingSetStore: WorkingSetStore | undefined;
-let fallbackRecoveryWalStore: RecoveryWalStore | undefined;
-
-function workingSetStoreFor(
-  dependencies: MemoryToolDependencies,
-): WorkingSetStore {
-  if (dependencies.workingSetStore) return dependencies.workingSetStore;
-  fallbackWorkingSetStore ??= new WorkingSetStore({
-    logger: dependencies.logger,
-  });
-  return fallbackWorkingSetStore;
-}
-
-function recoveryWalStoreFor(
-  dependencies: MemoryToolDependencies,
-): RecoveryWalStore {
-  if (dependencies.recoveryWalStore) return dependencies.recoveryWalStore;
-  fallbackRecoveryWalStore ??= new RecoveryWalStore({
-    walPath: process.env.OPENBRAIN_RECOVERY_WAL_PATH ?? null,
-    logger: dependencies.logger,
-  });
-  return fallbackRecoveryWalStore;
 }
 
 export async function buildAgentContextPackPayload(

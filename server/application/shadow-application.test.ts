@@ -135,6 +135,118 @@ describe("shadow application composition", () => {
     expect(((await response.json()) as { status: string }).status).toBe("degraded");
   });
 
+  it("reports the configured NATS boundary in health without any caller supplying it", async () => {
+    // Before config owned this, `server/transport/health.ts` fell back to a
+    // hardcoded `http`/`available` literal whenever nothing passed a
+    // `natsHealth` port -- and NOTHING did. So the `nats` block was a constant,
+    // and the degraded branch below was unreachable in the composed app.
+    const base = await listen();
+    const body = (await (await fetch(`${base}/health`)).json()) as {
+      status: string;
+      nats: { requested_transport: string; availability: string };
+    };
+
+    expect(body.status).toBe("healthy");
+    expect(body.nats.requested_transport).toBe("http");
+  });
+
+  it("degrades health when NATS is the requested transport but the bridge is not available", async () => {
+    // The charter freezes this: degraded means NATS was explicitly REQUESTED
+    // and the runtime bridge is not available. A worker misconfigured this way
+    // previously reported itself healthy on the strength of the literal.
+    const base = await listen({
+      config: testConfig({
+        OPENBRAIN_TRANSPORT: "nats",
+        OPENBRAIN_NATS_ENABLE_BRIDGE: "true",
+        OPENBRAIN_NATS_URL: "nats://10.71.1.99:4222",
+      }),
+    });
+    const response = await fetch(`${base}/health`);
+    const body = (await response.json()) as {
+      status: string;
+      database: { connected: boolean };
+      nats: { requested_transport: string; availability: string };
+    };
+
+    expect(response.status).toBe(503);
+    expect(body.status).toBe("degraded");
+    // The database is fine; NATS alone is what degraded it. Asserting this
+    // keeps the test from passing for the unrelated reason the suite above
+    // already covers.
+    expect(body.database.connected).toBe(true);
+    expect(body.nats.requested_transport).toBe("nats");
+    expect(body.nats.availability).toBe("not_runtime_available");
+  });
+
+  it("drains background runtimes on close, after the session boundary", async () => {
+    // The application boundary DECLARES it owns "shutdown ordering", and until
+    // this port existed `close()` closed sessions and nothing else -- so a
+    // maintenance runner composed into this application was never stopped at
+    // all. Order is the assertion, not merely that stop ran: while a session is
+    // live an MCP handler can still enqueue maintenance work, so draining
+    // before sessions close lets a late request refill the queue behind the
+    // drain.
+    const order: string[] = [];
+    const application = createShadowApplication({
+      config: testConfig(),
+      logger: silentLogger(),
+      database: fakeDatabase(),
+      authenticate: bearerAuth(),
+      parseRequestBody: express.json(),
+      serverFactory: () => ({ connect: async () => {} }) as never,
+      backgroundRuntimes: [
+        {
+          name: "maintenance",
+          stop: async () => {
+            order.push("maintenance");
+          },
+        },
+      ],
+    });
+    const originalSessionClose = application.sessions.close.bind(application.sessions);
+    (application.sessions as { close: () => Promise<void> }).close = async () => {
+      order.push("sessions");
+      await originalSessionClose();
+    };
+
+    await application.close();
+
+    expect(order).toEqual(["sessions", "maintenance"]);
+  });
+
+  it("stops every background runtime even when an earlier one throws", async () => {
+    // A shutdown that abandons the remaining runtimes on the first failure
+    // leaks exactly when something is already wrong. The failure is still
+    // surfaced -- a partial shutdown must not read as a clean one.
+    const stopped: string[] = [];
+    const application = createShadowApplication({
+      config: testConfig(),
+      logger: silentLogger(),
+      database: fakeDatabase(),
+      authenticate: bearerAuth(),
+      parseRequestBody: express.json(),
+      serverFactory: () => ({ connect: async () => {} }) as never,
+      backgroundRuntimes: [
+        {
+          name: "broken",
+          stop: async () => {
+            stopped.push("broken");
+            throw new Error("stop failed");
+          },
+        },
+        {
+          name: "maintenance",
+          stop: async () => {
+            stopped.push("maintenance");
+          },
+        },
+      ],
+    });
+
+    await expect(application.close()).rejects.toThrow("stop failed");
+    expect(stopped).toEqual(["broken", "maintenance"]);
+  });
+
   it("requires authentication on every /mcp method", async () => {
     const base = await listen();
     for (const method of ["POST", "GET", "DELETE"]) {

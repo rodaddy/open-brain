@@ -133,7 +133,7 @@
       "curation-operations": "scaffold-declared",
       "raw-turn-ingest-server": "implemented",
       "namespace-denial": "implemented",
-      "realtime-working-recovery": "scaffold-declared",
+      "realtime-working-recovery": "implemented",
       "reflex-pointers": "implemented",
       "search-brain-arms": "implemented",
       "session-lifecycle-server": "implemented",

@@ -1,6 +1,6 @@
 import type { Express, RequestHandler } from "express";
 import type { Logger } from "pino";
-import type { ServerConfig } from "../config.ts";
+import { natsHealthFromConfig, type ServerConfig } from "../config.ts";
 import type { Database } from "../db/pool.ts";
 import type { ServerModuleBoundary } from "../module.ts";
 import {
@@ -28,6 +28,32 @@ export interface ShadowApplicationInput {
   readonly transportFactory?: SessionTransportFactory;
   readonly fetch?: typeof fetch;
   readonly natsHealth?: () => TransportNatsHealth;
+  /**
+   * Long-running work this application must shut down, in order, on close.
+   *
+   * The maintenance queue runner is the one that matters today. It is passed as
+   * a PORT rather than constructed here for a specific reason: `stop()` on a
+   * claim-then-dispatch runner is not a cancel, it is a DRAIN. It must await
+   * the in-flight claim so rows that claim already leased land in the tracked
+   * set before the drain waits on it — otherwise those rows sit `running` with
+   * a live lease and no handler, stuck until the lease expires
+   * (`docs/sme/domain-backend.md`, PR #350 / issue #343). That behavior belongs
+   * to the runner and is already implemented there; the application's job is
+   * only to CALL it, and to call it before the database goes away.
+   */
+  readonly backgroundRuntimes?: readonly BackgroundRuntime[];
+}
+
+/**
+ * Anything the application starts and must stop before the database closes.
+ *
+ * Deliberately one method wide. The application orders shutdown; it does not
+ * want to know whether the thing behind this is a queue runner, a NATS bridge,
+ * or a sweeper.
+ */
+export interface BackgroundRuntime {
+  readonly name: string;
+  stop(): Promise<void>;
 }
 
 export interface ShadowApplication {
@@ -59,7 +85,17 @@ export function createShadowApplication(
       ? { embeddingApiKey: input.config.transport.embeddingApiKey }
       : {}),
     ...(input.fetch ? { fetch: input.fetch } : {}),
-    ...(input.natsHealth ? { natsHealth: input.natsHealth } : {}),
+    // Config is the DEFAULT source of the `nats` health block, not an optional
+    // extra. `server/transport/health.ts` falls back to a hardcoded
+    // http/available literal when nothing supplies one, which is correct only
+    // for a worker that genuinely runs HTTP -- so a worker configured with
+    // `OPENBRAIN_TRANSPORT=nats` and a broken bridge would report itself
+    // `healthy` on the strength of a constant. Deriving it from the parsed
+    // config makes the degraded case reachable; an explicit `natsHealth` still
+    // wins, because a LIVE bridge knows its own failure counters and config
+    // cannot.
+    natsHealth:
+      input.natsHealth ?? (() => natsHealthFromConfig(input.config.nats)),
   };
   const app = createSingleWorkerTransportApp({
     authenticate: input.authenticate,
@@ -71,6 +107,49 @@ export function createShadowApplication(
   return {
     app,
     sessions,
-    close: () => sessions.close(),
+    close: () => closeInOrder(input, sessions),
   };
+}
+
+/**
+ * Shut down in dependency order: stop accepting work, then drain, then release.
+ *
+ * SESSIONS FIRST. While a session is live an MCP handler can still enqueue
+ * maintenance work, so draining the runner before closing sessions would let a
+ * late request refill the queue after the drain had already passed it.
+ *
+ * BACKGROUND RUNTIMES SECOND, and they are drained BEFORE the caller closes the
+ * database, because a claim-then-dispatch runner needs its pool to finish the
+ * jobs it has already leased. Killing the pool first turns an orderly drain
+ * into the exact abandoned-lease failure the drain exists to prevent.
+ *
+ * EVERY runtime is stopped even if an earlier one throws. A shutdown path that
+ * abandons the remaining runtimes on the first failure leaks precisely when
+ * something is already going wrong, which is the worst moment to also lose the
+ * drain. Failures are logged with an error CATEGORY, never the error object,
+ * and the first one is rethrown so a caller cannot read a partial shutdown as a
+ * clean one.
+ */
+async function closeInOrder(
+  input: ShadowApplicationInput,
+  sessions: SessionTransportHandlers,
+): Promise<void> {
+  await sessions.close();
+  let firstFailure: unknown;
+  for (const runtime of input.backgroundRuntimes ?? []) {
+    try {
+      await runtime.stop();
+      input.logger.info({ runtime: runtime.name }, "background_runtime_stopped");
+    } catch (error: unknown) {
+      firstFailure ??= error;
+      input.logger.error(
+        {
+          runtime: runtime.name,
+          error_category: error instanceof Error ? error.name : typeof error,
+        },
+        "background_runtime_stop_failed",
+      );
+    }
+  }
+  if (firstFailure !== undefined) throw firstFailure;
 }

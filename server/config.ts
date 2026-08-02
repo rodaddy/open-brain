@@ -7,6 +7,16 @@
  * here and passed inward as typed data.
  */
 import { z } from "zod";
+import {
+  parseMaintenanceConfig,
+  type MaintenanceConfig,
+} from "./config/maintenance.ts";
+import { parseNatsConfig, type NatsConfig } from "./config/nats.ts";
+
+export type { MaintenanceConfig } from "./config/maintenance.ts";
+export { parseMaintenanceConfig } from "./config/maintenance.ts";
+export type { NatsConfig } from "./config/nats.ts";
+export { natsHealthFromConfig, parseNatsConfig } from "./config/nats.ts";
 
 const LOG_LEVELS = ["debug", "info", "warn", "error"] as const;
 const ROLE_NAMES = [
@@ -105,6 +115,8 @@ export interface ServerConfig {
     readonly embeddingBaseUrl?: string;
     readonly embeddingApiKey?: string;
   };
+  readonly nats: NatsConfig;
+  readonly maintenance: MaintenanceConfig;
   readonly sharedNamespace: "shared-kb";
 }
 
@@ -187,6 +199,15 @@ function buildConfig(parsed: ParsedEnvironment, userTokens: AuthTokenConfig[]): 
         ? { embeddingApiKey: parsed.EMBEDDING_API_KEY }
         : {}),
     },
+    // The schema's `.catchall` keeps every unlisted key as an optional string,
+    // so the NATS variables survive parsing and this reads them from the SAME
+    // validated object rather than reaching back into `process.env`. That is
+    // the whole point of the config boundary: one env read, at the composition
+    // root, and no module behind it touching global state.
+    nats: parseNatsConfig(parsed as Record<string, string | undefined>),
+    maintenance: parseMaintenanceConfig(
+      parsed as Record<string, string | undefined>,
+    ),
     sharedNamespace: parsed.SHARED_NAMESPACE_CANONICAL,
   };
 }
