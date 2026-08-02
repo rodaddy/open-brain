@@ -8,7 +8,10 @@
  * assertions against the current server live in `src/transport.test.ts`.
  *
  * Every dependency is injected, so no socket is bound and no database is
- * touched. `SERVER_REWRITE_STATE.servesTraffic` stays false.
+ * touched -- unchanged by the Phase 6 cutover, which moved the deployed spawn
+ * target to `server/main.ts` and set `SERVER_REWRITE_STATE.servesTraffic` to
+ * true. These handlers are now the ones behind the serving process, so the
+ * frozen behavior above is a production contract rather than a candidate's.
  */
 import { describe, expect, it } from "bun:test";
 import { randomUUID } from "node:crypto";

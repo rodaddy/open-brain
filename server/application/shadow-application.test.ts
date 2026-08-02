@@ -8,8 +8,13 @@
  * routing, auth placement, and status codes are proven rather than assumed.
  *
  * The database is a fake probe and the MCP server factory is a stub, so no
- * Postgres connection is opened. Read `SERVER_REWRITE_STATE` below: this
- * composition still serves no production traffic.
+ * Postgres connection is opened -- these bind ephemeral test ports, which is
+ * unchanged by the cutover.
+ *
+ * What DID change: `SERVER_REWRITE_STATE` now reads `servesTraffic: true`
+ * (charter §4 Phase 6). The assertion below tracks that flip deliberately
+ * rather than being loosened -- it is the same pin, moved to the new reality,
+ * so an accidental revert of `server/state.ts` still fails here.
  */
 import { afterEach, describe, expect, it } from "bun:test";
 import type { AddressInfo } from "node:net";
@@ -103,9 +108,9 @@ afterEach(async () => {
 });
 
 describe("shadow application composition", () => {
-  it("still declares itself non-serving", () => {
-    expect(SERVER_REWRITE_STATE.servesTraffic).toBe(false);
-    expect(SERVER_REWRITE_STATE.cutoverStarted).toBe(false);
+  it("declares itself the serving composition now that the cutover landed", () => {
+    expect(SERVER_REWRITE_STATE.servesTraffic).toBe(true);
+    expect(SERVER_REWRITE_STATE.cutoverStarted).toBe(true);
   });
 
   it("serves single-worker health without authentication and without a worker roster", async () => {

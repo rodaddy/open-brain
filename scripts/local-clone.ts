@@ -14,6 +14,22 @@ import { validateLocalCloneMode } from "../src/local-clone-mode.ts";
 export const LOCAL_CLONE_VERIFY_RECEIPT_SCHEMA =
   "openbrain.local_clone_verify_receipt.v1";
 
+/**
+ * The file this launcher actually starts -- the local dogfood serving target.
+ *
+ * This is the charter's Phase 6 cutover in one line
+ * (`_plans/463-server-rewrite-charter.md` §4): it was `src/index.ts`, and the
+ * rewrite under `server/` became the default only when this constant changed.
+ * It is named and exported rather than inlined in the default `child.spawn`
+ * below so the flip has ONE owning site that a test can assert against, instead
+ * of a string literal reachable only by starting a real process.
+ *
+ * ROLLBACK: set this back to `src/index.ts` and redeploy. `src/` is untouched
+ * by the cutover and still starts, per the charter's strangler rule that an old
+ * module is retired only after the candidate is proven RUNNING.
+ */
+export const SERVING_ENTRYPOINT = "server/main.ts";
+
 const CHILD_ENV_KEYS = [
   "ALLOWED_ORIGINS",
   "AUTH_TOKEN_ADMIN",
@@ -394,7 +410,7 @@ export const productionDependencies: LocalCloneLauncherDependencies = {
   },
   child: {
     spawn(env): ChildProcess {
-      return spawn(process.execPath, ["run", "src/index.ts"], {
+      return spawn(process.execPath, ["run", SERVING_ENTRYPOINT], {
         cwd: process.cwd(),
         env,
         stdio: "inherit",

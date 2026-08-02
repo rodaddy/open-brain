@@ -36,7 +36,13 @@ export const SERVER_CONTRACT_PROVIDERS: readonly ContractDeclarationProvider[] =
   },
   {
     id: "server-rewrite-scaffold",
-    state: "partial-implementation",
+    // The id is now a misnomer kept on purpose: renaming it would churn every
+    // fixture and log line that records which provider answered, for no
+    // behavior change. The `state` is what carries the truth, and the cutover
+    // (charter §4 Phase 6) made this the implementation the deployed chain
+    // spawns. `current-src` keeps its own `running-implementation` state
+    // because it remains the rollback target and must stay contract-covered.
+    state: "running-implementation",
     // DERIVED, not asserted. This was a pair of hardcoded literals, so the
     // parity check compared a constant to itself and reported green while the
     // rewrite registry was short of the contract. Identity now comes from the

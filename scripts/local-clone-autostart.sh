@@ -62,8 +62,12 @@ if [[ "${OPENBRAIN_LOCAL_CLONE:-0}" != "1" ]]; then
   exit 1
 fi
 
-if [[ ! -f "${RUNTIME_DIR}/src/index.ts" ]]; then
-  log "FATAL: no deployed runtime at ${RUNTIME_DIR}"
+# Prove the deployed tree actually contains what will be started. This checks
+# server/main.ts because the Phase 6 cutover made it the serving entrypoint
+# (scripts/local-clone.ts SERVING_ENTRYPOINT); checking src/index.ts would now
+# pass against a deploy that predates the rewrite and then fail inside bun.
+if [[ ! -f "${RUNTIME_DIR}/server/main.ts" ]]; then
+  log "FATAL: no deployed runtime at ${RUNTIME_DIR} (server/main.ts missing)"
   log "deploy one first: scripts/local-clone-deploy.sh [<ref>]"
   exit 1
 fi

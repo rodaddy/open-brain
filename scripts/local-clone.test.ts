@@ -1,11 +1,14 @@
 import { describe, expect, it } from "bun:test";
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   buildChildEnvironment,
   LOCAL_CLONE_VERIFY_RECEIPT_SCHEMA,
   productionDependencies,
   runLocalCloneLauncher,
+  SERVING_ENTRYPOINT,
   type LocalCloneLauncherDependencies,
 } from "./local-clone.ts";
 
@@ -266,6 +269,25 @@ describe("local clone launcher", () => {
         }),
       ),
     ).rejects.toThrow("Local clone database preflight failed");
+  });
+
+  /**
+   * The cutover, asserted at the only site that decides it.
+   *
+   * Charter §4 Phase 6 (`_plans/463-server-rewrite-charter.md`) flips the local
+   * dogfood serving target from `src/index.ts` to the rewrite's entrypoint. The
+   * target used to be a string literal inside `productionDependencies.child`,
+   * reachable only by starting a real process -- so nothing could assert it and
+   * a silent revert would have been caught only by a deploy. These two tests are
+   * the tripwire: what we intend to start, and that the file is really there.
+   */
+  it("names the rewrite entrypoint as the local dogfood serving target", () => {
+    expect(SERVING_ENTRYPOINT).toBe("server/main.ts");
+  });
+
+  it("points the serving target at a file that exists in this tree", () => {
+    const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+    expect(existsSync(`${repoRoot}${SERVING_ENTRYPOINT}`)).toBe(true);
   });
 });
 
