@@ -7,6 +7,7 @@ import { registerEntityTools } from "./entities.ts";
 import { registerIngestRawTurnTool } from "./ingest-raw-turn.ts";
 import { registerLaneTools } from "./lanes.ts";
 import { registerNamespaceGuardTool } from "./namespace-guard.ts";
+import { registerReportingTools } from "./reporting.ts";
 import { registerResolveEntryTool } from "./resolve-entry.ts";
 import { registerUpdateEntryTool } from "./update-entry.ts";
 import { registerSessionEventTool } from "./session-events.ts";
@@ -37,6 +38,7 @@ export function registerMemoryTools(
   registerUpdateEntryTool(server, dependencies);
   registerResolveEntryTool(server, dependencies);
   registerTieringTools(server, dependencies);
+  registerReportingTools(server, dependencies);
   registerEntityTools(server, dependencies);
 }
 

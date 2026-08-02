@@ -3,9 +3,10 @@
   "description": "Complete current-src MCP registration inventory split by observed server fixture coverage.",
   "source": "src/tools/**/*.ts server.registerTool literal registrations",
   "registered_tool_count": 63,
-  "fixture_covered_tool_count": 37,
-  "without_parity_fixture_count": 26,
+  "fixture_covered_tool_count": 39,
+  "without_parity_fixture_count": 24,
   "fixture_covered_tools": [
+    "access_report",
     "agent_context_pack",
     "agent_reflex_pointers",
     "append_session_event",
@@ -19,6 +20,7 @@
     "demote_entry",
     "find_duplicates",
     "get_entity",
+    "get_stats",
     "ingest_conversation_facts",
     "ingest_raw_turn",
     "lane_load",
@@ -45,11 +47,6 @@
     "working_set_append"
   ],
   "without_parity_fixture": [
-    {
-      "tool": "access_report",
-      "capability": "access-reporting",
-      "reason": "No observed current-src server fixture has been extracted for this tool yet."
-    },
     {
       "tool": "adjacent_context",
       "capability": "graph-traversal",
@@ -78,11 +75,6 @@
     {
       "tool": "get_entry",
       "capability": "entry-read",
-      "reason": "No observed current-src server fixture has been extracted for this tool yet."
-    },
-    {
-      "tool": "get_stats",
-      "capability": "statistics",
       "reason": "No observed current-src server fixture has been extracted for this tool yet."
     },
     {

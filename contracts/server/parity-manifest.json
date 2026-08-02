@@ -6,6 +6,7 @@
     "server-rewrite-scaffold"
   ],
   "expected_fixture_ids": [
+    "server-access-reporting",
     "server-auth-and-validation-errors",
     "server-brain-answer-empty",
     "server-capture-checkpoint",
@@ -29,6 +30,7 @@
     "server-tier-tools"
   ],
   "capabilities": [
+    "access-reporting",
     "auth-error-shapes",
     "brain-answer",
     "capture-ingest-checkpoint",
@@ -73,7 +75,8 @@
       "tier-recommendations": "implemented",
       "graph-entities": "implemented",
       "entry-decomposition": "implemented",
-      "entry-listing": "implemented"
+      "entry-listing": "implemented",
+      "access-reporting": "implemented"
     },
     "server-rewrite-scaffold": {
       "auth-error-shapes": "scaffold-declared",
@@ -96,7 +99,8 @@
       "tier-recommendations": "implemented",
       "graph-entities": "implemented",
       "entry-decomposition": "implemented",
-      "entry-listing": "implemented"
+      "entry-listing": "implemented",
+      "access-reporting": "implemented"
     }
   }
 }
