@@ -34,6 +34,14 @@ export type {
 export { createSingleWorkerTransportApp } from "./http-app.ts";
 export type { SingleWorkerTransportAppInput } from "./http-app.ts";
 
+export {
+  createRequestLogger,
+  createRestSurface,
+  installHttpMiddleware,
+  parseAllowedOrigins,
+} from "./rest.ts";
+export type { RestSurfaceInput } from "./rest.ts";
+
 export { createWorkerProxyHandler } from "./worker-proxy.ts";
 export type {
   AggregateHealth,

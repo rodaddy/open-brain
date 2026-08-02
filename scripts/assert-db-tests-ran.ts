@@ -81,6 +81,18 @@ export const REQUIRED_SUITES: ReadonlyArray<{
   // passing run look identical from the outside. That is precisely the shape
   // this guard exists for.
   { name: "maintenance runtime lease boundary (live Postgres)", minTests: 5 },
+  // The rewrite's real process entrypoint (`server/main.ts`), charter Phase 5.
+  // Registered for the strongest version of this guard's reason: these are the
+  // ONLY suites that start the entrypoint as a process -- real config parse,
+  // real pool, real migrations, real token map, real audit installation, real
+  // listener -- so a silently skipped run reports a green build for a startup
+  // path nothing ever executed. Every other `server/` suite hand-assembles the
+  // application and would stay green with a completely broken `startServer`.
+  { name: "rewrite entrypoint start-equivalence (live Postgres)", minTests: 5 },
+  {
+    name: "rewrite entrypoint startup and shutdown ordering (live Postgres)",
+    minTests: 2,
+  },
 ];
 
 // Absolute floor on total executed (non-skipped) live-Postgres testcases,
@@ -89,8 +101,9 @@ export const REQUIRED_SUITES: ReadonlyArray<{
 // its 8, then 12 once that suite also covered the realtime append tools and the
 // two-worker front, then 44 -> 53 when the #469 skill-usage telemetry suite
 // added its 9, then 53 -> 58 when the maintenance lease-boundary suite added
-// its 5), so the global floor cannot silently fall behind the per-suite one.
-export const MIN_TOTAL_LIVE_TESTCASES = 58;
+// its 5, then 58 -> 65 when the two entrypoint suites added their 5 and 2), so
+// the global floor cannot silently fall behind the per-suite one.
+export const MIN_TOTAL_LIVE_TESTCASES = 65;
 
 export interface SuiteStats {
   tests: number;
