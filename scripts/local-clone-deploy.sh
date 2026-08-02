@@ -50,8 +50,11 @@ fatal() { printf 'FATAL: %s\n' "$1" >&2; exit 1; }
 
 restart_service() {
   [[ -n "$SERVICE_LABEL" ]] || { log "no service label set; not restarting"; return 0; }
+  local uid
+  uid="$(id -u)"
   log "restarting ${SERVICE_LABEL}"
-  launchctl kickstart -k "$SERVICE_LABEL" || log "WARN: could not restart ${SERVICE_LABEL}"
+  launchctl kickstart -k "gui/${uid}/${SERVICE_LABEL}" \
+    || fatal "could not restart ${SERVICE_LABEL}"
 }
 
 # Health is checked against the port the CLONE env declares, not a hardcoded
