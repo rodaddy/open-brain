@@ -5,6 +5,8 @@ import { registerCurationTools } from "./curation.ts";
 import { registerIngestRawTurnTool } from "./ingest-raw-turn.ts";
 import { registerLaneTools } from "./lanes.ts";
 import { registerNamespaceGuardTool } from "./namespace-guard.ts";
+import { registerResolveEntryTool } from "./resolve-entry.ts";
+import { registerUpdateEntryTool } from "./update-entry.ts";
 import { registerSessionEventTool } from "./session-events.ts";
 import { registerSessionLifecycleTools } from "./session-lifecycle.ts";
 import { registerSessionSaveLoadTools } from "./session-save-load.ts";
@@ -28,6 +30,8 @@ export function registerMemoryTools(
   registerIngestRawTurnTool(server, dependencies);
   registerNamespaceGuardTool(server, dependencies);
   registerCurationTools(server, dependencies);
+  registerUpdateEntryTool(server, dependencies);
+  registerResolveEntryTool(server, dependencies);
 }
 
 export type { MemoryToolDependencies } from "./types.ts";

@@ -3,8 +3,8 @@
   "description": "Complete current-src MCP registration inventory split by observed server fixture coverage.",
   "source": "src/tools/**/*.ts server.registerTool literal registrations",
   "registered_tool_count": 63,
-  "fixture_covered_tool_count": 31,
-  "without_parity_fixture_count": 32,
+  "fixture_covered_tool_count": 34,
+  "without_parity_fixture_count": 29,
   "fixture_covered_tools": [
     "agent_context_pack",
     "agent_reflex_pointers",
@@ -24,8 +24,10 @@
     "log_decision",
     "log_thought",
     "promote_entry",
+    "rate_entry",
     "recovery_wal_append",
     "recovery_wal_mark",
+    "resolve_entry",
     "scan_namespace",
     "search_brain",
     "session_context",
@@ -36,6 +38,7 @@
     "set_tier",
     "tier_lane",
     "tier_recommendations",
+    "update_entry",
     "working_set_append"
   ],
   "without_parity_fixture": [
@@ -140,11 +143,6 @@
       "reason": "No observed current-src server fixture has been extracted for this tool yet."
     },
     {
-      "tool": "rate_entry",
-      "capability": "curation",
-      "reason": "No observed current-src server fixture has been extracted for this tool yet."
-    },
-    {
       "tool": "register_source",
       "capability": "source-registry",
       "reason": "No observed current-src server fixture has been extracted for this tool yet."
@@ -152,11 +150,6 @@
     {
       "tool": "remove_source",
       "capability": "source-registry",
-      "reason": "No observed current-src server fixture has been extracted for this tool yet."
-    },
-    {
-      "tool": "resolve_entry",
-      "capability": "entry-decomposition",
       "reason": "No observed current-src server fixture has been extracted for this tool yet."
     },
     {
@@ -172,11 +165,6 @@
     {
       "tool": "unlink_entities",
       "capability": "graph-relations",
-      "reason": "No observed current-src server fixture has been extracted for this tool yet."
-    },
-    {
-      "tool": "update_entry",
-      "capability": "curation",
       "reason": "No observed current-src server fixture has been extracted for this tool yet."
     },
     {

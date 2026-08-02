@@ -14,6 +14,7 @@
     "server-conversation-ingest-gate",
     "server-curation-dry-run",
     "server-curation-operations",
+    "server-entry-revision",
     "server-ingest-raw-turn",
     "server-namespace-denial",
     "server-realtime-working-recovery",
@@ -32,8 +33,9 @@
     "conversation-ingest-gate",
     "curation",
     "curation-operations",
-    "raw-turn-ingest-server",
+    "entry-revision",
     "namespace-denial",
+    "raw-turn-ingest-server",
     "realtime-working-recovery",
     "reflex-pointers",
     "search-brain-arms",
@@ -58,7 +60,8 @@
       "search-brain-arms": "implemented",
       "session-lifecycle-server": "implemented",
       "session-save-load": "implemented",
-      "tier-tools": "implemented"
+      "tier-tools": "implemented",
+      "entry-revision": "implemented"
     },
     "server-rewrite-scaffold": {
       "auth-error-shapes": "scaffold-declared",
@@ -76,7 +79,8 @@
       "search-brain-arms": "scaffold-declared",
       "session-lifecycle-server": "implemented",
       "session-save-load": "implemented",
-      "tier-tools": "scaffold-declared"
+      "tier-tools": "scaffold-declared",
+      "entry-revision": "implemented"
     }
   }
 }
