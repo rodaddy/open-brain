@@ -716,3 +716,107 @@ hands the wait to the OS scheduler rather than polling, CPython releases the GIL
 around `sqlite3_step()`, and the call runs inside `asyncio.to_thread`. The GIL
 was never what slowed this down, and a free-threaded build would not have fixed
 it -- the bug was a transaction that refused to wait at all.
+
+## 2026-08-02 field traps
+
+### A hanging local `/health` does not mean Open Brain is down
+
+**Symptom:** the local clone's `/health` hangs and `SELECT 1` stretches past the
+pool's 5-second window, making the service look dead.
+
+**Cause, measured 2026-08-02:** the shared local PostgreSQL 18 instance serves
+multiple projects by design. A neighbour's scratch-database tests run
+`CREATE/DROP DATABASE WITH FORCE` per test and caused forced-checkpoint storms:
+72 forced checkpoints in 3 minutes, with `pg_stat_checkpointer.num_requested =
+21,212` against `num_timed = 1,057`.
+
+**Check before declaring an outage:** inspect `pg_stat_checkpointer` and
+concurrent workloads. The Open Brain service recovers in place after the churn.
+Do **not** propose isolating the neighbour: the shared instance is the operator's
+deliberate dogfood design, confirmed 2026-08-02.
+
+### `core.bare=true` makes a normal checkout claim it has no work tree
+
+**Symptom:** `scripts/local-clone-deploy.sh` stops at its dirty-tree guard
+(lines 104-105) with:
+
+```
+fatal: this operation must be run in a work tree
+```
+
+**Cause, observed twice within about 30 minutes on 2026-08-02:** something
+concurrent set this repo's main-checkout local config to `core.bare=true`. The
+actor remains **UNATTRIBUTED**.
+
+**Recovery:**
+
+```bash
+git config --local core.bare false
+git rev-parse --is-inside-work-tree
+```
+
+The second command must return `true`. Deploy workers now re-assert this before
+running.
+
+### A bare launchd label fails, and the old process can fake deploy success
+
+**Symptom:** `launchctl kickstart` fails with `Unrecognized target specifier`,
+but `scripts/local-clone-deploy.sh` only warns, then prints a successful
+post-deploy health receipt.
+
+**Cause:** `kickstart` requires the service-target form
+`gui/$UID/<label>`; the bare label is not a valid target. On
+2026-08-02T04:12:18Z the health check passed against the **old process still
+serving**, producing a false deploy receipt.
+
+A fix PR is open on `fix/deploy-runbook-and-kickstart`. Until that lands, a green
+health response after a restart warning does not prove the new process started.
+
+### `ob_raw_turns` does not prove a distilled provider capture
+
+**Symptom:** the deploy runbook's dogfood smoke reports no raw-turn increase and
+looks like the provider capture failed.
+
+**Cause:** the smoke counted the wrong table. A provider capture writes a
+distilled event to `ob_session_events`; `ob_raw_turns` measures raw-turn
+ingestion only.
+
+**Live proof, 2026-08-02:** the provider returned a `saved` / `durable` receipt,
+`ob_raw_turns` changed by 0, and event
+`2496e009-a2a3-48af-9aa5-6ea1996c9c1a` was present in
+`ob_session_events`.
+
+### A one-shot Codex worker can exit 0 after doing nothing
+
+**Symptom:** a Codex/Terra one-shot exits 0 while printing deferral prose such as
+`work is running in the background` or `publication remains pending`.
+
+**Observed twice on 2026-08-01/02:** the worker completed partial or no work, but
+its process status looked successful. Never relay that output as done. Verify the
+artifact against live state -- GitHub or the filesystem -- and relaunch with an
+explicit execution contract: finishing means the artifact URL is printed in the
+worker's own output.
+
+### `AskUserQuestion` had an impossible design-lookup gate
+
+**Symptom:** `AskUserQuestion` was blocked unconditionally; no subject lookup
+could unlock it.
+
+**Cause:** `mutationSubject()` returned `file_path`, which is always empty for a
+question, so no lookup could ever match. Fixed 2026-08-02 in commit `bfb9389` on
+`audit/router-dedupe-matrix-2026-08-02`: a question's subject is now its question
+text.
+
+### Bare `python3 resume.py` can select an interpreter without the package
+
+**Symptom:** invoking `resume.py` with bare `python3` dies with
+`ModuleNotFoundError` because system Python 3.13 does not have
+`openbrain_memory`.
+
+**Fix:** a self-re-exec guard routes through the uv tool interpreter. Branch
+`fix/brain-resume-interpreter`, commit `b12200f`, was applied to the live
+Development tree on 2026-08-02.
+
+**Related find:** Development `main` did not contain the canonical resume
+workflow commits; the live file was ahead of its own history. The repair branch
+carries all three commits.
