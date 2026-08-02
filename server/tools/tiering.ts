@@ -19,10 +19,22 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { canRead } from "../auth/permissions.ts";
-import { namespacePredicate } from "../auth/namespace-policy.ts";
+import {
+  namespacePredicate,
+  type NamespacePredicate,
+} from "../auth/namespace-policy.ts";
 import type { ResourceTable } from "../auth/types.ts";
 import { authIdentity, errorResult, textResult, type MemoryToolDependencies } from "./types.ts";
-import { ALL_TABLES, PREVIEW_WIDTH, qualifyNamespacePredicate } from "./curation-helpers.ts";
+import {
+  ALL_TABLES,
+  PREVIEW_WIDTH,
+  SOURCE_LABELS,
+  TIERS,
+  qualifyNamespacePredicate,
+  tableEnum,
+  tierEnum,
+  type Tier,
+} from "./curation-helpers.ts";
 
 /** Query alias per table, matching observed current-src SQL. */
 const TABLE_ALIAS: Readonly<Record<ResourceTable, string>> = {
@@ -184,4 +196,185 @@ export function registerTieringTools(
       });
     },
   );
+
+  server.registerTool(
+    "list_stale",
+    {
+      description:
+        "Find brain entries not accessed recently -- candidates for tier demotion (hot->warm->cold). " +
+        "Queries by last_accessed_at (falls back to created_at for never-accessed entries). " +
+        "Returns {entries, total_count, has_more} envelope by default, or raw array with response_format='array'. " +
+        "Resilient parsing: const entries = Array.isArray(result) ? result : result.entries ?? [];",
+      inputSchema: {
+        table: tableEnum.optional().describe("Optional: filter to a specific table"),
+        days: z
+          .number()
+          .int()
+          .min(1)
+          .max(365)
+          .optional()
+          .describe(
+            "Entries not accessed in this many days are considered stale (default 30)",
+          ),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(500)
+          .optional()
+          .describe("Maximum entries to return (default 50, max 500)"),
+        offset: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe("Number of entries to skip for pagination (default 0)"),
+        tier: tierEnum
+          .optional()
+          .describe(
+            "Optional: filter to a specific tier (e.g. 'hot' to find hot entries that should decay to warm)",
+          ),
+        response_format: z
+          .enum(["envelope", "array"])
+          .optional()
+          .describe(
+            "Response format: 'envelope' (default) returns {entries, total_count, has_more}; 'array' returns raw array for backwards compatibility",
+          ),
+      },
+      annotations: {
+        title: "List Stale",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+      },
+    },
+    async (args, extra) => {
+      const identity = authIdentity(extra.authInfo);
+      if (!identity) return errorResult("Permission denied: no readable tables");
+
+      // A named table the caller cannot read is a distinct refusal from having
+      // no readable tables at all, matching observed current-src wording.
+      let accessible: readonly ResourceTable[];
+      if (args.table) {
+        if (!canRead(identity.role, args.table)) {
+          return errorResult(`Permission denied: cannot read ${args.table}`);
+        }
+        accessible = [args.table];
+      } else {
+        accessible = ALL_TABLES.filter((table) => canRead(identity.role, table));
+      }
+      if (accessible.length === 0) {
+        return errorResult("Permission denied: no readable tables");
+      }
+
+      const days = args.days ?? 30;
+      const rowCap = args.limit ?? 50;
+      const offset = args.offset ?? 0;
+      const useArray = args.response_format === "array";
+
+      // The data query binds $1..$3 before the namespace values; the count
+      // query binds only $1, so its namespace values start one slot later.
+      const dataPredicate = namespacePredicate(identity, "read", 4);
+      const countPredicate = namespacePredicate(identity, "read", 2);
+
+      const selects = accessible.map((table) =>
+        buildStaleSelect(table, args.tier, dataPredicate, 4),
+      );
+      const sql = `${selects.join("\nUNION ALL\n")}
+        ORDER BY effective_last_access ASC
+        LIMIT $2 OFFSET $3`;
+
+      const countSelects = accessible.map((table) =>
+        buildStaleCountSelect(table, args.tier, countPredicate, 2),
+      );
+      const countSql = `SELECT SUM(cnt)::int AS total_count FROM (${countSelects.join("\nUNION ALL\n")}) counts`;
+
+      const [dataResult, countResult] = await Promise.all([
+        dependencies.pool.query(sql, [days, rowCap, offset, ...dataPredicate.values]),
+        dependencies.pool
+          .query(countSql, [days, ...countPredicate.values])
+          .catch(() => null),
+      ]);
+
+      const totalCount = countResult?.rows[0]?.total_count ?? null;
+      const hasMore =
+        totalCount !== null ? offset + dataResult.rows.length < totalCount : false;
+
+      dependencies.logger.info(
+        { tool: "list_stale", tables: accessible.length, days },
+        "tool_result",
+      );
+
+      return textResult(
+        useArray
+          ? dataResult.rows
+          : {
+              entries: dataResult.rows,
+              total_count: totalCount,
+              offset,
+              limit: rowCap,
+              has_more: hasMore,
+            },
+      );
+    },
+  );
+}
+
+/**
+ * Staleness WHERE clause shared by the data and count queries.
+ *
+ * The tier value reaches an interpolated position, so it is narrowed by
+ * `tierEnum` at the schema boundary first -- nothing outside the three tier
+ * literals can arrive here. `$1` is always the day threshold.
+ */
+function staleWhereClause(
+  alias: string,
+  tier: Tier | undefined,
+  predicate: NamespacePredicate,
+  namespaceParameter: number,
+): string {
+  if (tier && !TIERS.includes(tier)) throw new Error(`Invalid tier: ${tier}`);
+  const tierFilter = tier ? ` AND ${alias}.tier = '${tier}'` : "";
+  const scoped = qualifyNamespacePredicate(
+    predicate,
+    `${alias}.namespace`,
+    namespaceParameter,
+  );
+  return `WHERE ${alias}.archived_at IS NULL
+    AND COALESCE(${alias}.last_accessed_at, ${alias}.created_at) < NOW() - INTERVAL '1 day' * $1${tierFilter}${scoped}`;
+}
+
+/** One arm of the stale UNION, reproducing the observed current-src columns. */
+function buildStaleSelect(
+  table: ResourceTable,
+  tier: Tier | undefined,
+  predicate: NamespacePredicate,
+  namespaceParameter: number,
+): string {
+  const alias = TABLE_ALIAS[table];
+  return `SELECT
+    '${SOURCE_LABELS[table]}' AS source_type,
+    ${alias}.id,
+    LEFT(${ALIASED_PREVIEW[table]}, ${PREVIEW_WIDTH}) AS content_preview,
+    ${alias}.tags,
+    ${alias}.tier,
+    ${alias}.access_count,
+    ${alias}.last_accessed_at,
+    ${alias}.created_at,
+    COALESCE(${alias}.last_accessed_at, ${alias}.created_at) AS effective_last_access
+  FROM ${table} ${alias}
+  ${staleWhereClause(alias, tier, predicate, namespaceParameter)}`;
+}
+
+/** Count arm matching `buildStaleSelect`'s predicate exactly. */
+function buildStaleCountSelect(
+  table: ResourceTable,
+  tier: Tier | undefined,
+  predicate: NamespacePredicate,
+  namespaceParameter: number,
+): string {
+  const alias = TABLE_ALIAS[table];
+  return `SELECT COUNT(*) AS cnt
+  FROM ${table} ${alias}
+  ${staleWhereClause(alias, tier, predicate, namespaceParameter)}`;
 }

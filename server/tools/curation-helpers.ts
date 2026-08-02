@@ -30,6 +30,22 @@ export const tableEnum = z.enum(ALL_TABLES);
 /** Cognitive tiers from `006_cognitive_tiering.sql`. */
 export const TIERS = ["hot", "warm", "cold"] as const;
 export const tierEnum = z.enum(TIERS);
+export type Tier = (typeof TIERS)[number];
+
+/**
+ * Singular `source_type` label per table, as observed in current-src.
+ *
+ * These are emitted as SQL string literals in UNION arms, so they are frozen
+ * wire values: a client switching on `source_type` sees `thought`, not
+ * `thoughts`.
+ */
+export const SOURCE_LABELS: Readonly<Record<ResourceTable, string>> = {
+  thoughts: "thought",
+  decisions: "decision",
+  relationships: "relationship",
+  projects: "project",
+  sessions: "session",
+};
 
 /**
  * Content preview SQL expression per table, unqualified.

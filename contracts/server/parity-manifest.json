@@ -14,6 +14,8 @@
     "server-conversation-ingest-gate",
     "server-curation-dry-run",
     "server-curation-operations",
+    "server-entry-decomposition",
+    "server-entry-listing",
     "server-entry-revision",
     "server-graph-entities",
     "server-ingest-raw-turn",
@@ -35,6 +37,8 @@
     "conversation-ingest-gate",
     "curation",
     "curation-operations",
+    "entry-decomposition",
+    "entry-listing",
     "entry-revision",
     "graph-entities",
     "namespace-denial",
@@ -67,7 +71,9 @@
       "tier-tools": "implemented",
       "entry-revision": "implemented",
       "tier-recommendations": "implemented",
-      "graph-entities": "implemented"
+      "graph-entities": "implemented",
+      "entry-decomposition": "implemented",
+      "entry-listing": "implemented"
     },
     "server-rewrite-scaffold": {
       "auth-error-shapes": "scaffold-declared",
@@ -88,7 +94,9 @@
       "tier-tools": "scaffold-declared",
       "entry-revision": "implemented",
       "tier-recommendations": "implemented",
-      "graph-entities": "implemented"
+      "graph-entities": "implemented",
+      "entry-decomposition": "implemented",
+      "entry-listing": "implemented"
     }
   }
 }
