@@ -901,3 +901,40 @@ Commits `b9c6a55`, `130b977`, and `fdee699` on
 not a size proposal. Memory content stays unbounded, and prose proposing a *new*
 cap is still walled. The exemption is for literals that are already fixed
 somewhere else.
+
+### Swapping back to core01 is one env var — and a missing token looks exactly like a dead host
+
+**The single switch.** While this machine is in dev/dogfood mode its brain is
+the local service, and the *only* thing that says so is `OPENBRAIN_BASE_URL` in
+`~/.local/share/openbrain-memory/env/claudex-observation.env` — verified
+2026-08-02 pointing at `http://127.0.0.1:3100`. When dev mode ends and this
+machine goes back to core01 as its brain, repoint that one variable at core01
+(`10.71.1.21:3100`) and refresh `OPENBRAIN_TOKEN` to the matching consumer
+token. There is no second place to edit and no code change to make.
+
+**Why this is now safe to forget.** `_ob/scripts/ob-memory-provider.ts` used to
+carry `OPENBRAIN_BASE_URL: "http://10.71.1.21:3100"` as a silent built-in
+default (observed 2026-08-02 at line 221), so an unset or unsourced env file did
+not fail — it quietly hydrated the session from **core01** while every other
+part of the session believed it was on the local dogfood brain. The provider is
+being changed to source the env file and fail loud when either
+`OPENBRAIN_BASE_URL` or `OPENBRAIN_TOKEN` is missing, naming the variable. After
+that change a forgotten repoint is a named error instead of a session's worth of
+memory written to the wrong brain. Do not reintroduce a host default to "make it
+work again" — the default is the bug.
+
+**The diagnostic that cost two sessions.** `OB ✗ gate unavailable` against a
+service whose `/health` answers fine is **not** a host outage. The provider
+needs BOTH variables; a present URL with a missing token produces the same
+message as an unreachable host. Order of checks:
+
+1. Are `OPENBRAIN_BASE_URL` **and** `OPENBRAIN_TOKEN` both present and exported
+   in the session? (Name the variable in your report — never the token value.)
+2. Is the env file sourced at all, and does its URL match the brain you think
+   you are on?
+3. *Only then* probe host availability.
+
+Two sessions diagnosed a missing token as a core01 outage, and core01 was probed
+healthy mid-incident — the healthy probe was read as noise instead of as the
+answer. A healthy `/health` next to a failing gate is positive evidence the
+problem is credentials or environment, not the network.
