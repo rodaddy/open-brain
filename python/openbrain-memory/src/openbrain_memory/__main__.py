@@ -10,7 +10,9 @@ from .cli import (
     encode_json_output,
     execute_json,
     failure_output,
+    operation_names,
     parse_json_input,
+    usage_output,
 )
 from .runtime import ReceiptStatus
 
@@ -18,10 +20,14 @@ from .runtime import ReceiptStatus
 def main(argv: Sequence[str] | None = None) -> int:
     """Read one JSON object from stdin and emit one JSON object to stdout."""
     arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments == ["--help"]:
+        sys.stdout.buffer.write(encode_json_output(usage_output()))
+        return 0
     if arguments:
         output = failure_output(
             "input",
-            "arguments are not supported; provide bounded JSON on stdin",
+            "arguments are not supported; use --help or provide bounded JSON "
+            f"on stdin; valid operations: {', '.join(operation_names())}",
         )
         sys.stdout.buffer.write(encode_json_output(output))
         return 2
