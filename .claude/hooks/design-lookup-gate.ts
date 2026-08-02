@@ -356,6 +356,10 @@ function relevantLookup(
 /** What is this mutation about? Path for file writes, command for Bash. */
 function mutationSubject(tool: string, input: Record<string, unknown>): string {
   if (tool === "Bash") return String(input.command ?? "");
+  // A question's subject is its text. Without this the subject is always empty,
+  // so no lookup can ever match and AskUserQuestion is blocked unconditionally,
+  // which contradicts the unlock-by-lookup intent documented on MUTATING_TOOLS.
+  if (tool === "AskUserQuestion") return JSON.stringify(input.questions ?? "");
   return String(input.file_path ?? input.notebook_path ?? "");
 }
 
