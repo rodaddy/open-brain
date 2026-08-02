@@ -42,8 +42,26 @@ async function run(
   return { exitCode, output: stdout + stderr };
 }
 
+function isolatedGitEnv(): Record<string, string | undefined> {
+  const env = { ...process.env };
+  // Git exports repository-local variables to hooks. Nested fixture repositories
+  // must not inherit the caller's gitdir, worktree, index, or object database.
+  for (const key of [
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_PREFIX",
+  ]) {
+    delete env[key];
+  }
+  return env;
+}
+
 async function git(cwd: string, ...args: string[]): Promise<string> {
-  const result = await run(["git", ...args], { cwd });
+  const result = await run(["git", ...args], { cwd, env: isolatedGitEnv() });
   if (result.exitCode !== 0) {
     throw new Error(`git ${args.join(" ")} failed:\n${result.output}`);
   }
@@ -110,7 +128,7 @@ async function invokeDeploy(
   const envFile = join(fixture.root, "guaranteed-missing.env");
   const result = await run([DEPLOY_SCRIPT], {
     env: {
-      ...process.env,
+      ...isolatedGitEnv(),
       BUN_BIN: process.execPath,
       REPO_DIR: fixture.checkout,
       ENV_FILE: envFile,
