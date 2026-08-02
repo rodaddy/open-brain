@@ -1531,3 +1531,115 @@ no-op. Nothing is dropped and nothing is stored twice.
   cannot fail on the oversized input, it is not proving the path.
 - On a send failure, does the watermark (or any resume cursor) stay put so the
   region re-reads, and is the re-send idempotent on the server's dedupe key?
+
+## [2026-08-02] A gate that compares a constant to itself has no failing input
+
+**Severity:** HIGH
+**Source:** PR (this change), `contracts/check-parity.ts`, `server/contracts/declaration.ts`
+**Scope:** any parity/compatibility gate that compares a declared value to a computed one
+**Status:** active
+
+### Pattern
+
+`server/contracts/declaration.ts` declared the rewrite's contract identity as
+two hardcoded string literals, and `contracts/check-parity.ts` asserted those
+literals equalled `buildContract()`. Both sides were fixed text that a human had
+already made match, so the assertion could not fail for any state of the code it
+claimed to police. Contract parity reported GREEN across every run while the
+rewrite registry was missing a tool the frozen contract requires.
+
+The gate was not weak, it was VACUOUS: it proved the `src` side (which really
+derives from the builder) and merely echoed the server side back. The same
+report line carried both, so the honest half lent its credibility to the half
+that measured nothing.
+
+Two second-order traps came with it. First, deriving both sides fixes the lie
+but produces a comparison that passes by construction -- correct and still
+worthless -- so the real assertion has to move to something the identity string
+cannot express: does the implementation REGISTER what its contract promises.
+Second, the obvious way to enumerate a registry (regex the source for
+`registerTool(`) silently found ZERO tools in `server/tools`, because `src`
+writes the tool name on the same line as the call and `server` writes it on the
+next. A shortfall check over an empty set reports success, which would have
+replaced one vacuous gate with another. Running the real registrar against a
+recording stand-in cannot lie about what is registered; a zero-tool result now
+throws rather than passing.
+
+The final predicate reads the ledger the repo already keeps
+(`provider_capability_status`: `implemented` vs `scaffold-declared`) so it fails
+on the false CLAIM rather than on the unfinished port -- otherwise the only way
+to green it is to lie in the manifest.
+
+### Review Questions
+
+- For every equality assertion in a gate: can BOTH sides change independently?
+  If one is a literal a human keeps in sync with the other, the check has no
+  failing input and proves nothing. Ask what edit would make it red.
+- When a check is made honest by deriving a previously-hardcoded value, does the
+  comparison still assert anything, or do the two sides now agree by
+  construction? Derivation removes the lie; it does not by itself restore the
+  signal.
+- Does any registry/inventory scan report a plausible-looking ZERO or a suspicious
+  count? Print the count and assert a floor. A pattern that matches nothing makes
+  every downstream "nothing is missing" conclusion vacuous.
+- Was the gate proven RED by fault injection on the real tree, or only observed
+  green? A green gate is evidence of nothing until something has made it fail.
+
+## A "flaky test" that was a real defect, and a coverage check that measured itself
+
+**Provenance:** issue #498, PR for `fix/498-chunk-write-flake`. Severity: HIGH.
+Status: active.
+
+`src/chunk-write.pg.test.ts` was intermittently red on the shared-Postgres CI
+runner with a 5000ms timeout and a `thoughts_parent_id_fkey` violation. It was
+filed, reasonably, as runner contention: non-deterministic, passing locally in
+1.6s, and the isolated `db-integration` job was always green. The proposed
+options were all infrastructure ones, plus "raise the timeout."
+
+The cause was a product bug. `chunkText` did not terminate its loop: once `end`
+clamped to `text.length` it stayed pinned there, so `end - overlap` stopped
+advancing and the `start + 1` progress floor crawled the cursor forward ONE
+CHARACTER per iteration, emitting a shrinking copy of the tail for each
+remaining character. A 14,000-char entry produced 410 chunks instead of ~11,
+ending with a chunk whose text was `"."`.
+
+The tell was available without any CI access: **the spurious count tracked
+`overlap`, not the input.** Same text at overlap=400 gave 410 chunks; at
+overlap=200, 208. A count that moves with a tuning parameter and not with the
+data is not a slow test, it is a wrong loop.
+
+The cost was never limited to CI. `embedText` (`src/embedding.ts`) spends one
+network embed call per segment, so every long entry in production paid ~400
+round-trips instead of ~11, and `log-thought` wrote the junk rows to `thoughts`.
+Raising the timeout would have removed the only signal pointing at it.
+
+The second trap was in the fix's own verification. Three drafts of the coverage
+check located chunks with `text.indexOf(chunk.text)`, which is unsound for
+repetitive text: `indexOf` matches an EARLIER identical occurrence, so the cover
+map fills at wrong offsets and reports phantom gaps. Chunk 1 truly began at
+offset 1209; `indexOf` anchored it at 19, because the phrase repeated every 35
+characters. Each draft was caught only by running it against the buggy AND the
+fixed chunker and getting byte-identical failures from both.
+
+### Review Questions
+
+- Is a "flaky infrastructure" test actually flaky? Before accepting contention,
+  slowness, or load as the cause, ask what work the test performs and whether
+  that amount is CORRECT. A test doing 400 round-trips where 11 are right looks
+  exactly like a slow runner.
+- Does any count scale with a tuning parameter (overlap, batch size, window)
+  rather than with the input? That is the signature of a loop whose advance and
+  whose termination condition disagree.
+- For a loop that both clamps an end offset and relies on a `max(next, cur + 1)`
+  floor to guarantee progress: what happens on the iteration where the clamp
+  binds? The floor will happily walk one unit at a time forever, and it looks
+  like progress.
+- Does the fix's own verifier fail on the UNFIXED code? Run it both ways. A
+  verifier that reports identical failures before and after is measuring itself,
+  and a green one that was never red proves nothing.
+- Does the assertion cover both directions -- nothing lost AND nothing spurious?
+  Checking only "no text is lost" passes a chunker that emits 400 duplicates;
+  checking only the count passes one that drops the tail.
+- Was the unit under test covered at all? `chunkText` had ZERO unit tests; it was
+  exercised only through a live-Postgres suite asserting storage properties, so
+  a 37x row-count error registered as "CI is slow."
