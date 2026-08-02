@@ -1,0 +1,64 @@
+{
+  "id": "server-reflex-pointers-empty",
+  "description": "Project an empty body-free reflex pointer response from current-src.",
+  "capability": "reflex-pointers",
+  "providers": [
+    "current-src",
+    "server-rewrite-scaffold"
+  ],
+  "auth": {
+    "role": "agent",
+    "client_id": "parity-reflex",
+    "namespace_source": "token"
+  },
+  "steps": [
+    {
+      "tool": "agent_reflex_pointers",
+      "arguments": {
+        "agent": "fixture-agent",
+        "platform": "test",
+        "server_id": "server-1",
+        "channel_id": "channel-1",
+        "session_key": "parity/reflex",
+        "query": "What should this turn remember?"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "schema": "openbrain.agent_reflex_pointers.v1",
+          "status": "ok",
+          "placement": "client_owned",
+          "resolvable_reference_only": true,
+          "scope": {
+            "namespace_source": "authorization",
+            "namespace": "{{namespace}}",
+            "agent": "fixture-agent",
+            "platform": "test",
+            "server_id": "server-1",
+            "channel_id": "channel-1",
+            "thread_id": null,
+            "session_key": "parity/reflex"
+          },
+          "pointers": {
+            "label": "pointers",
+            "namespace_scoped": true,
+            "resolvable_reference_only": true,
+            "items": [],
+            "item_count": 0,
+            "truncated": false
+          },
+          "warnings": {
+            "scope_denials": [],
+            "degraded_sources": [],
+            "truncation": []
+          },
+          "budget": {
+            "requested": null
+          },
+          "citations": [],
+          "query": "What should this turn remember?"
+        }
+      }
+    }
+  ]
+}

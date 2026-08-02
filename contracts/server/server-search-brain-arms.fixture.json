@@ -1,0 +1,49 @@
+{
+  "id": "server-search-brain-arms",
+  "description": "Exercise keyword, vector, and hybrid search_brain arms against an empty isolated namespace.",
+  "capability": "search-brain-arms",
+  "providers": [
+    "current-src",
+    "server-rewrite-scaffold"
+  ],
+  "auth": {
+    "role": "agent",
+    "client_id": "parity-search",
+    "namespace_source": "token"
+  },
+  "steps": [
+    {
+      "tool": "search_brain",
+      "arguments": {
+        "query": "parity needle",
+        "search_mode": "keyword"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": []
+      }
+    },
+    {
+      "tool": "search_brain",
+      "arguments": {
+        "query": "parity needle",
+        "search_mode": "vector"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": []
+      }
+    },
+    {
+      "tool": "search_brain",
+      "arguments": {
+        "query": "parity needle",
+        "search_mode": "hybrid"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": []
+      }
+    }
+  ]
+}

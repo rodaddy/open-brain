@@ -1,0 +1,200 @@
+{
+  "id": "server-context-pack-sections",
+  "description": "Request empty working, recovery, durable lane, durable memory, pointers, and candidate sections from current-src.",
+  "capability": "context-pack-sections",
+  "providers": [
+    "current-src",
+    "server-rewrite-scaffold"
+  ],
+  "auth": {
+    "role": "agent",
+    "client_id": "parity-pack",
+    "namespace_source": "token"
+  },
+  "steps": [
+    {
+      "tool": "agent_context_pack",
+      "arguments": {
+        "agent": "fixture-agent",
+        "platform": "test",
+        "server_id": "server-1",
+        "channel_id": "channel-1",
+        "session_key": "parity/pack",
+        "query": "What should the rewrite preserve?",
+        "requested_sections": [
+          "working_set",
+          "recovery",
+          "durable_lane_context",
+          "durable_memory",
+          "pointers",
+          "candidate_memory"
+        ],
+        "include_unreviewed_recovery": true
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "schema": "openbrain.agent_context_pack.v1",
+          "status": "ok",
+          "scope": {
+            "namespace_source": "authorization",
+            "namespace": "{{namespace}}",
+            "agent": "fixture-agent",
+            "platform": "test",
+            "server_id": "server-1",
+            "channel_id": "channel-1",
+            "thread_id": null,
+            "session_key": "parity/pack"
+          },
+          "sections": {
+            "working_set": {
+              "schema": "openbrain.working_set.v1",
+              "label": "working_context",
+              "exact_scope_required": true,
+              "not_durable_memory": true,
+              "scope": {
+                "namespace": "{{namespace}}",
+                "agent": "fixture-agent",
+                "platform": "test",
+                "server_id": "server-1",
+                "channel_id": "channel-1",
+                "thread_id": null,
+                "session_key": "parity/pack"
+              },
+              "items": [],
+              "item_count": 0,
+              "budget": {
+                "ttl_ms": 1800000,
+                "max_sessions": 128,
+                "max_items_per_session": 24,
+                "max_global_items": 1024,
+                "max_item_chars": 4000,
+                "max_metadata_chars": 2000
+              },
+              "counters": {
+                "dropped": 0,
+                "expired": 0,
+                "trimmed": 0
+              }
+            },
+            "recovery": {
+              "schema": "openbrain.recovery_wal.v1",
+              "label": "quarantined_recovery",
+              "exact_scope_required": true,
+              "not_durable_memory": true,
+              "not_searchable_recall": true,
+              "unreviewed_quarantine": true,
+              "scope": {
+                "namespace": "{{namespace}}",
+                "agent": "fixture-agent",
+                "platform": "test",
+                "server_id": "server-1",
+                "channel_id": "channel-1",
+                "thread_id": null,
+                "session_key": "parity/pack"
+              },
+              "pending_count": 0,
+              "items": [],
+              "item_count": 0,
+              "budget": {
+                "ttl_ms": 86400000,
+                "max_sessions": 128,
+                "max_items_per_session": 50,
+                "max_global_items": 2048,
+                "max_content_chars": 8000,
+                "max_metadata_chars": 2000,
+                "max_preview_chars": 1000
+              },
+              "counters": {
+                "dropped": 0,
+                "expired": 0,
+                "trimmed": 0,
+                "marked": 0,
+                "purged": 0
+              },
+              "wal_path_configured": false
+            },
+            "durable_memory": {
+              "label": "durable_memory",
+              "namespace_scoped": true,
+              "query": "What should the rewrite preserve?",
+              "empty_reason": "no_matches",
+              "items": [],
+              "item_count": 0,
+              "truncated": false,
+              "prior_context_suppression": {
+                "recalled": 0,
+                "suppressed": 0,
+                "net_new": 0,
+                "emitted": 0
+              }
+            },
+            "pointers": {
+              "label": "pointers",
+              "namespace_scoped": true,
+              "resolvable_reference_only": true,
+              "items": [],
+              "item_count": 0,
+              "truncated": false
+            },
+            "candidate_memory": {
+              "label": "candidate_memory",
+              "namespace_scoped": true,
+              "confidence": "unconfirmed",
+              "auto_promotable": false,
+              "items": [],
+              "item_count": 0,
+              "empty_reason": "candidate_predicate_unavailable",
+              "truncated": false
+            }
+          },
+          "warnings": {
+            "scope_denials": [
+              {
+                "source": "durable_lane_context",
+                "reasons": [
+                  "exact_scope"
+                ]
+              }
+            ],
+            "degraded_sources": [],
+            "truncation": []
+          },
+          "budget": {
+            "requested": null,
+            "working_set": {
+              "ttl_ms": 1800000,
+              "max_sessions": 128,
+              "max_items_per_session": 24,
+              "max_global_items": 1024,
+              "max_item_chars": 4000,
+              "max_metadata_chars": 2000
+            },
+            "recovery": {
+              "ttl_ms": 86400000,
+              "max_sessions": 128,
+              "max_items_per_session": 50,
+              "max_global_items": 2048,
+              "max_content_chars": 8000,
+              "max_metadata_chars": 2000,
+              "max_preview_chars": 1000
+            },
+            "durable_lane_context": {
+              "content_char_limit": 9007199254740991,
+              "content_chars_used": 0,
+              "max_events": 9007199254740991
+            },
+            "durable_memory": {
+              "content_char_limit": 9007199254740991,
+              "content_chars_used": 0,
+              "max_items": 9007199254740991,
+              "max_item_chars": 9007199254740991
+            }
+          },
+          "citations": [],
+          "query": "What should the rewrite preserve?"
+        }
+      }
+    }
+  ]
+}

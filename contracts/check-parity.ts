@@ -1,4 +1,4 @@
-import { buildContract } from "../src/contract.ts";
+import { SERVER_CONTRACT_PROVIDERS } from "./server-contract-providers.ts";
 
 type Runtime = "both" | "python" | "ts";
 type PythonStatus = "implemented";
@@ -32,10 +32,50 @@ interface ParityManifest {
   }>;
 }
 
+interface ServerFixture {
+  id: string;
+  description: string;
+  capability: string;
+  providers: string[];
+  auth: Record<string, unknown>;
+  steps: Array<{
+    tool: string;
+    arguments: Record<string, unknown>;
+    expectation: Record<string, unknown>;
+  }>;
+}
+
+type ServerCapabilityStatus = "implemented" | "scaffold-declared";
+
+interface ServerParityManifest {
+  id: string;
+  expected_fixture_ids: string[];
+  providers: string[];
+  capabilities: string[];
+  provider_capability_status: Record<string, Record<string, ServerCapabilityStatus>>;
+}
+
+interface ServerToolGap {
+  tool: string;
+  capability: string;
+  reason: string;
+}
+
+interface ServerToolGapMap {
+  id: string;
+  source: string;
+  registered_tool_count: number;
+  fixture_covered_tool_count: number;
+  without_parity_fixture_count: number;
+  fixture_covered_tools: string[];
+  without_parity_fixture: ServerToolGap[];
+}
+
 const PLACEHOLDER_REASONS = new Set(["-", "n/a", "na", "none", "todo", "tbd"]);
 const CONSUMER_ALLOWLIST = new Set(["python", "ts"]);
 
 const fixtureDir = new URL("./memory/", import.meta.url);
+const serverFixtureDir = new URL("./server/", import.meta.url);
 const errors: string[] = [];
 
 function isPlaceholderReason(value: string | undefined): boolean {
@@ -57,6 +97,12 @@ async function readJson<T>(url: URL): Promise<T> {
 
 const manifest = await readJson<ParityManifest>(
   new URL("parity-manifest.json", fixtureDir),
+);
+const serverManifest = await readJson<ServerParityManifest>(
+  new URL("parity-manifest.json", serverFixtureDir),
+);
+const serverToolGapMap = await readJson<ServerToolGapMap>(
+  new URL("tool-gap-map.json", serverFixtureDir),
 );
 if (!Array.isArray(manifest.capabilities)) {
   errors.push("parity-manifest.json: capabilities must be an array");
@@ -120,11 +166,13 @@ for (const entry of manifest.capabilities ?? []) {
   }
 }
 
-// buildContract's schema_hash is timestamp-independent, so the live TS hash
-// can be compared against the fixture's declared literal. This is the
-// executable TS<->fixture leg of the cross-runtime triangle; the pytest
-// replay already asserts the Python constants match the same fixture.
-const liveContract = buildContract("1970-01-01T00:00:00.000Z");
+// Every server implementation declares the same reviewed contract identity.
+// The running src/ provider derives it from buildContract; the rewrite provider
+// is declaration-only until its real schemas and handlers arrive.
+const serverDeclarations = SERVER_CONTRACT_PROVIDERS.map((provider) => ({
+  provider,
+  declaration: provider.declaration("1970-01-01T00:00:00.000Z"),
+}));
 
 const fixtureGlob = new Bun.Glob("*.fixture.json");
 const fixtureIds = new Set<string>();
@@ -226,15 +274,17 @@ for await (const name of fixtureGlob.scan({
     isRecord(fixture.request)
   ) {
     contractDeclarationChecked = true;
-    if (fixture.request.contract_id !== liveContract.contract_version) {
-      errors.push(
-        `${prefix} declared contract_id '${String(fixture.request.contract_id)}' does not match live TS contract '${liveContract.contract_version}'`,
-      );
-    }
-    if (fixture.request.schema_hash !== liveContract.schema_hash) {
-      errors.push(
-        `${prefix} declared schema_hash '${String(fixture.request.schema_hash)}' does not match live TS schema_hash '${liveContract.schema_hash}'`,
-      );
+    for (const { provider, declaration } of serverDeclarations) {
+      if (fixture.request.contract_id !== declaration.contractVersion) {
+        errors.push(
+          `${prefix} declared contract_id '${String(fixture.request.contract_id)}' does not match ${provider.id} contract '${declaration.contractVersion}'`,
+        );
+      }
+      if (fixture.request.schema_hash !== declaration.schemaHash) {
+        errors.push(
+          `${prefix} declared schema_hash '${String(fixture.request.schema_hash)}' does not match ${provider.id} schema_hash '${declaration.schemaHash}'`,
+        );
+      }
     }
   }
 }
@@ -287,6 +337,147 @@ for (const pending of manifest.not_yet_extracted ?? []) {
   }
 }
 
+const providerIds = serverDeclarations.map(({ provider }) => provider.id);
+if (JSON.stringify(serverManifest.providers) !== JSON.stringify(providerIds)) {
+  errors.push(
+    `server/parity-manifest.json: providers must be ${JSON.stringify(providerIds)}`,
+  );
+}
+const expectedServerFixtureIds = new Set(serverManifest.expected_fixture_ids ?? []);
+const serverCapabilities = new Set(serverManifest.capabilities ?? []);
+for (const providerId of providerIds) {
+  const statuses = serverManifest.provider_capability_status?.[providerId];
+  if (!statuses) {
+    errors.push(`server/parity-manifest.json: missing capability status for '${providerId}'`);
+    continue;
+  }
+  const declaredCapabilities = Object.keys(statuses).sort();
+  const expectedCapabilities = [...serverCapabilities].sort();
+  if (JSON.stringify(declaredCapabilities) !== JSON.stringify(expectedCapabilities)) {
+    errors.push(`server/parity-manifest.json: '${providerId}' must declare every capability exactly once`);
+  }
+  for (const [capability, status] of Object.entries(statuses)) {
+    if (status !== "implemented" && status !== "scaffold-declared") {
+      errors.push(`server/parity-manifest.json: '${providerId}' capability '${capability}' has invalid status '${String(status)}'`);
+    }
+  }
+}
+const observedServerFixtureIds = new Set<string>();
+const observedServerCapabilities = new Set<string>();
+const observedServerTools = new Set<string>();
+let serverFixtureCount = 0;
+const serverFixtureGlob = new Bun.Glob("*.fixture.json");
+for await (const name of serverFixtureGlob.scan({
+  cwd: serverFixtureDir.pathname,
+  onlyFiles: true,
+})) {
+  serverFixtureCount += 1;
+  const fixture = await readJson<ServerFixture>(new URL(name, serverFixtureDir));
+  const prefix = `server/${name}:`;
+  observedServerFixtureIds.add(fixture.id);
+  observedServerCapabilities.add(fixture.capability);
+  if (!expectedServerFixtureIds.has(fixture.id)) {
+    errors.push(`${prefix} fixture id '${fixture.id}' is absent from the server manifest`);
+  }
+  if (!serverCapabilities.has(fixture.capability)) {
+    errors.push(`${prefix} capability '${fixture.capability}' is absent from the server manifest`);
+  }
+  if (JSON.stringify(fixture.providers) !== JSON.stringify(providerIds)) {
+    errors.push(`${prefix} providers must declare current-src and server-rewrite-scaffold`);
+  }
+  if (!fixture.description) errors.push(`${prefix} description must be non-empty`);
+  if (!isRecord(fixture.auth)) errors.push(`${prefix} auth must be an object`);
+  if (!Array.isArray(fixture.steps) || fixture.steps.length === 0) {
+    errors.push(`${prefix} steps must contain an observed current-src call`);
+    continue;
+  }
+  for (const [index, step] of fixture.steps.entries()) {
+    if (!step.tool) errors.push(`${prefix} step ${index} tool must be non-empty`);
+    if (step.tool) observedServerTools.add(step.tool);
+    if (!isRecord(step.arguments)) errors.push(`${prefix} step ${index} arguments must be an object`);
+    if (!isRecord(step.expectation) || !("is_error" in step.expectation)) {
+      errors.push(`${prefix} step ${index} expectation must declare is_error`);
+    }
+  }
+}
+for (const id of expectedServerFixtureIds) {
+  if (!observedServerFixtureIds.has(id)) {
+    errors.push(`server/parity-manifest.json: expected fixture id '${id}' has no fixture file`);
+  }
+}
+for (const capability of serverCapabilities) {
+  if (!observedServerCapabilities.has(capability)) {
+    errors.push(`server/parity-manifest.json: capability '${capability}' has no fixture`);
+  }
+}
+
+const toolSourceDir = new URL("../src/tools/", import.meta.url);
+const toolSourceGlob = new Bun.Glob("*.ts");
+const registeredServerTools = new Set<string>();
+for await (const name of toolSourceGlob.scan({
+  cwd: toolSourceDir.pathname,
+  onlyFiles: true,
+})) {
+  const source = await Bun.file(new URL(name, toolSourceDir)).text();
+  for (const match of source.matchAll(
+    /server\.registerTool\(\s*["'`]([^"'`]+)["'`]/g,
+  )) {
+    const tool = match[1];
+    if (!tool) continue;
+    registeredServerTools.add(tool);
+  }
+}
+
+const declaredCoveredTools = new Set(serverToolGapMap.fixture_covered_tools ?? []);
+const declaredGapTools = new Set<string>();
+for (const entry of serverToolGapMap.without_parity_fixture ?? []) {
+  if (!entry.tool || entry.tool.length === 0) {
+    errors.push("server/tool-gap-map.json: every gap needs a tool name");
+    continue;
+  }
+  if (declaredGapTools.has(entry.tool)) {
+    errors.push(`server/tool-gap-map.json: duplicate gap tool '${entry.tool}'`);
+  }
+  declaredGapTools.add(entry.tool);
+  if (!entry.capability || entry.capability.length === 0) {
+    errors.push(`server/tool-gap-map.json: '${entry.tool}' needs a capability`);
+  }
+  if (isPlaceholderReason(entry.reason)) {
+    errors.push(`server/tool-gap-map.json: '${entry.tool}' needs a non-placeholder reason`);
+  }
+}
+
+const observedToolsSorted = [...observedServerTools].sort();
+const declaredCoveredSorted = [...declaredCoveredTools].sort();
+if (JSON.stringify(declaredCoveredSorted) !== JSON.stringify(observedToolsSorted)) {
+  errors.push(
+    "server/tool-gap-map.json: fixture_covered_tools must exactly match tools exercised by server fixtures",
+  );
+}
+for (const tool of declaredCoveredTools) {
+  if (declaredGapTools.has(tool)) {
+    errors.push(`server/tool-gap-map.json: '${tool}' is both covered and listed as a gap`);
+  }
+}
+
+const mappedServerTools = new Set([...declaredCoveredTools, ...declaredGapTools]);
+const registeredToolsSorted = [...registeredServerTools].sort();
+const mappedToolsSorted = [...mappedServerTools].sort();
+if (JSON.stringify(mappedToolsSorted) !== JSON.stringify(registeredToolsSorted)) {
+  errors.push(
+    "server/tool-gap-map.json: covered tools plus gaps must exactly match current-src registrations",
+  );
+}
+if (serverToolGapMap.registered_tool_count !== registeredServerTools.size) {
+  errors.push("server/tool-gap-map.json: registered_tool_count does not match current-src");
+}
+if (serverToolGapMap.fixture_covered_tool_count !== declaredCoveredTools.size) {
+  errors.push("server/tool-gap-map.json: fixture_covered_tool_count does not match its tool list");
+}
+if (serverToolGapMap.without_parity_fixture_count !== declaredGapTools.size) {
+  errors.push("server/tool-gap-map.json: without_parity_fixture_count does not match its gap list");
+}
+
 if (errors.length > 0) {
   console.error(
     `Contract parity check failed with ${errors.length} violation(s):`,
@@ -296,5 +487,5 @@ if (errors.length > 0) {
 }
 
 console.log(
-  `Contract parity check passed: ${fixtureCount} fixtures across ${capabilityMap.size} capabilities.`,
+  `Contract parity check passed: ${fixtureCount + serverFixtureCount} fixtures across ${capabilityMap.size + serverCapabilities.size} capabilities and ${serverDeclarations.length} server providers; ${observedServerTools.size}/${registeredServerTools.size} current-src MCP tools fixture-covered with ${declaredGapTools.size} explicit gaps.`,
 );
