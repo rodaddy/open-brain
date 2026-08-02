@@ -671,6 +671,12 @@ const CAP_PROPOSAL_EXEMPT = new RegExp(
     String.raw`\blimit["']?\s*[:=]`,
     String.raw`\btrimmed_chunk_text\b`,
     String.raw`\.trim\(`,
+    // Same operator-approved class, further members: the realtime session
+    // envelope's recorded field names, which the context-pack parity fixture
+    // must reproduce verbatim from observed current-src output. Memory content
+    // stays unbounded; JSON-key shapes only, prose proposals still hit the wall.
+    String.raw`["'](ttl_ms|max_sessions|max_items_per_session|trimmed|purged|dropped|expired|marked)["']\s*:`,
+    String.raw`\b(counters|budget)["']?\s*:`,
     String.raw`\bno\s+(cap|caps|limit|limits|ceiling)\b`,
     String.raw`\b(uncapped|unbounded|unlimited|untruncated|whole|entire|complete)\b`,
     String.raw`\b(un|de)-?(cap|caps|capping|limit|limiting|truncat)\w*`,
