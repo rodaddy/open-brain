@@ -1,0 +1,23 @@
+{
+  "id": "server-graph-entities",
+  "description": "Freeze the not-found shape for knowledge graph entity reads.",
+  "capability": "graph-entities",
+  "providers": ["current-src", "server-rewrite-scaffold"],
+  "auth": {
+    "role": "agent",
+    "client_id": "parity-graph-entities",
+    "namespace_source": "token"
+  },
+  "steps": [
+    {
+      "tool": "get_entity",
+      "arguments": {
+        "id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+      },
+      "expectation": {
+        "is_error": true,
+        "text": "Entity not found"
+      }
+    }
+  ]
+}

@@ -15,6 +15,7 @@
     "server-curation-dry-run",
     "server-curation-operations",
     "server-entry-revision",
+    "server-graph-entities",
     "server-ingest-raw-turn",
     "server-namespace-denial",
     "server-realtime-working-recovery",
@@ -35,6 +36,7 @@
     "curation",
     "curation-operations",
     "entry-revision",
+    "graph-entities",
     "namespace-denial",
     "raw-turn-ingest-server",
     "realtime-working-recovery",
@@ -64,7 +66,8 @@
       "session-save-load": "implemented",
       "tier-tools": "implemented",
       "entry-revision": "implemented",
-      "tier-recommendations": "implemented"
+      "tier-recommendations": "implemented",
+      "graph-entities": "implemented"
     },
     "server-rewrite-scaffold": {
       "auth-error-shapes": "scaffold-declared",
@@ -84,7 +87,8 @@
       "session-save-load": "implemented",
       "tier-tools": "scaffold-declared",
       "entry-revision": "implemented",
-      "tier-recommendations": "implemented"
+      "tier-recommendations": "implemented",
+      "graph-entities": "implemented"
     }
   }
 }
