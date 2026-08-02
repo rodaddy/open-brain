@@ -677,6 +677,16 @@ const CAP_PROPOSAL_EXEMPT = new RegExp(
     // stays unbounded; JSON-key shapes only, prose proposals still hit the wall.
     String.raw`["'](ttl_ms|max_sessions|max_items_per_session|trimmed|purged|dropped|expired|marked)["']\s*:`,
     String.raw`\b(counters|budget)["']?\s*:`,
+    // Same operator-approved class, further members: SQL DDL grammar. Operator
+    // narrowed the gate 2026-08-02 ("we can narrow the gate now anyway. I
+    // think the point has been proven") after the #469 worker hard-stopped on
+    // the CHECK-constraint keywords its migration requires. SQL CONSTRAINT /
+    // CHECK grammar enforces table integrity, not shrinkage; the noun/keyword
+    // is exempt while the verb forms (constrain, constrained, constraining)
+    // still hit the wall. Memory content stays unbounded; prose proposals to
+    // make something smaller are still blocked.
+    String.raw`\bCHECK\s*\(`,
+    String.raw`\bCONSTRAINTS?\b`,
     String.raw`\bno\s+(cap|caps|limit|limits|ceiling)\b`,
     String.raw`\b(uncapped|unbounded|unlimited|untruncated|whole|entire|complete)\b`,
     String.raw`\b(un|de)-?(cap|caps|capping|limit|limiting|truncat)\w*`,
