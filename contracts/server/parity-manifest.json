@@ -1,7 +1,10 @@
 {
   "id": "openbrain.server.contract-parity.v1",
   "description": "Observed current-src behavior and explicit implementation state for the server rewrite provider.",
-  "providers": ["current-src", "server-rewrite-scaffold"],
+  "providers": [
+    "current-src",
+    "server-rewrite-scaffold"
+  ],
   "expected_fixture_ids": [
     "server-auth-and-validation-errors",
     "server-brain-answer-empty",
@@ -11,6 +14,7 @@
     "server-conversation-ingest-gate",
     "server-curation-dry-run",
     "server-curation-operations",
+    "server-duplicate-discovery",
     "server-ingest-raw-turn",
     "server-namespace-denial",
     "server-realtime-working-recovery",
@@ -29,6 +33,7 @@
     "conversation-ingest-gate",
     "curation",
     "curation-operations",
+    "duplicate-discovery",
     "raw-turn-ingest-server",
     "namespace-denial",
     "realtime-working-recovery",
@@ -55,7 +60,8 @@
       "search-brain-arms": "implemented",
       "session-lifecycle-server": "implemented",
       "session-save-load": "implemented",
-      "tier-tools": "implemented"
+      "tier-tools": "implemented",
+      "duplicate-discovery": "implemented"
     },
     "server-rewrite-scaffold": {
       "auth-error-shapes": "scaffold-declared",
@@ -73,7 +79,8 @@
       "search-brain-arms": "scaffold-declared",
       "session-lifecycle-server": "implemented",
       "session-save-load": "implemented",
-      "tier-tools": "scaffold-declared"
+      "tier-tools": "scaffold-declared",
+      "duplicate-discovery": "scaffold-declared"
     }
   }
 }

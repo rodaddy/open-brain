@@ -153,6 +153,21 @@ async function createClient(provider: ProviderId, auth: AuthInfo): Promise<{
   };
 }
 
+// Every fixture describes behavior in an EMPTY ISOLATED namespace. The unique
+// per-run client namespace only delivers half of that: src/read-policy.ts
+// readableNamespaces() correctly grants every non-admin role read access to the
+// shared namespace as well (#147/#167), so with the default `shared-kb` the
+// fixtures also observe whatever the target database happens to hold there. The
+// recorded expectations were frozen against a database whose shared-kb was
+// empty, which made them assert an accident of that database instead of the
+// contract. Repointing the shared namespace at a unique per-run value that no
+// row can belong to restores the intended premise for BOTH providers without
+// changing production behavior, because sharedNamespaceConfig() resolves this
+// from the environment on every call.
+const SHARED_NAMESPACE_ISOLATION = `parity-shared-${process.pid}-${Date.now()}`;
+process.env.SHARED_NAMESPACE_CANONICAL = SHARED_NAMESPACE_ISOLATION;
+process.env.SHARED_NAMESPACE_PHYSICAL = SHARED_NAMESPACE_ISOLATION;
+
 dbDescribe("server parity fixtures by implemented provider capability (live Postgres)", () => {
   for (const provider of providers) {
     for (const fixture of fixtures) {
