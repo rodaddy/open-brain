@@ -1,6 +1,10 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ServerModuleBoundary } from "../module.ts";
 import { registerAdjacentContextTool } from "./adjacent-context.ts";
+import {
+  registerAgentContextPackTool,
+  registerAgentReflexPointersTool,
+} from "./agent-context-pack.ts";
 import { registerBrainAnswerTool } from "./brain-answer.ts";
 import { registerCaptureTools } from "./capture.ts";
 import { registerIngestRawTurnTool } from "./ingest-raw-turn.ts";
@@ -37,6 +41,11 @@ export function registerMemoryTools(
   registerBrainAnswerTool(server, dependencies);
   registerListRecentTool(server, dependencies);
   registerAdjacentContextTool(server, dependencies);
+  // The realtime context-pack surface. Both tools share ONE recall stack and one
+  // pointer builder: `agent_reflex_pointers` is a projection over
+  // `agent_context_pack`, not a second implementation of it.
+  registerAgentContextPackTool(server, dependencies);
+  registerAgentReflexPointersTool(server, dependencies);
 }
 
 export type { MemoryToolDependencies } from "./types.ts";

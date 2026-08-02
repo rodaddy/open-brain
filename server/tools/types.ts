@@ -2,6 +2,8 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Logger } from "pino";
 import type { Pool } from "pg";
 import type { AuthIdentity } from "../auth/types.ts";
+import type { WorkingSetStore } from "../realtime/working-set.ts";
+import type { RecoveryWalStore } from "../realtime/recovery-wal.ts";
 
 export interface MemoryToolDependencies {
   readonly pool: Pool;
@@ -19,6 +21,22 @@ export interface MemoryToolDependencies {
    * defect this avoids).
    */
   readonly qmdPath?: string;
+  /**
+   * Process-lifetime realtime stores backing the context pack's `working_set`
+   * and `recovery` sections.
+   *
+   * Injected rather than constructed per call, because both are STATEFUL: the
+   * working set is RAM-only scratch for the active turn, and the recovery WAL
+   * holds a crashed session's quarantined trace. A store built inside a handler
+   * would start empty on every request, so both sections would report a
+   * permanent, extremely convincing zero.
+   *
+   * Optional so a caller that registers no realtime surface pays nothing; the
+   * pack then reports the defined empty envelopes from a default store rather
+   * than failing.
+   */
+  readonly workingSetStore?: WorkingSetStore;
+  readonly recoveryWalStore?: RecoveryWalStore;
 }
 
 export interface McpAuthInfo {
