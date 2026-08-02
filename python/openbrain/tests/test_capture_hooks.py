@@ -1342,6 +1342,88 @@ class TestSessionStartRendersCanonAsPlainText:
         assert "R" in rendered
 
 
+class TestSessionStartSplitsCanonAcrossTwoEmissions:
+    """The two hook outputs partition one pack without changing any rule text."""
+
+    def test_default_sections_are_partitioned_without_overlap(self) -> None:
+        configured = ("profile_guidance", "process_guidance", "repo_facts")
+
+        first = session_start.sections_for_emission(
+            configured, session_start.CanonEmission.PROFILE_PROCESS
+        )
+        second = session_start.sections_for_emission(
+            configured, session_start.CanonEmission.REMAINING
+        )
+
+        assert first == ("profile_guidance", "process_guidance")
+        assert second == ("repo_facts",)
+        assert set(first).isdisjoint(second)
+        assert first + second == configured
+
+    def test_widened_sections_land_in_the_remaining_emission(self) -> None:
+        configured = (
+            "profile_guidance",
+            "process_guidance",
+            "repo_facts",
+            "working_set",
+        )
+
+        second = session_start.sections_for_emission(
+            configured, session_start.CanonEmission.REMAINING
+        )
+
+        assert second == ("repo_facts", "working_set")
+
+    def test_each_header_names_its_sections_and_one_shared_pack(self) -> None:
+        first_sections = ("profile_guidance", "process_guidance")
+        second_sections = ("repo_facts",)
+        first = session_start.render_pack(
+            _FIXTURE_PACK,
+            emission=session_start.CanonEmission.PROFILE_PROCESS,
+            requested_sections=first_sections,
+        )
+        second = session_start.render_pack(
+            _FIXTURE_PACK,
+            emission=session_start.CanonEmission.REMAINING,
+            requested_sections=second_sections,
+        )
+
+        assert "CANON PACK 1/2" in first.splitlines()[0]
+        assert "this emission sections: profile_guidance, process_guidance" in first
+        assert "CANON PACK 2/2" in second.splitlines()[0]
+        assert "this emission sections: repo_facts" in second
+        assert "one pack across two SessionStart emissions" in first
+        assert "one pack across two SessionStart emissions" in second
+
+    def test_every_rule_appears_whole_in_exactly_one_emission(self) -> None:
+        first = session_start.render_pack(
+            _FIXTURE_PACK,
+            emission=session_start.CanonEmission.PROFILE_PROCESS,
+            requested_sections=("profile_guidance", "process_guidance"),
+        )
+        second = session_start.render_pack(
+            _FIXTURE_PACK,
+            emission=session_start.CanonEmission.REMAINING,
+            requested_sections=("repo_facts",),
+        )
+
+        for section in _FIXTURE_PACK["sections"].values():
+            for item in section["items"]:
+                text = item.get("guidance") or item.get("fact")
+                assert (text in first) != (text in second)
+
+        expected_first = [
+            item["guidance"]
+            for label in ("profile_guidance", "process_guidance")
+            for item in _FIXTURE_PACK["sections"][label]["items"]
+        ]
+        expected_second = [
+            item["fact"] for item in _FIXTURE_PACK["sections"]["repo_facts"]["items"]
+        ]
+        assert first.splitlines()[2:] == expected_first
+        assert second.splitlines()[2:] == expected_second
+
+
 class TestSessionStartEntrypointWritesTheInjection:
     """The additionalContext envelope carries the rendered canon on the happy path."""
 
@@ -1355,9 +1437,7 @@ class TestSessionStartEntrypointWritesTheInjection:
         assert specific["hookEventName"] == "SessionStart"
         # additionalContext is a STRING carrying the RENDERED canon, not raw JSON.
         assert isinstance(specific["additionalContext"], str)
-        assert specific["additionalContext"] == session_start.render_pack(
-            _FIXTURE_PACK
-        )
+        assert specific["additionalContext"] == session_start.render_pack(_FIXTURE_PACK)
         # And it is plain text, not a re-parseable pack object.
         with pytest.raises(json.JSONDecodeError):
             json.loads(specific["additionalContext"])
@@ -1367,9 +1447,7 @@ class TestSessionStartEntrypointWritesTheInjection:
         big = "y" * 20000
         pack = {
             "sections": {
-                "process_guidance": {
-                    "items": [{"scope_key": "big", "guidance": big}]
-                }
+                "process_guidance": {"items": [{"scope_key": "big", "guidance": big}]}
             }
         }
         out = io.StringIO()
@@ -1396,10 +1474,40 @@ class TestSessionStartEntrypointWritesTheInjection:
             session_mod._canon_context = original  # type: ignore[assignment]
 
         envelope = json.loads(out.getvalue())
-        assert (
-            envelope["hookSpecificOutput"]["additionalContext"]
-            == session_start.render_pack(_FIXTURE_PACK)
+        context = envelope["hookSpecificOutput"]["additionalContext"]
+        assert context == session_start.render_pack(
+            _FIXTURE_PACK,
+            emission=session_start.CanonEmission.PROFILE_PROCESS,
+            requested_sections=("profile_guidance", "process_guidance"),
         )
+        assert "PROFILE-RULE-ONE in full." in context
+        assert "PROCESS-RULE-ONE in full." in context
+        assert "REPO-FACT-ONE in full." not in context
+
+    def test_the_remaining_entrypoint_writes_repo_facts(self) -> None:
+        reader = CanonPackReader(pack=_FIXTURE_PACK)
+        import openbrain.apps.hooks.session as session_mod
+
+        original = session_mod._canon_context
+        session_mod._canon_context = reader  # type: ignore[assignment]
+        try:
+            out = io.StringIO()
+            session_start.inject_canon_remaining_with(
+                io.StringIO(fixture_bytes("SessionStart")), out, canon_settings()
+            )
+        finally:
+            session_mod._canon_context = original  # type: ignore[assignment]
+
+        envelope = json.loads(out.getvalue())
+        context = envelope["hookSpecificOutput"]["additionalContext"]
+        assert context == session_start.render_pack(
+            _FIXTURE_PACK,
+            emission=session_start.CanonEmission.REMAINING,
+            requested_sections=("repo_facts",),
+        )
+        assert "REPO-FACT-ONE in full." in context
+        assert "PROFILE-RULE-ONE in full." not in context
+        assert "PROCESS-RULE-ONE in full." not in context
 
 
 class TestSessionStartEntrypointNeverDisruptsTheSession:
