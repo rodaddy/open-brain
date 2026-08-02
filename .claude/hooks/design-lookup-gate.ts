@@ -657,6 +657,13 @@ const CAP_PROPOSAL = new RegExp(
  */
 const CAP_PROPOSAL_EXEMPT = new RegExp(
   [
+    // Log-FILE rotation retention is ops hygiene, not remembered content --
+    // memory content stays unbounded. pino-roll's vendor API names its
+    // retention property `limit`, and STANDARDS-observability.md:61-63
+    // mandates three rotated files. Operator authorized this exact exemption
+    // 2026-08-02 after the #463 foundation worker hard-stopped on the conflict.
+    String.raw`\bpino-?roll\b`,
+    String.raw`\blog[-\s]rotation\b`,
     String.raw`\bno\s+(cap|caps|limit|limits|ceiling)\b`,
     String.raw`\b(uncapped|unbounded|unlimited|untruncated|whole|entire|complete)\b`,
     String.raw`\b(un|de)-?(cap|caps|capping|limit|limiting|truncat)\w*`,
