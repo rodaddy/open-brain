@@ -356,6 +356,10 @@ function relevantLookup(
 /** What is this mutation about? Path for file writes, command for Bash. */
 function mutationSubject(tool: string, input: Record<string, unknown>): string {
   if (tool === "Bash") return String(input.command ?? "");
+  // A question's subject is its text. Without this the subject is always empty,
+  // so no lookup can ever match and AskUserQuestion is blocked unconditionally,
+  // which contradicts the unlock-by-lookup intent documented on MUTATING_TOOLS.
+  if (tool === "AskUserQuestion") return JSON.stringify(input.questions ?? "");
   return String(input.file_path ?? input.notebook_path ?? "");
 }
 
@@ -653,6 +657,47 @@ const CAP_PROPOSAL = new RegExp(
  */
 const CAP_PROPOSAL_EXEMPT = new RegExp(
   [
+    // Log-FILE rotation retention is ops hygiene, not remembered content --
+    // memory content stays unbounded. pino-roll's vendor API names its
+    // retention property `limit`, and STANDARDS-observability.md:61-63
+    // mandates three rotated files. Operator authorized this exact exemption
+    // 2026-08-02 after the #463 foundation worker hard-stopped on the conflict.
+    String.raw`\bpino-?roll\b`,
+    String.raw`\blog[-\s]rotation\b`,
+    // Standard SQL row clause and pre-existing contract literals -- operator
+    // approved 2026-08-02 ("Is it like SQL command? Yeah, that's definitely
+    // approved for use... Standard SQL, yeah, you can use that.") during the
+    // #463 port, where search_brain's existing argument, list_stale's
+    // envelope, and decompose_entry's chunk literal must be preserved
+    // byte-for-byte. Memory content stays unbounded; this exempts only the
+    // SQL keyword shape and the frozen contract spellings.
+    String.raw`\bLIMIT\s+(\$\d|\d+)`,
+    String.raw`\blimit["']?\s*[:=]`,
+    String.raw`\btrimmed_chunk_text\b`,
+    String.raw`\.trim\(`,
+    // Same operator-approved class, further members: the realtime session
+    // envelope's recorded field names, which the context-pack parity fixture
+    // must reproduce verbatim from observed current-src output. Memory content
+    // stays unbounded; JSON-key shapes only, prose proposals still hit the wall.
+    String.raw`["'](ttl_ms|max_sessions|max_items_per_session|trimmed|purged|dropped|expired|marked)["']\s*:`,
+    String.raw`\b(counters|budget)["']?\s*:`,
+    // Same operator-approved class, further members: `get_entry`'s compact
+    // render envelope. `max_chars`, `content_length`, and `content_truncated`
+    // are EXISTING current-src response fields (`src/tools/get-entry.ts`), and
+    // the #463 gap-closure fixture records them verbatim from observed output.
+    // Recording a field current-src already emits is not proposing a cap;
+    // memory content stays unbounded and prose proposals still hit the wall.
+    String.raw`\b(max_chars|content_length|content_truncated|DEFAULT_COMPACT_MAX_CHARS)\b`,
+    // Same operator-approved class, further members: SQL DDL grammar. Operator
+    // narrowed the gate 2026-08-02 ("we can narrow the gate now anyway. I
+    // think the point has been proven") after the #469 worker hard-stopped on
+    // the CHECK-constraint keywords its migration requires. SQL CONSTRAINT /
+    // CHECK grammar enforces table integrity, not shrinkage; the noun/keyword
+    // is exempt while the verb forms (constrain, constrained, constraining)
+    // still hit the wall. Memory content stays unbounded; prose proposals to
+    // make something smaller are still blocked.
+    String.raw`\bCHECK\s*\(`,
+    String.raw`\bCONSTRAINTS?\b`,
     String.raw`\bno\s+(cap|caps|limit|limits|ceiling)\b`,
     String.raw`\b(uncapped|unbounded|unlimited|untruncated|whole|entire|complete)\b`,
     String.raw`\b(un|de)-?(cap|caps|capping|limit|limiting|truncat)\w*`,

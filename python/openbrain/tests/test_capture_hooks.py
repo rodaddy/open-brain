@@ -36,6 +36,7 @@ from conftest import (
 from openbrain.apps.capture.watermark import WatermarkStore
 from openbrain.apps.hooks import (
     post_compact,
+    post_tool_use,
     session_end,
     session_start,
     stop,
@@ -47,12 +48,14 @@ from openbrain.apps.hooks.session import (
     CanonNotConfiguredError,
     CaptureNotConfiguredError,
     PostCompactHook,
+    PostToolUseHook,
     SessionEndHook,
     SessionStartHook,
     StartedLane,
     StopHook,
     SubagentStopHook,
     run_post_compact,
+    run_post_tool_use,
     run_session_end,
     run_session_start,
     run_stop,
@@ -63,7 +66,18 @@ from openbrain.config import CanonSettings, CaptureSettings
 #: The events whose entrypoints do REAL work and reach settings/the client, so
 #: the shared "run it through the table" tests below skip them and each gets its
 #: own focused coverage. Every other event is a drain-and-exit stub.
-REAL_EVENTS = ("SessionStart", "Stop", "SubagentStop", "SessionEnd", "PostCompact")
+REAL_EVENTS = (
+    "SessionStart",
+    "Stop",
+    "SubagentStop",
+    "SessionEnd",
+    "PostCompact",
+    # PostToolUse stopped being a stub with #469: a Skill call now records one
+    # usage metric. It is listed here rather than left among the stubs because
+    # the captured fixture is a BASH call, which returns early -- so the stub
+    # test would keep passing over it and silently stop describing the module.
+    "PostToolUse",
+)
 
 if TYPE_CHECKING:
     from typing import TextIO
@@ -605,6 +619,214 @@ class TestPostCompactEntrypointNeverDisruptsTheSession:
     def test_main_returns_zero(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr("sys.stdin", io.StringIO("{not json"))
         assert post_compact.main() == 0
+
+
+class TestPostToolUseParsesTheCapturedPayload:
+    """The PostToolUse fixture yields the fields usage telemetry needs -- and no more."""
+
+    def test_the_captured_bash_call_is_not_a_skill_invocation(self) -> None:
+        """The real fixture is a Bash call, so it must count as nothing.
+
+        PostToolUse fires for EVERY tool. #469 counts skills, so anything that is
+        not a Skill call has to fall out before any client is built.
+        """
+        payload = PostToolUseHook.model_validate_json(fixture_bytes("PostToolUse"))
+        captured = json.loads(fixture_bytes("PostToolUse"))
+        assert payload.tool_name == captured["tool_name"] == "Bash"
+        assert payload.skill_slug() is None
+
+    def test_the_session_and_cwd_are_read_from_the_real_bytes(self) -> None:
+        payload = PostToolUseHook.model_validate_json(fixture_bytes("PostToolUse"))
+        captured = json.loads(fixture_bytes("PostToolUse"))
+        assert payload.session_id == captured["session_id"]
+        assert payload.cwd == captured["cwd"]
+        assert payload.repo() == Path(captured["cwd"]).name
+
+    def test_the_tool_response_is_dropped_at_the_parse_boundary(self) -> None:
+        """The open memory-vs-observability question stays open, structurally.
+
+        ``tool_response`` is the content stream ``capture-never-drops-a-turn.md``
+        leaves UNDECIDED. The model must not even carry it, so it cannot be sent
+        by a later edit reaching for a field that happens to be there.
+        """
+        captured = json.loads(fixture_bytes("PostToolUse"))
+        assert "tool_response" in captured, "fixture should carry the field"
+        payload = PostToolUseHook.model_validate_json(fixture_bytes("PostToolUse"))
+        assert not hasattr(payload, "tool_response")
+        assert "tool_response" not in PostToolUseHook.model_fields
+
+    def test_a_skill_call_yields_its_slug(self) -> None:
+        payload = PostToolUseHook.model_validate_json(
+            json.dumps(
+                {
+                    "hook_event_name": "PostToolUse",
+                    "tool_name": "Skill",
+                    "tool_input": {"skill": "brain", "args": "recall"},
+                    "session_id": "sess-1",
+                    "cwd": "/Volumes/ThunderBolt/Development/open-brain",
+                }
+            )
+        )
+        assert payload.skill_slug() == "brain"
+        assert payload.repo() == "open-brain"
+
+    @pytest.mark.parametrize(
+        "tool_input",
+        [{}, {"skill": ""}, {"skill": "   "}, {"skill": 7}, {"args": "no skill"}],
+    )
+    def test_a_skill_call_without_a_usable_name_counts_as_nothing(
+        self, tool_input: dict[str, object]
+    ) -> None:
+        payload = PostToolUseHook(tool_name="Skill", tool_input=tool_input)
+        assert payload.skill_slug() is None
+
+
+class TestPostToolUseRecordsOneUsageMetric:
+    """run_post_tool_use sends the metric dimensions #469 asks for, and nothing else."""
+
+    async def test_a_skill_call_sends_the_four_dimensions(self, tmp_path: Path) -> None:
+        settings = capture_settings(tmp_path / "wm.sqlite")
+        sent: list[dict[str, object]] = []
+        payload = PostToolUseHook(
+            tool_name="Skill",
+            tool_input={"skill": "wayfinder", "args": "chart"},
+            session_id="sess-1",
+            cwd="/Volumes/ThunderBolt/Development/open-brain",
+        )
+
+        recorded = await run_post_tool_use(
+            payload,
+            settings,
+            recorder=lambda _s, _k, arguments: sent.append(arguments),
+        )
+
+        assert recorded is True
+        assert len(sent) == 1
+        assert sent[0]["skill_slug"] == "wayfinder"
+        assert sent[0]["session_id"] == "sess-1"
+        assert sent[0]["repo"] == "open-brain"
+        assert sent[0]["runtime"] == "claude-code"
+        assert sent[0]["agent"] == settings.agent_id
+        assert sent[0]["usage_kind"] == "skill"
+
+    async def test_no_tool_content_is_ever_sent(self, tmp_path: Path) -> None:
+        """The metric carries the skill NAME and no other tool input.
+
+        This is the guard on the open question: a later edit that widened the
+        payload to carry arguments or output would fail here.
+        """
+        settings = capture_settings(tmp_path / "wm.sqlite")
+        sent: list[dict[str, object]] = []
+        payload = PostToolUseHook(
+            tool_name="Skill",
+            tool_input={"skill": "brain", "args": "SECRET-ARGUMENT-VALUE"},
+            session_id="sess-1",
+        )
+
+        await run_post_tool_use(
+            payload, settings, recorder=lambda _s, _k, a: sent.append(a)
+        )
+
+        assert "SECRET-ARGUMENT-VALUE" not in json.dumps(sent[0])
+        assert set(sent[0]) <= {
+            "skill_slug",
+            "usage_kind",
+            "session_id",
+            "runtime",
+            "agent",
+            "repo",
+        }
+
+    async def test_a_non_skill_tool_is_a_no_op(self, tmp_path: Path) -> None:
+        settings = capture_settings(tmp_path / "wm.sqlite")
+        sent: list[dict[str, object]] = []
+        payload = PostToolUseHook(
+            tool_name="Bash",
+            tool_input={"command": "echo hello"},
+            session_id="sess-1",
+        )
+
+        recorded = await run_post_tool_use(
+            payload, settings, recorder=lambda _s, _k, a: sent.append(a)
+        )
+
+        assert recorded is False
+        assert sent == []
+
+    async def test_no_session_is_a_no_op(self, tmp_path: Path) -> None:
+        settings = capture_settings(tmp_path / "wm.sqlite")
+        sent: list[dict[str, object]] = []
+        payload = PostToolUseHook(tool_name="Skill", tool_input={"skill": "brain"})
+
+        recorded = await run_post_tool_use(
+            payload, settings, recorder=lambda _s, _k, a: sent.append(a)
+        )
+
+        assert recorded is False
+        assert sent == []
+
+    async def test_a_missing_cwd_omits_the_repo_rather_than_guessing(
+        self, tmp_path: Path
+    ) -> None:
+        settings = capture_settings(tmp_path / "wm.sqlite")
+        sent: list[dict[str, object]] = []
+        payload = PostToolUseHook(
+            tool_name="Skill", tool_input={"skill": "brain"}, session_id="sess-1"
+        )
+
+        await run_post_tool_use(
+            payload, settings, recorder=lambda _s, _k, a: sent.append(a)
+        )
+
+        assert "repo" not in sent[0]
+
+
+class TestPostToolUseEntrypointNeverDisruptsTheSession:
+    """record_skill_usage swallows everything and exits 0 with empty stdout."""
+
+    def test_a_malformed_payload_is_swallowed(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        post_tool_use.record_skill_usage(io.StringIO("{not json"))
+        assert capsys.readouterr().out == ""
+
+    def test_an_unconfigured_capture_is_swallowed(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # A Skill payload reaches the real recorder, and an unconfigured capture
+        # raises CaptureNotConfiguredError -- which the entrypoint must eat.
+        skill_payload = json.dumps(
+            {
+                "hook_event_name": "PostToolUse",
+                "tool_name": "Skill",
+                "tool_input": {"skill": "brain"},
+                "session_id": "sess-1",
+            }
+        )
+        post_tool_use.record_skill_usage_with(
+            io.StringIO(skill_payload), _unconfigured_settings()
+        )
+        assert capsys.readouterr().out == ""
+
+    def test_the_captured_non_skill_payload_runs_clean(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The real Bash fixture returns before settings are ever loaded."""
+        assert post_tool_use.main(stream_for("PostToolUse")) == 0
+        assert capsys.readouterr().out == ""
+
+    def test_main_returns_zero(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("sys.stdin", io.StringIO("{not json"))
+        assert post_tool_use.main() == 0
+
+    def test_stdin_content_never_reaches_the_log(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A sentinel in a malformed payload must not appear in any log output."""
+        post_tool_use.record_skill_usage(io.StringIO('{"tool_input": SENTINEL-XYZZY'))
+        captured = capsys.readouterr()
+        assert "SENTINEL-XYZZY" not in captured.out
+        assert "SENTINEL-XYZZY" not in captured.err
 
 
 class TestStopEntrypointNeverDisruptsTheSession:
@@ -1342,6 +1564,88 @@ class TestSessionStartRendersCanonAsPlainText:
         assert "R" in rendered
 
 
+class TestSessionStartSplitsCanonAcrossTwoEmissions:
+    """The two hook outputs partition one pack without changing any rule text."""
+
+    def test_default_sections_are_partitioned_without_overlap(self) -> None:
+        configured = ("profile_guidance", "process_guidance", "repo_facts")
+
+        first = session_start.sections_for_emission(
+            configured, session_start.CanonEmission.PROFILE_PROCESS
+        )
+        second = session_start.sections_for_emission(
+            configured, session_start.CanonEmission.REMAINING
+        )
+
+        assert first == ("profile_guidance", "process_guidance")
+        assert second == ("repo_facts",)
+        assert set(first).isdisjoint(second)
+        assert first + second == configured
+
+    def test_widened_sections_land_in_the_remaining_emission(self) -> None:
+        configured = (
+            "profile_guidance",
+            "process_guidance",
+            "repo_facts",
+            "working_set",
+        )
+
+        second = session_start.sections_for_emission(
+            configured, session_start.CanonEmission.REMAINING
+        )
+
+        assert second == ("repo_facts", "working_set")
+
+    def test_each_header_names_its_sections_and_one_shared_pack(self) -> None:
+        first_sections = ("profile_guidance", "process_guidance")
+        second_sections = ("repo_facts",)
+        first = session_start.render_pack(
+            _FIXTURE_PACK,
+            emission=session_start.CanonEmission.PROFILE_PROCESS,
+            requested_sections=first_sections,
+        )
+        second = session_start.render_pack(
+            _FIXTURE_PACK,
+            emission=session_start.CanonEmission.REMAINING,
+            requested_sections=second_sections,
+        )
+
+        assert "CANON PACK 1/2" in first.splitlines()[0]
+        assert "this emission sections: profile_guidance, process_guidance" in first
+        assert "CANON PACK 2/2" in second.splitlines()[0]
+        assert "this emission sections: repo_facts" in second
+        assert "one pack across two SessionStart emissions" in first
+        assert "one pack across two SessionStart emissions" in second
+
+    def test_every_rule_appears_whole_in_exactly_one_emission(self) -> None:
+        first = session_start.render_pack(
+            _FIXTURE_PACK,
+            emission=session_start.CanonEmission.PROFILE_PROCESS,
+            requested_sections=("profile_guidance", "process_guidance"),
+        )
+        second = session_start.render_pack(
+            _FIXTURE_PACK,
+            emission=session_start.CanonEmission.REMAINING,
+            requested_sections=("repo_facts",),
+        )
+
+        for section in _FIXTURE_PACK["sections"].values():
+            for item in section["items"]:
+                text = item.get("guidance") or item.get("fact")
+                assert (text in first) != (text in second)
+
+        expected_first = [
+            item["guidance"]
+            for label in ("profile_guidance", "process_guidance")
+            for item in _FIXTURE_PACK["sections"][label]["items"]
+        ]
+        expected_second = [
+            item["fact"] for item in _FIXTURE_PACK["sections"]["repo_facts"]["items"]
+        ]
+        assert first.splitlines()[2:] == expected_first
+        assert second.splitlines()[2:] == expected_second
+
+
 class TestSessionStartEntrypointWritesTheInjection:
     """The additionalContext envelope carries the rendered canon on the happy path."""
 
@@ -1355,9 +1659,7 @@ class TestSessionStartEntrypointWritesTheInjection:
         assert specific["hookEventName"] == "SessionStart"
         # additionalContext is a STRING carrying the RENDERED canon, not raw JSON.
         assert isinstance(specific["additionalContext"], str)
-        assert specific["additionalContext"] == session_start.render_pack(
-            _FIXTURE_PACK
-        )
+        assert specific["additionalContext"] == session_start.render_pack(_FIXTURE_PACK)
         # And it is plain text, not a re-parseable pack object.
         with pytest.raises(json.JSONDecodeError):
             json.loads(specific["additionalContext"])
@@ -1367,9 +1669,7 @@ class TestSessionStartEntrypointWritesTheInjection:
         big = "y" * 20000
         pack = {
             "sections": {
-                "process_guidance": {
-                    "items": [{"scope_key": "big", "guidance": big}]
-                }
+                "process_guidance": {"items": [{"scope_key": "big", "guidance": big}]}
             }
         }
         out = io.StringIO()
@@ -1396,10 +1696,40 @@ class TestSessionStartEntrypointWritesTheInjection:
             session_mod._canon_context = original  # type: ignore[assignment]
 
         envelope = json.loads(out.getvalue())
-        assert (
-            envelope["hookSpecificOutput"]["additionalContext"]
-            == session_start.render_pack(_FIXTURE_PACK)
+        context = envelope["hookSpecificOutput"]["additionalContext"]
+        assert context == session_start.render_pack(
+            _FIXTURE_PACK,
+            emission=session_start.CanonEmission.PROFILE_PROCESS,
+            requested_sections=("profile_guidance", "process_guidance"),
         )
+        assert "PROFILE-RULE-ONE in full." in context
+        assert "PROCESS-RULE-ONE in full." in context
+        assert "REPO-FACT-ONE in full." not in context
+
+    def test_the_remaining_entrypoint_writes_repo_facts(self) -> None:
+        reader = CanonPackReader(pack=_FIXTURE_PACK)
+        import openbrain.apps.hooks.session as session_mod
+
+        original = session_mod._canon_context
+        session_mod._canon_context = reader  # type: ignore[assignment]
+        try:
+            out = io.StringIO()
+            session_start.inject_canon_remaining_with(
+                io.StringIO(fixture_bytes("SessionStart")), out, canon_settings()
+            )
+        finally:
+            session_mod._canon_context = original  # type: ignore[assignment]
+
+        envelope = json.loads(out.getvalue())
+        context = envelope["hookSpecificOutput"]["additionalContext"]
+        assert context == session_start.render_pack(
+            _FIXTURE_PACK,
+            emission=session_start.CanonEmission.REMAINING,
+            requested_sections=("repo_facts",),
+        )
+        assert "REPO-FACT-ONE in full." in context
+        assert "PROFILE-RULE-ONE in full." not in context
+        assert "PROCESS-RULE-ONE in full." not in context
 
 
 class TestSessionStartEntrypointNeverDisruptsTheSession:

@@ -1,0 +1,21 @@
+{
+  "id": "server-namespace-discovery",
+  "description": "Freeze list_namespaces' envelope on a namespace with no entries.",
+  "capability": "namespace-discovery",
+  "providers": ["current-src", "server-rewrite-scaffold"],
+  "auth": {
+    "role": "agent",
+    "client_id": "parity-namespace-discovery",
+    "namespace_source": "token"
+  },
+  "steps": [
+    {
+      "tool": "list_namespaces",
+      "arguments": {},
+      "expectation": {
+        "is_error": false,
+        "json": { "namespace_count": 0, "namespaces": [] }
+      }
+    }
+  ]
+}

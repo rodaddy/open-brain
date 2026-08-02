@@ -30,13 +30,19 @@ import pytest
 from openbrain.apps.bulk.formats import (
     FormatNotImplementedError,
     InputFormat,
+    MalformedCodexRecordError,
     adapter_for,
+    codex_raw_turn_from_line,
 )
 from openbrain.apps.bulk.ingest import ingest, stage_file
 from openbrain.apps.bulk.staging import StagingStore
 from openbrain.apps.capture.records import raw_turn_from_line
+from openbrain.models.turn import TurnRole
 
 FIXTURE = Path(__file__).parent / "fixtures" / "bulk" / "claude-transcript.jsonl"
+CODEX_FIXTURE = (
+    Path(__file__).parent / "fixtures" / "bulk" / "codex-rollout-sanitized.jsonl"
+)
 
 #: The operator turns the fixture contains, in order, with their exact text. The
 #: fixture also carries markers, an assistant line, a tool result, a system
@@ -211,15 +217,161 @@ class TestRejectedTurnsAreQuarantinedNotDropped:
 
 
 class TestUnbuiltFormatsFailLoud:
-    """Code and Hermes are follow-on tickets -- selecting them raises, not skips."""
+    """Hermes remains unbuilt until an observed contract is charted."""
 
-    @pytest.mark.parametrize("input_format", [InputFormat.CODE, InputFormat.HERMES])
+    @pytest.mark.parametrize("input_format", [InputFormat.HERMES])
     def test_selecting_an_unbuilt_format_raises(
         self, tmp_path: Path, input_format: InputFormat
     ) -> None:
         store = StagingStore(tmp_path / "stage.sqlite")
         with pytest.raises(FormatNotImplementedError):
             stage_file(FIXTURE, input_format, store)
+
+
+class TestCodexObservedRolloutAdapter:
+    """Observed Codex events become normalized turns through the existing spine."""
+
+    def test_factory_returns_the_codex_adapter(self) -> None:
+        assert adapter_for(InputFormat.CODEX) is codex_raw_turn_from_line
+
+    def test_sanitized_observed_sample_reaches_fake_lane(self, tmp_path: Path) -> None:
+        store = StagingStore(tmp_path / "codex.sqlite")
+        staged = stage_file(CODEX_FIXTURE, InputFormat.CODEX, store)
+        lane = RecordingLane()
+
+        result = ingest(store, lane)
+
+        assert staged.staged == 2
+        assert result.sent == 2
+        assert result.quarantined == 0
+        user_turn, assistant_turn = lane.turns
+
+        # The human event normalizes to a USER turn, whole, at its own timestamp.
+        assert user_turn["content"] == "structural user sample"
+        assert user_turn["role"] == TurnRole.USER
+        assert user_turn["is_human_prompt"] is True
+        assert user_turn["occurred_at"] == "2026-08-02T03:11:24.000Z"
+
+        # The completed task carries its final answer as the ASSISTANT turn, and
+        # keeps Codex's own turn_id as identity rather than minting a new one.
+        assert assistant_turn["turn_uuid"] == "fixture-turn-1"
+        assert assistant_turn["content"] == "structural assistant sample"
+        assert assistant_turn["role"] == TurnRole.ASSISTANT
+        assert assistant_turn["is_human_prompt"] is False
+        assert assistant_turn["occurred_at"] == "2026-08-02T03:11:27.000Z"
+
+    def test_user_turn_identity_is_unique_per_record_not_per_timestamp(self) -> None:
+        # Observed on the real 2026-08-02 corpus: several user_message events
+        # share one timestamp to the millisecond, so a timestamp-derived id
+        # COLLIDES and the second turn overwrites the first. Identity is derived
+        # from the whole record instead, which keeps same-instant turns distinct
+        # while staying deterministic across re-runs of the same file.
+        def user_line(message: str) -> str:
+            return json.dumps(
+                {
+                    "timestamp": "2026-08-02T03:11:24.000Z",
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "user_message",
+                        "message": message,
+                        "images": [],
+                        "local_images": [],
+                        "audio": [],
+                        "local_audio": [],
+                        "text_elements": [],
+                    },
+                }
+            )
+
+        first = codex_raw_turn_from_line(user_line("first at this instant"))
+        second = codex_raw_turn_from_line(user_line("second at this instant"))
+        assert first is not None
+        assert second is not None
+        assert first.turn_uuid != second.turn_uuid
+
+        # Deterministic: the same record re-parsed keeps the same identity, so a
+        # re-run of the same file resumes instead of duplicating every turn.
+        repeat = codex_raw_turn_from_line(user_line("first at this instant"))
+        assert repeat is not None
+        assert repeat.turn_uuid == first.turn_uuid
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            (
+                '{"timestamp":"2026-08-02T03:11:22.000Z","type":"event_msg",'
+                '"payload":{"type":"task_started","turn_id":"t1",'
+                '"started_at":1,"model_context_window":1000,'
+                '"collaboration_mode_kind":"default"}}'
+            ),
+            (
+                '{"timestamp":"2026-08-02T03:11:26.000Z","type":"event_msg",'
+                '"payload":{"type":"token_count","info":{'
+                '"total_token_usage":{},"last_token_usage":{},'
+                '"model_context_window":1000},"rate_limits":{}}}'
+            ),
+            (
+                '{"timestamp":"2026-08-02T03:11:25.000Z","type":"event_msg",'
+                '"payload":{"type":"agent_message","message":"valid non-turn",'
+                '"phase":"commentary","memory_citation":null}}'
+            ),
+            (
+                '{"timestamp":"2026-08-02T03:11:27.000Z","type":"event_msg",'
+                '"payload":{"type":"task_complete","turn_id":"t1",'
+                '"last_agent_message":null,"started_at":1,"completed_at":2,'
+                '"duration_ms":1,"time_to_first_token_ms":1}}'
+            ),
+        ],
+    )
+    def test_valid_metadata_and_nonfinal_events_are_declined(self, line: str) -> None:
+        assert codex_raw_turn_from_line(line) is None
+
+
+class TestMalformedCodexLinesFailLoud:
+    """Malformed rollout data names its shape and source line, never vanishing."""
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "",
+            "{not json",
+            (
+                '{"timestamp":"2026-08-02T03:11:27.000Z","type":"event_msg",'
+                '"payload":{"type":"task_complete","turn_id":"t1"}}'
+            ),
+            (
+                '{"timestamp":"2026-08-02T03:11:24.000Z","type":"event_msg",'
+                '"payload":{"type":"user_message","message":[],'
+                '"images":[],"local_images":[],"audio":[],"local_audio":[],'
+                '"text_elements":[]}}'
+            ),
+        ],
+    )
+    def test_adapter_raises_actionable_content_free_error(self, line: str) -> None:
+        with pytest.raises(MalformedCodexRecordError) as raised:
+            codex_raw_turn_from_line(line)
+
+        message = str(raised.value)
+        assert "malformed Codex rollout record" in message
+        assert "ACTION REQUIRED" in message
+        assert "No message content is included" in message
+
+    def test_stage_file_names_the_bad_jsonl_line_and_stages_nothing(
+        self, tmp_path: Path
+    ) -> None:
+        source = tmp_path / "broken-codex.jsonl"
+        source.write_text(
+            CODEX_FIXTURE.read_text(encoding="utf-8").splitlines()[0]
+            + "\n{not json\n",
+            encoding="utf-8",
+        )
+        store = StagingStore(tmp_path / "stage.sqlite")
+
+        with pytest.raises(MalformedCodexRecordError) as raised:
+            stage_file(source, InputFormat.CODEX, store)
+
+        assert f"{source}:2" in str(raised.value)
+        assert store.counts().staged == 0
 
 
 class TestClaudeAdapterIsTheReusedPureFunction:

@@ -1,0 +1,47 @@
+{
+  "id": "server-contract-discovery",
+  "description": "Freeze get_contract as the downstream negotiation surface: the manifest identity clients pin against is served to any readable role, and it is service metadata rather than namespaced memory.",
+  "capability": "contract-discovery",
+  "providers": [
+    "current-src",
+    "server-rewrite-scaffold"
+  ],
+  "auth": {
+    "role": "agent",
+    "client_id": "parity-contract-discovery",
+    "namespace_source": "token"
+  },
+  "steps": [
+    {
+      "tool": "get_contract",
+      "arguments": {},
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "service": "open-brain",
+          "contract_version": "2026-07-23.memory-tools.v23",
+          "contract_scope": "required_openbrain_memory_contract",
+          "schema_version": 1,
+          "schema_hash": "4b69e9b437c96175531b049b6e3c2782f383334e9e1931e96e73835599e4a4a8",
+          "generated_at": "<iso-date>",
+          "min_client_versions": {
+            "openbrain-memory": "0.1.15",
+            "rtech-hermes-runtime": "0.1.0",
+            "mcp2cli": "0.3.6"
+          },
+          "compatible_client_ranges": {
+            "openbrain-memory": ">=0.1.15 <1.0.0",
+            "rtech-hermes-runtime": ">=0.1.0 <1.0.0",
+            "mcp2cli": ">=0.3.6 <1.0.0"
+          },
+          "transport": {
+            "mcp": "streamable-http",
+            "auth": "bearer",
+            "namespace_boundary": "authorization",
+            "session_required": true
+          }
+        }
+      }
+    }
+  ]
+}

@@ -22,7 +22,12 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict
 
-from openbrain.apps.bulk.formats import InputFormat, LineAdapter, adapter_for
+from openbrain.apps.bulk.formats import (
+    InputFormat,
+    LineAdapter,
+    MalformedCodexRecordError,
+    adapter_for,
+)
 from openbrain.apps.bulk.staging import StagingStore
 from openbrain.models.turn import RawTurn
 
@@ -168,7 +173,13 @@ def _parsed_turns(path: Path, adapter: LineAdapter) -> Iterator[RawTurn]:
     the parse is never fully resident as Python objects.
     """
     with path.open("r", encoding="utf-8", errors="replace") as handle:
-        for line in handle:
-            turn = adapter(line)
+        for line_number, line in enumerate(handle, start=1):
+            try:
+                turn = adapter(line)
+            except MalformedCodexRecordError as error:
+                location = f"{path}:{line_number}"
+                raise MalformedCodexRecordError(
+                    error.record, error.fields, location
+                ) from error
             if turn is not None:
                 yield turn

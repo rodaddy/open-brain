@@ -1,0 +1,31 @@
+{
+  "id": "server-duplicate-discovery",
+  "description": "Freeze the empty find_duplicates shape under a namespace-scoped role. Split out of server-curation-operations: find_duplicates exposes no namespace argument, so under the admin role read-policy contributes no namespace predicate and the tool self-joins the whole table, which is a global-scan scenario rather than the empty-namespace one this shape describes.",
+  "capability": "duplicate-discovery",
+  "providers": [
+    "current-src",
+    "server-rewrite-scaffold"
+  ],
+  "auth": {
+    "role": "agent",
+    "client_id": "parity-duplicate-discovery",
+    "namespace_source": "token"
+  },
+  "steps": [
+    {
+      "tool": "find_duplicates",
+      "arguments": {
+        "table": "thoughts",
+        "threshold": 0
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "threshold": 0,
+          "duplicates_found": 0,
+          "duplicates": []
+        }
+      }
+    }
+  ]
+}

@@ -27,6 +27,7 @@ from openbrain_memory._runtime_spool import PARKED_NAMESPACE_KEY, TrackingSpool
 from openbrain_memory.cli import (
     encode_json_output,
     execute_json,
+    operation_names,
     parse_json_input,
 )
 
@@ -1889,6 +1890,49 @@ def test_main_returns_nonzero_when_output_bound_replaces_success() -> None:
     emitted = json.loads(stdout_buffer.getvalue())
     assert emitted["receipt"]["status"] == "failed"
     assert emitted["receipt"]["operation"] == "output"
+
+
+def test_unknown_and_missing_operation_errors_name_complete_vocabulary() -> None:
+    outputs = (
+        execute_json({"operation": "not-an-operation"}),
+        execute_json({}),
+    )
+
+    assert outputs[0]["receipt"]["error"].startswith(
+        "unsupported operation: not-an-operation;"
+    )
+    for output in outputs:
+        assert output["receipt"]["status"] == "failed"
+        error = output["receipt"]["error"]
+        for operation in operation_names():
+            assert operation in error
+
+
+def test_help_lists_every_routed_operation() -> None:
+    output = execute_json({"operation": "help"})
+
+    assert output["receipt"]["status"] == "direct"
+    operations = output["result"]["operations"]
+    assert [entry["name"] for entry in operations] == list(operation_names())
+    assert all(entry["description"] for entry in operations)
+    assert output["result"]["example"]["operation"] in operation_names()
+
+
+def test_module_entry_point_supports_help_argument() -> None:
+    completed = subprocess.run(
+        [sys.executable, "-m", "openbrain_memory", "--help"],
+        text=True,
+        capture_output=True,
+        check=False,
+        cwd=Path(__file__).resolve().parents[1],
+    )
+
+    assert completed.returncode == 0
+    assert completed.stderr == ""
+    output = json.loads(completed.stdout)
+    assert [entry["name"] for entry in output["result"]["operations"]] == list(
+        operation_names()
+    )
 
 
 def test_module_entry_point_emits_json_for_malformed_input() -> None:

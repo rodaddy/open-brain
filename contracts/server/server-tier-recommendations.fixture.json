@@ -1,0 +1,59 @@
+{
+  "id": "server-tier-recommendations",
+  "description": "Freeze read-only tier recommendation shapes for both directions in an empty namespace.",
+  "capability": "tier-recommendations",
+  "providers": ["current-src", "server-rewrite-scaffold"],
+  "auth": {
+    "role": "agent",
+    "client_id": "parity-tier-recs",
+    "namespace_source": "token"
+  },
+  "steps": [
+    {
+      "tool": "tier_recommendations",
+      "arguments": {
+        "action": "promote"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "action": "promote",
+          "threshold_days": 7,
+          "candidates_found": 0,
+          "candidates": []
+        }
+      }
+    },
+    {
+      "tool": "tier_recommendations",
+      "arguments": {
+        "action": "demote"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "action": "demote",
+          "threshold_days": 30,
+          "candidates_found": 0,
+          "candidates": []
+        }
+      }
+    },
+    {
+      "tool": "tier_recommendations",
+      "arguments": {
+        "action": "demote",
+        "threshold_days": 90
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "action": "demote",
+          "threshold_days": 90,
+          "candidates_found": 0,
+          "candidates": []
+        }
+      }
+    }
+  ]
+}
