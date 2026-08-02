@@ -1,6 +1,6 @@
 [project]
 name = "openbrain-provider"
-version = "0.1.0"
+version = "0.9.0"
 description = "Runtime lifecycle provider for Open Brain: session start, capture, checkpoint, reflex, and the agent hooks that drive them."
 readme = "README.md"
 requires-python = ">=3.13"

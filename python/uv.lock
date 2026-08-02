@@ -202,7 +202,7 @@ wheels = [
 
 [[package]]
 name = "openbrain"
-version = "0.1.0"
+version = "0.9.0"
 source = { editable = "openbrain" }
 dependencies = [
     { name = "loguru" },
@@ -239,7 +239,7 @@ dev = [
 
 [[package]]
 name = "openbrain-memory"
-version = "0.1.18"
+version = "0.9.0"
 source = { editable = "openbrain-memory" }
 
 [package.optional-dependencies]
@@ -267,7 +267,7 @@ dev = [
 
 [[package]]
 name = "openbrain-provider"
-version = "0.1.0"
+version = "0.9.0"
 source = { editable = "openbrain-provider" }
 dependencies = [
     { name = "loguru" },
