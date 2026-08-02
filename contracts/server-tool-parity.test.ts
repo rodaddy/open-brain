@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import pino from "pino";
@@ -164,11 +164,42 @@ async function createClient(provider: ProviderId, auth: AuthInfo): Promise<{
 // row can belong to restores the intended premise for BOTH providers without
 // changing production behavior, because sharedNamespaceConfig() resolves this
 // from the environment on every call.
+//
+// The override is installed and REMOVED around this suite rather than at module
+// scope. Bun runs every test file in one process and `sharedNamespaceConfig()`
+// re-reads the environment on every call, so a module-scope assignment is a
+// process-wide mutation that outlives this file: the legacy-collab fallback
+// tests in `src/tools/__tests__/search-brain.test.ts` (and the repo-fact,
+// brain_answer, and search_all fallback suites) assert against the real
+// `shared-kb`/`collab` pair and fail purely from load order. Measured on this
+// branch: `bun test src/tools/__tests__/search-brain.test.ts` alone is 40/0,
+// and with this file added it is 5 failures — the same 5 that appear in the
+// full run. Scoping the assignment to the suite keeps the isolated premise for
+// these fixtures and leaves every sibling file the environment it recorded
+// against.
 const SHARED_NAMESPACE_ISOLATION = `parity-shared-${process.pid}-${Date.now()}`;
-process.env.SHARED_NAMESPACE_CANONICAL = SHARED_NAMESPACE_ISOLATION;
-process.env.SHARED_NAMESPACE_PHYSICAL = SHARED_NAMESPACE_ISOLATION;
+const priorSharedNamespaceEnv = {
+  canonical: process.env.SHARED_NAMESPACE_CANONICAL,
+  physical: process.env.SHARED_NAMESPACE_PHYSICAL,
+};
+
+/** Restore an env var to its pre-suite value, unsetting it when it was absent. */
+function restoreEnv(key: string, value: string | undefined): void {
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
+}
 
 dbDescribe("server parity fixtures by implemented provider capability (live Postgres)", () => {
+  beforeAll(() => {
+    process.env.SHARED_NAMESPACE_CANONICAL = SHARED_NAMESPACE_ISOLATION;
+    process.env.SHARED_NAMESPACE_PHYSICAL = SHARED_NAMESPACE_ISOLATION;
+  });
+
+  afterAll(() => {
+    restoreEnv("SHARED_NAMESPACE_CANONICAL", priorSharedNamespaceEnv.canonical);
+    restoreEnv("SHARED_NAMESPACE_PHYSICAL", priorSharedNamespaceEnv.physical);
+  });
+
   for (const provider of providers) {
     for (const fixture of fixtures) {
       if (parityManifest.provider_capability_status[provider][fixture.capability] !== "implemented") continue;
