@@ -74,6 +74,13 @@ export const REQUIRED_SUITES: ReadonlyArray<{
   // across the namespace boundary. `skill_usage_log` has no namespace column, so
   // that boundary lives entirely in a join this suite is what checks.
   { name: "skill usage telemetry (live Postgres)", minTests: 9 },
+  // The maintenance queue runner's lease boundary, proven through the composed
+  // `server/` runtime. This entry matters more than most: both invariants it
+  // covers fail SILENTLY -- a row sits `running` under a live lease with no
+  // handler, nothing throws, and nothing is logged -- so a skipped run and a
+  // passing run look identical from the outside. That is precisely the shape
+  // this guard exists for.
+  { name: "maintenance runtime lease boundary (live Postgres)", minTests: 5 },
 ];
 
 // Absolute floor on total executed (non-skipped) live-Postgres testcases,
@@ -81,9 +88,9 @@ export const REQUIRED_SUITES: ReadonlyArray<{
 // `minTests` values above (32 before the Phase 5 real-SDK protocol suite added
 // its 8, then 12 once that suite also covered the realtime append tools and the
 // two-worker front, then 44 -> 53 when the #469 skill-usage telemetry suite
-// added its 9), so the global floor cannot silently fall behind the per-suite
-// one.
-export const MIN_TOTAL_LIVE_TESTCASES = 53;
+// added its 9, then 53 -> 58 when the maintenance lease-boundary suite added
+// its 5), so the global floor cannot silently fall behind the per-suite one.
+export const MIN_TOTAL_LIVE_TESTCASES = 58;
 
 export interface SuiteStats {
   tests: number;

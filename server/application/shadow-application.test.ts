@@ -214,6 +214,74 @@ describe("shadow application composition", () => {
     expect(order).toEqual(["sessions", "maintenance"]);
   });
 
+  it("composes the maintenance runner into the shutdown order, last", async () => {
+    // The port used to have NO production supplier: every proof of ordered
+    // shutdown above runs against a fake runtime, so "the application drains
+    // maintenance" was true of a shape and not of a runner. This asserts the
+    // real composition -- supplying handlers builds a queue runner and places it
+    // in the shutdown order.
+    //
+    // LAST is the assertion, not merely present. The queue runner is the drain
+    // that needs the database for the longest, because it must finish jobs it
+    // has already leased; anything stopped after it would be stopped while it
+    // was still using the pool.
+    const application = createShadowApplication({
+      config: testConfig(),
+      logger: silentLogger(),
+      database: fakeDatabase(),
+      authenticate: bearerAuth(),
+      parseRequestBody: express.json(),
+      serverFactory: () => ({ connect: async () => {} }) as never,
+      backgroundRuntimes: [{ name: "other", stop: async () => {} }],
+      maintenanceHandlers: new Map([["noop.kind", async () => {}]]),
+      // No timer: this test asserts composition, not polling, and a live poller
+      // would query the fake database.
+      maintenanceAutoStart: false,
+    });
+
+    expect(application.backgroundRuntimes.map((runtime) => runtime.name)).toEqual([
+      "other",
+      "maintenance",
+    ]);
+    await application.close();
+  });
+
+  it("composes no maintenance runner when the operator disabled it", async () => {
+    // An operator opting a worker out must leave NOTHING in the shutdown order,
+    // not an idle runner that still holds a pool connection to poll with.
+    const application = createShadowApplication({
+      config: testConfig({ OPEN_BRAIN_MAINTENANCE_ENABLED: "0" }),
+      logger: silentLogger(),
+      database: fakeDatabase(),
+      authenticate: bearerAuth(),
+      parseRequestBody: express.json(),
+      serverFactory: () => ({ connect: async () => {} }) as never,
+      maintenanceHandlers: new Map([["noop.kind", async () => {}]]),
+      maintenanceAutoStart: false,
+    });
+
+    expect(application.backgroundRuntimes).toEqual([]);
+    await application.close();
+  });
+
+  it("composes no maintenance runner when the process dispatches no job kinds", async () => {
+    // Distinct from the disabled case above and deliberately so: this process
+    // was never given a dispatch surface, so there is nothing for a runner to
+    // run. Both end with an empty shutdown order, but only one of them is an
+    // operator decision.
+    const application = createShadowApplication({
+      config: testConfig(),
+      logger: silentLogger(),
+      database: fakeDatabase(),
+      authenticate: bearerAuth(),
+      parseRequestBody: express.json(),
+      serverFactory: () => ({ connect: async () => {} }) as never,
+    });
+
+    expect(application.backgroundRuntimes).toEqual([]);
+    await application.close();
+  });
+
   it("stops every background runtime even when an earlier one throws", async () => {
     // A shutdown that abandons the remaining runtimes on the first failure
     // leaks exactly when something is already wrong. The failure is still
