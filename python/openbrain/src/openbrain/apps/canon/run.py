@@ -1,0 +1,314 @@
+"""The console-script entrypoint: read a pack file, read live canon, report drift.
+
+Purpose:
+    An operator runs this to answer "is canon what we said it is". It parses the
+    declared pack, reads the live ``agent_context_pack`` through the same client
+    the SessionStart hook uses, diffs them, and prints the report -- then, only
+    when explicitly told to, writes the missing and stale rules through the
+    lifecycle path #445 established.
+
+Architecture:
+    A parse-and-drive shell, the canon mirror of ``apps.bulk.run``. Every
+    decision lives in the capabilities: ``pack`` parses, ``reconcile`` diffs,
+    ``writes`` builds the calls. This module builds the client and orders them.
+
+    The client is the SAME construction the canon read already uses --
+    ``apps.hooks.session._canon_context`` -- reached by calling
+    ``run_session_start`` with a synthesised ``SessionStart`` payload rather than
+    by opening a second connection path. There is exactly one place that knows
+    how to read canon, and this is not a second one.
+
+Pattern/Convention:
+    DRY RUN IS THE DEFAULT, and that is a design position, not caution. Canon is
+    an AUTHORITY model, not a decay model (``docs/code-brain-design.md``: canon >
+    decided > observed), and #444 -- deciding what canon contains -- is an open
+    HITL grilling ticket whose own text says "Rico decides; do not answer this
+    one alone". A tool that promoted rules into the standing set the moment it
+    was run would be answering it. So the default run REPORTS, prints the exact
+    calls it would make, and changes nothing; ``--apply`` is the operator saying
+    the pack is the decision.
+
+    LOUD, NOT SWALLOWED -- the inverse of the hook entrypoints' exit-0 contract.
+    A missing endpoint, an unparseable pack, or an unreachable server exits
+    NON-ZERO, because a person is watching and can act. Drift itself also exits
+    non-zero, so this is usable as a check: "canon matches the file" is the only
+    green state.
+
+    NO TOKEN, NO ENDPOINT, IN ANY OUTPUT. Reporting goes through ``loguru``, the
+    one logging surface this package has (``utils.logging_config`` owns every
+    sink); nothing here calls ``print``. The report carries rule TEXT (see
+    ``reconcile.format_report``), which is not a secret and is the whole point of
+    a drift report. What never appears is anything from settings: a failure is
+    logged as its exception CLASS alone, because a transport error's message
+    carries the endpoint it could not reach and an operator log is a file someone
+    pastes into a ticket.
+
+See Also:
+    - ``openbrain.apps.canon.reconcile`` - the diff this drives
+    - ``openbrain.apps.bulk.run`` - the operator-entrypoint shape this mirrors
+    - ``openbrain.apps.hooks.session.run_session_start`` - the one canon read
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+from loguru import logger
+
+from openbrain.apps.canon.pack import Pack
+from openbrain.apps.canon.reconcile import (
+    DriftReport,
+    diff_pack,
+    format_report,
+)
+from openbrain.apps.canon.writes import FactProvenance, PlannedWrite, plan_promote
+from openbrain.apps.hooks.session import SessionStartHook, run_session_start
+from openbrain.config import load_canon_settings
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from openbrain.config import CanonSettings
+
+#: The ``source`` on the synthesised SessionStart payload. ``startup`` is the
+#: ordinary value and the read does not gate on it (``run_session_start``:
+#: "``source`` is read but does not gate the read"); naming it explicitly beats
+#: inventing a fake one that a later reader would have to interpret.
+_READ_SOURCE = "startup"
+
+
+def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
+    """Parse the reconcile command line."""
+    parser = argparse.ArgumentParser(
+        prog="openbrain-canon-reconcile",
+        description=(
+            "Compare a declared canon pack file against the canon Open Brain "
+            "actually serves, and report the drift. Reports only unless "
+            "--apply is given: promoting a rule into the standing set is an "
+            "operator decision, not a side effect of running a check."
+        ),
+    )
+    parser.add_argument("pack", type=Path, help="the canon pack file, read whole")
+    parser.add_argument(
+        "--apply",
+        action="store_true",
+        help=(
+            "write the missing and stale rules. Without it the run reports and "
+            "changes nothing. Undeclared live rules are NEVER written or "
+            "deleted either way -- retiring canon is an operator-authored "
+            "relegate on the key."
+        ),
+    )
+    parser.add_argument(
+        "--repo-source-commit",
+        default=None,
+        help="the commit repo facts are verified at (required to apply repo facts)",
+    )
+    parser.add_argument(
+        "--repo-source-url",
+        default=None,
+        help="the source URL naming that commit and path (required to apply repo facts)",
+    )
+    parser.add_argument(
+        "--repo-verified-at",
+        default=None,
+        help="ISO-8601 instant the repo facts were verified (required to apply)",
+    )
+    return parser.parse_args(argv)
+
+
+def read_live_pack(settings: CanonSettings) -> Any:
+    """Read the live canon pack through the one canon read path.
+
+    Args:
+        settings: The canon configuration -- endpoint, token, scope, sections.
+
+    Returns:
+        The decoded ``agent_context_pack`` payload, or ``None`` when canon is
+        configured to request no sections.
+
+    Raises:
+        Whatever the read raises -- notably ``CanonNotConfiguredError`` when no
+        endpoint or token is set. UNLIKE the hook, this does not swallow: an
+        operator running a check must be told the check could not run.
+    """
+    payload = SessionStartHook.model_validate(
+        {"hook_event_name": "SessionStart", "source": _READ_SOURCE}
+    )
+    return asyncio.run(run_session_start(payload, settings))
+
+
+def provenance_from(
+    args: argparse.Namespace, settings: CanonSettings
+) -> FactProvenance | None:
+    """Assemble the repo-fact provenance, or ``None`` when it was not supplied.
+
+    Args:
+        args: The parsed command line, carrying the commit, URL, and instant.
+        settings: The canon configuration, carrying the repo the facts bind to.
+
+    Returns:
+        The provenance, or ``None`` when any part is absent. All-or-nothing:
+        ``repoFactMetadata`` refuses a write whose ``source_url`` does not
+        contain both the commit and the path, so a half-filled provenance is
+        never closer to valid than none at all -- it just fails later, at the
+        server.
+    """
+    if not (args.repo_source_commit and args.repo_source_url and args.repo_verified_at):
+        return None
+    return FactProvenance(
+        repo=settings.repo,
+        source_commit=args.repo_source_commit,
+        source_url=args.repo_source_url,
+        verified_at=args.repo_verified_at,
+    )
+
+
+def plan_writes(
+    pack: Pack, report: DriftReport, args: argparse.Namespace, settings: CanonSettings
+) -> list[PlannedWrite]:
+    """Build the write for every actionable finding, or fail before sending any.
+
+    Args:
+        pack: The declared pack, used to recover each finding's full entry.
+        report: The drift report.
+        args: The parsed command line, carrying the repo-fact provenance.
+        settings: The canon configuration, carrying the lane and repo.
+
+    Returns:
+        One planned write per missing or stale finding, in report order.
+
+    Raises:
+        ValueError: A repo fact is missing provenance the server validates. Every
+            write is planned BEFORE any is sent, so this stops the run with
+            nothing written rather than after landing half of them.
+    """
+    by_key = {(entry.lane, entry.key): entry for entry in pack.entries}
+    provenance = provenance_from(args, settings)
+    return [
+        plan_promote(
+            by_key[(finding.lane, finding.key)],
+            session_key=settings.session_key,
+            provenance=provenance,
+        )
+        for finding in report.actionable()
+    ]
+
+
+def _describe(planned: Sequence[PlannedWrite]) -> str:
+    """Render the planned writes as the lines a dry run prints.
+
+    One line per call: the tool, the lane, and the key. Not the whole argument
+    payload -- the rule text is already in the drift report directly above, and
+    printing it twice buries the list of calls that is the point of this block.
+    """
+    if not planned:
+        return "no writes needed"
+    lines = [f"{len(planned)} write(s) planned:"]
+    lines.extend(
+        f"    {call.tool} [{call.lane}] {call.key}" for call in planned
+    )
+    return "\n".join(lines)
+
+
+def _apply(planned: Sequence[PlannedWrite], settings: CanonSettings) -> None:
+    """Send every planned write through one client.
+
+    The client is built here rather than in a capability for the same reason
+    ``apps.bulk.run`` builds its own: this is the operator path, so it does NOT
+    inherit the hook path's single-attempt, deadline-pinned policy -- an operator
+    run may retry, which is the sibling client's default.
+
+    Raises:
+        CanonNotConfiguredError: No endpoint or token. Raised before the import
+            so an unconfigured run fails identically whether or not the sibling
+            package is installed.
+    """
+    from openbrain.apps.hooks.session import CanonNotConfiguredError
+
+    if settings.base_url is None or settings.token is None:
+        missing = ", ".join(
+            name
+            for name, value in (
+                ("base_url", settings.base_url),
+                ("token", settings.token),
+            )
+            if value is None
+        )
+        raise CanonNotConfiguredError(missing)
+
+    from openbrain_memory.client import OpenBrainClient
+
+    client = OpenBrainClient(
+        base_url=settings.base_url,
+        token=settings.token.get_secret_value(),
+        namespace=settings.agent,
+    )
+    try:
+        for call in planned:
+            client.call_tool(call.tool, call.arguments)
+    finally:
+        client.close()
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Run one reconcile and report what it found.
+
+    Args:
+        argv: The command line, or ``None`` to read ``sys.argv``.
+
+    Returns:
+        ``0`` only when the declared pack and the live canon agree. ``1`` when
+        they drift -- including after a successful ``--apply``, because the
+        written rows have not been re-read and this process has not observed
+        them standing. ``2`` when the run could not complete: an unparseable
+        pack, an unconfigured or unreachable service, a repo fact missing the
+        provenance its write path validates.
+    """
+    args = _parse_args(argv)
+
+    try:
+        pack = Pack.from_path(args.pack)
+    except Exception as error:  # noqa: BLE001 -- reported to the operator, then exit
+        logger.error(
+            "canon pack unreadable ({}): {}", type(error).__name__, args.pack
+        )
+        return 2
+
+    try:
+        settings = load_canon_settings()
+        live = read_live_pack(settings)
+    except Exception as error:  # noqa: BLE001 -- reported to the operator, then exit
+        # The exception CLASS only. A transport error's message carries the
+        # endpoint it failed to reach, and an operator log is a file someone
+        # pastes.
+        logger.error("canon read failed ({})", type(error).__name__)
+        return 2
+
+    report = diff_pack(pack, live)
+    logger.info("\n{}", format_report(report))
+
+    try:
+        planned = plan_writes(pack, report, args, settings)
+    except ValueError as error:
+        logger.error("cannot plan writes: {}", error)
+        return 2
+
+    logger.info("{}", _describe(planned))
+
+    if args.apply and planned:
+        try:
+            _apply(planned, settings)
+        except Exception as error:  # noqa: BLE001 -- reported to the operator, then exit
+            logger.error("apply failed ({})", type(error).__name__)
+            return 2
+        logger.info("applied {} write(s)", len(planned))
+
+    return 1 if report.has_drift else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
