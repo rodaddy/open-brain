@@ -19,8 +19,10 @@
     "server-entry-listing",
     "server-entry-revision",
     "server-graph-entities",
+    "server-graph-relations",
     "server-ingest-raw-turn",
     "server-namespace-denial",
+    "server-people",
     "server-realtime-working-recovery",
     "server-reflex-pointers-empty",
     "server-search-brain-arms",
@@ -43,7 +45,9 @@
     "entry-listing",
     "entry-revision",
     "graph-entities",
+    "graph-relations",
     "namespace-denial",
+    "people",
     "raw-turn-ingest-server",
     "realtime-working-recovery",
     "reflex-pointers",
@@ -76,7 +80,9 @@
       "graph-entities": "implemented",
       "entry-decomposition": "implemented",
       "entry-listing": "implemented",
-      "access-reporting": "implemented"
+      "access-reporting": "implemented",
+      "graph-relations": "implemented",
+      "people": "implemented"
     },
     "server-rewrite-scaffold": {
       "auth-error-shapes": "scaffold-declared",
@@ -100,7 +106,9 @@
       "graph-entities": "implemented",
       "entry-decomposition": "implemented",
       "entry-listing": "implemented",
-      "access-reporting": "implemented"
+      "access-reporting": "implemented",
+      "graph-relations": "implemented",
+      "people": "implemented"
     }
   }
 }

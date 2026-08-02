@@ -3,8 +3,8 @@
   "description": "Complete current-src MCP registration inventory split by observed server fixture coverage.",
   "source": "src/tools/**/*.ts server.registerTool literal registrations",
   "registered_tool_count": 63,
-  "fixture_covered_tool_count": 39,
-  "without_parity_fixture_count": 24,
+  "fixture_covered_tool_count": 46,
+  "without_parity_fixture_count": 17,
   "fixture_covered_tools": [
     "access_report",
     "agent_context_pack",
@@ -19,12 +19,16 @@
     "decompose_entry",
     "demote_entry",
     "find_duplicates",
+    "find_person",
     "get_entity",
     "get_stats",
+    "hydrate_entities",
     "ingest_conversation_facts",
     "ingest_raw_turn",
     "lane_load",
     "lane_upsert",
+    "link_entities",
+    "list_entities",
     "list_stale",
     "log_decision",
     "log_thought",
@@ -43,7 +47,10 @@
     "set_tier",
     "tier_lane",
     "tier_recommendations",
+    "unlink_entities",
     "update_entry",
+    "upsert_entity",
+    "upsert_person",
     "working_set_append"
   ],
   "without_parity_fixture": [
@@ -63,11 +70,6 @@
       "reason": "No observed current-src server fixture has been extracted for this tool yet."
     },
     {
-      "tool": "find_person",
-      "capability": "people",
-      "reason": "No observed current-src server fixture has been extracted for this tool yet."
-    },
-    {
       "tool": "get_contract",
       "capability": "contract-discovery",
       "reason": "No observed current-src server fixture has been extracted for this tool yet."
@@ -75,21 +77,6 @@
     {
       "tool": "get_entry",
       "capability": "entry-read",
-      "reason": "No observed current-src server fixture has been extracted for this tool yet."
-    },
-    {
-      "tool": "hydrate_entities",
-      "capability": "graph-entities",
-      "reason": "No observed current-src server fixture has been extracted for this tool yet."
-    },
-    {
-      "tool": "link_entities",
-      "capability": "graph-relations",
-      "reason": "No observed current-src server fixture has been extracted for this tool yet."
-    },
-    {
-      "tool": "list_entities",
-      "capability": "graph-entities",
       "reason": "No observed current-src server fixture has been extracted for this tool yet."
     },
     {
@@ -143,23 +130,8 @@
       "reason": "No observed current-src server fixture has been extracted for this tool yet."
     },
     {
-      "tool": "unlink_entities",
-      "capability": "graph-relations",
-      "reason": "No observed current-src server fixture has been extracted for this tool yet."
-    },
-    {
       "tool": "update_source",
       "capability": "source-registry",
-      "reason": "No observed current-src server fixture has been extracted for this tool yet."
-    },
-    {
-      "tool": "upsert_entity",
-      "capability": "graph-entities",
-      "reason": "No observed current-src server fixture has been extracted for this tool yet."
-    },
-    {
-      "tool": "upsert_person",
-      "capability": "people",
       "reason": "No observed current-src server fixture has been extracted for this tool yet."
     },
     {

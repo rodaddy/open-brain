@@ -1,0 +1,97 @@
+{
+  "id": "server-graph-relations",
+  "description": "Freeze link/unlink refusals and the idempotent-unlink no-op text.",
+  "capability": "graph-relations",
+  "providers": ["current-src", "server-rewrite-scaffold"],
+  "auth": {
+    "role": "admin",
+    "client_id": "parity-graph-relations",
+    "namespace_source": "token"
+  },
+  "steps": [
+    {
+      "tool": "link_entities",
+      "arguments": {
+        "from_type": "entity",
+        "from_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "to_type": "entity",
+        "to_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "relation": "relates_to"
+      },
+      "expectation": {
+        "is_error": true,
+        "text": "Invalid link: cannot link a node to itself"
+      }
+    },
+    {
+      "tool": "link_entities",
+      "arguments": {
+        "from_type": "entity",
+        "from_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "to_type": "entity",
+        "to_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        "relation": "relates_to"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "from_type": "entity",
+          "to_type": "entity",
+          "relation": "relates_to",
+          "weight": 1,
+          "is_new": true
+        }
+      }
+    },
+    {
+      "tool": "link_entities",
+      "arguments": {
+        "from_type": "entity",
+        "from_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "to_type": "entity",
+        "to_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        "relation": "relates_to",
+        "weight": 4
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "relation": "relates_to",
+          "weight": 4,
+          "is_new": false
+        }
+      }
+    },
+    {
+      "tool": "unlink_entities",
+      "arguments": {
+        "from_type": "entity",
+        "from_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "to_type": "entity",
+        "to_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        "relation": "relates_to"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "namespace": "{{namespace}}",
+          "unlinked": true
+        }
+      }
+    },
+    {
+      "tool": "unlink_entities",
+      "arguments": {
+        "from_type": "entity",
+        "from_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "to_type": "entity",
+        "to_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        "relation": "relates_to"
+      },
+      "expectation": {
+        "is_error": false,
+        "text": "Already unlinked or not found"
+      }
+    }
+  ]
+}

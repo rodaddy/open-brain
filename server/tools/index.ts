@@ -7,6 +7,7 @@ import { registerEntityTools } from "./entities.ts";
 import { registerIngestRawTurnTool } from "./ingest-raw-turn.ts";
 import { registerLaneTools } from "./lanes.ts";
 import { registerNamespaceGuardTool } from "./namespace-guard.ts";
+import { registerPeopleTools } from "./people.ts";
 import { registerReportingTools } from "./reporting.ts";
 import { registerResolveEntryTool } from "./resolve-entry.ts";
 import { registerUpdateEntryTool } from "./update-entry.ts";
@@ -40,6 +41,7 @@ export function registerMemoryTools(
   registerTieringTools(server, dependencies);
   registerReportingTools(server, dependencies);
   registerEntityTools(server, dependencies);
+  registerPeopleTools(server, dependencies);
 }
 
 export type { MemoryToolDependencies } from "./types.ts";
