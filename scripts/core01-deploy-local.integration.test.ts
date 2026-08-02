@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -25,6 +32,7 @@ const GIT_ENV_KEYS = [
   "GIT_PREFIX",
   "GIT_REPLACE_REF_BASE",
   "GIT_SHALLOW_FILE",
+  "GIT_TEMPLATE_DIR",
   "GIT_WORK_TREE",
 ] as const;
 
@@ -272,16 +280,21 @@ describe("core01 deploy shell ref-gate wiring", () => {
       "--git-common-dir",
     );
     const inheritedHome = join(outerRoot, "inherited-home");
-    await mkdir(inheritedHome);
+    const inheritedTemplate = join(inheritedHome, "git-template");
+    const inheritedHook = join(inheritedTemplate, "hooks", "pre-commit");
+    await mkdir(join(inheritedTemplate, "hooks"), { recursive: true });
     await writeFile(
       join(inheritedHome, ".gitconfig"),
       "[commit]\n\tgpgsign = true\n",
     );
+    await writeFile(inheritedHook, "#!/bin/sh\nexit 1\n");
+    await chmod(inheritedHook, 0o755);
     const inheritedEnv: ProcessEnv = {
       ...process.env,
       GIT_COMMON_DIR: inheritedCommonDir,
       GIT_DIR: inheritedGitDir,
       GIT_INDEX_FILE: join(inheritedGitDir, "index"),
+      GIT_TEMPLATE_DIR: inheritedTemplate,
       GIT_WORK_TREE: linked,
       HOME: inheritedHome,
       XDG_CONFIG_HOME: inheritedHome,
