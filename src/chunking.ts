@@ -66,10 +66,25 @@ export function chunkText(
       index++;
     }
 
-    // Next chunk starts overlap chars back for continuity
+    // THIS CHUNK REACHED THE END, SO THERE IS NOTHING LEFT TO SPLIT.
+    // Without this, the loop never terminates on its own terms: once `end`
+    // clamps to text.length it is PINNED there, so `end - overlap` stops
+    // advancing and the `start + 1` floor below crawls forward ONE CHARACTER
+    // per iteration, emitting one near-duplicate tail chunk per remaining
+    // character. Measured on 2026-08-02 before this line existed: 14,000 chars
+    // at chunkSize=2000/overlap=400 produced 410 chunks instead of 11 -- the
+    // first 10 correct, then 400 shrinking copies of the tail down to a final
+    // chunk whose entire text was ".". Every caller paid for them: log-thought
+    // wrote them as rows, and embedText (src/embedding.ts) spent one network
+    // embed call on each.
+    if (end >= text.length) break;
+
+    // Next chunk starts overlap chars back for continuity. The `start + 1`
+    // floor remains as a belt-and-braces guarantee of forward progress for a
+    // short/degenerate chunk in the MIDDLE of the text (where end < length),
+    // which is the only case that can still reach it.
     const nextStart = end - overlap;
     start = Math.max(nextStart, start + 1);
-    if (start >= text.length) break;
   }
 
   logger.info("chunked_text", {
