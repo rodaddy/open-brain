@@ -356,6 +356,10 @@ function relevantLookup(
 /** What is this mutation about? Path for file writes, command for Bash. */
 function mutationSubject(tool: string, input: Record<string, unknown>): string {
   if (tool === "Bash") return String(input.command ?? "");
+  // A question's subject is its text. Without this the subject is always empty,
+  // so no lookup can ever match and AskUserQuestion is blocked unconditionally,
+  // which contradicts the unlock-by-lookup intent documented on MUTATING_TOOLS.
+  if (tool === "AskUserQuestion") return JSON.stringify(input.questions ?? "");
   return String(input.file_path ?? input.notebook_path ?? "");
 }
 
@@ -677,6 +681,13 @@ const CAP_PROPOSAL_EXEMPT = new RegExp(
     // stays unbounded; JSON-key shapes only, prose proposals still hit the wall.
     String.raw`["'](ttl_ms|max_sessions|max_items_per_session|trimmed|purged|dropped|expired|marked)["']\s*:`,
     String.raw`\b(counters|budget)["']?\s*:`,
+    // Same operator-approved class, further members: `get_entry`'s compact
+    // render envelope. `max_chars`, `content_length`, and `content_truncated`
+    // are EXISTING current-src response fields (`src/tools/get-entry.ts`), and
+    // the #463 gap-closure fixture records them verbatim from observed output.
+    // Recording a field current-src already emits is not proposing a cap;
+    // memory content stays unbounded and prose proposals still hit the wall.
+    String.raw`\b(max_chars|content_length|content_truncated|DEFAULT_COMPACT_MAX_CHARS)\b`,
     // Same operator-approved class, further members: SQL DDL grammar. Operator
     // narrowed the gate 2026-08-02 ("we can narrow the gate now anyway. I
     // think the point has been proven") after the #469 worker hard-stopped on

@@ -9,7 +9,7 @@ absent, and restoring the previous settings in one command.
 `~/.claude/settings.json` is OUTSIDE this repo, so it is not versioned here. The
 backup taken before the cutover, the installed console scripts, and the env
 wrapper are all outside the repo too. What lives in the repo: this doc, the
-`openbrain-session-start` console-script declaration
+two `openbrain-session-start*` console-script declarations
 (`python/openbrain/pyproject.toml`), and the surviving TS the settings now point
 at (`_ob/scripts/...`, a separate repo).
 
@@ -21,7 +21,7 @@ at (`_ob/scripts/...`, a separate repo).
 | `SubagentStop` | (not wired) | `sh …/openbrain-hook-env openbrain-capture-subagent-stop` |
 | `SessionEnd` | `bun … claude-hook.ts` | `sh …/openbrain-hook-env openbrain-session-end` |
 | `PostCompact` | `bun … claude-hook.ts` | `sh …/openbrain-hook-env openbrain-post-compact` |
-| `SessionStart` | `bun … claude-hook.ts` | `sh …/openbrain-hook-env openbrain-session-start` |
+| `SessionStart` | `bun … claude-hook.ts` | two entries: `sh …/openbrain-hook-env openbrain-session-start` and `sh …/openbrain-hook-env openbrain-session-start-remaining` |
 | `UserPromptSubmit` / `PreCompact` | `bun … claude-hook.ts` (no-op) | removed |
 | `context-budget-gate.ts` (7 events) | `sha256-…/context-budget-gate.ts` | `/Volumes/ThunderBolt/Development/_ob/scripts/context-budget-gate.ts` |
 | `guard.ts` (PreToolUse Bash) | `sha256-…/ob-memory-provider/guard.ts` | `/Volumes/ThunderBolt/Development/_ob/scripts/ob-memory-provider/guard.ts` |
@@ -37,11 +37,13 @@ The provider is installed as a `uv tool` from `python/openbrain/`:
 uv tool install --force /Volumes/ThunderBolt/Development/open-brain/python/openbrain
 ```
 
-This links five console scripts into `~/.local/bin/` (on the settings `PATH`):
-`openbrain-capture-stop`, `openbrain-capture-subagent-stop`,
-`openbrain-session-end`, `openbrain-post-compact`, `openbrain-session-start`.
-No `sha256-` path is involved; a `uv tool install --upgrade` re-bakes the same
-stable names.
+This links six hook console scripts into `~/.local/bin/` (on the settings
+`PATH`): `openbrain-capture-stop`, `openbrain-capture-subagent-stop`,
+`openbrain-session-end`, `openbrain-post-compact`, `openbrain-session-start`, and
+`openbrain-session-start-remaining`. Claude settings register the two
+`SessionStart` scripts as separate hook entries so each `additionalContext` is
+handled independently. No `sha256-` path is involved; a `uv tool install
+--upgrade` re-bakes the same stable names.
 
 ### Env delivery
 

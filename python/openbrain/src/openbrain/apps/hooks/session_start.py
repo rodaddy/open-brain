@@ -5,8 +5,8 @@ Purpose:
     ``startup``/``resume``/``clear``/``compact``/``fork``) and hands it the event
     as JSON on stdin. It reads that payload, reads the CANON-tier context pack
     through the same ``openbrain_memory`` client the capture hooks use, and writes
-    the pack back to the harness as ``hookSpecificOutput.additionalContext`` on
-    stdout so it lands in front of the model for the whole session.
+    it through two independently registered ``additionalContext`` hook outputs:
+    profile/process guidance first, then repo facts and any remaining sections.
 
     CANON ONLY. The injection is the always-known layer -- who Rico is
     (``profile_guidance``), the rules/LAWs/standards/persona
@@ -27,11 +27,12 @@ Non-goals:
     or retry mechanism.
 
 Architecture:
-    A parse-and-exit shell. Reading stdin, loading settings, choosing a
-    capability, and serialising the response is all this module does; the
-    capability that builds the client and reads ``agent_context_pack`` is
-    ``session.run_session_start``, so there is no business logic here
-    (``_plans/418-prov-9-hook-entrypoints.md``).
+    Two parse-and-exit console scripts share this module and partition the
+    configured section names before calling the unchanged whole-pack capability.
+    Claude Code registers both scripts as separate ``SessionStart`` hooks because
+    ``additionalContext`` delivery is independent per hook. The capability that
+    builds the client and reads ``agent_context_pack`` remains
+    ``session.run_session_start`` (``_plans/418-prov-9-hook-entrypoints.md``).
 
 Pattern/Convention:
     FAIL OPEN. A hook that opens a session must never block or break one. Every
@@ -41,11 +42,11 @@ Pattern/Convention:
     (``tests/fixtures/captured_hooks/README.md``). The session opens uninjured
     either way; a missing injection is a degraded start, not a broken one.
 
-    The injecting response is one JSON object on stdout:
+    Each registered script writes one JSON object on stdout:
     ``{"hookSpecificOutput": {"hookEventName": "SessionStart",
     "additionalContext": "<rendered>"}}`` -- the documented SessionStart
-    contract. ``additionalContext`` is a string, so the assembled canon pack is
-    RENDERED into it as plain text.
+    contract. Both headers identify their section set and name the two outputs as
+    one canon pack; every rule body is copied whole into exactly one output.
 
     WHY PLAIN TEXT, NOT THE RAW PACK JSON. Measured 2026-08-01 against the #450
     cold-session prototype: dumping the raw ``agent_context_pack`` JSON envelope
@@ -53,12 +54,12 @@ Pattern/Convention:
     ``additionalContext``, and Claude Code diverted a payload that large to a
     file it surfaced only as a ~2 KB preview -- the session saw 2-3 of 31 items
     and could not name the sections. The canon-only design requires the RULES
-    themselves front-of-mind, whole. So this renders every item to its own line
-    -- scope key, the rule text IN FULL, lane -- and drops the JSON envelope and
-    per-item metadata that carried the bulk. This is FORMATTING, not content
-    reduction: no rule text is shortened or omitted (``docs/CODING_STANDARDS.md``
-    section 6). If a choice ever arises between dropping content and a large
-    injection, the injection stays whole and large.
+    themselves front-of-mind, whole. The two hook emissions therefore render one
+    exact rule body per line and put section identity in each emission's header,
+    dropping the JSON envelope and per-item metadata that carried the bulk. The
+    unsplit renderer keeps scope keys and lanes for diagnostic callers. This is
+    FORMATTING, not content reduction: no rule text is shortened or omitted
+    (``docs/CODING_STANDARDS.md`` section 6).
 
 Example:
     >>> import io
@@ -76,6 +77,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
@@ -92,49 +94,85 @@ if TYPE_CHECKING:
 #: the injection to the event by this exact string.
 _HOOK_EVENT_NAME = "SessionStart"
 
+#: The sections that always belong to the first of the two canon emissions.
+_PROFILE_PROCESS_SECTIONS = frozenset({"profile_guidance", "process_guidance"})
 
-def inject_canon(stream: TextIO, out: TextIO) -> None:
-    """Read one ``SessionStart`` payload and write its canon injection, swallowing all.
+
+class CanonEmission(StrEnum):
+    """Which independently registered ``SessionStart`` hook output is rendered."""
+
+    PROFILE_PROCESS = "1/2"
+    REMAINING = "2/2"
+
+
+def sections_for_emission(
+    configured: tuple[str, ...], emission: CanonEmission
+) -> tuple[str, ...]:
+    """Partition configured canon sections between the two hook emissions.
 
     Args:
-        stream: The hook's stdin. Read whole; a ``SessionStart`` payload is one
-            JSON object.
-        out: Where the injection is written -- the hook's stdout. Nothing is
-            written on any failure or when there is no pack, so the session opens
-            with an empty stdout, the "proceed normally" response.
+        configured: The operator-configured section order.
+        emission: Which registered hook output is being built.
 
-    Loads the ``canon`` settings itself. Takes the streams rather than reading
-    ``sys.stdin`` / writing ``sys.stdout`` directly so a test drives it with
-    in-memory buffers. Every exception is caught -- an observer must never break
-    the session it opens.
+    Returns:
+        The sections for that emission, preserving configured order. Profile and
+        process guidance always belong to emission one; every other configured
+        section, including repo facts, belongs to emission two.
     """
+    if emission is CanonEmission.PROFILE_PROCESS:
+        return tuple(
+            section for section in configured if section in _PROFILE_PROCESS_SECTIONS
+        )
+    return tuple(
+        section for section in configured if section not in _PROFILE_PROCESS_SECTIONS
+    )
+
+
+def inject_canon(stream: TextIO, out: TextIO) -> None:
+    """Write profile and process guidance as the first canon emission."""
     inject_canon_with(stream, out, None)
+
+
+def inject_canon_remaining(stream: TextIO, out: TextIO) -> None:
+    """Write repo facts and all other configured sections as emission two."""
+    inject_canon_remaining_with(stream, out, None)
 
 
 def inject_canon_with(
     stream: TextIO, out: TextIO, settings: CanonSettings | None
 ) -> None:
-    """Inject one ``SessionStart`` payload's canon with a given (or loaded) config.
+    """Inject emission one with a given (or loaded) canon configuration."""
+    _inject_canon_with(stream, out, settings, CanonEmission.PROFILE_PROCESS)
 
-    Args:
-        stream: The hook's stdin.
-        out: The hook's stdout.
-        settings: The ``canon`` configuration, or ``None`` to load it. Injected
-            so a test exercises the swallow with an explicit config -- e.g. an
-            unconfigured one -- without reaching ``load_canon_settings``.
 
-    The swallow lives here so BOTH the entrypoint and tests get it: any failure,
-    including a missing config or an unreachable server, is logged and eaten with
-    nothing written to stdout.
-    """
+def inject_canon_remaining_with(
+    stream: TextIO, out: TextIO, settings: CanonSettings | None
+) -> None:
+    """Inject emission two with a given (or loaded) canon configuration."""
+    _inject_canon_with(stream, out, settings, CanonEmission.REMAINING)
+
+
+def _inject_canon_with(
+    stream: TextIO,
+    out: TextIO,
+    settings: CanonSettings | None,
+    emission: CanonEmission,
+) -> None:
+    """Inject one partition of canon and swallow every observer failure."""
     try:
         raw = stream.read()
         payload = SessionStartHook.model_validate_json(raw)
         canon = settings if settings is not None else load_canon_settings()
-        pack = asyncio.run(run_session_start(payload, canon))
+        sections = sections_for_emission(canon.sections, emission)
+        if not sections:
+            return
+        selected = canon.model_copy(update={"sections": sections})
+        pack = asyncio.run(run_session_start(payload, selected))
         if pack is None:
             return
-        out.write(_injection_envelope(pack))
+        out.write(
+            _injection_envelope(pack, emission=emission, requested_sections=sections)
+        )
     except Exception as error:  # noqa: BLE001 -- an observer must never break its subject
         # Content-free BY CONSTRUCTION: only the exception class name is passed,
         # never the exception object, so no payload text or token reaches the
@@ -145,67 +183,82 @@ def inject_canon_with(
         )
 
 
-def render_pack(pack: Any) -> str:
-    """Render a canon ``agent_context_pack`` payload to front-of-mind plain text.
+def render_pack(
+    pack: Any,
+    *,
+    emission: CanonEmission | None = None,
+    requested_sections: tuple[str, ...] | None = None,
+) -> str:
+    """Render selected canon sections as plain text with every rule whole.
 
     Args:
-        pack: The decoded ``agent_context_pack.v1`` payload the server assembled
-            -- ``schema``, ``scope``, ``sections`` (each a labelled block of
-            ``items``), and ``warnings``.
+        pack: The decoded ``agent_context_pack.v1`` payload.
+        emission: The registered hook output, or ``None`` for the unsplit renderer.
+        requested_sections: The exact sections this emission owns. ``None`` renders
+            every section present in the pack.
 
     Returns:
-        One header line then every item on its own line, the rule text WHOLE. The
-        header names the schema, the resolved namespace, and the per-section
-        counts so the session can state what it was given. Each item line is
-        ``[<lane>] <scope-key>: <rule text in full>`` -- the lane is the item's
-        candidate/fact type, the scope-key is its stable name, and the rule text
-        is the item's ``guidance`` (profile/process items) or ``fact`` (repo
-        facts), never shortened.
-
-    This drops the JSON envelope and per-item metadata (ids, citations,
-    confidences, promotion timestamps, the ``warnings`` block) that carried the
-    bulk without carrying a rule. That is the whole point: it is the RULES the
-    session must hold, and only removing the scaffolding around them keeps the
-    injection small enough that Claude Code presents it inline instead of
-    diverting it to a preview file. No rule text is bounded, shortened, or
-    dropped (``docs/CODING_STANDARDS.md`` section 6).
-
-    Defensive by construction: a section, an item field, or the whole pack being
-    absent or the wrong type must not raise -- the entrypoint swallows, but a
-    partial pack should still render what it does carry rather than nothing. A
-    non-dict pack renders to an empty string, which the entrypoint treats as
-    "nothing to inject".
+        One header line, a blank line, then every selected item on its own line.
+        Rule text is copied in full from ``guidance`` or ``fact`` and is never
+        shortened or split.
     """
     if not isinstance(pack, dict):
         return ""
 
     sections = pack.get("sections")
     sections = sections if isinstance(sections, dict) else {}
-
-    schema = pack.get("schema") or "openbrain.agent_context_pack.v1"
-    scope = pack.get("scope")
-    namespace = ""
-    if isinstance(scope, dict):
-        namespace = str(scope.get("namespace") or "")
+    labels = tuple(sections) if requested_sections is None else requested_sections
 
     counts: list[str] = []
     lines: list[str] = []
-    for label, section in sections.items():
+    for label in labels:
+        section = sections.get(label)
         if not isinstance(section, dict):
             continue
         items = section.get("items")
         items = items if isinstance(items, list) else []
         counts.append(f"{label}={len(items)}")
-        for item in items:
-            lines.append(_render_item(label, item))
+        renderer = _render_item if emission is None else _render_rule_text
+        lines.extend(renderer(label, item) for item in items)
 
-    header_bits = [f"CANON ({schema})"]
-    if namespace:
-        header_bits.append(f"namespace={namespace}")
-    header_bits.append("sections: " + ", ".join(counts) if counts else "sections: (none)")
-    header = " | ".join(header_bits)
+    header_bits = _header_bits(pack, emission, labels)
+    header_bits.append(
+        "sections: " + ", ".join(counts) if counts else "sections: (none)"
+    )
+    return "\n".join([" | ".join(header_bits), "", *lines])
 
-    return "\n".join([header, "", *lines])
+
+def _header_bits(
+    pack: dict[str, Any],
+    emission: CanonEmission | None,
+    labels: tuple[str, ...],
+) -> list[str]:
+    """Build the canon header, identifying the shared pack and held sections."""
+    schema = pack.get("schema") or "openbrain.agent_context_pack.v1"
+    title = f"CANON ({schema})"
+    if emission is not None:
+        title = f"CANON PACK {emission.value} ({schema})"
+
+    bits = [title]
+    if emission is not None:
+        bits.append("one pack across two SessionStart emissions")
+        held = ", ".join(labels) if labels else "(none)"
+        bits.append(f"this emission sections: {held}")
+
+    scope = pack.get("scope")
+    if isinstance(scope, dict) and scope.get("namespace"):
+        bits.append(f"namespace={scope['namespace']}")
+    return bits
+
+
+def _render_rule_text(_label: str, item: Any) -> str:
+    """Render only one item's exact rule body for an inline hook emission."""
+    if not isinstance(item, dict):
+        return str(item)
+    text = item.get("guidance")
+    if text is None:
+        text = item.get("fact")
+    return "" if text is None else str(text)
 
 
 def _render_item(label: str, item: Any) -> str:
@@ -239,38 +292,34 @@ def _render_item(label: str, item: Any) -> str:
     return f"{prefix}{text}"
 
 
-def _injection_envelope(pack: Any) -> str:
-    """Wrap the rendered canon in the ``additionalContext`` response envelope.
-
-    The SessionStart contract carries the injection as a STRING on
-    ``hookSpecificOutput.additionalContext``. The pack is RENDERED to plain text
-    (:func:`render_pack`) rather than dumped as raw JSON so it arrives whole and
-    front-of-mind instead of being diverted to a preview file; nothing in the
-    rendered rules is bounded, shortened, or dropped.
-    """
-    return json.dumps(
-        {
-            "hookSpecificOutput": {
-                "hookEventName": _HOOK_EVENT_NAME,
-                "additionalContext": render_pack(pack),
-            }
+def _injection_envelope(
+    pack: Any,
+    *,
+    emission: CanonEmission | None = None,
+    requested_sections: tuple[str, ...] | None = None,
+) -> str:
+    """Wrap one rendered canon emission in the SessionStart response envelope."""
+    return json.dumps({
+        "hookSpecificOutput": {
+            "hookEventName": _HOOK_EVENT_NAME,
+            "additionalContext": render_pack(
+                pack,
+                emission=emission,
+                requested_sections=requested_sections,
+            ),
         }
-    )
+    })
 
 
 def main(stream: TextIO | None = None) -> int:
-    """Run the ``SessionStart`` canon injection over stdin and always report success.
-
-    Args:
-        stream: The hook's stdin. Defaults to ``sys.stdin``; the argument keeps
-            the signature uniform with the other entrypoints so ``dispatch``
-            holds one table of them.
-
-    Returns:
-        ``0``, unconditionally. The return value is the exit code, and a hook
-        that opens a session may never fail it.
-    """
+    """Run profile/process canon emission one and always report success."""
     inject_canon(sys.stdin if stream is None else stream, sys.stdout)
+    return 0
+
+
+def main_remaining(stream: TextIO | None = None) -> int:
+    """Run repo/remaining canon emission two and always report success."""
+    inject_canon_remaining(sys.stdin if stream is None else stream, sys.stdout)
     return 0
 
 

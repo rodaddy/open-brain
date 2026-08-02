@@ -716,3 +716,225 @@ hands the wait to the OS scheduler rather than polling, CPython releases the GIL
 around `sqlite3_step()`, and the call runs inside `asyncio.to_thread`. The GIL
 was never what slowed this down, and a free-threaded build would not have fixed
 it -- the bug was a transaction that refused to wait at all.
+
+## 2026-08-02 field traps
+
+### A hanging local `/health` does not mean Open Brain is down
+
+**Symptom:** the local clone's `/health` hangs and `SELECT 1` stretches past the
+pool's 5-second window, making the service look dead.
+
+**Cause, measured 2026-08-02:** the shared local PostgreSQL 18 instance serves
+multiple projects by design. A neighbour's scratch-database tests run
+`CREATE/DROP DATABASE WITH FORCE` per test and caused forced-checkpoint storms:
+72 forced checkpoints in 3 minutes, with `pg_stat_checkpointer.num_requested =
+21,212` against `num_timed = 1,057`.
+
+**Check before declaring an outage:** inspect `pg_stat_checkpointer` and
+concurrent workloads. The Open Brain service recovers in place after the churn.
+Do **not** propose isolating the neighbour: the shared instance is the operator's
+deliberate dogfood design, confirmed 2026-08-02.
+
+### `core.bare=true` makes a normal checkout claim it has no work tree
+
+**Symptom:** `scripts/local-clone-deploy.sh` stops at its dirty-tree guard
+(lines 104-105) with:
+
+```
+fatal: this operation must be run in a work tree
+```
+
+**Cause, observed twice within about 30 minutes on 2026-08-02:** something
+concurrent set this repo's main-checkout local config to `core.bare=true`. The
+actor remains **UNATTRIBUTED**.
+
+**Recovery:**
+
+```bash
+git config --local core.bare false
+git rev-parse --is-inside-work-tree
+```
+
+The second command must return `true`. Deploy workers now re-assert this before
+running.
+
+### A bare launchd label fails, and the old process can fake deploy success
+
+**Symptom:** `launchctl kickstart` fails with `Unrecognized target specifier`,
+but `scripts/local-clone-deploy.sh` only warns, then prints a successful
+post-deploy health receipt.
+
+**Cause:** `kickstart` requires the service-target form
+`gui/$UID/<label>`; the bare label is not a valid target. On
+2026-08-02T04:12:18Z the health check passed against the **old process still
+serving**, producing a false deploy receipt.
+
+A fix PR is open on `fix/deploy-runbook-and-kickstart`. Until that lands, a green
+health response after a restart warning does not prove the new process started.
+
+### `ob_raw_turns` does not prove a distilled provider capture
+
+**Symptom:** the deploy runbook's dogfood smoke reports no raw-turn increase and
+looks like the provider capture failed.
+
+**Cause:** the smoke counted the wrong table. A provider capture writes a
+distilled event to `ob_session_events`; `ob_raw_turns` measures raw-turn
+ingestion only.
+
+**Live proof, 2026-08-02:** the provider returned a `saved` / `durable` receipt,
+`ob_raw_turns` changed by 0, and event
+`2496e009-a2a3-48af-9aa5-6ea1996c9c1a` was present in
+`ob_session_events`.
+
+### A one-shot Codex worker can exit 0 after doing nothing
+
+**Symptom:** a Codex/Terra one-shot exits 0 while printing deferral prose such as
+`work is running in the background` or `publication remains pending`.
+
+**Observed twice on 2026-08-01/02:** the worker completed partial or no work, but
+its process status looked successful. Never relay that output as done. Verify the
+artifact against live state -- GitHub or the filesystem -- and relaunch with an
+explicit execution contract: finishing means the artifact URL is printed in the
+worker's own output.
+
+### `AskUserQuestion` had an impossible design-lookup gate
+
+**Symptom:** `AskUserQuestion` was blocked unconditionally; no subject lookup
+could unlock it.
+
+**Cause:** `mutationSubject()` returned `file_path`, which is always empty for a
+question, so no lookup could ever match. Fixed 2026-08-02 in commit `bfb9389` on
+`audit/router-dedupe-matrix-2026-08-02`: a question's subject is now its question
+text.
+
+### Bare `python3 resume.py` can select an interpreter without the package
+
+**Symptom:** invoking `resume.py` with bare `python3` dies with
+`ModuleNotFoundError` because system Python 3.13 does not have
+`openbrain_memory`.
+
+**Fix:** a self-re-exec guard routes through the uv tool interpreter. Branch
+`fix/brain-resume-interpreter`, commit `b12200f`, was applied to the live
+Development tree on 2026-08-02.
+
+**Related find:** Development `main` did not contain the canonical resume
+workflow commits; the live file was ahead of its own history. The repair branch
+carries all three commits.
+
+## 2026-08-02 worker-layer traps (phase 2)
+
+### The Codex worker layer dies in waves, killing every concurrent session
+
+**Symptom:** every in-flight `claudex terra`/`claudex sol -p` worker returns
+`Execution error` at the same instant. Solo workers launched afterwards die the
+same way. A trivial probe against the same route still answers, and the proxy
+process itself is untouched, so nothing looks down.
+
+**Observed 2026-08-02:** mass-death events at `01:48` and about `03:32` took out
+all concurrent sessions, followed by further solo deaths. Because the probe
+answers and the proxy is alive, the layer reads as healthy while it is
+destroying real work.
+
+**Mitigation that held:** route heavy build lanes as native Claude Workflow
+agents rather than through the Codex worker layer, and require per-step
+journaling from every worker. Journaling is what caps the loss — a wave kills
+the session, not the record of what it had already finished.
+
+### A Codex worker that reads the Workflow-first policy appoints itself controller
+
+**Symptom:** a worker's output reads like a deferral — `still running elsewhere`
+— and no artifact exists. The worker exited without doing the work.
+
+**Cause:** the worker reads the Workflow-first routing policy, concludes it
+should delegate, spawns a sub-node, and exits. The child dies with the parent,
+so the delegated work never lands, and the parent's last words describe work it
+believes is still in progress somewhere.
+
+**Five occurrences on 2026-08-02.** The standard prompt clauses that stopped it,
+now required on every worker launch:
+
+- YOU are the implementer.
+- No delegation, no sub-agents.
+- Synchronous only.
+- Finishing means the artifact URL appears in YOUR own output.
+- Append a per-step journal entry after every step.
+
+### Test machinery from killed lanes wedged the live dogfood database
+
+**Symptom:** the live dogfood service degrades; 97 backends are connected and
+queries stall.
+
+**Cause, measured 2026-08-02:** lanes killed by the worker mass-death left their
+test machinery mid-transaction against the **dogfood** database. 63 orphaned
+`DELETE FROM thoughts` statements were queued behind a wedged
+`DROP TRIGGER test_poison_thought_trg` — test DDL running against dogfood — which
+was itself queued behind three long-running scans. Every layer was waiting on the
+one below it.
+
+**Containment that worked, in this order:** terminate the orphaned `DELETE`
+backends, cancel the three blocking scans, then let the `DROP TRIGGER` complete
+on its own. The trigger was gone, the backend count fell to 11, and the service
+returned to healthy.
+
+**Standing rule, now in every worker prompt:** tests NEVER touch dogfood.
+Live-Postgres tests go through `OPENBRAIN_TEST_DATABASE_URL`, an isolated test
+database, or the playground — never `open_brain_local_20260724`.
+
+### The design-lookup gate's limitation wall blocks frozen contract spellings
+
+**Symptom:** the gate refuses a write whose only "limit" is a literal that
+already exists in a frozen contract or a vendor's config schema — there is no new
+cap being proposed, but the wall cannot tell the difference.
+
+**Operator-approved exemptions, 2026-08-02**, each for a spelling the author does
+not own:
+
+- `pino-roll` rotation configuration, for log-file operations.
+- The standard SQL row clause, plus existing tool arguments — the `search_brain`
+  `limit` argument, the `list_stale` envelope, `trimmed_chunk_text`.
+- Realtime envelope field names — counter and budget keys.
+
+Commits `b9c6a55`, `130b977`, and `fdee699` on
+`audit/router-dedupe-matrix-2026-08-02`.
+
+**The pattern to apply when extending this:** a vendor or contract spelling is
+not a size proposal. Memory content stays unbounded, and prose proposing a *new*
+cap is still walled. The exemption is for literals that are already fixed
+somewhere else.
+
+### Swapping back to core01 is one env var — and a missing token looks exactly like a dead host
+
+**The single switch.** While this machine is in dev/dogfood mode its brain is
+the local service, and the *only* thing that says so is `OPENBRAIN_BASE_URL` in
+`~/.local/share/openbrain-memory/env/claudex-observation.env` — verified
+2026-08-02 pointing at `http://127.0.0.1:3100`. When dev mode ends and this
+machine goes back to core01 as its brain, repoint that one variable at core01
+(`10.71.1.21:3100`) and refresh `OPENBRAIN_TOKEN` to the matching consumer
+token. There is no second place to edit and no code change to make.
+
+**Why this is now safe to forget.** `_ob/scripts/ob-memory-provider.ts` used to
+carry `OPENBRAIN_BASE_URL: "http://10.71.1.21:3100"` as a silent built-in
+default (observed 2026-08-02 at line 221), so an unset or unsourced env file did
+not fail — it quietly hydrated the session from **core01** while every other
+part of the session believed it was on the local dogfood brain. The provider is
+being changed to source the env file and fail loud when either
+`OPENBRAIN_BASE_URL` or `OPENBRAIN_TOKEN` is missing, naming the variable. After
+that change a forgotten repoint is a named error instead of a session's worth of
+memory written to the wrong brain. Do not reintroduce a host default to "make it
+work again" — the default is the bug.
+
+**The diagnostic that cost two sessions.** `OB ✗ gate unavailable` against a
+service whose `/health` answers fine is **not** a host outage. The provider
+needs BOTH variables; a present URL with a missing token produces the same
+message as an unreachable host. Order of checks:
+
+1. Are `OPENBRAIN_BASE_URL` **and** `OPENBRAIN_TOKEN` both present and exported
+   in the session? (Name the variable in your report — never the token value.)
+2. Is the env file sourced at all, and does its URL match the brain you think
+   you are on?
+3. *Only then* probe host availability.
+
+Two sessions diagnosed a missing token as a core01 outage, and core01 was probed
+healthy mid-incident — the healthy probe was read as noise instead of as the
+answer. A healthy `/health` next to a failing gate is positive evidence the
+problem is credentials or environment, not the network.
