@@ -52,6 +52,22 @@ interface ServerParityManifest {
   capabilities: string[];
 }
 
+interface ServerToolGap {
+  tool: string;
+  capability: string;
+  reason: string;
+}
+
+interface ServerToolGapMap {
+  id: string;
+  source: string;
+  registered_tool_count: number;
+  fixture_covered_tool_count: number;
+  without_parity_fixture_count: number;
+  fixture_covered_tools: string[];
+  without_parity_fixture: ServerToolGap[];
+}
+
 const PLACEHOLDER_REASONS = new Set(["-", "n/a", "na", "none", "todo", "tbd"]);
 const CONSUMER_ALLOWLIST = new Set(["python", "ts"]);
 
@@ -81,6 +97,9 @@ const manifest = await readJson<ParityManifest>(
 );
 const serverManifest = await readJson<ServerParityManifest>(
   new URL("parity-manifest.json", serverFixtureDir),
+);
+const serverToolGapMap = await readJson<ServerToolGapMap>(
+  new URL("tool-gap-map.json", serverFixtureDir),
 );
 if (!Array.isArray(manifest.capabilities)) {
   errors.push("parity-manifest.json: capabilities must be an array");
@@ -325,6 +344,7 @@ const expectedServerFixtureIds = new Set(serverManifest.expected_fixture_ids ?? 
 const serverCapabilities = new Set(serverManifest.capabilities ?? []);
 const observedServerFixtureIds = new Set<string>();
 const observedServerCapabilities = new Set<string>();
+const observedServerTools = new Set<string>();
 let serverFixtureCount = 0;
 const serverFixtureGlob = new Bun.Glob("*.fixture.json");
 for await (const name of serverFixtureGlob.scan({
@@ -353,6 +373,7 @@ for await (const name of serverFixtureGlob.scan({
   }
   for (const [index, step] of fixture.steps.entries()) {
     if (!step.tool) errors.push(`${prefix} step ${index} tool must be non-empty`);
+    if (step.tool) observedServerTools.add(step.tool);
     if (!isRecord(step.arguments)) errors.push(`${prefix} step ${index} arguments must be an object`);
     if (!isRecord(step.expectation) || !("is_error" in step.expectation)) {
       errors.push(`${prefix} step ${index} expectation must declare is_error`);
@@ -370,6 +391,73 @@ for (const capability of serverCapabilities) {
   }
 }
 
+const toolSourceDir = new URL("../src/tools/", import.meta.url);
+const toolSourceGlob = new Bun.Glob("*.ts");
+const registeredServerTools = new Set<string>();
+for await (const name of toolSourceGlob.scan({
+  cwd: toolSourceDir.pathname,
+  onlyFiles: true,
+})) {
+  const source = await Bun.file(new URL(name, toolSourceDir)).text();
+  for (const match of source.matchAll(
+    /server\.registerTool\(\s*["'`]([^"'`]+)["'`]/g,
+  )) {
+    const tool = match[1];
+    if (!tool) continue;
+    registeredServerTools.add(tool);
+  }
+}
+
+const declaredCoveredTools = new Set(serverToolGapMap.fixture_covered_tools ?? []);
+const declaredGapTools = new Set<string>();
+for (const entry of serverToolGapMap.without_parity_fixture ?? []) {
+  if (!entry.tool || entry.tool.length === 0) {
+    errors.push("server/tool-gap-map.json: every gap needs a tool name");
+    continue;
+  }
+  if (declaredGapTools.has(entry.tool)) {
+    errors.push(`server/tool-gap-map.json: duplicate gap tool '${entry.tool}'`);
+  }
+  declaredGapTools.add(entry.tool);
+  if (!entry.capability || entry.capability.length === 0) {
+    errors.push(`server/tool-gap-map.json: '${entry.tool}' needs a capability`);
+  }
+  if (isPlaceholderReason(entry.reason)) {
+    errors.push(`server/tool-gap-map.json: '${entry.tool}' needs a non-placeholder reason`);
+  }
+}
+
+const observedToolsSorted = [...observedServerTools].sort();
+const declaredCoveredSorted = [...declaredCoveredTools].sort();
+if (JSON.stringify(declaredCoveredSorted) !== JSON.stringify(observedToolsSorted)) {
+  errors.push(
+    "server/tool-gap-map.json: fixture_covered_tools must exactly match tools exercised by server fixtures",
+  );
+}
+for (const tool of declaredCoveredTools) {
+  if (declaredGapTools.has(tool)) {
+    errors.push(`server/tool-gap-map.json: '${tool}' is both covered and listed as a gap`);
+  }
+}
+
+const mappedServerTools = new Set([...declaredCoveredTools, ...declaredGapTools]);
+const registeredToolsSorted = [...registeredServerTools].sort();
+const mappedToolsSorted = [...mappedServerTools].sort();
+if (JSON.stringify(mappedToolsSorted) !== JSON.stringify(registeredToolsSorted)) {
+  errors.push(
+    "server/tool-gap-map.json: covered tools plus gaps must exactly match current-src registrations",
+  );
+}
+if (serverToolGapMap.registered_tool_count !== registeredServerTools.size) {
+  errors.push("server/tool-gap-map.json: registered_tool_count does not match current-src");
+}
+if (serverToolGapMap.fixture_covered_tool_count !== declaredCoveredTools.size) {
+  errors.push("server/tool-gap-map.json: fixture_covered_tool_count does not match its tool list");
+}
+if (serverToolGapMap.without_parity_fixture_count !== declaredGapTools.size) {
+  errors.push("server/tool-gap-map.json: without_parity_fixture_count does not match its gap list");
+}
+
 if (errors.length > 0) {
   console.error(
     `Contract parity check failed with ${errors.length} violation(s):`,
@@ -379,5 +467,5 @@ if (errors.length > 0) {
 }
 
 console.log(
-  `Contract parity check passed: ${fixtureCount + serverFixtureCount} fixtures across ${capabilityMap.size + serverCapabilities.size} capabilities and ${serverDeclarations.length} server providers.`,
+  `Contract parity check passed: ${fixtureCount + serverFixtureCount} fixtures across ${capabilityMap.size + serverCapabilities.size} capabilities and ${serverDeclarations.length} server providers; ${observedServerTools.size}/${registeredServerTools.size} current-src MCP tools fixture-covered with ${declaredGapTools.size} explicit gaps.`,
 );

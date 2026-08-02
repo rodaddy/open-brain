@@ -1,0 +1,203 @@
+{
+  "id": "openbrain.server.tool-gap-map.v1",
+  "description": "Complete current-src MCP registration inventory split by observed server fixture coverage.",
+  "source": "src/tools/**/*.ts server.registerTool literal registrations",
+  "registered_tool_count": 63,
+  "fixture_covered_tool_count": 31,
+  "without_parity_fixture_count": 32,
+  "fixture_covered_tools": [
+    "agent_context_pack",
+    "agent_reflex_pointers",
+    "append_session_event",
+    "archive_entry",
+    "brain_answer",
+    "bulk_archive",
+    "bulk_set_tier",
+    "citation_recall",
+    "curate_entries",
+    "demote_entry",
+    "find_duplicates",
+    "ingest_conversation_facts",
+    "ingest_raw_turn",
+    "lane_load",
+    "lane_upsert",
+    "log_decision",
+    "log_thought",
+    "promote_entry",
+    "recovery_wal_append",
+    "recovery_wal_mark",
+    "scan_namespace",
+    "search_brain",
+    "session_context",
+    "session_load",
+    "session_save",
+    "session_start",
+    "session_wrap",
+    "set_tier",
+    "tier_lane",
+    "tier_recommendations",
+    "working_set_append"
+  ],
+  "without_parity_fixture": [
+    {
+      "tool": "access_report",
+      "capability": "access-reporting",
+      "reason": "No observed current-src server fixture has been extracted for this tool yet."
+    },
+    {
+      "tool": "adjacent_context",
+      "capability": "graph-traversal",
+      "reason": "No observed current-src server fixture has been extracted for this tool yet."
+    },
+    {
+      "tool": "archive_entity",
+      "capability": "graph-entities",
+      "reason": "No observed current-src server fixture has been extracted for this tool yet."
+    },
+    {
+      "tool": "collect_drop_folder",
+      "capability": "source-ingestion",
+      "reason": "No observed current-src server fixture has been extracted for this tool yet."
+    },
+    {
+      "tool": "decompose_entry",
+      "capability": "entry-decomposition",
+      "reason": "No observed current-src server fixture has been extracted for this tool yet."
+    },
+    {
+      "tool": "find_person",
+      "capability": "people",
+      "reason": "No observed current-src server fixture has been extracted for this tool yet."
+    },
+    {
+      "tool": "get_contract",
+      "capability": "contract-discovery",
+      "reason": "No observed current-src server fixture has been extracted for this tool yet."
+    },
+    {
+      "tool": "get_entity",
+      "capability": "graph-entities",
+      "reason": "No observed current-src server fixture has been extracted for this tool yet."
+    },
+    {
+      "tool": "get_entry",
+      "capability": "entry-read",
+      "reason": "No observed current-src server fixture has been extracted for this tool yet."
+    },
+    {
+      "tool": "get_stats",
+      "capability": "statistics",
+      "reason": "No observed current-src server fixture has been extracted for this tool yet."
+    },
+    {
+      "tool": "hydrate_entities",
+      "capability": "graph-entities",
+      "reason": "No observed current-src server fixture has been extracted for this tool yet."
+    },
+    {
+      "tool": "link_entities",
+      "capability": "graph-relations",
+      "reason": "No observed current-src server fixture has been extracted for this tool yet."
+    },
+    {
+      "tool": "list_entities",
+      "capability": "graph-entities",
+      "reason": "No observed current-src server fixture has been extracted for this tool yet."
+    },
+    {
+      "tool": "list_namespaces",
+      "capability": "namespace-discovery",
+      "reason": "No observed current-src server fixture has been extracted for this tool yet."
+    },
+    {
+      "tool": "list_recent",
+      "capability": "entry-listing",
+      "reason": "No observed current-src server fixture has been extracted for this tool yet."
+    },
+    {
+      "tool": "list_repo_facts",
+      "capability": "repo-facts",
+      "reason": "No observed current-src server fixture has been extracted for this tool yet."
+    },
+    {
+      "tool": "list_sources",
+      "capability": "source-registry",
+      "reason": "No observed current-src server fixture has been extracted for this tool yet."
+    },
+    {
+      "tool": "list_stale",
+      "capability": "entry-listing",
+      "reason": "No observed current-src server fixture has been extracted for this tool yet."
+    },
+    {
+      "tool": "operator_doctor",
+      "capability": "operator-diagnostics",
+      "reason": "No observed current-src server fixture has been extracted for this tool yet."
+    },
+    {
+      "tool": "promote_shared",
+      "capability": "promotion",
+      "reason": "No observed current-src server fixture has been extracted for this tool yet."
+    },
+    {
+      "tool": "rate_entry",
+      "capability": "curation",
+      "reason": "No observed current-src server fixture has been extracted for this tool yet."
+    },
+    {
+      "tool": "register_source",
+      "capability": "source-registry",
+      "reason": "No observed current-src server fixture has been extracted for this tool yet."
+    },
+    {
+      "tool": "remove_source",
+      "capability": "source-registry",
+      "reason": "No observed current-src server fixture has been extracted for this tool yet."
+    },
+    {
+      "tool": "resolve_entry",
+      "capability": "entry-decomposition",
+      "reason": "No observed current-src server fixture has been extracted for this tool yet."
+    },
+    {
+      "tool": "search_all",
+      "capability": "federated-search",
+      "reason": "No observed current-src server fixture has been extracted for this tool yet."
+    },
+    {
+      "tool": "source_ingestion_eligibility",
+      "capability": "source-registry",
+      "reason": "No observed current-src server fixture has been extracted for this tool yet."
+    },
+    {
+      "tool": "unlink_entities",
+      "capability": "graph-relations",
+      "reason": "No observed current-src server fixture has been extracted for this tool yet."
+    },
+    {
+      "tool": "update_entry",
+      "capability": "curation",
+      "reason": "No observed current-src server fixture has been extracted for this tool yet."
+    },
+    {
+      "tool": "update_source",
+      "capability": "source-registry",
+      "reason": "No observed current-src server fixture has been extracted for this tool yet."
+    },
+    {
+      "tool": "upsert_entity",
+      "capability": "graph-entities",
+      "reason": "No observed current-src server fixture has been extracted for this tool yet."
+    },
+    {
+      "tool": "upsert_person",
+      "capability": "people",
+      "reason": "No observed current-src server fixture has been extracted for this tool yet."
+    },
+    {
+      "tool": "upsert_repo_fact",
+      "capability": "repo-facts",
+      "reason": "No observed current-src server fixture has been extracted for this tool yet."
+    }
+  ]
+}

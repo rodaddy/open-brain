@@ -9,7 +9,10 @@ the behavior is intentionally not shared.
 through the full in-memory protocol boundary and a real isolated Postgres database.
 Each fixture also declares `server-rewrite-scaffold`; the scaffold does not execute
 the calls until its handlers exist, but the declaration prevents rewrite work from
-silently dropping a reviewed scenario.
+silently dropping a reviewed scenario. `contracts/server/tool-gap-map.json` inventories
+every literal `server.registerTool` registration and splits the fleet into observed
+fixture coverage versus named capability gaps; the parity checker fails when that map
+drifts from either the fixture steps or the current registration sources.
 
 Run the gate from the repository root:
 

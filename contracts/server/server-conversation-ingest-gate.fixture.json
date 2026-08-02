@@ -1,0 +1,52 @@
+{
+  "id": "server-conversation-ingest-gate",
+  "description": "Reject distilled conversation ingestion until its structural source is approved in the exact namespace.",
+  "capability": "conversation-ingest-gate",
+  "providers": [
+    "current-src",
+    "server-rewrite-scaffold"
+  ],
+  "auth": {
+    "role": "agent",
+    "client_id": "parity-conversation",
+    "namespace_source": "token"
+  },
+  "steps": [
+    {
+      "tool": "ingest_conversation_facts",
+      "arguments": {
+        "scope": {
+          "agent": "fixture-agent",
+          "platform": "test",
+          "server_id": "server-1",
+          "channel_id": "channel-1",
+          "thread_id": null,
+          "session_key": "parity/conversation"
+        },
+        "source_ref": {
+          "source_kind": "conversation",
+          "external_id": "unapproved-parity-source"
+        },
+        "facts": [
+          {
+            "event_type": "fact",
+            "content": "Observed behavior requires approved structural provenance.",
+            "source_locator": "message-1",
+            "importance": "warm"
+          }
+        ]
+      },
+      "expectation": {
+        "is_error": true,
+        "json": {
+          "ok": false,
+          "error": "source_not_approved",
+          "message": "Conversation source is not approved and active in this namespace",
+          "retryable": false,
+          "namespace": "{{namespace}}",
+          "code": "not_found"
+        }
+      }
+    }
+  ]
+}
