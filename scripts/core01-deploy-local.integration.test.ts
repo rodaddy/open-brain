@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -8,9 +15,34 @@ const SOURCE_ROOT = join(import.meta.dir, "..");
 const DEPLOY_SCRIPT = join(SOURCE_ROOT, "scripts", "core01-deploy-local.sh");
 const GATE_SOURCE = join(SOURCE_ROOT, "scripts", "deploy-ref-gate.ts");
 const ownedTempDirs: string[] = [];
+const GIT_ENV_KEYS = [
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+  "GIT_COMMON_DIR",
+  "GIT_CONFIG",
+  "GIT_CONFIG_COUNT",
+  "GIT_CONFIG_GLOBAL",
+  "GIT_CONFIG_PARAMETERS",
+  "GIT_CONFIG_SYSTEM",
+  "GIT_DIR",
+  "GIT_GRAFT_FILE",
+  "GIT_IMPLICIT_WORK_TREE",
+  "GIT_INDEX_FILE",
+  "GIT_NO_REPLACE_OBJECTS",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_PREFIX",
+  "GIT_REPLACE_REF_BASE",
+  "GIT_SHALLOW_FILE",
+  "GIT_TEMPLATE_DIR",
+  "GIT_WORK_TREE",
+] as const;
+
+type ProcessEnv = Record<string, string | undefined>;
+type GitRunner = (cwd: string, ...args: string[]) => Promise<string>;
 
 interface GitFixture {
   checkout: string;
+  env: ProcessEnv;
+  git: GitRunner;
   mainSha: string;
   reachableTagSha: string;
   outsideTagSha: string;
@@ -24,13 +56,38 @@ interface DeployResult {
   stagingDir: string;
 }
 
+async function createIsolatedGitEnv(
+  root: string,
+  sourceEnv: ProcessEnv = process.env,
+): Promise<ProcessEnv> {
+  const home = join(root, "home");
+  const xdgConfig = join(root, "xdg-config");
+  await Promise.all([
+    mkdir(home, { recursive: true }),
+    mkdir(xdgConfig, { recursive: true }),
+  ]);
+
+  const env: ProcessEnv = { ...sourceEnv };
+  for (const key of GIT_ENV_KEYS) delete env[key];
+  for (const key of Object.keys(env)) {
+    if (/^GIT_CONFIG_(KEY|VALUE)_\d+$/.test(key)) delete env[key];
+  }
+  return {
+    ...env,
+    HOME: home,
+    XDG_CONFIG_HOME: xdgConfig,
+    GIT_CONFIG_GLOBAL: join(xdgConfig, "gitconfig"),
+    GIT_CONFIG_NOSYSTEM: "1",
+  };
+}
+
 async function run(
   command: string[],
-  options: { cwd?: string; env?: Record<string, string | undefined> } = {},
+  options: { cwd: string; env: ProcessEnv },
 ): Promise<{ exitCode: number; output: string }> {
   const proc = Bun.spawn(command, {
     cwd: options.cwd,
-    env: options.env ?? process.env,
+    env: options.env,
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -42,46 +99,54 @@ async function run(
   return { exitCode, output: stdout + stderr };
 }
 
-async function git(cwd: string, ...args: string[]): Promise<string> {
-  const result = await run(["git", ...args], { cwd });
+async function git(
+  cwd: string,
+  env: ProcessEnv,
+  ...args: string[]
+): Promise<string> {
+  const result = await run(["git", ...args], { cwd, env });
   if (result.exitCode !== 0) {
     throw new Error(`git ${args.join(" ")} failed:\n${result.output}`);
   }
   return result.output.trim();
 }
 
-async function createGitFixture(): Promise<GitFixture> {
+async function createGitFixture(
+  sourceEnv: ProcessEnv = process.env,
+): Promise<GitFixture> {
   const root = await mkdtemp(join(tmpdir(), "open-brain-deploy-ref-"));
   ownedTempDirs.push(root);
+  const gitEnv = await createIsolatedGitEnv(join(root, "git-env"), sourceEnv);
+  const runGit: GitRunner = (cwd, ...args) => git(cwd, gitEnv, ...args);
 
   const remote = join(root, "remote.git");
   const seed = join(root, "seed");
   const checkout = join(root, "checkout");
   await mkdir(seed);
-  await git(root, "init", "--bare", remote);
-  await git(seed, "init", "-b", "fixture-main");
-  await git(seed, "config", "user.name", "Deploy Gate Test");
-  await git(seed, "config", "user.email", "deploy-gate@example.invalid");
+  await runGit(root, "init", "--bare", remote);
+  await runGit(seed, "init", "-b", "fixture-main");
+  await runGit(seed, "config", "user.name", "Deploy Gate Test");
+  await runGit(seed, "config", "user.email", "deploy-gate@example.invalid");
 
   await writeFile(join(seed, "fixture.txt"), "reachable tag\n");
-  await git(seed, "add", "fixture.txt");
-  await git(seed, "commit", "-m", "reachable tag commit");
-  const reachableTagSha = await git(seed, "rev-parse", "HEAD");
-  await git(seed, "tag", "v1.0.0");
+  await runGit(seed, "add", "fixture.txt");
+  await runGit(seed, "commit", "-m", "reachable tag commit");
+  const reachableTagSha = await runGit(seed, "rev-parse", "HEAD");
+  await runGit(seed, "tag", "v1.0.0");
 
   await writeFile(join(seed, "fixture.txt"), "current main\n");
-  await git(seed, "commit", "-am", "current main commit");
-  const mainSha = await git(seed, "rev-parse", "HEAD");
+  await runGit(seed, "commit", "-am", "current main commit");
+  const mainSha = await runGit(seed, "rev-parse", "HEAD");
 
-  await git(seed, "switch", "--orphan", "outside-main");
+  await runGit(seed, "switch", "--orphan", "outside-main");
   await writeFile(join(seed, "outside.txt"), "outside main ancestry\n");
-  await git(seed, "add", "outside.txt");
-  await git(seed, "commit", "-m", "outside main commit");
-  const outsideTagSha = await git(seed, "rev-parse", "HEAD");
-  await git(seed, "tag", "v9.9.9");
+  await runGit(seed, "add", "outside.txt");
+  await runGit(seed, "commit", "-m", "outside main commit");
+  const outsideTagSha = await runGit(seed, "rev-parse", "HEAD");
+  await runGit(seed, "tag", "v9.9.9");
 
-  await git(seed, "remote", "add", "origin", remote);
-  await git(
+  await runGit(seed, "remote", "add", "origin", remote);
+  await runGit(
     seed,
     "push",
     "origin",
@@ -89,8 +154,8 @@ async function createGitFixture(): Promise<GitFixture> {
     "outside-main",
     "--tags",
   );
-  await git(remote, "symbolic-ref", "HEAD", "refs/heads/main");
-  await git(root, "clone", remote, checkout);
+  await runGit(remote, "symbolic-ref", "HEAD", "refs/heads/main");
+  await runGit(root, "clone", remote, checkout);
 
   await mkdir(join(checkout, "scripts"));
   await writeFile(
@@ -98,7 +163,15 @@ async function createGitFixture(): Promise<GitFixture> {
     await Bun.file(GATE_SOURCE).text(),
   );
 
-  return { checkout, mainSha, reachableTagSha, outsideTagSha, root };
+  return {
+    checkout,
+    env: gitEnv,
+    git: runGit,
+    mainSha,
+    reachableTagSha,
+    outsideTagSha,
+    root,
+  };
 }
 
 async function invokeDeploy(
@@ -109,8 +182,9 @@ async function invokeDeploy(
   const stagingDir = join(fixture.root, "staging");
   const envFile = join(fixture.root, "guaranteed-missing.env");
   const result = await run([DEPLOY_SCRIPT], {
+    cwd: fixture.root,
     env: {
-      ...process.env,
+      ...fixture.env,
       BUN_BIN: process.execPath,
       REPO_DIR: fixture.checkout,
       ENV_FILE: envFile,
@@ -166,9 +240,77 @@ afterEach(async () => {
 });
 
 describe("core01 deploy shell ref-gate wiring", () => {
+  it("isolates fixture Git commands from an enclosing worktree", async () => {
+    const outerRoot = await mkdtemp(join(tmpdir(), "open-brain-git-env-"));
+    ownedTempDirs.push(outerRoot);
+    const owner = join(outerRoot, "owner");
+    const linked = join(outerRoot, "linked");
+    await mkdir(owner);
+
+    const bootstrapEnv = await createIsolatedGitEnv(
+      join(outerRoot, "bootstrap-env"),
+    );
+    const bootstrapGit: GitRunner = (cwd, ...args) =>
+      git(cwd, bootstrapEnv, ...args);
+    await bootstrapGit(owner, "init", "-b", "main");
+    await bootstrapGit(owner, "config", "user.name", "Outer Repo Test");
+    await bootstrapGit(
+      owner,
+      "config",
+      "user.email",
+      "outer-repo@example.invalid",
+    );
+    await writeFile(join(owner, "outer.txt"), "outer repository\n");
+    await bootstrapGit(owner, "add", "outer.txt");
+    await bootstrapGit(owner, "commit", "-m", "outer commit");
+    await bootstrapGit(owner, "worktree", "add", "--detach", linked, "HEAD");
+
+    const beforeHead = await bootstrapGit(owner, "rev-parse", "HEAD");
+    const configPath = join(owner, ".git", "config");
+    const beforeConfig = await readFile(configPath, "utf8");
+    const inheritedGitDir = await bootstrapGit(
+      linked,
+      "rev-parse",
+      "--absolute-git-dir",
+    );
+    const inheritedCommonDir = await bootstrapGit(
+      linked,
+      "rev-parse",
+      "--path-format=absolute",
+      "--git-common-dir",
+    );
+    const inheritedHome = join(outerRoot, "inherited-home");
+    const inheritedTemplate = join(inheritedHome, "git-template");
+    const inheritedHook = join(inheritedTemplate, "hooks", "pre-commit");
+    await mkdir(join(inheritedTemplate, "hooks"), { recursive: true });
+    await writeFile(
+      join(inheritedHome, ".gitconfig"),
+      "[commit]\n\tgpgsign = true\n",
+    );
+    await writeFile(inheritedHook, "#!/bin/sh\nexit 1\n");
+    await chmod(inheritedHook, 0o755);
+    const inheritedEnv: ProcessEnv = {
+      ...process.env,
+      GIT_COMMON_DIR: inheritedCommonDir,
+      GIT_DIR: inheritedGitDir,
+      GIT_INDEX_FILE: join(inheritedGitDir, "index"),
+      GIT_TEMPLATE_DIR: inheritedTemplate,
+      GIT_WORK_TREE: linked,
+      HOME: inheritedHome,
+      XDG_CONFIG_HOME: inheritedHome,
+    };
+
+    const fixture = await createGitFixture(inheritedEnv);
+    expect(await fixture.git(fixture.checkout, "rev-parse", "HEAD")).toBe(
+      fixture.mainSha,
+    );
+    expect(await bootstrapGit(owner, "rev-parse", "HEAD")).toBe(beforeHead);
+    expect(await readFile(configPath, "utf8")).toBe(beforeConfig);
+  });
+
   it("lets a current-main manual dispatch reach only host preflight", async () => {
     const fixture = await createGitFixture();
-    await git(fixture.checkout, "checkout", fixture.mainSha);
+    await fixture.git(fixture.checkout, "checkout", fixture.mainSha);
 
     const result = await invokeDeploy(fixture, {
       DEPLOY_PROVIDER: "forgejo",
@@ -181,7 +323,7 @@ describe("core01 deploy shell ref-gate wiring", () => {
 
   it("lets a reachable version tag reach only host preflight", async () => {
     const fixture = await createGitFixture();
-    await git(fixture.checkout, "checkout", fixture.reachableTagSha);
+    await fixture.git(fixture.checkout, "checkout", fixture.reachableTagSha);
 
     const result = await invokeDeploy(fixture, {
       DEPLOY_PROVIDER: "forgejo",
@@ -194,7 +336,7 @@ describe("core01 deploy shell ref-gate wiring", () => {
 
   it("refuses a stale manual commit before env loading or staging", async () => {
     const fixture = await createGitFixture();
-    await git(fixture.checkout, "checkout", fixture.reachableTagSha);
+    await fixture.git(fixture.checkout, "checkout", fixture.reachableTagSha);
 
     const result = await invokeDeploy(fixture, {
       DEPLOY_PROVIDER: "forgejo",
@@ -207,7 +349,7 @@ describe("core01 deploy shell ref-gate wiring", () => {
 
   it("refuses a tag outside main ancestry before env loading or staging", async () => {
     const fixture = await createGitFixture();
-    await git(fixture.checkout, "checkout", fixture.outsideTagSha);
+    await fixture.git(fixture.checkout, "checkout", fixture.outsideTagSha);
 
     const result = await invokeDeploy(fixture, {
       DEPLOY_PROVIDER: "forgejo",
@@ -220,7 +362,7 @@ describe("core01 deploy shell ref-gate wiring", () => {
 
   it("refuses unsupported provider and event metadata before preflight", async () => {
     const fixture = await createGitFixture();
-    await git(fixture.checkout, "checkout", fixture.mainSha);
+    await fixture.git(fixture.checkout, "checkout", fixture.mainSha);
 
     const unsupportedProvider = await invokeDeploy(fixture, {
       DEPLOY_PROVIDER: "gitlab",
