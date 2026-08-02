@@ -12,6 +12,35 @@ export interface SingleWorkerTransportAppInput {
   readonly sessions: SessionTransportHandlers;
   readonly health: SingleWorkerHealthInput;
   readonly logger: Logger;
+  /**
+   * Middleware mounted ahead of EVERY route, including `/health`.
+   *
+   * CORS and request logging belong here rather than at the caller, because
+   * their correctness is entirely positional: a request logger mounted after
+   * the routes never sees a response, and a CORS handler mounted after them
+   * never gets to answer the preflight. Making the position a parameter of the
+   * app builder is what stops a future composition from getting the order
+   * wrong silently.
+   *
+   * `/health` is deliberately INSIDE this: an unauthenticated probe is still a
+   * request, and a deployment that cannot see its own health traffic cannot
+   * tell a dead monitor from a healthy service.
+   */
+  readonly beforeRoutes?: readonly RequestHandler[];
+  /**
+   * Additional routers, mounted at their own prefixes after `/health`.
+   *
+   * Mounted after health and before `/mcp` so that neither an authenticated
+   * REST router nor its error handler can intercept the liveness probe or the
+   * MCP session routes. Each entry owns its own authentication; this builder
+   * does not apply `authenticate` to them, because the REST surface applies it
+   * per-router already and applying it twice would run token resolution twice
+   * per request.
+   */
+  readonly routers?: ReadonlyArray<{
+    readonly path: string;
+    readonly handler: RequestHandler;
+  }>;
 }
 
 type AsyncRoute = (request: Request, response: Response) => Promise<void>;
@@ -60,6 +89,7 @@ export function createSingleWorkerTransportApp(
   input: SingleWorkerTransportAppInput,
 ): Express {
   const app = express();
+  for (const middleware of input.beforeRoutes ?? []) app.use(middleware);
   app.use(input.parseRequestBody);
   app.get(
     "/health",
@@ -68,6 +98,7 @@ export function createSingleWorkerTransportApp(
       response.status(health.status === "healthy" ? 200 : 503).json(health);
     }),
   );
+  for (const router of input.routers ?? []) app.use(router.path, router.handler);
   app.post(
     "/mcp",
     input.authenticate,

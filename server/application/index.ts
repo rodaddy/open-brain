@@ -68,6 +68,21 @@ export interface ShadowApplicationInput {
    * deterministically.
    */
   readonly maintenanceAutoStart?: boolean;
+  /**
+   * Middleware mounted ahead of every route, and extra routers mounted after
+   * `/health`. Passed straight through to the transport app builder, which owns
+   * the ordering rule; see `server/transport/http-app.ts`.
+   *
+   * They are optional because the shadow compositions that predate the real
+   * entrypoint compose no REST surface at all, and a test that only needs
+   * `/health` and `/mcp` should not have to supply an empty CORS handler to get
+   * one.
+   */
+  readonly beforeRoutes?: readonly RequestHandler[];
+  readonly routers?: ReadonlyArray<{
+    readonly path: string;
+    readonly handler: RequestHandler;
+  }>;
 }
 
 /**
@@ -136,6 +151,8 @@ export function createShadowApplication(
     sessions,
     health,
     logger: transportLogger,
+    ...(input.beforeRoutes ? { beforeRoutes: input.beforeRoutes } : {}),
+    ...(input.routers ? { routers: input.routers } : {}),
   });
   // Compose maintenance BEFORE returning, so the runner and its place in the
   // shutdown order are created together. `createMaintenanceRuntime` returns
