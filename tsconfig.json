@@ -24,6 +24,7 @@
     "src/**/*",
     "scripts/**/*",
     "contracts/**/*.ts",
-    "clients/ts/**/*.ts"
+    "clients/ts/**/*.ts",
+    "server/**/*.ts"
   ]
 }

@@ -1,4 +1,4 @@
-import { buildContract } from "../src/contract.ts";
+import { SERVER_CONTRACT_PROVIDERS } from "./server-contract-providers.ts";
 
 type Runtime = "both" | "python" | "ts";
 type PythonStatus = "implemented";
@@ -120,11 +120,13 @@ for (const entry of manifest.capabilities ?? []) {
   }
 }
 
-// buildContract's schema_hash is timestamp-independent, so the live TS hash
-// can be compared against the fixture's declared literal. This is the
-// executable TS<->fixture leg of the cross-runtime triangle; the pytest
-// replay already asserts the Python constants match the same fixture.
-const liveContract = buildContract("1970-01-01T00:00:00.000Z");
+// Every server implementation declares the same reviewed contract identity.
+// The running src/ provider derives it from buildContract; the rewrite provider
+// is declaration-only until its real schemas and handlers arrive.
+const serverDeclarations = SERVER_CONTRACT_PROVIDERS.map((provider) => ({
+  provider,
+  declaration: provider.declaration("1970-01-01T00:00:00.000Z"),
+}));
 
 const fixtureGlob = new Bun.Glob("*.fixture.json");
 const fixtureIds = new Set<string>();
@@ -226,15 +228,17 @@ for await (const name of fixtureGlob.scan({
     isRecord(fixture.request)
   ) {
     contractDeclarationChecked = true;
-    if (fixture.request.contract_id !== liveContract.contract_version) {
-      errors.push(
-        `${prefix} declared contract_id '${String(fixture.request.contract_id)}' does not match live TS contract '${liveContract.contract_version}'`,
-      );
-    }
-    if (fixture.request.schema_hash !== liveContract.schema_hash) {
-      errors.push(
-        `${prefix} declared schema_hash '${String(fixture.request.schema_hash)}' does not match live TS schema_hash '${liveContract.schema_hash}'`,
-      );
+    for (const { provider, declaration } of serverDeclarations) {
+      if (fixture.request.contract_id !== declaration.contractVersion) {
+        errors.push(
+          `${prefix} declared contract_id '${String(fixture.request.contract_id)}' does not match ${provider.id} contract '${declaration.contractVersion}'`,
+        );
+      }
+      if (fixture.request.schema_hash !== declaration.schemaHash) {
+        errors.push(
+          `${prefix} declared schema_hash '${String(fixture.request.schema_hash)}' does not match ${provider.id} schema_hash '${declaration.schemaHash}'`,
+        );
+      }
     }
   }
 }
@@ -296,5 +300,5 @@ if (errors.length > 0) {
 }
 
 console.log(
-  `Contract parity check passed: ${fixtureCount} fixtures across ${capabilityMap.size} capabilities.`,
+  `Contract parity check passed: ${fixtureCount} fixtures across ${capabilityMap.size} capabilities and ${serverDeclarations.length} server providers.`,
 );
