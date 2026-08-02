@@ -167,12 +167,21 @@ for (const entry of manifest.capabilities ?? []) {
   }
 }
 
-// Every server implementation declares the same reviewed contract identity.
-// The running src/ provider derives it from buildContract; the rewrite provider
-// is declaration-only until its real schemas and handlers arrive.
+// Every server implementation declares the same reviewed contract identity, and
+// BOTH providers now derive it from buildContract rather than asserting it. The
+// rewrite's declaration used to be two string literals, so the fixture
+// comparison below matched a constant against itself and reported green no
+// matter what the rewrite had actually built.
+//
+// Deriving the identity makes that comparison honest but also makes it weak:
+// two derived values agree by construction. The identity check is therefore no
+// longer the load-bearing assertion for the rewrite -- `satisfaction` is. A
+// contract is a promise about tools, so the question worth failing on is
+// whether the provider REGISTERS what its contract names.
 const serverDeclarations = SERVER_CONTRACT_PROVIDERS.map((provider) => ({
   provider,
   declaration: provider.declaration("1970-01-01T00:00:00.000Z"),
+  satisfaction: provider.satisfaction?.("1970-01-01T00:00:00.000Z"),
 }));
 
 const fixtureGlob = new Bun.Glob("*.fixture.json");
@@ -337,7 +346,6 @@ for (const pending of manifest.not_yet_extracted ?? []) {
     );
   }
 }
-
 const providerIds = serverDeclarations.map(({ provider }) => provider.id);
 if (JSON.stringify(serverManifest.providers) !== JSON.stringify(providerIds)) {
   errors.push(
@@ -366,6 +374,7 @@ for (const providerId of providerIds) {
 const observedServerFixtureIds = new Set<string>();
 const observedServerCapabilities = new Set<string>();
 const observedServerTools = new Set<string>();
+const serverFixtures: ServerFixture[] = [];
 let serverFixtureCount = 0;
 const serverFixtureGlob = new Bun.Glob("*.fixture.json");
 for await (const name of serverFixtureGlob.scan({
@@ -374,6 +383,7 @@ for await (const name of serverFixtureGlob.scan({
 })) {
   serverFixtureCount += 1;
   const fixture = await readJson<ServerFixture>(new URL(name, serverFixtureDir));
+  serverFixtures.push(fixture);
   const prefix = `server/${name}:`;
   observedServerFixtureIds.add(fixture.id);
   observedServerCapabilities.add(fixture.capability);
@@ -424,6 +434,89 @@ for (const id of expectedServerFixtureIds) {
 for (const capability of serverCapabilities) {
   if (!observedServerCapabilities.has(capability)) {
     errors.push(`server/parity-manifest.json: capability '${capability}' has no fixture`);
+  }
+}
+
+// Does each provider's registered tool set satisfy the contract it declares?
+//
+// This is the assertion the old gate was missing. It compared the rewrite's
+// hardcoded {contractVersion, schemaHash} literals to buildContract() -- a
+// constant against itself -- so it stayed green regardless of what the rewrite
+// had actually built.
+//
+// The predicate is LEDGER-AWARE rather than absolute, and that is the design
+// decision. `contracts/README.md` says parity-manifest.json "declares the
+// current implementation asymmetry", and the server manifest already records
+// per capability which provider has really built it (`implemented`) versus only
+// declared it (`scaffold-declared`). The rewrite carries 6 scaffold-declared
+// capabilities today, `citation-recall` among them. A gate that ignored that
+// ledger would not measure drift; it would re-litigate a port schedule the repo
+// has already written down, and the only way to green it would be to lie in the
+// manifest. So this reads the declared asymmetry instead of overriding it:
+//
+//   - a tool whose capability the provider claims `implemented` MUST be
+//     registered. Claiming it and not registering it is drift -- exactly the
+//     failure the literals hid.
+//   - a tool whose capability is `scaffold-declared` may be absent, and is
+//     REPORTED so the remaining port surface stays visible instead of silent.
+//
+// Registering MORE than the contract requires is allowed: the rewrite carries
+// `record_skill_usage`/`skill_usage_report` (#469), which the frozen contract
+// never named. Only a shortfall against a claim can break a client.
+const satisfactionNotes: string[] = [];
+for (const { provider, satisfaction } of serverDeclarations) {
+  if (!satisfaction) continue;
+  if (satisfaction.registeredTools.length === 0) {
+    errors.push(
+      `${provider.id}: registry walk returned zero tools -- the walk is broken, not the registry empty`,
+    );
+    continue;
+  }
+
+  const statuses = serverManifest.provider_capability_status?.[provider.id] ?? {};
+  // Map each tool to the capability the server fixtures file it under, so a
+  // missing tool can be judged against that capability's declared status.
+  const toolCapability = new Map<string, string>();
+  for (const fixture of serverFixtures) {
+    for (const step of fixture.steps ?? []) {
+      if (step.tool && !toolCapability.has(step.tool)) {
+        toolCapability.set(step.tool, fixture.capability);
+      }
+    }
+  }
+
+  const claimedMissing: string[] = [];
+  const scaffoldMissing: string[] = [];
+  for (const tool of satisfaction.missingTools) {
+    const capability = toolCapability.get(tool);
+    // No mapping means no fixture files this tool at all, so nothing has
+    // declared it deferred -- treat it as claimed and fail rather than excuse it.
+    if (capability && statuses[capability] === "scaffold-declared") {
+      scaffoldMissing.push(`${tool} (${capability})`);
+    } else {
+      claimedMissing.push(
+        capability ? `${tool} (${capability})` : `${tool} (unmapped)`,
+      );
+    }
+  }
+
+  if (claimedMissing.length > 0) {
+    errors.push(
+      `${provider.id}: registry does not satisfy the contract it declares -- ${claimedMissing.length} of ${satisfaction.requiredTools.length} required tool(s) missing while their capability is claimed implemented: ${claimedMissing.join(", ")}`,
+    );
+  }
+  if (scaffoldMissing.length > 0) {
+    satisfactionNotes.push(
+      `${provider.id}: ${scaffoldMissing.length} contract-required tool(s) still unported, each covered by a scaffold-declared capability: ${scaffoldMissing.join(", ")}`,
+    );
+  }
+  const extra = satisfaction.registeredTools.filter(
+    (tool) => !satisfaction.requiredTools.includes(tool),
+  );
+  if (extra.length > 0) {
+    satisfactionNotes.push(
+      `${provider.id}: registers ${extra.length} tool(s) beyond the frozen contract (allowed): ${extra.join(", ")}`,
+    );
   }
 }
 
@@ -502,6 +595,17 @@ if (errors.length > 0) {
   process.exit(1);
 }
 
+for (const note of satisfactionNotes) console.log(`note: ${note}`);
+
+const satisfactionSummary = serverDeclarations
+  .filter((entry) => entry.satisfaction)
+  .map((entry) => {
+    const { registeredTools, requiredTools, missingTools } = entry.satisfaction!;
+    const met = requiredTools.length - missingTools.length;
+    return `${entry.provider.id} registers ${registeredTools.length} tools covering ${met}/${requiredTools.length} contract-required${missingTools.length > 0 ? ` (${missingTools.length} scaffold-declared, not yet ported)` : ""}`;
+  })
+  .join("; ");
+
 console.log(
-  `Contract parity check passed: ${fixtureCount + serverFixtureCount} fixtures across ${capabilityMap.size + serverCapabilities.size} capabilities and ${serverDeclarations.length} server providers; ${observedServerTools.size}/${registeredServerTools.size} current-src MCP tools fixture-covered with ${declaredGapTools.size} explicit gaps.`,
+  `Contract parity check passed: ${fixtureCount + serverFixtureCount} fixtures across ${capabilityMap.size + serverCapabilities.size} capabilities and ${serverDeclarations.length} server providers; ${observedServerTools.size}/${registeredServerTools.size} current-src MCP tools fixture-covered with ${declaredGapTools.size} explicit gaps${satisfactionSummary ? `; ${satisfactionSummary}` : ""}.`,
 );

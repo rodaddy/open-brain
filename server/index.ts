@@ -1,6 +1,10 @@
 export { APPLICATION_BOUNDARY } from "./application/index.ts";
 export { CONFIG_BOUNDARY } from "./config/index.ts";
-export { SERVER_CONTRACT_DECLARATION } from "./contracts/declaration.ts";
+export {
+  rewriteContractSatisfaction,
+  serverContractDeclaration,
+} from "./contracts/declaration.ts";
+export { rewriteRegisteredTools } from "./contracts/registered-tools.ts";
 export { DATABASE_BOUNDARY } from "./db/index.ts";
 export { DOMAIN_BOUNDARY } from "./domain/index.ts";
 export { OBSERVABILITY_BOUNDARY } from "./observability/index.ts";

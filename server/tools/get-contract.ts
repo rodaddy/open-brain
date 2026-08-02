@@ -9,12 +9,20 @@
  * and the two would diverge silently on the first schema edit. Reusing the
  * builder means the rewrite cannot drift from the contract it serves.
  *
- * `server/contracts/declaration.ts` already records that same identity
- * (`2026-07-23.memory-tools.v23`, hash `4b69e9b4...`), verified equal to
- * `buildContract()`'s output on this branch. The assertion below keeps that
- * equality enforced rather than assumed: if `src/contract.ts` moves without the
- * rewrite's declaration moving with it, the mismatch surfaces as a logged
- * warning at call time instead of as a client-side negotiation failure.
+ * `server/contracts/declaration.ts` used to hold that identity as two string
+ * literals, and the warning below compared `buildContract()` against them. That
+ * comparison is gone because the declaration is now DERIVED from the same
+ * builder: deriving both sides would make the condition `x !== x`, a branch that
+ * can never fire while still reading like a guard. The frozen identity is
+ * anchored where an anchor actually holds -- the pinned expectation in
+ * `src/contract.test.ts` and `contracts/memory/contract-declaration-v23.fixture.json`
+ * -- so a hash move still has to be deliberate.
+ *
+ * What IS worth checking at call time is the question the old string comparison
+ * could not ask: whether this server registers everything the contract it just
+ * handed out promises. A client negotiates against the manifest and then calls
+ * its tools, so serving a contract naming a tool this registry does not answer
+ * is the failure that matters, and it is invisible to any version-string match.
  *
  * `natsAvailability` is not threaded through. The rewrite has not ported
  * `nats-runtime.ts`/`nats-bridge.ts` on any wave, so there is no runtime
@@ -26,7 +34,11 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { canRead } from "../auth/permissions.ts";
 import { buildContract } from "../../src/contract.ts";
-import { SERVER_CONTRACT_DECLARATION } from "../contracts/declaration.ts";
+import {
+  contractRequiredTools,
+  evaluateRewriteContractSatisfaction,
+} from "../contracts/declaration.ts";
+import { rewriteRegisteredTools } from "../contracts/registered-tools.ts";
 import { authIdentity, errorResult, textResult, type MemoryToolDependencies } from "./types.ts";
 
 export function registerGetContractTool(
@@ -56,17 +68,23 @@ export function registerGetContractTool(
       }
 
       const contract = buildContract();
-      if (
-        contract.contract_version !== SERVER_CONTRACT_DECLARATION.contractVersion ||
-        contract.schema_hash !== SERVER_CONTRACT_DECLARATION.schemaHash
-      ) {
+      const satisfaction = evaluateRewriteContractSatisfaction(
+        contractRequiredTools(contract),
+        rewriteRegisteredTools(),
+      );
+      if (!satisfaction.satisfied) {
+        // Warn, do not fail: `get_contract` answering honestly is more useful to
+        // a client than refusing, and the build-time gate in
+        // `contracts/check-parity.ts` is what blocks the gap from shipping.
         dependencies.logger.warn(
           {
             tool: "get_contract",
             servedVersion: contract.contract_version,
-            declaredVersion: SERVER_CONTRACT_DECLARATION.contractVersion,
+            missingTools: satisfaction.missingTools,
+            requiredToolCount: satisfaction.requiredTools.length,
+            registeredToolCount: satisfaction.registeredTools.length,
           },
-          "contract_declaration_drift",
+          "contract_registry_shortfall",
         );
       }
       dependencies.logger.info({ tool: "get_contract" }, "tool_result");

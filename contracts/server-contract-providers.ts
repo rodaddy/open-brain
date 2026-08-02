@@ -1,5 +1,9 @@
 import { buildContract } from "../src/contract.ts";
-import { SERVER_CONTRACT_DECLARATION } from "../server/contracts/declaration.ts";
+import {
+  rewriteContractSatisfaction,
+  serverContractDeclaration,
+  type RewriteContractSatisfaction,
+} from "../server/contracts/declaration.ts";
 
 export interface ContractDeclarationProvider {
   id: "current-src" | "server-rewrite-scaffold";
@@ -8,6 +12,14 @@ export interface ContractDeclarationProvider {
     contractVersion: string;
     schemaHash: string;
   };
+  /**
+   * Whether this provider's REGISTERED tools satisfy the contract it declares.
+   *
+   * Optional because it only means something for a provider whose registry the
+   * checker can walk in-process. `current-src` already has an equivalent, and
+   * stricter, invariant in the tool gap map.
+   */
+  satisfaction?(generatedAt: string): RewriteContractSatisfaction;
 }
 
 export const SERVER_CONTRACT_PROVIDERS: readonly ContractDeclarationProvider[] = [
@@ -25,8 +37,16 @@ export const SERVER_CONTRACT_PROVIDERS: readonly ContractDeclarationProvider[] =
   {
     id: "server-rewrite-scaffold",
     state: "partial-implementation",
-    declaration() {
-      return SERVER_CONTRACT_DECLARATION;
+    // DERIVED, not asserted. This was a pair of hardcoded literals, so the
+    // parity check compared a constant to itself and reported green while the
+    // rewrite registry was short of the contract. Identity now comes from the
+    // same builder the running provider uses; `satisfaction` is what proves the
+    // rewrite has earned the identity it declares.
+    declaration(generatedAt) {
+      return serverContractDeclaration(generatedAt);
+    },
+    satisfaction(generatedAt) {
+      return rewriteContractSatisfaction(generatedAt);
     },
   },
 ];
