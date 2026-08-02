@@ -254,10 +254,25 @@ WRITTEN.
 
 ### Step 5 — dogfood smoke (optional, normal production traffic)
 
-A capture/checkpoint/reflex through the installed provider is normal dogfood
-traffic (writes an `ob_raw_turns` row via the running service, not DDL). If the
-operator wants a live round-trip proof, fire one normal capture and confirm the
-count increments. This is production write behavior, not a schema mutation.
+A provider capture is normal dogfood traffic and persists a distilled event in
+`ob_session_events`; it does **not** ingest a row into `ob_raw_turns`. If the
+operator wants a live round-trip proof, fire one normal capture, require a
+`saved` / `durable` receipt, retain its `event_id`, and verify that exact row:
+
+```bash
+set -a; . /Volumes/ThunderBolt/Development/open-brain/.env; set +a
+psql -At -d open_brain_local_20260724 -c \
+  "SELECT id, event_type, created_at FROM ob_session_events WHERE id = '<event_id-from-receipt>';"
+```
+
+Keep `ob_raw_turns` checks for smokes that actually exercise raw-turn ingestion;
+a distilled provider capture is not one of those operations. This is production
+write behavior, not a schema mutation.
+
+**Corrected from live evidence 2026-08-02:** the capture receipt reported
+`saved` / `durable`, `ob_raw_turns` changed by 0, and the persisted event was
+present in `ob_session_events` as
+`2496e009-a2a3-48af-9aa5-6ea1996c9c1a`.
 
 ### Step 6 — rollback (if anything is wrong)
 
