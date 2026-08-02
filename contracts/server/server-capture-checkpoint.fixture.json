@@ -1,0 +1,115 @@
+{
+  "id": "server-capture-checkpoint",
+  "description": "Capture durable thoughts and decisions, then create and read a checkpoint lane through current-src.",
+  "capability": "capture-ingest-checkpoint",
+  "providers": [
+    "current-src",
+    "server-rewrite-scaffold"
+  ],
+  "auth": {
+    "role": "agent",
+    "client_id": "parity-capture",
+    "namespace_source": "token"
+  },
+  "steps": [
+    {
+      "tool": "log_thought",
+      "arguments": {
+        "content": "Observed parity capture thought",
+        "tags": ["parity", "capture"]
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "id": "<uuid>",
+          "namespace": "{{namespace}}",
+          "embedded": true,
+          "merged": false,
+          "source_refs": [],
+          "chunks_written": 0,
+          "chunks_unembedded": 0
+        }
+      }
+    },
+    {
+      "tool": "log_decision",
+      "arguments": {
+        "title": "Preserve observed behavior",
+        "rationale": "The rewrite must match current-src before cutover.",
+        "alternatives": ["Redesign during rewrite"],
+        "tags": ["parity", "decision"]
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "id": "<uuid>",
+          "namespace": "{{namespace}}",
+          "embedded": true,
+          "merged": false,
+          "source_refs": []
+        }
+      }
+    },
+    {
+      "tool": "lane_upsert",
+      "arguments": {
+        "session_key": "parity/checkpoint",
+        "agent": "fixture-agent",
+        "source": "test",
+        "channel_id": "channel-1",
+        "project": "open-brain",
+        "topic": "Server rewrite parity",
+        "current_context_md": "Observed checkpoint context",
+        "metadata": {
+          "server_id": "server-1"
+        }
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "id": "<uuid>",
+          "session_key": "parity/checkpoint",
+          "namespace": "{{namespace}}",
+          "status": "active",
+          "is_new": true,
+          "embedded": true,
+          "updated_at": "<iso-date>"
+        }
+      }
+    },
+    {
+      "tool": "lane_load",
+      "arguments": {
+        "session_key": "parity/checkpoint"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "lanes": [
+            {
+              "id": "<uuid>",
+              "session_key": "parity/checkpoint",
+              "namespace": "{{namespace}}",
+              "status": "active",
+              "agent": "fixture-agent",
+              "source": "test",
+              "channel_id": "channel-1",
+              "thread_id": null,
+              "project": "open-brain",
+              "topic": "Server rewrite parity",
+              "current_context_md": "Observed checkpoint context",
+              "metadata": {
+                "server_id": "server-1"
+              },
+              "created_by": "{{namespace}}",
+              "created_at": "<iso-date>",
+              "updated_at": "<iso-date>",
+              "ended_at": null
+            }
+          ],
+          "count": 1
+        }
+      }
+    }
+  ]
+}

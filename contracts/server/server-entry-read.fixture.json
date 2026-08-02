@@ -1,0 +1,131 @@
+{
+  "id": "server-entry-read",
+  "description": "Freeze get_entry against a captured thought id: the full render returns the table projection, the compact render returns the observed preview envelope with its own get_entry fetch path, resolve_entry points at that same path, and an unknown id collapses to one not-found string.",
+  "capability": "entry-read",
+  "providers": [
+    "current-src",
+    "server-rewrite-scaffold"
+  ],
+  "auth": {
+    "role": "agent",
+    "client_id": "parity-entry-read",
+    "namespace_source": "token"
+  },
+  "steps": [
+    {
+      "tool": "log_thought",
+      "arguments": {
+        "content": "parity get_entry probe thought",
+        "tags": ["parity"]
+      },
+      "capture": {
+        "thought_id": "id"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "id": "<uuid>",
+          "namespace": "{{namespace}}"
+        }
+      }
+    },
+    {
+      "tool": "get_entry",
+      "arguments": {
+        "table": "thoughts",
+        "id": "{{thought_id}}"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "id": "{{thought_id}}",
+          "content": "parity get_entry probe thought",
+          "tags": ["parity"],
+          "source": "mcp",
+          "created_by": "{{namespace}}",
+          "created_at": "<iso-date>",
+          "tier": "warm",
+          "access_count": 0,
+          "namespace": "{{namespace}}",
+          "promoted_from": null
+        }
+      }
+    },
+    {
+      "tool": "get_entry",
+      "arguments": {
+        "table": "thoughts",
+        "id": "{{thought_id}}",
+        "render": "compact"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "id": "{{thought_id}}",
+          "table": "thoughts",
+          "source_type": "thought",
+          "namespace": "{{namespace}}",
+          "render": "compact",
+          "max_chars": 500,
+          "content_preview": "parity get_entry probe thought",
+          "content_length": 30,
+          "content_truncated": false,
+          "created_by": "{{namespace}}",
+          "created_at": "<iso-date>",
+          "tier": "warm",
+          "tags": ["parity"],
+          "source_ref": {
+            "source": "brain",
+            "type": "thought",
+            "id": "{{thought_id}}",
+            "namespace": "{{namespace}}"
+          },
+          "full_available": true,
+          "fetch_path": {
+            "tool": "get_entry",
+            "arguments": {
+              "table": "thoughts",
+              "id": "{{thought_id}}",
+              "render": "full"
+            }
+          }
+        }
+      }
+    },
+    {
+      "tool": "resolve_entry",
+      "arguments": {
+        "id": "{{thought_id}}"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "resolved": true,
+          "status": "found",
+          "id": "{{thought_id}}",
+          "source_type": "thought",
+          "table": "thoughts",
+          "namespace": "{{namespace}}",
+          "fetch_path": {
+            "tool": "get_entry",
+            "arguments": {
+              "table": "thoughts",
+              "id": "{{thought_id}}"
+            }
+          }
+        }
+      }
+    },
+    {
+      "tool": "get_entry",
+      "arguments": {
+        "table": "thoughts",
+        "id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+      },
+      "expectation": {
+        "is_error": true,
+        "text": "Entry not found or archived"
+      }
+    }
+  ]
+}

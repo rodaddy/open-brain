@@ -1,0 +1,24 @@
+{
+  "id": "server-promotion",
+  "description": "Freeze promote_shared's identity gate for a non-promoter caller.",
+  "capability": "promotion",
+  "providers": ["current-src", "server-rewrite-scaffold"],
+  "auth": {
+    "role": "agent",
+    "client_id": "parity-promotion",
+    "namespace_source": "token"
+  },
+  "steps": [
+    {
+      "tool": "promote_shared",
+      "arguments": {
+        "table": "thoughts",
+        "id": "ffffffff-ffff-4fff-8fff-ffffffffffff"
+      },
+      "expectation": {
+        "is_error": true,
+        "text": "Permission denied: shared-kb promotion requires the promoter, admin, or ob-admin identity"
+      }
+    }
+  ]
+}

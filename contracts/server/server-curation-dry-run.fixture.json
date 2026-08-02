@@ -1,0 +1,43 @@
+{
+  "id": "server-curation-dry-run",
+  "description": "Run safe-by-default curation against an empty isolated namespace.",
+  "capability": "curation",
+  "providers": [
+    "current-src",
+    "server-rewrite-scaffold"
+  ],
+  "auth": {
+    "role": "agent",
+    "client_id": "parity-curation",
+    "namespace_source": "token"
+  },
+  "steps": [
+    {
+      "tool": "curate_entries",
+      "arguments": {
+        "mode": "all",
+        "dry_run": true,
+        "table": "thoughts"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "mode": "all",
+          "dry_run": true,
+          "tables_processed": [
+            "thoughts"
+          ],
+          "duplicates": [],
+          "stale": [],
+          "vague": [],
+          "summary": {
+            "duplicates_found": 0,
+            "stale_found": 0,
+            "vague_found": 0,
+            "archived": 0
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,68 @@
+{
+  "id": "server-repo-facts",
+  "description": "Freeze the repo-fact write refusals and the list round trip.",
+  "capability": "repo-facts",
+  "providers": [
+    "current-src",
+    "server-rewrite-scaffold"
+  ],
+  "auth": {
+    "role": "agent",
+    "client_id": "parity-repo-facts",
+    "namespace_source": "token"
+  },
+  "steps": [
+    {
+      "tool": "upsert_repo_fact",
+      "arguments": {
+        "metadata": {
+          "source_system": "qmd",
+          "repo": "open-brain",
+          "collection": "open-brain",
+          "path": "server/tools/index.ts",
+          "subject": "tool registration",
+          "fact_type": "workflow",
+          "fact": "Every server tool is registered through the TOOLS_BOUNDARY seam in server/tools/index.ts, so a new tool is wired in exactly one place.",
+          "source_commit": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0",
+          "source_url": "https://github.com/rodaddy/open-brain/blob/a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0/server/tools/index.ts",
+          "verified_at": "2026-08-01T00:00:00.000Z",
+          "staleness_policy": "stable_fact_verify_source"
+        }
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "entity_type": "repo_fact",
+          "namespace": "{{namespace}}",
+          "is_new": true
+        }
+      }
+    },
+    {
+      "tool": "list_repo_facts",
+      "arguments": {
+        "repo": "open-brain",
+        "fact_type": "workflow"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": [
+          {
+            "entity_type": "repo_fact",
+            "namespace": "{{namespace}}"
+          }
+        ]
+      }
+    },
+    {
+      "tool": "list_repo_facts",
+      "arguments": {
+        "repo": "no-such-repo"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": []
+      }
+    }
+  ]
+}
