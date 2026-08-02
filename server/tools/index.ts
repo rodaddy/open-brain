@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ServerModuleBoundary } from "../module.ts";
 import { registerCaptureTools } from "./capture.ts";
+import { registerCurationTools } from "./curation.ts";
 import { registerIngestRawTurnTool } from "./ingest-raw-turn.ts";
 import { registerLaneTools } from "./lanes.ts";
 import { registerNamespaceGuardTool } from "./namespace-guard.ts";
@@ -26,6 +27,7 @@ export function registerMemoryTools(
   registerSessionSaveLoadTools(server, dependencies);
   registerIngestRawTurnTool(server, dependencies);
   registerNamespaceGuardTool(server, dependencies);
+  registerCurationTools(server, dependencies);
 }
 
 export type { MemoryToolDependencies } from "./types.ts";
