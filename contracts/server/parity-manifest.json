@@ -1,0 +1,41 @@
+{
+  "id": "openbrain.server.contract-parity.v1",
+  "description": "Observed current-src MCP behavior declared for the current implementation and server rewrite scaffold.",
+  "providers": ["current-src", "server-rewrite-scaffold"],
+  "expected_fixture_ids": [
+    "server-auth-and-validation-errors",
+    "server-brain-answer-empty",
+    "server-capture-checkpoint",
+    "server-citation-recall-not-found",
+    "server-context-pack-sections",
+    "server-conversation-ingest-gate",
+    "server-curation-dry-run",
+    "server-curation-operations",
+    "server-ingest-raw-turn",
+    "server-namespace-denial",
+    "server-realtime-working-recovery",
+    "server-reflex-pointers-empty",
+    "server-search-brain-arms",
+    "server-session-lifecycle",
+    "server-session-save-load",
+    "server-tier-tools"
+  ],
+  "capabilities": [
+    "auth-error-shapes",
+    "brain-answer",
+    "capture-ingest-checkpoint",
+    "citation-recall",
+    "context-pack-sections",
+    "conversation-ingest-gate",
+    "curation",
+    "curation-operations",
+    "raw-turn-ingest-server",
+    "namespace-denial",
+    "realtime-working-recovery",
+    "reflex-pointers",
+    "search-brain-arms",
+    "session-lifecycle-server",
+    "session-save-load",
+    "tier-tools"
+  ]
+}
