@@ -67,15 +67,23 @@ export const REQUIRED_SUITES: ReadonlyArray<{
     name: "rewrite candidate over the real MCP SDK and real HTTP transport (live Postgres)",
     minTests: 12,
   },
+  // Skill/canon usage telemetry (#469). Registered for the same reason as every
+  // suite above: it is env-gated on OPENBRAIN_TEST_DATABASE_URL, so without this
+  // entry a CI Postgres misconfiguration would silently skip the ONE suite that
+  // proves usage rows are saved, queryable, and -- most importantly -- invisible
+  // across the namespace boundary. `skill_usage_log` has no namespace column, so
+  // that boundary lives entirely in a join this suite is what checks.
+  { name: "skill usage telemetry (live Postgres)", minTests: 9 },
 ];
 
 // Absolute floor on total executed (non-skipped) live-Postgres testcases,
 // independent of the per-suite breakdown above. Tracks the sum of the
 // `minTests` values above (32 before the Phase 5 real-SDK protocol suite added
 // its 8, then 12 once that suite also covered the realtime append tools and the
-// two-worker front), so the global floor cannot silently fall behind the
-// per-suite one.
-export const MIN_TOTAL_LIVE_TESTCASES = 44;
+// two-worker front, then 44 -> 53 when the #469 skill-usage telemetry suite
+// added its 9), so the global floor cannot silently fall behind the per-suite
+// one.
+export const MIN_TOTAL_LIVE_TESTCASES = 53;
 
 export interface SuiteStats {
   tests: number;

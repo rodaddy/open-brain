@@ -26,6 +26,7 @@ import { registerSearchAllTool } from "./search-all.ts";
 import { registerSearchBrainTool } from "./search-brain.ts";
 import { registerUpdateEntryTool } from "./update-entry.ts";
 import { registerSessionEventTool } from "./session-events.ts";
+import { registerSkillUsageTools } from "./skill-usage.ts";
 import { registerSourceRegistryTools } from "./source-registry.ts";
 import { registerSessionLifecycleTools } from "./session-lifecycle.ts";
 import { registerSessionSaveLoadTools } from "./session-save-load.ts";
@@ -58,6 +59,15 @@ export function registerMemoryTools(
   registerGetEntryTool(server, dependencies);
   registerTieringTools(server, dependencies);
   registerReportingTools(server, dependencies);
+  // Skill/canon usage telemetry (#469). Registered on the REWRITE registry
+  // only, not on `src/tools`: the operator placed this on the rewrite path
+  // ("We're rewriting it, so this seems like a good place to add new
+  // functionality"), so adding it to the stack being replaced would build new
+  // surface on the retiring one. It registers next to `reporting.ts` because it
+  // is the same kind of thing -- a read-only aggregate over a log table, scoped
+  // by joining back to the owning row -- and reuses that module's scoping rule
+  // rather than inventing a second one.
+  registerSkillUsageTools(server, dependencies);
   registerEntityTools(server, dependencies);
   registerPeopleTools(server, dependencies);
   registerSourceRegistryTools(server, dependencies);

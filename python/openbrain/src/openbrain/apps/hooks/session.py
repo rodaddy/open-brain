@@ -285,6 +285,68 @@ class PostCompactHook(BaseModel):
     timestamp: str | None = None
 
 
+class PostToolUseHook(BaseModel):
+    """The fields a ``PostToolUse`` payload carries that usage telemetry needs.
+
+    Modelled from the captured fixture (``tests/fixtures/captured_hooks/
+    PostToolUse.json``): ``tool_name`` says which tool ran, ``tool_input`` carries
+    its arguments, ``session_id`` keys the session, and ``cwd`` is the directory
+    the invocation happened in, which is how the repo is derived.
+
+    ``tool_input`` IS PARSED FOR ONE FIELD AND NOTHING ELSE. Only the skill name
+    is read out of it (:meth:`skill_slug`); no other key is touched and none is
+    stored. The rest of ``tool_input`` -- and the whole of ``tool_response``,
+    which this model does not even declare -- is the content stream that
+    ``docs/decisions/capture-never-drops-a-turn.md`` leaves explicitly UNDECIDED
+    between memory and observability, and which ``post_tool_use``'s docstring
+    warns against resolving by accident. Counting invocations does not need it,
+    so this does not carry it: ``extra="ignore"`` drops ``tool_response``,
+    ``tool_use_id``, ``duration_ms``, ``transcript_path``, and the rest at the
+    parse boundary, where they cannot be picked up later by mistake.
+
+    All fields optional -- a hook can fire before one exists, a do-nothing
+    outcome, not a parse failure.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    tool_name: str | None = None
+    tool_input: dict[str, Any] | None = None
+    session_id: str | None = None
+    cwd: str | None = None
+
+    def skill_slug(self) -> str | None:
+        """Return the invoked skill's slug, or ``None`` when this is not a Skill call.
+
+        Returns:
+            The ``skill`` argument of a ``Skill`` tool call, stripped; ``None``
+            for every other tool and for a Skill call carrying no usable name.
+
+        ``PostToolUse`` fires for EVERY tool -- Bash, Read, Edit, and the rest --
+        and #469 counts skills, so this is the filter. Only ``tool_name ==
+        "Skill"`` proceeds, which is why the other tools' inputs are never read.
+        """
+        if self.tool_name != "Skill" or self.tool_input is None:
+            return None
+        raw = self.tool_input.get("skill")
+        if not isinstance(raw, str):
+            return None
+        slug = raw.strip()
+        return slug or None
+
+    def repo(self) -> str | None:
+        """Return the repository name derived from ``cwd``.
+
+        Returns:
+            The final path segment of ``cwd``, or ``None`` when absent. #469 asks
+            for counts "per repo", and the directory basename is the name every
+            other surface in this repo uses for one.
+        """
+        if self.cwd is None or not self.cwd.strip():
+            return None
+        return Path(self.cwd).name or None
+
+
 class StartedLane(BaseModel):
     """A raw lane with its server session started, and how to release it.
 
@@ -523,6 +585,118 @@ async def run_post_compact(
         # swallows its own transport errors, so it cannot mask a send failure.
         started.close()
     return True
+
+
+async def run_post_tool_use(
+    payload: PostToolUseHook,
+    settings: CaptureSettings,
+    *,
+    recorder: Callable[[CaptureSettings, str, dict[str, Any]], None] | None = None,
+) -> bool:
+    """Record one skill invocation from a ``PostToolUse`` payload as a usage metric.
+
+    Args:
+        payload: The parsed ``PostToolUse`` hook fields.
+        settings: The ``capture`` configuration section: endpoint, token, and
+            identity.
+        recorder: Sends the metric; injected for tests, defaults to the real
+            ``openbrain_memory`` client calling ``record_skill_usage``.
+
+    Returns:
+        ``True`` when a metric was sent, ``False`` when the payload was not a
+        Skill invocation or carried no session -- there is nothing to count then.
+
+    METRICS ONLY (#469). What goes over the wire is the skill slug, the agent,
+    the repo, the session, and the runtime -- who invoked what, where, and how
+    often. NOT ``tool_input`` beyond the skill name, and NOT ``tool_response`` at
+    all: that content stream is the open memory-versus-observability question in
+    ``docs/decisions/capture-never-drops-a-turn.md``, and counting invocations
+    does not require answering it. :class:`PostToolUseHook` drops those fields at
+    the parse boundary so they cannot reach this function to be sent by mistake.
+
+    ``PostToolUse`` fires on EVERY tool call, so the filter matters more here
+    than in the other capabilities: everything that is not a ``Skill`` call
+    returns ``False`` before any client is built, which means the common case
+    costs one dict lookup and no network at all.
+
+    Namespace stays token-derived server-side; nothing here sets one.
+
+    Raises:
+        Whatever the recorder raises. The ENTRYPOINT swallows these; a failed
+        metric must never break the session it observes.
+    """
+    slug = payload.skill_slug()
+    if slug is None or payload.session_id is None:
+        return False
+
+    arguments: dict[str, Any] = {
+        "skill_slug": slug,
+        "usage_kind": "skill",
+        "session_id": payload.session_id,
+        "runtime": "claude-code",
+        # `agent_id` is a required non-empty field on CaptureSettings, so this
+        # dimension is always present rather than conditionally attached.
+        "agent": settings.agent_id,
+    }
+    repo = payload.repo()
+    if repo is not None:
+        arguments["repo"] = repo
+
+    send = recorder if recorder is not None else _record_skill_usage
+    await asyncio.to_thread(send, settings, payload.session_id, arguments)
+    return True
+
+
+def _record_skill_usage(
+    settings: CaptureSettings, session_key: str, arguments: dict[str, Any]
+) -> None:
+    """Call ``record_skill_usage`` on a real client, releasing the slot after.
+
+    The one non-test recorder. The sibling is imported here rather than at module
+    top for the same reason :func:`_started_memory` does it: a ``PostToolUse``
+    that is not a Skill call never reaches this function, so the client's import
+    graph is not paid on the overwhelmingly common path.
+
+    Raises:
+        CaptureNotConfiguredError: When no endpoint or token is set. The
+            entrypoint swallows it -- an unconfigured hook declines to record, it
+            does not fail the session.
+    """
+    if settings.base_url is None or settings.token is None:
+        missing = ", ".join(
+            name
+            for name, value in (
+                ("base_url", settings.base_url),
+                ("token", settings.token),
+            )
+            if value is None
+        )
+        raise CaptureNotConfiguredError(missing)
+
+    from openbrain_memory.client import OpenBrainClient
+    from openbrain_memory.policy import RetryPolicy
+
+    # One attempt, matching the pinned retry every other hook path uses: a
+    # retryable 429 must not turn one metric into two calls against the same
+    # deadline the capture lifecycle budget is derived from.
+    client = OpenBrainClient(
+        base_url=settings.base_url,
+        token=settings.token.get_secret_value(),
+        # Inert on this path for the same reason `_started_memory` documents:
+        # the client sends X-Namespace only with delegate_namespace=True
+        # (default False), so the server writes to the token's own namespace.
+        # agent_id is reused so nothing invents a second identity string.
+        namespace=settings.agent_id,
+        agent_id=settings.agent_id,
+        timeout=CAPTURE_REQUEST_TIMEOUT_SECONDS,
+        retry_policy=RetryPolicy(attempts=1),
+    )
+    try:
+        client.call_tool("record_skill_usage", arguments)
+    finally:
+        # The client holds a server session slot; release it on every path, the
+        # same lifecycle rule run_stop and run_session_end own.
+        client.close()
 
 
 def _started_memory(settings: CaptureSettings, session_key: str) -> StartedLane:
