@@ -1,6 +1,6 @@
 [project]
 name = "openbrain"
-version = "0.1.0"
+version = "0.9.0"
 description = "Open Brain: the shared core, configuration, models, and capability modules that every Open Brain Python process is built from."
 # The package README is GENERATED from the src/openbrain/__init__.py docstring
 # by scripts/pytools/generate_package_docs.py. Pointing at the generated file
