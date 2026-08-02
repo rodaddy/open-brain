@@ -24,13 +24,25 @@ interface DeployResult {
   stagingDir: string;
 }
 
+const GIT_LOCAL_ENV_KEYS = [
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_INDEX_FILE",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+  "GIT_COMMON_DIR",
+  "GIT_PREFIX",
+];
+
 async function run(
   command: string[],
   options: { cwd?: string; env?: Record<string, string | undefined> } = {},
 ): Promise<{ exitCode: number; output: string }> {
+  const env = { ...(options.env ?? process.env) };
+  for (const key of GIT_LOCAL_ENV_KEYS) delete env[key];
   const proc = Bun.spawn(command, {
     cwd: options.cwd,
-    env: options.env ?? process.env,
+    env,
     stdout: "pipe",
     stderr: "pipe",
   });
