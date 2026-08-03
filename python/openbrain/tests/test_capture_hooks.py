@@ -1381,6 +1381,77 @@ class TestSessionStartParsesTheCapturedPayload:
         assert payload.source == "startup"
 
 
+class RecordingCanonClient:
+    """Stands in for OpenBrainClient at the wire boundary of `_canon_context`.
+
+    CanonPackReader replaces the whole factory, so it can never see what the
+    REAL factory puts on the wire -- which is exactly where #526 lived: a
+    `repo: null` argument the server rejects. This fake records the tool-call
+    arguments themselves.
+    """
+
+    instances: list[RecordingCanonClient] = []
+
+    def __init__(self, **kwargs: object) -> None:
+        """Record construction and start with no calls."""
+        self.calls: list[dict[str, object]] = []
+        RecordingCanonClient.instances.append(self)
+
+    def agent_context_pack(self, **arguments: object) -> dict[str, object]:
+        self.calls.append(arguments)
+        return {"sections": {}}
+
+    def close(self) -> None:
+        """Nothing to release; the shape is what run paths call."""
+
+
+class TestCanonReadOmitsAnUnderivableRepo:
+    """#526: a non-repo cwd must OMIT `repo` from the wire call, never send null.
+
+    The live server rejects `repo: null` outright, which killed the WHOLE pack
+    (profile/process included) for every session outside a git repo -- proven
+    2026-08-03 against the dogfood service with two probes differing only in
+    cwd. #517's design is that an underivable repo yields the server's defined
+    empty repo_facts state; that requires the key to be absent.
+    """
+
+    def test_a_none_repo_is_omitted_from_the_wire_call(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import openbrain_memory.client as client_module
+
+        from openbrain.apps.hooks.session import _canon_context
+
+        RecordingCanonClient.instances = []
+        monkeypatch.setattr(client_module, "OpenBrainClient", RecordingCanonClient)
+        settings = canon_settings().model_copy(update={"repo": None})
+
+        context = _canon_context(settings)
+
+        call = RecordingCanonClient.instances[0].calls[0]
+        assert "repo" not in call
+        # The rest of the scope still travels -- omitting repo narrows nothing
+        # else.
+        assert call["session_key"] == settings.session_key
+        assert call["requested_sections"] == list(settings.sections)
+        assert context.pack == {"sections": {}}
+
+    def test_a_derived_repo_still_binds_exactly(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import openbrain_memory.client as client_module
+
+        from openbrain.apps.hooks.session import _canon_context
+
+        RecordingCanonClient.instances = []
+        monkeypatch.setattr(client_module, "OpenBrainClient", RecordingCanonClient)
+        settings = canon_settings().model_copy(update={"repo": "king-signals"})
+
+        _canon_context(settings)
+
+        assert RecordingCanonClient.instances[0].calls[0]["repo"] == "king-signals"
+
+
 class TestSessionStartRequestsCanonOnly:
     """run_session_start requests the always-known layer and NOTHING episodic."""
 

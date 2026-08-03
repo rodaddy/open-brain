@@ -1064,16 +1064,24 @@ def _canon_context(settings: CanonSettings) -> CanonContext:
         timeout=CANON_REQUEST_TIMEOUT_SECONDS,
         retry_policy=RetryPolicy(attempts=1),
     )
+    # repo is OMITTED when None, never sent as null. The client method is a
+    # pure **arguments pass-through, so a None here reaches the wire as
+    # `repo: null` and the server rejects the whole call -- which killed the
+    # entire pack (profile/process included) for every non-repo cwd (#526),
+    # not the defined-empty repo_facts state #517 intended. Same shape as the
+    # receipts call's conditional repo above.
+    scope: dict[str, Any] = {
+        "agent": settings.agent,
+        "platform": settings.platform,
+        "server_id": settings.server_id,
+        "channel_id": settings.channel_id,
+        "session_key": settings.session_key,
+        "requested_sections": list(settings.sections),
+    }
+    if settings.repo is not None:
+        scope["repo"] = settings.repo
     try:
-        pack = client.agent_context_pack(
-            agent=settings.agent,
-            platform=settings.platform,
-            server_id=settings.server_id,
-            channel_id=settings.channel_id,
-            session_key=settings.session_key,
-            repo=settings.repo,
-            requested_sections=list(settings.sections),
-        )
+        pack = client.agent_context_pack(**scope)
     except BaseException:
         # agent_context_pack lazily opens the MCP session (``_ensure_session``);
         # if the call then raises after the slot was allocated, close it so the
