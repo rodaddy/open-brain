@@ -60,8 +60,24 @@ from pydantic import BaseModel, ConfigDict, SkipValidation
 
 from openbrain.apps.capture.deliver import Delivery, RawLane, deliver_new_turns
 from openbrain.apps.capture.watermark import WatermarkStore
+from openbrain.apps.hooks.receipts import (
+    note_capture,
+    note_compaction,
+    note_verified_recall_for_current_cycle,
+)
 from openbrain.config import CanonSettings, CaptureSettings, ConfigurationError
 from openbrain.models.turn import RawTurn, TurnRole
+
+#: The ``SessionStart`` ``source`` value that means "a compaction just finished".
+#:
+#: The one start that is a post-compaction read-back. A ``startup``, ``resume``,
+#: ``clear``, or ``fork`` start reads canon too, but it is not what the
+#: context-budget gate armed its block against, and recording a ``compact`` recall
+#: receipt for one would clear a block a real compaction had every right to hold.
+#: Observed on the captured ``compact`` variant of the fixture, which carries
+#: ``prompt_id`` and ``model`` the ``startup`` variant lacks
+#: (``tests/fixtures/captured_hooks/README.md``).
+COMPACT_SESSION_SOURCE = "compact"
 
 #: The Stop harness deadline, in seconds. NOT a content bound -- this is a TIME
 #: budget tied to an EXTERNAL limit: Claude Code kills a Stop hook that has not
@@ -180,13 +196,20 @@ class SessionStartHook(BaseModel):
     ``source`` is READ but does not gate injection: the ruling is that canon --
     the always-known layer -- loads on every session start regardless of trigger.
     Back-history is what varies by source, and back-history is explicit-on-request
-    (the resume flow), never auto-loaded here.
+    (the resume flow), never auto-loaded here. It DOES gate the receipt: only a
+    ``compact`` start is the post-compaction read-back the gate is waiting for.
+
+    ``cwd`` is carried for the receipt alone. Canon does not use it -- its scope is
+    configured -- but the context-budget gate files every receipt under a project
+    slug derived from this directory, so a receipt written without it is filed
+    where the gate never looks.
     """
 
     model_config = ConfigDict(extra="ignore")
 
     session_id: str | None = None
     source: str | None = None
+    cwd: Path | None = None
 
 
 class StopHook(BaseModel):
@@ -198,12 +221,18 @@ class StopHook(BaseModel):
     do-nothing outcome, not a parse failure. ``extra="ignore"`` because the real
     payload carries many more fields (``stop_hook_active``, ``effort``, ...)
     that capture has no interest in.
+
+    ``cwd`` is carried for the capture receipt alone -- the context-budget gate
+    files receipts under a project slug derived from it, so a receipt written
+    without it is filed where the gate never looks. Delivery itself does not use
+    it; the namespace stays token-derived server-side.
     """
 
     model_config = ConfigDict(extra="ignore")
 
     transcript_path: Path | None = None
     session_id: str | None = None
+    cwd: Path | None = None
 
 
 class SubagentStopHook(BaseModel):
@@ -274,7 +303,12 @@ class PostCompactHook(BaseModel):
     recorded, and it takes it straight from this payload rather than the
     transcript. All fields optional -- a hook can fire before one exists, a
     do-nothing outcome, not a parse failure -- and ``extra="ignore"`` drops
-    ``trigger``, ``cwd``, and the rest.
+    ``trigger`` and the rest.
+
+    ``cwd`` is carried for the compaction-cycle receipt alone. Recording the
+    summary does not need it, but the context-budget gate keys the cycle this hook
+    opens on a project slug derived from this directory, and that cycle is what
+    the following ``SessionStart`` recall must name to release the gate.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -283,6 +317,7 @@ class PostCompactHook(BaseModel):
     session_id: str | None = None
     prompt_id: str | None = None
     timestamp: str | None = None
+    cwd: Path | None = None
 
 
 class PostToolUseHook(BaseModel):
@@ -422,7 +457,7 @@ async def run_stop(
     store = WatermarkStore(settings.watermark_path)
 
     try:
-        return await deliver_new_turns(
+        delivery = await deliver_new_turns(
             payload.transcript_path, payload.session_id, store, started.lane
         )
     finally:
@@ -431,6 +466,14 @@ async def run_stop(
         # its own transport errors (``openbrain_memory.client.close``), so it
         # cannot itself break the delivery's outcome.
         started.close()
+
+    # Only reached when the delivery RETURNED, so the receipt is evidence rather
+    # than a claim: a raised delivery leaves the watermark unadvanced and skips
+    # this, which correctly leaves the gate's capture block standing. Written for
+    # a delivery of zero turns too -- the gate's question is "did this session
+    # reach Open Brain", and a turn with nothing new to send did.
+    note_capture(payload.session_id, payload.cwd)
+    return delivery
 
 
 async def run_subagent_stop(
@@ -584,6 +627,13 @@ async def run_post_compact(
         # same lifecycle rule run_stop and run_session_end own. The closer
         # swallows its own transport errors, so it cannot mask a send failure.
         started.close()
+
+    # AFTER the summary is stored, never before: this opens the compaction cycle
+    # the context-budget gate then blocks on, and arming that block for a
+    # compaction whose summary was never recorded would block the session over
+    # work that did not happen. It writes nothing and raises nothing when the cwd
+    # is out of scope or the receipt file is unwritable.
+    note_compaction(payload.session_id, payload.cwd)
     return True
 
 
@@ -852,12 +902,21 @@ async def run_session_start(
     build = canon_factory if canon_factory is not None else _canon_context
     context = build(settings)
     try:
-        return context.pack
+        pack = context.pack
     finally:
         # The read holds a server session slot; release it on every path, the
         # same lifecycle rule the capture capabilities own. The closer is
         # content-free and swallows its own transport errors.
         context.close()
+
+    # THE UNBLOCK, and only on a compaction restart. A ``startup`` or ``resume``
+    # start is not what the gate armed its read-back against, and writing a
+    # ``compact`` recall receipt for one would clear a block that a real
+    # compaction had every right to hold. Reached only after the read RETURNED,
+    # so the receipt is evidence the session really read canon back.
+    if payload.source == COMPACT_SESSION_SOURCE:
+        note_verified_recall_for_current_cycle(payload.session_id, payload.cwd)
+    return pack
 
 
 def _canon_context(settings: CanonSettings) -> CanonContext:
