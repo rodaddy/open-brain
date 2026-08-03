@@ -24,8 +24,8 @@ dependencies = [
 # that: it parses this table and imports every declared `module:attr`.
 #
 # Each script is declared only once its module exists. The remaining names from
-# the epic's "Home and shape" section -- `ob-memory-provider`,
-# `ob-claude-hook`, `ob-context-budget-gate` -- arrive with their modules.
+# the epic's "Home and shape" section -- `ob-memory-provider` and
+# `ob-claude-hook` -- arrive with their modules.
 #
 # THE LIFECYCLE HOOKS ARE NOT AMONG THEM, and that is the part this file used to
 # get wrong. PROV-9 (#418) shipped on 2026-08-01 in the SIBLING package: the
@@ -55,6 +55,12 @@ dependencies = [
 # The port is behaviour-preserving; whether PreToolUse should observe or
 # enforce remains OPEN as open-brain#451.
 ob-guard = "openbrain_provider.cli_guard:main"
+# The two hook gates (#419, PROV-10). These replace the six
+# `context-budget-gate.ts` and four `policy-refresh-gate.ts` registrations.
+# PROV-9's capture/lifecycle scripts live in the sibling `openbrain` package,
+# not here.
+openbrain-context-budget-gate = "openbrain_provider.context_budget_gate:_cli"
+openbrain-policy-refresh-gate = "openbrain_provider.policy_refresh_gate:_cli"
 
 [tool.uv.sources]
 openbrain-memory = { workspace = true }
