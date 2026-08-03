@@ -1,0 +1,684 @@
+[
+  {
+    "name": "ts-block-000",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"mcp2cli open-brain search_all --params '{}'\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "ts-block-001",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"/Users/rico/.local/bin/mcp2cli open-brain get_entity --params '{}'\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "ts-block-002",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"OPENBRAIN_TEST=1 mcp2cli open-brain session_load --params '{}'\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "ts-block-003",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"env TEST_MODE=1 mcp2cli open-brain search_all --params '{}'\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "ts-block-004",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo ready && mcp2cli open-brain search_all --params '{}'\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "ts-block-005",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"zsh -c 'mcp2cli open-brain search_all --params {}'\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "ts-block-006",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"bash -lc 'mcp2cli open-brain search_all --params {}'\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "ts-block-007",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo -u root -- mcp2cli open-brain search_all --params '{}'\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "ts-block-008",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"command -- mcp2cli open-brain search_all --params '{}'\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "ts-block-009",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"eval 'mcp2cli open-brain search_all --params {}'\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "ts-block-010",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"printf '%s\\\\n' item | xargs mcp2cli open-brain search_all\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "ts-block-011",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"find . -exec mcp2cli open-brain search_all ;\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "ts-block-012",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo \\\"$(mcp2cli open-brain search_all --params '{}')\\\"\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "ts-block-013",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"mcp2cli $'open-brain' search_all --params '{}'\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "ts-block-014",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"$'mcp2cli' open-brain search_all --params '{}'\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "ts-block-015",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"zsh -c $'mcp2cli open-brain search_all --params {}'\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "ts-block-016",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"$(printf mcp2cli) open-brain search_all --params '{}'\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "ts-block-017",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"mcp2cli $(printf open-brain) search_all --params '{}'\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "ts-block-018",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"${tool:-mcp2cli} open-brain search_all --params '{}'\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "ts-block-019",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"mcp2cli ${service:-open-brain} search_all --params '{}'\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "ts-block-020",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"tool=mcp2cli; service=open-brain; $tool $service search_all\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "ts-block-021",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"tool='mcp2cli'; service='open-brain'; \\\"$tool\\\" \\\"$service\\\" search_all\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "ts-block-022",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"tool=mcp2cli\\nservice=open-brain\\n${tool} ${service} search_all\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "ts-block-023",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"mcp2cli $service search --params '{}'\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "ts-block-024",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"$tool open-brain search_all --params '{}'\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "ts-block-025",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"$tool $service search_all --params '{}'\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "ts-block-026",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"tool=mcp2cli | service=open-brain; $tool $service search_all\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "ts-allow-027",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"mcp2cli qmd search --params '{}'\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "ts-allow-028",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"mcp2cli n8n list_workflows --params '{}'\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "ts-allow-029",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo 'mcp2cli open-brain search_all'\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "ts-allow-030",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"rg 'mcp2cli open-brain' _ob\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "ts-allow-031",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"printf '%s' 'mcp2cli open-brain'\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "ts-allow-032",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"printf '%s' $'mcp2cli open-brain'\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "ts-allow-033",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"rg $'mcp2cli open-brain' _ob\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "ts-allow-034",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo '$(mcp2cli open-brain search_all)'\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "ts-allow-035",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"printf '%s' '`mcp2cli open-brain search_all`'\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "ts-allow-036",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"mcp2cli $'qmd' search --params '{}'\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "ts-allow-037",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"$(printf mcp2cli) qmd search --params '{}'\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "ts-allow-038",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"tool=mcp2cli; service=qmd; $tool $service search --params '{}'\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "ts-allow-039",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"tool=printf; service=open-brain; $tool '%s' $service\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "ts-allow-040",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"tool=mcp2cli; service=open-brain; echo '$tool $service search_all'\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "ts-allow-041",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"tool=mcp2cli; service=open-brain; rg '$tool $service' _ob\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "ts-allow-042",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"tool=mcp2cli; service=open-brain; '$tool' '$service' search_all\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "extra-block-043",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"mcp2cli   open-brain   search_all\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "extra-block-044",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"nohup mcp2cli open-brain search_all &\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "extra-block-045",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"env -u FOO mcp2cli open-brain search_all\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "extra-block-046",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"env -S 'mcp2cli open-brain search_all'\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "extra-block-047",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"env FOO=1 -- mcp2cli open-brain search_all\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "extra-block-048",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"exec mcp2cli open-brain search_all\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "extra-block-049",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo --user root mcp2cli open-brain search_all\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "extra-block-050",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo -n mcp2cli open-brain search_all\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "extra-block-051",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sh -c 'sh -c \\\"mcp2cli open-brain search_all\\\"'\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "extra-block-052",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo hi; mcp2cli open-brain search_all\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "extra-block-053",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo hi || mcp2cli open-brain search_all\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "extra-block-054",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"true & mcp2cli open-brain search_all\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "extra-block-055",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"`mcp2cli open-brain search_all`\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "extra-block-056",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"find . -execdir mcp2cli open-brain search_all ;\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "extra-block-057",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"find . -ok mcp2cli open-brain search_all ;\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "extra-block-058",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"find . -okdir mcp2cli open-brain search_all ;\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "extra-block-059",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"printf x | xargs -I{} mcp2cli open-brain search_all\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "extra-block-060",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"zsh --command 'mcp2cli open-brain search_all'\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "extra-block-061",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"ksh -c 'mcp2cli open-brain search_all'\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "extra-block-062",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"dash -c 'mcp2cli open-brain search_all'\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "extra-block-063",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"bash -xc 'mcp2cli open-brain search_all'\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "extra-block-064",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"mcp2cli \\\"open-brain\\\" search_all\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "extra-block-065",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"'mcp2cli' 'open-brain' search_all\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "extra-block-066",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"/usr/local/bin/mcp2cli open-brain search_all\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "extra-block-067",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"tool=mcp2cli\\nservice=open-brain\\n$tool $service search_all\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "extra-block-068",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"mcp2cli open-brain\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "extra-block-069",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"mcp2cli open-brain search_all | head -5\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "extra-block-070",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"if true; then mcp2cli open-brain search_all; fi\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "extra-block-071",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"mcp2cli open-brain search_all > out.txt\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "extra-block-072",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"( mcp2cli open-brain search_all )\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "extra-allow-073",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git status --short\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "extra-allow-074",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"bun test\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "extra-allow-075",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"ls -la /Volumes/ThunderBolt\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "extra-allow-076",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"rg -n 'open-brain' --glob '*.ts'\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "extra-allow-077",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"aqmd \\\"how does the guard work\\\"\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "extra-allow-078",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"mcp2cli\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "extra-allow-079",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"mcp2cli open-brainx search\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "extra-allow-080",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"mcp2clix open-brain search\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "extra-allow-081",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"MCP2CLI=1 echo open-brain\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "extra-allow-082",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"# mcp2cli open-brain search_all\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "extra-allow-083",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo a # mcp2cli open-brain search_all\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "extra-allow-084",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cd /Volumes && echo hi\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "extra-allow-085",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "extra-allow-086",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"   \"}}",
+    "stdout": ""
+  },
+  {
+    "name": "extra-allow-087",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo mcp2cli qmd search\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "extra-allow-088",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"nohup mcp2cli qmd search &\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "extra-allow-089",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"env -u FOO mcp2cli qmd search\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "extra-allow-090",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"env -S 'mcp2cli qmd search'\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "extra-allow-091",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"xargs echo < list.txt\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "extra-allow-092",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"find . -name '*.ts'\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "extra-allow-093",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sh -c 'echo hi'\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "extra-allow-094",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"eval 'echo hi'\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "extra-allow-095",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo open-brain\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "extra-allow-096",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"mcp2cli vaultwarden-secrets get --params '{}'\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "extra-allow-097",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"openbrain-capture-stop\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "extra-allow-098",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"uv run pytest -q\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "shelltool-099",
+    "stdin": "{\"tool_name\":\"Shell\",\"tool_input\":{\"command\":\"mcp2cli open-brain search_all\"}}",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "shelltool-100",
+    "stdin": "{\"tool_name\":\"Shell\",\"tool_input\":{\"command\":\"echo safe\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "nonshell-101",
+    "stdin": "{\"tool_name\":\"Read\",\"tool_input\":{\"command\":\"mcp2cli open-brain search_all\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "nonshell-102",
+    "stdin": "{\"tool_name\":\"Edit\",\"tool_input\":{\"command\":\"mcp2cli open-brain search_all\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "nonshell-103",
+    "stdin": "{\"tool_name\":\"Task\",\"tool_input\":{\"prompt\":\"mcp2cli open-brain search_all\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "shape-104",
+    "stdin": "{\"tool_name\":\"Bash\"}",
+    "stdout": ""
+  },
+  {
+    "name": "shape-105",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{}}",
+    "stdout": ""
+  },
+  {
+    "name": "shape-106",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":42}}",
+    "stdout": ""
+  },
+  {
+    "name": "shape-107",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":\"mcp2cli open-brain search_all\"}",
+    "stdout": ""
+  },
+  {
+    "name": "shape-108",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":null}",
+    "stdout": ""
+  },
+  {
+    "name": "shape-109",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":[\"mcp2cli open-brain search_all\"]}",
+    "stdout": ""
+  },
+  {
+    "name": "shape-110",
+    "stdin": "{\"tool_input\":{\"command\":\"mcp2cli open-brain search_all\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "shape-111",
+    "stdin": "{\"tool_name\":7,\"tool_input\":{\"command\":\"mcp2cli open-brain search_all\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "shape-112",
+    "stdin": "{}",
+    "stdout": ""
+  },
+  {
+    "name": "raw-notjson-113",
+    "stdin": "not-json",
+    "stdout": ""
+  },
+  {
+    "name": "raw-empty-114",
+    "stdin": "",
+    "stdout": ""
+  },
+  {
+    "name": "raw-array-115",
+    "stdin": "[1,2,3]",
+    "stdout": ""
+  },
+  {
+    "name": "raw-string-116",
+    "stdin": "\"hello\"",
+    "stdout": ""
+  },
+  {
+    "name": "raw-number-117",
+    "stdin": "12",
+    "stdout": ""
+  },
+  {
+    "name": "raw-null-118",
+    "stdin": "null",
+    "stdout": ""
+  },
+  {
+    "name": "raw-unterminated-119",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo",
+    "stdout": ""
+  },
+  {
+    "name": "raw-oversize-safe-120",
+    "stdin_parts": [
+      "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo safe\",\"padding\":\"",
+      {
+        "repeat": "x",
+        "count": 70000
+      },
+      "\"}}"
+    ],
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "raw-oversize-hidden-toolname-121",
+    "stdin_parts": [
+      "{\"padding\":\"",
+      {
+        "repeat": "x",
+        "count": 70000
+      },
+      "\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"mcp2cli open-brain search_all\"}}"
+    ],
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "raw-oversize-read-122",
+    "stdin_parts": [
+      "{\"tool_name\":\"Read\",\"tool_input\":{\"path\":\"/safe\",\"padding\":\"",
+      {
+        "repeat": "x",
+        "count": 70000
+      },
+      "\"}}"
+    ],
+    "stdout": ""
+  },
+  {
+    "name": "raw-oversize-nested-toolname-only-123",
+    "stdin_parts": [
+      "{\"padding\":\"",
+      {
+        "repeat": "x",
+        "count": 70000
+      },
+      "\",\"nested\":{\"tool_name\":\"Read\"},\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo safe\"}}"
+    ],
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "raw-oversize-notoolname-124",
+    "stdin_parts": [
+      "{\"padding\":\"",
+      {
+        "repeat": "x",
+        "count": 70000
+      },
+      "\",\"tool_input\":{\"command\":\"echo safe\"}}"
+    ],
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Claude uses the direct openbrain-memory adapter; executable mcp2cli open-brain commands are blocked. qmd and other mcp2cli services remain allowed.\"}\n"
+  },
+  {
+    "name": "raw-oversize-read-first-125",
+    "stdin_parts": [
+      "{\"tool_name\":\"Read\",\"padding\":\"",
+      {
+        "repeat": "x",
+        "count": 70000
+      },
+      "\",\"tool_input\":{\"command\":\"echo safe\"}}"
+    ],
+    "stdout": ""
+  },
+  {
+    "name": "raw-nonascii-126",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo é — ✓\"}}",
+    "stdout": ""
+  },
+  {
+    "name": "raw-at-threshold-127",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo safe\"}}                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       ",
+    "stdout": ""
+  }
+]

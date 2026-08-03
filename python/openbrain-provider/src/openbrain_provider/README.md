@@ -24,10 +24,15 @@ Architecture:
     declared once here rather than restated per call site -- the duplication
     that produced two divergent copies in #412.
 
-    Incremental by design (#409): configuration, observability, and vocabulary
-    are present. Request parsing, receipt construction, dispatch, reflex, and
-    observation land in later slices. Nothing here is a placeholder; what is
-    exported works, and what is absent is absent.
+    Incremental by design (#409): configuration, observability, vocabulary, and
+    the ``ob-guard`` PreToolUse guard are present. Request parsing, receipt
+    construction, dispatch, reflex, and observation land in later slices.
+    Nothing here is a placeholder; what is exported works, and what is absent
+    is absent.
+
+    The guard is deliberately NOT re-exported here. It is an enforcement tool
+    invoked as a process by a hook, not a capability another module composes
+    with, and importing it would imply a coupling that does not exist.
 
 Key Components:
     - load_config / ProviderConfig: validated settings, read once at start
@@ -35,6 +40,9 @@ Key Components:
     - ConfigError: raised at boot on a bad setting, never at first use
     - configure_observability / logger: the single configured logging entry
     - EVENT_TYPES / is_valid_event_type: the one event vocabulary
+    - guard / shell_lexer / cli_guard: the ``ob-guard`` PreToolUse guard, a
+      standalone enforcement tool reached through its console script rather
+      than this package's importable surface
 
 Pattern/Convention:
     Configuration is read in ``config`` and nowhere else. A module that needs a
