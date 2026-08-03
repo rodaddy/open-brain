@@ -32,9 +32,7 @@ def _work_transcript(root: Path) -> str:
                 json.dumps(
                     {
                         "type": "assistant",
-                        "message": {
-                            "content": [{"type": "tool_use", "name": "Write"}]
-                        },
+                        "message": {"content": [{"type": "tool_use", "name": "Write"}]},
                     }
                 ),
             ]

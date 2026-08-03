@@ -331,9 +331,7 @@ def save_session_state(
     )
 
 
-def record_transition(
-    state: SessionState, name: str, now: str, reason: str
-) -> None:
+def record_transition(state: SessionState, name: str, now: str, reason: str) -> None:
     """Append one named transition to the session's log.
 
     Args:

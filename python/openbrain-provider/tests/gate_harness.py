@@ -161,15 +161,24 @@ def run_gate(
     stdin_payload.setdefault("session_id", session_id)
     stdin_payload.setdefault("cwd", DEVELOPMENT_CWD)
     argv = [
-        "--event", event,
-        "--state-path", str(paths.state),
-        "--receipt-state-path", str(paths.receipts),
-        "--settings-path", str(paths.settings),
-        "--policy-state-path", str(paths.policy_state),
-        "--spool-path", str(paths.spool),
-        "--session-id", str(stdin_payload["session_id"]),
-        "--nag-tokens", "200000",
-        "--hard-tokens", "250000",
+        "--event",
+        event,
+        "--state-path",
+        str(paths.state),
+        "--receipt-state-path",
+        str(paths.receipts),
+        "--settings-path",
+        str(paths.settings),
+        "--policy-state-path",
+        str(paths.policy_state),
+        "--spool-path",
+        str(paths.spool),
+        "--session-id",
+        str(stdin_payload["session_id"]),
+        "--nag-tokens",
+        "200000",
+        "--hard-tokens",
+        "250000",
     ]
     if project:
         argv += ["--project", project]
@@ -212,11 +221,16 @@ def run_policy_gate(
     stdin_payload.setdefault("session_id", session_id)
     stdin_payload.setdefault("cwd", DEVELOPMENT_CWD)
     argv = [
-        "--event", event,
-        "--state-path", str(state_path),
-        "--agent", agent,
-        "--runtime", runtime,
-        "--session-id", str(stdin_payload["session_id"]),
+        "--event",
+        event,
+        "--state-path",
+        str(state_path),
+        "--agent",
+        agent,
+        "--runtime",
+        runtime,
+        "--session-id",
+        str(stdin_payload["session_id"]),
     ] + (extra or [])
     stdout = io.StringIO()
     code = policy_refresh_gate.main(

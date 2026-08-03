@@ -45,11 +45,48 @@ __all__ = [
 #: mutating flags, because the binary alone does not settle it.
 READONLY_BASH: Final[frozenset[str]] = frozenset(
     {
-        "ls", "cat", "head", "tail", "grep", "rg", "egrep", "fgrep", "find", "fd",
-        "wc", "stat", "file", "du", "df", "tree", "realpath", "dirname", "basename",
-        "echo", "printf", "pwd", "whoami", "id", "date", "hostname", "uname",
-        "which", "type", "printenv", "sort", "uniq", "cut", "tr", "column",
-        "jq", "diff", "sed", "awk", "test", "sw_vers", "uuidgen",
+        "ls",
+        "cat",
+        "head",
+        "tail",
+        "grep",
+        "rg",
+        "egrep",
+        "fgrep",
+        "find",
+        "fd",
+        "wc",
+        "stat",
+        "file",
+        "du",
+        "df",
+        "tree",
+        "realpath",
+        "dirname",
+        "basename",
+        "echo",
+        "printf",
+        "pwd",
+        "whoami",
+        "id",
+        "date",
+        "hostname",
+        "uname",
+        "which",
+        "type",
+        "printenv",
+        "sort",
+        "uniq",
+        "cut",
+        "tr",
+        "column",
+        "jq",
+        "diff",
+        "sed",
+        "awk",
+        "test",
+        "sw_vers",
+        "uuidgen",
     }
 )
 
@@ -57,8 +94,14 @@ READONLY_BASH: Final[frozenset[str]] = frozenset(
 #: are permitted regardless of gate state.
 _ALWAYS_ALLOWED_TOOLS: Final[frozenset[str]] = frozenset(
     {
-        "read", "grep", "glob", "tasklist", "taskget",
-        "askuserquestion", "skill", "toolsearch",
+        "read",
+        "grep",
+        "glob",
+        "tasklist",
+        "taskget",
+        "askuserquestion",
+        "skill",
+        "toolsearch",
     }
 )
 
@@ -379,9 +422,7 @@ def _is_gate_repair_command(
         event_index = words.index("--event", index + 1)
     except ValueError:
         return False
-    return (
-        event_index + 1 < len(words) and words[event_index + 1] == required_event
-    )
+    return event_index + 1 < len(words) and words[event_index + 1] == required_event
 
 
 def _provider_events_allowed_by_state(state: SessionState) -> frozenset[str]:

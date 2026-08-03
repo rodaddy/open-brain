@@ -158,9 +158,7 @@ def test_the_recovery_command_is_accepted_in_every_equivalent_spelling(
             id="no-payload",
         ),
         pytest.param(
-            lambda command: command.replace(
-                "--event session-start", "--event capture"
-            ),
+            lambda command: command.replace("--event session-start", "--event capture"),
             id="wrong-event",
         ),
         pytest.param(
@@ -438,7 +436,7 @@ def test_the_read_only_allowance_admits_reading(tmp_path: Path, command: str) ->
     "command",
     [
         "mcp2cli qmd search --params '{}'",
-        "mcp2cli open-brain session_load --params '{\"project\":\"Development\"}'",
+        'mcp2cli open-brain session_load --params \'{"project":"Development"}\'',
     ],
 )
 def test_another_tools_memory_command_is_not_this_gates_evidence(

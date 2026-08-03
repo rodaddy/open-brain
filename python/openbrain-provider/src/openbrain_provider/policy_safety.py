@@ -195,8 +195,7 @@ def tmp_write_block_reason(
         path = _file_path_of(tool_input)
         if _TMP_FILE_PATH.search(path):
             return (
-                "That path does not exist as an agent-writable location. "
-                f"{_TMP_REMEDY}"
+                f"That path does not exist as an agent-writable location. {_TMP_REMEDY}"
             )
         return None
 
@@ -319,7 +318,7 @@ def _shell_safety_block_reason(command: str, command_cwd: str) -> str | None:
         )
     if _CLAUDE_WORKTREE.search(command):
         return (
-            "Do not use `claude --worktree` directly. Use `gwt \"name\"` with the "
+            'Do not use `claude --worktree` directly. Use `gwt "name"` with the '
             "intended runtime."
         )
     if _GH_PR_MERGE.search(command) and _GH_MERGE_AUTOMATIC.search(command):

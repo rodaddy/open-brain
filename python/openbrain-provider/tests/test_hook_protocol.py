@@ -75,9 +75,7 @@ def test_both_tool_field_spellings_are_accepted() -> None:
         )
     )
     codex = read_hook_event(
-        io.StringIO(
-            json.dumps({"toolName": "Write", "toolInput": {"file_path": "a"}})
-        )
+        io.StringIO(json.dumps({"toolName": "Write", "toolInput": {"file_path": "a"}}))
     )
 
     assert claude.tool_name == codex.tool_name == "Write"
@@ -138,12 +136,18 @@ def test_the_budget_gate_survives_an_empty_event(tmp_path: Path, event: str) -> 
     stdout = io.StringIO()
     code = context_budget_gate.main(
         [
-            "--event", event,
-            "--state-path", str(paths.state),
-            "--receipt-state-path", str(paths.receipts),
-            "--settings-path", str(paths.settings),
-            "--policy-state-path", str(paths.policy_state),
-            "--spool-path", str(paths.spool),
+            "--event",
+            event,
+            "--state-path",
+            str(paths.state),
+            "--receipt-state-path",
+            str(paths.receipts),
+            "--settings-path",
+            str(paths.settings),
+            "--policy-state-path",
+            str(paths.policy_state),
+            "--spool-path",
+            str(paths.spool),
         ],
         stdin=io.StringIO(""),
         stdout=stdout,

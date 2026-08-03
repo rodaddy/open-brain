@@ -74,9 +74,7 @@ def test_checkpoint_done_accepts_only_a_verified_remote_receipt(
     paths = gate_paths(tmp_path)
     transcript = _usage_transcript(tmp_path, 260_000)
 
-    warned = run_gate(
-        paths, "user-prompt-submit", {"transcript_path": transcript}
-    )
+    warned = run_gate(paths, "user-prompt-submit", {"transcript_path": transcript})
     payload = warned.json
     assert str(payload["systemMessage"]).startswith("OB ")
     assert "automatic compaction" in payload["hookSpecificOutput"]["additionalContext"]

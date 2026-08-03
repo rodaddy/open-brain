@@ -197,9 +197,7 @@ def _build_parser(env: dict[str, str]) -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--repair-reason", default="")
-    parser.add_argument(
-        "--repair-minutes", type=int, default=_DEFAULT_REPAIR_MINUTES
-    )
+    parser.add_argument("--repair-minutes", type=int, default=_DEFAULT_REPAIR_MINUTES)
     parser.add_argument(
         "--gate-script-path",
         default="",
@@ -725,9 +723,7 @@ def main(
         a non-zero exit means the hook itself failed.
     """
     environment = dict(os.environ) if env is None else env
-    args = _build_parser(environment).parse_args(
-        sys.argv[1:] if argv is None else argv
-    )
+    args = _build_parser(environment).parse_args(sys.argv[1:] if argv is None else argv)
     event = read_hook_event(stdin)
     gate = _Gate(args, event, stdout)
     handler = _HANDLERS[gate.event_name]

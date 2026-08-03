@@ -130,7 +130,7 @@ def startup_context(command_cwd: str, runtime: str) -> str:
         "- Pony style is active by default: identify the owning boundary, make "
         "the smallest correct owned change, preserve callers/invariants, and "
         "verify.",
-        '- Say what you mean: verify before asserting. Every factual claim about '
+        "- Say what you mean: verify before asserting. Every factual claim about "
         "the system comes from something checked this session, not memory or "
         'inference. Name the exact object. "I don\'t know yet" is a complete '
         "answer; a guess in the grammar of a fact is not. Do not agree "
@@ -236,7 +236,6 @@ def refresh_context(refreshed: int) -> str:
             "- Critical: challenge assumptions, surface risk, ask if ambiguity "
             "matters.",
             "- Source order: source/live state > OB/qmd > memory/summary.",
-            "- Next action must name the controlling SOPs and concrete "
-            "verification.",
+            "- Next action must name the controlling SOPs and concrete verification.",
         ]
     )

@@ -400,8 +400,7 @@ def _stale_block_reason(gate: _Gate) -> str:
             "Policy refresh is required before risky task action.",
             f"Reason: {reason}.",
             "",
-            "Before continuing, reread the active router and triggered SOPs, "
-            "then run:",
+            "Before continuing, reread the active router and triggered SOPs, then run:",
             command,
             "",
             "Refresh must restate Pony style, critical mode, source-of-truth "

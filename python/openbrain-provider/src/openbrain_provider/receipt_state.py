@@ -502,9 +502,7 @@ def _write_state(path: Path, state: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.parent.chmod(0o700)
     temporary = path.with_name(f"{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
-    descriptor = os.open(
-        temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
-    )
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
         with os.fdopen(descriptor, "w", encoding="utf8") as handle:
             handle.write(encoded)
@@ -570,9 +568,7 @@ def _create_owned_lock(lock_path: Path, token: str) -> bool:
     import os
 
     try:
-        descriptor = os.open(
-            lock_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
-        )
+        descriptor = os.open(lock_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except FileExistsError:
         return False
     except OSError:
