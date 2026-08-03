@@ -38,6 +38,7 @@ See Also:
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -68,6 +69,29 @@ _GIT_TIMEOUT_SECONDS = 2.0
 #: Characters a slug may keep; everything else becomes ``-``. Matches the
 #: TypeScript ``replace(/[^a-zA-Z0-9._-]/g, "-")``.
 _SLUG_UNSAFE = re.compile(r"[^a-zA-Z0-9._-]")
+
+#: Git environment variables that OVERRIDE ``git -C`` and must be cleared.
+#:
+#: This is not hypothetical tidiness -- it was measured. ``git push`` exports
+#: ``GIT_DIR`` and ``GIT_WORK_TREE`` to its hooks, and ``GIT_WORK_TREE`` beats
+#: ``-C``: inside a pre-push hook, ``git -C <any path> rev-parse --show-toplevel``
+#: answered ``/Volumes/ThunderBolt/Development`` for EVERY directory asked about.
+#: Every receipt in every repo would then be filed under the single project slug
+#: ``Development``, and the gate -- which keys its blocks per project -- would
+#: never match one.
+#:
+#: Caught 2026-08-03 by the scope tests failing under the pre-push hook while
+#: passing when run directly. Cleared rather than merely documented, because a
+#: hook is exactly where these hooks run.
+_OVERRIDING_GIT_ENV = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_COMMON_DIR",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CEILING_DIRECTORIES",
+)
 
 
 class DevelopmentScope(BaseModel):
@@ -210,6 +234,10 @@ def _git_path(cwd: Path, selector: str) -> Path | None:
 
     Never raises. Scope resolution runs inside a hook, and a git that is absent or
     slow must degrade to "no scope" rather than break the session.
+
+    Runs with :data:`_OVERRIDING_GIT_ENV` stripped, because those variables beat
+    ``-C`` and would make every directory answer with the invoking repository's
+    paths instead of its own.
     """
     try:
         completed = subprocess.run(  # noqa: S603 -- fixed argv, no shell, no user input in the command
@@ -218,6 +246,7 @@ def _git_path(cwd: Path, selector: str) -> Path | None:
             text=True,
             timeout=_GIT_TIMEOUT_SECONDS,
             check=False,
+            env=_git_environment(),
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -227,6 +256,24 @@ def _git_path(cwd: Path, selector: str) -> Path | None:
 
     reported = completed.stdout.strip()
     return Path(reported) if reported else None
+
+
+def _git_environment() -> dict[str, str]:
+    """This process's environment with git's repository overrides removed.
+
+    Returns:
+        A copy of ``os.environ`` without :data:`_OVERRIDING_GIT_ENV`.
+
+    A copy, not a mutation: this runs inside a hook whose parent process owns
+    those variables, and clearing them globally would change the behaviour of
+    anything else that shells out to git afterwards. Only the child sees them
+    gone.
+    """
+    return {
+        name: value
+        for name, value in os.environ.items()
+        if name not in _OVERRIDING_GIT_ENV
+    }
 
 
 def _canonical_directory(path: Path) -> Path | None:

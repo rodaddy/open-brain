@@ -212,6 +212,34 @@ def test_a_temp_directory_that_is_not_a_worktree_does_not_resolve(
     assert resolve_development_scope(tmp_path) is None
 
 
+def test_git_env_overrides_do_not_hijack_the_slug(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A hook's inherited ``GIT_WORK_TREE`` must not rename every project.
+
+    MEASURED, not theoretical. ``git push`` exports ``GIT_DIR`` and
+    ``GIT_WORK_TREE`` to its hooks, and ``GIT_WORK_TREE`` BEATS ``git -C``: with
+    it set, ``rev-parse --show-toplevel`` answers the invoking repository for
+    every directory asked about. This test failed exactly that way inside the
+    pre-push hook on 2026-08-03 while passing when run directly -- ``open-brain``
+    resolved as ``Development``.
+
+    The consequence is the quiet kind: every repo's receipts would be filed under
+    one slug, and the gate -- which keys its blocks per project -- would match
+    none of them. Nothing would raise; the gate would simply stop unblocking.
+
+    Reproduces the hook's environment exactly, so it fails against the old
+    behaviour and passes only because the subprocess environment is stripped.
+    """
+    monkeypatch.setenv("GIT_DIR", str(DEVELOPMENT_ROOT / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(DEVELOPMENT_ROOT))
+
+    scope = resolve_development_scope(REPO_INSIDE_DEVELOPMENT)
+
+    assert scope is not None
+    assert scope.project == "open-brain"
+
+
 def test_the_fallback_slug_is_never_empty() -> None:
     """Whatever happens, a resolved scope carries a usable slug.
 
