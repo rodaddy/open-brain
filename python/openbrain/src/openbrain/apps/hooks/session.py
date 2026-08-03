@@ -56,16 +56,28 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from loguru import logger
 from pydantic import BaseModel, ConfigDict, SkipValidation
 
 from openbrain.apps.capture.deliver import Delivery, RawLane, deliver_new_turns
+from openbrain.apps.capture.langfuse_emitter import LangfuseEmitter
+from openbrain.apps.capture.observe import (
+    ObservationEmitter,
+    observation_active,
+    observe_new_turns,
+)
 from openbrain.apps.capture.watermark import WatermarkStore
 from openbrain.apps.hooks.receipts import (
     note_capture,
     note_compaction,
     note_verified_recall_for_current_cycle,
 )
-from openbrain.config import CanonSettings, CaptureSettings, ConfigurationError
+from openbrain.config import (
+    CanonSettings,
+    CaptureSettings,
+    ConfigurationError,
+    ObservationSettings,
+)
 from openbrain.models.turn import RawTurn, TurnRole
 
 #: The ``SessionStart`` ``source`` value that means "a compaction just finished".
@@ -428,6 +440,9 @@ async def run_stop(
     settings: CaptureSettings,
     *,
     lane_factory: Callable[[CaptureSettings, str], StartedLane] | None = None,
+    observation: ObservationSettings | None = None,
+    emitter_factory: Callable[[ObservationSettings], ObservationEmitter]
+    | None = None,
 ) -> Delivery | None:
     """Deliver the turns written since the watermark for one ``Stop`` payload.
 
@@ -438,6 +453,11 @@ async def run_stop(
         lane_factory: Builds the :class:`StartedLane` for a session key. Injected
             so tests hand in a recorder; defaults to a real ``openbrain_memory``
             client with its session started.
+        observation: The observation sink's coordinates (#523), or ``None`` to
+            observe nothing. Passed by the entrypoint like ``settings`` is; an
+            inactive or absent sink is an ordinary state, not a failure.
+        emitter_factory: Builds the observation emitter. Injected so tests hand
+            in a recorder; defaults to the real Langfuse client.
 
     Returns:
         The :class:`~openbrain.apps.capture.deliver.Delivery`, or ``None`` when
@@ -448,6 +468,9 @@ async def run_stop(
         Whatever the lane or the reader raises. The ENTRYPOINT swallows these;
         this capability surfaces them so its tests can see a failure and so the
         watermark is left unadvanced (the spine's rule), which is the retry.
+        The OBSERVATION lane never raises out of here: its failure is logged
+        content-free and its own watermark stays unadvanced, so it retries on
+        the next Stop without ever holding the memory lane back.
     """
     if payload.transcript_path is None or payload.session_id is None:
         return None
@@ -473,7 +496,47 @@ async def run_stop(
     # a delivery of zero turns too -- the gate's question is "did this session
     # reach Open Brain", and a turn with nothing new to send did.
     note_capture(payload.session_id, payload.cwd)
+
+    # The second sink (#523), after the receipt because it must never affect
+    # it. Ordered after the memory delivery on purpose: when the memory lane
+    # raises, this is never reached, both watermarks stay put, and the next
+    # Stop retries both lanes -- neither ever advances past the other's
+    # failure into inconsistency.
+    await _observe_best_effort(
+        payload.transcript_path,
+        payload.session_id,
+        store,
+        observation,
+        emitter_factory,
+    )
     return delivery
+
+
+async def _observe_best_effort(
+    path: Path,
+    session_key: str,
+    store: WatermarkStore,
+    observation: ObservationSettings | None,
+    emitter_factory: Callable[[ObservationSettings], ObservationEmitter] | None,
+) -> None:
+    """Run the observation lane, declining quietly and failing silently.
+
+    Declining (no settings, disabled, missing coordinates) is not logged at
+    all -- most hosts will run with the sink off, and a warning per Stop would
+    be noise presented as a problem. A FAILURE of an active sink is logged as
+    the exception class alone, the entrypoints' content-free convention: a
+    transport error's message can carry the endpoint.
+    """
+    if observation is None or not observation_active(observation):
+        return
+    build = emitter_factory if emitter_factory is not None else LangfuseEmitter
+    try:
+        await observe_new_turns(path, session_key, store, build(observation))
+    except Exception as error:  # noqa: BLE001 -- observation never breaks capture
+        logger.warning(
+            "observation emit failed ({}); turns left for retry",
+            type(error).__name__,
+        )
 
 
 async def run_subagent_stop(
@@ -481,6 +544,9 @@ async def run_subagent_stop(
     settings: CaptureSettings,
     *,
     lane_factory: Callable[[CaptureSettings, str], StartedLane] | None = None,
+    observation: ObservationSettings | None = None,
+    emitter_factory: Callable[[ObservationSettings], ObservationEmitter]
+    | None = None,
 ) -> Delivery | None:
     """Deliver the subagent's unread turns, keyed to its own transcript.
 
@@ -489,6 +555,10 @@ async def run_subagent_stop(
         settings: The ``capture`` configuration section.
         lane_factory: Builds the :class:`StartedLane`; injected for tests,
             defaults to the real ``openbrain_memory`` client.
+        observation: The observation sink's coordinates, passed through to
+            :func:`run_stop` unchanged -- a subagent's turns are observed under
+            its own watermark key the same way they are captured under it.
+        emitter_factory: Builds the observation emitter; injected for tests.
 
     Returns:
         The :class:`~openbrain.apps.capture.deliver.Delivery`, or ``None`` when
@@ -510,6 +580,8 @@ async def run_subagent_stop(
         StopHook(transcript_path=payload.agent_transcript_path, session_id=key),
         settings,
         lane_factory=lane_factory,
+        observation=observation,
+        emitter_factory=emitter_factory,
     )
 
 

@@ -48,6 +48,7 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from openbrain.apps.hooks.session import SubagentStopHook, run_subagent_stop
+from openbrain.apps.hooks.stop import loaded_observation
 from openbrain.config import load_capture_settings
 
 if TYPE_CHECKING:
@@ -88,7 +89,11 @@ def capture_subagent_stop_with(
         raw = stream.read()
         payload = SubagentStopHook.model_validate_json(raw)
         capture = settings if settings is not None else load_capture_settings()
-        asyncio.run(run_subagent_stop(payload, capture))
+        asyncio.run(
+            run_subagent_stop(
+                payload, capture, observation=loaded_observation()
+            )
+        )
     except Exception as error:  # noqa: BLE001 -- an observer must never break its subject
         # Content-free BY CONSTRUCTION: only the exception class name is passed,
         # never the exception object, so no transcript text or token reaches the
