@@ -197,8 +197,55 @@ def operator_line(
 
 
 def assistant_line(uuid: str) -> str:
-    """Build one assistant transcript line -- not an operator turn."""
+    """Build one assistant line that SAID NOTHING -- no text blocks at all.
+
+    Still not a captured turn after #447 restored the agent side, and for a
+    reason worth keeping distinct: it is declined for holding no spoken text,
+    NOT for being the assistant. Use :func:`assistant_says` for a reply that
+    actually speaks.
+    """
     return json.dumps({"type": "assistant", "uuid": uuid, "message": {"content": []}})
+
+
+def assistant_says(
+    uuid: str,
+    *blocks: dict[str, Any],
+    session: str = "s1",
+    timestamp: str = TIMESTAMP,
+) -> str:
+    """Build one assistant line carrying the given content blocks (#447).
+
+    The assistant's half is ALWAYS the list shape -- measured 2026-08-03 across
+    134 live assistant records, none of which used a bare string -- so blocks are
+    passed through exactly as the transcript writes them and callers build the
+    mix they mean to test (``text``, ``tool_use``, ``thinking``).
+    """
+    return json.dumps(
+        {
+            "type": "assistant",
+            "uuid": uuid,
+            "sessionId": session,
+            "cwd": "/repo",
+            "parentUuid": None,
+            "timestamp": timestamp,
+            "message": {"role": "assistant", "content": list(blocks)},
+        }
+    )
+
+
+def text_block(text: str) -> dict[str, Any]:
+    """An assistant ``text`` block -- words that appeared on screen."""
+    return {"type": "text", "text": text}
+
+
+def thinking_block(text: str) -> dict[str, Any]:
+    """An assistant ``thinking`` block -- chain-of-thought, never stored."""
+    return {"type": "thinking", "thinking": text}
+
+
+def tool_use_block(name: str) -> dict[str, Any]:
+    """An assistant ``tool_use`` block -- machinery, left to the open question."""
+    return {"type": "tool_use", "name": name, "input": {"command": "ls"}}
 
 
 def write_lines(path: Path, lines: list[str]) -> None:
