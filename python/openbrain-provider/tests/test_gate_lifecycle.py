@@ -15,6 +15,7 @@ from pathlib import Path
 
 from gate_harness import (
     SESSION,
+    GatePaths,
     gate_paths,
     read_session_state,
     record_receipt,
@@ -42,10 +43,14 @@ def _work_transcript(root: Path) -> str:
     return str(path)
 
 
-def _policy_state(paths: object, refresh_required: object) -> None:
-    """Write a policy state file the gate will read for this session."""
-    assert hasattr(paths, "policy_state")
-    paths.policy_state.write_text(  # type: ignore[attr-defined]
+def _policy_state(paths: GatePaths, refresh_required: object) -> None:
+    """Write a policy state file the gate will read for this session.
+
+    `refresh_required` is deliberately `object`: the field arrives from JSON on
+    disk, so a truthy non-bool is a real input the gate has to handle, and one
+    caller below passes `1` to prove it.
+    """
+    paths.policy_state.write_text(
         json.dumps(
             {"sessions": {f"claude:{SESSION}": {"refreshRequired": refresh_required}}}
         ),

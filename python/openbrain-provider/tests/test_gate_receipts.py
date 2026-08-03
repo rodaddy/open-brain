@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import NamedTuple
 
 from gate_harness import (
     PROJECT,
@@ -26,6 +27,15 @@ from gate_harness import (
 )
 
 from openbrain_provider.development_scope import resolve_development_scope
+
+
+class WrongReceipt(NamedTuple):
+    """A receipt that looks valid but must not clear the gate."""
+
+    session_id: str
+    project: str
+    #: `None` means "now" -- only the age case sets an explicit instant.
+    recorded_at: str | None
 
 
 def _usage_transcript(root: Path, tokens: int) -> str:
@@ -108,13 +118,9 @@ def test_checkpoint_evidence_is_scoped_and_fresh(tmp_path: Path) -> None:
     # context it proved is gone.
     paths = gate_paths(tmp_path)
     cases = [
-        {"session_id": "other-session", "project": PROJECT, "recorded_at": None},
-        {"session_id": SESSION, "project": "other-project", "recorded_at": None},
-        {
-            "session_id": SESSION,
-            "project": PROJECT,
-            "recorded_at": iso(datetime.now(UTC) - timedelta(minutes=21)),
-        },
+        WrongReceipt("other-session", PROJECT, None),
+        WrongReceipt(SESSION, "other-project", None),
+        WrongReceipt(SESSION, PROJECT, iso(datetime.now(UTC) - timedelta(minutes=21))),
     ]
     for case in cases:
         record_receipt(
@@ -123,9 +129,9 @@ def test_checkpoint_evidence_is_scoped_and_fresh(tmp_path: Path) -> None:
             "saved",
             True,
             "explicit",
-            case["recorded_at"],
-            project=str(case["project"]),
-            session_id=str(case["session_id"]),
+            case.recorded_at,
+            project=case.project,
+            session_id=case.session_id,
         )
         refused = run_gate(paths, "checkpoint-done")
         assert refused.code == 1, case
