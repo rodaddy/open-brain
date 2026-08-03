@@ -1,0 +1,992 @@
+[
+  {
+    "name": "budget-status-fresh",
+    "script": "budget",
+    "argv": [
+      "--event",
+      "status",
+      "--state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/budget-state.json",
+      "--receipt-state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/receipts.json",
+      "--settings-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/settings.json",
+      "--policy-state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/policy-state.json",
+      "--spool-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/spool.jsonl",
+      "--session-id",
+      "rec-1",
+      "--nag-tokens",
+      "200000",
+      "--hard-tokens",
+      "250000",
+      "--project",
+      "Development"
+    ],
+    "stdin": {
+      "session_id": "rec-1",
+      "cwd": "/Volumes/ThunderBolt/Development"
+    },
+    "stdout": "{\n  \"sessionId\": \"rec-1\",\n  \"project\": \"Development\",\n  \"contextTokens\": 0,\n  \"nagAt\": 200000,\n  \"hardAt\": 250000,\n  \"checkpointRequired\": false,\n  \"preCompactTaskBlocking\": false,\n  \"readbackRequired\": false,\n  \"captureRequired\": false,\n  \"repairModeActive\": false,\n  \"repairModeEnteredAt\": null,\n  \"repairModeExpiresAt\": null,\n  \"lastWriteAt\": null,\n  \"checkpointAt\": null,\n  \"policyStale\": null,\n  \"spoolPending\": 0,\n  \"statusLine\": \"OB ✓ recall ok · policy — · capture ok · spool 0\",\n  \"pendingClearedNotices\": [],\n  \"transitions\": []\n}\n",
+    "stderr": "",
+    "status": 0
+  },
+  {
+    "name": "budget-user-prompt-submit-clean",
+    "script": "budget",
+    "argv": [
+      "--event",
+      "user-prompt-submit",
+      "--state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/budget-state.json",
+      "--receipt-state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/receipts.json",
+      "--settings-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/settings.json",
+      "--policy-state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/policy-state.json",
+      "--spool-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/spool.jsonl",
+      "--session-id",
+      "rec-1",
+      "--nag-tokens",
+      "200000",
+      "--hard-tokens",
+      "250000",
+      "--project",
+      "Development"
+    ],
+    "stdin": {
+      "session_id": "rec-1",
+      "cwd": "/Volumes/ThunderBolt/Development"
+    },
+    "stdout": "{\"systemMessage\":\"OB ✓ recall ok · policy — · capture ok · spool 0\"}\n",
+    "stderr": "",
+    "status": 0
+  },
+  {
+    "name": "budget-pre-tool-use-clean",
+    "script": "budget",
+    "argv": [
+      "--event",
+      "pre-tool-use",
+      "--state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/budget-state.json",
+      "--receipt-state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/receipts.json",
+      "--settings-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/settings.json",
+      "--policy-state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/policy-state.json",
+      "--spool-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/spool.jsonl",
+      "--session-id",
+      "rec-1",
+      "--nag-tokens",
+      "200000",
+      "--hard-tokens",
+      "250000",
+      "--project",
+      "Development"
+    ],
+    "stdin": {
+      "session_id": "rec-1",
+      "cwd": "/Volumes/ThunderBolt/Development",
+      "tool_name": "Read",
+      "tool_input": {
+        "file_path": "/x"
+      }
+    },
+    "stdout": "",
+    "stderr": "",
+    "status": 0
+  },
+  {
+    "name": "budget-session-start-startup",
+    "script": "budget",
+    "argv": [
+      "--event",
+      "session-start",
+      "--state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/budget-state.json",
+      "--receipt-state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/receipts.json",
+      "--settings-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/settings.json",
+      "--policy-state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/policy-state.json",
+      "--spool-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/spool.jsonl",
+      "--session-id",
+      "rec-1",
+      "--nag-tokens",
+      "200000",
+      "--hard-tokens",
+      "250000",
+      "--project",
+      "Development"
+    ],
+    "stdin": {
+      "session_id": "rec-1",
+      "cwd": "/Volumes/ThunderBolt/Development",
+      "source": "startup"
+    },
+    "stdout": "",
+    "stderr": "",
+    "status": 0
+  },
+  {
+    "name": "budget-pre-compact",
+    "script": "budget",
+    "argv": [
+      "--event",
+      "pre-compact",
+      "--state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/budget-state.json",
+      "--receipt-state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/receipts.json",
+      "--settings-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/settings.json",
+      "--policy-state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/policy-state.json",
+      "--spool-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/spool.jsonl",
+      "--session-id",
+      "rec-1",
+      "--nag-tokens",
+      "200000",
+      "--hard-tokens",
+      "250000",
+      "--project",
+      "Development"
+    ],
+    "stdin": {
+      "session_id": "rec-1",
+      "cwd": "/Volumes/ThunderBolt/Development"
+    },
+    "stdout": "",
+    "stderr": "",
+    "status": 0
+  },
+  {
+    "name": "budget-post-compact-arms",
+    "script": "budget",
+    "argv": [
+      "--event",
+      "post-compact",
+      "--state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/budget-state.json",
+      "--receipt-state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/receipts.json",
+      "--settings-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/settings.json",
+      "--policy-state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/policy-state.json",
+      "--spool-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/spool.jsonl",
+      "--session-id",
+      "rec-2",
+      "--nag-tokens",
+      "200000",
+      "--hard-tokens",
+      "250000",
+      "--project",
+      "Development"
+    ],
+    "stdin": {
+      "session_id": "rec-2",
+      "cwd": "/Volumes/ThunderBolt/Development"
+    },
+    "stdout": "",
+    "stderr": "",
+    "status": 0
+  },
+  {
+    "name": "budget-blocked-pre-tool-use",
+    "script": "budget",
+    "argv": [
+      "--event",
+      "pre-tool-use",
+      "--state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/budget-state.json",
+      "--receipt-state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/receipts.json",
+      "--settings-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/settings.json",
+      "--policy-state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/policy-state.json",
+      "--spool-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/spool.jsonl",
+      "--session-id",
+      "rec-2",
+      "--nag-tokens",
+      "200000",
+      "--hard-tokens",
+      "250000",
+      "--project",
+      "Development"
+    ],
+    "stdin": {
+      "session_id": "rec-2",
+      "cwd": "/Volumes/ThunderBolt/Development",
+      "tool_name": "Write",
+      "tool_input": {
+        "file_path": "/x/y"
+      }
+    },
+    "stdout": "{\"decision\":\"block\",\"reason\":\"<!-- Context Budget: forced post-compact read-back -->\\nA compact just happened. Task tools are BLOCKED until a fresh direct recall\\nreceipt proves Open Brain was read (the built-in summary is not enough).\\nSessionStart:compact normally runs this automatically. If it did not, run:\\n  printf '%s' '{\\\"cwd\\\":\\\"/Volumes/ThunderBolt/Development\\\",\\\"session_id\\\":\\\"rec-2\\\",\\\"source\\\":\\\"compact\\\",\\\"correlation_id\\\":\\\"1c4be25b-7866-4913-b45b-a168f192984a\\\"}' | bun '/Volumes/ThunderBolt/Development/_ob/scripts/ob-memory-provider.ts' --runtime claude --event session-start\\nA direct receipt unblocks the next gate check; fallback/failed recall does not.\\n<!-- End Context Budget -->\",\"systemMessage\":\"context-budget-gate transition=still-blocking-with-reason reason=readback-required\"}\n",
+    "stderr": "",
+    "status": 0
+  },
+  {
+    "name": "budget-blocked-user-prompt-submit",
+    "script": "budget",
+    "argv": [
+      "--event",
+      "user-prompt-submit",
+      "--state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/budget-state.json",
+      "--receipt-state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/receipts.json",
+      "--settings-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/settings.json",
+      "--policy-state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/policy-state.json",
+      "--spool-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/spool.jsonl",
+      "--session-id",
+      "rec-2",
+      "--nag-tokens",
+      "200000",
+      "--hard-tokens",
+      "250000",
+      "--project",
+      "Development"
+    ],
+    "stdin": {
+      "session_id": "rec-2",
+      "cwd": "/Volumes/ThunderBolt/Development"
+    },
+    "stdout": "{\"systemMessage\":\"OB ✗ recall DUE · policy — · capture ok · spool 0\",\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"<!-- Context Budget: forced post-compact read-back -->\\nA compact just happened. Task tools are BLOCKED until a fresh direct recall\\nreceipt proves Open Brain was read (the built-in summary is not enough).\\nSessionStart:compact normally runs this automatically. If it did not, run:\\n  printf '%s' '{\\\"cwd\\\":\\\"/Volumes/ThunderBolt/Development\\\",\\\"session_id\\\":\\\"rec-2\\\",\\\"source\\\":\\\"compact\\\",\\\"correlation_id\\\":\\\"1c4be25b-7866-4913-b45b-a168f192984a\\\"}' | bun '/Volumes/ThunderBolt/Development/_ob/scripts/ob-memory-provider.ts' --runtime claude --event session-start\\nA direct receipt unblocks the next gate check; fallback/failed recall does not.\\n<!-- End Context Budget -->\"}}\n",
+    "stderr": "",
+    "status": 0
+  },
+  {
+    "name": "budget-blocked-allows-read",
+    "script": "budget",
+    "argv": [
+      "--event",
+      "pre-tool-use",
+      "--state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/budget-state.json",
+      "--receipt-state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/receipts.json",
+      "--settings-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/settings.json",
+      "--policy-state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/policy-state.json",
+      "--spool-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/spool.jsonl",
+      "--session-id",
+      "rec-2",
+      "--nag-tokens",
+      "200000",
+      "--hard-tokens",
+      "250000",
+      "--project",
+      "Development"
+    ],
+    "stdin": {
+      "session_id": "rec-2",
+      "cwd": "/Volumes/ThunderBolt/Development",
+      "tool_name": "Read",
+      "tool_input": {
+        "file_path": "/x"
+      }
+    },
+    "stdout": "",
+    "stderr": "",
+    "status": 0
+  },
+  {
+    "name": "budget-status-blocked",
+    "script": "budget",
+    "argv": [
+      "--event",
+      "status",
+      "--state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/budget-state.json",
+      "--receipt-state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/receipts.json",
+      "--settings-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/settings.json",
+      "--policy-state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/policy-state.json",
+      "--spool-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/spool.jsonl",
+      "--session-id",
+      "rec-2",
+      "--nag-tokens",
+      "200000",
+      "--hard-tokens",
+      "250000",
+      "--project",
+      "Development"
+    ],
+    "stdin": {
+      "session_id": "rec-2",
+      "cwd": "/Volumes/ThunderBolt/Development"
+    },
+    "stdout": "{\n  \"sessionId\": \"rec-2\",\n  \"project\": \"Development\",\n  \"contextTokens\": 0,\n  \"nagAt\": 200000,\n  \"hardAt\": 250000,\n  \"checkpointRequired\": false,\n  \"preCompactTaskBlocking\": false,\n  \"readbackRequired\": true,\n  \"captureRequired\": false,\n  \"repairModeActive\": false,\n  \"repairModeEnteredAt\": null,\n  \"repairModeExpiresAt\": null,\n  \"lastWriteAt\": null,\n  \"checkpointAt\": null,\n  \"policyStale\": null,\n  \"spoolPending\": 0,\n  \"statusLine\": \"OB ✗ recall DUE · policy — · capture ok · spool 0\",\n  \"pendingClearedNotices\": [],\n  \"transitions\": [\n    {\n      \"name\": \"armed\",\n      \"at\": \"2026-08-03T00:48:35.180Z\",\n      \"reason\": \"post-compact read-back cycle 1c4be25b-7866-4913-b45b-a168f192984a\"\n    },\n    {\n      \"name\": \"still-blocking-with-reason\",\n      \"at\": \"2026-08-03T00:48:35.230Z\",\n      \"reason\": \"readback-required\"\n    }\n  ]\n}\n",
+    "stderr": "",
+    "status": 0
+  },
+  {
+    "name": "budget-repair-enter",
+    "script": "budget",
+    "argv": [
+      "--event",
+      "repair-enter",
+      "--state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/budget-state.json",
+      "--receipt-state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/receipts.json",
+      "--settings-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/settings.json",
+      "--policy-state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/policy-state.json",
+      "--spool-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/spool.jsonl",
+      "--session-id",
+      "rec-2",
+      "--nag-tokens",
+      "200000",
+      "--hard-tokens",
+      "250000",
+      "--project",
+      "Development",
+      "--repair-reason",
+      "recall is broken",
+      "--repair-minutes",
+      "5"
+    ],
+    "stdin": {
+      "session_id": "rec-2",
+      "cwd": "/Volumes/ThunderBolt/Development"
+    },
+    "stdout": "context-budget-gate transition=repair-entered reason=expires at 2026-08-03T00:53:35.430Z; recall is broken\n",
+    "stderr": "",
+    "status": 0
+  },
+  {
+    "name": "budget-repair-active-bash",
+    "script": "budget",
+    "argv": [
+      "--event",
+      "pre-tool-use",
+      "--state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/budget-state.json",
+      "--receipt-state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/receipts.json",
+      "--settings-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/settings.json",
+      "--policy-state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/policy-state.json",
+      "--spool-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/spool.jsonl",
+      "--session-id",
+      "rec-2",
+      "--nag-tokens",
+      "200000",
+      "--hard-tokens",
+      "250000",
+      "--project",
+      "Development"
+    ],
+    "stdin": {
+      "session_id": "rec-2",
+      "cwd": "/Volumes/ThunderBolt/Development",
+      "tool_name": "Bash",
+      "tool_input": {
+        "command": "echo hi >> notes.txt"
+      }
+    },
+    "stdout": "{\"systemMessage\":\"context-budget-gate transition=repair-active-tool-allowed reason=bash permitted until 2026-08-03T00:53:35.430Z\"}\n",
+    "stderr": "",
+    "status": 0
+  },
+  {
+    "name": "budget-repair-exit",
+    "script": "budget",
+    "argv": [
+      "--event",
+      "repair-exit",
+      "--state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/budget-state.json",
+      "--receipt-state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/receipts.json",
+      "--settings-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/settings.json",
+      "--policy-state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/policy-state.json",
+      "--spool-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/spool.jsonl",
+      "--session-id",
+      "rec-2",
+      "--nag-tokens",
+      "200000",
+      "--hard-tokens",
+      "250000",
+      "--project",
+      "Development",
+      "--repair-reason",
+      "done"
+    ],
+    "stdin": {
+      "session_id": "rec-2",
+      "cwd": "/Volumes/ThunderBolt/Development"
+    },
+    "stdout": "context-budget-gate transition=repair-exited reason=normal enforcement resumed\n",
+    "stderr": "",
+    "status": 0
+  },
+  {
+    "name": "budget-repair-enter-refused",
+    "script": "budget",
+    "argv": [
+      "--event",
+      "repair-enter",
+      "--state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/budget-state.json",
+      "--receipt-state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/receipts.json",
+      "--settings-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/settings.json",
+      "--policy-state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/policy-state.json",
+      "--spool-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/spool.jsonl",
+      "--session-id",
+      "rec-2",
+      "--nag-tokens",
+      "200000",
+      "--hard-tokens",
+      "250000",
+      "--project",
+      "Development",
+      "--repair-minutes",
+      "5"
+    ],
+    "stdin": {
+      "session_id": "rec-2",
+      "cwd": "/Volumes/ThunderBolt/Development"
+    },
+    "stdout": "REFUSED: repair-enter requires --repair-reason and --repair-minutes between 1 and 15.\n",
+    "stderr": "",
+    "status": 1
+  },
+  {
+    "name": "budget-checkpoint-done-refused",
+    "script": "budget",
+    "argv": [
+      "--event",
+      "checkpoint-done",
+      "--state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/budget-state.json",
+      "--receipt-state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/receipts.json",
+      "--settings-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/settings.json",
+      "--policy-state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/policy-state.json",
+      "--spool-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/spool.jsonl",
+      "--session-id",
+      "rec-2",
+      "--nag-tokens",
+      "200000",
+      "--hard-tokens",
+      "250000",
+      "--project",
+      "Development"
+    ],
+    "stdin": {
+      "session_id": "rec-2",
+      "cwd": "/Volumes/ThunderBolt/Development"
+    },
+    "stdout": "REFUSED: no fresh verified-remote provider checkpoint receipt exists for this session/project. Run the direct ob-memory-provider checkpoint command and retry; spooled, failed, and lost writes do not count.\n",
+    "stderr": "",
+    "status": 1
+  },
+  {
+    "name": "budget-stop-no-work",
+    "script": "budget",
+    "argv": [
+      "--event",
+      "stop",
+      "--state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/budget-state.json",
+      "--receipt-state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/receipts.json",
+      "--settings-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/settings.json",
+      "--policy-state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/policy-state.json",
+      "--spool-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/spool.jsonl",
+      "--session-id",
+      "rec-3",
+      "--nag-tokens",
+      "200000",
+      "--hard-tokens",
+      "250000",
+      "--project",
+      "Development"
+    ],
+    "stdin": {
+      "session_id": "rec-3",
+      "cwd": "/Volumes/ThunderBolt/Development"
+    },
+    "stdout": "",
+    "stderr": "",
+    "status": 0
+  },
+  {
+    "name": "budget-outside-development",
+    "script": "budget",
+    "argv": [
+      "--event",
+      "user-prompt-submit",
+      "--state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/budget-state.json",
+      "--receipt-state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/receipts.json",
+      "--settings-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/settings.json",
+      "--policy-state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/policy-state.json",
+      "--spool-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/spool.jsonl",
+      "--session-id",
+      "rec-4",
+      "--nag-tokens",
+      "200000",
+      "--hard-tokens",
+      "250000"
+    ],
+    "stdin": {
+      "session_id": "rec-4",
+      "cwd": "/Users/rico"
+    },
+    "stdout": "",
+    "stderr": "",
+    "status": 0
+  },
+  {
+    "name": "budget-empty-stdin",
+    "script": "budget",
+    "argv": [
+      "--event",
+      "status",
+      "--state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/budget-state.json",
+      "--receipt-state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/receipts.json",
+      "--settings-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/settings.json",
+      "--policy-state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/policy-state.json",
+      "--spool-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/spool.jsonl",
+      "--session-id",
+      "rec-5",
+      "--nag-tokens",
+      "200000",
+      "--hard-tokens",
+      "250000",
+      "--project",
+      "Development"
+    ],
+    "stdin": {},
+    "stdout": "{\n  \"sessionId\": \"rec-5\",\n  \"project\": \"Development\",\n  \"contextTokens\": 0,\n  \"nagAt\": 200000,\n  \"hardAt\": 250000,\n  \"checkpointRequired\": false,\n  \"preCompactTaskBlocking\": false,\n  \"readbackRequired\": false,\n  \"captureRequired\": false,\n  \"repairModeActive\": false,\n  \"repairModeEnteredAt\": null,\n  \"repairModeExpiresAt\": null,\n  \"lastWriteAt\": null,\n  \"checkpointAt\": null,\n  \"policyStale\": null,\n  \"spoolPending\": 0,\n  \"statusLine\": \"OB ✓ recall ok · policy — · capture ok · spool 0\",\n  \"pendingClearedNotices\": [],\n  \"transitions\": []\n}\n",
+    "stderr": "",
+    "status": 0
+  },
+  {
+    "name": "policy-session-start",
+    "script": "policy",
+    "argv": [
+      "--event",
+      "session-start",
+      "--state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/policy-own-state.json",
+      "--agent",
+      "claude",
+      "--runtime",
+      "claude",
+      "--session-id",
+      "pol-1"
+    ],
+    "stdin": {
+      "session_id": "pol-1",
+      "cwd": "/Volumes/ThunderBolt/Development"
+    },
+    "stdout": "<!-- Development Policy Refresh: session-start -->\n## Development Policy Refresh\n- Pony style is active by default: identify the owning boundary, make the smallest correct owned change, preserve callers/invariants, and verify.\n- Say what you mean: verify before asserting. Every factual claim about the system comes from something checked this session, not memory or inference. Name the exact object. \"I don't know yet\" is a complete answer; a guess in the grammar of a fact is not. Do not agree reflexively, and do not manufacture a concern to look rigorous.\n- ADHD output shaping is active by default for user-facing responses: lead with the next concrete action, number multi-step work, restate state each turn, suppress tangents, give task-only time estimates, and make wins visible (`_ob/skills/adhd-mode/_DOCS/procedure.md`).\n- Source-of-truth order: live/source files and current system state beat OB/qmd, which beat compacted memory or recalled summaries.\n- Hard local rules: no `/bin/bash` on macOS, no system Python for project processes, temp work under `{temp_workspace}/{project-or-repo}/...` with stale artifacts moved to `_archive/`, temp has no lifetime persistence guarantee, no raw `rm -f`/`rm -rf` temp cleanup, no secrets in logs/git, no protected-branch mutation.\n- After compaction, resume, or phase change, reread the active router and triggered SOPs before risky action.\n- Model routing: the head/controller is Claude Opus 5 at high effort and is also the normal Claude workhorse; every worker runs as a Workflow `agent()` node, with Claude workers as direct native Workflow models and Codex Luna/Sol/Terra through the Workflow-owned non-native `codex:codex-rescue` integration; runners own code swarms, highly parallel mutation, clean repro, dirty experiments, heavy dependencies, detached jobs, and best-of-N; Sonnet max medium; Fable only as an explicit non-default low/medium/high route; never Ultra or reasoning above high.\n\n## Runtime Fast Path\nClaude/Claudex startup memory hydration is already performed by the package-owned direct Open Brain SessionStart adapter.\n- Do not run `mcp2cli open-brain`; that operational path is retired and blocked for Claude.\n- Treat the visible `OB ✓ gate passed` line as the direct-recall proof.\n- Use `/Volumes/ThunderBolt/Development/_ob/repo-context/development.md` only when direct recall is missing, stale, or reports `OB ✗ gate unavailable`.\n<!-- End Development Policy Refresh -->\n",
+    "stderr": "",
+    "status": 0
+  },
+  {
+    "name": "policy-user-prompt-submit",
+    "script": "policy",
+    "argv": [
+      "--event",
+      "user-prompt-submit",
+      "--state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/policy-own-state.json",
+      "--agent",
+      "claude",
+      "--runtime",
+      "claude",
+      "--session-id",
+      "pol-1"
+    ],
+    "stdin": {
+      "session_id": "pol-1",
+      "cwd": "/Volumes/ThunderBolt/Development"
+    },
+    "stdout": "",
+    "stderr": "",
+    "status": 0
+  },
+  {
+    "name": "policy-pre-tool-use-harmless",
+    "script": "policy",
+    "argv": [
+      "--event",
+      "pre-tool-use",
+      "--state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/policy-own-state.json",
+      "--agent",
+      "claude",
+      "--runtime",
+      "claude",
+      "--session-id",
+      "pol-1"
+    ],
+    "stdin": {
+      "session_id": "pol-1",
+      "cwd": "/Volumes/ThunderBolt/Development",
+      "tool_name": "Read",
+      "tool_input": {
+        "file_path": "/x"
+      }
+    },
+    "stdout": "",
+    "stderr": "",
+    "status": 0
+  },
+  {
+    "name": "policy-pre-tool-use-tmp-write",
+    "script": "policy",
+    "argv": [
+      "--event",
+      "pre-tool-use",
+      "--state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/policy-own-state.json",
+      "--agent",
+      "claude",
+      "--runtime",
+      "claude",
+      "--session-id",
+      "pol-1"
+    ],
+    "stdin": {
+      "session_id": "pol-1",
+      "cwd": "/Volumes/ThunderBolt/Development",
+      "tool_name": "Write",
+      "tool_input": {
+        "file_path": "/tmp/evil.txt"
+      }
+    },
+    "stdout": "{\"decision\":\"block\",\"reason\":\"That path does not exist as an agent-writable location. There is no writable system temp directory on this machine. $TMPDIR is already pointed at this repo's temp workspace, so just use it, or write to {temp_workspace}/{project-or-repo}/_scratch/ directly (/Volumes/ThunderBolt/_tmp on this Mac, /mnt/collab/tmp_space on cc-* boxes). Temp policy: _DOCS/CODING_STANDARDS.md ## Workspace Hygiene.\"}\n",
+    "stderr": "",
+    "status": 0
+  },
+  {
+    "name": "policy-pre-tool-use-tmp-redirect",
+    "script": "policy",
+    "argv": [
+      "--event",
+      "pre-tool-use",
+      "--state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/policy-own-state.json",
+      "--agent",
+      "claude",
+      "--runtime",
+      "claude",
+      "--session-id",
+      "pol-1"
+    ],
+    "stdin": {
+      "session_id": "pol-1",
+      "cwd": "/Volumes/ThunderBolt/Development",
+      "tool_name": "Bash",
+      "tool_input": {
+        "command": "echo hi > /tmp/x.txt"
+      }
+    },
+    "stdout": "{\"decision\":\"block\",\"reason\":\"That path is not an agent-writable location: it is on the small main disk and is sandbox-local, so anything written there is invisible to runners and to the operator. There is no writable system temp directory on this machine. $TMPDIR is already pointed at this repo's temp workspace, so just use it, or write to {temp_workspace}/{project-or-repo}/_scratch/ directly (/Volumes/ThunderBolt/_tmp on this Mac, /mnt/collab/tmp_space on cc-* boxes). Temp policy: _DOCS/CODING_STANDARDS.md ## Workspace Hygiene.\"}\n",
+    "stderr": "",
+    "status": 0
+  },
+  {
+    "name": "policy-pre-tool-use-git-reset-hard",
+    "script": "policy",
+    "argv": [
+      "--event",
+      "pre-tool-use",
+      "--state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/policy-own-state.json",
+      "--agent",
+      "claude",
+      "--runtime",
+      "claude",
+      "--session-id",
+      "pol-1"
+    ],
+    "stdin": {
+      "session_id": "pol-1",
+      "cwd": "/Volumes/ThunderBolt/Development",
+      "tool_name": "Bash",
+      "tool_input": {
+        "command": "git reset --hard origin/main"
+      }
+    },
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Codex git guard: `git reset --hard` needs explicit user approval.\"}\n",
+    "stderr": "",
+    "status": 0
+  },
+  {
+    "name": "policy-pre-tool-use-git-checkout-main",
+    "script": "policy",
+    "argv": [
+      "--event",
+      "pre-tool-use",
+      "--state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/policy-own-state.json",
+      "--agent",
+      "claude",
+      "--runtime",
+      "claude",
+      "--session-id",
+      "pol-1"
+    ],
+    "stdin": {
+      "session_id": "pol-1",
+      "cwd": "/Volumes/ThunderBolt/Development",
+      "tool_name": "Bash",
+      "tool_input": {
+        "command": "git checkout main"
+      }
+    },
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Codex git guard: do not switch to main/master for work; use a focused work branch.\"}\n",
+    "stderr": "",
+    "status": 0
+  },
+  {
+    "name": "policy-pre-tool-use-pr-merge-admin",
+    "script": "policy",
+    "argv": [
+      "--event",
+      "pre-tool-use",
+      "--state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/policy-own-state.json",
+      "--agent",
+      "claude",
+      "--runtime",
+      "claude",
+      "--session-id",
+      "pol-1"
+    ],
+    "stdin": {
+      "session_id": "pol-1",
+      "cwd": "/Volumes/ThunderBolt/Development",
+      "tool_name": "Bash",
+      "tool_input": {
+        "command": "gh pr merge --admin 12"
+      }
+    },
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Codex merge guard: do not use `gh pr merge --admin/--auto`. Inspect checks and merge deliberately.\"}\n",
+    "stderr": "",
+    "status": 0
+  },
+  {
+    "name": "policy-pre-tool-use-agent",
+    "script": "policy",
+    "argv": [
+      "--event",
+      "pre-tool-use",
+      "--state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/policy-own-state.json",
+      "--agent",
+      "claude",
+      "--runtime",
+      "claude",
+      "--session-id",
+      "pol-1"
+    ],
+    "stdin": {
+      "session_id": "pol-1",
+      "cwd": "/Volumes/ThunderBolt/Development",
+      "tool_name": "Agent",
+      "tool_input": {}
+    },
+    "stdout": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"Native session (no ANTHROPIC_BASE_URL): direct Agent/Task is permitted. Prefer a Workflow `agent()` node with model and effort pinned per _DOCS/MODEL_ROUTING.md when the work is a delegated worker rather than a one-off search.\"}}\n",
+    "stderr": "",
+    "status": 0
+  },
+  {
+    "name": "policy-post-compact",
+    "script": "policy",
+    "argv": [
+      "--event",
+      "post-compact",
+      "--state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/policy-own-state.json",
+      "--agent",
+      "claude",
+      "--runtime",
+      "claude",
+      "--session-id",
+      "pol-2"
+    ],
+    "stdin": {
+      "session_id": "pol-2",
+      "cwd": "/Volumes/ThunderBolt/Development"
+    },
+    "stdout": "<!-- Development Policy Refresh Required -->\nPolicy refresh is required before risky action.\nReason: post-compact marked context as stale.\nReread the active router plus triggered SOPs, then restate Pony style, critical mode, source order, and next action.\n<!-- End Development Policy Refresh Required -->\n<!-- Post-Compact Standing Requirements -->\n## Post-Compact Standing Requirements\n\nThese requirements survive compaction regardless of what the summary retained:\n\n- The pre-merge review gauntlet is MANDATORY at every PR boundary for non-trivial behavior/logic changes. Do not mark a PR ready, merge, or declare a slice complete without it.\n- Canonical procedure: `/Volumes/ThunderBolt/Development/_ob/skills/pre-merge-gauntlet/SKILL.md` (registry: `_ob/skills/registry.json`). Reread it before the next PR-boundary action -- do not run the gauntlet from memory of the pre-compact context.\n- Reviews run at PR boundaries only; review weight is tiered by blast radius (full gauntlet for repo-set/deploy-path code; lighter single-review tier for dev tooling/docs). The skill defines the current ordering.\n<!-- End Post-Compact Standing Requirements -->\n",
+    "stderr": "",
+    "status": 0
+  },
+  {
+    "name": "policy-pre-compact",
+    "script": "policy",
+    "argv": [
+      "--event",
+      "pre-compact",
+      "--state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/policy-own-state.json",
+      "--agent",
+      "claude",
+      "--runtime",
+      "claude",
+      "--session-id",
+      "pol-3"
+    ],
+    "stdin": {
+      "session_id": "pol-3",
+      "cwd": "/Volumes/ThunderBolt/Development"
+    },
+    "stdout": "<!-- Development Policy Refresh Required -->\nPolicy refresh is required before risky action.\nReason: pre-compact marked context as stale.\nReread the active router plus triggered SOPs, then restate Pony style, critical mode, source order, and next action.\n<!-- End Development Policy Refresh Required -->\n",
+    "stderr": "",
+    "status": 0
+  },
+  {
+    "name": "policy-blocked-risky-write",
+    "script": "policy",
+    "argv": [
+      "--event",
+      "pre-tool-use",
+      "--state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/policy-own-state.json",
+      "--agent",
+      "claude",
+      "--runtime",
+      "claude",
+      "--session-id",
+      "pol-2"
+    ],
+    "stdin": {
+      "session_id": "pol-2",
+      "cwd": "/Volumes/ThunderBolt/Development",
+      "tool_name": "Write",
+      "tool_input": {
+        "file_path": "/Volumes/ThunderBolt/Development/x.md"
+      }
+    },
+    "stdout": "{\"decision\":\"block\",\"reason\":\"Policy refresh is required before risky task action.\\nReason: post-compact marked context as stale.\\n\\nBefore continuing, reread the active router and triggered SOPs, then run:\\nbun /Volumes/ThunderBolt/Development/_ob/scripts/policy-refresh-gate.ts --event refresh --agent claude --session-id 'pol-2'\\n\\nRefresh must restate Pony style, critical mode, source-of-truth order, and the next concrete action.\"}\n",
+    "stderr": "",
+    "status": 0
+  },
+  {
+    "name": "policy-blocked-allows-refresh-cmd",
+    "script": "policy",
+    "argv": [
+      "--event",
+      "pre-tool-use",
+      "--state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/policy-own-state.json",
+      "--agent",
+      "claude",
+      "--runtime",
+      "claude",
+      "--session-id",
+      "pol-2"
+    ],
+    "stdin": {
+      "session_id": "pol-2",
+      "cwd": "/Volumes/ThunderBolt/Development",
+      "tool_name": "Bash",
+      "tool_input": {
+        "command": "bun /Volumes/ThunderBolt/Development/_ob/scripts/policy-refresh-gate.ts --event refresh --agent claude"
+      }
+    },
+    "stdout": "",
+    "stderr": "",
+    "status": 0
+  },
+  {
+    "name": "policy-refresh",
+    "script": "policy",
+    "argv": [
+      "--event",
+      "refresh",
+      "--state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/policy-own-state.json",
+      "--agent",
+      "claude",
+      "--runtime",
+      "claude",
+      "--session-id",
+      "pol-2"
+    ],
+    "stdin": {
+      "session_id": "pol-2",
+      "cwd": "/Volumes/ThunderBolt/Development"
+    },
+    "stdout": "Policy refresh marked complete for 1 session state.\n\nRestate before acting:\n- Pony: owning boundary, smallest correct owned change, verify.\n- Critical: challenge assumptions, surface risk, ask if ambiguity matters.\n- Source order: source/live state > OB/qmd > memory/summary.\n- Next action must name the controlling SOPs and concrete verification.\n",
+    "stderr": "",
+    "status": 0
+  },
+  {
+    "name": "policy-empty-stdin",
+    "script": "policy",
+    "argv": [
+      "--event",
+      "user-prompt-submit",
+      "--state-path",
+      "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gaterec-6Rlo8p/policy-own-state.json",
+      "--agent",
+      "claude",
+      "--runtime",
+      "claude",
+      "--session-id",
+      "pol-9"
+    ],
+    "stdin": {},
+    "stdout": "",
+    "stderr": "",
+    "status": 0
+  }
+]
