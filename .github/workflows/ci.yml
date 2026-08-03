@@ -384,9 +384,17 @@ jobs:
       run:
         working-directory: python/openbrain
     steps:
-      - uses: actions/checkout@v6
+      # PINNED BY FULL COMMIT SHA, not a mutable tag: `_DOCS/STANDARDS-ci-
+      # security.md:11` requires it, and this job runs on a PERSISTENT
+      # self-hosted runner, so a retargeted tag would execute attacker-chosen
+      # code on shared infrastructure regardless of the trusted-source gate
+      # above. The SHAs are the ones already used by `contract-parity` in this
+      # same workflow, verified 2026-08-03 against the upstream tags they
+      # annotate. The sibling package jobs still use bare tags; that is
+      # pre-existing drift, not a precedent to copy.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
-      - uses: astral-sh/setup-uv@v8.2.0
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
 
       - name: Install Python ${{ env.PYTHON_VERSION }}
         run: uv python install "${PYTHON_VERSION}"
