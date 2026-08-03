@@ -159,6 +159,10 @@ def provenance_from(
     """
     if not (args.repo_source_commit and args.repo_source_url and args.repo_verified_at):
         return None
+    if settings.repo is None:
+        # Same all-or-nothing rule: a fact cannot bind without a repo, and the
+        # cwd-derived None (#517) must never become a half-filled provenance.
+        return None
     return FactProvenance(
         repo=settings.repo,
         source_commit=args.repo_source_commit,

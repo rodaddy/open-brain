@@ -1448,6 +1448,72 @@ class TestSessionStartRequestsCanonOnly:
         assert returned is pack
 
 
+class TestSessionStartBindsRepoFromCwd:
+    """repo_facts binds to the repo the session is IN, not a literal (#517).
+
+    The regression: ``CanonSettings.repo`` defaulted to ``"open-brain"`` and the
+    hook never looked at ``cwd``, so every session on the machine -- Development
+    root, king repos, anywhere -- was served open-brain's repo facts. Proven
+    live 2026-08-03 against the dogfood DB (Development has 1 bound fact; the
+    emission returned open-brain's 7).
+    """
+
+    async def test_repo_is_derived_from_the_payload_cwd(self, tmp_path) -> None:
+        root = tmp_path / "King-Core"
+        (root / ".git").mkdir(parents=True)
+        nested = root / "src" / "deep"
+        nested.mkdir(parents=True)
+        reader = CanonPackReader()
+        payload = SessionStartHook(session_id="sess", source="startup", cwd=nested)
+
+        await run_session_start(payload, canon_settings(), canon_factory=reader)
+
+        assert reader.requested[0].repo == "king-core"
+
+    async def test_an_explicit_repo_setting_wins_over_derivation(self, tmp_path) -> None:
+        root = tmp_path / "some-repo"
+        (root / ".git").mkdir(parents=True)
+        reader = CanonPackReader()
+        payload = SessionStartHook(session_id="sess", source="startup", cwd=root)
+
+        await run_session_start(
+            payload, canon_settings(repo="pinned-repo"), canon_factory=reader
+        )
+
+        assert reader.requested[0].repo == "pinned-repo"
+
+    async def test_a_worktree_git_file_counts_as_the_repo_root(self, tmp_path) -> None:
+        root = tmp_path / "Some-Worktree"
+        root.mkdir()
+        (root / ".git").write_text("gitdir: elsewhere")
+        reader = CanonPackReader()
+        payload = SessionStartHook(session_id="sess", source="startup", cwd=root)
+
+        await run_session_start(payload, canon_settings(), canon_factory=reader)
+
+        assert reader.requested[0].repo == "some-worktree"
+
+    async def test_outside_any_repo_requests_the_empty_state_not_a_fallback(
+        self, tmp_path
+    ) -> None:
+        # None is the honest binding: the server serves the defined empty state
+        # (agent-context-pack-repo-facts.ts), never another repo's facts.
+        reader = CanonPackReader()
+        payload = SessionStartHook(session_id="sess", source="startup", cwd=tmp_path)
+
+        await run_session_start(payload, canon_settings(), canon_factory=reader)
+
+        assert reader.requested[0].repo is None
+
+    async def test_a_missing_cwd_requests_the_empty_state(self) -> None:
+        reader = CanonPackReader()
+        payload = SessionStartHook(session_id="sess", source="startup")
+
+        await run_session_start(payload, canon_settings(), canon_factory=reader)
+
+        assert reader.requested[0].repo is None
+
+
 def _write_injection(pack: object, out: io.StringIO) -> None:
     """Serialise a pack through the entrypoint's own envelope builder."""
     out.write(session_start._injection_envelope(pack))

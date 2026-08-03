@@ -858,6 +858,31 @@ class CanonContext(BaseModel):
     close: Callable[[], None]
 
 
+def _derive_repo_slug(cwd: str | Path | None) -> str | None:
+    """Resolve the ``repo_facts`` binding from the session's working directory.
+
+    Walks up from ``cwd`` to the nearest directory containing ``.git`` (the
+    repository root -- a plain directory for a checkout, a file for a worktree)
+    and returns its basename, lowercased. That is the slug convention the
+    existing fact rows already use (``open-brain``, ``king-core``); rows bound
+    under other shapes are rebind work, not a fallback here.
+
+    Returns ``None`` when no repository contains ``cwd``. The server then
+    serves the defined empty state for ``repo_facts`` -- never another repo's
+    facts (``src/tools/agent-context-pack-repo-facts.ts``).
+    """
+    if not cwd:
+        return None
+    try:
+        path = Path(cwd).resolve()
+    except OSError:
+        return None
+    for candidate in (path, *path.parents):
+        if (candidate / ".git").exists():
+            return candidate.name.lower()
+    return None
+
+
 async def run_session_start(
     payload: SessionStartHook,
     settings: CanonSettings,
@@ -899,6 +924,11 @@ async def run_session_start(
     """
     if not settings.sections:
         return None
+    # Bind repo_facts to the repo the session is ACTUALLY in. An explicit
+    # OPENBRAIN_CANON_REPO always wins; otherwise the literal default served
+    # open-brain's facts to every repo on the machine (#517).
+    if "repo" not in settings.model_fields_set:
+        settings = settings.model_copy(update={"repo": _derive_repo_slug(payload.cwd)})
     build = canon_factory if canon_factory is not None else _canon_context
     context = build(settings)
     try:
