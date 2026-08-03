@@ -8,16 +8,19 @@ Purpose:
     it through two independently registered ``additionalContext`` hook outputs:
     profile/process guidance first, then repo facts and any remaining sections.
 
-    CANON ONLY. The injection is the always-known layer -- who Rico is
-    (``profile_guidance``), the rules/LAWs/standards/persona
-    (``process_guidance``), and this repo's facts (``repo_facts``) -- and NOTHING
-    episodic. No lane history, no session events, no working-set dump: knowing
-    that back-information poisons what the session is trying to do next. Back
-    history stays explicit-on-request (the resume flow), the way session start
-    used to be a direct command. Operator ruling 2026-08-01, superseding the
-    "stays stub" row in ``_plans/rewrite-gotchas.md``; the canon-vs-episodic model
-    it enforces is ``_ob/skills/brain/workflows/canon.md`` and
-    ``_plans/canon-always-known.md``.
+    CANON, PLUS THIS REPO'S OWN LANE. The injection is the always-known layer
+    -- who Rico is (``profile_guidance``), the rules/LAWs/standards/persona
+    (``process_guidance``), and this repo's facts (``repo_facts``) -- plus one
+    REPO-SCOPED lane resume in emission two (#519): the lane's checkpoint and
+    its most recent day's intent events, so a session opens knowing where the
+    repo's work left off without anyone typing a resume command. Operator
+    amendment 2026-08-03 ("startup should already know most of this stuff"),
+    amending the 2026-08-01 canon-only ruling by scope, not by reversal:
+    CROSS-lane history and deeper digs stay explicit-on-request (the resume
+    flow), because loading ANOTHER lane's history poisons what the session is
+    trying to do next -- the same contamination rule, now enforced by scoping
+    the auto-load to the repo the session is in. The canon-vs-episodic model is
+    ``_ob/skills/brain/workflows/canon.md`` and ``_plans/canon-always-known.md``.
 
 Non-goals:
     This does NOT load back-history -- that is the resume flow, which already
@@ -82,7 +85,12 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from openbrain.apps.hooks.session import SessionStartHook, run_session_start
+from openbrain.apps.hooks.session import (
+    CANON_REQUEST_TIMEOUT_SECONDS,
+    SessionStartHook,
+    _derive_repo_slug,
+    run_session_start,
+)
 from openbrain.config import load_canon_settings
 
 if TYPE_CHECKING:
@@ -170,8 +178,23 @@ def _inject_canon_with(
         pack = asyncio.run(run_session_start(payload, selected))
         if pack is None:
             return
+        trailer = None
+        if emission is CanonEmission.REMAINING:
+            try:
+                trailer = _lane_resume_text(payload, canon)
+            except Exception as error:  # noqa: BLE001 -- the lane read must not cost the pack
+                # Same content-free rule as the outer handler: class name only.
+                logger.warning(
+                    "SessionStart lane resume failed ({}); canon emitted without it",
+                    type(error).__name__,
+                )
         out.write(
-            _injection_envelope(pack, emission=emission, requested_sections=sections)
+            _injection_envelope(
+                pack,
+                emission=emission,
+                requested_sections=sections,
+                trailer=trailer,
+            )
         )
     except Exception as error:  # noqa: BLE001 -- an observer must never break its subject
         # Content-free BY CONSTRUCTION: only the exception class name is passed,
@@ -292,21 +315,116 @@ def _render_item(label: str, item: Any) -> str:
     return f"{prefix}{text}"
 
 
+def _resolve_lane_key(payload: SessionStartHook, canon: CanonSettings) -> str | None:
+    """The lane the startup resume reads: explicit setting, else ``dev:<repo>``.
+
+    An explicitly configured ``OPENBRAIN_CANON_SESSION_KEY`` always wins, the
+    same precedence rule the ``repo`` binding uses (#517). Otherwise the lane is
+    ``dev:<git-root basename>`` derived from the payload's cwd. ``None`` --
+    outside any repo -- means no lane is read at all: the scoping IS the
+    contamination guard, so there is no fallback lane.
+    """
+    if "session_key" in canon.model_fields_set:
+        return canon.session_key
+    repo = _derive_repo_slug(payload.cwd)
+    return None if repo is None else f"dev:{repo}"
+
+
+#: The event types the startup lane resume renders -- the intent lanes
+#: ``resume.py --brief`` shows. ``fact`` is excluded there for noise, the same
+#: reason it is excluded here.
+_LANE_RESUME_EVENT_TYPES = frozenset(
+    {"decision", "blocker", "correction", "checkpoint", "handoff"}
+)
+
+
+def _render_lane_resume(lane_key: str, context: Any) -> str:
+    """Render one lane's recent state in the ``resume.py --brief`` shape.
+
+    Header, the lane checkpoint's first line, then the newest calendar day's
+    intent events (newest last, so reading order matches time order). Every
+    rendered event body is carried whole -- formatting, not content reduction.
+    An empty lane says so in one line; it never borrows another lane's events.
+    """
+    header = f"LANE RESUME ({lane_key}) | openbrain.session_context"
+    lane = context.get("lane") if isinstance(context, dict) else None
+    events = (context.get("events") or []) if isinstance(context, dict) else []
+    if not lane:
+        return f"{header}\nNo lane history for this repo yet."
+    lines = [header]
+    checkpoint = str(lane.get("current_context_md") or "").strip()
+    if checkpoint:
+        lines.append(f"Checkpoint: {checkpoint.splitlines()[0]}")
+    intent = [
+        event
+        for event in events
+        if event.get("event_type") in _LANE_RESUME_EVENT_TYPES
+        and event.get("created_at")
+    ]
+    if not intent:
+        lines.append("No recent decisions or blockers recorded.")
+        return "\n".join(lines)
+    newest_day = str(intent[0]["created_at"])[:10]
+    day_events = [e for e in intent if str(e["created_at"])[:10] == newest_day]
+    lines.append(f"{newest_day} — {len(day_events)} recent intent events:")
+    for event in reversed(day_events):
+        stamp = str(event["created_at"])[11:16]
+        body = str(event.get("content") or "").strip()
+        lines.append(f"- {stamp} {event['event_type']}: {body}")
+    return "\n".join(lines)
+
+
+def _lane_resume_text(payload: SessionStartHook, canon: CanonSettings) -> str | None:
+    """Read and render the repo lane's recent state for emission two (#519).
+
+    One ``session_context`` call on the same client configuration the canon
+    read uses: single attempt, the canon timeout, token-scoped namespace. Any
+    failure propagates to the caller, which logs content-free and emits the
+    pack without the trailer -- the lane read must never cost the canon.
+    """
+    lane_key = _resolve_lane_key(payload, canon)
+    if lane_key is None or canon.base_url is None or canon.token is None:
+        return None
+
+    from openbrain_memory.client import OpenBrainClient
+    from openbrain_memory.policy import RetryPolicy
+
+    client = OpenBrainClient(
+        base_url=canon.base_url,
+        token=canon.token.get_secret_value(),
+        namespace=canon.agent,
+        agent_id=canon.agent,
+        timeout=CANON_REQUEST_TIMEOUT_SECONDS,
+        retry_policy=RetryPolicy(attempts=1),
+    )
+    try:
+        context = client.session_context(
+            session_key=lane_key, include_events=True, event_limit=50
+        )
+    finally:
+        client.close()
+    return _render_lane_resume(lane_key, context)
+
+
 def _injection_envelope(
     pack: Any,
     *,
     emission: CanonEmission | None = None,
     requested_sections: tuple[str, ...] | None = None,
+    trailer: str | None = None,
 ) -> str:
     """Wrap one rendered canon emission in the SessionStart response envelope."""
+    rendered = render_pack(
+        pack,
+        emission=emission,
+        requested_sections=requested_sections,
+    )
+    if trailer:
+        rendered = f"{rendered}\n\n{trailer}"
     return json.dumps({
         "hookSpecificOutput": {
             "hookEventName": _HOOK_EVENT_NAME,
-            "additionalContext": render_pack(
-                pack,
-                emission=emission,
-                requested_sections=requested_sections,
-            ),
+            "additionalContext": rendered,
         }
     })
 
