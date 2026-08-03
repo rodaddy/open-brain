@@ -25,7 +25,10 @@ from gate_harness import (
     write_session_state,
 )
 
-TS_GATE = "/Volumes/ThunderBolt/Development/_ob/scripts/context-budget-gate.ts"
+from openbrain_provider.development_scope import development_root
+
+#: Derived, not a literal, so it follows the same root the gate resolved against.
+TS_GATE = str(development_root() / "_ob" / "scripts" / "context-budget-gate.ts")
 
 
 def test_a_stale_readback_self_releases_after_fifteen_minutes(tmp_path: Path) -> None:

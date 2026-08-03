@@ -25,6 +25,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Final
 
+from .development_scope import development_root
+
 __all__ = [
     "post_compact_requirements",
     "refresh_context",
@@ -39,7 +41,19 @@ _FAST_PATH_END: Final[str] = "<!-- runtime-fast-path:end -->"
 #: Runtimes whose startup hydration is already done by the Python adapter.
 _DIRECT_HYDRATION_RUNTIMES: Final[frozenset[str]] = frozenset({"claude", "claudex"})
 
-_DEVELOPMENT_AGENTS: Final[Path] = Path("/Volumes/ThunderBolt/Development/AGENTS.md")
+
+def _development_agents() -> Path:
+    """Return the source-owned Development ``AGENTS.md``.
+
+    Derived from `development_root()` rather than written as a literal, so it
+    follows the same root everything else resolves against instead of pinning a
+    path that exists on exactly one machine.
+
+    Returns:
+        The path. It need not exist -- the caller treats an unreadable candidate
+        as simply not supplying a block.
+    """
+    return development_root() / "AGENTS.md"
 
 
 def _runtime_fast_path_block(command_cwd: str, runtime: str) -> str:
@@ -76,7 +90,7 @@ def _runtime_fast_path_block(command_cwd: str, runtime: str) -> str:
             ]
         )
 
-    candidates = [Path(command_cwd) / "AGENTS.md", _DEVELOPMENT_AGENTS]
+    candidates = [Path(command_cwd) / "AGENTS.md", _development_agents()]
     for path in candidates:
         try:
             text = path.read_text(encoding="utf8")

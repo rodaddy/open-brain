@@ -21,7 +21,11 @@ from pathlib import Path
 import pytest
 from gate_harness import SESSION, run_policy_gate
 
-DEVELOPMENT_CWD = "/Volumes/ThunderBolt/Development"
+from openbrain_provider.development_scope import development_root
+
+# Derived, not a literal: a second hardcoded copy of the root disagrees with
+# the one the gate resolved against on any machine but Rico's Mac.
+DEVELOPMENT_CWD = str(development_root())
 
 
 def _state(state_path: Path, agent: str = "claude") -> dict[str, object]:
@@ -57,8 +61,35 @@ def test_codex_startup_quotes_the_source_owned_fast_path(tmp_path: Path) -> None
     # Codex keeps the UUID recipe, and the gate READS it out of AGENTS.md rather
     # than restating it -- a second copy would be stale the first time the real
     # one changed. The envelope is Codex's `hookSpecificOutput` shape.
+    #
+    # The AGENTS.md is written HERE rather than relying on the real one: reading
+    # Rico's file made this pass on his Mac and fail on CI, and it also meant the
+    # assertions were checking his file's contents instead of the extraction this
+    # test is actually about. The fixture is minimal and deliberately unlike the
+    # real file, so a pass means the markers were honoured.
+    agents = tmp_path / "AGENTS.md"
+    agents.write_text(
+        "\n".join(
+            [
+                "# Fixture router",
+                "Text before the block is not extracted.",
+                "<!-- runtime-fast-path:start -->",
+                "```yaml",
+                "repo_fact_uuid: 0c0a4e94-84bc-424f-b396-bf7d0ad62083",
+                "```",
+                "<!-- runtime-fast-path:end -->",
+                "Text after the block is not extracted either.",
+            ]
+        ),
+        encoding="utf8",
+    )
+
     started = run_policy_gate(
-        tmp_path / "state.json", "session-start", agent="codex", runtime="codex"
+        tmp_path / "state.json",
+        "session-start",
+        {"cwd": str(tmp_path)},
+        agent="codex",
+        runtime="codex",
     )
 
     assert started.code == 0
@@ -67,6 +98,9 @@ def test_codex_startup_quotes_the_source_owned_fast_path(tmp_path: Path) -> None
     assert "runtime-fast-path:start" in context
     assert "repo_fact_uuid" in context
     assert "loaded from the source-owned AGENTS.md" in context
+    # Only the marked span, not the whole file.
+    assert "Text before the block" not in context
+    assert "Text after the block" not in context
 
 
 def test_startup_names_the_current_model_routing(tmp_path: Path) -> None:

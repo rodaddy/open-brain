@@ -425,7 +425,7 @@ def _default_gate_script_path() -> str:
     name the `.ts` entry, and refusing that spelling would block the repair
     command the gate itself printed.
     """
-    return "/Volumes/ThunderBolt/Development/_ob/scripts/context-budget-gate.ts"
+    return str(development_root() / "_ob" / "scripts" / "context-budget-gate.ts")
 
 
 def _handle_user_prompt_submit(gate: _Gate) -> int:
