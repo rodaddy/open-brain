@@ -487,7 +487,13 @@ class CanonSettings(_Base):
         default="dev:open-brain",
         validation_alias=AliasChoices("OPENBRAIN_CANON_SESSION_KEY"),
     )
-    repo: str = Field(
+    #: ``repo_facts`` binding. When NOT explicitly set via environment, the
+    #: session-start path derives it from the hook payload's ``cwd`` (git-root
+    #: basename, lowercased) so a session gets the facts of the repo it is
+    #: actually in -- the literal default served open-brain's facts to every
+    #: repo on the machine (#517). ``None`` (underivable) yields the server's
+    #: defined empty state, never another repo's facts.
+    repo: str | None = Field(
         default="open-brain",
         validation_alias=AliasChoices("OPENBRAIN_CANON_REPO"),
     )
