@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 from gate_harness import (
+    DEVELOPMENT_CWD,
     PROJECT,
     SESSION,
     GatePaths,
@@ -30,10 +31,18 @@ from gate_harness import (
 )
 from test_gate_receipts import _recovery_command
 
+from openbrain_provider.development_scope import development_root
 from openbrain_provider.gate_shell import shell_quote
 
-SIBLING_PROVIDER = "/Volumes/ThunderBolt/Development/_ob/scripts/ob-memory-provider.ts"
-DEVELOPMENT_CWD = "/Volumes/ThunderBolt/Development"
+#: The provider script the gate's `--provider-script-path` default names. Built
+#: from the resolved root for the same reason `gate_harness` builds its cwd that
+#: way -- a hardcoded second copy disagrees with the root the gate resolved
+#: against on any machine that is not Rico's Mac.
+#:
+#: `DEVELOPMENT_CWD` is deliberately NOT redefined here: it is imported from
+#: `gate_harness` above, and shadowing it with a literal is what made five of
+#: these tests pass locally and fail on CI.
+SIBLING_PROVIDER = str(development_root() / "_ob" / "scripts" / "ob-memory-provider.ts")
 
 
 def _bash(command: str) -> dict[str, object]:
@@ -127,6 +136,29 @@ def test_the_printed_recovery_command_is_the_one_the_gate_accepts(
     assert command.endswith("--runtime claude --event session-start")
 
     assert run_gate(paths, "pre-tool-use", _bash(command)).stdout == ""
+
+
+def test_the_fallback_cwd_is_a_directory_that_exists(tmp_path: Path) -> None:
+    # When the hook reports no usable cwd, the banner composes one from the
+    # project. For the Development repo itself the project IS `Development`, and
+    # composing `<root>/<project>` yields `/Volumes/ThunderBolt/Development/
+    # Development` -- a path that does not exist, so the command the operator is
+    # told to paste fails and the block never clears. That is the #419 deadlock
+    # reappearing through the escape hatch meant to resolve it.
+    #
+    # `context-budget-gate.ts:352-355` still composes it that way; this is one of
+    # the bugs the port fixes by writing it correctly rather than porting it.
+    paths = gate_paths(tmp_path)
+    record_receipt(paths.receipts, "recall", "failed", False, "compact")
+    run_gate(paths, "session-start", {"source": "compact", "cwd": DEVELOPMENT_CWD})
+
+    # No cwd on this event: the fallback is what renders.
+    prompted = run_gate(paths, "user-prompt-submit", {"cwd": ""})
+    command = _recovery_command(prompted.stdout)
+
+    assert f'"cwd":"{DEVELOPMENT_CWD}"' in command
+    # The defect's signature: the root's own name appearing twice in a row.
+    assert f"{PROJECT}/{PROJECT}" not in command
 
 
 def test_the_recovery_command_is_accepted_in_every_equivalent_spelling(

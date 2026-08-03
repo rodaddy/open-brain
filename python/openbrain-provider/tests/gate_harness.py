@@ -33,6 +33,7 @@ from typing import Any
 from uuid import uuid4
 
 from openbrain_provider import context_budget_gate, policy_refresh_gate
+from openbrain_provider.development_scope import development_root
 from openbrain_provider.receipt_state import (
     MEMORY_CONTRACT,
     MEMORY_CONTRACT_SCHEMA_HASH,
@@ -59,8 +60,13 @@ __all__ = [
 
 #: The Development directory every test claims to run from, so the gate resolves
 #: a real project rather than falling silent outside its lane.
-DEVELOPMENT_CWD = "/Volumes/ThunderBolt/Development"
-PROJECT = "Development"
+#:
+#: Read from the production constant rather than repeated as a literal: on a
+#: machine without Rico's volume, `conftest.py` provisions a stand-in root and
+#: points the override at it, and a second hardcoded copy here would send the
+#: gate a cwd outside the root it actually resolved against.
+DEVELOPMENT_CWD = str(development_root())
+PROJECT = development_root().name
 SESSION = "gate-session"
 
 

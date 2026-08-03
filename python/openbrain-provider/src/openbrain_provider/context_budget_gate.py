@@ -48,7 +48,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
-from .development_scope import resolve_development_scope
+from .development_scope import development_root, resolve_development_scope
 from .gate_presentation import (
     PresentationContext,
     capture_banner,
@@ -205,7 +205,10 @@ def _build_parser(env: dict[str, str]) -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--provider-script-path",
-        default="/Volumes/ThunderBolt/Development/_ob/scripts/ob-memory-provider.ts",
+        # Derived from the resolved root rather than written as an independent
+        # literal: this path and the recovery command's cwd have to agree, and
+        # two literals agree only by luck.
+        default=str(development_root() / "_ob" / "scripts" / "ob-memory-provider.ts"),
         help="Path a direct provider command must name to be allowed.",
     )
     return parser
@@ -281,11 +284,27 @@ class _Gate:
             self.state.project = scope.project
 
     def _development_cwd(self) -> str:
-        """Return the cwd a recovery command should carry."""
+        """Return the cwd a recovery command should carry.
+
+        The fallback composes `<root>/<project>`, EXCEPT when the project is the
+        root's own name. A hook fired from the Development repository itself
+        reports project `Development`, and the naive composition then yields
+        `/Volumes/ThunderBolt/Development/Development`, which does not exist --
+        so the recovery command the banner tells the operator to paste fails,
+        and the block never clears. That is the #419 deadlock arriving through
+        the escape hatch meant to resolve it.
+
+        `context-budget-gate.ts:352-355` has this defect. It is fixed here
+        rather than there, per the port's rule that bugs are fixed by being
+        written correctly in Python.
+        """
         if self.event.cwd and resolve_development_scope(self.event.cwd) is not None:
             return self.event.cwd
         project = self.state.project or ""
-        return f"/Volumes/ThunderBolt/Development/{project}".rstrip("/")
+        root = development_root()
+        if not project or project == root.name:
+            return str(root)
+        return str(root / project)
 
     def save(self) -> None:
         """Persist this session's state."""

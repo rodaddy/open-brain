@@ -15,6 +15,7 @@ decide anything about memory. It answers one question about one path.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from dataclasses import dataclass
@@ -23,14 +24,44 @@ from typing import Final
 
 __all__ = [
     "APPROVED_TEMP_WORKTREE_ROOTS",
-    "DEVELOPMENT_ROOT",
+    "DEFAULT_DEVELOPMENT_ROOT",
+    "development_root",
     "DevelopmentScope",
     "approved_temp_worktree_path",
     "resolve_development_scope",
 ]
 
-#: ob-memory-provider.ts:143. The one lane root.
-DEVELOPMENT_ROOT: Final[Path] = Path("/Volumes/ThunderBolt/Development")
+#: ob-memory-provider.ts:143. The one lane root, as shipped. Public because the
+#: parity fixtures were recorded against it and have to recognise it by name.
+DEFAULT_DEVELOPMENT_ROOT: Final[Path] = Path("/Volumes/ThunderBolt/Development")
+
+
+def development_root() -> Path:
+    """Return the Development lane root.
+
+    Read per call rather than frozen at import, and overridable via
+    `OPENBRAIN_DEVELOPMENT_ROOT`, for one reason: this module answers by asking
+    the FILESYSTEM -- `_canonical_directory` requires the path to exist and be a
+    directory. On any machine without this exact macOS volume (a Linux CI
+    runner, a container) every scope resolves to None, the gate correctly falls
+    silent, and every test depending on a resolved scope then asserts against
+    silence. That shipped green locally and failed 11 tests on CI.
+
+    A module constant could not fix it: it is evaluated when the module is first
+    imported, which under pytest happens during collection -- before a conftest
+    can set the variable. A function has no such ordering to get wrong.
+
+    The TypeScript already threads `developmentRoot` as a parameter through its
+    helpers (`ob-memory-provider.ts:1455-1469`) and pins it only at the entry
+    point; this is that same seam.
+
+    Returns:
+        The override when set and non-empty, else the shipped default. The
+        default is unchanged, so production behaviour is identical.
+    """
+    override = os.environ.get("OPENBRAIN_DEVELOPMENT_ROOT", "").strip()
+    return Path(override) if override else DEFAULT_DEVELOPMENT_ROOT
+
 
 #: ob-memory-provider.ts:144-147. A worktree under one of these still counts as
 #: Development work, but only when git agrees it is the same repository — see
@@ -190,7 +221,7 @@ def _project_slug(cwd: Path) -> str:
         subdirectory name, so every hook in that repo shares one state key.
     """
     toplevel = _git_path(cwd, "--show-toplevel")
-    development = _canonical_directory(DEVELOPMENT_ROOT)
+    development = _canonical_directory(development_root())
     if toplevel is not None and development is not None:
         if _same_git_repository(toplevel, development):
             return development.name
@@ -211,7 +242,7 @@ def resolve_development_scope(cwd: str | Path | None) -> DevelopmentScope | None
     """
     if cwd is None:
         return None
-    root = _canonical_directory(DEVELOPMENT_ROOT)
+    root = _canonical_directory(development_root())
     candidate = _canonical_directory(cwd)
     if root is None or candidate is None:
         return None

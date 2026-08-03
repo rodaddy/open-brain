@@ -26,7 +26,10 @@ from gate_harness import (
     start_compact_cycle,
 )
 
-from openbrain_provider.development_scope import resolve_development_scope
+from openbrain_provider.development_scope import (
+    development_root,
+    resolve_development_scope,
+)
 
 
 class WrongReceipt(NamedTuple):
@@ -65,7 +68,12 @@ def test_the_project_comes_from_the_git_toplevel(tmp_path: Path) -> None:
     # nested directory inside Development must resolve to the SAME project as
     # its root -- otherwise a hook fired from a subdirectory would look at an
     # empty state file and enforce nothing.
-    nested = "/Volumes/ThunderBolt/Development/_ob/scripts"
+    # Built from the resolved root, not written as a literal: the scope check
+    # requires the directory to EXIST, so a hardcoded macOS path resolves to
+    # None anywhere else and this asserts against a gate that fell silent.
+    nested_path = development_root() / "_ob" / "scripts"
+    nested_path.mkdir(parents=True, exist_ok=True)
+    nested = str(nested_path)
     scope = resolve_development_scope(nested)
     assert scope is not None
     assert scope.project == PROJECT

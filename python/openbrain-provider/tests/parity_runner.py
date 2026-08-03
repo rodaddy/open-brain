@@ -31,6 +31,10 @@ from pathlib import Path
 from typing import Any, Final
 
 from openbrain_provider import context_budget_gate, policy_refresh_gate
+from openbrain_provider.development_scope import (
+    DEFAULT_DEVELOPMENT_ROOT,
+    development_root,
+)
 
 __all__ = ["ParityCase", "load_cases", "normalise", "run_case"]
 
@@ -106,13 +110,20 @@ def normalise(text: str, scratch: Path) -> str:
         scratch: The scratch directory this run used.
 
     Returns:
-        The text with timestamps, UUIDs, and scratch paths replaced by stable
-        markers. Nothing else is touched.
+        The text with timestamps, UUIDs, scratch paths, and the Development root
+        replaced by stable markers. Nothing else is touched.
     """
     replaced = _TIMESTAMP.sub("<TIME>", text)
     replaced = _UUID.sub("<UUID>", replaced)
     replaced = replaced.replace(str(scratch), "<SCRATCH>")
-    return _SCRATCH_PATH.sub("<SCRATCH>", replaced)
+    replaced = _SCRATCH_PATH.sub("<SCRATCH>", replaced)
+    # The recordings were made on Rico's Mac, where the Development root is
+    # `/Volumes/ThunderBolt/Development`. On a machine without that volume the
+    # suite runs against a provisioned stand-in root, so the root is environment
+    # exactly like a scratch path is -- NOT behaviour. Both spellings collapse to
+    # one marker, which keeps every other byte of the banner compared literally.
+    replaced = replaced.replace(str(development_root()), "<DEV_ROOT>")
+    return replaced.replace(str(DEFAULT_DEVELOPMENT_ROOT), "<DEV_ROOT>")
 
 
 def _rewrite_argv(argv: list[str], scratch: Path) -> list[str]:
