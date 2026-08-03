@@ -1,4 +1,8 @@
-"""The gate's unblock state, written from Python instead of only read from TypeScript.
+# receipts
+
+<!-- generated from __init__.py -- do not edit by hand -->
+
+The gate's unblock state, written from Python instead of only read from TypeScript.
 
 Purpose:
     A live TypeScript hook -- ``_ob/scripts/context-budget-gate.ts``, registered
@@ -47,58 +51,9 @@ See Also:
     - ``_ob/scripts/ob-memory-provider/receipt-state.ts`` - the specification
     - ``_ob/scripts/context-budget-gate-state.ts`` - the reader that unblocks
     - ``_plans/issues/415-prov-6-receipt-construction-and-receipt-state.md``
-"""
 
-from __future__ import annotations
+---
 
-from openbrain.receipts.evidence import (
-    MEMORY_CONTRACT,
-    MEMORY_CONTRACT_SCHEMA_HASH,
-    MEMORY_CONTRACT_SCHEMA_VERSION,
-    RECEIPT_STATE_SCHEMA,
-    CompactCycleEvidence,
-    CompactCycleParticipant,
-    ProviderReceiptEvidence,
-    ReceiptMode,
-    ReceiptOperation,
-    ReceiptStatus,
-    ReceiptTrigger,
-    receipt_mode,
-)
-from openbrain.receipts.scope import (
-    DevelopmentScope,
-    resolve_development_scope,
-)
-from openbrain.receipts.state import (
-    ReceiptStateError,
-    attach_compact_cycle,
-    default_receipt_state_path,
-    ensure_compact_cycle,
-    open_compact_cycle,
-    record_provider_receipt,
-    start_compact_cycle,
-)
-
-__all__ = [
-    "MEMORY_CONTRACT",
-    "MEMORY_CONTRACT_SCHEMA_HASH",
-    "MEMORY_CONTRACT_SCHEMA_VERSION",
-    "RECEIPT_STATE_SCHEMA",
-    "CompactCycleEvidence",
-    "CompactCycleParticipant",
-    "DevelopmentScope",
-    "ProviderReceiptEvidence",
-    "ReceiptMode",
-    "ReceiptOperation",
-    "ReceiptStateError",
-    "ReceiptStatus",
-    "ReceiptTrigger",
-    "attach_compact_cycle",
-    "default_receipt_state_path",
-    "ensure_compact_cycle",
-    "open_compact_cycle",
-    "receipt_mode",
-    "record_provider_receipt",
-    "resolve_development_scope",
-    "start_compact_cycle",
-]
+Generated from the module docstring in `__init__.py`. To change this
+file, edit that docstring and run
+`python scripts/pytools/generate_package_docs.py --write`.
