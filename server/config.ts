@@ -33,7 +33,52 @@ export type Role = z.infer<typeof roleSchema>;
 
 const positiveInteger = z.coerce.number().int().positive();
 const nonEmpty = z.string().trim().min(1);
-const optionalSecret = z.string().min(1).optional();
+/**
+ * Every field declared with the shared optional-secret schema below.
+ *
+ * Exported so the boundary tests can parameterize over the whole class rather
+ * than the single field that happened to break a deploy.
+ */
+export const OPTIONAL_SECRET_KEYS = [
+  "DB_PASSWORD",
+  "EMBEDDING_API_KEY",
+  "AUTH_TOKEN_ADMIN",
+  "AUTH_TOKEN_AGENT",
+  "AUTH_TOKEN_DISCORD",
+  "AUTH_TOKEN_OB_ADMIN",
+  "AUTH_TOKEN_PROMOTER",
+  "AUTH_TOKEN_READONLY",
+] as const;
+
+/**
+ * An optional secret: absent, or a non-empty value. **Present-and-empty counts
+ * as absent.**
+ *
+ * The `z.preprocess` is the whole point and is not decoration. Without it,
+ * `z.string().min(1).optional()` accepts an unset variable but REJECTS
+ * `FOO=`, and those are the same thing to every consumer of these fields:
+ * `src/auth.ts` skips a role token with `if (!token)`, `src/db/pool.ts` hands
+ * `process.env.DB_PASSWORD` straight to pg, and `src/embedding.ts`'s
+ * `embeddingApiKey()` returns the raw value. An empty string behaves as unset
+ * in all three.
+ *
+ * Shell environments produce empty rather than absent as a matter of course, so
+ * this is the normal case and not a malformed one. The local dogfood clone env
+ * sets `EMBEDDING_API_KEY=` because the local MLX embedding server needs no
+ * key; on 2026-08-02 that alone made the rewritten entrypoint throw
+ * `server_configuration_invalid` at startup and launchd throttle-looped it,
+ * while `src/index.ts` had always started fine on the identical environment.
+ *
+ * Normalizing HERE, at the parse boundary, rather than at each of the eight
+ * declaration sites, is what makes the rule hold for a field added later:
+ * everything typed `optionalSecret` gets it. Required fields keep rejecting
+ * empty — see `nonEmpty` — because there an empty value is a real misconfiguration
+ * rather than an omission.
+ */
+const optionalSecret = z.preprocess(
+  (value) => (value === "" ? undefined : value),
+  z.string().min(1).optional(),
+);
 const userTokenValue = z
   .string()
   .transform((value) => {
