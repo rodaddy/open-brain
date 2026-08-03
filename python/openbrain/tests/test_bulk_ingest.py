@@ -44,15 +44,36 @@ CODEX_FIXTURE = (
     Path(__file__).parent / "fixtures" / "bulk" / "codex-rollout-sanitized.jsonl"
 )
 
-#: The operator turns the fixture contains, in order, with their exact text. The
-#: fixture also carries markers, an assistant line, a tool result, a system
-#: prompt, and a compaction summary -- none of which is an operator turn -- so a
-#: run that returns exactly these three has declined all the non-turns correctly.
+#: The CONVERSATION the fixture contains, in file order, with exact text.
+#:
+#: BOTH SIDES since #447: the operator's three turns and the assistant's one
+#: reply. The bulk ingester shares ``raw_turn_from_line`` with the live capture
+#: path, so restoring the agent side there restored it here too -- which is the
+#: point. A bulk-ingested corpus that held only the operator's half would grade
+#: the same one-sided material the live path was producing.
+#:
+#: The fixture also carries markers, a tool result, a system-injected prompt, and
+#: a compaction summary -- none of which either participant SAID -- so a run
+#: returning exactly these four has declined all the non-turns correctly.
 EXPECTED_TURNS = (
     ("op-1", "port the bulk ingester from the spec"),
+    ("as-1", "working on it"),
     ("op-2", "y"),
     ("op-3", "use SQLite staging, not an in-memory list, and yield each turn whole"),
 )
+
+#: How each expected turn is attributed: ``(role, is_human_prompt)`` by uuid.
+#:
+#: Asserted separately from the text because #447's defect was never that content
+#: was wrong -- it was that a whole speaker was missing, and a restored speaker
+#: mislabelled as the operator would corrupt the health check that watches for
+#: operator-side loss (``docs/decisions/capture-never-drops-a-turn.md``).
+EXPECTED_ATTRIBUTION = {
+    "op-1": (TurnRole.USER, True),
+    "as-1": (TurnRole.ASSISTANT, False),
+    "op-2": (TurnRole.USER, True),
+    "op-3": (TurnRole.USER, True),
+}
 
 
 class TurnRejectedError(RuntimeError):
@@ -97,10 +118,10 @@ def stage_fixture(tmp_path: Path) -> StagingStore:
     return store
 
 
-class TestEveryOperatorTurnReachesTheLane:
-    """A giant file in, every operator turn out -- and nothing that is not one."""
+class TestEveryTurnReachesTheLane:
+    """A giant file in, the whole conversation out -- and nothing that is not it."""
 
-    def test_all_operator_turns_land_in_file_order(self, tmp_path: Path) -> None:
+    def test_all_turns_land_in_file_order(self, tmp_path: Path) -> None:
         store = stage_fixture(tmp_path)
         lane = RecordingLane()
 
@@ -111,11 +132,26 @@ class TestEveryOperatorTurnReachesTheLane:
         landed = [(turn["turn_uuid"], turn["content"]) for turn in lane.turns]
         assert landed == list(EXPECTED_TURNS)
 
-    def test_non_operator_records_are_declined_not_stored(
+    def test_each_turn_is_attributed_to_the_side_that_said_it(
         self, tmp_path: Path
     ) -> None:
-        # The fixture's tool result, assistant line, system prompt, markers, and
-        # compaction summary must all be absent -- staging carries only turns.
+        """Both speakers land, and each is labelled as itself (#447)."""
+        store = stage_fixture(tmp_path)
+        lane = RecordingLane()
+
+        ingest(store, lane)
+
+        attribution = {
+            turn["turn_uuid"]: (turn["role"], turn["is_human_prompt"])
+            for turn in lane.turns
+        }
+        assert attribution == EXPECTED_ATTRIBUTION
+
+    def test_records_neither_side_said_are_declined_not_stored(
+        self, tmp_path: Path
+    ) -> None:
+        # The fixture's tool result, system-injected prompt, markers, and
+        # compaction summary must all be absent -- staging carries only speech.
         store = stage_fixture(tmp_path)
         assert store.counts().staged == len(EXPECTED_TURNS)
         landed_ids = {turn.turn_uuid for turn in store.pending()}
@@ -180,12 +216,14 @@ class TestResumeDoesNotResend:
         self, tmp_path: Path
     ) -> None:
         store = stage_fixture(tmp_path)
-        # First run rejects op-2: op-1 lands, op-2 quarantines, op-3 still lands.
+        # First run rejects op-2: everything before and after it still lands,
+        # including the assistant's reply -- quarantine is per turn, and it is
+        # not allowed to take a whole speaker down with it.
         rejecting = RejectingLane(reject_uuid="op-2")
         first = ingest(store, rejecting)
-        assert first.sent == 2
+        assert first.sent == len(EXPECTED_TURNS) - 1
         assert first.quarantined == 1
-        assert rejecting.accepted == ["op-1", "op-3"]
+        assert rejecting.accepted == ["op-1", "as-1", "op-3"]
 
         # A resume with an accepting lane sends ONLY the still-pending op-2 --
         # the two already-sent turns are not re-sent.
@@ -204,7 +242,7 @@ class TestRejectedTurnsAreQuarantinedNotDropped:
         store = stage_fixture(tmp_path)
         result = ingest(store, RejectingLane(reject_uuid="op-2"))
 
-        assert result.sent == 2
+        assert result.sent == len(EXPECTED_TURNS) - 1
         assert result.quarantined == 1
         quarantined = list(store.quarantined())
         assert len(quarantined) == 1

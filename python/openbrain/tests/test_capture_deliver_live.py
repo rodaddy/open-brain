@@ -75,6 +75,58 @@ def operator_line(turn_uuid: str, content: str, session: str) -> str:
     )
 
 
+#: Text placed in a `thinking` block that must NEVER appear in any stored row.
+#: A literal marker rather than a shape test: the assertion is a substring search
+#: over what Postgres actually holds, so a leak anywhere in the round trip fails.
+THINKING_MARKER = "PRIVATE-CHAIN-OF-THOUGHT-MUST-NOT-PERSIST"
+
+#: A tool name that must never appear either -- the open memory-versus-
+#: observability question stays open on the live path too, not just in-process.
+TOOL_MARKER = "ToolNameMustNotPersist"
+
+#: A tool ARGUMENT VALUE that must never appear. Separate from the name because
+#: the two leak independently: a parser that persisted only `input` would still
+#: satisfy an assertion about the name. The live fixture previously sent an
+#: EMPTY `input`, which made this the one leak the round trip could not disprove
+#: (reviewer finding, 2026-08-03).
+TOOL_ARGUMENT_MARKER = "ToolArgumentValueMustNotPersistLive"
+
+
+def assistant_line(turn_uuid: str, text: str, session: str) -> str:
+    """One assistant transcript line, in the shape Claude Code actually writes.
+
+    The list content shape is not a stylistic choice: all 134 assistant records
+    on a live transcript measured 2026-08-03 used it and none used a bare
+    string, so a fixture written the operator's way would prove nothing about
+    the path #447 restored. The `thinking` and `tool_use` blocks are present
+    deliberately -- their markers are what the leak assertions search for.
+    """
+    return json.dumps(
+        {
+            "type": "assistant",
+            "uuid": turn_uuid,
+            "sessionId": session,
+            "cwd": "/repo/spine-live",
+            "parentUuid": None,
+            "timestamp": "2026-07-31T06:00:01.000Z",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": THINKING_MARKER},
+                    {"type": "text", "text": text},
+                    {
+                        "type": "tool_use",
+                        "name": TOOL_MARKER,
+                        # NON-EMPTY on purpose: an empty input cannot prove the
+                        # argument value stays out of Postgres.
+                        "input": {"command": TOOL_ARGUMENT_MARKER},
+                    },
+                ],
+            },
+        }
+    )
+
+
 def fetch_row(database_url: str, turn_uuid: str) -> tuple[str, object] | None:
     """The row as Postgres holds it: (content, occurred_at)."""
     import psycopg
@@ -85,6 +137,28 @@ def fetch_row(database_url: str, turn_uuid: str) -> tuple[str, object] | None:
             (turn_uuid,),
         ).fetchone()
     return None if row is None else (str(row[0]), row[1])
+
+
+def fetch_attribution(database_url: str, turn_uuid: str) -> tuple[str, bool] | None:
+    """How Postgres attributed the row: (role, is_human_prompt).
+
+    A separate query rather than a wider :func:`fetch_row`, because the two
+    answer different questions: whether the turn survived, and whether the
+    SERVER agreed about who said it. `role` is validated server-side
+    (`src/tools/ingest-raw-turn.ts`: `z.enum(["user","assistant","tool"])`), and
+    `_plans/python-port-sequence.md` records that the live gate is precisely
+    where such contract facts surfaced -- "the server requires `role` +
+    `turn_index`" was learned here, not in-process. So this is the only proof
+    that an `assistant` turn is neither coerced nor refused on the wire.
+    """
+    import psycopg
+
+    with psycopg.connect(database_url) as connection:
+        row = connection.execute(
+            "SELECT role, is_human_prompt FROM ob_raw_turns WHERE turn_uuid = %s",
+            (turn_uuid,),
+        ).fetchone()
+    return None if row is None else (str(row[0]), bool(row[1]))
 
 
 def started_memory(live_env: dict[str, str], session: str) -> Any:
@@ -193,3 +267,109 @@ class TestOneTurnEndToEnd:
 
         replay = await deliver_new_turns(path, session, store, memory)
         assert replay.delivered == 0
+
+
+class TestBothSidesReachPostgres:
+    """#447 on the real wire: the conversation lands, the reasoning does not."""
+
+    async def test_a_conversation_lands_with_each_side_attributed(
+        self, live_env: dict[str, str], tmp_path: Path
+    ) -> None:
+        """THE PRODUCT PROOF, end to end.
+
+        In-process tests prove the parser reads the agent side; only this proves
+        the server ACCEPTS it. That distinction is load-bearing here: `role` is
+        server-validated, so an `assistant` turn could in principle be refused
+        or coerced on the wire, and the in-process suite could not tell.
+        """
+        session = f"spine-bothsides-{uuid.uuid4()}"
+        operator_id, assistant_id = f"u-{uuid.uuid4()}", f"a-{uuid.uuid4()}"
+        question = "why is the fleet index 20% third-party code?"
+        finding = "buzz's checkout is dirty and was never rebuilt after the move."
+        path = tmp_path / "conversation.jsonl"
+        path.write_text(
+            operator_line(operator_id, question, session)
+            + "\n"
+            + assistant_line(assistant_id, finding, session)
+            + "\n",
+            encoding="utf-8",
+        )
+        store = WatermarkStore(tmp_path / "wm.sqlite")
+        memory = started_memory(live_env, session)
+
+        result = await deliver_new_turns(path, session, store, memory)
+
+        assert result.delivered == 2, (
+            "a conversation is both speakers -- delivering 1 is the #447 "
+            "regression, where the corpus holds the question and not the answer"
+        )
+
+        database_url = live_env["OPENBRAIN_TEST_DATABASE_URL"]
+        stored_question = fetch_row(database_url, operator_id)
+        stored_finding = fetch_row(database_url, assistant_id)
+
+        assert stored_question is not None
+        assert stored_question[0] == question
+        assert stored_finding is not None, (
+            "the agent's finding never reached Postgres -- the session's "
+            "answers are exactly what #447 says get lost"
+        )
+        assert stored_finding[0] == finding
+        # The ordering key on BOTH rows: without it the two sides are stored but
+        # cannot be sequenced back into a conversation.
+        assert stored_question[1] is not None
+        assert stored_finding[1] is not None
+
+        # The server AGREED about who said what -- role is its own enum, and
+        # is_human_prompt must stay the operator-only health-check signal.
+        assert fetch_attribution(database_url, operator_id) == ("user", True)
+        assert fetch_attribution(database_url, assistant_id) == ("assistant", False)
+
+    async def test_no_reasoning_or_tool_name_is_ever_persisted(
+        self, live_env: dict[str, str], tmp_path: Path
+    ) -> None:
+        """The hard rule, proven against the column rather than the parser.
+
+        Searches the WHOLE session's stored content, not just the turn under
+        test, so a leak through any row -- a future block kind, a re-encoding --
+        fails here.
+        """
+        import psycopg
+
+        session = f"spine-noreasoning-{uuid.uuid4()}"
+        assistant_id = f"a-{uuid.uuid4()}"
+        path = tmp_path / "reasoning.jsonl"
+        path.write_text(
+            assistant_line(assistant_id, "the measured answer", session) + "\n",
+            encoding="utf-8",
+        )
+        store = WatermarkStore(tmp_path / "wm.sqlite")
+        memory = started_memory(live_env, session)
+
+        await deliver_new_turns(path, session, store, memory)
+
+        database_url = live_env["OPENBRAIN_TEST_DATABASE_URL"]
+        with psycopg.connect(database_url) as connection:
+            rows = connection.execute(
+                "SELECT content FROM ob_raw_turns WHERE session_ref = %s",
+                (session,),
+            ).fetchall()
+
+        assert rows, "nothing was stored, so this proves nothing about leaking"
+        stored = "\n".join(str(row[0]) for row in rows)
+        # Non-vacuity beyond "a row exists": the SPOKEN text must be the thing
+        # that arrived, or the absence checks below could pass over some other
+        # row entirely.
+        assert "the measured answer" in stored
+        assert THINKING_MARKER not in stored, (
+            "chain-of-thought reached durable storage -- the standing hard rule "
+            "is distilled events only, never raw reasoning"
+        )
+        assert TOOL_MARKER not in stored, (
+            "a tool name reached durable storage, resolving by accident the "
+            "memory-versus-observability question the decision doc parks"
+        )
+        assert TOOL_ARGUMENT_MARKER not in stored, (
+            "a tool ARGUMENT VALUE reached durable storage -- the name staying "
+            "out is not sufficient, they leak independently"
+        )

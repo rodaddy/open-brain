@@ -197,8 +197,74 @@ def operator_line(
 
 
 def assistant_line(uuid: str) -> str:
-    """Build one assistant transcript line -- not an operator turn."""
+    """Build one assistant line that SAID NOTHING -- no text blocks at all.
+
+    Still not a captured turn after #447 restored the agent side, and for a
+    reason worth keeping distinct: it is declined for holding no spoken text,
+    NOT for being the assistant. Use :func:`assistant_says` for a reply that
+    actually speaks.
+    """
     return json.dumps({"type": "assistant", "uuid": uuid, "message": {"content": []}})
+
+
+def assistant_says(
+    uuid: str,
+    *blocks: dict[str, Any],
+    session: str = "s1",
+    timestamp: str = TIMESTAMP,
+) -> str:
+    """Build one assistant line carrying the given content blocks (#447).
+
+    The assistant's half is ALWAYS the list shape -- measured 2026-08-03 across
+    134 live assistant records, none of which used a bare string -- so blocks are
+    passed through exactly as the transcript writes them and callers build the
+    mix they mean to test (``text``, ``tool_use``, ``thinking``).
+    """
+    return json.dumps(
+        {
+            "type": "assistant",
+            "uuid": uuid,
+            "sessionId": session,
+            "cwd": "/repo",
+            "parentUuid": None,
+            "timestamp": timestamp,
+            "message": {"role": "assistant", "content": list(blocks)},
+        }
+    )
+
+
+def text_block(text: str) -> dict[str, Any]:
+    """An assistant ``text`` block -- words that appeared on screen."""
+    return {"type": "text", "text": text}
+
+
+def thinking_block(text: str) -> dict[str, Any]:
+    """An assistant ``thinking`` block -- chain-of-thought, never stored."""
+    return {"type": "thinking", "thinking": text}
+
+
+#: A value placed inside a `tool_use` block's ARGUMENTS that must never persist.
+#:
+#: Distinct from the tool NAME and from the argument KEY, because those three can
+#: leak independently. An earlier version of the leak assertions checked the name
+#: and the key only, so a parser that persisted just the argument VALUE would
+#: have passed -- the reviewer's finding, 2026-08-03. A unique sentinel makes the
+#: value itself assertable.
+TOOL_ARGUMENT_SENTINEL = "ToolArgumentValueMustNotPersist"
+
+
+def tool_use_block(name: str) -> dict[str, Any]:
+    """An assistant ``tool_use`` block -- machinery, left to the open question.
+
+    Carries a NON-EMPTY argument holding :data:`TOOL_ARGUMENT_SENTINEL`, so a
+    test can assert the absence of the name, the key, AND the value. An empty
+    ``input`` would make the strongest of those three assertions unprovable.
+    """
+    return {
+        "type": "tool_use",
+        "name": name,
+        "input": {"command": TOOL_ARGUMENT_SENTINEL},
+    }
 
 
 def write_lines(path: Path, lines: list[str]) -> None:

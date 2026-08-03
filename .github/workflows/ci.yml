@@ -360,6 +360,71 @@ jobs:
           TMPDIR: ${{ runner.temp }}
         run: uv build --python "${PYTHON_VERSION}"
 
+  # THE CAPTURE PACKAGE HAD NO CI JOB AT ALL until 2026-08-03 (#447).
+  #
+  # `python-package` runs from `python/openbrain-memory` and `python-provider`
+  # from `python/openbrain-provider`; NOTHING ran `python/openbrain`, which owns
+  # the hook entrypoints and the whole capture path. So a change there could be
+  # merged on a fully green PR having had its tests, lint, and typing executed
+  # nowhere but the author's machine -- and #447 is exactly the defect class that
+  # slips through: the port silently stopped recording the assistant side of
+  # every conversation for six days while every check stayed green.
+  #
+  # Two sibling packages passing is not coverage of a third. Found by the
+  # opposite-harness pre-merge audit, which named it as the "green sibling
+  # package jobs do not cover the changed package" pattern in
+  # `docs/sme/gotcha-agent.md`.
+  python-capture:
+    runs-on: [self-hosted, Linux, rodaddy]
+    # Self-hosted runner: same trusted-source gate as the sibling package jobs.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    env:
+      PYTHON_VERSION: "3.13"
+    defaults:
+      run:
+        working-directory: python/openbrain
+    steps:
+      # PINNED BY FULL COMMIT SHA, not a mutable tag: `_DOCS/STANDARDS-ci-
+      # security.md:11` requires it, and this job runs on a PERSISTENT
+      # self-hosted runner, so a retargeted tag would execute attacker-chosen
+      # code on shared infrastructure regardless of the trusted-source gate
+      # above. The SHAs are the ones already used by `contract-parity` in this
+      # same workflow, verified 2026-08-03 against the upstream tags they
+      # annotate. The sibling package jobs still use bare tags; that is
+      # pre-existing drift, not a precedent to copy.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+
+      - name: Install Python ${{ env.PYTHON_VERSION }}
+        run: uv python install "${PYTHON_VERSION}"
+
+      - name: Lint capture package
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: uv run --python "${PYTHON_VERSION}" ruff check src tests
+
+      - name: Typecheck capture package
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: uv run --python "${PYTHON_VERSION}" mypy src
+
+      # The default `addopts` deselects `-m live`, so this is the in-process
+      # suite. The live gate needs a playground service and database that this
+      # runner does not have; it is run by the author against the local
+      # playground and its receipt goes in the PR. Deselecting it here is why
+      # the in-process suite must be strong on its own -- see the non-vacuity
+      # guards in `test_capture_both_sides.py`.
+      - name: Test capture package
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: uv run --python "${PYTHON_VERSION}" pytest -q
+
+      - name: Build capture package
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: uv build --python "${PYTHON_VERSION}"
+
   contract-parity:
     runs-on: [self-hosted, Linux, rodaddy]
     # Self-hosted runner: same trusted-source gate as the existing validation jobs.
@@ -427,7 +492,18 @@ jobs:
         run: uv run --python "${PYTHON_VERSION}" pytest -q tests/test_contract_fixtures.py
 
   deploy:
-    needs: [check, db-integration, python-package, python-provider, contract-parity]
+    # `python-capture` added 2026-08-03 (#447): the capture package ships the
+    # hook entrypoints, so deploying without gating on it would ship the exact
+    # path that silently lost half of every conversation.
+    needs:
+      [
+        check,
+        db-integration,
+        python-package,
+        python-provider,
+        python-capture,
+        contract-parity,
+      ]
     runs-on: [self-hosted, macOS, core01]
     if: |
       (github.event_name == 'workflow_dispatch' && inputs.deploy_core01 && github.ref == 'refs/heads/main') ||
