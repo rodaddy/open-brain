@@ -281,6 +281,30 @@ envelope; the environment is the fallback.
 `OPENBRAIN_TOKEN` accepting two spellings is a compatibility shim. New code
 writes `OPENBRAIN_TOKEN`.
 
+### Observation sink (#523) — Python `openbrain` hooks
+
+Read by `python/openbrain/src/openbrain/config.py` (`ObservationSettings`,
+`load_observation_settings`). The capture hooks ship the same turns they
+deliver to the raw lane to the fleet Langfuse server as content-ful session
+traces — secret-shaped values masked client-side
+(`apps/capture/redaction.py`), because Langfuse redacts nothing server-side.
+
+| variable | default | notes |
+|---|---|---|
+| `OPENBRAIN_OBSERVATION_ENABLED` | `false` | opt-in per host; off means the sink declines silently |
+| `OPENBRAIN_OBSERVATION_ENDPOINT` | — | Langfuse host; the `/api/public/ingestion` suffix the #372 lane uses is accepted and stripped |
+| `OPENBRAIN_OBSERVATION_PUBLIC_KEY` | — | Langfuse `pk-lf-...` |
+| `OPENBRAIN_OBSERVATION_SECRET_KEY` | — | Langfuse `sk-lf-...`, held as a `SecretStr` |
+| `OPENBRAIN_OBSERVATION_HMAC_SECRET` | — | reserved for the #372 content-free lane; declared so the provisioned variable is not rejected as a typo, read by nothing yet |
+
+**Deploy coupling:** the deployed `openbrain-hook-env` wrapper (see
+`docs/420-cutover-rollback.md`) passes hooks ONLY the variables the installed
+package declares. The wrapper may add the `OPENBRAIN_OBSERVATION_*`
+pass-throughs only at or after the moment the installed package includes
+`ObservationSettings` — passing them to an older install makes
+`unknown_prefixed_variables` reject the whole environment, which the hooks
+swallow into a silent zero capture.
+
 ### Live canary flags
 
 `OPENBRAIN_LIVE_CANARY`, `OPENBRAIN_LIVE_CANARY_WRITE`,

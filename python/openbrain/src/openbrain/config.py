@@ -409,6 +409,68 @@ class CaptureSettings(_Base):
     )
 
 
+class ObservationSettings(_Base):
+    """Where the capture hooks ship observation traces, and the keys they use.
+
+    The observation sink (#523) is the SECOND destination for captured turns:
+    the same turns the raw lane receives are also emitted to the fleet Langfuse
+    server as content-ful session traces, for observation and debugging. Open
+    Brain remains the memory authority; this lane is the flight recorder. It is
+    deliberately DISTINCT from the content-free telemetry lane #372 specifies --
+    the operator decided 2026-08-03 that full transcript content (with
+    secret-shaped values masked client-side, ``apps.capture.redaction``) goes to
+    Langfuse.
+
+    Every coordinate is OPTIONAL for the same reason capture's are: a process
+    that never observes -- the server, a migration -- must load without this
+    being configured, and the requirement is enforced at use time
+    (``apps.capture.observe``), where an unconfigured or disabled sink declines
+    quietly. ``enabled`` defaults to ``False`` on top of that: observation is
+    opt-in per host, and an endpoint present in a shared env file must not by
+    itself start shipping transcripts.
+
+    ``hmac_secret`` is declared but UNUSED here. The provisioned env file
+    carries it for the #372 ingestion lane; an ``OPENBRAIN_``-prefixed variable
+    matching no declared field is rejected by :func:`unknown_prefixed_variables`
+    as a typo, and that rejection -- swallowed by the hook entrypoints -- is a
+    silent zero capture. Declaring it is what lets the variable exist.
+
+    Attributes:
+        enabled: Ship observation traces. Off by default; the sink declines
+            without logging when disabled.
+        endpoint: The Langfuse server, host or ingestion URL. The provisioned
+            value carries the ``/api/public/ingestion`` path the #372 lane
+            posts to; the SDK wants the bare host, so the sink normalises the
+            suffix away rather than requiring the env file to change shape.
+        public_key: The Langfuse public key (``pk-lf-...``).
+        secret_key: The Langfuse secret key, held as a ``SecretStr`` so it
+            never reaches a log line, repr, or traceback.
+        hmac_secret: Reserved for the #372 content-free lane. Declared so the
+            provisioned variable is recognised; nothing reads it yet.
+    """
+
+    enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("OPENBRAIN_OBSERVATION_ENABLED"),
+    )
+    endpoint: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("OPENBRAIN_OBSERVATION_ENDPOINT"),
+    )
+    public_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("OPENBRAIN_OBSERVATION_PUBLIC_KEY"),
+    )
+    secret_key: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("OPENBRAIN_OBSERVATION_SECRET_KEY"),
+    )
+    hmac_secret: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("OPENBRAIN_OBSERVATION_HMAC_SECRET"),
+    )
+
+
 class CanonSettings(_Base):
     """Where the ``SessionStart`` hook reads canon from, and the scope it reads under.
 
@@ -637,6 +699,7 @@ _SECTION_MODELS: tuple[tuple[str, type[BaseModel]], ...] = (
     ("database", DatabaseSettings),
     ("embedding", EmbeddingSettings),
     ("capture", CaptureSettings),
+    ("observation", ObservationSettings),
     ("canon", CanonSettings),
     ("logging", LogSettings),
     ("server", ServerSettings),
@@ -813,6 +876,10 @@ class Settings(BaseSettings):
     # reason the others are: it lets the submodel build from its own env aliases
     # when no source supplies a `capture` key.
     capture: CaptureSettings = Field(default_factory=CaptureSettings)
+    # No required fields -- observation is optional like capture, and off by
+    # default besides (see ObservationSettings): a process that never observes
+    # loads without it.
+    observation: ObservationSettings = Field(default_factory=ObservationSettings)
     # No required fields -- canon is optional like capture, so a non-hook process
     # loads without it. The SessionStart hook enforces base_url/token at use time
     # (see CanonSettings and apps.hooks.session).
@@ -1089,6 +1156,44 @@ def load_capture_settings(
     # ``populate_by_name``, so ``model_validate`` accepts the names. A splat would
     # not type-check the heterogeneous mapping against each field's type.
     return CaptureSettings.model_validate(values)
+
+
+def load_observation_settings(
+    environ: Mapping[str, str] | None = None,
+) -> ObservationSettings:
+    """Resolve ONLY the ``observation`` section, without the rest of the tree.
+
+    The capture hooks need the observation sink's coordinates alongside
+    capture's own, in the same environment-configured hook process the ``Stop``
+    entrypoint runs (``load_capture_settings`` explains why the full
+    ``load_settings`` cannot serve a hook). This mirrors that loader exactly:
+    validate the whole prefixed environment for typos first, then resolve this
+    section's aliases through the shared resolver.
+
+    Args:
+        environ: Environment to read. Defaults to the live process environment;
+            the argument exists so the resolver is testable without mutating it.
+
+    Returns:
+        The validated :class:`ObservationSettings`. Coordinates are ``None``
+        and ``enabled`` is ``False`` when unset -- the requirement is enforced
+        at use time in ``apps.capture.observe``, not here.
+
+    Raises:
+        UnknownEnvironmentVariableError: When a prefixed variable matches no
+            declared setting -- the same check every section loader runs, so a
+            typo like ``OPENBRAIN_OBSERVATION_ENDPONT`` is rejected rather than
+            loading clean as an unset endpoint and declining observation
+            silently.
+    """
+    source = os.environ if environ is None else environ
+
+    unknown = unknown_prefixed_variables(source)
+    if unknown:
+        raise UnknownEnvironmentVariableError(unknown)
+
+    values = _resolve_section_from_env(ObservationSettings, source)
+    return ObservationSettings.model_validate(values)
 
 
 def load_canon_settings(

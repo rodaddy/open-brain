@@ -45,12 +45,12 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from openbrain.apps.hooks.session import StopHook, run_stop
-from openbrain.config import load_capture_settings
+from openbrain.config import load_capture_settings, load_observation_settings
 
 if TYPE_CHECKING:
     from typing import TextIO
 
-    from openbrain.config import CaptureSettings
+    from openbrain.config import CaptureSettings, ObservationSettings
 
 
 def capture_stop(stream: TextIO) -> None:
@@ -85,7 +85,7 @@ def capture_stop_with(stream: TextIO, settings: CaptureSettings | None) -> None:
         raw = stream.read()
         payload = StopHook.model_validate_json(raw)
         capture = settings if settings is not None else _loaded_capture()
-        asyncio.run(run_stop(payload, capture))
+        asyncio.run(run_stop(payload, capture, observation=loaded_observation()))
     except Exception as error:  # noqa: BLE001 -- an observer must never break its subject
         # Content-free BY CONSTRUCTION, not by handler config. The exception can
         # hold transcript text or a token -- a pydantic ValidationError carries
@@ -108,6 +108,25 @@ def _loaded_capture() -> CaptureSettings:
     swallowed here, is a silent zero capture on every ``Stop``.
     """
     return load_capture_settings()
+
+
+def loaded_observation() -> ObservationSettings | None:
+    """The ``observation`` section (#523), or ``None`` when it cannot load.
+
+    Swallowed SEPARATELY from the outer catch, and that is the point: the
+    observation sink is best-effort, so a malformed observation variable must
+    degrade to "observe nothing" rather than ride the shared exception path
+    and take the memory capture down with it.
+    """
+    try:
+        return load_observation_settings()
+    except Exception as error:  # noqa: BLE001 -- observation never breaks capture
+        # Class name only, the entrypoint's content-free convention.
+        logger.warning(
+            "observation settings unreadable ({}); observing nothing",
+            type(error).__name__,
+        )
+        return None
 
 
 def main(stream: TextIO | None = None) -> int:

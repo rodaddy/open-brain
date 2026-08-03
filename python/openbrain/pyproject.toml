@@ -34,6 +34,12 @@ dependencies = [
     # is a live import, so the dependency is real and is stated here. Resolved
     # from the workspace, not PyPI -- see `[tool.uv.sources]`.
     "openbrain-memory",
+    # The observation sink (#523): captured turns also ship to the fleet
+    # Langfuse server as content-ful session traces. v4 is the floor because
+    # the emitter uses the v4 surface (`propagate_attributes`,
+    # `start_as_current_observation`) -- v3 spells both differently, so an
+    # older resolve would import-error rather than misbehave.
+    "langfuse>=4",
 ]
 
 # The console scripts. Step 10 of `_plans/python-port-sequence.md`: declare an
