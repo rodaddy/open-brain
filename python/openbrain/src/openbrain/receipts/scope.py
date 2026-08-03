@@ -246,7 +246,7 @@ def _git_path(cwd: Path, selector: str) -> Path | None:
             text=True,
             timeout=_GIT_TIMEOUT_SECONDS,
             check=False,
-            env=_git_environment(),
+            env=git_environment(),
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -258,7 +258,7 @@ def _git_path(cwd: Path, selector: str) -> Path | None:
     return Path(reported) if reported else None
 
 
-def _git_environment() -> dict[str, str]:
+def git_environment() -> dict[str, str]:
     """This process's environment with git's repository overrides removed.
 
     Returns:

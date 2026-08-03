@@ -23,6 +23,7 @@ import pytest
 from openbrain.receipts.scope import (
     DEVELOPMENT_ROOT,
     FALLBACK_PROJECT,
+    git_environment,
     resolve_development_scope,
 )
 
@@ -159,6 +160,11 @@ def test_a_worktree_of_development_itself_resolves() -> None:
     The worktree is removed with ``git worktree remove``, never a recursive
     delete: that is a git operation which unregisters and removes together, and is
     the one cleanup that must not be left behind.
+
+    Both git calls run with the repository-overriding environment stripped, for
+    the same reason the resolver strips it: under a pre-push hook, an inherited
+    ``GIT_WORK_TREE`` makes ``worktree add`` operate on the invoking repository
+    rather than the one named by ``-C``.
     """
     import subprocess
 
@@ -180,6 +186,7 @@ def test_a_worktree_of_development_itself_resolves() -> None:
         text=True,
         timeout=120,
         check=False,
+        env=git_environment(),
     )
     if created.returncode != 0:
         pytest.skip(f"could not create a probe worktree: {created.stderr.strip()}")
@@ -198,6 +205,7 @@ def test_a_worktree_of_development_itself_resolves() -> None:
             text=True,
             timeout=120,
             check=False,
+            env=git_environment(),
         )
 
 
