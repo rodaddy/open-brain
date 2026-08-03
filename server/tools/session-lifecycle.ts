@@ -1,7 +1,14 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { authIdentity, errorResult, textResult, type MemoryToolDependencies } from "./types.ts";
-import { authorize, contentHash, embeddingFields, sessionEmbedText } from "./memory-helpers.ts";
+import {
+  authorize,
+  contentHash,
+  embeddingFields,
+  EVENT_TYPES,
+  IMPORTANCE_LEVELS,
+  sessionEmbedText,
+} from "./memory-helpers.ts";
 
 const startLaneFields = `id, session_key, namespace, status, agent, source, channel_id,
   thread_id, project, topic, current_context_md, metadata, created_at, updated_at, ended_at`;
@@ -59,7 +66,7 @@ function registerSessionStart(server: McpServer, dependencies: MemoryToolDepende
       if (existing.rows[0]) {
         const events = await dependencies.pool.query(
           `SELECT ${eventFields} FROM ob_session_events
-            WHERE lane_id = $1 ORDER BY created_at DESC`,
+            WHERE lane_id = $1 ORDER BY created_at DESC LIMIT 50`,
           [existing.rows[0].id],
         );
         return textResult({
@@ -110,6 +117,9 @@ function registerSessionContext(server: McpServer, dependencies: MemoryToolDepen
         channel_id: z.string().max(500).optional(),
         thread_id: z.string().max(500).optional(),
         include_events: z.boolean().optional(),
+        event_limit: z.number().int().min(1).max(200).optional(),
+        event_types: z.array(z.enum(EVENT_TYPES)).optional(),
+        importance: z.enum(IMPORTANCE_LEVELS).optional(),
       },
       annotations: {
         title: "Session Context",
@@ -151,13 +161,25 @@ function registerSessionContext(server: McpServer, dependencies: MemoryToolDepen
       );
       const lane = lanes.rows[0];
       if (!lane) return textResult({ lane: null, events: [], event_count: 0 });
-      const events = args.include_events === false
-        ? { rows: [] }
-        : await dependencies.pool.query(
-            `SELECT ${eventFields} FROM ob_session_events
-              WHERE lane_id = $1 ORDER BY created_at DESC`,
-            [lane.id],
-          );
+      let events: { rows: unknown[] } = { rows: [] };
+      if (args.include_events !== false) {
+        const eventConditions = ["lane_id = $1"];
+        const eventValues: unknown[] = [lane.id, args.event_limit ?? 50];
+        if (args.event_types && args.event_types.length > 0) {
+          eventValues.push(args.event_types);
+          eventConditions.push(`event_type = ANY($${eventValues.length})`);
+        }
+        if (args.importance) {
+          eventValues.push(args.importance);
+          eventConditions.push(`importance = $${eventValues.length}`);
+        }
+        events = await dependencies.pool.query(
+          `SELECT ${eventFields} FROM ob_session_events
+            WHERE ${eventConditions.join(" AND ")}
+            ORDER BY created_at DESC LIMIT $2`,
+          eventValues,
+        );
+      }
       return textResult({ lane, events: events.rows, event_count: events.rows.length });
     },
   );
