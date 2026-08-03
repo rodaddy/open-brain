@@ -185,6 +185,20 @@ mechanics: compare typed-in-transcript against `is_human_prompt` rows in
 something not yet identified, and the instinct to measure window sizes should be
 resisted — that is what produced the retracted 58%.
 
+**Run it PER ROLE, not just for the operator.** As written above this check
+watches one speaker, and that blind spot is exactly how #447 went unnoticed for
+six days: the operator numbers stayed healthy the entire time the assistant side
+was at zero. Group by role and compare each against the transcript:
+
+```sql
+SELECT role, count(*) FROM ob_raw_turns
+WHERE namespace = 'rico' AND created_at > now() - interval '24 hours'
+GROUP BY role;
+```
+
+An `assistant` count near zero beside a healthy `user` count is a capture
+defect, not a quiet day.
+
 It assumed one turn is a handful of entries. True for plain conversation, false
 with tool calls: every call and every result is its own transcript line. Worse,
 the collection loop walks **backward**, so the 8 kept are the *newest* — the
@@ -260,6 +274,50 @@ PROV-9) must carry this decision forward — it is written into #418's acceptanc
 criteria — and the next wheel install will overwrite the deployed file. If
 capture starts silently shrinking again, check whether this decision survived
 the port.
+
+### It did not survive the port. Fixed 2026-08-03 (#447).
+
+The warning above was correct and the check it asks for was never run. The
+Python port carried the OPERATOR half of this decision and left the assistant
+half behind: its record parser returned a turn only for operator records, so
+every `type == "assistant"` line became `None`.
+
+Measured on the dogfood database, `ob_raw_turns` in namespace `rico`:
+
+| Day | assistant | tool | user | Path |
+|---|---|---|---|---|
+| 2026-07-27 | 5,773 | 3,022 | 495 | TypeScript adapter |
+| 2026-07-30 | 3,332 | 1,877 | 255 | TypeScript adapter |
+| 2026-08-02 | 13 | 0 | 365 | Python port |
+
+and all 13 of those assistant rows are `PostCompact` summaries, not replies. So
+"everything on screen goes in" held for one speaker for six days of sessions,
+and the corpus REM grades held the questions with none of the answers — which
+is what #447 was raised to name.
+
+**The fix is a restoration, not a new decision.** `records.py` now reads the
+`text` blocks off assistant records and attributes them `role=assistant`,
+`is_human_prompt=False`. No distillation step was added: this section's rule
+still holds, a filter here may TYPE a turn and may never decide whether to keep
+one, and a model-backed summarizer on the capture path would be exactly the
+drop-by-default filter that rule forbids.
+
+**What the fix did NOT resolve.** The OPEN question below — reasoning blocks,
+tool invocations, tool output — stays open, deliberately. `thinking` blocks are
+never stored (chain-of-thought, and the TypeScript reference skipped them for
+the same reason at `backfill-transcripts.ts:148`), and `tool_use` blocks are
+left to that question rather than answered by this fix. Reading speech now and
+leaving the machinery to a deliberate decision is the reversible order.
+
+**Why the gates did not catch it, recorded so the next port does better:** the
+port's tests were written from the port, so they asserted what it did. A
+`conftest.py` helper named `assistant_line` existed and was used only to prove
+an assistant record was correctly *declined*. The suite encoded the defect as
+intended behaviour. The health check this document already recommends —
+comparing stored rows against the transcript — would have caught it on day one;
+nobody ran it for the assistant side because the check as written only names
+`is_human_prompt`. It should be run per ROLE. The review pattern is captured in
+`docs/sme/gotcha-agent.md`, "A port is complete when the BEHAVIOUR matches".
 
 Verified at the time of the change, 9/9 functional cases: `yes`, `ok`, `no do
 it`, and `okay` all capture as `fact`; `use postgres not sqlite` still
