@@ -20,6 +20,13 @@
 #      src/index.ts and re-exporting HEAD produced an archive with zero
 #      occurrences of it.
 #
+#   3. A REVISION PROOF, which core01's script does not have. The deploy only
+#      succeeds if the process LISTENING on the clone port changed pid, is
+#      running out of the runtime directory, and that directory is stamped with
+#      the revision this run shipped. Added 2026-08-02 after a deploy reported
+#      success while the previous process still held the port and served the
+#      previous revision; see `check_new_process_serving` for the receipt.
+#
 # Everything else -- staging dir, atomic swap, .previous rollback, health
 # check -- is the core01 shape, deliberately.
 #
@@ -73,13 +80,139 @@ wait_for_health() {
   return 1
 }
 
+# The pid of whatever is LISTENING on the clone port, or empty if nothing is.
+#
+# `lsof` on the port, deliberately, and not the two obvious alternatives:
+#   - `launchctl print ... | grep pid` reports the SUPERVISED pid, which here is
+#     the `local-clone.ts --start` wrapper, not the server that binds the socket
+#     (measured 2026-08-02: wrapper 2407, listener 2476, its child).
+#   - `pgrep -f 'bun run ...'` matches stray orphans from earlier sessions that
+#     hold no port (measured: pid 37600, running since the previous day).
+# The question this must answer is "who is serving :PORT", and only the socket
+# knows that.
+listening_pid() {
+  local port="$1"
+  lsof -nP -iTCP:"${port}" -sTCP:LISTEN -t 2>/dev/null | head -1
+}
+
+# The working directory of a running process, used to prove the listener is
+# serving the tree we just swapped in rather than some other checkout.
+pid_cwd() {
+  local pid="$1"
+  lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1
+}
+
+deployed_short_sha() {
+  local dir="$1"
+  [[ -r "${dir}/.deployed-revision" ]] || return 1
+  sed -n 's/^short_sha=//p' "${dir}/.deployed-revision" | head -1
+}
+
+# Prove the NEW process is the one serving. THIS is the deploy's success
+# criterion; the health check below is a secondary liveness assertion.
+#
+# A health check the previous process can satisfy is not a proof. On 2026-08-02
+# this exact script reported a successful deploy while the OLD runtime was still
+# answering :3100: the restart was accepted, the new entrypoint threw on config
+# and died, launchd held the service down for its ThrottleInterval (30s here)
+# before retrying -- longer than the 15x2s health poll ran -- and `curl /health`
+# was answered by the process that had never stopped. The stamp on disk said one
+# revision; the running code was another. A deploy that cannot tell those apart
+# cannot fail, and one that cannot fail proves nothing when it passes.
+#
+# Three assertions, all required, all fatal:
+#   1. a listener exists and its pid DIFFERS from the pre-restart pid
+#      (the old process really went away and a new one really bound the port)
+#   2. that listener's cwd is the runtime directory
+#      (it is serving the tree we swapped, not another checkout)
+#   3. the runtime's .deployed-revision matches the sha this run deployed
+#      (the tree it is serving is the revision we asked for)
+# Returns 0 only if all three assertions hold; logs the exact reason otherwise.
+# Non-fatal by design so the deploy path can roll back on failure -- the callers
+# decide whether a failure is recoverable, and both of them treat it as loud.
+check_new_process_serving() {
+  local port="$1" previous_pid="$2" expected_short_sha="$3"
+  local pid="" cwd="" stamped=""
+
+  # Poll rather than sleep-once: bun install/migrate timing varies, and launchd
+  # may hold a restarted service down for ThrottleInterval (30s on this service)
+  # before the new process even starts. The polling window has to outlast that
+  # or a merely-delayed start reads as a permanent failure.
+  for _ in $(seq 1 30); do
+    pid="$(listening_pid "$port")"
+    if [[ -n "$pid" && "$pid" != "$previous_pid" ]]; then
+      break
+    fi
+    sleep 2
+  done
+
+  if [[ -z "$pid" ]]; then
+    log "revision proof FAILED: nothing is listening on port ${port} after restart"
+    return 1
+  fi
+  if [[ "$pid" == "$previous_pid" ]]; then
+    log "revision proof FAILED: port ${port} is still held by the PRE-DEPLOY process (pid ${pid}); the new runtime never took over"
+    return 1
+  fi
+
+  cwd="$(pid_cwd "$pid")"
+  if [[ "$cwd" != "$RUNTIME_DIR" ]]; then
+    log "revision proof FAILED: listener pid ${pid} is serving '${cwd:-<unknown>}', not the deployed runtime ${RUNTIME_DIR}"
+    return 1
+  fi
+
+  if ! stamped="$(deployed_short_sha "$RUNTIME_DIR")"; then
+    log "revision proof FAILED: no .deployed-revision in ${RUNTIME_DIR}"
+    return 1
+  fi
+  if [[ "$stamped" != "$expected_short_sha" ]]; then
+    log "revision proof FAILED: runtime is stamped ${stamped} but this deploy shipped ${expected_short_sha}"
+    return 1
+  fi
+
+  log "revision proof PASSED: pid ${previous_pid:-<none>} -> ${pid}, cwd ${cwd}, revision ${stamped}"
+  return 0
+}
+
+# Fatal wrapper for callers with nowhere left to fall back to.
+assert_new_process_serving() {
+  check_new_process_serving "$@" \
+    || fatal "revision proof failed and there is no further fallback"
+}
+
 if [[ "${1:-}" == "--rollback" ]]; then
   [[ -d "$PREVIOUS_DIR" ]] || fatal "no previous runtime at ${PREVIOUS_DIR}"
+  [[ -r "$ENV_FILE" ]] || fatal "env file missing or unreadable: ${ENV_FILE}"
+  # Sourced here too, not only on the deploy path: the rollback needs the clone
+  # port to know which listener to prove. A rollback that cannot check the port
+  # is the same unfalsifiable success the deploy path used to report.
+  set -a
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
+  set +a
+  ROLLBACK_PORT="${PORT:-3100}"
+
   log "rolling back to ${PREVIOUS_DIR}"
   rm -rf "${RUNTIME_DIR}.rollback-discard"
   [[ -d "$RUNTIME_DIR" ]] && mv "$RUNTIME_DIR" "${RUNTIME_DIR}.rollback-discard"
   mv "$PREVIOUS_DIR" "$RUNTIME_DIR"
+
+  PRE_ROLLBACK_PID="$(listening_pid "$ROLLBACK_PORT")"
+  log "pre-rollback listener on port ${ROLLBACK_PORT}: pid ${PRE_ROLLBACK_PID:-<none>}"
   restart_service
+
+  if [[ -n "$SERVICE_LABEL" ]]; then
+    # Same standard of proof as a deploy. Rolling back is exactly when a false
+    # success is most expensive: the operator stops looking because the log said
+    # the old revision is back, while the broken one is still serving.
+    assert_new_process_serving "$ROLLBACK_PORT" "$PRE_ROLLBACK_PID" \
+      "$(deployed_short_sha "$RUNTIME_DIR")"
+    wait_for_health "$ROLLBACK_PORT" "post-rollback" \
+      || fatal "health check failed after rollback; service is down"
+  else
+    log "NOTE: no service label set, so nothing was restarted and the rollback is UNVERIFIED."
+  fi
+
   log "rollback complete; discarded runtime kept at ${RUNTIME_DIR}.rollback-discard"
   exit 0
 fi
@@ -149,22 +282,48 @@ fi
 mv "$STAGING_DIR" "$RUNTIME_DIR"
 log "swapped ${SHORT_SHA} into ${RUNTIME_DIR}"
 
+# Read the OUTGOING listener before the restart. This is the value that makes
+# the proof below possible: without a "before", "something is answering" and
+# "the new thing is answering" are indistinguishable.
+PRE_RESTART_PID="$(listening_pid "$CLONE_PORT")"
+log "pre-restart listener on port ${CLONE_PORT}: pid ${PRE_RESTART_PID:-<none>}"
+
 restart_service
 
 if [[ -n "$SERVICE_LABEL" ]]; then
-  if ! wait_for_health "$CLONE_PORT" "post-deploy"; then
-    log "health check FAILED; rolling back"
+  # Order matters: prove the process FIRST, then check health. Reversing these
+  # is the 2026-08-02 failure -- health passed against the outgoing process and
+  # the deploy exited 0 with the old revision still serving.
+  deploy_ok=1
+  if ! check_new_process_serving "$CLONE_PORT" "$PRE_RESTART_PID" "$SHORT_SHA"; then
+    deploy_ok=0
+  elif ! wait_for_health "$CLONE_PORT" "post-deploy"; then
+    log "health check FAILED"
+    deploy_ok=0
+  fi
+
+  if [[ "$deploy_ok" -eq 0 ]]; then
+    log "deploy verification FAILED; rolling back"
     if [[ -d "$PREVIOUS_DIR" ]]; then
       rm -rf "${RUNTIME_DIR}.failed"
       mv "$RUNTIME_DIR" "${RUNTIME_DIR}.failed"
       mv "$PREVIOUS_DIR" "$RUNTIME_DIR"
+      rollback_pid="$(listening_pid "$CLONE_PORT")"
       restart_service
+      # The rollback gets the same standard of proof as the deploy. A rollback
+      # that "succeeded" because the failed process still held the port would
+      # leave the broken revision serving under a reassuring log line.
+      assert_new_process_serving "$CLONE_PORT" "$rollback_pid" \
+        "$(deployed_short_sha "$RUNTIME_DIR")"
       wait_for_health "$CLONE_PORT" "post-rollback" \
         || fatal "health check failed after rollback; service is down"
-      fatal "deploy of ${SHORT_SHA} failed health check and was rolled back"
+      fatal "deploy of ${SHORT_SHA} failed verification and was rolled back"
     fi
-    fatal "deploy of ${SHORT_SHA} failed health check and there was no previous runtime"
+    fatal "deploy of ${SHORT_SHA} failed verification and there was no previous runtime"
   fi
+else
+  log "NOTE: no service label set, so nothing was restarted and NO revision proof was possible."
+  log "NOTE: ${RUNTIME_DIR} now holds ${SHORT_SHA} but the running process is unverified."
 fi
 
 log "deployed ${SHORT_SHA} to ${RUNTIME_DIR}"

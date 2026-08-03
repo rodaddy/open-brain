@@ -244,6 +244,60 @@ dbDescribe("rewrite entrypoint start-equivalence (live Postgres)", () => {
 });
 
 dbDescribe("rewrite entrypoint startup and shutdown ordering (live Postgres)", () => {
+  test("starts on an environment whose optional secrets are present but empty", async () => {
+    // The 2026-08-02 deploy failure, as a live boot rather than a unit parse.
+    // `server/config.test.ts` pins the parse-boundary semantics for all eight
+    // optional-secret fields; this proves the ENTRYPOINT actually comes up on
+    // that environment, which is the claim start-equivalence makes and the one
+    // the previous fixtures never exercised — every env they built either set
+    // an optional secret to a real value or omitted the key entirely, so the
+    // shape that broke production (`EMBEDDING_API_KEY=`, empty) had no test.
+    const url = new URL(DB_URL!);
+    const result = parseServerConfig({
+      DB_HOST: url.hostname,
+      DB_PORT: url.port || "5432",
+      DB_NAME: url.pathname.replace(/^\//, ""),
+      DB_USER: decodeURIComponent(url.username) || "postgres",
+      LOG_FILE: "logs/open-brain-entrypoint-empty-secret-test.log",
+      OPEN_BRAIN_SERVER_IP: "127.0.0.1",
+      OPENBRAIN_MIGRATIONS_DIR: "src/db/migrations",
+      AUTH_TOKEN_AGENT: TOKEN,
+      // Exactly the local clone env's shape: the MLX embedding server needs no
+      // key, so the variable is exported empty rather than left unset.
+      EMBEDDING_API_KEY: "",
+      DB_PASSWORD: "",
+      AUTH_TOKEN_ADMIN: "",
+    });
+    if (!result.ok) {
+      throw new Error(
+        `empty optional secrets must not fail config: ${JSON.stringify(result.issues)}`,
+      );
+    }
+    const instance = await startServer({
+      config: result.config,
+      port: 0,
+      bindHost: "127.0.0.1",
+      logger: silentLogger(),
+      runMigrations: false,
+      allowedOrigins: [],
+    });
+    try {
+      // A real listener answering the real health route. 503 is acceptable
+      // because the embedding provider need not be up beside a test database.
+      expect([200, 503]).toContain(
+        (await fetch(`http://127.0.0.1:${instance.port}/health`)).status,
+      );
+      // The empty admin token must not have been registered as a credential:
+      // a blank bearer token accepted as `admin` would be an auth hole.
+      expect(result.config.authTokens.map(({ role }) => role)).toEqual(["agent"]);
+      // Empty password/key were dropped rather than passed to pg / the provider.
+      expect("password" in result.config.database).toBe(false);
+      expect("embeddingApiKey" in result.config.transport).toBe(false);
+    } finally {
+      await instance.shutdown();
+    }
+  });
+
   test("refuses to start, and opens no listener, without configured tokens", async () => {
     const config = testConfig();
     const tokenless: ServerConfig = { ...config, authTokens: [] };
