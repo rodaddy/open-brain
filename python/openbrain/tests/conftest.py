@@ -243,9 +243,28 @@ def thinking_block(text: str) -> dict[str, Any]:
     return {"type": "thinking", "thinking": text}
 
 
+#: A value placed inside a `tool_use` block's ARGUMENTS that must never persist.
+#:
+#: Distinct from the tool NAME and from the argument KEY, because those three can
+#: leak independently. An earlier version of the leak assertions checked the name
+#: and the key only, so a parser that persisted just the argument VALUE would
+#: have passed -- the reviewer's finding, 2026-08-03. A unique sentinel makes the
+#: value itself assertable.
+TOOL_ARGUMENT_SENTINEL = "ToolArgumentValueMustNotPersist"
+
+
 def tool_use_block(name: str) -> dict[str, Any]:
-    """An assistant ``tool_use`` block -- machinery, left to the open question."""
-    return {"type": "tool_use", "name": name, "input": {"command": "ls"}}
+    """An assistant ``tool_use`` block -- machinery, left to the open question.
+
+    Carries a NON-EMPTY argument holding :data:`TOOL_ARGUMENT_SENTINEL`, so a
+    test can assert the absence of the name, the key, AND the value. An empty
+    ``input`` would make the strongest of those three assertions unprovable.
+    """
+    return {
+        "type": "tool_use",
+        "name": name,
+        "input": {"command": TOOL_ARGUMENT_SENTINEL},
+    }
 
 
 def write_lines(path: Path, lines: list[str]) -> None:

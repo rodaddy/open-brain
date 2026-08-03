@@ -84,6 +84,13 @@ THINKING_MARKER = "PRIVATE-CHAIN-OF-THOUGHT-MUST-NOT-PERSIST"
 #: observability question stays open on the live path too, not just in-process.
 TOOL_MARKER = "ToolNameMustNotPersist"
 
+#: A tool ARGUMENT VALUE that must never appear. Separate from the name because
+#: the two leak independently: a parser that persisted only `input` would still
+#: satisfy an assertion about the name. The live fixture previously sent an
+#: EMPTY `input`, which made this the one leak the round trip could not disprove
+#: (reviewer finding, 2026-08-03).
+TOOL_ARGUMENT_MARKER = "ToolArgumentValueMustNotPersistLive"
+
 
 def assistant_line(turn_uuid: str, text: str, session: str) -> str:
     """One assistant transcript line, in the shape Claude Code actually writes.
@@ -107,7 +114,13 @@ def assistant_line(turn_uuid: str, text: str, session: str) -> str:
                 "content": [
                     {"type": "thinking", "thinking": THINKING_MARKER},
                     {"type": "text", "text": text},
-                    {"type": "tool_use", "name": TOOL_MARKER, "input": {}},
+                    {
+                        "type": "tool_use",
+                        "name": TOOL_MARKER,
+                        # NON-EMPTY on purpose: an empty input cannot prove the
+                        # argument value stays out of Postgres.
+                        "input": {"command": TOOL_ARGUMENT_MARKER},
+                    },
                 ],
             },
         }
@@ -344,6 +357,10 @@ class TestBothSidesReachPostgres:
 
         assert rows, "nothing was stored, so this proves nothing about leaking"
         stored = "\n".join(str(row[0]) for row in rows)
+        # Non-vacuity beyond "a row exists": the SPOKEN text must be the thing
+        # that arrived, or the absence checks below could pass over some other
+        # row entirely.
+        assert "the measured answer" in stored
         assert THINKING_MARKER not in stored, (
             "chain-of-thought reached durable storage -- the standing hard rule "
             "is distilled events only, never raw reasoning"
@@ -351,4 +368,8 @@ class TestBothSidesReachPostgres:
         assert TOOL_MARKER not in stored, (
             "a tool name reached durable storage, resolving by accident the "
             "memory-versus-observability question the decision doc parks"
+        )
+        assert TOOL_ARGUMENT_MARKER not in stored, (
+            "a tool ARGUMENT VALUE reached durable storage -- the name staying "
+            "out is not sufficient, they leak independently"
         )

@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from conftest import (
+    TOOL_ARGUMENT_SENTINEL,
     RecordingLane,
     assistant_line,
     assistant_says,
@@ -176,14 +177,23 @@ class TestReasoningIsNeverStored:
 
         ``capture-never-drops-a-turn.md``: "Do not resolve this by inference,
         and do not let it be resolved by accident."
+
+        A tool call can leak in THREE independent ways -- its name, its argument
+        key, and its argument VALUE -- so all three are asserted. An earlier
+        version checked the first two only, which a parser persisting just the
+        value would have satisfied (reviewer finding, 2026-08-03).
         """
         turn = raw_turn_from_line(
             assistant_says("a1", text_block(FINDING), tool_use_block("Bash"))
         )
 
         assert turn is not None
+        # Non-vacuity: the assertions below are only meaningful because this
+        # record DID produce a turn with content to search.
+        assert turn.content == FINDING
         assert "Bash" not in turn.content
         assert "command" not in turn.content
+        assert TOOL_ARGUMENT_SENTINEL not in turn.content
 
     def test_an_empty_assistant_record_is_not_a_turn(self) -> None:
         """Declined for saying nothing, not for being the assistant."""
@@ -292,7 +302,17 @@ class TestBothSidesReachTheLane:
 
     @pytest.mark.asyncio
     async def test_no_reasoning_reaches_the_lane(self, tmp_path: Path) -> None:
-        """End-to-end guarantee, not just a parser property."""
+        """End-to-end guarantee, not just a parser property.
+
+        NON-VACUITY IS ASSERTED FIRST, and that ordering is the point. An
+        absence assertion over an empty corpus passes for the wrong reason:
+        under the pre-#447 parser both records below yield nothing, `delivered`
+        is the empty string, and every `not in` check is trivially true. That is
+        precisely the shape `docs/sme/correctness.md` warns about -- "a green
+        gate is evidence of nothing until something has made it fail" -- and it
+        was caught here by the opposite-harness review on 2026-08-03. So this
+        proves the material ARRIVED before it proves what was left out.
+        """
         transcript = tmp_path / "session.jsonl"
         write_lines(
             transcript,
@@ -306,11 +326,22 @@ class TestBothSidesReachTheLane:
         lane = RecordingLane()
         store = WatermarkStore(tmp_path / "watermark.sqlite")
 
-        await deliver_new_turns(transcript, "s1", store, lane)
+        delivery = await deliver_new_turns(transcript, "s1", store, lane)
+
+        # THE NON-VACUITY GUARD. Exactly one turn: the record that spoke. The
+        # tool-only record is correctly declined, so a2 contributes nothing --
+        # which is why the count is 1 and not 2.
+        assert delivery.delivered == 1, (
+            "nothing was delivered, so the absence checks below would pass "
+            "against an empty corpus and prove nothing"
+        )
+        assert len(lane.turns) == 1
+        assert lane.turns[0]["content"] == FINDING
 
         delivered = " ".join(turn["content"] for turn in lane.turns)
         assert "SECRET REASONING" not in delivered
         assert "Bash" not in delivered
+        assert TOOL_ARGUMENT_SENTINEL not in delivered
 
     @pytest.mark.asyncio
     async def test_the_watermark_advances_over_both_sides(
