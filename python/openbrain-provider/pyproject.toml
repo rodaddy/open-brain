@@ -17,18 +17,24 @@ dependencies = [
     "openbrain-memory",
 ]
 
-# [project.scripts] is deliberately absent until PROV-9 (#418) adds
-# `cli_provider.py`. A declared entry point whose target module does not exist
-# still installs an executable shim into .venv/bin; it just dies with
-# ModuleNotFoundError when anything runs it. No lint, type, or test gate looks
-# at entry-point targets, so a broken script ships green.
+# A declared entry point whose target module does not exist still installs an
+# executable shim into .venv/bin; it just dies with ModuleNotFoundError when
+# anything runs it, and no lint, type, or test gate looks at entry-point
+# targets -- so a broken script ships green. `tests/test_packaging.py` closes
+# that: it parses this table and imports every declared `module:attr`.
 #
-# Planned, once the module lands:
-#   [project.scripts]
-#   ob-memory-provider = "openbrain_provider.cli_provider:main"
+# Each script is declared only once its module exists. The remaining names from
+# the epic's "Home and shape" section -- `ob-memory-provider`,
+# `ob-claude-hook`, `ob-context-budget-gate` -- arrive with their modules.
 #
 # The stable command name is the point: it replaces hook entries that hardcode
-# absolute paths into a content-addressed `sha256-<hash>` install dir (#420).
+# an absolute script path.
+[project.scripts]
+# Replaces `bun /Volumes/ThunderBolt/Development/_ob/scripts/ob-memory-provider/guard.ts`,
+# the PreToolUse/Bash registration in both the Claude and Codex-sol profiles.
+# The port is behaviour-preserving; whether PreToolUse should observe or
+# enforce remains OPEN as open-brain#451.
+ob-guard = "openbrain_provider.cli_guard:main"
 
 [tool.uv.sources]
 openbrain-memory = { workspace = true }
@@ -61,8 +67,10 @@ convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
 # Tests document themselves through their names; a docstring on every test
-# function is noise that trains people to write empty ones.
-"tests/*" = ["D100", "D103"]
+# function is noise that trains people to write empty ones. The same applies
+# to a class used purely to group related tests -- and to a nested helper
+# stub, which is why D101/D102 are here too.
+"tests/*" = ["D100", "D101", "D102", "D103"]
 
 [build-system]
 requires = ["hatchling"]
