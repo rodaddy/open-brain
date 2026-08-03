@@ -247,6 +247,14 @@ def test_vocabulary_is_declared_exactly_where_expected() -> None:
         # surface above has its own per-surface drift test. Listed here so the
         # census still trips on an EIGHTH, undocumented declaration.
         "python/openbrain/src/openbrain/models/turn.py",
+        # NOT a vocabulary declaration: the startup lane resume (#519) SELECTS
+        # the intent subset -- decision/blocker/correction/checkpoint/handoff,
+        # fact excluded for noise, the same selection resume.py --brief makes.
+        # A subset filter names members without declaring the vocabulary; the
+        # authority stays openbrain_memory.EVENT_TYPES, and an unknown name in
+        # that set simply never matches an event. Listed so the census keeps
+        # tripping on genuinely new declarations.
+        "python/openbrain/src/openbrain/apps/hooks/session_start.py",
     }
     result = subprocess.run(
         ["git", "grep", "-l", "-E", r'"blocker"', "--", "*.py", "*.ts"],

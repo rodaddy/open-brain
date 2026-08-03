@@ -1514,6 +1514,105 @@ class TestSessionStartBindsRepoFromCwd:
         assert reader.requested[0].repo is None
 
 
+class TestStartupLaneResume:
+    """Emission two carries the repo lane's recent state (#519).
+
+    Operator amendment 2026-08-03 to the canon-only ruling: a REPO-SCOPED lane
+    resume auto-loads at session start; cross-lane history stays
+    explicit-on-request. Scope is the contamination guard, so an unresolvable
+    repo reads no lane at all -- there is no fallback lane.
+    """
+
+    def test_lane_key_derives_from_cwd(self, tmp_path) -> None:
+        root = tmp_path / "Some-Repo"
+        (root / ".git").mkdir(parents=True)
+        payload = SessionStartHook(session_id="sess", source="startup", cwd=root)
+
+        assert (
+            session_start._resolve_lane_key(payload, canon_settings())
+            == "dev:some-repo"
+        )
+
+    def test_an_explicit_session_key_wins(self, tmp_path) -> None:
+        root = tmp_path / "some-repo"
+        (root / ".git").mkdir(parents=True)
+        payload = SessionStartHook(session_id="sess", source="startup", cwd=root)
+
+        key = session_start._resolve_lane_key(
+            payload, canon_settings(session_key="dev:pinned")
+        )
+
+        assert key == "dev:pinned"
+
+    def test_outside_a_repo_reads_no_lane(self, tmp_path) -> None:
+        payload = SessionStartHook(session_id="sess", source="startup", cwd=tmp_path)
+
+        assert session_start._resolve_lane_key(payload, canon_settings()) is None
+
+    def test_an_empty_lane_says_so_in_one_line(self) -> None:
+        text = session_start._render_lane_resume(
+            "dev:new-repo", {"lane": None, "events": [], "event_count": 0}
+        )
+
+        assert "No lane history for this repo yet." in text
+        assert "dev:new-repo" in text
+
+    def test_renders_only_the_newest_day_of_intent_events_whole(self) -> None:
+        context = {
+            "lane": {"current_context_md": "Checkpoint line one.\nMore detail."},
+            "events": [
+                # Newest first, as session_context returns them.
+                {
+                    "event_type": "decision",
+                    "content": "today decision body carried whole",
+                    "created_at": "2026-08-03T04:01:20+00:00",
+                },
+                {
+                    "event_type": "fact",
+                    "content": "facts are noise here",
+                    "created_at": "2026-08-03T03:00:00+00:00",
+                },
+                {
+                    "event_type": "blocker",
+                    "content": "today blocker",
+                    "created_at": "2026-08-03T01:00:00+00:00",
+                },
+                {
+                    "event_type": "decision",
+                    "content": "yesterday decision must not render",
+                    "created_at": "2026-08-02T22:00:00+00:00",
+                },
+            ],
+            "event_count": 4,
+        }
+
+        text = session_start._render_lane_resume("dev:open-brain", context)
+
+        assert "Checkpoint: Checkpoint line one." in text
+        assert "today decision body carried whole" in text
+        assert "today blocker" in text
+        assert "facts are noise here" not in text
+        assert "yesterday decision must not render" not in text
+        # Reading order matches time order: blocker (01:00) before decision (04:01).
+        assert text.index("today blocker") < text.index("today decision body")
+
+    def test_the_envelope_appends_the_trailer_after_the_pack(self) -> None:
+        envelope = json.loads(
+            session_start._injection_envelope(
+                _FIXTURE_PACK, trailer="LANE RESUME (dev:x)\nline"
+            )
+        )
+
+        context = envelope["hookSpecificOutput"]["additionalContext"]
+        assert context.endswith("LANE RESUME (dev:x)\nline")
+
+    def test_no_trailer_leaves_the_envelope_unchanged(self) -> None:
+        with_none = session_start._injection_envelope(_FIXTURE_PACK, trailer=None)
+        plain = session_start._injection_envelope(_FIXTURE_PACK)
+
+        assert with_none == plain
+
+
 def _write_injection(pack: object, out: io.StringIO) -> None:
     """Serialise a pack through the entrypoint's own envelope builder."""
     out.write(session_start._injection_envelope(pack))
