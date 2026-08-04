@@ -80,3 +80,25 @@ loudly; RETIRE this fact (relegate on this key) when #535 lands — the code \
 replaces the warning sign.\
 """
 source = "open-brain#439/#526, src/tools/agent-context-pack.ts; approved 2026-08-03 as interim until #535"
+
+[[entries]]
+key = "repo.open_brain.nats_transport_design"
+lane = "repo_facts"
+subject = "NATS transport: port, subjects, wire format"
+fact_type = "api_contract"
+text = """
+NATS follows the FLEET standard (fleet-bus/packages/fleet-nats) — never a \
+local invention. Wire = fleet Envelope v1 (compact JSON; key is `from`, not \
+`sender`; reply correlation_id echoes the REQUEST id). Subject = \
+{env}.ob.memory.context_pack (env=dev locally; the ob domain is \
+Open-Brain-owned upstream since fleet-bus 2b20f97). Local broker: \
+127.0.0.1:4222 (monitor :8222), LaunchAgent com.rico.open-brain-nats with \
+explicit -c config — NEVER brew services, whose default binds 0.0.0.0. \
+Bridge worker: com.rico.open-brain-local-nats-worker, own health on :3110, \
+separate process from HTTP by design. Auth-off is legal ONLY on loopback; \
+any non-loopback broker REQUIRES OPENBRAIN_NATS_REQUIRE_AUTH=true first \
+(namespace forgery otherwise). Python: openbrain_memory/nats_wire.py defers \
+to fleet_nats when importable, else a 1:1 mirror — keep the mirror probed \
+against fleet-bus (#550). Full config: docs/fleet-nats-integration.md.\
+"""
+source = "docs/fleet-nats-integration.md, PR #545, fleet-bus 2b20f97, live-verified 2026-08-04; operator directive: fleet is the standard"
