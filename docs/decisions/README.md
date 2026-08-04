@@ -54,7 +54,6 @@ its scope key as identity, the distilled rule, a verbatim quote, and its source.
 | [only-idempotent-writes-are-retried.md](./only-idempotent-writes-are-retried.md) | rodaddy/open-brain#74, #85 (comments by rodaddy) | `decision.only_idempotent_writes_are_retried` |
 | [dream-once-is-dry-run-only.md](./dream-once-is-dry-run-only.md) | rodaddy/open-brain#75 (comment by rodaddy) | `decision.dream_once_is_dry_run_only` |
 | [openbrain-memory-package-ownership.md](./openbrain-memory-package-ownership.md) | rodaddy/open-brain#66, #71 (issue bodies) | `decision.openbrain_memory_package_ownership_and_placement` |
-| [get-contract-is-the-whole-manual.md](./get-contract-is-the-whole-manual.md) | issue #172 (body, provenance line credits Rico 2026-06-19) | `contract.get_contract_is_the_whole_manual` |
 | [dream-proposes-promoter-applies.md](./dream-proposes-promoter-applies.md) | issue #161 (comment by rodaddy, design correction 2026-06-19) | `architecture.dream_proposes_promoter_applies` |
 | [openbrain-memory-is-the-canonical-client.md](./openbrain-memory-is-the-canonical-client.md) | issue #177 ("Make openbrain-memory importable/installable + canonical redaction") | `architecture.openbrain_memory_is_the_canonical_client` |
 | [redaction-is-display-time.md](./redaction-is-display-time.md) | https://github.com/rodaddy/open-brain/issues/232 | `architecture.redaction_is_display_time_not_write_path` |
