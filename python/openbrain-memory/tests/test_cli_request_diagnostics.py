@@ -23,10 +23,26 @@ _FULL_SCOPE = {
     "channel_id": "channel-id",
     "session_key": "session-key",
 }
+# Config is supplied EXPLICITLY, never inherited from the environment.
+#
+# Without it these tests read OPENBRAIN_BASE_URL from the developer's shell, so
+# they passed on a machine that had the env set and failed in CI with
+# `base_url must be a non-empty string` -- config is built before the scope is
+# validated, so the assertion never reached the error it was written for. A
+# test that only passes where the environment is already right is the same
+# defect this file exists to document.
+_CONFIG = {
+    "base_url": "https://brain.example",
+    "namespace": "bilby",
+    "token": "fixture-token",
+}
 
 
 def _error(request: dict[str, object]) -> str:
-    output = execute_json(request, transport=LaneAwareTransport())
+    output = execute_json(
+        {"config": _CONFIG, **request},
+        transport=LaneAwareTransport(),
+    )
     receipt = output["receipt"]
     assert receipt["status"] == "failed"
     return str(receipt["error"])
@@ -78,6 +94,7 @@ def test_top_level_namespace_is_rejected_by_where_it_belongs() -> None:
     """
     output = execute_json(
         {
+            "config": _CONFIG,
             "operation": "recall",
             "query": "client install proof",
             "namespace": "rico",
@@ -115,6 +132,7 @@ def test_ingest_keeps_its_own_top_level_namespace() -> None:
     """`ingest` DEFINES a top-level `namespace`; the guard must not eat it."""
     output = execute_json(
         {
+            "config": _CONFIG,
             "operation": "ingest",
             "namespace": "rico",
             "turns": [],
