@@ -1,0 +1,306 @@
+# The SHARED PROCESS PACK — 26 rules harvested from issue/PR history (#522),
+# walked rule-by-rule with Rico on 2026-08-03 and approved with amendments.
+#
+# STATUS: WRITTEN, awaiting Rico's side-by-side read-through of this file
+# (merge = approval), then `openbrain-canon-reconcile --apply` per namespace.
+# Nothing here is standing canon until that apply runs.
+#
+# WORDING CONTRACT (operator decision 2026-08-03): the rule text below is
+# deliberately HARD — succinct, imperative, MUST/NEVER — because "a succinct
+# rule with hard language is what's actually followed." The verbatim operator
+# quotes ride in the promotion event's provenance (candidate_reason/source),
+# never in the served text. Amendments Rico made during the walkthrough are
+# folded in and marked [AMENDED] in the source field.
+#
+# This pack reconciles into EVERY working-agent namespace (rico, skippy,
+# nagatha, bilby) — one ledger entry per namespace, kept honest by re-running
+# the reconciler after edits.
+
+kind = "canon"
+
+[[entries]]
+key = "process.stacked_pr_fix_base_first"
+lane = "process_guidance"
+text = """
+Stacked PRs: fix the base PR first, then rebase the child onto the corrected \
+base. NEVER merge the child while the base carries known defects.\
+"""
+source = "open-brain#61/#62 (Rico); #522 harvest, approved 2026-08-03"
+
+[[entries]]
+key = "process.tests_assert_output_not_query_construction"
+lane = "process_guidance"
+text = """
+Tests assert on tool OUTPUT given controlled inputs — the tool is a black box. \
+NEVER assert on SQL strings, parameter positions, or query construction. Where \
+a security predicate must be proven exactly, use a query-recording or \
+DB-backed test, never a positional index assertion.\
+"""
+source = "open-brain#48 (209 query-internal assertions removed); approved 2026-08-03"
+
+[[entries]]
+key = "process.critical_self_review_receipt_required"
+lane = "process_guidance"
+text = """
+Every non-trivial PR carries a critical self-review receipt produced by \
+RUNNING /critical-mode against the change — not by filling in a template. \
+'All good' is a violation. The receipt names real risks with evidence. CI \
+rejects the empty shell; the run is the requirement.\
+"""
+source = "open-brain#148, scripts/validate-pr-body.ts; [AMENDED 2026-08-03: receipt = a manual /critical-mode run]"
+
+[[entries]]
+key = "process.swarm_claim_matches_current_process"
+lane = "process_guidance"
+text = """
+NEVER claim swarm review without running the swarm process as currently \
+documented in the swarm skill — today: SME lane + antagonist lane, fix rounds \
+to zero findings after each, then a final review by the opposite agent \
+harness. A swarm claim that skipped the process is a false receipt: run the \
+real swarm post-merge against the exact merged diff and fix what it finds.\
+"""
+source = "open-brain#151 (PR #150 false swarm claim); [AMENDED 2026-08-03: current documented process, not a frozen five-lane list]"
+
+[[entries]]
+key = "process.live_proof_receipt_or_split_residual"
+lane = "process_guidance"
+text = """
+An issue whose acceptance demands live proof NEVER closes on code, tests, and \
+docs alone. Post the live sanitized receipt, or split the unproven remainder \
+into its own tracked issue. Checking the box without the receipt is a false \
+closure.\
+"""
+source = "open-brain#147/#151/#153; approved 2026-08-03"
+
+[[entries]]
+key = "contract.live_get_contract_over_pinned_constants"
+lane = "process_guidance"
+text = """
+get_contract from the RUNNING server is the contract authority. Package \
+constants are lagging snapshots: NEVER treat one as authoritative when the \
+live server is reachable, and keep the drift test that fails when they \
+diverge.\
+"""
+source = "open-brain#178/#179 (Rico); approved 2026-08-03"
+
+[[entries]]
+key = "process.migration_closure_needs_live_receipts"
+lane = "process_guidance"
+text = """
+A data-migration or background-job issue closes ONLY on running evidence: a \
+live dry-run count, a bounded apply receipt, the destination count moving, \
+and a recorded stop. Merged is not running.\
+"""
+source = "open-brain#145 (reopened for exactly this gap); approved 2026-08-03"
+
+[[entries]]
+key = "process.live_capability_audit_before_planning"
+lane = "process_guidance"
+text = """
+Before planning work against Open Brain, audit the DEPLOYED tool surface and \
+scope the work from what actually exists. NEVER rebuild a live primitive; add \
+only thin wrappers or smoke tests where the shape is genuinely awkward.\
+"""
+source = "open-brain#104/#106/#108 (Rico's scope corrections); approved 2026-08-03"
+
+[[entries]]
+key = "process.reverify_issue_premise_before_implementing"
+lane = "process_guidance"
+text = """
+Before implementing an issue older than the current architecture, re-verify \
+its premise against the live contract. A stale-premise change is CLOSED, not \
+merged. Porting a fork faithfully reproduces the fork's bugs — parity is not \
+correctness.\
+"""
+source = "open-brain#232; approved 2026-08-03"
+
+[[entries]]
+key = "process.transport_epic_needs_live_parity_and_canary"
+lane = "process_guidance"
+text = """
+An infrastructure epic closes ONLY on the live rollout plus parity and canary \
+evidence. Every live attempt is preceded by a PR with tests and a \
+deploy/recovery plan. Ad-hoc live poking that gets rolled back proves nothing.\
+"""
+source = "open-brain#223; approved 2026-08-03"
+
+[[entries]]
+key = "process.close_agent_fix_only_on_live_log_canary"
+lane = "process_guidance"
+text = """
+A fix for a live agent-facing defect closes ONLY when fresh logs from the \
+live agents show the symptom gone. Merged, package-pinned, installed, \
+restarted — each rung was individually insufficient once (#190). Close on the \
+clean log, nothing earlier.\
+"""
+source = "open-brain#190; approved 2026-08-03"
+
+[[entries]]
+key = "process.contract_bump_requires_lockstep_client_release"
+lane = "process_guidance"
+text = """
+NEVER deploy a server contract-version bump alone. The matching client \
+release and downstream pin bumps ship in the same batch — clients exact-match \
+the contract and fail closed on their next restart.\
+"""
+source = "open-brain#280 (near-miss: every Hermes gateway would have fail-closed); approved 2026-08-03"
+
+[[entries]]
+key = "process.closure_wording_matches_enforcement_class"
+lane = "process_guidance"
+text = """
+Closure wording NEVER claims a stronger enforcement class than the mechanism \
+delivers. 'Structurally blocked' requires a machine check on the path that \
+would break; a runbook step or warning tripwire is 'guarded procedurally' and \
+must be written as exactly that.\
+"""
+source = "open-brain#280 closure audit; approved 2026-08-03"
+
+[[entries]]
+key = "observability.bounded_error_category_on_content_free_receipts"
+lane = "process_guidance"
+text = """
+Content-free receipts still name WHY: every non-success status carries a \
+closed-enum error_category mapped from the sanitized internal error. Free \
+text never. Stripping the reason entirely never — it turns a one-look answer \
+into a multi-step SSH dig.\
+"""
+source = "open-brain#308; approved 2026-08-03"
+
+[[entries]]
+key = "process.recall_program_standing_constraints"
+lane = "process_guidance"
+text = """
+Four constraints stand over ALL memory work; relaxing any one requires an \
+explicit operator decision, never a local trade-off: (1) exact namespace and \
+session-scope isolation is a security boundary; (2) prompt placement is \
+client/runtime-owned — no implicit MCP _meta injection; (3) observability is \
+content-free by default, with ONE operator-approved exception: the local \
+dogfood Langfuse tracing lane is content-ful (Rico, 2026-08-03) and the \
+exception extends no further without him; (4) Dream planning stays dry-run \
+unless a mutating wrapper is explicitly invoked.\
+"""
+source = "open-brain#320/#321/#325/#331/#336/#342 standing block; [AMENDED 2026-08-03: Langfuse content-ful exception]"
+
+[[entries]]
+key = "repo.open_brain.recency_uses_occurred_at"
+lane = "process_guidance"
+text = """
+Every recency judgment reads occurred_at — when the thing was actually said. \
+created_at is import bookkeeping and NEVER drives supersession, re-warming, \
+or drift detection: backfill gives every row the same created_at and \
+collapses months of history into one fake moment.\
+"""
+source = "open-brain#396 (DREAM-7); approved 2026-08-03"
+
+[[entries]]
+key = "repo.open_brain.corroboration_before_cadence"
+lane = "process_guidance"
+text = """
+NEVER raise the Deep stage cadence before the corroboration counter exists. \
+Hourly multiplies the commit rate by 24; with self-reported confidence that \
+turns a slow corpus-poisoning leak into a fast one. Corroboration first, \
+cadence second.\
+"""
+source = "open-brain#436 (DREAM-12); approved 2026-08-03"
+
+[[entries]]
+key = "process.self_review_gate_is_not_a_formality"
+lane = "process_guidance"
+text = """
+Writing self-review sections to turn the check green without doing the \
+verification is a FALSE RECEIPT in the permanent record — it happened, and \
+the doc's central claim was wrong by two orders of magnitude. Discovered \
+post-merge, the correction is recorded on the merged PR itself.\
+"""
+source = "open-brain PR #385 correction; approved 2026-08-03"
+
+[[entries]]
+key = "repo.open_brain.split_fail_open_by_cause"
+lane = "process_guidance"
+text = """
+Every memory-write failure is LOUD — both kinds (operator ruling 2026-08-03: \
+'both are fail'). Caller errors (bad enum, malformed payload) fail with the \
+named reason AND the accepted vocabulary; retry never helps. Environment \
+errors (server unreachable, timeout) keep the session alive and spool for \
+replay, but the failure is visibly reported — silent spooling is a defect \
+(#536). Alerts fire on state change, never per call.\
+"""
+source = "open-brain#431/#413; [AMENDED 2026-08-03: environment failures loud too, session survives]"
+
+[[entries]]
+key = "process.one_agent_one_session_issues_are_proposals"
+lane = "process_guidance"
+text = """
+A batch of issues authored by one agent in one session is a proposal to \
+AUDIT, never a plan to execute — that is the same shape as the drift being \
+diagnosed. NEVER pick up children of a parked epic without a recorded \
+decision.\
+"""
+source = "open-brain#400 (SHAPE epic warning); approved 2026-08-03"
+
+[[entries]]
+key = "canon.storage.vectorized_in_openbrain"
+lane = "process_guidance"
+text = """
+Canon is SERVED from Open Brain as recall. Files may AUTHOR canon — small, \
+reviewed, scope-keyed, reconciled one-directionally into Open Brain — but an \
+agent is never served canon by reading a rules file directly.\
+"""
+source = "open-brain#444 (Rico ruling), PR #493; approved 2026-08-03"
+
+[[entries]]
+key = "capture.two_applications_never_merged"
+lane = "process_guidance"
+text = """
+Live capture and bulk ingestion are two distinct applications and are NEVER \
+merged. The live adapter: Stop hook, watermark-to-EOF, hard deadline, one \
+format, never blocks the session. The bulk ingester: operator-run, whole \
+files, no deadline, many formats, may retry/quarantine/resume. Nothing slow, \
+multi-format, or whole-file ever lands on the live path.\
+"""
+source = "open-brain#454 (Rico: 'distinctly different applications'); approved 2026-08-03"
+
+[[entries]]
+key = "capture.bulk_reuses_pure_parts_and_client"
+lane = "process_guidance"
+text = """
+The bulk ingester IMPORTS the live ingester's pure functions and writes ONLY \
+through the canonical openbrain-memory client. Nothing in python/openbrain \
+talks to Postgres or HTTP directly. A second implementation of either is a \
+defect on sight.\
+"""
+source = "open-brain#454; approved 2026-08-03"
+
+[[entries]]
+key = "canon.repo_fact_requires_commit_provenance"
+lane = "process_guidance"
+text = """
+A repo_fact carries file-at-commit provenance (repo, source_commit, \
+source_url, verified_at) and is a distilled operational truth an agent needs \
+at startup — never a mirror of what already auto-loads. Chat NEVER becomes a \
+repo_fact. The binding slug is the git-root basename lowercased; any other \
+shape is invisible to the pack.\
+"""
+source = "open-brain#520; approved 2026-08-03"
+
+[[entries]]
+key = "hooks.gate_exemptions_are_narrow_and_operator_approved"
+lane = "process_guidance"
+text = """
+A gate exemption exists ONLY after permission is asked for and granted by \
+Rico — never self-granted. It is one narrow literal member per false \
+positive. NEVER widen a pattern, and NEVER rename code to slip past a gate.\
+"""
+source = "open-brain PR #499/#496; [AMENDED 2026-08-03: permission asked and granted, explicitly]"
+
+[[entries]]
+key = "canon.harvest_dedups_and_never_autopromotes"
+lane = "process_guidance"
+text = """
+Every canon harvest dedups against standing scope keys AND existing decision \
+records before proposing, verifies every quote against the real source, and \
+carries issue/PR provenance per candidate. NOTHING auto-promotes: the output \
+is a review queue, and promotion is the operator's act.\
+"""
+source = "open-brain#522; approved 2026-08-03"
