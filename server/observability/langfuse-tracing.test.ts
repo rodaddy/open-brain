@@ -483,7 +483,13 @@ describe("createTracingRuntime — the composition root's seam", () => {
       config: ENABLED_CONFIG,
       createSink: () => sink,
     });
-    expect(runtime.sink).toBe(sink);
+    // ONE sink for the process. The runtime hands back a health-carrying view
+    // of the sink it built rather than the bare object — the tracker has to
+    // hang off the shared sink or the shared path has no way to report an
+    // outage at all — so the assertion is that everything still lands in the
+    // same underlying sink, which `sink.bodies` below proves.
+    expect(runtime.sink).toBeDefined();
+    expect(runtime.sink?.health).toBeDefined();
 
     // Two sessions, as `createServerFactory` produces: each gets its own
     // McpServer but they must NOT each build a client.
@@ -583,23 +589,49 @@ describe("createTracingRuntime — the composition root's seam", () => {
  * that only checked `toBeDefined()` would pass against a per-call warn.
  */
 describe("outage alerts fire on state change only", () => {
-  test("the healthy path logs nothing at all", async () => {
-    const sink = recordingSink();
-    const { server, handlers } = fakeServer();
-    installMcpTracing(server, {
+  /**
+   * Wire tracing EXACTLY as `server/main.ts` does, and return the call handle.
+   *
+   * This helper is the point of this suite. The previous version of these tests
+   * installed with `createSink`, which made `installMcpTracing` build and own
+   * the sink — a branch production never takes, because `createServerFactory`
+   * always passes `sink:` from the process-wide runtime. Every alert assertion
+   * therefore passed against a code path no server ran, while the shared path
+   * silently discarded every failure (measured: zero lines across a 500-call
+   * outage). Driving `createTracingRuntime` -> `installMcpTracing({ sink })`
+   * means a regression in the production wiring fails these tests.
+   */
+  function wireLikeProduction(
+    sink: TracingSink,
+    healthOptions?: { cooldownMs?: number; now?: () => number },
+  ): () => Promise<void> {
+    const runtime = createTracingRuntime({
       config: ENABLED_CONFIG,
       createSink: () => sink,
+      ...(healthOptions === undefined ? {} : { healthOptions }),
+    });
+    const { server, handlers } = fakeServer();
+    // The `main.ts` shape: config plus the process's ONE shared sink.
+    installMcpTracing(server, {
+      config: ENABLED_CONFIG,
+      sink: runtime.sink!,
     });
     server.registerTool(
       "log_thought",
       { inputSchema: {} } as never,
       (() => ({ ok: true })) as never,
     );
+    return async () => {
+      await handlers.get("log_thought")?.({}, AUTH);
+    };
+  }
+
+  test("the healthy path logs nothing at all", async () => {
+    const sink = recordingSink();
+    const call = wireLikeProduction(sink);
 
     const lines = await captureLogLines(async () => {
-      for (let i = 0; i < 5; i += 1) {
-        await handlers.get("log_thought")?.({ i }, AUTH);
-      }
+      for (let i = 0; i < 5; i += 1) await call();
     });
 
     expect(sink.bodies).toHaveLength(5);
@@ -608,21 +640,9 @@ describe("outage alerts fire on state change only", () => {
     );
   });
 
-  test("one suspend line for a whole outage, then one recovery line with the drop count", async () => {
+  test("the shared-sink path reports an outage — one suspend, one recovery with the drop count", async () => {
     const sink = flakySink();
-    const { server, handlers } = fakeServer();
-    installMcpTracing(server, {
-      config: ENABLED_CONFIG,
-      createSink: () => sink,
-    });
-    server.registerTool(
-      "log_thought",
-      { inputSchema: {} } as never,
-      (() => ({ ok: true })) as never,
-    );
-    const call = async (): Promise<void> => {
-      await handlers.get("log_thought")?.({}, AUTH);
-    };
+    const call = wireLikeProduction(sink);
 
     const lines = await captureLogLines(async () => {
       await call(); // healthy
@@ -639,7 +659,8 @@ describe("outage alerts fire on state change only", () => {
     const resumes = lines.filter((line) =>
       line.includes("mcp_tool_tracing_resumed"),
     );
-    // FOUR failed calls, ONE line. That ratio is the requirement.
+    // FOUR failed calls, ONE line. That ratio is the requirement — and this is
+    // now asserted through the shared sink, where it previously read zero.
     expect(suspends).toHaveLength(1);
     expect(resumes).toHaveLength(1);
     expect(resumes[0]).toContain('"droppedTraces":4');
@@ -648,8 +669,85 @@ describe("outage alerts fire on state change only", () => {
     expect(suspends[0]).not.toContain("sk-lf-leak");
   });
 
+  test("many sessions over one shared sink still report a single pair", async () => {
+    // The multiplication the per-install tracker would have caused if it had
+    // ever run on the shared path: N sessions must not mean N suspend lines.
+    const sink = flakySink();
+    const runtime = createTracingRuntime({
+      config: ENABLED_CONFIG,
+      createSink: () => sink,
+    });
+    const calls = [0, 1, 2].map(() => {
+      const { server, handlers } = fakeServer();
+      installMcpTracing(server, {
+        config: ENABLED_CONFIG,
+        sink: runtime.sink!,
+      });
+      server.registerTool(
+        "log_thought",
+        { inputSchema: {} } as never,
+        (() => ({ ok: true })) as never,
+      );
+      return async () => {
+        await handlers.get("log_thought")?.({}, AUTH);
+      };
+    });
+
+    const lines = await captureLogLines(async () => {
+      sink.down = true;
+      for (const call of calls) await call();
+      sink.down = false;
+      await calls[0]!();
+    });
+
+    expect(
+      lines.filter((line) => line.includes("mcp_tool_tracing_suspended")),
+    ).toHaveLength(1);
+    const resumes = lines.filter((line) =>
+      line.includes("mcp_tool_tracing_resumed"),
+    );
+    expect(resumes).toHaveLength(1);
+    // Three sessions' worth of drops counted into ONE window.
+    expect(resumes[0]).toContain('"droppedTraces":3');
+  });
+
+  /**
+   * Caught by the live blackholed probe, not by a test: traces enqueued BEFORE
+   * the outage was noticed were reported as `droppedTraces: 0`.
+   *
+   * The outage is discovered on the background export, seconds after the calls
+   * were made, so the whole in-flight batch was already handed over while the
+   * sink still looked healthy. Those are exactly the traces the operator lost.
+   */
+  test("traces enqueued before the failure was noticed still count as dropped", () => {
+    const tracker = new SinkHealthTracker({ cooldownMs: 0 });
+    // Five traces accepted while the sink still looked healthy.
+    for (let i = 0; i < 5; i += 1) tracker.recordEnqueued();
+    // The background export then reports the endpoint is gone. `false` because
+    // a failed BATCH is not itself one lost trace.
+    expect(tracker.recordFailure(false)).toBe(true);
+    // Two more arrive during the known outage.
+    tracker.recordEnqueued();
+    tracker.recordEnqueued();
+    // All seven, not two — and emphatically not zero.
+    expect(tracker.recordSuccess()).toBe(7);
+  });
+
+  test("a delivered flush clears the pending tally so a later outage is not inflated", () => {
+    const tracker = new SinkHealthTracker({ cooldownMs: 0 });
+    for (let i = 0; i < 4; i += 1) tracker.recordEnqueued();
+    // Those four reached the endpoint.
+    tracker.noteDelivered();
+    for (let i = 0; i < 3; i += 1) tracker.recordEnqueued();
+    expect(tracker.recordFailure(false)).toBe(true);
+    // Only the three that were still in flight, not the four already delivered.
+    expect(tracker.recordSuccess()).toBe(3);
+  });
+
   test("a second outage reports its own window, not a running total", () => {
-    const tracker = new SinkHealthTracker();
+    // Cooldown disabled: this asserts the counting rule, and a real clock would
+    // otherwise suppress the second pair as a flap.
+    const tracker = new SinkHealthTracker({ cooldownMs: 0 });
     expect(tracker.recordFailure()).toBe(true); // transition
     expect(tracker.recordFailure()).toBe(false); // already down — no line
     expect(tracker.recordSuccess()).toBe(2);
@@ -661,10 +759,14 @@ describe("outage alerts fire on state change only", () => {
 
   test("tool calls still return their own result verbatim throughout an outage", async () => {
     const sink = flakySink();
+    const runtime = createTracingRuntime({
+      config: ENABLED_CONFIG,
+      createSink: () => sink,
+    });
     const { server, handlers } = fakeServer();
     installMcpTracing(server, {
       config: ENABLED_CONFIG,
-      createSink: () => sink,
+      sink: runtime.sink!,
     });
     const result = { content: [{ type: "text", text: "untouched" }] };
     server.registerTool(
@@ -677,6 +779,80 @@ describe("outage alerts fire on state change only", () => {
       const returned = await handlers.get("log_thought")?.({}, AUTH);
       expect(returned).toBe(result);
     });
+  });
+
+  /**
+   * The LOW finding from the adversarial review: state-change-only is not by
+   * itself a bound on output. A sink alternating fail/success changes state on
+   * every call, so 20 alternating calls MEASURED 10 suspend and 10 resume lines
+   * — per-call noise arriving through the rule meant to prevent it.
+   */
+  test("a flapping sink reports a bounded number of pairs, not one per flap", async () => {
+    const sink = flakySink();
+    // A clock the test drives, so the 30 s default is asserted without sleeping
+    // through it. Time advances 1 s per call: twenty alternating calls span
+    // 20 s, which is inside one cooldown.
+    let clock = 0;
+    const call = wireLikeProduction(sink, {
+      cooldownMs: 30_000,
+      now: () => clock,
+    });
+
+    const lines = await captureLogLines(async () => {
+      for (let i = 0; i < 20; i += 1) {
+        sink.down = i % 2 === 0;
+        await call();
+        clock += 1_000;
+      }
+    });
+
+    const suspends = lines.filter((line) =>
+      line.includes("mcp_tool_tracing_suspended"),
+    );
+    const resumes = lines.filter((line) =>
+      line.includes("mcp_tool_tracing_resumed"),
+    );
+    // Was 10/10 before the cooldown. The first transition is never delayed, so
+    // exactly one pair is the correct bound for a window this size.
+    expect(suspends).toHaveLength(1);
+    expect(resumes).toHaveLength(1);
+  });
+
+  test("the cooldown delays a flap's pair but never a real outage after quiet", async () => {
+    const sink = flakySink();
+    let clock = 0;
+    const call = wireLikeProduction(sink, {
+      cooldownMs: 30_000,
+      now: () => clock,
+    });
+
+    const lines = await captureLogLines(async () => {
+      // First outage: reported immediately.
+      sink.down = true;
+      await call();
+      sink.down = false;
+      await call();
+      // A flap 1 s later: suppressed, because a pair was just printed.
+      clock += 1_000;
+      sink.down = true;
+      await call();
+      sink.down = false;
+      await call();
+      // A genuine outage well past the cooldown: reported again.
+      clock += 31_000;
+      sink.down = true;
+      await call();
+      sink.down = false;
+      await call();
+    });
+
+    // Two pairs, not three: the middle flap is the one the cooldown eats.
+    expect(
+      lines.filter((line) => line.includes("mcp_tool_tracing_suspended")),
+    ).toHaveLength(2);
+    expect(
+      lines.filter((line) => line.includes("mcp_tool_tracing_resumed")),
+    ).toHaveLength(2);
   });
 });
 

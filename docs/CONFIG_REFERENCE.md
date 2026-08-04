@@ -309,12 +309,31 @@ is still visible, but on STATE CHANGE only:
 
 | line | level | when | payload |
 |---|---|---|---|
-| `mcp_tool_tracing_suspended` | warn | first failure after healthy | error label only |
-| `mcp_tool_tracing_resumed` | info | first success after an outage | `droppedTraces` for that window |
+| `mcp_tool_tracing_suspended` | warn | first failed background export after healthy | error label only |
+| `mcp_tool_tracing_resumed` | info | first export that reaches the endpoint again | `droppedTraces` for that window |
 
-Never one line per failed call. Measured under a blackholed endpoint: heap
-plateaus at 34-45 MB across 30,000 traced calls with no upward trend, and the
-enqueue stays off the request path (~7 µs per call).
+Never one line per failed call. Both edges are detected on the EXPORT, not on
+the tool call: handing a span to the batch queue succeeds whether or not
+anything is listening, so an outage is only knowable once the background export
+runs. The down edge comes from OTel's global error handler; the up edge from a
+health probe that runs only while the sink is already known-unhealthy and sends
+its own span, so a flush that merely found an empty queue cannot be mistaken for
+the endpoint coming back.
+
+Observed against a blackholed endpoint (500 traced calls, 2026-08-04):
+`mcp_tool_tracing_suspended` while the process was still running, then
+`mcp_tool_tracing_resumed` with `droppedTraces: 500` once a reachable endpoint
+answered — and no `resumed` line at all while the endpoint stayed unreachable.
+
+A flapping sink is bounded rather than chatty: after a reported recovery,
+another suspend/resume pair is withheld for 30 seconds, so a sink alternating
+fail/success reports one pair instead of one per flap (measured 10 pairs across
+20 alternating calls before this bound). A genuine outage arriving after a quiet
+period is never delayed.
+
+Measured under a blackholed endpoint: heap plateaus at 34-45 MB across 30,000
+traced calls with no upward trend, and the enqueue stays off the request path
+(~7 µs per call).
 
 The SDK's own logger is silenced when the sink is built. Left at its default it
 writes export failures to `console.error` with the raw error attached, which

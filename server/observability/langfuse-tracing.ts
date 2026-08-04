@@ -65,6 +65,25 @@
  * sink transitions to unreachable, one when it recovers, carrying the count
  * dropped during that window. Never per call — "if you do that every time,
  * you're going to spend most of your time saying hey hey this isn't working."
+ *
+ * HEALTH BELONGS TO THE SINK, NOT TO AN INSTALL, and that distinction is the
+ * whole of whether any of the above actually happens. The composition root
+ * builds ONE sink and passes it to every per-session install, so a tracker
+ * created per install is a tracker the production path never has: the first
+ * version of this lane created one only when the install OWNED the sink, which
+ * made the shared path — the only path `server/main.ts` takes — count every
+ * failure into `undefined` and log nothing. Measured: zero suspend and zero
+ * recovery lines across a 500-call outage. The tracker now hangs off
+ * `TracingSink.health`, so both paths report identically by construction.
+ *
+ * AN OUTAGE IS DETECTED WHERE IT ACTUALLY SURFACES, which is not `emit`. An
+ * enqueue onto the batch queue succeeds whether or not anything is listening;
+ * only the background EXPORT fails. OTel reports that failure through the
+ * global error handler and reports success nowhere, so the down edge is a
+ * `setGlobalErrorHandler` hook and the up edge is a probe that re-flushes only
+ * while already known-unhealthy. Before both, an outage was invisible until
+ * shutdown flush — the SDK's own error line is silenced here on purpose (see
+ * `defaultSinkFactory`), so nothing else was left to say it.
  */
 import { configureGlobalLogger, LogLevel } from "@langfuse/core";
 import { LangfuseSpanProcessor } from "@langfuse/otel";
@@ -72,6 +91,7 @@ import {
   setLangfuseTracerProvider,
   startObservation,
 } from "@langfuse/tracing";
+import { setGlobalErrorHandler } from "@opentelemetry/core";
 import { BasicTracerProvider } from "@opentelemetry/sdk-trace-base";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AuthInfo } from "../../src/types.ts";
@@ -106,6 +126,34 @@ const DEFAULT_SHUTDOWN_TIMEOUT_MS = 2500;
  */
 const SINK_EXPORT_TIMEOUT_SECONDS = 2;
 
+/**
+ * Quiet period after a reported recovery before another PAIR may be printed.
+ *
+ * State-change-only is not by itself a bound on output: a sink alternating
+ * fail/success is a state change on every call, which is how 20 alternating
+ * calls MEASURED 10 suspend and 10 resume lines — per-call noise arriving
+ * through the rule meant to prevent it. The operator's ruling on #530 is
+ * state-change-only "within reason", so a flapping sink reports at most one
+ * pair per cooldown while a genuine outage still reports immediately: the first
+ * transition after a quiet period is never delayed, only the ones stacked
+ * behind a recovery that was just printed.
+ *
+ * 30 s is chosen against the export cadence rather than arbitrarily — the batch
+ * processor's default schedule is 5 s, so this spans several export attempts
+ * and a real outage is still surfaced inside one operator-noticeable interval.
+ */
+const DEFAULT_FLAP_COOLDOWN_MS = 30_000;
+
+/**
+ * How often a KNOWN-UNHEALTHY sink re-checks whether the endpoint is back.
+ *
+ * Only ever runs while the tracker is already down, so this is not a background
+ * cost on a working system. 5 s matches the batch processor's default export
+ * cadence: probing faster would just race the queue's own attempts, and slower
+ * would leave the recovery line trailing the actual recovery.
+ */
+const SINK_HEALTH_PROBE_MS = 5_000;
+
 export interface McpTracingConfig {
   enabled: boolean;
   endpoint: string;
@@ -137,6 +185,20 @@ export interface TracingSink {
   emit(body: TraceBody): void;
   forceFlush(): Promise<void>;
   shutdown(): Promise<void>;
+  /**
+   * Outage state for THIS sink, owned by whoever built it.
+   *
+   * Health belongs to the sink and not to an install, because the composition
+   * root builds ONE sink and hands it to every per-session install. A tracker
+   * created per install would be a tracker the shared path never has (the bug
+   * this field exists to remove: `installMcpTracing` used to create one only
+   * when it owned the sink, so in production — where `server/main.ts` always
+   * passes a shared sink — every failure was counted into `undefined` and no
+   * line was ever emitted, measured as zero suspend/recovery lines across a
+   * 500-call outage). Optional so a hand-written test fake stays a three-method
+   * object; when it is absent the emit path simply has nothing to report to.
+   */
+  readonly health?: SinkHealthTracker;
 }
 
 export interface McpTracingDeps {
@@ -165,6 +227,13 @@ export interface McpTracingDeps {
    * resolves without waiting the real deadline for it.
    */
   shutdownTimeoutMs?: number;
+  /**
+   * Health-tracker tuning for a sink the runtime has to wrap.
+   *
+   * Exists so a test can drive the flap cooldown from an injected clock instead
+   * of sleeping through a 30 s real one.
+   */
+  healthOptions?: { cooldownMs?: number; now?: () => number };
 }
 
 /** Shutdown handle returned by `installMcpTracing`, wired into the stop path. */
@@ -332,15 +401,83 @@ function errorClassOf(err: unknown): string {
 export class SinkHealthTracker {
   private healthy = true;
   private dropped = 0;
+  /**
+   * Traces enqueued while the sink still looked healthy.
+   *
+   * Rolled into `dropped` when a failure is discovered, because a background
+   * export failure condemns the batch that was already queued — those traces
+   * were lost, they simply had not been found out yet. Cleared on a flush that
+   * really reached the endpoint (`noteDelivered`).
+   */
+  private pending = 0;
+  /**
+   * When the last REPORTED pair completed, i.e. the last recovery that actually
+   * logged. `undefined` until one has, so the first outage is never delayed.
+   */
+  private lastReportedAt: number | undefined;
+  /** True while a window is being ridden out silently under the cooldown. */
+  private suppressed = false;
+  private readonly cooldownMs: number;
+  private readonly now: () => number;
+
+  constructor(options: { cooldownMs?: number; now?: () => number } = {}) {
+    this.cooldownMs = options.cooldownMs ?? DEFAULT_FLAP_COOLDOWN_MS;
+    this.now = options.now ?? Date.now;
+  }
+
+  /**
+   * Count one trace handed to the sink, whatever the current health state.
+   *
+   * SEPARATE FROM `recordFailure` because the two count different things, and
+   * conflating them under-reports the loss by orders of magnitude. A failure is
+   * one failed EXPORT BATCH; the operator's question is the TRACE count that
+   * went missing. The first probe of this lane reported `droppedTraces: 1`
+   * after 500 dropped calls, because the batch processor had failed a single
+   * export — a figure that reads as "nearly nothing happened" for a total
+   * outage.
+   *
+   * COUNTED WHILE HEALTHY TOO, into a pending tally that only becomes a loss if
+   * the window turns out to be bad. An outage is discovered on the background
+   * export, SECONDS after the traces were enqueued — the same 500-call probe
+   * then reported `droppedTraces: 0`, because every one of those traces had
+   * been handed over while the sink still looked healthy. The traces already
+   * sitting in the queue when the endpoint dies are exactly the ones an
+   * operator lost, so they have to be in the figure.
+   */
+  recordEnqueued(): void {
+    if (this.healthy) {
+      this.pending += 1;
+      return;
+    }
+    this.dropped += 1;
+  }
 
   /**
    * Record a failed emit or export. Returns true ONLY on the transition into
    * an outage, so the caller logs the suspend line exactly once per window.
+   *
+   * A transition inside the cooldown window returns false and marks the whole
+   * window suppressed, so its recovery stays silent too: the unit of output is
+   * the PAIR, and reporting a resume whose suspend was never printed would read
+   * as a recovery from nothing.
+   *
+   * `countsAsTrace` distinguishes the two callers: a throwing `emit` lost
+   * exactly one trace, while a failed background export batch lost none by
+   * itself — its traces are already counted by `recordEnqueued`, so counting
+   * the batch too would double-count.
    */
-  recordFailure(): boolean {
-    this.dropped += 1;
+  recordFailure(countsAsTrace = true): boolean {
+    if (countsAsTrace) this.dropped += 1;
     if (!this.healthy) return false;
     this.healthy = false;
+    // The batch that was in flight when the endpoint died is lost with it.
+    this.dropped += this.pending;
+    this.pending = 0;
+    if (this.withinCooldown()) {
+      this.suppressed = true;
+      return false;
+    }
+    this.suppressed = false;
     return true;
   }
 
@@ -348,13 +485,41 @@ export class SinkHealthTracker {
    * Record a success. Returns the number of traces dropped during the window
    * that just ended, or undefined when nothing changed — so a healthy sink
    * emits nothing at all on the happy path.
+   *
+   * The drop count is cleared on every recovery including a suppressed one:
+   * the counter measures a window, and a suppressed window is still a window
+   * that ended. Carrying it forward would inflate the next reported figure with
+   * drops from flaps the operator was deliberately not shown.
    */
   recordSuccess(): number | undefined {
     if (this.healthy) return undefined;
     const dropped = this.dropped;
     this.healthy = true;
     this.dropped = 0;
+    if (this.suppressed) {
+      this.suppressed = false;
+      return undefined;
+    }
+    // Only a REPORTED pair starts the next cooldown. A suppressed window must
+    // not extend the quiet period, or a sink flapping faster than the cooldown
+    // would stay silent forever instead of reporting once per cooldown.
+    this.lastReportedAt = this.now();
     return dropped;
+  }
+
+  /**
+   * A flush that really reached the endpoint: the pending traces landed, so
+   * they can no longer become a loss. Distinct from `recordSuccess`, which is
+   * about the health EDGE — a healthy sink calls this routinely and logs
+   * nothing.
+   */
+  noteDelivered(): void {
+    this.pending = 0;
+  }
+
+  private withinCooldown(): boolean {
+    if (this.lastReportedAt === undefined) return false;
+    return this.now() - this.lastReportedAt < this.cooldownMs;
   }
 
   /** Traces dropped in the current window; 0 while healthy. */
@@ -376,8 +541,9 @@ export class SinkHealthTracker {
 export function reportSinkFailure(
   tracker: SinkHealthTracker,
   err: unknown,
+  countsAsTrace = true,
 ): void {
-  if (!tracker.recordFailure()) return;
+  if (!tracker.recordFailure(countsAsTrace)) return;
   logger.warn("mcp_tool_tracing_suspended", { error: tracingErrorLabel(err) });
 }
 
@@ -415,10 +581,12 @@ export function installMcpTracing(
   if (!sink) return INACTIVE_HANDLE;
   tracingInstalledServers.add(server);
 
-  // A tracker of its own ONLY when this install owns the sink. A shared sink's
-  // health belongs to the runtime that built it, and two trackers over one sink
-  // would report the same outage twice.
-  const tracker = shared ? undefined : new SinkHealthTracker();
+  // Health comes OFF THE SINK, so the shared and owned paths report identically
+  // — one tracker per sink, whoever built it. The previous shape created one
+  // here only when the install owned the sink, which meant the production path
+  // (`server/main.ts` always passes a shared sink) had none at all and silently
+  // discarded every failure.
+  const tracker = sink.health;
 
   const original = server.registerTool.bind(server) as RegisterTool;
   server.registerTool = ((
@@ -495,8 +663,27 @@ export function createTracingRuntime(deps: McpTracingDeps = {}): {
 } {
   const config = deps.config ?? readMcpTracingConfig();
   if (!config.enabled) return { config, shutdown: () => Promise.resolve() };
-  const sink = deps.sink ?? createSinkSafely(config, deps.createSink);
-  if (!sink) return { config, shutdown: () => Promise.resolve() };
+  const built = deps.sink ?? createSinkSafely(config, deps.createSink);
+  if (!built) return { config, shutdown: () => Promise.resolve() };
+  // THE RUNTIME OWNS THE SHARED SINK, SO IT OWNS THAT SINK'S HEALTH. The real
+  // factory attaches its own tracker; an injected sink (a test fake, or one
+  // built elsewhere) generally has none, and without this it would travel to
+  // every install with no way to report an outage — reintroducing the exact
+  // silent-discard bug by a different route. Attaching here means the health
+  // wiring is a property of the composition root, which is where the tests can
+  // then prove it without reaching into the SDK.
+  // Delegating rather than spreading: a sink's methods may be `this`-dependent
+  // (the outage-simulating fake reads its own `down` flag), and a spread copy
+  // would rebind `this` to the copy and silently change the fake's behaviour.
+  const sink: TracingSink =
+    built.health === undefined
+      ? {
+          health: new SinkHealthTracker(deps.healthOptions),
+          emit: (body) => built.emit(body),
+          forceFlush: () => built.forceFlush(),
+          shutdown: () => built.shutdown(),
+        }
+      : built;
   return {
     config,
     sink,
@@ -536,6 +723,12 @@ function emitTrace(
 ): void {
   try {
     sink.emit(buildToolTraceBody(input));
+    // A successful enqueue is the recovery signal for a FAKE sink (one that
+    // throws while down). Against the REAL SDK an enqueue always succeeds even
+    // with the endpoint dead, so nothing here fires during a real outage and
+    // recovery is driven by the health probe in `defaultSinkFactory` instead.
+    //
+    // This trace is NOT counted as dropped: `emit` just accepted it.
     if (tracker) reportSinkSuccess(tracker);
   } catch (err: unknown) {
     if (tracker) reportSinkFailure(tracker, err);
@@ -601,7 +794,90 @@ function defaultSinkFactory(config: McpTracingConfig): TracingSink {
   const provider = new BasicTracerProvider({ spanProcessors: [processor] });
   setLangfuseTracerProvider(provider);
   const tracker = new SinkHealthTracker();
+
+
+  // WHERE AN OUTAGE ACTUALLY BECOMES VISIBLE WHILE THE SERVER RUNS.
+  //
+  // `emit` cannot fail against a dead endpoint — it is a synchronous enqueue
+  // onto the batch processor's in-memory queue, which succeeds whether or not
+  // anything is listening on the far end. The failure happens later, on the
+  // processor's own background export, and OTel routes that rejection to the
+  // global error handler (`BatchSpanProcessorBase._maybeStartTimer`'s `.catch`,
+  // verified in `@opentelemetry/sdk-trace` 2.10.0). The default handler logs
+  // through `diag`, and this module silences the SDK logger for content-free
+  // reasons — so before this hook an outage produced NOTHING until shutdown
+  // flush, which is precisely the silence #530 forbids.
+  //
+  // `forceFlush()` rejects to its CALLER instead of coming through here, so the
+  // drain path below and this hook are disjoint and one outage is never
+  // double-reported.
+  //
+  // This handler is process-global and OTel offers no per-processor seam, so it
+  // is installed only when this lane builds a real sink (never in tests, which
+  // inject a fake factory), and it deliberately reports rather than swallows:
+  // the previous behaviour for a non-Langfuse OTel error was a silent drop into
+  // a silenced diag logger, so routing it to a content-free warn strictly
+  // increases what an operator sees.
+  // `countsAsTrace: false` — a failed export batch is not itself a lost trace.
+  // The traces are counted as they are enqueued below, so counting the batch
+  // here as well would double-count them.
+  setGlobalErrorHandler((err: unknown) => {
+    reportSinkFailure(tracker, err, false);
+  });
+
+  // THE RECOVERY EDGE, which the error handler above cannot see.
+  //
+  // OTel signals export FAILURE globally but signals success nowhere: on a good
+  // batch `_flushOneBatch` simply resolves into a `.finally`, with no hook
+  // (verified in `@opentelemetry/sdk-trace` 2.10.0). Without this probe an
+  // outage would print its suspend line and then stay silent forever, and #530
+  // asks for the pair — the recovery line naming the dropped count is the half
+  // that tells an operator to stop looking.
+  //
+  // ONLY probes while already known-unhealthy, so the happy path costs exactly
+  // nothing.
+  //
+  // A REAL SPAN IS SENT, and that is not incidental. `forceFlush()` on an EMPTY
+  // queue returns an already-resolved promise without touching the network
+  // (`_flushOneBatch` returns early on `length === 0`), so flushing nothing
+  // "succeeds" against a blackholed endpoint and reads as recovery. That false
+  // recovery was MEASURED on the first probe of this fix: the lane reported
+  // `mcp_tool_tracing_resumed` while the endpoint was still non-routable.
+  // Enqueueing one span first means the flush has something to actually export,
+  // so its result reflects the transport rather than an empty queue.
+  const probe = setInterval(() => {
+    if (tracker.isHealthy) return;
+    try {
+      const span = startObservation("mcp_tool_tracing_health_probe", {
+        // Content-free by construction: the probe carries no payload, so it can
+        // never smuggle argument or result text to the endpoint.
+        metadata: { probe: true },
+      });
+      span.end();
+    } catch {
+      // A probe that cannot even be built is not a recovery; stay down.
+      return;
+    }
+    void processor
+      .forceFlush()
+      .then(() => {
+        // The probe span above guarantees the queue was non-empty, so a resolve
+        // here really is the endpoint answering.
+        tracker.noteDelivered();
+        reportSinkSuccess(tracker);
+      })
+      // Still down — and deliberately NOT `recordFailure`, which would count
+      // this probe as a dropped trace and inflate the recovery line with
+      // attempts that carried no payload. The window is already open; a failed
+      // probe is simply not the recovery, so it reports nothing.
+      .catch(() => undefined);
+  }, SINK_HEALTH_PROBE_MS);
+  // Never hold the event loop open for a diagnostic: without this an idle
+  // process would refuse to exit on account of the tracing lane alone.
+  probe.unref?.();
+
   return {
+    health: tracker,
     emit(body: TraceBody): void {
       // The span ends immediately: the tool call already happened, so this is a
       // record of it rather than a live scope.
@@ -617,19 +893,37 @@ function defaultSinkFactory(config: McpTracingConfig): TracingSink {
         ...(body.userId === undefined ? {} : { userId: body.userId }),
       });
       span.end();
+      // The enqueue above SUCCEEDS even with the endpoint dead — that is what
+      // makes an outage invisible from the request path. So while the sink is
+      // known-unhealthy, every span handed over is a span that will be dropped,
+      // and this is the only place with a per-trace view of it. A no-op while
+      // healthy.
+      tracker.recordEnqueued();
     },
     async forceFlush(): Promise<void> {
-      // The export is where an outage becomes observable — an enqueue cannot
-      // fail against a dead endpoint, only a flush can. That is why the health
-      // lines live on the drain path and not only on `emit`.
+      // DRAINING IS NOT EVIDENCE OF HEALTH, so this path deliberately reports
+      // no recovery. `forceFlush()` resolves whenever the queue ends up empty —
+      // including when the spans were already DROPPED by earlier failed
+      // exports, which is exactly the state a long outage leaves behind. A
+      // blackholed 500-call probe was measured printing `resumed` from right
+      // here with the endpoint still non-routable; announcing a recovery that
+      // did not happen is worse than saying nothing, because it retracts a
+      // warning the operator was correctly given.
+      //
+      // Recovery is the health probe's job (see above): it enqueues its own
+      // span first, so a resolve there means that span was exported rather than
+      // merely absent. A failure is still worth recording, since a REJECTED
+      // flush is unambiguous.
       try {
         await processor.forceFlush();
-        reportSinkSuccess(tracker);
       } catch (err: unknown) {
-        reportSinkFailure(tracker, err);
+        reportSinkFailure(tracker, err, false);
       }
     },
     shutdown(): Promise<void> {
+      // Stop probing before draining, so a probe cannot race the shutdown flush
+      // and report health state about a sink that is on its way out.
+      clearInterval(probe);
       return processor.shutdown();
     },
   };
@@ -736,4 +1030,6 @@ function tracingErrorLabel(err: unknown): string {
 export const TRACING_INTERNALS = {
   DEFAULT_SHUTDOWN_TIMEOUT_MS,
   SINK_EXPORT_TIMEOUT_SECONDS,
+  DEFAULT_FLAP_COOLDOWN_MS,
+  SINK_HEALTH_PROBE_MS,
 } as const;
