@@ -398,6 +398,50 @@ pass-throughs only at or after the moment the installed package includes
 `unknown_prefixed_variables` reject the whole environment, which the hooks
 swallow into a silent zero capture.
 
+### LAN plain-HTTP opt-in (#525) — Python `openbrain` hooks
+
+Declared on `CaptureSettings` and `CanonSettings`
+(`python/openbrain/src/openbrain/config.py`, `ALLOW_INSECURE_HTTP_ALIASES`), and
+flowed to `OpenBrainClient(allow_insecure_http=...)` at every site the hook
+stack builds a client.
+
+| variable | default | notes |
+|---|---|---|
+| `OPENBRAIN_ALLOW_INSECURE_HTTP` | `false` | permit a plain-`http` endpoint whose host is **not** loopback. One name, bound by both sections, and the same name `openbrain_memory.runtime` already reads |
+
+**What it is scoped to: a LAN-internal, pre-production posture.** The brain
+listens on a private address the operator controls, and putting TLS in front of
+3100 is a separate and larger piece of work (#525 names both routes; this is the
+declared opt-in route). It does **not** weaken the default — unset, the client's
+loopback-only rule stands exactly as before, so a public endpoint still has to be
+`https`. Turning it on is an explicit, per-host, documented choice.
+
+**Why it had to be declared rather than just exported.** The client refuses a
+non-loopback plain-`http` base URL unless the caller passes
+`allow_insecure_http=True` (`openbrain_memory.client._validate_base_url`) — and
+an `OPENBRAIN_`-prefixed variable matching no declared field is rejected by
+`unknown_prefixed_variables` as a typo, which the hook entrypoints swallow into a
+silent zero capture. So a LAN host had no legal way to say it: exporting the
+variable killed the whole environment, and not exporting it left the client
+refusing the URL. Measured 2026-08-02 (#525): a hook process pointing at
+`http://10.71.1.20:3100` declined canon **and** capture with no error anywhere —
+a Claude-family agent on a LAN box woke with the policy hook firing and zero
+hydration.
+
+**Deploy coupling — the wrapper must pass it through.** The deployed
+`openbrain-hook-env` wrapper (see `docs/420-cutover-rollback.md`) hands hooks only
+the variables it lists explicitly, and it stripped this one deliberately, because
+before this change the installed package rejected it. The wrapper adds the
+pass-through only at or after the moment the installed package declares the
+field. This is the same ordering rule the `OPENBRAIN_OBSERVATION_*` and
+`OPENBRAIN_SPOOL_PATH` notes carry: **the package declares first, the wrapper
+passes second.** Reversing it makes `unknown_prefixed_variables` reject the whole
+environment, which the hooks swallow into a silent zero capture.
+
+Both halves are required. Declaring the field without the wrapper pass-through
+leaves the hook process never seeing the variable; passing it through without the
+declaration is the rejection above.
+
 ### Sibling-package variables that must still be declared
 
 | variable | default | notes |

@@ -50,12 +50,22 @@ handled independently. No `sha256-` path is involved; a `uv tool install
 The Python config REJECTS any `OPENBRAIN_*` variable it does not declare
 (`config.unknown_prefixed_variables`), and the hooks swallow that rejection —
 so sourcing the whole `claudex-observation.env` (which carries
-`OPENBRAIN_OBSERVATION_*`, `OPENBRAIN_ALLOW_INSECURE_HTTP`, `OPENBRAIN_NAMESPACE`)
-would silently zero every capture. The wrapper
+`OPENBRAIN_NAMESPACE`) would silently zero every capture. The wrapper
 `~/.local/share/openbrain-memory/env/openbrain-hook-env` sources that file and
-passes the child ONLY the two accepted variables (`OPENBRAIN_BASE_URL`,
-`OPENBRAIN_TOKEN`) via `env -i`. The token stays in the env file; it is never
-written into `settings.json`.
+passes the child ONLY the accepted variables via `env -i`: `OPENBRAIN_BASE_URL`,
+`OPENBRAIN_TOKEN`, `OPENBRAIN_OBSERVATION_*` (#523), and
+`OPENBRAIN_ALLOW_INSECURE_HTTP` (#525). The token stays in the env file; it is
+never written into `settings.json`.
+
+**The pass-through list only ever grows AFTER the installed package declares the
+field.** A variable added here against an older install makes
+`unknown_prefixed_variables` reject the whole environment, and the hooks swallow
+that into a silent zero capture — so the order is: declare in
+`openbrain.config`, `uv tool install --reinstall`, verify the installed
+interpreter accepts it, then edit the wrapper. Verified in that order for #525 on
+2026-08-04 (old install raised `UnknownEnvironmentVariableError`; reinstalled
+one resolved `allow_insecure_http=True`). See `docs/CONFIG_REFERENCE.md`
+("LAN plain-HTTP opt-in").
 
 ## Verify the NEW path is ACTIVE
 
