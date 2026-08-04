@@ -292,6 +292,30 @@ storage against real traffic before enabling this anywhere it matters, and treat
 that Langfuse instance as holding the same content sensitivity as the brain
 itself.
 
+**SDK: Langfuse JS v4 (`@langfuse/tracing` + `@langfuse/otel`), OTel-based.**
+This matches the Python capture sink, which already runs on Python SDK v4, so
+both lanes speak one API family. The processor posts OTLP-HTTP to
+`${OPENBRAIN_TRACING_ENDPOINT}/api/public/otel/v1/traces`; give the bare server
+root, not the `/api/public/ingestion` path the #372 lane uses. Verified against
+the self-hosted server reporting `version 3.173.0`: server v3 and JS SDK v4 are
+separate version lines, and the server has carried the OTel ingestion route
+since v3.
+
+**Outage behaviour: the brain never waits, and the window is lost on purpose.**
+Langfuse being down must not stop or slow anything, so there is no disk spool
+and no replay — the Postgres audit log and the capture lane remain the system of
+record. Traces buffered when the endpoint is unreachable are dropped. The outage
+is still visible, but on STATE CHANGE only:
+
+| line | level | when | payload |
+|---|---|---|---|
+| `mcp_tool_tracing_suspended` | warn | first failure after healthy | error label only |
+| `mcp_tool_tracing_resumed` | info | first success after an outage | `droppedTraces` for that window |
+
+Never one line per failed call. Measured under a blackholed endpoint: heap
+plateaus at 34-45 MB across 30,000 traced calls with no upward trend, and the
+enqueue stays off the request path (~7 µs per call).
+
 ### Drop-folder collector
 
 `src/drop-folder-collector.ts` reads four scan bounds — `DROP_COLLECTOR_MAX_FILES`

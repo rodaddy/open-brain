@@ -403,7 +403,22 @@ async function shutdown(
   // contract (#530: a tracing fault must never alter the outcome of anything),
   // so it deliberately does NOT participate in `firstFailure` — a dropped batch
   // of diagnostics must not make a clean drain exit non-zero.
-  await tracing.shutdown();
+  //
+  // Caught here as well as inside the lane because THIS line owning an
+  // unhandled rejection would skip `database.close()` below and leak the pool.
+  // The lane bounds its own drain against a deadline (measured: an unreachable
+  // Langfuse made an unbounded drain take 28.0 s, past launchd's 20 s
+  // `ExitTimeOut`, so the process was SIGKILLed mid-shutdown). Two layers,
+  // because the ordering here is what makes the database close reachable at
+  // all.
+  try {
+    await tracing.shutdown();
+  } catch (error: unknown) {
+    logger.error(
+      { error_category: error instanceof Error ? error.name : typeof error },
+      "tracing_shutdown_failed",
+    );
+  }
   try {
     await database.close();
   } catch (error: unknown) {

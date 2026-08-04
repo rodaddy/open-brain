@@ -19,7 +19,9 @@ import {
   installMcpTracing,
   readMcpTracingConfig,
   resolveSessionId,
+  SinkHealthTracker,
   type McpTracingConfig,
+  type TraceBody,
   type TracingSink,
 } from "./langfuse-tracing.ts";
 
@@ -30,29 +32,95 @@ const ENABLED_CONFIG: McpTracingConfig = {
   secretKey: "sk-lf-test",
 };
 
-/** A minimal stand-in for the SDK client that records what it was handed. */
-function recordingSink(): TracingSink & { bodies: Record<string, unknown>[] } {
-  const bodies: Record<string, unknown>[] = [];
+/** A minimal stand-in for the SDK sink that records what it was handed. */
+function recordingSink(): TracingSink & { bodies: TraceBody[] } {
+  const bodies: TraceBody[] = [];
   return {
     bodies,
-    trace(body) {
+    emit(body) {
       bodies.push(body);
-      return {};
     },
-    flushAsync: () => Promise.resolve(),
-    shutdownAsync: () => Promise.resolve(),
+    forceFlush: () => Promise.resolve(),
+    shutdown: () => Promise.resolve(),
+  };
+}
+
+/**
+ * A sink whose drain NEVER settles — the real adversary for shutdown.
+ *
+ * This is what an unreachable endpoint produces: a promise that stays pending
+ * far past any supervisor's patience (the v3 lane was measured at 28.0 s,
+ * against launchd's 20 s `ExitTimeOut`). `throwingSink` cannot stand in for it,
+ * because rejecting instantly is the one thing a hung socket does not do — and
+ * no SDK timeout setting can be trusted to cover this, which is why the drain
+ * is raced rather than merely configured.
+ */
+function hangingSink(): TracingSink {
+  return {
+    emit: () => undefined,
+    forceFlush: () => new Promise<void>(() => {}),
+    shutdown: () => new Promise<void>(() => {}),
   };
 }
 
 /** A sink that fails on every method — the best-effort contract's adversary. */
 function throwingSink(): TracingSink {
   return {
-    trace() {
+    emit() {
       throw new Error("langfuse exploded with secret sk-lf-leak in the message");
     },
-    flushAsync: () => Promise.reject(new Error("flush exploded")),
-    shutdownAsync: () => Promise.reject(new Error("shutdown exploded")),
+    forceFlush: () => Promise.reject(new Error("flush exploded")),
+    shutdown: () => Promise.reject(new Error("shutdown exploded")),
   };
+}
+
+/**
+ * A sink that fails only while `down` is true — the outage simulator.
+ *
+ * The #530 alert contract is about TRANSITIONS, so the adversary has to be able
+ * to change state mid-run. A sink that always fails can only ever prove the
+ * suspend line; it can never prove that recovery reports the right drop count,
+ * or that the healthy path stays silent.
+ */
+function flakySink(): TracingSink & { down: boolean; bodies: TraceBody[] } {
+  const bodies: TraceBody[] = [];
+  return {
+    down: false,
+    bodies,
+    emit(body) {
+      if (this.down) throw new Error("connect ECONNREFUSED sk-lf-leak");
+      bodies.push(body);
+    },
+    forceFlush: () => Promise.resolve(),
+    shutdown: () => Promise.resolve(),
+  };
+}
+
+/**
+ * Capture the console channels the shared logger actually writes to.
+ *
+ * `warn` goes to `console.warn` but `info` goes to `console.LOG`, not
+ * `console.info` (`src/logger.ts:536-544` — the final `else` branch). Hooking
+ * `console.info` captures nothing and lets the real line escape to stdout,
+ * which is exactly how the first draft of this helper produced a green
+ * "one suspend line" assertion against zero captured lines.
+ */
+async function captureLogLines(run: () => Promise<void>): Promise<string[]> {
+  const lines: string[] = [];
+  const originalWarn = console.warn;
+  const originalLog = console.log;
+  const push = (...parts: unknown[]): void => {
+    lines.push(parts.map((part) => String(part)).join(" "));
+  };
+  console.warn = push;
+  console.log = push;
+  try {
+    await run();
+  } finally {
+    console.warn = originalWarn;
+    console.log = originalLog;
+  }
+  return lines;
 }
 
 /**
@@ -228,7 +296,7 @@ describe("installMcpTracing", () => {
     await handlers.get("log_thought")?.(args, AUTH);
 
     expect(sink.bodies).toHaveLength(1);
-    const body = sink.bodies[0] as Record<string, unknown>;
+    const body = sink.bodies[0]!;
     expect(body.name).toBe("log_thought");
     // CONTENT-FUL is the requirement: the same objects, not a summary of them.
     expect(body.input).toBe(args);
@@ -239,6 +307,7 @@ describe("installMcpTracing", () => {
     expect(body.metadata).toMatchObject({
       caller_role: "admin",
       caller_client_id: "rico",
+      caller_token_client_id: "rico",
       caller_agent_id: "worker-530",
       namespace_source: "header",
       status: "success",
@@ -439,9 +508,210 @@ describe("createTracingRuntime — the composition root's seam", () => {
     });
     await expect(runtime.shutdown()).resolves.toBeUndefined();
   });
+
+  // The gap that let the 28-second shutdown through: the only adversary in
+  // this suite was `throwingSink`, which REJECTS instantly. A sink that never
+  // settles is the real Langfuse against an unreachable endpoint, and nothing
+  // exercised it.
+  test("a sink that never settles cannot hold shutdown open", async () => {
+    const runtime = createTracingRuntime({
+      config: ENABLED_CONFIG,
+      createSink: hangingSink,
+      shutdownTimeoutMs: 25,
+    });
+    const started = Date.now();
+    await expect(runtime.shutdown()).resolves.toBeUndefined();
+    // Generous upper bound: the assertion is "bounded", not a timing
+    // measurement. Unbounded, this never resolves and the test times out.
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  test("the bounded drain warns content-free on timeout", async () => {
+    const lines: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...parts: unknown[]): void => {
+      lines.push(parts.map((part) => String(part)).join(" "));
+    };
+    try {
+      const runtime = createTracingRuntime({
+        config: ENABLED_CONFIG,
+        createSink: hangingSink,
+        shutdownTimeoutMs: 25,
+      });
+      await runtime.shutdown();
+    } finally {
+      console.warn = originalWarn;
+    }
+    const warn = lines.find((line) =>
+      line.includes("mcp_tool_tracing_shutdown_timeout"),
+    );
+    expect(warn).toBeDefined();
+    // Content-free: the deadline itself, never a payload or a key.
+    expect(warn).toContain('"timeoutMs":25');
+    expect(warn).not.toContain("sk-lf");
+  });
+
+  test("a per-session install with a hanging own sink still drains bounded", async () => {
+    const { server } = fakeServer();
+    const handle = installMcpTracing(server, {
+      config: ENABLED_CONFIG,
+      createSink: hangingSink,
+      shutdownTimeoutMs: 25,
+    });
+    expect(handle.active).toBe(true);
+    await expect(handle.shutdown()).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * The #530 outage contract: state-change alerts only.
+ *
+ * The operator's rule is that an outage must be visible but not noisy — "if you
+ * do that every time, you're going to spend most of your time saying hey hey
+ * this isn't working." So the assertions here are about COUNTS of log lines,
+ * not just their presence: "exactly one" is the whole requirement, and a test
+ * that only checked `toBeDefined()` would pass against a per-call warn.
+ */
+describe("outage alerts fire on state change only", () => {
+  test("the healthy path logs nothing at all", async () => {
+    const sink = recordingSink();
+    const { server, handlers } = fakeServer();
+    installMcpTracing(server, {
+      config: ENABLED_CONFIG,
+      createSink: () => sink,
+    });
+    server.registerTool(
+      "log_thought",
+      { inputSchema: {} } as never,
+      (() => ({ ok: true })) as never,
+    );
+
+    const lines = await captureLogLines(async () => {
+      for (let i = 0; i < 5; i += 1) {
+        await handlers.get("log_thought")?.({ i }, AUTH);
+      }
+    });
+
+    expect(sink.bodies).toHaveLength(5);
+    expect(lines.filter((line) => line.includes("mcp_tool_tracing"))).toEqual(
+      [],
+    );
+  });
+
+  test("one suspend line for a whole outage, then one recovery line with the drop count", async () => {
+    const sink = flakySink();
+    const { server, handlers } = fakeServer();
+    installMcpTracing(server, {
+      config: ENABLED_CONFIG,
+      createSink: () => sink,
+    });
+    server.registerTool(
+      "log_thought",
+      { inputSchema: {} } as never,
+      (() => ({ ok: true })) as never,
+    );
+    const call = async (): Promise<void> => {
+      await handlers.get("log_thought")?.({}, AUTH);
+    };
+
+    const lines = await captureLogLines(async () => {
+      await call(); // healthy
+      sink.down = true;
+      for (let i = 0; i < 4; i += 1) await call(); // the outage window
+      sink.down = false;
+      await call(); // recovery
+      await call(); // still healthy — must stay silent
+    });
+
+    const suspends = lines.filter((line) =>
+      line.includes("mcp_tool_tracing_suspended"),
+    );
+    const resumes = lines.filter((line) =>
+      line.includes("mcp_tool_tracing_resumed"),
+    );
+    // FOUR failed calls, ONE line. That ratio is the requirement.
+    expect(suspends).toHaveLength(1);
+    expect(resumes).toHaveLength(1);
+    expect(resumes[0]).toContain('"droppedTraces":4');
+    // Content-free: the suspend line carries an error label, never the message
+    // the sink threw (which deliberately contains a key-shaped string).
+    expect(suspends[0]).not.toContain("sk-lf-leak");
+  });
+
+  test("a second outage reports its own window, not a running total", () => {
+    const tracker = new SinkHealthTracker();
+    expect(tracker.recordFailure()).toBe(true); // transition
+    expect(tracker.recordFailure()).toBe(false); // already down — no line
+    expect(tracker.recordSuccess()).toBe(2);
+    // Recovered: a success now is a no-op, so nothing is logged on the happy path.
+    expect(tracker.recordSuccess()).toBeUndefined();
+    expect(tracker.recordFailure()).toBe(true);
+    expect(tracker.recordSuccess()).toBe(1);
+  });
+
+  test("tool calls still return their own result verbatim throughout an outage", async () => {
+    const sink = flakySink();
+    const { server, handlers } = fakeServer();
+    installMcpTracing(server, {
+      config: ENABLED_CONFIG,
+      createSink: () => sink,
+    });
+    const result = { content: [{ type: "text", text: "untouched" }] };
+    server.registerTool(
+      "log_thought",
+      { inputSchema: {} } as never,
+      (() => result) as never,
+    );
+    sink.down = true;
+    await captureLogLines(async () => {
+      const returned = await handlers.get("log_thought")?.({}, AUTH);
+      expect(returned).toBe(result);
+    });
+  });
 });
 
 describe("trace body helpers", () => {
+  // The case the audit lane already records both ids for
+  // (`src/audit-log.ts:299-301`): a delegated call whose acting identity is not
+  // its token identity. With only `caller_client_id`, the content-ful lane an
+  // operator reads to answer "who actually did this" loses the distinction.
+  test("a delegated call records both the acting and the token identity", () => {
+    const body = buildToolTraceBody({
+      toolName: "log_thought",
+      status: "success",
+      durationMs: 1,
+      args: {},
+      output: {},
+      auth: {
+        role: "admin",
+        clientId: "acting-agent",
+        tokenClientId: "issuing-operator",
+        namespaceSource: "header",
+      } as never,
+    });
+    expect(body.metadata).toMatchObject({
+      caller_client_id: "acting-agent",
+      caller_token_client_id: "issuing-operator",
+    });
+    // `userId` stays the acting identity: it is the Langfuse grouping key, and
+    // the token identity travels alongside it rather than replacing it.
+    expect(body.userId).toBe("acting-agent");
+  });
+
+  test("a call with no auth records both identities as null, never undefined", () => {
+    const body = buildToolTraceBody({
+      toolName: "t",
+      status: "success",
+      durationMs: 1,
+      args: {},
+      output: {},
+    });
+    expect(body.metadata).toMatchObject({
+      caller_client_id: null,
+      caller_token_client_id: null,
+    });
+  });
+
   test("omits sessionId and userId rather than sending nulls", () => {
     const body = buildToolTraceBody({
       toolName: "t",
