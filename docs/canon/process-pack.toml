@@ -1,5 +1,7 @@
-# The SHARED PROCESS PACK — 26 rules harvested from issue/PR history (#522),
-# walked rule-by-rule with Rico on 2026-08-03 and approved with amendments.
+# The SHARED PROCESS PACK — 27 rules: 26 harvested from issue/PR history
+# (#522), walked rule-by-rule with Rico on 2026-08-03 and approved with
+# amendments, plus one direct Rico directive (expensive-head delegation)
+# issued in-session 2026-08-03.
 #
 # STATUS: WRITTEN, awaiting Rico's side-by-side read-through of this file
 # (merge = approval), then `openbrain-canon-reconcile --apply` per namespace.
@@ -293,6 +295,19 @@ Rico — never self-granted. It is one narrow literal member per false \
 positive. NEVER widen a pattern, and NEVER rename code to slip past a gate.\
 """
 source = "open-brain PR #499/#496; [AMENDED 2026-08-03: permission asked and granted, explicitly]"
+
+[[entries]]
+key = "process.expensive_head_delegates_by_default"
+lane = "process_guidance"
+text = """
+A head on a premium model (Fable, Opus at high effort) NEVER does inline \
+work a cheaper routed subagent can do with tight instructions. The head's \
+job is to write the better prompt, delegate, and verify — inline execution \
+is reserved for conversation, single exact lookups/commands, and verifying \
+worker output. Burning premium tokens on delegable work is a cost defect, \
+not diligence.\
+"""
+source = "Rico directive 2026-08-03 (in-session, during #530 close-out)"
 
 [[entries]]
 key = "canon.harvest_dedups_and_never_autopromotes"
