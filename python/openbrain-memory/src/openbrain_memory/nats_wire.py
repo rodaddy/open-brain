@@ -9,17 +9,34 @@ subject-slug convention.
 fleet-nats is NOT published on PyPI and lives in a private monorepo
 subdirectory, so it is NOT a normal installable dependency for this
 lightweight client. We therefore import it *optionally*: if ``fleet_nats`` is
-importable we defer to its ``Envelope``/``subjects`` so both sides agree on the
-wire byte-for-byte; otherwise we fall back to a LOCAL mirror of the exact same
-shape. The mirror is kept 1:1 with
-``packages/fleet-nats/src/fleet_nats/envelope.py`` and ``subjects.py`` (probed
-2026-07-08). If the fleet contract changes, update both.
+importable we defer to it; otherwise we fall back to a LOCAL mirror of the same
+shape. The mirror is kept in sync with ``packages/fleet-nats`` (probed
+2026-08-04 against fleet-bus ``2b20f97``). If the fleet contract changes, update
+both — :mod:`tests.test_nats_wire_drift` fails when the clone is present and
+this mirror has aged.
 
-fleet-nats has no ``ob_context_pack(env)`` subject builder yet; we mirror the
-``{env}.<domain>...`` convention locally as ``{env}.ob.memory.context_pack``.
+SUBJECT — upstream now owns it. fleet-bus ``2b20f97`` (2026-07-28) added
+``fleet_nats.subjects.ob_context_pack(env)``, declaring the ``ob`` domain
+Open-Brain-owned and fulfilling this module's former TODO. When ``fleet_nats``
+is importable :func:`build_context_pack_subject` calls that builder directly and
+NO local subject construction happens on that path — the subject tree is owned
+by one library, which is the design this module always stated. The local mirror
+survives only for environments without fleet-nats. Note that upstream renamed
+``_slug`` to the public ``slug`` and added a ``>`` (NATS multi-token wildcard)
+rejection; the local mirror carries both.
 
-TODO(upstream): file a ``fleet_nats.subjects.ob_context_pack(env)`` builder so
-this local helper can be deleted and the subject tree stays owned by one lib.
+ENVELOPE — deliberately NOT delegated, unlike the subject. Upstream moved
+``Envelope`` to ``fleet_core.spec`` and its ``to_bytes`` now emits two ADDITIONAL
+wire keys, ``act`` and ``state`` (fleet's A2A/FIPA coordination fields), which
+the pre-2b20f97 shape this transport's locked cross-language fixture encodes
+does not contain. Calling the real ``Envelope.to_bytes`` would therefore put the
+fleet path and the TS mirror (``src/nats-runtime.ts``) on DIFFERENT bytes for the
+same message, breaking the byte-for-byte contract in
+``tests/fixtures/nats-context-pack-wire.json`` — the exact drift that fixture
+exists to catch. Until OB and the TS mirror adopt ``act``/``state`` together, the
+envelope is built locally on BOTH paths so the wire is identical regardless of
+whether fleet-nats happens to be installed. :data:`FLEET_NATS_AVAILABLE` records
+importability for diagnostics; it no longer selects an envelope builder.
 """
 
 from __future__ import annotations
@@ -31,60 +48,68 @@ from typing import Any
 # Kind constant for the OB memory context-pack request on the fleet bus.
 CONTEXT_PACK_REQUEST_KIND = "context_pack_request"
 
-# Mirror of fleet_nats.envelope.ENVELOPE_VERSION (probed 2026-07-08). Kept in
-# sync so a locally-built envelope is byte-compatible with a fleet-nats one.
+# Mirror of fleet_core.spec.ENVELOPE_VERSION, re-exported as
+# fleet_nats.envelope.ENVELOPE_VERSION (probed 2026-08-04 @ 2b20f97). Kept in
+# sync so a locally-built envelope carries the version the fleet expects.
 _FLEET_ENVELOPE_VERSION = 1
 
-# True when the real fleet-nats library is importable in this environment. The
-# transport works identically either way; this only records which path built
-# the wire bytes (useful for diagnostics / tests).
+# The upstream subject builder, when the real library is importable. This is
+# the ONLY fleet-nats symbol the transport delegates to; see the module
+# docstring for why the envelope stays local on both paths.
+_fleet_ob_context_pack: Callable[[str], str] | None
 try:  # pragma: no cover - import availability is environment-specific
-    from fleet_nats import Envelope as _FleetEnvelope  # type: ignore[import-not-found]
+    from fleet_nats.subjects import (  # type: ignore[import-not-found]
+        ob_context_pack as _imported_ob_context_pack,
+    )
 
+    _fleet_ob_context_pack = _imported_ob_context_pack
     FLEET_NATS_AVAILABLE = True
 except Exception:  # pragma: no cover - fleet-nats optional / not installed
-    _FleetEnvelope = None  # type: ignore[assignment,misc]
+    _fleet_ob_context_pack = None
     FLEET_NATS_AVAILABLE = False
 
 
 def _local_slug(value: str) -> str:
-    """Local mirror of ``fleet_nats.subjects._slug`` (probed 2026-07-08).
+    """Local mirror of ``fleet_nats.subjects.slug`` (probed 2026-08-04 @ 2b20f97).
 
     Normalise a subject token: lowercased, spaces/dots to hyphens, no empties.
     A whitespace-only token would otherwise produce an invalid NATS subject
     like ``dev.ob..context_pack`` that the server rejects (message lost).
+
+    ``>`` is REJECTED rather than normalised (upstream fleet-bus #222): it is the
+    NATS multi-token wildcard and never a legitimate single token. Left through,
+    an env token sourced from untrusted input turns into subject-token injection
+    — ``{env}`` of ``>`` yields ``>.ob.memory.context_pack``, which subscribes
+    across the whole tree. ``*`` is deliberately NOT rejected: it is how callers
+    build single-token authorization grant patterns, and it cannot widen a
+    subject beyond one token.
     """
     slug = value.strip().lower().replace(" ", "-").replace(".", "-")
     if not slug:
         raise ValueError(f"subject token normalises to empty: {value!r}")
+    if ">" in slug:
+        raise ValueError(
+            "subject token may not contain the NATS multi-token wildcard "
+            f"'>': {value!r}"
+        )
     return slug
-
-
-def _resolve_slug() -> Callable[[str], str]:
-    if FLEET_NATS_AVAILABLE:
-        try:  # pragma: no cover - only when fleet-nats installed
-            from fleet_nats.subjects import (  # type: ignore[import-not-found]
-                _slug as fleet_slug,
-            )
-
-            resolved: Callable[[str], str] = fleet_slug
-            return resolved
-        except Exception:  # pragma: no cover - defensive
-            return _local_slug
-    return _local_slug
 
 
 def build_context_pack_subject(env: str) -> str:
     """Build the OB memory context-pack subject ``{env}.ob.memory.context_pack``.
 
-    Mirrors the fleet convention ``{env}.{domain}.{...}`` (dot-delimited,
-    env-prefixed, hierarchical). Uses fleet-nats's ``_slug`` when the library is
-    importable so the env token is normalised identically on both sides; falls
-    back to the local mirror otherwise. Only the env token is caller-controlled;
-    the ``ob.memory.context_pack`` tail is a fixed, already-safe literal.
+    Delegates to ``fleet_nats.subjects.ob_context_pack`` when fleet-nats is
+    importable — upstream owns the ``ob`` domain as of fleet-bus ``2b20f97``, so
+    on that path this function constructs NO subject text of its own. Without
+    fleet-nats it falls back to the local mirror of the same shape: the fleet
+    convention ``{env}.{domain}.{...}`` with the env token slugged. Only the env
+    token is caller-controlled; the ``ob.memory.context_pack`` tail is a fixed,
+    already-normalised literal (note the UNDERSCORE, which keeps it
+    byte-identical to the pre-fleet flat subject minus the env prefix).
     """
-    slug = _resolve_slug()
-    return f"{slug(env)}.ob.memory.context_pack"
+    if _fleet_ob_context_pack is not None:  # pragma: no cover - needs fleet-nats
+        return _fleet_ob_context_pack(env)
+    return f"{_local_slug(env)}.ob.memory.context_pack"
 
 
 def build_request_envelope(
@@ -101,8 +126,11 @@ def build_request_envelope(
     library never touches ``time``/``random`` at import and stays deterministic
     under test — matching fleet-nats's own contract.
 
-    Uses fleet-nats's real ``Envelope`` when importable (byte-for-byte wire
-    parity); otherwise builds the identical local mirror.
+    Built from the LOCAL mirror on every path, including when fleet-nats is
+    importable. Upstream's ``Envelope.to_bytes`` gained ``act``/``state`` keys
+    after this transport's cross-language wire fixture was locked, so delegating
+    here would make the bytes depend on whether fleet-nats happens to be
+    installed and would diverge from the TS mirror. See the module docstring.
 
     Args:
         msg_id: Unique message id (e.g. a uuid4 hex).
@@ -111,18 +139,6 @@ def build_request_envelope(
         correlation_id: Links the reply back to this request.
         payload: Kind-specific body (OB identity + request body live here).
     """
-    if FLEET_NATS_AVAILABLE and _FleetEnvelope is not None:  # pragma: no cover
-        envelope = _FleetEnvelope.new(
-            msg_id=msg_id,
-            ts=ts,
-            sender=sender,
-            kind=CONTEXT_PACK_REQUEST_KIND,
-            payload=payload,
-            correlation_id=correlation_id,
-        )
-        wire = json.loads(envelope.to_bytes())
-        assert isinstance(wire, dict)
-        return wire
     return _local_envelope_wire(
         msg_id=msg_id,
         ts=ts,
@@ -135,7 +151,8 @@ def build_request_envelope(
 def envelope_to_wire_bytes(envelope: dict[str, Any]) -> bytes:
     """Serialise a fleet Envelope wire dict to canonical compact UTF-8 JSON bytes.
 
-    Mirrors ``fleet_nats.Envelope.to_bytes`` (probed 2026-07-08): compact
+    Mirrors ``fleet_nats.Envelope.to_bytes`` (probed 2026-08-04 @ 2b20f97, minus
+    the post-lock ``act``/``state`` keys — see the module docstring): compact
     separators (``,``/``:``, no spaces) and NO key sorting, so the dict's
     insertion order (fleet field order: id, ts, from, kind, payload, to,
     task_id, channel, topic, correlation_id, version) is preserved. Optional
@@ -155,10 +172,12 @@ def _local_envelope_wire(
     correlation_id: str,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
-    """Local mirror of ``fleet_nats.Envelope.to_bytes`` shape (probed 2026-07-08).
+    """Local mirror of the fleet ``Envelope`` wire body (probed 2026-08-04 @ 2b20f97).
 
-    Kept 1:1 with the fleet ``Envelope`` wire body so a locally-built request is
-    indistinguishable from one built by the real library.
+    Kept 1:1 with the fleet ``Envelope`` wire body as of the shape this
+    transport's cross-language fixture locks. Upstream has since added the
+    ``act``/``state`` coordination keys; they are intentionally absent here so
+    both languages stay on one wire (module docstring, ENVELOPE section).
     """
     if not msg_id:
         raise ValueError("Envelope.id must be non-empty")
