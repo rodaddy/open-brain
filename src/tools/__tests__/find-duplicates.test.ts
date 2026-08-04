@@ -122,17 +122,138 @@ describe("find_duplicates", () => {
       });
 
       expect(result.isError).toBeFalsy();
+      // Both sides bind the SAME list ($3): a pair spanning two namespaces is
+      // not a duplicate, and binding one side only leaves the join unbounded.
       expect(calls[0]!.sql).toContain("a.namespace = ANY($3::text[])");
-      expect(calls[0]!.sql).toContain("b.namespace = ANY($4::text[])");
-      expect(calls[0]!.params).toEqual([
-        0.08,
-        20,
-        ["bilby", "shared-kb"],
-        ["bilby", "shared-kb"],
-      ]);
+      expect(calls[0]!.sql).toContain("b.namespace = ANY($3::text[])");
+      expect(calls[0]!.params).toEqual([0.08, 20, ["bilby", "shared-kb"]]);
     } finally {
       await cleanup();
     }
+  });
+
+  // #485: for a global role `readableNamespaces()` returns undefined, so the
+  // old `appendReadNamespacePredicate()` call site contributed an empty string
+  // on BOTH sides and the self-join ran over every pair in the table. Measured
+  // on a 24,845-row corpus: 256.7ms scoped versus cancelled at 60,074ms by
+  // statement_timeout, with pooled connections that never came back.
+  describe("#485: a global role never emits an unscoped self-join", () => {
+    for (const role of ["admin", "ob-admin", "promoter"] as const) {
+      it(`binds ${role} to a concrete namespace on BOTH sides of the join`, async () => {
+        const calls: Array<{ sql: string; params?: any[] }> = [];
+        const mockPool = {
+          query: async (sql: string, params?: any[]) => {
+            calls.push({ sql, params });
+            return { rows: [] };
+          },
+        };
+        const auth: AuthInfo = { role, clientId: "operator" };
+
+        const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+        try {
+          const result = await client.callTool({
+            name: "find_duplicates",
+            arguments: { table: "thoughts", threshold: 0.08 },
+          });
+
+          expect(result.isError).toBeFalsy();
+          const join = calls[0]!;
+          // The whole defect: these two predicates were absent entirely.
+          expect(join.sql).toContain("a.namespace = ANY($3::text[])");
+          expect(join.sql).toContain("b.namespace = ANY($3::text[])");
+          expect(join.params).toEqual([0.08, 20, ["operator"]]);
+        } finally {
+          await cleanup();
+        }
+      });
+    }
+
+    it("scans a named namespace the global caller may read", async () => {
+      const calls: Array<{ sql: string; params?: any[] }> = [];
+      const mockPool = {
+        query: async (sql: string, params?: any[]) => {
+          calls.push({ sql, params });
+          return { rows: [] };
+        },
+      };
+      const auth: AuthInfo = { role: "admin", clientId: "operator" };
+
+      const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+      try {
+        const result = await client.callTool({
+          name: "find_duplicates",
+          arguments: { table: "thoughts", namespace: "bilby" },
+        });
+
+        expect(result.isError).toBeFalsy();
+        expect(calls[0]!.params).toEqual([0.08, 20, ["bilby"]]);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    // `canReadNamespace` treats the literal "all" as permitted for a global
+    // role, which is the one input that could smuggle the unbounded scan back
+    // in. It must resolve to a concrete single-element list -- a bounded
+    // (empty) namespace -- and never to "no predicate".
+    it("keeps the 'all' sentinel bounded rather than reopening the cross-product", async () => {
+      const calls: Array<{ sql: string; params?: any[] }> = [];
+      const mockPool = {
+        query: async (sql: string, params?: any[]) => {
+          calls.push({ sql, params });
+          return { rows: [] };
+        },
+      };
+      const auth: AuthInfo = { role: "admin", clientId: "operator" };
+
+      const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+      try {
+        const result = await client.callTool({
+          name: "find_duplicates",
+          arguments: { table: "thoughts", namespace: "all" },
+        });
+
+        expect(result.isError).toBeFalsy();
+        expect(calls[0]!.sql).toContain("a.namespace = ANY($3::text[])");
+        expect(calls[0]!.sql).toContain("b.namespace = ANY($3::text[])");
+        const bound = calls[0]!.params![2] as string[];
+        expect(Array.isArray(bound)).toBe(true);
+        expect(bound.length).toBe(1);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("refuses a namespace the caller cannot read, before touching the pool", async () => {
+      const calls: Array<{ sql: string }> = [];
+      const mockPool = {
+        query: async (sql: string) => {
+          calls.push({ sql });
+          return { rows: [] };
+        },
+      };
+      const auth: AuthInfo = { role: "agent", clientId: "bilby" };
+
+      const { client, cleanup } = await setupToolClient(mockPool, auth);
+
+      try {
+        const result = await client.callTool({
+          name: "find_duplicates",
+          arguments: { namespace: "someone-else" },
+        });
+
+        expect(result.isError).toBe(true);
+        expect((result.content as any)[0].text).toContain(
+          "Permission denied: cannot read namespace 'someone-else'",
+        );
+        expect(calls).toHaveLength(0);
+      } finally {
+        await cleanup();
+      }
+    });
   });
 
   it("denies discord role (no read access)", async () => {

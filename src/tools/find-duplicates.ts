@@ -1,7 +1,8 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { canRead } from "../permissions.ts";
-import { appendReadNamespacePredicate } from "../read-policy.ts";
+import { canReadNamespace, readableNamespaces } from "../read-policy.ts";
+import { physicalNamespace } from "../shared-namespace.ts";
 import type { AuthInfo, Table } from "../types.ts";
 import { logger } from "../logger.ts";
 import type { ToolDeps } from "./index.ts";
@@ -23,12 +24,49 @@ function contentPreviewForAlias(table: Table, alias: string): string {
   }
 }
 
+/**
+ * Resolve the namespace set BOTH sides of the self-join are bound to (#485).
+ *
+ * This is a total function by design: it returns a non-empty list for every
+ * identity, so no input produces an unscoped join. `readableNamespaces()`
+ * returns `undefined` for a global role (`admin`, `ob-admin`, `promoter`),
+ * which the previous `appendReadNamespacePredicate()` call site turned into an
+ * empty clause on BOTH sides -- a full cross-product. Measured on a 24,845-row
+ * corpus: 256.7 ms scoped, versus cancelled at 60,074 ms unscoped, with pooled
+ * connections that never came back.
+ *
+ * A global ROLE may read every namespace, but the comparison SPACE is still
+ * per-namespace: a pair drawn from two different namespaces is not a duplicate.
+ * So a global role is bound to a concrete namespace -- its own by default, or
+ * any one it may read when named explicitly -- rather than to no predicate.
+ *
+ * @param auth Authenticated caller.
+ * @param requested Caller-supplied namespace, if any.
+ * @returns Namespaces to scan, or `undefined` when the caller may not read the
+ *   namespace it named.
+ */
+export function duplicateScanNamespaces(
+  auth: AuthInfo,
+  requested: string | undefined,
+): string[] | undefined {
+  if (requested !== undefined) {
+    return canReadNamespace(auth, requested)
+      ? [physicalNamespace(requested)]
+      : undefined;
+  }
+  // A scoped role's own readable set is already a bounded list, and keeping it
+  // preserves the pre-#485 behavior of pairing within own + shared.
+  return readableNamespaces(auth) ?? [auth.clientId];
+}
+
 export function registerFindDuplicates(server: McpServer, deps: ToolDeps): void {
   server.registerTool(
     "find_duplicates",
     {
       description:
-        "Discover potential duplicate entries using vector similarity. Read-only -- does NOT archive anything.",
+        "Discover potential duplicate entries using vector similarity. Read-only -- does NOT archive anything. " +
+        "The pairwise scan is always bounded to a namespace set: it defaults to the caller's readable namespaces " +
+        "and can be pointed at any single namespace the caller may read.",
       inputSchema: {
         table: z
           .enum([
@@ -40,6 +78,14 @@ export function registerFindDuplicates(server: McpServer, deps: ToolDeps): void 
           ])
           .optional()
           .describe("Optional: limit to a specific table (default: all)"),
+        namespace: z
+          .string()
+          .min(1)
+          .max(500)
+          .optional()
+          .describe(
+            "Namespace to scan for duplicate pairs (defaults to the caller's readable namespaces)",
+          ),
         threshold: z
           .number()
           .min(0)
@@ -69,6 +115,19 @@ export function registerFindDuplicates(server: McpServer, deps: ToolDeps): void 
             {
               type: "text" as const,
               text: "Permission denied: not authenticated",
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const namespaces = duplicateScanNamespaces(auth, args.namespace);
+      if (namespaces === undefined) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Permission denied: cannot read namespace '${String(args.namespace)}'`,
             },
           ],
           isError: true,
@@ -107,18 +166,12 @@ export function registerFindDuplicates(server: McpServer, deps: ToolDeps): void 
         const remaining = limit - duplicates.length;
         const previewA = contentPreviewForAlias(table, "a");
         const previewB = contentPreviewForAlias(table, "b");
-        const params: unknown[] = [threshold, remaining];
-        const namespacePredicateA = appendReadNamespacePredicate(
-          auth,
-          params,
-          "a.namespace",
-        );
-        const namespacePredicateB = appendReadNamespacePredicate(
-          auth,
-          params,
-          "b.namespace",
-        );
-
+        // BOTH sides of the join bind the SAME resolved namespace list ($3),
+        // so the predicate is never empty and the comparison space stays
+        // per-namespace-set. Binding one side only still admits a
+        // cross-namespace pair and still leaves the unbounded shape #485
+        // measured. The `b.namespace` predicate sits on the JOIN condition so
+        // the planner can cut the pair space before computing distances.
         // Table name is validated by Zod enum -- safe for interpolation
         const { rows } = await deps.pool.query(
           `SELECT
@@ -131,14 +184,14 @@ export function registerFindDuplicates(server: McpServer, deps: ToolDeps): void 
           JOIN ${table} b ON a.id < b.id
             AND b.archived_at IS NULL
             AND b.embedding IS NOT NULL
+            AND b.namespace = ANY($3::text[])
           WHERE a.archived_at IS NULL
             AND a.embedding IS NOT NULL
+            AND a.namespace = ANY($3::text[])
             AND a.embedding <=> b.embedding < $1
-            ${namespacePredicateA}
-            ${namespacePredicateB}
           ORDER BY distance ASC
           LIMIT $2`,
-          params,
+          [threshold, remaining, namespaces],
         );
 
         for (const row of rows) {
@@ -153,6 +206,7 @@ export function registerFindDuplicates(server: McpServer, deps: ToolDeps): void 
 
       logger.info("find_duplicates_success", {
         tables_scanned: accessibleTables.length,
+        namespaces_scanned: namespaces.length,
         duplicates_found: duplicates.length,
       });
 
@@ -162,6 +216,7 @@ export function registerFindDuplicates(server: McpServer, deps: ToolDeps): void 
             type: "text" as const,
             text: JSON.stringify({
               threshold,
+              namespaces,
               duplicates_found: duplicates.length,
               duplicates,
             }),
