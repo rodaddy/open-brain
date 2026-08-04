@@ -383,6 +383,20 @@ class CaptureSettings(_Base):
             hook is a short-lived process, so this position must survive between
             invocations on disk; it is the one piece of local state capture
             keeps.
+        spool_path: The sibling provider's durability spool, or ``None`` to use
+            its default location. OWNED BY ``openbrain_memory``, which resolves
+            it from the same variable (``runtime.py``); declared here for the
+            same reason ``ObservationSettings.hmac_secret`` is -- an
+            ``OPENBRAIN_``-prefixed variable matching no declared field is
+            rejected by :func:`unknown_prefixed_variables` as a typo, and that
+            rejection, swallowed by the hook entrypoints, is a SILENT ZERO
+            CAPTURE on every ``Stop``. Measured 2026-08-03: with
+            ``OPENBRAIN_SPOOL_PATH`` set, ``load_capture_settings`` raised
+            ``UnknownEnvironmentVariableError``, so an operator pointing the
+            provider's spool somewhere killed all capture. The outage notice
+            reads this to report spool depth
+            (``apps.capture.outage.default_spool_path``); declaring it is what
+            makes setting it legal.
     """
 
     base_url: str | None = Field(
@@ -406,6 +420,10 @@ class CaptureSettings(_Base):
     watermark_path: Path = Field(
         default=PACKAGE_ROOT / "data" / "capture-watermarks.sqlite",
         validation_alias=AliasChoices("OPENBRAIN_CAPTURE_WATERMARK_PATH"),
+    )
+    spool_path: Path | None = Field(
+        default=None,
+        validation_alias=AliasChoices("OPENBRAIN_SPOOL_PATH"),
     )
 
 

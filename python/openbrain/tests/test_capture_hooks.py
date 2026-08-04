@@ -33,6 +33,7 @@ from conftest import (
     operator_line,
     write_lines,
 )
+from openbrain.apps.capture.outage import DEGRADED_NOTICE
 from openbrain.apps.capture.watermark import WatermarkStore
 from openbrain.apps.hooks import (
     post_compact,
@@ -1000,10 +1001,11 @@ class TestStopSurvivesAStalledEndpointWithinTheDeadline:
             {"transcript_path": str(transcript), "session_id": "sess"}
         )
 
+        notices = io.StringIO()
         start = time.monotonic()
         # capture_stop_with(settings=...) reaches the real factory and dials the
         # stalling endpoint, then swallows the timeout.
-        stop.capture_stop_with(io.StringIO(payload), settings)
+        stop.capture_stop_with(io.StringIO(payload), settings, notices=notices)
         elapsed = time.monotonic() - start
 
         # Under the deadline, with headroom -- the harness would not have killed
@@ -1015,6 +1017,11 @@ class TestStopSurvivesAStalledEndpointWithinTheDeadline:
         # Stop re-reads it. No watermark file, or a zero offset, both prove it.
         store = WatermarkStore(watermark)
         assert asyncio_run(store.offset_for("sess")) == 0
+        # And it was SAID OUT LOUD (#536). This is the real environment outage --
+        # a socket that accepts and never answers -- so the notice is proven on
+        # the path an operator hits when the service is down, not only on the
+        # config fault ``test_capture_outage_notice`` uses for its state machine.
+        assert DEGRADED_NOTICE in notices.getvalue()
 
 
 def asyncio_run(coro: object) -> object:

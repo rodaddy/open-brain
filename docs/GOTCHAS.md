@@ -90,6 +90,37 @@ Healthy output reaches `open-brain server started` in about one second.
 deleted-but-referenced script produces no error until the next restart, which
 may be days later, and by then the cause looks unrelated to the deletion.
 
+**The "no one notices" half is now closed (#536).** The capture `Stop` hook
+prints one line to stderr the first time a session's write fails --
+`open-brain unreachable - turn held for replay` -- and one more when writes
+start landing again. It is a STATE CHANGE, not an event: a long outage is one
+line, not one per turn, latched on disk (`apps/capture/outage.py`) because each
+Stop is a fresh process. Session survival is unchanged; only the silence went.
+
+**And the state change is rate-bound, because a state change alone was not
+enough.** A FLAPPING service changes state on every Stop, so the latch by itself
+still spoke on every Stop — measured 6 notices across 6 alternating Stops. That
+is not exotic: the capture request timeout is 0.7s with a single attempt, so one
+slow response is a complete outage-and-recovery pair. After a reported outage
+the latch stays quiet for `FLAP_COOLDOWN_SECONDS` (5 minutes); a window opened
+inside that period is ridden out silently at BOTH ends, since a recovery whose
+outage was never printed reads as a recovery from nothing. The recovery line
+carries the window's failed-turn count when it exceeds one. Same shape as the
+server-side tracing tracker (#534).
+
+**If the notice is missing, check the latch's lock before anything else.** The
+latch waits only `LOCK_WAIT_SECONDS` (0.25s) for the watermark file it shares,
+then gives up and says nothing — deliberately, because `Stop` has a 5s deadline
+and the harness kills the hook at 10s. On the original 30s wait a held lock kept
+one Stop running 31.09s, which would have been a killed hook and a lost capture.
+Silence under contention is the design, not a defect.
+
+So an outage is now visible WITHOUT the checks above. If those checks are ever
+needed again because nothing appeared on screen, the notice path itself is what
+to suspect first -- and note it reports reachability from the CAPTURE hook only.
+A provider `/checkpoint` failing while capture succeeds is a different fault
+and still shows up as the `spool N` count on the gate line, not as this line.
+
 ### `.env` is missing keys that `.env.example` documents
 
 **Symptom:** embeddings silently fail — candidates are written with a NULL
