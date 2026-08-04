@@ -14,6 +14,7 @@ unit tests that would dial a server.
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
 import pytest
@@ -33,6 +34,7 @@ from openbrain.apps.hooks.session import (
     run_stop,
     run_subagent_stop,
 )
+from openbrain.apps.hooks.stop import loaded_observation
 from openbrain.config import (
     CaptureSettings,
     ObservationSettings,
@@ -352,3 +354,53 @@ class TestObservationSettingsResolution:
     def test_a_secret_never_appears_in_the_repr(self) -> None:
         settings = observation_settings()
         assert "sk-lf-test" not in repr(settings)
+
+
+class TestTheSuiteNeverInheritsAnOperatorsSink:
+    """A developer's real observation coordinates must not reach a test (#544).
+
+    THE FAILURE THIS PINS. ``capture_stop_with`` accepts an injected
+    ``CaptureSettings`` but resolves the OBSERVATION section itself, from the
+    live process environment, on every call. On a machine whose shell carries
+    the four provisioned coordinates -- which the operator env file
+    ``claudex-observation.env`` supplies, so any hook-configured host has them
+    -- the unit suite built a real ``LangfuseEmitter`` and posted its fixture
+    transcripts to the fleet server. ``emit`` ends in ``client.shutdown()``,
+    which BLOCKS draining the OpenTelemetry batch worker, so
+    ``test_capture_outage_notice`` hung indefinitely at test 8 of 45 rather
+    than failing. A hang is the worst shape for this: it reports nothing, and
+    it looked like the branch that merely UNMASKED it (declaring
+    ``OPENBRAIN_ALLOW_INSECURE_HTTP`` stopped the typo check from rejecting the
+    load, which had been shadowing the sink) was the branch that caused it.
+
+    Asserted at ``loaded_observation`` and at the environment itself, rather
+    than by running the hook: the hook's symptom is a HANG, and a test that
+    hangs to prove a hang reports nothing and blocks the suite behind it. These
+    two are the boundary that reads the environment and the environment it
+    reads; the autouse ``_clean_environment`` fixture in ``conftest`` is what
+    keeps both inert. Both fail without it -- verified by flipping the fixture
+    to ``autouse=False`` in an operator shell, 2026-08-04.
+    """
+
+    def test_ambient_coordinates_do_not_activate_the_sink(self) -> None:
+        """The section the hook resolves for itself is inert under the fixture."""
+        resolved = loaded_observation()
+        assert resolved is not None
+        assert observation_active(resolved) is False
+
+    def test_the_environment_the_hook_reads_carries_no_openbrain_variables(
+        self,
+    ) -> None:
+        """No ``OPENBRAIN_*`` survives into a test, whatever the shell holds.
+
+        The one exception is the ``OPENBRAIN_TEST_*`` prefix the ``-m live``
+        gate addresses its playground service through; clearing that would make
+        the live gate pass having run nothing.
+        """
+        leaked = [
+            name
+            for name in os.environ
+            if name.upper().startswith("OPENBRAIN_")
+            and not name.upper().startswith("OPENBRAIN_TEST_")
+        ]
+        assert leaked == []
