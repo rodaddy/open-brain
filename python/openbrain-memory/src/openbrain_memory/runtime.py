@@ -114,6 +114,15 @@ _SCOPE_KEYS = {
     "session_key",
     "thread_id",
 }
+# Ordered, so a multi-field scope error reads the same way twice and a test can
+# assert on it. `thread_id` is absent because it is the one optional field.
+_REQUIRED_SCOPE_FIELDS = (
+    "agent",
+    "platform",
+    "server_id",
+    "channel_id",
+    "session_key",
+)
 _CONTEXT_PACK_SECTIONS = {
     "candidate_memory",
     "durable_lane_context",
@@ -200,16 +209,34 @@ class RuntimeScope:
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> RuntimeScope:
-        """Build a validated scope from untrusted JSON-like input."""
+        """Build a validated scope from untrusted JSON-like input.
+
+        Every required field is checked before ANY of them raises. Validating
+        field-by-field surfaced exactly one missing key per attempt, so a caller
+        assembling a scope by hand paid one round trip per field: the first
+        client install (2026-08-04) hit `namespace`, satisfied it, then hit
+        `server_id`, and each error was true and each was a third of the answer.
+        The full set is known up front, so reporting one at a time is a choice,
+        not a limit.
+        """
         _reject_unknown_keys(value, _SCOPE_KEYS, "scope")
-        return cls(
-            agent=_mapping_text(value, "agent"),
-            platform=_mapping_text(value, "platform"),
-            server_id=_mapping_text(value, "server_id"),
-            channel_id=_mapping_text(value, "channel_id"),
-            session_key=_mapping_text(value, "session_key"),
-            thread_id=_mapping_optional_text(value, "thread_id"),
-        )
+        fields: dict[str, str] = {}
+        errors: list[str] = []
+        for name in _REQUIRED_SCOPE_FIELDS:
+            try:
+                fields[name] = _mapping_text(value, name)
+            except ValueError as error:
+                errors.append(str(error))
+        try:
+            thread_id = _mapping_optional_text(value, "thread_id")
+        except ValueError as error:
+            thread_id = None
+            errors.append(str(error))
+        if errors:
+            raise ValueError(
+                f"scope is invalid ({len(errors)} problems): " + "; ".join(errors)
+            )
+        return cls(**fields, thread_id=thread_id)
 
     def context_pack_arguments(self, query: str) -> dict[str, Any]:
         """Return the server contract's exact-scope context-pack fields."""

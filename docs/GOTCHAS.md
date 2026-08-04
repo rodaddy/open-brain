@@ -1098,3 +1098,44 @@ bearer token on the wire, and one fewer silent-failure mode.
 copies the Mini's env file verbatim, so a client staged from a loopback-pointed
 env file must have its `OPENBRAIN_BASE_URL` edited — that is a required step, not
 a nicety.
+
+**Written down is not enforced.** The paragraph above predates the first real
+client install and did not prevent it: the Air was installed from an unedited
+loopback env file anyway. `setup-client.sh` now REFUSES a loopback base URL
+rather than warning, with `OPENBRAIN_ALLOW_LOOPBACK_CLIENT=1` to run the script
+on the Mini itself. A rule that only exists in a doc is a rule the install can
+skip.
+
+### The provider CLI takes JSON on stdin — the namespace comes from the ENVIRONMENT
+
+**Symptom.** A request that looks exactly like the documented example fails with
+`namespace must be a non-empty string`, and nothing in the error mentions an
+environment variable. Adding `"namespace"` to the request body does not fix it —
+it produces a receipt that lists `namespace` under
+`ignored_optional_request_keys` **and** fails on `namespace` in the same JSON
+object.
+
+**Cause.** Two separate things, both fixed now, both worth knowing:
+
+- The CLI has **no argv interface**. `openbrain-memory recall --query …` returns
+  `arguments are not supported` and never reaches the brain. It reads ONE
+  bounded JSON object on stdin with `operation` inside it. The shipped prover in
+  `setup-client.sh` used the argv form, so it reported `[FAIL]` on every install
+  regardless of whether the install worked — a check whose failure carried no
+  information.
+- Identity is environmental, not a request field. `OPENBRAIN_BASE_URL`,
+  `OPENBRAIN_TOKEN`, and `OPENBRAIN_NAMESPACE` are read from the environment;
+  the one documented in-request override is `{"config": {"namespace": "…"}}`
+  (`docs/memory-contract.md`). A top-level `namespace` is now rejected with an
+  error that says where it actually lives.
+
+**The example is a request body, and a body carries no identity.** That is why
+following it on a clean shell fails. `openbrain-memory --help` now carries an
+`environment` block naming the three variables next to the example they qualify.
+
+**Also fixed: scope errors arrive all at once.** Validation used to surface one
+missing field per attempt, so assembling a scope by hand cost a round trip per
+field — the Air hit `namespace`, satisfied it, then hit `server_id`, then the
+next. Every error was true and every error was a fraction of the answer. All
+five (`agent`, `platform`, `server_id`, `channel_id`, `session_key`) are now
+reported in a single receipt.
