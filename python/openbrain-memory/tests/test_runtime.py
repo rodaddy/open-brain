@@ -404,6 +404,80 @@ def test_json_adapter_required_field_typo_still_fails_closed() -> None:
     assert tool_calls(transport) == []
 
 
+def test_json_capture_forwards_lifecycle_keys_to_event_metadata() -> None:
+    """The #445 promotion vocabulary must reach the written event (#464).
+
+    Before this landed, `candidate_type`, `memory_lifecycle_action`, and
+    `candidate_scope` were outside the capture key allowlist, so the projector
+    dropped them: the write returned `status:saved` and the row landed with no
+    promotable metadata. A scripted promotion through this lane got a receipt
+    that said it worked and seeded nothing.
+    """
+    transport = LaneAwareTransport()
+
+    output = execute_json(
+        request_payload(
+            "capture",
+            distilled=True,
+            content="Rico prefers the smallest correct change.",
+            candidate_type="user_preference",
+            memory_lifecycle_action="promote",
+            candidate_scope={"repo": "rodaddy/open-brain"},
+        ),
+        transport=transport,
+    )
+
+    assert output["receipt"]["status"] == "saved"
+    # Accept-and-ignore leaves this note behind; honoring the keys must not.
+    assert "compatibility_note" not in output["receipt"]
+    event = tool_calls(transport)[-1]["params"]["arguments"]
+    assert event["metadata"]["candidate_type"] == "user_preference"
+    assert event["metadata"]["memory_lifecycle_action"] == "promote"
+    assert event["metadata"]["candidate_scope"] == {"repo": "rodaddy/open-brain"}
+
+
+def test_json_capture_rejects_lifecycle_value_outside_the_vocabulary() -> None:
+    """A bad lifecycle value fails by name rather than being dropped (#464)."""
+    transport = LaneAwareTransport()
+
+    output = execute_json(
+        request_payload(
+            "capture",
+            distilled=True,
+            content="Distilled candidate.",
+            candidate_type="not_a_candidate_type",
+        ),
+        transport=transport,
+    )
+
+    assert output["receipt"]["status"] == "failed"
+    assert output["receipt"]["error"] == (
+        "Unsupported candidate_type: not_a_candidate_type"
+    )
+    assert "append_session_event" not in json.dumps(tool_calls(transport))
+
+
+def test_json_receipt_names_the_ignored_request_keys() -> None:
+    """A dropped key is named in the receipt, not just counted (#464)."""
+    transport = LaneAwareTransport()
+
+    output = execute_json(
+        request_payload(
+            "capture",
+            distilled=True,
+            content="Distilled event.",
+            future_optional_field="must-never-be-forwarded",
+        ),
+        transport=transport,
+    )
+
+    assert output["receipt"]["compatibility_note"] == "ignored_optional_request_keys"
+    assert output["receipt"]["ignored_optional_request_keys"] == [
+        "future_optional_field"
+    ]
+    assert output["receipt"]["ignored_optional_key_count"] == 1
+
+
 def test_first_capture_establishes_lane_before_append() -> None:
     transport = LaneAwareTransport()
     runtime = FirstClassMemoryRuntime(

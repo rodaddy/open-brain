@@ -73,7 +73,9 @@ from ._runtime_validation import (
     wrap_metadata as _validate_wrap_metadata,
 )
 from .agent import (
+    CANDIDATE_TYPES,
     EVENT_TYPES,
+    MEMORY_LIFECYCLE_ACTIONS,
     AgentMemory,
     MemoryClient,
     MemorySpool,
@@ -775,13 +777,41 @@ class FirstClassMemoryRuntime:
         content: str,
         *,
         event_type: str = "fact",
+        candidate_type: str | None = None,
+        memory_lifecycle_action: str | None = None,
+        candidate_scope: Mapping[str, Any] | None = None,
     ) -> RuntimeOutput:
-        """Capture one already-distilled event; raw transcript APIs are absent."""
+        """Capture one already-distilled event; raw transcript APIs are absent.
+
+        The three lifecycle arguments are the #445 promotion vocabulary. They
+        are OPTIONAL but never ignored: a value outside the shared vocabulary
+        fails the write by name rather than being dropped, because a capture
+        that reports ``saved`` while silently discarding the metadata canon
+        promotion keys off is the exact accept-and-ignore defect this lane
+        exists to prevent (#464).
+
+        Args:
+            content: Already-distilled event content.
+            event_type: Event vocabulary value; must be in ``EVENT_TYPES``.
+            candidate_type: Optional value from ``CANDIDATE_TYPES``.
+            memory_lifecycle_action: Optional value from
+                ``MEMORY_LIFECYCLE_ACTIONS``.
+            candidate_scope: Optional JSON object narrowing the candidate.
+
+        Returns:
+            The write receipt, with the lifecycle keys on the written event's
+            metadata when supplied.
+        """
         try:
             safe_content = _distilled_content(content, "content")
             safe_event_type = _require_text(event_type, "event_type")
             if safe_event_type not in EVENT_TYPES:
                 raise ValueError(unsupported_event_type(safe_event_type))
+            lifecycle = _lifecycle_metadata(
+                candidate_type=candidate_type,
+                memory_lifecycle_action=memory_lifecycle_action,
+                candidate_scope=candidate_scope,
+            )
         except ValueError as error:
             return _failed_write("capture", error)
         return self._write(
@@ -794,6 +824,7 @@ class FirstClassMemoryRuntime:
                 channel_id=self.scope.channel_id,
                 thread_id=self.scope.thread_id,
                 event_type=safe_event_type,
+                **lifecycle,
             ),
         )
 
@@ -1304,3 +1335,53 @@ def _wrap_metadata(
         receipt_refs,
         _reject_secret_payload,
     )
+
+
+def _lifecycle_metadata(
+    *,
+    candidate_type: str | None,
+    memory_lifecycle_action: str | None,
+    candidate_scope: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Validate the optional #445 promotion vocabulary for a capture.
+
+    The vocabularies are the SAME sets ``AgentMemory`` enforces on the client
+    library promotion path, imported rather than re-listed: two copies drift,
+    and a value this side accepts but the server's CHECK constraint refuses is
+    a silent no-row write.
+
+    Args:
+        candidate_type: Optional value from ``CANDIDATE_TYPES``.
+        memory_lifecycle_action: Optional value from
+            ``MEMORY_LIFECYCLE_ACTIONS``.
+        candidate_scope: Optional JSON object narrowing the candidate.
+
+    Returns:
+        The metadata keys to merge into the written event, empty when the
+        caller supplied none.
+
+    Raises:
+        ValueError: If any supplied value is outside its vocabulary, is not a
+            JSON object, or carries a secret value.
+    """
+    metadata: dict[str, Any] = {}
+    if candidate_type is not None:
+        safe_candidate_type = _require_text(candidate_type, "candidate_type")
+        if safe_candidate_type not in CANDIDATE_TYPES:
+            raise ValueError(f"Unsupported candidate_type: {safe_candidate_type}")
+        metadata["candidate_type"] = safe_candidate_type
+    if memory_lifecycle_action is not None:
+        safe_action = _require_text(
+            memory_lifecycle_action,
+            "memory_lifecycle_action",
+        )
+        if safe_action not in MEMORY_LIFECYCLE_ACTIONS:
+            raise ValueError(f"Unsupported memory_lifecycle_action: {safe_action}")
+        metadata["memory_lifecycle_action"] = safe_action
+    if candidate_scope is not None:
+        if not isinstance(candidate_scope, Mapping):
+            raise ValueError("candidate_scope must be a JSON object")
+        scope = dict(candidate_scope)
+        _reject_secret_payload(scope, "candidate_scope")
+        metadata["candidate_scope"] = scope
+    return metadata

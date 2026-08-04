@@ -609,11 +609,33 @@ class AgentMemory:
         channel_id: str,
         thread_id: str | None = None,
         event_type: str = "fact",
+        **metadata: Any,
     ) -> JSON:
-        """Append an event with server-validated exact-scope coordinates."""
+        """Append an event with server-validated exact-scope coordinates.
+
+        Args:
+            role: Source role recorded on the event.
+            content: Already-distilled event content.
+            platform: Exact-scope platform coordinate.
+            server_id: Exact-scope server coordinate.
+            channel_id: Exact-scope channel coordinate.
+            thread_id: Optional exact-scope thread coordinate.
+            event_type: Event vocabulary value; must be in ``EVENT_TYPES``.
+            **metadata: Extra event metadata merged into the written row,
+                screened by the same ``_reject_reserved_metadata`` pass that
+                ``append_event`` already applies.
+
+        Returns:
+            The server's ``append_session_event`` result.
+
+        Raises:
+            ValueError: If ``event_type`` is outside ``EVENT_TYPES`` or
+                ``_reject_reserved_metadata`` refuses the metadata.
+        """
         self._require_session("append_scoped_event")
         if event_type not in EVENT_TYPES:
             raise ValueError(unsupported_event_type(event_type))
+        self._reject_reserved_metadata(metadata)
         key = idempotency_key()
         payload: dict[str, Any] = {
             "session_key": self.conversation_key,
@@ -624,7 +646,7 @@ class AgentMemory:
             "event_type": event_type,
             "content": content,
             "source": role,
-            "metadata": {"idempotency_key": key},
+            "metadata": {**dict(metadata), "idempotency_key": key},
         }
         if thread_id is not None:
             payload["thread_id"] = _required_str(thread_id, "thread_id")
