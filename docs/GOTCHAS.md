@@ -969,3 +969,132 @@ Two sessions diagnosed a missing token as a core01 outage, and core01 was probed
 healthy mid-incident — the healthy probe was read as noise instead of as the
 answer. A healthy `/health` next to a failing gate is positive evidence the
 problem is credentials or environment, not the network.
+
+---
+
+## 2026-08-04 client-install traps
+
+These four all bit while putting the direct client stack on a second machine.
+Full procedure: `docs/client-install-runbook.md`.
+
+### A stale MCP registration answers instead of the direct stack — and `/mcp` in an error is the tell
+
+**Symptom.** Recall or a hook fails, and the error names a URL ending in `/mcp`.
+The direct client stack is installed, the env file is right, `/health` answers,
+and it still does not work.
+
+**Cause.** A retired MCP-lane registration is still configured on the box —
+`claude mcp list` shows an open-brain entry — and it is being reached instead of
+the direct client.
+
+**The tell is exact: the direct stack NEVER uses a `/mcp` URL.** Its base URL is
+a bare `scheme://host:port`. So a `/mcp` path appearing anywhere in an error
+message is not a routing detail to investigate; it is positive proof that the
+retired lane is configured and answering. There is no configuration in which the
+direct stack legitimately produces that URL.
+
+**Check and fix.**
+
+```bash
+claude mcp list
+claude mcp remove <name>   # any open-brain entry
+```
+
+`setup-client.sh` prints this reminder and the current registrations at the end
+of every install, because a fresh install onto a box that used to run the MCP
+lane is exactly when this happens.
+
+### The hook wrapper and the installed package are a MATCHED PAIR, and the mismatch is silent
+
+**Symptom.** Every hook exits 0. Receipts look fine. No rows are written and no
+canon is injected. The box looks completely healthy and is doing nothing.
+
+**Cause.** Three facts that compound:
+
+1. `config.unknown_prefixed_variables` **rejects** any `OPENBRAIN_*` variable
+   that matches no declared setting — and rejects the **whole environment**, not
+   the one variable.
+2. The hook entrypoints **swallow every exception** (fail-open observer
+   contract).
+3. So a wrapper passing a variable the installed package does not declare turns
+   **every hook on the box** into a clean exit 0 with zero capture and zero
+   injection.
+
+This has happened three times with three variables: `OPENBRAIN_OBSERVATION_*`,
+`OPENBRAIN_SPOOL_PATH`, and `OPENBRAIN_ALLOW_INSECURE_HTTP`.
+
+**The ordering rule (PR #544).** Install the package that declares the variable
+**first**, then edit the wrapper to pass it. PR #544 verified this empirically in
+that order — the old install raised `UnknownEnvironmentVariableError` with the
+variable present; the reinstalled package accepted it and resolved
+`allow_insecure_http=True` on both sections. Reversed, the box goes dark between
+the two steps.
+
+**The empty-string half, which re-armed the same defect.** The wrapper's
+`env -i VAR="${VAR:-}"` style **cannot express "absent"** — an unset variable
+reaches the child as an **empty string**. For the bool `allow_insecure_http`,
+pydantic rejected `""` with `Input should be a valid boolean`, both
+`load_capture_settings` and `load_canon_settings` raised, the entrypoints
+swallowed it, and every hook on a host that **never opted in** went silently
+dead. The fix for #525 re-created the #525 defect class.
+
+Two layers guard it now: a validator in `config.py` mapping `""` to the default
+`False`, and a conditional in the wrapper that prepends the assignment only when
+non-empty — the conditional is what protects an **older** installed package that
+predates the validator, which is exactly the state of a client mid-upgrade.
+
+**Rule:** a non-string pass-through goes in the wrapper's conditional block,
+never in the `env -i` list. A string tolerates the empty spelling; a bool, an
+int, or an enum does not.
+
+**The check that catches it.** Not exit code, and not `/health` — both pass on a
+dead box. Start a fresh session and read the CANON PACK section counts. Zero
+counts, or no pack, is this bug.
+
+### Clients cannot install from GitHub — wheels from the Mini are the paved road
+
+**Symptom.** `uv tool install git+ssh://git@github.com/rodaddy/open-brain...`
+fails on a client box, and reaching for a package index does not help either.
+
+**Cause.** The repo is private and the client boxes have no deploy key. There is
+also no published index: `python/openbrain-memory/pyproject.toml` records that
+its `fleet-nats` dependency is **not** on PyPI and lives in a private monorepo.
+Docs showing `uv pip install openbrain-memory==<version>` imply an index that
+does not exist for these packages.
+
+**The paved road.** Build wheels on the Mini and stage them —
+`scripts/client-bundle.sh` does this, into
+`/Volumes/ThunderBolt/open-brain-local/air-bundle/`, and the bundle's
+`setup-client.sh` installs from `--find-links` against the bundle's own
+`wheels/`. That reuses the wheelhouse convention the Mini already runs on
+(`OPENBRAIN_MEMORY_FIND_LINKS`, default
+`~/.local/share/openbrain-memory/wheels`) rather than inventing a second one.
+
+Do not burn time looking for an install route from the client. There isn't one;
+the artifact has to be carried.
+
+### `OPENBRAIN_BASE_URL` is a BARE `scheme://host:port` — no path, ever
+
+**Symptom.** Requests 404, or fail in a way that mentions a path segment nobody
+configured on purpose.
+
+**Cause.** A path was appended to the base URL — `/mcp`, `/api`, a trailing
+route. The client appends its own paths (`/health` and the rest) to whatever it
+is given, so a base URL with a path produces `…/mcp/health`.
+
+**The correct spellings**, and only these two shapes:
+
+```
+https://ob.rodaddy.live        # preferred — TLS, no opt-in needed
+http://10.71.1.20:3100         # LAN plain http — needs OPENBRAIN_ALLOW_INSECURE_HTTP=1
+```
+
+`openbrain_memory.client._validate_base_url` permits plain `http` only for
+loopback, so the LAN spelling is refused outright without the opt-in declared by
+#525 / PR #544. Prefer `https://ob.rodaddy.live`: no opt-in, no plain-text
+bearer token on the wire, and one fewer silent-failure mode.
+
+`127.0.0.1` is correct **on the Mini only** and needs no opt-in there. The bundle
+copies the Mini's env file verbatim, so a client staged from a loopback-pointed
+env file must have its `OPENBRAIN_BASE_URL` edited — that is a required step, not
+a nicety.
