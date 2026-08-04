@@ -249,6 +249,49 @@ stemmers split multibyte accented characters and every non-English FTS assertion
 | `OPENBRAIN_LOCAL_CLONE` | `0` | `.env.example:41` | |
 | `OPENBRAIN_LOCAL_CLONE_ROOT` | unset | `.env.example:42` | |
 
+### Server call tracing (#530) — TypeScript `server/`
+
+Read by `server/observability/langfuse-tracing.ts` (`readMcpTracingConfig`),
+installed in `server/main.ts` alongside the audit wrapper. Every MCP tool call
+served by the rewrite entrypoint becomes one **content-ful** Langfuse trace:
+tool name, caller identity, full arguments, full result (or error class and
+message), duration, and session grouping.
+
+**CONTENT-FUL is the point, and it is deliberate.** #530 explicitly supersedes
+#372's content-free spec for the local dogfood deployment. Payloads are sent
+verbatim: no redaction, no summarisation, no size bucketing. `OPENBRAIN_MCP_AUDIT_*`
+(above) remains the separate content-FREE durable Postgres record and is
+unchanged — the two lanes coexist and neither replaces the other.
+
+| variable | default | notes |
+|---|---|---|
+| `OPENBRAIN_TRACING_ENABLED` | unset (off) | tracing runs only when this is exactly `"1"` |
+| `OPENBRAIN_TRACING_ENDPOINT` | — | Langfuse base URL (the SDK appends its own paths) |
+| `OPENBRAIN_TRACING_PUBLIC_KEY` | — | Langfuse `pk-lf-...` |
+| `OPENBRAIN_TRACING_SECRET_KEY` | — | Langfuse `sk-lf-...` |
+
+**Off unless all four are set.** The flag alone is not enough: `enabled` is
+`true` only when the flag is `"1"` AND all three coordinates are non-empty. A
+flag set with an incomplete triple logs one content-free
+`mcp_tool_tracing_config_incomplete` warn naming which coordinate is missing
+(booleans only — no key value is ever logged or persisted) and then stays off,
+so a typo cannot silently produce a zero-trace deployment.
+
+**Deploy coupling:** the keys live in the operator environment, sourced from the
+Vaultwarden item `Langfuse - Open Brain Local Dogfood`; they are never committed
+and never given values in `.env.example`. The variables are read ONCE at process
+start — `startServer` builds a single shared client before any session can
+exist — so **turning tracing on or off requires a service restart**. Editing the
+environment under a running process changes nothing. A `mcp_tracing_configured`
+info line at startup reports whether the lane came up.
+
+**Payload volume is the operating cost to watch.** Every tool call ships its
+full arguments and full result. Large `search_brain` result sets and
+`agent_context_pack` payloads are the heaviest; size the Langfuse server's
+storage against real traffic before enabling this anywhere it matters, and treat
+that Langfuse instance as holding the same content sensitivity as the brain
+itself.
+
 ### Drop-folder collector
 
 `src/drop-folder-collector.ts` reads four scan bounds — `DROP_COLLECTOR_MAX_FILES`
