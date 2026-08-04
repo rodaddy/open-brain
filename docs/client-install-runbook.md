@@ -132,6 +132,47 @@ staged value is loopback.
 
 ---
 
+## 3b. The Development root — the other value that is right on exactly one box
+
+`OPENBRAIN_BASE_URL` is not the only machine-specific value in that env file.
+`OPENBRAIN_DEVELOPMENT_ROOT` is the second one, and it fails harder: a wrong base
+URL makes the brain unreachable, while a wrong Development root **blocks every
+tool call** and points the operator's escape hatch at a directory that does not
+exist on the box.
+
+`openbrain-provider` resolves the Development lane by asking the filesystem, and
+the shipped `DEFAULT_DEVELOPMENT_ROOT` is `/Volumes/ThunderBolt/Development` —
+the Mini's volume. On a client whose tree is elsewhere (the Air:
+`/Users/rico/Development`), that path is absent, `resolve_development_scope()`
+returns `None` for every cwd, and `context_budget_gate._development_cwd()`
+composes its recovery command from the same missing root.
+
+**Two edits are required, and one without the other does nothing:**
+
+| Where | What |
+|---|---|
+| `claudex-observation.env` | `OPENBRAIN_DEVELOPMENT_ROOT=/this/box/Development` |
+| `openbrain-hook-env` | `OPENBRAIN_DEVELOPMENT_ROOT="${OPENBRAIN_DEVELOPMENT_ROOT:-}" \` in the `exec env -i` list |
+
+The wrapper starts a **clean** child, so a variable absent from its allowlist
+never reaches the hook no matter what the env file says. This is a **string**
+variable, so it takes the plain list spelling — the conditional block above the
+list is for non-string values, where `""` and absent differ (see §4).
+
+`setup-client.sh` does both automatically: it resolves the root from
+`OPENBRAIN_DEVELOPMENT_ROOT`, then `DEV_ROOT`, then by probing
+`/Volumes/ThunderBolt/Development` and `$HOME/Development`, writes the resolved
+value into the installed env file, and adds the pass-through. It **refuses to
+install** when it cannot resolve one, for the same reason as the loopback guard:
+a warning scrolls away and the install then succeeds into a box that blocks
+everything on first use. Override with
+`OPENBRAIN_ALLOW_NO_DEVELOPMENT_ROOT=1` only on a box that runs no gated agent
+work.
+
+Both edits are idempotent — re-running never produces a second spelling.
+
+---
+
 ## 4. The MATCHED-PAIR rule — the one that fails silently
 
 **The wrapper and the installed package must move together, package first.**
@@ -194,6 +235,7 @@ stopping early is how a green-looking dead box happens.
 | # | Rung | How | What a failure means |
 |---|---|---|---|
 | 0 | **The env file was edited** | `OPENBRAIN_BASE_URL` is the Mini's LAN address, and `OPENBRAIN_NAMESPACE` is present | The bundle ships the build machine's env verbatim, so an unedited `OPENBRAIN_BASE_URL` is loopback and points the client at itself. A missing `OPENBRAIN_NAMESPACE` fails later as a message about a *request key*, which points at the JSON instead of at this file. `setup-client.sh` now refuses on both. |
+| 0b | **The Development root is this machine's** | `OPENBRAIN_DEVELOPMENT_ROOT` is set in the env file AND passed by the wrapper's `env -i` list | The shipped default is the build machine's volume. On a box where it does not exist, every cwd resolves to no scope and the context-budget gate blocks every tool call while naming a path that box does not have (#555). Both halves are required: the value alone is stripped by the wrapper. `setup-client.sh` now writes both and refuses when it cannot resolve a root. |
 | 1 | **Health** | `curl -sS $OPENBRAIN_BASE_URL/health` → `200` | Service down, wrong URL, or the plain-http opt-in is missing. |
 | 2 | **Recall is `direct`** | source the env file, then pipe one JSON object (below) to `openbrain-memory` → `"status": "direct"` | Anything other than `direct` means the direct stack is not the lane answering — suspect a stale MCP registration. |
 | 3 | **CANON PACK, non-zero counts** | Start a **fresh** session; the `SessionStart` emissions carry section counts | Counts of zero, or no pack at all, is the matched-pair failure. The hooks ran and swallowed a rejection. |
