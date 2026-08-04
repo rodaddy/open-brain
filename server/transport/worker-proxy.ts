@@ -17,15 +17,20 @@ export interface WorkerHealthResult {
 
 export interface AggregateHealth {
   readonly status: "healthy" | "degraded";
+  readonly hostname: string;
   readonly server_ip: string;
   readonly server_ips: readonly string[];
+  readonly revision?: string;
   readonly workers: readonly WorkerHealthResult[];
   readonly timestamp: string;
 }
 
 export interface WorkerProxyInput {
   readonly workers: readonly WorkerTarget[];
+  readonly hostname: string;
   readonly serverIp: string;
+  readonly serverIps: readonly string[];
+  readonly revision?: string | undefined;
   readonly healthProbeTimeoutMs: number;
   readonly logger: Logger;
   readonly fetch?: typeof fetch;
@@ -101,8 +106,10 @@ export function createWorkerProxyHandler(input: WorkerProxyInput): WorkerProxyHa
       const healthy = workers.every((worker) => worker.ok);
       const health: AggregateHealth = {
         status: healthy ? "healthy" : "degraded",
+        hostname: input.hostname,
         server_ip: input.serverIp,
-        server_ips: [input.serverIp],
+        server_ips: input.serverIps,
+        ...(input.revision ? { revision: input.revision } : {}),
         workers,
         timestamp: new Date().toISOString(),
       };

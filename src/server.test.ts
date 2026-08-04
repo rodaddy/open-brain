@@ -99,40 +99,42 @@ function mockFetchOk() {
 
 // -- Tests --------------------------------------------------------------------
 describe("GET /health", () => {
-  it("includes server IP identity", async () => {
-    const originalServerIp = process.env.OPEN_BRAIN_SERVER_IP;
-    process.env.OPEN_BRAIN_SERVER_IP = "10.71.1.21";
+  it("includes a concrete server IP identity", async () => {
+    // Identity is resolved ONCE at module load, not per request: a process does
+    // not change hosts, and re-reading the environment on every probe would let
+    // a mutated variable silently change what the endpoint claims to be. The
+    // precedence rules themselves are covered directly, against injected
+    // interfaces, in `server/transport/server-identity.test.ts`.
+    const res = await fetch(`${baseUrl}/health`);
+    const body = (await res.json()) as HealthStatus;
 
-    try {
-      const res = await fetch(`${baseUrl}/health`);
-      const body = (await res.json()) as HealthStatus;
-
-      expect(body.server_ip).toBe("10.71.1.21");
-      expect(body.server_ips).toEqual(["10.71.1.21"]);
-    } finally {
-      if (originalServerIp === undefined) {
-        delete process.env.OPEN_BRAIN_SERVER_IP;
-      } else {
-        process.env.OPEN_BRAIN_SERVER_IP = originalServerIp;
-      }
-    }
+    expect(body.server_ip).not.toBe("unknown");
+    expect(body.server_ips.length).toBeGreaterThan(0);
+    expect(body.server_ips).toContain(body.server_ip);
   });
 
-  it("does not auto-disclose host interface IPs when identity is not configured", async () => {
-    const originalServerIp = process.env.OPEN_BRAIN_SERVER_IP;
-    delete process.env.OPEN_BRAIN_SERVER_IP;
+  it("reports the machine hostname alongside the address", async () => {
+    // The operator's question is "which brain am I pointed at?", and an address
+    // alone does not answer it on a multi-homed or NAT'd host.
+    const res = await fetch(`${baseUrl}/health`);
+    const body = (await res.json()) as HealthStatus;
 
-    try {
-      const res = await fetch(`${baseUrl}/health`);
-      const body = (await res.json()) as HealthStatus;
+    expect(typeof body.hostname).toBe("string");
+    expect(body.hostname.length).toBeGreaterThan(0);
+  });
 
-      expect(body.server_ip).toBe("unknown");
-      expect(body.server_ips).toEqual(["unknown"]);
-    } finally {
-      if (originalServerIp !== undefined) {
-        process.env.OPEN_BRAIN_SERVER_IP = originalServerIp;
-      }
-    }
+  it("never answers with a loopback or wildcard address", async () => {
+    // Supersedes the original `does not auto-disclose host interface IPs`
+    // assertion from #197. That stance is what made every local clone report
+    // `unknown`; identity resolution now lives in
+    // `server/transport/server-identity.ts`, which bounds automatic disclosure
+    // to private LAN ranges instead of withholding the answer entirely.
+    const res = await fetch(`${baseUrl}/health`);
+    const body = (await res.json()) as HealthStatus;
+
+    expect(["0.0.0.0", "127.0.0.1", "localhost", "::1"]).not.toContain(
+      body.server_ip,
+    );
   });
 
   it("does not degrade when the embedding provider is unreachable", async () => {

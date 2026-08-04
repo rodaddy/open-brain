@@ -145,8 +145,34 @@ watchdog restart script, not by the server itself: `MLX_EMBED_DAEMON`,
 | variable | default | read at |
 |---|---|---|
 | `PORT` | `3100` | `src/index.ts:349` |
-| `OPEN_BRAIN_BIND_HOST` | unset | `src/index.ts:353` |
-| `OPEN_BRAIN_SERVER_IP` | unset | `src/index.ts:44` |
+| `OPEN_BRAIN_BIND_HOST` | unset | `src/index.ts`, `server/main.ts`; also an identity input (below) |
+| `OPEN_BRAIN_SERVER_IP` | unset | `server/transport/server-identity.ts`; the advertised address |
+
+### Host identity in `/health`
+
+`/health` answers "which brain am I pointed at?", so it reports `hostname`,
+`server_ip`, `server_ips`, and — on a deployed tree — `revision`. Identity is
+resolved ONCE per process by `server/transport/server-identity.ts`, in this
+order:
+
+1. **`OPEN_BRAIN_SERVER_IP`** — an explicit advertised address. Always wins.
+   Set this when the address a client should use is not one the host can see
+   (behind NAT, a reverse proxy, or a floating VIP).
+2. **`OPEN_BRAIN_BIND_HOST`**, when it names a concrete address. A wildcard or
+   loopback bind (`0.0.0.0`, `::`, `127.0.0.1`, `::1`, `localhost`) is skipped:
+   it identifies no particular machine, which is the whole question being asked.
+3. **Detected private LAN interfaces**, physical adapters first, each interface
+   name sorted numerically so the answer is stable across reboots.
+4. **`"unknown"`** — only when the host genuinely has no private address.
+
+Detection is deliberately bounded to private ranges (RFC1918, RFC3927,
+RFC6598). `/health` is unauthenticated, so a public address is never volunteered
+automatically; an operator who wants one advertised sets
+`OPEN_BRAIN_SERVER_IP` and owns that decision.
+
+`revision` is the `short_sha` from the `.deployed-revision` stamp that
+`scripts/local-clone-deploy.sh` writes into a deployed tree. It is absent on a
+dev tree that was never deployed through the script, which is normal.
 | `ALLOWED_ORIGINS` | `[]` (none) | `src/index.ts:78`, comma-separated |
 | `OPEN_BRAIN_RUN_MIGRATIONS` | `1` | `src/index.ts:272`; `"0"` disables |
 | `OPEN_BRAIN_MAINTENANCE_ENABLED` | unset | `src/index.ts:383` |

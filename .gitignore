@@ -98,3 +98,9 @@ secrets/*
 !secrets/README.md
 !secrets/*.example
 !secrets/*.example.json
+
+# Deploy stamp written into a DEPLOYED tree by scripts/local-clone-deploy.sh
+# and read back by `/health` as `revision`. It describes one deployment, not
+# the source, so it must never be committed — a checked-in stamp would make
+# every tree claim to be whichever one happened to be deployed when it landed.
+.deployed-revision
