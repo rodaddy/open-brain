@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, cast
 
 from .agent import MemorySpool
@@ -21,8 +21,6 @@ from .runtime import (
 
 _LOGGER = logging.getLogger(__name__)
 
-MAX_IGNORED_OPTIONAL_KEY_COUNT = 65_535
-IGNORED_OPTIONAL_REQUEST_KEYS_NOTE = "ignored_optional_request_keys"
 # One admission size for EVERY operation.
 #
 # Until 2026-07-30 the distilled verbs -- capture, checkpoint, wrap -- were held
@@ -58,9 +56,20 @@ _OPERATION_SPECS = {
         "Load body-free reflex pointers for a query.",
         {"max_latency_ms", "max_tokens", "prior_context", "query"},
     ),
+    # The three lifecycle keys are the #445 promotion vocabulary. They were
+    # absent here until 2026-08-03, which meant a scripted promotion through
+    # this lane returned status:saved and wrote a row with none of the
+    # metadata that makes it promotable -- a false receipt (#464).
     "capture": (
         "Persist one distilled memory event.",
-        {"content", "distilled", "event_type"},
+        {
+            "candidate_scope",
+            "candidate_type",
+            "content",
+            "distilled",
+            "event_type",
+            "memory_lifecycle_action",
+        },
     ),
     # The raw lane carries no "distilled" key by design: it is the one verb
     # that ships the transcript rather than a summary of it.
@@ -114,10 +123,10 @@ def execute_json(
 ) -> dict[str, Any]:
     """Execute one bounded JSON lifecycle request and return JSON-ready output."""
     runtime: FirstClassMemoryRuntime | None = None
-    ignored_optional_key_count = 0
+    ignored_optional_keys: list[str] = []
     try:
         operation = _operation_text(payload)
-        projected, ignored_optional_key_count = _project_request(payload, operation)
+        projected, ignored_optional_keys = _project_request(payload, operation)
         if operation == "help":
             output = usage_output()
         else:
@@ -139,13 +148,13 @@ def execute_json(
             output = _dispatch(runtime, operation, projected).as_dict()
     except Exception as error:
         output = failure_output(_safe_operation(payload.get("operation")), error)
-    _attach_compatibility_receipt(output, ignored_optional_key_count)
+    _attach_compatibility_receipt(output, ignored_optional_keys)
     if runtime is not None:
         try:
             runtime.close()
         except Exception as error:
             output = failure_output("close", error)
-            _attach_compatibility_receipt(output, ignored_optional_key_count)
+            _attach_compatibility_receipt(output, ignored_optional_keys)
             return output
     return output
 
@@ -264,6 +273,12 @@ def _dispatch(
         return runtime.capture_distilled(
             _mapping_text(payload, "content"),
             event_type=_mapping_default_text(payload, "event_type", "fact"),
+            candidate_type=_mapping_optional_text(payload, "candidate_type"),
+            memory_lifecycle_action=_mapping_optional_text(
+                payload,
+                "memory_lifecycle_action",
+            ),
+            candidate_scope=_mapping_optional_object(payload, "candidate_scope"),
         )
     if operation == "ingest":
         # Deliberately NOT _require_distilled: this is the raw lane. Every
@@ -304,7 +319,7 @@ def _dispatch(
 def _project_request(
     payload: Mapping[str, Any],
     operation: str,
-) -> tuple[dict[str, Any], int]:
+) -> tuple[dict[str, Any], list[str]]:
     allowed = _OPERATION_KEYS.get(operation)
     if allowed is None:
         raise ValueError(
@@ -313,24 +328,31 @@ def _project_request(
         )
     known_keys = _COMMON_KEYS | allowed
     projected = {key: value for key, value in payload.items() if key in known_keys}
-    ignored_count = min(
-        sum(1 for key in payload if key not in known_keys),
-        MAX_IGNORED_OPTIONAL_KEY_COUNT,
-    )
-    return projected, ignored_count
+    ignored_keys = sorted(
+        _safe_text(str(key)) for key in payload if key not in known_keys
+    )[:MAX_IGNORED_OPTIONAL_KEY_COUNT]
+    return projected, ignored_keys
 
 
 def _attach_compatibility_receipt(
     output: dict[str, Any],
-    ignored_optional_key_count: int,
+    ignored_optional_keys: Sequence[str],
 ) -> None:
-    if ignored_optional_key_count <= 0:
+    """Record WHICH request keys were dropped, not just how many.
+
+    A bare count told a caller that something was ignored without saying what,
+    so a promotion whose lifecycle keys were dropped read as a successful write
+    with an unexplained note attached (#464). The names make the same receipt
+    diagnosable at the point of the write.
+    """
+    if not ignored_optional_keys:
         return
     receipt = output.get("receipt")
     if not isinstance(receipt, dict):
         return
     receipt["compatibility_note"] = IGNORED_OPTIONAL_REQUEST_KEYS_NOTE
-    receipt["ignored_optional_key_count"] = ignored_optional_key_count
+    receipt["ignored_optional_key_count"] = len(ignored_optional_keys)
+    receipt["ignored_optional_request_keys"] = list(ignored_optional_keys)
 
 
 def _require_distilled(payload: Mapping[str, Any], operation: str) -> None:
@@ -363,6 +385,24 @@ def _mapping_default_text(
     if name not in value:
         return default
     return _mapping_text(value, name)
+
+
+def _mapping_optional_text(value: Mapping[str, Any], name: str) -> str | None:
+    if value.get(name) is None:
+        return None
+    return _mapping_text(value, name)
+
+
+def _mapping_optional_object(
+    value: Mapping[str, Any],
+    name: str,
+) -> Mapping[str, Any] | None:
+    item = value.get(name)
+    if item is None:
+        return None
+    if not isinstance(item, Mapping):
+        raise ValueError(f"{name} must be a JSON object")
+    return item
 
 
 def _mapping_optional_int(value: Mapping[str, Any], name: str) -> int | None:

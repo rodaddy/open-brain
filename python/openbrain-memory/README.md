@@ -262,10 +262,18 @@ capped at 64 KiB, output at 1 MB, and distilled lifecycle content at 16 KiB.
 The `recall` and `reflex` operations read; capture, checkpoint, and wrap
 requests must include `"distilled": true`.
 
+`capture` additionally accepts the optional memory-lifecycle vocabulary —
+`candidate_type`, `memory_lifecycle_action`, and `candidate_scope` — and
+forwards them to the written event's metadata, so a promotion can be scripted
+through the console rather than only through `AgentMemory.promote_candidate`.
+A value outside `CANDIDATE_TYPES` or `MEMORY_LIFECYCLE_ACTIONS` fails the write
+by name; it is never dropped.
+
 The console is an N-1 tolerant reader for unknown optional top-level operation
 fields. It projects only recognized common and operation fields into dispatch,
-never forwards unknown fields, and adds a content-free compatibility note and
-bounded ignored-key count to the receipt. Unknown operations, missing or
+never forwards unknown fields, and adds a content-free compatibility note, a
+bounded ignored-key count, and the ignored key NAMES
+(`ignored_optional_request_keys`) to the receipt. Unknown operations, missing or
 mistyped known fields, nested `scope`/`config` authority fields, and reflex
 `prior_context` references remain fail-closed.
 
