@@ -3,11 +3,12 @@
 
 # #447 — Capture records Rico's prompts verbatim and none of the agent's findings
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: wayfinder:grilling
 Created: 2026-07-29T19:21:31Z
-Updated: 2026-07-29T19:21:31Z
+Updated: 2026-08-03T04:48:51Z
+Closed: 2026-08-03T04:48:51Z
 
 ---
 

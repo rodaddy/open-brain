@@ -1139,3 +1139,99 @@ field — the Air hit `namespace`, satisfied it, then hit `server_id`, then the
 next. Every error was true and every error was a fraction of the answer. All
 five (`agent`, `platform`, `server_id`, `channel_id`, `session_key`) are now
 reported in a single receipt.
+
+---
+
+## 2026-08-04 PR-gate traps
+
+Three ways the pre-PR gate lies to you. All three cost time on the #551/#552
+run, and all three share the house pattern: a confident report that is wrong,
+produced by a tool that exited cleanly.
+
+### `validate-pr-body.ts` reads the ENVIRONMENT, not argv — a file argument validates nothing
+
+**Symptom.** You run the validator against a PR body file and it reports every
+section missing — no Critical Self-Review, no Review Gate, no Contract Parity —
+on a body that visibly contains all of them. The obvious conclusion is that the
+body is malformed, and it is not.
+
+**Cause.** The `import.meta.main` block reads `process.env.PR_BODY`,
+`process.env.PR_TITLE`, and `process.env.CONTRACT_PARITY_REQUIRED`. It never
+looks at `process.argv`. Passing a path puts the filename somewhere the script
+does not read, so `PR_BODY` falls back to `""` and an empty body genuinely is
+missing every section. The exit code is 1, the errors are internally consistent,
+and the diagnosis is entirely false. This produced a false diagnosis on
+2026-08-04.
+
+**The correct local invocation** — the same shape CI uses:
+
+```bash
+PR_BODY="$(gh pr view <N> --json body -q .body)" \
+  CONTRACT_PARITY_REQUIRED=true \
+  bun run scripts/validate-pr-body.ts
+```
+
+Before the PR exists, pipe the drafted body in through the same variable rather
+than naming a file. **"Every section missing" on a body you can see is the
+signature of an empty `PR_BODY`, not of a bad body.** Check the invocation
+before you touch the markdown.
+
+### The self-review parser accepts only plain `- Label: text` — bold breaks it, and so does an invented disposition
+
+**Symptom.** Two flavours, both reported as content problems when the content is
+fine:
+
+- `Critical Self-Review field '<Label>' needs specific content.` on a line that
+  plainly has specific content.
+- `<X> must check exactly one disposition.` on a line where exactly one box is
+  checked.
+
+**Cause — formatting.** `requireSpecificLine` matches
+`^-\s*<label>:\s*(.+)$`. The label must be immediately followed by the colon, so
+`- **Highest-risk behavior:** text` does not match: the `**` sits between the
+anchor and the label, the regex fails, and the value reads as empty. The field is
+reported as missing content while being fully written. Hit on PR #552. Markdown
+bolding is the natural thing to reach for and it is exactly what breaks it —
+**copy the plain `- Label: content` lines from
+`.github/pull_request_template.md` and do not restyle them.**
+
+**Cause — wording.** Three lines accept EXACTLY the template's two dispositions
+and no third spelling:
+
+- `- SME review-memory update: [ ] `docs/sme/` updated or [ ] not applicable because: <reason>`
+- `- Live Open Brain checks: [ ] linked below or [ ] not applicable because: <reason>`
+- `- Contract parity: [ ] fixtures updated` / `- Contract parity: [ ] runtime-specific because: <reason>`
+
+`exactlyOneDisposition` tests for the two literal spellings and errors when the
+count of matches is not one. An invented third wording — "maintained", "no
+change needed", "already current" — matches neither branch, so zero are seen and
+the error says "must check exactly one disposition" even though you checked one.
+Hit on PR #551. The accepted forms are literals in `scripts/validate-pr-body.ts`;
+read them there rather than paraphrasing the intent. A not-applicable
+disposition also needs a real reason: `-`, `n/a`, `none`, `todo`, and `tbd` are
+rejected as placeholders.
+
+### Red `db-integration` on a diff that cannot cause it means the BRANCH is stale, not the code
+
+**Symptom.** CI fails on a PR whose diff does not touch anything in the failing
+tests — several failures at once, in files the branch never modified. Reading the
+diff for a mechanism produces nothing, because there is no mechanism.
+
+**Cause.** The branch was cut before fixes that have since landed, so CI is
+running the PR's changes on top of a tree that is genuinely broken independent of
+them. PR #551 carried six `db-integration` failures on 2026-08-04 for exactly
+this reason, in tests it never touched.
+
+**Check the base BEFORE reading the diff.** It is one command and it is
+conclusive:
+
+```bash
+git fetch origin
+git merge-base --is-ancestor origin/main <head-sha>   # exit 0 = current, 1 = stale
+gh pr update-branch --rebase <N>                      # the fix when it exits 1
+```
+
+Rebasing cleared all six on #551. **Failures that the diff cannot plausibly
+explain are evidence about the base, not about the change** — spending the first
+half hour hunting a causal path through the diff is the expensive way to find
+that out.
