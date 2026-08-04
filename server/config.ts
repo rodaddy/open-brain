@@ -56,8 +56,8 @@ export const OPTIONAL_SECRET_KEYS = [
 ] as const;
 
 /**
- * An optional secret: absent, or a non-empty value. **Present-and-empty counts
- * as absent.**
+ * An optional secret: absent, or a value with content. **Present-but-BLANK
+ * counts as absent**, where blank means empty OR whitespace-only.
  *
  * The `z.preprocess` is the whole point and is not decoration. Without it,
  * `z.string().min(1).optional()` accepts an unset variable but REJECTS
@@ -74,6 +74,20 @@ export const OPTIONAL_SECRET_KEYS = [
  * `server_configuration_invalid` at startup and launchd throttle-looped it,
  * while `src/index.ts` had always started fine on the identical environment.
  *
+ * WHY WHITESPACE IS ALSO ABSENT (#548). `EMBEDDING_API_KEY=" "` used to survive
+ * this schema and arrive downstream as a real value, because `min(1)` counts a
+ * space as a character. `server/transport/health.ts` then takes the truthy
+ * branch and sends `Authorization: Bearer  ` — a header whose value is one
+ * space — on every embedding probe. The launcher that starts this same process
+ * already disagreed: `scripts/local-clone.ts` reads
+ * `env.EMBEDDING_API_KEY?.trim()` before its own truthiness check, so preflight
+ * saw "no key" and sent no header while the server saw "key" and sent a blank
+ * one. Two components deciding the same question differently off one variable
+ * is the defect; this makes the config boundary agree with the launcher rather
+ * than adding a third opinion downstream. A key is normalized for the DECISION
+ * only — a value with content is passed through byte-for-byte, because altering
+ * a real secret would silently corrupt a credential whose padding is genuine.
+ *
  * Normalizing HERE, at the parse boundary, rather than at each of the eight
  * declaration sites, is what makes the rule hold for a field added later:
  * everything typed `optionalSecret` gets it. Required fields keep rejecting
@@ -81,7 +95,8 @@ export const OPTIONAL_SECRET_KEYS = [
  * rather than an omission.
  */
 const optionalSecret = z.preprocess(
-  (value) => (value === "" ? undefined : value),
+  (value) =>
+    typeof value === "string" && value.trim() === "" ? undefined : value,
   z.string().min(1).optional(),
 );
 const userTokenValue = z
