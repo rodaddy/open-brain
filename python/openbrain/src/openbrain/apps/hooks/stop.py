@@ -40,6 +40,14 @@ Pattern/Convention:
     state every turn and so defeats a state-change rule on its own. Failing to
     write the latch degrades to silence, never to a nag on every turn.
 
+    AND THE LATCH IS ON ITS OWN FILE, NOT THE WATERMARK'S. It takes ``BEGIN
+    IMMEDIATE``; the delivery path's watermark read waits 30 s on the file it
+    holds. Sharing one file made a HEALTHY Stop block 31.4 s behind a second
+    capture process -- past this hook's 5 s deadline, past the harness's 10 s
+    kill -- and deliver zero batches, so the telemetry DROPPED the turn it was
+    reporting on. ``outage.latch_path`` derives the sibling file; the watermark
+    is now opened by exactly one lane.
+
     AND THE LOG LINE IS DEMOTED TO MATCH. The latched notice would be pointless
     if the pre-existing per-Stop ``warning`` kept writing to the same stderr on
     every failed turn, so inside a known outage that line drops to ``debug``
@@ -74,6 +82,7 @@ from loguru import logger
 from openbrain.apps.capture.outage import (
     OutageLatch,
     default_spool_path,
+    latch_path,
     spool_notice,
     spool_pending,
 )
@@ -182,7 +191,8 @@ def was_already_degraded(
     if session_key is None or settings is None:
         return False
     try:
-        return asyncio.run(OutageLatch(settings.watermark_path).is_degraded(session_key))
+        latch = OutageLatch(latch_path(settings.watermark_path))
+        return asyncio.run(latch.is_degraded(session_key))
     except Exception:  # noqa: BLE001 -- a log level is never worth breaking a turn
         return False
 
@@ -244,7 +254,7 @@ def announce_outage_state(
     if session_key is None or settings is None:
         return
     try:
-        latch = OutageLatch(settings.watermark_path)
+        latch = OutageLatch(latch_path(settings.watermark_path))
         notice = asyncio.run(
             latch.note_delivered(session_key)
             if delivered

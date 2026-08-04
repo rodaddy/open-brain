@@ -125,8 +125,9 @@ def unconfigured(watermark: Path) -> CaptureSettings:
     """Capture with no endpoint or token: the real factory raises immediately.
 
     A stand-in for "the write did not land", chosen over a socket because it is
-    instant and deterministic. The watermark path is real, because that is the
-    file the latch shares and these tests read it back.
+    instant and deterministic. The watermark path is real, because the latch's
+    own file is derived from it (``outage.latch_path``) and these tests read
+    that back.
     """
     return CaptureSettings(watermark_path=watermark)
 
@@ -456,19 +457,27 @@ class TestTheNoticeNeverBreaksTheTurn:
     ) -> None:
         """A notice that cannot be latched is dropped, never raised.
 
-        The latch shares the watermark's database file. Pointing it at a
-        DIRECTORY makes every sqlite call fail; the hook must still return
-        normally with empty stdout, because this function exists to report a
-        failure and must not be able to cause one.
+        A DIRECTORY where the latch's file belongs makes every sqlite call fail;
+        the hook must still return normally with empty stdout, because this
+        function exists to report a failure and must not be able to cause one.
+
+        The directory goes at ``latch_path(watermark)``, NOT at the watermark
+        path. Now that the latch has its own file, an unusable WATERMARK path
+        leaves it on a perfectly writable sibling -- so the old spelling of this
+        test passed while exercising nothing, verified by hand before the path
+        was corrected. That is the ``docs/decisions/capture-never-drops-a-turn``
+        #447 pattern (a suite encoding the defect as intended behaviour), caught
+        here instead of six days later.
         """
-        unusable = tmp_path / "not-a-file"
+        watermark = tmp_path / "wm.sqlite"
+        unusable = outage_module.latch_path(watermark)
         unusable.mkdir()
         transcript = tmp_path / "t.jsonl"
         write_lines(transcript, [operator_line("u1", "hi", session="sess")])
 
         stop.capture_stop_with(
             io.StringIO(stop_payload(transcript)),
-            unconfigured(unusable),
+            unconfigured(watermark),
             notices=io.StringIO(),
         )
         # No assertion beyond "it returned": the contract is that nothing raised
@@ -655,34 +664,55 @@ class TestTheRecoveryLineCarriesWhatTheWindowCost:
         assert await latch.note_delivered("s") == f"{RECOVERED_NOTICE} (2 turns held)"
 
 
+@contextlib.contextmanager
+def latch_held(database: Path) -> Iterator[None]:
+    """Hold a ``BEGIN IMMEDIATE`` write lock on ``database`` for the block.
+
+    Exactly what a second capture process does while it is inside
+    :meth:`OutageLatch._set` -- the write lock is taken up front, so a
+    concurrent ``Stop`` and ``SubagentStop`` overlapping on one file is this,
+    not an exotic case. Parallel subagents make it routine.
+    """
+    OutageLatch(database)._prepare()  # noqa: SLF001 -- setting up the contention
+    blocker = sqlite3.connect(database, timeout=1.0, autocommit=True)
+    try:
+        blocker.execute("BEGIN IMMEDIATE")
+        blocker.execute(
+            "INSERT INTO capture_outage (session_key, degraded) VALUES ('x', 1)"
+        )
+        yield
+    finally:
+        with contextlib.suppress(sqlite3.Error):
+            blocker.execute("ROLLBACK")
+        blocker.close()
+
+
 class TestALockedLatchNeverStallsTheHook:
     """The latch is best-effort telemetry; it may never hold a hook past its deadline.
 
-    ``Stop`` has a 5s deadline and the harness kills the hook at 10s. The latch
-    shares the WATERMARK's database file, so contention is not hypothetical --
-    another capture process writing its watermark holds that lock. A 30s lock
-    wait therefore could not be paid at all: it would stall the hook until the
-    harness killed it, taking the turn's capture with it. The notice degrades to
-    silence instead.
+    ``Stop`` has a 5s deadline and the harness kills the hook at 10s. Two
+    properties make that true and BOTH are needed:
+
+        the latch's own WAIT is a fraction of a second   -- it never blocks long
+        the latch's FILE is not the watermark's          -- it never blocks the
+                                                            delivery path at all
+
+    The first alone is not enough, and that is measured below: bounding the wait
+    governs how long the latch WAITS, never how long it HOLDS, so while it held
+    the shared watermark file the DELIVERY's own read
+    (``watermark.LOCK_WAIT_SECONDS = 30``) waited behind it and a healthy Stop
+    ran 31.4s with zero batches delivered.
     """
 
     def test_a_held_lock_does_not_push_the_hook_past_its_deadline(
         self, tmp_path: Path
     ) -> None:
+        """The latch's WAIT: a locked latch file degrades to silence, fast."""
         transcript = tmp_path / "t.jsonl"
         write_lines(transcript, [operator_line("u1", "hi", session="sess")])
         watermark = tmp_path / "wm.sqlite"
 
-        # Create the table, then hold a write lock on the file from another
-        # connection -- exactly what a concurrent capture process does.
-        OutageLatch(watermark)._prepare()  # noqa: SLF001 -- setting up the contention
-        blocker = sqlite3.connect(watermark, timeout=1.0, autocommit=True)
-        try:
-            blocker.execute("BEGIN IMMEDIATE")
-            blocker.execute(
-                "INSERT INTO capture_outage (session_key, degraded) VALUES ('x', 1)"
-            )
-
+        with latch_held(outage_module.latch_path(watermark)):
             start = time.monotonic()
             stop.capture_stop_with(
                 io.StringIO(stop_payload(transcript)),
@@ -690,9 +720,6 @@ class TestALockedLatchNeverStallsTheHook:
                 notices=io.StringIO(),
             )
             elapsed = time.monotonic() - start
-        finally:
-            blocker.execute("ROLLBACK")
-            blocker.close()
 
         # Well under the 5s Stop deadline. On the 30s lock wait this measured
         # over 30s and the harness would have killed the hook.
@@ -705,6 +732,141 @@ class TestALockedLatchNeverStallsTheHook:
         and is correct there; copying it here is what made the hook stallable.
         """
         assert outage_module.LOCK_WAIT_SECONDS < 1.0
+
+
+class TestTheLatchCannotBlockTheDeliveryPath:
+    """The latch's FILE: telemetry may never cost the turn it reports on.
+
+    THE TEST ABOVE CANNOT CATCH THIS, and that gap is why the defect shipped.
+    It drives an UNCONFIGURED capture, which raises in the lane factory BEFORE
+    ``deliver`` ever reads the watermark -- so the only file it touches under
+    contention is the latch's, and the delivery lane it is supposed to protect
+    is never exercised at all. The measurement that found this drove a
+    CONFIGURED, REACHABLE Stop instead, and these do the same: the real
+    ``_started_memory`` seam (``brain``), a real transcript, a real watermark
+    read.
+
+    Measured on the shared-file latch, reproduced 4x: 31.36 / 31.37 / 31.38 /
+    31.01 s, and ``RecordingLane`` received NOTHING -- past the 5s deadline,
+    past the harness's 10s kill, the turn DROPPED rather than delayed. The
+    latch's ``BEGIN IMMEDIATE`` was on the watermark file and
+    ``deliver.position_for`` waited the watermark's own 30s behind it.
+    """
+
+    def test_a_healthy_turn_is_delivered_on_time_while_the_latch_is_locked(
+        self, tmp_path: Path, brain: Brain, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """CONFIGURED + REACHABLE, with the latch's transaction held open.
+
+        Driven through the real ``main`` -- the process entrypoint, whose return
+        value IS the exit code -- with only the settings loader replaced, so all
+        three of the measurement's failures are asserted from one run: the wall
+        time, the delivery, and the exit code. Any one alone passes for the
+        wrong reason; a hook that returns instantly having delivered nothing
+        satisfies the timing.
+        """
+        transcript = tmp_path / "t.jsonl"
+        write_lines(transcript, [operator_line("u1", "hi", session="sess")])
+        watermark = tmp_path / "wm.sqlite"
+        monkeypatch.setattr(stop, "_loaded_capture", lambda: reachable(watermark))
+
+        with latch_held(outage_module.latch_path(watermark)):
+            start = time.monotonic()
+            exit_code = stop.main(io.StringIO(stop_payload(transcript)))
+            elapsed = time.monotonic() - start
+
+        # (a) Well inside the 5s Stop deadline. The shared file measured 31.4s.
+        assert elapsed < 2.0
+        # (b) The turn LANDED. This is the assertion the old test could not
+        # make: on the shared file the lane received zero batches.
+        assert len(brain.lane.batches) == 1
+        # (c) And the hook still reported success.
+        assert exit_code == 0
+
+    def test_the_latch_never_opens_the_watermark_file(
+        self, tmp_path: Path, brain: Brain
+    ) -> None:
+        """The structural half, so a future refactor cannot quietly re-share it.
+
+        A timing assertion is a proxy; this is the property itself. After a full
+        configured Stop the two files both exist and are DIFFERENT, and the
+        watermark carries no ``capture_outage`` table.
+        """
+        transcript = tmp_path / "t.jsonl"
+        write_lines(transcript, [operator_line("u1", "hi", session="sess")])
+        watermark = tmp_path / "wm.sqlite"
+
+        # Fail first (to write a latch row), then succeed (to write a
+        # watermark), so both files are genuinely created by the hook.
+        brain.up = False
+        stop.capture_stop_with(
+            io.StringIO(stop_payload(transcript)),
+            reachable(watermark),
+            notices=io.StringIO(),
+        )
+        brain.up = True
+        stop.capture_stop_with(
+            io.StringIO(stop_payload(transcript)),
+            reachable(watermark),
+            notices=io.StringIO(),
+        )
+
+        latch_file = outage_module.latch_path(watermark)
+        assert latch_file != watermark
+        assert latch_file.exists()
+        assert watermark.exists()
+        assert table_names(watermark) == {"watermark"}
+        assert "capture_outage" in table_names(latch_file)
+
+    def test_an_old_watermark_table_is_left_alone_not_dropped(
+        self, tmp_path: Path, brain: Brain
+    ) -> None:
+        """Migration is a no-op: the dead table stays, unread (no destructive ops).
+
+        Dogfood machines have a ``capture_outage`` table inside their watermark
+        file from the first revision of #542. It must neither break the hook nor
+        be deleted by it -- and its stale state must not be read, so a session
+        recorded degraded there starts fresh as healthy.
+        """
+        transcript = tmp_path / "t.jsonl"
+        write_lines(transcript, [operator_line("u1", "hi", session="sess")])
+        watermark = tmp_path / "wm.sqlite"
+
+        # Stand up the OLD shape: the latch's table inside the watermark file,
+        # holding a degraded row for the session about to run.
+        OutageLatch(watermark)._prepare()  # noqa: SLF001 -- staging the old on-disk shape
+        with contextlib.closing(sqlite3.connect(watermark, autocommit=True)) as old:
+            old.execute(
+                "INSERT INTO capture_outage (session_key, degraded) VALUES ('sess', 1)"
+            )
+
+        notices = io.StringIO()
+        stop.capture_stop_with(
+            io.StringIO(stop_payload(transcript)),
+            reachable(watermark),
+            notices=notices,
+        )
+
+        # The dead table survives untouched -- nothing here deletes operator data.
+        assert "capture_outage" in table_names(watermark)
+        with contextlib.closing(sqlite3.connect(watermark, autocommit=True)) as old:
+            stale = old.execute(
+                "SELECT degraded FROM capture_outage WHERE session_key = 'sess'"
+            ).fetchone()
+        assert stale == (1,)
+        # And it is not READ: a stale "degraded" there would make this healthy
+        # Stop print a false recovery.
+        assert notices.getvalue() == ""
+        assert len(brain.lane.batches) == 1
+
+
+def table_names(database: Path) -> set[str]:
+    """Every user table in ``database``. Reads, never writes."""
+    with contextlib.closing(sqlite3.connect(database, autocommit=True)) as connection:
+        rows = connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    return {row[0] for row in rows if not row[0].startswith("sqlite_")}
 
 
 class TestTheKnownOutageStopsRepeatingItselfInTheLog:

@@ -18,10 +18,33 @@ Architecture:
     The latch has to be on disk because a ``Stop`` hook is a fresh PROCESS every
     turn -- an in-memory flag would forget the outage between two consecutive
     Stops and re-announce it on every single one, which is exactly the
-    per-call nagging the operator forbade. It shares the watermark's database
-    file (a separate table) rather than introducing a second store and a second
-    config knob: same durability, same locking discipline, one file to reason
-    about.
+    per-call nagging the operator forbade.
+
+    IT GETS ITS OWN DATABASE FILE, DERIVED FROM THE WATERMARK'S
+    (:func:`latch_path`). The first version put the ``capture_outage`` table
+    INSIDE the watermark file, for one file and one config knob. That is the
+    defect this module was rewritten to remove: this latch takes ``BEGIN
+    IMMEDIATE`` on whatever file it holds, and the watermark's own reader waits
+    on that same file for ``watermark.LOCK_WAIT_SECONDS`` (30 s). So a second
+    capture process sitting inside the latch's transaction -- routine, since
+    ``Stop`` and ``SubagentStop`` both run this and parallel subagents make two
+    at once -- stalled a HEALTHY hook for 31.4 s, measured and reproduced 4x:
+    past the 5 s ``Stop`` deadline, past the harness's 10 s kill, and the turn
+    delivered ZERO batches. The turn was DROPPED by its own telemetry.
+
+    Bounding the LATCH's wait (:data:`LOCK_WAIT_SECONDS`) was not enough,
+    because it bounds how long the latch WAITS, never how long it HOLDS. Only
+    separate files make the two lanes unable to block each other, and that is
+    what makes "telemetry can never cost a turn" true by construction rather
+    than by timing. The second file needs no second config knob: it is derived
+    from ``watermark_path``, so an operator who moves one moves both.
+
+    MIGRATION IS A NO-OP, ON PURPOSE. Watermark files already carrying a
+    ``capture_outage`` table (PR #542 created one on every dogfood machine) keep
+    it, unread, as a dead table. Nothing deletes it and nothing reads it: the
+    latch simply opens the sibling file instead, and a session whose state lived
+    in the old table starts fresh as healthy -- the safe default, since a first
+    failure then speaks and a first success stays silent.
 
 Pattern/Convention:
     A NOTICE IS A STATE CHANGE, NEVER AN EVENT. ``degraded`` is announced on the
@@ -59,7 +82,8 @@ Example:
     >>> import asyncio, tempfile, pathlib
     >>> async def demo() -> list[str | None]:
     ...     with tempfile.TemporaryDirectory() as directory:
-    ...         latch = OutageLatch(pathlib.Path(directory) / "w.db")
+    ...         watermark = pathlib.Path(directory) / "marks.sqlite"
+    ...         latch = OutageLatch(latch_path(watermark))
     ...         return [
     ...             await latch.note_spooled("s"),   # the outage begins
     ...             await latch.note_spooled("s"),   # still out: silence
@@ -93,12 +117,12 @@ from loguru import logger
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-#: How long a writer waits for another process's lock.
+#: How long a writer waits for another process's lock ON THE LATCH FILE.
 #:
-#: DELIBERATELY NOT the watermark's 30 s, even though this shares its file. The
-#: two have opposite duties: the watermark is DURABILITY -- losing its write
-#: re-delivers a turn -- so it is worth waiting for, while this latch is
-#: TELEMETRY, and the worst case of not writing it is that a line goes unsaid.
+#: DELIBERATELY NOT the watermark's 30 s. The two have opposite duties: the
+#: watermark is DURABILITY -- losing its write re-delivers a turn -- so it is
+#: worth waiting for, while this latch is TELEMETRY, and the worst case of not
+#: writing it is that a line goes unsaid.
 #:
 #: The value is bounded by the CALLER, not chosen for comfort. This runs inside
 #: the ``Stop`` hook, which has a 5 s deadline and is killed by the harness at
@@ -109,7 +133,19 @@ if TYPE_CHECKING:
 #: held lock kept the hook past its deadline
 #: (``tests/test_capture_outage_notice.py``). So the latch waits a fraction of a
 #: second, then gives up and says nothing.
+#:
+#: THIS IS THE SECOND HALF OF THE BOUND, NOT THE WHOLE OF IT. Bounding the wait
+#: is what stops a busy latch file from delaying a hook; it does nothing about
+#: the lock this latch HOLDS, which is why the file is separate from the
+#: watermark's (see the module docstring). Both are needed and neither replaces
+#: the other.
 LOCK_WAIT_SECONDS = 0.25
+
+#: The suffix appended to the watermark path to name the latch's own file.
+#:
+#: ``.outage.sqlite`` rather than a bare rename so the two files sort together
+#: and an operator listing the capture data directory sees the relationship.
+LATCH_SUFFIX = ".outage.sqlite"
 
 #: How long after a REPORTED outage the latch stays quiet about a new one.
 #:
@@ -186,11 +222,17 @@ CREATE TABLE IF NOT EXISTS capture_outage (
 #: Columns added after the table shipped, applied to an existing file on open.
 #:
 #: A migration rather than a rewritten ``_SCHEMA`` because ``CREATE TABLE IF NOT
-#: EXISTS`` is a no-op against the table PR #542 already created on this
-#: machine: a fresh install would get the new columns and every existing one
-#: would keep the two-column table and fail every read. ``ADD COLUMN`` against a
-#: column that already exists raises ``OperationalError``, caught per statement,
-#: so this is idempotent without needing a version table for one migration.
+#: EXISTS`` is a no-op against a table an earlier revision already created: a
+#: fresh install would get the new columns and every existing one would keep the
+#: two-column table and fail every read. ``ADD COLUMN`` against a column that
+#: already exists raises ``OperationalError``, caught per statement, so this is
+#: idempotent without needing a version table for one migration.
+#:
+#: Kept even though the latch moved to its OWN file, where every table is
+#: created fresh: this same code opens files written by any earlier revision of
+#: itself, and the two-column shape is cheap to keep tolerating. The table left
+#: behind inside old WATERMARK files is a different thing -- dead, unread, and
+#: deliberately not dropped (module docstring).
 _MIGRATIONS = (
     "ALTER TABLE capture_outage ADD COLUMN announced_at REAL",
     "ALTER TABLE capture_outage ADD COLUMN failures INTEGER NOT NULL DEFAULT 0",
@@ -305,12 +347,38 @@ def default_spool_path(configured: Path | None = None) -> Path:
     return Path(state_home) / "openbrain-memory" / "claude-spool.jsonl"
 
 
+def latch_path(watermark_path: Path) -> Path:
+    """Where the latch's own database lives, given the watermark's.
+
+    Args:
+        watermark_path: The resolved ``capture.watermark_path`` setting.
+
+    Returns:
+        A sibling of that file, suffixed with :data:`LATCH_SUFFIX` --
+        ``capture-watermarks.sqlite`` becomes
+        ``capture-watermarks.sqlite.outage.sqlite``.
+
+    THE POINT IS THAT IT IS NOT THE WATERMARK'S FILE. The latch takes ``BEGIN
+    IMMEDIATE``; the watermark's reader waits 30 s on the same file, which is
+    six times the ``Stop`` deadline. Sharing the file let telemetry stall -- and
+    therefore DROP -- the turn it was reporting on (module docstring). Derived
+    rather than separately configured so there is still one knob to move.
+
+    Example:
+        >>> from pathlib import Path
+        >>> latch_path(Path("/var/openbrain/marks.sqlite")).name
+        'marks.sqlite.outage.sqlite'
+    """
+    return watermark_path.with_name(watermark_path.name + LATCH_SUFFIX)
+
+
 class OutageLatch:
     """Per-session capture health, remembered across hook processes.
 
     Args:
-        path: The database file, normally the capture watermark's. Its parent
-            directory is created on first use.
+        path: The latch's OWN database file -- :func:`latch_path` of the
+            watermark's, never the watermark's itself. Its parent directory is
+            created on first use.
 
     Both methods return the line to print, or ``None`` for "say nothing" --
     which is the ordinary answer, since most Stops change no state.
@@ -326,7 +394,7 @@ class OutageLatch:
         """Bind the latch to a database file, creating it on first use.
 
         Args:
-            path: The database file, normally the capture watermark's.
+            path: The latch's own database file, from :func:`latch_path`.
             cooldown_seconds: The quiet period after a reported outage. Injected
                 so a test drives the window without waiting out five real
                 minutes.
@@ -386,8 +454,10 @@ class OutageLatch:
 
         A lock this cannot get in :data:`LOCK_WAIT_SECONDS` degrades to silence.
         That is the whole reason the wait is a fraction of a second: another
-        process holding the watermark file must never be able to hold THIS hook
-        past its deadline, because a notice is not worth a turn.
+        hook process holding the LATCH file must never be able to hold THIS hook
+        past its deadline, because a notice is not worth a turn. The lock this
+        one HOLDS is bounded the other way -- by the file being the latch's own,
+        so nothing on the delivery path ever waits behind it.
         """
         try:
             return await asyncio.to_thread(self._set_blocking, session_key, degraded)
