@@ -339,3 +339,65 @@ describe("agent_context_pack and working_set_append", () => {
     }
   });
 });
+
+/**
+ * #535 — the same loud-failure guarantee on the pre-rewrite tree.
+ *
+ * `server/main.ts` is the serving entrypoint, but `src/index.ts` is still
+ * reachable through `bun start`, `deploy/open-brain.service`, and
+ * `scripts/run-two-worker.ts`. A fix that landed only on the rewrite would
+ * leave a live path where `sections` still silently becomes the default pack.
+ *
+ * RED PROOF: revert this tree's registration to `agentContextPackInputSchema`
+ * (the raw shape) and the first test fails — the call succeeds and returns the
+ * working_set-only default, which is the old behavior exactly.
+ */
+describe("#535 unknown request keys fail loudly on the src tree too", () => {
+  it("rejects `sections` by name and names the accepted keys", async () => {
+    const auth: AuthInfo = { role: "admin", clientId: "rico" };
+    const { client, cleanup } = await setupToolClient(auth);
+
+    try {
+      const result = await client.callTool({
+        name: "agent_context_pack",
+        // The near-miss spelling of `requested_sections`.
+        arguments: { ...SCOPE, sections: ["durable_memory", "repo_facts"] },
+      });
+
+      expect(result.isError).toBe(true);
+      const text = (result.content as any)[0].text as string;
+      expect(text).toContain("unrecognized_keys");
+      expect(text).toContain("sections");
+      expect(text).toContain("Accepted keys");
+      expect(text).toContain("requested_sections");
+      // A success-shaped pack is exactly what must NOT come back.
+      expect(text).not.toContain("openbrain.agent_context_pack.v1");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("names requested vs served sections in the receipt", async () => {
+    const auth: AuthInfo = { role: "admin", clientId: "rico" };
+    const { client, cleanup } = await setupToolClient(auth);
+
+    try {
+      // `recovery` needs the explicit opt-in, so requesting it without one is a
+      // request that cannot be served — previously invisible in the payload.
+      const result = await client.callTool({
+        name: "agent_context_pack",
+        arguments: { ...SCOPE, requested_sections: ["working_set", "recovery"] },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const payload = JSON.parse((result.content as any)[0].text);
+      expect(payload.sections_receipt).toMatchObject({
+        requested: ["working_set", "recovery"],
+        requested_not_served: ["recovery"],
+      });
+      expect(payload.sections_receipt.served).not.toContain("recovery");
+    } finally {
+      await cleanup();
+    }
+  });
+});
