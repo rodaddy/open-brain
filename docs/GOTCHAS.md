@@ -90,6 +90,19 @@ Healthy output reaches `open-brain server started` in about one second.
 deleted-but-referenced script produces no error until the next restart, which
 may be days later, and by then the cause looks unrelated to the deletion.
 
+**The "no one notices" half is now closed (#536).** The capture `Stop` hook
+prints one line to stderr the first time a session's write fails --
+`open-brain unreachable - turn held for replay` -- and one more when writes
+start landing again. It is a STATE CHANGE, not an event: a long outage is one
+line, not one per turn, latched on disk (`apps/capture/outage.py`) because each
+Stop is a fresh process. Session survival is unchanged; only the silence went.
+
+So an outage is now visible WITHOUT the checks above. If those checks are ever
+needed again because nothing appeared on screen, the notice path itself is what
+to suspect first -- and note it reports reachability from the CAPTURE hook only.
+A provider `/checkpoint` failing while capture succeeds is a different fault
+and still shows up as the `spool N` count on the gate line, not as this line.
+
 ### `.env` is missing keys that `.env.example` documents
 
 **Symptom:** embeddings silently fail — candidates are written with a NULL

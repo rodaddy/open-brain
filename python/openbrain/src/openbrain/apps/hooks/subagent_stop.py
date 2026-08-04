@@ -28,6 +28,15 @@ Pattern/Convention:
     watermark unadvanced, so the next ``SubagentStop`` re-reads the same turns --
     that is the retry.
 
+    THE OUTAGE NOTICE IS LATCHED UNDER THE PARENT SESSION, not the subagent.
+    An unreachable brain is ONE condition, not one per lane: the delivery here
+    and the parent's ``Stop`` delivery fail together and recover together, so
+    latching each separately would announce the same outage twice and then
+    announce the same recovery twice. The subagent's turns still get their OWN
+    watermark key (that is durability, and it is per transcript); only the
+    "has anyone been told yet" flag is shared. Notice text and surface are
+    ``stop``'s (#536) -- stderr, state-change only.
+
 Example:
     >>> import io
     >>> capture_subagent_stop(io.StringIO("not json"))   # swallowed, no raise
@@ -48,7 +57,12 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from openbrain.apps.hooks.session import SubagentStopHook, run_subagent_stop
-from openbrain.apps.hooks.stop import loaded_observation
+
+# ``announce_outage_state`` is imported rather than reimplemented: both
+# entrypoints must print the same words on the same stream under the same
+# latch, and two copies of that is how they drift into announcing one outage
+# twice with two different wordings.
+from openbrain.apps.hooks.stop import announce_outage_state, loaded_observation
 from openbrain.config import load_capture_settings
 
 if TYPE_CHECKING:
@@ -72,7 +86,10 @@ def capture_subagent_stop(stream: TextIO) -> None:
 
 
 def capture_subagent_stop_with(
-    stream: TextIO, settings: CaptureSettings | None
+    stream: TextIO,
+    settings: CaptureSettings | None,
+    *,
+    notices: TextIO | None = None,
 ) -> None:
     """Deliver one ``SubagentStop`` payload with a given (or loaded) capture config.
 
@@ -81,15 +98,23 @@ def capture_subagent_stop_with(
         settings: The ``capture`` configuration, or ``None`` to load it. Injected
             so a test exercises the swallow with an explicit config -- e.g. an
             unconfigured one -- without reaching ``load_settings``.
+        notices: Where an outage or recovery notice is written. Defaults to
+            ``sys.stderr``; injected for tests, exactly as ``stop`` takes it.
 
     The swallow lives here so BOTH the entrypoint and tests get it: any failure,
     including a missing config or an unreachable lane, is logged and eaten.
     """
+    session_key: str | None = None
+    capture: CaptureSettings | None = None
     try:
         raw = stream.read()
         payload = SubagentStopHook.model_validate_json(raw)
         capture = settings if settings is not None else load_capture_settings()
-        asyncio.run(
+        # The PARENT session id, never ``watermark_key()``. The watermark key is
+        # per subagent because durability is per transcript; the latch is per
+        # session because the outage is.
+        session_key = payload.session_id
+        delivery = asyncio.run(
             run_subagent_stop(
                 payload, capture, observation=loaded_observation()
             )
@@ -102,6 +127,15 @@ def capture_subagent_stop_with(
             "SubagentStop capture failed ({}); turns left for retry",
             type(error).__name__,
         )
+        announce_outage_state(session_key, capture, delivered=False, notices=notices)
+    else:
+        # ``None`` means no subagent transcript or no watermark key, so nothing
+        # was dialed and health is unknown. See ``stop.capture_stop_with`` for
+        # why a no-op must not present as recovery.
+        if delivery is not None:
+            announce_outage_state(
+                session_key, capture, delivered=True, notices=notices
+            )
 
 
 def main(stream: TextIO | None = None) -> int:
