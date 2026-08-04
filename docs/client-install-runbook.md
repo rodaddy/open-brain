@@ -193,10 +193,26 @@ stopping early is how a green-looking dead box happens.
 
 | # | Rung | How | What a failure means |
 |---|---|---|---|
+| 0 | **The env file was edited** | `OPENBRAIN_BASE_URL` is the Mini's LAN address, and `OPENBRAIN_NAMESPACE` is present | The bundle ships the build machine's env verbatim, so an unedited `OPENBRAIN_BASE_URL` is loopback and points the client at itself. A missing `OPENBRAIN_NAMESPACE` fails later as a message about a *request key*, which points at the JSON instead of at this file. `setup-client.sh` now refuses on both. |
 | 1 | **Health** | `curl -sS $OPENBRAIN_BASE_URL/health` → `200` | Service down, wrong URL, or the plain-http opt-in is missing. |
-| 2 | **Recall is `direct`** | `sh …/openbrain-hook-env openbrain-memory recall --query … --limit 1` → `"status": "direct"` | Anything other than `direct` means the direct stack is not the lane answering — suspect a stale MCP registration. |
+| 2 | **Recall is `direct`** | source the env file, then pipe one JSON object (below) to `openbrain-memory` → `"status": "direct"` | Anything other than `direct` means the direct stack is not the lane answering — suspect a stale MCP registration. |
 | 3 | **CANON PACK, non-zero counts** | Start a **fresh** session; the `SessionStart` emissions carry section counts | Counts of zero, or no pack at all, is the matched-pair failure. The hooks ran and swallowed a rejection. |
 | 4 | **The turn is visible in Langfuse** | Find the session's turn in the Langfuse observation sink | The capture spine reached the brain but the observation lane did not. |
+
+Rung 2 in full. **The CLI takes one bounded JSON object on stdin** — with
+`operation` inside it — and it takes no argv flags at all; an argv invocation
+returns `arguments are not supported` without ever reaching the brain. The
+namespace comes from `OPENBRAIN_NAMESPACE` in the environment, which is why the
+env file is sourced first and why it is not a key in the JSON:
+
+```sh
+set -a; . ~/.local/share/openbrain-memory/env/claudex-observation.env; set +a
+printf '%s' '{"operation":"recall","query":"client install proof","scope":{"agent":"setup-client","platform":"claude-code","server_id":"client-install","channel_id":"client-install","session_key":"client-install-proof"}}' \
+  | openbrain-memory
+```
+
+All five scope fields are required. They are reported together in one receipt,
+so a scope that is missing several does not cost one attempt per field.
 
 Rung 3 is the one that catches the silent failure, because rungs 1 and 2 both
 pass on a box whose hooks are dead — they exercise the client library directly

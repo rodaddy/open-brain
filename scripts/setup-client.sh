@@ -193,6 +193,39 @@ case "$BASE_URL" in
     scheme://host:port with no path. A /mcp URL is the retired MCP lane." ;;
 esac
 
+# The bundle ships the BUILD MACHINE's env file verbatim, and on the Mini that
+# file says 127.0.0.1. Copied to a client, a loopback URL points the client at
+# ITSELF -- where nothing is listening -- so every later failure reads as "the
+# brain is down" instead of "this line was never edited." That is not a
+# hypothetical: it is the unedited default of every bundle produced so far.
+#
+# Refuse rather than warn. A warning here is printed above a wall of install
+# output and scrolls away, and the install then "succeeds" into a stack that
+# cannot work.
+case "$BASE_URL" in
+  http://127.0.0.1*|http://localhost*|https://127.0.0.1*|https://localhost*|*'[::1]'*)
+    if [ "${OPENBRAIN_ALLOW_LOOPBACK_CLIENT:-}" = "1" ]; then
+      log "    [warn] loopback base URL allowed by OPENBRAIN_ALLOW_LOOPBACK_CLIENT=1"
+    else
+      die "OPENBRAIN_BASE_URL is $BASE_URL — a LOOPBACK address.
+
+    On a client box that is always the unedited build-machine value: the
+    bundle ships the Mini's env file as-is, and loopback points this box at
+    itself, where no brain is listening.
+
+    Edit the line to the Mini's LAN address, then re-run:
+
+      $TARGET_ENV_DIR/claudex-observation.env
+      OPENBRAIN_BASE_URL=http://10.71.1.21:3100
+
+    Plain http on the LAN also needs OPENBRAIN_ALLOW_INSECURE_HTTP=1 in that
+    same file.
+
+    Running this script ON the Mini itself, where loopback is correct? Set
+    OPENBRAIN_ALLOW_LOOPBACK_CLIENT=1 to skip this check."
+    fi ;;
+esac
+
 health_code="$(curl -sS -m 10 -o /dev/null -w '%{http_code}' "$BASE_URL/health" || echo 000)"
 if [ "$health_code" = "200" ]; then
   log "    [ok] /health -> 200"
@@ -203,10 +236,44 @@ else
   log "           LAN address, is OPENBRAIN_ALLOW_INSECURE_HTTP=1 set?"
 fi
 
+# The CLI reads the namespace from OPENBRAIN_NAMESPACE in the ENVIRONMENT; it
+# is not a request field. Assert the export exists BEFORE recalling, because
+# without it the recall fails deep inside scope validation with a message about
+# a request key -- pointing at the JSON rather than at the missing line in the
+# env file. The first client install spent four round trips on that gap.
+if rg -q '^[[:space:]]*(export[[:space:]]+)?OPENBRAIN_NAMESPACE=' \
+    "$TARGET_ENV_DIR/claudex-observation.env" 2>/dev/null; then
+  log "    [ok] OPENBRAIN_NAMESPACE present in the env file"
+else
+  die "OPENBRAIN_NAMESPACE is missing from
+    $TARGET_ENV_DIR/claudex-observation.env
+
+    The provider CLI takes the namespace from the ENVIRONMENT, never from the
+    request body, so without this line every recall fails with a message about
+    a request key and says nothing about the env file. Add:
+
+      OPENBRAIN_NAMESPACE=rico"
+fi
+
+# The prover is the ONLY end-to-end check that the direct stack works, so it
+# has to call the CLI the way the CLI is actually called: ONE bounded JSON
+# object on stdin, with `operation` inside it and the full five-field scope.
+#
+# It previously ran `openbrain-memory recall --query ... --limit 1`, an argv
+# interface that has never existed. That invocation cannot reach the brain at
+# all -- it returns "arguments are not supported" -- so the prover reported
+# [FAIL] on every install regardless of whether the install was good, which
+# makes it worse than no prover: it is a check whose failure carries no
+# information.
 log "    recall through the installed openbrain-memory:"
-recall_out="$(sh "$TARGET_ENV_DIR/openbrain-hook-env" openbrain-memory recall \
-  --query "open brain client install" --limit 1 2>&1 || true)"
-if printf '%s' "$recall_out" | rg -q '"status"\s*:\s*"direct"' 2>/dev/null; then
+recall_out="$(
+  set -a
+  . "$TARGET_ENV_DIR/claudex-observation.env"
+  set +a
+  printf '%s' '{"operation":"recall","query":"client install proof","scope":{"agent":"setup-client","platform":"claude-code","server_id":"client-install","channel_id":"client-install","session_key":"client-install-proof"}}' \
+    | openbrain-memory 2>&1 || true
+)"
+if printf '%s' "$recall_out" | rg -q '"status"[[:space:]]*:[[:space:]]*"direct"' 2>/dev/null; then
   log "    [ok] recall returned status=direct"
 else
   log "    [FAIL] recall did not return status=direct"
