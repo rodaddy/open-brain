@@ -17,12 +17,15 @@ import pytest
 import openbrain_memory.__main__ as main_module
 import openbrain_memory.runtime as runtime_module
 from openbrain_memory import (
+    EVENT_TYPES,
     FirstClassMemoryRuntime,
     JsonlSpool,
     ReceiptStatus,
     RuntimeConfig,
     RuntimeScope,
+    unsupported_event_type,
 )
+from openbrain_memory._runtime_router import MAX_ERROR_CHARS
 from openbrain_memory._runtime_spool import PARKED_NAMESPACE_KEY, TrackingSpool
 from openbrain_memory.cli import (
     encode_json_output,
@@ -2025,8 +2028,57 @@ def test_module_entry_point_rejects_finding_event_type_loudly() -> None:
     assert output["receipt"]["status"] == "failed"
     assert output["receipt"]["durable"] is False
     # The named error is the other half of the seal: the caller is TOLD why,
-    # rather than handed a success with an empty output.
-    assert output["receipt"]["error"] == "Unsupported event_type: finding"
+    # rather than handed a success with an empty output. It names the rejected
+    # value AND the accepted set -- see
+    # test_rejected_event_type_receipt_names_the_accepted_vocabulary for why
+    # the second half is not decoration.
+    assert output["receipt"]["error"] == unsupported_event_type("finding")
     # No network was attempted -- the vocabulary refusal is client-side, before
     # any send, so this seal needs no live server and cannot flake on one.
     assert output["receipt"]["direct_attempted"] is False
+
+
+def test_rejected_event_type_receipt_names_the_accepted_vocabulary() -> None:
+    """The failure receipt lists every accepted type, not just the bad one.
+
+    The #431 defect had two halves and only the first was sealed. Half one:
+    an unaccepted `event_type` wrote no row and returned no receipt, so the
+    caller could not tell failure from success. That is fixed -- the receipt
+    above proves a FAILED, non-durable receipt and a non-zero exit.
+
+    Half two is what this test seals. The rejection said
+    `Unsupported event_type: finding` and stopped there, which tells an agent
+    that `finding` is wrong and NOT what to send instead. Agents reach for
+    `finding`, `note`, and `blocker` (issue #431) precisely because they do not
+    know the vocabulary; answering them with a bare negative leaves them
+    guessing at a closed nine-member set, and a second guess fails identically.
+    `_dispatch` has always answered an unknown OPERATION with
+    `valid operations: ...`; an unknown event type is the same class of caller
+    error and gets the same shape of answer.
+
+    Asserted against `EVENT_TYPES` itself rather than a literal list, so
+    widening the vocabulary cannot leave this message stale -- the one-
+    definition rule in `test_event_vocabulary.py` is what makes that authority
+    trustworthy.
+    """
+    receipt = runtime_module._failed_write(
+        "capture",
+        ValueError(unsupported_event_type("finding")),
+    ).receipt.as_dict()
+
+    assert receipt["status"] == "failed"
+    assert receipt["durable"] is False
+    # The rejected value is named -- the caller learns WHICH input was refused.
+    assert "finding" in receipt["error"]
+    # ...and so is every accepted alternative, so the caller can be right next
+    # time without reading the source. This is the assertion that fails on the
+    # bare `Unsupported event_type: finding` message.
+    for accepted in EVENT_TYPES:
+        assert accepted in receipt["error"], (
+            f"accepted event type {accepted!r} missing from the rejection "
+            f"reason: {receipt['error']!r}"
+        )
+    # The whole set survives into the receipt the caller actually reads: the
+    # error text is passed through the same redaction every receipt error is,
+    # and MAX_ERROR_CHARS is 500 against ~105 characters of vocabulary.
+    assert len(receipt["error"]) < MAX_ERROR_CHARS

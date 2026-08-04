@@ -77,6 +77,7 @@ from .agent import (
     MemoryItem,
     MemoryPolicy,
     MemorySpool,
+    unsupported_event_type,
 )
 from .client import (
     COMPATIBLE_CONTRACT_VERSIONS,
@@ -212,6 +213,7 @@ __all__ = [
     "replay_records",
     "tool_contract_to_input_schema",
     "tool_contracts_to_tool_schemas",
+    "unsupported_event_type",
     "validate_contract_manifest",
     "validate_required_memory_contract",
 ]

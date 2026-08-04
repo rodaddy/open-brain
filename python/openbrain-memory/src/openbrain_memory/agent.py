@@ -62,6 +62,35 @@ EVENT_TYPES = {
     "correction",
     "handoff",
 }
+
+
+def unsupported_event_type(value: str) -> str:
+    """Return the rejection reason for an event type outside `EVENT_TYPES`.
+
+    Names the rejected value AND the accepted set, because a rejection that
+    only says what was wrong leaves the caller no way to be right. This is the
+    #431 failure with the volume turned up rather than off: the original defect
+    wrote no row and returned no receipt at all, and the first fix made the
+    refusal loud but still answered `Unsupported event_type: finding` -- true,
+    and useless to an agent that reached for `finding` because it did not know
+    the nine words it was allowed to use. `_dispatch` already answers an
+    unknown OPERATION with `valid operations: ...`; an unknown event type is
+    the same class of caller error and now gets the same shape of answer.
+
+    Sorted so the text is stable across runs -- `EVENT_TYPES` is a `set`, whose
+    iteration order is not guaranteed, and an error string that reorders itself
+    between processes cannot be asserted on or diffed in a log.
+
+    The accepted set arrives whole in the receipt: the added suffix is ~105
+    characters and the existing `MAX_ERROR_CHARS` receipt allowance is 500, so
+    every one of the nine names is present in what the caller reads.
+    """
+    return (
+        f"Unsupported event_type: {value}; "
+        f"accepted event types: {', '.join(sorted(EVENT_TYPES))}"
+    )
+
+
 IMPORTANCE_LEVELS = {"hot", "warm", "cold"}
 CANDIDATE_TYPES = {
     "user_preference",
@@ -543,7 +572,7 @@ class AgentMemory:
         self._require_session("append_event")
         event_type = str(metadata.pop("event_type", "fact"))
         if event_type not in EVENT_TYPES:
-            raise ValueError(f"Unsupported event_type: {event_type}")
+            raise ValueError(unsupported_event_type(event_type))
         artifact_path = metadata.pop("artifact_path", None)
         importance = metadata.pop("importance", None)
         self._reject_reserved_metadata(metadata)
@@ -584,7 +613,7 @@ class AgentMemory:
         """Append an event with server-validated exact-scope coordinates."""
         self._require_session("append_scoped_event")
         if event_type not in EVENT_TYPES:
-            raise ValueError(f"Unsupported event_type: {event_type}")
+            raise ValueError(unsupported_event_type(event_type))
         key = idempotency_key()
         payload: dict[str, Any] = {
             "session_key": self.conversation_key,
