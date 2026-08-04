@@ -38,6 +38,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 from openbrain_memory.client import OpenBrainClient
+from pydantic import ValidationError
 
 from openbrain.config import (
     CanonSettings,
@@ -139,6 +140,62 @@ def test_the_opt_in_is_off_when_the_variable_is_absent() -> None:
     without = {k: v for k, v in LAN_ENV.items() if "INSECURE" not in k}
     assert load_capture_settings(without).allow_insecure_http is False
     assert load_canon_settings(without).allow_insecure_http is False
+
+
+@pytest.mark.parametrize(
+    "loader",
+    [load_capture_settings, load_canon_settings],
+    ids=["capture", "canon"],
+)
+@pytest.mark.parametrize("blank", ["", "   "], ids=["empty", "whitespace"])
+def test_an_empty_opt_in_loads_with_the_opt_in_off(loader: Any, blank: str) -> None:
+    """An EMPTY opt-in is unset, not malformed -- the shape the wrapper sends.
+
+    This is the assertion that fails on the pre-fix branch head, with
+    ``ValidationError ... bool_parsing, input_value=''``. It is not a
+    hypothetical: the deployed ``openbrain-hook-env`` passes
+    ``OPENBRAIN_ALLOW_INSECURE_HTTP="${OPENBRAIN_ALLOW_INSECURE_HTTP:-}"``, so
+    every host whose env file omits the variable hands the hook an empty
+    string. The entrypoints swallow the raise, so the visible symptom is a
+    clean exit 0 with no rows -- #525's own defect class, re-armed by the fix
+    for it.
+
+    Loading must SUCCEED with the opt-in OFF. A raise is the bug; silently
+    reading it as ON would be worse, so the value is asserted too.
+
+    Only the loaders reproduce this. A bare ``CaptureSettings()`` reads no
+    environment, so it looked healthy while both hook paths raised.
+    """
+    settings = loader({**LAN_ENV, "OPENBRAIN_ALLOW_INSECURE_HTTP": blank})
+
+    assert settings.allow_insecure_http is False
+
+
+@pytest.mark.parametrize(
+    "loader",
+    [load_capture_settings, load_canon_settings],
+    ids=["capture", "canon"],
+)
+@pytest.mark.parametrize("enabling", ["1", "true"], ids=["one", "true"])
+def test_a_real_opt_in_value_still_enables(loader: Any, enabling: str) -> None:
+    """Empty-means-unset does not blunt the values that mean yes.
+
+    The narrow reading is the point: only a blank string becomes the default.
+    """
+    enabled = loader({**LAN_ENV, "OPENBRAIN_ALLOW_INSECURE_HTTP": enabling})
+
+    assert enabled.allow_insecure_http is True
+
+
+def test_a_garbage_opt_in_value_is_still_rejected() -> None:
+    """Blank is unset; nonsense is still an error.
+
+    Treating ``""`` as absent must not slide into "treat anything unparseable
+    as off", which would let a typo'd VALUE (as opposed to a typo'd NAME) load
+    clean as an unset opt-in and decline the LAN endpoint silently.
+    """
+    with pytest.raises(ValidationError):
+        load_capture_settings({**LAN_ENV, "OPENBRAIN_ALLOW_INSECURE_HTTP": "maybe"})
 
 
 def test_a_misspelled_opt_in_is_still_rejected() -> None:

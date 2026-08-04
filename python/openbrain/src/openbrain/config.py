@@ -145,6 +145,43 @@ PositiveMs = Annotated[int, Field(gt=0)]
 ALLOW_INSECURE_HTTP_ALIASES = AliasChoices("OPENBRAIN_ALLOW_INSECURE_HTTP")
 
 
+def _empty_opt_in_means_unset(value: object) -> object:
+    """Treat an empty ``OPENBRAIN_ALLOW_INSECURE_HTTP`` as absent, not malformed.
+
+    Args:
+        value: Whatever the environment layer resolved for the field. Only a
+            string can be empty; a real ``bool`` passed in code goes through
+            untouched.
+
+    Returns:
+        ``False`` for an empty or whitespace-only string, the input unchanged
+        otherwise -- so ``"1"``/``"true"`` still enable, ``"false"`` still
+        disables, and genuine garbage like ``"maybe"`` still raises.
+
+    WHY THIS EXISTS (measured 2026-08-04, against the installed wrapper). The
+    deployed ``openbrain-hook-env`` passes the child
+    ``OPENBRAIN_ALLOW_INSECURE_HTTP="${OPENBRAIN_ALLOW_INSECURE_HTTP:-}"``, so a
+    machine whose env file does not set the variable hands the hook an EMPTY
+    STRING rather than nothing at all. Pydantic's bool parser rejects ``""``
+    with a ``ValidationError``, the hook entrypoints swallow it (fail-open
+    observer contract), and the result is a SILENT ZERO CAPTURE / ZERO
+    INJECTION with a clean exit 0 -- #525's exact defect class, re-armed on
+    every host that never opted in. ``load_capture_settings`` and
+    ``load_canon_settings`` both raised; only the direct constructor, which
+    reads no environment, appeared healthy.
+
+    Empty-means-unset is this repo's established reading of an environment
+    variable, not a new leniency: ``apps.capture.outage.default_spool_path``
+    and ``receipts.state.default_receipt_state_path`` both fall back on an
+    empty value rather than resolving it. The typo check
+    (:func:`unknown_prefixed_variables`) is untouched, so a MISSPELLED opt-in
+    still raises -- silence is only ever granted to the name we declared.
+    """
+    if isinstance(value, str) and not value.strip():
+        return False
+    return value
+
+
 class ConfigurationError(ValueError):
     """A setting is missing, malformed, or inert, and the process cannot start.
 
@@ -465,6 +502,10 @@ class CaptureSettings(_Base):
         validation_alias=ALLOW_INSECURE_HTTP_ALIASES,
     )
 
+    _empty_opt_in = field_validator("allow_insecure_http", mode="before")(
+        _empty_opt_in_means_unset
+    )
+
 
 class ObservationSettings(_Base):
     """Where the capture hooks ship observation traces, and the keys they use.
@@ -634,6 +675,10 @@ class CanonSettings(_Base):
     allow_insecure_http: bool = Field(
         default=False,
         validation_alias=ALLOW_INSECURE_HTTP_ALIASES,
+    )
+
+    _empty_opt_in = field_validator("allow_insecure_http", mode="before")(
+        _empty_opt_in_means_unset
     )
 
     @field_validator("sections", mode="before")

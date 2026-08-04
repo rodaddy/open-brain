@@ -442,6 +442,34 @@ Both halves are required. Declaring the field without the wrapper pass-through
 leaves the hook process never seeing the variable; passing it through without the
 declaration is the rejection above.
 
+**An EMPTY value means unset, and both halves enforce that (PR #544).** The
+wrapper's pass-through style is `VAR="${VAR:-}"`, which cannot express "absent" —
+it turns an unset variable into an **empty string** in the child. For a string
+setting that is harmless; for this `bool` it was not. Measured 2026-08-04 against
+the installed binary: with the variable omitted from `claudex-observation.env`,
+the child received `OPENBRAIN_ALLOW_INSECURE_HTTP=""`, pydantic's bool parser
+rejected it (`Input should be a valid boolean … input_value=''`), **both**
+`load_capture_settings` and `load_canon_settings` raised, the entrypoints
+swallowed the raise, and the hook exited 0 having captured and injected nothing —
+the #525 defect class, re-armed by the fix for #525 on every host that never
+opted in. Only the loaders reproduce it; a bare `CaptureSettings()` reads no
+environment and looked healthy throughout.
+
+Fixed at the owning boundary — a `mode="before"` validator on the field in both
+declaring sections maps a blank string to the default `False`. This is the same
+empty-means-unset reading `OPENBRAIN_SPOOL_PATH`
+(`apps.capture.outage.default_spool_path`) and `XDG_STATE_HOME`
+(`receipts.state.default_receipt_state_path`) already use. It is narrow on
+purpose: `1`/`true` still enable, `false` still disables, a garbage **value**
+like `maybe` still raises, and a misspelled **name** is still caught by
+`unknown_prefixed_variables`.
+
+The wrapper carries the second layer: it passes the variable only when non-empty,
+prepending `NAME=VALUE` to the positional list rather than listing it in `env -i`.
+That is what protects an **older installed package** that predates the validator.
+Any future non-string pass-through belongs in that conditional block, not the
+`env -i` list, for the same reason.
+
 ### Sibling-package variables that must still be declared
 
 | variable | default | notes |
