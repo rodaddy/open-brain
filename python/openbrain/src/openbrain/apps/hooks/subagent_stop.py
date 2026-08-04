@@ -54,15 +54,18 @@ import asyncio
 import sys
 from typing import TYPE_CHECKING
 
-from loguru import logger
-
 from openbrain.apps.hooks.session import SubagentStopHook, run_subagent_stop
 
 # ``announce_outage_state`` is imported rather than reimplemented: both
 # entrypoints must print the same words on the same stream under the same
 # latch, and two copies of that is how they drift into announcing one outage
 # twice with two different wordings.
-from openbrain.apps.hooks.stop import announce_outage_state, loaded_observation
+from openbrain.apps.hooks.stop import (
+    announce_outage_state,
+    loaded_observation,
+    log_capture_failure,
+    was_already_degraded,
+)
 from openbrain.config import load_capture_settings
 
 if TYPE_CHECKING:
@@ -120,12 +123,17 @@ def capture_subagent_stop_with(
             )
         )
     except Exception as error:  # noqa: BLE001 -- an observer must never break its subject
+        # Latched state read BEFORE the update, so a known outage demotes this
+        # line to debug instead of printing it on every Stop. Shared with
+        # ``stop`` for the same reason ``announce_outage_state`` is.
+        already_degraded = was_already_degraded(session_key, capture)
         # Content-free BY CONSTRUCTION: only the exception class name is passed,
         # never the exception object, so no transcript text or token reaches the
         # sink even under loguru's diagnose (see ``stop.capture_stop_with``).
-        logger.warning(
+        log_capture_failure(
             "SubagentStop capture failed ({}); turns left for retry",
             type(error).__name__,
+            already_degraded=already_degraded,
         )
         announce_outage_state(session_key, capture, delivered=False, notices=notices)
     else:

@@ -32,11 +32,20 @@ Pattern/Convention:
     chain and DOES own a stdout banner; this hook does not, and adding one here
     would put two writers on one channel.
 
-    THE NOTICE IS A STATE CHANGE, NOT AN EVENT. One line when an outage begins,
-    one when it ends, and nothing on the Stops in between -- the operator
-    explicitly forbade per-call nagging. The latch that makes that true across
-    hook PROCESSES is ``apps.capture.outage.OutageLatch``; failing to write it
-    degrades to silence, never to a nag on every turn.
+    THE NOTICE IS A STATE CHANGE, NOT AN EVENT, AND IT IS RATE-BOUND. One line
+    when an outage begins, one when it ends, and nothing on the Stops in between
+    -- the operator explicitly forbade per-call nagging. The latch that makes
+    that true across hook PROCESSES is ``apps.capture.outage.OutageLatch``, and
+    its cooldown is what makes it true for a FLAPPING service, which changes
+    state every turn and so defeats a state-change rule on its own. Failing to
+    write the latch degrades to silence, never to a nag on every turn.
+
+    AND THE LOG LINE IS DEMOTED TO MATCH. The latched notice would be pointless
+    if the pre-existing per-Stop ``warning`` kept writing to the same stderr on
+    every failed turn, so inside a known outage that line drops to ``debug``
+    (:func:`log_capture_failure`). Demoted, never deleted: it still reaches a
+    configured file/JSON sink, and the FIRST failure of an outage is still a
+    ``warning``.
 
     NO retry, queue, or timeout lives here. A failed send leaves the watermark
     unadvanced, and the next ``Stop`` re-reads the same turns -- that is the
@@ -128,6 +137,9 @@ def capture_stop_with(
             run_stop(payload, capture, observation=loaded_observation())
         )
     except Exception as error:  # noqa: BLE001 -- an observer must never break its subject
+        # Latched FIRST, because the latch is what decides how loud this failure
+        # should be -- see `log_capture_failure`.
+        already_degraded = was_already_degraded(session_key, capture)
         # Content-free BY CONSTRUCTION, not by handler config. The exception can
         # hold transcript text or a token -- a pydantic ValidationError carries
         # its `input_value`, which for a malformed Stop payload IS the hook's raw
@@ -135,8 +147,10 @@ def capture_stop_with(
         # diagnose, whose DEFAULT is on for the stderr handler a hook logs to.
         # So only the class name is passed, and no exception object reaches the
         # sink: there are no locals to render, whatever any handler is set to.
-        logger.warning(
-            "Stop capture failed ({}); turn left for retry", type(error).__name__
+        log_capture_failure(
+            "Stop capture failed ({}); turn left for retry",
+            type(error).__name__,
+            already_degraded=already_degraded,
         )
         announce_outage_state(session_key, capture, delivered=False, notices=notices)
     else:
@@ -150,6 +164,56 @@ def capture_stop_with(
             announce_outage_state(
                 session_key, capture, delivered=True, notices=notices
             )
+
+
+def was_already_degraded(
+    session_key: str | None, settings: CaptureSettings | None
+) -> bool:
+    """Whether this session's PREVIOUS Stop had already failed.
+
+    Read before the latch is updated, so it answers "was the operator already
+    told", not "is it failing now" -- which is the question
+    :func:`log_capture_failure` needs.
+
+    Answers ``False`` on anything unknown or unreadable: an unreadable latch
+    must produce the LOUD line, because the alternative is silently demoting the
+    first report of a genuine outage.
+    """
+    if session_key is None or settings is None:
+        return False
+    try:
+        return asyncio.run(OutageLatch(settings.watermark_path).is_degraded(session_key))
+    except Exception:  # noqa: BLE001 -- a log level is never worth breaking a turn
+        return False
+
+
+def log_capture_failure(
+    template: str, error_name: str, *, already_degraded: bool
+) -> None:
+    """Log a failed capture, loudly the first time and quietly thereafter.
+
+    Args:
+        template: The message, with one ``{}`` for the exception class name.
+        error_name: The exception class name. Never the exception itself -- see
+            the content-free note at the call site.
+        already_degraded: Whether the previous Stop had already failed.
+
+    THE INFORMATION IS NOT DELETED, ONLY DEMOTED. Inside a known outage this
+    drops from ``warning`` to ``debug``, so it keeps flowing to a configured
+    file/JSON sink (``utils.logging_config``) while leaving the operator's
+    stderr to the ONE latched notice. Without this the new notice is latched and
+    the old warning is not, so a long outage still printed a line to the same
+    stderr on every single Stop -- the per-Stop noise #536 exists to remove,
+    surviving in the lane next to the fix.
+
+    The FIRST failure of an outage stays at ``warning``: that one is the report,
+    it is the same line an operator has always seen, and it is what a log
+    scraper keyed on the level would still match.
+    """
+    if already_degraded:
+        logger.debug(template, error_name)
+        return
+    logger.warning(template, error_name)
 
 
 def announce_outage_state(
@@ -190,7 +254,9 @@ def announce_outage_state(
             return
         # Only read the spool once there is genuinely a line to print, so the
         # ordinary healthy Stop never pays the stat/read at all.
-        line = spool_notice(notice, spool_pending(default_spool_path()))
+        line = spool_notice(
+            notice, spool_pending(default_spool_path(settings.spool_path))
+        )
         target = sys.stderr if notices is None else notices
         target.write(f"{line}\n")
         target.flush()

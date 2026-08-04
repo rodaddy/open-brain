@@ -398,6 +398,23 @@ pass-throughs only at or after the moment the installed package includes
 `unknown_prefixed_variables` reject the whole environment, which the hooks
 swallow into a silent zero capture.
 
+### Sibling-package variables that must still be declared
+
+| variable | default | notes |
+|---|---|---|
+| `OPENBRAIN_SPOOL_PATH` | `$XDG_STATE_HOME/openbrain-memory/claude-spool.jsonl` | the `openbrain_memory` provider's durability spool. OWNED by that package (`runtime.py`); declared as `CaptureSettings.spool_path` so setting it is legal here, and read by the outage notice to report spool depth |
+
+**This is the same trap as the `OPENBRAIN_OBSERVATION_*` note above, and it has
+now been hit twice.** Any `OPENBRAIN_`-prefixed variable a SIBLING package owns
+still shares the hook's environment, and `unknown_prefixed_variables` rejects the
+whole environment over one name it does not recognise — which the hooks swallow
+into a silent zero capture. Measured 2026-08-03: with `OPENBRAIN_SPOOL_PATH`
+set, `load_capture_settings` raised `UnknownEnvironmentVariableError`, so an
+operator relocating the provider's spool silently killed all capture. Declaring
+the field is the fix, and the rule it generalises to is that a variable the hook
+environment can carry must be declared here even when nothing in THIS package
+reads it.
+
 ### Live canary flags
 
 `OPENBRAIN_LIVE_CANARY`, `OPENBRAIN_LIVE_CANARY_WRITE`,

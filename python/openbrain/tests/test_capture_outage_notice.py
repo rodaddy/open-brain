@@ -26,12 +26,17 @@ one notice path, and neither file grows a second copy of the other's harness.
 
 from __future__ import annotations
 
+import contextlib
 import io
 import json
+import sqlite3
+import time
 from typing import TYPE_CHECKING
 
 import pytest
+from loguru import logger
 
+import openbrain.apps.capture.outage as outage_module
 from conftest import (
     LaneUnreachableError,
     RecordingLane,
@@ -48,10 +53,72 @@ from openbrain.apps.capture.outage import (
 )
 from openbrain.apps.capture.watermark import WatermarkStore
 from openbrain.apps.hooks import stop, subagent_stop
-from openbrain.config import CaptureSettings
+from openbrain.config import (
+    CaptureSettings,
+    load_capture_settings,
+    unknown_prefixed_variables,
+)
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
     from pathlib import Path
+
+
+class FakeClock:
+    """A clock a test moves by hand.
+
+    The cooldown is 5 real minutes; sleeping through it would make these tests
+    slow AND flaky, and would assert a wall-clock coincidence rather than the
+    window. Callable so it drops straight into ``OutageLatch(now=...)``.
+    """
+
+    def __init__(self, start: float = 1_000_000.0) -> None:
+        """Start at an arbitrary epoch-like value."""
+        self._now = start
+
+    def __call__(self) -> float:
+        """Read the current time."""
+        return self._now
+
+    def advance(self, seconds: float) -> None:
+        """Move the clock forward."""
+        self._now += seconds
+
+
+#: The message this module's demotion tests are about.
+#:
+#: Matched on so the assertions cannot be answered by an UNRELATED line. The
+#: hook also logs "observation settings unreadable" at WARNING whenever the test
+#: environment carries a prefixed variable the model does not declare, and a
+#: bare "was there a WARNING" check reads that as the capture line and passes
+#: (or fails) for the wrong reason -- observed while writing these.
+CAPTURE_FAILURE_MESSAGE = "Stop capture failed"
+
+
+@contextlib.contextmanager
+def record_log_levels(contains: str) -> Iterator[list[str]]:
+    """Collect the loguru LEVELS of matching messages emitted inside the block.
+
+    Args:
+        contains: Substring identifying the line under test.
+
+    Levels, not messages: the question these tests ask is how LOUD a line was,
+    which is the whole subject of the demotion. A ``DEBUG``-level sink is added
+    so the demoted line is still observable -- proving it was demoted rather
+    than deleted.
+    """
+    seen: list[str] = []
+
+    def record(message: object) -> None:
+        record_ = message.record  # type: ignore[attr-defined]
+        if contains in record_["message"]:
+            seen.append(record_["level"].name)
+
+    sink_id = logger.add(record, level="DEBUG")
+    try:
+        yield seen
+    finally:
+        logger.remove(sink_id)
 
 
 def unconfigured(watermark: Path) -> CaptureSettings:
@@ -414,6 +481,325 @@ class TestTheNoticeNeverBreaksTheTurn:
         assert stop.main(io.StringIO(stop_payload(transcript))) == 0
 
 
+class TestAFlappingServiceCannotNag:
+    """The state-change rule is not enough on its own (#536, fix round 2).
+
+    A LONG outage is one line because the state only changes once. A FLAPPING
+    service changes state on EVERY Stop, so the latch alone announced on every
+    Stop -- measured 6 notices across 6 alternating Stops before the cooldown
+    existed, which is exactly the nagging the operator forbade: "if you do that
+    every time, you're going to spend most of your time saying hey this isn't
+    working". Flapping is the ORDINARY failure here, not an exotic one: the
+    capture request timeout is 0.7s with a single attempt, so one slow response
+    is a complete outage-and-recovery pair.
+
+    The clock is injected rather than slept, so these run in microseconds and
+    assert the WINDOW rather than a wall-clock coincidence.
+    """
+
+    async def test_six_alternating_stops_do_not_produce_six_notices(
+        self, tmp_path: Path
+    ) -> None:
+        """The measured defect, pinned as a count.
+
+        Six alternating Stops inside one cooldown window. Before the fix this
+        emitted 6 lines; the contract is that a flap costs ONE reported pair.
+        """
+        clock = FakeClock()
+        latch = OutageLatch(
+            tmp_path / "w.db", cooldown_seconds=300.0, now=clock
+        )
+
+        spoken: list[str] = []
+        for index in range(6):
+            # Each Stop is one second after the last: a service flapping far
+            # faster than the cooldown.
+            clock.advance(1.0)
+            notice = await (
+                latch.note_spooled("s")
+                if index % 2 == 0
+                else latch.note_delivered("s")
+            )
+            if notice is not None:
+                spoken.append(notice)
+
+        assert len(spoken) == 2
+        assert spoken[0] == DEGRADED_NOTICE
+        assert spoken[1].startswith(RECOVERED_NOTICE)
+
+    async def test_the_quiet_period_is_bounded_not_permanent(
+        self, tmp_path: Path
+    ) -> None:
+        """A cooldown that never expired would be a mute button, not a bound.
+
+        A genuinely NEW outage, after the window has passed, must still be
+        announced -- otherwise the second real outage of a session is silent.
+        """
+        clock = FakeClock()
+        latch = OutageLatch(
+            tmp_path / "w.db", cooldown_seconds=300.0, now=clock
+        )
+
+        assert await latch.note_spooled("s") == DEGRADED_NOTICE
+        assert await latch.note_delivered("s") == RECOVERED_NOTICE
+
+        clock.advance(301.0)
+
+        assert await latch.note_spooled("s") == DEGRADED_NOTICE
+
+    async def test_a_suppressed_window_stays_silent_on_both_ends(
+        self, tmp_path: Path
+    ) -> None:
+        """The unit of output is the PAIR.
+
+        A recovery whose outage was never printed reads as a recovery from
+        nothing, so a window ridden out under the cooldown is silent at both
+        ends. Mirrors the server-side tracker's ``suppressed`` flag (#534).
+        """
+        clock = FakeClock()
+        latch = OutageLatch(
+            tmp_path / "w.db", cooldown_seconds=300.0, now=clock
+        )
+
+        assert await latch.note_spooled("s") == DEGRADED_NOTICE
+        assert await latch.note_delivered("s") == RECOVERED_NOTICE
+
+        clock.advance(10.0)
+
+        assert await latch.note_spooled("s") is None
+        assert await latch.note_delivered("s") is None
+
+    async def test_the_quiet_period_survives_a_fresh_process(
+        self, tmp_path: Path
+    ) -> None:
+        """A Stop hook is a NEW PROCESS every turn.
+
+        An in-memory cooldown would forget the last announcement between two
+        consecutive Stops and re-announce on every one -- the same defect the
+        latch itself exists to avoid, reintroduced one layer up. A second
+        ``OutageLatch`` over the same file stands in for the next process.
+        """
+        clock = FakeClock()
+        database = tmp_path / "w.db"
+
+        first = OutageLatch(database, cooldown_seconds=300.0, now=clock)
+        assert await first.note_spooled("s") == DEGRADED_NOTICE
+        assert await first.note_delivered("s") == RECOVERED_NOTICE
+
+        clock.advance(10.0)
+
+        second = OutageLatch(database, cooldown_seconds=300.0, now=clock)
+        assert await second.note_spooled("s") is None
+
+    async def test_a_flap_faster_than_the_cooldown_still_reports_once_per_window(
+        self, tmp_path: Path
+    ) -> None:
+        """A suppressed window must not EXTEND the quiet period.
+
+        If every suppressed flap pushed the timestamp forward, a service
+        flapping faster than the cooldown would stay silent forever instead of
+        reporting once per window -- silence indistinguishable from health,
+        which is the failure #536 was raised about in the first place.
+        """
+        clock = FakeClock()
+        latch = OutageLatch(
+            tmp_path / "w.db", cooldown_seconds=300.0, now=clock
+        )
+
+        spoken: list[str] = []
+        # 40 minutes of a service flapping every 30 seconds.
+        for _ in range(80):
+            clock.advance(30.0)
+            for notice in (
+                await latch.note_spooled("s"),
+                await latch.note_delivered("s"),
+            ):
+                if notice is not None:
+                    spoken.append(notice)
+
+        degraded = [line for line in spoken if line == DEGRADED_NOTICE]
+        # 2400s of flapping over a 300s cooldown: reported periodically, not
+        # once and never again, and nowhere near the 80 a per-call nag gives.
+        assert 4 <= len(degraded) <= 9
+
+
+class TestTheRecoveryLineCarriesWhatTheWindowCost:
+    """A single blip and a long outage must not read identically."""
+
+    async def test_the_failed_turns_are_counted(self, tmp_path: Path) -> None:
+        latch = OutageLatch(tmp_path / "w.db")
+
+        for _ in range(5):
+            await latch.note_spooled("s")
+
+        assert await latch.note_delivered("s") == f"{RECOVERED_NOTICE} (5 turns held)"
+
+    async def test_the_count_does_not_leak_into_the_next_window(
+        self, tmp_path: Path
+    ) -> None:
+        """Each window reports its OWN failures, not the session's running total."""
+        clock = FakeClock()
+        latch = OutageLatch(
+            tmp_path / "w.db", cooldown_seconds=1.0, now=clock
+        )
+
+        for _ in range(4):
+            await latch.note_spooled("s")
+        assert await latch.note_delivered("s") == f"{RECOVERED_NOTICE} (4 turns held)"
+
+        clock.advance(10.0)
+
+        await latch.note_spooled("s")
+        await latch.note_spooled("s")
+
+        assert await latch.note_delivered("s") == f"{RECOVERED_NOTICE} (2 turns held)"
+
+
+class TestALockedLatchNeverStallsTheHook:
+    """The latch is best-effort telemetry; it may never hold a hook past its deadline.
+
+    ``Stop`` has a 5s deadline and the harness kills the hook at 10s. The latch
+    shares the WATERMARK's database file, so contention is not hypothetical --
+    another capture process writing its watermark holds that lock. A 30s lock
+    wait therefore could not be paid at all: it would stall the hook until the
+    harness killed it, taking the turn's capture with it. The notice degrades to
+    silence instead.
+    """
+
+    def test_a_held_lock_does_not_push_the_hook_past_its_deadline(
+        self, tmp_path: Path
+    ) -> None:
+        transcript = tmp_path / "t.jsonl"
+        write_lines(transcript, [operator_line("u1", "hi", session="sess")])
+        watermark = tmp_path / "wm.sqlite"
+
+        # Create the table, then hold a write lock on the file from another
+        # connection -- exactly what a concurrent capture process does.
+        OutageLatch(watermark)._prepare()  # noqa: SLF001 -- setting up the contention
+        blocker = sqlite3.connect(watermark, timeout=1.0, autocommit=True)
+        try:
+            blocker.execute("BEGIN IMMEDIATE")
+            blocker.execute(
+                "INSERT INTO capture_outage (session_key, degraded) VALUES ('x', 1)"
+            )
+
+            start = time.monotonic()
+            stop.capture_stop_with(
+                io.StringIO(stop_payload(transcript)),
+                unconfigured(watermark),
+                notices=io.StringIO(),
+            )
+            elapsed = time.monotonic() - start
+        finally:
+            blocker.execute("ROLLBACK")
+            blocker.close()
+
+        # Well under the 5s Stop deadline. On the 30s lock wait this measured
+        # over 30s and the harness would have killed the hook.
+        assert elapsed < 2.0
+
+    def test_the_lock_wait_is_under_the_stop_deadline(self) -> None:
+        """The constant itself, so the reason survives a future edit.
+
+        A latch write is telemetry. The watermark's own 30s wait is DURABILITY
+        and is correct there; copying it here is what made the hook stallable.
+        """
+        assert outage_module.LOCK_WAIT_SECONDS < 1.0
+
+
+class TestTheKnownOutageStopsRepeatingItselfInTheLog:
+    """The latched notice is pointless if the old warning still nags (#536).
+
+    ``stop`` already logged a ``warning`` on every failed Stop, to the SAME
+    stderr the notice goes to. Latching only the notice left the per-Stop noise
+    in place one line down. Inside a KNOWN outage that line drops to ``debug``
+    -- demoted, never deleted, so a configured file/JSON sink still receives it.
+    """
+
+    def test_the_first_failure_is_still_a_warning(self, tmp_path: Path) -> None:
+        """The first report stays loud: it IS the report."""
+        levels = record_log_levels(CAPTURE_FAILURE_MESSAGE)
+        transcript = tmp_path / "t.jsonl"
+        write_lines(transcript, [operator_line("u1", "hi", session="sess")])
+
+        with levels as seen:
+            stop.capture_stop_with(
+                io.StringIO(stop_payload(transcript)),
+                unconfigured(tmp_path / "wm.sqlite"),
+                notices=io.StringIO(),
+            )
+
+        assert "WARNING" in seen
+
+    def test_a_repeat_failure_inside_a_known_outage_is_demoted(
+        self, tmp_path: Path
+    ) -> None:
+        """The second failed Stop must not print another warning to stderr."""
+        transcript = tmp_path / "t.jsonl"
+        write_lines(transcript, [operator_line("u1", "hi", session="sess")])
+        settings = unconfigured(tmp_path / "wm.sqlite")
+
+        # First Stop: latches the outage and warns.
+        stop.capture_stop_with(
+            io.StringIO(stop_payload(transcript)),
+            settings,
+            notices=io.StringIO(),
+        )
+
+        levels = record_log_levels(CAPTURE_FAILURE_MESSAGE)
+        with levels as seen:
+            stop.capture_stop_with(
+                io.StringIO(stop_payload(transcript)),
+                settings,
+                notices=io.StringIO(),
+            )
+
+        assert "WARNING" not in seen
+        # NOT deleted -- the information still flows, one level down.
+        assert "DEBUG" in seen
+
+
+class TestTheSpoolPathVariableIsLegalToSet:
+    """``OPENBRAIN_SPOOL_PATH`` must not kill capture (#536, fix round 2).
+
+    ``default_spool_path`` reads it, but the strict settings model treated the
+    name as an UNRECOGNISED prefixed variable and raised
+    ``UnknownEnvironmentVariableError``. That is swallowed by the entrypoint,
+    so an operator pointing the provider's spool somewhere produced a SILENT
+    ZERO CAPTURE on every Stop. Fixed at the owning boundary: the variable is a
+    declared field.
+    """
+
+    def test_capture_settings_load_with_the_variable_set(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        spool = tmp_path / "custom-spool.jsonl"
+        monkeypatch.setenv("OPENBRAIN_SPOOL_PATH", str(spool))
+
+        settings = load_capture_settings({"OPENBRAIN_SPOOL_PATH": str(spool)})
+
+        assert settings.spool_path == spool
+
+    def test_the_variable_is_not_reported_as_a_typo(self) -> None:
+        """The check that raised is the one that has to accept it now."""
+        assert (
+            unknown_prefixed_variables({"OPENBRAIN_SPOOL_PATH": "/x/y.jsonl"}) == ()
+        )
+
+    def test_the_declared_setting_is_what_the_notice_reads(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The field is read, not merely declared to silence the check.
+
+        A declared-but-unread field is dead config: the variable would load and
+        still do nothing. The setting wins over the environment.
+        """
+        monkeypatch.setenv("OPENBRAIN_SPOOL_PATH", str(tmp_path / "from-env.jsonl"))
+        configured = tmp_path / "from-settings.jsonl"
+
+        assert default_spool_path(configured) == configured
+
+
 class TestSubagentStopSharesTheParentsLatch:
     """One outage is one notice, even across the two capture lanes."""
 
@@ -479,8 +865,22 @@ class TestTheLatchItself:
 
         assert await latch.note_spooled("s") == DEGRADED_NOTICE
         assert await latch.note_spooled("s") is None
-        assert await latch.note_delivered("s") == RECOVERED_NOTICE
+        # The bookend still fires on the transition, and now carries what the
+        # window cost: two Stops failed inside it.
+        assert await latch.note_delivered("s") == (
+            f"{RECOVERED_NOTICE} (2 turns held)"
+        )
         assert await latch.note_delivered("s") is None
+
+    async def test_a_single_failure_recovers_without_a_count(
+        self, tmp_path: Path
+    ) -> None:
+        """One failed Stop gets the bare bookend -- "(1 turns held)" is noise."""
+        latch = OutageLatch(tmp_path / "w.db")
+
+        assert await latch.note_spooled("s") == DEGRADED_NOTICE
+
+        assert await latch.note_delivered("s") == RECOVERED_NOTICE
 
     async def test_sessions_do_not_share_health(self, tmp_path: Path) -> None:
         """Two live sessions are two states; one going down is not the other's."""
