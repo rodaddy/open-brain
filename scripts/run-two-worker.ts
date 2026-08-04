@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { buildHttpWorkerEnv } from "./worker-env.ts";
+import { resolveServerIdentity } from "../server/transport/server-identity.ts";
 
 type WorkerConfig = {
   name: string;
@@ -16,12 +17,15 @@ const workerPorts = (process.env.OPEN_BRAIN_WORKER_PORTS ?? "3101,3102")
 const workerCount = parseInt(process.env.OPEN_BRAIN_WORKERS ?? "2", 10);
 const poolMax = process.env.OPEN_BRAIN_WORKER_DB_POOL_MAX ?? "5";
 
-function serverIps(): string[] {
-  const configured = process.env.OPEN_BRAIN_SERVER_IP?.trim();
-  if (configured) return [configured];
-
-  return ["unknown"];
-}
+/**
+ * Host identity for the aggregate front, resolved once. Shares the single
+ * resolver with both serving trees so the front and the workers behind it can
+ * never disagree about which machine they are.
+ */
+const SERVER_IDENTITY = resolveServerIdentity({
+  configuredServerIp: process.env.OPEN_BRAIN_SERVER_IP,
+  bindHost: process.env.OPEN_BRAIN_BIND_HOST,
+});
 
 if (workerCount < 1) {
   throw new Error("OPEN_BRAIN_WORKERS must be at least 1");
@@ -134,12 +138,12 @@ const proxy = Bun.serve({
     if (url.pathname === "/health") {
       const results = await Promise.all(workers.map(workerHealth));
       const healthy = results.every((result) => result.ok);
-      const ips = serverIps();
       return Response.json(
         {
           status: healthy ? "healthy" : "degraded",
-          server_ip: ips[0] ?? "unknown",
-          server_ips: ips,
+          hostname: SERVER_IDENTITY.hostname,
+          server_ip: SERVER_IDENTITY.serverIp,
+          server_ips: SERVER_IDENTITY.serverIps,
           workers: results,
           timestamp: new Date().toISOString(),
         },

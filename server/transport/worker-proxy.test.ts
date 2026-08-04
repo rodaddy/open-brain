@@ -33,7 +33,9 @@ function handlerWith(options: {
 }) {
   const input: WorkerProxyInput = {
     workers: options.workers ?? WORKERS,
+    hostname: "core01",
     serverIp: "10.71.1.21",
+    serverIps: ["10.71.1.21"],
     healthProbeTimeoutMs: 3_000,
     logger: silentLogger(),
     fetch: (async (url: string | URL | Request, init?: RequestInit) => {
@@ -194,7 +196,9 @@ describe("aggregate worker front boundary", () => {
     expect(() =>
       createWorkerProxyHandler({
         workers: [],
+        hostname: "core01",
         serverIp: "10.71.1.21",
+        serverIps: ["10.71.1.21"],
         healthProbeTimeoutMs: 3_000,
         logger: silentLogger(),
       }),

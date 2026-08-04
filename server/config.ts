@@ -6,12 +6,17 @@
  * public shared namespace is `shared-kb`). Environment input is validated once
  * here and passed inward as typed data.
  */
+import { readFileSync } from "node:fs";
 import { z } from "zod";
 import {
   parseMaintenanceConfig,
   type MaintenanceConfig,
 } from "./config/maintenance.ts";
 import { parseNatsConfig, type NatsConfig } from "./config/nats.ts";
+import {
+  readDeployedRevision,
+  resolveServerIdentity,
+} from "./transport/server-identity.ts";
 
 export type { MaintenanceConfig } from "./config/maintenance.ts";
 export { parseMaintenanceConfig } from "./config/maintenance.ts";
@@ -106,6 +111,7 @@ const environmentSchema = z
     SERVICE_NAME: nonEmpty.default("open-brain-server"),
     OPEN_BRAIN_WORKER_NAME: nonEmpty.default("worker"),
     OPEN_BRAIN_SERVER_IP: nonEmpty.optional(),
+    OPEN_BRAIN_BIND_HOST: nonEmpty.optional(),
     OPEN_BRAIN_SESSION_TTL_SECONDS: positiveInteger.default(30),
     OPEN_BRAIN_MAX_SESSIONS: positiveInteger.default(100),
     OPEN_BRAIN_SESSION_RETRY_AFTER_SECONDS: positiveInteger.default(2),
@@ -150,7 +156,22 @@ export interface ServerConfig {
   };
   readonly authTokens: readonly AuthTokenConfig[];
   readonly transport: {
+    /**
+     * Host identity for `/health`, resolved from configuration rather than
+     * guessed at request time. See `transport/server-identity.ts`: a client
+     * asking `/health` is asking WHICH brain it reached, so a wildcard or
+     * loopback bind is never the answer.
+     */
+    readonly hostname: string;
     readonly serverIp: string;
+    readonly serverIps: readonly string[];
+    /**
+     * Short sha of the deployed tree, from the `.deployed-revision` stamp that
+     * `scripts/local-clone-deploy.sh` writes. Read once at startup — a running
+     * process does not change its own code — and absent on a dev tree that was
+     * never deployed through the script.
+     */
+    readonly deployedRevision?: string;
     readonly sessionTtlMs: number;
     readonly maxSessions: number;
     readonly retryAfterSeconds: number;
@@ -209,7 +230,15 @@ function parseUserTokens(environment: Environment): ConfigResult | AuthTokenConf
   return issues.length > 0 ? { ok: false, issues } : configured;
 }
 
-function buildConfig(parsed: ParsedEnvironment, userTokens: AuthTokenConfig[]): ServerConfig {
+function buildConfig(
+  parsed: ParsedEnvironment,
+  userTokens: AuthTokenConfig[],
+  deployedRevision?: string,
+): ServerConfig {
+  const identity = resolveServerIdentity({
+    configuredServerIp: parsed.OPEN_BRAIN_SERVER_IP,
+    bindHost: parsed.OPEN_BRAIN_BIND_HOST,
+  });
   return {
     database: {
       host: parsed.DB_HOST,
@@ -230,7 +259,10 @@ function buildConfig(parsed: ParsedEnvironment, userTokens: AuthTokenConfig[]): 
     },
     authTokens: [...roleTokenConfig(parsed), ...userTokens],
     transport: {
-      serverIp: parsed.OPEN_BRAIN_SERVER_IP ?? "unknown",
+      hostname: identity.hostname,
+      serverIp: identity.serverIp,
+      serverIps: identity.serverIps,
+      ...(deployedRevision ? { deployedRevision } : {}),
       sessionTtlMs: parsed.OPEN_BRAIN_SESSION_TTL_SECONDS * 1_000,
       maxSessions: parsed.OPEN_BRAIN_MAX_SESSIONS,
       retryAfterSeconds: parsed.OPEN_BRAIN_SESSION_RETRY_AFTER_SECONDS,
@@ -257,8 +289,17 @@ function buildConfig(parsed: ParsedEnvironment, userTokens: AuthTokenConfig[]): 
   };
 }
 
-/** Validate an explicit environment-shaped input without reading global state. */
-export function parseServerConfig(environment: Environment): ConfigResult {
+/**
+ * Validate an explicit environment-shaped input without reading global state.
+ *
+ * `deployedRevision` is passed IN rather than read here: this function is the
+ * pure half of the boundary, and touching the filesystem would break that. The
+ * composition root below supplies it.
+ */
+export function parseServerConfig(
+  environment: Environment,
+  deployedRevision?: string,
+): ConfigResult {
   const parsed = environmentSchema.safeParse(environment);
   if (!parsed.success) {
     return {
@@ -271,12 +312,27 @@ export function parseServerConfig(environment: Environment): ConfigResult {
   }
   const userTokens = parseUserTokens(environment);
   if (!Array.isArray(userTokens)) return userTokens;
-  return { ok: true, config: buildConfig(parsed.data, userTokens) };
+  return {
+    ok: true,
+    config: buildConfig(parsed.data, userTokens, deployedRevision),
+  };
+}
+
+/**
+ * The deploy stamp lives beside the running tree, so it is read relative to
+ * this module rather than the process cwd — a service started from anywhere
+ * still identifies its own code correctly.
+ */
+function readDeployStamp(): string | undefined {
+  return readDeployedRevision(() => {
+    const stamp = new URL("../.deployed-revision", import.meta.url);
+    return readFileSync(stamp, "utf8");
+  });
 }
 
 /** Composition-root environment read. No other `server/` module reads it. */
 export function loadServerConfig(): ServerConfig {
-  const result = parseServerConfig(process.env);
+  const result = parseServerConfig(process.env, readDeployStamp());
   if (result.ok) return result.config;
   const summary = result.issues.map((issue) => `${issue.path}: ${issue.message}`).join("; ");
   throw new Error(`server_configuration_invalid: ${summary}`);

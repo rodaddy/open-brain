@@ -653,7 +653,9 @@ dbDescribe("rewrite candidate over the real MCP SDK and real HTTP transport (liv
     ];
     const front = createWorkerProxyHandler({
       workers,
+      hostname: "test-host",
       serverIp: "127.0.0.1",
+      serverIps: ["127.0.0.1"],
       healthProbeTimeoutMs: 2_000,
       logger: silentLogger(),
     });
@@ -700,7 +702,9 @@ dbDescribe("rewrite candidate over the real MCP SDK and real HTTP transport (liv
           baseUrl: `http://127.0.0.1:${workerTwo.port}`,
         },
       ],
+      hostname: "test-host",
       serverIp: "127.0.0.1",
+      serverIps: ["127.0.0.1"],
       healthProbeTimeoutMs: 2_000,
       logger: silentLogger(),
     });

@@ -68,7 +68,10 @@ function testConfig(): ServerConfig {
     DB_USER: decodeURIComponent(url.username) || "postgres",
     ...(url.password ? { DB_PASSWORD: decodeURIComponent(url.password) } : {}),
     LOG_FILE: "logs/open-brain-entrypoint-test.log",
-    OPEN_BRAIN_SERVER_IP: "127.0.0.1",
+    // A concrete LAN address, NOT loopback: `/health` exists to tell a client
+    // WHICH machine it reached, so `127.0.0.1` is not a valid answer and
+    // identity resolution deliberately falls through it to real detection.
+    OPEN_BRAIN_SERVER_IP: "10.71.1.99",
     OPENBRAIN_MIGRATIONS_DIR: "src/db/migrations",
     // One configured token, in the role the tool assertions need. The entrypoint
     // refuses to start with none, which is a separate test below.
@@ -116,8 +119,9 @@ dbDescribe("rewrite entrypoint start-equivalence (live Postgres)", () => {
     // `undefined` that an assertion happens to notice.
     const body = (await response.json()) as SingleWorkerHealth;
     expect(["healthy", "degraded"]).toContain(body.status);
-    expect(body.server_ip).toBe("127.0.0.1");
-    expect(body.server_ips).toEqual(["127.0.0.1"]);
+    expect(body.server_ip).toBe("10.71.1.99");
+    expect(body.server_ips).toEqual(["10.71.1.99"]);
+    expect(body.hostname.length).toBeGreaterThan(0);
     expect(body.database).toMatchObject({ connected: true });
     expect(body.embedding).toHaveProperty("configured");
     expect(body.embedding).toHaveProperty("connected");
@@ -259,7 +263,10 @@ dbDescribe("rewrite entrypoint startup and shutdown ordering (live Postgres)", (
       DB_NAME: url.pathname.replace(/^\//, ""),
       DB_USER: decodeURIComponent(url.username) || "postgres",
       LOG_FILE: "logs/open-brain-entrypoint-empty-secret-test.log",
-      OPEN_BRAIN_SERVER_IP: "127.0.0.1",
+      // A concrete LAN address, NOT loopback: `/health` exists to tell a client
+    // WHICH machine it reached, so `127.0.0.1` is not a valid answer and
+    // identity resolution deliberately falls through it to real detection.
+    OPEN_BRAIN_SERVER_IP: "10.71.1.99",
       OPENBRAIN_MIGRATIONS_DIR: "src/db/migrations",
       AUTH_TOKEN_AGENT: TOKEN,
       // Exactly the local clone env's shape: the MLX embedding server needs no

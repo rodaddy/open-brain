@@ -47,8 +47,12 @@ export interface PoolHealth {
 
 export interface HealthStatus {
   status: "healthy" | "degraded";
+  /** Machine hostname — the human half of "which brain did I reach?". */
+  hostname: string;
   server_ip: string;
   server_ips: string[];
+  /** Deploy stamp short sha; absent on a tree that was never deployed. */
+  revision?: string;
   database: PoolHealth;
   embedding: { configured: boolean; connected: boolean };
   nats: {
