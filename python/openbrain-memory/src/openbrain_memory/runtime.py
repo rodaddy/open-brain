@@ -78,6 +78,7 @@ from .agent import (
     MemoryClient,
     MemorySpool,
     _reject_secret_payload,
+    unsupported_event_type,
 )
 from .client import JSON, OpenBrainClient, Transport
 from .policy import redact_value
@@ -780,7 +781,7 @@ class FirstClassMemoryRuntime:
             safe_content = _distilled_content(content, "content")
             safe_event_type = _require_text(event_type, "event_type")
             if safe_event_type not in EVENT_TYPES:
-                raise ValueError(f"Unsupported event_type: {safe_event_type}")
+                raise ValueError(unsupported_event_type(safe_event_type))
         except ValueError as error:
             return _failed_write("capture", error)
         return self._write(

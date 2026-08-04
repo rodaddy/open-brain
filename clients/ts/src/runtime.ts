@@ -48,6 +48,30 @@ export const EVENT_TYPES: ReadonlySet<string> = new Set([
   "handoff",
 ]);
 
+/**
+ * The rejection reason for an event type outside {@link EVENT_TYPES}.
+ *
+ * Names the rejected value AND the accepted set, because a rejection that only
+ * says what was wrong leaves the caller no way to be right (#431). The bare
+ * `Unsupported event_type: finding` this replaces was true and useless to an
+ * agent that reached for `finding` because it did not know the nine words it
+ * was allowed to use.
+ *
+ * Sorted so the text is stable across runs -- `Set` iteration order follows
+ * insertion, and an error string that reorders itself when the declaration is
+ * reordered cannot be asserted on or diffed in a log.
+ *
+ * Kept byte-identical to `openbrain_memory.unsupported_event_type` so the two
+ * clients answer the same caller error the same way; `test_ts_parity.py` is
+ * what holds the two runtime surfaces together.
+ */
+export function unsupportedEventType(value: string): string {
+  return (
+    `Unsupported event_type: ${value}; ` +
+    `accepted event types: ${[...EVENT_TYPES].sort().join(", ")}`
+  );
+}
+
 export const CONTEXT_PACK_SECTIONS: ReadonlySet<string> = new Set([
   "candidate_memory",
   "durable_lane_context",
@@ -617,7 +641,7 @@ export class FirstClassMemoryRuntime {
       safeContent = distilledContent(content, "content");
       safeEventType = requireText(options.eventType ?? "fact", "event_type");
       if (!EVENT_TYPES.has(safeEventType)) {
-        throw new ValidationError(`Unsupported event_type: ${safeEventType}`);
+        throw new ValidationError(unsupportedEventType(safeEventType));
       }
     } catch (error) {
       return failedWrite("capture", error);
