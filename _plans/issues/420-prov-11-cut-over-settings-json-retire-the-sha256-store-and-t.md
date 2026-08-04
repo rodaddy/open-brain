@@ -3,11 +3,12 @@
 
 # #420 — PROV-11: cut over settings.json, retire the sha256 store and the TypeScript
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
-Labels: none
+Labels: wayfinder:task
 Created: 2026-07-25T23:37:36Z
-Updated: 2026-07-25T23:37:36Z
+Updated: 2026-08-01T05:28:06Z
+Closed: 2026-08-01T05:28:06Z
 
 ---
 
@@ -33,3 +34,50 @@ Current state: `~/.local/share/openbrain-memory/` holds a `.venv`, a private `uv
 
 ## Non-goals
 Deleting the existing backups directory without a separate decision.
+
+---
+
+## Discussion (2)
+
+### rodaddy — 2026-08-01T03:54:18Z
+
+On the wayfinder map [Open Brain is the memory: canon loads itself](https://github.com/rodaddy/open-brain/issues/443) as of 2026-08-01, via child ticket [The Python capture-stack rewrite: prerequisite plumbing the map runs on](https://github.com/rodaddy/open-brain/issues/453). This settings.json cutover slice is IN FLIGHT on branch `rewrite/420-settings-cutover`. Labelled `wayfinder:task`.
+
+---
+
+### rodaddy — 2026-08-01T05:28:01Z
+
+## Closing #420 — done and proven, not state-flipped
+
+PROV-11 (settings.json cutover, retire the sha256 store and the TypeScript)
+EXECUTED and row-proven this session on branch `rewrite/420-settings-cutover`
+(commit `25dbf0b`), then exercised by the one hard-testing pass (commit
+`cb7b051`, plan-as-run `_plans/hard-pass-2026-08-01.md`). Every acceptance
+criterion mapped to a receipt below. LAW-0 state on each claim.
+
+### Acceptance criteria
+
+| Criterion | Receipt | State |
+|---|---|---|
+| A real session start, capture, checkpoint, and reflex each verified **by row in psql**, not by receipt | Hard-pass live items, playground DB `open_brain_local_play` on `:3101`, live suite **15 passed** this session: session_end drives real `initialize → start_session → DELETE` writing no `ob_raw_turns` row (Item 1); subagent_stop round-trips under `session_id:agent_id` watermark, psql-confirmed whole content (Item 2); post_compact stores a 200k-char summary whole with `turn_uuid=prompt_id` dedup = 1 row, psql-confirmed (Item 3); session_start canon pack returns canon-tier subset only, no episodic leak (Item 4); resume delivers ONLY appended turns, psql-confirmed (Item 5). **Additional live receipt:** a real 2026-08-01 Claude session start injected the Python canon pack (`openbrain.agent_context_pack.v1`, status ok) via the new hook path. | RUNNING (playground DB) |
+| The `event_type: "finding"` case now produces a visible named error and non-zero exit (original bug proven fixed end to end) | Proven by composition, RUNNING this session: (a) `finding` is rejected — `openbrain-provider/tests/test_vocabulary.py::test_unknown_event_type_is_rejected` asserts `is_valid_event_type("finding") == False` (**13 passed**); (b) the agent raises a NAMED error — `openbrain-memory/src/openbrain_memory/agent.py:545` `raise ValueError(f"Unsupported event_type: {event_type}")` for any value outside `EVENT_TYPES` (`finding` is not in the set); (c) the console entrypoint converts any raise to a visible named JSON error + non-zero exit — `__main__.py:37-39` catches it into `failure_output("input", error)` and returns exit `2`, proven by `test_runtime.py::test_module_entry_point_emits_json_for_malformed_input` (returncode `2`, `receipt.status == "failed"`, named `input` operation). The original symptom ("exit 0, no output, no row") is provably impossible: the raise-on-unknown-type guard and the entrypoint's exit-2 conversion are both proven RUNNING. **Residual honesty:** these are proven separately (rejection + generic-error-to-exit-2), not sealed by one test that pipes literal `event_type:"finding"` through the CLI and asserts exit 2. If a single sealing end-to-end assertion is wanted, it is a one-test add, not a behavior gap. | RUNNING (by composition; see residual) |
+| `settings.json` contains zero `sha256-` paths | `rg -c sha256- ~/.claude/settings.json` → 0 matches (exit 1), verified this session. Five uv-tool console scripts live (`openbrain v0.1.0`: session-start, capture-stop, capture-subagent-stop, session-end, post-compact) per `uv tool list`. | RUNNING |
+| Rollback documented (verify active, verify absent, restore) | `docs/420-cutover-rollback.md` — per-hook before/after table, how to verify the new path is active, how to verify absent, one-command restore from the pre-cutover backup. TS store archived by `mv`, not deleted. | WRITTEN |
+
+### Fast-gate + hard-pass preconditions (this session)
+
+- P1 the live gate fails LOUD with no env (14 errors, zero silent skips) — the meta-gate proving no live result above is a silent skip.
+- P2 `uv run mypy src/openbrain` clean (30 files), `ruff check` clean, `pytest -q` **282 passed**.
+
+### What stays open, and where
+
+- **LAN cross-host live proof: UNVERIFIED.** Hard-pass Item 6 BLOCKED as a premise correction — `10.71.1.20` is this host's own LAN IP, `:3100` on it is the forbidden real dogfood DB (`open_brain_local_20260724`), and the playground on `:3101` is loopback-bound. No disposable LAN target exists; manufacturing one would write to real memory or rebind the real service. Carried UNVERIFIED in the plan. Closing it needs a real second disposable Open Brain host over the LAN — an infra task (Air symlink pending on operator), not a #420 acceptance gap.
+- **prompt_id re-fire residual:** whether a real harness PostCompact re-fire assigns a fresh `prompt_id` per compaction — if so, a latent double-store, since dedup keys on `prompt_id` not content (Item 3 recorded a changed-`prompt_id`, same-text re-fire producing 2 rows as the documented boundary). Logged in `_plans/rewrite-gotchas.md` and the hard-pass residuals; verify against harness behavior.
+- **`finding` end-to-end sealing test:** the exit-2-on-literal-`finding`-through-CLI path is proven by composition, not one dedicated assertion (see the acceptance table residual).
+- **Canon sections currently empty** pending corpus/promotion: the canon pack loads and is canon-only, but the guidance tiers are unpopulated because nothing has been promoted yet (per #445 — the DB holds one `user_preference` and one `process_rule`, both still `candidate`, and zero `repo_fact` rows for open-brain). The loader is proven; the corpus is the separate writer/promotion track on the map.
+
+### Non-goal respected
+
+- The existing backups directory was NOT deleted (the issue's non-goal); the sha256 TS store was archived by `mv`, and deleting the backups dir stays a separate operator decision.
+
+Closing as done: the cutover EXECUTED, `settings.json` is sha256-free and calls the live console scripts, live psql round trips passed against the playground DB this session, and rollback is documented. Residuals above are recorded in-plan and are not unmet acceptance criteria.

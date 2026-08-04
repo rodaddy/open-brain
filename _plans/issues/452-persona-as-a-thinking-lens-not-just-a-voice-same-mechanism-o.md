@@ -3,11 +3,12 @@
 
 # #452 — Persona as a thinking lens, not just a voice — same mechanism or a different one?
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: wayfinder:grilling
 Created: 2026-07-30T01:04:46Z
-Updated: 2026-07-30T01:04:46Z
+Updated: 2026-08-01T17:00:32Z
+Closed: 2026-08-01T17:00:32Z
 
 ---
 
@@ -52,3 +53,40 @@ whether that verdict extends.
 
 Type: grilling (HITL). Product decision, and it revises settled text if the
 answer is yes.
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-01T17:00:26Z
+
+## ANSWER — operator decision (2026-08-01)
+
+A **lens is a system-prompt composition unit**, not a voice variant.
+
+- **Voice** (Bob / Skippy / Bilby / Nagatha) overrides tone only.
+- **Lens** (for example: Sr Dev with security emphasis, Creative, adversary) is an additional or replacement system-prompt layer that changes how the agent acts.
+
+### Runtime composition
+
+- On Claude/Codex sessions, the frontal-lobe layer — **canon + lens + voice** — is **additive**, because the harness owns the base prompt; there is no choice.
+- On Pi, composition can be near-total: **system prompt = soul + lens + voice**, served from Open Brain. Soul is canon: it is always injected and no lens may override it.
+
+If Pi workers prove out, they may become the standard sub-worker runtime. It is the **main agent’s duty** to compose each worker’s full system prompt properly. This matches `ai-agents/platforms/pi/docs/multi-agent-plan.md` ("orchestrator is a prompt engineer") and the MAE library/validation direction. Composition is dynamic at spawn: packs are ingredients; the head writes each worker’s complete prompt.
+
+### Scope ruling
+
+**MAE / the Pi orchestration engine is not part of Open Brain.** Open Brain’s side of the boundary is:
+
+- pack storage
+- pack authoring
+- vacuum lifecycle
+- vectorized serving
+
+Orchestration engines are downstream consumers. Open Brain makes them viable by fixing the scattered, unfindable configuration failure mode.
+
+Within Open Brain scope, the remaining buildable work is:
+
+1. pack format
+2. files-to-Open-Brain reconciler
+3. loader guarantee that soul rides every composition

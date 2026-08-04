@@ -3,11 +3,12 @@
 
 # #418 — PROV-9: hook entrypoints as console scripts
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
-Labels: none
+Labels: wayfinder:task
 Created: 2026-07-25T23:36:38Z
-Updated: 2026-07-28T20:05:16Z
+Updated: 2026-08-01T05:27:17Z
+Closed: 2026-08-01T05:27:17Z
 
 ---
 
@@ -31,7 +32,7 @@ Editing `settings.json` - that is PROV-11.
 
 ---
 
-## Discussion (1)
+## Discussion (3)
 
 ### rodaddy — 2026-07-28T20:05:16Z
 
@@ -72,3 +73,49 @@ Deployed adapter `sha256-cd5fb4e4...` (2026-07-25 15:30), which `settings.json` 
 ### Why not patch the TypeScript
 
 #420 exists to delete it, and the next wheel install overwrites the hash directory. The enum has already drifted between the two copies (#409: *"agent.py declares 9 event types; the TS adapter declares 8"*).
+
+---
+
+### rodaddy — 2026-08-01T03:54:17Z
+
+On the wayfinder map [Open Brain is the memory: canon loads itself](https://github.com/rodaddy/open-brain/issues/443) as of 2026-08-01, via child ticket [The Python capture-stack rewrite: prerequisite plumbing the map runs on](https://github.com/rodaddy/open-brain/issues/453). This hook-capabilities slice is COMPLETE on branch `rewrite/418-hook-capabilities` (commits 2201a22, 0d5dc09, 28bbb9f — merged to the branch, not pushed). Labelled `wayfinder:task`.
+
+---
+
+### rodaddy — 2026-08-01T05:27:10Z
+
+## Closing #418 — done and proven, not state-flipped
+
+PROV-9 (hook entrypoints as console scripts) verified this session against the
+Python `openbrain` package on branch `rewrite/418-hook-capabilities`, then
+carried through the #420 cutover and the one hard-testing pass on
+`rewrite/420-settings-cutover`. Every acceptance criterion mapped to a receipt
+below. LAW-0 state on each claim.
+
+### Original acceptance criteria
+
+| Criterion | Receipt | State |
+|---|---|---|
+| Each entrypoint exercised by a functional test over stdin → stdout/stderr/exit code | `python/openbrain/tests/test_capture_hooks.py` — `test_the_dispatch_table_runs_the_captured_event` and `test_a_stub_returns_zero_and_reads_its_input` drive each entrypoint from captured harness stdin and assert exit 0 / empty stdout. **73 passed in 3.34s, run this session.** | RUNNING |
+| No business logic in an entrypoint module | Entrypoints are `openbrain.apps.hooks.{stop,subagent_stop,session_end,post_compact,session_start}:main` (declared `python/openbrain/pyproject.toml:65-69`); logic lives in the composition/lane layer the live tests exercise directly. | MERGED (on branch) |
+| Hook output byte-compatible with what Claude Code expects today, proven by test against captured real input | `test_capture_hooks.py` reads `tests/fixtures/captured_hooks/*.json` — the bytes Claude Code actually sent (10 fixtures on disk incl. `PostCompact.json` from a real forced compaction 2026-07-31), not hand-written payloads. `test_transcript_and_session_are_read_from_the_real_bytes` and the `PostCompact` fixture assertions prove shape parity. | RUNNING |
+
+### Added acceptance criteria (from the 2026-07-28 comment on this issue)
+
+| Criterion | Receipt | State |
+|---|---|---|
+| No length floor anywhere in the capture path — a one-character operator turn is captured, proven by test | `python/openbrain/tests/test_capture_signal.py::test_a_single_character_turn_is_captured` (the nine `capture-floor-removal.check.ts` cases ported, 9/9). **53 passed in 0.12s, run this session.** | RUNNING |
+| The pasted-terminal rejector still rejects, proven against the measured 1,035-char case | `test_capture_signal.py::test_a_pasted_terminal_block_is_refused` — the 2026-07-25 1,035-char terminal paste, `looks_pasted(...)` True. Part of the same 53-pass run. | RUNNING |
+| A turn producing 30+ transcript entries loses nothing, proven by test | The 8-entry window is retired for a per-session byte-offset watermark that reads to EOF regardless of entry count. `test_capture_hooks.py::test_turns_are_delivered_and_the_watermark_advances_after` + the live resume test (hard-pass Item 5, `test_capture_hooks_live.py`) prove watermark→EOF delivery and self-heal after a skipped hook. | RUNNING (unit) / RUNNING (live, playground DB) |
+
+### Carried through cutover + hard pass
+
+- **#420 cutover EXECUTED** (commit `25dbf0b`): `settings.json` now invokes these console scripts, zero `sha256-` paths; a real 2026-08-01 session start injected the Python canon pack (`openbrain.agent_context_pack.v1`, status ok) via the new path.
+- **Hard-testing pass EXECUTED** (commit `cb7b051`, plan-as-run `_plans/hard-pass-2026-08-01.md`): live round trips for session_end / subagent_stop / post_compact / session_start canon / resume against the playground DB (`open_brain_local_play`, :3101), 15 live passed; mypy/ruff clean; 282 unit passed.
+
+### What stays open, and where
+
+- **LAN cross-host live proof: UNVERIFIED.** Hard-pass Item 6 is BLOCKED — `10.71.1.20` is this host's own IP, `:3100` is the forbidden real dogfood DB, `:3101` is loopback-bound, so no disposable LAN target exists. Recorded UNVERIFIED in the plan; closing it is an infra task (a real second disposable Open Brain host), tracked on the Air-symlink operator item. Not a #418 acceptance gap.
+- **prompt_id re-fire residual:** whether a real harness re-fire assigns a fresh `prompt_id` per compaction (latent double-store if so) — logged in `_plans/rewrite-gotchas.md` and hard-pass Item 3. A PostCompact/#420 observation, not a #418 entrypoint gap.
+
+Branch `rewrite/418-hook-capabilities` holds these commits merged-to-branch (not pushed); the cutover and hard pass rode on `rewrite/420-settings-cutover`. Closing as done: implementation exists, tests pass RUNNING this session, and the entrypoints are the ones `settings.json` actually calls.
