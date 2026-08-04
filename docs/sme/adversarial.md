@@ -911,3 +911,103 @@ investigation.
 - When a test run shows many failures at once, check for pool starvation before
   believing the count. A connection leak makes unrelated tests fail in numbers
   that mislead the entire triage.
+
+---
+
+# Harvest #522 — findings recovered from issue/PR history (2026-08-03)
+
+Routed here by operator ruling on the #522 canon harvest: these are review
+findings from closed issues and PRs that never reached this lane file. Each
+carries its source and a verbatim quote. Severity is recorded as stated in the
+source; where the source did not state one, it says so rather than inventing a
+level.
+
+## [2026-08-03] No errors on a freshly restarted service proves nothing
+
+**Severity:** not stated in source
+**Source:** issue #162 (comment by rodaddy, 2026-06-19 regression report); harvested in #522
+**Scope key:** `verification.no_errors_on_fresh_restart_proves_nothing`
+**Status:** active
+
+### Pattern
+
+An absence of errors on a freshly restarted service is not evidence a fix worked — with no traffic in the window, no error had a chance to fire. Verify a deployed fix by driving one real request through the real client path (real MCP call, real parameterized query, confirmed row in the DB), never by hand-written SQL that approximates the query or by an error-count delta over a short uptime window. Corollary from the same thread: mock pools cannot catch SQL constraint or parameter-type-inference failures; env-gated DB-backed integration tests are required for query-shape changes.
+
+Verbatim, from the source:
+
+> The "240/24h stopped after restart" reading was a **false positive** — the service had only ~40s uptime with no lane traffic, so no new errors had a chance to fire. The first real lane write (mine, just now) fails. ... verified against hand-written SQL rather than the actual parameterized query.
+
+## [2026-08-03] A namespace test must pin the WHERE predicate and its bound parameter
+
+**Severity:** MEDIUM (stated in source)
+**Source:** PR #113 (review findings); harvested in #522
+**Scope key:** `review.namespace_predicate_tests_must_pin_the_where_clause`
+**Status:** active
+
+### Pattern
+
+A namespace-isolation test that asserts `sql.includes("namespace")` proves nothing — the word appears in the SELECT column list. Isolation regression tests must assert the exact WHERE predicate and its bound parameter. Same PR: a read-only tool must not issue writes (assert no UPDATE and no entry_access_log INSERT), and a `known_gaps`-style field must return an empty list rather than a success banner string.
+
+Verbatim, from the source:
+
+> Correctness MEDIUM: the namespace-predicate test is too loose because it only checks `sql.includes("namespace")`, which can pass on selected columns rather than the WHERE predicate.
+
+## [2026-08-03] A detector guard is also an exclusion filter
+
+**Severity:** not stated in source
+**Source:** https://github.com/rodaddy/open-brain/issues/232; harvested in #522
+**Scope key:** `sme.detector_guards_are_exclusion_filters`
+**Status:** active
+
+### Pattern
+
+A detector guard framed as "prevents over-matching X" is often silently also an under-matching filter that excludes real targets. Review detector tests for engineered-to-pass fixtures: if every positive test injects the exact feature the regex requires and every negative test omits it, the suite proves the regex matches itself, not that it catches real inputs. Demand adversarial fixtures on both sides of each guard.
+
+Verbatim, from the source:
+
+> Every "scrubs" test injects a symbol; NO test for the pure-alnum-40 leak; the two SHA-negative tests use only lowercase-hex-no-punctuation, so they never catch the `commit-<sha>-tag` over-redaction. ... **Killshot: the symbol requirement is a secret-EXCLUSION filter, not an anti-SHA tweak.**
+
+## [2026-08-03] A shell guard in a runbook is not an enforcement mechanism
+
+**Severity:** not stated in source
+**Source:** https://github.com/rodaddy/open-brain/pull/259; harvested in #522
+**Scope key:** `sme.doc_shell_guard_is_not_enforcement`
+**Status:** active
+
+### Pattern
+
+A copy-pasteable shell guard in a runbook is not an enforcement mechanism; the operator can omit it by copying only the command line. When a migration/maintenance script gates its mutating path in code, review the READ path too: a live dry-run against production is still live access and needs the same in-script fail-closed sentinel, keyed on the target host rather than on the `--execute` flag. Resolution in this repo: `scripts/retire-collab-migration.ts` now requires the approval sentinel before ANY query when `DB_HOST` is non-local.
+
+Verbatim, from the source:
+
+> The script only calls `assertExecuteApproval` when `args.execute` is true (line 537). A dry-run therefore hits the live DB ... with **no script-level sentinel check** — the *only* protection is the doc's `[ "$OPENBRAIN_..." = ... ]` shell guard ... An operator who copies just the `bun run ...` line ... reaches live production with zero fail-closed enforcement.
+
+## [2026-08-03] Atomicity tests need an app-side throw, not a Postgres RAISE
+
+**Severity:** not stated in source
+**Source:** PR #430 (test(dream): live-Postgres coverage); harvested in #522
+**Scope key:** `sme.atomicity_tests_need_app_side_throw`
+**Status:** active
+
+### Pattern
+
+Reusable review check for transaction-atomicity tests: forcing the failure with a Postgres-side `RAISE` proves nothing, because an aborted transaction treats `COMMIT` as `ROLLBACK` — the wrong keyword produces the right outcome and the test passes over the bug. The reachable partial-commit path is a throw from application code between `BEGIN` and `COMMIT`, where the transaction is still healthy.
+
+Verbatim, from the source:
+
+> **The obvious atomicity test was worthless.** The first `bulk_set_tier` rollback test passed with `ROLLBACK` swapped to `COMMIT`. A `RAISE` inside Postgres aborts the transaction, and an aborted transaction treats `COMMIT` as `ROLLBACK`, so the wrong keyword produces the right outcome.
+
+## [2026-08-03] A test that captures a global can pass vacuously in a full-suite run
+
+**Severity:** not stated in source
+**Source:** issue #422 (source-sync.test.ts full-suite failure); harvested in #522
+**Scope key:** `sme.global_capture_tests_pass_vacuously`
+**Status:** active
+
+### Pattern
+
+Reusable review check: a security-boundary test that captures output by monkey-patching a global (`console.error`) can silently capture zero lines in a full-suite run, after which every downstream assertion passes vacuously while the suite still reports coverage. Assert against the logger boundary directly instead of a rebindable global; if a capture stays, it must fail loudly when it captures zero lines for a reason other than the one under test.
+
+Verbatim, from the source:
+
+> When `failLine` is `undefined`, the redaction assertions never meaningfully run. A test that silently stops checking is worse than one that is simply absent, because the suite still reports it as covered.

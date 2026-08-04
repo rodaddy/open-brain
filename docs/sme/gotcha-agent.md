@@ -1016,3 +1016,88 @@ meant to cover.
 - **Does a test assert the ABSENCE of a compatibility note on the happy path?**
   Asserting `status == "saved"` passes on both the honored and the dropped case.
   Only `"compatibility_note" not in receipt` distinguishes them.
+
+---
+
+# Harvest #522 — findings recovered from issue/PR history (2026-08-03)
+
+Routed here by operator ruling on the #522 canon harvest: these are review
+findings from closed issues and PRs that never reached this lane file. Each
+carries its source and a verbatim quote. Severity is recorded as stated in the
+source; where the source did not state one, it says so rather than inventing a
+level.
+
+## [2026-08-03] Replacing a CI review workflow has a bootstrap and branch-protection problem
+
+**Severity:** not stated in source
+**Source:** https://github.com/rodaddy/open-brain/issues/231; harvested in #522
+**Scope key:** `sme.workflow_replacement_bootstrap_and_branch_protection`
+**Status:** active
+
+### Pattern
+
+A change that replaces a CI review workflow has a bootstrap problem: the new job's untriggered branches (here, the deep-review path) cannot be verified by the PR that introduces them, and the OLD job name may still be a required status check in branch protection — which blocks every future PR until an admin swaps it. Reviewing a workflow-replacement PR means checking branch-protection required-check names and either proving or explicitly waiving each untriggered branch.
+
+Verbatim, from the source:
+
+> Gauntlet call: do not merge yet as `Zero Known Issues`; Phase 3/deep-path verification is still unresolved. ... If `claude-code-review` is a required status check in branch protection, that requirement must be swapped to `codex-review` by an admin or this PR (and future PRs) cannot merge.
+
+## [2026-08-03] Cross-language wire bugs are invisible to same-language review lanes
+
+**Severity:** not stated in source
+**Source:** issue #282 (pre-merge gauntlet comment); harvested in #522
+**Scope key:** `review.cross_language_wire_needs_shared_fixture`
+**Status:** active
+
+### Pattern
+
+Cross-language wire bugs are structurally invisible to same-language review lanes: each lane validates its own side's shape, so a TS/Python mismatch (response `kind` string, override field path) passes both reviews and fails only end-to-end. When a change spans two runtimes on one wire, require a shared cross-language fixture both sides validate against, and add a review lane (or opposite-runtime auditor) whose explicit job is comparing the two implementations field-by-field.
+
+Verbatim, from the source:
+
+> Codex caught two end-to-end blockers the same-language reviewers structurally could not (each swarm tested one side's own shape; the bugs are in the TS↔Python mismatch). ... **Root cause:** no shared cross-language wire fixture — TS and Python drifted independently.
+
+## [2026-08-03] An enum-drift guard must enumerate every declaration surface
+
+**Severity:** not stated in source
+**Source:** PR #428 (feat(412): one event vocabulary); harvested in #522
+**Scope key:** `sme.enum_drift_guard_enumerates_every_surface`
+**Status:** active
+
+### Pattern
+
+Reusable review check: when guarding an enum/vocabulary against drift, enumerate ALL declaration surfaces — here there were eight (Python definition, TS client, TS server set, a TS union, MCP tool schema, tiering union, SQL table constants, and the migration CHECK constraint), where the issue named only two. The database CHECK constraint matters most: code drifting wider than it means validation passes, the insert is refused, and the caller sees exit 0 with no row. The guard must include a 'no seventh copy appeared' assertion, and its path filter must match path components (`tests/`, `*.test.ts`) rather than the substring 'test', which silently skipped `latest.ts`, `manifest.ts`, and `attestation.ts`.
+
+Verbatim, from the source:
+
+> **There were not two copies. There are six, plus SQL.** [...] **The SQL constraint is included and matters most.** Postgres is the authority, so a code set drifting *wider* than the constraint reproduces the exact reported symptom: validation passes, the insert is refused, and the caller sees exit 0 with no row.
+
+## [2026-08-03] GIT_DIR/GIT_WORK_TREE leak into hooks and override git -C
+
+**Severity:** not stated in source
+**Source:** https://github.com/rodaddy/open-brain/pull/510 (with issue #483); harvested in #522
+**Scope key:** `review.git_env_leaks_into_hooks`
+**Status:** active
+
+### Pattern
+
+Git exports GIT_DIR and GIT_WORK_TREE into hook environments, and GIT_WORK_TREE overrides `git -C <path>`, so any code that shells out to git from inside a git hook resolves against the REAL repo regardless of the directory it was asked about. Strip GIT_DIR/GIT_WORK_TREE from a copy of the environment before spawning git children in hooks and hook-invoked tests. This class of defect is silent -- no raise, no log -- and issue #483 shows its worse form: a test that inherited GIT_DIR committed two 'reachable tag commit' junk commits onto the branch being pushed during a pre-push run, recovered only via reflog.
+
+Verbatim, from the source:
+
+> `git push` exports `GIT_DIR`/`GIT_WORK_TREE` to its hooks, and **`GIT_WORK_TREE` beats `git -C`** — `rev-parse --show-toplevel` answered `/Volumes/ThunderBolt/Development` for every directory asked about, so every project resolved to the slug `Development`.
+
+## [2026-08-03] SessionStart additionalContext has a practical inline bound
+
+**Severity:** not stated in source
+**Source:** https://github.com/rodaddy/open-brain/pull/465; harvested in #522
+**Scope key:** `hooks.session_start_context_inline_bound`
+**Status:** active
+
+### Pattern
+
+Claude Code's SessionStart additionalContext has an observed practical inline bound: an oversized payload is persisted to a file and surfaced as a short preview, so the session silently receives a fraction of it. Emit canon as plain text (one line per rule, full body) rather than a raw JSON envelope, and split large packs across independently registered SessionStart emissions. This is formatting, not content reduction -- rule bodies stay byte-for-byte whole, and the fix must be validated by a whole-rule check that each body appears exactly once across the emissions.
+
+Verbatim, from the source:
+
+> `openbrain-session-start` dumped the raw `agent_context_pack` JSON envelope (~30 KB of nested items, ids, citations, confidences, warnings) into `additionalContext`, and Claude Code persisted a payload that large to a file it surfaced as only a ~2 KB preview -- the session saw 2-3 of 31 items

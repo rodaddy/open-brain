@@ -363,3 +363,43 @@ predicate and its own validation commands.
 - List the packages/workspaces in the repo; does each appear in the hook's
   path predicates with its own gate?
 - Was the hook's predicate re-checked when a new top-level package landed?
+
+---
+
+# Harvest #522 — findings recovered from issue/PR history (2026-08-03)
+
+Routed here by operator ruling on the #522 canon harvest: these are review
+findings from closed issues and PRs that never reached this lane file. Each
+carries its source and a verbatim quote. Severity is recorded as stated in the
+source; where the source did not state one, it says so rather than inventing a
+level.
+
+## [2026-08-03] Provenance that no read projection exposes is not a control
+
+**Severity:** not stated in source
+**Source:** rodaddy/open-brain#62 (review swarm comment by rodaddy); harvested in #522
+**Scope key:** `sme.quality.written_provenance_must_be_readable`
+**Status:** active
+
+### Pattern
+
+Provenance that is written but not exposed through any read projection is unauditable and therefore not a real control. When a change adds a provenance or audit column, verify it appears in the retrieval projections of every surface (REST and MCP) or that a named provenance endpoint exists.
+
+Verbatim, from the source:
+
+> PR #62 writes `promoted_from`, but PR #61/stack entry projections omit it from REST and MCP `get_entry` results. Promoted entries should be auditable after creation.
+
+## [2026-08-03] DDL tests need a dedicated schema, not row-scoped cleanup
+
+**Severity:** P3 (stated in source)
+**Source:** PR #352 (initial Full-tier review, P3); harvested in #522
+**Scope key:** `testing.ddl_tests_need_a_dedicated_schema_not_row_cleanup`
+**Status:** active
+
+### Pattern
+
+Namespace- or row-scoped cleanup does not isolate table-level DDL: a test that drops or narrows a constraint on a shared database is visible to every parallel test file and to duplicate CI workflows sharing that database. Run schema-mutating regressions inside a dedicated test schema with a scoped search_path, and serialize duplicate workflows with a session advisory lock.
+
+Verbatim, from the source:
+
+> The fixture globally drops and narrows `maintenance_jobs_last_error_category_check` on the shared CI database. Bun runs test files in parallel by default, so another live queue test can observe the temporary old constraint and fail spuriously. Namespace-scoped row cleanup does not isolate table-level DDL.
