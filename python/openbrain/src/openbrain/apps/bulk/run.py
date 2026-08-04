@@ -134,6 +134,8 @@ def _lane(settings: CaptureSettings, session_key: str) -> BulkLane:
         token=settings.token.get_secret_value(),
         namespace=settings.agent_id,
         agent_id=settings.agent_id,
+        # The LAN opt-in (#525), same environment the hook lanes read.
+        allow_insecure_http=settings.allow_insecure_http,
     )
     memory = AgentMemory(client, agent=settings.agent_id)
     memory.start_session(session_key)

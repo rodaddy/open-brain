@@ -177,9 +177,18 @@ the wrong brain. Before #74, a session with no `OPENBRAIN_*` silently hydrated
 from core01 — two sessions chased a phantom core01 outage over exactly that.
 
 `OPENBRAIN_ALLOW_INSECURE_HTTP` is present because the local/LAN endpoint is
-plain `http`. **UNVERIFIED for cc-\* boxes:** whether cross-box plain-HTTP bearer
-tokens over the LAN are acceptable to Rico, or whether the boxes must go through
-`https://open-brain.rodaddy.live`. §6.
+plain `http`, and as of #525 it is a **declared** setting on both
+`CaptureSettings` and `CanonSettings` that the wrapper passes through — see §1.3.
+Before that fix it was declared nowhere and stripped by the wrapper, which is why
+a LAN box could not reach the brain at all: the client refuses non-loopback plain
+`http` without the flag, and exporting the flag made the strict config reject the
+whole environment. A LAN box now needs this variable set; on `127.0.0.1` it is
+inert (loopback http is auto-permitted).
+
+**UNVERIFIED for cc-\* boxes:** whether cross-box plain-HTTP bearer tokens over
+the LAN are acceptable to Rico, or whether the boxes must go through
+`https://open-brain.rodaddy.live`. §6. The declared opt-in makes plain-HTTP LAN
+possible; it does not decide that it is the chosen posture for those boxes.
 
 ### 1.3 The hook-env wrapper — EXISTS, and it is not optional
 
@@ -193,15 +202,29 @@ exec env -i \
   PATH="$PATH" HOME="$HOME" \
   OPENBRAIN_BASE_URL="${OPENBRAIN_BASE_URL:-}" \
   OPENBRAIN_TOKEN="${OPENBRAIN_TOKEN:-}" \
+  OPENBRAIN_OBSERVATION_*="..." \
+  OPENBRAIN_ALLOW_INSECURE_HTTP="${OPENBRAIN_ALLOW_INSECURE_HTTP:-}" \
   "$@"
 ```
 
-**Why it must be copied and not skipped** (`docs/420-cutover-rollback.md:46-56`):
+**Why it must be copied and not skipped** (`docs/420-cutover-rollback.md`):
 the Python config **rejects** any `OPENBRAIN_*` variable it does not declare
 (`config.unknown_prefixed_variables`), *and the hooks swallow that rejection*.
 So sourcing the whole env file into a hook would **silently zero every
 capture** — a green-looking box writing nothing. The wrapper's `env -i` passes
-exactly the two accepted variables.
+exactly the accepted variables and nothing else.
+
+**The pass-through list grows only AFTER the installed package declares the
+field** — declare in `openbrain.config`, `uv tool install --reinstall`, verify
+the installed interpreter accepts it, then edit the wrapper. Getting that order
+backwards is itself the silent-zero-capture failure. `OPENBRAIN_OBSERVATION_*`
+(#523) and `OPENBRAIN_ALLOW_INSECURE_HTTP` (#525) were both added this way.
+
+**A LAN box needs `OPENBRAIN_ALLOW_INSECURE_HTTP` in its env file** (the Air,
+`10.71.1.26`, pointing at `http://10.71.1.20:3100`). Without it the client
+refuses the non-loopback plain-`http` base URL and canon *and* capture decline
+silently — the #525 symptom. This is the family-A delta a LAN box has that the
+dev Mac does not, because loopback needs no flag.
 
 This is the single highest-risk thing to get wrong on a new box, because the
 failure is silent. The Step-5 gate below is written specifically to catch it by

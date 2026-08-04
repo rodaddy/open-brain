@@ -250,6 +250,10 @@ def _apply(planned: Sequence[PlannedWrite], settings: CanonSettings) -> None:
         base_url=settings.base_url,
         token=settings.token.get_secret_value(),
         namespace=settings.agent,
+        # The LAN opt-in (#525). The operator path reads the same environment the
+        # hooks do, so an operator on a LAN host reconciles canon rather than
+        # hitting the client's loopback-only refusal.
+        allow_insecure_http=settings.allow_insecure_http,
     )
     try:
         for call in planned:

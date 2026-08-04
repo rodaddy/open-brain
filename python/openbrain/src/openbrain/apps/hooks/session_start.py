@@ -396,6 +396,9 @@ def _lane_resume_text(payload: SessionStartHook, canon: CanonSettings) -> str | 
         agent_id=canon.agent,
         timeout=CANON_REQUEST_TIMEOUT_SECONDS,
         retry_policy=RetryPolicy(attempts=1),
+        # The LAN opt-in (#525), on the same client configuration the canon read
+        # uses -- emission two must not be the one lane that still refuses.
+        allow_insecure_http=canon.allow_insecure_http,
     )
     try:
         context = client.session_context(
