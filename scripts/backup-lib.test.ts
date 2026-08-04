@@ -907,6 +907,62 @@ describe("summarizeChildStderr", () => {
       "unclassifiable stderr",
     );
   });
+
+  // Issue #537: a child that colorizes its own stderr (a TTY, or any
+  // environment carrying FORCE_COLOR — which the local dev machine sets and
+  // CI does not) emits SGR escapes BEFORE the tool-name prefix. Those leading
+  // escapes defeat the ^-anchored prefix strip, so the class line was cut at
+  // the colon after "pg_dump" and the real class was lost.
+  describe("terminal control sequences", () => {
+    const ESC = "\u001B";
+    const BEL = "\u0007";
+
+    it("classifies a colorized line the same as a plain one", () => {
+      const plain = "pg_dump: error: query failed: ERROR:  canceling statement";
+      const colorized = `${ESC}[0m${ESC}[31m${plain}${ESC}[0m`;
+      expect(summarizeChildStderr(plain)).toBe("query failed");
+      expect(summarizeChildStderr(colorized)).toBe("query failed");
+    });
+
+    it("strips CSI, OSC, and bare two-character escapes", () => {
+      expect(
+        summarizeChildStderr(`${ESC}[1;31mpg_restore: error: COPY failed`),
+      ).toBe("COPY failed");
+      expect(
+        summarizeChildStderr(`${ESC}]0;window title${BEL}pg_dump: error: boom`),
+      ).toBe("boom");
+      expect(summarizeChildStderr(`${ESC}Mpg_dump: error: boom`)).toBe("boom");
+    });
+
+    it("never lets a control character reach the summary", () => {
+      const summary = summarizeChildStderr(
+        `${ESC}[31mpg_restore: error: COPY failed for table${ESC}[0m`,
+      );
+      expect(summary).toBe("COPY failed for table");
+      expect(summary).not.toMatch(/[\u0000-\u001F\u007F-\u009F]/);
+    });
+
+    it("treats a line that is only control characters as empty", () => {
+      expect(summarizeChildStderr(`${ESC}[0m${ESC}[0m`)).toBe(
+        "no stderr output",
+      );
+      // A colorized blank first line falls through to the next real line.
+      expect(
+        summarizeChildStderr(`${ESC}[0m\npg_dump: error: query failed: x`),
+      ).toBe("query failed");
+    });
+
+    it("still refuses to carry row content out of a colorized COPY failure", () => {
+      const stderr = [
+        `${ESC}[31mpg_restore: error: COPY failed for table "thoughts": ERROR:  value too long${ESC}[0m`,
+        `${ESC}[31mCONTEXT:  COPY thoughts, line 42: "${ROW_SENTINEL}"${ESC}[0m`,
+      ].join("\n");
+      const summary = summarizeChildStderr(stderr);
+      expect(summary).toBe("COPY failed for table");
+      expect(summary).not.toContain(ROW_SENTINEL);
+      expect(summary).not.toContain('"');
+    });
+  });
 });
 
 describe("redactSecret", () => {
