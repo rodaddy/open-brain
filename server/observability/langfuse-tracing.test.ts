@@ -110,7 +110,17 @@ async function captureLogLines(run: () => Promise<void>): Promise<string[]> {
   const originalWarn = console.warn;
   const originalLog = console.log;
   const push = (...parts: unknown[]): void => {
-    lines.push(parts.map((part) => String(part)).join(" "));
+    // `String(err)` on an Error yields "Error: <message>", but the SDK logger
+    // hands the Error as its own argument, so the interesting text is in a
+    // later part rather than the first. Stringify every part, and reach into
+    // Error objects explicitly so a leaked message is actually visible here.
+    lines.push(
+      parts
+        .map((part) =>
+          part instanceof Error ? `${part.name}: ${part.message}` : String(part),
+        )
+        .join(" "),
+    );
   };
   console.warn = push;
   console.log = push;
@@ -667,6 +677,48 @@ describe("outage alerts fire on state change only", () => {
       const returned = await handlers.get("log_thought")?.({}, AUTH);
       expect(returned).toBe(result);
     });
+  });
+});
+
+/**
+ * The v3 review's MEDIUM finding, carried into v4: the SDK's own logger writes
+ * export failures straight to `console.error` with the raw error attached, so a
+ * transport message carrying the endpoint or an auth header would bypass this
+ * module's content-free discipline AND the shared logger's redaction.
+ *
+ * Measured before the fix: the SDK logger emitted 2 lines and the injected
+ * `sk-lf-` string appeared in them.
+ */
+describe("the SDK's own logger cannot bypass the content-free discipline", () => {
+  test("building the real sink silences SDK-level error and warn output", async () => {
+    const { configureGlobalLogger, getGlobalLogger, LogLevel } = await import(
+      "@langfuse/core"
+    );
+
+    // Asserted through the SDK's OWN level gate rather than by capturing
+    // `console.error`: Bun's runner installs its own console, so a swapped
+    // `console.error` does not reliably observe a library's writes from inside
+    // a test. `shouldLog` is the exact predicate that decides whether the SDK
+    // reaches the console at all, so checking it tests the real mechanism
+    // instead of a proxy for it.
+    type Gated = { shouldLog(level: number): boolean };
+
+    // Baseline asserted FIRST and explicitly, because the SDK logger is
+    // process-global: an earlier test that built a real sink has already
+    // installed the suppression, so "silent" would otherwise pass for the
+    // wrong reason.
+    configureGlobalLogger({ level: LogLevel.DEBUG });
+    expect((getGlobalLogger() as unknown as Gated).shouldLog(LogLevel.ERROR)).toBe(
+      true,
+    );
+
+    // Building the real sink installs the suppression. `createSink` is NOT
+    // injected here on purpose: the point is that the DEFAULT factory does it.
+    createTracingRuntime({ config: ENABLED_CONFIG });
+
+    const gated = getGlobalLogger() as unknown as Gated;
+    expect(gated.shouldLog(LogLevel.ERROR)).toBe(false);
+    expect(gated.shouldLog(LogLevel.WARN)).toBe(false);
   });
 });
 

@@ -316,6 +316,13 @@ Never one line per failed call. Measured under a blackholed endpoint: heap
 plateaus at 34-45 MB across 30,000 traced calls with no upward trend, and the
 enqueue stays off the request path (~7 µs per call).
 
+The SDK's own logger is silenced when the sink is built. Left at its default it
+writes export failures to `console.error` with the raw error attached, which
+would route a transport message — potentially carrying the endpoint or an auth
+header — around both this module's content-free discipline and the shared
+logger's redaction (measured: the injected key-shaped string appeared in the
+output). The two lines above are how this lane reports its health instead.
+
 ### Drop-folder collector
 
 `src/drop-folder-collector.ts` reads four scan bounds — `DROP_COLLECTOR_MAX_FILES`

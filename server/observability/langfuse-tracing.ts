@@ -42,8 +42,11 @@
  * handler is instrumented by construction rather than by 65 call sites
  * remembering to. Same WeakSet install-once guard, same `isToolError` result
  * check, same `(extra).authInfo` auth source. Wrapping composes: whichever
- * wrapper is installed last is outermost, and both see the same args, result,
- * and thrown error.
+ * wrapper is installed last is outermost. In `createServerFactory` the audit
+ * lane installs first and tracing second (`server/main.ts:158` then `:162`), so
+ * TRACING is the outer wrapper and audit the inner one. Either way both see the
+ * same args, result, and thrown error, which is why the order is not
+ * load-bearing for correctness.
  *
  * BEST-EFFORT IS THE HARD REQUIREMENT. A tracing failure must never fail,
  * slow, or alter a tool call. Every SDK interaction is fire-and-forget — no
@@ -63,6 +66,7 @@
  * dropped during that window. Never per call — "if you do that every time,
  * you're going to spend most of your time saying hey hey this isn't working."
  */
+import { configureGlobalLogger, LogLevel } from "@langfuse/core";
 import { LangfuseSpanProcessor } from "@langfuse/otel";
 import {
   setLangfuseTracerProvider,
@@ -579,6 +583,14 @@ function createSinkSafely(
  * neither slows nor grows, and the window's traces are simply lost.
  */
 function defaultSinkFactory(config: McpTracingConfig): TracingSink {
+  // The SDK's own logger writes export failures straight to `console.error`
+  // with the raw error attached (`@langfuse/core` Logger.error), which would
+  // route a transport message — potentially carrying the endpoint, a request
+  // body, or an auth header — around this module's content-free discipline and
+  // around the shared logger's redaction. Silenced to ERROR+1 so nothing the
+  // SDK emits reaches the log; this lane reports its own health through the
+  // two state-change lines instead, which carry a label and a count only.
+  configureGlobalLogger({ level: (LogLevel.ERROR + 1) as LogLevel });
   const processor = new LangfuseSpanProcessor({
     publicKey: config.publicKey,
     secretKey: config.secretKey,

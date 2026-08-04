@@ -5,6 +5,7 @@
     "": {
       "name": "open-brain",
       "dependencies": {
+        "@langfuse/core": "^4.6.1",
         "@langfuse/otel": "^4.6.1",
         "@langfuse/tracing": "^4.6.1",
         "@modelcontextprotocol/sdk": "^1.27.1",
