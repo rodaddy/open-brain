@@ -1,7 +1,8 @@
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { Database } from "bun:sqlite";
 import type pg from "pg";
 import { CONTRACT_VERSION, CONTRACT_SCHEMA_VERSION } from "./contract.ts";
 import {
@@ -26,6 +27,12 @@ const MIGRATIONS_DIR = join(
   "db",
   "migrations",
 );
+const QMD_INDEX_PATH = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  ".qmd",
+  "index.sqlite",
+);
 
 // Any field addition/removal in OperatorDoctorStatus requires bumping this
 // version. src/operator-doctor.test.ts locks the exact payload shape.
@@ -35,6 +42,7 @@ export const DISTILLATION_LAG_WARNING_RATIO = 0.5;
 export const DISTILLATION_LAG_CRITICAL_RATIO = 0.8;
 const OPTIONAL_TIMEOUT_MS = 2_000;
 const DOCTOR_CACHE_TTL_MS = 5_000;
+const QMD_INDEX_STALE_AFTER_HOURS = 48;
 
 let cachedServiceVersion: string | null = null;
 
@@ -76,7 +84,8 @@ export interface OperatorDoctorStatus {
   //   critical. Critical lag means live turns are nearing retention expiry;
   //   unhealthy remains reserved for a database hard failure.
   // Neutral: warning-level lag, an unconfigured embedding provider, and qmd
-  //   availability never affect the tier (issue #270 optional-dep rule).
+  //   availability or index freshness never affect the tier (issue #270
+  //   optional-dep rule).
   status: "healthy" | "degraded" | "unhealthy";
   contract_version: string;
   generated_at: string;
@@ -127,6 +136,15 @@ export interface OperatorDoctorStatus {
     // included in the payload.
     available: boolean;
     status: "available" | "unavailable";
+    index: {
+      status: "available" | "unavailable";
+      last_updated_at: string | null;
+      age_hours: number | null;
+      freshness: "current" | "stale" | "unknown";
+      stale_after_hours: number;
+      document_count: number | null;
+      collection_count: number | null;
+    };
   };
   transport: {
     mode: "http" | "nats";
@@ -391,10 +409,64 @@ async function checkEmbeddingAvailability(): Promise<boolean> {
   return withTimeout(probeUrl(`${baseUrl}/models`, headers), false);
 }
 
+export interface OperatorDoctorBuildOptions {
+  now?: () => number;
+  qmdIndexPath?: string;
+  qmdIndexStaleAfterHours?: number;
+}
+
+function readQmdIndexStatus(
+  options: OperatorDoctorBuildOptions,
+): OperatorDoctorStatus["qmd"]["index"] {
+  const staleAfterHours =
+    options.qmdIndexStaleAfterHours ?? QMD_INDEX_STALE_AFTER_HOURS;
+  try {
+    const indexPath = options.qmdIndexPath ?? QMD_INDEX_PATH;
+    const modifiedAt = statSync(indexPath).mtime;
+    const database = new Database(indexPath, { readonly: true });
+    try {
+      const documentRow = database
+        .query("SELECT COUNT(*) AS count FROM documents WHERE active = 1")
+        .get() as { count: number };
+      const collectionRow = database
+        .query("SELECT COUNT(*) AS count FROM store_collections")
+        .get() as { count: number };
+      const ageHours = Math.max(
+        0,
+        ((options.now ?? Date.now)() - modifiedAt.getTime()) / 3_600_000,
+      );
+      return {
+        status: "available",
+        last_updated_at: modifiedAt.toISOString(),
+        age_hours: Math.round(ageHours * 100) / 100,
+        freshness: ageHours >= staleAfterHours ? "stale" : "current",
+        stale_after_hours: staleAfterHours,
+        document_count: Number(documentRow.count),
+        collection_count: Number(collectionRow.count),
+      };
+    } finally {
+      database.close();
+    }
+  } catch (error) {
+    logger.warn("doctor_qmd_index_unreadable", describeError(error));
+    return {
+      status: "unavailable",
+      last_updated_at: null,
+      age_hours: null,
+      freshness: "unknown",
+      stale_after_hours: staleAfterHours,
+      document_count: null,
+      collection_count: null,
+    };
+  }
+}
+
 // Availability = the qmd entrypoint file exists at the same resolved path
-// search_all executes (src/qmd-path.ts). This proves binary presence only;
-// it does not exercise qmd search health.
-function checkQmdBinaryPresence(): OperatorDoctorStatus["qmd"] {
+// search_all executes (src/qmd-path.ts). This remains binary presence only;
+// repo-local index freshness is reported separately below.
+function checkQmdStatus(
+  options: OperatorDoctorBuildOptions,
+): OperatorDoctorStatus["qmd"] {
   const resolved = resolveQmdPath();
   let available = false;
   try {
@@ -404,7 +476,6 @@ function checkQmdBinaryPresence(): OperatorDoctorStatus["qmd"] {
     // stranger -- a permission error on an ancestor directory, an unmounted
     // volume. Reporting the binary as simply absent would send the operator
     // looking for a missing install that is actually present and unreachable.
-    available = false;
     logger.warn("doctor_qmd_probe_failed", {
       path_source: resolved.source,
       ...describeError(error),
@@ -415,6 +486,7 @@ function checkQmdBinaryPresence(): OperatorDoctorStatus["qmd"] {
     path_source: resolved.source,
     available,
     status: available ? "available" : "unavailable",
+    index: readQmdIndexStatus(options),
   };
 }
 
@@ -422,6 +494,7 @@ export async function buildOperatorDoctorStatus(
   pool: pg.Pool,
   natsRuntimeBoundary: NatsRuntimeBoundary,
   natsBridgeHealth?: NatsBridgeHealth,
+  options: OperatorDoctorBuildOptions = {},
 ): Promise<OperatorDoctorStatus> {
   const [
     database,
@@ -438,7 +511,7 @@ export async function buildOperatorDoctorStatus(
     readServiceVersion(),
     readAuditStorageStatus(pool),
   ]);
-  const qmd = checkQmdBinaryPresence();
+  const qmd = checkQmdStatus(options);
 
   const embeddingDiagnostics = getEmbeddingProviderDiagnostics();
   const transportAvailability =
