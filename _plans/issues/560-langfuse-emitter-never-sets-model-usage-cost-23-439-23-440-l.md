@@ -3,11 +3,12 @@
 
 # #560 — Langfuse emitter never sets model/usage/cost -- 23,439/23,440 live generations have NULL cost, spend ledger reads $0.72 total
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: none
 Created: 2026-08-05T01:10:15Z
-Updated: 2026-08-05T06:14:32Z
+Updated: 2026-08-05T19:15:47Z
+Closed: 2026-08-05T19:15:47Z
 
 ---
 
@@ -23,8 +24,34 @@ Until this lands, every cost dashboard/score computes over NULL -- the instance 
 
 ---
 
-## Discussion (1)
+## Discussion (2)
 
 ### rodaddy — 2026-08-05T06:14:32Z
 
 Reopening deliberately: the fix is MERGED (PR #568 at ff45179 — model+usage now carried, plus the swarm-driven hardening: malformed enrichments can no longer drop a transcript record, and partial/mistyped usage omits rather than fabricating zeros; fail-first tests reproduced independently). But this issue's acceptance is LIVE: non-NULL total_cost on CT 273's dashboards, which needs (1) the updated capture lane actually running and (2) custom model prices seeded for claude-opus-5 / claude-sonnet-5 / claude-fable-5 — an operator/instance step nobody has verified. Merged is not deployed. Closes for real in the OBS run (#571) with a live receipt.
+
+---
+
+### rodaddy — 2026-08-05T19:15:46Z
+
+Closing with a live receipt (RUNNING-verified this session, 2026-08-05).
+
+**Chain:** PR #568 (merged 06:14Z) carries model + usage to both emitters → live measurement was blocked by #582's observation zero-emit → PR #586 (merged 19:12Z) fixed the driver's child-env poisoning → live drive + verify on trunk `a5a1274`:
+
+```
+Langfuse egress gate: PASS  (mode=drive)
+check=capture_exit status=PASS fatal=true
+check=emit_proven status=PASS fatal=true observed=1446 expected=1 emit_failure_detected=false
+
+Langfuse egress gate: PASS  (mode=verify, same tag)
+observed traces=1 observations=4 generations=3
+settle waited_ms=96 timed_out=false polls=1
+check=arrival_count       status=PASS fatal=true  observed=4 expected=4
+check=generation_metadata status=PASS fatal=true  observed=3 expected=3
+check=total_cost          status=PASS fatal=false observed=3 expected=3
+check=secret_scan         status=PASS fatal=true  observed=0 content_fields_present=true
+```
+
+All 3 generations in the live capture trace carry model metadata **and non-NULL computed cost** — the acceptance this issue defined. The cost dashboards now have real numbers to compute over for the capture lane going forward; the 23,439 historical NULL rows stay NULL (pre-fix data, not retro-priced).
+
+Residual, tracked elsewhere: server-side spans are not generations (no server-side LLM calls are modeled as such today); wider trace coverage (retrieval internals, embedding, off-request-path jobs) belongs to #569/#571 sequencing. `release` handling landed with #568 (processor-level, langfuse-tracing.ts:833).

@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: none
 Created: 2026-08-05T02:39:48Z
-Updated: 2026-08-05T03:22:36Z
+Updated: 2026-08-05T22:43:25Z
 
 ---
 
@@ -62,8 +62,19 @@ Closing #549 does not answer the question above, and answering the question abov
 
 ---
 
-## Discussion (1)
+## Discussion (2)
 
 ### rodaddy — 2026-08-05T03:22:36Z
 
 Follow-up measurement 2026-08-05 (live #549 proof, revision d46d68e): the same durable_memory request now builds 63,370,799 bytes (~60.4 MiB), up from 58.5 MB measured 2026-08-04 — the corpus grows daily. Also clarified: durable_memory is query-gated (agent-context-pack-durable-memory.ts:215 returns empty_reason no_query on a blank query), so the whole-corpus serialization requires both a query that matches broadly AND no max_tokens. With the #549 fix deployed, the bus now answers this with a correlated payload_too_large envelope instead of silence.
+
+---
+
+### rodaddy — 2026-08-05T22:43:25Z
+
+**Stale-blocker sweep verdict (2026-08-05): RICO_GATED** — every issue this one references is closed, so it was audited against live state (scripts/stale-blockers.ts flagged it; a verification lane checked the acceptance itself).
+
+**What actually remains:**
+Operator decision required on the response shape for a budgetless, broad durable_memory request. Three implementable options to put in front of Rico: (a) make budget.max_tokens REQUIRED for durable_memory (server/tools/context-pack-args.ts:97, drop .optional()); (b) apply a server-side default cap by replacing DURABLE_MEMORY_MAX_CONTENT_CHARS = Number.MAX_SAFE_INTEGER (context-pack-durable-memory.ts:43) with a finite ceiling, noting the docstring says a prior 4,000-token default was removed for violating the pack contract, so the contract text must change with it; (c) return pointers-only / paginated above a size threshold, using the pointer pool the pack already builds. After the ruling: implement, add a regression test proving the budgetless path is bounded, and update the "Still open" paragraph at docs/core01-nats-worker-runbook.md:390.
+
+**Stale text in this issue corrected by this comment:** Body cites `server/tools/context-pack-durable-memory.ts` sizes from tables `ob_sessions`/`ob_decisions`/`ob_thoughts`, which do not exist in the local dogfood DB (actual: ob_session_events, ob_entities, ob_links, ...); the measurement table may reflect core01 or a superseded schema, so re-measure against named tables before using those row counts as a baseline.

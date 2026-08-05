@@ -3,11 +3,12 @@
 
 # #582 — Observation lane zero-emit: capture child exits 0, writes no watermark, emits nothing — reproduced under a scrubbed env with all four tracing vars set
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: bug
 Created: 2026-08-05T17:27:27Z
-Updated: 2026-08-05T17:27:27Z
+Updated: 2026-08-05T19:12:58Z
+Closed: 2026-08-05T19:12:58Z
 
 ---
 

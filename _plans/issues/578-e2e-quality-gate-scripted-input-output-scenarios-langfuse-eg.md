@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: none
 Created: 2026-08-05T16:04:17Z
-Updated: 2026-08-05T17:26:12Z
+Updated: 2026-08-05T19:15:48Z
 
 ---
 
@@ -68,7 +68,7 @@ evals (subjective; this gate is deterministic), CI-required gating on day one
 
 ---
 
-## Discussion (1)
+## Discussion (2)
 
 ### rodaddy — 2026-08-05T17:26:12Z
 
@@ -134,3 +134,9 @@ check=emit_proven   status=FAIL fatal=true observed=0 expected=1 emit_failure_de
 ### Status
 
 Both gate lanes are **RUNNING and failing** on `origin/main`. Per the run contract these were reported verbatim rather than retried until green; no issue closed, #560 untouched. Three defects above: the fixture/provider `project` scope mismatch (blocks lane 1), the capture zero-emit (blocks lane 2), and two swallowed-stderr paths that made both far harder to diagnose than they should have been.
+
+---
+
+### rodaddy — 2026-08-05T19:15:48Z
+
+Live gate rerun on trunk a5a1274 after #586: drive PASS (emit proven, watermark offset 1446) + verify PASS (1 trace, 4 obs, 3 generations, generation_metadata 3/3, total_cost 3/3 non-NULL, secret_scan clean over real content, settled in 1 poll). This run is the closing receipt on #560. The gate found #581/#582/#583 this morning; all three are now closed, all same-day.

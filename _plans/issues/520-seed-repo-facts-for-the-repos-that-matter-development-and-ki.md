@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: none
 Created: 2026-08-03T06:09:11Z
-Updated: 2026-08-03T06:09:11Z
+Updated: 2026-08-05T22:43:27Z
 
 ---
 
@@ -18,3 +18,20 @@ Seeding is content-authoring, not plumbing: each fact needs provenance (`repoFac
 Candidates per repo: deploy/run truths, DB/test gotchas, host bindings, the things `# Stack`/`## Commands` sections carry. Write path: `upsert_repo_fact` per #445's decision record; the canon pack TOML + reconciler (#493 finding: no pack file exists yet) is the reviewable home once authored.
 
 Slug convention is git-root basename lowercased (#517). Any future fact bound under another shape is invisible to the pack — bind exactly.
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-05T22:43:27Z
+
+**Stale-blocker sweep verdict (2026-08-05): PARTIAL** — every issue this one references is closed, so it was audited against live state (scripts/stale-blockers.ts flagged it; a verification lane checked the acceptance itself).
+
+**What actually remains:**
+1. Seed the five king-* repos still at the 2026-06-18 baseline of one auto-derived `package.json` fact each: king-trading, king-status, king-ops, king-market-data, king-reconciliation. Same bar as the completed repos (6-8 distilled operational facts, full `repoFactMetadata` provenance, exact basename slug). These are explicitly in scope — the issue body says "1 each for the other king repos" is the gap.
+
+2. Author pack TOMLs under `docs/canon/` for the development and king-* facts, or record an operator decision that DB-resident facts without a pack source are acceptable. The issue names the pack as "the reviewable home once authored"; today only `docs/canon/open-brain-repo-facts.toml` exists (6 entries, open-brain only), leaving the 59 live development/king-* facts outside #493's drift detection.
+
+3. Optional operator call: whether the 5 thin repos genuinely warrant seeding or should be declared out of scope (some may be low-activity/archived). If Rico rules them out of scope, item 1 drops and only item 2 gates closure.
+
+**Stale text in this issue corrected by this comment:** Live check 2026-08-05 against dogfood DB (service rev a5a1274): the baseline in this body has moved — development is now 8 facts (was 1), king-core 8 (was 2), and king-signals/king-agents 8, king-dashboard/king-ingest 7, king-infra 6, all seeded 2026-08-03 with complete source_commit/source_url/verified_at provenance and exact basename slugs. Still open per this issue's own acceptance: king-trading, king-status, king-ops, king-market-data and king-reconciliation remain at the original 2026-06-18 single auto-derived package.json fact, and the canon pack TOML home named above exists only for open-brain (docs/canon/open-brain-repo-facts.toml, 6 entries), so the 59 live development/king-* facts have no reviewable pack source for the #493 reconciler.

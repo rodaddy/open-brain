@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: enhancement, memory, closure-audit
 Created: 2026-07-19T02:21:12Z
-Updated: 2026-07-24T19:26:25Z
+Updated: 2026-08-05T22:43:28Z
 
 ---
 
@@ -31,7 +31,7 @@ The Claude rollout required two activation manifests and a chained restore scrip
 
 ---
 
-## Discussion (4)
+## Discussion (5)
 
 ### rodaddy — 2026-07-20T07:23:15Z
 
@@ -104,3 +104,18 @@ The shipped docs are honest about the remaining acceptance gaps:
 
 **Remediation required before closure**
 Schedule production backups and stale/failure alerting, automate retention pruning, record a real core01 backup plus clean scratch restore, add Python client reconnect/restore-then-replay coverage, and either implement a consistent mid-upgrade snapshot strategy or explicitly narrow the issue contract with owner approval.
+
+---
+
+### rodaddy — 2026-08-05T22:43:28Z
+
+**Stale-blocker sweep verdict (2026-08-05): PARTIAL** — every issue this one references is closed, so it was audited against live state (scripts/stale-blockers.ts flagged it; a verification lane checked the acceptance itself).
+
+**What actually remains:**
+1. Wire scheduled backups + stale/failure alerting that consumes `backup-verify --max-age-hours` exit 3 (no launchd/cron artifact exists on trunk).
+2. Take a real production backup on core01 and execute one clean scratch restore against it; attach the receipt (no `openbrain.backup_manifest.v1` set exists anywhere on disk today).
+3. Add python-client restore-then-replay + reconnect coverage (server restore composed with client spool drain) — currently deferred per docs/backup-restore.md:204.
+4. Either drill interrupted-upgrade and rollback (and decide backup-during-upgrade), or get Rico's explicit approval to narrow the issue contract to exclude those four scenarios — this part is operator-gated.
+5. Retention pruning remains operator-run; needs either automation or an explicit owner decision that manual is acceptable.
+
+Note: items 1-3 are pure engineering and closable by work; item 4 needs a Rico decision if the answer is "narrow the contract" rather than "build the drills".

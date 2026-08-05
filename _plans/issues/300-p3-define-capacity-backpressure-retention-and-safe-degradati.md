@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: enhancement, memory, closure-audit
 Created: 2026-07-19T02:21:15Z
-Updated: 2026-07-24T19:26:23Z
+Updated: 2026-08-05T22:43:24Z
 
 ---
 
@@ -31,7 +31,7 @@ P3 “what did I not ask?” production-capacity requirement; not a blocker for 
 
 ---
 
-## Discussion (4)
+## Discussion (5)
 
 ### rodaddy — 2026-07-20T07:23:16Z
 
@@ -87,3 +87,14 @@ No concurrent durable-session limit is defined in the limit table. The closure t
 
 **Remediation required before closure**
 Define and enforce the missing session/receipt/replay/backup envelopes, add content-free alert thresholds and a degraded-state surface, and add a bounded concurrent multi-runtime load test that proves backpressure, recovery, scope isolation, and no acknowledged-data loss.
+
+---
+
+### rodaddy — 2026-08-05T22:43:24Z
+
+**Stale-blocker sweep verdict (2026-08-05): PARTIAL** — every issue this one references is closed, so it was audited against live state (scripts/stale-blockers.ts flagged it; a verification lane checked the acceptance itself).
+
+**What actually remains:**
+1) Define and enforce a concurrent durable-session envelope (server `DEFAULT_MAX_SESSIONS = 100` at src/transport.ts:36 is unmentioned in docs/memory-limits.md; note core01 runs 2 workers so the effective cap differs from local). 2) Receipt-retention policy and backup duration/storage envelopes — blocked on #298 (OPEN). 3) Replay throughput envelope beyond serialized drain — blocked on #296 (OPEN). 4) Content-free saturation ALERT thresholds and a unified degraded-state surface (metrics exist; thresholds do not). 5) A bounded concurrent Claude+Codex+Python load test proving backpressure, recovery, scope isolation, and no acknowledged-data loss. 6) Cleanup/retention documentation for receipts, retired lanes, and orphaned spool records. Recommended alternative if the operator wants the count down: this is a P3 program envelope, not a defect — a RICO_GATED decision to split items 2/3 into #296/#298 and re-scope #300 to items 1/4/5/6 is defensible, but that is Rico's call, not an auditor's.
+
+**Stale text in this issue corrected by this comment:** Status check 2026-08-05 against trunk 9fedefc: the four gaps named in the 2026-07-24 closure audit are all still open — docs/memory-limits.md:73-83 itself defers the concurrent multi-runtime load harness, saturation alert thresholds/degraded-state signal, receipt-retention + backup envelopes (to #298, OPEN), and replay-throughput limits (to #296, OPEN), and no concurrent durable-session cap is defined (the server's DEFAULT_MAX_SESSIONS = 100 at src/transport.ts:36 is absent from the limits table). The one hard criterion — never silently drop an acknowledged checkpoint — remains MET and verified: SpoolFullError backpressure at spool.py:250-255 with tests/test_spool.py passing 53/53 this session. Correcting the record: the dependencies referenced here are NOT all closed.
