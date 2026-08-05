@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.rico.qmd-sync</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Volumes/ThunderBolt/open-brain/app/scripts/qmd-sync.sh</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Volumes/ThunderBolt/open-brain/app</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>/Users/rico</string>
+    <key>PATH</key>
+    <string>/Users/rico/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>4</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+
+  <key>StandardOutPath</key>
+  <string>/Volumes/ThunderBolt/open-brain/logs/qmd-sync.launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Volumes/ThunderBolt/open-brain/logs/qmd-sync.launchd.err.log</string>
+</dict>
+</plist>
