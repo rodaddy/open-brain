@@ -6,6 +6,7 @@ import { logger } from "./logger.ts";
 import {
   buildAgentContextPackPayload,
   parseAgentContextPackArgs,
+  SECTION_NAMES,
 } from "./tools/agent-context-pack.ts";
 import type {
   FleetEnvelope,
@@ -29,6 +30,18 @@ export interface NatsRequestMessage {
   subject: string;
   data: Uint8Array;
   headers?: Record<string, string | undefined>;
+  /**
+   * The broker's OWN advertised payload figure for this connection, in bytes,
+   * as reported by the server in its INFO (`connection.info.max_payload`).
+   *
+   * REPO LAW for this seam: never substitute a constant of our own here. The
+   * figure differs per broker (this fleet's local broker advertises 8 MiB; the
+   * NATS protocol default is 1 MiB), so a hardcoded number would either refuse
+   * replies the broker would have carried or keep letting undeliverable ones
+   * through. `undefined` means the driver could not read it — in that case the
+   * bridge does not pre-judge the reply and simply publishes.
+   */
+  maxPayloadBytes?: number;
   respond(data: Uint8Array): boolean | void | Promise<boolean | void>;
 }
 
@@ -131,10 +144,7 @@ export async function startNatsContextPackBridge(
       deps: options.deps,
       health,
     });
-    const responded = await message.respond(envelopeToBytes(response));
-    if (responded === false) {
-      throw new Error("NATS request did not include a reply inbox");
-    }
+    await respondWithinBrokerFigure(message, response);
   });
 
   return {
@@ -160,6 +170,154 @@ export async function startNatsContextPackBridge(
       }
     },
   };
+}
+
+/**
+ * Publish a reply, answering an undeliverable one with an error envelope.
+ *
+ * THE DEFECT THIS CLOSES (#549): the handler finishes its work, builds a large
+ * pack, and `respond()` returns false because the broker refuses to carry the
+ * publish. The old code threw "NATS request did not include a reply inbox" —
+ * which was BOTH a misattribution (the reply inbox was present; the broker's
+ * refusal was the problem) and, worse, SILENCE: nothing was ever published, so
+ * the caller waited out its own timeout with no client-visible reason. A
+ * measured live case built a 58.5 MB reply against a broker advertising 8 MiB.
+ *
+ * The answer is an error envelope, never silence. Two paths reach it:
+ *   (a) the encoded reply exceeds the broker's OWN advertised figure, which we
+ *       compare against BEFORE publishing so we never spend a doomed publish;
+ *   (b) the publish is refused anyway (`respond()` returned false) — the
+ *       advertised figure was unreadable, or the broker refused for its own
+ *       reason. We answer with the same envelope rather than assume why.
+ *
+ * The error envelope is CONTENT-FREE: it names what happened, the measured
+ * reply bytes, the broker's advertised figure, and which sections were asked
+ * for. No pack data crosses into it, so an undeliverable reply cannot leak
+ * through the error path.
+ *
+ * This changes only how an undeliverable reply is ANSWERED. What the handler
+ * builds is untouched — the pack is still built in full, and nothing here
+ * reshapes, shortens, or withholds any part of it.
+ *
+ * If the error envelope ITSELF cannot be published there is nothing further the
+ * bridge can do on the wire, so it logs accurately and gives up — that case is
+ * a genuinely missing reply inbox, which is what the old message claimed about
+ * every case.
+ */
+async function respondWithinBrokerFigure(
+  message: NatsRequestMessage,
+  response: FleetEnvelope,
+): Promise<void> {
+  const encoded = envelopeToBytes(response);
+  const advertised = message.maxPayloadBytes;
+  const exceedsAdvertised =
+    typeof advertised === "number" &&
+    Number.isFinite(advertised) &&
+    advertised > 0 &&
+    encoded.byteLength > advertised;
+
+  if (!exceedsAdvertised) {
+    const responded = await message.respond(encoded);
+    if (responded !== false) return;
+  }
+
+  const undeliverable = undeliverableReplyEnvelope(
+    message,
+    response,
+    encoded.byteLength,
+    advertised,
+  );
+  const respondedWithError = await message.respond(
+    envelopeToBytes(undeliverable),
+  );
+  if (respondedWithError === false) {
+    // Only now is "no reply inbox" the accurate reading: a small, known-good
+    // error envelope was refused too, so the refusal is not about the figure.
+    logger.error("NATS reply could not be published to a reply inbox", {
+      subject: message.subject,
+      reply_bytes: encoded.byteLength,
+    });
+    return;
+  }
+
+  logger.warn("NATS reply exceeded the broker's advertised payload figure", {
+    subject: message.subject,
+    reply_bytes: encoded.byteLength,
+    broker_advertised_bytes: advertised ?? null,
+    correlation_id: response.correlation_id,
+  });
+}
+
+/**
+ * Build the content-free error envelope for a reply the broker will not carry.
+ *
+ * Reuses the EXISTING wire error shape (`status`/`operation`/`namespace_source`
+ * /`error{code,message}`) and the existing `payload_too_large` code, so nothing
+ * about the cross-language contract changes — no fixture and no Python mirror
+ * edit. It echoes the same `correlation_id` a normal reply would, which is what
+ * lets the waiting caller match this to its request instead of timing out.
+ *
+ * The message states measurements only — what the reply weighed, what the
+ * broker advertises, what was asked for. It prescribes nothing about how the
+ * caller should react; that is the operator's call, not this envelope's.
+ */
+function undeliverableReplyEnvelope(
+  message: NatsRequestMessage,
+  response: FleetEnvelope,
+  replyBytes: number,
+  advertisedBytes: number | undefined,
+): FleetEnvelope {
+  const sections = requestedSectionsFromRequest(message.data);
+  const advertisedText =
+    typeof advertisedBytes === "number"
+      ? `${advertisedBytes} bytes`
+      : "not advertised by the broker";
+  const sectionsText = sections.length > 0 ? sections.join(", ") : "default";
+  return buildResponseEnvelope(response.correlation_id ?? response.id, {
+    status: "error",
+    operation: "agent_context_pack",
+    namespace_source: namespaceSourceFromResponse(response),
+    error: {
+      code: "payload_too_large",
+      message:
+        "The broker refused to carry this context pack reply. " +
+        `Reply was ${replyBytes} bytes; the broker advertises ${advertisedText}. ` +
+        `Requested sections: ${sectionsText}.`,
+    },
+  });
+}
+
+/**
+ * Read the requested section names back off the INBOUND request bytes.
+ *
+ * Best-effort and deliberately defensive: this runs on the failure path, where
+ * the one thing that must not happen is a second failure. Anything unparseable
+ * or unexpected yields an empty list, and the error envelope says "default".
+ * Only known section names are echoed, so arbitrary caller text cannot be
+ * reflected back into the error message.
+ */
+function requestedSectionsFromRequest(data: Uint8Array): string[] {
+  try {
+    const envelope = envelopeFromBytes(data);
+    const payload = envelope.payload as { body?: unknown } | undefined;
+    const body = payload?.body as { requested_sections?: unknown } | undefined;
+    const requested = body?.requested_sections;
+    if (!Array.isArray(requested)) return [];
+    const known = new Set<string>(SECTION_NAMES);
+    return requested.filter(
+      (name): name is string => typeof name === "string" && known.has(name),
+    );
+  } catch {
+    return [];
+  }
+}
+
+function namespaceSourceFromResponse(
+  response: FleetEnvelope,
+): NamespaceSource | null {
+  const source = (response.payload as { namespace_source?: unknown })
+    .namespace_source;
+  return typeof source === "string" ? (source as NamespaceSource) : null;
 }
 
 interface LaneBinding {
@@ -457,7 +615,15 @@ async function createNatsJsDriver(
               consecutiveEmptySubscriptions = 0;
               markNatsBridgeAvailable(health);
               resubscribeDelayMs = NATS_RESUBSCRIBE_INITIAL_DELAY_MS;
-              await processNatsSubscriptionMessage(message, handler);
+              await processNatsSubscriptionMessage(
+                message,
+                handler,
+                // Read the figure PER MESSAGE, not once at connect: nats.js
+                // refreshes `connection.info` on reconnect, so a failover to a
+                // broker advertising a different figure is picked up here
+                // instead of being judged against a stale one.
+                advertisedMaxPayloadBytes(connection),
+              );
             }
             if (!closed && !processedMessage) {
               consecutiveEmptySubscriptions += 1;
@@ -551,6 +717,7 @@ function delay(ms: number): Promise<void> {
 async function processNatsSubscriptionMessage(
   message: NatsSubscriptionMessage,
   handler: (message: NatsRequestMessage) => Promise<void>,
+  maxPayloadBytes?: number,
   onError: (err: unknown, subject: string) => void = logNatsHandlerError,
 ): Promise<void> {
   try {
@@ -558,6 +725,7 @@ async function processNatsSubscriptionMessage(
       subject: message.subject,
       data: message.data,
       headers: headersToRecord(message.headers),
+      maxPayloadBytes,
       respond: (data) => {
         return message.respond(data);
       },
@@ -565,6 +733,24 @@ async function processNatsSubscriptionMessage(
   } catch (err) {
     onError(err, message.subject);
   }
+}
+
+/**
+ * The broker's own advertised payload figure for this connection, in bytes.
+ *
+ * Sourced ONLY from the server's INFO (`connection.info.max_payload`) — the
+ * bridge never supplies a figure of its own, because the correct value is
+ * whatever THIS broker says it is and that differs between deployments. A
+ * connection that has not yet reported INFO returns undefined, and the reply is
+ * published without being pre-judged.
+ */
+function advertisedMaxPayloadBytes(connection: {
+  info?: { max_payload?: number };
+}): number | undefined {
+  const advertised = connection.info?.max_payload;
+  return typeof advertised === "number" && Number.isFinite(advertised) && advertised > 0
+    ? advertised
+    : undefined;
 }
 
 function logNatsHandlerError(err: unknown, subject: string): void {

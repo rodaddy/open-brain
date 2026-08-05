@@ -489,17 +489,31 @@ describe("startNatsContextPackBridge", () => {
     expect(runtime).toBeNull();
   });
 
-  it("surfaces reply failures from request messages", async () => {
+  // #549 regression lane. Before this fix the bridge threw "NATS request did
+  // not include a reply inbox" and published NOTHING, so a caller whose reply
+  // the broker refused waited out its own timeout with no reason. Each test
+  // below fails on that old behavior: the throw escapes, and no reply exists to
+  // assert against.
+  it("answers with an error envelope when the broker refuses the reply publish", async () => {
+    const published: Array<ReturnType<typeof envelopeFromBytes>> = [];
     const driver: NatsBridgeDriver = {
       subscribe: async (subject, handler) => {
-        await expect(
-          handler({
-            subject,
-            data: data(envelope({ from: "rico" })),
-            headers: {},
-            respond: () => false,
-          } satisfies NatsRequestMessage),
-        ).rejects.toThrow("NATS request did not include a reply inbox");
+        let firstPublish = true;
+        await handler({
+          subject,
+          data: data(envelope({ id: "req-refused", from: "rico" })),
+          headers: {},
+          respond: (payload: Uint8Array) => {
+            // The broker refuses the real reply, then carries the small error
+            // envelope — exactly the live shape from the runbook.
+            if (firstPublish) {
+              firstPublish = false;
+              return false;
+            }
+            published.push(envelopeFromBytes(payload));
+            return true;
+          },
+        } satisfies NatsRequestMessage);
         return { close: () => undefined };
       },
       close: () => undefined,
@@ -512,7 +526,140 @@ describe("startNatsContextPackBridge", () => {
       driver,
     });
 
+    expect(published).toHaveLength(1);
+    const reply = published[0]!;
+    expect(reply.kind).toBe(RESPONSE_KIND);
+    expect(reply.from).toBe(RESPONSE_FROM);
+    // The correlation id is what lets the waiting caller match this reply to
+    // its request instead of timing out.
+    expect(reply.correlation_id).toBe("req-refused");
+    const payload = reply.payload as Record<string, any>;
+    expect(payload.status).toBe("error");
+    expect(payload.operation).toBe("agent_context_pack");
+    expect(payload.error.code).toBe("payload_too_large");
+    expect(payload.error.message).toContain("broker refused");
+    expect(payload.error.message).toContain("working_set");
+
     await runtime?.close();
+  });
+
+  it("answers with an error envelope without attempting a publish the broker's advertised figure rules out", async () => {
+    const published: Array<ReturnType<typeof envelopeFromBytes>> = [];
+    const attempts: number[] = [];
+    const driver: NatsBridgeDriver = {
+      subscribe: async (subject, handler) => {
+        await handler({
+          subject,
+          data: data(envelope({ id: "req-oversized", from: "rico" })),
+          headers: {},
+          // A figure small enough that the real reply cannot fit, while the
+          // content-free error envelope still can.
+          maxPayloadBytes: 400,
+          respond: (payload: Uint8Array) => {
+            attempts.push(payload.byteLength);
+            published.push(envelopeFromBytes(payload));
+            return true;
+          },
+        } satisfies NatsRequestMessage);
+        return { close: () => undefined };
+      },
+      close: () => undefined,
+    };
+
+    const runtime = await startNatsContextPackBridge({
+      boundary: localBoundary(),
+      tokenMap: new Map(),
+      deps: depsWithWorkingSet("rico"),
+      driver,
+    });
+
+    // Only the error envelope was ever put on the wire: the doomed publish was
+    // never spent, because the reply already exceeded what the broker advertises.
+    expect(attempts).toHaveLength(1);
+    const payload = published[0]!.payload as Record<string, any>;
+    expect(payload.status).toBe("error");
+    expect(payload.error.code).toBe("payload_too_large");
+    // The envelope names the measured reply size and the broker's own figure.
+    expect(payload.error.message).toContain("400 bytes");
+    expect(payload.error.message).toMatch(/Reply was \d+ bytes/);
+    expect(published[0]!.correlation_id).toBe("req-oversized");
+
+    await runtime?.close();
+  });
+
+  it("carries the reply normally when it fits the broker's advertised figure", async () => {
+    const published: Array<ReturnType<typeof envelopeFromBytes>> = [];
+    const driver: NatsBridgeDriver = {
+      subscribe: async (subject, handler) => {
+        await handler({
+          subject,
+          data: data(envelope({ id: "req-ok", from: "rico" })),
+          headers: {},
+          maxPayloadBytes: 8 * 1024 * 1024,
+          respond: (payload: Uint8Array) => {
+            published.push(envelopeFromBytes(payload));
+            return true;
+          },
+        } satisfies NatsRequestMessage);
+        return { close: () => undefined };
+      },
+      close: () => undefined,
+    };
+
+    const runtime = await startNatsContextPackBridge({
+      boundary: localBoundary(),
+      tokenMap: new Map(),
+      deps: depsWithWorkingSet("rico"),
+      driver,
+    });
+
+    expect(published).toHaveLength(1);
+    expect((published[0]!.payload as Record<string, any>).status).toBe("ok");
+
+    await runtime?.close();
+  });
+
+  it("logs an accurate reason when even the error envelope cannot be published", async () => {
+    const loggedErrors: string[] = [];
+    const originalError = logger.error;
+    logger.error = (message, extra) => {
+      loggedErrors.push(`${message}:${JSON.stringify(extra ?? {})}`);
+    };
+
+    try {
+      const driver: NatsBridgeDriver = {
+        subscribe: async (subject, handler) => {
+          await handler({
+            subject,
+            data: data(envelope({ id: "req-no-inbox", from: "rico" })),
+            headers: {},
+            // Every publish is refused, including the small error envelope —
+            // the only case where a missing reply inbox is the accurate reading.
+            respond: () => false,
+          } satisfies NatsRequestMessage);
+          return { close: () => undefined };
+        },
+        close: () => undefined,
+      };
+
+      const runtime = await startNatsContextPackBridge({
+        boundary: localBoundary(),
+        tokenMap: new Map(),
+        deps: depsWithWorkingSet("rico"),
+        driver,
+      });
+
+      const joined = loggedErrors.join("\n");
+      expect(joined).toContain(
+        "NATS reply could not be published to a reply inbox",
+      );
+      // The old misattribution claimed this about EVERY refused publish.
+      expect(joined).not.toContain("NATS request did not include a reply inbox");
+
+      await runtime?.close();
+    } finally {
+      logger.error = originalError;
+    }
   });
 
   it("attempts driver close when subscription close fails", async () => {
@@ -629,7 +776,15 @@ describe("startNatsContextPackBridge", () => {
           }),
         ]),
       );
+      // The `req-no-reply` message refuses EVERY publish, including the error
+      // envelope, so the bridge logs the one accurate reading of that case and
+      // moves on. It no longer throws (#549): the old throw was misattributed,
+      // and turning a refused publish into a handler error is what let the
+      // caller receive nothing at all.
       expect(loggedErrors).toContain(
+        "NATS reply could not be published to a reply inbox:",
+      );
+      expect(loggedErrors).not.toContain(
         "NATS context-pack bridge request failed:Error",
       );
       expect(loggedErrors).toContain(
