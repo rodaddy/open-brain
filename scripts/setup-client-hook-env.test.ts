@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -91,6 +92,22 @@ function runWrapper(wrapperPath: string, home: string) {
   });
 }
 
+function sourceWrapper(shell: string, wrapperPath: string, home: string) {
+  return spawnSync(
+    shell,
+    [
+      "-c",
+      'wrapper=$1; set -- /usr/bin/env; . "$wrapper"',
+      join(suiteRoot, "wrong-invocation-path/openbrain-hook-env"),
+      wrapperPath,
+    ],
+    {
+      encoding: "utf8",
+      env: { HOME: home, PATH: process.env.PATH ?? "/usr/bin:/bin" },
+    },
+  );
+}
+
 function fixtureDirectory(name: string): string {
   return mkdtempSync(join(suiteRoot, `${name}-`));
 }
@@ -131,7 +148,59 @@ describe("setup-client hook env-file normalization", () => {
     expect(result.stderr).toBe("");
   });
 
-  it("uses the HOME fallback only when wrapper-directory derivation is empty", () => {
+  it("resolves a PATH-invoked symlink to the wrapper's real directory", () => {
+    const home = fixtureDirectory("symlink-home");
+    const root = fixtureDirectory("symlink-layout");
+    const envDirectory = join(root, "env");
+    const binDirectory = join(root, "bin");
+    const wrapperPath = createWrapper(envDirectory);
+    mkdirSync(binDirectory, { recursive: true });
+    writeFileSync(
+      join(envDirectory, "claudex-observation.env"),
+      "OPENBRAIN_BASE_URL=http://symlink.invalid\n" +
+        "OPENBRAIN_TOKEN=ob-symlink-placeholder\n",
+    );
+    expect(normalize(wrapperPath).status).toBe(0);
+    symlinkSync(
+      "../env/openbrain-hook-env",
+      join(binDirectory, "openbrain-hook-env"),
+    );
+
+    const result = spawnSync("openbrain-hook-env", ["/usr/bin/env"], {
+      encoding: "utf8",
+      env: { HOME: home, PATH: `${binDirectory}:/usr/bin:/bin` },
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(
+      "OPENBRAIN_BASE_URL=http://symlink.invalid\n",
+    );
+    expect(result.stderr).toBe("");
+  });
+
+  it("uses the sourced wrapper location in bash and zsh", () => {
+    const home = fixtureDirectory("sourced-home");
+    const envDirectory = fixtureDirectory("sourced-wrapper");
+    const wrapperPath = createWrapper(envDirectory);
+    writeFileSync(
+      join(envDirectory, "claudex-observation.env"),
+      "OPENBRAIN_BASE_URL=http://sourced.invalid\n" +
+        "OPENBRAIN_TOKEN=ob-sourced-placeholder\n",
+    );
+    expect(normalize(wrapperPath).status).toBe(0);
+
+    for (const shell of ["bash", "zsh"]) {
+      const result = sourceWrapper(shell, wrapperPath, home);
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain(
+        "OPENBRAIN_BASE_URL=http://sourced.invalid\n",
+      );
+      expect(result.stderr).toBe("");
+    }
+  });
+
+  it("fails loudly when the wrapper directory cannot be resolved", () => {
     const home = fixtureDirectory("fallback-home");
     const fallbackDirectory = join(
       home,
@@ -145,13 +214,17 @@ describe("setup-client hook env-file normalization", () => {
     );
     const wrapperPath = createWrapper(fixtureDirectory("fallback-wrapper"));
     expect(normalize(wrapperPath).status).toBe(0);
+    const missingWrapperPath = join(
+      suiteRoot,
+      "missing-directory/openbrain-hook-env",
+    );
 
     const result = spawnSync(
-      "/bin/sh",
+      "/bin/dash",
       [
         "-c",
         'wrapper=$1; set -- /usr/bin/env; . "$wrapper"',
-        join(suiteRoot, "missing-directory/openbrain-hook-env"),
+        missingWrapperPath,
         wrapperPath,
       ],
       {
@@ -160,11 +233,10 @@ describe("setup-client hook env-file normalization", () => {
       },
     );
 
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain(
-      "OPENBRAIN_BASE_URL=http://fallback.invalid\n",
-    );
-    expect(result.stderr).toBe("");
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("could not resolve wrapper directory");
+    expect(result.stderr).toContain(missingWrapperPath);
   });
 
   it("converges to one managed block when run twice", () => {
@@ -207,7 +279,7 @@ describe("setup-client hook env-file normalization", () => {
     expect(result.status).not.toBe(0);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain(expectedPath);
-    expect(result.stderr).toContain("wrapper directory derived from");
+    expect(result.stderr).toContain("wrapper source:");
     expect(result.stderr).toContain("missing or unreadable");
   });
 

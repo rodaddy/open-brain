@@ -317,15 +317,53 @@ if recognized.search(text) is None:
     )
 
 block = f'''{BEGIN}
-ENV_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" 2>/dev/null && pwd || :)"
-ENV_FILE_SOURCE="wrapper directory derived from $0"
-if [ -z "$ENV_DIR" ]; then
-  ENV_DIR="${{HOME}}/.local/share/openbrain-memory/env"
-  ENV_FILE_SOURCE="HOME fallback because wrapper directory derivation from $0 yielded nothing"
+if [ -n "${{BASH_SOURCE:-}}" ]; then
+  WRAPPER_SOURCE="${{BASH_SOURCE[0]}}"
+elif [ -n "${{ZSH_VERSION:-}}" ]; then
+  eval 'WRAPPER_SOURCE=${{(%):-%x}}'
+else
+  WRAPPER_SOURCE="$0"
 fi
+if [ -z "$WRAPPER_SOURCE" ]; then
+  printf '%s\\n' "openbrain-hook-env: could not resolve wrapper source: shell reported an empty path" >&2
+  exit 1
+fi
+case "$WRAPPER_SOURCE" in
+  */*) ;;
+  *)
+    RESOLVED_SOURCE="$(command -v -- "$WRAPPER_SOURCE" 2>/dev/null || :)"
+    if [ -z "$RESOLVED_SOURCE" ]; then
+      printf '%s\\n' "openbrain-hook-env: could not resolve wrapper source via PATH: $WRAPPER_SOURCE" >&2
+      exit 1
+    fi
+    WRAPPER_SOURCE="$RESOLVED_SOURCE"
+    ;;
+esac
+if RESOLVED_SOURCE="$(readlink -f -- "$WRAPPER_SOURCE" 2>/dev/null)" && [ -n "$RESOLVED_SOURCE" ]; then
+  WRAPPER_SOURCE="$RESOLVED_SOURCE"
+else
+  while [ -L "$WRAPPER_SOURCE" ]; do
+    WRAPPER_DIR="$(CDPATH='' cd -- "$(dirname -- "$WRAPPER_SOURCE")" 2>/dev/null && pwd)" || {{
+      printf '%s\\n' "openbrain-hook-env: could not resolve symlink directory: $WRAPPER_SOURCE" >&2
+      exit 1
+    }}
+    LINK_TARGET="$(readlink "$WRAPPER_SOURCE" 2>/dev/null)" || {{
+      printf '%s\\n' "openbrain-hook-env: could not read symlink target: $WRAPPER_SOURCE" >&2
+      exit 1
+    }}
+    case "$LINK_TARGET" in
+      /*) WRAPPER_SOURCE="$LINK_TARGET" ;;
+      *) WRAPPER_SOURCE="$WRAPPER_DIR/$LINK_TARGET" ;;
+    esac
+  done
+fi
+ENV_DIR="$(CDPATH='' cd -- "$(dirname -- "$WRAPPER_SOURCE")" 2>/dev/null && pwd)" || {{
+  printf '%s\\n' "openbrain-hook-env: could not resolve wrapper directory: $WRAPPER_SOURCE" >&2
+  exit 1
+}}
 ENV_FILE="$ENV_DIR/claudex-observation.env"
 if [ ! -r "$ENV_FILE" ]; then
-  printf '%s\\n' "openbrain-hook-env: env file missing or unreadable: $ENV_FILE (derived from $ENV_FILE_SOURCE)" >&2
+  printf '%s\\n' "openbrain-hook-env: env file missing or unreadable: $ENV_FILE (wrapper source: $WRAPPER_SOURCE)" >&2
   exit 1
 fi
 {END}
