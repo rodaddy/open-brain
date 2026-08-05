@@ -1,8 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import {
+  captureEnvironment,
   evaluateDriveOutcome,
   langfuseHost,
+  observationOffset,
   parseEgressArgs,
+  readCaptureDriveConfig,
   runEgressCli,
   serializeCliOutcome,
   verifyLangfuseEgress,
@@ -24,6 +28,12 @@ const OPTED_IN_ENV = {
   OPENBRAIN_TRACING_SECRET_KEY: "private-id",
 };
 
+const CAPTURE_DRIVE_ENV = {
+  ...OPTED_IN_ENV,
+  OPENBRAIN_CAPTURE_BASE_URL: "http://127.0.0.1:3100",
+  OPENBRAIN_CAPTURE_TOKEN: "capture-token",
+};
+
 interface FakeObservationOptions {
   usage?: boolean;
   cost?: number | null;
@@ -36,9 +46,9 @@ function generation(
   return {
     id: "observation-1",
     type: "GENERATION",
-    providedModelName: "claude-fable-5",
+    model: "claude-fable-5",
     usageDetails: options.usage === false ? undefined : { input: 2, output: 3 },
-    totalCost: options.cost === undefined ? 0.001 : options.cost,
+    totalPrice: options.cost === undefined ? 0.001 : options.cost,
     output: options.output ?? "SAFE_BODY_MARKER",
   };
 }
@@ -59,6 +69,7 @@ function fakeTransport(
       return Response.json({
         id: "trace-1",
         sessionId: "run-tag",
+        tags: ["open-brain-capture"],
         observations,
         ...bodyExtras,
       });
@@ -102,6 +113,71 @@ function check(receipt: Awaited<ReturnType<typeof verify>>, label: string) {
 }
 
 describe("Langfuse egress verification", () => {
+  test("drive configuration requires raw capture coordinates", () => {
+    expect(() => readCaptureDriveConfig(OPTED_IN_ENV)).toThrow(
+      "OPENBRAIN_CAPTURE_BASE_URL and OPENBRAIN_CAPTURE_TOKEN",
+    );
+  });
+
+  test("drive returns a non-zero configuration error before spawning an invalid child", async () => {
+    const outcome = await runEgressCli(
+      ["--drive", "--tag", "run-tag"],
+      OPTED_IN_ENV,
+    );
+
+    expect(outcome).toEqual({
+      exitCode: 2,
+      error:
+        "OPENBRAIN_CAPTURE_BASE_URL and OPENBRAIN_CAPTURE_TOKEN are required for --drive",
+    });
+  });
+
+  test("drive child keeps declared hook settings and drops foreign Open Brain names", () => {
+    const child = captureEnvironment(
+      {
+        ...CAPTURE_DRIVE_ENV,
+        OPENBRAIN_LOCAL_CLONE: "1",
+        OPENBRAIN_TRANSPORT: "typescript-only",
+        OPENBRAIN_ALLOW_INSECURE_HTTP: "1",
+        PATH: "/test/bin",
+      },
+      CONFIG,
+      readCaptureDriveConfig(CAPTURE_DRIVE_ENV),
+      "/scratch/watermarks.sqlite",
+    );
+
+    expect(child).toMatchObject({
+      PATH: "/test/bin",
+      OPENBRAIN_CAPTURE_BASE_URL: "http://127.0.0.1:3100",
+      OPENBRAIN_CAPTURE_TOKEN: "capture-token",
+      OPENBRAIN_ALLOW_INSECURE_HTTP: "1",
+      OPENBRAIN_OBSERVATION_ENABLED: "1",
+      OPENBRAIN_CAPTURE_WATERMARK_PATH: "/scratch/watermarks.sqlite",
+    });
+    expect(child.OPENBRAIN_LOCAL_CLONE).toBeUndefined();
+    expect(child.OPENBRAIN_TRANSPORT).toBeUndefined();
+  });
+
+  test("observation watermark read falls back after a post-child database failure", async () => {
+    let fallbackCalls = 0;
+
+    const offset = await observationOffset("/watermarks.sqlite", "run-tag", {
+      fileExists: async () => true,
+      databaseFactory: () => {
+        throw new Error("unable to open database file");
+      },
+      fallbackOffset: async (path, sessionKey) => {
+        fallbackCalls += 1;
+        expect(path).toBe("/watermarks.sqlite");
+        expect(sessionKey).toBe("observe:run-tag");
+        return 42;
+      },
+    });
+
+    expect(offset).toBe(42);
+    expect(fallbackCalls).toBe(1);
+  });
+
   test("normalizes bare hosts and ingestion URLs identically", () => {
     expect(langfuseHost("https://langfuse.example")).toBe(
       "https://langfuse.example",
@@ -109,6 +185,55 @@ describe("Langfuse egress verification", () => {
     expect(langfuseHost("https://langfuse.example/api/public/ingestion/")).toBe(
       "https://langfuse.example",
     );
+  });
+
+  test("verification excludes server traces that share the capture session", async () => {
+    const transport: HttpTransport = async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/api/public/traces") {
+        return Response.json({
+          data: [{ id: "capture-trace" }, { id: "server-trace" }],
+          meta: { totalPages: 1 },
+        });
+      }
+      if (url.pathname === "/api/public/traces/capture-trace") {
+        return Response.json({
+          id: "capture-trace",
+          tags: ["claude-code", "open-brain-capture"],
+          observations: [
+            { id: "span-1", type: "SPAN" },
+            generation(),
+            generation(),
+            generation(),
+          ],
+        });
+      }
+      if (url.pathname === "/api/public/traces/server-trace") {
+        return Response.json({
+          id: "server-trace",
+          tags: ["mcp-tool", "open-brain-server"],
+          observations: [{ id: "span-2", type: "SPAN" }],
+        });
+      }
+      return new Response(null, { status: 404 });
+    };
+
+    const receipt = await verifyLangfuseEgress({
+      tag: "run-tag",
+      expectedObservations: 4,
+      expectedGenerations: 3,
+      expectedTraces: 1,
+      settleTimeoutSeconds: 0,
+      config: CONFIG,
+      transport,
+    });
+
+    expect(receipt.passed).toBeTrue();
+    expect(receipt.observed).toEqual({
+      traces: 1,
+      observations: 4,
+      generations: 3,
+    });
   });
 
   test("arrival-count miss is fatal", async () => {
@@ -216,7 +341,11 @@ describe("Langfuse egress verification", () => {
         });
       }
       if (url.pathname === "/api/public/traces/trace-1") {
-        return Response.json({ id: "trace-1", observations: [generation()] });
+        return Response.json({
+          id: "trace-1",
+          tags: ["open-brain-capture"],
+          observations: [generation()],
+        });
       }
       return new Response(null, { status: 404 });
     };
@@ -251,7 +380,11 @@ describe("Langfuse egress verification", () => {
         });
       }
       if (url.pathname === "/api/public/traces/trace-1") {
-        return Response.json({ id: "trace-1", observations: [generation()] });
+        return Response.json({
+          id: "trace-1",
+          tags: ["open-brain-capture"],
+          observations: [generation()],
+        });
       }
       return new Response(null, { status: 404 });
     };
@@ -292,6 +425,7 @@ describe("Langfuse egress verification", () => {
       const id = url.pathname.split("/").at(-1) ?? "missing";
       return Response.json({
         id,
+        tags: ["open-brain-capture"],
         observations: [generation()],
       });
     };

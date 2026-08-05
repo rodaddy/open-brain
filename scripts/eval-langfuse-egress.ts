@@ -10,6 +10,11 @@
  * coordinates come from the existing OPENBRAIN_TRACING_* variables. Output is
  * content-free: counts, ids, statuses, and detector labels only. Trace bodies,
  * credentials, matching values, and match offsets are never emitted.
+ *
+ * ``--drive`` invokes the real raw-capture Stop hook, so it also requires
+ * OPENBRAIN_CAPTURE_BASE_URL and OPENBRAIN_CAPTURE_TOKEN (or their shared
+ * aliases). The driver rejects a missing raw configuration before spawning a
+ * child; a hook's normal exit-zero contract cannot prove a capture happened.
  */
 
 import { randomUUID } from "node:crypto";
@@ -26,11 +31,23 @@ const DEFAULT_SETTLE_TIMEOUT_SECONDS = 60;
 const DEFAULT_SETTLE_POLL_INTERVAL_MS = 2_000;
 const MAX_TRACE_PAGES = 100;
 const EMIT_FAILURE_MARKER = "observation emit failed";
+const CAPTURE_TRACE_TAG = "open-brain-capture";
+const CAPTURE_OPTION_ENV_KEYS = [
+  "OPENBRAIN_CAPTURE_AGENT_ID",
+  "OPENBRAIN_CAPTURE_AGENT",
+  "OPENBRAIN_SPOOL_PATH",
+  "OPENBRAIN_ALLOW_INSECURE_HTTP",
+] as const;
 
 export interface LangfuseReadConfig {
   endpoint: string;
   publicKey: string;
   secretKey: string;
+}
+
+interface CaptureDriveConfig {
+  baseUrl: string;
+  token: string;
 }
 
 export type HttpTransport = (
@@ -116,6 +133,12 @@ interface DriveOptions {
   cwd?: string;
 }
 
+interface ObservationOffsetOptions {
+  fileExists?: (path: string) => Promise<boolean>;
+  databaseFactory?: (path: string) => Database;
+  fallbackOffset?: (path: string, sessionKey: string) => Promise<number>;
+}
+
 /** Normalize either a bare Langfuse host or its public ingestion URL. */
 export function langfuseHost(endpoint: string): string {
   return endpoint
@@ -136,6 +159,22 @@ export function readLangfuseEgressConfig(
     throw new Error("OPENBRAIN_TRACING_* coordinates are incomplete");
   }
   return { endpoint: langfuseHost(endpoint), publicKey, secretKey };
+}
+
+/** Resolve the raw capture coordinates the real Stop hook needs before observing. */
+export function readCaptureDriveConfig(
+  env: Record<string, string | undefined> = process.env,
+): CaptureDriveConfig {
+  const baseUrl =
+    env.OPENBRAIN_CAPTURE_BASE_URL?.trim() ?? env.OPENBRAIN_BASE_URL?.trim() ?? "";
+  const token =
+    env.OPENBRAIN_CAPTURE_TOKEN?.trim() ?? env.OPENBRAIN_TOKEN?.trim() ?? "";
+  if (!baseUrl || !token) {
+    throw new Error(
+      "OPENBRAIN_CAPTURE_BASE_URL and OPENBRAIN_CAPTURE_TOKEN are required for --drive",
+    );
+  }
+  return { baseUrl, token };
 }
 
 function assertSafeTag(tag: string): void {
@@ -240,6 +279,10 @@ function traceFrom(value: unknown): LangfuseTrace | undefined {
   return { id, observations: arrayField(value, "observations"), body };
 }
 
+function isCaptureTrace(trace: LangfuseTrace): boolean {
+  return arrayField(trace.body, "tags").includes(CAPTURE_TRACE_TAG);
+}
+
 function pageData(value: unknown): unknown[] {
   const direct = arrayField(value, "data");
   if (direct.length > 0) return direct;
@@ -281,7 +324,8 @@ async function queryTaggedTraces(
         config.endpoint,
       );
       const detail = await fetchJson(detailUrl, config, transport);
-      traces.push(traceFrom(detail) ?? summaryTrace);
+      const trace = traceFrom(detail) ?? summaryTrace;
+      if (isCaptureTrace(trace)) traces.push(trace);
     }
     more = hasNextPage(
       payload,
@@ -374,11 +418,11 @@ export async function verifyLangfuseEgress(
   const generations = observations.filter(isGeneration);
   const metadataCount = generations.filter(
     (row) =>
-      fieldPresent(row, "providedModelName", "provided_model_name") &&
+      fieldPresent(row, "model", "providedModelName", "provided_model_name") &&
       fieldPresent(row, "usageDetails", "usage_details"),
   ).length;
   const costCount = generations.filter((row) =>
-    fieldPresent(row, "totalCost", "total_cost"),
+    fieldPresent(row, "totalPrice", "totalCost", "total_cost"),
   ).length;
   const scan = secretScan(traces);
   const secretHitCount = Object.values(scan.counts).reduce(
@@ -479,15 +523,22 @@ function transcriptLine(tag: string, index: number): string {
   });
 }
 
-function captureEnvironment(
+export function captureEnvironment(
   env: Record<string, string | undefined>,
   config: LangfuseReadConfig,
+  capture: CaptureDriveConfig,
   watermarkPath: string,
 ): Record<string, string> {
   const child: Record<string, string> = {};
   for (const [key, value] of Object.entries(env)) {
-    if (value === undefined || key.startsWith("OPENBRAIN_TRACING_")) continue;
+    if (value === undefined || key.startsWith("OPENBRAIN_")) continue;
     child[key] = value;
+  }
+  child.OPENBRAIN_CAPTURE_BASE_URL = capture.baseUrl;
+  child.OPENBRAIN_CAPTURE_TOKEN = capture.token;
+  for (const key of CAPTURE_OPTION_ENV_KEYS) {
+    const value = env[key];
+    if (value !== undefined) child[key] = value;
   }
   child.OPENBRAIN_OBSERVATION_ENABLED = "1";
   child.OPENBRAIN_OBSERVATION_ENDPOINT = config.endpoint;
@@ -497,24 +548,55 @@ function captureEnvironment(
   return child;
 }
 
-async function observationOffset(
+export async function observationOffset(
   watermarkPath: string,
   tag: string,
+  options: ObservationOffsetOptions = {},
 ): Promise<number> {
-  if (!(await Bun.file(watermarkPath).exists())) return 0;
-  const database = new Database(watermarkPath, {
-    readonly: true,
-    create: false,
-  });
+  const fileExists =
+    options.fileExists ?? ((path) => Bun.file(path).exists());
+  if (!(await fileExists(watermarkPath))) return 0;
+  const databaseFactory =
+    options.databaseFactory ??
+    ((path) => new Database(path, { readonly: true, create: false }));
+  const sessionKey = `observe:${tag}`;
   try {
-    const row = database
-      .query("SELECT offset FROM watermark WHERE session_key = ?")
-      .get(`observe:${tag}`);
-    const offset = objectValue(row)?.offset;
-    return typeof offset === "number" && offset > 0 ? offset : 0;
-  } finally {
-    database.close();
+    const database = databaseFactory(watermarkPath);
+    try {
+      const row = database
+        .query("SELECT offset FROM watermark WHERE session_key = ?")
+        .get(sessionKey);
+      const offset = objectValue(row)?.offset;
+      return typeof offset === "number" && offset > 0 ? offset : 0;
+    } finally {
+      database.close();
+    }
+  } catch {
+    const fallbackOffset = options.fallbackOffset ?? sqlite3WatermarkOffset;
+    return fallbackOffset(watermarkPath, sessionKey);
   }
+}
+
+async function sqlite3WatermarkOffset(
+  watermarkPath: string,
+  sessionKey: string,
+): Promise<number> {
+  const quotedSessionKey = sessionKey.replaceAll("'", "''");
+  const statement =
+    "SELECT offset FROM watermark WHERE session_key = '" +
+    `${quotedSessionKey}';`;
+  const child = Bun.spawn(["sqlite3", "-ifexists", watermarkPath, statement], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [exitCode, stdout] = await Promise.all([
+    child.exited,
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+  ]);
+  if (exitCode !== 0) throw new Error("watermark SQLite probe failed");
+  const offset = Number.parseInt(stdout.trim(), 10);
+  return Number.isSafeInteger(offset) && offset > 0 ? offset : 0;
 }
 
 /** Evaluate content-free evidence produced by the drive child process. */
@@ -555,6 +637,7 @@ export async function driveLangfuseEgress(
   options: DriveOptions,
 ): Promise<EgressReceipt> {
   const config = readLangfuseEgressConfig(options.env);
+  const capture = readCaptureDriveConfig(options.env);
   const cwd = options.cwd ?? process.cwd();
   const runDir = path.join(scratchRoot(cwd), `${options.tag}-${randomUUID()}`);
   await mkdir(runDir, { recursive: true });
@@ -573,7 +656,7 @@ export async function driveLangfuseEgress(
   });
   const processHandle = Bun.spawn(["uv", "run", "openbrain-capture-stop"], {
     cwd: path.join(cwd, "python", "openbrain"),
-    env: captureEnvironment(options.env, config, watermarkPath),
+    env: captureEnvironment(options.env, config, capture, watermarkPath),
     stdin: new Blob([payload]),
     stdout: "pipe",
     stderr: "pipe",
