@@ -3,11 +3,12 @@
 
 # #382 — DISTILL-1: Add memory.distill job kind writing to candidate_memory
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: enhancement, memory
 Created: 2026-07-24T21:30:36Z
-Updated: 2026-07-24T22:09:46Z
+Updated: 2026-08-04T23:25:32Z
+Closed: 2026-08-04T23:25:32Z
 
 ---
 
@@ -67,7 +68,7 @@ endpoint sized for core01 (~3GB budget). See #383.
 
 ---
 
-## Discussion (1)
+## Discussion (2)
 
 ### rodaddy — 2026-07-24T22:09:46Z
 
@@ -133,3 +134,15 @@ outright.
 Constrained decoding (XGrammar, already in this issue's scope) makes validity
 structural: a truncated generation becomes a short-but-valid array instead of
 a parse error. The ladder then only handles genuine over-production.
+
+---
+
+### rodaddy — 2026-08-04T23:25:31Z
+
+Closing 2026-08-04 — I probed the one place this could have been oversold, the payload contract, and it does diverge from the issue text, but not in a way that leaves acceptance unmet.
+
+MERGED: PR #455 (commit `eb84b02`) added `src/distill-handler.ts`, `src/distiller.ts`, `src/distill-window.ts`. The issue specifies payload `{namespace, lane_id, turn_ids[], batch_hash}` with `batch_hash` as idempotency key; the shipped handler is a SWEEP model (payload `{max_sessions, max_turns}`, idempotency key from a caller `sweepLabel`) because a sweep's unit of work is "the due backlog at time T", which has no stable hash. I therefore checked the four acceptance CHECKBOXES rather than the prose, and all four hold.
+
+RUNNING: "Proposals land in `candidate_memory` with no manual capture command" — `candidate_memory` = 5,434 rows on the dogfood DB, 3,795 turns stamped `distilled_at`. "Identical re-enqueued batch is a no-op" — idempotency is enforced on three independent levels: selection on `distilled_at IS NULL`, the insert's `ON CONFLICT (namespace, content_hash) DO NOTHING` (`distill-handler.ts:207`), and stamp+write in one transaction, with tests "a second sweep over the same turns writes zero new rows" and "running the handler twice over the same corpus is a no-op the second time". "Malformed/foreign-version payloads dead-letter without burning retries" — the version gate at line 353 throws `MaintenanceTerminalError` BEFORE any payload read (line 363), covered by "dead-letters a version mismatch before reading the payload". "Namespace mismatch fails closed server-side" — `job.namespace` binds the claim at lines 376-379, covered by "a scoped job binds its namespace on the claim" and "a global (null-namespace) job sweeps every namespace".
+
+Registration confirmed in `composeMaintenanceHandlers` via `makeMemoryDistillHandler` (`maintenance-bootstrap.ts:177`); `MEMORY_DISTILL_JOB_KIND = 'memory.distill'`. The non-goal holds: writes go to `candidate_memory` only, with tests asserting no statement mentions `review_action` or `graded_by`. 24 tests pass. The split-retry ladder in the earlier comment is a later handler refinement measured after the fact, not part of this issue's acceptance.

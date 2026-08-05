@@ -3,11 +3,12 @@
 
 # #483 — Pre-push gate: ref-gate integration test inherits GIT_DIR and commits into the real branch
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: none
 Created: 2026-08-02T08:41:36Z
-Updated: 2026-08-02T21:48:05Z
+Updated: 2026-08-04T23:25:17Z
+Closed: 2026-08-04T23:25:17Z
 
 ---
 
@@ -54,7 +55,7 @@ Found while landing #479 / PR #482, which had to be pushed with `--no-verify` fo
 
 ---
 
-## Discussion (3)
+## Discussion (4)
 
 ### rodaddy — 2026-08-02T08:42:55Z
 
@@ -82,3 +83,15 @@ Recovery: `git -C /Volumes/ThunderBolt/Development/open-brain config --local cor
 ### rodaddy — 2026-08-02T21:48:04Z
 
 Additional side-effect observed 2026-08-02 (post-#475, from pollution predating its merge): the fixture had written `user.name = Deploy Gate Test` and `user.email = deploy-gate@example.invalid` into the PRIMARY checkout's LOCAL git config. Every commit made in that tree since inherited the fixture identity — six operator-authorized hook commits on the audit branch are misattributed (cosmetic: their squash-merged copies on main are authored correctly). Repaired by unsetting both local keys so the global identity applies again. If any tree's commits show the fixture author, check `git config --local user.name user.email`.
+
+---
+
+### rodaddy — 2026-08-04T23:25:16Z
+
+Closing 2026-08-04 — VERIFIED by direct execution, not by reading the PR.
+
+MERGED: PR #475 ("test: isolate deploy fixtures from inherited Git state", merged 2026-08-02T19:41:47Z). On main at `2a8d2db`, `scripts/core01-deploy-local.integration.test.ts:26` scrubs `GIT_DIR` (with `GIT_COMMON_DIR`/`GIT_INDEX_FILE`/`GIT_TEMPLATE_DIR`/`GIT_WORK_TREE`), `GIT_ENV_KEYS` (lines 18-36) removes 18 `GIT_*` vars plus dynamic `GIT_CONFIG_KEY/VALUE_n`, `createIsolatedGitEnv` pins `HOME`/`XDG_CONFIG_HOME`/`GIT_CONFIG_GLOBAL`/`GIT_CONFIG_NOSYSTEM`, and `sourceEnv` is threaded explicitly through `createGitFixture` (lines 61, 115).
+
+RUNNING: I ran the issue's exact acceptance command at `2a8d2db` — `GIT_DIR=$(git rev-parse --git-dir) bun test scripts/core01-deploy-local.integration.test.ts` → 6 pass / 0 fail, `git rev-parse HEAD` unchanged before and after, `git status --short` empty. That is criteria 1 and 3 as written. The hostile-worktree regression (lines 270-308) builds a fully poisoned env — `GIT_DIR`, `GIT_COMMON_DIR`, `GIT_INDEX_FILE`, `GIT_TEMPLATE_DIR` with a failing pre-commit hook, `GIT_WORK_TREE`, `HOME` with `gpgsign=true` — and asserts the real repo's HEAD and config bytes are untouched. The two follow-up comments were verified repaired: `git config --local core.bare` = false, `user.name`/`user.email` unset locally.
+
+RESIDUAL, not blocking: criterion 2 (full pre-push gate on a no-TypeScript branch) cannot be proven green locally right now. I traced the cause and it is unrelated — the only 2 suite failures are `Cannot find module @langfuse/core`, a dependency declared in `package.json` AND present in `bun.lock` but absent from `node_modules/`, i.e. a stale local install, not a code or fixture-isolation defect. The bug this issue exists to kill is dead.

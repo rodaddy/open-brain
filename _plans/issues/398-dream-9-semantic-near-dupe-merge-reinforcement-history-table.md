@@ -3,11 +3,12 @@
 
 # #398 — DREAM-9: Semantic near-dupe merge — reinforcement history table, NOT arithmetic on confidence
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: enhancement
 Created: 2026-07-25T01:05:58Z
-Updated: 2026-07-25T01:08:42Z
+Updated: 2026-08-04T23:25:29Z
+Closed: 2026-08-04T23:25:29Z
 
 ---
 
@@ -157,7 +158,7 @@ live in light (#390), which is model-free by design.
 
 ---
 
-## Discussion (1)
+## Discussion (2)
 
 ### rodaddy — 2026-07-25T01:08:42Z
 
@@ -215,3 +216,17 @@ reprocessing a batch after a resize or retry must not inflate reinforcement.
 `ON CONFLICT DO NOTHING` against that index makes re-runs idempotent, matching
 the pattern already used for `(namespace, session_ref, content_hash)` on raw
 turns.
+
+---
+
+### rodaddy — 2026-08-04T23:25:28Z
+
+Closing 2026-08-04 — checked clause by clause, because this issue's whole point is that an earlier draft was WRONG, so a faithful-looking implementation of the wrong thing was the real risk.
+
+MERGED: PR #455 (commit `eb84b02`, "rewrite: Open Brain capture/hook Python port + DREAM + residual re-land") added `src/candidate-dedupe.ts` and migrations `038_reinforcement_history.sql` + `039_candidate_memory_said_at.sql`, but named only #418/#420/#382/#390/#394/#435, so this issue was never auto-closed.
+
+It implements the CORRECTED design: migration 038 creates `candidate_reinforcement` with exactly the issue's seven columns (`candidate_id`, `dup_content_hash`, `dup_occurred_at`, `dup_source_turn_ids`, `similarity`, `model`, `created_at`) plus `namespace`; nothing is added to `confidence` anywhere. Migration 039 adds `first_said_at`/`last_said_at` with a CHECK enforcing `last >= first`, and the reinforcement COUNT is never denormalized — `readReinforcement` (`:366`) computes it live off a covering `(candidate_id, dup_occurred_at DESC)` index, which is exactly the "no stale count" guarantee. `runCandidateDedupe` (`src/candidate-dedupe.ts:133`) merges at 0.09 cosine distance with a strict `(said_at, id)` total order for oldest-wins antisymmetry, and resolves merge CHAINS recursively to the oldest cluster member — a subtlety the issue did not ask for, which exists to stop an `ON DELETE CASCADE` silently destroying a third party's reinforcement row.
+
+RUNNING: I ran the tests (25 pass / 0 fail) and read the names — reversibility (keeps hash, turns, and SAID time), idempotency ("is idempotent on replay — reinforcement cannot be inflated by a retry"), "never touches confidence — reinforcement is not arithmetic on truth", "advances last_said_at and never first_said_at", "does not append to source_refs". Wiring verified: `src/dream-rem.ts:58`, with `dream-rem.test.ts:479` proving "runs dedupe BEFORE grading so grading sees the reinforcement" (34 pass).
+
+Two caveats that do NOT block: the 20 live-Postgres migration tests skip without `OPENBRAIN_TEST_DATABASE_URL` (gated by design, run in the db-integration CI job), and `candidate_reinforcement` has 0 rows on the dogfood DB — a corpus property (0 near-dupes on that snapshot), which `docs/dream-pipeline-status.md:236-239` already records as "structurally present and functionally unexercised", not missing work.

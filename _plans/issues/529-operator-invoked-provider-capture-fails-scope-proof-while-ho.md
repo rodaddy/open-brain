@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: none
 Created: 2026-08-04T00:33:46Z
-Updated: 2026-08-04T00:33:46Z
+Updated: 2026-08-04T23:27:28Z
 
 ---
 
@@ -32,3 +32,11 @@ The AGENTS.md contract tells Claude to capture distilled in-flight events throug
 - Either the provider's session_start handshake proves the scope fields the capture gate demands (`agent`, `channel_id`, `source`), or the gate's demanded set matches what session_start actually proves.
 - The silently-ignored top-level `namespace` key should be a named rejection, not `ignored_optional_request_keys` (same silent-drop family as #464/#431).
 - One documented, working operator recipe in `docs/memory-contract.md` or the provider README, verified by a live canary.
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-04T23:27:28Z
+
+Status check 2026-08-04. Core defect UNCHANGED (MERGED main 2a8d2db): the exact-scope gate still fires from `_runtime_validation.py:689` / `_require_session_start_scope` (line 72), so operator-invoked capture still fails scope proof while hook capture writes. Partial delivery on the third Wanted bullet: PR #533 (MERGED 2026-08-04, closed #464) forwards `candidate_type`/`memory_lifecycle_action`/`candidate_scope` through the capture allowlist and adds `ignored_optional_request_keys` to the receipt, so silently-dropped keys are now named. Still owed here: the session_start handshake proving `agent`/`channel_id`/`source` (or the gate demanding only what it proves), a named rejection for the top-level `namespace` key, and a live-canary-verified operator recipe in `docs/memory-contract.md`.

@@ -3,11 +3,12 @@
 
 # #479 — Build the Codex rollout adapter for the bulk ingester
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: wayfinder:task
 Created: 2026-08-02T07:19:35Z
-Updated: 2026-08-02T07:19:35Z
+Updated: 2026-08-04T23:25:18Z
+Closed: 2026-08-04T23:25:18Z
 
 ---
 
@@ -60,3 +61,17 @@ Build the Codex rollout adapter only. Pi remains a named gap because no observed
 - Downstream rollout: not applicable. This changes `python/openbrain` bulk-file parsing only; it does not change MCP, transport, database, `python/openbrain-memory`, generated skills, or Hermes-facing contracts listed in `docs/downstream-rollout.md:10-22`.
 
 Type: task (AFK). Sub-issue of #443.
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-04T23:25:18Z
+
+Closing 2026-08-04 — every scope bullet is present and I executed all four acceptance gates.
+
+MERGED: commit `9793373` ("feat(bulk): Codex rollout adapter parsed from the observed format (#479) (#482)") on main. `python/openbrain/src/openbrain/apps/bulk/formats.py` now carries the real `codex_raw_turn_from_line` (line 172) registered as `InputFormat.CODEX` (line 282), replacing the placeholder, with per-record handlers for `user_message`, `token_count`, `task_started`, `task_complete` (lines 204-276) matching the observed contract in the issue body. `HERMES` at line 283 is still `_unbuilt`, which proves CODEX was specifically built rather than the placeholder blanket-removed. The pure `(str) -> RawTurn | None` shape and factory registration pattern are preserved.
+
+Non-turn records decline correctly: `_codex_token_count` and `_codex_task_started` validate then return `None`, and non-`event_msg` records return `None` at line 194. Fail-loud is real — blank lines raise `MalformedCodexRecordError` explicitly (line 186), and `_malformed()` maps pydantic errors to content-free FIELD LOCATIONS only, never values, satisfying both "actionable" and the sanitization requirement.
+
+RUNNING: I checked the test coverage the issue demands rather than trusting the claim. 21 collected tests include factory selection, `test_sanitized_observed_sample_reaches_fake_lane` (the real-sample fixture test), four parametrized valid-metadata declines covering `token_count` AND `task_started` AND `task_complete`-with-null-message, and four parametrized malformed cases including blank and `{not json`. Fixtures at `tests/fixtures/bulk/`. Gates run by me: `uv run pytest -q` → 564 passed / 1 skipped; `uv run mypy src/openbrain` → no issues in 49 files; `uv run ruff check src tests` → all passed.

