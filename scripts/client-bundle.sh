@@ -156,11 +156,19 @@ fi
 
 python3 - "$STAGE/env/claudex-observation.env" "$BUILD_DEV_ROOT" <<'PY'
 import re
+import shlex
 import sys
 
 path, build_root = sys.argv[1], sys.argv[2]
 with open(path, encoding="utf-8") as handle:
     text = handle.read()
+
+# Shell-quote it for the same reason setup-client.sh does: this file is read
+# with POSIX `set -a; . "$ENV_FILE"`, so an unquoted path containing a space
+# splits on IFS and the variable arrives empty. The staged line is commented,
+# but it is the line an operator uncomments when hand-installing -- staging it
+# unquoted hands them the #555 wedge with the fix's own example.
+quoted_build_root = shlex.quote(build_root)
 
 # Stage the BUILD machine's value COMMENTED. Live, it would look authoritative
 # on a client where it is wrong; commented with the note, it reads as the
@@ -172,7 +180,10 @@ block = (
     "## so on a box where this path does not exist EVERY cwd resolves to no\n"
     "## scope and EVERY tool call is blocked behind a recovery command naming a\n"
     "## directory that box does not have (#555).\n"
-    f"# OPENBRAIN_DEVELOPMENT_ROOT={build_root}\n"
+    "## The value is shell-quoted: this file is sourced, so a path containing a\n"
+    "## space would otherwise split and arrive empty. Keep the quoting if you\n"
+    "## edit it by hand.\n"
+    f"# OPENBRAIN_DEVELOPMENT_ROOT={quoted_build_root}\n"
 )
 
 pattern = re.compile(r"^[#\s]*OPENBRAIN_DEVELOPMENT_ROOT=.*$\n?", re.M)
