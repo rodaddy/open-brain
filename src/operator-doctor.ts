@@ -453,7 +453,37 @@ function unavailableQmdIndexStatus(
   };
 }
 
+// Concurrent callers share one probe per path. Each probe spawns a Worker that
+// boots a module graph and opens the index, and buildOperatorDoctorStatus is
+// called repeatedly under load (the contract parity suite drives it many times
+// in quick succession). Spawning one per call starved the event loop enough
+// that neighbouring fixtures exceeded their 5s query timeout -- measured as
+// 8-10 parity failures against origin/main's stable 7. The entry is cleared on
+// settle, so the next call re-probes rather than serving a stale reading.
+const inFlightQmdIndexProbes = new Map<
+  string,
+  Promise<QmdIndexProbeResult>
+>();
+
 function startQmdIndexProbe(path: string): {
+  task: Promise<QmdIndexProbeResult>;
+  terminate: () => void;
+} {
+  const existing = inFlightQmdIndexProbes.get(path);
+  if (existing) return { task: existing, terminate: () => {} };
+  const spawned = spawnQmdIndexProbe(path);
+  const shared = spawned.task.finally(() => {
+    inFlightQmdIndexProbes.delete(path);
+    spawned.terminate();
+  });
+  // Keep the shared promise from surfacing as an unhandled rejection when the
+  // only awaiting caller has already timed out.
+  shared.catch(() => {});
+  inFlightQmdIndexProbes.set(path, shared);
+  return { task: shared, terminate: () => {} };
+}
+
+function spawnQmdIndexProbe(path: string): {
   task: Promise<QmdIndexProbeResult>;
   terminate: () => void;
 } {
