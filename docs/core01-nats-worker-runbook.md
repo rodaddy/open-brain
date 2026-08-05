@@ -344,28 +344,52 @@ curl -fsS http://127.0.0.1:3100/health    # must stay healthy across a worker re
 launchctl kickstart -k "gui/$(id -u)/com.rico.open-brain-local-nats-worker"
 ```
 
-### OPEN DEFECT — large context packs get no reply at all (2026-08-04)
+### The silence is fixed; large context packs still do not fit (#549, 2026-08-04)
 
 A live request/reply on `dev.ob.memory.context_pack` returns `status: ok` in
 ~1.2s for `repo_facts` / `working_set` / `pointers`. Asking for
 `durable_memory` in the `rico` namespace currently builds a **58.5 MB** reply
 (the `durable_memory` section alone is 39.9 MB), which exceeds the broker's
-8 MB `max_payload`. The publish is rejected, `message.respond()` returns false,
-`startNatsContextPackBridge` throws "NATS request did not include a reply
-inbox", and the caller sees **no reply at all** — it waits until its own
-timeout.
+8 MB `max_payload`, so the client rejects the publish.
 
-This is a real defect and not specific to this broker: `src/nats-bridge.ts`
-guards the REQUEST at `MAX_NATS_REQUEST_BYTES` (64 KB) but has **no response
-size guard**, and NATS's own protocol default `max_payload` is 1 MB — so a
-default broker or the fleet bus would fail sooner and the same silent way. The
-handler completes its work successfully first, so this burns a full context-pack
-build before dropping it.
+**How the rejection actually surfaces:** the nats.js client THROWS on it. Its
+`Msg.respond()` publishes through `protocol.publish()`, which raises
+`NatsError(MAX_PAYLOAD_EXCEEDED)` once the encoded length passes
+`info.max_payload` (`nats-base-client/msg.js` -> `protocol.js`). It does NOT
+return false — `respond()` returns false in exactly one case, a request that
+carried no reply inbox at all, which is unrelated to size.
 
-The 8 MB figure is the NATS server's own `max_payload` ceiling, not an Open
-Brain choice — this is reported here as a measurement, and how to resolve it is
-the operator's call, not something this runbook prescribes. The one thing that
-is unambiguously wrong regardless of size is the SILENCE: the bridge should
-answer with a redacted `payload_too_large` error envelope instead of leaving the
-caller to time out with no reply and no client-visible reason.
+**What used to happen:** that throw escaped to
+`processNatsSubscriptionMessage`, whose catch logged the generic **"NATS
+context-pack bridge request failed"** and published nothing, so the caller saw
+**no reply at all** and waited out its own timeout with no client-visible
+reason. The "NATS request did not include a reply inbox" message was never the
+one this path produced; it was reserved for its own, correct condition.
+
+**What happens now (#549):** the bridge answers with a redacted
+`payload_too_large` error envelope carrying the same `correlation_id` as a
+normal reply, so the caller is released immediately instead of timing out. The
+envelope is content-free — it names the measured reply bytes, the broker's own
+advertised `max_payload`, and which sections were requested, and carries no pack
+data. Before publishing, the bridge compares the encoded reply against the
+figure the broker advertises on the connection (`connection.info.max_payload`),
+never a value of Open Brain's own, so a broker advertising the NATS protocol
+default of 1 MB and this one advertising 8 MB are both handled correctly. When
+the figure is unreadable the reply cannot be pre-judged, so the publish is
+attempted — and that call is wrapped, so a thrown `MAX_PAYLOAD_EXCEEDED` routes
+to the same error envelope instead of escaping to the handler-error catch. The
+throw is matched by its machine **code**, never by message text, so a reworded
+client string cannot silently reopen this. Any other throw is not the bridge's
+to reinterpret and is rethrown unchanged. Only when `respond()` returns false —
+the genuine no-reply-inbox condition — does the bridge log a missing reply
+inbox, which is the accurate reading of that case.
+
+The handler still builds the full pack first, and nothing about what it builds
+changed; this changed only how an undeliverable reply is answered.
+
+**Still open:** the 58.5 MB reply does not fit an 8 MB broker, so a
+`durable_memory` request on this namespace gets a clear error rather than a
+pack. The 8 MB figure is the NATS server's own `max_payload`, not an Open Brain
+choice — it is reported here as a measurement, and how to resolve it is the
+operator's call, not something this runbook prescribes.
 
