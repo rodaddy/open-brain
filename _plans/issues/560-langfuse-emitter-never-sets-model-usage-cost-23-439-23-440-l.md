@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: none
 Created: 2026-08-05T01:10:15Z
-Updated: 2026-08-05T01:10:15Z
+Updated: 2026-08-05T06:14:32Z
 
 ---
 
@@ -20,3 +20,11 @@ Found during a Langfuse-potential survey (2026-08-04, read-only, ClickHouse on C
 **Fix shape (PROPOSED, ~S):** set `model` + `usageDetails` (input/output/cache-read) in both emitters; seed custom model prices for claude-opus-5 / claude-sonnet-5 / claude-fable-5 (3 custom prices already exist on the instance, mechanism proven). While in there: pass git SHA as `release` (currently empty on 100% of traces) and always set `userId` (1,615/2,922).
 
 Until this lands, every cost dashboard/score computes over NULL -- the instance cannot answer 'which agent burned $40 yesterday', which is the primary reason to run it.
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-05T06:14:32Z
+
+Reopening deliberately: the fix is MERGED (PR #568 at ff45179 — model+usage now carried, plus the swarm-driven hardening: malformed enrichments can no longer drop a transcript record, and partial/mistyped usage omits rather than fabricating zeros; fail-first tests reproduced independently). But this issue's acceptance is LIVE: non-NULL total_cost on CT 273's dashboards, which needs (1) the updated capture lane actually running and (2) custom model prices seeded for claude-opus-5 / claude-sonnet-5 / claude-fable-5 — an operator/instance step nobody has verified. Merged is not deployed. Closes for real in the OBS run (#571) with a live receipt.

@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: none
 Created: 2026-08-04T00:33:46Z
-Updated: 2026-08-05T03:56:49Z
+Updated: 2026-08-05T05:25:46Z
 
 ---
 
@@ -35,7 +35,7 @@ The AGENTS.md contract tells Claude to capture distilled in-flight events throug
 
 ---
 
-## Discussion (2)
+## Discussion (3)
 
 ### rodaddy — 2026-08-04T23:27:28Z
 
@@ -48,3 +48,9 @@ Status check 2026-08-04. Core defect UNCHANGED (MERGED main 2a8d2db): the exact-
 Reproduced 2026-08-05 ~01:55 from a mini Development session wrap: `printf '<distilled json>' | bun _ob/scripts/ob-memory-provider.ts --runtime claude --event capture` -> **exit 0, zero stdout/stderr, no receipt, ~/.local/state/openbrain-memory/claude-spool.jsonl untouched (empty since Aug 3)**. Session capture was silently dropped.
 
 Same-day context makes this sting: the Air incident write-up (development `_DOCS/_handoff/AIR-session-handoff-20260804.md` section 10) ratified 'silent failure is the multiplier -- every one of these exited 0.' Operator-invoked capture is currently another instance of that exact class. Whatever the scope-proof fix is, the floor is: a capture that saves nothing must exit non-zero and say why.
+
+---
+
+### rodaddy — 2026-08-05T05:25:46Z
+
+Fresh reproduction 2026-08-05 (head session, operator-invoked capture via ~/.local/bin/openbrain-memory with claudex-observation.env): request with distilled=true and full scope {agent, platform, channel_id, server_id, session_key} fails with `session_start result did not prove exact Open Brain scope: agent, channel_id, server_id, source` — receipt status `lost`, durable=false. Note this one was LOUD (a real receipt with a named error), unlike the 2026-08-05T03:56 silent exit-0 reproduction — so the silent-drop regression and the scope-proof gap are distinct defects on the same path. Also observed: `kind` is silently relegated to ignored_optional_request_keys, so operator captures lose their event type. Practical impact today: a goal-run authority directive could not be captured to OB and had to persist in a doc instead.
