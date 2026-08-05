@@ -34,7 +34,7 @@ function extractNormalizer(): string {
   return managedBlock.slice(pythonStart + heredocStart.length, pythonEnd);
 }
 
-const scratchRoot = "/Volumes/ThunderBolt/_tmp/open-brain/_scratch";
+const scratchRoot = join(repoRoot, "out", "test-fixtures");
 mkdirSync(scratchRoot, { recursive: true });
 const suiteRoot = mkdtempSync(join(scratchRoot, "setup-client-hook-env-"));
 process.stderr.write(`setup-client-hook-env fixtures: ${suiteRoot}\n`);
