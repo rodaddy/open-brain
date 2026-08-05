@@ -101,6 +101,7 @@ export class LiveScenarioTransport implements ScenarioTransport {
         OPENBRAIN_BASE_URL: this.config.baseUrl,
         OPENBRAIN_TOKEN: this.config.primaryToken,
         OPENBRAIN_NAMESPACE: this.config.primaryNamespace,
+        OPENBRAIN_PROJECT: this.config.project,
       },
       stdin: "pipe",
       stdout: "pipe",

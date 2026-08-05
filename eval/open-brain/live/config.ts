@@ -36,6 +36,8 @@ export interface LiveEvalConfig {
   primaryNamespace: string;
   /** Per-run unique negative (unreadable-from-primary) sibling namespace. */
   negativeNamespace: string;
+  /** Provider lane metadata, separate from the exact-scope predicate. */
+  project: string;
   /** Recall search mode; hybrid by default to exercise the full retriever. */
   searchMode: "hybrid" | "vector" | "keyword";
   /** Per-request timeout in milliseconds. */
@@ -232,6 +234,7 @@ export function loadLiveConfig(
     negativeTokenIsDistinct,
     primaryNamespace: primary,
     negativeNamespace: negative,
+    project: "open-brain",
     searchMode: searchModeRaw,
     timeoutMs,
   };
