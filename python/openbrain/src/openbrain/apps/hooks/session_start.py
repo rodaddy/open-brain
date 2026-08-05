@@ -91,7 +91,7 @@ from openbrain.apps.hooks.session import (
     _derive_repo_slug,
     run_session_start,
 )
-from openbrain.config import load_canon_settings
+from openbrain.config import UnknownEnvironmentVariableError, load_canon_settings
 
 if TYPE_CHECKING:
     from typing import TextIO
@@ -196,6 +196,26 @@ def _inject_canon_with(
                 trailer=trailer,
             )
         )
+    except UnknownEnvironmentVariableError as error:
+        # THE ONE FAILURE AN OPERATOR CAN ACT ON, so it is the one that speaks.
+        #
+        # A rejected environment is not a degraded server or an unconfigured
+        # lane -- it is a misconfiguration of this box, and the fix is a
+        # specific variable name. Logged like every other failure AND named on
+        # stderr, following #558: loud diagnosis, non-blocking, stderr only,
+        # never touching the emitted JSON. Silence here cost two machines a
+        # session's canon on 2026-08-04 (open-brain#565); the warning alone did
+        # not say WHICH variable, so it read as noise.
+        #
+        # Safe to print: the error carries variable NAMES, never their values,
+        # so a token's spelling cannot reach the stream (see
+        # ``UnknownEnvironmentVariableError``).
+        logger.warning(
+            "SessionStart canon injection failed ({}); session opens uninjected",
+            type(error).__name__,
+        )
+        sys.stderr.write(f"[openbrain] {error}\n")
+        sys.stderr.flush()
     except Exception as error:  # noqa: BLE001 -- an observer must never break its subject
         # Content-free BY CONSTRUCTION: only the exception class name is passed,
         # never the exception object, so no payload text or token reaches the

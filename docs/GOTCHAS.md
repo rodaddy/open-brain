@@ -1047,9 +1047,48 @@ predates the validator, which is exactly the state of a client mid-upgrade.
 never in the `env -i` list. A string tolerates the empty spelling; a bool, an
 int, or an enum does not.
 
+**The third clause: EVERY package, not just the consuming one (#557 → #565).**
+A variable the wrapper passes must be declared in **every** package whose config
+applies strict prefix rejection — not merely in the package that reads it.
+
+`OPENBRAIN_DEVELOPMENT_ROOT` is the case study, and it is the sharpest form of
+this bug so far: the `openbrain` package had **read** the variable since #556
+(`receipts/scope.py`, via `os.environ` per call, because the value is answered
+against the filesystem and a module constant freezes during pytest collection).
+Reading it that way never registered the NAME with `config.py`, so
+`unknown_prefixed_variables` still classed it a typo. The package rejected a
+variable its own code depended on. #557 then shipped the wrapper line without
+the declaration, and every box built from bundle `air-bundle/20260804-203726`
+opened sessions with no canon and exit 0 — field-proved on two machines
+2026-08-04.
+
+The trap is that the variable **works** in `openbrain-provider`, which reads
+`os.environ` directly and rejects nothing. Testing it there proves nothing about
+the box. Only `openbrain` applies the check today; that is a property to
+re-verify, not assume.
+
+**Consuming a variable is not declaring it.** `os.environ.get(...)` anywhere in
+a package does not register the name. The declaration is what
+`_accepted_variable_names()` reads, and it derives from `_SECTION_MODELS` — so
+declaring the field on any registered section fixes all three section loaders at
+once. Declaring a variable the package does not otherwise read is normal and
+already precedented: `OPENBRAIN_OBSERVATION_HMAC_SECRET` is declared purely so
+the provisioned variable is not rejected as a typo.
+
 **The check that catches it.** Not exit code, and not `/health` — both pass on a
 dead box. Start a fresh session and read the CANON PACK section counts. Zero
-counts, or no pack, is this bug.
+counts, or no pack, is this bug. Since #565 the rejection also names the
+offending variable on **stderr**, so the fastest confirmation is to pipe a
+`SessionStart` payload through the installed wrapper and read the
+`[openbrain]` line:
+
+```
+printf '{"hook_event_name":"SessionStart","session_id":"probe","cwd":"'"$PWD"'"}' \
+  | ~/.local/share/openbrain-memory/env/openbrain-hook-env openbrain-session-start
+```
+
+A CANON PACK on stdout is healthy; an `[openbrain] unrecognised ...` line names
+the exact variable to declare or drop.
 
 ### Clients cannot install from GitHub — wheels from the Mini are the paved road
 

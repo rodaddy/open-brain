@@ -182,6 +182,36 @@ def _empty_opt_in_means_unset(value: object) -> object:
     return value
 
 
+def _empty_string_means_unset(value: object) -> object:
+    """Treat an empty optional string setting as absent, not as a real value.
+
+    The string counterpart of :func:`_empty_opt_in_means_unset`, and it exists
+    for the same measured reason. The deployed ``openbrain-hook-env`` builds the
+    child environment as ``env -i VAR="${VAR:-}"``, a style that CANNOT express
+    "absent": a machine whose env file omits the variable hands the hook an
+    EMPTY STRING. Without this, an empty ``OPENBRAIN_DEVELOPMENT_ROOT`` would
+    resolve to ``Path("")`` -- a path that exists as the current directory on
+    some platforms and not others -- instead of falling back to the shipped
+    default the operator expects.
+
+    Empty-means-unset is this repo's established reading of an environment
+    variable rather than a new leniency: ``receipts.scope.development_root``
+    already applies exactly this rule to the same variable
+    (``os.environ.get(...).strip()`` then fall back), and
+    ``apps.capture.outage.default_spool_path`` does the same for its own.
+
+    Args:
+        value: Whatever the environment layer resolved for the field.
+
+    Returns:
+        ``None`` for an empty or whitespace-only string, the input unchanged
+        otherwise.
+    """
+    if isinstance(value, str) and not value.strip():
+        return None
+    return value
+
+
 class ConfigurationError(ValueError):
     """A setting is missing, malformed, or inert, and the process cannot start.
 
@@ -767,13 +797,20 @@ class LogSettings(_Base):
 
 
 class ServerSettings(_Base):
-    """HTTP server binding.
+    """Process-level settings: the HTTP binding, and this machine's lane root.
+
+    ``development_root`` sits here rather than on a hook section because it
+    describes the BOX, not a lane -- the same value serves the receipts writer
+    and the provider gate, neither of which is capture, canon, or observation.
 
     Attributes:
         port: Listen port.
         bind_host: Interface to bind, or ``None`` for the runtime default.
         allowed_origins: CORS origins. Empty means none are permitted.
         run_migrations: Apply pending migrations at start.
+        development_root: This machine's Development lane root, or ``None`` to
+            use the shipped default. DECLARED HERE, RESOLVED ELSEWHERE -- see
+            the field comment.
     """
 
     port: PositiveInt = Field(
@@ -793,6 +830,34 @@ class ServerSettings(_Base):
         validation_alias=AliasChoices(
             "OPENBRAIN_RUN_MIGRATIONS", "OPEN_BRAIN_RUN_MIGRATIONS"
         ),
+    )
+    #: DECLARED HERE, RESOLVED IN ``receipts.scope`` -- and that split is the
+    #: point, not an oversight.
+    #:
+    #: This package has READ ``OPENBRAIN_DEVELOPMENT_ROOT`` since #556
+    #: (``receipts.scope.development_root``), through ``os.environ`` per call,
+    #: because the value is answered against the FILESYSTEM and a module
+    #: constant is frozen during pytest collection before a conftest can set it.
+    #: Reading it that way never registered the NAME, so
+    #: :func:`unknown_prefixed_variables` still classed it a typo and rejected
+    #: the whole environment -- the package refusing a variable its own code
+    #: depends on. #557 then shipped a wrapper that passes it, and every box
+    #: built from that bundle opened sessions with no canon and exit 0
+    #: (open-brain#565).
+    #:
+    #: The declaration exists to make the name RECOGNISED and readable. It is
+    #: deliberately not the resolver: ``receipts.scope`` and the gate's
+    #: ``openbrain_provider.development_scope`` read the same variable, spelled
+    #: identically, so a writer and a reader can never land in different
+    #: scopes. A settings field resolved independently would reintroduce exactly
+    #: that split.
+    development_root: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("OPENBRAIN_DEVELOPMENT_ROOT"),
+    )
+
+    _empty_root = field_validator("development_root", mode="before")(
+        _empty_string_means_unset
     )
 
 
