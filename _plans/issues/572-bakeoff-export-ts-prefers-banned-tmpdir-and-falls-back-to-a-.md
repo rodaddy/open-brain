@@ -3,11 +3,12 @@
 
 # #572 — bakeoff-export.ts prefers banned TMPDIR and falls back to a macOS-only hardcoded scratch path
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: bug
 Created: 2026-08-05T05:54:29Z
-Updated: 2026-08-05T05:54:29Z
+Updated: 2026-08-05T07:10:48Z
+Closed: 2026-08-05T07:10:48Z
 
 ---
 
