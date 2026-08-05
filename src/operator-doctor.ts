@@ -327,7 +327,12 @@ async function readDistillationLag(
   pool: pg.Pool,
 ): Promise<OperatorDoctorStatus["distillation_lag"]> {
   const ttlSeconds = readDistillationLagTtlSeconds();
-  const query: pg.QueryConfig<[number, string]> & { query_timeout: number } = {
+  // created_at is deliberate and must match issue #395 retention/eviction's
+  // column. If #395 expires on occurred_at, this alarm silently stops catching
+  // its near-loss case.
+  const query: pg.QueryConfig<[number, string, string]> & {
+    query_timeout: number;
+  } = {
     text: `
       SELECT
         namespace,
@@ -341,10 +346,12 @@ async function readDistillationLag(
       FROM ob_raw_turns
       WHERE distilled_at IS NULL
         AND retention_tier = $2
+        -- Parity fixtures are not operator-actionable distillation lag.
+        AND namespace NOT LIKE $3
       GROUP BY namespace
       ORDER BY namespace
     `,
-    values: [ttlSeconds, "live"],
+    values: [ttlSeconds, "live", "parity-raw-turn-%"],
     query_timeout: OPTIONAL_TIMEOUT_MS,
   };
   return withTimeout(

@@ -19,7 +19,7 @@ import { addLogSink } from "./logger.ts";
 
 const originalFetch = globalThis.fetch;
 const THIS_FILE = fileURLToPath(import.meta.url);
-type QueryInput = string | { text: string };
+type QueryInput = string | { text: string; values?: readonly unknown[] };
 
 function queryText(query: QueryInput): string {
   return typeof query === "string" ? query : query.text;
@@ -50,7 +50,23 @@ function makePool(
         if (distillationLagRows === "throws") {
           throw new Error("distillation lag unavailable");
         }
-        return { rows: distillationLagRows };
+        const exclusion = sql.match(/namespace\s+NOT\s+LIKE\s+\$(\d+)/i);
+        if (!exclusion) return { rows: distillationLagRows };
+        const value =
+          typeof query === "string"
+            ? undefined
+            : query.values?.[Number(exclusion[1]) - 1];
+        if (typeof value !== "string" || !value.endsWith("%")) {
+          throw new Error("unsupported namespace exclusion");
+        }
+        const prefix = value.slice(0, -1);
+        return {
+          rows: distillationLagRows.filter(
+            (row) =>
+              typeof row.namespace !== "string" ||
+              !row.namespace.startsWith(prefix),
+          ),
+        };
       }
       return { rows: [] };
     },
@@ -232,6 +248,37 @@ describe("operator doctor status", () => {
     ]);
     expect(status.status).toBe("degraded");
     expect(JSON.stringify(status)).not.toContain("must-not-leak");
+  });
+
+  it("excludes parity raw-turn fixtures from operator-actionable lag", async () => {
+    const status = await buildOperatorDoctorStatus(
+      await makeCurrentPool([
+        {
+          namespace: "customer-live",
+          undistilled_depth: "2",
+          oldest_undistilled_age_seconds: "302400",
+          ratio: "0.5",
+        },
+        {
+          namespace: "parity-raw-turn-admin",
+          undistilled_depth: "9",
+          oldest_undistilled_age_seconds: "544320",
+          ratio: "0.9",
+        },
+      ]),
+      readNatsRuntimeBoundary({}),
+    );
+
+    expect(status.distillation_lag).toEqual([
+      {
+        namespace: "customer-live",
+        undistilled_depth: 2,
+        oldest_undistilled_age_seconds: 302400,
+        ratio: 0.5,
+        level: "warning",
+      },
+    ]);
+    expect(status.status).toBe("healthy");
   });
 
   it("keeps warning-level lag healthy", async () => {
