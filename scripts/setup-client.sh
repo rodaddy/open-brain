@@ -49,6 +49,90 @@ command -v python3 >/dev/null 2>&1 || die "python3 not on PATH"
 [ -f "$BUNDLE_DIR/env/openbrain-hook-env" ] || die "bundle incomplete: env/openbrain-hook-env missing"
 [ -f "$BUNDLE_DIR/settings-hooks.json" ] || die "bundle incomplete: settings-hooks.json missing"
 
+# --- 0. this machine's Development root, RESOLVED ---------------------------
+# openbrain-provider resolves the Development lane by asking the FILESYSTEM, and
+# the shipped default is the BUILD machine's volume
+# (development_scope.py: DEFAULT_DEVELOPMENT_ROOT). On a box whose Development
+# tree is somewhere else, that path does not exist, resolve_development_scope()
+# answers None for every cwd, and the context-budget gate then composes its
+# recovery command from the same wrong root -- so the banner tells the operator
+# to cd somewhere that is not there, and the session cannot be unblocked from
+# inside itself. Field-proved on the Air, 2026-08-04 (#555).
+#
+# The package already reads OPENBRAIN_DEVELOPMENT_ROOT per call; nothing ever
+# SHIPPED it. Resolving it here, per box, is that missing half. The package is
+# unchanged.
+#
+# RESOLUTION RUNS FIRST, BEFORE ANYTHING IS INSTALLED. It reads the environment
+# and the filesystem and writes nothing, but it can `die` -- and a refusal that
+# fires after the wheels are installed and the env dir is copied leaves a
+# half-installed box behind an error the operator then has to reason about
+# twice. Refusing here means the failure mode is "nothing happened yet". The
+# WRITE of the resolved value stays in section 2b, after the env file it edits
+# actually exists.
+#
+# Resolution order: an exported value wins (the operator said so), then DEV_ROOT
+# (what the fleet scripts already call it), then the two known layouts. Probing
+# is last because a guess should never beat an instruction.
+log "==> resolving this machine's Development root"
+DEV_ROOT_RESOLVED=""
+DEV_ROOT_SOURCE=""
+if [ -n "${OPENBRAIN_DEVELOPMENT_ROOT:-}" ]; then
+  DEV_ROOT_RESOLVED="$OPENBRAIN_DEVELOPMENT_ROOT"
+  DEV_ROOT_SOURCE="OPENBRAIN_DEVELOPMENT_ROOT in the environment"
+elif [ -n "${DEV_ROOT:-}" ]; then
+  DEV_ROOT_RESOLVED="$DEV_ROOT"
+  DEV_ROOT_SOURCE="DEV_ROOT in the environment"
+else
+  for candidate in /Volumes/ThunderBolt/Development "$HOME/Development"; do
+    if [ -d "$candidate" ]; then
+      DEV_ROOT_RESOLVED="$candidate"
+      DEV_ROOT_SOURCE="probed (found on disk)"
+      break
+    fi
+  done
+fi
+
+# An explicitly-given root that does not exist is a typo, not a preference, and
+# it fails exactly like the defect this guard exists to close. Say so now.
+if [ -n "$DEV_ROOT_RESOLVED" ] && [ ! -d "$DEV_ROOT_RESOLVED" ]; then
+  die "OPENBRAIN_DEVELOPMENT_ROOT / DEV_ROOT names a path that does not exist:
+
+      $DEV_ROOT_RESOLVED
+
+    The provider resolves the lane by asking the filesystem, so a path that is
+    not there behaves exactly like no value at all: every gate wedges. Point it
+    at this machine's real Development tree and re-run."
+fi
+
+# Refuse rather than warn, matching the loopback guard below: a warning here
+# scrolls away under install output and the install then "succeeds" into a box
+# that blocks every tool call on first use.
+if [ -z "$DEV_ROOT_RESOLVED" ]; then
+  if [ "${OPENBRAIN_ALLOW_NO_DEVELOPMENT_ROOT:-}" = "1" ]; then
+    log "    [warn] no Development root resolved; continuing because"
+    log "           OPENBRAIN_ALLOW_NO_DEVELOPMENT_ROOT=1"
+  else
+    die "cannot determine this machine's Development root.
+
+    Neither /Volumes/ThunderBolt/Development nor \$HOME/Development exists here,
+    and neither OPENBRAIN_DEVELOPMENT_ROOT nor DEV_ROOT was set.
+
+    Without it the provider keeps the build machine's default, every cwd
+    resolves to no scope, and the context-budget gate blocks every tool call
+    while pointing its own recovery command at a path this box does not have.
+
+    Re-run naming the variable:
+
+      OPENBRAIN_DEVELOPMENT_ROOT=/path/to/Development ./setup-client.sh
+
+    This box genuinely has no Development tree and runs no gated agent work?
+    Set OPENBRAIN_ALLOW_NO_DEVELOPMENT_ROOT=1 to skip this check."
+  fi
+else
+  log "    Development root: $DEV_ROOT_RESOLVED [$DEV_ROOT_SOURCE]"
+fi
+
 # --- 1. wheels -------------------------------------------------------------
 # --find-links points at the bundle's own wheels/, mirroring the
 # OPENBRAIN_MEMORY_FIND_LINKS convention the Mini already uses
@@ -77,6 +161,93 @@ cp "$BUNDLE_DIR/env/claudex-observation.env" "$TARGET_ENV_DIR/"
 cp "$BUNDLE_DIR/env/openbrain-hook-env" "$TARGET_ENV_DIR/"
 chmod 600 "$TARGET_ENV_DIR/claudex-observation.env"
 chmod +x "$TARGET_ENV_DIR/openbrain-hook-env"
+
+# --- 2b. this machine's Development root, WRITTEN ---------------------------
+# The value was resolved in section 0, before anything was installed, so a bad
+# or missing root has already refused by the time we get here. What is left is
+# the write, and it lives here because it edits the env file section 2 just
+# placed.
+#
+# Write it into the INSTALLED env file. The bundle ships the build machine's
+# value (or none), so this rewrite is what makes the file correct per box --
+# same reason the wrapper's ENV_FILE is rewritten just below.
+if [ -n "$DEV_ROOT_RESOLVED" ]; then
+  python3 - "$TARGET_ENV_DIR/claudex-observation.env" "$DEV_ROOT_RESOLVED" <<'PY'
+import re
+import shlex
+import sys
+
+path, root = sys.argv[1], sys.argv[2]
+with open(path, encoding="utf-8") as handle:
+    text = handle.read()
+
+# Shell-quote the value. The wrapper reads this file with POSIX
+# `set -a; . "$ENV_FILE"`, which SPLITS an unquoted right-hand side on IFS: a
+# root containing a space becomes a word plus a stray command, the shell says
+# "No such file or directory", and the variable lands EMPTY -- which is exactly
+# the #555 wedge this line exists to close, delivered silently through its own
+# fix while the installer still prints success. Quoting preserves the value
+# whole. The other lines in this file are unquoted, which is fine; POSIX `.`
+# reads a quoted value just as happily, so only the line we write changes.
+quoted_root = shlex.quote(root)
+
+block = (
+    "## This machine's Development root. Written by setup-client.sh at install\n"
+    "## time -- the provider's built-in default is the BUILD machine's volume,\n"
+    "## and a root that does not exist resolves every cwd to no scope, which\n"
+    "## blocks every tool call behind a recovery command pointing somewhere\n"
+    "## this box does not have (#555). Re-run setup-client.sh to update it.\n"
+    "## Shell-quoted: this file is sourced, so a path containing a space would\n"
+    "## otherwise split and arrive empty.\n"
+    f"OPENBRAIN_DEVELOPMENT_ROOT={quoted_root}\n"
+)
+
+# Replace any existing assignment (commented or live) so re-running is
+# idempotent and an install never leaves two spellings disagreeing.
+pattern = re.compile(r"^[#\s]*OPENBRAIN_DEVELOPMENT_ROOT=.*$\n?", re.M)
+if pattern.search(text):
+    text = pattern.sub("", text)
+text = text.rstrip("\n") + "\n" + block
+with open(path, "w", encoding="utf-8") as handle:
+    handle.write(text)
+print(f"    OPENBRAIN_DEVELOPMENT_ROOT={quoted_root} written to the installed env file")
+PY
+fi
+
+# The wrapper starts a CLEAN child (`exec env -i`), so a variable that is not on
+# its allowlist never reaches the hook no matter what the env file says. Ensure
+# the pass-through is present. OPENBRAIN_DEVELOPMENT_ROOT is a STRING, so it
+# takes the plain list spelling; the wrapper's header reserves the conditional
+# block for non-string values, where "" and absent differ.
+python3 - "$TARGET_ENV_DIR/openbrain-hook-env" <<'PY'
+import sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as handle:
+    text = handle.read()
+
+if "OPENBRAIN_DEVELOPMENT_ROOT=" in text:
+    print("    [ok] wrapper already passes OPENBRAIN_DEVELOPMENT_ROOT")
+    sys.exit(0)
+
+anchor = '  OPENBRAIN_TOKEN="${OPENBRAIN_TOKEN:-}" \\\n'
+if anchor not in text:
+    sys.exit(
+        "setup-client: could not find the OPENBRAIN_TOKEN line in the wrapper's\n"
+        "    env -i list, so OPENBRAIN_DEVELOPMENT_ROOT could not be added. The\n"
+        "    wrapper's shape changed; add the pass-through by hand:\n"
+        '      OPENBRAIN_DEVELOPMENT_ROOT="${OPENBRAIN_DEVELOPMENT_ROOT:-}" \\'
+    )
+
+text = text.replace(
+    anchor,
+    anchor + '  OPENBRAIN_DEVELOPMENT_ROOT="${OPENBRAIN_DEVELOPMENT_ROOT:-}" \\\n',
+    1,
+)
+with open(path, "w", encoding="utf-8") as handle:
+    handle.write(text)
+print("    OPENBRAIN_DEVELOPMENT_ROOT pass-through added to the wrapper")
+PY
 
 # The wrapper hardcodes ENV_FILE as an absolute path from the BUILD machine. If
 # this client's $HOME differs, that path is wrong and every hook silently fails

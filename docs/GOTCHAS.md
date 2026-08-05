@@ -974,7 +974,7 @@ problem is credentials or environment, not the network.
 
 ## 2026-08-04 client-install traps
 
-These four all bit while putting the direct client stack on a second machine.
+These all bit while putting the direct client stack on a second machine.
 Full procedure: `docs/client-install-runbook.md`.
 
 ### A stale MCP registration answers instead of the direct stack — and `/mcp` in an error is the tell
@@ -1139,6 +1139,65 @@ field — the Air hit `namespace`, satisfied it, then hit `server_id`, then the
 next. Every error was true and every error was a fraction of the answer. All
 five (`agent`, `platform`, `server_id`, `channel_id`, `session_key`) are now
 reported in a single receipt.
+
+### A fresh box blocks EVERY tool call, and the escape hatch names a path it does not have
+
+**Symptom.** On a newly installed client whose Development tree is not on
+`/Volumes/ThunderBolt`, every tool call is blocked by the context-budget gate,
+and the remediation the banner prints names a directory that does not exist on
+that machine. Pasting it fails, so the block never clears and the session cannot
+be recovered from inside itself. On the operator-invoked path the same
+misconfiguration reads differently: the provider exits clean with no receipt and
+no output, which is indistinguishable from having worked.
+
+**Cause.** `development_scope.py` ships the BUILD machine's volume as
+`DEFAULT_DEVELOPMENT_ROOT`, and it resolves the lane by asking the FILESYSTEM. A
+root that is not there fails the `is_dir()` test, so `resolve_development_scope()`
+returns `None` for every cwd. The gate then has no project, and
+`context_budget_gate._development_cwd()` composes its recovery path out of that
+same absent root — which is how the escape hatch ends up pointing at nothing.
+
+The override `OPENBRAIN_DEVELOPMENT_ROOT` has always existed and always worked.
+**Nothing shipped it** (#555): neither installer script mentioned it, and the
+wrapper's `exec env -i` allowlist did not pass it, so even hand-setting it in the
+env file was stripped before any hook child saw it. Both halves are required —
+the value AND the pass-through.
+
+**Reproducing this on the Mini takes care.** `/Users/rico/Development` here is a
+**symlink** to `/Volumes/ThunderBolt/Development`, and `_canonical_directory`
+calls `.resolve()`. Probe with that path and both the broken and fixed cases
+return a healthy scope, hiding the defect entirely. Use a root that is a real
+directory with no symlink back to the volume:
+
+```bash
+cd python/openbrain-provider
+uv run python -c "
+from openbrain_provider.development_scope import resolve_development_scope, development_root
+print('root :', development_root())
+print('scope:', resolve_development_scope('/some/real/Development/open-brain'))"
+```
+
+`scope: None` with a `root` that is not this machine's tree is the defect.
+Setting `OPENBRAIN_DEVELOPMENT_ROOT` to the real tree turns it into a
+`DevelopmentScope`.
+
+**Fix and check.** `setup-client.sh` now resolves the root per box (exported
+value, then `DEV_ROOT`, then probing the known layouts), writes it into the
+installed env file, and adds the wrapper pass-through. It refuses to install when
+it cannot resolve one — `OPENBRAIN_ALLOW_NO_DEVELOPMENT_ROOT=1` is the deliberate
+override for a box with no Development tree. On any box already installed:
+
+```bash
+python3 - "$HOME/.local/share/openbrain-memory/env/openbrain-hook-env" <<'EOF'
+import sys
+print("pass-through present:",
+      "OPENBRAIN_DEVELOPMENT_ROOT" in open(sys.argv[1], encoding="utf-8").read())
+EOF
+```
+
+**The shape to recognise:** a value that is correct on exactly one machine, with
+a working override that nothing ever ships. The build box cannot detect it,
+because the default is right there.
 
 ---
 

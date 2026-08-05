@@ -129,6 +129,107 @@ cp -p "$SOURCE_ENV_DIR/openbrain-hook-env" "$STAGE/env/"
 chmod 600 "$STAGE/env/claudex-observation.env"
 chmod 755 "$STAGE/env/openbrain-hook-env"
 
+# --- 2b. Development root, staged -------------------------------------------
+# The staged env dir is a copy of THIS machine's live installation, and this
+# machine is the one box where the provider's built-in default happens to be
+# right -- so a bundle built here carries no evidence that the value is
+# machine-specific at all. On any client it is wrong, every cwd resolves to no
+# scope, and the context-budget gate blocks every tool call (#555).
+#
+# setup-client.sh resolves and overwrites this per box. What is staged here is
+# the BUILD machine's value plus a loud note, so the file is self-describing if
+# anyone reads or hand-installs it, and the allowlist entry, without which the
+# value cannot reach the hook child at all.
+
+log "==> staging the Development root marker"
+# The build machine's own root, by the same order setup-client.sh uses.
+BUILD_DEV_ROOT="${OPENBRAIN_DEVELOPMENT_ROOT:-${DEV_ROOT:-}}"
+if [ -z "$BUILD_DEV_ROOT" ]; then
+  for candidate in /Volumes/ThunderBolt/Development "$HOME/Development"; do
+    if [ -d "$candidate" ]; then
+      BUILD_DEV_ROOT="$candidate"
+      break
+    fi
+  done
+fi
+[ -n "$BUILD_DEV_ROOT" ] || BUILD_DEV_ROOT="/Volumes/ThunderBolt/Development"
+
+python3 - "$STAGE/env/claudex-observation.env" "$BUILD_DEV_ROOT" <<'PY'
+import re
+import shlex
+import sys
+
+path, build_root = sys.argv[1], sys.argv[2]
+with open(path, encoding="utf-8") as handle:
+    text = handle.read()
+
+# Shell-quote it for the same reason setup-client.sh does: this file is read
+# with POSIX `set -a; . "$ENV_FILE"`, so an unquoted path containing a space
+# splits on IFS and the variable arrives empty. The staged line is commented,
+# but it is the line an operator uncomments when hand-installing -- staging it
+# unquoted hands them the #555 wedge with the fix's own example.
+quoted_build_root = shlex.quote(build_root)
+
+# Stage the BUILD machine's value COMMENTED. Live, it would look authoritative
+# on a client where it is wrong; commented with the note, it reads as the
+# example it actually is. setup-client.sh writes the live line per box.
+block = (
+    "## EDIT ME ON THE CLIENT -- or just let setup-client.sh do it, which is the\n"
+    "## paved road. This is the BUILD machine's Development root, staged as an\n"
+    "## example only. The provider resolves the lane by asking the filesystem,\n"
+    "## so on a box where this path does not exist EVERY cwd resolves to no\n"
+    "## scope and EVERY tool call is blocked behind a recovery command naming a\n"
+    "## directory that box does not have (#555).\n"
+    "## The value is shell-quoted: this file is sourced, so a path containing a\n"
+    "## space would otherwise split and arrive empty. Keep the quoting if you\n"
+    "## edit it by hand.\n"
+    f"# OPENBRAIN_DEVELOPMENT_ROOT={quoted_build_root}\n"
+)
+
+pattern = re.compile(r"^[#\s]*OPENBRAIN_DEVELOPMENT_ROOT=.*$\n?", re.M)
+if pattern.search(text):
+    text = pattern.sub("", text)
+text = text.rstrip("\n") + "\n" + block
+with open(path, "w", encoding="utf-8") as handle:
+    handle.write(text)
+print("    staged OPENBRAIN_DEVELOPMENT_ROOT marker (commented)", file=sys.stderr)
+PY
+
+# The wrapper starts a clean child with `exec env -i`, so a variable missing
+# from its list never reaches the hook regardless of the env file. Stage the
+# pass-through here too, so a bundle is correct even if the build machine's own
+# wrapper predates this fix. String variable -> plain list spelling; the
+# conditional block above it is for non-string values only.
+python3 - "$STAGE/env/openbrain-hook-env" <<'PY'
+import sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as handle:
+    text = handle.read()
+
+if "OPENBRAIN_DEVELOPMENT_ROOT=" in text:
+    print("    [ok] staged wrapper already passes it", file=sys.stderr)
+    sys.exit(0)
+
+anchor = '  OPENBRAIN_TOKEN="${OPENBRAIN_TOKEN:-}" \\\n'
+if anchor not in text:
+    sys.exit(
+        "client-bundle: the staged wrapper has no OPENBRAIN_TOKEN line in its\n"
+        "    env -i list, so the OPENBRAIN_DEVELOPMENT_ROOT pass-through could\n"
+        "    not be added. Fix the source wrapper before bundling."
+    )
+
+text = text.replace(
+    anchor,
+    anchor + '  OPENBRAIN_DEVELOPMENT_ROOT="${OPENBRAIN_DEVELOPMENT_ROOT:-}" \\\n',
+    1,
+)
+with open(path, "w", encoding="utf-8") as handle:
+    handle.write(text)
+print("    added OPENBRAIN_DEVELOPMENT_ROOT pass-through to the staged wrapper",
+      file=sys.stderr)
+PY
+
 # --- 3. hook entries -------------------------------------------------------
 # Extract ONLY hook entries whose command mentions openbrain. Everything else in
 # settings.json is this machine's business and must not travel.
