@@ -3,11 +3,12 @@
 
 # #440 — SEARCH-1: the policy layer (_DOCS, _ob) is in no qmd index — agents cannot find the rules they are judged by
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: enhancement
 Created: 2026-07-29T18:22:32Z
-Updated: 2026-07-29T18:22:32Z
+Updated: 2026-08-05T02:41:26Z
+Closed: 2026-08-05T02:41:26Z
 
 ---
 
@@ -41,3 +42,75 @@ The policy layer that governs how every agent works is the only body of knowledg
 This is the *retrieval* half only. The always-known half is #438/#439: canon carries the short absolute rule, the index serves the full procedure on trigger. Index-only is what failed here — an agent that does not know a rule exists never searches for it.
 
 Design: `_plans/canon-always-known.md`
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-05T02:41:21Z
+
+## Closing — 2026-08-04 — SEARCH-1 is RUNNING (operator-approved)
+
+Re-verified read-only today before closing. Twin of #448; both close on the same
+evidence.
+
+**RUNNING — a named index over `_DOCS` + `_ob` exists.**
+
+    $ ls -la ~/.cache/qmd/global_docs_instructions.sqlite
+    -rw-r--r-- 1 rico 22773760 Aug  4 19:05 .../global_docs_instructions.sqlite
+
+    $ sqlite3 ~/.cache/qmd/global_docs_instructions.sqlite "select count(*) from documents;"
+    861
+
+Directly against the measurement recorded here on 2026-07-29:
+
+    fleet.sqlite: 10,900 documents, 40+ collections
+      documents from _DOCS: 0
+      documents from _ob:   0
+
+Today, per collection:
+
+    _DOCS               85
+    _ob                568
+
+653 documents from the two trees that held zero. The index also carries the
+agent-harness config that ships with the shared policy (`claude.skills` 14,
+`codex.skills` 80, `claude.commands` 17, `claudex.workflows` 6, `claudex.plans`
+16, `claudex.profiles` 2, `codex.hooks` 5, `claude.agents` 3, `claude.docs` 8) —
+selected, not globbed, with `~/.codex/auth-profiles` and transcript trees
+deliberately excluded so live tokens never reach a vector database.
+
+The two consequences this issue documented are addressed at the source: the
+`_DOCS` collection contains `_DOCS/QMD_INDEXES.md` (the parameterized-builder
+doc the `ai-agents` session could not find), and the `_ob` collection contains
+`_ob/skills/skill-maintainer/workflows/update.md` (the adapter-edit-is-a-fork
+rule).
+
+**RUNNING — routed so ordinary agent searches reach it.**
+
+`/Volumes/ThunderBolt/Development/_ob/bin/aqmd` line 63 pins the index name, and
+the default question branch appends it to every local search:
+
+    SHARED_INDEX="global_docs_instructions"
+    ...
+    *)
+      run_query query "$*"
+      if [[ -f "$HOME/.config/qmd/${SHARED_INDEX}.yml" ]]; then
+        print -r -- "--- shared policy: _DOCS + _ob (aqmd internal) ---"
+        run_query query "$*" --index "$SHARED_INDEX"
+      fi
+
+**The scope constraint stated here was honored.** This is NOT solved by widening
+the repo index — the GPU-hour guard from 2026-07-27 stands. It is a separate
+named index queried a second time and labelled separately, exactly so an edit to
+a standard does not leave ~45 stale per-repo copies. `aqmd internal "q"` queries
+the policy alone; `aqmd up internal` rebuilds config and embeddings (the
+build-once-then-stale-forever defect is fixed); `ensure_named_index` builds it on
+first use on a new box, since named indexes are caches under `~/.config/qmd` +
+`~/.cache/qmd` and do not travel with a Development sync.
+
+**Layering note.** As stated in this issue, this is the retrieval half only. The
+always-known half (#438/#439, `_plans/canon-always-known.md`) is tracked
+separately and is not claimed complete by this closure.
+
+Closing as completed.

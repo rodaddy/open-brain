@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: none
 Created: 2026-08-04T00:33:46Z
-Updated: 2026-08-04T23:27:28Z
+Updated: 2026-08-05T03:56:49Z
 
 ---
 
@@ -35,8 +35,16 @@ The AGENTS.md contract tells Claude to capture distilled in-flight events throug
 
 ---
 
-## Discussion (1)
+## Discussion (2)
 
 ### rodaddy — 2026-08-04T23:27:28Z
 
 Status check 2026-08-04. Core defect UNCHANGED (MERGED main 2a8d2db): the exact-scope gate still fires from `_runtime_validation.py:689` / `_require_session_start_scope` (line 72), so operator-invoked capture still fails scope proof while hook capture writes. Partial delivery on the third Wanted bullet: PR #533 (MERGED 2026-08-04, closed #464) forwards `candidate_type`/`memory_lifecycle_action`/`candidate_scope` through the capture allowlist and adds `ignored_optional_request_keys` to the receipt, so silently-dropped keys are now named. Still owed here: the session_start handshake proving `agent`/`channel_id`/`source` (or the gate demanding only what it proves), a named rejection for the top-level `namespace` key, and a live-canary-verified operator recipe in `docs/memory-contract.md`.
+
+---
+
+### rodaddy — 2026-08-05T03:56:49Z
+
+Reproduced 2026-08-05 ~01:55 from a mini Development session wrap: `printf '<distilled json>' | bun _ob/scripts/ob-memory-provider.ts --runtime claude --event capture` -> **exit 0, zero stdout/stderr, no receipt, ~/.local/state/openbrain-memory/claude-spool.jsonl untouched (empty since Aug 3)**. Session capture was silently dropped.
+
+Same-day context makes this sting: the Air incident write-up (development `_DOCS/_handoff/AIR-session-handoff-20260804.md` section 10) ratified 'silent failure is the multiplier -- every one of these exited 0.' Operator-invoked capture is currently another instance of that exact class. Whatever the scope-proof fix is, the floor is: a capture that saves nothing must exit non-zero and say why.

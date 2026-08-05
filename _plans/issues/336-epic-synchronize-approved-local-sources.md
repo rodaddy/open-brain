@@ -3,11 +3,12 @@
 
 # #336 — [Epic] Synchronize approved local sources
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: enhancement, memory
 Created: 2026-07-22T14:33:56Z
-Updated: 2026-07-22T14:34:11Z
+Updated: 2026-08-05T02:47:01Z
+Closed: 2026-08-05T02:47:01Z
 
 ---
 
@@ -61,3 +62,94 @@ Build an approved-only local ingestion plane with a source registry, real metada
 - Prompt placement stays client/runtime-owned; no implicit MCP `_meta` injection.
 - Observability remains content-free.
 - Dream planning remains dry-run-safe unless a separately authorized mutating wrapper is used.
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-05T02:46:56Z
+
+## Epic validation receipt — 2026-08-04
+
+Ran the validation this epic demands of itself (`## Validation`: collector,
+reconciliation, resume, isolation, and FTS functional suites, plus SOURCE-5
+through EVAL-3). Executed against the **local dogfood service** at
+`http://127.0.0.1:3100` and `open_brain_local_20260724` — never core01. No code,
+config, or server state was changed.
+
+**Truth labels.** Suites are `RUNNING` (executed now, this machine). The five
+children's hosted core01 rollouts are `MERGED` — quoted from their own closing
+receipts, not re-verified here.
+
+### Substrate
+
+- `ob_sources`: 33 registered (6 approved / 27 pending)
+- `ob_source_files` and `ob_source_sync_runs` both present (migrations 030-031)
+- local service revision `fde646a`; `git diff fde646a..HEAD -- src/` is **empty**,
+  so the running binary matches HEAD source for every path under test
+
+### Functional suites — RUNNING
+
+| Demanded suite | Files | Result |
+|---|---|---|
+| Collector (SOURCE-3) | `src/drop-folder-collector.test.ts`, `src/tools/__tests__/drop-folder-collector.test.ts` | **40 pass / 0 fail** |
+| Reconciliation + resume (SOURCE-2) | `src/source-sync.test.ts`, `src/source-sync.pg.test.ts` | **34 pass / 0 fail** |
+| Registry + conversation facts (SOURCE-1/4) | `source-registry`, `ingest-conversation-facts` (+`.pg`) | **28 pass / 0 fail** |
+| FTS (SOURCE-5) | `search-brain-fts-language` (+`.pg`), `fts-config` | **63 pass / 0 fail** |
+| Isolation | `namespace-isolation-matrix`, `namespace-policy`, `shared-namespace` | **40 pass / 0 fail** |
+
+The `.pg` suites were run with `OPENBRAIN_TEST_DATABASE_URL` set and confirmed
+**not** silently skipped: `source-sync.pg.test.ts` alone ran 10 tests / 99
+expects and emitted real `source_sync_ok` checkpoint/resume log lines, proving
+rename-identity preservation, split-budget resume to an identical manifest, and
+per-namespace manifest separation against the live migration-030 schema.
+
+### SOURCE-5 through EVAL-3 — RUNNING, PASS
+
+`bun run scripts/eval-open-brain-live.ts` against the live local service,
+commit `64c9b9f`:
+
+```
+Open Brain live recall gate: PASS
+fixture=open-brain-live-recall-v1 thresholds=open-brain-live-recall-thresholds-v1
+recall@5=1  precision@5=0.4  mrr=1  namespace_leaks=0
+thresholds recall>=0.9 precision>=0.3 mrr>=0.8 leaks<=0
+negative-control ran=true denied=true observed_hits=0
+teardown attempted=10 archived=10 already_absent=0 failed=0
+```
+
+Exit `0`. The negative control **ran and was denied** (an empty-but-successful
+read would have failed the gate), and teardown stranded nothing.
+
+### Mutation accounting (before / after)
+
+The gate seeds and archives, which is a mutation — allowed here, local only.
+
+- before: `thoughts` 25037, `decisions` 18005, 107 namespaces
+- seeded: 10 rows per run under per-run throwaway namespaces
+  (`eval-live-recall-epic336val-…`, `…-epic336kw-…`, plus one `eval-kwdiag-…`
+  diagnostic row)
+- after: **every** row this validation wrote is tombstoned (`archived_at`
+  non-null); zero live rows remain in any namespace it created
+- live (non-archived) totals settled at `thoughts` 24978, `decisions` 17977
+
+### One investigated non-finding
+
+A deliberately out-of-spec `search_mode=keyword` run of the gate exited `1`
+(recall 0). This is **not** a defect and is **not** part of what the epic
+demands. `thresholds.json` is versioned `applies_to_fixture_id` for the default
+**hybrid** retriever. Isolated with a live seed-and-search in a single session,
+keyword mode correctly returned the seeded row (`keyword hits=1`, hybrid 5,
+vector 5); the fixture's graded-relevant set relies on semantic matching that
+keyword mode intentionally does not perform. A namespace-scoped cross-check
+agreed with Postgres exactly (0 `grommet` / 16 `migration` rows in `rico`).
+The diagnostic row was archived.
+
+Stranded rows from an **older, unrelated** eval run
+(`eval-live-recall-361bed5b6129-*`) were observed and deliberately left
+untouched — not this validation's records to clean up.
+
+### Verdict
+
+All five acceptance criteria and both demanded validation steps pass. Closing as
+completed; Status → Done on project 8.

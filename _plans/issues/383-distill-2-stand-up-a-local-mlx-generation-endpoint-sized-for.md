@@ -3,11 +3,12 @@
 
 # #383 — DISTILL-2: Stand up a local MLX generation endpoint sized for core01
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: enhancement, memory
 Created: 2026-07-24T21:31:04Z
-Updated: 2026-07-24T21:31:04Z
+Updated: 2026-08-05T02:41:54Z
+Closed: 2026-08-05T02:41:54Z
 
 ---
 
@@ -78,3 +79,69 @@ it gets wrong.
 
 Once real input/output pairs exist, DWQ (`mlx_lm.dwq`) or a LoRA on the actual
 distillation schema will beat generic pruning — but only after measurement.
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-05T02:41:50Z
+
+## Closing — 2026-08-04 — superseded by #435 (operator-approved)
+
+DISTILL-2 rests on a premise that #435 (DREAM-11) measured away: that generation
+for the memory pipeline must run locally, sized to core01's ~3 GB budget. REM now
+runs on a hosted model, so the local endpoint is no longer the thing standing
+between us and distillation.
+
+**Verified the supersession claim — #435 says what is claimed here.**
+
+`gh issue view 435` — "DREAM-11: REM moves to a hosted model — the local-capacity
+constraints are measured dead". It records `~3 GB core01 budget for REM`
+(`dream-design.md:761`, `:1086`) and `REM model column "local (small)"` (`:84`)
+as **measured dead**, on two measurements from 2026-07-28: the entire candidate
+corpus is one prompt (835,211 chars / ~209k tokens for all 1,414 candidates), and
+the local 4B was never fairly measured (the cited mislabelling run had
+`enable_thinking` left on, so the parser read Qwen3.5's deliberation instead of
+its verdict — the cited evidence did not support the conclusion drawn from it).
+Its acceptance criterion "REM runs on terra low" is recorded MET in the
+2026-08-04 status comment: `src/rem-terra-grader.ts` sends the round-three prompt
+to Terra at low effort. #435 remains open only on AC1 (writing the dead
+constraints into `docs/dream-design.md`), which does not restore this issue's
+premise.
+
+**Verified the endpoint still does not exist.**
+
+    $ curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8791/v1/models
+    200
+    $ curl -s -X POST http://127.0.0.1:8791/v1/chat/completions -d {...}
+    {"detail":"Not Found"}          # HTTP 404
+
+8791 is the embedding server, unchanged — it serves `/v1/models` and has no
+generation route. Nothing listens on 8792.
+
+    $ ls /Volumes/ThunderBolt/open-brain-local/mlx-generation-server/
+    bakeoff.py  distill_db.py  distill_sample.py  extract_turns.py
+    import_turns.py  ingest_sessions.py  probe_distill.py
+
+Probe, extract, import, ingest, and bake-off scripts only. No server. None of the
+three acceptance criteria here was ever met: no OpenAI-compatible completion on
+loopback, no resident-set measurement under the core01 budget, no benchmark on
+captured events with tok/s recorded.
+
+**The weights stay on disk if the premise returns.**
+
+    $ ls /Volumes/ThunderBolt/open-brain-local/models/
+    Qwen3.5-4B-4bit/  embeddinggemma-300m-8bit/  .hf_cache/
+
+`Qwen3.5-4B-4bit` (fetched 2026-07-24) is still there, alongside the embedding
+model, on the external volume — nothing on the main disk, nothing in the repo.
+The model-selection research in this issue (HF-API-verified sizes: Qwen3.5-4B-4bit
+3.06 GB fits; gemma-4-e2b-it-4bit 3.58 GB marginal; gemma-4-e4b-it-4bit 5.18 GB
+does not — the blog-sourced ~3 GB figure for E4B was wrong) stays valid and is
+worth re-reading rather than re-deriving if local generation is ever revived, e.g.
+for offline operation or to stop sending the memory stream off-box. That concern
+is real and is simply not what this issue is now the right vehicle for; it would
+open fresh against the hosted-REM design.
+
+Closing as not planned — superseded, not abandoned. Nothing on disk is being
+removed.
