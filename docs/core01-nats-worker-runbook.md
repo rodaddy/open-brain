@@ -350,13 +350,21 @@ A live request/reply on `dev.ob.memory.context_pack` returns `status: ok` in
 ~1.2s for `repo_facts` / `working_set` / `pointers`. Asking for
 `durable_memory` in the `rico` namespace currently builds a **58.5 MB** reply
 (the `durable_memory` section alone is 39.9 MB), which exceeds the broker's
-8 MB `max_payload`. The publish is rejected and `message.respond()` returns
-false.
+8 MB `max_payload`, so the client rejects the publish.
 
-**What used to happen:** `startNatsContextPackBridge` threw "NATS request did
-not include a reply inbox" — a misattribution, since the reply inbox was
-present — and published nothing, so the caller saw **no reply at all** and
-waited out its own timeout with no client-visible reason.
+**How the rejection actually surfaces:** the nats.js client THROWS on it. Its
+`Msg.respond()` publishes through `protocol.publish()`, which raises
+`NatsError(MAX_PAYLOAD_EXCEEDED)` once the encoded length passes
+`info.max_payload` (`nats-base-client/msg.js` -> `protocol.js`). It does NOT
+return false — `respond()` returns false in exactly one case, a request that
+carried no reply inbox at all, which is unrelated to size.
+
+**What used to happen:** that throw escaped to
+`processNatsSubscriptionMessage`, whose catch logged the generic **"NATS
+context-pack bridge request failed"** and published nothing, so the caller saw
+**no reply at all** and waited out its own timeout with no client-visible
+reason. The "NATS request did not include a reply inbox" message was never the
+one this path produced; it was reserved for its own, correct condition.
 
 **What happens now (#549):** the bridge answers with a redacted
 `payload_too_large` error envelope carrying the same `correlation_id` as a
@@ -366,10 +374,15 @@ advertised `max_payload`, and which sections were requested, and carries no pack
 data. Before publishing, the bridge compares the encoded reply against the
 figure the broker advertises on the connection (`connection.info.max_payload`),
 never a value of Open Brain's own, so a broker advertising the NATS protocol
-default of 1 MB and this one advertising 8 MB are both handled correctly. If the
-publish is refused anyway, the error envelope is sent regardless. Only when that
-small envelope is ALSO refused does the bridge log a missing reply inbox — which
-is now the accurate reading of that case.
+default of 1 MB and this one advertising 8 MB are both handled correctly. When
+the figure is unreadable the reply cannot be pre-judged, so the publish is
+attempted — and that call is wrapped, so a thrown `MAX_PAYLOAD_EXCEEDED` routes
+to the same error envelope instead of escaping to the handler-error catch. The
+throw is matched by its machine **code**, never by message text, so a reworded
+client string cannot silently reopen this. Any other throw is not the bridge's
+to reinterpret and is rethrown unchanged. Only when `respond()` returns false —
+the genuine no-reply-inbox condition — does the bridge log a missing reply
+inbox, which is the accurate reading of that case.
 
 The handler still builds the full pack first, and nothing about what it builds
 changed; this changed only how an undeliverable reply is answered.

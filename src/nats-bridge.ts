@@ -176,19 +176,30 @@ export async function startNatsContextPackBridge(
  * Publish a reply, answering an undeliverable one with an error envelope.
  *
  * THE DEFECT THIS CLOSES (#549): the handler finishes its work, builds a large
- * pack, and `respond()` returns false because the broker refuses to carry the
- * publish. The old code threw "NATS request did not include a reply inbox" —
- * which was BOTH a misattribution (the reply inbox was present; the broker's
- * refusal was the problem) and, worse, SILENCE: nothing was ever published, so
- * the caller waited out its own timeout with no client-visible reason. A
- * measured live case built a 58.5 MB reply against a broker advertising 8 MiB.
+ * pack, and the reply publish cannot be carried. In the real nats.js client
+ * that surfaces as a THROW, not a false return: `Msg.respond()` publishes
+ * through `protocol.publish()`, which raises `NatsError(MaxPayloadExceeded)`
+ * once the encoded length passes `info.max_payload`
+ * (`nats-base-client/msg.js` -> `protocol.js`). The old code let that throw
+ * escape to `processNatsSubscriptionMessage`, whose catch logged the generic
+ * "NATS context-pack bridge request failed" and published NOTHING — so the
+ * caller waited out its own timeout with no client-visible reason. A measured
+ * live case built a 58.5 MB reply against a broker advertising 8 MiB.
  *
- * The answer is an error envelope, never silence. Two paths reach it:
+ * `respond()` returns false in exactly ONE case: the request carried no reply
+ * inbox at all. That condition is real but unrelated to size, which is why the
+ * "no reply inbox" reading is kept for it and only for it, below.
+ *
+ * The answer is an error envelope, never silence. Three paths reach it:
  *   (a) the encoded reply exceeds the broker's OWN advertised figure, which we
  *       compare against BEFORE publishing so we never spend a doomed publish;
- *   (b) the publish is refused anyway (`respond()` returned false) — the
- *       advertised figure was unreadable, or the broker refused for its own
- *       reason. We answer with the same envelope rather than assume why.
+ *   (b) the publish THROWS `MaxPayloadExceeded` anyway — the advertised figure
+ *       was unreadable, so the reply was never pre-judged and the broker's own
+ *       client rejected it. Matched by error CODE, never by message text, so a
+ *       reworded client string cannot silently reopen the defect. Any other
+ *       throw is not ours to interpret and is rethrown unchanged;
+ *   (c) `respond()` returns false — no reply inbox. We answer with the same
+ *       envelope, and if that is refused too the reading below is accurate.
  *
  * The error envelope is CONTENT-FREE: it names what happened, the measured
  * reply bytes, the broker's advertised figure, and which sections were asked
@@ -201,8 +212,7 @@ export async function startNatsContextPackBridge(
  *
  * If the error envelope ITSELF cannot be published there is nothing further the
  * bridge can do on the wire, so it logs accurately and gives up — that case is
- * a genuinely missing reply inbox, which is what the old message claimed about
- * every case.
+ * a genuinely missing reply inbox.
  */
 async function respondWithinBrokerFigure(
   message: NatsRequestMessage,
@@ -217,8 +227,17 @@ async function respondWithinBrokerFigure(
     encoded.byteLength > advertised;
 
   if (!exceedsAdvertised) {
-    const responded = await message.respond(encoded);
-    if (responded !== false) return;
+    // The advertised figure was unreadable or the reply fits it, so the publish
+    // is worth attempting. It can still be rejected by the client itself, and
+    // the real nats.js client rejects by THROWING rather than returning false —
+    // an unguarded call here would let that escape to the handler-error catch
+    // and hand the caller silence, which is the whole #549 defect.
+    try {
+      const responded = await message.respond(encoded);
+      if (responded !== false) return;
+    } catch (err) {
+      if (!isMaxPayloadExceededError(err)) throw err;
+    }
   }
 
   const undeliverable = undeliverableReplyEnvelope(
@@ -227,12 +246,25 @@ async function respondWithinBrokerFigure(
     encoded.byteLength,
     advertised,
   );
-  const respondedWithError = await message.respond(
-    envelopeToBytes(undeliverable),
-  );
+  let respondedWithError: boolean | void;
+  try {
+    respondedWithError = await message.respond(envelopeToBytes(undeliverable));
+  } catch (err) {
+    if (!isMaxPayloadExceededError(err)) throw err;
+    // Even the content-free envelope was rejected against the advertised
+    // figure. The bridge has nothing further it can put on the wire, so it
+    // records what happened and stops.
+    logger.error("NATS error envelope exceeded the broker's advertised figure", {
+      subject: message.subject,
+      reply_bytes: encoded.byteLength,
+      broker_advertised_bytes: advertised ?? null,
+    });
+    return;
+  }
+
   if (respondedWithError === false) {
-    // Only now is "no reply inbox" the accurate reading: a small, known-good
-    // error envelope was refused too, so the refusal is not about the figure.
+    // Only now is "no reply inbox" the accurate reading: the client returns
+    // false for exactly one condition, and it is not about the figure.
     logger.error("NATS reply could not be published to a reply inbox", {
       subject: message.subject,
       reply_bytes: encoded.byteLength,
@@ -246,6 +278,32 @@ async function respondWithinBrokerFigure(
     broker_advertised_bytes: advertised ?? null,
     correlation_id: response.correlation_id,
   });
+}
+
+/**
+ * The nats.js client's own code for a publish it will not carry.
+ *
+ * `ErrorCode.MaxPayloadExceeded` in `nats-base-client/core.js`. Reproduced as a
+ * literal rather than imported so this seam stays testable without a live
+ * client and so the bridge's own driver interface (which is what the tests
+ * drive) does not gain a hard dependency on the client's module shape.
+ */
+const NATS_MAX_PAYLOAD_EXCEEDED_CODE = "MAX_PAYLOAD_EXCEEDED";
+
+/**
+ * Is this the client's refusal to carry a publish of this length?
+ *
+ * Matched on the error's `code`, NEVER on its message text. `NatsError` carries
+ * a stable machine code while its message is prose the client is free to
+ * reword; matching prose would reopen #549 silently on a client upgrade.
+ */
+function isMaxPayloadExceededError(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "code" in err &&
+    (err as { code?: unknown }).code === NATS_MAX_PAYLOAD_EXCEEDED_CODE
+  );
 }
 
 /**

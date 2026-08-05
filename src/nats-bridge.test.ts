@@ -587,6 +587,125 @@ describe("startNatsContextPackBridge", () => {
     await runtime?.close();
   });
 
+  it("answers with an error envelope when the client THROWS MaxPayloadExceeded on the reply publish", async () => {
+    // This mirrors the REAL nats.js client, which is what makes this the
+    // regression test for #549 rather than a restatement of the false-return
+    // case. `Msg.respond()` publishes through `protocol.publish()`, and that
+    // raises NatsError(MAX_PAYLOAD_EXCEEDED) — it does not return false. The
+    // false return is reserved for a genuinely absent reply inbox.
+    //
+    // The message text is deliberately NOT what the bridge matches on, so this
+    // fixture carries the machine code and prose the client is free to reword.
+    const published: Array<ReturnType<typeof envelopeFromBytes>> = [];
+    const driver: NatsBridgeDriver = {
+      subscribe: async (subject, handler) => {
+        let firstPublish = true;
+        await handler({
+          subject,
+          data: data(envelope({ id: "req-thrown", from: "rico" })),
+          headers: {},
+          // The figure is UNREADABLE, so the bridge cannot pre-judge the reply
+          // and must attempt the publish — the exact path that had no guard.
+          maxPayloadBytes: undefined,
+          respond: (payload: Uint8Array) => {
+            if (firstPublish) {
+              firstPublish = false;
+              const err = new Error("Maximum payload exceeded") as Error & {
+                code: string;
+                name: string;
+              };
+              err.name = "NatsError";
+              err.code = "MAX_PAYLOAD_EXCEEDED";
+              throw err;
+            }
+            published.push(envelopeFromBytes(payload));
+            return true;
+          },
+        } satisfies NatsRequestMessage);
+        return { close: () => undefined };
+      },
+      close: () => undefined,
+    };
+
+    const runtime = await startNatsContextPackBridge({
+      boundary: localBoundary(),
+      tokenMap: new Map(),
+      deps: depsWithWorkingSet("rico"),
+      driver,
+    });
+
+    // The caller is answered. Before the guard the throw escaped to the
+    // handler-error catch and NOTHING was published, so this array was empty.
+    expect(published).toHaveLength(1);
+    const reply = published[0]!;
+    expect(reply.kind).toBe(RESPONSE_KIND);
+    expect(reply.from).toBe(RESPONSE_FROM);
+    // The correlation id is what releases the waiting caller.
+    expect(reply.correlation_id).toBe("req-thrown");
+    const payload = reply.payload as Record<string, any>;
+    expect(payload.status).toBe("error");
+    expect(payload.operation).toBe("agent_context_pack");
+    expect(payload.error.code).toBe("payload_too_large");
+    expect(payload.error.message).toContain("working_set");
+
+    await runtime?.close();
+  });
+
+  it("rethrows a respond failure that is not the client's payload refusal", async () => {
+    // A connection-closed throw is not ours to reinterpret as an undeliverable
+    // reply. It must reach the handler-error path, not be answered with a
+    // payload_too_large envelope that would misdescribe what happened.
+    const published: Array<ReturnType<typeof envelopeFromBytes>> = [];
+    const loggedErrors: string[] = [];
+    const originalError = logger.error;
+    logger.error = (message, extra) => {
+      loggedErrors.push(`${message}:${JSON.stringify(extra ?? {})}`);
+    };
+
+    try {
+      let handlerRejection: unknown = null;
+      const driver: NatsBridgeDriver = {
+        subscribe: async (subject, handler) => {
+          await handler({
+            subject,
+            data: data(envelope({ id: "req-closed", from: "rico" })),
+            headers: {},
+            respond: (payload: Uint8Array) => {
+              published.push(envelopeFromBytes(payload));
+              const err = new Error("connection closed") as Error & {
+                code: string;
+              };
+              err.code = "CONNECTION_CLOSED";
+              throw err;
+            },
+          } satisfies NatsRequestMessage).catch((err) => {
+            handlerRejection = err;
+          });
+          return { close: () => undefined };
+        },
+        close: () => undefined,
+      };
+
+      const runtime = await startNatsContextPackBridge({
+        boundary: localBoundary(),
+        tokenMap: new Map(),
+        deps: depsWithWorkingSet("rico"),
+        driver,
+      });
+
+      expect((handlerRejection as { code?: string } | null)?.code).toBe(
+        "CONNECTION_CLOSED",
+      );
+      // Exactly one publish was attempted; no error envelope followed it.
+      expect(published).toHaveLength(1);
+      expect((published[0]!.payload as Record<string, any>).status).toBe("ok");
+
+      await runtime?.close();
+    } finally {
+      logger.error = originalError;
+    }
+  });
+
   it("carries the reply normally when it fits the broker's advertised figure", async () => {
     const published: Array<ReturnType<typeof envelopeFromBytes>> = [];
     const driver: NatsBridgeDriver = {
