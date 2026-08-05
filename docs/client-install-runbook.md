@@ -151,7 +151,7 @@ composes its recovery command from the same missing root.
 
 | Where | What |
 |---|---|
-| `claudex-observation.env` | `OPENBRAIN_DEVELOPMENT_ROOT=/this/box/Development` |
+| `claudex-observation.env` | `OPENBRAIN_DEVELOPMENT_ROOT='/this/box/Development'` — keep the single quotes; the wrapper sources this file with POSIX `. `, so an unquoted path containing a space sources to empty and redelivers the exact wedge this variable exists to prevent |
 | `openbrain-hook-env` | `OPENBRAIN_DEVELOPMENT_ROOT="${OPENBRAIN_DEVELOPMENT_ROOT:-}" \` in the `exec env -i` list |
 
 The wrapper starts a **clean** child, so a variable absent from its allowlist
