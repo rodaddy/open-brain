@@ -468,6 +468,37 @@ Both halves are required. Declaring the field without the wrapper pass-through
 leaves the hook process never seeing the variable; passing it through without the
 declaration is the rejection above.
 
+### Development lane root (#555 / #565) — Python `openbrain` hooks
+
+Declared on `ServerSettings`
+(`python/openbrain/src/openbrain/config.py`, `development_root`) and **resolved
+elsewhere**: `openbrain.receipts.scope.development_root` and the gate's
+`openbrain_provider.development_scope.development_root` both read the variable
+from `os.environ` per call, spelled identically, so a writer and a reader can
+never land in different scopes.
+
+| variable | default | notes |
+|---|---|---|
+| `OPENBRAIN_DEVELOPMENT_ROOT` | `/Volumes/ThunderBolt/Development` | this machine's Development lane root; written by `setup-client.sh` at install time, because the shipped default is the BUILD machine's volume. Empty reads as unset |
+
+**Why it had to be declared even though nothing in `config.py` reads it.** The
+`openbrain` package had consumed this variable since #556 — but through
+`os.environ` directly, which never registers the NAME with the config. So
+`unknown_prefixed_variables` still classed it a typo and rejected the whole
+environment: the package refusing a variable its own code depended on. #557
+added the wrapper pass-through without the declaration, and every box installed
+from bundle `air-bundle/20260804-203726` opened sessions with **no canon and
+exit 0**, field-proved on two machines 2026-08-04 (#565). Declaring a name the
+config itself does not read is precedented here — `OPENBRAIN_OBSERVATION_HMAC_SECRET`
+exists for exactly that reason.
+
+**Ordering, as always: the package declares first, the wrapper passes second.**
+`setup-client.sh` writes the variable into `claudex-observation.env` and the
+`exec env -i` list in `openbrain-hook-env`; both are safe only against an
+install that carries this field. Single-quote the value in the env file — the
+wrapper sources it with POSIX `.`, so an unquoted path containing a space
+sources to empty.
+
 **An EMPTY value means unset, and both halves enforce that (PR #544).** The
 wrapper's pass-through style is `VAR="${VAR:-}"`, which cannot express "absent" —
 it turns an unset variable into an **empty string** in the child. For a string
