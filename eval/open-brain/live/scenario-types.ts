@@ -87,6 +87,10 @@ export interface ProviderExecution {
   exitCode: number;
   receipt?: ProviderReceipt;
   result: Record<string, unknown>;
+  /** Error class recognized in the provider's stderr, when it failed. */
+  error_class?: string;
+  /** First meaningful stderr line, redacted. */
+  stderr_first_line?: string;
 }
 
 export type ScenarioRecord =
@@ -139,6 +143,13 @@ export interface ScenarioVerdict {
   passed: boolean;
   failures: string[];
   checks: Record<string, boolean | number | string>;
+  /**
+   * Content-free child diagnostics for a failing scenario: error class plus one
+   * redacted stderr line. Present only when the provider actually said
+   * something on stderr (issue #583).
+   */
+  error_class?: string;
+  stderr_first_line?: string;
 }
 
 export interface ScenarioGateReceipt {

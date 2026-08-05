@@ -10,7 +10,7 @@ import type {
   ScenarioVerdict,
   TeardownTally,
 } from "./scenario-types.ts";
-import type { ContextPackScope } from "./transport.ts";
+import { LiveTransportError, type ContextPackScope } from "./transport.ts";
 
 export interface RunScenarioGateOptions {
   fixture: ScenarioFixture;
@@ -74,6 +74,24 @@ function ignoredRequestFailures(
   return ignored
     .filter((key) => Object.hasOwn(request, key))
     .map((key) => `provider_ignored_request_key:${key}`);
+}
+
+/**
+ * Content-free child diagnostics for a verdict. A provider can exit nonzero and
+ * still emit a parseable receipt, so this covers the path that never throws;
+ * only attached when the scenario actually failed and the child said something.
+ */
+function executionDiagnostics(
+  execution: ProviderExecution,
+  passed: boolean,
+): { error_class?: string; stderr_first_line?: string } {
+  if (passed) return {};
+  return {
+    ...(execution.error_class ? { error_class: execution.error_class } : {}),
+    ...(execution.stderr_first_line
+      ? { stderr_first_line: execution.stderr_first_line }
+      : {}),
+  };
 }
 
 function providerFailures(
@@ -176,6 +194,7 @@ async function runCaptureScenario(
       durable: execution.receipt?.durable ?? false,
       read_back_exact: roundTrip.found,
     },
+    ...executionDiagnostics(execution, failures.length === 0),
   };
 }
 
@@ -308,6 +327,12 @@ async function runCheckpointScenario(
       lane_events_surface: roundTrip.found,
       checkpoint_summary_surface: summarySurfaced,
     },
+    // Two children run here; the checkpoint call is the later one, so its
+    // stderr is the more proximate explanation when both spoke.
+    ...executionDiagnostics(
+      checkpointExecution.stderr_first_line ? checkpointExecution : eventExecution,
+      failures.length === 0,
+    ),
   };
 }
 
@@ -341,13 +366,28 @@ export async function runScenarioGate(
         verdicts.push(
           await runScenario(scenario, opts.namespace, opts.transport, records),
         );
-      } catch {
+      } catch (error: unknown) {
+        // A transport throw is the case that used to be a bare label with no
+        // way to tell WHY the provider died (issue #583). Carry the child's
+        // content-free diagnostics into the verdict.
+        const transportError =
+          error instanceof LiveTransportError ? error : undefined;
         verdicts.push({
           scenario_id: scenario.id,
           kind: scenario.kind,
           passed: false,
-          failures: ["scenario_transport_error"],
+          failures: [
+            transportError
+              ? `scenario_transport_error:${transportError.label}`
+              : "scenario_transport_error",
+          ],
           checks: {},
+          ...(transportError?.errorClass
+            ? { error_class: transportError.errorClass }
+            : {}),
+          ...(transportError?.stderrFirstLine
+            ? { stderr_first_line: transportError.stderrFirstLine }
+            : {}),
         });
       }
     }

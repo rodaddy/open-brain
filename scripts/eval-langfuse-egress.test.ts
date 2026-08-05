@@ -204,6 +204,64 @@ describe("Langfuse egress verification", () => {
     });
   });
 
+  test("secret scan over an empty trace set is skipped-no-data, not a pass", async () => {
+    // Issue #583: at observed=0 traces the scan examined nothing, so calling it
+    // a pass was a vacuous green. It must report skipped-no-data, and the
+    // fatal arrival_count check must still fail the run.
+    const emptyTransport: HttpTransport = async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/api/public/traces") {
+        return Response.json({ data: [], meta: { totalPages: 1 } });
+      }
+      throw new Error(`unexpected request ${url.pathname}`);
+    };
+    const receipt = await verify([], { transport: emptyTransport });
+
+    expect(check(receipt, "secret_scan")).toMatchObject({
+      status: "skipped-no-data",
+      observed: 0,
+      passed: false,
+    });
+    expect(check(receipt, "arrival_count")).toMatchObject({
+      passed: false,
+      fatal: true,
+    });
+    expect(receipt.passed).toBeFalse();
+  });
+
+  test("skipped-no-data fails the run even when the caller expects zero traces", async () => {
+    // Review finding on #584: with expectedTraces: 0 the arrival_count check
+    // passes (0 === 0), so if secret_scan's passed were decoupled from the
+    // data, a run would be certified secret-free while the scanner examined
+    // nothing. The skip itself must be a fatal failure.
+    const emptyTransport: HttpTransport = async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/api/public/traces") {
+        return Response.json({ data: [], meta: { totalPages: 1 } });
+      }
+      throw new Error(`unexpected request ${url.pathname}`);
+    };
+    const receipt = await verify([], {
+      transport: emptyTransport,
+      expectedTraces: 0,
+      expected: 0,
+    });
+
+    expect(check(receipt, "secret_scan")).toMatchObject({
+      status: "skipped-no-data",
+      passed: false,
+      fatal: true,
+    });
+    expect(receipt.passed).toBeFalse();
+  });
+
+  test("secret scan over a real trace set reports an explicit pass status", async () => {
+    const receipt = await verify([generation()]);
+
+    expect(check(receipt, "secret_scan")).toMatchObject({ status: "pass" });
+    expect(receipt.passed).toBeTrue();
+  });
+
   test("settle polling records a late successful arrival", async () => {
     let listCalls = 0;
     let now = 0;
@@ -339,6 +397,61 @@ describe("Langfuse egress verification", () => {
       observed: 42,
       emit_failure_detected: false,
     });
+  });
+
+  test("failing drive child surfaces its stderr first line in the receipt", () => {
+    // Issue #583: the drive path captured stdout/stderr and never surfaced
+    // them, so a dead child presented as a bare exit code.
+    const receipt = evaluateDriveOutcome({
+      tag: "run-tag",
+      count: 1,
+      exitCode: 1,
+      stdout: "",
+      stderr: [
+        "Traceback (most recent call last):",
+        '  File "capture_stop.py", line 40, in main',
+        "RuntimeError: langfuse client refused the scope key",
+      ].join("\n"),
+      observeOffset: 0,
+    });
+
+    expect(receipt.passed).toBeFalse();
+    expect(receipt.error_class).toBe("RuntimeError");
+    expect(receipt.stderr_first_line).toBe(
+      "RuntimeError: langfuse client refused the scope key",
+    );
+    expect(serializeCliOutcome({ exitCode: 1, receipt }, false)).toContain(
+      "error_class=RuntimeError",
+    );
+  });
+
+  test("passing drive child carries no stderr diagnostics", () => {
+    const receipt = evaluateDriveOutcome({
+      tag: "run-tag",
+      count: 1,
+      exitCode: 0,
+      stdout: "",
+      stderr: "warming embedding cache",
+      observeOffset: 5,
+    });
+
+    expect(receipt.passed).toBeTrue();
+    expect(receipt.error_class).toBeUndefined();
+    expect(receipt.stderr_first_line).toBeUndefined();
+  });
+
+  test("drive receipt redacts labeled secret material from stderr", () => {
+    const receipt = evaluateDriveOutcome({
+      tag: "run-tag",
+      count: 1,
+      exitCode: 1,
+      stdout: "",
+      stderr: "ValueError: rejected token=abcd1234efgh5678ijkl",
+      observeOffset: 0,
+    });
+
+    expect(receipt.stderr_first_line).not.toContain("abcd1234efgh5678ijkl");
+    expect(receipt.stderr_first_line).toContain("[REDACTED]");
   });
 
   test("drive outcome fails without watermark proof or on explicit emit failure", () => {

@@ -16,6 +16,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { Database } from "bun:sqlite";
+import { summarizeChildStderr } from "../src/child-stderr.ts";
 import { SECRET_DETECTORS } from "../src/secret-patterns.ts";
 
 const OPT_IN_ENV = "OPEN_BRAIN_LANGFUSE_EGRESS";
@@ -53,6 +54,12 @@ export interface EgressCheck {
   detector_counts?: Record<string, number>;
   content_fields_present?: boolean;
   emit_failure_detected?: boolean;
+  /**
+   * `skipped-no-data` marks a check that had nothing to examine, which is NOT
+   * the same claim as `pass`. A scan over zero traces found zero secrets
+   * trivially; reporting that as a pass is a vacuous green (issue #583).
+   */
+  status?: "pass" | "fail" | "skipped-no-data";
 }
 
 export interface EgressReceipt {
@@ -64,6 +71,13 @@ export interface EgressReceipt {
   observed: { traces: number; observations: number; generations: number };
   checks: EgressCheck[];
   settle?: { waited_ms: number; timed_out: boolean; polls: number };
+  /**
+   * Content-free diagnostics from the drive child: error class plus one
+   * redacted stderr line. Without these a drive failure presents as a bare
+   * exit code and has to be recovered by replaying the command (issue #583).
+   */
+  error_class?: string;
+  stderr_first_line?: string;
 }
 
 export interface CliOutcome {
@@ -415,11 +429,23 @@ export async function verifyLangfuseEgress(
     },
     {
       label: "secret_scan",
-      passed: secretHitCount === 0,
+      // An empty scanned set proves nothing about egress safety, so it reports
+      // skipped-no-data AND fails: passed is coupled to the data, not to the
+      // absence of hits, so a caller passing expectedTraces: 0 cannot get a
+      // run certified secret-free while the scanner examined nothing (#583
+      // review finding — the arrival_count default was the only thing holding
+      // the old comment's claim, and it is caller-overridable).
+      passed: traces.length > 0 && secretHitCount === 0,
       fatal: true,
       observed: secretHitCount,
       detector_counts: scan.counts,
       content_fields_present: scan.contentFieldsPresent,
+      status:
+        traces.length === 0
+          ? "skipped-no-data"
+          : secretHitCount === 0
+            ? "pass"
+            : "fail",
     },
   ];
   const passed = checks.every((check) => check.passed || !check.fatal);
@@ -539,14 +565,19 @@ export function evaluateDriveOutcome(outcome: DriveOutcome): EgressReceipt {
       emit_failure_detected: emitFailureDetected,
     },
   ];
+  const passed = checks.every((check) => check.passed || !check.fatal);
+  // Only surfaced on failure: a healthy run's stderr is noise, and the receipt
+  // stays content-free either way (issue #583).
+  const diagnostics = passed ? {} : summarizeChildStderr(outcome.stderr);
   return {
     gate: "langfuse_egress",
     mode: "drive",
     tag: outcome.tag,
-    passed: checks.every((check) => check.passed || !check.fatal),
+    passed,
     expected: { traces: 1, observations: outcome.count + 1 },
     observed: { traces: 0, observations: 0, generations: 0 },
     checks,
+    ...diagnostics,
   };
 }
 
@@ -658,12 +689,17 @@ export function serializeCliOutcome(
       check.emit_failure_detected === undefined
         ? ""
         : ` emit_failure_detected=${check.emit_failure_detected}`;
+    const status = check.status ?? (check.passed ? "pass" : "fail");
     lines.push(
-      `check=${check.label} status=${check.passed ? "PASS" : "FAIL"} fatal=${check.fatal} observed=${check.observed}${check.expected === undefined ? "" : ` expected=${check.expected}`}${contentFields}${emitFailure}`,
+      `check=${check.label} status=${status.toUpperCase()} fatal=${check.fatal} observed=${check.observed}${check.expected === undefined ? "" : ` expected=${check.expected}`}${contentFields}${emitFailure}`,
     );
     for (const [kind, count] of Object.entries(check.detector_counts ?? {})) {
       lines.push(`detector=${kind} count=${count}`);
     }
+  }
+  if (receipt.error_class) lines.push(`error_class=${receipt.error_class}`);
+  if (receipt.stderr_first_line) {
+    lines.push(`stderr_first_line=${receipt.stderr_first_line}`);
   }
   return lines.join("\n");
 }
