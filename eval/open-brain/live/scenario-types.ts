@@ -18,7 +18,6 @@ export interface CaptureRequest {
   content: string;
   event_type: string;
   scope: ScenarioScope;
-  expected_honored_request_keys: string[];
   optional_request_fields?: Record<string, unknown>;
 }
 
@@ -86,7 +85,7 @@ export interface ProviderReceipt {
 
 export interface ProviderExecution {
   exitCode: number;
-  receipt: ProviderReceipt;
+  receipt?: ProviderReceipt;
   result: Record<string, unknown>;
 }
 

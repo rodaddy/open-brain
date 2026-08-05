@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseScenarioFixture } from "../scenario-fixtures.ts";
 import { runScenarioGate } from "../scenario-gate.ts";
+import { parseProviderOutput } from "../scenario-transport.ts";
 import type {
   ProviderExecution,
   ScenarioFixture,
@@ -22,9 +23,12 @@ const FIXTURE = parseScenarioFixture(
 
 interface FakeOptions {
   zeroWrite?: boolean;
+  emptyProviderOutput?: boolean;
   lostCapture?: boolean;
   ignoredKeys?: string[];
   packCharLimit?: number;
+  packItems?: Array<Record<string, unknown>>;
+  packItemCount?: number;
   packThrows?: boolean;
   cleanupFails?: number;
 }
@@ -46,7 +50,7 @@ function fakeTransport(opts: FakeOptions = {}): ScenarioTransport {
   ): ProviderExecution {
     const lost = operation === "capture" && opts.lostCapture;
     return {
-      exitCode: lost ? 1 : 0,
+      exitCode: 0,
       receipt: {
         operation,
         status: lost ? "lost" : "saved",
@@ -70,6 +74,9 @@ function fakeTransport(opts: FakeOptions = {}): ScenarioTransport {
           events: [],
         };
       lanes.set(scope.session_key, lane);
+      if (operation === "capture" && opts.emptyProviderOutput) {
+        return parseProviderOutput("", 0);
+      }
       if (operation === "capture") {
         if (!opts.zeroWrite && !opts.lostCapture) {
           lane.events.push({
@@ -93,12 +100,15 @@ function fakeTransport(opts: FakeOptions = {}): ScenarioTransport {
     },
     async contextPack() {
       if (opts.packThrows) throw new Error("synthetic pack failure");
+      const items = opts.packItems ?? [
+        { id: "memory-1", citation_id: "citation-1" },
+      ];
       const sections = {
         durable_memory: {
           label: "durable_memory",
           namespace_scoped: true,
-          items: [{ id: "memory-1", citation_id: "citation-1" }],
-          item_count: 1,
+          items,
+          item_count: opts.packItemCount ?? items.length,
           truncated: false,
         },
       };
@@ -203,7 +213,22 @@ describe("runScenarioGate", () => {
     expect(capture.checks.read_back_exact).toBe(false);
   });
 
-  it("surfaces scope-proof loss as a named lost/durable failure", async () => {
+  it("names an exit-0 empty provider result as an absent capture receipt", async () => {
+    const outcome = await run(fakeTransport({ emptyProviderOutput: true }));
+    expect(outcome.passed).toBe(false);
+    expect(outcome.receipt.failures).toContain(
+      "capture-round-trip:capture_receipt_absent",
+    );
+    expect(outcome.receipt.failures).not.toContain(
+      "capture-round-trip:scenario_transport_error",
+    );
+    const capture = outcome.receipt.scenarios[0]!;
+    expect(capture.checks.provider_exit_zero).toBe(true);
+    expect(capture.checks.receipt_saved).toBe(false);
+    expect(capture.checks.read_back_exact).toBe(false);
+  });
+
+  it("surfaces scope-proof loss independently of the provider exit code", async () => {
     const outcome = await run(fakeTransport({ lostCapture: true }));
     expect(outcome.passed).toBe(false);
     expect(outcome.receipt.failures).toContain(
@@ -212,20 +237,38 @@ describe("runScenarioGate", () => {
     expect(outcome.receipt.failures).toContain(
       "capture-round-trip:capture_not_durable",
     );
+    expect(outcome.receipt.failures).not.toContain(
+      "capture-round-trip:provider_exit_nonzero",
+    );
+    expect(outcome.receipt.scenarios[0]!.checks.provider_exit_zero).toBe(true);
     expectContentFree(outcome.receipt);
   });
 
-  it("fails when a key declared as honored is reported ignored", async () => {
+  it("fails when the provider ignores any key the request sent", async () => {
+    const outcome = await run(fakeTransport({ ignoredKeys: ["summary", "kind"] }));
+    expect(outcome.passed).toBe(false);
+    expect(outcome.receipt.failures).toContain(
+      "checkpoint-wrap-round-trip:provider_ignored_request_key:summary",
+    );
+    expect(outcome.receipt.failures).not.toContain(
+      "checkpoint-wrap-round-trip:provider_ignored_request_key:kind",
+    );
+  });
+
+  it("fails when durable_memory item_count disagrees with the actual items", async () => {
     const outcome = await run(
-      fakeTransport({ ignoredKeys: ["candidate_type", "kind"] }),
+      fakeTransport({ packItems: [], packItemCount: 5 }),
     );
     expect(outcome.passed).toBe(false);
     expect(outcome.receipt.failures).toContain(
-      "capture-round-trip:capture_ignored_expected_key:candidate_type",
+      "durable-memory-pack-shape:durable_memory_item_count_mismatch",
     );
-    expect(outcome.receipt.failures).not.toContain(
-      "capture-round-trip:capture_ignored_expected_key:kind",
+    expect(outcome.receipt.failures).toContain(
+      "durable-memory-pack-shape:durable_memory_items_missing",
     );
+    const durable = outcome.receipt.scenarios[1]!;
+    expect(durable.checks.item_count).toBe(0);
+    expect(durable.checks.reported_item_count).toBe(5);
   });
 
   it("fails the durable_memory scenario when serialized sections exceed the reported budget", async () => {

@@ -23,7 +23,13 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function parseProviderOutput(text: string, exitCode: number): ProviderExecution {
+export function parseProviderOutput(
+  text: string,
+  exitCode: number,
+): ProviderExecution {
+  if (exitCode === 0 && text.trim() === "") {
+    return { exitCode, result: {} };
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -32,6 +38,9 @@ function parseProviderOutput(text: string, exitCode: number): ProviderExecution 
   }
   const output = asRecord(parsed);
   const receipt = asRecord(output?.receipt);
+  if (!receipt && exitCode === 0) {
+    return { exitCode, result: asRecord(output?.result) ?? {} };
+  }
   if (!receipt) {
     throw new LiveTransportError("openbrain-memory:missing-receipt", false);
   }

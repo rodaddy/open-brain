@@ -17,7 +17,6 @@ const captureRequestSchema = z.object({
   content: z.string().min(1),
   event_type: z.string().min(1),
   scope: scopeSchema,
-  expected_honored_request_keys: z.array(z.string().min(1)),
   optional_request_fields: z.record(z.string(), z.unknown()).optional(),
 });
 

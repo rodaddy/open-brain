@@ -19,10 +19,6 @@
           "session_key": "eval:scenario:{{run_id}}:capture",
           "project": "open-brain"
         },
-        "expected_honored_request_keys": [
-          "candidate_type",
-          "memory_lifecycle_action"
-        ],
         "optional_request_fields": {
           "candidate_type": "durable_decision",
           "memory_lifecycle_action": "candidate"
@@ -69,8 +65,7 @@
           "channel_id": "checkpoint-round-trip",
           "session_key": "eval:scenario:{{run_id}}:checkpoint",
           "project": "open-brain"
-        },
-        "expected_honored_request_keys": []
+        }
       },
       "checkpoint": {
         "operation": "checkpoint",

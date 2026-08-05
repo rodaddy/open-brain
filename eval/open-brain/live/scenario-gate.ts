@@ -66,22 +66,34 @@ function recordArray(value: unknown): Array<Record<string, unknown>> {
   });
 }
 
+function ignoredRequestFailures(
+  execution: ProviderExecution,
+  request: Record<string, unknown>,
+): string[] {
+  const ignored = execution.receipt?.ignored_optional_request_keys ?? [];
+  return ignored
+    .filter((key) => Object.hasOwn(request, key))
+    .map((key) => `provider_ignored_request_key:${key}`);
+}
+
 function providerFailures(
   execution: ProviderExecution,
-  expectedHonoredKeys: string[],
+  request: Record<string, unknown>,
 ): string[] {
   const failures: string[] = [];
   if (execution.exitCode !== 0) failures.push("provider_exit_nonzero");
-  if (execution.receipt.status === "lost" && !execution.receipt.durable) {
+  const receipt = execution.receipt;
+  if (!receipt) {
+    failures.push("capture_receipt_absent");
+    return failures;
+  }
+  if (receipt.status === "lost" && !receipt.durable) {
     failures.push("capture_receipt_lost");
-  } else if (execution.receipt.status !== "saved") {
+  } else if (receipt.status !== "saved") {
     failures.push("capture_receipt_not_saved");
   }
-  if (!execution.receipt.durable) failures.push("capture_not_durable");
-  const ignored = new Set(execution.receipt.ignored_optional_request_keys ?? []);
-  for (const key of expectedHonoredKeys) {
-    if (ignored.has(key)) failures.push(`capture_ignored_expected_key:${key}`);
-  }
+  if (!receipt.durable) failures.push("capture_not_durable");
+  failures.push(...ignoredRequestFailures(execution, request));
   return failures;
 }
 
@@ -138,14 +150,10 @@ async function runCaptureScenario(
   transport: ScenarioTransport,
   records: ScenarioRecord[],
 ): Promise<ScenarioVerdict> {
-  const execution = await transport.executeProvider(
-    providerPayload(scenario.request, namespace),
-  );
+  const request = providerPayload(scenario.request, namespace);
+  const execution = await transport.executeProvider(request);
   collectProviderRecords(execution, scenario.request.scope.session_key, records);
-  const failures = providerFailures(
-    execution,
-    scenario.request.expected_honored_request_keys,
-  );
+  const failures = providerFailures(execution, request);
   const context = await transport.sessionContext({
     sessionKey: scenario.request.scope.session_key,
     namespace,
@@ -164,8 +172,8 @@ async function runCaptureScenario(
     failures,
     checks: {
       provider_exit_zero: execution.exitCode === 0,
-      receipt_saved: execution.receipt.status === "saved",
-      durable: execution.receipt.durable,
+      receipt_saved: execution.receipt?.status === "saved",
+      durable: execution.receipt?.durable ?? false,
       read_back_exact: roundTrip.found,
     },
   };
@@ -179,10 +187,13 @@ function durableSectionChecks(
   const failures: string[] = [];
   const section = asRecord(sections.durable_memory);
   const items = recordArray(section?.items);
-  const itemCount =
-    typeof section?.item_count === "number" ? section.item_count : items.length;
+  const reportedItemCount =
+    typeof section?.item_count === "number" ? section.item_count : null;
   if (!section) failures.push("durable_memory_section_missing");
-  if (itemCount < minItems) failures.push("durable_memory_items_missing");
+  if (reportedItemCount !== null && reportedItemCount !== items.length) {
+    failures.push("durable_memory_item_count_mismatch");
+  }
+  if (items.length < minItems) failures.push("durable_memory_items_missing");
   const wholePack = asRecord(budget.whole_pack);
   const charLimit =
     typeof wholePack?.content_char_limit === "number"
@@ -197,7 +208,8 @@ function durableSectionChecks(
     failures,
     checks: {
       section_present: Boolean(section),
-      item_count: itemCount,
+      item_count: items.length,
+      reported_item_count: reportedItemCount ?? -1,
       serialized_chars: serializedChars,
       content_char_limit: charLimit ?? -1,
       within_budget: charLimit !== null && serializedChars <= charLimit,
@@ -243,15 +255,11 @@ async function runCheckpointScenario(
   transport: ScenarioTransport,
   records: ScenarioRecord[],
 ): Promise<ScenarioVerdict> {
-  const eventExecution = await transport.executeProvider(
-    providerPayload(scenario.event, namespace),
-  );
+  const eventRequest = providerPayload(scenario.event, namespace);
+  const eventExecution = await transport.executeProvider(eventRequest);
   collectProviderRecords(eventExecution, scenario.event.scope.session_key, records);
-  const failures = providerFailures(
-    eventExecution,
-    scenario.event.expected_honored_request_keys,
-  );
-  const checkpointExecution = await transport.executeProvider({
+  const failures = providerFailures(eventExecution, eventRequest);
+  const checkpointRequest = {
     operation: scenario.checkpoint.operation,
     distilled: scenario.checkpoint.distilled,
     summary: scenario.checkpoint.summary,
@@ -259,12 +267,14 @@ async function runCheckpointScenario(
     next_steps: scenario.checkpoint.next_steps,
     scope: scenario.checkpoint.scope,
     config: { namespace },
-  });
+  };
+  const checkpointExecution = await transport.executeProvider(checkpointRequest);
+  failures.push(...ignoredRequestFailures(checkpointExecution, checkpointRequest));
   if (checkpointExecution.exitCode !== 0) failures.push("checkpoint_exit_nonzero");
-  if (checkpointExecution.receipt.status !== "saved") {
+  if (checkpointExecution.receipt?.status !== "saved") {
     failures.push("checkpoint_receipt_not_saved");
   }
-  if (!checkpointExecution.receipt.durable) failures.push("checkpoint_not_durable");
+  if (!checkpointExecution.receipt?.durable) failures.push("checkpoint_not_durable");
   const checkpointSessionId = checkpointExecution.result.session_id;
   if (typeof checkpointSessionId === "string") {
     records.push({ kind: "memory", table: "sessions", id: checkpointSessionId });
@@ -293,8 +303,8 @@ async function runCheckpointScenario(
     passed: failures.length === 0,
     failures,
     checks: {
-      event_receipt_saved: eventExecution.receipt.status === "saved",
-      checkpoint_receipt_saved: checkpointExecution.receipt.status === "saved",
+      event_receipt_saved: eventExecution.receipt?.status === "saved",
+      checkpoint_receipt_saved: checkpointExecution.receipt?.status === "saved",
       lane_events_surface: roundTrip.found,
       checkpoint_summary_surface: summarySurfaced,
     },
