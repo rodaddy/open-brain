@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: none
 Created: 2026-08-02T18:12:12Z
-Updated: 2026-08-03T16:31:47Z
+Updated: 2026-08-04T23:27:29Z
 
 ---
 
@@ -25,7 +25,7 @@ State: PROPOSED — nothing here is written. Do not start until 0.9.0 is tagged.
 
 ---
 
-## Discussion (4)
+## Discussion (5)
 
 ### rodaddy — 2026-08-03T16:06:54Z
 
@@ -84,3 +84,9 @@ So this corpus is STRICTLY RICHER than a Discord API export: it carries the mess
 **Adapter shape this settles:** SQLite -> normalized turns -> the #454 bulk-ingest SQLite staging (a natural fit — staging is already SQLite). No Discord API dependency for the primary corpus; the Discord export route (prior comment) demotes to gap-filling for anything after the last state.db write.
 
 Next concrete step: copy the two .db files (read-only source) to `{temp_workspace}` staging on the Mac, then build the normalizer against the real schema above. Also snapshot-worthy: `~/.hermes/sessions/` (53M) and `state-snapshots/` (23M), same box, not yet inspected.
+
+---
+
+### rodaddy — 2026-08-04T23:27:29Z
+
+Split status 2026-08-04. **Item 2 (Langfuse telemetry) is substantially DELIVERED** — MERGED: PR #524 (capture observation sink, 2026-08-03), PR #534 (content-ful Langfuse trace per MCP tool call, rebuilt on SDK v4, 2026-08-04), PR #543 (launcher passes `OPENBRAIN_TRACING_*` through to the server child). Server-side tracing is RUNNING against the local dogfood service. **Item 1 (Hermes bulk adapter) is UNCHANGED** — MERGED main 2a8d2db still has `python/openbrain/src/openbrain/apps/bulk/formats.py:283` registering `InputFormat.HERMES: _unbuilt(InputFormat.HERMES)`, i.e. the loud named gap from 0.9.0. The corpus contract this issue asked to chart first is now RUNNING-verified in the comment above (`skippy@10.71.20.111:~/.hermes`, SQLite, 543 sessions / 25,054 messages, schema read), and #522's second harvest batch already normalized 122 of those sessions end-to-end — so the remaining work is registering that normalizer as the real `_ADAPTERS` entry, not discovery. Suggest the issue narrow to the Hermes adapter alone.

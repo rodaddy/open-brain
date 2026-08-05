@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: enhancement
 Created: 2026-07-25T00:19:31Z
-Updated: 2026-07-25T00:19:31Z
+Updated: 2026-08-04T23:27:37Z
 
 ---
 
@@ -59,3 +59,11 @@ re-litigate it.
   `qmd search`.
 - A skill definition in `_ob` is retrievable by name.
 - Index size growth is proportionate and no excluded path appears in results.
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-04T23:27:36Z
+
+2026-08-04 status. WRITTEN: the shared 53-repo qmd index this issue is written against was retired 2026-07-29/30 — see `docs/standards/QMD_INDEXES.md`, which records that merging all repos into one bucket is what made cross-repo search return stale hits. The "27 of 82 registered / 55 invisible" count no longer describes anything. RUNNING: 54 repos under `/Volumes/ThunderBolt/Development` now carry their own project-local `.qmd/index.sqlite`, covering 6 of the 9 repos named here (mcp2cli, rtech-mcps, rtech-infra, rtech-agents, king-capital, skippy-agentspace). The two flagged as most consequential, `_ob` and `_DOCS`, are indexed in `~/.cache/qmd/global_docs_instructions.sqlite` and appended to every bare `aqmd` query, so the "agents cannot fast-look-up the rules that govern them" problem is solved. RESIDUAL: `bulkbridge` has no index, and the durable exclusion rule this issue asks for is documented in `QMD_INDEXES.md` but not enforced by tooling. Worth rescoping to those two items or closing in favour of #388's per-repo coverage check.

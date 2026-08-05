@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: enhancement
 Created: 2026-07-25T00:20:25Z
-Updated: 2026-07-25T01:23:56Z
+Updated: 2026-08-04T23:27:34Z
 
 ---
 
@@ -99,3 +99,11 @@ serves. Simpler, and one less piece of state to keep correct.
 - Write-path latency impact is measured and negligible (see #397 load test).
 - No light scheduler, no light backlog counter, no light-ran health check
   exists anywhere in the codebase.
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-04T23:27:34Z
+
+2026-08-04 status. MERGED: Light shipped in PR #455 (2026-08-01) as `src/dream-light.ts` + migration `035_raw_turns_light_swept.sql`. It is model-free as specified. WRITTEN: two deltas against this body. (1) Light is a BOUNDED QUEUE SWEEP with a `light_swept_at` idempotency marker, not an in-transaction write-path tag — so the verification bullets "no light scheduler exists" and "no window exists where an untagged raw turn is visible to REM" are contradicted by the shipped design, not merely unmet. (2) `docs/decisions/light-counts-but-does-not-gate.md` (accepted 2026-07-28) supersedes the corroboration premise: measured over 3,795 turns, exactly 1 content row appeared in more than one session, so occurrence count is a signal REM reads, never a gate it sits behind. RUNNING: dogfood DB has 15,908 `content_occurrences` rows, and 29,083 of 57,484 raw turns still unswept — the sweep backlog the write-path design was meant to make impossible.

@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: none
 Created: 2026-08-03T02:26:29Z
-Updated: 2026-08-03T02:26:29Z
+Updated: 2026-08-04T23:27:50Z
 
 ---
 
@@ -30,3 +30,13 @@ Pi is fully operator-controlled, which makes it the cross-model proving ground: 
 - Sequenced after 0.9.0 soak, alongside #492. Do not start until the operator green-lights the lane.
 
 Refs: #443 (map — "Claude first, then adapters for Claudex, Codex, and Pi"), PR #500 (fleet rollout plan), #492 (post-0.9.0 sequencing).
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-04T23:27:50Z
+
+Sequencing decision, operator, 2026-08-04: the Codex adapter is to be done pretty soon if not next; then Pi, which is expected to be easy because it is the same shape and fully operator-controlled.
+
+Recorded for ordering only — this is NOT yet a go-ahead to start.

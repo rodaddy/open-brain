@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: enhancement
 Created: 2026-07-25T00:19:15Z
-Updated: 2026-07-25T00:19:15Z
+Updated: 2026-08-04T23:29:28Z
 
 ---
 
@@ -66,3 +66,11 @@ Session-wrap was also the wrong home:
 - Job registered and fires on schedule.
 - `qmd status` shows an updated timestamp within 24h.
 - A search for a symbol added the previous day returns the file.
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-04T23:29:28Z
+
+2026-08-04 status. NOT DELIVERED: there is still no machine-owned scheduled qmd sync — `~/Library/LaunchAgents` holds no qmd plist, `launchctl list | rg qmd` is empty, and crontab is empty. Refresh today is the manual `aqmd up` an agent is expected to run after writing files, which is the same 'fires only when someone remembers' failure this issue names. WRITTEN: every measurement in the body is obsolete. The single 52,337-file / 2.2 GB / 39-day-stale global index was retired 2026-07-29/30 (`docs/standards/QMD_INDEXES.md`) in favour of one project-local `.qmd/` per repo. RUNNING: `qmd status` in open-brain reports 1,096 files, 8,248 vectors, updated 57m ago — the `open-brain` collection is no longer absent. Rescope: a scheduled job now means iterating the 54 per-repo indexes (via `_ob/bin/qmd-backfill`-style traversal) plus the `global_docs_instructions` index, not one `qmd update && qmd embed` pair. The Out-of-scope note deferring to a dream/deep stage is still sound.

@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: none
 Created: 2026-08-03T02:26:36Z
-Updated: 2026-08-03T02:26:36Z
+Updated: 2026-08-04T23:27:49Z
 
 ---
 
@@ -27,3 +27,13 @@ Codex/Claudex sessions carry the same Open Brain client structure proven on Clau
 - Sequenced after 0.9.0 soak and after the Pi lane proves the structure transfers across harnesses.
 
 Refs: #443 (map), docs/memory-contract.md, PR #500 (fleet rollout plan), sibling Pi adapter issue.
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-04T23:27:49Z
+
+Sequencing decision, operator, 2026-08-04: the Codex adapter is to be done pretty soon if not next; then Pi, which is expected to be easy because it is the same shape and fully operator-controlled.
+
+Recorded for ordering only — this is NOT yet a go-ahead to start.

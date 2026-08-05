@@ -3,11 +3,12 @@
 
 # #419 — PROV-10: context budget gate with a repair-mode escape
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: none
 Created: 2026-07-25T23:36:39Z
-Updated: 2026-08-03T01:31:50Z
+Updated: 2026-08-04T23:25:23Z
+Closed: 2026-08-04T23:25:23Z
 
 ---
 
@@ -34,7 +35,7 @@ Changing the gate's policy about what it gates on when healthy.
 
 ---
 
-## Discussion (1)
+## Discussion (2)
 
 ### rodaddy — 2026-08-03T01:31:50Z
 
@@ -74,3 +75,15 @@ The #420 cutover removed every hook registration that invoked the TypeScript wri
 **Stays OPEN.** The TS fix did not do this issue's work, and closing it would record a Python port that does not exist. Whether the port still makes sense given PR #75's investment is an operator call, not mine — flagging it rather than deciding it.
 
 <sub>Ledger from the 2026-08-02 provider archaeology pass; the keystone is open-brain#510.</sub>
+
+---
+
+### rodaddy — 2026-08-04T23:25:23Z
+
+Closing 2026-08-04 — the one comment that kept this open listed three remaining items; I verified each independently.
+
+MERGED: PR #509 (merged 2026-08-03T01:56:21Z, commit `1e194e2`) ported both gates to Python — `python/openbrain-provider/src/openbrain_provider/context_budget_gate.py` (763 lines) and `policy_refresh_gate.py` (573 lines), with 33-case byte-parity fixtures and a mutation-proven 15-minute self-release test. (1) The port exists and is split across modules: `context_budget_gate.py` (27KB) and `policy_refresh_gate.py` (18KB) alongside `gate_state.py`, `gate_shell.py`, `gate_presentation.py`, `gate_transcript.py`, `receipt_state.py`.
+
+RUNNING: (2) the settings cutover the PR deliberately deferred has happened. I parsed `/Users/rico/.claude/settings.json` directly — `openbrain-context-budget-gate` is registered on six events (post-compact, pre-compact, pre-tool-use, session-start, stop, user-prompt-submit) and `openbrain-policy-refresh-gate` on four, and I counted ZERO occurrences of `context-budget-gate.ts`, `policy-refresh-gate.ts`, or any `-gate.ts` string in the file. Both console scripts resolve on PATH (`~/.local/bin`), and `openbrain-context-budget-gate --event status` returns valid JSON carrying `repairModeActive`/`repairModeEnteredAt`/`repairModeExpiresAt`/`transitions`. (3) `policy-refresh-gate`'s homelessness is resolved by being ported and registered here.
+
+The issue's acceptance demands tests, not just code, and that is met by `tests/test_gate_repair.py`, whose 9 tests I ran (9 passed): the self-release test drives `readbackRequiredAt` to 15min+1s and asserts the gate unblocks Write with transition `self-released-after-timeout` and reason "15-minute read-back timeout elapsed"; a companion test proves the release never manufactures a recall receipt; repair mode is proven to admit Bash/Write/Edit, to NOT admit everything, to expire back into enforcement, and to refuse without a reason. Transitions are logged at every branch, satisfying "silence is a signal". Full provider suite: 584 passed.

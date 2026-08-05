@@ -3,11 +3,12 @@
 
 # #441 — SEARCH-2: fleet index is 20% third-party code — rebuild scoped, and get buzz out of Development
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: none
 Created: 2026-07-29T18:22:48Z
-Updated: 2026-07-29T18:22:48Z
+Updated: 2026-08-04T23:25:20Z
+Closed: 2026-08-04T23:25:20Z
 
 ---
 
@@ -50,3 +51,17 @@ The agent could not reach either. `open-brain` is the only project with a correc
 Root cause is #440 plus the missing rule in canon (#438). Fix the reachability and the next agent does not repeat it.
 
 Design: `_plans/canon-always-known.md`
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-04T23:25:19Z
+
+Closing 2026-08-04 — confirmed on substance, with one evidence detail corrected.
+
+RUNNING: the claim "`fleet.sqlite` no longer exists" is FALSE — `~/.cache/qmd/fleet.sqlite` is present. But it is a 0-byte file with no schema at all (`select name from sqlite_master` errors, "no such table: documents"), i.e. an empty path touched open by tooling, not the 10,900-document 20%-third-party index this ticket exists to eliminate. That index is gone. The scoped replacement is real: `global_docs_instructions.sqlite` holds 861 documents across 11 collections which I enumerated — `_DOCS`, `_ob`, `claude.skills`, `codex.skills`, `claude.commands`, `claude.agents`, `claude.docs`, `codex.hooks`, `claudex.workflows`, `claudex.plans`, `claudex.profiles` — zero third-party code. `aqmd` retires both entry points with hard `die` calls (`_ob/bin/aqmd:422` "aqmd fleet was renamed", `:429` "aqmd all was removed").
+
+Scope items 2 and 3 verified independently: `/Volumes/ThunderBolt/Development/buzz` does not exist; the checkout at `/Volumes/ThunderBolt/_tmp/ai-agents/_research/buzz` has HEAD `651f63727` (upstream 0.5.4 release, 2026-08-03), empty `git status --short`, no `.qmd` directory, and `git merge-base --is-ancestor 26c942383 HEAD` returns not-ancestor with no branch containing it — the offending allowlist commit is unreachable, so `git pull` stays clean.
+
+Scope item 4 is answered better than the original evidence claimed: `ai-agents` DOES reference buzz, via `.qmd/references.yml` pointing at that exact research root, built into its own `ref-ai-agents` index — precisely the pattern this ticket prescribed.

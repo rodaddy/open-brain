@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: enhancement
 Created: 2026-07-28T19:01:22Z
-Updated: 2026-07-28T19:01:22Z
+Updated: 2026-08-04T23:27:31Z
 
 ---
 
@@ -54,3 +54,19 @@ Round-two bake-off, 30 nodes, 6 prompts x 5 model/effort configs, same 50 items,
 - [ ] REM runs on terra low
 - [ ] REM still yields within one job of a request arriving
 - [ ] REM writes `machine_grade` and never `review_action`
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-04T23:27:31Z
+
+2026-08-04 — most of this is MERGED; one acceptance criterion is genuinely unmet. Verified against `origin/main` at 2a8d2db. MERGED via PR #455 (squash `eb84b02`, title references #435):
+
+- **AC3 REM runs on terra low — MET.** `src/rem-terra-grader.ts` exists and names this issue in its header; it sends the round-three prompt (`src/rem-prompt.ts`) to Terra at low effort, batching the whole corpus into one call via `prime()` so the per-candidate `NamedRemGrader.grade()` interface is untouched.
+- **AC2 no memory-headroom gate, no bounded-slice logic — MET.** `rg -n headroom src/*.ts` returns zero hits. The constraint is gone from code, not just from the argument.
+- **AC5 REM writes machine_grade, never review_action — MET and structural.** `src/dream-rem.ts:12-13` states the hard rule; the UPDATE at `:334-339` sets only `machine_grade` and `machine_grade_model`, guarded by `AND machine_grade IS NULL`.
+
+**NOT MET — AC1.** `docs/dream-design.md` was last modified 2026-08-01 and contains **zero** occurrences of "terra", "hosted", or "measured dead". The measured-dead table and its numbers live only in `_plans/435-436-dream-hosted-rem.md`. The criterion names the design doc specifically, and for good reason: the doc still sizes REM around a resident 4B model competing with Postgres, so anyone reading it gets the superseded picture. AC4 (yields within one job of a request) is unverified here.
+
+This stays OPEN on AC1 — writing the constraints down as dead, in the doc that still asserts them, with the numbers.

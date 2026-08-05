@@ -3,11 +3,12 @@
 
 # #550 — nats_wire: defer to the now-existing fleet_nats.ob_context_pack upstream builder and close the mirror-drift window
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: none
 Created: 2026-08-04T18:53:43Z
-Updated: 2026-08-04T18:53:43Z
+Updated: 2026-08-04T22:02:19Z
+Closed: 2026-08-04T22:02:19Z
 
 ---
 

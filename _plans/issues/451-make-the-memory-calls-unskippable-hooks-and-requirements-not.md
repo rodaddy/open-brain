@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: wayfinder:grilling
 Created: 2026-07-30T01:04:26Z
-Updated: 2026-08-03T01:03:51Z
+Updated: 2026-08-04T23:27:30Z
 
 ---
 
@@ -50,7 +50,7 @@ Type: grilling (HITL). Where the hard edges go is Rico's call.
 
 ---
 
-## Discussion (1)
+## Discussion (2)
 
 ### rodaddy — 2026-08-03T01:03:51Z
 
@@ -98,3 +98,9 @@ sh /Users/rico/.local/share/openbrain-memory/env/openbrain-hook-env ob-guard
 ```
 
 Latency, measured over 10 invocations: ~76 ms for the Python against ~20 ms for bun. Both well inside the registered `"timeout": 5`; the ~4x is interpreter startup.
+
+---
+
+### rodaddy — 2026-08-04T23:27:30Z
+
+2026-08-04 — state correction, not a resolution. The design question this issue owns (PreToolUse as observation vs enforcement) is still OPEN; `python/openbrain/src/openbrain/apps/hooks/pre_tool_use.py` remains the deliberate stub. What changed: the operator settings swap the 2026-08-01 comment listed as pending is DONE. RUNNING — `~/.claude/settings.json:334` now registers `sh /Users/rico/.local/share/openbrain-memory/env/openbrain-hook-env ob-guard`, not `bun .../guard.ts`. Read the earlier "Live registration: UNCHANGED" line as superseded. Consequence for this ticket: the two pinned known gaps (`( mcp2cli open-brain search_all )` and `if true; then mcp2cli open-brain search_all; fi`, both pinned in `TestKnownGapsArePinned`) are now live in the Python guard rather than the TypeScript one. If this issue resolves to "enforcement, and it must hold", those two are the concrete work items and the recorded fixture harness makes them cheap to prove.

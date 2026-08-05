@@ -3,11 +3,12 @@
 
 # #372 — Export content-free Open Brain telemetry to Langfuse
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: none
 Created: 2026-07-24T00:59:53Z
-Updated: 2026-07-24T01:01:02Z
+Updated: 2026-08-04T23:25:34Z
+Closed: 2026-08-04T23:25:34Z
 
 ---
 
@@ -28,3 +29,17 @@ The existing Langfuse service receives bounded Open Brain lifecycle and aggregat
 - sentinel leakage tests and an authenticated metadata-only canary proving input/output/body fields are absent
 - Langfuse failure cannot change recall, write, spool, receipt, or gate outcomes
 - Hermes remains not applicable
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-04T23:25:33Z
+
+Closing 2026-08-04 — obsolete by explicit supersession. I treated the "obsolete" claim as the thing most likely to be wrong and went looking for a live dependency.
+
+MERGED: issue #530 ("Server-side call tracing to Langfuse: every MCP tool call as a content-ful span (supersedes #372's content-free scope)") is CLOSED and shipped. `server/observability/langfuse-tracing.ts:4` names it — "Design authority: issue #530, which explicitly supersedes #372's content-free scope" — and `buildToolTraceBody` (line 330) emits `input`/`output` verbatim as "content-ful by design". The complementary capture lane #523 is also CLOSED.
+
+I checked the SCOPE of the override, because #530 supersedes #372 only "for the local/dogfood deployment" — but #372's own parent epic #369 IS the local deployment ("Run Open Brain locally for Claude and Claudex dogfooding"), and #369's constraint "no raw prompts, transcripts... in telemetry" is exactly what #369's 2026-08-03 audit comment records Rico as overriding: "the content-free Langfuse constraint was explicitly overridden by Rico for the local deployment — the #523/#524 sink ships full-content session traces, and #530 extends that to server-side tool-call tracing." There is no surviving deployment where #372's acceptance is still the target.
+
+RESIDUAL — documentation debt only, flagged so a future reader does not resurrect the content-free lane from a docstring: `config.py:546` and `docs/CONFIG_REFERENCE.md:417` still declare `OPENBRAIN_OBSERVATION_HMAC_SECRET` as "Reserved for the #372 content-free lane... nothing reads it yet". `config.py:530-534` explains it is declared purely so the provisioned env var is not rejected as a typo by `unknown_prefixed_variables` (a rejection that would silently zero capture). That is a stale comment pointing at a retired spec, not an unbuilt deliverable.
