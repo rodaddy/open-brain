@@ -34,8 +34,8 @@
   <string>Background</string>
 
   <key>StandardOutPath</key>
-  <string>/Volumes/ThunderBolt/open-brain/logs/qmd-sync.launchd.out.log</string>
+  <string>/Users/rico/Library/Logs/com.rico.qmd-sync.out.log</string>
   <key>StandardErrorPath</key>
-  <string>/Volumes/ThunderBolt/open-brain/logs/qmd-sync.launchd.err.log</string>
+  <string>/Users/rico/Library/Logs/com.rico.qmd-sync.err.log</string>
 </dict>
 </plist>

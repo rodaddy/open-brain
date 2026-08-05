@@ -26,12 +26,13 @@ The sync script writes its durable primary log to:
 /Volumes/ThunderBolt/open-brain/logs/qmd-sync.log
 ```
 
-launchd also reserves these files for startup errors that occur before the
-script opens its primary log:
+launchd also reserves these boot-volume files for startup errors that occur
+before the script opens its primary log, including when the ThunderBolt volume
+is unavailable:
 
 ```text
-/Volumes/ThunderBolt/open-brain/logs/qmd-sync.launchd.out.log
-/Volumes/ThunderBolt/open-brain/logs/qmd-sync.launchd.err.log
+/Users/rico/Library/Logs/com.rico.qmd-sync.out.log
+/Users/rico/Library/Logs/com.rico.qmd-sync.err.log
 ```
 
 ## Install and load
@@ -129,10 +130,20 @@ qmd update --index global_docs_instructions
 qmd embed --index global_docs_instructions
 ```
 
-If launchd could not start the script at all, read the two
-`qmd-sync.launchd.*.log` files and verify that the deployed script exists and is
-executable:
+If launchd could not start the script at all, read its boot-volume fallback
+logs, then verify that the deployed script exists and is executable:
 
 ```bash
+tail -n 200 "$HOME/Library/Logs/com.rico.qmd-sync.out.log"
+tail -n 200 "$HOME/Library/Logs/com.rico.qmd-sync.err.log"
 ls -l /Volumes/ThunderBolt/open-brain/app/scripts/qmd-sync.sh
+```
+
+## Test the metric parsers
+
+Run the sourceable parser functions against captured qmd output fixtures without
+starting a real sync:
+
+```bash
+bash scripts/qmd-sync.test.sh
 ```

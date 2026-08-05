@@ -12,9 +12,11 @@ HOME="${HOME:-/Users/rico}"
 PATH="/Users/rico/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export HOME PATH
 
-mkdir -p "$LOG_DIR"
-touch "$LOG_FILE"
-exec >> "$LOG_FILE" 2>&1
+initialize_logging() {
+  mkdir -p "$LOG_DIR"
+  touch "$LOG_FILE"
+  exec >> "$LOG_FILE" 2>&1
+}
 
 timestamp() {
   /bin/date '+%Y-%m-%dT%H:%M:%S%z'
@@ -22,6 +24,41 @@ timestamp() {
 
 strip_ansi() {
   /usr/bin/sed $'s/\033\[[0-9;]*m//g'
+}
+
+parse_update_metrics() {
+  /usr/bin/awk '
+    /^Indexed:/ { new_files += $2; updated_files += $4; lines++ }
+    END { print new_files + 0, updated_files + 0, lines + 0 }
+  '
+}
+
+parse_embed_metrics() {
+  /usr/bin/awk '
+    /Done!.*Embedded [0-9][0-9,]* chunks/ {
+      for (i = 1; i <= NF; i++) {
+        if ($i == "Embedded") {
+          count = $(i + 1)
+          gsub(/,/, "", count)
+          chunks += count
+        }
+      }
+    }
+    END { print chunks + 0 }
+  '
+}
+
+is_embed_terminal_output() {
+  /usr/bin/grep -Eq \
+    'Done!.*Embedded [0-9][0-9,]* chunks|All content hashes already have embeddings|No non-empty documents to embed'
+}
+
+parse_status_metrics() {
+  /usr/bin/awk '
+    /^[[:space:]]*Total:/ && files == "" { files = $2 }
+    /^[[:space:]]*Vectors:/ && vectors == "" { vectors = $2 }
+    END { print files, vectors }
+  '
 }
 
 sync_index() {
@@ -49,10 +86,7 @@ sync_index() {
 
   plain_output="$(printf '%s\n' "$update_output" | strip_ansi)"
   read -r files_new files_updated update_metric_lines < <(
-    printf '%s\n' "$plain_output" | /usr/bin/awk '
-      /^Indexed:/ { new_files += $2; updated_files += $4; lines++ }
-      END { print new_files + 0, updated_files + 0, lines + 0 }
-    '
+    printf '%s\n' "$plain_output" | parse_update_metrics
   )
 
   if (( update_metric_lines == 0 )); then
@@ -78,21 +112,9 @@ sync_index() {
     return 1
   fi
 
-  vectors_embedded="$(
-    printf '%s\n' "$plain_output" | /usr/bin/awk '
-      /Done!.*Embedded [0-9]+ chunks/ {
-        for (i = 1; i <= NF; i++) {
-          if ($i == "Embedded") {
-            chunks += $(i + 1)
-          }
-        }
-      }
-      END { print chunks + 0 }
-    '
-  )"
+  vectors_embedded="$(printf '%s\n' "$plain_output" | parse_embed_metrics)"
 
-  if ! printf '%s\n' "$plain_output" | /usr/bin/grep -Eq \
-    'Done!.*Embedded [0-9]+ chunks|All content hashes already have embeddings|No non-empty documents to embed'; then
+  if ! printf '%s\n' "$plain_output" | is_embed_terminal_output; then
     printf '[%s] index=%s status=failed step=metrics reason=embed-output-unparseable\n' \
       "$(timestamp)" "$label"
     return 1
@@ -109,8 +131,9 @@ sync_index() {
   fi
 
   plain_output="$(printf '%s\n' "$status_output" | strip_ansi)"
-  files_indexed="$(printf '%s\n' "$plain_output" | /usr/bin/awk '/^[[:space:]]*Total:/ { print $2; exit }')"
-  vectors_total="$(printf '%s\n' "$plain_output" | /usr/bin/awk '/^[[:space:]]*Vectors:/ { print $2; exit }')"
+  read -r files_indexed vectors_total < <(
+    printf '%s\n' "$plain_output" | parse_status_metrics
+  )
 
   if [[ -z "$files_indexed" || -z "$vectors_total" ]]; then
     printf '[%s] index=%s status=failed step=metrics reason=status-output-unparseable\n' \
@@ -129,6 +152,7 @@ main() {
   local project_indexes=0
   local failures=0
 
+  initialize_logging
   run_started_at="$(timestamp)"
   printf '[%s] qmd-sync status=started dev_root=%s\n' "$run_started_at" "$DEV_ROOT"
 
@@ -177,4 +201,6 @@ main() {
     "$(timestamp)" "$run_started_at" "$indexes_attempted"
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi
