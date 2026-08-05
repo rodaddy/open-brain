@@ -202,6 +202,8 @@ export async function claimDistillBatch(
   db: Pick<pg.Pool, "query">,
   options: {
     namespace?: string;
+    /** Bind one queued batch to the lane selected by the sweep producer. */
+    laneId?: string | null;
     /** Max sessions per batch. Bounded: one sweep must not read the whole table. */
     maxSessions?: number;
     /** Max turns per batch, a second bound for pathologically large sessions. */
@@ -217,6 +219,17 @@ export async function claimDistillBatch(
   if (options.namespace !== undefined) {
     params.push(options.namespace);
     nsPredicate = ` AND namespace = $${params.length}`;
+  }
+  let lanePredicate = "";
+  let outerLanePredicate = "";
+  if (options.laneId === null) {
+    lanePredicate = " AND lane_id IS NULL";
+    outerLanePredicate = " AND t.lane_id IS NULL";
+  }
+  if (typeof options.laneId === "string") {
+    params.push(options.laneId);
+    lanePredicate = ` AND lane_id = $${params.length}::uuid`;
+    outerLanePredicate = ` AND t.lane_id = $${params.length}::uuid`;
   }
   params.push(maxSessions);
   const sessionLimit = `$${params.length}`;
@@ -235,7 +248,7 @@ export async function claimDistillBatch(
        SELECT session_ref, min(occurred_at) AS first_due
          FROM ob_raw_turns
         WHERE distilled_at IS NULL
-          AND retention_tier = 'live'${nsPredicate}
+          AND retention_tier = 'live'${nsPredicate}${lanePredicate}
         GROUP BY session_ref
         ORDER BY first_due ASC NULLS LAST
         LIMIT ${sessionLimit}
@@ -246,7 +259,7 @@ export async function claimDistillBatch(
        FROM ob_raw_turns t
        JOIN due_sessions d
          ON t.session_ref IS NOT DISTINCT FROM d.session_ref
-      WHERE t.retention_tier = 'live'${nsPredicate}
+      WHERE t.retention_tier = 'live'${nsPredicate}${outerLanePredicate}
       ORDER BY ${DISTILL_ORDER_BY}
       LIMIT ${turnLimit}`,
     params,

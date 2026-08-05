@@ -339,10 +339,10 @@ interface GraphDerivationHandlerDeps {
  * MaintenanceJobHandler the runner invokes per claimed job. It is registered by
  * composeMaintenanceHandlers (maintenance-bootstrap.ts) and dispatched by the
  * runner started in startMaintenanceQueue — the queue/index wiring is present.
- * graph.derive jobs are produced only by the explicit, bounded
- * enqueueGraphDerivationJobs producer (an operator or the future #347
- * scheduler); the bootstrap enqueues nothing and defines no recurring sweep, so
- * there is no automatic continuous derivation.
+ * graph.derive jobs are produced by the explicit, bounded
+ * enqueueGraphDerivationJobs producer. The maintenance bootstrap now calls that
+ * shared producer from its recurring #384 sweep, so scheduled and direct callers
+ * retain one selection/idempotency path.
  *
  * On each run it:
  *  0. Rejects any job.version other than GRAPH_DERIVATION_JOB_VERSION BEFORE
