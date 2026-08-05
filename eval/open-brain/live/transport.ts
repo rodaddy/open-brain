@@ -47,6 +47,8 @@ export interface ToolCallResult {
   errorLabel: string;
 }
 
+export type ArchiveTable = LiveMemoryTable | "sessions";
+
 export interface LogMemoryResult {
   id: string;
   /** The namespace the server reported the row was written to. */
@@ -175,6 +177,27 @@ export class LiveTransportError extends Error {
  */
 export class OpenBrainLiveClient {
   constructor(private readonly caller: OpenBrainToolCaller) {}
+
+  /**
+   * Call a tool whose success contract is one JSON object and return that parsed
+   * object without ever logging or surfacing the raw body. Scenario fixtures use
+   * this narrow seam for lifecycle reads while retaining the same real/fake
+   * OpenBrainToolCaller boundary as the ranking and context-pack gates.
+   */
+  async structuredTool(
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const result = await this.caller.callTool(name, args);
+    if (result.isError) {
+      throw new LiveTransportError(result.errorLabel, result.denied);
+    }
+    const parsed = safeJson(result.data);
+    if (!parsed) {
+      throw new LiveTransportError(`${name}:malformed-payload`, false);
+    }
+    return parsed;
+  }
 
   /**
    * Seed one memory into a namespace, returning the server-assigned id.
@@ -432,7 +455,7 @@ export class OpenBrainLiveClient {
    * as clean cleanup, stranding a live record while the gate reports PASS.
    */
   async archive(opts: {
-    table: LiveMemoryTable;
+    table: ArchiveTable;
     id: string;
   }): Promise<"archived" | "already_absent"> {
     const result = await this.caller.callTool("archive_entry", {
