@@ -1,0 +1,120 @@
+# RICO'S PROFILE PACK — 9 harvested preferences (#522) plus one rule minted
+# live during the 2026-08-03 walkthrough. Each is a standing call Rico made,
+# walked through with him one-by-one on 2026-08-03 and approved with
+# amendments (marked [AMENDED] in source).
+#
+# STATUS: WRITTEN, awaiting Rico's read-through of this file (merge =
+# approval), then `openbrain-canon-reconcile --apply` into the rico namespace.
+# Per-agent profile packs (skippy, nagatha, bilby, kevin, geetesh) are
+# separate files, authored when their seed corpora are reviewed.
+#
+# Wording contract: hard succinct text is what agents see; Rico's verbatim
+# words ride in provenance only.
+
+kind = "canon"
+
+[[entries]]
+key = "process.rico_comment_review_is_blocking"
+lane = "profile_guidance"
+text = """
+A plain COMMENT review from Rico that raises design problems IS \
+changes-requested. Treat it as blocking. GitHub cannot record a formal block \
+from his account on its own PRs, so his blocks arrive as comments.\
+"""
+source = "open-brain#41; approved 2026-08-03"
+
+[[entries]]
+key = "security.rename_primitives_via_deprecated_alias"
+lane = "profile_guidance"
+text = """
+Renaming a security primitive (auth role, token name): add the canonical new \
+name, keep the old as a deprecated alias with a warning, remove it in a \
+separate later cleanup. NEVER hard-break a security primitive, even one \
+provably unused.\
+"""
+source = "open-brain#168 (Rico's call); approved 2026-08-03"
+
+[[entries]]
+key = "preference.python_client_feature_matches_ts_adapter"
+lane = "profile_guidance"
+text = """
+Once a surface is productionized, a capability added to one client (TS or \
+Python) ships in the SAME change in the other — Hermes consumes the Python \
+path, so a TS-only feature is a feature the agents cannot use. During a \
+development phase one client may complete first; parity lands before \
+productionization.\
+"""
+source = "open-brain#218; [AMENDED 2026-08-03: same-change parity applies once productionized]"
+
+[[entries]]
+key = "process.false_attestation_reverts_the_session"
+lane = "profile_guidance"
+text = """
+One false verification attestation reverts the ENTIRE session's merges — \
+including work the agent believes was genuinely verified. After one false \
+receipt the agent's self-assessment is no longer evidence. Redo standard: \
+every layer proven against the real database, bottom to top, before anything \
+is rebuilt on it.\
+"""
+source = "open-brain PR #434 (revert), PR #385; approved 2026-08-03"
+
+[[entries]]
+key = "repo.open_brain.dream_before_frontend"
+lane = "profile_guidance"
+text = """
+The DREAM memory lifecycle works before any web frontend is built over it. \
+The frontend issue exists only to hold the stack decision and is NOT work to \
+pick up.\
+"""
+source = "open-brain#437 (Rico, 2026-07-28); approved 2026-08-03"
+
+[[entries]]
+key = "startup.repo_scoped_lane_resume_autoloads"
+lane = "profile_guidance"
+text = """
+Session startup already knows canon AND the operating facts of the repo it is \
+standing in — Rico re-explains nothing. The repo-scoped lane resume \
+auto-loads at startup; cross-lane history stays explicit-on-request. \
+Contamination is handled by scoping the lane, not by omitting history.\
+"""
+source = "open-brain#519 (amends the 2026-07-29 explicit-on-request ruling); approved 2026-08-03"
+
+[[entries]]
+key = "output.no_narrated_plumbing"
+lane = "profile_guidance"
+text = """
+NEVER narrate routine plumbing. Hydration, recall, and mechanical setup \
+happen silently; surface the RESULT, not the commands that produced it.\
+"""
+source = "open-brain#519 (Rico: 'that shit just happens'); approved 2026-08-03"
+
+[[entries]]
+key = "telemetry.metrics_only_no_auto_retirement"
+lane = "profile_guidance"
+text = """
+Usage telemetry reports facts only — counts, trends, last-used, an explicit \
+never-used list. NOTHING auto-retires, auto-rotates, categorizes, or \
+recommends. Rico makes those decisions from the metrics.\
+"""
+source = "open-brain#469 (Rico: 'decisions made on facts and not on feel'); approved 2026-08-03"
+
+[[entries]]
+key = "canon.seed_corpus_priority_skippy_chats"
+lane = "profile_guidance"
+text = """
+Chat-corpus canon harvests prioritize Skippy's Hermes conversations. Chat \
+material feeds the guidance lane ONLY — it can never become a repo_fact.\
+"""
+source = "open-brain#492 (Rico: 'MAINLY THE SKIPPY ONES'); approved 2026-08-03"
+
+[[entries]]
+key = "preference.no_credential_rotation_nagging"
+lane = "profile_guidance"
+text = """
+NEVER flag credential exposure inside Rico's own infrastructure, and NEVER \
+propose rotation — not for LAN services, not for internet-facing tokens, not \
+as an aside. All rotation happens in bulk via the Vaultwarden rotation \
+process when Rico schedules it. The no-secrets-in-git/logs floor still \
+stands; the nagging does not.\
+"""
+source = "Rico 2026-08-03: 'I don't need you to be my security bitch... just stop it.' Minted during the #522 walkthrough."
