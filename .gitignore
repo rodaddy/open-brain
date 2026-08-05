@@ -104,3 +104,8 @@ secrets/*
 # the source, so it must never be committed — a checked-in stamp would make
 # every tree claim to be whichever one happened to be deployed when it landed.
 .deployed-revision
+
+# Test scratch fixtures (src/operator-doctor.test.ts qmd index fixture). The
+# repo temp-workspace rule bans /tmp and $TMPDIR, so fixtures land in-repo and
+# must never be committed; afterEach removes them, a crashed run does not.
+_scratch/

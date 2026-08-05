@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it } from "bun:test";
-import { readdir } from "node:fs/promises";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { Database } from "bun:sqlite";
+import { mkdir, readdir, rm, utimes, writeFile } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -23,6 +24,33 @@ type QueryInput = string | { text: string; values?: readonly unknown[] };
 
 function queryText(query: QueryInput): string {
   return typeof query === "string" ? query : query.text;
+}
+
+const SCRATCH_DIR = join(
+  dirname(THIS_FILE),
+  "..",
+  "_scratch",
+  "operator-doctor",
+);
+const QMD_INDEX_FIXTURE = join(
+  SCRATCH_DIR,
+  `qmd-index-${process.pid}.sqlite`,
+);
+
+async function createQmdIndexFixture(modifiedAt: Date): Promise<void> {
+  await mkdir(SCRATCH_DIR, { recursive: true });
+  const database = new Database(QMD_INDEX_FIXTURE, { create: true });
+  try {
+    database.exec(`
+      CREATE TABLE documents (active INTEGER NOT NULL);
+      CREATE TABLE store_collections (name TEXT PRIMARY KEY);
+      INSERT INTO documents (active) VALUES (1), (1), (0);
+      INSERT INTO store_collections (name) VALUES ('open-brain');
+    `);
+  } finally {
+    database.close();
+  }
+  await utimes(QMD_INDEX_FIXTURE, modifiedAt, modifiedAt);
 }
 
 function makePool(
@@ -109,17 +137,26 @@ function makeDownPool() {
   } as any;
 }
 
-afterEach(() => {
+beforeEach(() => {
+  process.env.QMD_INDEX_PATH = join(
+    SCRATCH_DIR,
+    "missing-default-index.sqlite",
+  );
+});
+
+afterEach(async () => {
   (globalThis as Record<string, unknown>).fetch = originalFetch;
   delete process.env.EMBEDDING_BASE_URL;
   delete process.env.EMBEDDING_API_KEY;
   delete process.env.QMD_PATH;
+  delete process.env.QMD_INDEX_PATH;
   delete process.env.LOG_FILE;
   delete process.env.LOG_MAX_BYTES;
   delete process.env.LOG_MAX_FILES;
   delete process.env.OPENBRAIN_MCP_AUDIT_ENABLED;
   delete process.env.OPENBRAIN_RAW_TURN_TTL_SECONDS;
   resetOperatorDoctorCache();
+  await rm(SCRATCH_DIR, { recursive: true, force: true });
 });
 
 describe("distillation lag classification", () => {
@@ -162,6 +199,7 @@ describe("operator doctor status", () => {
     process.env.LOG_FILE = logPath;
     process.env.LOG_MAX_BYTES = "1000";
     process.env.QMD_PATH = THIS_FILE;
+    const reportedIndexPath = join(SCRATCH_DIR, "missing-index.sqlite");
 
     (globalThis as Record<string, unknown>).fetch = (
       input: string | URL | globalThis.Request,
@@ -178,10 +216,12 @@ describe("operator doctor status", () => {
     const status = await buildOperatorDoctorStatus(
       makePool(["001_init.sql"]),
       readNatsRuntimeBoundary({}),
+      undefined,
+      { qmdIndexPath: reportedIndexPath },
     );
     const serialized = JSON.stringify(status);
 
-    expect(status.contract_version).toBe("2026-08-05.operator-doctor.v3");
+    expect(status.contract_version).toBe("2026-08-05.operator-doctor.v4");
     expect(status.runtime.contract_version).toBe("2026-07-23.memory-tools.v23");
     expect(status.database.connected).toBe(true);
     expect(status.embedding_provider).toMatchObject({
@@ -200,11 +240,23 @@ describe("operator doctor status", () => {
       path_source: "env",
       available: true,
       status: "available",
+      index: {
+        path: reportedIndexPath,
+        path_source: "option",
+        status: "unavailable",
+        last_updated_at: null,
+        age_hours: null,
+        freshness: "unknown",
+        stale_after_hours: 48,
+        document_count: null,
+        collection_count: null,
+      },
     });
     expect(serialized).not.toContain(secret);
     expect(serialized).not.toContain(embeddingHost);
     expect(serialized).not.toContain(logPath);
-    // The resolved qmd path must never appear in the payload.
+    expect(serialized).toContain(reportedIndexPath);
+    // The qmd entrypoint path remains hidden; only the index path is reported.
     expect(serialized).not.toContain(THIS_FILE);
   });
 
@@ -348,6 +400,8 @@ describe("operator doctor status", () => {
     const status = await buildOperatorDoctorStatus(
       await makeCurrentPool(),
       readNatsRuntimeBoundary({}),
+      undefined,
+      { qmdIndexPath: "/nonexistent/.qmd/index.sqlite" },
     );
 
     expect(status.qmd).toEqual({
@@ -355,6 +409,17 @@ describe("operator doctor status", () => {
       path_source: "env",
       available: false,
       status: "unavailable",
+      index: {
+        path: "/nonexistent/.qmd/index.sqlite",
+        path_source: "option",
+        status: "unavailable",
+        last_updated_at: null,
+        age_hours: null,
+        freshness: "unknown",
+        stale_after_hours: 48,
+        document_count: null,
+        collection_count: null,
+      },
     });
     expect(status.optional_dependencies.qmd).toBe("unavailable");
     // qmd is an optional dependency: presence/absence never changes the tier.
@@ -364,12 +429,181 @@ describe("operator doctor status", () => {
     );
   });
 
+  it("reports a stale repo-local qmd index with counts", async () => {
+    process.env.QMD_PATH = THIS_FILE;
+    const modifiedAt = new Date("2026-08-03T11:00:00.000Z");
+    const now = new Date("2026-08-05T12:00:00.000Z");
+    await createQmdIndexFixture(modifiedAt);
+
+    const status = await buildOperatorDoctorStatus(
+      await makeCurrentPool(),
+      readNatsRuntimeBoundary({}),
+      undefined,
+      { now: () => now.getTime(), qmdIndexPath: QMD_INDEX_FIXTURE },
+    );
+
+    expect(status.qmd.index).toEqual({
+      path: QMD_INDEX_FIXTURE,
+      path_source: "option",
+      status: "available",
+      last_updated_at: modifiedAt.toISOString(),
+      age_hours: 49,
+      freshness: "stale",
+      stale_after_hours: 48,
+      document_count: 2,
+      collection_count: 1,
+    });
+    // qmd remains optional: a stale index is visible without changing the tier.
+    expect(status.status).toBe("healthy");
+  });
+
+  it("reports a current qmd index with counts", async () => {
+    process.env.QMD_PATH = THIS_FILE;
+    const modifiedAt = new Date("2026-08-05T11:00:00.000Z");
+    const now = new Date("2026-08-05T12:00:00.000Z");
+    await createQmdIndexFixture(modifiedAt);
+
+    const status = await buildOperatorDoctorStatus(
+      await makeCurrentPool(),
+      readNatsRuntimeBoundary({}),
+      undefined,
+      { now: () => now.getTime(), qmdIndexPath: QMD_INDEX_FIXTURE },
+    );
+
+    expect(status.qmd.index).toMatchObject({
+      path: QMD_INDEX_FIXTURE,
+      path_source: "option",
+      status: "available",
+      last_updated_at: modifiedAt.toISOString(),
+      age_hours: 1,
+      freshness: "current",
+      stale_after_hours: 48,
+      document_count: 2,
+      collection_count: 1,
+    });
+  });
+
+  it("uses the WAL mtime when it is newer than the qmd index file", async () => {
+    process.env.QMD_PATH = THIS_FILE;
+    await mkdir(SCRATCH_DIR, { recursive: true });
+    const writer = new Database(QMD_INDEX_FIXTURE, { create: true });
+    try {
+      writer.exec(`
+        PRAGMA journal_mode = WAL;
+        PRAGMA wal_autocheckpoint = 0;
+        CREATE TABLE documents (active INTEGER NOT NULL);
+        CREATE TABLE store_collections (name TEXT PRIMARY KEY);
+        INSERT INTO documents (active) VALUES (1), (1);
+        INSERT INTO store_collections (name) VALUES ('open-brain');
+      `);
+      const indexModifiedAt = new Date("2026-08-03T11:00:00.000Z");
+      const walModifiedAt = new Date("2026-08-05T11:00:00.000Z");
+      const now = new Date("2026-08-05T12:00:00.000Z");
+      await utimes(QMD_INDEX_FIXTURE, indexModifiedAt, indexModifiedAt);
+      await utimes(
+        `${QMD_INDEX_FIXTURE}-wal`,
+        walModifiedAt,
+        walModifiedAt,
+      );
+
+      const status = await buildOperatorDoctorStatus(
+        await makeCurrentPool(),
+        readNatsRuntimeBoundary({}),
+        undefined,
+        { now: () => now.getTime(), qmdIndexPath: QMD_INDEX_FIXTURE },
+      );
+
+      expect(status.qmd.index).toMatchObject({
+        status: "available",
+        last_updated_at: walModifiedAt.toISOString(),
+        age_hours: 1,
+        freshness: "current",
+      });
+    } finally {
+      writer.close();
+    }
+  });
+
+  it("reports a corrupt qmd sqlite file as unavailable", async () => {
+    await mkdir(SCRATCH_DIR, { recursive: true });
+    await writeFile(QMD_INDEX_FIXTURE, "not a sqlite database");
+
+    const status = await buildOperatorDoctorStatus(
+      await makeCurrentPool(),
+      readNatsRuntimeBoundary({}),
+      undefined,
+      { qmdIndexPath: QMD_INDEX_FIXTURE },
+    );
+
+    expect(status.qmd.index).toMatchObject({
+      path: QMD_INDEX_FIXTURE,
+      path_source: "option",
+      status: "unavailable",
+      last_updated_at: null,
+      age_hours: null,
+      freshness: "unknown",
+      document_count: null,
+      collection_count: null,
+    });
+  });
+
+  it("reports a qmd sqlite file missing expected tables as unavailable", async () => {
+    await mkdir(SCRATCH_DIR, { recursive: true });
+    const database = new Database(QMD_INDEX_FIXTURE, { create: true });
+    try {
+      database.exec("CREATE TABLE unrelated (id INTEGER PRIMARY KEY)");
+    } finally {
+      database.close();
+    }
+
+    const status = await buildOperatorDoctorStatus(
+      await makeCurrentPool(),
+      readNatsRuntimeBoundary({}),
+      undefined,
+      { qmdIndexPath: QMD_INDEX_FIXTURE },
+    );
+
+    expect(status.qmd.index).toMatchObject({
+      path: QMD_INDEX_FIXTURE,
+      path_source: "option",
+      status: "unavailable",
+      freshness: "unknown",
+      document_count: null,
+      collection_count: null,
+    });
+  });
+
+  it("uses and reports the QMD_INDEX_PATH environment override", async () => {
+    process.env.QMD_PATH = THIS_FILE;
+    const modifiedAt = new Date("2026-08-05T11:00:00.000Z");
+    const now = new Date("2026-08-05T12:00:00.000Z");
+    await createQmdIndexFixture(modifiedAt);
+    process.env.QMD_INDEX_PATH = QMD_INDEX_FIXTURE;
+
+    const status = await buildOperatorDoctorStatus(
+      await makeCurrentPool(),
+      readNatsRuntimeBoundary({}),
+      undefined,
+      { now: () => now.getTime() },
+    );
+
+    expect(status.qmd.index).toMatchObject({
+      path: QMD_INDEX_FIXTURE,
+      path_source: "env",
+      status: "available",
+      freshness: "current",
+    });
+  });
+
   it("falls back to the shared default qmd path when QMD_PATH is unset", async () => {
     delete process.env.QMD_PATH;
+    const fixtureIndexPath = join(SCRATCH_DIR, "default-path-test.sqlite");
 
     const status = await buildOperatorDoctorStatus(
       makePool(["001_init.sql"]),
       readNatsRuntimeBoundary({}),
+      undefined,
+      { qmdIndexPath: fixtureIndexPath },
     );
 
     // Unset env is NOT "not configured": search_all runs the default path.
@@ -378,6 +612,11 @@ describe("operator doctor status", () => {
     expect(status.qmd.status).toBe(
       status.qmd.available ? "available" : "unavailable",
     );
+    expect(status.qmd.index).toMatchObject({
+      path: fixtureIndexPath,
+      path_source: "option",
+      status: "unavailable",
+    });
   });
 
   it("degrades (never unhealthy) when a configured embedding provider is unavailable", async () => {
@@ -456,7 +695,7 @@ describe("operator doctor status", () => {
     // section) requires bumping DOCTOR_CONTRACT_VERSION in
     // src/operator-doctor.ts. Update the version literal and these field
     // sets together, never one without the other.
-    expect(DOCTOR_CONTRACT_VERSION).toBe("2026-08-05.operator-doctor.v3");
+    expect(DOCTOR_CONTRACT_VERSION).toBe("2026-08-05.operator-doctor.v4");
 
     const status = await buildOperatorDoctorStatus(
       makePool(["001_init.sql"], "reachable", undefined, [
@@ -531,7 +770,19 @@ describe("operator doctor status", () => {
     expect(Object.keys(status.qmd).sort()).toEqual([
       "available",
       "configured",
+      "index",
       "path_source",
+      "status",
+    ]);
+    expect(Object.keys(status.qmd.index).sort()).toEqual([
+      "age_hours",
+      "collection_count",
+      "document_count",
+      "freshness",
+      "last_updated_at",
+      "path",
+      "path_source",
+      "stale_after_hours",
       "status",
     ]);
     expect(Object.keys(status.transport).sort()).toEqual([
