@@ -509,12 +509,13 @@ describe("selectSourcesNeedingDerivation", () => {
     expect(call.params).toContainEqual(["other-team"]);
   });
 
-  it("bounds the limit to the hard cap", async () => {
+  it("bounds selection to the enqueue maximum plus one sentinel", async () => {
     const pool = new FakeSourcePool();
     await selectSourcesNeedingDerivation(pool, undefined, 10_000);
     const call = pool.calls.at(-1)!;
-    // Limit is a bound param (last param); never interpolated as a literal.
-    expect(call.params.at(-1)).toBe(256);
+    // The final row is observation-only: enqueueGraphDerivationJobs still emits
+    // at most 256 jobs and uses row 257 solely to prove real deferral.
+    expect(call.params.at(-1)).toBe(257);
   });
 });
 
@@ -584,13 +585,14 @@ describe("enqueueGraphDerivationJobs", () => {
       },
     };
     let resolveCalls = 0;
-    const jobs = await enqueueGraphDerivationJobs(pool, queue, ["team-kb"], {
+    const batch = await enqueueGraphDerivationJobs(pool, queue, ["team-kb"], {
       resolveMetadata: (s) => {
         resolveCalls += 1;
         return { topics: [`topic-${s.id.slice(0, 8)}`], people: [] };
       },
     });
-    expect(jobs.length).toBe(2);
+    expect(batch.jobs.length).toBe(2);
+    expect(batch.limitReached).toBe(false);
     expect(enqueued.length).toBe(2);
     expect(resolveCalls).toBe(2);
     expect(enqueued[0]!.kind).toBe(GRAPH_DERIVATION_JOB_KIND);

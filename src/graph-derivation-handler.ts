@@ -63,10 +63,10 @@ export const GRAPH_DERIVATION_JOB_VERSION = 1 as const;
 /** The anchor entity_type every derived source graph hangs from. */
 export const SOURCE_ANCHOR_ENTITY_TYPE = "source" as const;
 
-// Upper bound on how many sources one selection/enqueue sweep considers. The
-// scheduler sweeps repeatedly; a single sweep must not scan or enqueue the whole
-// table unbounded.
-const MAX_SELECT_LIMIT = 256;
+// One enqueue sweep emits at most 256 jobs. Selection may read one additional
+// sentinel row so the caller reports deferral only when work actually remains.
+const MAX_ENQUEUE_LIMIT = 256;
+const MAX_SELECT_LIMIT = MAX_ENQUEUE_LIMIT + 1;
 const DEFAULT_SELECT_LIMIT = 100;
 
 // The stored content_hash / derivation payload hashes are lowercase sha256 hex.
@@ -258,7 +258,8 @@ export interface GraphDerivationEnqueuePort {
  * supplies already-extracted topics/people per source (the collector seam);
  * when omitted, the job carries no metadata and the handler falls back to the
  * deterministic extractor. Both selection and metadata resolution happen here,
- * OUTSIDE any queue lock. Returns the enqueued jobs. Content-free logging only.
+ * OUTSIDE any queue lock. Returns the enqueued jobs plus a true deferral signal
+ * derived from one sentinel selection row. Content-free logging only.
  */
 export async function enqueueGraphDerivationJobs(
   pool: Pick<pg.Pool, "query">,
@@ -271,14 +272,19 @@ export async function enqueueGraphDerivationJobs(
     ) =>
       Promise<DerivationMetadata | undefined> | DerivationMetadata | undefined;
   } = {},
-): Promise<MaintenanceJob[]> {
+): Promise<{ jobs: MaintenanceJob[]; limitReached: boolean }> {
+  const enqueueLimit = Math.min(
+    Math.max(Math.trunc(options.limit ?? DEFAULT_SELECT_LIMIT), 1),
+    MAX_ENQUEUE_LIMIT,
+  );
   const sources = await selectSourcesNeedingDerivation(
     pool,
     writableNamespaces,
-    options.limit,
+    enqueueLimit + 1,
   );
+  const selected = sources.slice(0, enqueueLimit);
   const enqueued: MaintenanceJob[] = [];
-  for (const source of sources) {
+  for (const source of selected) {
     const metadata = options.resolveMetadata
       ? await options.resolveMetadata(source)
       : undefined;
@@ -287,11 +293,13 @@ export async function enqueueGraphDerivationJobs(
     );
     enqueued.push(job);
   }
+  const limitReached = sources.length > enqueueLimit;
   logger.info("graph_derivation_enqueue_sweep", {
-    selected: sources.length,
+    selected: selected.length,
     enqueued: enqueued.length,
+    limit_reached: limitReached ? 1 : 0,
   });
-  return enqueued;
+  return { jobs: enqueued, limitReached };
 }
 
 /**
@@ -339,10 +347,10 @@ interface GraphDerivationHandlerDeps {
  * MaintenanceJobHandler the runner invokes per claimed job. It is registered by
  * composeMaintenanceHandlers (maintenance-bootstrap.ts) and dispatched by the
  * runner started in startMaintenanceQueue — the queue/index wiring is present.
- * graph.derive jobs are produced only by the explicit, bounded
- * enqueueGraphDerivationJobs producer (an operator or the future #347
- * scheduler); the bootstrap enqueues nothing and defines no recurring sweep, so
- * there is no automatic continuous derivation.
+ * graph.derive jobs are produced by the explicit, bounded
+ * enqueueGraphDerivationJobs producer. The maintenance bootstrap now calls that
+ * shared producer from its recurring #384 sweep, so scheduled and direct callers
+ * retain one selection/idempotency path.
  *
  * On each run it:
  *  0. Rejects any job.version other than GRAPH_DERIVATION_JOB_VERSION BEFORE
