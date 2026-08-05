@@ -812,6 +812,10 @@ def _record_skill_usage(
         agent_id=settings.agent_id,
         timeout=CAPTURE_REQUEST_TIMEOUT_SECONDS,
         retry_policy=RetryPolicy(attempts=1),
+        # The LAN opt-in (#525). Unset it is False, so the client's loopback-only
+        # http rule stands; a LAN host that declared it reaches the dev brain
+        # over plain http instead of this metric declining silently.
+        allow_insecure_http=settings.allow_insecure_http,
     )
     try:
         client.call_tool("record_skill_usage", arguments)
@@ -875,6 +879,9 @@ def _started_memory(settings: CaptureSettings, session_key: str) -> StartedLane:
         # CAPTURE_REQUEST_TIMEOUT_SECONDS.
         timeout=CAPTURE_REQUEST_TIMEOUT_SECONDS,
         retry_policy=single_attempt,
+        # The LAN opt-in (#525). This is the capture spine: without it a LAN host
+        # loses every turn, which is the silent zero capture the issue measured.
+        allow_insecure_http=settings.allow_insecure_http,
     )
     # Annotated to RawLane, the Protocol the spine needs, which AgentMemory
     # structurally satisfies. start_session is not part of that Protocol -- it is
@@ -1063,6 +1070,10 @@ def _canon_context(settings: CanonSettings) -> CanonContext:
         agent_id=settings.agent,
         timeout=CANON_REQUEST_TIMEOUT_SECONDS,
         retry_policy=RetryPolicy(attempts=1),
+        # The LAN opt-in (#525). This is the CANON PACK read -- the lane whose
+        # absence the issue opens on ("the hook told me the rules and then handed
+        # me an empty skull").
+        allow_insecure_http=settings.allow_insecure_http,
     )
     # repo is OMITTED when None, never sent as null. The client method is a
     # pure **arguments pass-through, so a None here reaches the wire as

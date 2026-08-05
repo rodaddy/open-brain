@@ -3,11 +3,12 @@
 
 # #422 — src/source-sync.test.ts fails only in the full suite — captured console.error line goes missing
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: none
 Created: 2026-07-26T04:25:20Z
-Updated: 2026-07-26T04:25:20Z
+Updated: 2026-08-04T23:25:22Z
+Closed: 2026-08-04T23:25:22Z
 
 ---
 
@@ -78,3 +79,19 @@ Assert against the logger boundary directly rather than by monkey-patching a glo
 ## Scope
 
 Filed separately rather than folded into PR #421, which does not touch this path. Flagging it so it is not mistaken for fallout from the uv-workspace or provider work.
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-04T23:25:21Z
+
+Closing 2026-08-04 — I reproduced the fix rather than accepting a run log.
+
+RUNNING: full suite at `2a8d2db` → 3130 pass / 496 skip / 2 fail across 3628 tests in 230 files. The `source_sync_failed` line IS emitted and captured in the full-suite run — it appears under the `src/source-sync.test.ts:` heading as `{"source_kind_scope":"git_directory",...,"error_code":"integrity_constraint_violation","message":"source_sync_failed"}` — and `src/source-sync.test.ts` is 24 pass / 0 fail both alone and in-suite. The failing assertion at line 484 no longer fails, so the redaction assertions at 486-495 now meaningfully run, which is the security-boundary concern this issue was really about.
+
+I verified the 2 remaining failures are not this issue and not a masked variant: both are `Cannot find module @langfuse/core` from `server/observability/langfuse-tracing.ts`, and the dependency is declared in `package.json:44` AND resolved in `bun.lock` at 4.6.1 while `node_modules/@langfuse` is absent — a stale local install.
+
+MERGED: the root-cause attribution holds. `22ece04` ("shared log envelope, runtime log level, credential redaction", #424) landed the logger rework, and `logger.ts` now carries an explicit `ExtraSink` subscription boundary whose docstring names this exact hazard: "Bun runs all test files in one process and a suite that swaps console.error without restoring it would otherwise silently break unrelated assertions."
+
+RESIDUAL, not blocking: the test still monkey-patches `console.error` rather than using that sink, so the issue's "Suggested fix direction" was not adopted — but that was a suggestion, and the stated Reproduction/failure is verifiably gone.

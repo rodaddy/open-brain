@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: documentation
 Created: 2026-07-29T18:23:37Z
-Updated: 2026-07-29T18:23:37Z
+Updated: 2026-08-04T23:27:30Z
 
 ---
 
@@ -51,3 +51,11 @@ Trim for Claudex/Codex reuse once proven here. Runtime-specific content should b
 confined to one section so porting is deletion rather than a rewrite.
 
 Design: `_plans/canon-always-known.md`
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-04T23:27:30Z
+
+2026-08-04 — still valid, and now UNBLOCKED. All four measured defects are WRITTEN-as-is in `_ob/skills/brain/`, re-verified today: hardcoded core01 endpoint at `SKILL.md:10` and `ob.json:17` (`http://10.71.1.21:3100/mcp`); stale table header at `SKILL.md:52` ("live -- 46 tools, verified 2026-07-02 against v0.3.13"); the `/tmp`-writing drift check at `SKILL.md:139` and `_DOCS/procedure.md:68` (`> /tmp/ob-live.txt`, a hard-rule violation); retired `mcp2cli open-brain` recipes as the spine. What changed: the stated blocker is gone. This body says the work is "downstream of #438/#439" — both are now CLOSED (CANON-1 content authored, CANON-2 loader landed), so the objection that rewriting the skill first would leave it describing an empty room no longer holds. Also worth noting the live tool count is now 65, not the 63 this body cites. Ready to execute as scoped: delete the stale table, delete the drift check, demote the operator-CLI recipes to a Codex appendix, no hardcoded endpoint anywhere.

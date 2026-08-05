@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: none
 Created: 2026-07-24T00:59:51Z
-Updated: 2026-07-24T01:44:39Z
+Updated: 2026-08-04T23:27:38Z
 
 ---
 
@@ -29,3 +29,17 @@ Claude-compatible and Claudex sessions use the same reviewed direct Open Brain p
 - raw prompts and pointer bodies never enter receipts, spools, logs, or telemetry
 - functional cross-runtime isolation, citation, suppression, restart, and recovery tests pass
 - Codex is not part of this issue
+
+---
+
+## Discussion (2)
+
+### rodaddy — 2026-08-04T00:39:50Z
+
+Status audit 2026-08-03, against acceptance: SessionStart full context-pack under one serialized budget — RUNNING (CANON PACK 1/2 + 2/2 in every session, budget gate live). Capture/checkpoint/wrap — RUNNING (Stop/SubagentStop/SessionEnd/PostCompact all registered through openbrain-hook-env; ob_raw_turns takes live writes). Claudex validated directly — yes, this is the daily runtime. **NOT delivered: UserPromptSubmit reflex pointers.** Verified now: no reflex entrypoint exists in python/openbrain's project.scripts and no UserPromptSubmit hook beyond the context-budget gate is registered — `agent_reflex_pointers` per-turn recall was never ported to the Python package. That is the single remaining line item; everything else in this issue is live. Leaving open, scoped down to the reflex port.
+
+---
+
+### rodaddy — 2026-08-04T23:27:38Z
+
+2026-08-04 correction to the 2026-08-03 audit. The reflex client WAS ported — `agent_reflex_pointers` is live in the openbrain-memory package (`_runtime_router.py:78` and `:287-298`, with the no-spool read path enforced) and exposed as the `reflex` CLI operation (`cli.py:55`, `:338`). WRITTEN, not missing. The actual remaining gap is narrower and purely runtime wiring: no UserPromptSubmit hook invokes it. The only UserPromptSubmit entry registered is `openbrain-hook-env openbrain-context-budget-gate --event user-prompt-submit`, and no hook under `~/.claude/hooks/` references reflex at all. Everything else in this issue stays RUNNING against the local server at revision fde646a. Scope is therefore: register the per-turn reflex hook and prove prior-context suppression end to end — not port the client.

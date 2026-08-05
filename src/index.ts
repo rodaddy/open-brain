@@ -1,5 +1,10 @@
 import express from "express";
 import cors from "cors";
+import { readFileSync } from "node:fs";
+import {
+  readDeployedRevision,
+  resolveServerIdentity,
+} from "../server/transport/server-identity.ts";
 import type { Request, Response, NextFunction } from "express";
 import type pg from "pg";
 import { createPool, checkPoolHealth } from "./db/pool.ts";
@@ -40,12 +45,25 @@ import { validateLocalCloneMode } from "./local-clone-mode.ts";
 
 const EMBEDDING_BASE_URL = process.env.EMBEDDING_BASE_URL;
 
-function serverIps(): string[] {
-  const configured = process.env.OPEN_BRAIN_SERVER_IP?.trim();
-  if (configured) return [configured];
+/**
+ * Host identity for `/health`, resolved once per process.
+ *
+ * This used to read `OPEN_BRAIN_SERVER_IP` and return the literal `"unknown"`
+ * when it was unset (#197), which is exactly what every local clone reported.
+ * Resolution now lives in `server/transport/server-identity.ts` so both serving
+ * trees answer identically — this file still serves core01
+ * (`deploy/open-brain.service`), while the local clone runs `server/main.ts`.
+ *
+ * Read once: a process does not change hosts or change its own code.
+ */
+const SERVER_IDENTITY = resolveServerIdentity({
+  configuredServerIp: process.env.OPEN_BRAIN_SERVER_IP,
+  bindHost: process.env.OPEN_BRAIN_BIND_HOST,
+});
 
-  return ["unknown"];
-}
+const DEPLOYED_REVISION = readDeployedRevision(() =>
+  readFileSync(new URL("../.deployed-revision", import.meta.url), "utf8"),
+);
 
 /**
  * `/health`'s probe timeout, preserved from the private copy this file used to
@@ -102,7 +120,6 @@ export function createApp(
         : Promise.resolve(false),
     ]);
 
-    const ips = serverIps();
     const natsAvailability =
       toolDeps.natsBridgeHealth?.availability ??
       natsRuntimeBoundary.nats.availability;
@@ -112,8 +129,10 @@ export function createApp(
     );
     const status: HealthStatus = {
       status: dbHealth.connected && !natsDegraded ? "healthy" : "degraded",
-      server_ip: ips[0] ?? "unknown",
-      server_ips: ips,
+      hostname: SERVER_IDENTITY.hostname,
+      server_ip: SERVER_IDENTITY.serverIp,
+      server_ips: [...SERVER_IDENTITY.serverIps],
+      ...(DEPLOYED_REVISION ? { revision: DEPLOYED_REVISION } : {}),
       database: dbHealth,
       embedding: {
         configured: Boolean(EMBEDDING_BASE_URL),

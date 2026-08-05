@@ -154,6 +154,52 @@ const DEFAULT_FLAP_COOLDOWN_MS = 30_000;
  */
 const SINK_HEALTH_PROBE_MS = 5_000;
 
+/**
+ * How long `git rev-parse` may take before the release is treated as unknown.
+ *
+ * Short by intent: resolving the SHA is an enrichment, so a hung git call must
+ * never be what delays server startup. The timeout expiring costs one metadata
+ * field and nothing else.
+ */
+const REV_PARSE_TIMEOUT_MS = 2_000;
+
+/**
+ * The short git SHA of the checkout this process runs from, or `undefined`.
+ *
+ * Langfuse's `release` is what turns "cost went up" into "cost went up at THIS
+ * commit"; #560 measured it empty on 100% of traces.
+ *
+ * Resolved ONCE, lazily, and cached for the process: the SHA cannot change
+ * under a running process, and a subprocess per emit would put a fork on the
+ * request path — which is the one thing this whole lane is built not to do.
+ *
+ * `undefined` when the SHA cannot be resolved — a deployed tarball, no git
+ * binary, a timeout. Deliberately NOT a placeholder like `"unknown"`: an
+ * omitted release reads as absent, while a placeholder becomes a release value
+ * that groups every unversioned trace together as though they shared a commit.
+ */
+let cachedRelease: string | undefined | null = null;
+
+export function repoRelease(): string | undefined {
+  if (cachedRelease !== null) return cachedRelease;
+  cachedRelease = undefined;
+  try {
+    const result = Bun.spawnSync({
+      cmd: ["git", "rev-parse", "--short", "HEAD"],
+      stdout: "pipe",
+      stderr: "ignore",
+      timeout: REV_PARSE_TIMEOUT_MS,
+    });
+    if (result.success) {
+      const sha = result.stdout.toString().trim();
+      if (sha) cachedRelease = sha;
+    }
+  } catch {
+    // Not knowing the release is never a reason to lose tracing.
+  }
+  return cachedRelease;
+}
+
 export interface McpTracingConfig {
   enabled: boolean;
   endpoint: string;
@@ -784,12 +830,22 @@ function defaultSinkFactory(config: McpTracingConfig): TracingSink {
   // SDK emits reaches the log; this lane reports its own health through the
   // two state-change lines instead, which carry a label and a count only.
   configureGlobalLogger({ level: (LogLevel.ERROR + 1) as LogLevel });
+  // `release` belongs to the PROCESSOR, not to `updateTrace` (#560). The SDK
+  // stamps it onto every span it sees at start, and `LangfuseTraceAttributes`
+  // — what `updateTrace` accepts — has no release field at all, so setting it
+  // there would be silently dropped rather than rejected. Verified against the
+  // installed `@langfuse/otel` 4.6.x type surface.
+  //
+  // Spread so an unresolvable SHA omits the option entirely instead of passing
+  // `undefined`, keeping "unknown release" distinct from a placeholder value.
+  const release = repoRelease();
   const processor = new LangfuseSpanProcessor({
     publicKey: config.publicKey,
     secretKey: config.secretKey,
     baseUrl: config.endpoint,
     timeout: SINK_EXPORT_TIMEOUT_SECONDS,
     exportMode: "batched",
+    ...(release === undefined ? {} : { release }),
   });
   const provider = new BasicTracerProvider({ spanProcessors: [processor] });
   setLangfuseTracerProvider(provider);

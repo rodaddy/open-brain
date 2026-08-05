@@ -117,10 +117,20 @@ def gate_paths(root: Path) -> GatePaths:
 
 @dataclass(frozen=True)
 class GateResult:
-    """One gate invocation's answer."""
+    """One gate invocation's answer.
+
+    Attributes:
+        stdout: The verdict channel, which a JSON reader is on the other end of.
+        code: The process exit code.
+        stderr: The operator-facing diagnostic channel, captured separately.
+            Held apart from ``stdout`` because the gate's contract is that a
+            diagnosis never contaminates the verdict -- an assertion that could
+            not tell the two apart would not be able to prove that.
+    """
 
     stdout: str
     code: int
+    stderr: str = ""
 
     @property
     def json(self) -> dict[str, Any]:
@@ -161,7 +171,12 @@ def run_gate(
         session_id: Session the event belongs to.
 
     Returns:
-        The answer.
+        The answer, with the verdict and the diagnosis captured separately.
+
+    Both streams are passed in explicitly. ``main`` selects ``stderr or
+    sys.stderr``, so leaving it unset would send any diagnosis to the real
+    process stderr, where no assertion can reach it -- which is how the
+    operator-facing text stayed untested while the suite stayed green.
     """
     stdin_payload = payload if payload is not None else {}
     stdin_payload.setdefault("session_id", session_id)
@@ -190,13 +205,15 @@ def run_gate(
         argv += ["--project", project]
     argv += extra or []
     stdout = io.StringIO()
+    stderr = io.StringIO()
     code = context_budget_gate.main(
         argv,
         stdin=io.StringIO(json.dumps(stdin_payload)),
         stdout=stdout,
+        stderr=stderr,
         env={"HOME": str(paths.root)},
     )
-    return GateResult(stdout=stdout.getvalue(), code=code)
+    return GateResult(stdout=stdout.getvalue(), code=code, stderr=stderr.getvalue())
 
 
 def run_policy_gate(

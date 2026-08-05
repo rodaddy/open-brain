@@ -48,7 +48,13 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
-from .development_scope import development_root, resolve_development_scope
+from .development_scope import (
+    describe_development_root,
+    development_root,
+    development_root_missing,
+    render_scope_diagnosis,
+    resolve_development_scope,
+)
 from .gate_presentation import (
     PresentationContext,
     capture_banner,
@@ -297,8 +303,18 @@ class _Gate:
         `context-budget-gate.ts:352-355` has this defect. It is fixed here
         rather than there, per the port's rule that bugs are fixed by being
         written correctly in Python.
+
+        The same fallback fails a second way when the CONFIGURED ROOT does not
+        exist on this machine: every composition from it names a directory that
+        cannot be entered, and the operator reads it as their own cwd
+        (open-brain#556). So a measured cwd is preferred over any composed path
+        whenever the root is absent -- it is the one directory here known to be
+        real. The diagnosis itself is emitted separately, by
+        `_warn_missing_development_root`.
         """
         if self.event.cwd and resolve_development_scope(self.event.cwd) is not None:
+            return self.event.cwd
+        if development_root_missing() and self.event.cwd:
             return self.event.cwd
         project = self.state.project or ""
         root = development_root()
@@ -721,11 +737,35 @@ _HANDLERS: Final[dict[str, Any]] = {
 }
 
 
+def _warn_missing_development_root(event: HookEvent, stderr: TextIO | None) -> None:
+    """Say so on stderr when the configured Development root does not exist.
+
+    Diagnostic only, and deliberately NOT a verdict. The gate's contract is that
+    it must not deadlock on what it gates (#419), and the repair for an absent
+    root is an environment variable the operator exports in a shell -- so a gate
+    that blocked here would be gating its own escape. Loud, then out of the way.
+
+    stderr rather than stdout for the same reason: stdout is the hook's verdict
+    channel and a JSON reader is on the other end of it.
+
+    Args:
+        event: The hook event, read for its measured cwd.
+        stderr: Where the diagnosis goes. Defaults to ``sys.stderr``.
+    """
+    if not development_root_missing():
+        return
+    diagnosis = describe_development_root(event.cwd or None)
+    if diagnosis is None:
+        return
+    print(render_scope_diagnosis(diagnosis), file=stderr or sys.stderr)
+
+
 def main(
     argv: list[str] | None = None,
     *,
     stdin: TextIO | None = None,
     stdout: TextIO | None = None,
+    stderr: TextIO | None = None,
     env: dict[str, str] | None = None,
 ) -> int:
     """Run one gate invocation.
@@ -734,16 +774,19 @@ def main(
         argv: Command-line arguments. Defaults to ``sys.argv[1:]``.
         stdin: The hook's stdin. Defaults to ``sys.stdin``.
         stdout: The return channel. Defaults to ``sys.stdout``.
+        stderr: The diagnostic channel. Defaults to ``sys.stderr``.
         env: Environment mapping for defaults. Defaults to ``os.environ``.
 
     Returns:
         The process exit code: ``0`` for every verdict including a block, and
         ``1`` only for a REFUSED operator command. A block is data on stdout;
-        a non-zero exit means the hook itself failed.
+        a non-zero exit means the hook itself failed. An absent Development root
+        changes none of this -- it is reported on stderr and nothing else.
     """
     environment = dict(os.environ) if env is None else env
     args = _build_parser(environment).parse_args(sys.argv[1:] if argv is None else argv)
     event = read_hook_event(stdin)
+    _warn_missing_development_root(event, stderr)
     gate = _Gate(args, event, stdout)
     handler = _HANDLERS[gate.event_name]
     result = handler(gate)

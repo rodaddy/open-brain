@@ -90,6 +90,37 @@ Healthy output reaches `open-brain server started` in about one second.
 deleted-but-referenced script produces no error until the next restart, which
 may be days later, and by then the cause looks unrelated to the deletion.
 
+**The "no one notices" half is now closed (#536).** The capture `Stop` hook
+prints one line to stderr the first time a session's write fails --
+`open-brain unreachable - turn held for replay` -- and one more when writes
+start landing again. It is a STATE CHANGE, not an event: a long outage is one
+line, not one per turn, latched on disk (`apps/capture/outage.py`) because each
+Stop is a fresh process. Session survival is unchanged; only the silence went.
+
+**And the state change is rate-bound, because a state change alone was not
+enough.** A FLAPPING service changes state on every Stop, so the latch by itself
+still spoke on every Stop — measured 6 notices across 6 alternating Stops. That
+is not exotic: the capture request timeout is 0.7s with a single attempt, so one
+slow response is a complete outage-and-recovery pair. After a reported outage
+the latch stays quiet for `FLAP_COOLDOWN_SECONDS` (5 minutes); a window opened
+inside that period is ridden out silently at BOTH ends, since a recovery whose
+outage was never printed reads as a recovery from nothing. The recovery line
+carries the window's failed-turn count when it exceeds one. Same shape as the
+server-side tracing tracker (#534).
+
+**If the notice is missing, check the latch's lock before anything else.** The
+latch waits only `LOCK_WAIT_SECONDS` (0.25s) for the watermark file it shares,
+then gives up and says nothing — deliberately, because `Stop` has a 5s deadline
+and the harness kills the hook at 10s. On the original 30s wait a held lock kept
+one Stop running 31.09s, which would have been a killed hook and a lost capture.
+Silence under contention is the design, not a defect.
+
+So an outage is now visible WITHOUT the checks above. If those checks are ever
+needed again because nothing appeared on screen, the notice path itself is what
+to suspect first -- and note it reports reachability from the CAPTURE hook only.
+A provider `/checkpoint` failing while capture succeeds is a different fault
+and still shows up as the `spool N` count on the gate line, not as this line.
+
 ### `.env` is missing keys that `.env.example` documents
 
 **Symptom:** embeddings silently fail — candidates are written with a NULL
@@ -938,3 +969,367 @@ Two sessions diagnosed a missing token as a core01 outage, and core01 was probed
 healthy mid-incident — the healthy probe was read as noise instead of as the
 answer. A healthy `/health` next to a failing gate is positive evidence the
 problem is credentials or environment, not the network.
+
+---
+
+## 2026-08-04 client-install traps
+
+These all bit while putting the direct client stack on a second machine.
+Full procedure: `docs/client-install-runbook.md`.
+
+### A stale MCP registration answers instead of the direct stack — and `/mcp` in an error is the tell
+
+**Symptom.** Recall or a hook fails, and the error names a URL ending in `/mcp`.
+The direct client stack is installed, the env file is right, `/health` answers,
+and it still does not work.
+
+**Cause.** A retired MCP-lane registration is still configured on the box —
+`claude mcp list` shows an open-brain entry — and it is being reached instead of
+the direct client.
+
+**The tell is exact: the direct stack NEVER uses a `/mcp` URL.** Its base URL is
+a bare `scheme://host:port`. So a `/mcp` path appearing anywhere in an error
+message is not a routing detail to investigate; it is positive proof that the
+retired lane is configured and answering. There is no configuration in which the
+direct stack legitimately produces that URL.
+
+**Check and fix.**
+
+```bash
+claude mcp list
+claude mcp remove <name>   # any open-brain entry
+```
+
+`setup-client.sh` prints this reminder and the current registrations at the end
+of every install, because a fresh install onto a box that used to run the MCP
+lane is exactly when this happens.
+
+### The hook wrapper and the installed package are a MATCHED PAIR, and the mismatch is silent
+
+**Symptom.** Every hook exits 0. Receipts look fine. No rows are written and no
+canon is injected. The box looks completely healthy and is doing nothing.
+
+**Cause.** Three facts that compound:
+
+1. `config.unknown_prefixed_variables` **rejects** any `OPENBRAIN_*` variable
+   that matches no declared setting — and rejects the **whole environment**, not
+   the one variable.
+2. The hook entrypoints **swallow every exception** (fail-open observer
+   contract).
+3. So a wrapper passing a variable the installed package does not declare turns
+   **every hook on the box** into a clean exit 0 with zero capture and zero
+   injection.
+
+This has happened three times with three variables: `OPENBRAIN_OBSERVATION_*`,
+`OPENBRAIN_SPOOL_PATH`, and `OPENBRAIN_ALLOW_INSECURE_HTTP`.
+
+**The ordering rule (PR #544).** Install the package that declares the variable
+**first**, then edit the wrapper to pass it. PR #544 verified this empirically in
+that order — the old install raised `UnknownEnvironmentVariableError` with the
+variable present; the reinstalled package accepted it and resolved
+`allow_insecure_http=True` on both sections. Reversed, the box goes dark between
+the two steps.
+
+**The empty-string half, which re-armed the same defect.** The wrapper's
+`env -i VAR="${VAR:-}"` style **cannot express "absent"** — an unset variable
+reaches the child as an **empty string**. For the bool `allow_insecure_http`,
+pydantic rejected `""` with `Input should be a valid boolean`, both
+`load_capture_settings` and `load_canon_settings` raised, the entrypoints
+swallowed it, and every hook on a host that **never opted in** went silently
+dead. The fix for #525 re-created the #525 defect class.
+
+Two layers guard it now: a validator in `config.py` mapping `""` to the default
+`False`, and a conditional in the wrapper that prepends the assignment only when
+non-empty — the conditional is what protects an **older** installed package that
+predates the validator, which is exactly the state of a client mid-upgrade.
+
+**Rule:** a non-string pass-through goes in the wrapper's conditional block,
+never in the `env -i` list. A string tolerates the empty spelling; a bool, an
+int, or an enum does not.
+
+**The third clause: EVERY package, not just the consuming one (#557 → #565).**
+A variable the wrapper passes must be declared in **every** package whose config
+applies strict prefix rejection — not merely in the package that reads it.
+
+`OPENBRAIN_DEVELOPMENT_ROOT` is the case study, and it is the sharpest form of
+this bug so far: the `openbrain` package had **read** the variable since #556
+(`receipts/scope.py`, via `os.environ` per call, because the value is answered
+against the filesystem and a module constant freezes during pytest collection).
+Reading it that way never registered the NAME with `config.py`, so
+`unknown_prefixed_variables` still classed it a typo. The package rejected a
+variable its own code depended on. #557 then shipped the wrapper line without
+the declaration, and every box built from bundle `air-bundle/20260804-203726`
+opened sessions with no canon and exit 0 — field-proved on two machines
+2026-08-04.
+
+The trap is that the variable **works** in `openbrain-provider`, which reads
+`os.environ` directly and rejects nothing. Testing it there proves nothing about
+the box. Only `openbrain` applies the check today; that is a property to
+re-verify, not assume.
+
+**Consuming a variable is not declaring it.** `os.environ.get(...)` anywhere in
+a package does not register the name. The declaration is what
+`_accepted_variable_names()` reads, and it derives from `_SECTION_MODELS` — so
+declaring the field on any registered section fixes all three section loaders at
+once. Declaring a variable the package does not otherwise read is normal and
+already precedented: `OPENBRAIN_OBSERVATION_HMAC_SECRET` is declared purely so
+the provisioned variable is not rejected as a typo.
+
+**The check that catches it.** Not exit code, and not `/health` — both pass on a
+dead box. Start a fresh session and read the CANON PACK section counts. Zero
+counts, or no pack, is this bug. Since #565 the rejection also names the
+offending variable on **stderr**, so the fastest confirmation is to pipe a
+`SessionStart` payload through the installed wrapper and read the
+`[openbrain]` line:
+
+```
+printf '{"hook_event_name":"SessionStart","session_id":"probe","cwd":"'"$PWD"'"}' \
+  | ~/.local/share/openbrain-memory/env/openbrain-hook-env openbrain-session-start
+```
+
+A CANON PACK on stdout is healthy; an `[openbrain] unrecognised ...` line names
+the exact variable to declare or drop.
+
+### Clients cannot install from GitHub — wheels from the Mini are the paved road
+
+**Symptom.** `uv tool install git+ssh://git@github.com/rodaddy/open-brain...`
+fails on a client box, and reaching for a package index does not help either.
+
+**Cause.** The repo is private and the client boxes have no deploy key. There is
+also no published index: `python/openbrain-memory/pyproject.toml` records that
+its `fleet-nats` dependency is **not** on PyPI and lives in a private monorepo.
+Docs showing `uv pip install openbrain-memory==<version>` imply an index that
+does not exist for these packages.
+
+**The paved road.** Build wheels on the Mini and stage them —
+`scripts/client-bundle.sh` does this, into
+`/Volumes/ThunderBolt/open-brain-local/air-bundle/`, and the bundle's
+`setup-client.sh` installs from `--find-links` against the bundle's own
+`wheels/`. That reuses the wheelhouse convention the Mini already runs on
+(`OPENBRAIN_MEMORY_FIND_LINKS`, default
+`~/.local/share/openbrain-memory/wheels`) rather than inventing a second one.
+
+Do not burn time looking for an install route from the client. There isn't one;
+the artifact has to be carried.
+
+### `OPENBRAIN_BASE_URL` is a BARE `scheme://host:port` — no path, ever
+
+**Symptom.** Requests 404, or fail in a way that mentions a path segment nobody
+configured on purpose.
+
+**Cause.** A path was appended to the base URL — `/mcp`, `/api`, a trailing
+route. The client appends its own paths (`/health` and the rest) to whatever it
+is given, so a base URL with a path produces `…/mcp/health`.
+
+**The correct spellings**, and only these two shapes:
+
+```
+https://ob.rodaddy.live        # preferred — TLS, no opt-in needed
+http://10.71.1.20:3100         # LAN plain http — needs OPENBRAIN_ALLOW_INSECURE_HTTP=1
+```
+
+`openbrain_memory.client._validate_base_url` permits plain `http` only for
+loopback, so the LAN spelling is refused outright without the opt-in declared by
+#525 / PR #544. Prefer `https://ob.rodaddy.live`: no opt-in, no plain-text
+bearer token on the wire, and one fewer silent-failure mode.
+
+`127.0.0.1` is correct **on the Mini only** and needs no opt-in there. The bundle
+copies the Mini's env file verbatim, so a client staged from a loopback-pointed
+env file must have its `OPENBRAIN_BASE_URL` edited — that is a required step, not
+a nicety.
+
+**Written down is not enforced.** The paragraph above predates the first real
+client install and did not prevent it: the Air was installed from an unedited
+loopback env file anyway. `setup-client.sh` now REFUSES a loopback base URL
+rather than warning, with `OPENBRAIN_ALLOW_LOOPBACK_CLIENT=1` to run the script
+on the Mini itself. A rule that only exists in a doc is a rule the install can
+skip.
+
+### The provider CLI takes JSON on stdin — the namespace comes from the ENVIRONMENT
+
+**Symptom.** A request that looks exactly like the documented example fails with
+`namespace must be a non-empty string`, and nothing in the error mentions an
+environment variable. Adding `"namespace"` to the request body does not fix it —
+it produces a receipt that lists `namespace` under
+`ignored_optional_request_keys` **and** fails on `namespace` in the same JSON
+object.
+
+**Cause.** Two separate things, both fixed now, both worth knowing:
+
+- The CLI has **no argv interface**. `openbrain-memory recall --query …` returns
+  `arguments are not supported` and never reaches the brain. It reads ONE
+  bounded JSON object on stdin with `operation` inside it. The shipped prover in
+  `setup-client.sh` used the argv form, so it reported `[FAIL]` on every install
+  regardless of whether the install worked — a check whose failure carried no
+  information.
+- Identity is environmental, not a request field. `OPENBRAIN_BASE_URL`,
+  `OPENBRAIN_TOKEN`, and `OPENBRAIN_NAMESPACE` are read from the environment;
+  the one documented in-request override is `{"config": {"namespace": "…"}}`
+  (`docs/memory-contract.md`). A top-level `namespace` is now rejected with an
+  error that says where it actually lives.
+
+**The example is a request body, and a body carries no identity.** That is why
+following it on a clean shell fails. `openbrain-memory --help` now carries an
+`environment` block naming the three variables next to the example they qualify.
+
+**Also fixed: scope errors arrive all at once.** Validation used to surface one
+missing field per attempt, so assembling a scope by hand cost a round trip per
+field — the Air hit `namespace`, satisfied it, then hit `server_id`, then the
+next. Every error was true and every error was a fraction of the answer. All
+five (`agent`, `platform`, `server_id`, `channel_id`, `session_key`) are now
+reported in a single receipt.
+
+### A fresh box blocks EVERY tool call, and the escape hatch names a path it does not have
+
+**Symptom.** On a newly installed client whose Development tree is not on
+`/Volumes/ThunderBolt`, every tool call is blocked by the context-budget gate,
+and the remediation the banner prints names a directory that does not exist on
+that machine. Pasting it fails, so the block never clears and the session cannot
+be recovered from inside itself. On the operator-invoked path the same
+misconfiguration reads differently: the provider exits clean with no receipt and
+no output, which is indistinguishable from having worked.
+
+**Cause.** `development_scope.py` ships the BUILD machine's volume as
+`DEFAULT_DEVELOPMENT_ROOT`, and it resolves the lane by asking the FILESYSTEM. A
+root that is not there fails the `is_dir()` test, so `resolve_development_scope()`
+returns `None` for every cwd. The gate then has no project, and
+`context_budget_gate._development_cwd()` composes its recovery path out of that
+same absent root — which is how the escape hatch ends up pointing at nothing.
+
+The override `OPENBRAIN_DEVELOPMENT_ROOT` has always existed and always worked.
+**Nothing shipped it** (#555): neither installer script mentioned it, and the
+wrapper's `exec env -i` allowlist did not pass it, so even hand-setting it in the
+env file was stripped before any hook child saw it. Both halves are required —
+the value AND the pass-through.
+
+**Reproducing this on the Mini takes care.** `/Users/rico/Development` here is a
+**symlink** to `/Volumes/ThunderBolt/Development`, and `_canonical_directory`
+calls `.resolve()`. Probe with that path and both the broken and fixed cases
+return a healthy scope, hiding the defect entirely. Use a root that is a real
+directory with no symlink back to the volume:
+
+```bash
+cd python/openbrain-provider
+uv run python -c "
+from openbrain_provider.development_scope import resolve_development_scope, development_root
+print('root :', development_root())
+print('scope:', resolve_development_scope('/some/real/Development/open-brain'))"
+```
+
+`scope: None` with a `root` that is not this machine's tree is the defect.
+Setting `OPENBRAIN_DEVELOPMENT_ROOT` to the real tree turns it into a
+`DevelopmentScope`.
+
+**Fix and check.** `setup-client.sh` now resolves the root per box (exported
+value, then `DEV_ROOT`, then probing the known layouts), writes it into the
+installed env file, and adds the wrapper pass-through. It refuses to install when
+it cannot resolve one — `OPENBRAIN_ALLOW_NO_DEVELOPMENT_ROOT=1` is the deliberate
+override for a box with no Development tree. On any box already installed:
+
+```bash
+python3 - "$HOME/.local/share/openbrain-memory/env/openbrain-hook-env" <<'EOF'
+import sys
+print("pass-through present:",
+      "OPENBRAIN_DEVELOPMENT_ROOT" in open(sys.argv[1], encoding="utf-8").read())
+EOF
+```
+
+**The shape to recognise:** a value that is correct on exactly one machine, with
+a working override that nothing ever ships. The build box cannot detect it,
+because the default is right there.
+
+---
+
+## 2026-08-04 PR-gate traps
+
+Three ways the pre-PR gate lies to you. All three cost time on the #551/#552
+run, and all three share the house pattern: a confident report that is wrong,
+produced by a tool that exited cleanly.
+
+### `validate-pr-body.ts` reads the ENVIRONMENT, not argv — a file argument validates nothing
+
+**Symptom.** You run the validator against a PR body file and it reports every
+section missing — no Critical Self-Review, no Review Gate, no Contract Parity —
+on a body that visibly contains all of them. The obvious conclusion is that the
+body is malformed, and it is not.
+
+**Cause.** The `import.meta.main` block reads `process.env.PR_BODY`,
+`process.env.PR_TITLE`, and `process.env.CONTRACT_PARITY_REQUIRED`. It never
+looks at `process.argv`. Passing a path puts the filename somewhere the script
+does not read, so `PR_BODY` falls back to `""` and an empty body genuinely is
+missing every section. The exit code is 1, the errors are internally consistent,
+and the diagnosis is entirely false. This produced a false diagnosis on
+2026-08-04.
+
+**The correct local invocation** — the same shape CI uses:
+
+```bash
+PR_BODY="$(gh pr view <N> --json body -q .body)" \
+  CONTRACT_PARITY_REQUIRED=true \
+  bun run scripts/validate-pr-body.ts
+```
+
+Before the PR exists, pipe the drafted body in through the same variable rather
+than naming a file. **"Every section missing" on a body you can see is the
+signature of an empty `PR_BODY`, not of a bad body.** Check the invocation
+before you touch the markdown.
+
+### The self-review parser accepts only plain `- Label: text` — bold breaks it, and so does an invented disposition
+
+**Symptom.** Two flavours, both reported as content problems when the content is
+fine:
+
+- `Critical Self-Review field '<Label>' needs specific content.` on a line that
+  plainly has specific content.
+- `<X> must check exactly one disposition.` on a line where exactly one box is
+  checked.
+
+**Cause — formatting.** `requireSpecificLine` matches
+`^-\s*<label>:\s*(.+)$`. The label must be immediately followed by the colon, so
+`- **Highest-risk behavior:** text` does not match: the `**` sits between the
+anchor and the label, the regex fails, and the value reads as empty. The field is
+reported as missing content while being fully written. Hit on PR #552. Markdown
+bolding is the natural thing to reach for and it is exactly what breaks it —
+**copy the plain `- Label: content` lines from
+`.github/pull_request_template.md` and do not restyle them.**
+
+**Cause — wording.** Three lines accept EXACTLY the template's two dispositions
+and no third spelling:
+
+- `- SME review-memory update: [ ] `docs/sme/` updated or [ ] not applicable because: <reason>`
+- `- Live Open Brain checks: [ ] linked below or [ ] not applicable because: <reason>`
+- `- Contract parity: [ ] fixtures updated` / `- Contract parity: [ ] runtime-specific because: <reason>`
+
+`exactlyOneDisposition` tests for the two literal spellings and errors when the
+count of matches is not one. An invented third wording — "maintained", "no
+change needed", "already current" — matches neither branch, so zero are seen and
+the error says "must check exactly one disposition" even though you checked one.
+Hit on PR #551. The accepted forms are literals in `scripts/validate-pr-body.ts`;
+read them there rather than paraphrasing the intent. A not-applicable
+disposition also needs a real reason: `-`, `n/a`, `none`, `todo`, and `tbd` are
+rejected as placeholders.
+
+### Red `db-integration` on a diff that cannot cause it means the BRANCH is stale, not the code
+
+**Symptom.** CI fails on a PR whose diff does not touch anything in the failing
+tests — several failures at once, in files the branch never modified. Reading the
+diff for a mechanism produces nothing, because there is no mechanism.
+
+**Cause.** The branch was cut before fixes that have since landed, so CI is
+running the PR's changes on top of a tree that is genuinely broken independent of
+them. PR #551 carried six `db-integration` failures on 2026-08-04 for exactly
+this reason, in tests it never touched.
+
+**Check the base BEFORE reading the diff.** It is one command and it is
+conclusive:
+
+```bash
+git fetch origin
+git merge-base --is-ancestor origin/main <head-sha>   # exit 0 = current, 1 = stale
+gh pr update-branch --rebase <N>                      # the fix when it exits 1
+```
+
+Rebasing cleared all six on #551. **Failures that the diff cannot plausibly
+explain are evidence about the base, not about the change** — spending the first
+half hour hunting a causal path through the diff is the expensive way to find
+that out.

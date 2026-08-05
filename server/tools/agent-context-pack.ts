@@ -40,8 +40,8 @@ import {
   type WorkingSetScope,
 } from "../realtime/working-set.ts";
 import {
-  agentContextPackInputSchema,
-  agentReflexPointersInputSchema,
+  agentContextPackStrictSchema,
+  agentReflexPointersStrictSchema,
   parseAgentContextPackArgs,
   parseAgentReflexPointersArgs,
   type AgentContextPackArgs,
@@ -669,12 +669,38 @@ export async function buildAgentContextPackPayload(
   if (durableMemorySection) sections.durable_memory = durableMemorySection;
   for (const { key, section } of structuredSections) sections[key] = section;
 
+  // #535 receipt: name what was asked for against what came back, so a section
+  // that was requested and did NOT arrive is visible in the answer itself.
+  //
+  // An unknown top-level KEY is already rejected by name at parse time, and an
+  // unknown VALUE inside `requested_sections` is already rejected by the enum
+  // with the accepted set listed. What neither catches is a section that was
+  // spelled correctly, accepted, and then dropped downstream — budget eviction
+  // being the live case. That still reads as a success-shaped short answer, so
+  // the receipt states the difference rather than leaving the caller to diff
+  // `sections` against their own request from memory.
+  //
+  // `requested: null` means the caller sent no `requested_sections` and took the
+  // documented working_set-only default — distinct from an explicit empty array.
+  const servedSections = Object.keys(sections);
+  const requestedSections = args.requested_sections ?? null;
+
   return {
     payload: {
       schema: "openbrain.agent_context_pack.v1",
       status: "ok",
       scope: { namespace_source: "authorization", ...normalizedScope },
       sections,
+      sections_receipt: {
+        requested: requestedSections,
+        served: servedSections,
+        requested_not_served:
+          requestedSections === null
+            ? []
+            : requestedSections.filter(
+                (name) => !servedSections.includes(name),
+              ),
+      },
       warnings: {
         scope_denials: [
           ...(workingSet ? workingSet.warnings.scope_denials : []),
@@ -850,7 +876,10 @@ export function registerAgentContextPackTool(
         "emitted as durable_memory items, reusing the single durable_memory recall; " +
         "candidate_memory is a truthful empty section (no candidate predicate yet) " +
         "that never drives its own recall.",
-      inputSchema: agentContextPackInputSchema,
+      // The STRICT object, not the raw shape: the SDK strips unknown keys from
+      // a raw shape before dispatch, which is the #535 silent-default defect.
+      // See `context-pack-args.ts` `rejectUnknownRequestKeys`.
+      inputSchema: agentContextPackStrictSchema,
       annotations: {
         title: "Agent Context Pack",
         readOnlyHint: true,
@@ -888,7 +917,7 @@ export function registerAgentReflexPointersTool(
         "through the authorized read path (get_entry, table = source_ref.type + " +
         '"s", id = source_ref.id). Placement into the model prompt is client-owned; ' +
         "this tool never performs implicit _meta injection.",
-      inputSchema: agentReflexPointersInputSchema,
+      inputSchema: agentReflexPointersStrictSchema,
       annotations: {
         title: "Agent Reflex Pointers",
         readOnlyHint: true,

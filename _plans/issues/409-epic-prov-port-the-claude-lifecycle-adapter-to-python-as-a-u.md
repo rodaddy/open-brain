@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: none
 Created: 2026-07-25T23:34:17Z
-Updated: 2026-07-25T23:38:03Z
+Updated: 2026-08-04T23:27:32Z
 
 ---
 
@@ -85,3 +85,17 @@ Not aspirations — existing rules in `_DOCS/CODING_STANDARDS.md`, `king-capital
 
 - Rewriting `openbrain-memory` itself. It stays as-is and becomes a workspace member.
 - Generating a TS artifact. Deferred until a real TS consumer is demonstrated; none exists today.
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-04T23:27:32Z
+
+Epic ledger update -- 2026-08-04.
+
+MERGED: PROV-10 (#419) is delivered. PR #509 (commit `1e194e2`) ported `context-budget-gate.ts` and `policy-refresh-gate.ts` into `python/openbrain-provider` (`context_budget_gate.py` 763 lines, `policy_refresh_gate.py` 573 lines) with 33-case byte-parity fixtures and a mutation-proven 15-minute self-release.
+
+RUNNING: the settings cutover PR #509 deliberately deferred has since happened. `~/.claude/settings.json` now registers `openbrain-context-budget-gate` on all six events and `openbrain-policy-refresh-gate` on four, with zero remaining `bun ...-gate.ts` invocations. `openbrain-context-budget-gate --event status` returns valid JSON carrying `repairModeActive`/`repairModeExpiresAt`. That also gives `policy-refresh-gate.ts` the home the #419 ledger flagged as missing.
+
+WRITTEN: nine of eleven children are now closed or delivered. The remaining middle is PROV-4 (#413), PROV-5 (#414), PROV-7 (#416), PROV-8 (#417). Verified against current source: `openbrain_provider/__init__.py:23-25` still states construction, dispatch, reflex and observation "land in later slices"; `NO_COLOR` and ANSI stripping appear nowhere in `python/`; `openbrain_memory/cli.py` has no non-zero exit path. The Langfuse lane that landed via PR #524 is the CONTENT-FUL capture sink, not PROV-8's content-free export.

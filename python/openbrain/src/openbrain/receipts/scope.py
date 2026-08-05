@@ -45,10 +45,58 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
-#: The one directory tree Development work happens in. A literal, matching
-#: ``DEVELOPMENT_ROOT``; the gate has the same literal, and a configurable value
-#: on one side only would put the writer and the reader in different scopes.
+#: The one directory tree Development work happens in, as shipped.
+#:
+#: The gate side became overridable (``openbrain_provider.development_scope``)
+#: because a machine without this exact macOS volume resolves every scope to
+#: None. This side reads the SAME variable, deliberately: a configurable value
+#: on one side only would put the writer and the reader in different scopes,
+#: which is what the previous literal-only comment was protecting against.
 DEVELOPMENT_ROOT = Path("/Volumes/ThunderBolt/Development")
+
+#: The override both sides honour. Spelled identically to the gate's.
+DEVELOPMENT_ROOT_ENV_VAR = "OPENBRAIN_DEVELOPMENT_ROOT"
+
+
+def development_root() -> Path:
+    """Return the Development root, honouring the shared override.
+
+    Read per call rather than frozen at import, matching the gate: the value is
+    answered against the FILESYSTEM, and a module constant is evaluated during
+    pytest collection, before a conftest can set the variable.
+
+    Returns:
+        The override when set and non-empty, else the shipped default.
+    """
+    override = os.environ.get(DEVELOPMENT_ROOT_ENV_VAR, "").strip()
+    return Path(override) if override else DEVELOPMENT_ROOT
+
+
+def development_root_missing() -> bool:
+    """Report whether the configured Development root is absent here.
+
+    Separates the two causes of a ``None`` scope: somebody else's repository
+    (silent by design) versus a root that does not exist on this machine (a
+    misconfiguration -- open-brain#556).
+
+    Returns:
+        True when the configured root is not an existing directory.
+    """
+    return _canonical_directory(development_root()) is None
+
+
+def development_root_origin() -> str:
+    """Name where the configured root's value came from.
+
+    Returns:
+        The environment variable name when it is set and non-empty, else
+        ``shipped default``. Quoted in the diagnosis so an operator who already
+        exported the variable is told the value THEY set, not a default they did
+        not choose.
+    """
+    override = os.environ.get(DEVELOPMENT_ROOT_ENV_VAR, "").strip()
+    return DEVELOPMENT_ROOT_ENV_VAR if override else "shipped default"
+
 
 #: Temp roots a Development worktree may legitimately live under, matching
 #: ``APPROVED_TEMP_WORKTREE_ROOTS``. The first is Rico's Mac, the second the
@@ -143,7 +191,7 @@ def _scoped_cwd(cwd: Path) -> Path | None:
     shape. The git check is what stops an arbitrary directory that happens to sit
     in the temp workspace from claiming Development scope.
     """
-    root = _canonical_directory(DEVELOPMENT_ROOT)
+    root = _canonical_directory(development_root())
     candidate = _canonical_directory(cwd)
     if root is None or candidate is None:
         return None
@@ -166,7 +214,7 @@ def _project_slug(cwd: Path) -> str:
     its own git top level, falling back to the directory when git says nothing.
     """
     top = _git_path(cwd, "--show-toplevel")
-    root = _canonical_directory(DEVELOPMENT_ROOT)
+    root = _canonical_directory(development_root())
     if top is not None and root is not None and _same_git_repository(top, root):
         return root.name
 

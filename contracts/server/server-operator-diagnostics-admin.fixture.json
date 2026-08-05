@@ -18,7 +18,7 @@
       "expectation": {
         "is_error": false,
         "json": {
-          "contract_version": "2026-07-08.operator-doctor.v2",
+          "contract_version": "2026-08-05.operator-doctor.v4",
           "generated_at": "<iso-date>",
           "runtime": {
             "service": "open-brain",

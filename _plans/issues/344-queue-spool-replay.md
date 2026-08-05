@@ -3,11 +3,12 @@
 
 # #344 — Queue spool replay
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: enhancement, memory, closure-audit
 Created: 2026-07-22T14:34:00Z
-Updated: 2026-07-24T18:30:01Z
+Updated: 2026-08-04T01:40:50Z
+Closed: 2026-08-04T01:40:49Z
 
 ---
 
@@ -54,7 +55,7 @@ Run the existing spool replay and quarantine flow as a scheduled maintenance job
 
 ---
 
-## Discussion (1)
+## Discussion (3)
 
 ### rodaddy — 2026-07-24T18:30:00Z
 
@@ -68,3 +69,15 @@ PR #355 (`0abdec5`) provides a real, tested client-owned `SpoolReplayMaintenance
 
 **Remediation required before closure**
 Wire scheduler start/stop into the owning long-lived client process (or implement another explicit production consumer), configure the interval, add process-start/restart lifecycle coverage, and run a live idle-spool canary proving a parked unit drains without a new healthy user operation.
+
+---
+
+### rodaddy — 2026-08-04T00:39:52Z
+
+Status audit 2026-08-03: the capture spool itself is healthy and drained (spool 0 on the operator gate line), but the deliverable here — replay registered as a **scheduled idempotent maintenance handler** — does not exist in the rewrite server: no spool/replay maintenance job in `server/` (checked today; only recovery-wal touches replay semantics). This issue predates the rewrite (parent #342 architecture); it needs a decision whether the queued-handler shape still applies to the rewrite or should be respecified against it. Leaving open as a real remainder, not done-in-practice.
+
+---
+
+### rodaddy — 2026-08-04T01:40:49Z
+
+Closed as superseded by operator decision 2026-08-03. This issue extends the pre-rewrite queue architecture (parent #342); the rewrite server has no such queued-handler substrate, and the spool itself is healthy and drained. The spool's outage story now lives in #536 (loud spool-on-outage with restart/replay/drain acceptance), correctly scoped against the rewrite. If a scheduled automatic replayer is ever wanted, a fresh issue against the rewrite says it better than this one could.

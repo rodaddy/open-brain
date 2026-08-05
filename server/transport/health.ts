@@ -12,8 +12,12 @@ export interface TransportNatsHealth {
 
 export interface SingleWorkerHealth {
   readonly status: "healthy" | "degraded";
+  /** Machine hostname — the human half of "which brain did I reach?". */
+  readonly hostname: string;
   readonly server_ip: string;
   readonly server_ips: readonly string[];
+  /** Deploy stamp short sha; absent on a tree that was never deployed. */
+  readonly revision?: string;
   readonly database: DatabaseHealth;
   readonly embedding: {
     readonly configured: boolean;
@@ -27,7 +31,10 @@ export interface SingleWorkerHealthInput {
   readonly databaseHealth: () => Promise<DatabaseHealth>;
   readonly embeddingBaseUrl?: string;
   readonly embeddingApiKey?: string;
+  readonly hostname: string;
   readonly serverIp: string;
+  readonly serverIps: readonly string[];
+  readonly revision?: string | undefined;
   readonly probeTimeoutMs: number;
   readonly logger: Logger;
   readonly fetch?: typeof fetch;
@@ -92,8 +99,10 @@ export async function getSingleWorkerHealth(
   );
   return {
     status,
+    hostname: input.hostname,
     server_ip: input.serverIp,
-    server_ips: [input.serverIp],
+    server_ips: input.serverIps,
+    ...(input.revision ? { revision: input.revision } : {}),
     database,
     embedding: {
       configured: Boolean(input.embeddingBaseUrl),

@@ -3,11 +3,12 @@
 
 # #446 — Build the canon loader — the one named by two skills that does not exist
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: wayfinder:task
 Created: 2026-07-29T19:21:08Z
-Updated: 2026-07-29T19:21:08Z
+Updated: 2026-08-04T00:39:42Z
+Closed: 2026-08-04T00:39:42Z
 
 ---
 
@@ -38,3 +39,11 @@ the decision.
 
 Type: task (AFK). Blocked by the writer question and the content decision — a
 loader with nothing to load proves nothing.
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-04T00:39:41Z
+
+Built and RUNNING — not as `load-core-context.ts` but as the package-owned SessionStart adapter: `openbrain-session-start` / `openbrain-session-start-remaining` console scripts (python/openbrain, registered in ~/.claude/settings.json via the openbrain-hook-env wrapper). It calls `agent_context_pack` with `requested_sections`, supplies the full five-field scope, takes endpoint/token from env only, loads canon only (no lane history), and its output is the CANON PACK 1/2 + 2/2 emissions visible in every session on this machine (this one included: profile=10, process=22, repo_facts=7). The stale skill pointers to `load-core-context.ts` were the doc side of this; the loader they named now exists under its real name. #526 (repo=None wire rejection) was the last defect keeping it from working outside repo cwds — fixed, merged 2920e1c, and proven by Skippy's fresh Buzz session reporting the pack verbatim.

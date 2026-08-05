@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: none
 Created: 2026-07-24T00:59:09Z
-Updated: 2026-07-24T01:44:41Z
+Updated: 2026-08-04T00:39:51Z
 
 ---
 
@@ -37,3 +37,11 @@ Parent program: #320
 ## Completion
 
 All child issues are locally and functionally verified, Claude/Claudex canaries use the local server, Langfuse stores allowlisted metadata only, #347 completes against the local stack, and Project #8 reflects live state.
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-04T00:39:51Z
+
+Epic audit 2026-08-03: #370 closed delivered (clone RUNNING). #371 scoped down to its one unmet item — per-turn reflex pointers (never ported to the Python package; everything else live). Observability delta from the original scope: the content-free Langfuse constraint was explicitly overridden by Rico for the local deployment — the #523/#524 sink ships full-content session traces, and #530 extends that to server-side tool-call tracing. Epic stays open until #371's reflex port lands or is descoped by Rico.

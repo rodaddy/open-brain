@@ -3,11 +3,12 @@
 
 # #444 — Decide what canon actually contains — the seed set for user, soul, and repo facts
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: wayfinder:grilling
 Created: 2026-07-29T19:20:48Z
-Updated: 2026-07-29T19:20:48Z
+Updated: 2026-08-01T22:41:37Z
+Closed: 2026-08-01T22:41:37Z
 
 ---
 
@@ -35,3 +36,150 @@ which of it is canon and in what words — not where it is stored.
 weight; complete authoring is a later effort.
 
 Type: grilling (HITL). Rico decides; do not answer this one alone.
+
+---
+
+## Discussion (5)
+
+### rodaddy — 2026-08-01T17:00:54Z
+
+## STATUS — operator decisions from live grilling (2026-08-01)
+
+This issue remains open because the actual seed content list is still undecided.
+
+### Storage shape decided
+
+Canon is the frontal-lobe layer mapped as recorded in `_plans/canon-always-known.md:104-107`:
+
+- `user.md` → `profile_guidance`
+- `soul.md` → `process_guidance`
+- repo facts → `repo_facts`
+
+Churny content, including coding standards and personas, lives **below canon**. Canon carries the short pointer rule that survives churn; the detailed material remains in files served by the qmd index. This is the two-level design recorded in `_plans/canon-always-known.md:125-140`.
+
+### Authoring shape — PROPOSED, leaning accepted
+
+Canon / lens / voice packs are authored as small reviewed files with scope keys, then reconciled one-directionally into Open Brain:
+
+- file changed → promote on the same `candidate_scope.key`
+- file removed → discard
+
+This preserves both qmd-style vacuum behavior and git review while Open Brain remains the vectorized serving layer, per the operator ruling: **"canon will be in openbrain as vectorized recall, not marked-on files"**.
+
+Retirement follows #445: relegate/discard by `candidate_scope.key`.
+
+### Still open
+
+1. The actual seed list for each lane.
+2. Promotion policy. A files-author model implies **propose by PR; merge = promote**, but that policy is not yet decided.
+
+---
+
+### rodaddy — 2026-08-01T17:04:41Z
+
+Candidate CANON SEED SET drafted as a veto artifact: **#462** (do not merge).
+
+`_plans/canon-seed-draft-2026-08-01.md` -- 28 candidate rules across the three lanes, each with a proposed `candidate_scope.key` (per #445's retirement mechanism: no key => cannot be cleanly retired), a source citation, and a lane:
+
+- **profile_guidance** (`user_preference`): 8
+- **process_guidance** (`process_rule`): 13
+- **repo_facts[open-brain]** (`repo_fact`): 7
+
+Sources mined: the 14 operating-preference events migrated into OB 2026-08-01, `~/.claude/docs/laws.md`, Development `AGENTS.md` short absolutes, open-brain `AGENTS.md` repo facts, `_ob/skills/personas/SKILL.md`. Each row is the short absolute only, pointer-style where detail lives in an indexed doc. A **cut-from-canon** section records the boundary (OB visible ritual, session-wipe, git-archaeology, glossary/pai-naming, the situational LAWs, persona always-keep line) so pulling a row back in is a one-line decision.
+
+This is a **PROPOSED draft for veto -- nothing is seeded**; the three lanes still measure `items=0`. Cut rows, reword rules, reassign lanes. Rows I was unsure about are marked **UNCERTAIN -- operator call**.
+
+---
+
+### rodaddy — 2026-08-01T20:45:35Z
+
+## Canon seed draft v2 — operator veto round 1 applied
+
+**merged, unverified** — v2 written and pushed to `docs/canon-seed-draft` (commit `a51474c`), PR #462 updated. Nothing is seeded; this is still the PROPOSED artifact for #444. Unlisted entries KEEP (operator listed only deviations).
+
+File: `_plans/canon-seed-draft-2026-08-01.md`. Lane counts v2: profile **10** · process **14** · repo **7** (v1 was 8·13·7 — +2 profile entries, +1 process entry).
+
+### Amendments applied
+
+| note | scope key | change |
+|------|-----------|--------|
+| 1 | `profile.identity` + NEW `profile.people_contacts`, `profile.contexts` | Expanded who-Rico-is; added people/contacts and contexts/relationships as first-class canon — the dimension other second brains carry as their *only* payload. |
+| 3 | `profile.no_unrequested_suggestions` | Named the offenses: no sleep / been-at-this-too-long / hour-or-state commentary; no unrequested work that breaks planned-but-undocumented things. |
+| 7 | `profile.no_flash_extraction` | UNCERTAIN → KEEP + reworded: lowest-tier models only when every step is given and outcome is concrete; never where thinking is required. |
+| 9 | `process.law0_say_what_you_mean` | Appended receipts requirement to LAW 0 — say what you mean, mean what you say, and give receipts. |
+| 18 | `process.delegate_reviews_runners` | KEPT; note to formalize as the software-factory processes stand up. |
+| 19 | `profile.never_speedrun` | Strengthened: BOTH guards — no speedrun without authorization AND no barreling on without guidance. (Mapping divergence — see below.) |
+| 20 | `process.capture_when_learned` | Stays UNCERTAIN; the open question is reframed as the *reason* itself. |
+| 23 | `repo.no_hardcoded_host` | Generalized to vars-over-hardcoding always, past initial concept. |
+| 24 | `repo.dogfood_db` | Stale loopback wording corrected to LAN-bind + Air reality — service binds `0.0.0.0` (verified live in `local-clone.env` L3), Air `10.71.1.26` is a sanctioned client at `10.71.1.20:3100`; two-host scope preserved, no retired host resurrected. |
+| Glossary | NEW `process.glossary_authoritative` | Pointer entry → `_DOCS/GLOSSARY.md` as authoritative shared vocabulary; agents use and maintain it. |
+
+### Mapping divergence (note 19)
+
+The authoritative `canon-data` numbering maps **n=19 → `process.ob_durable_memory_provider`**, but note 19's text ("stop don't just keep go'n without any guidance") is a behavioral guard that fits `profile.never_speedrun`, not the OB-memory entry. Per the head's confirmed interpretation, applied to `never_speedrun`; `ob_durable_memory_provider` left as written. Recorded in the draft's "Veto round 1" section rather than stopping.
+
+### Still UNCERTAIN (operator call carried forward)
+
+- **`process.capture_when_learned` (note 20)** — the reason it belongs in canon vs loader-driven is the open question itself.
+- Plus the mapping divergence on note 19 above (adjudicated, but flagged for the operator).
+- Unlisted UNCERTAINs KEPT unchanged: `profile.no_sleep_polling` (#6), `repo.standards_generated` (#28), and the two cut-list UNCERTAINs (SAS/pai naming, persona always-keep line).
+
+---
+
+### rodaddy — 2026-08-01T22:41:07Z
+
+## Canon seeded — v2 set is RUNNING (operator authorized "send it", 2026-08-01)
+
+The v2 canon seed set from `_plans/canon-seed-draft-2026-08-01.md` (PR #462, `docs/canon-seed-draft` @ `a51474c`) was promoted into the dogfood brain, namespace `rico`. **31 entries in, 31 seeded, 0 failed.**
+
+### Per-lane seeded counts
+| Lane | Selector | Count |
+|------|------|------:|
+| `profile_guidance` | `candidate_type=user_preference` + `memory_lifecycle_action=promote` | **10** |
+| `process_guidance` | `candidate_type=process_rule` + `memory_lifecycle_action=promote` | **14** |
+| `repo_facts[open-brain]` | `entity_type=repo_fact`, `metadata.repo=open-brain` | **7** |
+
+Every guidance row carries its `candidate_scope.key` (required for later retirement via a newer `relegate`/`discard` on the same key, per #445). UNCERTAIN-flagged rows (`process.capture_when_learned`, `profile.no_sleep_polling`, `repo.standards_generated`) were seeded — the operator sent the set; the UNCERTAIN flag rides in the draft for later revision, and no row said do-not-seed.
+
+### Mechanism (per #445)
+- Guidance = `ob_session_events` rows with `metadata.candidate_type` + `memory_lifecycle_action=promote` + `candidate_scope.key`. Written via the sanctioned client library `AgentMemory.promote_candidate(...)` — the JSON-on-stdin provider `capture` op silently drops those metadata keys, so it cannot express canon promotion.
+- Repo facts = `upsert_repo_fact` into `ob_entities`, bound to repo `open-brain` exactly, with the full qmd metadata contract (`source_system=qmd`, `source_commit`, `source_url` matching repo/path/commit — the context-pack loader excludes any repo fact lacking `source_url`+`source_commit`).
+- Session scope: `dev:open-brain:canon-seed-20260801` (fresh key). Namespace token-derived server-side = `rico`.
+
+### psql proof (repo `.env` libpq vars)
+```
+GUIDANCE promote rows created today, namespace rico:
+  process_rule    | 14
+  user_preference | 10
+REPO_FACTS entity_type=repo_fact, namespace=rico, repo=open-brain: 7
+```
+Scope keys (24 guidance):
+```
+profile.identity  profile.people_contacts  profile.contexts  profile.never_speedrun
+profile.no_unrequested_suggestions  profile.lead_with_mechanism  profile.minimal_correct
+profile.no_sleep_polling  profile.no_flash_extraction  profile.no_preprod_rotation
+process.law0_say_what_you_mean  process.never_on_main  process.never_tmp
+process.never_recursive_delete  process.fast_tools  process.never_ancient_bash
+process.act_on_explicit_targets  process.no_secrets  process.remove_worktrees
+process.delegate_reviews_runners  process.ob_durable_memory_provider
+process.capture_when_learned  process.no_hand_rolling  process.glossary_authoritative
+```
+Repo-fact subjects (7): `repo.two_hosts  repo.no_hardcoded_host  repo.dogfood_db  repo.psql_no_args  repo.test_skip_trap  repo.downstream_rollout_gate  repo.standards_generated`
+
+### READ-side pack proof (`agent_context_pack` via `openbrain-session-start`, canon config)
+```
+NS: rico
+profile_guidance item_count= 10
+process_guidance item_count= 14
+repo_facts       item_count= 7   (repo=open-brain, repo_bound=True)
+```
+Baseline before seeding (same call): all three `item_count=0`. The three lanes are no longer empty; the loader carries real weight end-to-end.
+
+### Closing
+This ticket is a HITL grilling ("Rico decides; do not answer this one alone"). The operator made the decision — the v2 set is what he sent ("send it", 2026-08-01), which resolves the per-lane content question and the UNCERTAIN inclusions by explicit inclusion. Seed goal met (prove the loader carries real weight; complete authoring is a later effort). Closing as decided-and-seeded. Individual `profile.person.<slug>` rows seed as specific people are named; the standing `profile.people_contacts` rule is in place.
+
+---
+
+### rodaddy — 2026-08-01T22:41:37Z
+
+Decided and seeded: operator sent the v2 canon set ("send it", 2026-08-01), resolving the per-lane content question and the UNCERTAIN inclusions by explicit inclusion. 31/31 seeded, all three lanes RUNNING. Seed goal met (prove the loader carries real weight; complete authoring is a later effort). See receipt above.

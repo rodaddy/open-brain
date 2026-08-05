@@ -3,11 +3,12 @@
 
 # #431 — Memory provider: an unaccepted event_type writes no row and returns no receipt, silently
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: none
 Created: 2026-07-27T04:35:37Z
-Updated: 2026-07-27T04:44:44Z
+Updated: 2026-08-04T01:41:28Z
+Closed: 2026-08-04T01:41:28Z
 
 ---
 
@@ -56,7 +57,7 @@ TypeScript adapter.
 
 ---
 
-## Discussion (1)
+## Discussion (2)
 
 ### rodaddy — 2026-07-27T04:44:44Z
 
@@ -96,3 +97,17 @@ Two things to settle, beyond the loud-rejection fix:
 
 Either way the fix in this issue stands: a rejected `event_type` must exit
 non-zero with a named reason listing the accepted set, never return empty.
+
+---
+
+### rodaddy — 2026-08-01T06:11:00Z
+
+## SUPERSEDED-by-rewrite (evidence recorded; left OPEN pending row-proof of the exact path) — 2026-08-01
+
+This is the silent-drop bug: the retired TypeScript adapter accepted six event types, `ob_session_events` held eight, and an unaccepted type (e.g. `finding`, `handoff`) wrote no row and returned no receipt — silently. That adapter is retired to `~/.local/share/openbrain-memory/_archive/420-cutover-retired-20260801/` (see #420 / #453).
+
+**In the current Python capture stack the drop is no longer silent, verified live in source this session (LAW 0, RUNNING):**
+- An unsupported event type now raises the loud named error `agent.py:546` — `raise ValueError(f"Unsupported event_type: {event_type}")` (also at :587). The #420 cutover worklog records this firing: "Finding event-type failure raises the named `ValueError` tracked by #431."
+- The vocabulary is now a **closed** `StrEnum` (`python/openbrain/src/openbrain/models/turn.py:93`) that includes the formerly-unwritable `handoff`, `action`, and `artifact`, so the accept-set and the table no longer disagree by construction.
+
+**Why left OPEN (LAW 0):** the loud-rejection behavior is proven in source and named in the cutover worklog, but I have not this session re-produced the specific `finding`→loud-`ValueError`, no-silent-row round trip as a fresh psql-row proof against a live DB. That is the exact acceptance shape this ticket implies (a caller-visible rejection, not a silent no-row), so I am recording the evidence and leaving it open for that row-proof or an explicit Rico decision to close on the source evidence above.

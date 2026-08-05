@@ -9,8 +9,20 @@
 // Open Brain's context-pack subject slots into that tree as
 // `{env}.ob.memory.context_pack`. The `ob` domain is Open-Brain-owned.
 //
-// TODO(fleet-nats): file upstream issue to add ob_context_pack(env) builder in
-// fleet_nats/subjects.py; this TS mirror must stay in parity.
+// The upstream builder now EXISTS: fleet-bus 2b20f97 (2026-07-28) added
+// `fleet_nats.subjects.ob_context_pack(env)`, which cites this TS mirror as the
+// parity target (its env token is slugged specifically to match
+// `obContextPackSubject`). The Python client defers to it when fleet-nats is
+// importable; TypeScript cannot import a Python package, so this mirror stays.
+//
+// KNOWN GAP (open-brain #550): upstream's `slug` also REJECTS `>`, the NATS
+// multi-token wildcard (fleet-bus #222), and `slugSubjectToken` below does not.
+// Adding it here changes which env strings this runtime accepts, so it is a
+// deliberate follow-up rather than a silent tightening inside a mirror refresh.
+// Not currently reachable: `env` is supplied by config, which uses dev, prod,
+// or staging. The Python drift canary
+// (`python/openbrain-memory/tests/test_nats_wire_drift.py`) pins the Python
+// side against the clone; this comment is the TS side's marker.
 
 /**
  * Normalise a token for use in a subject (no dots or spaces).

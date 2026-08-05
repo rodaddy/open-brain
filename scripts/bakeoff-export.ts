@@ -8,6 +8,9 @@
  * the pool.
  */
 
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createPool } from "../src/db/pool.ts";
 
 // NEVER /Volumes/collab. That is the SHARED volume: its README documents a
@@ -15,9 +18,13 @@ import { createPool } from "../src/db/pool.ts";
 // line wrote `/Volumes/collab/rem-bakeoff-items.json` and was one of 37 files
 // this repo left in that root -- which the operator, in a sandboxed session,
 // could not even `ls` to find out what was going on. Nothing here runs remotely;
-// there was never a reason to use the share. Local work, local scratch.
-const OUT = `${process.env.TMPDIR ?? "/Volumes/ThunderBolt/_tmp/open-brain/_scratch"}/rem-bakeoff-items.json`;
+// there was never a reason to use the share. Local work, repo-local output.
+const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+const outDir = join(repoRoot, "out");
+const OUT = join(outDir, "rem-bakeoff-items.json");
 const TARGET = 50;
+
+mkdirSync(outDir, { recursive: true });
 
 const pool = createPool();
 try {

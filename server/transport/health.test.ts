@@ -27,7 +27,9 @@ const DISCONNECTED: DatabaseHealth = {
 function input(overrides?: Partial<SingleWorkerHealthInput>): SingleWorkerHealthInput {
   return {
     databaseHealth: async () => CONNECTED,
+    hostname: "core01",
     serverIp: "10.71.1.21",
+    serverIps: ["10.71.1.21"],
     probeTimeoutMs: 3_000,
     logger: silentLogger(),
     ...overrides,

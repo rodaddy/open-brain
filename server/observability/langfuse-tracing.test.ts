@@ -18,6 +18,7 @@ import {
   errorOutput,
   installMcpTracing,
   readMcpTracingConfig,
+  repoRelease,
   resolveSessionId,
   SinkHealthTracker,
   type McpTracingConfig,
@@ -969,5 +970,34 @@ describe("trace body helpers", () => {
       error_class: "string",
       error_message: "plain string",
     });
+  });
+});
+
+/**
+ * #560: `release` is what lets an operator ask "which COMMIT got expensive".
+ *
+ * It was empty on 100% of traces because nothing ever resolved it. The resolver
+ * is asserted rather than the processor option, because constructing a real
+ * `LangfuseSpanProcessor` would build an exporter and this suite dials nothing.
+ */
+describe("the release stamped on every trace", () => {
+  test("resolves to the short SHA of the checkout under test", () => {
+    const release = repoRelease();
+
+    // This suite runs from a git checkout, so a SHA is expected here — but the
+    // shape is what is asserted, since the value changes with every commit.
+    expect(release).toMatch(/^[0-9a-f]{7,40}$/);
+  });
+
+  test("is never a placeholder standing in for an unknown commit", () => {
+    // A placeholder would group every unversioned trace as one release, which
+    // is worse than an absent field: it reads as a real, shared commit.
+    expect(repoRelease()).not.toBe("unknown");
+  });
+
+  test("is resolved once and cached, never forked per trace", () => {
+    // A subprocess per emit would put a fork on the request path, which is the
+    // one thing this lane is built not to do.
+    expect(repoRelease()).toBe(repoRelease());
   });
 });

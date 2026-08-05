@@ -3,11 +3,12 @@
 
 # #438 — CANON-1: the three guidance lanes are empty — author the always-known content
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: enhancement, memory
 Created: 2026-07-29T18:22:02Z
-Updated: 2026-07-29T18:22:02Z
+Updated: 2026-08-01T22:41:36Z
+Closed: 2026-08-01T22:41:36Z
 
 ---
 
@@ -46,3 +47,39 @@ Canon is the always-loaded layer: who Rico is, the rules any agent needs, and th
 Canon must stay small. Front-of-mind works because it is bounded, not because retrieval is fast. Content requires operator approval — these are Rico's rules, not derived facts.
 
 Design: `_plans/canon-always-known.md`
+
+---
+
+## Discussion (2)
+
+### rodaddy — 2026-08-01T22:41:27Z
+
+## The three lanes are no longer empty — canon seeded (2026-08-01)
+
+This issue's statement — "the three guidance lanes are empty," measured `items=0` for `profile_guidance`/`process_guidance`/`repo_facts` against the local dogfood service, namespace `rico`, repo `open-brain` — is now **false with evidence**. The v2 canon seed set (PR #462, `docs/canon-seed-draft` @ `a51474c`) was promoted; operator authorized "send it" (2026-08-01).
+
+### Authored content, per lane (scope)
+- **`profile_guidance` (user):** 10 rows — identity, people/contacts, contexts, never-speedrun, no-unrequested-suggestions, lead-with-mechanism, minimal-correct, no-sleep-polling, no-flash-extraction, no-preprod-rotation.
+- **`process_guidance` (soul):** 14 rows — LAW 0, never-on-main, never-/tmp, never-recursive-delete, fast-tools, never-ancient-bash, act-on-explicit-targets, no-secrets, remove-worktrees, delegate-reviews/runners, OB-durable-memory-provider, capture-when-learned, no-hand-rolling, glossary-authoritative.
+- **`repo_facts[open-brain]`:** 7 rows — two-hosts, no-hardcoded-host, dogfood-db, psql-no-args, test-skip-trap, downstream-rollout-gate, standards-generated.
+
+Short, absolute, rule-not-procedure — as the scope required.
+
+### Before / after (`agent_context_pack` via `openbrain-session-start`, namespace `rico`)
+```
+                    before   after
+profile_guidance:   items=0  item_count=10
+process_guidance:   items=0  item_count=14
+repo_facts:         items=0  item_count=7   (repo=open-brain, repo_bound=True)
+```
+psql confirms the durable rows: 10 `user_preference` + 14 `process_rule` promote rows in namespace `rico`, all carrying `candidate_scope.key`; 7 `entity_type=repo_fact` rows bound to `open-brain`. Full receipt and scope-key list: #444.
+
+Mechanism per #445 — guidance via lifecycle `promote` on `ob_session_events` (`candidate_type` + `candidate_scope.key`), repo facts via `upsert_repo_fact` into `ob_entities`. Written through the sanctioned client library; no raw SQL writes.
+
+"Canon-only by default" now returns real content every session. Closing — the empty-lanes condition this issue names no longer holds.
+
+---
+
+### rodaddy — 2026-08-01T22:41:36Z
+
+Empty-lanes condition resolved: profile_guidance=10, process_guidance=14, repo_facts=7 (RUNNING, namespace rico, repo open-brain). Content authored and promoted; loader carries real weight end-to-end. See receipt above and #444.

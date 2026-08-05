@@ -114,6 +114,103 @@ PositiveInt = Annotated[int, Field(gt=0)]
 #: A positive number of milliseconds.
 PositiveMs = Annotated[int, Field(gt=0)]
 
+#: The environment spelling of the plain-HTTP opt-in, shared by every section
+#: that builds an ``openbrain_memory`` client.
+#:
+#: WHY THIS IS ONE NAME AND NOT A PER-SECTION ONE. The sibling client refuses a
+#: plain-``http`` base URL unless the host is loopback or the caller passes
+#: ``allow_insecure_http=True`` (``openbrain_memory.client._validate_base_url``),
+#: and ``openbrain_memory.runtime`` already reads exactly this variable for its
+#: own direct-client path (``runtime.py``: ``RuntimeConfig.from_sources``). A
+#: second, section-scoped spelling would mean a LAN host had to set two
+#: variables that mean the same thing, and the sibling would keep ignoring the
+#: new one. So capture and canon BOTH bind this single name.
+#:
+#: WHY IT MUST BE DECLARED AT ALL (#525). An ``OPENBRAIN_``-prefixed variable
+#: matching no declared field is rejected by :func:`unknown_prefixed_variables`
+#: as a typo, and the hook entrypoints swallow that rejection into a SILENT ZERO
+#: CAPTURE / ZERO INJECTION with a clean exit 0. Measured 2026-08-02 and recorded
+#: in the issue: a hook process on a LAN box pointing at ``http://10.71.1.20:3100``
+#: declined canon AND capture with no error anywhere, because the deployed
+#: ``openbrain-hook-env`` wrapper strips this variable precisely to avoid that
+#: rejection. This is the same trap ``CaptureSettings.spool_path`` and
+#: ``ObservationSettings.hmac_secret`` document, hit a third time.
+#:
+#: WHAT IT IS SCOPED TO. A LAN-internal pre-production posture: the brain listens
+#: on a private address the operator controls, and the alternative -- TLS in front
+#: of 3100 -- is a separate, larger piece of work (#525 names both routes; this is
+#: the declared opt-in route). It does NOT weaken the default. Unset, the client's
+#: loopback-only rule stands exactly as before, so a public endpoint still has to
+#: be ``https``. Turning it on is an explicit, per-host, documented choice.
+ALLOW_INSECURE_HTTP_ALIASES = AliasChoices("OPENBRAIN_ALLOW_INSECURE_HTTP")
+
+
+def _empty_opt_in_means_unset(value: object) -> object:
+    """Treat an empty ``OPENBRAIN_ALLOW_INSECURE_HTTP`` as absent, not malformed.
+
+    Args:
+        value: Whatever the environment layer resolved for the field. Only a
+            string can be empty; a real ``bool`` passed in code goes through
+            untouched.
+
+    Returns:
+        ``False`` for an empty or whitespace-only string, the input unchanged
+        otherwise -- so ``"1"``/``"true"`` still enable, ``"false"`` still
+        disables, and genuine garbage like ``"maybe"`` still raises.
+
+    WHY THIS EXISTS (measured 2026-08-04, against the installed wrapper). The
+    deployed ``openbrain-hook-env`` passes the child
+    ``OPENBRAIN_ALLOW_INSECURE_HTTP="${OPENBRAIN_ALLOW_INSECURE_HTTP:-}"``, so a
+    machine whose env file does not set the variable hands the hook an EMPTY
+    STRING rather than nothing at all. Pydantic's bool parser rejects ``""``
+    with a ``ValidationError``, the hook entrypoints swallow it (fail-open
+    observer contract), and the result is a SILENT ZERO CAPTURE / ZERO
+    INJECTION with a clean exit 0 -- #525's exact defect class, re-armed on
+    every host that never opted in. ``load_capture_settings`` and
+    ``load_canon_settings`` both raised; only the direct constructor, which
+    reads no environment, appeared healthy.
+
+    Empty-means-unset is this repo's established reading of an environment
+    variable, not a new leniency: ``apps.capture.outage.default_spool_path``
+    and ``receipts.state.default_receipt_state_path`` both fall back on an
+    empty value rather than resolving it. The typo check
+    (:func:`unknown_prefixed_variables`) is untouched, so a MISSPELLED opt-in
+    still raises -- silence is only ever granted to the name we declared.
+    """
+    if isinstance(value, str) and not value.strip():
+        return False
+    return value
+
+
+def _empty_string_means_unset(value: object) -> object:
+    """Treat an empty optional string setting as absent, not as a real value.
+
+    The string counterpart of :func:`_empty_opt_in_means_unset`, and it exists
+    for the same measured reason. The deployed ``openbrain-hook-env`` builds the
+    child environment as ``env -i VAR="${VAR:-}"``, a style that CANNOT express
+    "absent": a machine whose env file omits the variable hands the hook an
+    EMPTY STRING. Without this, an empty ``OPENBRAIN_DEVELOPMENT_ROOT`` would
+    resolve to ``Path("")`` -- a path that exists as the current directory on
+    some platforms and not others -- instead of falling back to the shipped
+    default the operator expects.
+
+    Empty-means-unset is this repo's established reading of an environment
+    variable rather than a new leniency: ``receipts.scope.development_root``
+    already applies exactly this rule to the same variable
+    (``os.environ.get(...).strip()`` then fall back), and
+    ``apps.capture.outage.default_spool_path`` does the same for its own.
+
+    Args:
+        value: Whatever the environment layer resolved for the field.
+
+    Returns:
+        ``None`` for an empty or whitespace-only string, the input unchanged
+        otherwise.
+    """
+    if isinstance(value, str) and not value.strip():
+        return None
+    return value
+
 
 class ConfigurationError(ValueError):
     """A setting is missing, malformed, or inert, and the process cannot start.
@@ -383,6 +480,25 @@ class CaptureSettings(_Base):
             hook is a short-lived process, so this position must survive between
             invocations on disk; it is the one piece of local state capture
             keeps.
+        spool_path: The sibling provider's durability spool, or ``None`` to use
+            its default location. OWNED BY ``openbrain_memory``, which resolves
+            it from the same variable (``runtime.py``); declared here for the
+            same reason ``ObservationSettings.hmac_secret`` is -- an
+            ``OPENBRAIN_``-prefixed variable matching no declared field is
+            rejected by :func:`unknown_prefixed_variables` as a typo, and that
+            rejection, swallowed by the hook entrypoints, is a SILENT ZERO
+            CAPTURE on every ``Stop``. Measured 2026-08-03: with
+            ``OPENBRAIN_SPOOL_PATH`` set, ``load_capture_settings`` raised
+            ``UnknownEnvironmentVariableError``, so an operator pointing the
+            provider's spool somewhere killed all capture. The outage notice
+            reads this to report spool depth
+            (``apps.capture.outage.default_spool_path``); declaring it is what
+            makes setting it legal.
+        allow_insecure_http: Permit a plain-``http`` endpoint whose host is not
+            loopback, for a LAN client reaching the dev brain. See
+            :data:`ALLOW_INSECURE_HTTP_ALIASES` for the posture this is scoped
+            to; the value flows to ``OpenBrainClient(allow_insecure_http=...)``
+            at every capture-lane construction site.
     """
 
     base_url: str | None = Field(
@@ -406,6 +522,18 @@ class CaptureSettings(_Base):
     watermark_path: Path = Field(
         default=PACKAGE_ROOT / "data" / "capture-watermarks.sqlite",
         validation_alias=AliasChoices("OPENBRAIN_CAPTURE_WATERMARK_PATH"),
+    )
+    spool_path: Path | None = Field(
+        default=None,
+        validation_alias=AliasChoices("OPENBRAIN_SPOOL_PATH"),
+    )
+    allow_insecure_http: bool = Field(
+        default=False,
+        validation_alias=ALLOW_INSECURE_HTTP_ALIASES,
+    )
+
+    _empty_opt_in = field_validator("allow_insecure_http", mode="before")(
+        _empty_opt_in_means_unset
     )
 
 
@@ -517,6 +645,12 @@ class CanonSettings(_Base):
         repo: The repository slug ``repo_facts`` binds to exactly.
         sections: The sections to request. The canon-only default is the three
             structured-guidance sections; an operator may override it.
+        allow_insecure_http: Permit a plain-``http`` endpoint whose host is not
+            loopback, for a LAN client reaching the dev brain. Binds the SAME
+            variable capture does (:data:`ALLOW_INSECURE_HTTP_ALIASES`), because
+            both lanes reach the one service the environment points at -- a host
+            that can capture over LAN http can read canon over it too, and #525
+            proved that a lane left off the flow declines silently.
     """
 
     base_url: str | None = Field(
@@ -567,6 +701,14 @@ class CanonSettings(_Base):
     sections: tuple[str, ...] = Field(
         default=("profile_guidance", "process_guidance", "repo_facts"),
         validation_alias=AliasChoices("OPENBRAIN_CANON_SECTIONS"),
+    )
+    allow_insecure_http: bool = Field(
+        default=False,
+        validation_alias=ALLOW_INSECURE_HTTP_ALIASES,
+    )
+
+    _empty_opt_in = field_validator("allow_insecure_http", mode="before")(
+        _empty_opt_in_means_unset
     )
 
     @field_validator("sections", mode="before")
@@ -655,13 +797,20 @@ class LogSettings(_Base):
 
 
 class ServerSettings(_Base):
-    """HTTP server binding.
+    """Process-level settings: the HTTP binding, and this machine's lane root.
+
+    ``development_root`` sits here rather than on a hook section because it
+    describes the BOX, not a lane -- the same value serves the receipts writer
+    and the provider gate, neither of which is capture, canon, or observation.
 
     Attributes:
         port: Listen port.
         bind_host: Interface to bind, or ``None`` for the runtime default.
         allowed_origins: CORS origins. Empty means none are permitted.
         run_migrations: Apply pending migrations at start.
+        development_root: This machine's Development lane root, or ``None`` to
+            use the shipped default. DECLARED HERE, RESOLVED ELSEWHERE -- see
+            the field comment.
     """
 
     port: PositiveInt = Field(
@@ -681,6 +830,34 @@ class ServerSettings(_Base):
         validation_alias=AliasChoices(
             "OPENBRAIN_RUN_MIGRATIONS", "OPEN_BRAIN_RUN_MIGRATIONS"
         ),
+    )
+    #: DECLARED HERE, RESOLVED IN ``receipts.scope`` -- and that split is the
+    #: point, not an oversight.
+    #:
+    #: This package has READ ``OPENBRAIN_DEVELOPMENT_ROOT`` since #556
+    #: (``receipts.scope.development_root``), through ``os.environ`` per call,
+    #: because the value is answered against the FILESYSTEM and a module
+    #: constant is frozen during pytest collection before a conftest can set it.
+    #: Reading it that way never registered the NAME, so
+    #: :func:`unknown_prefixed_variables` still classed it a typo and rejected
+    #: the whole environment -- the package refusing a variable its own code
+    #: depends on. #557 then shipped a wrapper that passes it, and every box
+    #: built from that bundle opened sessions with no canon and exit 0
+    #: (open-brain#565).
+    #:
+    #: The declaration exists to make the name RECOGNISED and readable. It is
+    #: deliberately not the resolver: ``receipts.scope`` and the gate's
+    #: ``openbrain_provider.development_scope`` read the same variable, spelled
+    #: identically, so a writer and a reader can never land in different
+    #: scopes. A settings field resolved independently would reintroduce exactly
+    #: that split.
+    development_root: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("OPENBRAIN_DEVELOPMENT_ROOT"),
+    )
+
+    _empty_root = field_validator("development_root", mode="before")(
+        _empty_string_means_unset
     )
 
 

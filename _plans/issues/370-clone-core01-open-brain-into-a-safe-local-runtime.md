@@ -3,11 +3,12 @@
 
 # #370 — Clone core01 Open Brain into a safe local runtime
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: none
 Created: 2026-07-24T00:59:50Z
-Updated: 2026-07-24T01:00:58Z
+Updated: 2026-08-04T00:39:40Z
+Closed: 2026-08-04T00:39:40Z
 
 ---
 
@@ -28,3 +29,11 @@ A fresh core01 Open Brain backup can be transferred encrypted, verified, restore
 - functional real-PostgreSQL concurrency, restore, health, read/write, isolation, restart, and socket tests pass
 - core01 receives no validation writes and remains healthy
 - content-free receipts and errors are preserved
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-04T00:39:40Z
+
+Delivered and RUNNING. The dogfood clone `open_brain_local_20260724` (PostgreSQL 18 + pgvector, restored from a verified core01 backup) serves on port 3100 via launchd `com.rico.open-brain-local-clone`, local MLX embeddings (768-dim contract intact), local-only credentials in `local-clone.env`. It has been the live durable memory for every Claude session on this machine through the whole 0.9 dogfood arc — capture writes to `ob_raw_turns` daily, canon packs read from it at every SessionStart, core01 untouched. One recorded delta from the original acceptance: since 2026-08-01 it binds 0.0.0.0 rather than literal loopback, an operator decision making the Air (10.71.1.26) a sanctioned LAN client of this dev brain — the two-host scope still holds.
