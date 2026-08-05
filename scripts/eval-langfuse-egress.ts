@@ -15,12 +15,17 @@
 import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import { Database } from "bun:sqlite";
 import { SECRET_DETECTORS } from "../src/secret-patterns.ts";
 
 const OPT_IN_ENV = "OPEN_BRAIN_LANGFUSE_EGRESS";
 const INGESTION_SUFFIX = "/api/public/ingestion";
 const DEFAULT_EVENT_COUNT = 3;
 const DEFAULT_PAGE_LIMIT = 100;
+const DEFAULT_SETTLE_TIMEOUT_SECONDS = 60;
+const DEFAULT_SETTLE_POLL_INTERVAL_MS = 2_000;
+const MAX_TRACE_PAGES = 100;
+const EMIT_FAILURE_MARKER = "observation emit failed";
 
 export interface LangfuseReadConfig {
   endpoint: string;
@@ -34,12 +39,20 @@ export type HttpTransport = (
 ) => Promise<Response>;
 
 export interface EgressCheck {
-  label: "arrival_count" | "generation_metadata" | "total_cost" | "secret_scan";
+  label:
+    | "arrival_count"
+    | "generation_metadata"
+    | "total_cost"
+    | "secret_scan"
+    | "capture_exit"
+    | "emit_proven";
   passed: boolean;
   fatal: boolean;
   observed: number;
   expected?: number;
   detector_counts?: Record<string, number>;
+  content_fields_present?: boolean;
+  emit_failure_detected?: boolean;
 }
 
 export interface EgressReceipt {
@@ -50,6 +63,7 @@ export interface EgressReceipt {
   expected: { traces: number; observations: number };
   observed: { traces: number; observations: number; generations: number };
   checks: EgressCheck[];
+  settle?: { waited_ms: number; timed_out: boolean; polls: number };
 }
 
 export interface CliOutcome {
@@ -63,6 +77,7 @@ interface CliOptions {
   tag: string;
   count: number;
   requireCost: boolean;
+  settleTimeoutSeconds: number;
 }
 
 interface LangfuseTrace {
@@ -77,8 +92,21 @@ interface VerificationOptions {
   expectedGenerations?: number;
   expectedTraces?: number;
   requireCost?: boolean;
+  settleTimeoutSeconds?: number;
+  pollIntervalMs?: number;
+  now?: () => number;
+  sleep?: (milliseconds: number) => Promise<void>;
   config: LangfuseReadConfig;
   transport?: HttpTransport;
+}
+
+export interface DriveOutcome {
+  tag: string;
+  count: number;
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  observeOffset: number;
 }
 
 interface DriveOptions {
@@ -139,6 +167,13 @@ export function parseEgressArgs(args: string[]): CliOptions {
   if (!Number.isSafeInteger(count) || count < 1) {
     throw new Error("--count must be a positive integer");
   }
+  const settleTimeoutText =
+    argumentValue(args, "settle-timeout") ??
+    String(DEFAULT_SETTLE_TIMEOUT_SECONDS);
+  const settleTimeoutSeconds = Number(settleTimeoutText);
+  if (!Number.isFinite(settleTimeoutSeconds) || settleTimeoutSeconds < 0) {
+    throw new Error("--settle-timeout must be a non-negative number");
+  }
   const tag = argumentValue(args, "tag") ?? randomUUID();
   assertSafeTag(tag);
   return {
@@ -146,6 +181,7 @@ export function parseEgressArgs(args: string[]): CliOptions {
     tag,
     count,
     requireCost: args.includes("--require-cost"),
+    settleTimeoutSeconds,
   };
 }
 
@@ -199,7 +235,9 @@ function isGeneration(value: unknown): boolean {
 function traceFrom(value: unknown): LangfuseTrace | undefined {
   const id = stringField(value, "id");
   if (!id) return undefined;
-  return { id, observations: arrayField(value, "observations"), body: value };
+  const object = objectValue(value) ?? {};
+  const { observations: _observations, ...body } = object;
+  return { id, observations: arrayField(value, "observations"), body };
 }
 
 function pageData(value: unknown): unknown[] {
@@ -208,10 +246,16 @@ function pageData(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
-function hasNextPage(value: unknown, page: number): boolean {
+function hasNextPage(
+  value: unknown,
+  page: number,
+  rowCount: number,
+  pageSize: number,
+): boolean {
   const meta = objectValue(objectValue(value)?.meta);
   const totalPages = meta?.totalPages ?? meta?.total_pages;
-  return typeof totalPages === "number" && page < totalPages;
+  if (typeof totalPages === "number") return page < totalPages;
+  return rowCount === pageSize;
 }
 
 async function queryTaggedTraces(
@@ -222,7 +266,7 @@ async function queryTaggedTraces(
   const traces: LangfuseTrace[] = [];
   let page = 1;
   let more = true;
-  while (more) {
+  while (more && page <= MAX_TRACE_PAGES) {
     const url = new URL("/api/public/traces", config.endpoint);
     url.searchParams.set("sessionId", tag);
     url.searchParams.set("page", String(page));
@@ -239,22 +283,83 @@ async function queryTaggedTraces(
       const detail = await fetchJson(detailUrl, config, transport);
       traces.push(traceFrom(detail) ?? summaryTrace);
     }
-    more = hasNextPage(payload, page);
+    more = hasNextPage(
+      payload,
+      page,
+      summaries.length,
+      DEFAULT_PAGE_LIMIT,
+    );
     page += 1;
   }
   return traces;
 }
 
-function secretCounts(traces: LangfuseTrace[]): Record<string, number> {
+function observationContentPresent(observation: unknown): boolean {
+  const body = objectValue(observation);
+  if (!body) return false;
+  return Object.hasOwn(body, "input") || Object.hasOwn(body, "output");
+}
+
+function secretScan(traces: LangfuseTrace[]): {
+  counts: Record<string, number>;
+  contentFieldsPresent: boolean;
+} {
   const counts: Record<string, number> = {};
+  let contentFieldsPresent = false;
   for (const trace of traces) {
-    const serialized = JSON.stringify(trace.body);
+    const observationBodies = trace.observations.map((observation) => {
+      if (observationContentPresent(observation)) contentFieldsPresent = true;
+      return observation;
+    });
+    const serialized = JSON.stringify({
+      trace: trace.body,
+      observations: observationBodies,
+    });
     for (const detector of SECRET_DETECTORS) {
       if (!detector.pattern.test(serialized)) continue;
       counts[detector.kind] = (counts[detector.kind] ?? 0) + 1;
     }
   }
-  return counts;
+  return { counts, contentFieldsPresent };
+}
+
+interface SettledTraces {
+  traces: LangfuseTrace[];
+  waitedMs: number;
+  timedOut: boolean;
+  polls: number;
+}
+
+async function queryUntilSettled(
+  options: VerificationOptions,
+  transport: HttpTransport,
+  expectedTraces: number,
+): Promise<SettledTraces> {
+  const timeoutMs =
+    (options.settleTimeoutSeconds ?? DEFAULT_SETTLE_TIMEOUT_SECONDS) * 1_000;
+  const pollIntervalMs =
+    options.pollIntervalMs ?? DEFAULT_SETTLE_POLL_INTERVAL_MS;
+  const now = options.now ?? Date.now;
+  const sleep =
+    options.sleep ??
+    ((milliseconds: number) => Bun.sleep(milliseconds));
+  const startedAt = now();
+  let polls = 0;
+  let traces: LangfuseTrace[] = [];
+  while (true) {
+    traces = await queryTaggedTraces(options.tag, options.config, transport);
+    polls += 1;
+    const observations = traces.flatMap((trace) => trace.observations);
+    const arrived =
+      traces.length >= expectedTraces &&
+      observations.length >= options.expectedObservations;
+    const waitedMs = Math.max(0, now() - startedAt);
+    if (arrived) return { traces, waitedMs, timedOut: false, polls };
+    if (waitedMs >= timeoutMs) {
+      return { traces, waitedMs, timedOut: true, polls };
+    }
+    await sleep(Math.min(pollIntervalMs, timeoutMs - waitedMs));
+  }
 }
 
 /** Query Langfuse and evaluate the issue #578 egress assertions. */
@@ -262,11 +367,9 @@ export async function verifyLangfuseEgress(
   options: VerificationOptions,
 ): Promise<EgressReceipt> {
   const transport = options.transport ?? fetch;
-  const traces = await queryTaggedTraces(
-    options.tag,
-    options.config,
-    transport,
-  );
+  const expectedTraces = options.expectedTraces ?? 1;
+  const settled = await queryUntilSettled(options, transport, expectedTraces);
+  const traces = settled.traces;
   const observations = traces.flatMap((trace) => trace.observations);
   const generations = observations.filter(isGeneration);
   const metadataCount = generations.filter(
@@ -277,12 +380,11 @@ export async function verifyLangfuseEgress(
   const costCount = generations.filter((row) =>
     fieldPresent(row, "totalCost", "total_cost"),
   ).length;
-  const detectorCounts = secretCounts(traces);
-  const secretHitCount = Object.values(detectorCounts).reduce(
+  const scan = secretScan(traces);
+  const secretHitCount = Object.values(scan.counts).reduce(
     (sum, count) => sum + count,
     0,
   );
-  const expectedTraces = options.expectedTraces ?? 1;
   const expectedGenerations =
     options.expectedGenerations ?? options.expectedObservations;
   const checks: EgressCheck[] = [
@@ -316,7 +418,8 @@ export async function verifyLangfuseEgress(
       passed: secretHitCount === 0,
       fatal: true,
       observed: secretHitCount,
-      detector_counts: detectorCounts,
+      detector_counts: scan.counts,
+      content_fields_present: scan.contentFieldsPresent,
     },
   ];
   const passed = checks.every((check) => check.passed || !check.fatal);
@@ -335,6 +438,11 @@ export async function verifyLangfuseEgress(
       generations: generations.length,
     },
     checks,
+    settle: {
+      waited_ms: settled.waitedMs,
+      timed_out: settled.timedOut,
+      polls: settled.polls,
+    },
   };
 }
 
@@ -389,6 +497,59 @@ function captureEnvironment(
   return child;
 }
 
+async function observationOffset(
+  watermarkPath: string,
+  tag: string,
+): Promise<number> {
+  if (!(await Bun.file(watermarkPath).exists())) return 0;
+  const database = new Database(watermarkPath, {
+    readonly: true,
+    create: false,
+  });
+  try {
+    const row = database
+      .query("SELECT offset FROM watermark WHERE session_key = ?")
+      .get(`observe:${tag}`);
+    const offset = objectValue(row)?.offset;
+    return typeof offset === "number" && offset > 0 ? offset : 0;
+  } finally {
+    database.close();
+  }
+}
+
+/** Evaluate content-free evidence produced by the drive child process. */
+export function evaluateDriveOutcome(outcome: DriveOutcome): EgressReceipt {
+  const emitFailureDetected = `${outcome.stdout}\n${outcome.stderr}`.includes(
+    EMIT_FAILURE_MARKER,
+  );
+  const checks: EgressCheck[] = [
+    {
+      label: "capture_exit",
+      passed: outcome.exitCode === 0,
+      fatal: true,
+      observed: outcome.exitCode,
+      expected: 0,
+    },
+    {
+      label: "emit_proven",
+      passed: outcome.observeOffset > 0 && !emitFailureDetected,
+      fatal: true,
+      observed: outcome.observeOffset,
+      expected: 1,
+      emit_failure_detected: emitFailureDetected,
+    },
+  ];
+  return {
+    gate: "langfuse_egress",
+    mode: "drive",
+    tag: outcome.tag,
+    passed: checks.every((check) => check.passed || !check.fatal),
+    expected: { traces: 1, observations: outcome.count + 1 },
+    observed: { traces: 0, observations: 0, generations: 0 },
+    checks,
+  };
+}
+
 /** Drive the real Python Stop-hook capture path with known generation turns. */
 export async function driveLangfuseEgress(
   options: DriveOptions,
@@ -417,21 +578,20 @@ export async function driveLangfuseEgress(
     stdout: "pipe",
     stderr: "pipe",
   });
-  const exitCode = await processHandle.exited;
-  if (exitCode !== 0) throw new Error(`capture path exited ${exitCode}`);
-  return {
-    gate: "langfuse_egress",
-    mode: "drive",
+  const [exitCode, stdout, stderr] = await Promise.all([
+    processHandle.exited,
+    new Response(processHandle.stdout).text(),
+    new Response(processHandle.stderr).text(),
+  ]);
+  const observeOffset = await observationOffset(watermarkPath, options.tag);
+  return evaluateDriveOutcome({
     tag: options.tag,
-    passed: true,
-    expected: { traces: 1, observations: options.count + 1 },
-    observed: {
-      traces: 0,
-      observations: options.count,
-      generations: options.count,
-    },
-    checks: [],
-  };
+    count: options.count,
+    exitCode,
+    stdout,
+    stderr,
+    observeOffset,
+  });
 }
 
 /** Execute the CLI lifecycle with injectable environment and HTTP transport. */
@@ -458,6 +618,7 @@ export async function runEgressCli(
             expectedObservations: options.count + 1,
             expectedGenerations: options.count,
             requireCost: options.requireCost,
+            settleTimeoutSeconds: options.settleTimeoutSeconds,
             config,
             transport,
           });
@@ -483,9 +644,22 @@ export function serializeCliOutcome(
     `expected traces=${receipt.expected.traces} observations=${receipt.expected.observations}`,
     `observed traces=${receipt.observed.traces} observations=${receipt.observed.observations} generations=${receipt.observed.generations}`,
   ];
-  for (const check of receipt.checks) {
+  if (receipt.settle) {
     lines.push(
-      `check=${check.label} status=${check.passed ? "PASS" : "FAIL"} fatal=${check.fatal} observed=${check.observed}${check.expected === undefined ? "" : ` expected=${check.expected}`}`,
+      `settle waited_ms=${receipt.settle.waited_ms} timed_out=${receipt.settle.timed_out} polls=${receipt.settle.polls}`,
+    );
+  }
+  for (const check of receipt.checks) {
+    const contentFields =
+      check.content_fields_present === undefined
+        ? ""
+        : ` content_fields_present=${check.content_fields_present}`;
+    const emitFailure =
+      check.emit_failure_detected === undefined
+        ? ""
+        : ` emit_failure_detected=${check.emit_failure_detected}`;
+    lines.push(
+      `check=${check.label} status=${check.passed ? "PASS" : "FAIL"} fatal=${check.fatal} observed=${check.observed}${check.expected === undefined ? "" : ` expected=${check.expected}`}${contentFields}${emitFailure}`,
     );
     for (const [kind, count] of Object.entries(check.detector_counts ?? {})) {
       lines.push(`detector=${kind} count=${count}`);

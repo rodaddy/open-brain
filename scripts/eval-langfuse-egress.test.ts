@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
+  evaluateDriveOutcome,
   langfuseHost,
+  parseEgressArgs,
   runEgressCli,
   serializeCliOutcome,
   verifyLangfuseEgress,
@@ -25,6 +27,7 @@ const OPTED_IN_ENV = {
 interface FakeObservationOptions {
   usage?: boolean;
   cost?: number | null;
+  output?: unknown;
 }
 
 function generation(
@@ -36,7 +39,7 @@ function generation(
     providedModelName: "claude-fable-5",
     usageDetails: options.usage === false ? undefined : { input: 2, output: 3 },
     totalCost: options.cost === undefined ? 0.001 : options.cost,
-    output: "SAFE_BODY_MARKER",
+    output: options.output ?? "SAFE_BODY_MARKER",
   };
 }
 
@@ -68,16 +71,27 @@ async function verify(
   observations: unknown[],
   options: {
     expected?: number;
+    expectedTraces?: number;
     requireCost?: boolean;
     body?: Record<string, unknown>;
+    settleTimeoutSeconds?: number;
+    pollIntervalMs?: number;
+    now?: () => number;
+    sleep?: (milliseconds: number) => Promise<void>;
+    transport?: HttpTransport;
   } = {},
 ) {
   return verifyLangfuseEgress({
     tag: "run-tag",
     expectedObservations: options.expected ?? 1,
+    expectedTraces: options.expectedTraces,
     requireCost: options.requireCost,
+    settleTimeoutSeconds: options.settleTimeoutSeconds ?? 0,
+    pollIntervalMs: options.pollIntervalMs,
+    now: options.now,
+    sleep: options.sleep,
     config: CONFIG,
-    transport: fakeTransport(observations, options.body),
+    transport: options.transport ?? fakeTransport(observations, options.body),
   });
 }
 
@@ -158,6 +172,253 @@ describe("Langfuse egress verification", () => {
     });
     expect(output).toContain("labeled_secret");
     expect(output).not.toContain("do-not-emit-this-value");
+  });
+
+  test("secret in observation output is fatal and content visibility is explicit", async () => {
+    const receipt = await verify([
+      generation({ output: "password=observation-only-secret" }),
+    ]);
+    const output = JSON.stringify(receipt);
+
+    expect(receipt.passed).toBeFalse();
+    expect(check(receipt, "secret_scan")).toMatchObject({
+      passed: false,
+      fatal: true,
+      content_fields_present: true,
+      detector_counts: { labeled_secret: 1 },
+    });
+    expect(output).not.toContain("observation-only-secret");
+  });
+
+  test("secret scan discloses when observation content fields are absent", async () => {
+    const receipt = await verify([
+      {
+        id: "span-1",
+        type: "SPAN",
+      },
+    ], { expected: 1 });
+
+    expect(check(receipt, "secret_scan")).toMatchObject({
+      passed: true,
+      content_fields_present: false,
+    });
+  });
+
+  test("settle polling records a late successful arrival", async () => {
+    let listCalls = 0;
+    let now = 0;
+    const transport: HttpTransport = async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/api/public/traces") {
+        listCalls += 1;
+        return Response.json({
+          data: listCalls === 1 ? [] : [{ id: "trace-1" }],
+        });
+      }
+      if (url.pathname === "/api/public/traces/trace-1") {
+        return Response.json({ id: "trace-1", observations: [generation()] });
+      }
+      return new Response(null, { status: 404 });
+    };
+
+    const receipt = await verify([], {
+      settleTimeoutSeconds: 5,
+      pollIntervalMs: 2_000,
+      now: () => now,
+      sleep: async (milliseconds) => {
+        now += milliseconds;
+      },
+      transport,
+    });
+
+    expect(receipt.passed).toBeTrue();
+    expect(receipt.settle).toEqual({
+      waited_ms: 2_000,
+      timed_out: false,
+      polls: 2,
+    });
+  });
+
+  test("settle timeout reports the final observed counts", async () => {
+    let listCalls = 0;
+    let now = 0;
+    const transport: HttpTransport = async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/api/public/traces") {
+        listCalls += 1;
+        return Response.json({
+          data: listCalls === 1 ? [] : [{ id: "trace-1" }],
+        });
+      }
+      if (url.pathname === "/api/public/traces/trace-1") {
+        return Response.json({ id: "trace-1", observations: [generation()] });
+      }
+      return new Response(null, { status: 404 });
+    };
+
+    const receipt = await verify([], {
+      expected: 2,
+      settleTimeoutSeconds: 2,
+      pollIntervalMs: 2_000,
+      now: () => now,
+      sleep: async (milliseconds) => {
+        now += milliseconds;
+      },
+      transport,
+    });
+
+    expect(receipt.passed).toBeFalse();
+    expect(receipt.observed.observations).toBe(1);
+    expect(receipt.settle).toEqual({
+      waited_ms: 2_000,
+      timed_out: true,
+      polls: 2,
+    });
+  });
+
+  test("pagination falls back to full pages when totalPages is absent", async () => {
+    const firstPage = Array.from({ length: 100 }, (_, index) => ({
+      id: `trace-${index + 1}`,
+    }));
+    const transport: HttpTransport = async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/api/public/traces") {
+        return Response.json({
+          data: url.searchParams.get("page") === "1"
+            ? firstPage
+            : [{ id: "trace-101" }],
+        });
+      }
+      const id = url.pathname.split("/").at(-1) ?? "missing";
+      return Response.json({
+        id,
+        observations: [generation()],
+      });
+    };
+
+    const receipt = await verify([], {
+      expected: 101,
+      expectedTraces: 101,
+      settleTimeoutSeconds: 0,
+      transport,
+    });
+
+    expect(receipt.passed).toBeTrue();
+    expect(receipt.observed).toEqual({
+      traces: 101,
+      observations: 101,
+      generations: 101,
+    });
+  });
+
+  test("drive outcome requires a successful exit and advanced observe watermark", () => {
+    const receipt = evaluateDriveOutcome({
+      tag: "run-tag",
+      count: 3,
+      exitCode: 0,
+      stdout: "",
+      stderr: "",
+      observeOffset: 42,
+    });
+
+    expect(receipt.passed).toBeTrue();
+    expect(receipt.observed).toEqual({
+      traces: 0,
+      observations: 0,
+      generations: 0,
+    });
+    expect(check(receipt, "capture_exit")).toMatchObject({
+      passed: true,
+      fatal: true,
+      observed: 0,
+      expected: 0,
+    });
+    expect(check(receipt, "emit_proven")).toMatchObject({
+      passed: true,
+      fatal: true,
+      observed: 42,
+      emit_failure_detected: false,
+    });
+  });
+
+  test("drive outcome fails without watermark proof or on explicit emit failure", () => {
+    const missingWatermark = evaluateDriveOutcome({
+      tag: "run-tag",
+      count: 1,
+      exitCode: 0,
+      stdout: "",
+      stderr: "",
+      observeOffset: 0,
+    });
+    const explicitFailure = evaluateDriveOutcome({
+      tag: "run-tag",
+      count: 1,
+      exitCode: 0,
+      stdout: "",
+      stderr: "observation emit failed (network); turns left for retry",
+      observeOffset: 9,
+    });
+    const captureFailure = evaluateDriveOutcome({
+      tag: "run-tag",
+      count: 1,
+      exitCode: 7,
+      stdout: "",
+      stderr: "",
+      observeOffset: 9,
+    });
+
+    expect(missingWatermark.passed).toBeFalse();
+    expect(check(missingWatermark, "emit_proven")).toMatchObject({
+      passed: false,
+      observed: 0,
+      emit_failure_detected: false,
+    });
+    expect(explicitFailure.passed).toBeFalse();
+    expect(check(explicitFailure, "emit_proven")).toMatchObject({
+      passed: false,
+      observed: 9,
+      emit_failure_detected: true,
+    });
+    expect(captureFailure.passed).toBeFalse();
+    expect(check(captureFailure, "capture_exit")).toMatchObject({
+      passed: false,
+      observed: 7,
+      expected: 0,
+    });
+  });
+
+  test("settle timeout CLI flag accepts non-negative seconds and rejects invalid values", () => {
+    expect(
+      parseEgressArgs(["--verify", "--tag", "run-tag"])
+        .settleTimeoutSeconds,
+    ).toBe(60);
+    expect(
+      parseEgressArgs([
+        "--verify",
+        "--tag",
+        "run-tag",
+        "--settle-timeout",
+        "2.5",
+      ]).settleTimeoutSeconds,
+    ).toBe(2.5);
+    expect(() =>
+      parseEgressArgs([
+        "--verify",
+        "--tag",
+        "run-tag",
+        "--settle-timeout",
+        "-1",
+      ]),
+    ).toThrow("--settle-timeout must be a non-negative number");
+    expect(() =>
+      parseEgressArgs([
+        "--verify",
+        "--tag",
+        "run-tag",
+        "--settle-timeout",
+        "later",
+      ]),
+    ).toThrow("--settle-timeout must be a non-negative number");
   });
 
   test("missing explicit opt-in refuses to run", async () => {
