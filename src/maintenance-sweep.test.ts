@@ -60,23 +60,25 @@ function recordingLogger() {
   return { logger, info, warn, error };
 }
 
-function producerPool() {
+function producerPool(graphRows = 1) {
   const query = mock(async (sql: string) => {
-    if (sql.includes("WITH due_lanes")) {
+    if (sql.includes("WITH due_turns")) {
       return {
         rows: [
           {
             lane_id: "11111111-1111-4111-8111-111111111111",
             namespace: "lane-a",
-            batch_anchor: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            batch_hash: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
             pending_turns: 9,
+            processable_turns: 4,
             total_batches: 3,
           },
           {
             lane_id: null,
             namespace: "unassigned-ns",
-            batch_anchor: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+            batch_hash: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
             pending_turns: 2,
+            processable_turns: 2,
             total_batches: 3,
           },
         ],
@@ -84,20 +86,16 @@ function producerPool() {
       };
     }
     if (sql.includes("LEFT JOIN ob_entities anchor")) {
-      return {
-        rows: [
-          {
-            id: "33333333-3333-4333-8333-333333333333",
-            namespace: "source-ns",
-            source_kind: "git",
-            external_id: "https://example.invalid/repo.git",
-            content_hash: HASH,
-            revision: 2,
-            derived_content_hash: null,
-          },
-        ],
-        rowCount: 1,
-      };
+      const rows = Array.from({ length: graphRows }, (_, index) => ({
+        id: `33333333-3333-4333-8333-${String(index + 1).padStart(12, "3")}`,
+        namespace: "source-ns",
+        source_kind: "git",
+        external_id: `https://example.invalid/repo-${index}.git`,
+        content_hash: HASH,
+        revision: 2,
+        derived_content_hash: null,
+      }));
+      return { rows, rowCount: rows.length };
     }
     return { rows: [], rowCount: 0 };
   });
@@ -132,6 +130,7 @@ describe("runMaintenanceSweep", () => {
     ]);
     expect(enqueued[0]?.payload).toMatchObject({
       lane_id: "11111111-1111-4111-8111-111111111111",
+      max_sessions: 4,
       max_turns: 5,
     });
     expect(enqueued[1]?.scope?.namespace).toBe("unassigned-ns");
@@ -140,29 +139,53 @@ describe("runMaintenanceSweep", () => {
       distillBatchesSelected: 2,
       distillJobsEnqueued: 2,
       distillBatchesDeferred: 1,
-      distillTurnsDeferredByBatchCap: 4,
+      distillTurnsDeferred: 5,
       graphJobsEnqueued: 1,
-      graphLimitReached: true,
+      graphLimitReached: false,
     });
     expect(logs.warn.map((entry) => entry.message)).toEqual([
       "maintenance_sweep_distill_cap_hit",
-      "maintenance_sweep_graph_cap_reached",
     ]);
     expect(logs.info.at(-1)?.message).toBe("maintenance_sweep_complete");
+  });
+
+  it("reports graph deferral only when a sentinel source exists", async () => {
+    const pool = producerPool(2);
+    const enqueued: EnqueueMaintenanceJob[] = [];
+    const queue = {
+      enqueue: async (input: EnqueueMaintenanceJob) => {
+        enqueued.push(input);
+        return maintenanceJob(input, enqueued.length);
+      },
+    };
+    const logs = recordingLogger();
+
+    const summary = await runMaintenanceSweep({
+      pool: pool as any,
+      queue,
+      logger: logs.logger,
+      graphDerivationLimit: 1,
+    });
+
+    expect(
+      enqueued.filter((job) => job.kind === GRAPH_DERIVATION_JOB_KIND),
+    ).toHaveLength(1);
+    expect(summary.graphLimitReached).toBe(true);
   });
 });
 
 function bootstrapPool(insertedKinds: string[]) {
   let sequence = 0;
   const query = mock(async (sql: string, params: unknown[] = []) => {
-    if (sql.includes("WITH due_lanes")) {
+    if (sql.includes("WITH due_turns")) {
       return {
         rows: [
           {
             lane_id: "44444444-4444-4444-8444-444444444444",
             namespace: "bootstrap-ns",
-            batch_anchor: "55555555-5555-4555-8555-555555555555",
+            batch_hash: "55555555-5555-4555-8555-555555555555",
             pending_turns: 1,
+            processable_turns: 1,
             total_batches: 1,
           },
         ],

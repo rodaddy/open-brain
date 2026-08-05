@@ -76,6 +76,8 @@ export interface DistillUnit {
  * justify a different number yet -- so it is adopted, not invented.
  */
 export const DEFAULT_CONTEXT_WINDOW = 3;
+/** Default whole-session bound shared by direct and scheduled distill sweeps. */
+export const DEFAULT_MAX_DISTILL_SESSIONS = 4;
 
 /**
  * Is this turn SPEECH -- something a person or an agent actually said, and
@@ -211,7 +213,10 @@ export async function claimDistillBatch(
     contextWindow?: number;
   } = {},
 ): Promise<DistillBatch> {
-  const maxSessions = Math.min(Math.max(options.maxSessions ?? 4, 1), 64);
+  const maxSessions = Math.min(
+    Math.max(options.maxSessions ?? DEFAULT_MAX_DISTILL_SESSIONS, 1),
+    64,
+  );
   const maxTurns = Math.min(Math.max(options.maxTurns ?? 1500, 1), 20_000);
 
   const params: unknown[] = [];
