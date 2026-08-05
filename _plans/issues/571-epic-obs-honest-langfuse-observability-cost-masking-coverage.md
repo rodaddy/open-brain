@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: none
 Created: 2026-08-05T05:17:36Z
-Updated: 2026-08-05T05:17:36Z
+Updated: 2026-08-05T16:04:26Z
 
 ---
 
@@ -21,3 +21,11 @@ Groups the Langfuse observability lane surfaced by the 2026-08-05 issue-state au
 
 ## Done means
 Cost dashboards price real numbers on CT 273 (RUNNING, not merged), masking lands before tracing widens, and #569's three decisions are made and recorded.
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-05T16:04:25Z
+
+#578 (E2E quality gate) added to this epic's close path: its Langfuse egress verifier is the mechanism that produces #560's live cost receipt and turns #561's secret census into a permanent regression gate. Building it is the first step of the OBS run.
