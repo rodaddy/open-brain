@@ -55,6 +55,15 @@ the time; the comments carry the corrections that reshaped it. #390's body
 describes the Light stage, but the reasoning that made it model-free is in a
 comment.
 
+## Stale-blocker sweep — run it with the mirror sync
+
+`bun run scripts/stale-blockers.ts` names every open issue whose referenced
+issues/PRs are ALL closed. GitHub auto-closes issue←PR (closing keyword on
+merge) but never issue←issue — "blocked on #419" is prose to the forge, so
+dependents outlive their blockers silently (operator, 2026-08-05). A flagged
+issue is a CANDIDATE: verify its own acceptance against live state before
+closing. Run at close-run start and end, alongside `sync-issues`.
+
 Everything is indexed — no substantive-vs-side-quest triage. Classifying by
 title misjudges, and a misfiled issue is invisible, which is the failure this is
 meant to fix. Noisier search beats lost context.
