@@ -29,7 +29,10 @@ const MIGRATIONS_DIR = join(
 
 // Any field addition/removal in OperatorDoctorStatus requires bumping this
 // version. src/operator-doctor.test.ts locks the exact payload shape.
-export const DOCTOR_CONTRACT_VERSION = "2026-07-08.operator-doctor.v2";
+export const DOCTOR_CONTRACT_VERSION = "2026-08-05.operator-doctor.v3";
+export const DISTILLATION_LAG_TTL_SECONDS_DEFAULT = 7 * 24 * 60 * 60;
+export const DISTILLATION_LAG_WARNING_RATIO = 0.5;
+export const DISTILLATION_LAG_CRITICAL_RATIO = 0.8;
 const OPTIONAL_TIMEOUT_MS = 2_000;
 const DOCTOR_CACHE_TTL_MS = 5_000;
 
@@ -68,10 +71,12 @@ export function canReadDoctor(auth: AuthInfo | undefined): boolean {
 export interface OperatorDoctorStatus {
   // unhealthy: the database is unreachable (hard failure).
   // degraded: DB is connected but migrations are not verified current
-  //   (pending OR unknown), the requested transport is unavailable, or a
-  //   CONFIGURED embedding provider is unavailable.
-  // Neutral: an unconfigured embedding provider and qmd availability never
-  //   affect the tier (issue #270 optional-dep rule).
+  //   (pending OR unknown), the requested transport is unavailable, a
+  //   CONFIGURED embedding provider is unavailable, or distillation lag is
+  //   critical. Critical lag means live turns are nearing retention expiry;
+  //   unhealthy remains reserved for a database hard failure.
+  // Neutral: warning-level lag, an unconfigured embedding provider, and qmd
+  //   availability never affect the tier (issue #270 optional-dep rule).
   status: "healthy" | "degraded" | "unhealthy";
   contract_version: string;
   generated_at: string;
@@ -91,6 +96,13 @@ export interface OperatorDoctorStatus {
     latest_applied: string | null;
     latest_expected: string | null;
   };
+  distillation_lag: Array<{
+    namespace: string;
+    undistilled_depth: number;
+    oldest_undistilled_age_seconds: number;
+    ratio: number;
+    level: "ok" | "warning" | "critical";
+  }>;
   embedding_provider: {
     configured: boolean;
     available: boolean;
@@ -285,6 +297,84 @@ async function readAuditStorageStatus(
   return reachable ? "available" : "not_available";
 }
 
+/** Classify oldest-undistilled-age / raw-turn-TTL without reading the database. */
+export function classifyDistillationLag(
+  ratio: number,
+): OperatorDoctorStatus["distillation_lag"][number]["level"] {
+  if (ratio >= DISTILLATION_LAG_CRITICAL_RATIO) return "critical";
+  if (ratio >= DISTILLATION_LAG_WARNING_RATIO) return "warning";
+  return "ok";
+}
+
+/** Read the alarm denominator, falling back to the documented one-week TTL. */
+export function readDistillationLagTtlSeconds(
+  environment: Record<string, string | undefined> = process.env,
+): number {
+  const configured = Number(environment.OPENBRAIN_RAW_TURN_TTL_SECONDS);
+  return Number.isInteger(configured) && configured > 0
+    ? configured
+    : DISTILLATION_LAG_TTL_SECONDS_DEFAULT;
+}
+
+interface DistillationLagRow {
+  namespace: string;
+  undistilled_depth: string | number;
+  oldest_undistilled_age_seconds: string | number;
+  ratio: string | number;
+}
+
+async function readDistillationLag(
+  pool: pg.Pool,
+): Promise<OperatorDoctorStatus["distillation_lag"]> {
+  const ttlSeconds = readDistillationLagTtlSeconds();
+  const query: pg.QueryConfig<[number, string]> & { query_timeout: number } = {
+    text: `
+      SELECT
+        namespace,
+        COUNT(*)::integer AS undistilled_depth,
+        GREATEST(
+          0,
+          FLOOR(EXTRACT(EPOCH FROM (now() - MIN(created_at))))
+        )::bigint AS oldest_undistilled_age_seconds,
+        GREATEST(0, EXTRACT(EPOCH FROM (now() - MIN(created_at))))
+          / $1::double precision AS ratio
+      FROM ob_raw_turns
+      WHERE distilled_at IS NULL
+        AND retention_tier = $2
+      GROUP BY namespace
+      ORDER BY namespace
+    `,
+    values: [ttlSeconds, "live"],
+    query_timeout: OPTIONAL_TIMEOUT_MS,
+  };
+  return withTimeout(
+    pool
+      .query<DistillationLagRow>(query)
+      .then(({ rows }) =>
+        rows.map((row) => {
+          const ratio = Number(row.ratio);
+          return {
+            namespace: row.namespace,
+            undistilled_depth: Number(row.undistilled_depth),
+            oldest_undistilled_age_seconds: Number(
+              row.oldest_undistilled_age_seconds,
+            ),
+            ratio,
+            level: classifyDistillationLag(ratio),
+          };
+        }),
+      )
+      .catch((error: unknown) => {
+        logger.warn(
+          "doctor_distillation_lag_query_failed",
+          describeError(error),
+        );
+        return [];
+      }),
+    [],
+  );
+}
+
 async function checkEmbeddingAvailability(): Promise<boolean> {
   const baseUrl = embeddingBaseUrl();
   if (!baseUrl) return false;
@@ -329,12 +419,14 @@ export async function buildOperatorDoctorStatus(
   const [
     database,
     migrations,
+    distillationLag,
     embeddingAvailable,
     serviceVersion,
     auditStorage,
   ] = await Promise.all([
     checkPoolHealth(pool),
     readMigrationStatus(pool),
+    readDistillationLag(pool),
     checkEmbeddingAvailability(),
     readServiceVersion(),
     readAuditStorageStatus(pool),
@@ -349,15 +441,22 @@ export async function buildOperatorDoctorStatus(
     transportAvailability,
   );
   // Migrations not verified current (pending OR unknown) with a connected
-  // DB means an unverified or broken schema: degraded, never silently
-  // healthy. A configured-but-unavailable embedding provider hard-fails
-  // vector search: degraded. An unconfigured provider and qmd stay neutral.
+  // DB means an unverified or broken schema: degraded, never silently healthy.
+  // A configured-but-unavailable embedding provider hard-fails vector search.
+  // Critical distillation lag means acknowledged live turns are nearing TTL
+  // expiry, so it degrades service status; warning lag is early signal only.
   const migrationsDegraded = migrations.status !== "current";
   const embeddingDegraded =
     embeddingDiagnostics.configured && !embeddingAvailable;
+  const distillationDegraded = distillationLag.some(
+    ({ level }) => level === "critical",
+  );
   const status: OperatorDoctorStatus["status"] = !database.connected
     ? "unhealthy"
-    : migrationsDegraded || transportDegraded || embeddingDegraded
+    : migrationsDegraded ||
+        transportDegraded ||
+        embeddingDegraded ||
+        distillationDegraded
       ? "degraded"
       : "healthy";
   const fileLogConfigured = Boolean(process.env.LOG_FILE?.trim());
@@ -380,6 +479,7 @@ export async function buildOperatorDoctorStatus(
     },
     database,
     migrations,
+    distillation_lag: distillationLag,
     embedding_provider: {
       configured: embeddingDiagnostics.configured,
       available: embeddingAvailable,
