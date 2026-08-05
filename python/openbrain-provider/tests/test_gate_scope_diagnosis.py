@@ -82,3 +82,79 @@ def test_gate_still_answers_when_the_configured_root_is_absent(
 
     assert result.code == 0
     assert not result.blocked
+
+
+def test_absent_root_diagnoses_on_stderr_through_the_gate_entrypoint(
+    tmp_path: Path, absent_root: Path
+) -> None:
+    """A full `main()` run tells the operator what is wrong and how to fix it.
+
+    The two tests above pin the pieces -- the recovery path and the non-blocking
+    posture -- but neither runs the entrypoint that decides whether the operator
+    ever SEES a diagnosis. Deleting the `_warn_missing_development_root` call
+    from `main()` leaves both of them passing and restores the Air's silence
+    verbatim, which is the gap this closes.
+
+    Four facts are asserted because all four were wrong or missing in the field
+    report: the root consulted, where that value came from, the directory
+    actually measured, and the variable that repairs it.
+    """
+    here = tmp_path / "real-working-directory"
+    here.mkdir(parents=True)
+    paths = gate_paths(tmp_path / "gate")
+
+    result = run_gate(paths, "status", payload={"cwd": str(here)}, project=None)
+
+    assert str(absent_root) in result.stderr
+    assert "set via OPENBRAIN_DEVELOPMENT_ROOT" in result.stderr
+    assert str(here) in result.stderr
+    assert "export OPENBRAIN_DEVELOPMENT_ROOT" in result.stderr
+
+
+def test_present_root_with_out_of_lane_cwd_says_nothing_on_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Somebody else's repository stays silent.
+
+    The gate runs in every directory the agent visits. A diagnosis that fired on
+    an out-of-lane cwd -- rather than only on an absent root -- would put this
+    text in front of the operator constantly, and noise that appears everywhere
+    is read as normal and stops carrying information. Silence here is what makes
+    the loud case worth reading.
+    """
+    root = tmp_path / "Development"
+    root.mkdir(parents=True)
+    monkeypatch.setenv("OPENBRAIN_DEVELOPMENT_ROOT", str(root))
+    elsewhere = tmp_path / "somebody-elses-repository"
+    elsewhere.mkdir(parents=True)
+    paths = gate_paths(tmp_path / "gate")
+
+    result = run_gate(paths, "status", payload={"cwd": str(elsewhere)}, project=None)
+
+    assert result.stderr == ""
+
+
+@pytest.mark.parametrize("root_exists", [False, True])
+def test_stdout_stays_the_untouched_verdict_channel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, root_exists: bool
+) -> None:
+    """The diagnosis never contaminates the JSON a hook reader parses.
+
+    stdout is consumed by a JSON parser on the other end of the hook. Prose
+    written there would not be a cosmetic problem -- it would make the verdict
+    unreadable and the gate's answer indeterminate. Parsed rather than
+    pattern-matched, because parsing is the assertion that actually matches what
+    the reader does.
+    """
+    root = tmp_path / "Development"
+    if root_exists:
+        root.mkdir(parents=True)
+    monkeypatch.setenv("OPENBRAIN_DEVELOPMENT_ROOT", str(root))
+    here = tmp_path / "real-working-directory"
+    here.mkdir(parents=True)
+    paths = gate_paths(tmp_path / "gate")
+
+    result = run_gate(paths, "status", payload={"cwd": str(here)}, project=None)
+
+    assert result.code == 0
+    assert isinstance(result.json, dict)
