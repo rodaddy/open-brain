@@ -23,6 +23,7 @@ Key Components:
     - EventType: the nine accepted event types
     - TurnRole: who produced a turn -- user, assistant, or tool
     - TurnSignal: an event type plus the content it was derived from
+    - TurnUsage: what one assistant turn cost, in tokens
     - RawTurn: a transcript record bound for the raw lane
 
 Pattern/Convention:
@@ -182,6 +183,47 @@ class TurnSignal(BaseModel):
         return value
 
 
+class TurnUsage(BaseModel):
+    """What one assistant turn cost, in tokens, as the transcript reported it.
+
+    The four counts Langfuse prices against, and nothing else. They are carried
+    so the observation lane can set ``usage_details`` on a generation: without
+    them Langfuse has no quantity to multiply a model price by, and every
+    generation lands with ``total_cost = NULL`` (#560 measured 23,439 of 23,440
+    such rows).
+
+    ``extra="ignore"`` is LOAD-BEARING and differs deliberately from
+    :class:`RawTurn`'s ``extra="forbid"``. The live ``usage`` blob carries
+    ``server_tool_use``, ``service_tier``, ``iterations``, ``speed``,
+    ``inference_geo`` and more (measured on a real transcript 2026-08-05), and
+    the set grows without notice. Forbidding extras here would turn an upstream
+    addition into a parse failure on the CAPTURE path, which
+    ``docs/decisions/capture-never-drops-a-turn.md`` forbids -- a turn would be
+    lost over a field nobody reads.
+
+    Every count defaults to 0 rather than being optional: a token count is a
+    quantity, and an assistant turn that reports no cache read genuinely read
+    zero cached tokens. Absence of the WHOLE blob is expressed by
+    ``RawTurn.usage`` being ``None``, not by a field-by-field null.
+
+    Attributes:
+        input_tokens: Fresh input tokens billed at the full input rate.
+        output_tokens: Tokens the model generated.
+        cache_read_input_tokens: Tokens served from cache, billed at a
+            reduced rate -- the field that makes a cached agent look cheap
+            instead of impossible.
+        cache_creation_input_tokens: Tokens written into the cache, billed at
+            a premium.
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+
+
 class RawTurn(BaseModel):
     """One transcript record, bound for the raw lane.
 
@@ -207,6 +249,12 @@ class RawTurn(BaseModel):
         parent_turn_uuid: The preceding record, when the transcript names one.
         session_ref: The session this belongs to.
         repo: The repository the turn happened in, when derivable.
+        model: The model that produced this turn, verbatim from the transcript
+            (``claude-fable-5``, ``claude-opus-5``). ASSISTANT TURNS ONLY --
+            a person typing has no model, and defaulting one onto their turn
+            would attribute their words to an agent.
+        usage: What the turn cost in tokens, when the transcript reported it.
+            Assistant turns only, for the same reason.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -219,3 +267,5 @@ class RawTurn(BaseModel):
     parent_turn_uuid: str | None = None
     session_ref: str | None = None
     repo: str | None = None
+    model: str | None = None
+    usage: TurnUsage | None = None

@@ -133,7 +133,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from openbrain.models.turn import RawTurn, TurnRole
+from openbrain.models.turn import RawTurn, TurnRole, TurnUsage
 
 #: The record type carrying a message, whoever authored it.
 #:
@@ -198,6 +198,15 @@ class TranscriptMessage(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     content: Any = None
+    #: The model that produced this record, present on assistant records only.
+    model: str | None = None
+    #: The token counts for this record, present on assistant records only.
+    #:
+    #: Held as a raw mapping and converted at the boundary below rather than
+    #: declared as :class:`~openbrain.models.turn.TurnUsage` here, so a blob
+    #: whose shape drifts is still PARSED -- the conversion can then decline it
+    #: without the whole transcript line failing validation.
+    usage: dict[str, Any] | None = None
 
 
 class TranscriptRecord(BaseModel):
@@ -349,6 +358,12 @@ def raw_turn_from_line(line: str) -> RawTurn | None:
     # BOTH SIDES, and the branch order is not arbitrary: the operator test is
     # the narrower one (a type AND a promptSource), so it is asked first and the
     # assistant test never sees a record the operator test already claimed.
+    # Cost attribution data, and it is set on the ASSISTANT BRANCH ONLY (#560).
+    # A person typing has no model and burns no tokens; carrying either onto
+    # their turn would attribute their words, and their spend, to an agent.
+    model: str | None = None
+    usage: TurnUsage | None = None
+
     if record.is_operator_turn:
         content = record.operator_text
         role = TurnRole.USER
@@ -361,6 +376,8 @@ def raw_turn_from_line(line: str) -> RawTurn | None:
         content = record.assistant_text
         role = TurnRole.ASSISTANT
         is_human_prompt = False
+        model = record.message.model if record.message else None
+        usage = _turn_usage(record.message.usage if record.message else None)
     else:
         return None
 
@@ -382,4 +399,35 @@ def raw_turn_from_line(line: str) -> RawTurn | None:
         parent_turn_uuid=record.parent_uuid or None,
         session_ref=record.session_id or None,
         repo=record.cwd or None,
+        # #560: without these the observation lane writes a generation with no
+        # model and no quantity, and Langfuse prices it at NULL.
+        model=model,
+        usage=usage,
     )
+
+
+def _turn_usage(blob: dict[str, Any] | None) -> TurnUsage | None:
+    """The four priced token counts from a transcript's ``usage`` object.
+
+    Args:
+        blob: The record's ``message.usage``, straight off the transcript and
+            therefore untrusted in shape.
+
+    Returns:
+        A :class:`~openbrain.models.turn.TurnUsage`, or ``None`` when the
+        record carried no usage at all or carried something unreadable.
+
+    ``None`` and a zeroed model are DIFFERENT ANSWERS and the distinction is the
+    point: an omitted ``usage_details`` says "this turn's cost is unknown",
+    while zeros say "this turn was measured and cost nothing". The second is a
+    false measurement, so an unusable blob returns ``None`` rather than a
+    defaulted object.
+    """
+    if not blob:
+        return None
+    try:
+        return TurnUsage.model_validate(blob)
+    except ValidationError:
+        # A shape change upstream must not cost the TURN. The text is what the
+        # raw lane exists to keep; the counts are an enrichment on top of it.
+        return None

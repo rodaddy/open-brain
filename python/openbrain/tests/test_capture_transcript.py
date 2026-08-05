@@ -90,6 +90,56 @@ def assistant_line(uuid: str) -> str:
     return json.dumps({"type": "assistant", "uuid": uuid, "message": {"content": []}})
 
 
+def assistant_reply_line(
+    uuid: str,
+    text: str = "the index was empty",
+    *,
+    model: str | None = "claude-fable-5",
+    usage: dict[str, object] | None = None,
+) -> str:
+    """An assistant record that SAID something, with its model and usage.
+
+    The usage default is the live shape measured on a real transcript
+    2026-08-05, extra keys and all -- ``service_tier``, ``iterations``,
+    ``server_tool_use`` -- because those extras are precisely what
+    ``TurnUsage(extra="ignore")`` exists to survive.
+    """
+    message: dict[str, object] = {
+        "role": "assistant",
+        "content": [{"type": "text", "text": text}],
+    }
+    if model is not None:
+        message["model"] = model
+    if usage is not None:
+        message["usage"] = usage
+    return json.dumps(
+        {
+            "type": "assistant",
+            "uuid": uuid,
+            "sessionId": "s1",
+            "cwd": "/repo",
+            "message": message,
+        }
+    )
+
+
+#: The ``usage`` object as Claude Code actually writes it, verbatim.
+LIVE_USAGE = {
+    "input_tokens": 2,
+    "cache_creation_input_tokens": 41238,
+    "cache_read_input_tokens": 15510,
+    "output_tokens": 456,
+    "server_tool_use": {"web_search_requests": 0, "web_fetch_requests": 0},
+    "service_tier": "standard",
+    "cache_creation": {
+        "ephemeral_1h_input_tokens": 41238,
+        "ephemeral_5m_input_tokens": 0,
+    },
+    "inference_geo": "not_available",
+    "speed": "standard",
+}
+
+
 def write_lines(path: Path, lines: list[str]) -> None:
     path.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
 
@@ -319,6 +369,62 @@ class TestFieldsCarriedThrough:
 
         assert turn is not None
         assert turn.parent_turn_uuid is None
+
+
+class TestCostAttributionSurvivesTheParse:
+    """Model and token counts reach the RawTurn, or cost is NULL forever (#560).
+
+    This is the boundary the data used to die at: the transcript carried
+    ``message.model`` and ``message.usage`` on every assistant record and
+    ``TranscriptMessage`` declared neither, so the observation lane had nothing
+    to price. 23,439 of 23,440 live generations landed with ``total_cost =
+    NULL``.
+    """
+
+    async def test_an_assistant_turn_carries_its_model(self) -> None:
+        turn = raw_turn_from_line(assistant_reply_line("a1", usage=LIVE_USAGE))
+
+        assert turn is not None
+        assert turn.model == "claude-fable-5"
+
+    async def test_an_assistant_turn_carries_the_four_priced_counts(self) -> None:
+        """The live blob's extra keys are ignored, not fatal."""
+        turn = raw_turn_from_line(assistant_reply_line("a1", usage=LIVE_USAGE))
+
+        assert turn is not None
+        assert turn.usage is not None
+        assert turn.usage.input_tokens == 2
+        assert turn.usage.output_tokens == 456
+        assert turn.usage.cache_read_input_tokens == 15510
+        assert turn.usage.cache_creation_input_tokens == 41238
+
+    async def test_an_operator_turn_claims_no_model_and_no_usage(self) -> None:
+        """A person typing burns no tokens; inventing some misattributes spend."""
+        turn = raw_turn_from_line(operator_line("u1", "hello"))
+
+        assert turn is not None
+        assert turn.model is None
+        assert turn.usage is None
+
+    async def test_an_assistant_turn_without_usage_reports_none(self) -> None:
+        """Unknown cost is ``None``, never a zeroed blob that reads as measured."""
+        turn = raw_turn_from_line(assistant_reply_line("a1", model=None))
+
+        assert turn is not None
+        assert turn.model is None
+        assert turn.usage is None
+
+    async def test_an_unreadable_usage_blob_costs_the_counts_not_the_turn(
+        self,
+    ) -> None:
+        """A shape change upstream must never drop a turn's TEXT."""
+        turn = raw_turn_from_line(
+            assistant_reply_line("a1", usage={"input_tokens": "lots"})
+        )
+
+        assert turn is not None
+        assert turn.content == "the index was empty"
+        assert turn.usage is None
 
 
 class TestWatermarkStore:
