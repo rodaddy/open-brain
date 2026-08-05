@@ -16,6 +16,7 @@ import { readMcpAuditConfig } from "./audit-log.ts";
 import { resolveQmdPath } from "./qmd-path.ts";
 import { logger } from "./logger.ts";
 import { describeError } from "./observability/index.ts";
+import type { QmdIndexProbeResult } from "./qmd-index-probe-worker.ts";
 import type { NatsBridgeHealth } from "./nats-bridge.ts";
 import type { NatsRuntimeBoundary } from "./nats-runtime.ts";
 import { isRequestedTransportDegraded } from "./nats-runtime.ts";
@@ -26,12 +27,22 @@ const MIGRATIONS_DIR = join(
   "db",
   "migrations",
 );
+const DEFAULT_QMD_INDEX_PATH = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  ".qmd",
+  "index.sqlite",
+);
 
 // Any field addition/removal in OperatorDoctorStatus requires bumping this
 // version. src/operator-doctor.test.ts locks the exact payload shape.
-export const DOCTOR_CONTRACT_VERSION = "2026-07-08.operator-doctor.v2";
+export const DOCTOR_CONTRACT_VERSION = "2026-08-05.operator-doctor.v4";
+export const DISTILLATION_LAG_TTL_SECONDS_DEFAULT = 7 * 24 * 60 * 60;
+export const DISTILLATION_LAG_WARNING_RATIO = 0.5;
+export const DISTILLATION_LAG_CRITICAL_RATIO = 0.8;
 const OPTIONAL_TIMEOUT_MS = 2_000;
 const DOCTOR_CACHE_TTL_MS = 5_000;
+const QMD_INDEX_STALE_AFTER_HOURS = 48;
 
 let cachedServiceVersion: string | null = null;
 
@@ -68,10 +79,13 @@ export function canReadDoctor(auth: AuthInfo | undefined): boolean {
 export interface OperatorDoctorStatus {
   // unhealthy: the database is unreachable (hard failure).
   // degraded: DB is connected but migrations are not verified current
-  //   (pending OR unknown), the requested transport is unavailable, or a
-  //   CONFIGURED embedding provider is unavailable.
-  // Neutral: an unconfigured embedding provider and qmd availability never
-  //   affect the tier (issue #270 optional-dep rule).
+  //   (pending OR unknown), the requested transport is unavailable, a
+  //   CONFIGURED embedding provider is unavailable, or distillation lag is
+  //   critical. Critical lag means live turns are nearing retention expiry;
+  //   unhealthy remains reserved for a database hard failure.
+  // Neutral: warning-level lag, an unconfigured embedding provider, and qmd
+  //   availability or index freshness never affect the tier (issue #270
+  //   optional-dep rule).
   status: "healthy" | "degraded" | "unhealthy";
   contract_version: string;
   generated_at: string;
@@ -91,6 +105,13 @@ export interface OperatorDoctorStatus {
     latest_applied: string | null;
     latest_expected: string | null;
   };
+  distillation_lag: Array<{
+    namespace: string;
+    undistilled_depth: number;
+    oldest_undistilled_age_seconds: number;
+    ratio: number;
+    level: "ok" | "warning" | "critical";
+  }>;
   embedding_provider: {
     configured: boolean;
     available: boolean;
@@ -115,6 +136,17 @@ export interface OperatorDoctorStatus {
     // included in the payload.
     available: boolean;
     status: "available" | "unavailable";
+    index: {
+      path: string;
+      path_source: "option" | "env" | "default";
+      status: "available" | "unavailable";
+      last_updated_at: string | null;
+      age_hours: number | null;
+      freshness: "current" | "stale" | "unknown";
+      stale_after_hours: number;
+      document_count: number | null;
+      collection_count: number | null;
+    };
   };
   transport: {
     mode: "http" | "nats";
@@ -285,6 +317,91 @@ async function readAuditStorageStatus(
   return reachable ? "available" : "not_available";
 }
 
+/** Classify oldest-undistilled-age / raw-turn-TTL without reading the database. */
+export function classifyDistillationLag(
+  ratio: number,
+): OperatorDoctorStatus["distillation_lag"][number]["level"] {
+  if (ratio >= DISTILLATION_LAG_CRITICAL_RATIO) return "critical";
+  if (ratio >= DISTILLATION_LAG_WARNING_RATIO) return "warning";
+  return "ok";
+}
+
+/** Read the alarm denominator, falling back to the documented one-week TTL. */
+export function readDistillationLagTtlSeconds(
+  environment: Record<string, string | undefined> = process.env,
+): number {
+  const configured = Number(environment.OPENBRAIN_RAW_TURN_TTL_SECONDS);
+  return Number.isInteger(configured) && configured > 0
+    ? configured
+    : DISTILLATION_LAG_TTL_SECONDS_DEFAULT;
+}
+
+interface DistillationLagRow {
+  namespace: string;
+  undistilled_depth: string | number;
+  oldest_undistilled_age_seconds: string | number;
+  ratio: string | number;
+}
+
+async function readDistillationLag(
+  pool: pg.Pool,
+): Promise<OperatorDoctorStatus["distillation_lag"]> {
+  const ttlSeconds = readDistillationLagTtlSeconds();
+  // created_at is deliberate and must match issue #395 retention/eviction's
+  // column. If #395 expires on occurred_at, this alarm silently stops catching
+  // its near-loss case.
+  const query: pg.QueryConfig<[number, string, string]> & {
+    query_timeout: number;
+  } = {
+    text: `
+      SELECT
+        namespace,
+        COUNT(*)::integer AS undistilled_depth,
+        GREATEST(
+          0,
+          FLOOR(EXTRACT(EPOCH FROM (now() - MIN(created_at))))
+        )::bigint AS oldest_undistilled_age_seconds,
+        GREATEST(0, EXTRACT(EPOCH FROM (now() - MIN(created_at))))
+          / $1::double precision AS ratio
+      FROM ob_raw_turns
+      WHERE distilled_at IS NULL
+        AND retention_tier = $2
+        -- Parity fixtures are not operator-actionable distillation lag.
+        AND namespace NOT LIKE $3
+      GROUP BY namespace
+      ORDER BY namespace
+    `,
+    values: [ttlSeconds, "live", "parity-raw-turn-%"],
+    query_timeout: OPTIONAL_TIMEOUT_MS,
+  };
+  return withTimeout(
+    pool
+      .query<DistillationLagRow>(query)
+      .then(({ rows }) =>
+        rows.map((row) => {
+          const ratio = Number(row.ratio);
+          return {
+            namespace: row.namespace,
+            undistilled_depth: Number(row.undistilled_depth),
+            oldest_undistilled_age_seconds: Number(
+              row.oldest_undistilled_age_seconds,
+            ),
+            ratio,
+            level: classifyDistillationLag(ratio),
+          };
+        }),
+      )
+      .catch((error: unknown) => {
+        logger.warn(
+          "doctor_distillation_lag_query_failed",
+          describeError(error),
+        );
+        return [];
+      }),
+    [],
+  );
+}
+
 async function checkEmbeddingAvailability(): Promise<boolean> {
   const baseUrl = embeddingBaseUrl();
   if (!baseUrl) return false;
@@ -294,10 +411,156 @@ async function checkEmbeddingAvailability(): Promise<boolean> {
   return withTimeout(probeUrl(`${baseUrl}/models`, headers), false);
 }
 
+export interface OperatorDoctorBuildOptions {
+  now?: () => number;
+  qmdIndexPath?: string;
+  qmdIndexStaleAfterHours?: number;
+}
+
+type QmdIndexPathSource = "option" | "env" | "default";
+
+interface ResolvedQmdIndexPath {
+  path: string;
+  source: QmdIndexPathSource;
+}
+
+function resolveQmdIndexPath(
+  options: OperatorDoctorBuildOptions,
+): ResolvedQmdIndexPath {
+  if (options.qmdIndexPath !== undefined) {
+    return { path: options.qmdIndexPath, source: "option" };
+  }
+  if (process.env.QMD_INDEX_PATH !== undefined) {
+    return { path: process.env.QMD_INDEX_PATH, source: "env" };
+  }
+  return { path: DEFAULT_QMD_INDEX_PATH, source: "default" };
+}
+
+function unavailableQmdIndexStatus(
+  resolved: ResolvedQmdIndexPath,
+  staleAfterHours: number,
+): OperatorDoctorStatus["qmd"]["index"] {
+  return {
+    path: resolved.path,
+    path_source: resolved.source,
+    status: "unavailable",
+    last_updated_at: null,
+    age_hours: null,
+    freshness: "unknown",
+    stale_after_hours: staleAfterHours,
+    document_count: null,
+    collection_count: null,
+  };
+}
+
+// Concurrent callers share one probe per path. Each probe spawns a Worker that
+// boots a module graph and opens the index, and buildOperatorDoctorStatus is
+// called repeatedly under load (the contract parity suite drives it many times
+// in quick succession). Spawning one per call starved the event loop enough
+// that neighbouring fixtures exceeded their 5s query timeout -- measured as
+// 8-10 parity failures against origin/main's stable 7. The entry is cleared on
+// settle, so the next call re-probes rather than serving a stale reading.
+const inFlightQmdIndexProbes = new Map<
+  string,
+  Promise<QmdIndexProbeResult>
+>();
+
+function startQmdIndexProbe(path: string): {
+  task: Promise<QmdIndexProbeResult>;
+  terminate: () => void;
+} {
+  const existing = inFlightQmdIndexProbes.get(path);
+  if (existing) return { task: existing, terminate: () => {} };
+  const spawned = spawnQmdIndexProbe(path);
+  const shared = spawned.task.finally(() => {
+    inFlightQmdIndexProbes.delete(path);
+    spawned.terminate();
+  });
+  // Keep the shared promise from surfacing as an unhandled rejection when the
+  // only awaiting caller has already timed out.
+  shared.catch(() => {});
+  inFlightQmdIndexProbes.set(path, shared);
+  return { task: shared, terminate: () => {} };
+}
+
+function spawnQmdIndexProbe(path: string): {
+  task: Promise<QmdIndexProbeResult>;
+  terminate: () => void;
+} {
+  const worker = new Worker(
+    new URL("./qmd-index-probe-worker.ts", import.meta.url),
+    { type: "module" },
+  );
+  const task = new Promise<QmdIndexProbeResult>((resolve, reject) => {
+    worker.onmessage = (event: MessageEvent<QmdIndexProbeResult>) => {
+      resolve(event.data);
+    };
+    worker.onerror = (event: ErrorEvent) => {
+      reject(event.error ?? new Error(event.message));
+    };
+    worker.postMessage({ path });
+  });
+  return { task, terminate: () => worker.terminate() };
+}
+
+function availableQmdIndexStatus(
+  options: OperatorDoctorBuildOptions,
+  resolved: ResolvedQmdIndexPath,
+  staleAfterHours: number,
+  result: QmdIndexProbeResult,
+): OperatorDoctorStatus["qmd"]["index"] {
+  const modifiedAt = new Date(result.modified_at_ms);
+  const ageHours = Math.max(
+    0,
+    ((options.now ?? Date.now)() - modifiedAt.getTime()) / 3_600_000,
+  );
+  return {
+    path: resolved.path,
+    path_source: resolved.source,
+    status: "available",
+    last_updated_at: modifiedAt.toISOString(),
+    age_hours: Math.round(ageHours * 100) / 100,
+    freshness: ageHours >= staleAfterHours ? "stale" : "current",
+    stale_after_hours: staleAfterHours,
+    document_count: result.document_count,
+    collection_count: result.collection_count,
+  };
+}
+
+async function readQmdIndexStatus(
+  options: OperatorDoctorBuildOptions,
+): Promise<OperatorDoctorStatus["qmd"]["index"]> {
+  const resolved = resolveQmdIndexPath(options);
+  const staleAfterHours =
+    options.qmdIndexStaleAfterHours ?? QMD_INDEX_STALE_AFTER_HOURS;
+  const fallback = unavailableQmdIndexStatus(resolved, staleAfterHours);
+  const probe = startQmdIndexProbe(resolved.path);
+  try {
+    const result = await withTimeout(probe.task, null);
+    if (result === null) return fallback;
+    return availableQmdIndexStatus(
+      options,
+      resolved,
+      staleAfterHours,
+      result,
+    );
+  } catch (error) {
+    logger.warn("doctor_qmd_index_unreadable", {
+      path_source: resolved.source,
+      ...describeError(error),
+    });
+    return fallback;
+  } finally {
+    probe.terminate();
+  }
+}
+
 // Availability = the qmd entrypoint file exists at the same resolved path
-// search_all executes (src/qmd-path.ts). This proves binary presence only;
-// it does not exercise qmd search health.
-function checkQmdBinaryPresence(): OperatorDoctorStatus["qmd"] {
+// search_all executes (src/qmd-path.ts). This remains binary presence only;
+// repo-local index freshness is reported separately below.
+async function checkQmdStatus(
+  options: OperatorDoctorBuildOptions,
+): Promise<OperatorDoctorStatus["qmd"]> {
   const resolved = resolveQmdPath();
   let available = false;
   try {
@@ -307,7 +570,6 @@ function checkQmdBinaryPresence(): OperatorDoctorStatus["qmd"] {
     // stranger -- a permission error on an ancestor directory, an unmounted
     // volume. Reporting the binary as simply absent would send the operator
     // looking for a missing install that is actually present and unreachable.
-    available = false;
     logger.warn("doctor_qmd_probe_failed", {
       path_source: resolved.source,
       ...describeError(error),
@@ -318,6 +580,7 @@ function checkQmdBinaryPresence(): OperatorDoctorStatus["qmd"] {
     path_source: resolved.source,
     available,
     status: available ? "available" : "unavailable",
+    index: await readQmdIndexStatus(options),
   };
 }
 
@@ -325,21 +588,25 @@ export async function buildOperatorDoctorStatus(
   pool: pg.Pool,
   natsRuntimeBoundary: NatsRuntimeBoundary,
   natsBridgeHealth?: NatsBridgeHealth,
+  options: OperatorDoctorBuildOptions = {},
 ): Promise<OperatorDoctorStatus> {
   const [
     database,
     migrations,
+    distillationLag,
     embeddingAvailable,
     serviceVersion,
     auditStorage,
+    qmd,
   ] = await Promise.all([
     checkPoolHealth(pool),
     readMigrationStatus(pool),
+    readDistillationLag(pool),
     checkEmbeddingAvailability(),
     readServiceVersion(),
     readAuditStorageStatus(pool),
+    checkQmdStatus(options),
   ]);
-  const qmd = checkQmdBinaryPresence();
 
   const embeddingDiagnostics = getEmbeddingProviderDiagnostics();
   const transportAvailability =
@@ -349,15 +616,22 @@ export async function buildOperatorDoctorStatus(
     transportAvailability,
   );
   // Migrations not verified current (pending OR unknown) with a connected
-  // DB means an unverified or broken schema: degraded, never silently
-  // healthy. A configured-but-unavailable embedding provider hard-fails
-  // vector search: degraded. An unconfigured provider and qmd stay neutral.
+  // DB means an unverified or broken schema: degraded, never silently healthy.
+  // A configured-but-unavailable embedding provider hard-fails vector search.
+  // Critical distillation lag means acknowledged live turns are nearing TTL
+  // expiry, so it degrades service status; warning lag is early signal only.
   const migrationsDegraded = migrations.status !== "current";
   const embeddingDegraded =
     embeddingDiagnostics.configured && !embeddingAvailable;
+  const distillationDegraded = distillationLag.some(
+    ({ level }) => level === "critical",
+  );
   const status: OperatorDoctorStatus["status"] = !database.connected
     ? "unhealthy"
-    : migrationsDegraded || transportDegraded || embeddingDegraded
+    : migrationsDegraded ||
+        transportDegraded ||
+        embeddingDegraded ||
+        distillationDegraded
       ? "degraded"
       : "healthy";
   const fileLogConfigured = Boolean(process.env.LOG_FILE?.trim());
@@ -380,6 +654,7 @@ export async function buildOperatorDoctorStatus(
     },
     database,
     migrations,
+    distillation_lag: distillationLag,
     embedding_provider: {
       configured: embeddingDiagnostics.configured,
       available: embeddingAvailable,

@@ -18,11 +18,74 @@ shape; only the ``-m live`` tests prove a write survives Postgres.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+import pytest
+
 if TYPE_CHECKING:
     from pathlib import Path
+
+#: Environment prefixes the settings models read, cleared for every test.
+#:
+#: ``OPENBRAIN_TEST_`` is deliberately NOT among them: the ``-m live`` tests
+#: address the playground service through that prefix, and clearing it would
+#: skip the live gate having run nothing.
+_LEAKING_PREFIXES = ("OPENBRAIN_", "OPEN_BRAIN_", "DB_", "EMBEDDING_", "LOG_")
+
+#: Unprefixed names the settings models read.
+_LEAKING_NAMES = frozenset({"PORT", "SERVICE_NAME", "ALLOWED_ORIGINS"})
+
+
+@pytest.fixture(autouse=True)
+def _clean_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Remove every variable the settings models read, for every test.
+
+    WHY THIS IS SUITE-WIDE AND NOT PER-FILE (#544). ``test_settings`` has
+    carried a file-scoped copy of this since it was written, for the reason its
+    docstring gives -- "a developer's real shell leaks into the assertions and a
+    test that should fail passes on their machine only". The leak is not
+    confined to settings tests. Every hook entrypoint reads the environment
+    itself for the sections its CALLER did not inject: ``capture_stop_with``
+    takes ``settings`` but still calls ``loaded_observation()``, which resolves
+    ``ObservationSettings`` from the live process environment. So a test that
+    injects a fake capture lane still runs the observation lane against
+    whatever the developer's shell happens to hold.
+
+    MEASURED, ON THIS BRANCH. An operator shell with the four observation
+    coordinates set (``OPENBRAIN_OBSERVATION_ENABLED`` /``_ENDPOINT``
+    /``_PUBLIC_KEY``/``_SECRET_KEY``, as
+    ``~/.local/share/openbrain-memory/env/claudex-observation.env`` provides)
+    made ``test_capture_outage_notice`` HANG INDEFINITELY at test 8 of 45. The
+    faulthandler stack named it exactly: ``capture_stop_with`` ->
+    ``LangfuseEmitter.emit`` -> ``client.shutdown()``, blocked draining an
+    OpenTelemetry batch worker against the real fleet Langfuse server. The test
+    suite was posting the fixture's transcripts to production and waiting on
+    the network to answer.
+
+    WHY IT LOOKED LIKE THIS BRANCH INTRODUCED IT. It did not; it UNMASKED it.
+    ``unknown_prefixed_variables`` rejects any ``OPENBRAIN_``-prefixed variable
+    matching no declared field, and before this branch
+    ``OPENBRAIN_ALLOW_INSECURE_HTTP`` was undeclared -- so on a host that set it
+    the settings load raised, ``loaded_observation()`` swallowed the raise, and
+    the sink silently stayed off. Declaring the variable (the whole point of
+    #525) let the load SUCCEED, and the observation lane it had been shadowing
+    all along started dialing. The typo check was acting as an accidental
+    network guard, which is why CI never saw this: CI sets no observation
+    coordinates, so ``observation_active`` is False there either way.
+
+    Prefix-based rather than a fixed list, because the failure mode is a
+    variable nobody thought to enumerate -- the one that hung the suite was
+    added to the environment file after the tests were written.
+    """
+    for name in list(os.environ):
+        upper = name.upper()
+        if upper.startswith("OPENBRAIN_TEST_"):
+            continue
+        if upper.startswith(_LEAKING_PREFIXES) or upper in _LEAKING_NAMES:
+            monkeypatch.delenv(name, raising=False)
+
 
 #: The timestamp every helper line carries. Real transcripts always set one, and
 #: the server orders a session by it; a fixed value keeps assertions stable.

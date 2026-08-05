@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: wayfinder:map
 Created: 2026-07-29T19:20:32Z
-Updated: 2026-07-30T01:23:07Z
+Updated: 2026-08-04T23:28:12Z
 
 ---
 
@@ -75,9 +75,15 @@ consumer and must work first.
 
 - [How does anything get INTO canon?](https://github.com/rodaddy/open-brain/issues/445) — two write paths already exist. Guidance lanes: an `ob_session_events` row with `metadata.candidate_type` = `user_preference`/`process_rule` **plus** `memory_lifecycle_action='promote'`. Repo facts: `upsert_repo_fact` into `ob_entities`, bound to the active repo exactly. Canon is empty because **nothing was ever promoted** — the DB holds exactly one `user_preference` and one `process_rule`, both still `candidate`, and 13 `repo_fact` rows, none for open-brain. Authority is metadata, **not** tier (hot/warm/cold is decay, a separate model). Retirement is a newer `relegate`/`discard` on the same `candidate_scope.key` — **so every seeded rule must carry a scope key or it can never be cleanly retired**.
 - [Fleet index is 20% third-party code, and buzz's checkout is dirty](https://github.com/rodaddy/open-brain/issues/449) — resolved outside the map. Prior art lives outside the working tree in a per-repo `ref-<repo>` named index, sources never written to; `buzz` is out of Development and `ai-agents` owns it via `ref-ai-agents`. Two working examples now, which closes the original gap: with only open-brain doing it right, there was no pattern to copy.
+- [The bulk ingester: the second application, built from the live adapter parts](https://github.com/rodaddy/open-brain/issues/454) — built with SQLite staging and Claude format first; other formats loud-fail as follow-on work.
 
 ## Not yet specified
 
+- **Remaining Python rewrite path:** [Skill and canon usage telemetry -- log invocations into entry_access_log, weekly rotation report](https://github.com/rodaddy/open-brain/issues/469) is ON the rewrite path. Its Claude Code PostToolUse emitter sequences with the remaining Python apps/hooks work, sibling of apps/hooks.
+  - **Sharpened 2026-08-03 — #469 is CLOSED and the work is MERGED.** The telemetry landed in the rewrite stack squash `a55c804` (PR #495, ancestor of `origin/main`), and `record_skill_usage` + `skill_usage_report` are two of the 65 tools answering on the live local clone. This bullet no longer describes remaining work.
+- **The Bun/TypeScript server rewrite is charted as [The server rewrite: src/ is the same application, and it goes last](https://github.com/rodaddy/open-brain/issues/463).** It is the final rewrite phase, sequenced after the remaining Python work.
+  - **Telemetry pointer:** the server-side skill entity seeding and weekly rotation report from [Skill and canon usage telemetry -- log invocations into entry_access_log, weekly rotation report](https://github.com/rodaddy/open-brain/issues/469) fold into this phase charting under #463; they are not nice-to-have work.
+  - **Sharpened 2026-08-03 — "it goes last" has happened, and #463 is substantially reached.** The rewrite is the serving entrypoint on the local dogfood clone (`server/main.ts`, PR #506 `1048f77`), at 65-tool parity, with `src/` intact as rollback. #463 stays OPEN on what is left, which is not code: soak, the core01 swap-back (what the held `v0.9.0` tag waits on), and the `src/` retirement decision. Evidence: the 2026-08-03 landing comment.
 - **Who decides what gets promoted, and when.** #445 settled the *mechanism*
   (lifecycle promote + `candidate_scope.key`); what remains is the policy — does
   an agent propose a candidate and Rico promotes, does DREAM propose, or is
@@ -94,16 +100,42 @@ consumer and must work first.
 - **Skill/capability discovery beyond the policy index.** Vectorizing skills in
   place is agreed in principle; the retrieval shape and whether it is qmd or OB
   is not settled.
+  - **Sharpened 2026-08-01 — the policy index itself now RUNS.** The gap [The
+    policy layer is in no index — agents cannot find the rules they are judged
+    by](https://github.com/rodaddy/open-brain/issues/448) is resolved in
+    substance and RUNNING: a shared-policy qmd index over `_DOCS` + `_ob` +
+    harness config (860 docs, zero third-party) is built by the existing
+    parameterized builder, and a bare `aqmd "q"` from any repo appends the
+    shared-policy block automatically (verified live — `aqmd internal` returns
+    `_DOCS/QMD_INDEXES.md` at 93%). The feature lives in the Development repo,
+    not open-brain, so it lands no commit here. #448 stays **open** on one
+    operator DECIDE only: the index is named `global_docs_instructions`, not the
+    ticket's proposed `policy` (Rico renamed it 2026-07-30 on the
+    contents-not-scope standard); accept the current name or authorize a
+    GPU-bound rename. This is what the skill-discovery fog above builds on: the
+    policy index exists, so extending it to skills is the next question, not a
+    from-scratch one.
+- **Whether the capture app needs any content-free observation export**
+  ([#417](https://github.com/rodaddy/open-brain/issues/417)). The ~18
+  Langfuse-export functions lived in the retired TS monolith; no
+  observation/Langfuse emitter exists in the Python capture app. Whether it
+  needs one, or whether observability now lives only in `openbrain-memory`, is
+  unsettled and not covered by the port. Sharpens once the capture app has an
+  observability requirement to point at.
 - **qmd cache hygiene** (residue from #449, too small to ticket): `fleet.sqlite`
   still holds `buzz` (2,205 of 11,486) because it was not rebuilt after the move,
   so `aqmd all` still ranks it. Superseded index files also remain on disk —
   `research.sqlite` duplicates `ref-open-brain.sqlite`, and
   `ai-agents-research.sqlite` duplicates `ref-ai-agents.sqlite`. Caches are
-  expendable; a scoped rebuild and a delete clear both. Likely folds into #448.
+  expendable; a scoped rebuild and a delete clear both. This is the last residue
+  under #448 now that its retrieval/routing is RUNNING (above); it rides with
+  that ticket until the name decision closes it.
 
 ## Out of scope
 
 <!-- ruled beyond the destination; closed, never graduates -->
+
+- **MAE / Pi multi-agent orchestration.** A downstream **consumer** of canon/lens packs, explicitly not part of this map (operator ruling 2026-08-01). Open Brain done right is what makes it viable; returns as its own effort in `ai-agents`.
 
 - **DREAM (Light / REM / Deep) and the grading page.** Real work, already
   designed, and the consumer of what this map builds — but not the way to this
@@ -111,3 +143,170 @@ consumer and must work first.
 - **Persona switching.** Deliberately parked by Rico on 2026-07-29.
 - **Claudex / Codex adapter rollout.** Explicitly "next after this is proven
   out".
+  - **Amended 2026-08-01:** the Python capture-stack rewrite (the capture/hook
+    plumbing itself, not the per-runtime adapter rollout) is now ON the map, not
+    out of scope — it became this map's critical path after this line was
+    written. Tracked as [The Python capture-stack rewrite: prerequisite plumbing
+    the map runs on](https://github.com/rodaddy/open-brain/issues/453). The
+    downstream Claudex/Codex/Pi adapter *rollout* stays out of scope as stated
+    above.
+    - **Progress 2026-08-01:** the prerequisite plumbing is now proven RUNNING.
+      The two remaining PROV slices closed with row-proven evidence — #418 (hook
+      entrypoints as console scripts) and #420 (settings.json cutover; zero
+      `sha256-` paths, live canon-pack injection). The one hard-testing pass
+      (`_plans/hard-pass-2026-08-01.md`) round-tripped session_end,
+      subagent_stop, post_compact, session_start canon, and resume against the
+      playground DB. So the writer and loader the destination sits on now exist
+      and fire. What is NOT yet reached: canon sections load canon-only but are
+      **empty pending corpus/promotion** (#445 — nothing promoted yet), the LAN
+      cross-host live path is UNVERIFIED (no disposable LAN host; Air symlink
+      pending on operator), and the prompt_id re-fire dedup residual is carried
+      in `_plans/rewrite-gotchas.md`. Detail on #453.
+
+---
+
+## Discussion (4)
+
+### rodaddy — 2026-08-01T09:12:00Z
+
+## Landing: the Python capture-stack rewrite is MERGED (the plumbing #453 tracks)
+
+The prerequisite plumbing this map runs on ([#453](https://github.com/rodaddy/open-brain/issues/453)) has landed on `main`.
+
+- [The Python capture-stack rewrite](https://github.com/rodaddy/open-brain/issues/453) — **MERGED, unverified-hosted.** #418 hook capabilities + #420 settings.json cutover both landed via PR #455 (squash `eb84b02`), and the LAN-bind clone-mode mirror via PR #456 (squash `3584527`). Both were CI-green at merge (check, db-integration, python-package/provider, contract-parity, validate; deploy skipped-by-design). The rewrite gives canon a working **writer** and **loader** to sit on: `ingest-raw-turn` + the four `agent-context-pack-*` tools on the server, and the installable `python/openbrain` hook provider (SessionStart canon pack + capture hooks) on the client.
+
+**Proven RUNNING this session (main gate + installed provider):**
+- Gates on merged `main`: `bunx tsc --noEmit` exit 0; `bun test` 2855 pass / 0 fail (unit). Python — openbrain-memory 547 pass, openbrain 295 pass, openbrain-provider 98 pass; all three mypy + ruff clean.
+- Installed client stack: `uv tool install --force python/openbrain` → 6 executables incl. `openbrain-bulk-ingest`. SessionStart fixture through the hook-env wrapper → well-formed `openbrain.agent_context_pack.v1` canon pack (status ok, namespace rico). One real operator-typed capture through the installed `openbrain-capture-stop` → service `ingest_raw_turn_ok ingested:1`, row `7fc1279c-a47b-4d3e-bd01-83a6bb22bdbf` in dogfood `ob_raw_turns` (namespace rico). Session-start + capture legs of #453's hard-testing gate are RUNNING-proven by psql row.
+
+**Still open (do NOT read this as #453 done):**
+- #453's own hard-testing gate names **four** legs proven by psql row: session start / capture / **checkpoint** / **reflex**. Only session-start + capture are proven this session. Checkpoint and reflex end-to-end are NOT yet demonstrated, so #453 stays OPEN by its own stated criterion.
+- Live-suite-vs-playground showed 4 failures, all an exact-array fixture collision with the populated `shared-kb` namespace in the playground clone (list_stale / tier_recommendations union `shared-kb` by design, read-policy.ts / #147) — not a code defect; the same two files pass in CI db-integration against the clean ephemeral DB.
+- Downstream rollout (recorded on PR #455): local verification is RUNNING; hosted core01 deploy + rtech-mcps handoff + mcp2cli refresh + Hermes canary remain the residual work. Merge is not deploy.
+
+---
+
+### rodaddy — 2026-08-03T02:27:29Z
+
+## Landing: the rewrite ships as 0.9.0, the local dogfood clone RUNS it, and PROV enforcement is Python end to end
+
+Two days of landings since the 2026-08-01 comment. States are per LAW 0 — RUNNING / MERGED / WRITTEN / PROPOSED — and every sha, PR, and state below was checked with `gh` / `git merge-base --is-ancestor` against `origin/main` this session.
+
+### 1. Merge day and the release — MERGED, tag deliberately HELD
+
+- Rewrite stack squash `a55c804` (`feat(telemetry): skill and canon usage metrics`, PR #495) and release bump `de4429b` (`chore(release): v0.9.0`, PR #497) are both **ancestors of `origin/main`**.
+- **All four manifests read `0.9.0` on `origin/main`** — verified by `git show origin/main:<path>`: `package.json`, `python/openbrain/pyproject.toml`, `python/openbrain-memory/pyproject.toml`, `python/openbrain-provider/pyproject.toml`.
+- **The `v0.9.0` tag is HELD by the operator** — verified absent both locally and on the remote (`git ls-remote --tags origin 'v0.9*'` returns nothing). This is deliberate, not an oversight: `.github/workflows/ci.yml:6` triggers on `tags: ["v*"]`, so **any** `v*` tag unconditionally deploys core01. The tag waits for the core01 swap-back.
+
+### 2. Dogfood cutover — COMPLETE and RUNNING
+
+The local clone serves the **rewrite** entrypoint, not `src/`. Proven this session, not inferred:
+
+- `~/Library/LaunchAgents/com.rico.open-brain-local-clone.plist` runs `/Volumes/ThunderBolt/open-brain-local/app/scripts/local-clone-autostart.sh`, whose preflight (lines 66-70) checks **`server/main.ts`** and states the Phase 6 cutover made it `SERVING_ENTRYPOINT`.
+- `/health` on the live service answers `status: healthy`, database connected, embedding connected.
+- **65 tools RUNNING**, counted from a real MCP `initialize` → `tools/list` handshake against the live service — `65 = 63 src-parity + record_skill_usage + skill_usage_report`, and both telemetry tool names are present in the live response.
+- **`src/` is intact on disk as rollback** (`/Volumes/ThunderBolt/open-brain-local/app/src` alongside `server/`).
+
+Landed as (all MERGED, all ancestors of `origin/main`):
+
+| PR | Squash | What it did |
+|---|---|---|
+| #504 | `7905f0f` | ported the last ten tools — registry recount `65 = 63 src + 2`; fixed #485's vanishing predicate on the way |
+| #502 | `869e188` | contract declaration **derived** from what the rewrite actually registers, not hand-declared |
+| #505 | `ccb80c7` | **the chunkText production bug, fixed at root** |
+| #503 | `0a09ab4` | the real process entrypoint — an environment becomes a running server |
+| #506 | `1048f77` | flipped the local dogfood clone to the rewrite entrypoint |
+| #507 | `5f1595b` | deploy hardening + the `optionalSecret` fix |
+
+Two of those deserve their own line:
+
+- **#506 flipped `servesTraffic` and `cutoverStarted` BY DESIGN, not as a status update.** The commit states it plainly: the flags flip *because the entrypoint does*, and "a green suite with `servesTraffic: true` and a chain still pointing at `src/index.ts` is the" wrong state. The flag and the fact move together or the flag is a lie.
+- **#505 was a real production bug, not a test flake.** `chunkText` never terminated on its own terms: once `end` clamped to `text.length` the cursor crawled forward one character per iteration, emitting a shrinking near-duplicate tail. A 14,000-char entry produced **410 chunks at overlap=400** where ~11 is correct, and `embedText` spends one network embed call per segment — so **~400 embed round-trips per long entry instead of ~11**, with the final chunk's entire text being `"."`. Measured 2.03s → 0.129s on the live-Postgres suite. It was also the root cause of the #498 CI flake.
+
+**This substantially reaches [#463](https://github.com/rodaddy/open-brain/issues/463)'s destination** — the rewrite is the application that serves traffic on this machine, at tool parity, with the old one still sitting there as rollback. **#463 stays OPEN**, and correctly so. What remains is not code: soak time on the running clone, the **core01 swap-back** (which is what the held tag is waiting on), and the `src/` retirement decision, which nobody has made.
+
+### 3. PROV enforcement — the full port is MERGED on `origin/main`
+
+Three PRs, all ancestors of `origin/main`, all landing in `python/openbrain-provider`:
+
+- **PR #509 (`1e194e2`) — budget + policy gates.** Byte-parity against the live TypeScript gates on recorded fixtures; the bar was BYTE parity, not similar behaviour, because "a `decision` key spelled differently is an unenforced gate." The parity fixtures earned their keep immediately: the startup block emits no blank line after its heading because the TS builds the array with a `""` separator then `.filter(Boolean)` drops it — nobody writes that from source by eye.
+  - **It found and fixed a real deadlock bug.** `context-budget-gate.ts:352-355` composes the recovery cwd as `<root>/<project>` — and a hook fired **from the Development repo itself** reports project `Development`, so the naive composition yields `/Volumes/ThunderBolt/Development/Development`, **a path that does not exist**. The escape command the gate's own banner tells the operator to paste could therefore never work in the Development repo, and the block never cleared. That is #419's deadlock arriving *through the escape hatch meant to resolve it*. Verified in the merged source at `python/openbrain-provider/src/openbrain_provider/context_budget_gate.py` (`_development_cwd`), fixed in Python per the port's rule that bugs are fixed by being written correctly, not patched in TS first. Mutation-proven test in the port.
+- **PR #508 (`c48410a`) — ob-guard, verdict-for-verdict.** A corpus of **128 recorded payloads** fed to the running `guard.ts` as a subprocess; all 128 pass against the shipped artifact after `uv sync`. **Two pre-existing guard evasions were found and deliberately NOT fixed here** — pinned for [#451](https://github.com/rodaddy/open-brain/issues/451), because "keeping them apart is what leaves #451 open by construction." A port that quietly fixes behaviour is not a port.
+- **PR #510 (`f2e8b7f`) — the receipts keystone.** This is the one that broke a circularity: the #420 cutover removed every hook registration that *wrote* `receipts.json` but left the *reader* — `context-budget-gate.ts` — registered on six live events. The gate could block a session and **nothing in the running hook chain could unblock it**. `openbrain.receipts` now reproduces `_ob/scripts/ob-memory-provider/receipt-state.ts` byte-for-byte (schema literal, camelCase fields, contract triple, `triggerReceipts` key format, `O_CREAT|O_EXCL` advisory lockfile with stale-reclaim, fsync-then-rename), cross-language red-proofed against the real TS gate. The TS module was treated as the specification rather than a reference to improve on, because a divergence is a receipt the gate silently skips — which fails CLOSED into a session that can no longer edit.
+
+### 4. Controller settings swap — EXECUTED 2026-08-02, RUNNING
+
+Verified live this session by reading both settings files:
+
+- `~/.claude/settings.json` (mtime `Aug 2 22:06`) and `~/.claudex/profiles/sol/settings.json` (mtime `Aug 2 22:07`) each register **11 enforcement hooks: 6 budget-gate, 4 policy-gate, 1 ob-guard** — counted from `.hooks[].hooks[].command`.
+- **Every one runs as a Python console script** via `sh ~/.local/share/openbrain-memory/env/openbrain-hook-env <script>` — `openbrain-context-budget-gate`, `openbrain-policy-refresh-gate`, `ob-guard`.
+- **Zero remaining registrations point at the TypeScript gates in `_ob/scripts`** in either file. The TS gates are **retired in place** — the source still exists, nothing invokes it.
+- Backups exist at `settings.json.bak-prov-port-swap-20260803` for both files.
+- **CANON PACK 1/2 proven post-swap**: a real `SessionStart` fixture through the installed wrapper returns a well-formed `openbrain.agent_context_pack.v1` pack, namespace `rico`, `profile_guidance=10, process_guidance=15`.
+
+[#419](https://github.com/rodaddy/open-brain/issues/419) is **closeable after soak** — the port is merged, the swap is executed, the deadlock is fixed. Noting it; **not closing it**.
+
+### 5. Fleet rollout plan — PR #500 OPEN by design
+
+[PR #500](https://github.com/rodaddy/open-brain/pull/500) (`docs(plan): chart the 0.9.x fleet rollout -- PROPOSED, do not merge`) is **OPEN, not a draft, no review decision recorded**. It is a decision artifact awaiting operator review and is deliberately unmerged. Its own title carries its state.
+
+### 6. Operator direction, 2026-08-02 — PROPOSED
+
+Recorded as **direction, not done work**:
+
+- **Next step is the Pi and Codex adapter lanes.** This is the map's own stated sequence — "Claude first, then adapters for Claudex, Codex, and Pi" — now that local proof exists. PROPOSED.
+- **mcp2cli stays pointed at core01 for all other consumers** until the core01 swap-back. Local-box testing of mcp2cli against the dogfood rewrite is allowed. PROPOSED.
+
+**One correction to the record, from a live check.** The standing note that the canon corpus "remains empty pending promotion policy (#445)" is **no longer accurate**, and the map should stop carrying it. Counted in the dogfood DB (`open_brain_local_20260724`) this session:
+
+- `ob_session_events` with `memory_lifecycle_action='promote'`: **25** — 15 `process_rule`, 10 `user_preference`. Only 4 rows remain at `candidate`.
+- `ob_entities` with `entity_type='repo_fact'`: **20**.
+- And it **loads**: the live SessionStart pack returns exactly those counts as `profile_guidance=10, process_guidance=15`.
+
+So the seed exists and canon is serving. What is still open under [#445](https://github.com/rodaddy/open-brain/issues/445) is the **policy** the body already names separately — *who* decides what gets promoted and when — not an empty corpus. The destination gap moved; it did not close.
+
+### Not verified in this pass
+
+- **Soak.** Nothing here claims the running clone has been under sustained real load; "RUNNING" above means observed answering this session.
+- **Hosted core01.** Every RUNNING claim in this comment is the **local** service. core01 is untouched and still on the pre-rewrite build; the swap-back has not happened.
+- **CI-green-at-merge** per PR was not re-checked in this pass — merge state was verified, check-run history was not.
+
+---
+
+### rodaddy — 2026-08-04T22:01:20Z
+
+## Status — 2026-08-04
+
+Wayfinder-relevant state, with truth labels. Nothing below is a completion claim
+unless it says RUNNING or MERGED.
+
+- **Canon packs — PR #538 OPEN (WRITTEN, not merged).** It carries 27 process
+  rules plus repo facts. The rules exist as code and content; they are not on
+  `main` and are not in effect for anyone but this branch.
+- **SessionStart canon pack hydration — RUNNING locally.** Two-emission pack,
+  observed 2026-08-04 with `profile_guidance=10` and `process_guidance=22`. That
+  is a local observation on this machine, not a fleet-wide rollout.
+- **#522 (canon harvest) — OPEN, pending PR #538.** The harvest output is what
+  #538 carries, so #522 cannot close ahead of it.
+- **Local dogfood service — RUNNING** on `0.0.0.0:3100`, with Langfuse tracing
+  attached.
+- **Client bundle — installed on the Air**, with direct HTTPS transport proven
+  through `ob.rodaddy.live`.
+
+Board reconciliation done the same day: every open issue that was missing from
+"Open Brain Work Board" (project 8) has been added, including the wayfinder
+family (#443, #448, #451, #463, #479). The board previously stopped at #420.
+
+---
+
+### rodaddy — 2026-08-04T23:28:11Z
+
+Issue-closure audit ran 2026-08-04 over all 68 open issues.
+
+**Closed with receipts (10):** #483, #479, #441, #422, #419, #398, #382, #372, #331, #325 — each carries a dated receipt quoting the verified evidence, and each was re-verified by execution or direct source read rather than by reading the PR. Nine were set to Done on board 8; #382 has no board item, so nothing to move.
+
+**Updated, staying open (12):** #529, #492, #451, #442, #435, #409, #394, #390, #389, #388, #387, #371. Recurring theme: the code largely landed via PR #455 and the Python port, but several bodies now describe superseded designs (Deep's confidence bands, Light's corroboration gate, the retired 53-repo qmd index), so the comments correct the ledger rather than claim completion.
+
+**Flagged for operator (3):** #435 stays open on AC1 alone (the measured-dead numbers never reached `docs/dream-design.md`); #387 and #388 need rescoping against per-repo `.qmd` indexes before they mean anything.
+
+**Sequencing (operator, 2026-08-04, recorded not authorized):** Codex adapter #512 next — moved Backlog → Todo. Pi #511 after, expected easy as the same shape and fully operator-controlled. Not yet a go-ahead to start.

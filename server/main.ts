@@ -57,6 +57,10 @@ import {
 import { runMigrations } from "./db/migrations.ts";
 import { createDatabase, type Database } from "./db/pool.ts";
 import { createLogger } from "./logging/logger.ts";
+import {
+  createTracingRuntime,
+  installMcpTracing,
+} from "./observability/langfuse-tracing.ts";
 import { RecoveryWalStore } from "./realtime/recovery-wal.ts";
 import { WorkingSetStore } from "./realtime/working-set.ts";
 import { registerMemoryTools } from "./tools/index.ts";
@@ -123,16 +127,25 @@ export interface StartServerOptions {
  * is installed is a tool whose calls are never audited. Ordering here is the
  * whole of the audit guarantee.
  *
+ * `installMcpTracing` (#530) is installed alongside it, under the same ordering
+ * rule and for the same reason. THE TWO ARE NOT ALTERNATIVES: audit is the
+ * content-FREE durable Postgres record and is on by default; tracing is the
+ * content-FUL Langfuse export and is off unless the operator configures it.
+ * Both wrap `registerTool`, so both see every call; `tracingSink` is undefined
+ * whenever tracing is off, which makes the install a no-op.
+ *
  * The realtime stores are built ONCE and captured, not per session: the working
  * set is the process's scratch for the active turn and the recovery WAL holds a
  * crashed session's trace, so rebuilding them per connection would make both
  * report a permanent and very convincing zero.
  */
-function createServerFactory(
-  pool: pg.Pool,
-  logger: Logger,
-  config: ServerConfig,
-): () => McpServer {
+function createServerFactory(input: {
+  pool: pg.Pool;
+  logger: Logger;
+  config: ServerConfig;
+  tracing: ReturnType<typeof createTracingRuntime>;
+}): () => McpServer {
+  const { pool, logger, config } = input;
   const realtime = {
     workingSetStore: new WorkingSetStore(),
     recoveryWalStore: new RecoveryWalStore({
@@ -143,6 +156,14 @@ function createServerFactory(
   return () => {
     const server = new McpServer({ name: "open-brain", version: "1.0.0" });
     installMcpAudit(server, { pool });
+    // `sink` undefined means tracing is off for this process; the install then
+    // never wraps `registerTool` and costs nothing.
+    if (input.tracing.sink) {
+      installMcpTracing(server, {
+        config: input.tracing.config,
+        sink: input.tracing.sink,
+      });
+    }
     registerMemoryTools(server, {
       pool,
       embedFn: generateEmbedding,
@@ -198,6 +219,13 @@ export async function startServer(
   }
 
   const database = createDatabase(config.database, logger);
+  // ONE tracing client for the process (#530), built before any session can
+  // exist and shared by every per-session MCP server. Off unless the operator
+  // set all four OPENBRAIN_TRACING_* variables; `createTracingRuntime` never
+  // throws, so a misconfigured or unreachable Langfuse can never keep the
+  // service from starting.
+  const tracing = createTracingRuntime();
+  logger.info({ enabled: tracing.sink !== undefined }, "mcp_tracing_configured");
   let application: ShadowApplication | undefined;
   try {
     if (options.runMigrations !== false) {
@@ -254,7 +282,12 @@ export async function startServer(
       database,
       authenticate,
       parseRequestBody: express.json({ limit: "1mb" }),
-      serverFactory: createServerFactory(database.pool, logger, config),
+      serverFactory: createServerFactory({
+        pool: database.pool,
+        logger,
+        config,
+        tracing,
+      }),
       // CORS and request logging run ahead of EVERY route, `/health` included:
       // an unauthenticated probe is still traffic, and a deployment that cannot
       // see its own health requests cannot tell a dead monitor from a healthy
@@ -311,7 +344,7 @@ export async function startServer(
       server,
       port: boundPort,
       logger,
-      shutdown: () => shutdown(composed, database, server, logger),
+      shutdown: () => shutdown(composed, database, server, logger, tracing),
     };
   } catch (error: unknown) {
     // A failure anywhere after the pool exists must not leak it. The
@@ -324,6 +357,9 @@ export async function startServer(
       // Already reported by closeInOrder's own logging; the startup failure is
       // the one the operator needs, so it wins.
     }
+    // The tracing client owns a background flush timer; leaving it running
+    // after a failed start keeps the process alive with nothing to serve.
+    await tracing.shutdown().catch(() => undefined);
     await database.close().catch(() => undefined);
     throw error;
   }
@@ -348,6 +384,7 @@ async function shutdown(
   database: Database<pg.Pool>,
   server: Server,
   logger: Logger,
+  tracing: ReturnType<typeof createTracingRuntime>,
 ): Promise<void> {
   logger.info({}, "server_shutdown_started");
   await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -359,6 +396,27 @@ async function shutdown(
     logger.error(
       { error_category: error instanceof Error ? error.name : typeof error },
       "application_close_failed",
+    );
+  }
+  // AFTER the MCP sessions are closed, so no further call can enqueue, and
+  // before the pool goes. `tracing.shutdown()` swallows its own failures by
+  // contract (#530: a tracing fault must never alter the outcome of anything),
+  // so it deliberately does NOT participate in `firstFailure` — a dropped batch
+  // of diagnostics must not make a clean drain exit non-zero.
+  //
+  // Caught here as well as inside the lane because THIS line owning an
+  // unhandled rejection would skip `database.close()` below and leak the pool.
+  // The lane bounds its own drain against a deadline (measured: an unreachable
+  // Langfuse made an unbounded drain take 28.0 s, past launchd's 20 s
+  // `ExitTimeOut`, so the process was SIGKILLed mid-shutdown). Two layers,
+  // because the ordering here is what makes the database close reachable at
+  // all.
+  try {
+    await tracing.shutdown();
+  } catch (error: unknown) {
+    logger.error(
+      { error_category: error instanceof Error ? error.name : typeof error },
+      "tracing_shutdown_failed",
     );
   }
   try {

@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: enhancement
 Created: 2026-07-25T00:20:12Z
-Updated: 2026-07-27T16:55:30Z
+Updated: 2026-08-04T23:27:35Z
 
 ---
 
@@ -138,7 +138,7 @@ the next stage can do.
 
 ---
 
-## Discussion (1)
+## Discussion (2)
 
 ### rodaddy — 2026-07-27T16:55:30Z
 
@@ -204,3 +204,9 @@ epic rather than per-issue.
 Not proposing a new issue; recording it here so the epic carries the axis it
 otherwise loses. Both source artifacts are queryable in the current corpus:
 `select content from thoughts where content like 'SOP: OB Dream Cycle%'`.
+
+---
+
+### rodaddy — 2026-08-04T23:27:35Z
+
+2026-08-04 status. MERGED: all three stages exist on main as `src/dream-light.ts`, `src/dream-rem.ts`, `src/dream-deep.ts` with operator runners under `scripts/`, delivered by PR #455 (2026-08-01). The "built but nothing calls it" table at the top of this body is stale for the stage code itself. WRITTEN: two design points here are superseded by accepted decisions — Deep's >0.5-commit band by `docs/decisions/let-everything-pass-grading.md` (Deep does not commit; the operator queue is `reviewed_at IS NULL`), and Light's corroboration-as-promotion-signal by `docs/decisions/light-counts-but-does-not-gate.md` (1 of 1,098 content rows crossed sessions). RUNNING: dogfood DB shows 15,908 `content_occurrences`, 5,434 `candidate_memory`, 0 `discarded_entries`. STILL OPEN, and still the epic's real thesis: nothing schedules any of it — `src/maintenance-bootstrap.ts:16-20` enqueues nothing and defers to #347, so every stage runs only when an operator types the command. Children #391, #393, #395, #396, #397, #398 remain open.

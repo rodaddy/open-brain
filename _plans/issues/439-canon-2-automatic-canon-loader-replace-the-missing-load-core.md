@@ -3,11 +3,12 @@
 
 # #439 — CANON-2: automatic canon loader — replace the missing load-core-context.ts, read from OB not files
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: enhancement, memory
 Created: 2026-07-29T18:22:16Z
-Updated: 2026-07-29T18:22:16Z
+Updated: 2026-08-04T00:39:43Z
+Closed: 2026-08-04T00:39:43Z
 
 ---
 
@@ -44,3 +45,11 @@ A SessionStart loader that reads **from Open Brain**, not from files:
 #438 (empty lanes — a loader with no content loads an empty room).
 
 Design: `_plans/canon-always-known.md`
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-04T00:39:42Z
+
+Same deliverable as #446, closing on the same evidence: the automatic canon loader exists as the package-owned `openbrain-session-start` SessionStart adapter reading from Open Brain (not files), with `requested_sections` and full exact scope. Proven RUNNING 2026-08-03 across three distinct consumers: Rico's sessions (canon packs in every SessionStart), a cold non-repo cwd (post-#526), and Skippy's Buzz session under his own token/namespace. Personas/skill prose that still names `load-core-context.ts` is a doc cleanup in those skills' own repos, not a missing loader.

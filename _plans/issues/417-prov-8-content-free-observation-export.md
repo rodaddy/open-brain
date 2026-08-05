@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: none
 Created: 2026-07-25T23:36:38Z
-Updated: 2026-07-25T23:37:26Z
+Updated: 2026-08-03T01:32:44Z
 
 ---
 
@@ -28,3 +28,56 @@ Contract from the existing source, preserved verbatim: the sink *"must never thr
 
 ## Non-goals
 Changing what Langfuse receives.
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-03T01:32:44Z
+
+## Archaeology ledger: where PROV-4..PROV-8 actually stand
+
+Re-scope note, not a closure. Posting the measured state of epic #409 because the sub-issues have been executed **out of order** and a reader hitting one of these issues alone cannot tell what is real.
+
+### The shape of the problem
+
+| # | Item | State | What landed |
+|---|---|---|---|
+| 410 | PROV-1 uv workspace | CLOSED | landed |
+| 411 | PROV-2 provider skeleton | CLOSED | `config`, `observability` |
+| 412 | PROV-3 one vocabulary | CLOSED | `vocabulary.py` |
+| **413** | **PROV-4 rejection reasons** | **OPEN** | nothing named for it |
+| **414** | **PROV-5 dispatch boundary** | **OPEN** | `DispatchConfig` only (`config.py:85`) — the config, not the dispatcher |
+| **415** | **PROV-6 receipt + receipt-state** | **OPEN** | **landed via #510** — see below |
+| **416** | **PROV-7 reflex recall** | **OPEN** | nothing |
+| **417** | **PROV-8 observation export** | **OPEN** | nothing |
+| 418 | PROV-9 hook entrypoints | CLOSED | landed — but in `python/openbrain`, NOT `openbrain-provider` |
+| 419 | PROV-10 context budget gate | OPEN | fixed in **TypeScript** by Development PR #75; see the note on that issue |
+| 420 | PROV-11 settings cutover | CLOSED | executed, row-proven |
+
+**#418 and #420 — the last two items — closed while #413–#417 stayed open.** The *entrypoints* and the *cutover* landed on top of a provider package that had only reached PROV-3. The replacement is not stalled; it is **inverted** — the top of the stack shipped onto an unbuilt middle.
+
+### The consequence that actually bit
+
+The #420 cutover removed every hook registration that invoked the TypeScript writer of `receipts.json`, but left the READER — `context-budget-gate.ts` — registered on six live events. Reader registered, writers not. The gate could block a session and nothing in the running hook chain could unblock it; the only remaining writer was the agent manually running the command the gate's own banner prints.
+
+That is exactly the gap **PROV-6 (#415)** describes, and it is why that one was pulled forward and closed first (open-brain#510): the Python hooks now write the receipt state, proven by running the real TypeScript gate against a `receipts.json` only Python has touched.
+
+### Where the code actually lives — verified, not remembered
+
+`openbrain-provider` today holds `config`, `constants`, `observability`, `vocabulary`, and — new via #508 — `guard`, `cli_guard`, `shell_lexer`. It has **no** dispatcher, no rejection-reason module, no reflex, no observation export.
+
+The **lifecycle** hooks are in the sibling package `python/openbrain` (`openbrain/apps/hooks/`), and #510 added `openbrain/receipts/` there too, beside the hooks that call it. That placement is deliberate: the receipt writer is invoked by the lifecycle hooks, and splitting them across packages is what produced the "which package owns this?" confusion in the first place.
+
+### What each remaining issue needs
+
+- **#413 (PROV-4)** — named rejection reasons and a loud caller-error path. Nothing implements it. Note `receipts` grew its own named errors (`ReceiptStateError`, `LockTimeoutError`); a shared vocabulary should reconcile with those rather than duplicate them.
+- **#414 (PROV-5)** — the dispatch boundary. `DispatchConfig` exists at `config.py:85`; the subprocess/`NO_COLOR`/timeout/output-validation behaviour it configures does not. Worth re-checking whether a dispatcher is still wanted now that the hooks are console scripts rather than a dispatched child.
+- **#416 (PROV-7)** — reflex pointer recall. Nothing. Note the TS side stores reflex suppression in the SAME `receipts.json` (`reflexSuppression`); #510 preserves that section on write but does not read or produce it.
+- **#417 (PROV-8)** — content-free observation export. Nothing.
+
+### Disposition
+
+**All four stay OPEN — this is a re-scope note, not a closure.** Whether any should instead be closed as superseded (particularly #414, given the console-script shape) is an operator call. Recording the state so the decision is made on measured facts rather than on the issue titles.
+
+<sub>From the 2026-08-02 provider archaeology pass, re-verified against the tree on 2026-08-03. Keystone: open-brain#510.</sub>

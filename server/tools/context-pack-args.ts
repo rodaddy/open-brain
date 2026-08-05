@@ -137,11 +137,122 @@ export const agentContextPackInputSchema = {
   budget: contextPackBudgetInputSchema,
 };
 
+/**
+ * Build the strict registration schema for a tool surface.
+ *
+ * The `.strict()` alone rejects the key but its stock message names only the
+ * offending key. The issue's requirement (and the #431/PR #532 pattern) is that
+ * a failure names the ACCEPTED VOCABULARY too, so the caller has something to
+ * correct toward rather than a bare "no". The accepted set is derived from the
+ * shape, never re-listed, so it cannot drift from the schema it describes.
+ *
+ * The message must carry the vocabulary itself, not rely on a formatter: the
+ * serving entrypoint (`server/main.ts`) does NOT install
+ * `installValidationSummaryFormatter` — only `src/server.ts` does — so anything
+ * that lives only in the formatter is invisible on the surface that actually
+ * runs.
+ */
+function strictRequestSchema<Shape extends z.ZodRawShape>(
+  shape: Shape,
+  toolName: string,
+) {
+  const accepted = Object.keys(shape).sort().join(", ");
+  return z
+    .object(shape, {
+      error: (issue: { code?: string; keys?: string[] }) =>
+        issue.code === "unrecognized_keys"
+          ? `Unrecognized key(s) for ${toolName}: ${(issue.keys ?? []).join(", ")}. ` +
+            `Accepted keys: ${accepted}.`
+          : undefined,
+    } as z.core.$ZodObjectParams)
+    .strict();
+}
+
+/**
+ * Reject an unknown top-level request key by NAME, listing the accepted set.
+ *
+ * THE DEFECT (#535). The MCP SDK builds its validating schema from a raw shape
+ * with a plain `z.object()`, which STRIPS undeclared keys instead of rejecting
+ * them, and it strips them BEFORE the handler runs. So `sections: [...]` — the
+ * near-miss spelling of `requested_sections` — never reached the tool at all:
+ * the pack saw no section selection, fell back to its working_set-only default,
+ * and returned `status: "ok"` on a near-empty answer. A typo in one key looked
+ * exactly like a correct minimal request, and it cost real debugging time at
+ * least twice (#439, #526).
+ *
+ * THE FIX. Registration passes the `.strict()` object below as `inputSchema`
+ * instead of the raw shape, so the SDK's own pre-dispatch validator does the
+ * rejecting. That is the only layer that still sees the raw arguments — a
+ * handler-side check cannot work, because by then the key is already gone. It
+ * also makes the advertised JSON schema honest: `additionalProperties: false`
+ * now appears in `tools/list`, so a caller can see the rule before breaking it.
+ *
+ * REJECT, don't tolerate — for THIS surface specifically. An unknown key here
+ * is always a caller mistake, never forward-tolerance: every key the pack
+ * accepts selects work it must do, so an ignored one silently changes the
+ * answer. That is the opposite of the capture lane (#464/PR #533), where
+ * genuinely future lifecycle keys are expected and naming what was ignored in
+ * the receipt is the right shape. Forward tolerance is a per-surface decision,
+ * and this surface does not want it.
+ *
+ * This function stays as defense in depth for the DIRECT callers of
+ * `parseAgentContextPackArgs` (tests, the NATS bridge, any non-MCP entrypoint),
+ * which never pass through the SDK validator. Its error is a real `ZodError`,
+ * so `summarizeValidationError` renders it through the same
+ * `input_validation_failed` envelope as every other field error and names the
+ * accepted vocabulary (#431/PR #532) so the caller has something to correct
+ * toward.
+ */
+function rejectUnknownRequestKeys(
+  args: unknown,
+  acceptedKeys: readonly string[],
+  toolName: string,
+): void {
+  if (typeof args !== "object" || args === null || Array.isArray(args)) return;
+
+  const record = args as Record<string, unknown>;
+  const accepted = new Set(acceptedKeys);
+  const unknown = Object.keys(record).filter((key) => !accepted.has(key));
+  if (unknown.length === 0) return;
+
+  const sorted = [...acceptedKeys].sort();
+  throw new z.ZodError(
+    unknown.map((key) => ({
+      code: "unrecognized_keys" as const,
+      keys: [key],
+      path: [key],
+      message:
+        `Unrecognized key "${key}" for ${toolName}. ` +
+        `Accepted keys: ${sorted.join(", ")}.`,
+      input: record,
+    })),
+  );
+}
+
 const agentContextPackArgsSchema = z.object(agentContextPackInputSchema);
+
+/**
+ * The registration-time schema: identical fields, but unknown top-level keys
+ * are REJECTED rather than stripped. Register this, never the raw shape.
+ */
+export const agentContextPackStrictSchema = strictRequestSchema(
+  agentContextPackInputSchema,
+  "agent_context_pack",
+);
+
+/** The exact accepted top-level key set, derived from the schema — never re-listed. */
+export const AGENT_CONTEXT_PACK_REQUEST_KEYS = Object.keys(
+  agentContextPackInputSchema,
+) as readonly string[];
 
 export type AgentContextPackArgs = z.infer<typeof agentContextPackArgsSchema>;
 
 export function parseAgentContextPackArgs(args: unknown): AgentContextPackArgs {
+  rejectUnknownRequestKeys(
+    args,
+    AGENT_CONTEXT_PACK_REQUEST_KEYS,
+    "agent_context_pack",
+  );
   return agentContextPackArgsSchema.parse(args);
 }
 
@@ -182,6 +293,21 @@ export const agentReflexPointersInputSchema = {
 
 const agentReflexPointersArgsSchema = z.object(agentReflexPointersInputSchema);
 
+/** The reflex's registration-time schema; see {@link agentContextPackStrictSchema}. */
+export const agentReflexPointersStrictSchema = strictRequestSchema(
+  agentReflexPointersInputSchema,
+  "agent_reflex_pointers",
+);
+
+/**
+ * The reflex surface's accepted keys. Deliberately NARROWER than the pack's —
+ * it omits `requested_sections` and the section toggles — so passing a pack key
+ * here is exactly the near-miss #535 is about and must be named, not stripped.
+ */
+export const AGENT_REFLEX_POINTERS_REQUEST_KEYS = Object.keys(
+  agentReflexPointersInputSchema,
+) as readonly string[];
+
 export type AgentReflexPointersArgs = z.infer<
   typeof agentReflexPointersArgsSchema
 >;
@@ -189,5 +315,10 @@ export type AgentReflexPointersArgs = z.infer<
 export function parseAgentReflexPointersArgs(
   args: unknown,
 ): AgentReflexPointersArgs {
+  rejectUnknownRequestKeys(
+    args,
+    AGENT_REFLEX_POINTERS_REQUEST_KEYS,
+    "agent_reflex_pointers",
+  );
   return agentReflexPointersArgsSchema.parse(args);
 }

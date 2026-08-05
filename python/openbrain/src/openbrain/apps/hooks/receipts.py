@@ -58,10 +58,46 @@ from openbrain.receipts import (
     resolve_development_scope,
     start_compact_cycle,
 )
+from openbrain.receipts.scope import (
+    DEVELOPMENT_ROOT_ENV_VAR,
+    development_root,
+    development_root_missing,
+    development_root_origin,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
+
+
+def _warn_missing_development_root(event: str, cwd: str | Path | None) -> None:
+    """Log when no receipt was written because the configured root is absent.
+
+    An out-of-scope ``cwd`` is silent on purpose -- it is somebody else's
+    repository. A configured root that does not exist on this machine is not
+    that: it is a misconfiguration, it makes EVERY directory out of scope, and
+    left silent it is indistinguishable from working correctly. Field-proved on
+    the Air (open-brain#556), where the provider exited clean with no output and
+    no receipt.
+
+    Names the measured ``cwd``, never a path composed from the absent root.
+
+    Args:
+        event: The hook name, for the log line only.
+        cwd: The hook payload's working directory, as measured.
+    """
+    if not development_root_missing():
+        return
+    origin = development_root_origin()
+    logger.warning(
+        "{} receipt not recorded: the configured Development root {} ({}) does "
+        "not exist on this machine; cwd: {}; set {} for this machine",
+        event,
+        development_root(),
+        origin,
+        cwd if cwd is not None else "<none reported>",
+        DEVELOPMENT_ROOT_ENV_VAR,
+    )
 
 
 def note_compaction(
@@ -266,6 +302,7 @@ def _guarded(
     """
     scope = resolve_development_scope(cwd)
     if scope is None:
+        _warn_missing_development_root(event, cwd)
         return None
 
     try:

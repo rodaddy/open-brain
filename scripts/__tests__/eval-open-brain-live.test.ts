@@ -26,6 +26,7 @@ const CONFIG: LiveEvalConfig = {
   negativeTokenIsDistinct: false,
   primaryNamespace: "eval-live-recall-run-test",
   negativeNamespace: "eval-live-recall-run-test-negative",
+  project: "open-brain",
   searchMode: "hybrid",
   timeoutMs: 1000,
 };

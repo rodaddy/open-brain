@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: enhancement
 Created: 2026-07-25T00:19:41Z
-Updated: 2026-07-25T00:19:41Z
+Updated: 2026-08-04T23:27:36Z
 
 ---
 
@@ -43,3 +43,11 @@ empty — which is worse than being unavailable, because nothing signals doubt.
 - Doctor reports a stale index when one exists.
 - Doctor reports a Development directory that is not a registered collection.
 - Doctor passes clean after #386 and #402 land.
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-04T23:27:35Z
+
+2026-08-04 status. NOT DELIVERED: `src/operator-doctor.ts` still carries only `checkQmdBinaryPresence` (lines 297-311), which its own comment scopes to "binary presence only, NOT qmd search health" — no last-index timestamp, no per-collection age, no vector count, no 48h threshold. WRITTEN: the architecture this issue targets was replaced. Per `docs/standards/QMD_INDEXES.md`, the single 53-repo shared index was retired 2026-07-29/30 in favour of one project-local `.qmd/` per repo (54 present under Development today) plus a `global_docs_instructions` index holding `_DOCS` + `_ob`. Rescope needed: "last index update timestamp" is now per-repo, and the "Development directory that is not a registered collection" check has no target under the new model — the equivalent question is "which active repos lack a `.qmd/` at all". The blocking references to #386 and #402 in the verification section should be re-derived after that rescope.

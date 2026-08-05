@@ -9,8 +9,17 @@ Ported from `ob-memory-provider.ts:336-338` (`resolveDevelopmentScope`) and its
 helpers at `:1455-1534`, which is the only piece of that 2,046-line module the
 gates actually import.
 
+A `None` answer has two causes, and they are not the same event. The cwd may be
+somebody else's repository — expected, and silent on purpose. Or the CONFIGURED
+ROOT ITSELF may not exist on this machine, which is a misconfiguration of the
+operator's own box and has no business being silent. `development_root_missing`
+and `describe_development_root` separate them, so a caller can stay quiet for
+the first and speak up for the second (open-brain#556).
+
 What this module does NOT do: it does not read config, contact a server, or
-decide anything about memory. It answers one question about one path.
+decide anything about memory. It answers one question about one path. It also
+does not decide what a caller does with a diagnosis — it renders the text and
+leaves the verdict to the gate, whose fail posture is its own.
 """
 
 from __future__ import annotations
@@ -26,10 +35,18 @@ __all__ = [
     "APPROVED_TEMP_WORKTREE_ROOTS",
     "DEFAULT_DEVELOPMENT_ROOT",
     "development_root",
+    "development_root_missing",
     "DevelopmentScope",
+    "ScopeDiagnosis",
     "approved_temp_worktree_path",
+    "describe_development_root",
+    "render_scope_diagnosis",
     "resolve_development_scope",
 ]
+
+#: The environment variable that overrides the shipped root. Named once here so
+#: the diagnosis can quote the exact spelling an operator has to export.
+DEVELOPMENT_ROOT_ENV_VAR: Final[str] = "OPENBRAIN_DEVELOPMENT_ROOT"
 
 #: ob-memory-provider.ts:143. The one lane root, as shipped. Public because the
 #: parity fixtures were recorded against it and have to recognise it by name.
@@ -59,8 +76,92 @@ def development_root() -> Path:
         The override when set and non-empty, else the shipped default. The
         default is unchanged, so production behaviour is identical.
     """
-    override = os.environ.get("OPENBRAIN_DEVELOPMENT_ROOT", "").strip()
+    override = os.environ.get(DEVELOPMENT_ROOT_ENV_VAR, "").strip()
     return Path(override) if override else DEFAULT_DEVELOPMENT_ROOT
+
+
+def development_root_missing() -> bool:
+    """Report whether the configured Development root is absent on this machine.
+
+    This is the half of a `None` scope that is a MISCONFIGURATION rather than a
+    correct silence. Kept separate from :func:`resolve_development_scope` on
+    purpose: a caller in somebody else's repository asks about a cwd and should
+    hear nothing, while a caller on a machine whose root does not exist has a
+    problem no amount of cwd changing will fix.
+
+    Returns:
+        True when the configured root is not an existing directory.
+    """
+    return _canonical_directory(development_root()) is None
+
+
+@dataclass(frozen=True)
+class ScopeDiagnosis:
+    """Why scope could not resolve, in the terms an operator can act on.
+
+    Attributes:
+        configured_root: The root that was consulted and found absent.
+        source: Where that value came from -- the env var name, or ``default``.
+        cwd: The directory actually measured, never a composed substitute.
+    """
+
+    configured_root: Path
+    source: str
+    cwd: Path
+
+
+def describe_development_root(cwd: str | Path | None) -> ScopeDiagnosis | None:
+    """Describe an absent Development root, or None when nothing is wrong.
+
+    Args:
+        cwd: The directory the caller is actually in. Recorded as measured; a
+            caller that has no cwd to report gets the process's, because a
+            diagnosis quoting a composed path is the defect this closes.
+
+    Returns:
+        The diagnosis when the configured root does not exist, else None. An
+        existing root always answers None, even when the cwd is out of lane --
+        that case is not a misconfiguration and must stay silent.
+    """
+    if not development_root_missing():
+        return None
+    override = os.environ.get(DEVELOPMENT_ROOT_ENV_VAR, "").strip()
+    measured = Path(cwd) if cwd is not None else Path.cwd()
+    return ScopeDiagnosis(
+        configured_root=development_root(),
+        source=DEVELOPMENT_ROOT_ENV_VAR if override else "default",
+        cwd=measured,
+    )
+
+
+def render_scope_diagnosis(diagnosis: ScopeDiagnosis) -> str:
+    """Render a diagnosis as the operator-facing line.
+
+    Three facts, in the order a reader needs them: the root that was consulted
+    and where that value came from, the directory actually measured, and the one
+    command that resolves it. The cwd is labelled, so the configured root can
+    never be misread as the session's directory -- which is exactly what
+    happened on the Air (open-brain#556).
+
+    Args:
+        diagnosis: The absent-root diagnosis.
+
+    Returns:
+        A single multi-line string, safe for stderr or a receipt field.
+    """
+    origin = (
+        "shipped default"
+        if diagnosis.source == "default"
+        else f"set via {DEVELOPMENT_ROOT_ENV_VAR}"
+    )
+    return (
+        "Open Brain: the configured Development root does not exist on this "
+        "machine.\n"
+        f"  configured root: {diagnosis.configured_root} ({origin})\n"
+        f"  cwd: {diagnosis.cwd}\n"
+        f"  fix: export {DEVELOPMENT_ROOT_ENV_VAR}=<this machine's Development "
+        "directory>"
+    )
 
 
 #: ob-memory-provider.ts:144-147. A worktree under one of these still counts as
@@ -239,6 +340,11 @@ def resolve_development_scope(cwd: str | Path | None) -> DevelopmentScope | None
         The scope when the directory is inside Development, or inside an
         approved temp worktree of the SAME repository. None otherwise — and None
         is what makes the gate silent outside its lane.
+
+        None does NOT distinguish "not my repository" from "the configured root
+        is absent on this machine". A caller that reports anything to an
+        operator must ask :func:`describe_development_root` before falling
+        silent, or it reproduces open-brain#556.
     """
     if cwd is None:
         return None

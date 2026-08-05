@@ -101,8 +101,10 @@ export interface DistillSweepDeps {
   model?: NamedDistillModel;
   /** Injectable embed fn; defaults to the configured provider. */
   embedFn?: DistillEmbedFn;
-  /** Restrict the sweep to one namespace. Omit to sweep every namespace. */
+  /** Bind the sweep to one namespace. Omit to sweep every namespace. */
   namespace?: string;
+  /** Bind a queued batch to one owning lane. */
+  laneId?: string | null;
   maxSessions?: number;
   maxTurns?: number;
   contextWindow?: number;
@@ -259,6 +261,7 @@ export async function runDistillSweep(
 
   const batch = await claimDistillBatch(deps.pool, {
     ...(deps.namespace !== undefined ? { namespace: deps.namespace } : {}),
+    ...(deps.laneId !== undefined ? { laneId: deps.laneId } : {}),
     ...(deps.maxSessions !== undefined
       ? { maxSessions: deps.maxSessions }
       : {}),
@@ -361,6 +364,10 @@ export function makeMemoryDistillHandler(
     // default for a recurring maintenance job. Values are read defensively
     // because a job row is durable and may predate a code change.
     const payload = job.payload ?? {};
+    const laneId =
+      payload.lane_id === null || typeof payload.lane_id === "string"
+        ? payload.lane_id
+        : undefined;
     const maxSessions =
       typeof payload.max_sessions === "number"
         ? payload.max_sessions
@@ -377,6 +384,7 @@ export function makeMemoryDistillHandler(
       // one was scoped. A null namespace is a deliberate global sweep, which is
       // what a maintenance identity is for -- not an error.
       ...(job.namespace !== null ? { namespace: job.namespace } : {}),
+      ...(laneId !== undefined ? { laneId } : {}),
       ...(maxSessions !== undefined ? { maxSessions } : {}),
       ...(maxTurns !== undefined ? { maxTurns } : {}),
       distillJobId: job.id,
@@ -398,10 +406,12 @@ export function makeMemoryDistillHandler(
 export function buildMemoryDistillEnqueue(input: {
   sweepLabel: string;
   namespace?: string;
+  laneId?: string | null;
   maxSessions?: number;
   maxTurns?: number;
 }) {
   const payload: Record<string, unknown> = {};
+  if (input.laneId !== undefined) payload.lane_id = input.laneId;
   if (input.maxSessions !== undefined) payload.max_sessions = input.maxSessions;
   if (input.maxTurns !== undefined) payload.max_turns = input.maxTurns;
 

@@ -14,12 +14,17 @@ unit tests that would dial a server.
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
 import pytest
 
 from conftest import RecordingLane, operator_line, write_lines
-from openbrain.apps.capture.langfuse_emitter import INGESTION_SUFFIX, sink_host
+from openbrain.apps.capture.langfuse_emitter import (
+    INGESTION_SUFFIX,
+    LangfuseEmitter,
+    sink_host,
+)
 from openbrain.apps.capture.observe import (
     OBSERVE_KEY_PREFIX,
     observation_active,
@@ -33,18 +38,18 @@ from openbrain.apps.hooks.session import (
     run_stop,
     run_subagent_stop,
 )
+from openbrain.apps.hooks.stop import loaded_observation
 from openbrain.config import (
     CaptureSettings,
     ObservationSettings,
     UnknownEnvironmentVariableError,
     load_observation_settings,
 )
+from openbrain.models.turn import RawTurn, TurnRole, TurnUsage
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from pathlib import Path
-
-    from openbrain.models.turn import RawTurn
 
 
 class RecordingEmitter:
@@ -352,3 +357,153 @@ class TestObservationSettingsResolution:
     def test_a_secret_never_appears_in_the_repr(self) -> None:
         settings = observation_settings()
         assert "sk-lf-test" not in repr(settings)
+
+
+class FakeObservation:
+    """The two methods ``_observe_turn`` uses on what it starts."""
+
+    def __init__(self) -> None:
+        """Start un-ended, so a test can prove the observation was closed."""
+        self.ended = False
+
+    def end(self) -> None:
+        self.ended = True
+
+
+class FakeClient:
+    """Records the kwargs each observation was started with.
+
+    Deliberately NOT a real ``Langfuse``: the assertion here is about the
+    arguments this module composes, and a real client would dial the fleet
+    server (the failure #544 pinned).
+    """
+
+    def __init__(self) -> None:
+        """Start with nothing recorded."""
+        self.started: list[dict[str, object]] = []
+
+    def start_observation(self, **kwargs: object) -> FakeObservation:
+        self.started.append(kwargs)
+        return FakeObservation()
+
+
+def observed(turn: RawTurn) -> dict[str, object]:
+    """The kwargs ``_observe_turn`` passes for one turn."""
+    client = FakeClient()
+    LangfuseEmitter._observe_turn(client, turn)  # noqa: SLF001
+    return client.started[0]
+
+
+class TestAGenerationCarriesWhatLangfusePrices:
+    """Model and usage reach the generation, under the names that PRICE (#560).
+
+    ``usage_details`` keys are matched against a model price's own unit names.
+    A key Langfuse does not recognise contributes nothing, so a generation with
+    the transcript's own ``input_tokens`` spelling looks populated in the UI and
+    still costs NULL -- which is why these tests assert the literal strings
+    rather than only the values.
+    """
+
+    async def test_the_generation_names_its_model(self) -> None:
+        turn = RawTurn(
+            turn_uuid="a1",
+            content="hi",
+            role=TurnRole.ASSISTANT,
+            model="claude-opus-5",
+        )
+
+        assert observed(turn)["model"] == "claude-opus-5"
+
+    async def test_usage_details_uses_the_keys_langfuse_prices_against(
+        self,
+    ) -> None:
+        turn = RawTurn(
+            turn_uuid="a1",
+            content="hi",
+            role=TurnRole.ASSISTANT,
+            model="claude-opus-5",
+            usage=TurnUsage(
+                input_tokens=2,
+                output_tokens=456,
+                cache_read_input_tokens=15510,
+                cache_creation_input_tokens=41238,
+            ),
+        )
+
+        assert observed(turn)["usage_details"] == {
+            "input": 2,
+            "output": 456,
+            "cache_read_input_tokens": 15510,
+            "cache_creation_input_tokens": 41238,
+        }
+
+    async def test_a_turn_without_usage_omits_the_field_entirely(self) -> None:
+        """Absent, not empty: ``{}`` would read as a turn measured at zero."""
+        turn = RawTurn(
+            turn_uuid="a1", content="hi", role=TurnRole.ASSISTANT, model="claude-opus-5"
+        )
+
+        assert "usage_details" not in observed(turn)
+
+    async def test_a_turn_without_a_model_omits_the_field_entirely(self) -> None:
+        turn = RawTurn(turn_uuid="a1", content="hi", role=TurnRole.ASSISTANT)
+
+        assert "model" not in observed(turn)
+
+    async def test_a_user_turn_is_a_span_and_is_never_priced(self) -> None:
+        """Only the assistant produces a generation; a span has no cost."""
+        kwargs = observed(RawTurn(turn_uuid="u1", content="hi", role=TurnRole.USER))
+
+        assert kwargs["as_type"] == "span"
+        assert "model" not in kwargs
+        assert "usage_details" not in kwargs
+
+
+class TestTheSuiteNeverInheritsAnOperatorsSink:
+    """A developer's real observation coordinates must not reach a test (#544).
+
+    THE FAILURE THIS PINS. ``capture_stop_with`` accepts an injected
+    ``CaptureSettings`` but resolves the OBSERVATION section itself, from the
+    live process environment, on every call. On a machine whose shell carries
+    the four provisioned coordinates -- which the operator env file
+    ``claudex-observation.env`` supplies, so any hook-configured host has them
+    -- the unit suite built a real ``LangfuseEmitter`` and posted its fixture
+    transcripts to the fleet server. ``emit`` ends in ``client.shutdown()``,
+    which BLOCKS draining the OpenTelemetry batch worker, so
+    ``test_capture_outage_notice`` hung indefinitely at test 8 of 45 rather
+    than failing. A hang is the worst shape for this: it reports nothing, and
+    it looked like the branch that merely UNMASKED it (declaring
+    ``OPENBRAIN_ALLOW_INSECURE_HTTP`` stopped the typo check from rejecting the
+    load, which had been shadowing the sink) was the branch that caused it.
+
+    Asserted at ``loaded_observation`` and at the environment itself, rather
+    than by running the hook: the hook's symptom is a HANG, and a test that
+    hangs to prove a hang reports nothing and blocks the suite behind it. These
+    two are the boundary that reads the environment and the environment it
+    reads; the autouse ``_clean_environment`` fixture in ``conftest`` is what
+    keeps both inert. Both fail without it -- verified by flipping the fixture
+    to ``autouse=False`` in an operator shell, 2026-08-04.
+    """
+
+    def test_ambient_coordinates_do_not_activate_the_sink(self) -> None:
+        """The section the hook resolves for itself is inert under the fixture."""
+        resolved = loaded_observation()
+        assert resolved is not None
+        assert observation_active(resolved) is False
+
+    def test_the_environment_the_hook_reads_carries_no_openbrain_variables(
+        self,
+    ) -> None:
+        """No ``OPENBRAIN_*`` survives into a test, whatever the shell holds.
+
+        The one exception is the ``OPENBRAIN_TEST_*`` prefix the ``-m live``
+        gate addresses its playground service through; clearing that would make
+        the live gate pass having run nothing.
+        """
+        leaked = [
+            name
+            for name in os.environ
+            if name.upper().startswith("OPENBRAIN_")
+            and not name.upper().startswith("OPENBRAIN_TEST_")
+        ]
+        assert leaked == []

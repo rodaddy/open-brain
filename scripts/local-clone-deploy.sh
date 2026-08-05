@@ -40,6 +40,9 @@
 #   OPENBRAIN_RUNTIME_NAME      runtime dir name under the root (default "app")
 #   OPENBRAIN_CLONE_ENV_FILE    env file to migrate against (default <root>/local-clone.env)
 #   OPENBRAIN_SERVICE_LABEL     launchd label to restart, if any
+#   OPENBRAIN_NATS_WORKER_LABEL NATS worker launchd label to kickstart, if any
+#                               (e.g. com.rico.open-brain-local-nats-worker).
+#                               Unset = no worker installed; nothing happens.
 set -euo pipefail
 
 REPO_DIR="${OPENBRAIN_REPO_DIR:-/Volumes/ThunderBolt/Development/open-brain}"
@@ -50,6 +53,14 @@ STAGING_DIR="${RUNTIME_DIR}.next"
 PREVIOUS_DIR="${RUNTIME_DIR}.previous"
 ENV_FILE="${OPENBRAIN_CLONE_ENV_FILE:-${CLONE_ROOT}/local-clone.env}"
 SERVICE_LABEL="${OPENBRAIN_SERVICE_LABEL:-}"
+# The NATS worker is a SEPARATE launchd service (docs/core01-nats-worker-runbook.md
+# "Boundary"), so swapping the runtime directory under it leaves it executing the
+# PREVIOUS revision's scripts/run-nats-worker.ts until something restarts it.
+# core01's deploy has always kickstarted its worker
+# (scripts/core01-deploy-local.sh NATS_WORKER_LABEL); this script did not, which
+# meant a local deploy silently left the two ingresses on different revisions.
+# Empty by default so a clone with no worker installed is unaffected.
+NATS_WORKER_LABEL="${OPENBRAIN_NATS_WORKER_LABEL:-}"
 BUN_BIN="${BUN_BIN:-/opt/homebrew/bin/bun}"
 
 log() { printf '%s local-clone-deploy: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1"; }
@@ -62,6 +73,25 @@ restart_service() {
   log "restarting ${SERVICE_LABEL}"
   launchctl kickstart -k "gui/${uid}/${SERVICE_LABEL}" \
     || fatal "could not restart ${SERVICE_LABEL}"
+}
+
+# Restart the NATS worker onto the newly-swapped runtime.
+#
+# NON-FATAL by design, matching core01's WARN (scripts/core01-deploy-local.sh).
+# The HTTP service is the deploy's success criterion and has a revision proof
+# behind it; the NATS worker is a second, optional ingress. A clone that has
+# never installed the worker is the COMMON case, and failing the deploy for a
+# service the operator deliberately does not run would be wrong. The warning is
+# still loud, because a worker that exists and did not restart is serving the
+# previous revision.
+restart_nats_worker() {
+  [[ -n "$NATS_WORKER_LABEL" ]] || return 0
+  local uid
+  uid="$(id -u)"
+  log "restarting ${NATS_WORKER_LABEL}"
+  if ! launchctl kickstart -k "gui/${uid}/${NATS_WORKER_LABEL}"; then
+    log "WARN: could not restart NATS worker ${NATS_WORKER_LABEL}; it may still be serving the PREVIOUS revision"
+  fi
 }
 
 # Health is checked against the port the CLONE env declares, not a hardcoded
@@ -200,6 +230,7 @@ if [[ "${1:-}" == "--rollback" ]]; then
   PRE_ROLLBACK_PID="$(listening_pid "$ROLLBACK_PORT")"
   log "pre-rollback listener on port ${ROLLBACK_PORT}: pid ${PRE_ROLLBACK_PID:-<none>}"
   restart_service
+  restart_nats_worker
 
   if [[ -n "$SERVICE_LABEL" ]]; then
     # Same standard of proof as a deploy. Rolling back is exactly when a false
@@ -289,6 +320,7 @@ PRE_RESTART_PID="$(listening_pid "$CLONE_PORT")"
 log "pre-restart listener on port ${CLONE_PORT}: pid ${PRE_RESTART_PID:-<none>}"
 
 restart_service
+restart_nats_worker
 
 if [[ -n "$SERVICE_LABEL" ]]; then
   # Order matters: prove the process FIRST, then check health. Reversing these
@@ -310,6 +342,7 @@ if [[ -n "$SERVICE_LABEL" ]]; then
       mv "$PREVIOUS_DIR" "$RUNTIME_DIR"
       rollback_pid="$(listening_pid "$CLONE_PORT")"
       restart_service
+      restart_nats_worker
       # The rollback gets the same standard of proof as the deploy. A rollback
       # that "succeeded" because the failed process still held the port would
       # leave the broken revision serving under a reassuring log line.

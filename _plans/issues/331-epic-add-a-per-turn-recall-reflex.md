@@ -3,11 +3,12 @@
 
 # #331 — [Epic] Add a per-turn recall reflex
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: enhancement, memory
 Created: 2026-07-22T14:33:54Z
-Updated: 2026-07-22T14:34:08Z
+Updated: 2026-08-04T23:25:36Z
+Closed: 2026-08-04T23:25:36Z
 
 ---
 
@@ -58,3 +59,17 @@ Add a runtime-owned per-turn reflex that detects salient entities and concepts, 
 - Prompt placement stays client/runtime-owned; no implicit MCP `_meta` injection.
 - Observability remains content-free.
 - Dream planning remains dry-run-safe unless a separately authorized mutating wrapper is used.
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-04T23:25:35Z
+
+Closing 2026-08-04 — I did not stop at "all children closed". The epic carries its own acceptance and its own Validation section, and an epic whose children merged two weeks and one "rewrite" commit ago is exactly where code silently disappears.
+
+MERGED: all four children are CLOSED with merged PRs — #354 (332, bounded turn concepts), #359 (333, prior-context suppression), #361 (334, cited reflex pointers), #367 (335, live A/B suppression gate, merged 2026-07-23T20:04:31Z). Code confirmed present on main at `2a8d2db` AFTER the `eb84b02` rewrite: `server/tools/agent-context-pack.ts` exposes `agent_reflex_pointers`, `src/prior-context-suppression.ts` and `python/openbrain-memory/src/openbrain_memory/turn_concepts.py` both exist, and the live harness ships as `eval/open-brain/live/reflex-ab-{gate,fixtures,setup,cli,types}.ts`.
+
+RUNNING: I ran the eval suite myself — 194 pass / 0 fail across 9 files, plus 32 pass on the suppression/context-pack unit tests. The epic's three acceptance bullets are each evidenced. End-to-end detect/recall/suppress/pointer and "reduces redundant resurfacing" are proven by the three-arm hosted receipt in PR #367: suppression OFF → 6 pointers with 2 already-known resurfaced; unsuppressed CONTROL identical at 2 (so the baseline is stable, not vacuous); suppression ON → 4 pointers with 0 resurfaced and 3/3 net-new still present; suppression delta 2; negative namespace denied with 0 leaks; teardown 8/8. That control arm is what distinguishes real suppression from a flaky recall run. "No result injected through MCP `_meta`" is held by the client-owned-placement assertion in the same receipt. The Validation items (REFLEX-4 against EVAL-3 in an isolated namespace, no raw turn or memory content in logs) are covered by the sealed gate's content-free structured receipt.
+
+Zero open children; nothing left to build.

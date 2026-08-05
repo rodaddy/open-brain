@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "fixture_id": "open-brain-scenarios-v1",
+  "description": "Scripted live and fake-transport scenarios for capture, durable memory, and checkpoint resume behavior.",
+  "scenarios": [
+    {
+      "id": "capture-round-trip",
+      "kind": "capture_round_trip",
+      "request": {
+        "operation": "capture",
+        "distilled": true,
+        "content": "Scenario {{run_id}} capture round-trip marker.",
+        "event_type": "decision",
+        "scope": {
+          "agent": "scenario-eval",
+          "platform": "eval",
+          "server_id": "open-brain-scenarios",
+          "channel_id": "capture-round-trip",
+          "session_key": "eval:scenario:{{run_id}}:capture"
+        },
+        "optional_request_fields": {
+          "candidate_type": "durable_decision",
+          "memory_lifecycle_action": "candidate"
+        }
+      }
+    },
+    {
+      "id": "durable-memory-pack-shape",
+      "kind": "durable_memory_shape",
+      "seed": {
+        "table": "thoughts",
+        "content": "Scenario {{run_id}} marlin telemetry cache marker.",
+        "tags": ["eval", "scenario-578"]
+      },
+      "request": {
+        "query": "Scenario {{run_id}} marlin telemetry cache marker",
+        "budget_max_tokens": 1200,
+        "scope": {
+          "agent": "scenario-eval",
+          "platform": "eval",
+          "server_id": "open-brain-scenarios",
+          "channel_id": "durable-memory",
+          "session_key": "eval:scenario:{{run_id}}:durable-memory"
+        }
+      },
+      "expected": {
+        "section": "durable_memory",
+        "min_items": 1
+      }
+    },
+    {
+      "id": "checkpoint-wrap-round-trip",
+      "kind": "checkpoint_round_trip",
+      "event": {
+        "operation": "capture",
+        "distilled": true,
+        "content": "Scenario {{run_id}} lane event survives checkpoint resume.",
+        "event_type": "decision",
+        "scope": {
+          "agent": "scenario-eval",
+          "platform": "eval",
+          "server_id": "open-brain-scenarios",
+          "channel_id": "checkpoint-round-trip",
+          "session_key": "eval:scenario:{{run_id}}:checkpoint"
+        }
+      },
+      "checkpoint": {
+        "operation": "checkpoint",
+        "distilled": true,
+        "summary": "Scenario {{run_id}} checkpoint summary.",
+        "key_decisions": ["Keep the scripted lane event visible after resume."],
+        "next_steps": ["Verify the resumed lane context."],
+        "scope": {
+          "agent": "scenario-eval",
+          "platform": "eval",
+          "server_id": "open-brain-scenarios",
+          "channel_id": "checkpoint-round-trip",
+          "session_key": "eval:scenario:{{run_id}}:checkpoint"
+        }
+      }
+    }
+  ]
+}

@@ -246,6 +246,7 @@ describe("live config validation", () => {
     expect(config.negativeToken).toBe("primary-token");
     expect(config.negativeTokenIsDistinct).toBe(false);
     expect(config.primaryNamespace).toBe("eval-live-recall-run-7");
+    expect(config.project).toBe("open-brain");
   });
 });
 

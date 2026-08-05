@@ -307,6 +307,36 @@ URL + token). The receipt (`schema: openbrain.reflex_ab_gate.v1`) is
 content-free: only ids, namespaces, labels, counts, and booleans — no memory
 bodies, tokens, or secrets.
 
+## Scripted Scenario Gate (#578 phase 1)
+
+The scenario gate extends the existing live harness with scripted
+input-to-asserted-output fixtures. It uses the same opt-in environment,
+per-invocation throwaway namespace derivation, real MCP client/fake caller seam,
+content-free receipt discipline, and EVAL-3 teardown tally.
+
+```bash
+bun run eval:scenarios
+bun run eval:scenarios -- --json
+bun run eval:scenarios -- --fixture eval/open-brain/fixtures/scenarios-v1.json
+```
+
+`fixtures/scenarios-v1.json` contains the first three scenarios:
+
+- provider capture followed by exact `session_context` read-back (the write
+  receipt alone never proves persistence), including named failures for
+  lost/non-durable receipts and expected request keys reported as ignored;
+- a real-query `durable_memory` pack request carrying an explicit token budget,
+  with section/item shape and serialized whole-pack accounting assertions;
+- capture + checkpoint + resume-read, asserting the lane event and checkpoint
+  summary both surface.
+
+Plain `bun test` runs these against a fake `ScenarioTransport`; no service or
+PostgreSQL connection is touched. Live mode uses the installed
+`openbrain-memory` provider for capture/checkpoint, the existing MCP transport
+for reads and pack assembly, and exact-id cleanup for the records created by the
+run. Output contains only fixture/scenario ids, namespace labels, counts,
+statuses, booleans, and named failure classes.
+
 ## Next Expansion Points
 
 - Add a live Open Brain adapter that loads fixtures into an isolated namespace

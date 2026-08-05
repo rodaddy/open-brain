@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: wayfinder:grilling
 Created: 2026-07-30T01:04:26Z
-Updated: 2026-07-30T01:04:26Z
+Updated: 2026-08-04T23:27:30Z
 
 ---
 
@@ -47,3 +47,60 @@ teaches agents to route around the guard, which is exactly how the `Grep`-with-a
 capital-G workaround happened.
 
 Type: grilling (HITL). Where the hard edges go is Rico's call.
+
+---
+
+## Discussion (2)
+
+### rodaddy — 2026-08-03T01:03:51Z
+
+## The `PreToolUse` guard is now in Python. **The design question here is untouched and still yours.**
+
+PR #508 (merged) ports `_ob/scripts/ob-memory-provider/guard.ts` to `ob-guard` in `python/openbrain-provider`. Recording it because this issue owns the `PreToolUse` observation-vs-enforcement decision, and I want it on the record that the port did **not** quietly answer it.
+
+### What the port changed: the language. Nothing else.
+
+Every verdict is the TypeScript's, proven rather than asserted. 128 payloads were fed to the *running* `guard.ts` as a subprocess — the way the hook feeds it — and its stdout captured byte for byte. That recording is the test fixture. Then both real executables, `bun guard.ts` and the installed `.venv/bin/ob-guard`, were run over all 128:
+
+```
+cases compared: 128
+stdout mismatches (live TS vs installed ob-guard): 0
+non-zero ob-guard exits: 0 []
+```
+
+The corpus covers all 43 cases `guard.test.ts` names plus 85 more (the `Shell` tool, non-shell tools, malformed shapes, the oversized fast path).
+
+### Two known gaps are preserved on purpose — and they are relevant to this issue
+
+The TypeScript does **not** block either of these, because `(` and `then` lex into command position:
+
+- `( mcp2cli open-brain search_all )`
+- `if true; then mcp2cli open-brain search_all; fi`
+
+I had predicted both as blocks; the recording corrected me. They are pinned by name in `TestKnownGapsArePinned` so nothing closes them by accident.
+
+**These are real evasions of a real guard**, and they are pre-existing live behaviour, not introduced by the port. Closing them is a behaviour change, which makes it this issue's call and not a port's. If the answer here turns out to be "enforcement, and it must actually hold," these two are concrete work items — and they are now cheap to fix and cheap to prove, because the fixture harness exists.
+
+### #451 stays open by construction, not by promise
+
+The port is deliberately **not** wired into `openbrain.apps.hooks`. That package's `pre_tool_use.py` is an explicit stub whose docstring says not to conflate observation with enforcement; `ob-guard` is the separate enforcement tool that stub refers to. Nothing in the merged change decides whether the *capture* app owns any `PreToolUse` behaviour.
+
+### State, per LAW 0
+
+- Port: **MERGED**, gates green (ruff, ruff format, mypy strict, 425 tests; `python-provider` and `contract-parity` CI green).
+- Live registration: **UNCHANGED**. `~/.claude/settings.json` and the Codex-sol profile both still run `bun .../guard.ts`. Nothing under `~/.claude` or `~/.claudex` was touched; the settings swap is a separate operator action.
+- The decision this issue exists for: **OPEN**.
+
+The replacement registration line, for whenever that swap happens:
+
+```
+sh /Users/rico/.local/share/openbrain-memory/env/openbrain-hook-env ob-guard
+```
+
+Latency, measured over 10 invocations: ~76 ms for the Python against ~20 ms for bun. Both well inside the registered `"timeout": 5`; the ~4x is interpreter startup.
+
+---
+
+### rodaddy — 2026-08-04T23:27:30Z
+
+2026-08-04 — state correction, not a resolution. The design question this issue owns (PreToolUse as observation vs enforcement) is still OPEN; `python/openbrain/src/openbrain/apps/hooks/pre_tool_use.py` remains the deliberate stub. What changed: the operator settings swap the 2026-08-01 comment listed as pending is DONE. RUNNING — `~/.claude/settings.json:334` now registers `sh /Users/rico/.local/share/openbrain-memory/env/openbrain-hook-env ob-guard`, not `bun .../guard.ts`. Read the earlier "Live registration: UNCHANGED" line as superseded. Consequence for this ticket: the two pinned known gaps (`( mcp2cli open-brain search_all )` and `if true; then mcp2cli open-brain search_all; fi`, both pinned in `TestKnownGapsArePinned`) are now live in the Python guard rather than the TypeScript one. If this issue resolves to "enforcement, and it must hold", those two are the concrete work items and the recorded fixture harness makes them cheap to prove.

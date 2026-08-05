@@ -216,6 +216,8 @@ describe("local clone launcher", () => {
       SSH_AUTH_SOCK: "/should/not/be/inherited",
       CORE01_HOST: "10.71.1.21",
       AUTH_TOKEN_USER_LOCAL: "rico:local-user-token",
+      OPENBRAIN_TRACING_ENABLED: "1",
+      OPENBRAIN_TRACING_ENDPOINT: "http://langfuse.local:3000",
     };
     const deps = fakeDependencies({
       child: {
@@ -239,6 +241,12 @@ describe("local clone launcher", () => {
     expect(spawnedEnv).toEqual(buildChildEnvironment(env));
     expect(spawnedEnv?.DB_PASSWORD).toBe("local-secret");
     expect(spawnedEnv?.AUTH_TOKEN_USER_LOCAL).toBe("rico:local-user-token");
+    // #530: the tracing coordinates must reach the server child, or
+    // createTracingRuntime silently stays off while the env file says on.
+    expect(spawnedEnv?.OPENBRAIN_TRACING_ENABLED).toBe("1");
+    expect(spawnedEnv?.OPENBRAIN_TRACING_ENDPOINT).toBe(
+      "http://langfuse.local:3000",
+    );
     expect(spawnedEnv).not.toHaveProperty("PATH");
     expect(spawnedEnv).not.toHaveProperty("SSH_AUTH_SOCK");
     expect(spawnedEnv).not.toHaveProperty("CORE01_HOST");

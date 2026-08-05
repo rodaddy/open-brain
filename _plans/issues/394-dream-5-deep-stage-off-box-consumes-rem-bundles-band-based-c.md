@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: enhancement
 Created: 2026-07-25T00:21:31Z
-Updated: 2026-07-25T00:21:31Z
+Updated: 2026-08-04T23:27:33Z
 
 ---
 
@@ -94,3 +94,11 @@ page**. Roughly: 20 is reviewable, 200 gets skipped. REM over-prescription
 - Items above the commit band appear in durable tables with provenance.
 - Items in the review band appear on the nightly page and nowhere else.
 - A/B harness can run both modes and compare recall.
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-04T23:27:33Z
+
+2026-08-04 status. MERGED: `src/dream-deep.ts` landed in PR #455 (2026-08-01) and builds REM-fed review bundles. WRITTEN: the confidence-band commit table in this body is SUPERSEDED — per the 2026-07-28 operator decision (`docs/decisions/let-everything-pass-grading.md`, encoded in migration 037:59-63), Deep does not commit at all and writes nothing to `candidate_memory`; the operator queue is `reviewed_at IS NULL` with no band filter and no machine suppression path. RUNNING: Deep executes on-box via `scripts/dream-deep-run.ts`, not off-box on Sol/Opus. Still open: off-box placement, and the A/B recall harness (mode A vs mode B) which does not exist.

@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: wayfinder:task
 Created: 2026-07-29T19:21:33Z
-Updated: 2026-07-29T19:21:33Z
+Updated: 2026-08-01T06:04:43Z
 
 ---
 
@@ -43,3 +43,37 @@ full text on trigger. Index-only is what already failed: an agent that does not
 know a rule exists never searches for it.
 
 Type: task (AFK).
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-01T06:04:43Z
+
+## Resolution status — retrieval + routing is RUNNING; one operator decision remains (index name)
+
+Investigated against live state (2026-08-01). The substance of this ticket — the policy layer being in **no** index — is **already fixed and RUNNING**, built as work items 1, 2, and 6 of `_plans/canon-always-known.md` on 2026-07-30/31, *after* this ticket was filed. The one thing not literally satisfied is the proposed index **name** `policy`, which is now a deliberate operator decision (see DECIDE-SURFACED below), not a build gap.
+
+### What exists today (observed, not inferred)
+
+- A shared-policy qmd index over `_DOCS` + `_ob` (+ the agent-harness config: `.claude`/`.codex`/`.claudex` skills, hooks, workflows) — **860 documents**, `_ob` 567 / `_DOCS` 85, **zero** third-party. Named **`global_docs_instructions`**, not `policy`.
+- Built by the **existing parameterized builder**, no bespoke script: `QMD_INDEX_SOURCES="$D/_DOCS $D/_ob …" ROOT="$D" INDEX=global_docs_instructions qmd-reference-index`. `aqmd up internal` refreshes it. Dry-run confirmed it drives the two sources.
+- **Routing is wired and RUNNING.** A bare `aqmd "question"` from *any* repo appends a `--- shared policy: _DOCS + _ob ---` block automatically; `aqmd internal "q"` queries it alone. `aqmd all`/`aqmd fleet` are retired with pointers.
+
+### Acceptance criteria
+
+1. **`aqmd search` for a `_DOCS`-only rule returns it** — **MET (RUNNING).** The exact buzz-incident file, `_DOCS/QMD_INDEXES.md`, returns at **93%** for `aqmd internal "how do I build a named research index for third-party upstream clones without dirtying them"`, and is appended at rank 2 to a bare `aqmd "qmd research index naming standard…"` run from the *`qmd` repo* (a different repo). The rule that was "in no index" when this ticket was filed is now ambient everywhere.
+2. **Index named `policy`, rebuildable via the parameterized builder** — **PARTIAL.** Rebuildable via the parameterized builder: **MET.** Named `policy`: **NOT MET** — it is `global_docs_instructions`. See DECIDE-SURFACED.
+3. **Routing documented in the owning SOP where agents reach it** — **MET (RUNNING).** `_DOCS/QMD_INDEXES.md` carries the index (table row), the full `aqmd` routing table, the naming standard, and §2 the research-index procedure ("`qmd-backfill` is wrong here… dirties a third-party checkout"). `_ob/skills/brain/workflows/canon.md` carries the one-line "never `qmd-backfill` a repo you do not own" rule pointing at the 150-line procedure.
+
+### DECIDE-SURFACED — index name: `policy` vs `global_docs_instructions`
+
+This ticket (filed 2026-07-29) proposes the name `policy`. On **2026-07-30 Rico deliberately renamed** this index (from `fleet`) to `global_docs_instructions`, documented in `_ob/bin/qmd-reference-index`, `_ob/bin/aqmd` (`SHARED_INDEX="global_docs_instructions"`), and `_DOCS/QMD_INDEXES.md`, on the standard "the name must state the CONTENTS, not a scope the reader has to infer." Renaming to `policy` now would (a) contradict that decision, (b) regress running routing (`aqmd internal` + every bare-`aqmd` append point at the current name), and (c) force a GPU-bound rebuild for a rename only. **Decision for Rico:** accept `global_docs_instructions` as the fulfillment of this criterion (retitle the criterion), or authorize a rename to `policy` (I'll rebuild + re-point aqmd + resync the SOP). I did not rename unilaterally.
+
+### Build / commit
+
+No open-brain source change is required: this feature lives in the **Development** repo (`_ob/bin/aqmd`, `_ob/bin/qmd-reference-index`, `_DOCS/QMD_INDEXES.md`) and already landed there (commits `baa51bd`, `0977632`, `b0a1f47`, `d87c1bb`). Committing a Development artifact onto the open-brain branch would cross the git boundary, so no such commit was made. Pre-existing uncommitted `_DOCS/QMD_INDEXES.md` in the Development tree (the `fleet`→`global_docs_instructions` doc sync) is not this session's work and was left untouched.
+
+### Why still OPEN
+
+Criterion 2's literal `policy` name is unmet and only Rico can decide it. Closing now would be flipping state without meeting the named contract. Everything the ticket exists to prevent — an agent unable to find a `_DOCS`-only procedure — is RUNNING; the residue is a naming decision, above.

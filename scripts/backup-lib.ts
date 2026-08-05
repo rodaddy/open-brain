@@ -961,19 +961,47 @@ export function redactSecret(text: string, secret: string | undefined): string {
 }
 
 /**
+ * Strip ANSI escape sequences and other C0/C1 control characters from a line
+ * of child-process stderr.
+ *
+ * A child that believes it is writing to a terminal — or that has `FORCE_COLOR`
+ * in its inherited environment — wraps its own diagnostics in SGR sequences,
+ * so the bytes arriving on the pipe are `ESC[0mESC[31mpg_dump: error: ...`
+ * rather than `pg_dump: error: ...`. Those leading escapes defeat every
+ * `^`-anchored classifier downstream, and control characters have no business
+ * in a receipt regardless: they are non-printable payload that can reposition
+ * a cursor or recolor an operator's terminal when a receipt is displayed.
+ */
+function stripControlSequences(line: string): string {
+  return (
+    line
+      // OSC sequences (ESC ] ... BEL, or ESC ] ... ESC \) consumed whole,
+      // payload included: the title/hyperlink text is data-bearing.
+      .replace(/\u001B\][^\u0007\u001B]*(?:\u0007|\u001B\\)/g, "")
+      // CSI sequences (ESC [ ... final byte): colors, cursor moves.
+      .replace(/\u001B\[[0-?]*[ -\/]*[@-~]/g, "")
+      // Remaining two-character escapes (ESC followed by one final byte).
+      .replace(/\u001B[@-Z\\-_]/g, "")
+      // Any leftover C0/C1 control characters, including a bare ESC or BEL.
+      .replace(/[\u0000-\u001F\u007F-\u009F]/g, "")
+  );
+}
+
+/**
  * Summarize child pg_dump/pg_restore stderr WITHOUT carrying row content.
  * Raw pg stderr can embed literal row data (COPY "CONTEXT: ... line N" blocks,
  * DETAIL/HINT lines, quoted values); receipts certify content-freedom, so
- * only an error CLASS may survive: the first non-empty stderr line, with the
- * tool-name/severity prefixes stripped, truncated at the first ':' or quote
- * character (everything after is potentially data-bearing detail).
+ * only an error CLASS may survive: the first non-empty stderr line, stripped
+ * of terminal control sequences, with the tool-name/severity prefixes removed,
+ * truncated at the first ':' or quote character (everything after is
+ * potentially data-bearing detail).
  */
 export function summarizeChildStderr(stderrText: string): string {
   const firstLine =
     stderrText
       .split(/\r?\n/)
-      .find((l) => l.trim().length > 0)
-      ?.trim() ?? "";
+      .map((l) => stripControlSequences(l).trim())
+      .find((l) => l.length > 0) ?? "";
   if (firstLine.length === 0) return "no stderr output";
   let line = firstLine;
   for (let i = 0; i < 4; i++) {

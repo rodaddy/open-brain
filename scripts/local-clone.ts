@@ -151,6 +151,12 @@ export function buildChildEnvironment(
     if (key.startsWith("AUTH_TOKEN_USER_") && configured !== undefined) {
       childEnv[key] = configured;
     }
+    // #530 server-side tracing: the four OPENBRAIN_TRACING_* variables must
+    // reach the server child or createTracingRuntime silently stays off — the
+    // same deploy coupling the hook wrapper documents for OPENBRAIN_OBSERVATION_*.
+    if (key.startsWith("OPENBRAIN_TRACING_") && configured !== undefined) {
+      childEnv[key] = configured;
+    }
   }
   return childEnv;
 }

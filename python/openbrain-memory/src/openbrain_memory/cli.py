@@ -110,6 +110,79 @@ _HELP_EXAMPLE = {
     },
 }
 
+# The example above is a REQUEST BODY, and a request body carries no identity.
+# base_url, token, and namespace come from the environment (or an explicit
+# `config` object), so the example alone does not run on a clean shell -- it
+# fails with "namespace must be a non-empty string" and says nothing about
+# where namespace was supposed to come from. The first client install
+# (2026-08-04) burned four round trips on exactly that. Name the requirement in
+# the help output itself, next to the example it qualifies.
+#
+# The variable names are VALUES in a list rather than keys of an object on
+# purpose. As `{"OPENBRAIN_TOKEN": "bearer token"}` the redactor matched the
+# key -- its rule is `"token": "..."` -- and replaced the DESCRIPTION with
+# [REDACTED], so the help hid its own explanation. The rule is right (a live
+# token in that shape must never print); the help just has to stop looking like
+# a credential it is not.
+_HELP_ENVIRONMENT = {
+    "required": [
+        "OPENBRAIN_BASE_URL -- bare scheme://host:port, no path",
+        "OPENBRAIN_NAMESPACE -- namespace for every request; NOT a request key",
+        "OPENBRAIN_TOKEN -- the bearer value sent as the Authorization header",
+    ],
+    "note": (
+        "The example is a request body and carries no identity. base_url, "
+        "token, and namespace are read from these variables, or from an "
+        "explicit top-level \"config\" object. Putting \"namespace\" at the top "
+        "level of the request does nothing."
+    ),
+}
+
+# Keys that are NOT request fields but that callers reach for anyway, mapped to
+# the sentence that says where each one actually lives. Silently folding these
+# into `ignored_optional_request_keys` produced a self-contradicting receipt:
+# `namespace` listed as ignored AND `namespace must be a non-empty string` as
+# the error, in the same JSON object. Ignoring a key is right when the key is
+# merely unrecognised; it is wrong when the key names a real setting the caller
+# is trying to set, because the request then fails for the exact thing the
+# receipt says was optional.
+#
+# Rejecting rather than aliasing is deliberate. `docs/memory-contract.md` and
+# `_CONFIG_KEYS` in runtime.py already give `config.namespace` as the explicit
+# override; accepting a second top-level spelling would add an undocumented
+# field with the same meaning. The error names the environment variable and the
+# config path instead.
+_MISPLACED_CONFIG_KEYS = {
+    "namespace": (
+        "namespace comes from OPENBRAIN_NAMESPACE in the environment, not the "
+        "request body; to override it in-request use "
+        '{"config": {"namespace": "..."}}'
+    ),
+    "base_url": (
+        "base_url comes from OPENBRAIN_BASE_URL in the environment, not the "
+        "request body; to override it in-request use "
+        '{"config": {"base_url": "..."}}'
+    ),
+    "token": (
+        "token comes from OPENBRAIN_TOKEN in the environment, not the request "
+        'body; to override it in-request use {"config": {"token": "..."}}'
+    ),
+}
+
+
+def _reject_misplaced_config_keys(
+    payload: Mapping[str, Any],
+    allowed: set[str],
+) -> None:
+    """Fail a request that puts a config setting at the top level.
+
+    Only for keys this operation does not itself define -- `ingest` owns a real
+    top-level ``namespace``, so it keeps it.
+    """
+    for key in sorted(_MISPLACED_CONFIG_KEYS):
+        if key in payload and key not in allowed:
+            raise ValueError(_MISPLACED_CONFIG_KEYS[key])
+
 
 def execute_json(
     payload: Mapping[str, Any],
@@ -192,6 +265,7 @@ def usage_output() -> dict[str, Any]:
                 for name, (description, _) in _OPERATION_SPECS.items()
             ],
             "example": _HELP_EXAMPLE,
+            "environment": _HELP_ENVIRONMENT,
         },
     ).as_dict()
 
@@ -326,6 +400,7 @@ def _project_request(
             f"unsupported operation: {_safe_text(operation)}; "
             f"valid operations: {_OPERATION_VOCABULARY}"
         )
+    _reject_misplaced_config_keys(payload, allowed)
     known_keys = _COMMON_KEYS | allowed
     projected = {key: value for key, value in payload.items() if key in known_keys}
     ignored_keys = sorted(

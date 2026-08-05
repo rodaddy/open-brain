@@ -3,11 +3,12 @@
 
 # #450 — Prove it: a cold session where Rico re-explains nothing
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: wayfinder:prototype
 Created: 2026-07-29T19:21:56Z
-Updated: 2026-07-29T19:21:56Z
+Updated: 2026-08-04T00:39:44Z
+Closed: 2026-08-04T00:39:44Z
 
 ---
 
@@ -36,3 +37,123 @@ Also settle the standing regression check: what proves this stays working a week
 later, without Rico noticing it broke.
 
 Type: prototype (HITL). Rico is the instrument; the agent cannot score this alone.
+
+---
+
+## Discussion (5)
+
+### rodaddy — 2026-08-01T23:25:43Z
+
+## Cold-loader punch-list resolved (mechanism) -- #450 stays OPEN for the operator re-run
+
+The 2026-08-01 cold test passed on content but failed the *mechanism* twice. Both
+were loader-transport bugs. Fixed and merged in #465 (`e6d1f1e`).
+
+### GAP 1 -- canon pack was diverted to a preview
+
+`openbrain-session-start` dumped the raw `agent_context_pack` JSON envelope
+(~30 KB of nested items, ids, citations, confidences, warnings) into
+`additionalContext`, and Claude Code persisted a payload that large to a file it
+surfaced as only a ~2 KB preview -- the session saw 2-3 of 31 items and could
+not name the sections.
+
+**Fix:** `session_start.render_pack` renders plain text -- a one-line header then
+every item on its own line (`[<lane>] <scope-key>: <rule text in full>`), all 31
+items, whole rule text. Formatting only (dropped the JSON envelope + per-item
+metadata bulk), not content reduction.
+
+**Proven live (installed hook, real 31-item pack):**
+
+| | bytes | shape |
+|---|---|---|
+| Before (raw JSON) | 30,072 | diverted to ~2 KB preview |
+| After (plain text) | 12,254 | 33 lines, inline |
+
+First lines of the live installed output:
+
+```
+CANON (openbrain.agent_context_pack.v1) | namespace=rico | sections: profile_guidance=10, process_guidance=14, repo_facts=7
+
+[user_preference] profile.no_preprod_rotation: Pre-prod / LAN-local (10.71.x) credentials get no rotation ceremony ...
+[user_preference] profile.no_flash_extraction: The lowest-tier models (flash/haiku) are usable ONLY when ...
+...
+```
+
+All 31 rules verbatim, 0 truncated (longest rule 645 chars, present whole).
+
+### GAP 2 -- episodic injected at startup, against the canon-only ruling
+
+The 57.8 KB `Lane: dev:open-brain (200 events)` block at SessionStart was **not**
+the canon hook. Injector identified from the cold-session transcript: a *second*
+`SessionStart` hook in this repo's own `.claude/settings.json` (matcher
+`startup|resume|clear`) running `_ob/skills/brain/scripts/resume.py --limit 200`
+-- its line-108 render is exactly that block.
+
+**Fix:** removed that `SessionStart` block from `.claude/settings.json`. Lane
+history no longer auto-injects. Episodic is now explicit-on-request -- the recap
+vocabulary ("session recap" / "where were we" / "continue", or `resume.py`
+directly) is the door. Canon still auto-loads every session via
+`openbrain-session-start`. Documented in `_plans/canon-always-known.md`.
+
+**Proven end to end:** a disposable `claude -p` session in this repo fired
+policy-refresh-gate + `openbrain-session-start` at SessionStart and **no**
+resume.py hook / **no** `Lane:` block; canon + policy refresh present, lane
+history absent.
+
+### Receipts
+
+- PR #465, squash-merged to `main` as `e6d1f1e`.
+- CI green (the #461 live-Postgres chunk-write flake hit the `pull_request`
+  `check` job on the identical commit and greened on rerun, matching that issue's
+  documented signature; the `push` run of the same commit passed first time).
+- `uv tool install --force python/openbrain` reinstalled; the installed
+  `openbrain-session-start` now emits the plain-text whole pack (measured above).
+
+**Left OPEN on purpose:** the operator is the instrument for this prototype. The
+mechanism is fixed and proven at the hook level; the outcome ("start cold,
+re-explain nothing") is closed only by the operator's own cold re-run.
+
+---
+
+### rodaddy — 2026-08-02T00:10:49Z
+
+Measured the Claude Code `additionalContext` inline behavior precisely and did the canon fit check. Doc: `_plans/hook-context-ceiling-2026-08-01.md` · PR #466 (do NOT merge — you pick the option).
+
+**Boundary (measured + doc-stated agree).** Claude Code 2.1.220 inlines `SessionStart` `additionalContext` up to **10,000 characters**; **10,001 diverts** to a persisted file + preview. Bisected by byte-exact transcript reads (`.attachment.content[0]`), repeated at the boundary — stable. Docs (`code.claude.com/docs/en/hooks`, 2026-08-01) state the same 10,000-char bound, unit = **characters**, uniform across events, **no setting/env var to raise it**.
+
+**Preview when diverted.** `<persisted-output>` wrapper (~2.3KB) with the full pack written to disk and the **first 2KB** of it shown inline — i.e. header + ~first 5–6 rules. That is the cold-session symptom on this issue.
+
+**Fit check (live canon, same client + `render_pack` as the hook).** 12,253 chars / 31 items. Pure rule text ALONE = **10,835 chars** — already over 10,000 before any prefix or header. Removing ONLY render scaffolding (`[lane] key:` prefixes 1,263 + header 123 + newlines) projects **10,865 chars → still does not fit**. The rules themselves are over budget; overhead removal alone can't land all 31 whole inline in one emission.
+
+**Knob?** None. No doc-sanctioned setting/env var raises the 10,000-char bound.
+
+**Three options (you decide — full projections in the doc):**
+1. Reduce rule text ~865+ chars → all 31 inline in one emission (edits rule text).
+2. Split into two ≤10,000-char emissions → both inline, zero rule-text change (INFERRED from per-hook per-string divert; needs a confirming probe).
+3. Accept the persisted file + preview, make the on-disk full pack first-class via a read pointer in the first 2KB.
+
+Method + probe scripts: `{temp_workspace}/open-brain/_validation-runs/hc-probe/`.
+
+---
+
+### rodaddy — 2026-08-02T00:12:24Z
+
+Cold-start context load: measured breakdown, CLAUDE-only actions (31 off-domain skill adapters relocated to `~/.claude/skills-ondemand/`, `~/.claude/CLAUDE.md` rewrite 10585->7383 bytes, MEMORY.md stub 1063->322), and the SHARED-router veto list are recorded in PR #467 (`_plans/cold-start-context-2026-08-02.md`). WRITTEN, not merged; a fresh cold `/context` re-run is the RUNNING proof and has not been done.
+
+---
+
+### rodaddy — 2026-08-02T00:41:04Z
+
+Router rule-level dedupe matrix (measured, not vibes) → PR #468, deliverable `_plans/router-dedupe-plan-2026-08-02.md`.
+
+Extends the cold-start context veto doc (`_plans/cold-start-context-2026-08-02.md`) with the granular rule-level layer under it: every router rule mapped to its `file:line` on each of the 7 surfaces + its live canon scope key + a residence verdict.
+
+Headline for the cold-session goal: **6 rules stated 3+ times, 13 stated 2×; canon already carries 32 items.** Safe Claude-only cuts now ≈ 0.5k tokens; the real ≈ 2-3k-token prize is stranded on the two shared `AGENTS.md` routers and is **gated on a Codex canon path** (Codex reads only the file, so cutting there before Codex has canon starves it). Per-repo canon confirmed real — `repo_facts` binds the active repo exactly — with 11 seeding candidates listed ready on approval.
+
+Veto artifact: DO NOT MERGE.
+
+---
+
+### rodaddy — 2026-08-04T00:39:44Z
+
+The cold-session proof has now been run for real, twice, and passed. (1) This machine: brand-new sessions receive CANON PACK 1/2 + 2/2 at SessionStart with no priming — who Rico is, the hard rules, the two-host rule, dogfood-is-real all arrive as canon (10 profile / 22 process / 7 repo_facts), and the standing proof card at `{temp_workspace}/open-brain/_scratch/ob-recall-proof.md` (v3) scripts the full 6-check verification: canon, resume, brief, limit, semantic recall, and write-path capture — all six passed on the 2026-08-03 run. (2) Off-repo/off-operator: Skippy's fresh Buzz session hydrated his own namespace's pack with zero priming. The 'Rico corrects nothing' bar: the failures this test was designed to surface were in fact surfaced and fixed during dogfooding (#515 resume bounds, #526 empty-skull) — which is the test doing its job, and the layer-thinness question it asked is answered: the remaining thin layer is per-agent canon content (empty skulls awaiting the #522 seeding), not the load path.

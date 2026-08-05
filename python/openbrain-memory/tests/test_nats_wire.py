@@ -31,6 +31,32 @@ def test_empty_env_token_rejected():
         build_context_pack_subject("   ")
 
 
+def test_wildcard_env_token_rejected():
+    """A '>' env token must be refused, not normalised (fleet-bus #222).
+
+    '>' is the NATS multi-token wildcard. Passed through, an env token that
+    derives from configuration or untrusted input produces a subject that
+    matches the entire tree — ``>.ob.memory.context_pack`` subscribes far wider
+    than the ob domain, and a consumer parsing the env back out of
+    ``msg.subject`` reads a wildcard-shaped key. Upstream's ``slug`` rejects it;
+    the local mirror must too, or the two paths disagree on what is a legal env.
+    """
+    with pytest.raises(ValueError, match="multi-token wildcard"):
+        build_context_pack_subject("a>b")
+    with pytest.raises(ValueError, match="multi-token wildcard"):
+        build_context_pack_subject(">")
+
+
+def test_star_env_token_still_allowed():
+    """'*' must NOT be rejected — it is a legal single subject token.
+
+    Upstream draws the line precisely here: '*' matches one token and is how
+    authorization grant patterns are built, so rejecting it would over-restrict
+    the mirror relative to fleet-nats.
+    """
+    assert build_context_pack_subject("*") == "*.ob.memory.context_pack"
+
+
 def test_request_envelope_has_fleet_wire_shape():
     envelope = build_request_envelope(
         msg_id="abc",

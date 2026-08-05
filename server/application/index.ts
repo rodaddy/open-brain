@@ -123,7 +123,12 @@ export function createShadowApplication(
   });
   const health = {
     databaseHealth: input.database.health,
+    hostname: input.config.transport.hostname,
     serverIp: input.config.transport.serverIp,
+    serverIps: input.config.transport.serverIps,
+    ...(input.config.transport.deployedRevision
+      ? { revision: input.config.transport.deployedRevision }
+      : {}),
     probeTimeoutMs: input.config.transport.healthProbeTimeoutMs,
     logger: transportLogger,
     ...(input.config.transport.embeddingBaseUrl

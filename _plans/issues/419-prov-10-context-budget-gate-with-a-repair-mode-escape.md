@@ -3,11 +3,12 @@
 
 # #419 — PROV-10: context budget gate with a repair-mode escape
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: none
 Created: 2026-07-25T23:36:39Z
-Updated: 2026-07-25T23:37:27Z
+Updated: 2026-08-04T23:25:23Z
+Closed: 2026-08-04T23:25:23Z
 
 ---
 
@@ -31,3 +32,58 @@ Observed again this session: after a compact, the gate blocked Task tools pendin
 
 ## Non-goals
 Changing the gate's policy about what it gates on when healthy.
+
+---
+
+## Discussion (2)
+
+### rodaddy — 2026-08-03T01:31:50Z
+
+## Ledger reconciliation: this issue and Development PR #75 are BOTH right, and they are not the same work
+
+Recording the true state, because the two repos currently disagree and a reader hitting either one alone gets a wrong answer. **Leaving this open on purpose** — see the last section.
+
+### What actually landed
+
+Development **PR #75** (`fix(policy): bounded repair mode and self-release for the context-budget gate`, merged 2026-08-02) says "Closes #419". It is merged and the code it shipped is RUNNING: the 15-minute self-release, `--event repair-enter`, named transitions, and the 988→4-module split of `context-budget-gate.ts`.
+
+But it fixed the gate **in TypeScript**, and this issue is the **Python port** of it. PR #75 states plainly that "the entry filename is deliberately unchanged… so no settings change is required" — a decision, made one day after the #420 cutover, to keep the gate on TypeScript. So the merge closed the *bug*, not the *port*.
+
+That is a real tension with the epic's governing decision (`_plans/issues/409-*.md:41`): "The bugs are fixed by being written correctly in Python, not fixed in TS first. A TS fix would be deleted by the port." This is **not a criticism of PR #75** — the gate deadlock was real and blocking, and fixing it there was the right call in the moment. It does mean the TS gate got *invested in* rather than retired, which moves the end state further away.
+
+### What just landed here, and what it does NOT do
+
+open-brain **#510** (`feat(receipts): the Python hooks write the gate state, breaking the circularity`) ports the gate's **state**, not the gate. Specifically:
+
+- The Python lifecycle hooks now WRITE `receipts.json` — `PostCompact` opens the compaction cycle, a `compact` `SessionStart` stamps the verified recall, `Stop` files the capture receipt.
+- Proven cross-language: the real `context-budget-gate.ts` runs under `bun` against a `receipts.json` only Python has touched, and unblocks. Red and green, on both unblock paths.
+
+**The gate itself is still TypeScript and still registered on six live events.** #510 removed the *circularity* (reader registered, writers not) — it did not remove the TypeScript dependency.
+
+### Why the circularity mattered
+
+The #420 cutover removed every hook registration that invoked the TypeScript writer, but left the reader registered. So the gate could block a session and nothing in the running hook chain could unblock it; the only remaining writer was the agent manually running the command the gate's own banner prints. That is what #510 fixed, and it is the prerequisite that makes porting the gate itself safe rather than a flag day.
+
+### Remaining scope for THIS issue
+
+1. Port `context-budget-gate.ts` to Python — 6 live registrations, and note PR #75 just rewrote it, so the port target moved.
+2. Decide the settings cutover for those registrations (the #420 pattern applies).
+3. `policy-refresh-gate.ts` (4 more live registrations) appears in **no** PROV issue at all — needs a home, here or its own.
+
+### Disposition
+
+**Stays OPEN.** The TS fix did not do this issue's work, and closing it would record a Python port that does not exist. Whether the port still makes sense given PR #75's investment is an operator call, not mine — flagging it rather than deciding it.
+
+<sub>Ledger from the 2026-08-02 provider archaeology pass; the keystone is open-brain#510.</sub>
+
+---
+
+### rodaddy — 2026-08-04T23:25:23Z
+
+Closing 2026-08-04 — the one comment that kept this open listed three remaining items; I verified each independently.
+
+MERGED: PR #509 (merged 2026-08-03T01:56:21Z, commit `1e194e2`) ported both gates to Python — `python/openbrain-provider/src/openbrain_provider/context_budget_gate.py` (763 lines) and `policy_refresh_gate.py` (573 lines), with 33-case byte-parity fixtures and a mutation-proven 15-minute self-release test. (1) The port exists and is split across modules: `context_budget_gate.py` (27KB) and `policy_refresh_gate.py` (18KB) alongside `gate_state.py`, `gate_shell.py`, `gate_presentation.py`, `gate_transcript.py`, `receipt_state.py`.
+
+RUNNING: (2) the settings cutover the PR deliberately deferred has happened. I parsed `/Users/rico/.claude/settings.json` directly — `openbrain-context-budget-gate` is registered on six events (post-compact, pre-compact, pre-tool-use, session-start, stop, user-prompt-submit) and `openbrain-policy-refresh-gate` on four, and I counted ZERO occurrences of `context-budget-gate.ts`, `policy-refresh-gate.ts`, or any `-gate.ts` string in the file. Both console scripts resolve on PATH (`~/.local/bin`), and `openbrain-context-budget-gate --event status` returns valid JSON carrying `repairModeActive`/`repairModeEnteredAt`/`repairModeExpiresAt`/`transitions`. (3) `policy-refresh-gate`'s homelessness is resolved by being ported and registered here.
+
+The issue's acceptance demands tests, not just code, and that is met by `tests/test_gate_repair.py`, whose 9 tests I ran (9 passed): the self-release test drives `readbackRequiredAt` to 15min+1s and asserts the gate unblocks Write with transition `self-released-after-timeout` and reason "15-minute read-back timeout elapsed"; a companion test proves the release never manufactures a recall receipt; repair mode is proven to admit Bash/Write/Edit, to NOT admit everything, to expire back into enforcement, and to refuse without a reason. Transitions are logged at every branch, satisfying "silence is a signal". Full provider suite: 584 passed.
