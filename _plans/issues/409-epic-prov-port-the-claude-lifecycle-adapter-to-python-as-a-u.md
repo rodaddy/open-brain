@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: none
 Created: 2026-07-25T23:34:17Z
-Updated: 2026-08-04T23:27:32Z
+Updated: 2026-08-05T05:17:57Z
 
 ---
 
@@ -85,6 +85,9 @@ Not aspirations — existing rules in `_DOCS/CODING_STANDARDS.md`, `king-capital
 
 - Rewriting `openbrain-memory` itself. It stays as-is and becomes a workspace member.
 - Generating a TS artifact. Deferred until a real TS consumer is demonstrated; none exists today.
+
+## Close-run map (2026-08-05 audit)
+Remaining open members: #413 (partial) #414 #416. #417 audit verdict: SUPERSEDED by the #523 content-ful observation lane (redact-not-exclude inverts its premise) — close pending operator sign-off since the content-free property was a stated security boundary.
 
 ---
 

@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: enhancement
 Created: 2026-07-25T00:20:12Z
-Updated: 2026-08-04T23:27:35Z
+Updated: 2026-08-05T05:17:53Z
 
 ---
 
@@ -135,6 +135,9 @@ have to decide, deep when it is not sure** — and then it asks.
 
 The more each sleep stage can do without becoming slow or overwhelmed, the more
 the next stage can do.
+
+## Close-run map (2026-08-05 audit)
+Open members incl. late additions: #390 #391 #393 #394 #395 #396 #397 #399, hosted-model successors #435 #436. #392 closed 2026-08-05 (audit-verified on main). #437 (web service) stays deferred until this epic works. Sequenced AFTER the capture/observability runs.
 
 ---
 

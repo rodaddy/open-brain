@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: wayfinder:map
 Created: 2026-07-29T19:20:32Z
-Updated: 2026-08-04T23:28:12Z
+Updated: 2026-08-05T05:17:56Z
 
 ---
 
@@ -162,6 +162,9 @@ consumer and must work first.
       cross-host live path is UNVERIFIED (no disposable LAN host; Air symlink
       pending on operator), and the prompt_id re-fire dedup residual is carried
       in `_plans/rewrite-gotchas.md`. Detail on #453.
+
+## Close-run map (2026-08-05 audit)
+This issue is the canon epic. Members: #451 (unskippable memory calls), #520 (seed repo facts), #522 (harvest — PRs #538/#539 draft, gated on Rico read-through), #433 (session events invisible to brain_answer — also feeds the #320 recall program). Done means a cold session anywhere resumes without re-explanation — the 2026-08-05 cold-start test mostly passed on the mini; the gap list lives in the session worklog.
 
 ---
 
