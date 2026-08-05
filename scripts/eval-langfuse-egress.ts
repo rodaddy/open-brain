@@ -430,10 +430,12 @@ export async function verifyLangfuseEgress(
     {
       label: "secret_scan",
       // An empty scanned set proves nothing about egress safety, so it reports
-      // skipped-no-data rather than pass. It stays non-blocking on its own —
-      // the arrival_count check above is fatal and already fails at zero
-      // traces, so a skip can never be the reason a run is green (issue #583).
-      passed: secretHitCount === 0,
+      // skipped-no-data AND fails: passed is coupled to the data, not to the
+      // absence of hits, so a caller passing expectedTraces: 0 cannot get a
+      // run certified secret-free while the scanner examined nothing (#583
+      // review finding — the arrival_count default was the only thing holding
+      // the old comment's claim, and it is caller-overridable).
+      passed: traces.length > 0 && secretHitCount === 0,
       fatal: true,
       observed: secretHitCount,
       detector_counts: scan.counts,

@@ -220,8 +220,35 @@ describe("Langfuse egress verification", () => {
     expect(check(receipt, "secret_scan")).toMatchObject({
       status: "skipped-no-data",
       observed: 0,
+      passed: false,
     });
     expect(check(receipt, "arrival_count")).toMatchObject({
+      passed: false,
+      fatal: true,
+    });
+    expect(receipt.passed).toBeFalse();
+  });
+
+  test("skipped-no-data fails the run even when the caller expects zero traces", async () => {
+    // Review finding on #584: with expectedTraces: 0 the arrival_count check
+    // passes (0 === 0), so if secret_scan's passed were decoupled from the
+    // data, a run would be certified secret-free while the scanner examined
+    // nothing. The skip itself must be a fatal failure.
+    const emptyTransport: HttpTransport = async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/api/public/traces") {
+        return Response.json({ data: [], meta: { totalPages: 1 } });
+      }
+      throw new Error(`unexpected request ${url.pathname}`);
+    };
+    const receipt = await verify([], {
+      transport: emptyTransport,
+      expectedTraces: 0,
+      expected: 0,
+    });
+
+    expect(check(receipt, "secret_scan")).toMatchObject({
+      status: "skipped-no-data",
       passed: false,
       fatal: true,
     });
