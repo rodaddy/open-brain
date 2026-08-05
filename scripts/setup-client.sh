@@ -290,29 +290,93 @@ with open(path, "w", encoding="utf-8") as handle:
 print("    OPENBRAIN_DEVELOPMENT_ROOT pass-through added to the wrapper")
 PY
 
-# The wrapper hardcodes ENV_FILE as an absolute path from the BUILD machine. If
-# this client's $HOME differs, that path is wrong and every hook silently fails
-# to find its env — so rewrite it to this machine's actual location.
-BUILD_ENV_PATH="$(python3 - "$TARGET_ENV_DIR/openbrain-hook-env" <<'PY'
+# The wrapper staged into the bundle may carry either the legacy BUILD-machine
+# ENV_FILE assignment or a block from a previous install. Normalize both shapes
+# into one runtime-derived block so the wrapper and its sibling env file share a
+# single location truth on every client.
+# --- begin hook env-file path normalization ---
+python3 - "$TARGET_ENV_DIR/openbrain-hook-env" <<'PY'
 import re
 import sys
-text = open(sys.argv[1], encoding="utf-8").read()
-match = re.search(r'^ENV_FILE="([^"]+)"', text, re.M)
-print(match.group(1) if match else "")
-PY
-)"
-WANT_ENV_PATH="$TARGET_ENV_DIR/claudex-observation.env"
-if [ -n "$BUILD_ENV_PATH" ] && [ "$BUILD_ENV_PATH" != "$WANT_ENV_PATH" ]; then
-  log "    rewriting wrapper ENV_FILE: $BUILD_ENV_PATH -> $WANT_ENV_PATH"
-  python3 - "$TARGET_ENV_DIR/openbrain-hook-env" "$WANT_ENV_PATH" <<'PY'
-import re
-import sys
-path, want = sys.argv[1], sys.argv[2]
-text = open(path, encoding="utf-8").read()
-text = re.sub(r'^ENV_FILE="[^"]+"', f'ENV_FILE="{want}"', text, count=1, flags=re.M)
-open(path, "w", encoding="utf-8").write(text)
-PY
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as handle:
+    text = handle.read()
+
+BEGIN = "# >>> openbrain: hook env file (managed) >>>"
+END = "# <<< openbrain: hook env file (managed) <<<"
+managed = rf"^{re.escape(BEGIN)}\n.*?^{re.escape(END)}\n?"
+legacy = r'^ENV_FILE="[^"\n]*"\n?'
+recognized = re.compile(rf"(?:{managed}|{legacy})", re.M | re.S)
+
+if recognized.search(text) is None:
+    sys.exit(
+        "setup-client: wrapper has neither a legacy ENV_FILE assignment nor the\n"
+        "    managed hook env-file block. Refusing to guess an insertion point:\n"
+        f"    {path}"
+    )
+
+block = f'''{BEGIN}
+if [ -n "${{BASH_SOURCE:-}}" ]; then
+  WRAPPER_SOURCE="${{BASH_SOURCE[0]}}"
+elif [ -n "${{ZSH_VERSION:-}}" ]; then
+  eval 'WRAPPER_SOURCE=${{(%):-%x}}'
+else
+  WRAPPER_SOURCE="$0"
 fi
+if [ -z "$WRAPPER_SOURCE" ]; then
+  printf '%s\\n' "openbrain-hook-env: could not resolve wrapper source: shell reported an empty path" >&2
+  exit 1
+fi
+case "$WRAPPER_SOURCE" in
+  */*) ;;
+  *)
+    RESOLVED_SOURCE="$(command -v -- "$WRAPPER_SOURCE" 2>/dev/null || :)"
+    if [ -z "$RESOLVED_SOURCE" ]; then
+      printf '%s\\n' "openbrain-hook-env: could not resolve wrapper source via PATH: $WRAPPER_SOURCE" >&2
+      exit 1
+    fi
+    WRAPPER_SOURCE="$RESOLVED_SOURCE"
+    ;;
+esac
+if RESOLVED_SOURCE="$(readlink -f -- "$WRAPPER_SOURCE" 2>/dev/null)" && [ -n "$RESOLVED_SOURCE" ]; then
+  WRAPPER_SOURCE="$RESOLVED_SOURCE"
+else
+  while [ -L "$WRAPPER_SOURCE" ]; do
+    WRAPPER_DIR="$(CDPATH='' cd -- "$(dirname -- "$WRAPPER_SOURCE")" 2>/dev/null && pwd)" || {{
+      printf '%s\\n' "openbrain-hook-env: could not resolve symlink directory: $WRAPPER_SOURCE" >&2
+      exit 1
+    }}
+    LINK_TARGET="$(readlink "$WRAPPER_SOURCE" 2>/dev/null)" || {{
+      printf '%s\\n' "openbrain-hook-env: could not read symlink target: $WRAPPER_SOURCE" >&2
+      exit 1
+    }}
+    case "$LINK_TARGET" in
+      /*) WRAPPER_SOURCE="$LINK_TARGET" ;;
+      *) WRAPPER_SOURCE="$WRAPPER_DIR/$LINK_TARGET" ;;
+    esac
+  done
+fi
+ENV_DIR="$(CDPATH='' cd -- "$(dirname -- "$WRAPPER_SOURCE")" 2>/dev/null && pwd)" || {{
+  printf '%s\\n' "openbrain-hook-env: could not resolve wrapper directory: $WRAPPER_SOURCE" >&2
+  exit 1
+}}
+ENV_FILE="$ENV_DIR/claudex-observation.env"
+if [ ! -r "$ENV_FILE" ]; then
+  printf '%s\\n' "openbrain-hook-env: env file missing or unreadable: $ENV_FILE (wrapper source: $WRAPPER_SOURCE)" >&2
+  exit 1
+fi
+{END}
+'''
+
+text = recognized.sub("__OPENBRAIN_HOOK_ENV_FILE_BLOCK__", text, count=1)
+text = recognized.sub("", text)
+text = text.replace("__OPENBRAIN_HOOK_ENV_FILE_BLOCK__", block, 1)
+with open(path, "w", encoding="utf-8") as handle:
+    handle.write(text)
+print("    wrapper env-file path now derives from the wrapper directory")
+PY
+# --- end hook env-file path normalization ---
 
 # The hook COMMANDS in settings-hooks.json also carry the build machine's
 # absolute wrapper path; retarget them the same way during the merge below.
