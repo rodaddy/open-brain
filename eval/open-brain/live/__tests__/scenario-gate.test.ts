@@ -24,6 +24,12 @@ const FIXTURE = parseScenarioFixture(
 interface FakeOptions {
   zeroWrite?: boolean;
   emptyProviderOutput?: boolean;
+  /** Raw stderr a failing capture child writes before dying (issue #583). */
+  captureStderr?: string;
+  /** Exit code for that failing capture child. */
+  captureExitCode?: number;
+  /** Stdout for that failing capture child; defaults to empty. */
+  captureStdout?: string;
   lostCapture?: boolean;
   ignoredKeys?: string[];
   packCharLimit?: number;
@@ -76,6 +82,15 @@ function fakeTransport(opts: FakeOptions = {}): ScenarioTransport {
       lanes.set(scope.session_key, lane);
       if (operation === "capture" && opts.emptyProviderOutput) {
         return parseProviderOutput("", 0);
+      }
+      if (operation === "capture" && opts.captureStderr !== undefined) {
+        // Exercised through the real parser, so the test proves the production
+        // stderr path rather than a hand-built execution object.
+        return parseProviderOutput(
+          opts.captureStdout ?? "",
+          opts.captureExitCode ?? 1,
+          opts.captureStderr,
+        );
       }
       if (operation === "capture") {
         if (!opts.zeroWrite && !opts.lostCapture) {
@@ -211,6 +226,39 @@ describe("runScenarioGate", () => {
     expect(capture.checks.provider_exit_zero).toBe(true);
     expect(capture.checks.receipt_saved).toBe(true);
     expect(capture.checks.read_back_exact).toBe(false);
+  });
+
+  it("carries a failing child's stderr first line into the scenario receipt", async () => {
+    // Issue #583: a dead provider used to present as a bare exit code, so the
+    // real root cause had to be recovered by replaying the command by hand.
+    const outcome = await run(
+      fakeTransport({
+        captureStderr: [
+          "Traceback (most recent call last):",
+          '  File "provider.py", line 12, in main',
+          "PermissionError: scope key 'project' was rejected",
+        ].join("\n"),
+      }),
+    );
+    expect(outcome.passed).toBe(false);
+    const capture = outcome.receipt.scenarios[0]!;
+    expect(capture.error_class).toBe("PermissionError");
+    expect(capture.stderr_first_line).toBe(
+      "PermissionError: scope key 'project' was rejected",
+    );
+    expect(outcome.receipt.failures.join(" ")).toContain(
+      "capture-round-trip:scenario_transport_error",
+    );
+    expectContentFree(outcome.receipt);
+  });
+
+  it("leaves stderr diagnostics off a passing scenario", async () => {
+    const outcome = await run(fakeTransport());
+    expect(outcome.passed).toBe(true);
+    for (const scenario of outcome.receipt.scenarios) {
+      expect(scenario.error_class).toBeUndefined();
+      expect(scenario.stderr_first_line).toBeUndefined();
+    }
   });
 
   it("names an exit-0 empty provider result as an absent capture receipt", async () => {

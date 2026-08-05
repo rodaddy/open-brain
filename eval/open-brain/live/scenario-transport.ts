@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import { Pool } from "pg";
+import { summarizeChildStderr } from "../../../src/child-stderr.ts";
 import type { LiveEvalConfig } from "./config.ts";
 import { teardownRecords } from "./gate.ts";
 import type {
@@ -26,23 +27,33 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 export function parseProviderOutput(
   text: string,
   exitCode: number,
+  stderr = "",
 ): ProviderExecution {
+  // Summarized once and attached to every exit from this function, so a
+  // provider failure never presents as a bare exit code (issue #583).
+  const diagnostics = summarizeChildStderr(stderr);
+  const fail = (label: string): LiveTransportError =>
+    new LiveTransportError(label, false, {
+      errorClass: diagnostics.error_class,
+      stderrFirstLine: diagnostics.stderr_first_line,
+    });
+
   if (exitCode === 0 && text.trim() === "") {
-    return { exitCode, result: {} };
+    return { exitCode, result: {}, ...diagnostics };
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch {
-    throw new LiveTransportError("openbrain-memory:malformed-output", false);
+    throw fail("openbrain-memory:malformed-output");
   }
   const output = asRecord(parsed);
   const receipt = asRecord(output?.receipt);
   if (!receipt && exitCode === 0) {
-    return { exitCode, result: asRecord(output?.result) ?? {} };
+    return { exitCode, result: asRecord(output?.result) ?? {}, ...diagnostics };
   }
   if (!receipt) {
-    throw new LiveTransportError("openbrain-memory:missing-receipt", false);
+    throw fail("openbrain-memory:missing-receipt");
   }
   const required = {
     operation: receipt.operation,
@@ -58,7 +69,7 @@ export function parseProviderOutput(
     typeof required.direct_attempted !== "boolean" ||
     typeof required.fallback_attempted !== "boolean"
   ) {
-    throw new LiveTransportError("openbrain-memory:invalid-receipt", false);
+    throw fail("openbrain-memory:invalid-receipt");
   }
   const ignored = receipt.ignored_optional_request_keys;
   const providerReceipt: ProviderReceipt = {
@@ -109,8 +120,8 @@ export class LiveScenarioTransport implements ScenarioTransport {
     proc.stdin.write(JSON.stringify(request));
     proc.stdin.end();
     const stdout = await new Response(proc.stdout).text();
-    await new Response(proc.stderr).text();
-    return parseProviderOutput(stdout, await proc.exited);
+    const stderr = await new Response(proc.stderr).text();
+    return parseProviderOutput(stdout, await proc.exited, stderr);
   }
 
   async logMemory(opts: {

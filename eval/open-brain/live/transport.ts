@@ -162,11 +162,25 @@ export interface ReflexPointersPayload {
 export class LiveTransportError extends Error {
   readonly label: string;
   readonly denied: boolean;
-  constructor(label: string, denied: boolean) {
+  /**
+   * Content-free diagnostics carried from a failing child process: the error
+   * class and one redacted stderr line. Without these a provider failure
+   * presents as a bare exit code and has to be recovered by replaying the
+   * command by hand (issue #583).
+   */
+  readonly errorClass?: string;
+  readonly stderrFirstLine?: string;
+  constructor(
+    label: string,
+    denied: boolean,
+    diagnostics: { errorClass?: string; stderrFirstLine?: string } = {},
+  ) {
     super(label);
     this.name = "LiveTransportError";
     this.label = label;
     this.denied = denied;
+    this.errorClass = diagnostics.errorClass;
+    this.stderrFirstLine = diagnostics.stderrFirstLine;
   }
 }
 
