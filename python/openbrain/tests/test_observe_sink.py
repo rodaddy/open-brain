@@ -20,7 +20,11 @@ from typing import TYPE_CHECKING
 import pytest
 
 from conftest import RecordingLane, operator_line, write_lines
-from openbrain.apps.capture.langfuse_emitter import INGESTION_SUFFIX, sink_host
+from openbrain.apps.capture.langfuse_emitter import (
+    INGESTION_SUFFIX,
+    LangfuseEmitter,
+    sink_host,
+)
 from openbrain.apps.capture.observe import (
     OBSERVE_KEY_PREFIX,
     observation_active,
@@ -41,12 +45,11 @@ from openbrain.config import (
     UnknownEnvironmentVariableError,
     load_observation_settings,
 )
+from openbrain.models.turn import RawTurn, TurnRole, TurnUsage
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from pathlib import Path
-
-    from openbrain.models.turn import RawTurn
 
 
 class RecordingEmitter:
@@ -354,6 +357,106 @@ class TestObservationSettingsResolution:
     def test_a_secret_never_appears_in_the_repr(self) -> None:
         settings = observation_settings()
         assert "sk-lf-test" not in repr(settings)
+
+
+class FakeObservation:
+    """The two methods ``_observe_turn`` uses on what it starts."""
+
+    def __init__(self) -> None:
+        """Start un-ended, so a test can prove the observation was closed."""
+        self.ended = False
+
+    def end(self) -> None:
+        self.ended = True
+
+
+class FakeClient:
+    """Records the kwargs each observation was started with.
+
+    Deliberately NOT a real ``Langfuse``: the assertion here is about the
+    arguments this module composes, and a real client would dial the fleet
+    server (the failure #544 pinned).
+    """
+
+    def __init__(self) -> None:
+        """Start with nothing recorded."""
+        self.started: list[dict[str, object]] = []
+
+    def start_observation(self, **kwargs: object) -> FakeObservation:
+        self.started.append(kwargs)
+        return FakeObservation()
+
+
+def observed(turn: RawTurn) -> dict[str, object]:
+    """The kwargs ``_observe_turn`` passes for one turn."""
+    client = FakeClient()
+    LangfuseEmitter._observe_turn(client, turn)  # noqa: SLF001
+    return client.started[0]
+
+
+class TestAGenerationCarriesWhatLangfusePrices:
+    """Model and usage reach the generation, under the names that PRICE (#560).
+
+    ``usage_details`` keys are matched against a model price's own unit names.
+    A key Langfuse does not recognise contributes nothing, so a generation with
+    the transcript's own ``input_tokens`` spelling looks populated in the UI and
+    still costs NULL -- which is why these tests assert the literal strings
+    rather than only the values.
+    """
+
+    async def test_the_generation_names_its_model(self) -> None:
+        turn = RawTurn(
+            turn_uuid="a1",
+            content="hi",
+            role=TurnRole.ASSISTANT,
+            model="claude-opus-5",
+        )
+
+        assert observed(turn)["model"] == "claude-opus-5"
+
+    async def test_usage_details_uses_the_keys_langfuse_prices_against(
+        self,
+    ) -> None:
+        turn = RawTurn(
+            turn_uuid="a1",
+            content="hi",
+            role=TurnRole.ASSISTANT,
+            model="claude-opus-5",
+            usage=TurnUsage(
+                input_tokens=2,
+                output_tokens=456,
+                cache_read_input_tokens=15510,
+                cache_creation_input_tokens=41238,
+            ),
+        )
+
+        assert observed(turn)["usage_details"] == {
+            "input": 2,
+            "output": 456,
+            "cache_read_input_tokens": 15510,
+            "cache_creation_input_tokens": 41238,
+        }
+
+    async def test_a_turn_without_usage_omits_the_field_entirely(self) -> None:
+        """Absent, not empty: ``{}`` would read as a turn measured at zero."""
+        turn = RawTurn(
+            turn_uuid="a1", content="hi", role=TurnRole.ASSISTANT, model="claude-opus-5"
+        )
+
+        assert "usage_details" not in observed(turn)
+
+    async def test_a_turn_without_a_model_omits_the_field_entirely(self) -> None:
+        turn = RawTurn(turn_uuid="a1", content="hi", role=TurnRole.ASSISTANT)
+
+        assert "model" not in observed(turn)
+
+    async def test_a_user_turn_is_a_span_and_is_never_priced(self) -> None:
+        """Only the assistant produces a generation; a span has no cost."""
+        kwargs = observed(RawTurn(turn_uuid="u1", content="hi", role=TurnRole.USER))
+
+        assert kwargs["as_type"] == "span"
+        assert "model" not in kwargs
+        assert "usage_details" not in kwargs
 
 
 class TestTheSuiteNeverInheritsAnOperatorsSink:
