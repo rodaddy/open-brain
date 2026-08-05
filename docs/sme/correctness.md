@@ -1643,3 +1643,163 @@ fixed chunker and getting byte-identical failures from both.
 - Was the unit under test covered at all? `chunkText` had ZERO unit tests; it was
   exercised only through a live-Postgres suite asserting storage properties, so
   a 37x row-count error registered as "CI is slow."
+
+---
+
+# Harvest #522 — findings recovered from issue/PR history (2026-08-03)
+
+Routed here by operator ruling on the #522 canon harvest: these are review
+findings from closed issues and PRs that never reached this lane file. Each
+carries its source and a verbatim quote. Severity is recorded as stated in the
+source; where the source did not state one, it says so rather than inventing a
+level.
+
+## [2026-08-03] Idempotency must cover every natural key, atomically
+
+**Severity:** not stated in source
+**Source:** rodaddy/open-brain#62 (review swarm comment by rodaddy); harvested in #522
+**Scope key:** `sme.correctness.idempotency_must_cover_all_natural_keys`
+**Status:** active
+
+### Pattern
+
+A check-then-insert idempotency guard that tests only one duplicate key is not idempotent: enumerate every table-specific natural/unique key, and make the write atomic via table-specific ON CONFLICT or a guarded single insert. Return the existing row as a duplicate rather than surfacing a unique-constraint violation as a 500.
+
+Verbatim, from the source:
+
+> Promotion prechecks only active `content_hash` duplicates before insert. Inserts can still violate table-specific unique keys such as `relationships(namespace, person_name)`, `projects(namespace, name)`, and `sessions(namespace, session_id)`. The check-then-insert flow can race under concurrent promote requests.
+
+## [2026-08-03] An SSE reader must return the response matching the request id
+
+**Severity:** MEDIUM (stated in source)
+**Source:** rodaddy/open-brain#87 (comment by rodaddy); harvested in #522
+**Scope key:** `sme.correctness.sse_must_match_request_id`
+**Status:** active
+
+### Pattern
+
+An SSE/streaming JSON-RPC reader must keep reading until the event carrying the MATCHING request id arrives; returning on the first id-bearing event silently returns another request's response once the server interleaves notifications. Prove it with a test that streams a notification, then a mismatched-id response, then the matching one, without EOF — raw-transport tests alone will not catch it.
+
+Verbatim, from the source:
+
+> MEDIUM: SSE transport returned after the first id-bearing event, even if it was not the current request id. Fix: `UrllibTransport.post()` now threads the JSON-RPC request id into SSE reading and keeps reading until the matching response id appears.
+
+## [2026-08-03] Delete the registry entry before close(), and guard close()
+
+**Severity:** not stated in source
+**Source:** rodaddy/open-brain#17 (issue body); harvested in #522
+**Scope key:** `sme.correctness.delete_before_close_in_cleanup`
+**Status:** active
+
+### Pattern
+
+In resource-registry cleanup, delete the registry entry BEFORE calling close(), and wrap close() in try/catch — a rejecting close in a timer callback skips the delete and leaks the slot permanently until restart. Pair the per-entry timer with an independent sweeper as a safety net.
+
+Verbatim, from the source:
+
+> Timer callbacks in `transport.ts` call `transport.close()` without `await` or `try/catch`. If `close()` rejects (e.g., transport already dead from a dropped SSE connection), `sessions.delete()` never executes and the session leaks permanently.
+
+## [2026-08-03] An --acknowledge escape hatch needs a matching success condition
+
+**Severity:** not stated in source
+**Source:** https://github.com/rodaddy/open-brain/pull/259; harvested in #522
+**Scope key:** `sme.acknowledge_escape_hatch_needs_success_condition`
+**Status:** active
+
+### Pattern
+
+An `--acknowledge-*` escape hatch that lets a migration proceed past unhandled rows must be matched by a post-execute success condition that accounts for those rows. Otherwise the runbook's checklist can pass in full while the acknowledged rows stay unreconciled and become invisible at the next cleanup step. When reviewing a migration runbook, verify the success conditions detect every state the escape hatch can leave behind.
+
+Verbatim, from the source:
+
+> When `--execute --acknowledge-out-of-scope` is used ... Step 5's four success conditions ... none of them assert that `audit.total_out_of_scope` returned to 0 or matches the acknowledged classification. An operator can pass all four listed conditions while the acknowledged out-of-scope rows ... remain live-unique and about to become invisible on fallback removal.
+
+## [2026-08-03] Sibling wrappers on one endpoint need shared normalization
+
+**Severity:** MEDIUM (stated in source)
+**Source:** https://github.com/rodaddy/open-brain/issues/218; harvested in #522
+**Scope key:** `sme.sibling_wrappers_need_shared_normalization`
+**Status:** active
+
+### Pattern
+
+When two sibling client methods call the same server endpoint, a normalization/cap applied in one and not the other is a contract escape: the unnormalized sibling sends unsupported fields and bypasses server limits. Review parallel wrapper methods for a shared normalization path rather than duplicated inline logic, and add a regression proving the field is not forwarded.
+
+Verbatim, from the source:
+
+> MEDIUM: Python `AgentMemory.checkpoint(..., receipt_refs=[...])` accepted `receipt_refs` after the parity change but forwarded it directly to `session_wrap`, unlike `wrap_session()`. That could still send an unsupported server field and bypass the max-20 `next_steps` cap. ... Fix: `checkpoint()` and `wrap_session()` now share one `_session_wrap_metadata()` normalization path.
+
+## [2026-08-03] The SQL visibility gate and the return-payload filter must enforce the same invariant
+
+**Severity:** not stated in source
+**Source:** https://github.com/rodaddy/open-brain/issues/255; harvested in #522
+**Scope key:** `sme.sql_gate_and_return_filter_must_agree`
+**Status:** active
+
+### Pattern
+
+When a SQL predicate gates row visibility and a separate application-layer schema filters the returned payload, the two must enforce the SAME invariant. If the schema is stricter than the SQL gate, a malformed row passes the gate and leaks its existence and content while returning an empty payload. Review visibility gates and return-path filters as a pair and assert they agree on every invariant, not just the primary one.
+
+Verbatim, from the source:
+
+> Scope `{client_id:"acme"}` → SQL `EXISTS` matches (it only checks the 5 scope keys via `->>`, never requires a doc id) so `get_entry` returns the row; but `filterSourceRefsForScope`→`sourceRefsSchema` rejects that element, so returned `source_refs` is `[]`. The row's *existence and content* leak under a scope that its refs don't legitimately satisfy per the ref contract.
+
+## [2026-08-03] A durable/spooled receipt needs a production drain caller
+
+**Severity:** not stated in source
+**Source:** issue #307; harvested in #522
+**Scope key:** `review.durable_status_needs_a_production_drain_caller`
+**Status:** active
+
+### Pattern
+
+A receipt status that promises eventual delivery (`spooled`/`durable`) is a lie unless a production caller actually drains the buffer. When reviewing durability features, trace the drain/replay entry point to a real runtime or adapter caller -- public API whose only callers are tests is a dead path, and green tests will certify it. Check the same way for quarantine, retry, and dead-letter paths.
+
+Verbatim, from the source:
+
+> `Spool.replay()` and `replay_records()` ... are public API with **only test callers**. Nothing in the runtime, adapter, or any CLI ever replays the spool in production. A record that gets spooled (receipt `status:"spooled"`, `durable:true`) is durable forever but never delivered. ... Without any production replay path, "durable" actually means "parked in a file nobody reads".
+
+## [2026-08-03] The read path's table list must include where the writes land
+
+**Severity:** not stated in source
+**Source:** issue #433 (brain_answer cannot see session events); harvested in #522
+**Scope key:** `sme.recall_read_path_must_cover_write_path`
+**Status:** active
+
+### Pattern
+
+Reusable review check: when a pipeline has a write path, a promotion step, and a read path, verify that the read path's table list actually includes where the writes land, and that something automatically calls the promotion step. `graduateLaneEvent` had never written a row in the database's entire history while 7,676 events sat eligible, and `ALL_TABLES` omitted `ob_session_events` — each defect alone would degrade gracefully, together they were silent and total. Ask on any recall surface: does it report 'newest evidence is N days old' rather than confidently answering from the oldest thing it can see?
+
+Verbatim, from the source:
+
+> Together they are silent and total: capture succeeds and returns a receipt, the operator believes the system remembered, and retrieval answers from whatever last made it into `thoughts` before promotion stopped. **The system reports success at every step while the knowledge is unreachable.**
+
+## [2026-08-03] MCP silently ignores dropped arguments, so a port loses them without error
+
+**Severity:** not stated in source
+**Source:** https://github.com/rodaddy/open-brain/pull/516; harvested in #522
+**Scope key:** `review.mcp_silently_ignores_dropped_args`
+**Status:** active
+
+### Pattern
+
+MCP tool schemas silently ignore unknown arguments, so a port that drops a declared argument produces no error -- callers keep sending it and get unbounded results. session_context lost event_limit/event_types/importance in the rewrite and returned 1,256 events / 3.2MB for a request asking for 3, killing every resume on the machine. Review question for any tool port: does the new schema declare every argument the frozen contract declares, and is each one actually APPLIED in the query rather than merely accepted?
+
+Verbatim, from the source:
+
+> The MCP schema silently ignores unknown arguments, so clients passing `event_limit` got the whole lane anyway.
+
+## [2026-08-03] Accept-and-ignore on a write surface is a false receipt
+
+**Severity:** not stated in source
+**Source:** https://github.com/rodaddy/open-brain/issues/464; harvested in #522
+**Scope key:** `review.no_silent_drop_on_successful_write`
+**Status:** active
+
+### Pattern
+
+Accept-and-ignore on a write surface is a false receipt: the openbrain-memory JSON-stdin CLI dropped the three promotion fields while returning status:saved, so any scripted canon promotion would report success and seed nothing promotable. A write API must either forward the full vocabulary or reject unknown keys loudly with a named error and non-zero exit -- never accept and ignore. Regression test shape: pipe the field through the real console path and assert either the metadata lands or the call fails loud.
+
+Verbatim, from the source:
+
+> Passing `candidate_type`, `memory_lifecycle_action`, or `candidate_scope` — the exact fields the #445 promotion mechanism requires — gets them **silently dropped**: the write succeeds, returns `status:saved`, and the row lands without the metadata.

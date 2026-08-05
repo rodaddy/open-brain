@@ -707,3 +707,73 @@ transposition.)
   unknown/misspelling validation?
 - Does a test prove a misspelled prefixed variable is rejected BY NAME with
   no value in the message?
+
+---
+
+# Harvest #522 — findings recovered from issue/PR history (2026-08-03)
+
+Routed here by operator ruling on the #522 canon harvest: these are review
+findings from closed issues and PRs that never reached this lane file. Each
+carries its source and a verbatim quote. Severity is recorded as stated in the
+source; where the source did not state one, it says so rather than inventing a
+level.
+
+## [2026-08-03] A shared pattern list has multiple consumers with different failure modes
+
+**Severity:** not stated in source
+**Source:** https://github.com/rodaddy/open-brain/issues/232; harvested in #522
+**Scope key:** `sme.shared_pattern_list_has_multiple_consumers`
+**Status:** active
+
+### Pattern
+
+When a pattern list feeds both a cosmetic redactor and a fail-closed reject gate, adding a broad heuristic to the shared list turns false positives into denial of service. Reviewing a change to a shared pattern/rule list means enumerating every consumer and checking whether each tolerates over-matching; keep high-recall heuristics in a separate list applied only to the cosmetic consumer.
+
+Verbatim, from the source:
+
+> `SECRET_PATTERNS` has **two** consumers in this package: `redact_text` (cosmetic redaction) AND `agent._reject_secret_payload` (a **fail-closed receipt reject gate**). ... A verbatim add to `SECRET_PATTERNS` broke the reject gate: the high-entropy heuristic matches benign 40+ char slash/underscore **file paths** ... causing a valid receipt to be **falsely rejected**.
+
+## [2026-08-03] A resource-cap rejection that logs nothing is undiagnosable
+
+**Severity:** not stated in source
+**Source:** https://github.com/rodaddy/open-brain/issues/193; harvested in #522
+**Scope key:** `sme.cap_rejections_must_be_logged_with_counts`
+**Status:** active
+
+### Pattern
+
+A resource-cap rejection that emits no log is undiagnosable: you cannot distinguish a leak (resources accumulating without reaping) from a spike (genuine concurrency burst) after the fact. Every cap rejection must log at warn/info with the current count and the configured limit, and lifecycle create/expire events must be visible at the operational log level — putting them at debug means they are suppressed exactly when you need them.
+
+Verbatim, from the source:
+
+> **`src/transport.ts:138`** — the primary 503 rejection (`res.status(503).json({ error: "Too many active sessions" })`) has **NO log statement at all.** ... **Consequence:** we cannot tell leak-vs-spike ... from OB's logs, because the data isn't emitted.
+
+## [2026-08-03] Never edit an applied migration -- add a repair migration
+
+**Severity:** not stated in source
+**Source:** PR #352; harvested in #522
+**Scope key:** `process.never_edit_an_applied_migration_add_a_repair`
+**Status:** active
+
+### Pattern
+
+The migration runner tracks filenames without checksums, so editing an already-applied migration file silently diverges upgraded databases from fresh ones -- fresh CI databases go green while a real upgraded database keeps the stale schema. Never fix a migration by editing it; add an additive follow-up migration that repairs the persisted object by name and includes a drift guard asserting the original and repair allowlists stay equal.
+
+Verbatim, from the source:
+
+> the persistent test database had already recorded migration 026 before `lease_expired` was added to that file, so the filename-only migration ledger skipped the edited body. Fresh db-integration databases passed, while the upgraded persistent database correctly failed.
+
+## [2026-08-03] A queue design must name its producer and carry a progress column
+
+**Severity:** not stated in source
+**Source:** issue #433 comment (root cause); harvested in #522
+**Scope key:** `sme.queue_needs_a_named_producer_and_progress_column`
+**Status:** active
+
+### Pattern
+
+Reusable review check for any queue/sweep design: name the producer explicitly. Open Brain shipped a correct consumer, correct classifier, and correct graduation function with no producer anywhere, and every layer above assumed promotion happened. Also require a processed-state column before landing any producer — `ob_session_events` had no `graduated_at`, so a sweep could not tell processed from unprocessed and would rescan all rows every run. That column is a prerequisite for the producer, not a follow-up.
+
+Verbatim, from the source:
+
+> `src/maintenance-bootstrap.ts` states it as intent, not accident: "The bootstrap enqueues nothing and defines no recurring sweep: the maintenance runner is a consumer." So the runner consumes a queue that no producer fills.

@@ -912,3 +912,133 @@ where the boundary must hold.
   across the boundary.
 - Is there a regression that writes the SAME client id in two namespaces and
   proves one namespace's write leaves the other's derived columns untouched?
+
+---
+
+# Harvest #522 — findings recovered from issue/PR history (2026-08-03)
+
+Routed here by operator ruling on the #522 canon harvest: these are review
+findings from closed issues and PRs that never reached this lane file. Each
+carries its source and a verbatim quote. Severity is recorded as stated in the
+source; where the source did not state one, it says so rather than inventing a
+level.
+
+## [2026-08-03] A wildcard namespace value must not erase the scope for a delegated caller
+
+**Severity:** not stated in source
+**Source:** rodaddy/open-brain#65 (review swarm comment by rodaddy); harvested in #522
+**Scope key:** `sme.security.wildcard_namespace_erases_scope`
+**Status:** active
+
+### Pattern
+
+When a namespace-scoping layer has a wildcard value (`all`, `*`), check that a delegated/header-scoped caller cannot pass it to erase the scope: a wildcard that resolves to an undefined filter is an isolation bypass, not a convenience. Delegated requests must stay scoped and the wildcard must only expand for non-delegated privileged callers; also verify the wildcard does not become a literal string predicate (`namespace = 'all'`) for the callers who are allowed it.
+
+Verbatim, from the source:
+
+> `src/read-policy.ts` allowed header-sourced admin/n8n callers to pass `namespace=all`, which made `namespaceFilterFor()` return `undefined` and removed namespace filtering entirely. Impact: a delegated request with `X-Namespace: bilby` could still request all namespaces on supported read paths.
+
+## [2026-08-03] Session reuse must bind the effective delegated identity, not just the token
+
+**Severity:** not stated in source
+**Source:** rodaddy/open-brain#90 (issue body); harvested in #522
+**Scope key:** `sme.security.session_reuse_must_bind_effective_identity`
+**Status:** active
+
+### Pattern
+
+Where identity can be delegated per-request (headers) but sessions are cached by token, check that session reuse keys on the EFFECTIVE identity, not just the bearer-token identity — otherwise one long-lived session is reusable across tenants. A test that asserts the permissive behavior is itself the finding: it must be replaced with a denial test covering POST, GET, and DELETE reuse paths.
+
+Verbatim, from the source:
+
+> MCP session reuse is bound to token identity and role, but not to the effective delegated namespace or agent id. ... `src/server.test.ts:188` explicitly asserts that the same token can initialize a session under `X-Namespace: bilby` and then reuse the same `Mcp-Session-Id` under `X-Namespace: skippy`.
+
+## [2026-08-03] Authority-key filters need normalization, recursion, and a depth bound
+
+**Severity:** not stated in source
+**Source:** rodaddy/open-brain#86 (comment by rodaddy); harvested in #522
+**Scope key:** `sme.security.authority_key_filters_need_normalization_and_depth_bound`
+**Status:** active
+
+### Pattern
+
+A reserved/authority-key rejection filter must normalize case and underscore-vs-dash before matching, and must recurse into nested metadata — otherwise `Authorization` or `headers: {"X-Namespace": "other"}` slips through a filter that only blocks `namespace`. Balance it the other way too: scope the recursive scan to authority/control keys so semantic keys like `source`, `summary`, `title`, and `rationale` are not blocked, and bound the recursion depth so user-controlled nesting cannot raise RecursionError.
+
+Verbatim, from the source:
+
+> Final gotcha lane found nested authority checks were case-sensitive and missed header-shaped values like `Authorization` or `headers: {"X-Namespace": "other"}`. Fixed by normalizing key names with lowercase and underscore-to-dash handling
+
+## [2026-08-03] Redaction changes need both directions tested and one shared helper
+
+**Severity:** MEDIUM (stated in source)
+**Source:** rodaddy/open-brain#88 (comment by rodaddy); harvested in #522
+**Scope key:** `sme.security.redaction_needs_both_directions_and_one_helper`
+**Status:** active
+
+### Pattern
+
+Redaction changes need both directions tested: a broadened unlabeled pattern must not eat benign values of the same shape (a 40-char SHA is not an AWS secret), and narrowing must be paired with contextual labelled matching so real secrets are not newly missed. Every diagnostic surface must call the ONE shared redaction helper — a client that keeps its own private patterns silently misses each new shape added to the shared one.
+
+Verbatim, from the source:
+
+> MEDIUM: AWS secret-like redaction was too broad and could redact benign 40-character hashes. ... MEDIUM: Client diagnostics still had separate redaction patterns, so new shared redaction shapes would not apply to `OpenBrainHTTPError` bodies.
+
+## [2026-08-03] Privileged batch/promotion runners: a four-point review checklist
+
+**Severity:** HIGH (stated in source)
+**Source:** issue #145 / #156 (privileged runner design and swarm findings); harvested in #522
+**Scope key:** `review.privileged_batch_runner_checklist`
+**Status:** active
+
+### Pattern
+
+Review privileged batch/promotion runners for four specific defects: arbitrary source/target namespace flags (constrain to the one configured route and reject legacy aliases as targets), resumed state files whose stored source/target are not revalidated against current args, durable state defaulting into temp-workspace paths that get cleaned, and missing dry-run default / bounded --max-apply / kill switch / per-batch receipts. (The cursor-advance-past-failed-rows half is already captured in adversarial.md 2026-06-19.)
+
+Verbatim, from the source:
+
+> - HIGH: privileged runner accepts arbitrary `--source-namespace` and `--target-namespace`, creating too broad a cross-namespace promotion path. Fix required: constrain this legacy runner to configured legacy shared namespace -> canonical shared namespace only.
+
+## [2026-08-03] Citation provenance is a namespace-isolation surface
+
+**Severity:** HIGH (stated in source)
+**Source:** PR #112 / #113 (review findings and fixes); harvested in #522
+**Scope key:** `review.provenance_in_citations_is_a_leak_surface`
+**Status:** active
+
+### Pattern
+
+Citation and provenance metadata is a namespace-isolation surface: exposing a promoted row's source namespace and source id leaks private metadata to any caller who can read the promoted copy. Citation refs must carry only citation-safe identity for the row the caller can actually read. Related checks from the same lane: guard `new Date(row.created_at).toISOString()` against malformed timestamps so one bad row cannot break search, and require both source_ref metadata and usable preview text before rendering an answer bullet so malformed evidence cannot produce uncited output.
+
+Verbatim, from the source:
+
+> HIGH security: `source_ref.promoted_from` exposes raw source namespace and source id from promoted rows. A caller who can read a promoted `collab` row could learn private source namespace metadata they cannot otherwise read.
+
+## [2026-08-03] Audit the write paths that have no caller who can self-censor
+
+**Severity:** not stated in source
+**Source:** https://github.com/rodaddy/open-brain/issues/236; harvested in #522
+**Scope key:** `sme.audit_write_paths_lacking_a_composer`
+**Status:** active
+
+### Pattern
+
+When a system's secret safety rests on "the caller does not write secrets," the security question is: which write paths have no caller who can self-censor? Automated importers, backfill scripts, and LLM-summarization pipelines fed by raw transcripts have no composer and therefore inherit no protection — they need explicit redaction at their own boundary. Audit write paths by composer presence, not by tool surface.
+
+Verbatim, from the source:
+
+> Found during an OB write-path audit (does anything write to OB from a source that cannot self-censor?). Answer: exactly one path, this one. ... `scripts/ob-backfill.ts` is an automated importer with **no human/agent composing the payload** and **no secret redaction** ... it bypasses [the contract] because there is no composer and no redactor.
+
+## [2026-08-03] Replay must derive scope from the record, not from the current scope
+
+**Severity:** not stated in source
+**Source:** issue #310; harvested in #522
+**Scope key:** `review.replay_must_be_scope_aware_not_current_scope`
+**Status:** active
+
+### Pattern
+
+When a strict scope/tenant proof gates dispatch, any replay or drain loop must derive each record's scope from the record's own persisted payload -- or filter to scope-matching units without dispatching the rest. Replaying every parked unit through the *current* runtime scope makes cross-scope records undeliverable indefinitely and burns a wasted live round trip per unit per drain, with the failure swallowed as a warning.
+
+Verbatim, from the source:
+
+> A unit parked under project A ... therefore fails dispatch with `session_start result did not prove exact Open Brain scope` when the drain is triggered by a healthy operation in project B ... Units can sit undelivered indefinitely if the client rarely operates in that project again. Every drain attempt re-dispatches mismatched units, issuing a wasted live `session_start` per unit per healthy operation, plus a swallowed warning.
