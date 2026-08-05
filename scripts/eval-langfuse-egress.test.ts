@@ -119,6 +119,23 @@ describe("Langfuse egress verification", () => {
     );
   });
 
+  test("empty-string capture vars still reach the shared aliases", () => {
+    // Deployed hook-env wrappers pass VAR="${VAR:-}": unset arrives as "", not
+    // absence (#525's shape). The alias fallback must engage on both.
+    const config = readCaptureDriveConfig({
+      ...OPTED_IN_ENV,
+      OPENBRAIN_CAPTURE_BASE_URL: "",
+      OPENBRAIN_CAPTURE_TOKEN: "",
+      OPENBRAIN_BASE_URL: "http://127.0.0.1:3100",
+      OPENBRAIN_TOKEN: "alias-token",
+    });
+
+    expect(config).toEqual({
+      baseUrl: "http://127.0.0.1:3100",
+      token: "alias-token",
+    });
+  });
+
   test("drive returns a non-zero configuration error before spawning an invalid child", async () => {
     const outcome = await runEgressCli(
       ["--drive", "--tag", "run-tag"],

@@ -165,10 +165,13 @@ export function readLangfuseEgressConfig(
 export function readCaptureDriveConfig(
   env: Record<string, string | undefined> = process.env,
 ): CaptureDriveConfig {
+  // `||`, not `??`: deployed hook-env wrappers pass VAR="${VAR:-}", so an unset
+  // CAPTURE var arrives as an empty string and must still reach the alias (#525
+  // documented this exact shape for the Python side; config.py:163-171).
   const baseUrl =
-    env.OPENBRAIN_CAPTURE_BASE_URL?.trim() ?? env.OPENBRAIN_BASE_URL?.trim() ?? "";
+    env.OPENBRAIN_CAPTURE_BASE_URL?.trim() || env.OPENBRAIN_BASE_URL?.trim() || "";
   const token =
-    env.OPENBRAIN_CAPTURE_TOKEN?.trim() ?? env.OPENBRAIN_TOKEN?.trim() ?? "";
+    env.OPENBRAIN_CAPTURE_TOKEN?.trim() || env.OPENBRAIN_TOKEN?.trim() || "";
   if (!baseUrl || !token) {
     throw new Error(
       "OPENBRAIN_CAPTURE_BASE_URL and OPENBRAIN_CAPTURE_TOKEN are required for --drive",
