@@ -191,22 +191,63 @@ with open(path, encoding="utf-8") as handle:
 # reads a quoted value just as happily, so only the line we write changes.
 quoted_root = shlex.quote(root)
 
+BEGIN = "## >>> openbrain: development root (managed) >>>"
+END = "## <<< openbrain: development root (managed) <<<"
+
 block = (
-    "## This machine's Development root. Written by setup-client.sh at install\n"
-    "## time -- the provider's built-in default is the BUILD machine's volume,\n"
-    "## and a root that does not exist resolves every cwd to no scope, which\n"
-    "## blocks every tool call behind a recovery command pointing somewhere\n"
-    "## this box does not have (#555). Re-run setup-client.sh to update it.\n"
+    f"{BEGIN}\n"
+    "## Written by setup-client.sh at install time -- the provider's built-in\n"
+    "## default is the BUILD machine's volume, and a root that does not exist\n"
+    "## resolves every cwd to no scope, which blocks every tool call behind a\n"
+    "## recovery command pointing somewhere this box does not have (#555).\n"
+    "## Re-run setup-client.sh to update it; this block is rewritten whole.\n"
     "## Shell-quoted: this file is sourced, so a path containing a space would\n"
     "## otherwise split and arrive empty.\n"
     f"OPENBRAIN_DEVELOPMENT_ROOT={quoted_root}\n"
+    f"{END}\n"
 )
 
-# Replace any existing assignment (commented or live) so re-running is
-# idempotent and an install never leaves two spellings disagreeing.
-pattern = re.compile(r"^[#\s]*OPENBRAIN_DEVELOPMENT_ROOT=.*$\n?", re.M)
-if pattern.search(text):
-    text = pattern.sub("", text)
+# Rewrite the block WHOLE, between markers. The previous version replaced only
+# the assignment LINE, which is idempotent on its own but left the comment lines
+# behind -- so every bundle+install cycle appended another seven-line preamble.
+# The Air's env file reached THREE stacked blocks that way, one still reading
+# "EDIT ME" above the value the installer had just resolved. Delete every marked
+# block first (there may be several from before this fix, and `*?` keeps each
+# match to its own block rather than swallowing the span between the first BEGIN
+# and the last END), then append exactly one.
+marked = re.compile(
+    rf"^{re.escape(BEGIN)}\n.*?^{re.escape(END)}\n?", re.M | re.S
+)
+text = marked.sub("", text)
+
+# Sweep the legacy UNMARKED copies this writer and client-bundle.sh emitted
+# before markers existed. Each is anchored on its OWN opening comment line and
+# eats the "##" run that follows, so it removes blocks this project wrote and
+# leaves operator comments alone.
+#
+# The trailing assignment is OPTIONAL, and that is the whole subtlety: the old
+# writer stripped the assignment line as it appended the next block, so in a
+# file with N stacked blocks only the LAST one still has a value under it and
+# the earlier N-1 are bare comment runs. Requiring the assignment cleaned up
+# exactly one block and left the rest -- measured on the Air-shaped fixture,
+# which still reported EDIT-ME=1 after a reinstall.
+legacy = (
+    # setup-client.sh's own historical block (live assignment).
+    r"^## This machine's Development root\. Written by setup-client\.sh at install\n"
+    r"(?:^##.*\n)*"
+    r"(?:^OPENBRAIN_DEVELOPMENT_ROOT=.*\n?)?",
+    # client-bundle.sh's staged block (commented assignment).
+    r"^## EDIT ME ON THE CLIENT.*\n"
+    r"(?:^##.*\n)*"
+    r"(?:^#\s*OPENBRAIN_DEVELOPMENT_ROOT=.*\n?)?",
+)
+for pat in legacy:
+    text = re.sub(pat, "", text, flags=re.M)
+
+# Any remaining stray assignment (hand-edited, or a spelling neither block
+# above owns) still has to go: two live assignments would disagree silently.
+text = re.sub(r"^[#\s]*OPENBRAIN_DEVELOPMENT_ROOT=.*$\n?", "", text, flags=re.M)
+
 text = text.rstrip("\n") + "\n" + block
 with open(path, "w", encoding="utf-8") as handle:
     handle.write(text)
@@ -384,13 +425,20 @@ case "$BASE_URL" in
     bundle ships the Mini's env file as-is, and loopback points this box at
     itself, where no brain is listening.
 
-    Edit the line to the Mini's LAN address, then re-run:
+    Edit this line, then re-run:
 
       $TARGET_ENV_DIR/claudex-observation.env
-      OPENBRAIN_BASE_URL=http://10.71.1.21:3100
 
-    Plain http on the LAN also needs OPENBRAIN_ALLOW_INSECURE_HTTP=1 in that
-    same file.
+    Preferred -- TLS, so it needs no extra variable and works off the LAN:
+
+      OPENBRAIN_BASE_URL=https://ob.rodaddy.live
+
+    Fallback, only if DNS or Caddy is down AND this box is on the LAN. Plain
+    http to a non-loopback address is refused by the client unless you ALSO add
+    OPENBRAIN_ALLOW_INSECURE_HTTP=1 to that same file -- both lines or neither:
+
+      OPENBRAIN_BASE_URL=http://10.71.1.20:3100
+      OPENBRAIN_ALLOW_INSECURE_HTTP=1
 
     Running this script ON the Mini itself, where loopback is correct? Set
     OPENBRAIN_ALLOW_LOOPBACK_CLIENT=1 to skip this check."

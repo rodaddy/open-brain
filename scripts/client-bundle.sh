@@ -170,25 +170,57 @@ with open(path, encoding="utf-8") as handle:
 # unquoted hands them the #555 wedge with the fix's own example.
 quoted_build_root = shlex.quote(build_root)
 
+BEGIN = "## >>> openbrain: development root (managed) >>>"
+END = "## <<< openbrain: development root (managed) <<<"
+
 # Stage the BUILD machine's value COMMENTED. Live, it would look authoritative
 # on a client where it is wrong; commented with the note, it reads as the
-# example it actually is. setup-client.sh writes the live line per box.
+# example it actually is. setup-client.sh writes the live line per box, which is
+# why this no longer says "EDIT ME": on the paved road nobody edits it, and the
+# instruction outlived its own fix -- it was still sitting above the resolved
+# value on a box the installer had already configured correctly.
 block = (
-    "## EDIT ME ON THE CLIENT -- or just let setup-client.sh do it, which is the\n"
-    "## paved road. This is the BUILD machine's Development root, staged as an\n"
-    "## example only. The provider resolves the lane by asking the filesystem,\n"
-    "## so on a box where this path does not exist EVERY cwd resolves to no\n"
-    "## scope and EVERY tool call is blocked behind a recovery command naming a\n"
-    "## directory that box does not have (#555).\n"
+    f"{BEGIN}\n"
+    "## The BUILD machine's Development root, staged as an EXAMPLE ONLY.\n"
+    "## setup-client.sh resolves and rewrites this per box at install time; you\n"
+    "## only touch it when hand-installing without that script.\n"
+    "## The provider resolves the lane by asking the filesystem, so on a box\n"
+    "## where this path does not exist EVERY cwd resolves to no scope and EVERY\n"
+    "## tool call is blocked behind a recovery command naming a directory that\n"
+    "## box does not have (#555).\n"
     "## The value is shell-quoted: this file is sourced, so a path containing a\n"
     "## space would otherwise split and arrive empty. Keep the quoting if you\n"
-    "## edit it by hand.\n"
+    "## do edit it by hand.\n"
     f"# OPENBRAIN_DEVELOPMENT_ROOT={quoted_build_root}\n"
+    f"{END}\n"
 )
 
-pattern = re.compile(r"^[#\s]*OPENBRAIN_DEVELOPMENT_ROOT=.*$\n?", re.M)
-if pattern.search(text):
-    text = pattern.sub("", text)
+# Rewrite the block WHOLE, between markers -- same reason as setup-client.sh.
+# A bundle is staged FROM this machine's live installed env file, so without
+# this the staged copy carries every block the installer ever wrote, ships them
+# to the client, and the next rebuild stacks another pair.
+marked = re.compile(
+    rf"^{re.escape(BEGIN)}\n.*?^{re.escape(END)}\n?", re.M | re.S
+)
+text = marked.sub("", text)
+
+# Sweep the legacy UNMARKED copies emitted before markers existed, anchored on
+# their own first comment lines so operator-written comments are untouched. The
+# trailing assignment is OPTIONAL: the old writer stripped it while appending
+# the next block, so in a file with N stacked blocks only the last one still
+# carries a value and the rest are bare comment runs.
+legacy = (
+    r"^## This machine's Development root\. Written by setup-client\.sh at install\n"
+    r"(?:^##.*\n)*"
+    r"(?:^OPENBRAIN_DEVELOPMENT_ROOT=.*\n?)?",
+    r"^## EDIT ME ON THE CLIENT.*\n"
+    r"(?:^##.*\n)*"
+    r"(?:^#\s*OPENBRAIN_DEVELOPMENT_ROOT=.*\n?)?",
+)
+for pat in legacy:
+    text = re.sub(pat, "", text, flags=re.M)
+
+text = re.sub(r"^[#\s]*OPENBRAIN_DEVELOPMENT_ROOT=.*$\n?", "", text, flags=re.M)
 text = text.rstrip("\n") + "\n" + block
 with open(path, "w", encoding="utf-8") as handle:
     handle.write(text)
