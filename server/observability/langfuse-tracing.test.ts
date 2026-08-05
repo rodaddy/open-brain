@@ -19,6 +19,7 @@ import {
   installMcpTracing,
   readMcpTracingConfig,
   repoRelease,
+  resolveRepoRelease,
   resolveSessionId,
   SinkHealthTracker,
   type McpTracingConfig,
@@ -981,6 +982,17 @@ describe("trace body helpers", () => {
  * `LangfuseSpanProcessor` would build an exporter and this suite dials nothing.
  */
 describe("the release stamped on every trace", () => {
+  test("uses the deploy stamp when the runtime has no git checkout", () => {
+    expect(
+      resolveRepoRelease({
+        readStamp: () => "sha=0123456789abcdef\nshort_sha=0123456\n",
+        resolveGit: () => {
+          throw new Error("git checkout unavailable");
+        },
+      }),
+    ).toBe("0123456");
+  });
+
   test("resolves to the short SHA of the checkout under test", () => {
     const release = repoRelease();
 

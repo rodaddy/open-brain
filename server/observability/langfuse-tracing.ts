@@ -94,8 +94,10 @@ import {
 import { setGlobalErrorHandler } from "@opentelemetry/core";
 import { BasicTracerProvider } from "@opentelemetry/sdk-trace-base";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { readFileSync } from "node:fs";
 import type { AuthInfo } from "../../src/types.ts";
 import { logger } from "../../src/logger.ts";
+import { readDeployedRevision } from "../transport/server-identity.ts";
 
 /** Tags on every trace this lane writes, so server traffic is filterable. */
 const TRACE_TAGS = ["open-brain-server", "mcp-tool"] as const;
@@ -173,30 +175,53 @@ const REV_PARSE_TIMEOUT_MS = 2_000;
  * under a running process, and a subprocess per emit would put a fork on the
  * request path — which is the one thing this whole lane is built not to do.
  *
- * `undefined` when the SHA cannot be resolved — a deployed tarball, no git
- * binary, a timeout. Deliberately NOT a placeholder like `"unknown"`: an
- * omitted release reads as absent, while a placeholder becomes a release value
- * that groups every unversioned trace together as though they shared a commit.
+ * `undefined` when neither the deploy stamp nor a git checkout can identify the
+ * SHA. Deliberately NOT a placeholder like `"unknown"`: an omitted release reads
+ * as absent, while a placeholder groups every unversioned trace together as
+ * though they shared a commit.
  */
 let cachedRelease: string | undefined | null = null;
 
-export function repoRelease(): string | undefined {
-  if (cachedRelease !== null) return cachedRelease;
-  cachedRelease = undefined;
+interface RepoReleaseDeps {
+  readStamp?: () => string | undefined;
+  resolveGit?: () => string | undefined;
+}
+
+/** Resolve the deploy stamp first, then a development checkout as fallback. */
+export function resolveRepoRelease(
+  deps: RepoReleaseDeps = {},
+): string | undefined {
+  const stamped = readDeployedRevision(deps.readStamp ?? readRuntimeDeployStamp);
+  if (stamped !== undefined) return stamped;
   try {
-    const result = Bun.spawnSync({
-      cmd: ["git", "rev-parse", "--short", "HEAD"],
-      stdout: "pipe",
-      stderr: "ignore",
-      timeout: REV_PARSE_TIMEOUT_MS,
-    });
-    if (result.success) {
-      const sha = result.stdout.toString().trim();
-      if (sha) cachedRelease = sha;
-    }
+    return (deps.resolveGit ?? resolveGitCheckoutRelease)();
   } catch {
     // Not knowing the release is never a reason to lose tracing.
+    return undefined;
   }
+}
+
+function readRuntimeDeployStamp(): string | undefined {
+  return readFileSync(
+    new URL("../../.deployed-revision", import.meta.url),
+    "utf8",
+  );
+}
+
+function resolveGitCheckoutRelease(): string | undefined {
+  const result = Bun.spawnSync({
+    cmd: ["git", "rev-parse", "--short", "HEAD"],
+    stdout: "pipe",
+    stderr: "ignore",
+    timeout: REV_PARSE_TIMEOUT_MS,
+  });
+  if (!result.success) return undefined;
+  return result.stdout.toString().trim() || undefined;
+}
+
+export function repoRelease(): string | undefined {
+  if (cachedRelease !== null) return cachedRelease;
+  cachedRelease = resolveRepoRelease();
   return cachedRelease;
 }
 
