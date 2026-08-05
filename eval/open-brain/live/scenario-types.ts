@@ -9,7 +9,6 @@ export type ScenarioKind =
 export interface ScenarioScope
   extends Omit<ContextPackScope, "namespace" | "thread_id"> {
   thread_id?: string | null;
-  project: string;
 }
 
 export interface CaptureRequest {

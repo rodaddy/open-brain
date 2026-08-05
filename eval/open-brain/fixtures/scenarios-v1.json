@@ -16,8 +16,7 @@
           "platform": "eval",
           "server_id": "open-brain-scenarios",
           "channel_id": "capture-round-trip",
-          "session_key": "eval:scenario:{{run_id}}:capture",
-          "project": "open-brain"
+          "session_key": "eval:scenario:{{run_id}}:capture"
         },
         "optional_request_fields": {
           "candidate_type": "durable_decision",
@@ -41,8 +40,7 @@
           "platform": "eval",
           "server_id": "open-brain-scenarios",
           "channel_id": "durable-memory",
-          "session_key": "eval:scenario:{{run_id}}:durable-memory",
-          "project": "open-brain"
+          "session_key": "eval:scenario:{{run_id}}:durable-memory"
         }
       },
       "expected": {
@@ -63,8 +61,7 @@
           "platform": "eval",
           "server_id": "open-brain-scenarios",
           "channel_id": "checkpoint-round-trip",
-          "session_key": "eval:scenario:{{run_id}}:checkpoint",
-          "project": "open-brain"
+          "session_key": "eval:scenario:{{run_id}}:checkpoint"
         }
       },
       "checkpoint": {
@@ -78,8 +75,7 @@
           "platform": "eval",
           "server_id": "open-brain-scenarios",
           "channel_id": "checkpoint-round-trip",
-          "session_key": "eval:scenario:{{run_id}}:checkpoint",
-          "project": "open-brain"
+          "session_key": "eval:scenario:{{run_id}}:checkpoint"
         }
       }
     }

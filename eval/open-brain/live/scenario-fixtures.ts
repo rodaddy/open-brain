@@ -1,6 +1,54 @@
 import { z } from "zod";
 import type { ScenarioFixture } from "./scenario-types.ts";
 
+// Contract-defined closed set: docs/agent-context-pack-contract.md:99-105.
+const CONTRACT_SCOPE_KEYS = new Set([
+  "namespace",
+  "agent",
+  "platform",
+  "server_id",
+  "channel_id",
+  "thread_id",
+  "session_key",
+]);
+
+export class ScenarioFixtureScopeKeyError extends Error {
+  constructor(
+    readonly invalidKeys: string[],
+    path?: string,
+  ) {
+    const prefix = path ? `Invalid scenario fixture ${path}: ` : "";
+    super(`${prefix}non-contract scope key(s): ${invalidKeys.join(", ")}`);
+    this.name = "ScenarioFixtureScopeKeyError";
+  }
+}
+
+function assertScopeKeys(scope: unknown): void {
+  if (!scope || typeof scope !== "object" || Array.isArray(scope)) return;
+  const invalidKeys = Object.keys(scope)
+    .filter((key) => !CONTRACT_SCOPE_KEYS.has(key))
+    .sort();
+  if (invalidKeys.length > 0) throw new ScenarioFixtureScopeKeyError(invalidKeys);
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function assertFixtureScopeKeys(value: unknown): void {
+  const scenarios = asRecord(value)?.scenarios;
+  if (!Array.isArray(scenarios)) return;
+  for (const value of scenarios) {
+    const scenario = asRecord(value);
+    if (!scenario) continue;
+    for (const key of ["request", "event", "checkpoint"] as const) {
+      assertScopeKeys(asRecord(scenario[key])?.scope);
+    }
+  }
+}
+
 const scopeSchema = z.object({
   agent: z.string().min(1),
   platform: z.string().min(1),
@@ -8,7 +56,6 @@ const scopeSchema = z.object({
   channel_id: z.string().min(1),
   thread_id: z.string().min(1).nullable().optional(),
   session_key: z.string().min(1),
-  project: z.string().min(1),
 });
 
 const captureRequestSchema = z.object({
@@ -69,6 +116,7 @@ export const scenarioFixtureSchema: z.ZodType<ScenarioFixture> = z.object({
 });
 
 export function parseScenarioFixture(raw: unknown): ScenarioFixture {
+  assertFixtureScopeKeys(raw);
   const fixture = scenarioFixtureSchema.parse(raw);
   const ids = new Set<string>();
   for (const scenario of fixture.scenarios) {
@@ -89,6 +137,9 @@ export async function loadScenarioFixture(path: string): Promise<ScenarioFixture
   try {
     return parseScenarioFixture(raw);
   } catch (error) {
+    if (error instanceof ScenarioFixtureScopeKeyError) {
+      throw new ScenarioFixtureScopeKeyError(error.invalidKeys, path);
+    }
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`Invalid scenario fixture ${path}: ${message}`);
   }

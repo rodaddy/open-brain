@@ -1,7 +1,11 @@
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseScenarioFixture } from "../scenario-fixtures.ts";
+import {
+  loadScenarioFixture,
+  parseScenarioFixture,
+  ScenarioFixtureScopeKeyError,
+} from "../scenario-fixtures.ts";
 import { runScenarioGate } from "../scenario-gate.ts";
 import { parseProviderOutput } from "../scenario-transport.ts";
 import type {
@@ -195,6 +199,14 @@ describe("scenario fixture validation", () => {
         scenarios: [FIXTURE.scenarios[0], FIXTURE.scenarios[0]],
       }),
     ).toThrow(/duplicate scenario id/);
+  });
+
+  it("rejects a non-contract fixture scope key at load", async () => {
+    const path = join(import.meta.dir, "scenario-invalid-scope.fixture.json");
+    const error = await loadScenarioFixture(path).catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(ScenarioFixtureScopeKeyError);
+    expect(error.message).toMatch(/non-contract scope key\(s\): bogus/);
   });
 });
 
