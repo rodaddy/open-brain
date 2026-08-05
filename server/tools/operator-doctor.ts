@@ -5,7 +5,7 @@
  * rebuilt here, for the same reason `get_contract` reuses `buildContract`: the
  * shape is a FROZEN contract. `src/operator-doctor.test.ts` locks the exact key
  * set of every section against `DOCTOR_CONTRACT_VERSION`
- * (`2026-08-05.operator-doctor.v3`), so a second implementation in the rewrite
+ * (`2026-08-05.operator-doctor.v4`), so a second implementation in the rewrite
  * would be a second payload that the lock test does not police, free to drift
  * on the first field addition. Reusing the builder keeps one answer to "how is
  * this server doing" and keeps that answer under the existing lock.

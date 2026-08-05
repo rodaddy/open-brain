@@ -1,8 +1,7 @@
-import { existsSync, statSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Database } from "bun:sqlite";
 import type pg from "pg";
 import { CONTRACT_VERSION, CONTRACT_SCHEMA_VERSION } from "./contract.ts";
 import {
@@ -17,6 +16,7 @@ import { readMcpAuditConfig } from "./audit-log.ts";
 import { resolveQmdPath } from "./qmd-path.ts";
 import { logger } from "./logger.ts";
 import { describeError } from "./observability/index.ts";
+import type { QmdIndexProbeResult } from "./qmd-index-probe-worker.ts";
 import type { NatsBridgeHealth } from "./nats-bridge.ts";
 import type { NatsRuntimeBoundary } from "./nats-runtime.ts";
 import { isRequestedTransportDegraded } from "./nats-runtime.ts";
@@ -27,7 +27,7 @@ const MIGRATIONS_DIR = join(
   "db",
   "migrations",
 );
-const QMD_INDEX_PATH = join(
+const DEFAULT_QMD_INDEX_PATH = join(
   dirname(fileURLToPath(import.meta.url)),
   "..",
   ".qmd",
@@ -36,7 +36,7 @@ const QMD_INDEX_PATH = join(
 
 // Any field addition/removal in OperatorDoctorStatus requires bumping this
 // version. src/operator-doctor.test.ts locks the exact payload shape.
-export const DOCTOR_CONTRACT_VERSION = "2026-08-05.operator-doctor.v3";
+export const DOCTOR_CONTRACT_VERSION = "2026-08-05.operator-doctor.v4";
 export const DISTILLATION_LAG_TTL_SECONDS_DEFAULT = 7 * 24 * 60 * 60;
 export const DISTILLATION_LAG_WARNING_RATIO = 0.5;
 export const DISTILLATION_LAG_CRITICAL_RATIO = 0.8;
@@ -137,6 +137,8 @@ export interface OperatorDoctorStatus {
     available: boolean;
     status: "available" | "unavailable";
     index: {
+      path: string;
+      path_source: "option" | "env" | "default";
       status: "available" | "unavailable";
       last_updated_at: string | null;
       age_hours: number | null;
@@ -415,58 +417,120 @@ export interface OperatorDoctorBuildOptions {
   qmdIndexStaleAfterHours?: number;
 }
 
-function readQmdIndexStatus(
+type QmdIndexPathSource = "option" | "env" | "default";
+
+interface ResolvedQmdIndexPath {
+  path: string;
+  source: QmdIndexPathSource;
+}
+
+function resolveQmdIndexPath(
   options: OperatorDoctorBuildOptions,
+): ResolvedQmdIndexPath {
+  if (options.qmdIndexPath !== undefined) {
+    return { path: options.qmdIndexPath, source: "option" };
+  }
+  if (process.env.QMD_INDEX_PATH !== undefined) {
+    return { path: process.env.QMD_INDEX_PATH, source: "env" };
+  }
+  return { path: DEFAULT_QMD_INDEX_PATH, source: "default" };
+}
+
+function unavailableQmdIndexStatus(
+  resolved: ResolvedQmdIndexPath,
+  staleAfterHours: number,
 ): OperatorDoctorStatus["qmd"]["index"] {
+  return {
+    path: resolved.path,
+    path_source: resolved.source,
+    status: "unavailable",
+    last_updated_at: null,
+    age_hours: null,
+    freshness: "unknown",
+    stale_after_hours: staleAfterHours,
+    document_count: null,
+    collection_count: null,
+  };
+}
+
+function startQmdIndexProbe(path: string): {
+  task: Promise<QmdIndexProbeResult>;
+  terminate: () => void;
+} {
+  const worker = new Worker(
+    new URL("./qmd-index-probe-worker.ts", import.meta.url),
+    { type: "module" },
+  );
+  const task = new Promise<QmdIndexProbeResult>((resolve, reject) => {
+    worker.onmessage = (event: MessageEvent<QmdIndexProbeResult>) => {
+      resolve(event.data);
+    };
+    worker.onerror = (event: ErrorEvent) => {
+      reject(event.error ?? new Error(event.message));
+    };
+    worker.postMessage({ path });
+  });
+  return { task, terminate: () => worker.terminate() };
+}
+
+function availableQmdIndexStatus(
+  options: OperatorDoctorBuildOptions,
+  resolved: ResolvedQmdIndexPath,
+  staleAfterHours: number,
+  result: QmdIndexProbeResult,
+): OperatorDoctorStatus["qmd"]["index"] {
+  const modifiedAt = new Date(result.modified_at_ms);
+  const ageHours = Math.max(
+    0,
+    ((options.now ?? Date.now)() - modifiedAt.getTime()) / 3_600_000,
+  );
+  return {
+    path: resolved.path,
+    path_source: resolved.source,
+    status: "available",
+    last_updated_at: modifiedAt.toISOString(),
+    age_hours: Math.round(ageHours * 100) / 100,
+    freshness: ageHours >= staleAfterHours ? "stale" : "current",
+    stale_after_hours: staleAfterHours,
+    document_count: result.document_count,
+    collection_count: result.collection_count,
+  };
+}
+
+async function readQmdIndexStatus(
+  options: OperatorDoctorBuildOptions,
+): Promise<OperatorDoctorStatus["qmd"]["index"]> {
+  const resolved = resolveQmdIndexPath(options);
   const staleAfterHours =
     options.qmdIndexStaleAfterHours ?? QMD_INDEX_STALE_AFTER_HOURS;
+  const fallback = unavailableQmdIndexStatus(resolved, staleAfterHours);
+  const probe = startQmdIndexProbe(resolved.path);
   try {
-    const indexPath = options.qmdIndexPath ?? QMD_INDEX_PATH;
-    const modifiedAt = statSync(indexPath).mtime;
-    const database = new Database(indexPath, { readonly: true });
-    try {
-      const documentRow = database
-        .query("SELECT COUNT(*) AS count FROM documents WHERE active = 1")
-        .get() as { count: number };
-      const collectionRow = database
-        .query("SELECT COUNT(*) AS count FROM store_collections")
-        .get() as { count: number };
-      const ageHours = Math.max(
-        0,
-        ((options.now ?? Date.now)() - modifiedAt.getTime()) / 3_600_000,
-      );
-      return {
-        status: "available",
-        last_updated_at: modifiedAt.toISOString(),
-        age_hours: Math.round(ageHours * 100) / 100,
-        freshness: ageHours >= staleAfterHours ? "stale" : "current",
-        stale_after_hours: staleAfterHours,
-        document_count: Number(documentRow.count),
-        collection_count: Number(collectionRow.count),
-      };
-    } finally {
-      database.close();
-    }
+    const result = await withTimeout(probe.task, null);
+    if (result === null) return fallback;
+    return availableQmdIndexStatus(
+      options,
+      resolved,
+      staleAfterHours,
+      result,
+    );
   } catch (error) {
-    logger.warn("doctor_qmd_index_unreadable", describeError(error));
-    return {
-      status: "unavailable",
-      last_updated_at: null,
-      age_hours: null,
-      freshness: "unknown",
-      stale_after_hours: staleAfterHours,
-      document_count: null,
-      collection_count: null,
-    };
+    logger.warn("doctor_qmd_index_unreadable", {
+      path_source: resolved.source,
+      ...describeError(error),
+    });
+    return fallback;
+  } finally {
+    probe.terminate();
   }
 }
 
 // Availability = the qmd entrypoint file exists at the same resolved path
 // search_all executes (src/qmd-path.ts). This remains binary presence only;
 // repo-local index freshness is reported separately below.
-function checkQmdStatus(
+async function checkQmdStatus(
   options: OperatorDoctorBuildOptions,
-): OperatorDoctorStatus["qmd"] {
+): Promise<OperatorDoctorStatus["qmd"]> {
   const resolved = resolveQmdPath();
   let available = false;
   try {
@@ -486,7 +550,7 @@ function checkQmdStatus(
     path_source: resolved.source,
     available,
     status: available ? "available" : "unavailable",
-    index: readQmdIndexStatus(options),
+    index: await readQmdIndexStatus(options),
   };
 }
 
@@ -503,6 +567,7 @@ export async function buildOperatorDoctorStatus(
     embeddingAvailable,
     serviceVersion,
     auditStorage,
+    qmd,
   ] = await Promise.all([
     checkPoolHealth(pool),
     readMigrationStatus(pool),
@@ -510,8 +575,8 @@ export async function buildOperatorDoctorStatus(
     checkEmbeddingAvailability(),
     readServiceVersion(),
     readAuditStorageStatus(pool),
+    checkQmdStatus(options),
   ]);
-  const qmd = checkQmdStatus(options);
 
   const embeddingDiagnostics = getEmbeddingProviderDiagnostics();
   const transportAvailability =

@@ -273,6 +273,7 @@ stemmers split multibyte accented characters and every non-English FTS assertion
 | `OPENBRAIN_MCP_AUDIT_ENABLED` | on | `src/audit-log.ts:138` | `"0"` disables MCP audit logging |
 | `OPENBRAIN_RECOVERY_WAL_PATH` | `null` | `src/tools/index.ts:88` | recovery WAL location |
 | `QMD_PATH` | `/opt/qmd/src/qmd.ts` | `src/qmd-path.ts:7` | must be set **empty** in local-clone mode |
+| `QMD_INDEX_PATH` | repo `.qmd/index.sqlite` | `src/operator-doctor.ts:30` | operator-doctor qmd freshness/count probe |
 | `OPENBRAIN_LOCAL_CLONE` | `0` | `.env.example:41` | |
 | `OPENBRAIN_LOCAL_CLONE_ROOT` | unset | `.env.example:42` | |
 

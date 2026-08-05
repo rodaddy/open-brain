@@ -23,9 +23,11 @@ function makePool() {
 
 describe("operator_doctor", () => {
   beforeEach(() => {
+    process.env.QMD_INDEX_PATH = "/nonexistent/operator-doctor-test-index.sqlite";
     resetOperatorDoctorCache();
   });
   afterEach(() => {
+    delete process.env.QMD_INDEX_PATH;
     resetOperatorDoctorCache();
   });
 
@@ -45,7 +47,7 @@ describe("operator_doctor", () => {
       });
       expect(result.isError).toBeFalsy();
       const parsed = parseToolResult(result);
-      expect(parsed.contract_version).toBe("2026-08-05.operator-doctor.v3");
+      expect(parsed.contract_version).toBe("2026-08-05.operator-doctor.v4");
       expect(parsed.runtime.service).toBe("open-brain");
       expect(parsed.database.connected).toBe(true);
     } finally {
