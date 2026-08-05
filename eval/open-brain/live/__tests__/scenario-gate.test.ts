@@ -255,6 +255,16 @@ describe("runScenarioGate", () => {
     );
   });
 
+  it("fails when the capture request's own sent key is ignored", async () => {
+    const outcome = await run(
+      fakeTransport({ ignoredKeys: ["candidate_type"] }),
+    );
+    expect(outcome.passed).toBe(false);
+    expect(outcome.receipt.failures).toContain(
+      "capture-round-trip:provider_ignored_request_key:candidate_type",
+    );
+  });
+
   it("fails when durable_memory item_count disagrees with the actual items", async () => {
     const outcome = await run(
       fakeTransport({ packItems: [], packItemCount: 5 }),
