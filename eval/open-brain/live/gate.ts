@@ -60,11 +60,40 @@ export interface GateOutcome {
   passed: boolean;
 }
 
-interface TeardownTally {
+export interface TeardownTally {
   attempted: number;
   archived: number;
   already_absent: number;
   failed: number;
+}
+
+/**
+ * Shared EVAL-3 teardown accounting. Callers provide the exact records this run
+ * created and one record-specific cleanup operation; every record is attempted,
+ * individual failures never prevent later cleanup, and the receipt carries only
+ * counts.
+ */
+export async function teardownRecords<T>(
+  records: readonly T[],
+  cleanup: (record: T) => Promise<"archived" | "already_absent">,
+): Promise<TeardownTally> {
+  const tally: TeardownTally = {
+    attempted: 0,
+    archived: 0,
+    already_absent: 0,
+    failed: 0,
+  };
+  for (const record of records) {
+    tally.attempted += 1;
+    try {
+      const outcome = await cleanup(record);
+      if (outcome === "archived") tally.archived += 1;
+      else tally.already_absent += 1;
+    } catch {
+      tally.failed += 1;
+    }
+  }
+  return tally;
 }
 
 /**
@@ -108,30 +137,11 @@ async function teardown(
   seeded: SeededRecord[],
   clients: GateClients,
 ): Promise<TeardownTally> {
-  const tally: TeardownTally = {
-    attempted: 0,
-    archived: 0,
-    already_absent: 0,
-    failed: 0,
-  };
-  for (const record of seeded) {
+  return teardownRecords(seeded, async (record) => {
     const client =
       record.namespace_role === "negative" ? clients.negative : clients.primary;
-    tally.attempted += 1;
-    try {
-      const outcome = await client.archive({
-        table: record.table,
-        id: record.server_id,
-      });
-      if (outcome === "archived") tally.archived += 1;
-      else tally.already_absent += 1;
-    } catch {
-      // Content-free: never surface the record body or an error string that
-      // could carry one. The count is the only signal the receipt needs.
-      tally.failed += 1;
-    }
-  }
-  return tally;
+    return client.archive({ table: record.table, id: record.server_id });
+  });
 }
 
 /**
