@@ -175,6 +175,7 @@ automatically; an operator who wants one advertised sets
 dev tree that was never deployed through the script, which is normal.
 | `ALLOWED_ORIGINS` | `[]` (none) | `src/index.ts:78`, comma-separated |
 | `OPEN_BRAIN_RUN_MIGRATIONS` | `1` | `src/index.ts:272`; `"0"` disables |
+| `OPENBRAIN_RAW_TURN_TTL_SECONDS` | `604800` (7 days) | `src/operator-doctor.ts`; alarm denominator only, retention/eviction belongs to #395 |
 | `OPEN_BRAIN_MAINTENANCE_ENABLED` | unset | `src/index.ts:383` |
 | `NODE_ENV` | unset | `src/operator-doctor.ts:375`; `production` / `development` / `test` |
 | `SERVICE_NAME` | `open-brain` | `src/logger.ts:202` |
