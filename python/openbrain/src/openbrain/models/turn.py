@@ -54,6 +54,7 @@ See Also:
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -201,10 +202,9 @@ class TurnUsage(BaseModel):
     ``docs/decisions/capture-never-drops-a-turn.md`` forbids -- a turn would be
     lost over a field nobody reads.
 
-    Every count defaults to 0 rather than being optional: a token count is a
-    quantity, and an assistant turn that reports no cache read genuinely read
-    zero cached tokens. Absence of the WHOLE blob is expressed by
-    ``RawTurn.usage`` being ``None``, not by a field-by-field null.
+    All four counts are required, strict, and non-negative. A partial or
+    mistyped blob is not a measurement: capture omits the whole enrichment as
+    ``RawTurn.usage = None`` rather than fabricating zeros or coercing values.
 
     Attributes:
         input_tokens: Fresh input tokens billed at the full input rate.
@@ -218,10 +218,10 @@ class TurnUsage(BaseModel):
 
     model_config = ConfigDict(extra="ignore", frozen=True)
 
-    input_tokens: int = 0
-    output_tokens: int = 0
-    cache_read_input_tokens: int = 0
-    cache_creation_input_tokens: int = 0
+    input_tokens: Annotated[int, Field(strict=True, ge=0)]
+    output_tokens: Annotated[int, Field(strict=True, ge=0)]
+    cache_read_input_tokens: Annotated[int, Field(strict=True, ge=0)]
+    cache_creation_input_tokens: Annotated[int, Field(strict=True, ge=0)]
 
 
 class RawTurn(BaseModel):

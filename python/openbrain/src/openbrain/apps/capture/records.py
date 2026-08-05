@@ -198,15 +198,13 @@ class TranscriptMessage(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     content: Any = None
-    #: The model that produced this record, present on assistant records only.
-    model: str | None = None
-    #: The token counts for this record, present on assistant records only.
+    #: Cost fields are untrusted enrichments, not part of the turn's identity.
     #:
-    #: Held as a raw mapping and converted at the boundary below rather than
-    #: declared as :class:`~openbrain.models.turn.TurnUsage` here, so a blob
-    #: whose shape drifts is still PARSED -- the conversion can then decline it
-    #: without the whole transcript line failing validation.
-    usage: dict[str, Any] | None = None
+    #: Keep both raw here so a malformed value cannot reject the whole message
+    #: and permanently drop its text. The boundary below validates each value
+    #: independently and omits only the unusable enrichment.
+    model: Any = None
+    usage: Any = None
 
 
 class TranscriptRecord(BaseModel):
@@ -376,7 +374,7 @@ def raw_turn_from_line(line: str) -> RawTurn | None:
         content = record.assistant_text
         role = TurnRole.ASSISTANT
         is_human_prompt = False
-        model = record.message.model if record.message else None
+        model = _turn_model(record.message.model if record.message else None)
         usage = _turn_usage(record.message.usage if record.message else None)
     else:
         return None
@@ -406,7 +404,12 @@ def raw_turn_from_line(line: str) -> RawTurn | None:
     )
 
 
-def _turn_usage(blob: dict[str, Any] | None) -> TurnUsage | None:
+def _turn_model(value: Any) -> str | None:
+    """Return a usable model identifier without risking the turn's text."""
+    return value if isinstance(value, str) else None
+
+
+def _turn_usage(blob: Any) -> TurnUsage | None:
     """The four priced token counts from a transcript's ``usage`` object.
 
     Args:
@@ -423,7 +426,7 @@ def _turn_usage(blob: dict[str, Any] | None) -> TurnUsage | None:
     false measurement, so an unusable blob returns ``None`` rather than a
     defaulted object.
     """
-    if not blob:
+    if not isinstance(blob, dict) or not blob:
         return None
     try:
         return TurnUsage.model_validate(blob)

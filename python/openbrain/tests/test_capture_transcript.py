@@ -414,13 +414,38 @@ class TestCostAttributionSurvivesTheParse:
         assert turn.model is None
         assert turn.usage is None
 
-    async def test_an_unreadable_usage_blob_costs_the_counts_not_the_turn(
-        self,
+    @pytest.mark.parametrize(
+        ("field", "malformed"),
+        [("model", {"unexpected": "shape"}), ("usage", ["not", "a", "mapping"])],
+    )
+    async def test_malformed_cost_enrichment_costs_only_the_enrichment(
+        self, field: str, malformed: object
     ) -> None:
         """A shape change upstream must never drop a turn's TEXT."""
-        turn = raw_turn_from_line(
-            assistant_reply_line("a1", usage={"input_tokens": "lots"})
-        )
+        line = json.loads(assistant_reply_line("a1", usage=LIVE_USAGE))
+        line["message"][field] = malformed
+
+        turn = raw_turn_from_line(json.dumps(line))
+
+        assert turn is not None
+        assert turn.content == "the index was empty"
+        assert getattr(turn, field) is None
+
+    @pytest.mark.parametrize(
+        "usage",
+        [
+            pytest.param({"input_tokens": 2}, id="partial"),
+            pytest.param({**LIVE_USAGE, "input_tokens": "2"}, id="string"),
+            pytest.param({**LIVE_USAGE, "input_tokens": True}, id="bool"),
+            pytest.param({**LIVE_USAGE, "input_tokens": -1}, id="negative"),
+        ],
+    )
+    async def test_invalid_usage_is_unknown_not_fabricated(self, usage: object) -> None:
+        """Incomplete, coerced, or negative counts are not measurements."""
+        line = json.loads(assistant_reply_line("a1", usage=LIVE_USAGE))
+        line["message"]["usage"] = usage
+
+        turn = raw_turn_from_line(json.dumps(line))
 
         assert turn is not None
         assert turn.content == "the index was empty"
