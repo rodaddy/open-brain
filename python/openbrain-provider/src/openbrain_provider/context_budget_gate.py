@@ -92,8 +92,30 @@ __all__ = ["main"]
 
 #: Advisory notice thresholds. These are notice points, not blocks: crossing
 #: them prints a line and nothing else (``nag_banner`` says so in its own text).
-_DEFAULT_NAG_TOKENS: Final[int] = 200_000
-_DEFAULT_ADVISORY_TOKENS: Final[int] = 250_000
+#:
+#: THESE ARE THE LAST RESORT, NOT THE OPERATING VALUES. They apply only when the
+#: compaction window cannot be resolved from settings at all (see
+#: ``resolve_thresholds``). Read as absolute token counts they are meaningless;
+#: they are the fractions below applied to a 200k window, which is the smallest
+#: context any supported model ships with.
+_FALLBACK_COMPACT_WINDOW: Final[int] = 200_000
+
+#: Claude Code reserves output tokens before measuring the compaction trigger,
+#: then fires at ``percent`` of what is left. Mirrors the live formula in
+#: ``~/.claudex/doctor.ts`` (``computedCompactAt``: ``floor((window -
+#: OUTPUT_RESERVE) * percent / 100)``) and its ``OUTPUT_RESERVE = 16_384``.
+#: Verified against that source 2026-08-05 (issue #77).
+_OUTPUT_RESERVE: Final[int] = 16_384
+_DEFAULT_COMPACT_PCT: Final[int] = 92
+
+#: Where the advisory sits relative to the REAL compaction point, not a fixed
+#: token count. An advisory that fires with 40%+ of the window still free is
+#: noise, and noise trains the reader to skip the channel -- so the nag opens at
+#: 88% of the way to compaction (~35k of runway on a 450k window: enough to wrap
+#: a thought, short enough to mean something) and the second tier at 96%
+#: (~14k out, compaction is imminent).
+_NAG_FRACTION_OF_COMPACT: Final[float] = 0.88
+_ADVISORY_FRACTION_OF_COMPACT: Final[float] = 0.96
 
 #: context-budget-gate.ts:75 -- how much the count must climb before the same
 #: advisory is repeated, so one long session does not print it every turn.
@@ -129,6 +151,98 @@ _EVENTS: Final[tuple[str, ...]] = (
 )
 
 
+def compaction_trigger(window: int, percent: int) -> int:
+    """Return the token count at which automatic compaction actually fires.
+
+    Mirrors ``computedCompactAt`` in ``~/.claudex/doctor.ts``: the output reserve
+    comes off the window first, and the trigger is ``percent`` of the remainder.
+    """
+    return (window - _OUTPUT_RESERVE) * percent // 100
+
+
+def _settings_env(settings_path: Path) -> dict[str, str]:
+    """Return the ``env`` block of a Claude settings file, or ``{}``.
+
+    Fail-open by contract: an unreadable, absent, or malformed settings file
+    leaves the caller on its fallbacks rather than raising inside a hook.
+    """
+    try:
+        if not settings_path.is_file():
+            return {}
+        if settings_path.stat().st_size > _MAX_STATE_SCAN_BYTES:
+            return {}
+        parsed = json.loads(settings_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    env = parsed.get("env")
+    return {k: str(v) for k, v in env.items()} if isinstance(env, dict) else {}
+
+
+def _positive_int(raw: str | None) -> int | None:
+    """Parse a positive integer, or return ``None`` for anything else."""
+    try:
+        value = int(str(raw))
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def resolve_thresholds(env: dict[str, str], settings_path: Path) -> tuple[int, int]:
+    """Return ``(nag, advisory)`` token counts for the ACTIVE profile.
+
+    Resolution order, most authoritative first:
+
+    1. ``CONTEXT_BUDGET_NAG`` / ``CONTEXT_BUDGET_HARD`` in the environment --
+       an explicit operator override, honoured verbatim.
+    2. The compaction window for the profile that is actually running, read out
+       of the settings file, with the thresholds placed as fractions of the real
+       trigger point.
+    3. ``_FALLBACK_COMPACT_WINDOW``, when no window can be resolved at all.
+
+    Why it reads the FILE and not just the environment (issue #77): the live
+    hook wrapper ``openbrain-hook-env`` starts the gate with ``exec env -i`` and
+    an explicit allowlist that carries no ``CONTEXT_BUDGET_*`` and no
+    ``CLAUDE_CODE_AUTO_COMPACT_WINDOW``. Every one of those variables is
+    stripped before the gate is reached, so a value set in ``settings.json`` had
+    no effect and the gate silently ran on the old hardcoded 200k -- firing at
+    roughly half the real compaction point, on every turn, until the reader
+    learned to ignore it. Reading the same file the settings live in needs no
+    passthrough and cannot be defeated by the wrapper.
+
+    Profiles differ and must not be hardcoded: the global profile runs a 450000
+    window and the Claudex native/Sol profiles run 397000, which is a ~49k
+    difference in where compaction lands.
+    """
+    window = _positive_int(env.get("CLAUDE_CODE_AUTO_COMPACT_WINDOW"))
+    percent = _positive_int(env.get("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"))
+    nag_override = _positive_int(env.get("CONTEXT_BUDGET_NAG"))
+    advisory_override = _positive_int(env.get("CONTEXT_BUDGET_HARD"))
+
+    if None in (window, percent, nag_override, advisory_override):
+        settings_env = _settings_env(settings_path)
+        window = window or _positive_int(
+            settings_env.get("CLAUDE_CODE_AUTO_COMPACT_WINDOW")
+        )
+        percent = percent or _positive_int(
+            settings_env.get("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE")
+        )
+        nag_override = nag_override or _positive_int(
+            settings_env.get("CONTEXT_BUDGET_NAG")
+        )
+        advisory_override = advisory_override or _positive_int(
+            settings_env.get("CONTEXT_BUDGET_HARD")
+        )
+
+    trigger = compaction_trigger(
+        window or _FALLBACK_COMPACT_WINDOW, percent or _DEFAULT_COMPACT_PCT
+    )
+    nag = nag_override or int(trigger * _NAG_FRACTION_OF_COMPACT)
+    advisory = advisory_override or int(trigger * _ADVISORY_FRACTION_OF_COMPACT)
+    return nag, advisory
+
+
 def _iso_now() -> str:
     """Return the current instant the way the TypeScript writer spells it."""
     utc = datetime.now(UTC)
@@ -158,16 +272,11 @@ def _build_parser(env: dict[str, str]) -> argparse.ArgumentParser:
     parser.add_argument("--event", default="status", choices=_EVENTS)
     parser.add_argument("--session-id", default="")
     parser.add_argument("--project", default="")
-    parser.add_argument(
-        "--nag-tokens",
-        type=int,
-        default=int(env.get("CONTEXT_BUDGET_NAG") or _DEFAULT_NAG_TOKENS),
-    )
-    parser.add_argument(
-        "--hard-tokens",
-        type=int,
-        default=int(env.get("CONTEXT_BUDGET_HARD") or _DEFAULT_ADVISORY_TOKENS),
-    )
+    # Defaulted to None and filled in by ``resolve_thresholds`` AFTER parsing:
+    # resolution reads ``--settings-path``, which is parsed in this same pass, so
+    # it cannot be computed while the parser is still being built.
+    parser.add_argument("--nag-tokens", type=int, default=None)
+    parser.add_argument("--hard-tokens", type=int, default=None)
     parser.add_argument(
         "--state-path",
         type=Path,
@@ -785,6 +894,15 @@ def main(
     """
     environment = dict(os.environ) if env is None else env
     args = _build_parser(environment).parse_args(sys.argv[1:] if argv is None else argv)
+    # Resolved here, not in the parser: it depends on ``--settings-path``, which
+    # the same parse produces. An explicit --nag-tokens/--hard-tokens still wins.
+    resolved_nag, resolved_advisory = resolve_thresholds(
+        environment, args.settings_path
+    )
+    if args.nag_tokens is None:
+        args.nag_tokens = resolved_nag
+    if args.hard_tokens is None:
+        args.hard_tokens = resolved_advisory
     event = read_hook_event(stdin)
     _warn_missing_development_root(event, stderr)
     gate = _Gate(args, event, stdout)
