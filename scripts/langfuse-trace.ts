@@ -1,12 +1,14 @@
 #!/usr/bin/env bun
 
 import { parseArgs } from "node:util";
+import { z } from "zod";
 import {
   diffTraces,
   renderRepeatReport,
   renderSessionTraces,
   renderTimeline,
   renderTraceDiff,
+  repeatExitCode,
   traceDiffExitCode,
   type LangfuseTrace,
 } from "./langfuse-trace-lib.ts";
@@ -24,6 +26,41 @@ interface CliOptions {
   query?: string;
   count: number;
 }
+
+const observationSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().optional(),
+  type: z.string().optional(),
+  parentObservationId: z.string().nullable().optional(),
+  startTime: z.string().optional(),
+  endTime: z.string().optional(),
+  latency: z.number().optional(),
+  input: z.unknown().optional(),
+  output: z.unknown().optional(),
+  metadata: z.record(z.string(), z.unknown()).nullable().optional(),
+}).passthrough();
+
+const traceSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().optional(),
+  timestamp: z.string().optional(),
+  release: z.string().nullable().optional(),
+  sessionId: z.string().nullable().optional(),
+  userId: z.string().nullable().optional(),
+  latency: z.number().optional(),
+  input: z.unknown().optional(),
+  output: z.unknown().optional(),
+  metadata: z.record(z.string(), z.unknown()).nullable().optional(),
+  observations: z.array(observationSchema).optional(),
+}).passthrough();
+
+const tracePageSchema = z.union([
+  z.array(traceSchema),
+  z.object({
+    data: z.array(traceSchema),
+    meta: z.record(z.string(), z.unknown()).optional(),
+  }).passthrough(),
+]);
 
 const HELP = `Open Brain Langfuse trace forensics
 
@@ -110,25 +147,22 @@ async function fetchJson(url: URL, config: LangfuseConfig): Promise<unknown> {
   return response.json();
 }
 
-function pageData(payload: unknown): LangfuseTrace[] {
-  if (Array.isArray(payload)) return payload as LangfuseTrace[];
-  const data = (payload as { data?: unknown } | null)?.data;
-  return Array.isArray(data) ? (data as LangfuseTrace[]) : [];
-}
-
-function totalPages(payload: unknown): number | undefined {
-  const meta = (payload as { meta?: Record<string, unknown> } | null)?.meta;
-  const value = meta?.totalPages ?? meta?.total_pages;
-  return typeof value === "number" ? value : undefined;
+function parseTracePage(payload: unknown): { traces: LangfuseTrace[]; totalPages?: number } {
+  const parsed = tracePageSchema.safeParse(payload);
+  if (!parsed.success) throw new Error("Langfuse returned an invalid trace-list response");
+  if (Array.isArray(parsed.data)) return { traces: parsed.data };
+  const value = parsed.data.meta?.totalPages ?? parsed.data.meta?.total_pages;
+  return {
+    traces: parsed.data.data,
+    totalPages: typeof value === "number" ? value : undefined,
+  };
 }
 
 async function fetchTrace(id: string, config: LangfuseConfig): Promise<LangfuseTrace> {
   const url = new URL(`/api/public/traces/${encodeURIComponent(id)}`, config.endpoint);
-  const payload = await fetchJson(url, config);
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    throw new Error(`Langfuse returned an invalid trace for ${id}`);
-  }
-  return payload as LangfuseTrace;
+  const parsed = traceSchema.safeParse(await fetchJson(url, config));
+  if (!parsed.success) throw new Error(`Langfuse returned an invalid trace for ${id}`);
+  return parsed.data;
 }
 
 async function listTraceSummaries(
@@ -143,11 +177,9 @@ async function listTraceSummaries(
     Object.entries(filters).forEach(([key, value]) => url.searchParams.set(key, value));
     url.searchParams.set("page", String(page));
     url.searchParams.set("limit", "100");
-    const payload = await fetchJson(url, config);
-    const rows = pageData(payload);
-    traces.push(...rows);
-    const pages = totalPages(payload);
-    if (rows.length === 0 || (pages !== undefined && page >= pages)) break;
+    const result = parseTracePage(await fetchJson(url, config));
+    traces.push(...result.traces);
+    if (result.traces.length === 0 || (result.totalPages !== undefined && page >= result.totalPages)) break;
     page += 1;
   }
   return traces.slice(0, requested);
@@ -185,6 +217,28 @@ finally:
     client.close()
 `;
 
+export function repeatChildFailureMessage(exitCode: number, stderr: string): string {
+  const detail = stderr.trim();
+  return `OpenBrainClient repeat failed (exit ${exitCode})${detail ? `: ${detail}` : ""}`;
+}
+
+export function parseRepeatChildOutput(stdout: string): string {
+  const lastLine = stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).at(-1);
+  if (!lastLine) throw new Error("OpenBrainClient repeat returned no JSON result");
+  let payload: unknown;
+  try {
+    payload = JSON.parse(lastLine);
+  } catch (error: unknown) {
+    const detail = error instanceof Error ? error.message : "invalid JSON";
+    throw new Error(`OpenBrainClient repeat returned invalid JSON: ${detail}`);
+  }
+  const sessionId = (payload as { session_id?: unknown } | null)?.session_id;
+  if (typeof sessionId !== "string" || sessionId.length === 0) {
+    throw new Error("OpenBrainClient repeat returned no MCP session id");
+  }
+  return sessionId;
+}
+
 async function driveRepeat(toolName: string, query: string, count: number): Promise<string> {
   for (const key of ["OPENBRAIN_BASE_URL", "OPENBRAIN_TOKEN"]) {
     if (!process.env[key]) throw new Error(`${key} is required for repeat`);
@@ -198,17 +252,28 @@ async function driveRepeat(toolName: string, query: string, count: number): Prom
       stderr: "pipe",
     },
   );
-  const [exitCode, stdout] = await Promise.all([
+  const [exitCode, stdout, stderr] = await Promise.all([
     child.exited,
     new Response(child.stdout).text(),
     new Response(child.stderr).text(),
   ]);
-  if (exitCode !== 0) throw new Error(`OpenBrainClient repeat failed (exit ${exitCode})`);
-  const payload = JSON.parse(stdout) as { session_id?: unknown };
-  if (typeof payload.session_id !== "string" || payload.session_id.length === 0) {
-    throw new Error("OpenBrainClient repeat returned no MCP session id");
+  if (exitCode !== 0) throw new Error(repeatChildFailureMessage(exitCode, stderr));
+  return parseRepeatChildOutput(stdout);
+}
+
+export function selectRepeatedTraceSummaries(
+  summaries: LangfuseTrace[],
+  count: number,
+  startedAt: string,
+): LangfuseTrace[] | undefined {
+  const startedAtMs = Date.parse(startedAt);
+  const fresh = summaries
+    .filter((trace) => Date.parse(trace.timestamp ?? "") >= startedAtMs)
+    .sort((a, b) => Date.parse(a.timestamp ?? "") - Date.parse(b.timestamp ?? "") || a.id.localeCompare(b.id));
+  if (fresh.length > count) {
+    throw new Error(`Langfuse returned ${fresh.length} fresh traces; expected exactly ${count}`);
   }
-  return payload.session_id;
+  return fresh.length === count ? fresh : undefined;
 }
 
 async function waitForRepeatedTraces(
@@ -220,12 +285,9 @@ async function waitForRepeatedTraces(
 ): Promise<LangfuseTrace[]> {
   const deadline = Date.now() + 30_000;
   while (Date.now() <= deadline) {
-    const summaries = await listTraceSummaries({ sessionId, name: toolName }, count, config);
-    const fresh = summaries.filter((trace) => String(trace.timestamp ?? "") >= startedAt);
-    if (fresh.length >= count) {
-      const selected = fresh.slice(0, count).reverse();
-      return Promise.all(selected.map((trace) => fetchTrace(trace.id, config)));
-    }
+    const summaries = await listTraceSummaries({ sessionId, name: toolName }, count + 1, config);
+    const selected = selectRepeatedTraceSummaries(summaries, count, startedAt);
+    if (selected) return Promise.all(selected.map((trace) => fetchTrace(trace.id, config)));
     await Bun.sleep(500);
   }
   throw new Error(`Langfuse did not return ${count} fresh ${toolName} traces for session ${sessionId}`);
@@ -256,8 +318,12 @@ async function run(options: CliOptions, config: LangfuseConfig): Promise<{ outpu
       const startedAt = new Date().toISOString();
       const sessionId = await driveRepeat(options.positionals[0]!, options.query!, options.count);
       const traces = await waitForRepeatedTraces(sessionId, options.positionals[0]!, options.count, startedAt, config);
-      const report = { sessionId, traces, comparisons: traces.slice(1).map((trace) => diffTraces(traces[0]!, trace)) };
-      return { output: options.json ? report : renderRepeatReport(sessionId, traces), exitCode: 0 };
+      const comparisons = traces.slice(1).map((trace) => diffTraces(traces[0]!, trace));
+      const report = { sessionId, traces, comparisons };
+      return {
+        output: options.json ? report : renderRepeatReport(sessionId, traces),
+        exitCode: repeatExitCode(comparisons),
+      };
     }
   }
 }
