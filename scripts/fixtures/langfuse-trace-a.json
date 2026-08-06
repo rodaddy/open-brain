@@ -1,0 +1,64 @@
+{
+  "id": "trace-a",
+  "name": "search_brain",
+  "timestamp": "2026-08-06T12:00:00.000Z",
+  "release": "abc1234",
+  "sessionId": "session-569",
+  "userId": "rico",
+  "latency": 0.12,
+  "observations": [
+    {
+      "id": "root-a",
+      "name": "search_brain",
+      "type": "SPAN",
+      "parentObservationId": null,
+      "startTime": "2026-08-06T12:00:00.000Z",
+      "endTime": "2026-08-06T12:00:00.120Z",
+      "metadata": {
+        "caller_client_id": "rico",
+        "caller_token_client_id": "rico",
+        "caller_agent_id": "trace-fixture",
+        "caller_role": "agent",
+        "resolved_namespace": ["rico", "shared-kb"],
+        "status": "success",
+        "duration_ms": 120
+      },
+      "output": {"content": [{"type": "text", "text": "fixture"}]}
+    },
+    {
+      "id": "rank-a",
+      "name": "retrieval.rank_rrf",
+      "type": "SPAN",
+      "parentObservationId": "root-a",
+      "startTime": "2026-08-06T12:00:00.080Z",
+      "endTime": "2026-08-06T12:00:00.100Z",
+      "metadata": {"stage": "scoring_ranking", "status": "success", "duration_ms": 20},
+      "output": {
+        "candidate_count": 2,
+        "selected_count": 1,
+        "selected_row_ids": ["row-1"],
+        "candidates": [
+          {"row_id": "row-1", "rrf_score": 0.03, "similarity": 0.91, "chosen": true, "filtered_by": null},
+          {"row_id": "row-2", "rrf_score": 0.02, "similarity": 0.82, "chosen": false, "filtered_by": "rrf_window"}
+        ]
+      }
+    },
+    {
+      "id": "vector-a",
+      "name": "retrieval.vector_query",
+      "type": "SPAN",
+      "parentObservationId": "root-a",
+      "startTime": "2026-08-06T12:00:00.020Z",
+      "endTime": "2026-08-06T12:00:00.070Z",
+      "metadata": {"stage": "candidate_generation", "status": "success", "duration_ms": 50},
+      "output": {
+        "count": 2,
+        "row_ids": ["row-1", "row-2"],
+        "candidates": [
+          {"row_id": "row-1", "distance": 0.09, "similarity": 0.91},
+          {"row_id": "row-2", "distance": 0.18, "similarity": 0.82}
+        ]
+      }
+    }
+  ]
+}

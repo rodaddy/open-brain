@@ -1,0 +1,64 @@
+{
+  "id": "trace-b",
+  "name": "search_brain",
+  "timestamp": "2026-08-06T12:01:00.000Z",
+  "release": "def5678",
+  "sessionId": "session-569",
+  "userId": "rico",
+  "latency": 0.15,
+  "observations": [
+    {
+      "id": "vector-b",
+      "name": "retrieval.vector_query",
+      "type": "SPAN",
+      "parentObservationId": "root-b",
+      "startTime": "2026-08-06T12:01:00.020Z",
+      "endTime": "2026-08-06T12:01:00.080Z",
+      "metadata": {"stage": "candidate_generation", "status": "success", "duration_ms": 60},
+      "output": {
+        "count": 2,
+        "row_ids": ["row-1", "row-3"],
+        "candidates": [
+          {"row_id": "row-1", "distance": 0.1, "similarity": 0.9},
+          {"row_id": "row-3", "distance": 0.2, "similarity": 0.8}
+        ]
+      }
+    },
+    {
+      "id": "root-b",
+      "name": "search_brain",
+      "type": "SPAN",
+      "parentObservationId": null,
+      "startTime": "2026-08-06T12:01:00.000Z",
+      "endTime": "2026-08-06T12:01:00.150Z",
+      "metadata": {
+        "caller_client_id": "rico",
+        "caller_token_client_id": "rico",
+        "caller_agent_id": "trace-fixture",
+        "caller_role": "agent",
+        "resolved_namespace": ["rico"],
+        "status": "success",
+        "duration_ms": 150
+      },
+      "output": {"content": [{"type": "text", "text": "fixture changed"}]}
+    },
+    {
+      "id": "rank-b",
+      "name": "retrieval.rank_rrf",
+      "type": "SPAN",
+      "parentObservationId": "root-b",
+      "startTime": "2026-08-06T12:01:00.090Z",
+      "endTime": "2026-08-06T12:01:00.120Z",
+      "metadata": {"stage": "scoring_ranking", "status": "success", "duration_ms": 30},
+      "output": {
+        "candidate_count": 2,
+        "selected_count": 1,
+        "selected_row_ids": ["row-3"],
+        "candidates": [
+          {"row_id": "row-1", "rrf_score": 0.025, "similarity": 0.9, "chosen": false, "filtered_by": "rrf_window"},
+          {"row_id": "row-3", "rrf_score": 0.035, "similarity": 0.8, "chosen": true, "filtered_by": null}
+        ]
+      }
+    }
+  ]
+}
