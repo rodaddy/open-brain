@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: none
 Created: 2026-08-05T04:36:56Z
-Updated: 2026-08-05T04:36:56Z
+Updated: 2026-08-05T23:49:15Z
 
 ---
 
@@ -21,3 +21,11 @@ Rico, 2026-08-05: 'shouldn't we be getting all of the calls and how they worked,
 3. **langfuse-trace skill** (from the 2026-08-04 gap analysis, still untracked until now): fetch trace by id / latest session for an agent / diff two traces / dump per-trace tool timeline, so forensics is one prompt instead of SSH+ClickHouse SQL. This is the consumer that makes the collection worth it.
 
 Depends on: #560 (metadata), #561 (masking). State: measured facts RUNNING-verified; everything proposed here PROPOSED.
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-05T23:49:15Z
+
+**Operator ruling (Rico, 2026-08-05): full coverage.** "Everything that can possibly be dropped into there should be dropped into there — no exceptions." This closes the coverage question this issue was holding open: the target is every surface traced — retrieval internals (candidates/scores/chosen), namespace value, structured row-id cross-links, embedding calls, dream/distill jobs, the NATS worker, and server-side LLM calls as generations. Sequencing stands as this issue already decided: #561 emitter-side masking lands FIRST, then capture widens. Implementation proceeds under epic #571.

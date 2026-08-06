@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: none
 Created: 2026-08-05T05:17:36Z
-Updated: 2026-08-05T16:04:26Z
+Updated: 2026-08-05T23:49:15Z
 
 ---
 
@@ -24,8 +24,14 @@ Cost dashboards price real numbers on CT 273 (RUNNING, not merged), masking land
 
 ---
 
-## Discussion (1)
+## Discussion (2)
 
 ### rodaddy — 2026-08-05T16:04:25Z
 
 #578 (E2E quality gate) added to this epic's close path: its Langfuse egress verifier is the mechanism that produces #560's live cost receipt and turns #561's secret census into a permanent regression gate. Building it is the first step of the OBS run.
+
+---
+
+### rodaddy — 2026-08-05T23:49:15Z
+
+Coverage ruling recorded on #569 (2026-08-05): full coverage, no exceptions, masking-first sequencing. Epic members now actionable in order: #587 (release stamp), #561 (masking), #569 (widen to full coverage), #492 telemetry-charter half.
