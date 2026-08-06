@@ -13,28 +13,36 @@
  */
 import { describe, expect, test } from "bun:test";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import {
-  existsSync,
-  readFileSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   buildToolTraceBody,
   createTracingRuntime,
+  emitTraceBodyWithObservations,
   errorOutput,
   installMcpTracing,
+  MAX_ACTIVE_SPAN_BYTES,
   readMcpTracingConfig,
   readRuntimeDeployStamp,
   repoRelease,
   resolveRepoRelease,
   resolveSessionId,
+  setActiveMcpTraceMetadata,
   SinkHealthTracker,
+  traceRetrievalSpan,
+  traceRetrievalSpanSync,
   type McpTracingConfig,
   type TraceBody,
   type TracingSink,
 } from "./langfuse-tracing.ts";
+import {
+  mergeFallbackSearchRows,
+  registerSearchBrain,
+  rrfMerge,
+  type SearchRow,
+} from "../../src/tools/search-brain.ts";
+import { registerSearchAll } from "../../src/tools/search-all.ts";
+import { mergeFallbackRows } from "../tools/search-engine.ts";
 
 const ENABLED_CONFIG: McpTracingConfig = {
   enabled: true,
@@ -79,7 +87,9 @@ function hangingSink(): TracingSink {
 function throwingSink(): TracingSink {
   return {
     emit() {
-      throw new Error("langfuse exploded with secret sk-lf-leak in the message");
+      throw new Error(
+        "langfuse exploded with secret sk-lf-leak in the message",
+      );
     },
     forceFlush: () => Promise.reject(new Error("flush exploded")),
     shutdown: () => Promise.reject(new Error("shutdown exploded")),
@@ -129,7 +139,9 @@ async function captureLogLines(run: () => Promise<void>): Promise<string[]> {
     lines.push(
       parts
         .map((part) =>
-          part instanceof Error ? `${part.name}: ${part.message}` : String(part),
+          part instanceof Error
+            ? `${part.name}: ${part.message}`
+            : String(part),
         )
         .join(" "),
     );
@@ -154,7 +166,10 @@ function fakeServer(): {
   handlers: Map<string, (args: unknown, extra: unknown) => unknown>;
   originalRegisterTool: unknown;
 } {
-  const handlers = new Map<string, (args: unknown, extra: unknown) => unknown>();
+  const handlers = new Map<
+    string,
+    (args: unknown, extra: unknown) => unknown
+  >();
   const registerTool = (name: string, _config: unknown, cb: unknown): void => {
     handlers.set(name, cb as (args: unknown, extra: unknown) => unknown);
   };
@@ -171,6 +186,41 @@ const AUTH = {
     namespaceSource: "header" as const,
   },
 };
+
+function searchRow(id: string, content = `content ${id}`): SearchRow {
+  return {
+    source_type: "thought",
+    id,
+    namespace: "rico",
+    content_preview: content,
+    tags: [],
+    created_at: "2026-01-01T00:00:00.000Z",
+    usefulness: 0.5,
+    tier: "warm",
+    distance: 0.1,
+    fts_rank: 0.5,
+  };
+}
+
+function qmdSpawn(docs: unknown[]): typeof Bun.spawn {
+  return (() => {
+    const encoded = new TextEncoder().encode(JSON.stringify(docs));
+    return {
+      stdout: new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoded);
+          controller.close();
+        },
+      }),
+      stderr: new ReadableStream({
+        start(controller) {
+          controller.close();
+        },
+      }),
+      exited: Promise.resolve(0),
+    };
+  }) as unknown as typeof Bun.spawn;
+}
 
 describe("readMcpTracingConfig", () => {
   test("is disabled with no environment at all", () => {
@@ -299,9 +349,9 @@ describe("resolveSessionId", () => {
   });
 
   test("falls back to the transport sessionId", () => {
-    expect(resolveSessionId({ content: "x" }, { sessionId: "transport-b" })).toBe(
-      "transport-b",
-    );
+    expect(
+      resolveSessionId({ content: "x" }, { sessionId: "transport-b" }),
+    ).toBe("transport-b");
   });
 
   test("is undefined when neither exists", () => {
@@ -318,7 +368,9 @@ describe("installMcpTracing", () => {
       createSink: () => sink,
     });
 
-    const result = { content: [{ type: "text", text: "the full answer body" }] };
+    const result = {
+      content: [{ type: "text", text: "the full answer body" }],
+    };
     server.registerTool(
       "log_thought",
       { inputSchema: {} } as never,
@@ -353,6 +405,447 @@ describe("installMcpTracing", () => {
     ).toBeGreaterThanOrEqual(0);
   });
 
+  test("emits masked retrieval child spans with row ids, scores, filter reasons, and namespace value", async () => {
+    const sink = recordingSink();
+    const { server, handlers } = fakeServer();
+    installMcpTracing(server, {
+      config: ENABLED_CONFIG,
+      createSink: () => sink,
+    });
+    server.registerTool(
+      "search_brain",
+      { inputSchema: {} } as never,
+      (async () => {
+        setActiveMcpTraceMetadata({ resolved_namespace: "rico" });
+        const candidates = await traceRetrievalSpan({
+          name: "retrieval.vector_query",
+          input: { namespace: "rico" },
+          run: async () => [
+            {
+              row_id: "row-569",
+              content_preview: "api_key=sk-live-candidate",
+              similarity: 0.93,
+              bm25_score: null,
+            },
+          ],
+          output: (rows) => ({ count: rows.length, candidates: rows }),
+        });
+        return traceRetrievalSpanSync({
+          name: "retrieval.rank_rrf",
+          input: { candidates },
+          run: () => ({ content: [{ type: "text", text: "ok" }] }),
+          output: () => ({
+            selected_row_ids: ["row-569"],
+            candidates: [
+              {
+                row_id: "row-569",
+                rrf_score: 0.031,
+                chosen: true,
+                filtered_by: null,
+              },
+            ],
+          }),
+        });
+      }) as never,
+    );
+
+    await handlers.get("search_brain")?.({ query: "memory" }, AUTH);
+
+    const body = sink.bodies[0]!;
+    expect(body.metadata.resolved_namespace).toBe("rico");
+    expect(body.spans?.map((span) => span.name)).toEqual([
+      "retrieval.vector_query",
+      "retrieval.rank_rrf",
+    ]);
+    expect(body.spans?.[0]?.output).toMatchObject({
+      count: 1,
+      candidates: [{ row_id: "row-569", similarity: 0.93 }],
+    });
+    expect(body.spans?.[1]?.output).toMatchObject({
+      selected_row_ids: ["row-569"],
+      candidates: [{ row_id: "row-569", chosen: true, filtered_by: null }],
+    });
+    const serialized = JSON.stringify(body.spans);
+    expect(serialized).not.toContain("sk-live-candidate");
+    expect(serialized).toContain("[MASKED:");
+  });
+
+  test("a real registered src search emits its full retrieval stage list", async () => {
+    const sink = recordingSink();
+    const { server, handlers } = fakeServer();
+    installMcpTracing(server, {
+      config: ENABLED_CONFIG,
+      createSink: () => sink,
+    });
+    const longContent = "x".repeat(1_000);
+    const pool = {
+      query: async (sql: string) => {
+        if (sql.includes("FROM ob_links")) return { rows: [] };
+        if (sql.startsWith("UPDATE") || sql.startsWith("INSERT")) {
+          return { rows: [] };
+        }
+        return { rows: [searchRow("real-search-row", longContent)] };
+      },
+    };
+    registerSearchBrain(server, {
+      pool: pool as never,
+      embedFn: async () => Array(768).fill(0.1),
+    });
+
+    await handlers.get("search_brain")?.(
+      {
+        query: "real retrieval",
+        table: "thoughts",
+        search_mode: "keyword",
+        limit: 1,
+      },
+      AUTH,
+    );
+
+    const body = sink.bodies[0]!;
+    expect(body.spans?.map((span) => span.name)).toEqual([
+      "retrieval.keyword_query",
+      "retrieval.execute",
+    ]);
+    const serialized = JSON.stringify(body.spans);
+    expect(serialized).not.toContain(longContent);
+    expect(
+      (
+        (
+          body.spans?.[0]?.output as {
+            candidates: Array<{ content_preview: string }>;
+          }
+        ).candidates[0]?.content_preview ?? ""
+      ).length,
+    ).toBe(300);
+  });
+
+  test("handler metadata cannot overwrite auth identity or exception status", async () => {
+    const sink = recordingSink();
+    const { server, handlers } = fakeServer();
+    installMcpTracing(server, {
+      config: ENABLED_CONFIG,
+      createSink: () => sink,
+    });
+    server.registerTool(
+      "guarded_tool",
+      { inputSchema: {} } as never,
+      (() => {
+        setActiveMcpTraceMetadata({
+          caller_role: "readonly",
+          caller_client_id: "forged",
+          status: "success",
+        });
+        throw new Error("handler failed");
+      }) as never,
+    );
+
+    await expect(handlers.get("guarded_tool")?.({}, AUTH)).rejects.toThrow(
+      "handler failed",
+    );
+    expect(sink.bodies[0]?.metadata).toMatchObject({
+      caller_role: "admin",
+      caller_client_id: "rico",
+      status: "exception",
+    });
+  });
+
+  test("a throwing summarizer records instrumentation_error without changing the tool result", async () => {
+    const sink = recordingSink();
+    const { server, handlers } = fakeServer();
+    installMcpTracing(server, {
+      config: ENABLED_CONFIG,
+      createSink: () => sink,
+    });
+    const result = { content: [{ type: "text", text: "unchanged" }] };
+    server.registerTool(
+      "summarizer_guard",
+      { inputSchema: {} } as never,
+      (() =>
+        traceRetrievalSpanSync({
+          name: "retrieval.rank_rrf",
+          run: () => result,
+          output: () => {
+            throw new Error("summary exploded");
+          },
+        })) as never,
+    );
+
+    const returned = await handlers.get("summarizer_guard")?.({}, AUTH);
+    expect(returned).toBe(result);
+    expect(sink.bodies[0]?.spans?.[0]?.output).toEqual({
+      instrumentation_error: "Error",
+    });
+  });
+
+  test("active child spans degrade to counts-only after the total payload bound", async () => {
+    const sink = recordingSink();
+    const { server, handlers } = fakeServer();
+    installMcpTracing(server, {
+      config: ENABLED_CONFIG,
+      createSink: () => sink,
+    });
+    const large = "z".repeat(MAX_ACTIVE_SPAN_BYTES);
+    server.registerTool(
+      "bounded_spans",
+      { inputSchema: {} } as never,
+      (() => {
+        traceRetrievalSpanSync({
+          name: "retrieval.vector_query",
+          input: { large },
+          run: () => ({ large }),
+        });
+        return traceRetrievalSpanSync({
+          name: "retrieval.rank_rrf",
+          input: { large },
+          run: () => ({ ok: true }),
+        });
+      }) as never,
+    );
+
+    await handlers.get("bounded_spans")?.({}, AUTH);
+
+    const spans = sink.bodies[0]?.spans ?? [];
+    expect(spans).toHaveLength(2);
+    expect(
+      spans.every((span) => span.metadata.payload_degraded === true),
+    ).toBe(true);
+    expect(JSON.stringify(spans)).not.toContain(large);
+    expect(Buffer.byteLength(JSON.stringify(spans), "utf8")).toBeLessThan(
+      MAX_ACTIVE_SPAN_BYTES,
+    );
+  });
+
+  test("concurrent calls keep child spans attributed to their own trace", async () => {
+    const sink = recordingSink();
+    const { server, handlers } = fakeServer();
+    installMcpTracing(server, {
+      config: ENABLED_CONFIG,
+      createSink: () => sink,
+    });
+    const releases = new Map<string, () => void>();
+    server.registerTool(
+      "concurrent_search",
+      { inputSchema: {} } as never,
+      (async (args: { call: string }) => {
+        await traceRetrievalSpan({
+          name: `retrieval.${args.call}`,
+          run: () =>
+            new Promise<void>((resolve) => {
+              releases.set(args.call, resolve);
+            }),
+        });
+        return { call: args.call };
+      }) as never,
+    );
+
+    const callA = handlers.get("concurrent_search")?.({ call: "a" }, AUTH);
+    const callB = handlers.get("concurrent_search")?.({ call: "b" }, AUTH);
+    await Bun.sleep(0);
+    releases.get("b")?.();
+    await Bun.sleep(0);
+    releases.get("a")?.();
+    await Promise.all([callA, callB]);
+
+    const byCall = new Map(
+      sink.bodies.map((body) => [
+        (body.input as { call: string }).call,
+        body.spans?.map((span) => span.name),
+      ]),
+    );
+    expect(byCall.get("a")).toEqual(["retrieval.a"]);
+    expect(byCall.get("b")).toEqual(["retrieval.b"]);
+  });
+
+  test("rrf and fallback transforms are deep-equal with tracing active or absent", async () => {
+    const equalRows = [searchRow("a"), searchRow("b"), searchRow("c")];
+    const cases = [
+      { vector: [] as SearchRow[], keyword: [] as SearchRow[], limit: 3 },
+      { vector: equalRows, keyword: [], limit: 2 },
+    ];
+    const baseline = {
+      rrf: cases.map((item) =>
+        rrfMerge(item.vector, item.keyword, item.limit),
+      ),
+      srcFallback: [
+        mergeFallbackSearchRows([], [], 3),
+        mergeFallbackSearchRows(equalRows.slice(0, 2), [equalRows[2]!], 2),
+      ],
+      serverFallback: [
+        mergeFallbackRows([], [], 3),
+        mergeFallbackRows(equalRows.slice(0, 2), [equalRows[2]!], 2),
+      ],
+    };
+    const sink = recordingSink();
+    const { server, handlers } = fakeServer();
+    installMcpTracing(server, {
+      config: ENABLED_CONFIG,
+      createSink: () => sink,
+    });
+    server.registerTool(
+      "equivalence",
+      { inputSchema: {} } as never,
+      (() => ({
+        rrf: cases.map((item) =>
+          rrfMerge(item.vector, item.keyword, item.limit),
+        ),
+        srcFallback: [
+          mergeFallbackSearchRows([], [], 3),
+          mergeFallbackSearchRows(equalRows.slice(0, 2), [equalRows[2]!], 2),
+        ],
+        serverFallback: [
+          mergeFallbackRows([], [], 3),
+          mergeFallbackRows(equalRows.slice(0, 2), [equalRows[2]!], 2),
+        ],
+      })) as never,
+    );
+
+    const traced = await handlers.get("equivalence")?.({}, AUTH);
+    expect(traced).toEqual(baseline);
+  });
+
+  test("ranking inputs carry ids and counts instead of candidate content", async () => {
+    const sink = recordingSink();
+    const { server, handlers } = fakeServer();
+    installMcpTracing(server, {
+      config: ENABLED_CONFIG,
+      createSink: () => sink,
+    });
+    const content = "candidate content must not be copied into rank input";
+    server.registerTool(
+      "rank_input",
+      { inputSchema: {} } as never,
+      (() => rrfMerge([searchRow("ranked", content)], [], 1)) as never,
+    );
+
+    await handlers.get("rank_input")?.({}, AUTH);
+
+    const span = sink.bodies[0]?.spans?.[0];
+    expect(span?.input).toMatchObject({
+      vector: { count: 1, row_ids: ["ranked"] },
+      keyword: { count: 0, row_ids: [] },
+    });
+    expect(JSON.stringify(span?.input)).not.toContain(content);
+  });
+
+  test("fallback evidence uses the run's dedupe key and exact classifications", async () => {
+    const sink = recordingSink();
+    const { server, handlers } = fakeServer();
+    installMcpTracing(server, {
+      config: ENABLED_CONFIG,
+      createSink: () => sink,
+    });
+    server.registerTool(
+      "fallback_classification",
+      { inputSchema: {} } as never,
+      (() =>
+        mergeFallbackRows(
+          [searchRow("primary", "same content")],
+          [
+            searchRow("legacy-duplicate", "same   content"),
+            searchRow("legacy-chosen", "unique content"),
+          ],
+          2,
+        )) as never,
+    );
+
+    await handlers.get("fallback_classification")?.({}, AUTH);
+
+    const output = sink.bodies[0]?.spans?.[0]?.output as {
+      candidates: Array<{ row_id: string; chosen: boolean; filtered_by: string | null }>;
+    };
+    expect(output.candidates).toMatchObject([
+      { row_id: "primary", chosen: true, filtered_by: null },
+      {
+        row_id: "legacy-duplicate",
+        chosen: false,
+        filtered_by: "fallback_duplicate",
+      },
+      { row_id: "legacy-chosen", chosen: true, filtered_by: null },
+    ]);
+  });
+
+  test("federated ranking distinguishes duplicate qmd paths by pre-sort index", async () => {
+    const sink = recordingSink();
+    const { server, handlers } = fakeServer();
+    installMcpTracing(server, {
+      config: ENABLED_CONFIG,
+      createSink: () => sink,
+    });
+    registerSearchAll(server, {
+      pool: { query: async () => ({ rows: [] }) } as never,
+      embedFn: async () => Array(768).fill(0.1),
+    });
+    const originalSpawn = Bun.spawn;
+    Bun.spawn = qmdSpawn([
+      { path: "/same.md", content: "first", score: 1 },
+      { path: "/same.md", content: "second", score: 1 },
+      { path: "/same.md", content: "third", score: 1 },
+    ]);
+    try {
+      await handlers.get("search_all")?.(
+        {
+          query: "duplicate path",
+          sources: "qmd",
+          offset: 1,
+          limit: 1,
+        },
+        AUTH,
+      );
+    } finally {
+      Bun.spawn = originalSpawn;
+    }
+
+    const span = sink.bodies[0]?.spans?.find(
+      (candidate) => candidate.name === "retrieval.federated_rank",
+    );
+    const candidates = (
+      span?.output as {
+        candidates: Array<{ chosen: boolean; filtered_by: string | null }>;
+      }
+    ).candidates;
+    expect(candidates.map((candidate) => candidate.chosen)).toEqual([
+      false,
+      true,
+      false,
+    ]);
+    expect(candidates.map((candidate) => candidate.filtered_by)).toEqual([
+      "pagination_offset",
+      null,
+      "federated_rank_window",
+    ]);
+  });
+
+  test("retrieval span helpers are direct no-ops outside an active traced call", async () => {
+    const object = { row_id: "row-no-trace" };
+    let calls = 0;
+    let summaries = 0;
+    const summarize = (): unknown => {
+      summaries += 1;
+      return {};
+    };
+    const asyncResult = await traceRetrievalSpan({
+      name: "retrieval.vector_query",
+      run: async () => {
+        calls += 1;
+        return object;
+      },
+      output: summarize,
+    });
+    const syncResult = traceRetrievalSpanSync({
+      name: "retrieval.rank_rrf",
+      run: () => {
+        calls += 1;
+        return object;
+      },
+      output: summarize,
+    });
+    expect(calls).toBe(2);
+    expect(summaries).toBe(0);
+    expect(asyncResult).toBe(object);
+    expect(syncResult).toBe(object);
+  });
+
   test("an isError result is traced as status error, not success", async () => {
     const sink = recordingSink();
     const { server, handlers } = fakeServer();
@@ -368,9 +861,9 @@ describe("installMcpTracing", () => {
 
     await handlers.get("search_memory")?.({ query: "x" }, AUTH);
 
-    expect(
-      (sink.bodies[0]?.metadata as { status: string }).status,
-    ).toBe("error");
+    expect((sink.bodies[0]?.metadata as { status: string }).status).toBe(
+      "error",
+    );
   });
 
   test("a sink that throws on every method leaves the result byte-identical and never throws", async () => {
@@ -421,9 +914,9 @@ describe("installMcpTracing", () => {
     ).rejects.toThrow("entity 7 is not in namespace rico");
 
     expect(sink.bodies).toHaveLength(1);
-    expect(
-      (sink.bodies[0]?.metadata as { status: string }).status,
-    ).toBe("exception");
+    expect((sink.bodies[0]?.metadata as { status: string }).status).toBe(
+      "exception",
+    );
     expect(sink.bodies[0]?.output).toEqual({
       error_class: "NamespaceViolationError",
       error_message: "entity 7 is not in namespace rico",
@@ -490,6 +983,47 @@ describe("installMcpTracing", () => {
         undefined,
       ),
     ).not.toThrow();
+  });
+});
+
+describe("child observation export", () => {
+  test("the parent observation ends when a child start throws", () => {
+    let parentEnded = 0;
+    let childStarts = 0;
+    const parent = {
+      updateTrace: () => undefined,
+      end: () => {
+        parentEnded += 1;
+      },
+      startObservation: () => {
+        childStarts += 1;
+        if (childStarts === 2) throw new Error("child start failed");
+        return {
+          updateTrace: () => undefined,
+          startObservation: () => {
+            throw new Error("unused");
+          },
+          end: () => undefined,
+        };
+      },
+    };
+    expect(() =>
+      emitTraceBodyWithObservations(
+        {
+          name: "tool",
+          input: {},
+          output: {},
+          metadata: {},
+          tags: [],
+          spans: [
+            { name: "one", input: {}, output: {}, metadata: {} },
+            { name: "two", input: {}, output: {}, metadata: {} },
+          ],
+        },
+        () => parent,
+      ),
+    ).toThrow("child start failed");
+    expect(parentEnded).toBe(1);
   });
 });
 
@@ -964,9 +1498,9 @@ describe("the SDK's own logger cannot bypass the content-free discipline", () =>
     // installed the suppression, so "silent" would otherwise pass for the
     // wrong reason.
     configureGlobalLogger({ level: LogLevel.DEBUG });
-    expect((getGlobalLogger() as unknown as Gated).shouldLog(LogLevel.ERROR)).toBe(
-      true,
-    );
+    expect(
+      (getGlobalLogger() as unknown as Gated).shouldLog(LogLevel.ERROR),
+    ).toBe(true);
 
     // Building the real sink installs the suppression. `createSink` is NOT
     // injected here on purpose: the point is that the DEFAULT factory does it.
@@ -1061,7 +1595,11 @@ describe("trace body helpers", () => {
         // The value is deliberately an obvious placeholder: key-based masking
         // triggers on the KEY alone, and a realistic-looking value here is
         // itself a secret-scanner hit (GitGuardian flagged the previous one).
-        text: JSON.stringify({ a: 1, password: "fake-placeholder-not-a-secret", b: 2 }),
+        text: JSON.stringify({
+          a: 1,
+          password: "fake-placeholder-not-a-secret",
+          b: 2,
+        }),
       },
     });
     const text = (body.output as { text: string }).text;
@@ -1218,10 +1756,7 @@ describe("the release stamped on every trace", () => {
       : undefined;
 
     try {
-      writeFileSync(
-        stampPath,
-        "sha=0123456789abcdef\nshort_sha=0123456\n",
-      );
+      writeFileSync(stampPath, "sha=0123456789abcdef\nshort_sha=0123456\n");
       expect(readRuntimeDeployStamp()).toContain("short_sha=0123456");
       expect(
         resolveRepoRelease({

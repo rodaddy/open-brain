@@ -1011,3 +1011,25 @@ Reusable review check: a security-boundary test that captures output by monkey-p
 Verbatim, from the source:
 
 > When `failLine` is `undefined`, the redaction assertions never meaningfully run. A test that silently stops checking is worse than one that is simply absent, because the suite still reports it as covered.
+
+## [2026-08-06] A field named preview that carries the full body turns evidence spans into a request-path amplifier
+
+**Severity:** HIGH
+**Source:** PR #599 review swarm, finding H2 (measured: 47.6 MB / 528 ms on one traced search)
+**Scope key:** `review.evidence_payload_bounded_and_deduplicated`
+**Status:** active
+
+### Pattern
+
+`content_preview` in this repo is defined as the FULL `t.content` (src/tools/table-constants.ts) — the name promises a bound the projection does not have. Evidence/observability payloads that embed row content must (1) apply a real character bound at the projection, (2) not re-serialize the same rows into multiple spans of one call (query output + rank input + rank output + execute output was 4-5 copies), and (3) bound total payload with an explicit degradation recorded in the emitted record. Also check WHERE masking runs: synchronous masking on the tool's own path multiplies per-string regex cost by payload size, and per-string `new RegExp` compilation belongs at module scope. Measure worst-case with the live corpus (max content size × caller-controlled limit × fetch multiplier), not the happy path.
+
+## [2026-08-06] Chosen-vs-filtered evidence keyed on a collapsing identity reports dropped rows as chosen
+
+**Severity:** MEDIUM
+**Source:** PR #599 review swarm, finding M4
+**Scope key:** `review.selection_evidence_keys_are_unique_per_candidate`
+**Status:** active
+
+### Pattern
+
+Selection evidence built by re-matching candidates against results via a derived key (`row.id ?? "qmd:" + path`) lies whenever the key collapses: qmd rows carry no id, chunks share paths, and absent paths collapse to one literal key — so a dropped candidate is reported `chosen: true`, answering "why wasn't this returned" with an affirmative falsehood. Key selection by pre-sort array index (or have the selecting code RETURN its classification) rather than re-deriving identity, and distinguish drop REASONS the branch structure knows (pagination offset vs ranking window vs limit). Test shape: two candidates that collapse to one key where only one survives; assert exactly one chosen.
