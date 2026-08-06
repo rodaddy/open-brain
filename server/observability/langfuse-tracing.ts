@@ -87,19 +87,14 @@
  */
 import { configureGlobalLogger, LogLevel } from "@langfuse/core";
 import { LangfuseSpanProcessor } from "@langfuse/otel";
-import {
-  setLangfuseTracerProvider,
-  startObservation,
-} from "@langfuse/tracing";
+import { setLangfuseTracerProvider, startObservation } from "@langfuse/tracing";
 import { setGlobalErrorHandler } from "@opentelemetry/core";
 import { BasicTracerProvider } from "@opentelemetry/sdk-trace-base";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { readFileSync } from "node:fs";
 import { logger } from "../../src/logger.ts";
-import {
-  isSensitiveKey,
-  SECRET_DETECTORS,
-} from "../../src/secret-patterns.ts";
+import { isSensitiveKey, SECRET_DETECTORS } from "../../src/secret-patterns.ts";
 import type { AuthInfo } from "../../src/types.ts";
 import { readDeployedRevision } from "../transport/server-identity.ts";
 
@@ -159,6 +154,19 @@ const DEFAULT_FLAP_COOLDOWN_MS = 30_000;
  * would leave the recovery line trailing the actual recovery.
  */
 const SINK_HEALTH_PROBE_MS = 5_000;
+
+/** Maximum serialized child-span payload retained for one tool call. */
+export const MAX_ACTIVE_SPAN_BYTES = 256 * 1024;
+
+const COMPILED_SECRET_DETECTORS = SECRET_DETECTORS.map((detector) => ({
+  kind: detector.kind,
+  pattern: new RegExp(
+    detector.pattern.source,
+    detector.pattern.flags.includes("g")
+      ? detector.pattern.flags
+      : `${detector.pattern.flags}g`,
+  ),
+}));
 
 /**
  * How long `git rev-parse` may take before the release is treated as unknown.
@@ -239,6 +247,14 @@ export interface McpTracingConfig {
   secretKey: string;
 }
 
+/** One child observation collected while a traced MCP tool call is active. */
+export interface TraceSpanBody {
+  name: string;
+  input: unknown;
+  output: unknown;
+  metadata: Record<string, unknown>;
+}
+
 /** The content-ful trace payload for one tool call. */
 export interface TraceBody {
   name: string;
@@ -246,6 +262,7 @@ export interface TraceBody {
   output: unknown;
   tags: string[];
   metadata: Record<string, unknown>;
+  spans?: TraceSpanBody[];
   sessionId?: string;
   userId?: string;
 }
@@ -327,6 +344,222 @@ const INACTIVE_HANDLE: McpTracingHandle = {
   active: false,
   shutdown: () => Promise.resolve(),
 };
+
+interface ActiveMcpTrace {
+  readonly spans: TraceSpanBody[];
+  readonly metadata: Record<string, unknown>;
+  spanBytes: number;
+  payloadDegraded: boolean;
+}
+
+const activeMcpTrace = new AsyncLocalStorage<ActiveMcpTrace>();
+
+/** Add trace-level metadata from inside the currently executing tool handler. */
+export function setActiveMcpTraceMetadata(
+  metadata: Record<string, unknown>,
+): void {
+  const active = activeMcpTrace.getStore();
+  if (!active) return;
+  Object.assign(active.metadata, metadata);
+}
+
+function traceValueCounts(value: unknown): Record<string, number> {
+  const counts = {
+    values: 0,
+    arrays: 0,
+    objects: 0,
+    strings: 0,
+    string_bytes: 0,
+  };
+  const pending: unknown[] = [value];
+  const seen = new WeakSet<object>();
+  while (pending.length > 0) {
+    const current = pending.pop();
+    counts.values += 1;
+    if (typeof current === "string") {
+      counts.strings += 1;
+      counts.string_bytes += Buffer.byteLength(current, "utf8");
+      continue;
+    }
+    if (!current || typeof current !== "object") continue;
+    if (seen.has(current)) continue;
+    seen.add(current);
+    if (Array.isArray(current)) counts.arrays += 1;
+    else counts.objects += 1;
+    pending.push(...Object.values(current));
+  }
+  return counts;
+}
+
+function degradedTraceSpan(
+  span: TraceSpanBody,
+  reason: "active_span_bytes_limit" | "serialization_error",
+): TraceSpanBody {
+  return {
+    name: span.name,
+    input: { counts: traceValueCounts(span.input) },
+    output: { counts: traceValueCounts(span.output) },
+    metadata: {
+      ...span.metadata,
+      payload_degraded: true,
+      payload_degradation_reason: reason,
+      payload_limit_bytes: MAX_ACTIVE_SPAN_BYTES,
+    },
+  };
+}
+
+function appendDegradedSpan(
+  active: ActiveMcpTrace,
+  span: TraceSpanBody,
+  reason: "active_span_bytes_limit" | "serialization_error",
+): void {
+  const degraded = degradedTraceSpan(span, reason);
+  const bytes = Buffer.byteLength(JSON.stringify(degraded), "utf8");
+  if (active.spanBytes + bytes <= MAX_ACTIVE_SPAN_BYTES) {
+    active.spans.push(degraded);
+    active.spanBytes += bytes;
+    return;
+  }
+  const last = active.spans.at(-1);
+  if (!last) return;
+  const omitted = Number(last.metadata.additional_spans_omitted ?? 0);
+  last.metadata.additional_spans_omitted = omitted + 1;
+}
+
+function recordTraceSpanUnsafe(
+  name: string,
+  input: unknown,
+  output: unknown,
+  metadata: Record<string, unknown>,
+): void {
+  const active = activeMcpTrace.getStore();
+  if (!active) return;
+  const span = { name, input, output, metadata };
+  if (active.payloadDegraded) {
+    appendDegradedSpan(active, span, "active_span_bytes_limit");
+    return;
+  }
+  try {
+    const spanBytes = Buffer.byteLength(JSON.stringify(span), "utf8");
+    if (active.spanBytes + spanBytes <= MAX_ACTIVE_SPAN_BYTES) {
+      active.spans.push(span);
+      active.spanBytes += spanBytes;
+      return;
+    }
+    const degraded = active.spans.map((recorded) =>
+      degradedTraceSpan(recorded, "active_span_bytes_limit"),
+    );
+    degraded.push(degradedTraceSpan(span, "active_span_bytes_limit"));
+    active.spans.splice(0, active.spans.length, ...degraded);
+    active.spanBytes = Buffer.byteLength(JSON.stringify(degraded), "utf8");
+    active.payloadDegraded = true;
+  } catch (err: unknown) {
+    logger.warn("mcp_tool_trace_span_payload_degraded", {
+      error: tracingErrorLabel(err),
+      reason: "serialization_error",
+    });
+    appendDegradedSpan(active, span, "serialization_error");
+    active.payloadDegraded = true;
+  }
+}
+
+function recordTraceSpan(
+  name: string,
+  input: unknown,
+  output: unknown,
+  metadata: Record<string, unknown>,
+): void {
+  try {
+    recordTraceSpanUnsafe(name, input, output, metadata);
+  } catch (err: unknown) {
+    logger.warn("mcp_tool_trace_span_collection_failed", {
+      error: tracingErrorLabel(err),
+    });
+  }
+}
+
+function traceSpanOutput<T>(
+  summarize: ((result: T) => unknown) | undefined,
+  result: T,
+): unknown {
+  if (!summarize) return result;
+  try {
+    return summarize(result);
+  } catch (err: unknown) {
+    return { instrumentation_error: tracingErrorLabel(err) };
+  }
+}
+
+/**
+ * Run an asynchronous retrieval stage as a child of the active MCP tool trace.
+ *
+ * With tracing disabled there is no async-local trace context, so this calls the
+ * operation directly and performs no masking, collection, or exporter work.
+ */
+export async function traceRetrievalSpan<T>(input: {
+  name: string;
+  input?: unknown;
+  metadata?: Record<string, unknown>;
+  run: () => Promise<T>;
+  output?: (result: T) => unknown;
+}): Promise<T> {
+  if (!activeMcpTrace.getStore()) return input.run();
+  const started = Date.now();
+  try {
+    const result = await input.run();
+    recordTraceSpan(
+      input.name,
+      input.input ?? null,
+      traceSpanOutput(input.output, result),
+      {
+        ...(input.metadata ?? {}),
+        status: "success",
+        duration_ms: Math.max(0, Date.now() - started),
+      },
+    );
+    return result;
+  } catch (err: unknown) {
+    recordTraceSpan(input.name, input.input ?? null, errorOutput(err), {
+      ...(input.metadata ?? {}),
+      status: "exception",
+      duration_ms: Math.max(0, Date.now() - started),
+    });
+    throw err;
+  }
+}
+
+/** Synchronous counterpart for ranking, filtering, and deterministic transforms. */
+export function traceRetrievalSpanSync<T>(input: {
+  name: string;
+  input?: unknown;
+  metadata?: Record<string, unknown>;
+  run: () => T;
+  output?: (result: T) => unknown;
+}): T {
+  if (!activeMcpTrace.getStore()) return input.run();
+  const started = Date.now();
+  try {
+    const result = input.run();
+    recordTraceSpan(
+      input.name,
+      input.input ?? null,
+      traceSpanOutput(input.output, result),
+      {
+        ...(input.metadata ?? {}),
+        status: "success",
+        duration_ms: Math.max(0, Date.now() - started),
+      },
+    );
+    return result;
+  } catch (err: unknown) {
+    recordTraceSpan(input.name, input.input ?? null, errorOutput(err), {
+      ...(input.metadata ?? {}),
+      status: "exception",
+      duration_ms: Math.max(0, Date.now() - started),
+    });
+    throw err;
+  }
+}
 
 type RegisterTool = McpServer["registerTool"];
 
@@ -421,13 +654,9 @@ function maskDetectorMatch(kind: string, match: string): string {
 /** Replace every detector match while retaining the rest of the string. */
 function maskTraceString(value: string): string {
   let masked = value;
-  for (const detector of SECRET_DETECTORS) {
-    const flags = detector.pattern.flags.includes("g")
-      ? detector.pattern.flags
-      : `${detector.pattern.flags}g`;
-    masked = masked.replace(
-      new RegExp(detector.pattern.source, flags),
-      (match) => maskDetectorMatch(detector.kind, match),
+  for (const detector of COMPILED_SECRET_DETECTORS) {
+    masked = masked.replace(detector.pattern, (match) =>
+      maskDetectorMatch(detector.kind, match),
     );
   }
   return masked;
@@ -448,7 +677,9 @@ function maskTraceValue(value: unknown): unknown {
   if (typeof value === "string") return maskTraceString(value);
   if (Array.isArray(value)) {
     const masked = value.map(maskTraceValue);
-    return masked.some((child, index) => child !== value[index]) ? masked : value;
+    return masked.some((child, index) => child !== value[index])
+      ? masked
+      : value;
   }
   if (!value || typeof value !== "object") return value;
   if (ArrayBuffer.isView(value)) return binaryViewMarker(value);
@@ -491,36 +722,50 @@ export function buildToolTraceBody(input: {
   auth?: AuthInfo;
   sessionId?: string;
   maskingEnabled?: boolean;
+  metadata?: Record<string, unknown>;
+  spans?: TraceSpanBody[];
 }): TraceBody {
   const maskingEnabled = input.maskingEnabled !== false;
-  const body: TraceBody = {
+  const traceMetadata = (
+    maskingEnabled
+      ? maskTraceValue(input.metadata ?? {})
+      : (input.metadata ?? {})
+  ) as Record<string, unknown>;
+  const metadata = {
+    ...traceMetadata,
+    caller_role: input.auth?.role ?? null,
+    caller_client_id: input.auth?.clientId ?? null,
+    // The audit lane records BOTH ids (`src/audit-log.ts:299-301`), and the
+    // pair is the whole answer to "who actually did this" when a delegated
+    // call's `clientId` differs from its token-derived identity.
+    caller_token_client_id: input.auth?.tokenClientId ?? null,
+    caller_agent_id: input.auth?.agentId ?? null,
+    namespace_source: input.auth?.namespaceSource ?? null,
+    duration_ms: Number.isFinite(input.durationMs)
+      ? Math.max(0, Math.round(input.durationMs))
+      : 0,
+    status: input.status,
+  };
+  const spans = input.spans?.map((span) => ({
+    name: span.name,
+    input: maskingEnabled ? maskTraceValue(span.input) : span.input,
+    output: maskingEnabled ? maskTraceValue(span.output) : span.output,
+    metadata: (maskingEnabled
+      ? maskTraceValue(span.metadata)
+      : span.metadata) as Record<string, unknown>,
+  }));
+  return {
     name: input.toolName,
     input: maskingEnabled ? maskTraceValue(input.args) : input.args,
     output: maskingEnabled ? maskTraceValue(input.output) : input.output,
     tags: [...TRACE_TAGS],
-    metadata: {
-      caller_role: input.auth?.role ?? null,
-      caller_client_id: input.auth?.clientId ?? null,
-      // The audit lane records BOTH ids (`src/audit-log.ts:299-301`), and the
-      // pair is the whole answer to "who actually did this" when a delegated
-      // call's `clientId` differs from its token-derived identity. The
-      // content-ful lane is the one an operator reads for that question, so
-      // dropping the token id here would make the two lanes disagree in
-      // exactly the case a security review cares about.
-      caller_token_client_id: input.auth?.tokenClientId ?? null,
-      caller_agent_id: input.auth?.agentId ?? null,
-      namespace_source: input.auth?.namespaceSource ?? null,
-      duration_ms: Number.isFinite(input.durationMs)
-        ? Math.max(0, Math.round(input.durationMs))
-        : 0,
-      status: input.status,
-    },
+    metadata,
+    ...(spans === undefined ? {} : { spans }),
     ...(input.sessionId === undefined ? {} : { sessionId: input.sessionId }),
     ...(input.auth?.clientId === undefined
       ? {}
       : { userId: input.auth.clientId }),
   };
-  return body;
 }
 
 /**
@@ -762,31 +1007,43 @@ export function installMcpTracing(
     const callback = cb as (args: unknown, extra: unknown) => unknown;
     const wrapped = async (args: unknown, extra: unknown) => {
       const started = Date.now();
-      try {
-        const result = await callback(args, extra);
-        emitTrace(sink, tracker, {
-          toolName: name,
-          status: isToolError(result) ? "error" : "success",
-          durationMs: Date.now() - started,
-          maskingEnabled: config.maskingEnabled,
-          args,
-          output: result,
-          ...authAndSession(args, extra),
-        });
-        return result;
-      } catch (err: unknown) {
-        emitTrace(sink, tracker, {
-          toolName: name,
-          status: "exception",
-          durationMs: Date.now() - started,
-          maskingEnabled: config.maskingEnabled,
-          args,
-          output: errorOutput(err),
-          ...authAndSession(args, extra),
-        });
-        // The caller's error is the one that matters; tracing never changes it.
-        throw err;
-      }
+      const active: ActiveMcpTrace = {
+        spans: [],
+        metadata: {},
+        spanBytes: 0,
+        payloadDegraded: false,
+      };
+      return activeMcpTrace.run(active, async () => {
+        try {
+          const result = await callback(args, extra);
+          emitTrace(sink, tracker, {
+            toolName: name,
+            status: isToolError(result) ? "error" : "success",
+            durationMs: Date.now() - started,
+            maskingEnabled: config.maskingEnabled,
+            args,
+            output: result,
+            metadata: active.metadata,
+            spans: active.spans,
+            ...authAndSession(args, extra),
+          });
+          return result;
+        } catch (err: unknown) {
+          emitTrace(sink, tracker, {
+            toolName: name,
+            status: "exception",
+            durationMs: Date.now() - started,
+            maskingEnabled: config.maskingEnabled,
+            args,
+            output: errorOutput(err),
+            metadata: active.metadata,
+            spans: active.spans,
+            ...authAndSession(args, extra),
+          });
+          // The caller's error is the one that matters; tracing never changes it.
+          throw err;
+        }
+      });
     };
     return (original as unknown as (...a: unknown[]) => unknown)(
       name,
@@ -916,6 +1173,54 @@ function createSinkSafely(
   }
 }
 
+interface TraceObservation {
+  startObservation(
+    name: string,
+    body: {
+      input?: unknown;
+      output?: unknown;
+      metadata?: Record<string, unknown>;
+    },
+  ): TraceObservation;
+  updateTrace(input: {
+    name: string;
+    tags: string[];
+    sessionId?: string;
+    userId?: string;
+  }): void;
+  end(): void;
+}
+
+/** Materialize one completed trace body through the SDK observation surface. */
+export function emitTraceBodyWithObservations(
+  body: TraceBody,
+  start: (name: string, body: Record<string, unknown>) => TraceObservation,
+): void {
+  const span = start(body.name, {
+    input: body.input,
+    output: body.output,
+    metadata: body.metadata,
+  });
+  try {
+    span.updateTrace({
+      name: body.name,
+      tags: body.tags,
+      ...(body.sessionId === undefined ? {} : { sessionId: body.sessionId }),
+      ...(body.userId === undefined ? {} : { userId: body.userId }),
+    });
+    for (const childBody of body.spans ?? []) {
+      const child = span.startObservation(childBody.name, {
+        input: childBody.input,
+        output: childBody.output,
+        metadata: childBody.metadata,
+      });
+      child.end();
+    }
+  } finally {
+    span.end();
+  }
+}
+
 /**
  * The real sink: a Langfuse span processor on an ISOLATED tracer provider.
  *
@@ -964,7 +1269,6 @@ function defaultSinkFactory(config: McpTracingConfig): TracingSink {
   const provider = new BasicTracerProvider({ spanProcessors: [processor] });
   setLangfuseTracerProvider(provider);
   const tracker = new SinkHealthTracker();
-
 
   // WHERE AN OUTAGE ACTUALLY BECOMES VISIBLE WHILE THE SERVER RUNS.
   //
@@ -1051,18 +1355,13 @@ function defaultSinkFactory(config: McpTracingConfig): TracingSink {
     emit(body: TraceBody): void {
       // The span ends immediately: the tool call already happened, so this is a
       // record of it rather than a live scope.
-      const span = startObservation(body.name, {
-        input: body.input,
-        output: body.output,
-        metadata: body.metadata,
-      });
-      span.updateTrace({
-        name: body.name,
-        tags: body.tags,
-        ...(body.sessionId === undefined ? {} : { sessionId: body.sessionId }),
-        ...(body.userId === undefined ? {} : { userId: body.userId }),
-      });
-      span.end();
+      emitTraceBodyWithObservations(
+        body,
+        startObservation as unknown as (
+          name: string,
+          body: Record<string, unknown>,
+        ) => TraceObservation,
+      );
       // The enqueue above SUCCEEDS even with the endpoint dead — that is what
       // makes an outage invisible from the request path. So while the sink is
       // known-unhealthy, every span handed over is a span that will be dropped,

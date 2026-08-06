@@ -29,6 +29,11 @@ import {
   VALID_TIERS,
 } from "./table-constants.ts";
 import {
+  setActiveMcpTraceMetadata,
+  traceRetrievalSpan,
+  traceRetrievalSpanSync,
+} from "../../server/observability/langfuse-tracing.ts";
+import {
   DEFAULT_FTS_CONFIG,
   ftsConfigLiteral,
   ftsStatementTimeoutMs,
@@ -179,23 +184,34 @@ async function generateSearchEmbedding(
   const controller = new AbortController();
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
-  try {
-    return await Promise.race([
-      deps.embedFn(query, undefined, { signal: controller.signal }),
-      new Promise<null>((resolve) => {
-        timeoutId = setTimeout(() => {
-          controller.abort();
-          logger.warn("search_embedding_timeout", {
-            timeoutMs,
-            queryLength: query.length,
-          });
-          resolve(null);
-        }, timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timeoutId) clearTimeout(timeoutId);
-  }
+  return traceRetrievalSpan({
+    name: "retrieval.embedding",
+    input: { query, timeout_ms: timeoutMs },
+    metadata: { stage: "candidate_generation" },
+    run: async () => {
+      try {
+        return await Promise.race([
+          deps.embedFn(query, undefined, { signal: controller.signal }),
+          new Promise<null>((resolve) => {
+            timeoutId = setTimeout(() => {
+              controller.abort();
+              logger.warn("search_embedding_timeout", {
+                timeoutMs,
+                queryLength: query.length,
+              });
+              resolve(null);
+            }, timeoutMs);
+          }),
+        ]);
+      } finally {
+        if (timeoutId) clearTimeout(timeoutId);
+      }
+    },
+    output: (embedding) => ({
+      generated: embedding !== null,
+      dimensions: embedding?.length ?? 0,
+    }),
+  });
 }
 
 /** Gentle recency factor: today=1.0, 30d=0.97, 90d=0.92, 365d=0.73 */
@@ -259,6 +275,32 @@ export interface SearchRow {
     hash_version?: string;
     byte_length?: number;
   };
+}
+
+function rowEvidence(row: SearchRow): Record<string, unknown> {
+  return {
+    row_id: row.id,
+    source_type: row.source_type,
+    namespace: row.namespace ?? null,
+    content_preview: row.content_preview?.slice(0, 300) ?? null,
+    distance: row.distance ?? null,
+    similarity: row.distance === undefined ? null : 1 - row.distance,
+    bm25_score: row.fts_rank ?? null,
+    usefulness: row.usefulness,
+    tier: row.tier ?? null,
+  };
+}
+
+function rowsEvidence(rows: readonly SearchRow[]): Record<string, unknown> {
+  return {
+    count: rows.length,
+    row_ids: rows.map((row) => row.id),
+    candidates: rows.map(rowEvidence),
+  };
+}
+
+function rowIdsEvidence(rows: readonly SearchRow[]): Record<string, unknown> {
+  return { count: rows.length, row_ids: rows.map((row) => row.id) };
 }
 
 const HAS_EXTRACTED_METADATA: Set<Table> = new Set(["thoughts", "decisions"]);
@@ -360,23 +402,92 @@ function dedupeFallbackSearchRows(rows: SearchRow[]): SearchRow[] {
   return deduped;
 }
 
-function mergeFallbackSearchRows(
+type FallbackClassification = {
+  row: SearchRow;
+  chosen: boolean;
+  filtered_by: "fallback_duplicate" | "fallback_limit" | null;
+};
+
+function selectedFallbackRows(
+  primary: SearchRow[],
+  legacy: SearchRow[],
+  limit: number,
+): SearchRow[] {
+  if (legacy.length === 0) return primary.slice(0, limit);
+  const firstLegacy = legacy[0];
+  if (!firstLegacy) return primary.slice(0, limit);
+  if (primary.length >= limit) {
+    return [...primary.slice(0, Math.max(0, limit - 1)), firstLegacy];
+  }
+  return [...primary, ...legacy.slice(0, limit - primary.length)];
+}
+
+function fallbackFilteredBy(
+  chosen: boolean,
+  duplicate: boolean,
+): FallbackClassification["filtered_by"] {
+  if (chosen) return null;
+  return duplicate ? "fallback_duplicate" : "fallback_limit";
+}
+
+function computeFallbackSearchRows(
   primaryRows: SearchRow[],
   legacyRows: SearchRow[],
   limit: number,
-): SearchRow[] {
+): { rows: SearchRow[]; classifications: FallbackClassification[] } {
   const primary = dedupeFallbackSearchRows(primaryRows);
   const primaryKeys = new Set(primary.map(fallbackDedupeKey));
   const legacy = dedupeFallbackSearchRows(
     legacyRows.filter((row) => !primaryKeys.has(fallbackDedupeKey(row))),
   );
-  if (legacy.length === 0) return primary.slice(0, limit);
-  if (primary.length >= limit) {
-    const fallbackRow = legacy[0];
-    if (!fallbackRow) return primary.slice(0, limit);
-    return [...primary.slice(0, Math.max(0, limit - 1)), fallbackRow];
-  }
-  return [...primary, ...legacy.slice(0, limit - primary.length)];
+  const rows = selectedFallbackRows(primary, legacy, limit);
+  const selectedKeys = new Set(rows.map(fallbackDedupeKey));
+  const seen = new Set<string>();
+  const classifications = [...primaryRows, ...legacyRows].map((row, index) => {
+    const key = fallbackDedupeKey(row);
+    const duplicate =
+      seen.has(key) ||
+      (index >= primaryRows.length && primaryKeys.has(key));
+    seen.add(key);
+    const chosen = !duplicate && selectedKeys.has(key);
+    return {
+      row,
+      chosen,
+      filtered_by: fallbackFilteredBy(chosen, duplicate),
+    } satisfies FallbackClassification;
+  });
+  return { rows, classifications };
+}
+
+export function mergeFallbackSearchRows(
+  primaryRows: SearchRow[],
+  legacyRows: SearchRow[],
+  limit: number,
+): SearchRow[] {
+  const result = traceRetrievalSpanSync({
+    name: "retrieval.fallback_dedupe",
+    input: {
+      limit,
+      primary: rowsEvidence(primaryRows),
+      legacy: rowsEvidence(legacyRows),
+    },
+    metadata: {
+      stage: "filtering",
+      filter_names: ["fallback_duplicate", "fallback_limit"],
+    },
+    run: () => computeFallbackSearchRows(primaryRows, legacyRows, limit),
+    output: ({ rows, classifications }) => ({
+      candidate_count: classifications.length,
+      selected_count: rows.length,
+      selected_row_ids: rows.map((row) => row.id),
+      candidates: classifications.map(({ row, chosen, filtered_by }) => ({
+        ...rowEvidence(row),
+        chosen,
+        filtered_by,
+      })),
+    }),
+  });
+  return result.rows;
 }
 
 function appendNamespaceParam(
@@ -776,8 +887,23 @@ async function relationalGraphSearch(
     .join("\nUNION ALL\n");
 
   try {
-    const { rows } = await deps.pool.query<SearchRow>(
-      `WITH relational_graph_seed AS (
+    const rows = await traceRetrievalSpan({
+      name: "retrieval.graph_query",
+      input: {
+        relation: parsed.relation,
+        direction: parsed.direction,
+        seed: parsed.seed,
+        fetch_limit: fetchLimit,
+        tier,
+        namespace,
+      },
+      metadata: {
+        stage: "candidate_generation",
+        filter_names: ["namespace", "relation", "archived_at"],
+      },
+      run: async () => {
+        const result = await deps.pool.query<SearchRow>(
+          `WITH relational_graph_seed AS (
          SELECT e.id, e.namespace
          FROM ob_entities e
          WHERE (
@@ -794,8 +920,12 @@ ${hydrationSql}
        ) relational_graph_rows
        ORDER BY fts_rank DESC, created_at DESC
        LIMIT $3`,
-      params,
-    );
+          params,
+        );
+        return withSourceRefs(result.rows);
+      },
+      output: rowsEvidence,
+    });
     logger.info("search_relational_graph", {
       relation: parsed.relation,
       direction: parsed.direction,
@@ -803,7 +933,7 @@ ${hydrationSql}
       target_tables: targetTables,
       candidate_count: rows.length,
     });
-    return withSourceRefs(rows);
+    return rows;
   } catch (err) {
     logger.warn("search_relational_graph_failed", {
       relation: parsed.relation,
@@ -855,8 +985,26 @@ ${unionAll}
 ORDER BY (distance * ${VECTOR_WEIGHT} + (1.0 - COALESCE(usefulness, 0.5)) * ${USEFULNESS_WEIGHT} + EXTRACT(EPOCH FROM (NOW() - created_at)) / 86400.0 * ${AGE_WEIGHT}) ASC
 LIMIT $2 OFFSET $3`;
 
-  const { rows } = await deps.pool.query(sql, params);
-  return withSourceRefs(rows as SearchRow[]);
+  return traceRetrievalSpan({
+    name: "retrieval.vector_query",
+    input: {
+      accessible_tables: accessibleTables,
+      fetch_limit: fetchLimit,
+      offset,
+      tier,
+      namespace,
+      source_scope: sourceScope,
+    },
+    metadata: {
+      stage: "candidate_generation",
+      filter_names: ["namespace", "tier", "source_scope", "archived_at"],
+    },
+    run: async () => {
+      const { rows } = await deps.pool.query(sql, params);
+      return withSourceRefs(rows as SearchRow[]);
+    },
+    output: rowsEvidence,
+  });
 }
 
 /**
@@ -953,8 +1101,28 @@ ${unionAll}
 ORDER BY fts_rank DESC
 LIMIT $2 OFFSET $3`;
 
-  const { rows } = await runBoundedFtsQuery(deps, sql, params, ftsConfig);
-  return withSourceRefs(rows as SearchRow[]);
+  return traceRetrievalSpan({
+    name: "retrieval.keyword_query",
+    input: {
+      query,
+      accessible_tables: accessibleTables,
+      fetch_limit: fetchLimit,
+      offset,
+      tier,
+      namespace,
+      source_scope: sourceScope,
+      fts_config: ftsConfig,
+    },
+    metadata: {
+      stage: "candidate_generation",
+      filter_names: ["namespace", "tier", "source_scope", "archived_at"],
+    },
+    run: async () => {
+      const { rows } = await runBoundedFtsQuery(deps, sql, params, ftsConfig);
+      return withSourceRefs(rows as SearchRow[]);
+    },
+    output: rowsEvidence,
+  });
 }
 
 /**
@@ -963,54 +1131,75 @@ LIMIT $2 OFFSET $3`;
  * Items in only one list get a single RRF score.
  * Hot entries get +0.3 boost, cold entries get -0.2, warm is unchanged.
  */
-function rrfMerge(
+export function rrfMerge(
   vectorRows: SearchRow[],
   ftsRows: SearchRow[],
   limit: number,
   graphRows: SearchRow[] = [],
 ): SearchRow[] {
-  const scoreMap = new Map<string, { row: SearchRow; rrf: number }>();
-
-  for (let i = 0; i < vectorRows.length; i++) {
-    const row = vectorRows[i]!;
-    const key = `${row.source_type}:${row.id}`;
-    scoreMap.set(key, { row, rrf: 1 / (RRF_K + i + 1) });
-  }
-
-  for (let i = 0; i < ftsRows.length; i++) {
-    const row = ftsRows[i]!;
-    const key = `${row.source_type}:${row.id}`;
-    const existing = scoreMap.get(key);
-    if (existing) {
-      existing.rrf += 1 / (RRF_K + i + 1);
-    } else {
-      scoreMap.set(key, { row, rrf: 1 / (RRF_K + i + 1) });
-    }
-  }
-
-  for (let i = 0; i < graphRows.length; i++) {
-    const row = graphRows[i]!;
-    const key = `${row.source_type}:${row.id}`;
-    const existing = scoreMap.get(key);
-    const graphRrf = 3 / (RRF_K + i + 1);
-    if (existing) {
-      existing.rrf += graphRrf;
-      existing.row = { ...existing.row, explicit_links: row.explicit_links };
-    } else {
-      scoreMap.set(key, { row, rrf: graphRrf });
-    }
-  }
-
-  return Array.from(scoreMap.values())
-    .map(({ row, rrf }) => {
-      const tier = TIER_BOOST[(row.tier ?? "warm") as Tier];
-      const weight = TABLE_WEIGHT[row.source_type] ?? 1.0;
-      const recency = recencyFactor(row.created_at);
-      return { row, rrf: Math.max(0, (rrf + tier) * weight * recency) };
-    })
-    .sort((a, b) => b.rrf - a.rrf)
-    .slice(0, limit)
-    .map(({ row }) => row);
+  let ranked: Array<{ row: SearchRow; rrf: number }> = [];
+  return traceRetrievalSpanSync({
+    name: "retrieval.rank_rrf",
+    input: {
+      limit,
+      vector: rowIdsEvidence(vectorRows),
+      keyword: rowIdsEvidence(ftsRows),
+      graph: rowIdsEvidence(graphRows),
+    },
+    metadata: { stage: "scoring_ranking", filter_names: ["rrf_window"] },
+    run: () => {
+      const scoreMap = new Map<string, { row: SearchRow; rrf: number }>();
+      const accumulate = (rows: SearchRow[], multiplier = 1): void => {
+        rows.forEach((row, index) => {
+          const key = `${row.source_type}:${row.id}`;
+          const contribution = multiplier / (RRF_K + index + 1);
+          const existing = scoreMap.get(key);
+          if (existing) {
+            existing.rrf += contribution;
+            if (multiplier === 3) {
+              existing.row = { ...existing.row, explicit_links: row.explicit_links };
+            }
+          } else {
+            scoreMap.set(key, { row, rrf: contribution });
+          }
+        });
+      };
+      accumulate(vectorRows);
+      accumulate(ftsRows);
+      accumulate(graphRows, 3);
+      ranked = Array.from(scoreMap.values())
+        .map(({ row, rrf }) => ({
+          row,
+          rrf: Math.max(
+            0,
+            (rrf + TIER_BOOST[(row.tier ?? "warm") as Tier]) *
+              (TABLE_WEIGHT[row.source_type] ?? 1.0) *
+              recencyFactor(row.created_at),
+          ),
+        }))
+        .sort((a, b) => b.rrf - a.rrf);
+      return ranked.slice(0, limit).map(({ row }) => row);
+    },
+    output: (rows) => {
+      const selectedKeys = new Set(
+        rows.map((row) => `${row.source_type}:${row.id}`),
+      );
+      return {
+        candidate_count: ranked.length,
+        selected_count: rows.length,
+        selected_row_ids: rows.map((row) => row.id),
+        candidates: ranked.map(({ row, rrf }) => {
+          const chosen = selectedKeys.has(`${row.source_type}:${row.id}`);
+          return {
+            ...rowEvidence(row),
+            rank_score: rrf,
+            chosen,
+            filtered_by: chosen ? null : "rrf_window",
+          };
+        }),
+      };
+    },
+  });
 }
 
 /** Circuit breaker: stop tracking after consecutive failures to avoid log floods */
@@ -1072,7 +1261,8 @@ export function trackUsage(
         });
       } else {
         const firstError = results.find((r) => r.status === "rejected") as
-          PromiseRejectedResult | undefined;
+          | PromiseRejectedResult
+          | undefined;
         logger.warn("search_tracking_error", {
           error:
             firstError?.reason instanceof Error
@@ -1086,7 +1276,7 @@ export function trackUsage(
   });
 }
 
-export async function executeSearch(
+async function executeSearchInternal(
   deps: ToolDeps,
   accessibleTables: SearchTable[],
   query: string,
@@ -1242,6 +1432,63 @@ export async function executeSearch(
     rows = await attachExplicitLinks(deps, rows, namespace);
   }
   return rows;
+}
+
+export function executeSearch(
+  deps: ToolDeps,
+  accessibleTables: SearchTable[],
+  query: string,
+  limit: number,
+  mode: SearchMode = "hybrid",
+  tier?: Tier,
+  offset = 0,
+  namespace?: NamespaceFilter,
+  includeLinks?: boolean,
+  sourceScope?: SourceScope,
+  options: ExecuteSearchOptions = {},
+): Promise<SearchRow[]> {
+  return traceRetrievalSpan({
+    name: "retrieval.execute",
+    input: {
+      query,
+      tables: accessibleTables,
+      limit,
+      mode,
+      tier,
+      offset,
+      namespace,
+      include_links: includeLinks,
+      source_scope: sourceScope,
+      options,
+    },
+    metadata: {
+      stage: "retrieval_pipeline",
+      resolved_namespace: namespace ?? null,
+      filter_names: [
+        "permissions",
+        "namespace",
+        "tier",
+        "source_scope",
+        "archived_at",
+        "pagination",
+      ],
+    },
+    run: () =>
+      executeSearchInternal(
+        deps,
+        accessibleTables,
+        query,
+        limit,
+        mode,
+        tier,
+        offset,
+        namespace,
+        includeLinks,
+        sourceScope,
+        options,
+      ),
+    output: rowsEvidence,
+  });
 }
 
 export async function executeSearchWithSharedFallback(
@@ -1623,6 +1870,7 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
         };
       }
       const namespace = namespaceFilterFor(auth, requestedNamespace);
+      setActiveMcpTraceMetadata({ resolved_namespace: namespace ?? null });
       const shouldUseSharedFallback =
         requestedNamespace !== undefined &&
         isSharedNamespace(requestedNamespace);

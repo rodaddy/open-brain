@@ -42,6 +42,10 @@ import {
 } from "./maintenance-bootstrap.ts";
 import { safeMaintenanceErrorCategory } from "./maintenance-queue.ts";
 import { validateLocalCloneMode } from "./local-clone-mode.ts";
+import {
+  createTracingRuntime,
+  installMcpTracing,
+} from "../server/observability/langfuse-tracing.ts";
 
 const EMBEDDING_BASE_URL = process.env.EMBEDDING_BASE_URL;
 
@@ -77,6 +81,7 @@ export function createApp(
   pool: pg.Pool,
   tokenMap: Map<string, AuthInfo>,
   deps?: ToolDeps,
+  tracing?: ReturnType<typeof createTracingRuntime>,
 ): express.Express {
   const app = express();
   const natsRuntimeBoundary =
@@ -234,6 +239,12 @@ export function createApp(
   // "Already connected to a transport" errors with concurrent clients
   const serverFactory = () => {
     const s = createBrainServer();
+    if (tracing?.sink) {
+      installMcpTracing(s, {
+        config: tracing.config,
+        sink: tracing.sink,
+      });
+    }
     registerAllTools(s, toolDeps);
     return s;
   };
@@ -287,6 +298,7 @@ if (import.meta.main) {
   }
 
   const pool = createPool();
+  const tracing = createTracingRuntime();
 
   if (process.env.OPEN_BRAIN_RUN_MIGRATIONS !== "0") {
     try {
@@ -364,7 +376,7 @@ if (import.meta.main) {
     process.exit(1);
   }
 
-  const app = createApp(pool, tokenMap, toolDeps);
+  const app = createApp(pool, tokenMap, toolDeps, tracing);
   const port = parseInt(process.env.PORT || "3100", 10);
 
   const bindHost = localClone.enabled
@@ -441,6 +453,7 @@ if (import.meta.main) {
         );
       }
     }
+    await tracing.shutdown();
     try {
       await pool.end();
     } catch (err) {
