@@ -1,0 +1,16 @@
+{
+  "id": "trace-duplicates-a",
+  "name": "search_all",
+  "observations": [
+    {
+      "id": "duplicate-a-1",
+      "name": "retrieval.fallback_dedupe",
+      "output": {"selected_row_ids": ["row-1"]}
+    },
+    {
+      "id": "duplicate-a-2",
+      "name": "retrieval.fallback_dedupe",
+      "output": {"selected_row_ids": ["row-2"]}
+    }
+  ]
+}

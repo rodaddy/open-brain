@@ -390,10 +390,13 @@ bun scripts/langfuse-trace.ts get 28a6758fe84d34490816d28bfcd4ac20
 # Last five traces for one brain/MCP session, printed in chronological order.
 bun scripts/langfuse-trace.ts session e07dcb17-0026-4dfb-8d2c-c8a5280833d2 -n 5
 
-# Stage-aligned retrieval evidence comparison; exit 1 means evidence differs.
+# Occurrence-aligned retrieval evidence comparison. Exit 1 means evidence
+# differs; exit 2 means the trace/API result is inconclusive or invalid.
 bun scripts/langfuse-trace.ts diff <trace-id-a> <trace-id-b>
 
 # Repeat one live search and report deterministic versus varying stage fields.
+# Traces are correlated to this run, ordered oldest-first, and exit 1 if any
+# retrieval evidence varies (exit 2 if the comparison is inconclusive).
 bun scripts/langfuse-trace.ts repeat search_brain --query "trace forensics" -n 3
 ```
 

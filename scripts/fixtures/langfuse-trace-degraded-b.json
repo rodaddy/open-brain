@@ -1,0 +1,16 @@
+{
+  "id": "trace-degraded-b",
+  "name": "search_brain",
+  "observations": [
+    {
+      "id": "degraded-b",
+      "name": "retrieval.vector_query",
+      "metadata": {
+        "payload_degraded": true,
+        "payload_degradation_reason": "serialization_error",
+        "payload_limit_bytes": 32768
+      },
+      "output": {"counts": {"values": 11, "arrays": 2, "objects": 3, "strings": 4, "string_bytes": 101}}
+    }
+  ]
+}
