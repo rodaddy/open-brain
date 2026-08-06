@@ -1,0 +1,90 @@
+# DEVELOPMENT REPO FACTS
+#
+# STATUS: WRITTEN. This pack is the reviewable source for the live repo facts.
+# Older rows were mirrored from dogfood with their stored provenance; their
+# historical sources were not re-verified in this run. The five issue #520
+# target packs add source-verified rows written through OpenBrainClient and
+# read back. Canon reconciler repo-fact apply remains tracked by issue #588.
+# Pack assembled 2026-08-05T23:58:51Z.
+
+kind = "canon"
+
+[[entries]]
+key = "repo.development.ob_scripts_is_the_only_node_ts_project_in_the_tree"
+lane = "repo_facts"
+subject = "_ob/scripts is the only Node/TS project in the tree"
+fact_type = "dependency"
+text = """
+`_ob/scripts/` is a scoped Bun/TypeScript project with its own package.json and tsconfig.json so editors and LSP servers resolve types without a repo-root Node project. Typecheck with `bun run check` (tsc --noEmit) and run its unit tests with `bun test` from inside that directory.\
+"""
+source = "_ob/scripts/README.md; https://github.com/rodaddy/development/blob/73f29e7aec6f7fd892642865ad33f8a40feab817/_ob/scripts/README.md#L3; verified_at=2026-08-03T16:17:42Z; source_commit=73f29e7aec6f7fd892642865ad33f8a40feab817"
+
+[[entries]]
+key = "repo.development.development_session_start_runtime_context"
+lane = "repo_facts"
+subject = "Development session-start runtime context"
+fact_type = "workflow"
+text = """
+Session start reads the repo-fact UUID from AGENTS.md, fetches this entity directly with get_entity, validates the source commit and SHA-256, then proceeds. Fallback is only the named source doc; normal discovery is OB/qmd then mdfind then rg. Known vetted tools run directly. Claude and Codex are rollout gates; Pi is best-effort and must not block them. Fleet host access: SSH to an agent host as that agent user (skippy@10.71.20.111, bilby@10.71.20.71) — the agent user owns ~/.hermes, its systemd user units, and its process view; resolve named hosts via rtech-infra/HOSTMAP.md, never recall IPs.\
+"""
+source = "_ob/repo-context/development.md; https://github.com/rodaddy/development/blob/3c2bdc36f27407e64f44d9a69a15ee296ea26510/_ob/repo-context/development.md; verified_at=2026-07-13T16:37:58Z; source_commit=3c2bdc36f27407e64f44d9a69a15ee296ea26510"
+
+[[entries]]
+key = "repo.development.just_recipes_launch_cmux_agent_rooms"
+lane = "repo_facts"
+subject = "just recipes launch CMUX agent rooms"
+fact_type = "workflow"
+text = """
+The root `justfile` exposes CMUX room launchers, not build steps: `just start` (alias `s`) opens this repo's standard CMUX room with Claude as the default main agent (pass `codex` to switch), `just swarm` (`sw`) adds a scribe watcher pane that tails `_reports/verified-swarm/*/ledger.jsonl`, and `just fast|cc|cockpit|pi|room` launch CMUX presets. Recipes run under `zsh -cu`.\
+"""
+source = "justfile; https://github.com/rodaddy/development/blob/73f29e7aec6f7fd892642865ad33f8a40feab817/justfile#L14; verified_at=2026-08-03T16:17:42Z; source_commit=73f29e7aec6f7fd892642865ad33f8a40feab817"
+
+[[entries]]
+key = "repo.development.open_brain_session_hydration_is_already_done_do_not_re_run_it"
+lane = "repo_facts"
+subject = "Open Brain session hydration is already done -- do not re-run it"
+fact_type = "workflow"
+text = """
+Claude/Claudex sessions in this repo are hydrated by the package-owned direct Open Brain SessionStart adapter; the visible "OB ✓ gate passed" line is the proof of direct recall. Never execute the `repo_fact_tool` line or any `mcp2cli open-brain` command here -- that bridge is retired and hook-blocked. Only on missing/stale/failed hydration, fall back to reading `_ob/repo-context/development.md`.\
+"""
+source = "AGENTS.md; https://github.com/rodaddy/development/blob/73f29e7aec6f7fd892642865ad33f8a40feab817/AGENTS.md#L6; verified_at=2026-08-03T16:17:42Z; source_commit=73f29e7aec6f7fd892642865ad33f8a40feab817"
+
+[[entries]]
+key = "repo.development.remote_and_board"
+lane = "repo_facts"
+subject = "Remote and board"
+fact_type = "ownership"
+text = """
+Origin is `git@github.com:rodaddy/development.git` (rodaddy/development). No GitHub Project board is declared for this control-plane repository, so board-mutation workflows have no default target here.\
+"""
+source = "_AGENTS.md; https://github.com/rodaddy/development/blob/73f29e7aec6f7fd892642865ad33f8a40feab817/_AGENTS.md#L7; verified_at=2026-08-03T16:17:42Z; source_commit=73f29e7aec6f7fd892642865ad33f8a40feab817"
+
+[[entries]]
+key = "repo.development.repo_shape_umbrella_workspace_that_ignores_everything_by_default"
+lane = "repo_facts"
+subject = "Repo shape: umbrella workspace that ignores everything by default"
+fact_type = "workflow"
+text = """
+/Volumes/ThunderBolt/Development is an umbrella control-plane workspace, not an ordinary project: .gitignore line 3 is a bare `*` so everything is ignored by default, and only explicit un-ignores are tracked (AGENTS.md, CLAUDE.md, GEMINI.md, _AGENTS.md, GLOSSARY.md, justfile, specs/, .claude/settings.json, and the _DOCS/ and _ob/ trees). Every child directory (open-brain, rtech-infra, king-capital, etc.) is a standalone repo with its own git history -- commit work in the repo that owns the files, never here.\
+"""
+source = ".gitignore; https://github.com/rodaddy/development/blob/73f29e7aec6f7fd892642865ad33f8a40feab817/.gitignore#L3; verified_at=2026-08-03T16:17:42Z; source_commit=73f29e7aec6f7fd892642865ad33f8a40feab817"
+
+[[entries]]
+key = "repo.development.repo_local_validation_commands"
+lane = "repo_facts"
+subject = "Repo-local validation commands"
+fact_type = "validation"
+text = """
+This repo's own checks are four Bun scripts run from the repo root: `bun _ob/scripts/validate-development-policy.ts`, `bun _ob/scripts/validate-development-registry.ts`, `bun _ob/scripts/validate-skills-registry.ts`, and `bun _ob/scripts/validate-runtime-fast-path.ts`. There is no deployment and no live-check step for this repository.\
+"""
+source = "_AGENTS.md; https://github.com/rodaddy/development/blob/73f29e7aec6f7fd892642865ad33f8a40feab817/_AGENTS.md#L11; verified_at=2026-08-03T16:17:42Z; source_commit=73f29e7aec6f7fd892642865ad33f8a40feab817"
+
+[[entries]]
+key = "repo.development.worktree_lsp_bootstrap"
+lane = "repo_facts"
+subject = "Worktree LSP bootstrap"
+fact_type = "workflow"
+text = """
+From a fresh worktree, prepare every detected language project with `bun _ob/scripts/lsp-worktree.ts bootstrap` -- it is manifest-driven (Bun for TypeScript, uv for Python, Go modules, SwiftPM, Cargo, compile_commands.json for C/C++, and xcode-build-server for Xcode project/workspace bundles), creates no global environment, and suppresses no diagnostics. `bun _ob/scripts/lsp-worktree.ts doctor` is the read-only environment check.\
+"""
+source = "_ob/scripts/README.md; https://github.com/rodaddy/development/blob/73f29e7aec6f7fd892642865ad33f8a40feab817/_ob/scripts/README.md#L9; verified_at=2026-08-03T16:17:42Z; source_commit=73f29e7aec6f7fd892642865ad33f8a40feab817"

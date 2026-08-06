@@ -8,18 +8,20 @@
 
   <key>ProgramArguments</key>
   <array>
-    <string>/Volumes/ThunderBolt/open-brain/app/scripts/qmd-sync.sh</string>
+    <string>__QMD_SYNC_SCRIPT__</string>
   </array>
 
   <key>WorkingDirectory</key>
-  <string>/Volumes/ThunderBolt/open-brain/app</string>
+  <string>__QMD_SYNC_WORKING_DIRECTORY__</string>
 
   <key>EnvironmentVariables</key>
   <dict>
     <key>HOME</key>
-    <string>/Users/rico</string>
+    <string>__HOME__</string>
     <key>PATH</key>
-    <string>/Users/rico/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <string>/opt/homebrew/bin:/Users/rico/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>LOG_DIR</key>
+    <string>__QMD_SYNC_LOG_DIR__</string>
   </dict>
 
   <key>StartCalendarInterval</key>
@@ -34,8 +36,8 @@
   <string>Background</string>
 
   <key>StandardOutPath</key>
-  <string>/Users/rico/Library/Logs/com.rico.qmd-sync.out.log</string>
+  <string>__QMD_SYNC_STDOUT__</string>
   <key>StandardErrorPath</key>
-  <string>/Users/rico/Library/Logs/com.rico.qmd-sync.err.log</string>
+  <string>__QMD_SYNC_STDERR__</string>
 </dict>
 </plist>

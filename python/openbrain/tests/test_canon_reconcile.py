@@ -357,21 +357,28 @@ class TestPlannedWrites:
         planned = plan_promote(entry, session_key="lane")
         assert planned.arguments["metadata"]["memory_lifecycle_action"] != "candidate"
 
-    def test_a_repo_fact_takes_the_entity_write_path_with_full_provenance(self) -> None:
+    def test_a_repo_fact_uses_the_pack_path_not_its_prose_source(self) -> None:
+        prose_source = "open-brain PR #84; approved 2026-08-03"
+        source_path = "docs/canon/repo-facts.toml"
+        source_commit = "abc123"
         entry = PackEntry(
             key="repo.hosts",
             lane=Lane.REPO_FACTS,
             subject="hosts",
             text="Two hosts.",
-            source="AGENTS.md",
+            source=prose_source,
         )
         planned = plan_promote(
             entry,
             session_key="lane",
             provenance=FactProvenance(
                 repo="open-brain",
-                source_commit="abc123",
-                source_url="https://example.invalid/open-brain/blob/abc123/AGENTS.md",
+                source_path=source_path,
+                source_commit=source_commit,
+                source_url=(
+                    "https://github.com/rodaddy/open-brain/blob/"
+                    f"{source_commit}/{source_path}"
+                ),
                 verified_at="2026-08-02T00:00:00Z",
             ),
         )
@@ -379,6 +386,12 @@ class TestPlannedWrites:
         metadata = planned.arguments["metadata"]
         assert metadata["source_system"] == "qmd"
         assert metadata["repo"] == "open-brain"
+        assert metadata["path"] == source_path
+        assert metadata["source_url"] == (
+            "https://github.com/rodaddy/open-brain/blob/"
+            f"{source_commit}/{metadata['path']}"
+        )
+        assert metadata["refresh_hint"] == f"Declared canon provenance: {prose_source}"
         assert metadata["subject"] == "hosts"
         assert metadata["fact_type"] == "gotcha"
         assert metadata["staleness_policy"] == "stable_fact_verify_source"

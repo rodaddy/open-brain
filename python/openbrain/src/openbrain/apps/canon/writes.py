@@ -92,19 +92,21 @@ REPO_FACT_STALENESS_POLICY = "stable_fact_verify_source"
 
 
 class FactProvenance(BaseModel):
-    """The four values ``repoFactMetadata`` validates on every repo fact.
+    """The five values ``repoFactMetadata`` validates on every repo fact.
 
-    They travel as ONE object rather than four parallel arguments because they
-    are one fact about one verification: the repo, the commit, the URL naming
-    that commit and path, and when it was checked. ``repoFactMetadata`` refuses
-    the write when ``source_url`` does not contain both the commit and the path,
-    so splitting them across a call signature invites exactly the mismatched
-    triple the server rejects.
+    They travel as ONE object rather than parallel arguments because they are
+    one fact about one verification: the repo, the pack's repo-relative path,
+    the commit, the URL naming that commit and path, and when it was checked.
+    ``repoFactMetadata`` refuses the write unless ``source_url`` contains the
+    exact same commit and path, so splitting them across a call signature invites
+    exactly the mismatched tuple the server rejects.
 
     Attributes:
         repo: The repo the fact binds to, EXACTLY -- the ``repo_facts`` selector
             has no fallback, so a fact under the wrong repo is invisible rather
             than misfiled.
+        source_path: The canon pack's repo-relative path, exactly as encoded in
+            ``source_url``.
         source_commit: The commit the fact was verified at.
         source_url: The URL naming that commit and path.
         verified_at: When it was verified, as an ISO-8601 instant.
@@ -113,6 +115,7 @@ class FactProvenance(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     repo: str
+    source_path: str
     source_commit: str
     source_url: str
     verified_at: str
@@ -268,7 +271,7 @@ def _plan_repo_fact(
                 "source_system": REPO_FACT_SOURCE_SYSTEM,
                 "repo": provenance.repo,
                 "collection": "canon-pack",
-                "path": entry.source or entry.key,
+                "path": provenance.source_path,
                 "subject": entry.subject,
                 "fact_type": str(entry.fact_type),
                 "fact": entry.text,
@@ -276,6 +279,11 @@ def _plan_repo_fact(
                 "source_url": provenance.source_url,
                 "verified_at": provenance.verified_at,
                 "staleness_policy": REPO_FACT_STALENESS_POLICY,
+                **(
+                    {"refresh_hint": f"Declared canon provenance: {entry.source}"}
+                    if entry.source
+                    else {}
+                ),
             }
         },
     )

@@ -1,0 +1,70 @@
+# KING-INFRA REPO FACTS
+#
+# STATUS: WRITTEN. This pack is the reviewable source for the live repo facts.
+# Older rows were mirrored from dogfood with their stored provenance; their
+# historical sources were not re-verified in this run. The five issue #520
+# target packs add source-verified rows written through OpenBrainClient and
+# read back. Canon reconciler repo-fact apply remains tracked by issue #588.
+# Pack assembled 2026-08-05T23:58:51Z.
+
+kind = "canon"
+
+[[entries]]
+key = "repo.king_infra.ci_runs_only_on_the_self_hosted_king_runner"
+lane = "repo_facts"
+subject = "CI runs only on the self-hosted king-runner"
+fact_type = "validation"
+text = """
+Every job defined in this repo targets `runs-on: [self-hosted, king-runner]` -- there are no GitHub-hosted runners (doc-check.yml and security-scan.yml instead call reusable workflows from King-Capital/.github). PR CI is three lint jobs: `yamllint -d relaxed` over `ansible/ services/ .github/workflows/`, `ansible-lint ansible/playbooks/ --exclude ansible/inventory/`, and shellcheck over `scripts/**/*.sh`. Note the shellcheck step ends in `|| true`, so shell-script findings are reported but never fail the build.\
+"""
+source = ".github/workflows/ci.yml; https://github.com/King-Capital/king-infra/blob/adeb4db2151e04aabde7846962032c57a5353a6f/.github/workflows/ci.yml#L48; verified_at=2026-08-03T16:17:42Z; source_commit=adeb4db2151e04aabde7846962032c57a5353a6f"
+
+[[entries]]
+key = "repo.king_infra.deployment_layer"
+lane = "repo_facts"
+subject = "deployment layer"
+fact_type = "workflow"
+text = """
+king-infra is the Ansible/IaC deployment layer for King services; it is operational infrastructure, not a code dependency for service packages.\
+"""
+source = "AGENTS.md; https://github.com/King-Capital/king-infra/blob/b2c1a0c13df0182d47ad0688697ce8f372cb0461/AGENTS.md; verified_at=2026-06-18T08:00:00.000Z; source_commit=b2c1a0c13df0182d47ad0688697ce8f372cb0461"
+
+[[entries]]
+key = "repo.king_infra.ephemeral_containers_are_ttl_reaped_automatically"
+lane = "repo_facts"
+subject = "Ephemeral containers are TTL-reaped automatically"
+fact_type = "ownership"
+text = """
+Containers in the VMID range 900-999 are reserved as ephemeral (CI/test) and carry a TTL in their Proxmox description, written by `deploy-service.yml` as `ephemeral created=<unix_ts> ttl_hours=<N> service=<name>`. The `cleanup-ephemeral.yml` workflow runs every 6 hours, scans proxmox01-04, and destroys any expired ones — so anything provisioned in that range will disappear on its own, and a container with no `created=` timestamp is skipped as manually created.\
+"""
+source = ".github/workflows/cleanup-ephemeral.yml; https://github.com/King-Capital/king-infra/blob/adeb4db2151e04aabde7846962032c57a5353a6f/.github/workflows/cleanup-ephemeral.yml#L7; verified_at=2026-08-03T16:17:42Z; source_commit=adeb4db2151e04aabde7846962032c57a5353a6f"
+
+[[entries]]
+key = "repo.king_infra.host_inventory_is_the_source_of_truth_not_the_claude_md_diagram"
+lane = "repo_facts"
+subject = "Host inventory is the source of truth, not the CLAUDE.md diagram"
+fact_type = "ownership"
+text = """
+`ansible/inventory/hosts.yml` is the authoritative host list, grouped under `king_capital` as `cc_cluster`, `trading`, `king_ops`, `status`, `gh_runners`, and `ephemeral`. It includes trading hosts the CLAUDE.md architecture diagram omits — `king-trading` at 10.71.20.106 and `king-ops` at 10.71.20.108 (CT 308, port 3600) — so resolve host facts from the inventory rather than the diagram.\
+"""
+source = "ansible/inventory/hosts.yml; https://github.com/King-Capital/king-infra/blob/adeb4db2151e04aabde7846962032c57a5353a6f/ansible/inventory/hosts.yml#L18; verified_at=2026-08-03T16:17:42Z; source_commit=adeb4db2151e04aabde7846962032c57a5353a6f"
+
+[[entries]]
+key = "repo.king_infra.repo_purpose_and_stack"
+lane = "repo_facts"
+subject = "Repo purpose and stack"
+fact_type = "dependency"
+text = """
+king-infra holds the Ansible playbooks, NATS deployment, and LXC provisioning for the King Capital trading platform; all King Capital services run on Proxmox LXC containers on the homelab cluster and this repo provisions and configures them. There is no application code -- work here is YAML playbooks, Jinja2 templates (`ansible/templates/`), inventory, per-service markdown under `services/`, and helper shell/Python scripts in `scripts/`.\
+"""
+source = "CLAUDE.md; https://github.com/King-Capital/king-infra/blob/adeb4db2151e04aabde7846962032c57a5353a6f/CLAUDE.md#L15; verified_at=2026-08-03T16:17:42Z; source_commit=adeb4db2151e04aabde7846962032c57a5353a6f"
+
+[[entries]]
+key = "repo.king_infra.running_playbooks"
+lane = "repo_facts"
+subject = "Running playbooks"
+fact_type = "workflow"
+text = """
+Playbooks are run from the `ansible/` directory against the checked-in inventory, e.g. `ansible-playbook -i inventory/hosts.yml playbooks/nats.yml`. There is no `ansible.cfg` in the repo, so the `-i inventory/hosts.yml` flag is required on every invocation — inventory is not auto-discovered.\
+"""
+source = "CLAUDE.md; https://github.com/King-Capital/king-infra/blob/adeb4db2151e04aabde7846962032c57a5353a6f/CLAUDE.md#L55; verified_at=2026-08-03T16:17:42Z; source_commit=adeb4db2151e04aabde7846962032c57a5353a6f"
