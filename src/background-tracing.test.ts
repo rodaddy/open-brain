@@ -6,6 +6,14 @@ import {
   type BackgroundTraceEmitter,
 } from "./background-tracing.ts";
 
+function throwingEmitter(): BackgroundTraceEmitter {
+  return {
+    emitBackground() {
+      throw new Error("emitter failed");
+    },
+  };
+}
+
 function recordingEmitter(): BackgroundTraceEmitter & {
   bodies: BackgroundTraceBody[];
 } {
@@ -105,6 +113,33 @@ describe("BackgroundTraceRecorder", () => {
     expect(result).toBe("job-result");
     expect(emitter.bodies).toHaveLength(1);
     expect(emitter.bodies[0]!.observations).toEqual([]);
+  });
+
+  test("a throwing emitter cannot fail finish()", () => {
+    const trace = new BackgroundTraceRecorder(throwingEmitter(), {
+      name: "best-effort-success",
+      tags: ["background-job"],
+    });
+
+    expect(() => trace.finish({ outcome: "succeeded" })).not.toThrow();
+  });
+
+  test("a throwing emitter cannot mask the original job error in fail()", async () => {
+    const original = new TypeError("original job failure");
+    const run = async () => {
+      const trace = new BackgroundTraceRecorder(throwingEmitter(), {
+        name: "best-effort-failure",
+        tags: ["background-job"],
+      });
+      try {
+        throw original;
+      } catch (error: unknown) {
+        trace.fail(error);
+        throw error;
+      }
+    };
+
+    await expect(run()).rejects.toBe(original);
   });
 
   test("records a failed stage and rethrows the original error", async () => {
