@@ -29,6 +29,11 @@ import {
   VALID_TIERS,
 } from "./table-constants.ts";
 import {
+  setActiveMcpTraceMetadata,
+  traceRetrievalSpan,
+  traceRetrievalSpanSync,
+} from "../../server/observability/langfuse-tracing.ts";
+import {
   DEFAULT_FTS_CONFIG,
   ftsConfigLiteral,
   ftsStatementTimeoutMs,
@@ -179,23 +184,34 @@ async function generateSearchEmbedding(
   const controller = new AbortController();
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
-  try {
-    return await Promise.race([
-      deps.embedFn(query, undefined, { signal: controller.signal }),
-      new Promise<null>((resolve) => {
-        timeoutId = setTimeout(() => {
-          controller.abort();
-          logger.warn("search_embedding_timeout", {
-            timeoutMs,
-            queryLength: query.length,
-          });
-          resolve(null);
-        }, timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timeoutId) clearTimeout(timeoutId);
-  }
+  return traceRetrievalSpan({
+    name: "retrieval.embedding",
+    input: { query, timeout_ms: timeoutMs },
+    metadata: { stage: "candidate_generation" },
+    run: async () => {
+      try {
+        return await Promise.race([
+          deps.embedFn(query, undefined, { signal: controller.signal }),
+          new Promise<null>((resolve) => {
+            timeoutId = setTimeout(() => {
+              controller.abort();
+              logger.warn("search_embedding_timeout", {
+                timeoutMs,
+                queryLength: query.length,
+              });
+              resolve(null);
+            }, timeoutMs);
+          }),
+        ]);
+      } finally {
+        if (timeoutId) clearTimeout(timeoutId);
+      }
+    },
+    output: (embedding) => ({
+      generated: embedding !== null,
+      dimensions: embedding?.length ?? 0,
+    }),
+  });
 }
 
 /** Gentle recency factor: today=1.0, 30d=0.97, 90d=0.92, 365d=0.73 */
@@ -258,6 +274,28 @@ export interface SearchRow {
     content_hash?: string;
     hash_version?: string;
     byte_length?: number;
+  };
+}
+
+function rowEvidence(row: SearchRow): Record<string, unknown> {
+  return {
+    row_id: row.id,
+    source_type: row.source_type,
+    namespace: row.namespace ?? null,
+    content_preview: row.content_preview,
+    distance: row.distance ?? null,
+    similarity: row.distance === undefined ? null : 1 - row.distance,
+    bm25_score: row.fts_rank ?? null,
+    usefulness: row.usefulness,
+    tier: row.tier ?? null,
+  };
+}
+
+function rowsEvidence(rows: readonly SearchRow[]): Record<string, unknown> {
+  return {
+    count: rows.length,
+    row_ids: rows.map((row) => row.id),
+    candidates: rows.map(rowEvidence),
   };
 }
 
@@ -776,8 +814,23 @@ async function relationalGraphSearch(
     .join("\nUNION ALL\n");
 
   try {
-    const { rows } = await deps.pool.query<SearchRow>(
-      `WITH relational_graph_seed AS (
+    const rows = await traceRetrievalSpan({
+      name: "retrieval.graph_query",
+      input: {
+        relation: parsed.relation,
+        direction: parsed.direction,
+        seed: parsed.seed,
+        fetch_limit: fetchLimit,
+        tier,
+        namespace,
+      },
+      metadata: {
+        stage: "candidate_generation",
+        filter_names: ["namespace", "relation", "archived_at"],
+      },
+      run: async () => {
+        const result = await deps.pool.query<SearchRow>(
+          `WITH relational_graph_seed AS (
          SELECT e.id, e.namespace
          FROM ob_entities e
          WHERE (
@@ -794,8 +847,12 @@ ${hydrationSql}
        ) relational_graph_rows
        ORDER BY fts_rank DESC, created_at DESC
        LIMIT $3`,
-      params,
-    );
+          params,
+        );
+        return withSourceRefs(result.rows);
+      },
+      output: rowsEvidence,
+    });
     logger.info("search_relational_graph", {
       relation: parsed.relation,
       direction: parsed.direction,
@@ -803,7 +860,7 @@ ${hydrationSql}
       target_tables: targetTables,
       candidate_count: rows.length,
     });
-    return withSourceRefs(rows);
+    return rows;
   } catch (err) {
     logger.warn("search_relational_graph_failed", {
       relation: parsed.relation,
@@ -855,8 +912,26 @@ ${unionAll}
 ORDER BY (distance * ${VECTOR_WEIGHT} + (1.0 - COALESCE(usefulness, 0.5)) * ${USEFULNESS_WEIGHT} + EXTRACT(EPOCH FROM (NOW() - created_at)) / 86400.0 * ${AGE_WEIGHT}) ASC
 LIMIT $2 OFFSET $3`;
 
-  const { rows } = await deps.pool.query(sql, params);
-  return withSourceRefs(rows as SearchRow[]);
+  return traceRetrievalSpan({
+    name: "retrieval.vector_query",
+    input: {
+      accessible_tables: accessibleTables,
+      fetch_limit: fetchLimit,
+      offset,
+      tier,
+      namespace,
+      source_scope: sourceScope,
+    },
+    metadata: {
+      stage: "candidate_generation",
+      filter_names: ["namespace", "tier", "source_scope", "archived_at"],
+    },
+    run: async () => {
+      const { rows } = await deps.pool.query(sql, params);
+      return withSourceRefs(rows as SearchRow[]);
+    },
+    output: rowsEvidence,
+  });
 }
 
 /**
@@ -953,8 +1028,28 @@ ${unionAll}
 ORDER BY fts_rank DESC
 LIMIT $2 OFFSET $3`;
 
-  const { rows } = await runBoundedFtsQuery(deps, sql, params, ftsConfig);
-  return withSourceRefs(rows as SearchRow[]);
+  return traceRetrievalSpan({
+    name: "retrieval.keyword_query",
+    input: {
+      query,
+      accessible_tables: accessibleTables,
+      fetch_limit: fetchLimit,
+      offset,
+      tier,
+      namespace,
+      source_scope: sourceScope,
+      fts_config: ftsConfig,
+    },
+    metadata: {
+      stage: "candidate_generation",
+      filter_names: ["namespace", "tier", "source_scope", "archived_at"],
+    },
+    run: async () => {
+      const { rows } = await runBoundedFtsQuery(deps, sql, params, ftsConfig);
+      return withSourceRefs(rows as SearchRow[]);
+    },
+    output: rowsEvidence,
+  });
 }
 
 /**
@@ -1001,7 +1096,7 @@ function rrfMerge(
     }
   }
 
-  return Array.from(scoreMap.values())
+  const selected = Array.from(scoreMap.values())
     .map(({ row, rrf }) => {
       const tier = TIER_BOOST[(row.tier ?? "warm") as Tier];
       const weight = TABLE_WEIGHT[row.source_type] ?? 1.0;
@@ -1011,6 +1106,43 @@ function rrfMerge(
     .sort((a, b) => b.rrf - a.rrf)
     .slice(0, limit)
     .map(({ row }) => row);
+  return traceRetrievalSpanSync({
+    name: "retrieval.rank_rrf",
+    input: {
+      vector: rowsEvidence(vectorRows),
+      keyword: rowsEvidence(ftsRows),
+      graph: rowsEvidence(graphRows),
+    },
+    metadata: { stage: "scoring_ranking", filter_names: ["rrf_window"] },
+    run: () => selected,
+    output: (rows) => {
+      const selectedKeys = new Set(
+        rows.map((row) => `${row.source_type}:${row.id}`),
+      );
+      return {
+        candidate_count: scoreMap.size,
+        selected_count: rows.length,
+        selected_row_ids: rows.map((row) => row.id),
+        candidates: Array.from(scoreMap.values()).map(({ row, rrf }) => {
+          const chosen = selectedKeys.has(`${row.source_type}:${row.id}`);
+          const tier = TIER_BOOST[(row.tier ?? "warm") as Tier];
+          const rankScore = Math.max(
+            0,
+            (rrf + tier) *
+              (TABLE_WEIGHT[row.source_type] ?? 1.0) *
+              recencyFactor(row.created_at),
+          );
+          return {
+            ...rowEvidence(row),
+            rrf_contribution: rrf,
+            rank_score: rankScore,
+            chosen,
+            filtered_by: chosen ? null : "rrf_window",
+          };
+        }),
+      };
+    },
+  });
 }
 
 /** Circuit breaker: stop tracking after consecutive failures to avoid log floods */
@@ -1072,7 +1204,8 @@ export function trackUsage(
         });
       } else {
         const firstError = results.find((r) => r.status === "rejected") as
-          PromiseRejectedResult | undefined;
+          | PromiseRejectedResult
+          | undefined;
         logger.warn("search_tracking_error", {
           error:
             firstError?.reason instanceof Error
@@ -1623,6 +1756,7 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
         };
       }
       const namespace = namespaceFilterFor(auth, requestedNamespace);
+      setActiveMcpTraceMetadata({ resolved_namespace: namespace ?? null });
       const shouldUseSharedFallback =
         requestedNamespace !== undefined &&
         isSharedNamespace(requestedNamespace);

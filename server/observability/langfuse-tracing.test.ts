@@ -13,12 +13,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import {
-  existsSync,
-  readFileSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   buildToolTraceBody,
@@ -30,7 +25,10 @@ import {
   repoRelease,
   resolveRepoRelease,
   resolveSessionId,
+  setActiveMcpTraceMetadata,
   SinkHealthTracker,
+  traceRetrievalSpan,
+  traceRetrievalSpanSync,
   type McpTracingConfig,
   type TraceBody,
   type TracingSink,
@@ -79,7 +77,9 @@ function hangingSink(): TracingSink {
 function throwingSink(): TracingSink {
   return {
     emit() {
-      throw new Error("langfuse exploded with secret sk-lf-leak in the message");
+      throw new Error(
+        "langfuse exploded with secret sk-lf-leak in the message",
+      );
     },
     forceFlush: () => Promise.reject(new Error("flush exploded")),
     shutdown: () => Promise.reject(new Error("shutdown exploded")),
@@ -129,7 +129,9 @@ async function captureLogLines(run: () => Promise<void>): Promise<string[]> {
     lines.push(
       parts
         .map((part) =>
-          part instanceof Error ? `${part.name}: ${part.message}` : String(part),
+          part instanceof Error
+            ? `${part.name}: ${part.message}`
+            : String(part),
         )
         .join(" "),
     );
@@ -154,7 +156,10 @@ function fakeServer(): {
   handlers: Map<string, (args: unknown, extra: unknown) => unknown>;
   originalRegisterTool: unknown;
 } {
-  const handlers = new Map<string, (args: unknown, extra: unknown) => unknown>();
+  const handlers = new Map<
+    string,
+    (args: unknown, extra: unknown) => unknown
+  >();
   const registerTool = (name: string, _config: unknown, cb: unknown): void => {
     handlers.set(name, cb as (args: unknown, extra: unknown) => unknown);
   };
@@ -299,9 +304,9 @@ describe("resolveSessionId", () => {
   });
 
   test("falls back to the transport sessionId", () => {
-    expect(resolveSessionId({ content: "x" }, { sessionId: "transport-b" })).toBe(
-      "transport-b",
-    );
+    expect(
+      resolveSessionId({ content: "x" }, { sessionId: "transport-b" }),
+    ).toBe("transport-b");
   });
 
   test("is undefined when neither exists", () => {
@@ -318,7 +323,9 @@ describe("installMcpTracing", () => {
       createSink: () => sink,
     });
 
-    const result = { content: [{ type: "text", text: "the full answer body" }] };
+    const result = {
+      content: [{ type: "text", text: "the full answer body" }],
+    };
     server.registerTool(
       "log_thought",
       { inputSchema: {} } as never,
@@ -353,6 +360,101 @@ describe("installMcpTracing", () => {
     ).toBeGreaterThanOrEqual(0);
   });
 
+  test("emits masked retrieval child spans with row ids, scores, filter reasons, and namespace value", async () => {
+    const sink = recordingSink();
+    const { server, handlers } = fakeServer();
+    installMcpTracing(server, {
+      config: ENABLED_CONFIG,
+      createSink: () => sink,
+    });
+    server.registerTool(
+      "search_brain",
+      { inputSchema: {} } as never,
+      (async () => {
+        setActiveMcpTraceMetadata({ resolved_namespace: "rico" });
+        const candidates = await traceRetrievalSpan({
+          name: "retrieval.vector_query",
+          input: { namespace: "rico" },
+          run: async () => [
+            {
+              row_id: "row-569",
+              content_preview: "api_key=sk-live-candidate",
+              similarity: 0.93,
+              bm25_score: null,
+            },
+          ],
+          output: (rows) => ({ count: rows.length, candidates: rows }),
+        });
+        return traceRetrievalSpanSync({
+          name: "retrieval.rank_rrf",
+          input: { candidates },
+          run: () => ({ content: [{ type: "text", text: "ok" }] }),
+          output: () => ({
+            selected_row_ids: ["row-569"],
+            candidates: [
+              {
+                row_id: "row-569",
+                rrf_score: 0.031,
+                chosen: true,
+                filtered_by: null,
+              },
+            ],
+          }),
+        });
+      }) as never,
+    );
+
+    await handlers.get("search_brain")?.({ query: "memory" }, AUTH);
+
+    const body = sink.bodies[0]!;
+    expect(body.metadata.resolved_namespace).toBe("rico");
+    expect(body.spans?.map((span) => span.name)).toEqual([
+      "retrieval.vector_query",
+      "retrieval.rank_rrf",
+    ]);
+    expect(body.spans?.[0]?.output).toMatchObject({
+      count: 1,
+      candidates: [{ row_id: "row-569", similarity: 0.93 }],
+    });
+    expect(body.spans?.[1]?.output).toMatchObject({
+      selected_row_ids: ["row-569"],
+      candidates: [{ row_id: "row-569", chosen: true, filtered_by: null }],
+    });
+    const serialized = JSON.stringify(body.spans);
+    expect(serialized).not.toContain("sk-live-candidate");
+    expect(serialized).toContain("[MASKED:");
+  });
+
+  test("retrieval span helpers are direct no-ops outside an active traced call", async () => {
+    const object = { row_id: "row-no-trace" };
+    let calls = 0;
+    let summaries = 0;
+    const summarize = (): unknown => {
+      summaries += 1;
+      return {};
+    };
+    const asyncResult = await traceRetrievalSpan({
+      name: "retrieval.vector_query",
+      run: async () => {
+        calls += 1;
+        return object;
+      },
+      output: summarize,
+    });
+    const syncResult = traceRetrievalSpanSync({
+      name: "retrieval.rank_rrf",
+      run: () => {
+        calls += 1;
+        return object;
+      },
+      output: summarize,
+    });
+    expect(calls).toBe(2);
+    expect(summaries).toBe(0);
+    expect(asyncResult).toBe(object);
+    expect(syncResult).toBe(object);
+  });
+
   test("an isError result is traced as status error, not success", async () => {
     const sink = recordingSink();
     const { server, handlers } = fakeServer();
@@ -368,9 +470,9 @@ describe("installMcpTracing", () => {
 
     await handlers.get("search_memory")?.({ query: "x" }, AUTH);
 
-    expect(
-      (sink.bodies[0]?.metadata as { status: string }).status,
-    ).toBe("error");
+    expect((sink.bodies[0]?.metadata as { status: string }).status).toBe(
+      "error",
+    );
   });
 
   test("a sink that throws on every method leaves the result byte-identical and never throws", async () => {
@@ -421,9 +523,9 @@ describe("installMcpTracing", () => {
     ).rejects.toThrow("entity 7 is not in namespace rico");
 
     expect(sink.bodies).toHaveLength(1);
-    expect(
-      (sink.bodies[0]?.metadata as { status: string }).status,
-    ).toBe("exception");
+    expect((sink.bodies[0]?.metadata as { status: string }).status).toBe(
+      "exception",
+    );
     expect(sink.bodies[0]?.output).toEqual({
       error_class: "NamespaceViolationError",
       error_message: "entity 7 is not in namespace rico",
@@ -910,9 +1012,9 @@ describe("the SDK's own logger cannot bypass the content-free discipline", () =>
     // installed the suppression, so "silent" would otherwise pass for the
     // wrong reason.
     configureGlobalLogger({ level: LogLevel.DEBUG });
-    expect((getGlobalLogger() as unknown as Gated).shouldLog(LogLevel.ERROR)).toBe(
-      true,
-    );
+    expect(
+      (getGlobalLogger() as unknown as Gated).shouldLog(LogLevel.ERROR),
+    ).toBe(true);
 
     // Building the real sink installs the suppression. `createSink` is NOT
     // injected here on purpose: the point is that the DEFAULT factory does it.
@@ -1007,7 +1109,11 @@ describe("trace body helpers", () => {
         // The value is deliberately an obvious placeholder: key-based masking
         // triggers on the KEY alone, and a realistic-looking value here is
         // itself a secret-scanner hit (GitGuardian flagged the previous one).
-        text: JSON.stringify({ a: 1, password: "fake-placeholder-not-a-secret", b: 2 }),
+        text: JSON.stringify({
+          a: 1,
+          password: "fake-placeholder-not-a-secret",
+          b: 2,
+        }),
       },
     });
     const text = (body.output as { text: string }).text;
@@ -1164,10 +1270,7 @@ describe("the release stamped on every trace", () => {
       : undefined;
 
     try {
-      writeFileSync(
-        stampPath,
-        "sha=0123456789abcdef\nshort_sha=0123456\n",
-      );
+      writeFileSync(stampPath, "sha=0123456789abcdef\nshort_sha=0123456\n");
       expect(readRuntimeDeployStamp()).toContain("short_sha=0123456");
       expect(
         resolveRepoRelease({

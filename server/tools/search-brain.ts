@@ -27,7 +27,12 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ResourceTable } from "../auth/types.ts";
 import { canRead } from "../auth/permissions.ts";
-import { authIdentity, errorResult, textResult, type MemoryToolDependencies } from "./types.ts";
+import {
+  authIdentity,
+  errorResult,
+  textResult,
+  type MemoryToolDependencies,
+} from "./types.ts";
 import { canReadNamespace, namespaceFilterFor } from "./read-scope.ts";
 import { isSharedNamespace } from "./shared-namespace.ts";
 import { ALL_TABLES, type Tier } from "./search-constants.ts";
@@ -35,6 +40,7 @@ import {
   executeSearchWithSharedFallback,
   type SearchMode,
 } from "./search-engine.ts";
+import { setActiveMcpTraceMetadata } from "../observability/langfuse-tracing.ts";
 import {
   DEFAULT_FTS_CONFIG,
   requestFtsConfig,
@@ -182,10 +188,14 @@ export function registerSearchBrainTool(
         ftsConfig = DEFAULT_FTS_CONFIG;
       }
 
-      if (requestedNamespace && !canReadNamespace(identity, requestedNamespace)) {
+      if (
+        requestedNamespace &&
+        !canReadNamespace(identity, requestedNamespace)
+      ) {
         return errorResult(NAMESPACE_DENIED);
       }
       const namespace = namespaceFilterFor(identity, requestedNamespace);
+      setActiveMcpTraceMetadata({ resolved_namespace: namespace ?? null });
 
       try {
         const rows = await executeSearchWithSharedFallback(
@@ -198,7 +208,8 @@ export function registerSearchBrainTool(
           offset,
           namespace,
           { ftsConfig },
-          requestedNamespace !== undefined && isSharedNamespace(requestedNamespace),
+          requestedNamespace !== undefined &&
+            isSharedNamespace(requestedNamespace),
         );
         return textResult(rows);
       } catch (error) {
@@ -210,7 +221,8 @@ export function registerSearchBrainTool(
             namespace,
             mode,
             tier,
-            error_message: error instanceof Error ? error.message : String(error),
+            error_message:
+              error instanceof Error ? error.message : String(error),
           },
           "search_brain_failed",
         );

@@ -17,6 +17,10 @@ import {
 import { isSharedNamespace } from "../shared-namespace.ts";
 import { describeError, logger } from "../observability/index.ts";
 import {
+  setActiveMcpTraceMetadata,
+  traceRetrievalSpanSync,
+} from "../../server/observability/langfuse-tracing.ts";
+import {
   sourceScopeAuthorizationError,
   sourceScopeSchema,
 } from "../source-refs.ts";
@@ -235,6 +239,7 @@ export function registerBrainAnswer(server: McpServer, deps: ToolDeps): void {
         auth,
         requestedNamespace,
       ) as NamespaceFilter;
+      setActiveMcpTraceMetadata({ resolved_namespace: namespace });
 
       let rows: SearchRow[];
       try {
@@ -305,20 +310,59 @@ export function registerBrainAnswer(server: McpServer, deps: ToolDeps): void {
         };
       }
 
-      const evidence: Evidence[] = [];
-      const knownGaps: string[] = [];
+      const filtered = traceRetrievalSpanSync({
+        name: "retrieval.citation_filter",
+        input: {
+          candidate_count: rows.length,
+          candidates: rows.map((row) => ({
+            row_id: row.id,
+            source_type: row.source_type,
+            namespace: row.namespace ?? null,
+            content_preview: row.content_preview,
+            distance: row.distance ?? null,
+            similarity: row.distance === undefined ? null : 1 - row.distance,
+            bm25_score: row.fts_rank ?? null,
+          })),
+        },
+        metadata: {
+          stage: "filtering",
+          filter_names: ["missing_source_ref", "empty_excerpt"],
+        },
+        run: () => {
+          const evidence: Evidence[] = [];
+          const knownGaps: string[] = [];
+          for (const row of rows) {
+            const excerpt = excerptFor(row);
+            if (!row.source_ref || !excerpt) {
+              knownGaps.push(
+                `Skipped ${row.source_type}:${row.id} because it lacked citation metadata or usable preview text.`,
+              );
+              continue;
+            }
+            evidence.push({ row, excerpt, source_ref: row.source_ref });
+          }
+          return { evidence, knownGaps };
+        },
+        output: ({ evidence }) => {
+          const selected = new Set(evidence.map((item) => item.row.id));
+          return {
+            selected_count: evidence.length,
+            selected_row_ids: evidence.map((item) => item.row.id),
+            candidates: rows.map((row) => {
+              const chosen = selected.has(row.id);
+              let filteredBy: string | null = null;
+              if (!chosen) {
+                filteredBy = row.source_ref
+                  ? "empty_excerpt"
+                  : "missing_source_ref";
+              }
+              return { row_id: row.id, chosen, filtered_by: filteredBy };
+            }),
+          };
+        },
+      });
+      const { evidence, knownGaps } = filtered;
       const uncertainty: string[] = [];
-
-      for (const row of rows) {
-        const excerpt = excerptFor(row);
-        if (!row.source_ref || !excerpt) {
-          knownGaps.push(
-            `Skipped ${row.source_type}:${row.id} because it lacked citation metadata or usable preview text.`,
-          );
-          continue;
-        }
-        evidence.push({ row, excerpt, source_ref: row.source_ref });
-      }
 
       if (evidence.length === 0) {
         return {

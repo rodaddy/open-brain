@@ -26,10 +26,25 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { canRead } from "../auth/permissions.ts";
-import { authIdentity, errorResult, textResult, type MemoryToolDependencies } from "./types.ts";
+import {
+  authIdentity,
+  errorResult,
+  textResult,
+  type MemoryToolDependencies,
+} from "./types.ts";
 import { canReadNamespace, namespaceFilterFor } from "./read-scope.ts";
 import { isSharedNamespace } from "./shared-namespace.ts";
-import { ALL_TABLES, RRF_K, TIER_BOOST, type Tier } from "./search-constants.ts";
+import {
+  ALL_TABLES,
+  RRF_K,
+  TIER_BOOST,
+  type Tier,
+} from "./search-constants.ts";
+import {
+  setActiveMcpTraceMetadata,
+  traceRetrievalSpan,
+  traceRetrievalSpanSync,
+} from "../observability/langfuse-tracing.ts";
 import {
   executeSearchWithSharedFallback,
   type SearchMode,
@@ -108,7 +123,7 @@ export function resolveQmdPath(
  *
  * @param qmdPath Resolved qmd entry point; never empty (see resolveQmdPath).
  */
-async function searchQmd(
+async function searchQmdInternal(
   dependencies: MemoryToolDependencies,
   qmdPath: string,
   query: string,
@@ -116,7 +131,15 @@ async function searchQmd(
   collection: string | undefined,
 ): Promise<UnifiedResult[]> {
   try {
-    const command = ["bun", qmdPath, "search", query, "--json", "-n", String(limit)];
+    const command = [
+      "bun",
+      qmdPath,
+      "search",
+      query,
+      "--json",
+      "-n",
+      String(limit),
+    ];
     if (collection) command.push("-c", collection);
 
     const proc = Bun.spawn(command, { stdout: "pipe", stderr: "pipe" });
@@ -138,11 +161,17 @@ async function searchQmd(
     ]);
 
     if (outcome.timedOut) {
-      dependencies.logger.warn({ timeout_ms: QMD_TIMEOUT_MS }, "qmd_search_timeout");
+      dependencies.logger.warn(
+        { timeout_ms: QMD_TIMEOUT_MS },
+        "qmd_search_timeout",
+      );
       return [];
     }
     if (outcome.exitCode !== 0) {
-      dependencies.logger.warn({ exit_code: outcome.exitCode }, "qmd_search_failed");
+      dependencies.logger.warn(
+        { exit_code: outcome.exitCode },
+        "qmd_search_failed",
+      );
       return [];
     }
 
@@ -154,10 +183,13 @@ async function searchQmd(
       return {
         source: "qmd" as const,
         type: "file",
-        content: (doc.content ?? doc.text ?? doc.preview ?? doc.snippet ?? "").slice(
-          0,
-          MAX_CONTENT_CHARS,
-        ),
+        content: (
+          doc.content ??
+          doc.text ??
+          doc.preview ??
+          doc.snippet ??
+          ""
+        ).slice(0, MAX_CONTENT_CHARS),
         score: doc.score ?? doc.similarity ?? 0.5,
         path,
         collection: doc.collection,
@@ -176,6 +208,31 @@ async function searchQmd(
     );
     return [];
   }
+}
+
+function searchQmd(
+  dependencies: MemoryToolDependencies,
+  qmdPath: string,
+  query: string,
+  limit: number,
+  collection: string | undefined,
+): Promise<UnifiedResult[]> {
+  return traceRetrievalSpan({
+    name: "retrieval.qmd_query",
+    input: { query, limit, collection },
+    metadata: { stage: "candidate_generation", source: "qmd" },
+    run: () =>
+      searchQmdInternal(dependencies, qmdPath, query, limit, collection),
+    output: (rows) => ({
+      count: rows.length,
+      candidates: rows.map((row) => ({
+        path: row.path ?? null,
+        collection: row.collection ?? null,
+        content: row.content,
+        score: row.score,
+      })),
+    }),
+  });
 }
 
 /** Project a brain search row into the federated result shape. */
@@ -249,7 +306,9 @@ export function registerSearchAllTool(
         tier: z
           .enum(["hot", "warm", "cold"])
           .optional()
-          .describe("Optional: filter brain results to a specific cognitive tier"),
+          .describe(
+            "Optional: filter brain results to a specific cognitive tier",
+          ),
       },
       annotations: {
         title: "Search All",
@@ -269,14 +328,19 @@ export function registerSearchAllTool(
       const tier = args.tier as Tier | undefined;
       const requestedNamespace = args.namespace;
 
-      if (requestedNamespace && !canReadNamespace(identity, requestedNamespace)) {
+      if (
+        requestedNamespace &&
+        !canReadNamespace(identity, requestedNamespace)
+      ) {
         return errorResult(NAMESPACE_DENIED);
       }
 
       const namespace = namespaceFilterFor(identity, requestedNamespace);
+      setActiveMcpTraceMetadata({ resolved_namespace: namespace ?? null });
       const wantBrain = sources === "all" || sources === "brain";
       const qmdPath = dependencies.qmdPath ?? resolveQmdPath();
-      const wantQmd = (sources === "all" || sources === "qmd") && qmdPath !== undefined;
+      const wantQmd =
+        (sources === "all" || sources === "qmd") && qmdPath !== undefined;
       if ((sources === "all" || sources === "qmd") && qmdPath === undefined) {
         // Say it once, at the boundary. Without this the qmd arm's absence is
         // indistinguishable from a search that found no files.
@@ -286,7 +350,9 @@ export function registerSearchAllTool(
       const totalNeeded = offset + limit;
 
       const brainSearch = async (): Promise<UnifiedResult[]> => {
-        const tables = ALL_TABLES.filter((table) => canRead(identity.role, table));
+        const tables = ALL_TABLES.filter((table) =>
+          canRead(identity.role, table),
+        );
         if (tables.length === 0) return [];
         try {
           const rows = await executeSearchWithSharedFallback(
@@ -299,7 +365,8 @@ export function registerSearchAllTool(
             0,
             namespace,
             {},
-            requestedNamespace !== undefined && isSharedNamespace(requestedNamespace),
+            requestedNamespace !== undefined &&
+              isSharedNamespace(requestedNamespace),
           );
           return rows.map(toUnifiedResult);
         } catch (error) {
@@ -317,7 +384,13 @@ export function registerSearchAllTool(
       const [brainResults, qmdResults] = await Promise.all([
         wantBrain ? brainSearch() : Promise.resolve<UnifiedResult[]>([]),
         wantQmd && qmdPath
-          ? searchQmd(dependencies, qmdPath, args.query, totalNeeded, args.collection)
+          ? searchQmd(
+              dependencies,
+              qmdPath,
+              args.query,
+              totalNeeded,
+              args.collection,
+            )
           : Promise.resolve<UnifiedResult[]>([]),
       ]);
 
@@ -330,7 +403,8 @@ export function registerSearchAllTool(
           ...result,
           rrf: Math.max(
             0,
-            1 / (RRF_K + index + 1) + TIER_BOOST[(result.tier ?? "warm") as Tier],
+            1 / (RRF_K + index + 1) +
+              TIER_BOOST[(result.tier ?? "warm") as Tier],
           ),
         });
       });
@@ -342,12 +416,50 @@ export function registerSearchAllTool(
         .sort((a, b) => b.rrf - a.rrf)
         .slice(offset, offset + limit)
         .map(({ rrf, ...rest }) => ({ ...rest, score: rrf }));
+      const tracedMerged = traceRetrievalSpanSync({
+        name: "retrieval.federated_rank",
+        input: {
+          brain_count: brainResults.length,
+          qmd_count: qmdResults.length,
+        },
+        metadata: {
+          stage: "scoring_ranking",
+          filter_names: ["federated_rank_window"],
+        },
+        run: () => merged,
+        output: (selected) => {
+          const selectedKeys = new Set(
+            selected.map((row) => row.id ?? `qmd:${row.path ?? ""}`),
+          );
+          return {
+            candidate_count: fused.length,
+            selected_count: selected.length,
+            returned_row_ids: selected
+              .filter((row) => row.source === "brain")
+              .map((row) => row.id),
+            candidates: fused.map((row) => {
+              const key = row.id ?? `qmd:${row.path ?? ""}`;
+              const chosen = selectedKeys.has(key);
+              return {
+                source: row.source,
+                row_id: row.id ?? null,
+                path: row.path ?? null,
+                content: row.content,
+                raw_score: row.score,
+                rrf_score: row.rrf,
+                chosen,
+                filtered_by: chosen ? null : "federated_rank_window",
+              };
+            }),
+          };
+        },
+      });
 
       return textResult({
         total: merged.length,
         brain_hits: brainResults.length,
         qmd_hits: qmdResults.length,
-        results: merged,
+        results: tracedMerged,
       });
     },
   );

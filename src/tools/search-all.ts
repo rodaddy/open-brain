@@ -20,6 +20,11 @@ import {
 import { isSharedNamespace } from "../shared-namespace.ts";
 import { resolveQmdPath } from "../qmd-path.ts";
 import {
+  setActiveMcpTraceMetadata,
+  traceRetrievalSpan,
+  traceRetrievalSpanSync,
+} from "../../server/observability/langfuse-tracing.ts";
+import {
   sourceScopeAuthorizationError,
   sourceScopeSchema,
 } from "../source-refs.ts";
@@ -62,7 +67,7 @@ interface QmdDocument {
 
 const QMD_TIMEOUT_MS = 10_000;
 
-async function searchQmd(
+async function searchQmdInternal(
   query: string,
   limit: number,
   collection?: string,
@@ -81,10 +86,7 @@ async function searchQmd(
     ];
     if (collection) qmdArgs.push("-c", collection);
 
-    const proc = Bun.spawn(
-      qmdArgs,
-      { stdout: "pipe", stderr: "pipe" },
-    );
+    const proc = Bun.spawn(qmdArgs, { stdout: "pipe", stderr: "pipe" });
 
     const result = await Promise.race([
       (async () => {
@@ -140,6 +142,28 @@ async function searchQmd(
     });
     return [];
   }
+}
+
+function searchQmd(
+  query: string,
+  limit: number,
+  collection?: string,
+): Promise<UnifiedResult[]> {
+  return traceRetrievalSpan({
+    name: "retrieval.qmd_query",
+    input: { query, limit, collection },
+    metadata: { stage: "candidate_generation", source: "qmd" },
+    run: () => searchQmdInternal(query, limit, collection),
+    output: (rows) => ({
+      count: rows.length,
+      candidates: rows.map((row) => ({
+        path: row.path ?? null,
+        collection: row.collection ?? null,
+        content: row.content,
+        score: row.score,
+      })),
+    }),
+  });
 }
 
 export function registerSearchAll(server: McpServer, deps: ToolDeps): void {
@@ -255,6 +279,7 @@ export function registerSearchAll(server: McpServer, deps: ToolDeps): void {
         };
       }
       const namespace = namespaceFilterFor(auth, requestedNamespace);
+      setActiveMcpTraceMetadata({ resolved_namespace: namespace ?? null });
       const searchBrain = sources === "all" || sources === "brain";
       const searchQmdSource =
         !sourceScope && (sources === "all" || sources === "qmd");
@@ -302,6 +327,44 @@ export function registerSearchAll(server: McpServer, deps: ToolDeps): void {
         .sort((a, b) => b.rrf - a.rrf)
         .slice(offset, offset + limit)
         .map(({ rrf, ...rest }) => ({ ...rest, score: rrf }));
+      const tracedMerged = traceRetrievalSpanSync({
+        name: "retrieval.federated_rank",
+        input: {
+          brain_count: brainResults.length,
+          qmd_count: qmdResults.length,
+        },
+        metadata: {
+          stage: "scoring_ranking",
+          filter_names: ["federated_rank_window"],
+        },
+        run: () => merged,
+        output: (selected) => {
+          const selectedKeys = new Set(
+            selected.map((row) => row.id ?? `qmd:${row.path ?? ""}`),
+          );
+          return {
+            candidate_count: withRrf.length,
+            selected_count: selected.length,
+            returned_row_ids: selected
+              .filter((row) => row.source === "brain")
+              .map((row) => row.id),
+            candidates: withRrf.map((row) => {
+              const key = row.id ?? `qmd:${row.path ?? ""}`;
+              const chosen = selectedKeys.has(key);
+              return {
+                source: row.source,
+                row_id: row.id ?? null,
+                path: row.path ?? null,
+                content: row.content,
+                raw_score: row.score,
+                rrf_score: row.rrf,
+                chosen,
+                filtered_by: chosen ? null : "federated_rank_window",
+              };
+            }),
+          };
+        },
+      });
 
       return {
         content: [
@@ -311,7 +374,7 @@ export function registerSearchAll(server: McpServer, deps: ToolDeps): void {
               total: merged.length,
               brain_hits: brainResults.length,
               qmd_hits: qmdResults.length,
-              results: merged,
+              results: tracedMerged,
             }),
           },
         ],
