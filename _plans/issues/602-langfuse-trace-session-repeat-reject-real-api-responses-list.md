@@ -3,11 +3,12 @@
 
 # #602 — langfuse-trace: session/repeat reject real API responses — list-endpoint observations are string ids, schema requires objects
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: bug
 Created: 2026-08-06T11:57:27Z
-Updated: 2026-08-06T11:57:27Z
+Updated: 2026-08-06T12:31:10Z
+Closed: 2026-08-06T12:31:10Z
 
 ---
 

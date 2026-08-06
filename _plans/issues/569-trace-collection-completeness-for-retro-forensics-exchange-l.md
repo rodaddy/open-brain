@@ -3,11 +3,12 @@
 
 # #569 — Trace collection completeness for retro-forensics: exchange-level is captured; decide coverage, masking-then-widen, and whether any lane needs wire-level
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: none
 Created: 2026-08-05T04:36:56Z
-Updated: 2026-08-06T07:43:30Z
+Updated: 2026-08-06T12:32:10Z
+Closed: 2026-08-06T12:32:10Z
 
 ---
 
@@ -24,7 +25,7 @@ Depends on: #560 (metadata), #561 (masking). State: measured facts RUNNING-verif
 
 ---
 
-## Discussion (2)
+## Discussion (3)
 
 ### rodaddy — 2026-08-05T23:49:15Z
 
@@ -37,3 +38,21 @@ Depends on: #560 (metadata), #561 (masking). State: measured facts RUNNING-verif
 **Operator ruling (Rico, 2026-08-06): the deliverable is full-flow replay + reproducibility.** Verbatim: capture every point we are allowed to get from Claude — what was the message, what was sent to Open Brain, what came back, how it was processed — "so that we can actually see: when a question comes in and it gets a response from Open Brain, is that the response that's expected? Is it consistent if we do it again and again? Do we get the same thing? Can we reproduce it? If we change a variable, does it change a whole ton of stuff or does it change just one thing or no things? That's the whole point of this."
 
 This upgrades decision 3 (langfuse-trace skill) from nice-to-have to required: trace-diff and repeat-run comparison are the consumers that make the retrieval-evidence spans worth collecting. Implementation wave launching now under epic #571: (a) retrieval-evidence child spans (candidates/scores/chosen/filtered) + row-id cross-links + namespace value, (b) embedding/dream/distill/NATS worker instrumentation, (c) reproducibility tooling (repeat a query, diff traces). Masking (#561) is merged, so widening is un-gated.
+
+---
+
+### rodaddy — 2026-08-06T12:32:09Z
+
+## Closure receipt — full-flow trace collection + reproducibility, per the operator rulings recorded above
+
+**RUNNING (live-verified today, dogfood b2bd77d):**
+- Retrieval evidence: every search_brain/search_all/brain_answer call emits stage child spans — candidates with row ids + namespaces, scores, chosen-vs-filtered with filter names, per-stage durations — release-stamped, session-joined, masked. Canary trace: 28a6758fe84d34490816d28bfcd4ac20.
+- Reproducibility tooling: `scripts/langfuse-trace.ts` (get / session / diff / repeat). Live closure demo: `repeat search_brain -n 3` → all three runs equivalent (same candidates, same chosen rows, same ranking order, exit 0); only durations vary plus rrf-score drift at the 1e-11 level (time-decay float noise) — exactly the deterministic-vs-varies visibility this issue existed to provide. The tool fails toward UNKNOWN (exit 2) when evidence is absent, never toward false equivalence.
+
+**MERGED + deployed, live proof pending jobs:** background-worker tracing (embedding, distill/dream, NATS as traces; server-side LLM calls as generations with usage) is wired in BOTH production composition roots, mutation-tested at the wiring seam, and deployed — but maintenance_jobs has no live jobs, so first live background traces arrive when #384 (maintenance runner enable) lands. That is an activation step tracked by its own open issue, not remaining work here.
+
+**Decisions this issue held, all resolved:** coverage = full per the 2026-08-05 ruling (implemented); wire-level = not needed, exchange-level suffices (a proxy for proxied lanes remains a separate decision if ever wanted); langfuse-trace skill = shipped as the repo script above.
+
+**Delivered via:** PRs #599, #600, #601, #603 — each through the opposite-family swarm with findings posted before fixes and independently verified fix deltas (receipts on each PR). SME base grew 8 entries from this wave. Open remainder recorded elsewhere: payload-size operator ruling (worklog 2026-08-05 §29), one LOW test-fixture follow-up on #601's endTime tie-break leg.
+
+Closed as DONE — the work was done, verified, and is running.
