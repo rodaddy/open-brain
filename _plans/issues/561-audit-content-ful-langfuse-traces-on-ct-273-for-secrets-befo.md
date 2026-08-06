@@ -3,11 +3,12 @@
 
 # #561 — Audit content-ful Langfuse traces on CT 273 for secrets before tracing widens (PR #534 sends full tool inputs/outputs)
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: none
 Created: 2026-08-05T01:10:16Z
-Updated: 2026-08-05T04:23:13Z
+Updated: 2026-08-06T01:04:26Z
+Closed: 2026-08-06T01:04:26Z
 
 ---
 

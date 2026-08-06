@@ -3,11 +3,12 @@
 
 # #386 — QMD-1: Restore the qmd sync as a standalone scheduled job (orphaned when session-wrap was removed)
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: enhancement
 Created: 2026-07-25T00:19:15Z
-Updated: 2026-08-05T08:52:13Z
+Updated: 2026-08-06T00:31:43Z
+Closed: 2026-08-06T00:31:43Z
 
 ---
 

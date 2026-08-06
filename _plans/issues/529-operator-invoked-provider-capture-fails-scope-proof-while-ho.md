@@ -3,11 +3,12 @@
 
 # #529 — Operator-invoked provider capture fails scope proof while hook capture works
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: none
 Created: 2026-08-04T00:33:46Z
-Updated: 2026-08-05T22:43:27Z
+Updated: 2026-08-06T00:52:11Z
+Closed: 2026-08-06T00:52:11Z
 
 ---
 

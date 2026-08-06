@@ -7,7 +7,7 @@ State: CLOSED
 Author: rodaddy
 Labels: none
 Created: 2026-08-05T01:10:15Z
-Updated: 2026-08-05T19:15:47Z
+Updated: 2026-08-06T05:17:21Z
 Closed: 2026-08-05T19:15:47Z
 
 ---
@@ -24,7 +24,7 @@ Until this lands, every cost dashboard/score computes over NULL -- the instance 
 
 ---
 
-## Discussion (2)
+## Discussion (3)
 
 ### rodaddy — 2026-08-05T06:14:32Z
 
@@ -55,3 +55,9 @@ check=secret_scan         status=PASS fatal=true  observed=0 content_fields_pres
 All 3 generations in the live capture trace carry model metadata **and non-NULL computed cost** — the acceptance this issue defined. The cost dashboards now have real numbers to compute over for the capture lane going forward; the 23,439 historical NULL rows stay NULL (pre-fix data, not retro-priced).
 
 Residual, tracked elsewhere: server-side spans are not generations (no server-side LLM calls are modeled as such today); wider trace coverage (retrieval internals, embedding, off-request-path jobs) belongs to #569/#571 sequencing. `release` handling landed with #568 (processor-level, langfuse-tracing.ts:833).
+
+---
+
+### rodaddy — 2026-08-06T05:17:21Z
+
+Post-closure correction (2026-08-06): the closing receipt proved the DRIVEN capture path (repo source via `uv run`), but the AMBIENT path — the installed `openbrain-capture-stop` uv tool that real sessions' Stop hooks invoke — was still the pre-fix 0.9.0 wheel, so live conversations kept emitting model=None/cost=0 after this issue closed. Found by inspecting real traces. Fixed: client bundle rebuilt from trunk a9aaca6 and reinstalled (all three tools), then the egress gate was driven through the INSTALLED binary directly: 1 trace, 4 observations, 3 generations, generation_metadata 3/3, total_cost 3/3 non-NULL. The ambient lane now matches the driven lane. Process lesson: a server redeploy does not refresh the client tools — both lanes need their own deploy step, and the gate's `uv run` child tests source, not the installed tool.

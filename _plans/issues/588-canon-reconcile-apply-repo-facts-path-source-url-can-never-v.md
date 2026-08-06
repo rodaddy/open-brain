@@ -3,11 +3,12 @@
 
 # #588 — canon reconcile --apply: repo-facts path/source_url can never validate, and namespace fan-out silently writes to the token's namespace
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: bug
 Created: 2026-08-05T22:01:20Z
-Updated: 2026-08-05T22:01:20Z
+Updated: 2026-08-06T00:56:42Z
+Closed: 2026-08-06T00:56:42Z
 
 ---
 

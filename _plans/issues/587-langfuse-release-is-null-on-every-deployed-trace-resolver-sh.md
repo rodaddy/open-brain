@@ -3,11 +3,12 @@
 
 # #587 — Langfuse release is null on every deployed trace: resolver shells git rev-parse but the deployed runtime is a gitless archive
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: bug
 Created: 2026-08-05T21:51:04Z
-Updated: 2026-08-05T21:51:04Z
+Updated: 2026-08-06T01:18:56Z
+Closed: 2026-08-06T01:17:38Z
 
 ---
 
@@ -22,3 +23,11 @@ The irony: `/health` answers the same question correctly on the same process, be
 **Fix shape (PROPOSED, ~S):** the release resolver reads the deploy's revision stamp first (same source `/health` uses), falling back to `git rev-parse` for dev-checkout runs where no stamp exists. A test that fails when a stamped-but-gitless runtime yields a null release.
 
 **Why it matters:** release attribution only exists in the environments nobody debugs (dev checkouts) and is absent in the ones everybody debugs (deployed dogfood, core01 — which deploys the same `git archive` way via the core01 script this one mirrors).
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-06T01:18:55Z
+
+Live closure receipt: local dogfood redeployed to a9aaca6 (revision proof pid 51594→4764), fresh traced tool call shows `release: a9aaca6` in the Langfuse traces API. The deployed-runtime symptom this issue described is observed gone. Note: the Python capture emitter's client-side trace still carries no release — that emitter was outside this issue's scope; it rides with #569's full-coverage widening if wanted.

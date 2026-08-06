@@ -3,11 +3,12 @@
 
 # #492 — post-0.9.0: Hermes bulk adapter + codify agent-telemetry push to Langfuse
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: none
 Created: 2026-08-02T18:12:12Z
-Updated: 2026-08-05T22:43:24Z
+Updated: 2026-08-06T00:56:44Z
+Closed: 2026-08-06T00:56:44Z
 
 ---
 

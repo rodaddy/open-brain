@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: none
 Created: 2026-08-05T04:36:56Z
-Updated: 2026-08-05T23:49:15Z
+Updated: 2026-08-06T07:43:30Z
 
 ---
 
@@ -24,8 +24,16 @@ Depends on: #560 (metadata), #561 (masking). State: measured facts RUNNING-verif
 
 ---
 
-## Discussion (1)
+## Discussion (2)
 
 ### rodaddy — 2026-08-05T23:49:15Z
 
 **Operator ruling (Rico, 2026-08-05): full coverage.** "Everything that can possibly be dropped into there should be dropped into there — no exceptions." This closes the coverage question this issue was holding open: the target is every surface traced — retrieval internals (candidates/scores/chosen), namespace value, structured row-id cross-links, embedding calls, dream/distill jobs, the NATS worker, and server-side LLM calls as generations. Sequencing stands as this issue already decided: #561 emitter-side masking lands FIRST, then capture widens. Implementation proceeds under epic #571.
+
+---
+
+### rodaddy — 2026-08-06T07:43:29Z
+
+**Operator ruling (Rico, 2026-08-06): the deliverable is full-flow replay + reproducibility.** Verbatim: capture every point we are allowed to get from Claude — what was the message, what was sent to Open Brain, what came back, how it was processed — "so that we can actually see: when a question comes in and it gets a response from Open Brain, is that the response that's expected? Is it consistent if we do it again and again? Do we get the same thing? Can we reproduce it? If we change a variable, does it change a whole ton of stuff or does it change just one thing or no things? That's the whole point of this."
+
+This upgrades decision 3 (langfuse-trace skill) from nice-to-have to required: trace-diff and repeat-run comparison are the consumers that make the retrieval-evidence spans worth collecting. Implementation wave launching now under epic #571: (a) retrieval-evidence child spans (candidates/scores/chosen/filtered) + row-id cross-links + namespace value, (b) embedding/dream/distill/NATS worker instrumentation, (c) reproducibility tooling (repeat a query, diff traces). Masking (#561) is merged, so widening is un-gated.

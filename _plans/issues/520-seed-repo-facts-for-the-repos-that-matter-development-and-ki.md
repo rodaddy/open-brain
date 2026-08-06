@@ -3,11 +3,12 @@
 
 # #520 — Seed repo facts for the repos that matter -- Development and king-* are near-empty and now honestly show it
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: none
 Created: 2026-08-03T06:09:11Z
-Updated: 2026-08-05T22:43:27Z
+Updated: 2026-08-06T00:25:59Z
+Closed: 2026-08-06T00:25:59Z
 
 ---
 
