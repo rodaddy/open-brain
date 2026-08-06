@@ -10,11 +10,13 @@ full on the first call.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from openbrain_memory.cli import execute_json, usage_output
 
-from ._runtime_fakes import LaneAwareTransport
+from ._runtime_fakes import LaneAwareTransport, StartThenFailClient
 
 _FULL_SCOPE = {
     "agent": "agent-name",
@@ -38,6 +40,31 @@ _CONFIG = {
 }
 
 
+class OperatorCaptureClient(StartThenFailClient):
+    """Return the sparse session_start lane seen by operator capture."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.appended: dict[str, Any] | None = None
+
+    def session_start(self, **arguments: Any) -> dict[str, Any]:
+        return {
+            "lane": {
+                "namespace": "bilby",
+                "session_key": arguments["session_key"],
+                "thread_id": arguments.get("thread_id"),
+            }
+        }
+
+    def append_session_event(self, **arguments: Any) -> dict[str, Any]:
+        self.appended = dict(arguments)
+        return {
+            "event_id": "event-1",
+            "lane_id": "lane-1",
+            "lane_created": False,
+        }
+
+
 def _error(request: dict[str, object]) -> str:
     output = execute_json(
         {"config": _CONFIG, **request},
@@ -46,6 +73,34 @@ def _error(request: dict[str, object]) -> str:
     receipt = output["receipt"]
     assert receipt["status"] == "failed"
     return str(receipt["error"])
+
+
+def test_operator_capture_accepts_contract_proven_sparse_start_lane() -> None:
+    """Reproduce #529's full-scope stdin capture against its sparse lane echo."""
+    client = OperatorCaptureClient()
+
+    output = execute_json(
+        {
+            "config": _CONFIG,
+            "operation": "capture",
+            "content": "Operator capture scope proof",
+            "distilled": True,
+            "event_type": "fact",
+            "scope": _FULL_SCOPE,
+        },
+        client=client,
+    )
+
+    assert output["receipt"]["status"] == "saved"
+    assert output["receipt"]["durable"] is True
+    assert client.appended is not None
+    assert {
+        name: client.appended[name]
+        for name in ("agent", "platform", "server_id", "channel_id")
+    } == {
+        name: _FULL_SCOPE[name]
+        for name in ("agent", "platform", "server_id", "channel_id")
+    }
 
 
 def test_missing_scope_fields_are_all_named_in_one_receipt() -> None:

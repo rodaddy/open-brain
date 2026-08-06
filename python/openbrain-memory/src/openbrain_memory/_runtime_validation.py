@@ -92,6 +92,13 @@ def validate_started_lane(
         candidate["server_id"] = metadata["server_id"]
     expected = exact_scope_fields(namespace, scope)
     expected["source"] = expected.pop("platform")
+    # A contract-v2 session_start success proves these request coordinates were
+    # established or matched. Some operator responses omit their nullable lane
+    # echoes, so use the reviewed handshake proof only when no conflicting value
+    # was returned; namespace, session key, and thread remain response-proven.
+    for name in ("agent", "source", "server_id", "channel_id"):
+        if candidate.get(name) is None:
+            candidate[name] = expected[name]
     validate_exact_fields(candidate, expected, "session_start result")
 
 
