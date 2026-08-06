@@ -286,14 +286,18 @@ tool name, caller identity, full arguments, full result (or error class and
 message), duration, and session grouping.
 
 **CONTENT-FUL is the point, and it is deliberate.** #530 explicitly supersedes
-#372's content-free spec for the local dogfood deployment. Payloads are sent
-verbatim: no redaction, no summarisation, no size bucketing. `OPENBRAIN_MCP_AUDIT_*`
-(above) remains the separate content-FREE durable Postgres record and is
-unchanged — the two lanes coexist and neither replaces the other.
+#372's content-free spec for the local dogfood deployment. #561 adds the required
+emitter-boundary protection before coverage widens: every string value passes
+`src/secret-patterns.ts` detectors, and each matched span becomes
+`[MASKED:<detector>]`. Surrounding content, object fields, and array items remain
+present. `OPENBRAIN_MCP_AUDIT_*` (above) remains the separate content-FREE durable
+Postgres record and is unchanged — the two lanes coexist and neither replaces
+the other.
 
 | variable | default | notes |
 |---|---|---|
 | `OPENBRAIN_TRACING_ENABLED` | unset (off) | tracing runs only when this is exactly `"1"` |
+| `OPENBRAIN_TRACING_MASKING_ENABLED` | unset (on) | detector-based masking is disabled only when this is exactly `"0"`; explicit operator bypass only |
 | `OPENBRAIN_TRACING_ENDPOINT` | — | Langfuse base URL (the SDK appends its own paths) |
 | `OPENBRAIN_TRACING_PUBLIC_KEY` | — | Langfuse `pk-lf-...` |
 | `OPENBRAIN_TRACING_SECRET_KEY` | — | Langfuse `sk-lf-...` |

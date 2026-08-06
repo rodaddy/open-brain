@@ -2,8 +2,9 @@
  * Functional tests for the #530 content-ful tracing lane.
  *
  * The contract under test is the one the module states: every tool call emits
- * one trace carrying VERBATIM input and output plus caller identity, and a
- * tracing failure never fails, slows, or ALTERS a tool call. The second half is
+ * one trace retaining complete input and output around masked detector matches,
+ * plus caller identity; a tracing failure never fails, slows, or ALTERS a tool
+ * call. The second half is
  * the one that matters operationally, so the sink that throws on every method
  * is a first-class case here, not an afterthought.
  *
@@ -28,6 +29,7 @@ import {
 
 const ENABLED_CONFIG: McpTracingConfig = {
   enabled: true,
+  maskingEnabled: true,
   endpoint: "http://10.71.20.50:3000",
   publicKey: "pk-lf-test",
   secretKey: "sk-lf-test",
@@ -163,7 +165,20 @@ const AUTH = {
 
 describe("readMcpTracingConfig", () => {
   test("is disabled with no environment at all", () => {
-    expect(readMcpTracingConfig({}).enabled).toBe(false);
+    const config = readMcpTracingConfig({});
+    expect(config.enabled).toBe(false);
+    expect(config.maskingEnabled).toBe(true);
+  });
+
+  test("masking is disabled only by the explicit zero value", () => {
+    expect(
+      readMcpTracingConfig({ OPENBRAIN_TRACING_MASKING_ENABLED: "0" })
+        .maskingEnabled,
+    ).toBe(false);
+    expect(
+      readMcpTracingConfig({ OPENBRAIN_TRACING_MASKING_ENABLED: "false" })
+        .maskingEnabled,
+    ).toBe(true);
   });
 
   test("is disabled when the coordinates are present but the flag is not set", () => {
@@ -250,6 +265,7 @@ describe("readMcpTracingConfig", () => {
       }),
     ).toEqual({
       enabled: true,
+      maskingEnabled: true,
       endpoint: "http://host:3000",
       publicKey: "pk-lf-1",
       secretKey: "sk-lf-1",
@@ -285,7 +301,7 @@ describe("resolveSessionId", () => {
 });
 
 describe("installMcpTracing", () => {
-  test("records one trace per call with verbatim input, output and caller identity", async () => {
+  test("records one trace per call with complete benign input, output and caller identity", async () => {
     const sink = recordingSink();
     const { server, handlers } = fakeServer();
     installMcpTracing(server, {
@@ -900,6 +916,157 @@ describe("the SDK's own logger cannot bypass the content-free discipline", () =>
 });
 
 describe("trace body helpers", () => {
+  const fakeLabeledSecret = [
+    "pass",
+    "word=obviously-fake-561-fixture-value",
+  ].join("");
+
+  test("masks detector matches in tool arguments and results while retaining every field", () => {
+    const body = buildToolTraceBody({
+      toolName: "fixture_tool",
+      status: "success",
+      durationMs: 7,
+      args: {
+        query: `args-before ${fakeLabeledSecret} args-after`,
+        untouched: "plain argument",
+      },
+      output: {
+        content: [
+          {
+            type: "text",
+            text: `result-before ${fakeLabeledSecret} result-after`,
+          },
+        ],
+        isError: false,
+      },
+    });
+
+    expect(body.input).toEqual({
+      query: "args-before password=[MASKED:labeled_secret] args-after",
+      untouched: "plain argument",
+    });
+    expect(body.output).toEqual({
+      content: [
+        {
+          type: "text",
+          text: "result-before password=[MASKED:labeled_secret] result-after",
+        },
+      ],
+      isError: false,
+    });
+  });
+
+  test("masks opaque values carried by sensitive argument and result keys", () => {
+    const opaqueValue = [
+      "obviously-fake-561-fixture-value-",
+      "aaaaaaaaaaaa",
+    ].join("");
+    const body = buildToolTraceBody({
+      toolName: "fixture_tool",
+      status: "success",
+      durationMs: 1,
+      args: {
+        password: opaqueValue,
+        nested: { api_key: opaqueValue },
+      },
+      output: {
+        password: opaqueValue,
+        nested: { api_key: opaqueValue, totp_secret: opaqueValue },
+      },
+    });
+
+    expect(body.input).toEqual({
+      password: "[MASKED:sensitive_key]",
+      nested: { api_key: "[MASKED:sensitive_key]" },
+    });
+    expect(body.output).toEqual({
+      password: "[MASKED:sensitive_key]",
+      nested: {
+        api_key: "[MASKED:sensitive_key]",
+        totp_secret: "[MASKED:sensitive_key]",
+      },
+    });
+  });
+
+  test("keeps serialized JSON parseable and retains a masked field label", () => {
+    const body = buildToolTraceBody({
+      toolName: "fixture_tool",
+      status: "success",
+      durationMs: 1,
+      args: {},
+      output: {
+        // The value is deliberately an obvious placeholder: key-based masking
+        // triggers on the KEY alone, and a realistic-looking value here is
+        // itself a secret-scanner hit (GitGuardian flagged the previous one).
+        text: JSON.stringify({ a: 1, password: "fake-placeholder-not-a-secret", b: 2 }),
+      },
+    });
+    const text = (body.output as { text: string }).text;
+
+    expect(JSON.parse(text)).toEqual({
+      a: 1,
+      password: "[MASKED:json_labeled_secret]",
+      b: 2,
+    });
+  });
+
+  test("normalizes non-plain carriers before masking their observable content", () => {
+    const opaqueValue = [
+      "obviously-fake-561-fixture-value-",
+      "bbbbbbbbbbbb",
+    ].join("");
+    const bytes = Buffer.from(`password=${opaqueValue}`);
+    const typedBytes = new Uint8Array(bytes);
+    const body = buildToolTraceBody({
+      toolName: "fixture_tool",
+      status: "success",
+      durationMs: 1,
+      args: {
+        map: new Map([
+          ["password", opaqueValue],
+          ["visible", "plain map value"],
+        ]),
+        set: new Set([`password=${opaqueValue}`, "plain set value"]),
+      },
+      output: {
+        error: new Error(`password=${opaqueValue}`),
+        buffer: bytes,
+        typedBytes,
+      },
+    });
+
+    expect(body.input).toEqual({
+      map: {
+        password: "[MASKED:sensitive_key]",
+        visible: "plain map value",
+      },
+      set: ["password=[MASKED:labeled_secret]", "plain set value"],
+    });
+    expect(body.output).toEqual({
+      error: {
+        name: "Error",
+        message: "password=[MASKED:labeled_secret]",
+      },
+      buffer: { type: "Buffer", byteLength: bytes.byteLength },
+      typedBytes: { type: "Uint8Array", byteLength: typedBytes.byteLength },
+    });
+    expect(JSON.stringify(body)).not.toContain(opaqueValue);
+  });
+
+  test("the explicit masking opt-out retains the original trace body", () => {
+    const body = buildToolTraceBody({
+      toolName: "fixture_tool",
+      status: "success",
+      durationMs: 7,
+      args: { query: fakeLabeledSecret },
+      output: { result: fakeLabeledSecret },
+      maskingEnabled: false,
+    });
+
+    expect(body.input).toEqual({ query: fakeLabeledSecret });
+    expect(body.output).toEqual({ result: fakeLabeledSecret });
+  });
+
   // The case the audit lane already records both ids for
   // (`src/audit-log.ts:299-301`): a delegated call whose acting identity is not
   // its token identity. With only `caller_client_id`, the content-ful lane an
