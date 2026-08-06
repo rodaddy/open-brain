@@ -309,6 +309,122 @@ class TestHermesObservedSQLiteAdapter:
         assert hermes_raw_turn_from_line(row("session-a", "system", "context")) is None
         assert hermes_raw_turn_from_line(row("session-a", "assistant", None)) is None
 
+    def test_nullable_and_integer_timestamps_stage_without_halting(
+        self, tmp_path: Path
+    ) -> None:
+        rows = [
+            {
+                "id": 4201,
+                "session_id": "session-null-time",
+                "role": "user",
+                "content": "timestamp absent at source",
+                "timestamp": None,
+                "active": 1,
+                "compacted": 0,
+            },
+            {
+                "id": 4202,
+                "session_id": "session-epoch-time",
+                "role": "assistant",
+                "content": "timestamp stored as an integer",
+                "timestamp": 1_752_418_523,
+                "active": 1,
+                "compacted": 0,
+            },
+        ]
+        source = tmp_path / "hermes-timestamps.jsonl"
+        source.write_text(
+            "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
+        )
+        store = StagingStore(tmp_path / "stage.sqlite")
+
+        staged = stage_file(source, InputFormat.HERMES, store)
+
+        turns = list(store.pending())
+        assert staged.staged == 2
+        assert [turn.occurred_at for turn in turns] == [None, "1752418523"]
+
+    def test_inactive_and_compacted_rows_are_not_staged(self, tmp_path: Path) -> None:
+        rows = [
+            {
+                "id": 4301,
+                "session_id": "session-state",
+                "role": "user",
+                "content": "live turn",
+                "timestamp": "2026-07-13T14:22:01.000Z",
+                "active": 1,
+                "compacted": 0,
+            },
+            {
+                "id": 4302,
+                "session_id": "session-state",
+                "role": "assistant",
+                "content": "edited out of the live thread",
+                "timestamp": "2026-07-13T14:22:02.000Z",
+                "active": 0,
+                "compacted": 0,
+            },
+            {
+                "id": 4303,
+                "session_id": "session-state",
+                "role": "assistant",
+                "content": "superseded by a compaction summary",
+                "timestamp": "2026-07-13T14:22:03.000Z",
+                "active": 1,
+                "compacted": 1,
+            },
+        ]
+        source = tmp_path / "hermes-row-state.jsonl"
+        source.write_text(
+            "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
+        )
+        store = StagingStore(tmp_path / "stage.sqlite")
+
+        staged = stage_file(source, InputFormat.HERMES, store)
+
+        assert staged.staged == 1
+        assert [turn.turn_uuid for turn in store.pending()] == [
+            "hermes:session-state:4301"
+        ]
+
+    def test_interleaved_sessions_keep_server_ordering_metadata(
+        self, tmp_path: Path
+    ) -> None:
+        rows = [
+            (4401, "session-b", "2026-07-13T14:22:03.000Z"),
+            (4402, "session-a", "2026-07-13T14:22:02.000Z"),
+            (4403, "session-b", "2026-07-13T14:22:01.000Z"),
+            (4404, "session-a", "2026-07-13T14:22:04.000Z"),
+        ]
+        source = tmp_path / "hermes-interleaved.jsonl"
+        source.write_text(
+            "".join(
+                json.dumps({
+                    "id": row_id,
+                    "session_id": session_id,
+                    "role": "user",
+                    "content": f"turn {row_id}",
+                    "timestamp": timestamp,
+                    "active": 1,
+                    "compacted": 0,
+                })
+                + "\n"
+                for row_id, session_id, timestamp in rows
+            ),
+            encoding="utf-8",
+        )
+        store = StagingStore(tmp_path / "stage.sqlite")
+        lane = RecordingLane()
+
+        staged = stage_file(source, InputFormat.HERMES, store)
+        result = ingest(store, lane)
+
+        assert staged.staged == 4
+        assert result.sent == 4
+        assert [
+            (turn["session_ref"], turn["occurred_at"]) for turn in lane.turns
+        ] == [(session_id, timestamp) for _, session_id, timestamp in rows]
+
     def test_malformed_row_names_location_without_content(self, tmp_path: Path) -> None:
         source = tmp_path / "broken-hermes.jsonl"
         source.write_text(

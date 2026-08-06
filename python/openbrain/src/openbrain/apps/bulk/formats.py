@@ -115,7 +115,9 @@ class HermesMessageRecord(BaseModel):
     session_id: str
     role: HermesMessageRole
     content: str | None
-    timestamp: str
+    timestamp: str | int | None = None
+    active: int | None = None
+    compacted: int | None = None
 
 
 class CodexEnvelope(BaseModel):
@@ -235,8 +237,8 @@ def hermes_raw_turn_from_line(line: str) -> RawTurn | None:
         line: One complete JSON object produced from a ``messages`` row.
 
     Returns:
-        A user, assistant, or tool turn when the row carries conversational
-        content, or ``None`` for system and content-free machinery rows.
+        A user, assistant, or tool turn when the row carries live conversational
+        content, or ``None`` for inactive, compacted, system, and content-free rows.
 
     Raises:
         MalformedHermesRecordError: When JSON or the observed row shape is invalid.
@@ -249,16 +251,20 @@ def hermes_raw_turn_from_line(line: str) -> RawTurn | None:
     except ValidationError as error:
         raise _malformed_hermes(error) from error
 
+    if message.active == 0 or message.compacted == 1:
+        return None
+
     turn_role = _HERMES_TURN_ROLES.get(message.role)
     if turn_role is None or message.content is None or not message.content.strip():
         return None
 
+    occurred_at = str(message.timestamp) if message.timestamp is not None else None
     return RawTurn(
         turn_uuid=f"hermes:{message.session_id}:{message.id}",
         content=message.content,
         role=turn_role,
         is_human_prompt=turn_role is TurnRole.USER,
-        occurred_at=message.timestamp,
+        occurred_at=occurred_at,
         session_ref=message.session_id,
     )
 
