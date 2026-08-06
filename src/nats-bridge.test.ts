@@ -559,6 +559,52 @@ describe("startNatsContextPackBridge", () => {
     await runtime?.close();
   });
 
+  it("does not trust a forged wire session key when auth rejects the request", async () => {
+    const tracing = recordingTracing();
+    const forgedSessionKey = "victim/session";
+    const driver: NatsBridgeDriver = {
+      subscribe: async (subject, handler) => {
+        await handler({
+          subject,
+          data: data(
+            envelope({
+              payload: {
+                ...requestPayload,
+                identity: {
+                  ...requestPayload.identity,
+                  session_key: forgedSessionKey,
+                },
+              },
+            }),
+          ),
+          headers: {},
+          respond: () => true,
+        } satisfies NatsRequestMessage);
+        return { close: () => undefined };
+      },
+      close: () => undefined,
+    };
+
+    const runtime = await startNatsContextPackBridge({
+      boundary: localBoundary({ OPENBRAIN_NATS_REQUIRE_AUTH: "true" }),
+      tokenMap: new Map([
+        ["valid-token", { role: "agent", clientId: "rico" }],
+      ]),
+      deps: depsWithWorkingSet("rico"),
+      driver,
+      tracing,
+    });
+
+    expect(tracing.bodies).toHaveLength(1);
+    expect(tracing.bodies[0]?.sessionId).toBeUndefined();
+    expect(tracing.bodies[0]?.metadata).toMatchObject({
+      declared_session_key_unverified: "[MASKED:unverified]",
+      status: "success",
+    });
+    expect(JSON.stringify(tracing.bodies)).not.toContain(forgedSessionKey);
+    await runtime?.close();
+  });
+
   it("traces an undeliverable reply as a handled error-envelope outcome", async () => {
     const tracing = recordingTracing();
     const driver: NatsBridgeDriver = {

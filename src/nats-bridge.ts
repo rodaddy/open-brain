@@ -142,13 +142,19 @@ export async function startNatsContextPackBridge(
   markNatsBridgeAvailable(health);
   const subject = options.boundary.nats.context_pack_subject;
   const subscription = await driver.subscribe(subject, async (message) => {
-    const trace = new BackgroundTraceRecorder(options.tracing, {
+    const traceStart = {
       name: "nats.message",
       input: { subject: message.subject, bytes: message.data.byteLength },
       tags: ["open-brain-server", "background-job", "nats"],
-      metadata: { subject: message.subject },
-      sessionId: natsSessionId(message.data),
-    });
+      metadata: {
+        subject: message.subject,
+        ...(hasDeclaredSessionKey(message.data)
+          ? { declared_session_key_unverified: "[MASKED:unverified]" }
+          : {}),
+      },
+      sessionId: undefined as string | undefined,
+    };
+    const trace = new BackgroundTraceRecorder(options.tracing, traceStart);
     try {
       const response = await trace.span(
         "nats.handle",
@@ -159,6 +165,9 @@ export async function startNatsContextPackBridge(
             tokenMap: options.tokenMap,
             deps: options.deps,
             health,
+            onResolvedBinding: (binding) => {
+              traceStart.sessionId = binding.sessionId;
+            },
           }),
         {
           input: { subject: message.subject },
@@ -213,20 +222,17 @@ export async function startNatsContextPackBridge(
   };
 }
 
-function natsSessionId(data: Uint8Array): string | undefined {
+function hasDeclaredSessionKey(data: Uint8Array): boolean {
   try {
     const envelope = envelopeFromBytes(data);
     const payload = envelope.payload as { identity?: unknown } | undefined;
     const identity = payload?.identity as { session_key?: unknown } | undefined;
-    const sessionKey = identity?.session_key;
-    return typeof sessionKey === "string" && sessionKey.length > 0
-      ? sessionKey
-      : undefined;
+    return typeof identity?.session_key === "string" && identity.session_key.length > 0;
   } catch (error: unknown) {
-    logger.debug("NATS trace session key unavailable", {
+    logger.debug("NATS trace declared session key unavailable", {
       error_type: safeErrorType(error),
     });
-    return undefined;
+    return false;
   }
 }
 
@@ -474,6 +480,7 @@ function namespaceSourceFromResponse(
 interface LaneBinding {
   auth: AuthInfo;
   namespaceSource: NamespaceSource;
+  sessionId: string;
 }
 
 /**
@@ -506,7 +513,11 @@ function resolveLaneBinding(
     // Auth ON: the bearer-derived identity is authoritative. Override is already
     // force-disabled at the boundary; we defensively ignore payload.namespace.
     if (!auth) return { rejected: true };
-    return { auth, namespaceSource: "token" };
+    return {
+      auth,
+      namespaceSource: "token",
+      sessionId: payload.identity.session_key,
+    };
   }
 
   // Auth OFF (trusted local bus). Bind a synthetic non-privileged identity to
@@ -515,12 +526,20 @@ function resolveLaneBinding(
   if (payload.namespace && boundary.nats.allow_namespace_override) {
     const ns = normalizeNamespaceToken(payload.namespace);
     if (!ns) return { rejected: true };
-    return { auth: localBusAuth(ns), namespaceSource: "override" };
+    return {
+      auth: localBusAuth(ns),
+      namespaceSource: "override",
+      sessionId: payload.identity.session_key,
+    };
   }
 
   const declared = declaredNamespace(payload, envelope);
   if (declared) {
-    return { auth: localBusAuth(declared), namespaceSource: "declared" };
+    return {
+      auth: localBusAuth(declared),
+      namespaceSource: "declared",
+      sessionId: payload.identity.session_key,
+    };
   }
 
   return { rejected: true };
@@ -556,6 +575,7 @@ export async function handleNatsContextPackMessage(input: {
   tokenMap: Map<string, AuthInfo>;
   deps: ToolDeps;
   health?: NatsBridgeHealth;
+  onResolvedBinding?: (binding: LaneBinding) => void;
 }): Promise<FleetEnvelope> {
   let requestId: string | null = null;
   let namespaceSource: NamespaceSource | null = null;
@@ -613,6 +633,13 @@ export async function handleNatsContextPackMessage(input: {
       );
     }
     namespaceSource = binding.namespaceSource;
+    try {
+      input.onResolvedBinding?.(binding);
+    } catch (error: unknown) {
+      logger.warn("NATS resolved-binding observer failed", {
+        error_type: safeErrorType(error),
+      });
+    }
 
     const result = await buildAgentContextPackPayload(
       // On the override/declared local-bus path the synthetic auth.clientId IS
