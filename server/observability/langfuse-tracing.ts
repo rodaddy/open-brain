@@ -2,10 +2,10 @@
  * CONTENT-FUL Langfuse tracing for every MCP tool call served by this server.
  *
  * Design authority: issue #530, which explicitly supersedes #372's content-free
- * spec for the local dogfood deployment. The operator's requirement is to see
- * "what agents are literally trying to do, what the calls are, what they're
- * getting back" — so arguments and results travel VERBATIM. There is no
- * redaction here, and adding some would defeat the only reason the lane exists.
+ * spec for the local dogfood deployment, plus #561's masking-before-widening
+ * ruling. The operator still receives every field and its surrounding content,
+ * but credential-shaped spans are replaced at this final emitter boundary before
+ * any payload reaches Langfuse. Masking is replacement, never field removal.
  *
  * THIS IS A SECOND, SEPARATE LANE. `src/audit-log.ts` stays exactly as it is:
  * it is the content-FREE durable audit record (declared key names, unknown-key
@@ -94,8 +94,12 @@ import {
 import { setGlobalErrorHandler } from "@opentelemetry/core";
 import { BasicTracerProvider } from "@opentelemetry/sdk-trace-base";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { AuthInfo } from "../../src/types.ts";
 import { logger } from "../../src/logger.ts";
+import {
+  isSensitiveKey,
+  SECRET_DETECTORS,
+} from "../../src/secret-patterns.ts";
+import type { AuthInfo } from "../../src/types.ts";
 
 /** Tags on every trace this lane writes, so server traffic is filterable. */
 const TRACE_TAGS = ["open-brain-server", "mcp-tool"] as const;
@@ -202,6 +206,7 @@ export function repoRelease(): string | undefined {
 
 export interface McpTracingConfig {
   enabled: boolean;
+  maskingEnabled: boolean;
   endpoint: string;
   publicKey: string;
   secretKey: string;
@@ -318,6 +323,7 @@ export function readMcpTracingConfig(
   const publicKey = env.OPENBRAIN_TRACING_PUBLIC_KEY?.trim() ?? "";
   const secretKey = env.OPENBRAIN_TRACING_SECRET_KEY?.trim() ?? "";
   const flagged = env.OPENBRAIN_TRACING_ENABLED === "1";
+  const maskingEnabled = env.OPENBRAIN_TRACING_MASKING_ENABLED !== "0";
   const complete =
     endpoint.length > 0 && publicKey.length > 0 && secretKey.length > 0;
   if (flagged && !complete) {
@@ -334,7 +340,13 @@ export function readMcpTracingConfig(
       privateIdSet: secretKey.length > 0,
     });
   }
-  return { enabled: flagged && complete, endpoint, publicKey, secretKey };
+  return {
+    enabled: flagged && complete,
+    maskingEnabled,
+    endpoint,
+    publicKey,
+    secretKey,
+  };
 }
 
 /**
@@ -368,8 +380,78 @@ function readStringField(value: unknown, key: string): string | undefined {
   return field;
 }
 
+function maskDetectorMatch(kind: string, match: string): string {
+  const replacement = `[MASKED:${kind}]`;
+  if (kind === "json_labeled_secret") {
+    return match.replace(/"[^"]+"$/, `"${replacement}"`);
+  }
+  if (kind === "labeled_secret") {
+    return match.replace(/([:=]\s*)[^\s,;]+$/, `$1${replacement}`);
+  }
+  return replacement;
+}
+
+/** Replace every detector match while retaining the rest of the string. */
+function maskTraceString(value: string): string {
+  let masked = value;
+  for (const detector of SECRET_DETECTORS) {
+    const flags = detector.pattern.flags.includes("g")
+      ? detector.pattern.flags
+      : `${detector.pattern.flags}g`;
+    masked = masked.replace(
+      new RegExp(detector.pattern.source, flags),
+      (match) => maskDetectorMatch(detector.kind, match),
+    );
+  }
+  return masked;
+}
+
+function binaryViewMarker(value: ArrayBufferView): {
+  type: string;
+  byteLength: number;
+} {
+  return {
+    type: value.constructor.name || "ArrayBufferView",
+    byteLength: value.byteLength,
+  };
+}
+
+/** Recursively normalize and mask values without removing fields or array items. */
+function maskTraceValue(value: unknown): unknown {
+  if (typeof value === "string") return maskTraceString(value);
+  if (Array.isArray(value)) {
+    const masked = value.map(maskTraceValue);
+    return masked.some((child, index) => child !== value[index]) ? masked : value;
+  }
+  if (!value || typeof value !== "object") return value;
+  if (ArrayBuffer.isView(value)) return binaryViewMarker(value);
+  if (value instanceof Map) {
+    return maskTraceValue(
+      Object.fromEntries(
+        Array.from(value, ([key, child]) => [String(key), child]),
+      ),
+    );
+  }
+  if (value instanceof Set) return maskTraceValue(Array.from(value));
+  if (value instanceof Error) {
+    return maskTraceValue({ name: value.name, message: value.message });
+  }
+
+  let masked: Record<string, unknown> | undefined;
+  for (const [key, child] of Object.entries(value)) {
+    const maskedChild =
+      isSensitiveKey(key) && child !== null && child !== undefined
+        ? "[MASKED:sensitive_key]"
+        : maskTraceValue(child);
+    if (maskedChild === child) continue;
+    masked ??= { ...(value as Record<string, unknown>) };
+    masked[key] = maskedChild;
+  }
+  return masked ?? value;
+}
+
 /**
- * The trace body for one tool call, content-ful by design (see file header).
+ * The trace body for one tool call, content-ful and masked by default.
  *
  * Exported so the shape is assertable without an SDK, a server, or a socket.
  */
@@ -381,11 +463,13 @@ export function buildToolTraceBody(input: {
   output: unknown;
   auth?: AuthInfo;
   sessionId?: string;
+  maskingEnabled?: boolean;
 }): TraceBody {
-  return {
+  const maskingEnabled = input.maskingEnabled !== false;
+  const body: TraceBody = {
     name: input.toolName,
-    input: input.args,
-    output: input.output,
+    input: maskingEnabled ? maskTraceValue(input.args) : input.args,
+    output: maskingEnabled ? maskTraceValue(input.output) : input.output,
     tags: [...TRACE_TAGS],
     metadata: {
       caller_role: input.auth?.role ?? null,
@@ -409,6 +493,7 @@ export function buildToolTraceBody(input: {
       ? {}
       : { userId: input.auth.clientId }),
   };
+  return body;
 }
 
 /**
@@ -656,6 +741,7 @@ export function installMcpTracing(
           toolName: name,
           status: isToolError(result) ? "error" : "success",
           durationMs: Date.now() - started,
+          maskingEnabled: config.maskingEnabled,
           args,
           output: result,
           ...authAndSession(args, extra),
@@ -666,6 +752,7 @@ export function installMcpTracing(
           toolName: name,
           status: "exception",
           durationMs: Date.now() - started,
+          maskingEnabled: config.maskingEnabled,
           args,
           output: errorOutput(err),
           ...authAndSession(args, extra),
