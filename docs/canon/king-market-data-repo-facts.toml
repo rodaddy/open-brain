@@ -1,0 +1,90 @@
+# KING-MARKET-DATA REPO FACTS
+#
+# STATUS: WRITTEN. This pack is the reviewable source for the live repo facts.
+# Older rows were mirrored from dogfood with their stored provenance; their
+# historical sources were not re-verified in this run. The five issue #520
+# target packs add source-verified rows written through OpenBrainClient and
+# read back. Canon reconciler repo-fact apply remains tracked by issue #588.
+# Pack assembled 2026-08-05T23:58:51Z.
+
+kind = "canon"
+
+[[entries]]
+key = "repo.king_market_data.test_preload"
+lane = "repo_facts"
+subject = "Bun tests preload isolated configuration"
+fact_type = "validation"
+text = """
+Every Bun test run preloads tests/setup.ts via bunfig.toml. The preload points database and NATS settings at test endpoints, sets the subject prefix to test, uses playback speed 1, marks NODE_ENV=test, and silences logs.\
+"""
+source = "tests/setup.ts; https://github.com/King-Capital/king-market-data/blob/e3cb1fccc73ad3906685446a0395b134ccfd1ee6/tests/setup.ts; verified_at=2026-08-05T23:58:51Z; source_commit=e3cb1fccc73ad3906685446a0395b134ccfd1ee6"
+
+[[entries]]
+key = "repo.king_market_data.headless_start"
+lane = "repo_facts"
+subject = "Headless server starts idle"
+fact_type = "workflow"
+text = """
+The headless `bun run server` path connects to the database and NATS, reports available symbols and contracts, then waits idle. Replay starts only through an explicit --start invocation or an interactive start command with concrete contract codes.\
+"""
+source = "src/server.ts; https://github.com/King-Capital/king-market-data/blob/e3cb1fccc73ad3906685446a0395b134ccfd1ee6/src/server.ts; verified_at=2026-08-05T23:58:51Z; source_commit=e3cb1fccc73ad3906685446a0395b134ccfd1ee6"
+
+[[entries]]
+key = "repo.king_market_data.market_data_server"
+lane = "repo_facts"
+subject = "market data server"
+fact_type = "workflow"
+text = """
+king-market-data depends on @king-capital/core and owns the CQG market data server plus synthetic tick replay for the King platform.\
+"""
+source = "package.json; https://github.com/King-Capital/king-market-data/blob/7d2cad60fc5500d1d16ba5e1460db1407552ac58/package.json; verified_at=2026-06-18T08:00:00.000Z; source_commit=7d2cad60fc5500d1d16ba5e1460db1407552ac58"
+
+[[entries]]
+key = "repo.king_market_data.nats_wire"
+lane = "repo_facts"
+subject = "NATS market-data wire shape"
+fact_type = "api_contract"
+text = """
+Quotes and trades are JSON-encoded MarketDataMessage values published on `NatsSubjects.marketData(envPrefix, symbol, contract)`. The publisher uses the shared @king-capital/core subject convention and drains the NATS connection during shutdown.\
+"""
+source = "src/lib/nats/publisher.ts; https://github.com/King-Capital/king-market-data/blob/e3cb1fccc73ad3906685446a0395b134ccfd1ee6/src/lib/nats/publisher.ts; verified_at=2026-08-05T23:58:51Z; source_commit=e3cb1fccc73ad3906685446a0395b134ccfd1ee6"
+
+[[entries]]
+key = "repo.king_market_data.bar_loading"
+lane = "repo_facts"
+subject = "Replay bar loading safeguards"
+fact_type = "gotcha"
+text = """
+Replay resolves specific contracts from contract_generics instead of scanning the 223M+ row futures table by root symbol. Bar loads support 1-minute and 5-minute tables, sort chronologically, and stop at 50,000 rows while returning an explicit truncated flag.\
+"""
+source = "src/lib/scheduler/bar-loader.ts; https://github.com/King-Capital/king-market-data/blob/e3cb1fccc73ad3906685446a0395b134ccfd1ee6/src/lib/scheduler/bar-loader.ts; verified_at=2026-08-05T23:58:51Z; source_commit=e3cb1fccc73ad3906685446a0395b134ccfd1ee6"
+
+[[entries]]
+key = "repo.king_market_data.required_config"
+lane = "repo_facts"
+subject = "Replay configuration fails fast"
+fact_type = "dependency"
+text = """
+MARKET_DATA_DATABASE_URL is required and validated at import time. NATS defaults to localhost with dev subjects, and PLAYBACK_SPEED is constrained to an integer from 1 through 60; invalid configuration prevents startup.\
+"""
+source = "src/config/env.ts; https://github.com/King-Capital/king-market-data/blob/e3cb1fccc73ad3906685446a0395b134ccfd1ee6/src/config/env.ts; verified_at=2026-08-05T23:58:51Z; source_commit=e3cb1fccc73ad3906685446a0395b134ccfd1ee6"
+
+[[entries]]
+key = "repo.king_market_data.session_api"
+lane = "repo_facts"
+subject = "Session-scoped replay API"
+fact_type = "api_contract"
+text = """
+The Next.js replay API scopes each scheduler by X-Session-Id and supports start, stop, pause, resume, and speed actions. Starts validate a 1-60 speed, resolve contracts over the requested date range, use 1-minute bars for ranges up to one day and 5-minute bars for longer ranges, and stream ticks to that session.\
+"""
+source = "src/app/api/replay/route.ts; https://github.com/King-Capital/king-market-data/blob/e3cb1fccc73ad3906685446a0395b134ccfd1ee6/src/app/api/replay/route.ts; verified_at=2026-08-05T23:58:51Z; source_commit=e3cb1fccc73ad3906685446a0395b134ccfd1ee6"
+
+[[entries]]
+key = "repo.king_market_data.tick_generation"
+lane = "repo_facts"
+subject = "Synthetic tick generation"
+fact_type = "workflow"
+text = """
+A one-minute OHLCV bar normally becomes 10-20 synthetic ticks, scaled by playback regime and bar duration. Generated prices honor instrument tick size, volume is distributed across ticks, bid/ask quotes and aggressor are produced, and each bar is bounded to at most 100 ticks.\
+"""
+source = "src/lib/tick-generator/index.ts; https://github.com/King-Capital/king-market-data/blob/e3cb1fccc73ad3906685446a0395b134ccfd1ee6/src/lib/tick-generator/index.ts; verified_at=2026-08-05T23:58:51Z; source_commit=e3cb1fccc73ad3906685446a0395b134ccfd1ee6"

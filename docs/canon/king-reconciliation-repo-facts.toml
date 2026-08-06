@@ -1,0 +1,90 @@
+# KING-RECONCILIATION REPO FACTS
+#
+# STATUS: WRITTEN. This pack is the reviewable source for the live repo facts.
+# Older rows were mirrored from dogfood with their stored provenance; their
+# historical sources were not re-verified in this run. The five issue #520
+# target packs add source-verified rows written through OpenBrainClient and
+# read back. Canon reconciler repo-fact apply remains tracked by issue #588.
+# Pack assembled 2026-08-05T23:58:51Z.
+
+kind = "canon"
+
+[[entries]]
+key = "repo.king_reconciliation.auth_mode"
+lane = "repo_facts"
+subject = "API key is optional development auth"
+fact_type = "gotcha"
+text = """
+When API_KEY is absent, king-rec logs a warning and permits requests as development mode; there is no separate production fail-closed branch in this middleware. When configured, reconcile and validation routes require a timing-safe bearer-key match.\
+"""
+source = "src/lib/auth.ts; https://github.com/King-Capital/king-reconciliation/blob/5299409758dedc1afaab6bc2bfcc3e698c5d9e0c/src/lib/auth.ts; verified_at=2026-08-05T23:58:51Z; source_commit=5299409758dedc1afaab6bc2bfcc3e698c5d9e0c"
+
+[[entries]]
+key = "repo.king_reconciliation.break_types"
+lane = "repo_facts"
+subject = "Break classification vocabulary"
+fact_type = "workflow"
+text = """
+Quantity breaks are classified as unexpected_close, unexpected_open, missing_trade, or qty_mismatch from prior quantity, signed trade quantity, and actual quantity. The classifier is pure and every break receives exactly one of these root-cause categories.\
+"""
+source = "src/reconciliation/reconciler/break-classifier.ts; https://github.com/King-Capital/king-reconciliation/blob/5299409758dedc1afaab6bc2bfcc3e698c5d9e0c/src/reconciliation/reconciler/break-classifier.ts; verified_at=2026-08-05T23:58:51Z; source_commit=5299409758dedc1afaab6bc2bfcc3e698c5d9e0c"
+
+[[entries]]
+key = "repo.king_reconciliation.deploy_gate"
+lane = "repo_facts"
+subject = "Builds on merge, production deploy is manual"
+fact_type = "workflow"
+text = """
+A merged pull request computes a patch tag, validates, builds, tests, and publishes a versioned artifact to /mnt/builds/king-rec. The production deployment job to CT302 under /home/king/rec runs only for workflow_dispatch, then restarts king-rec and performs health and smoke checks.\
+"""
+source = ".github/workflows/deploy.yml; https://github.com/King-Capital/king-reconciliation/blob/5299409758dedc1afaab6bc2bfcc3e698c5d9e0c/.github/workflows/deploy.yml; verified_at=2026-08-05T23:58:51Z; source_commit=5299409758dedc1afaab6bc2bfcc3e698c5d9e0c"
+
+[[entries]]
+key = "repo.king_reconciliation.route_boundaries"
+lane = "repo_facts"
+subject = "Public and protected route boundaries"
+fact_type = "api_contract"
+text = """
+GET /health and calendar routes are public. Reconcile and validation routes are authenticated and use stricter five-request-per-minute buckets, while manual-rec store operations receive a separate 60-request bucket; the bare manual reconcile mutation remains on the strict bucket.\
+"""
+source = "src/server.ts; https://github.com/King-Capital/king-reconciliation/blob/5299409758dedc1afaab6bc2bfcc3e698c5d9e0c/src/server.ts; verified_at=2026-08-05T23:58:51Z; source_commit=5299409758dedc1afaab6bc2bfcc3e698c5d9e0c"
+
+[[entries]]
+key = "repo.king_reconciliation.pure_core"
+lane = "repo_facts"
+subject = "Reconciliation core is I/O-free"
+fact_type = "api_contract"
+text = """
+The core reconcile function accepts preloaded prior positions, current positions, and trades. It compares expected and actual positions, marks expired contracts, extracts BREAK rows, and computes the summary without performing file, database, or network I/O; loaders belong at the caller boundary.\
+"""
+source = "src/reconciliation/master-rec.ts; https://github.com/King-Capital/king-reconciliation/blob/5299409758dedc1afaab6bc2bfcc3e698c5d9e0c/src/reconciliation/master-rec.ts; verified_at=2026-08-05T23:58:51Z; source_commit=5299409758dedc1afaab6bc2bfcc3e698c5d9e0c"
+
+[[entries]]
+key = "repo.king_reconciliation.reconciliation_engine"
+lane = "repo_facts"
+subject = "reconciliation engine"
+fact_type = "workflow"
+text = """
+king-reconciliation publishes package king-rec and coordinates with king-trading plus king-ops for trade matching, break classification, and trading calendars.\
+"""
+source = "package.json; https://github.com/King-Capital/king-reconciliation/blob/1697df95b9c9e307f9b41dbbfaa5301d474db458/package.json; verified_at=2026-06-18T08:00:00.000Z; source_commit=1697df95b9c9e307f9b41dbbfaa5301d474db458"
+
+[[entries]]
+key = "repo.king_reconciliation.identity"
+lane = "repo_facts"
+subject = "Repository and service names differ"
+fact_type = "gotcha"
+text = """
+The git repository and repo-fact slug are king-reconciliation, but package.json names the service `king-rec`, the runtime logs identify king-rec, and deployment paths use king-rec or /home/king/rec. Do not bind startup facts under king-rec; exact repo matching uses king-reconciliation.\
+"""
+source = "package.json; https://github.com/King-Capital/king-reconciliation/blob/5299409758dedc1afaab6bc2bfcc3e698c5d9e0c/package.json; verified_at=2026-08-05T23:58:51Z; source_commit=5299409758dedc1afaab6bc2bfcc3e698c5d9e0c"
+
+[[entries]]
+key = "repo.king_reconciliation.implemented_not_scaffold"
+lane = "repo_facts"
+subject = "The reconciliation engine is implemented, not a scaffold"
+fact_type = "gotcha"
+text = """
+CLAUDE.md still says this repo is a future extraction scaffold, but current source already exports working Markdown, CSV, Excel, KING Signal, allocator, TT, Marex LME, Wedbush, StoneX, and Marex parsers. Read current source and README instead of planning a fresh extraction.\
+"""
+source = "src/reconciliation/parsers/index.ts; https://github.com/King-Capital/king-reconciliation/blob/5299409758dedc1afaab6bc2bfcc3e698c5d9e0c/src/reconciliation/parsers/index.ts; verified_at=2026-08-05T23:58:51Z; source_commit=5299409758dedc1afaab6bc2bfcc3e698c5d9e0c"

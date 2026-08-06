@@ -1,0 +1,90 @@
+# KING-STATUS REPO FACTS
+#
+# STATUS: WRITTEN. This pack is the reviewable source for the live repo facts.
+# Older rows were mirrored from dogfood with their stored provenance; their
+# historical sources were not re-verified in this run. The five issue #520
+# target packs add source-verified rows written through OpenBrainClient and
+# read back. Canon reconciler repo-fact apply remains tracked by issue #588.
+# Pack assembled 2026-08-05T23:58:51Z.
+
+kind = "canon"
+
+[[entries]]
+key = "repo.king_status.admin_guard"
+lane = "repo_facts"
+subject = "Admin mutation authentication"
+fact_type = "gotcha"
+text = """
+Strategic writes, rollbacks, reseeds, diagnostics, and project-board mutations require x-admin-token. If ADMIN_TOKEN is unset, admin endpoints are disabled with 403; supplied values are compared with timingSafeEqual and failures produce HTTP 401.\
+"""
+source = "src/index.ts; https://github.com/King-Capital/king-status/blob/bc67563f9842652077caaddffeae5830289a09dc/src/index.ts; verified_at=2026-08-05T23:58:51Z; source_commit=bc67563f9842652077caaddffeae5830289a09dc"
+
+[[entries]]
+key = "repo.king_status.ci_scope"
+lane = "repo_facts"
+subject = "CI does not run the Bun test suite"
+fact_type = "validation"
+text = """
+Pull request CI runs lint, typecheck, and the client build on the self-hosted king-status runner. It does not run `bun test`, so a green workflow does not prove tests passed; run the Bun test suite separately when behavior changes.\
+"""
+source = ".github/workflows/ci.yml; https://github.com/King-Capital/king-status/blob/bc67563f9842652077caaddffeae5830289a09dc/.github/workflows/ci.yml; verified_at=2026-08-05T23:58:51Z; source_commit=bc67563f9842652077caaddffeae5830289a09dc"
+
+[[entries]]
+key = "repo.king_status.combined_status"
+lane = "repo_facts"
+subject = "Combined board, CI, and health status"
+fact_type = "api_contract"
+text = """
+GET /api/status returns the cached GitHub project board summary, service health results, CI results, and the last update time. Pollers refresh board, CI, and health together at POLL_INTERVAL_MS, which defaults to five minutes.\
+"""
+source = "src/index.ts; https://github.com/King-Capital/king-status/blob/bc67563f9842652077caaddffeae5830289a09dc/src/index.ts; verified_at=2026-08-05T23:58:51Z; source_commit=bc67563f9842652077caaddffeae5830289a09dc"
+
+[[entries]]
+key = "repo.king_status.runtime_shape"
+lane = "repo_facts"
+subject = "Hono backend and Vite frontend"
+fact_type = "dependency"
+text = """
+king-status is a Bun/Hono API on port 3700 plus a React 19/Vite client under client/ that builds into public/. Backend build and client build are separate commands; the server serves the built static frontend.\
+"""
+source = "CLAUDE.md; https://github.com/King-Capital/king-status/blob/bc67563f9842652077caaddffeae5830289a09dc/CLAUDE.md; verified_at=2026-08-05T23:58:51Z; source_commit=bc67563f9842652077caaddffeae5830289a09dc"
+
+[[entries]]
+key = "repo.king_status.operations_dashboard"
+lane = "repo_facts"
+subject = "operations dashboard"
+fact_type = "workflow"
+text = """
+king-status is a standalone Bun/Hono plus React ops dashboard for King project board and CI status; admin routes require ADMIN_TOKEN and x-admin-token.\
+"""
+source = "package.json; https://github.com/King-Capital/king-status/blob/297ab7c0b20cae97b57679613ddf6961922463ec/package.json; verified_at=2026-06-18T08:00:00.000Z; source_commit=297ab7c0b20cae97b57679613ddf6961922463ec"
+
+[[entries]]
+key = "repo.king_status.board_mutations"
+lane = "repo_facts"
+subject = "Project board mutation surface"
+fact_type = "workflow"
+text = """
+The dashboard mutates Project V2 single-select fields Status, Priority, Component, and Deploy Target through GraphQL, resolving option names against cached live field metadata. Assignee changes resolve the project item back to an issue or pull request and use the GitHub REST API.\
+"""
+source = "src/github-mutations.ts; https://github.com/King-Capital/king-status/blob/bc67563f9842652077caaddffeae5830289a09dc/src/github-mutations.ts; verified_at=2026-08-05T23:58:51Z; source_commit=bc67563f9842652077caaddffeae5830289a09dc"
+
+[[entries]]
+key = "repo.king_status.deploy_target"
+lane = "repo_facts"
+subject = "Status dashboard deployment"
+fact_type = "workflow"
+text = """
+Pushes to the default branch publish a versioned build under /mnt/builds/king-status and deploy to the king-status host as user king under /home/king/king-status. Deployment preserves .env, data/audit.db, and data/strategic, restarts king-status.service, then probes /api/status on port 3700.\
+"""
+source = ".github/workflows/deploy.yml; https://github.com/King-Capital/king-status/blob/bc67563f9842652077caaddffeae5830289a09dc/.github/workflows/deploy.yml; verified_at=2026-08-05T23:58:51Z; source_commit=bc67563f9842652077caaddffeae5830289a09dc"
+
+[[entries]]
+key = "repo.king_status.strategic_storage"
+lane = "repo_facts"
+subject = "Strategic content persistence"
+fact_type = "migration"
+text = """
+Strategic sections are versioned JSON files under data/strategic with an in-memory cache. Writes use a temporary sibling file plus rename, increment the section version, and append before/after state to the SQLite audit log; rollback writes the selected historical state as a new version.\
+"""
+source = "src/strategic-store.ts; https://github.com/King-Capital/king-status/blob/bc67563f9842652077caaddffeae5830289a09dc/src/strategic-store.ts; verified_at=2026-08-05T23:58:51Z; source_commit=bc67563f9842652077caaddffeae5830289a09dc"
