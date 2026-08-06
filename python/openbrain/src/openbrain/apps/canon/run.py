@@ -246,24 +246,23 @@ class NamespaceMismatchError(RuntimeError):
     """A canon write or verification read resolved outside the intended agent."""
 
 
+class ReadbackConfigurationError(ValueError):
+    """A scoped read cannot observe every lane in the planned writes."""
+
+
 def _receipt_namespace(receipt: Any) -> str | None:
-    """Resolve the namespace named directly or through writer provenance."""
+    """Resolve the authoritative namespace from a write receipt."""
     if not isinstance(receipt, Mapping):
         return None
     namespace = receipt.get("namespace")
     if isinstance(namespace, str) and namespace:
         return namespace
-    namespace_source = receipt.get("namespace_source")
-    if not isinstance(namespace_source, str):
-        return None
-    identity_field = {
-        "token": "token_identity",
-        "header": "delegated_agent_id",
-    }.get(namespace_source)
-    if identity_field is None:
-        return None
-    identity = receipt.get(identity_field)
-    return identity if isinstance(identity, str) and identity else None
+    writer_identity = receipt.get("writer_identity")
+    return (
+        writer_identity
+        if isinstance(writer_identity, str) and writer_identity
+        else None
+    )
 
 
 def _pack_readback_scope(settings: CanonSettings) -> dict[str, Any]:
@@ -281,10 +280,26 @@ def _pack_readback_scope(settings: CanonSettings) -> dict[str, Any]:
     return scope
 
 
+def _validate_readback_settings(
+    planned: Sequence[PlannedWrite], settings: CanonSettings
+) -> None:
+    """Require a scoped pack read that can observe every planned lane."""
+    requested = set(settings.sections)
+    missing_lanes = sorted({call.lane.value for call in planned} - requested)
+    if missing_lanes:
+        message = f"canon read-back lane {', '.join(missing_lanes)} is not requested"
+        raise ReadbackConfigurationError(message)
+    if settings.repo is None and any(call.lane is Lane.REPO_FACTS for call in planned):
+        message = "canon read-back of repo_facts requires a repo"
+        raise ReadbackConfigurationError(message)
+
+
 def _verify_readback(
-    planned: Sequence[PlannedWrite], payload: Any, intended_namespace: str
+    planned: Sequence[PlannedWrite], payload: Any, settings: CanonSettings
 ) -> None:
     """Prove unknown-receipt writes are visible under the intended namespace."""
+    _validate_readback_settings(planned, settings)
+    intended_namespace = settings.agent
     if not isinstance(payload, Mapping):
         message = "canon write read-back returned no scoped pack"
         raise NamespaceMismatchError(message)
@@ -317,19 +332,25 @@ def _verify_readback(
         raise NamespaceMismatchError(message)
 
 
-def _apply(planned: Sequence[PlannedWrite], settings: CanonSettings) -> None:
-    """Send every planned write through one client and verify its namespace.
+def _apply(
+    planned: Sequence[PlannedWrite], settings: CanonSettings
+) -> tuple[int, int]:
+    """Send every planned write and return new and already-present counts.
 
     The client is built here rather than in a capability for the same reason
     ``apps.bulk.run`` builds its own: this is the operator path, so it does NOT
     inherit the hook path's single-attempt, deadline-pinned policy -- an operator
     run may retry, which is the sibling client's default.
 
-    Every write receipt is checked against ``settings.agent``. The append-event
-    receipt identifies whether the token or delegated header supplied the writer;
-    repo-fact writes return ``namespace`` directly. If a future write surface
-    carries neither signal, one scoped pack read verifies the exact written keys
-    and texts instead of reporting success from an unverified call count.
+    Every write receipt is checked against ``settings.agent``. Append-event
+    receipts expose the persisted namespace as ``writer_identity``; repo-fact
+    writes return ``namespace`` directly. Duplicate receipts count as already
+    present rather than newly applied. If a future write surface carries neither
+    namespace signal, one scoped pack read verifies the exact written keys and
+    texts instead of reporting success from an unverified call count.
+
+    Returns:
+        A pair of ``(applied, already_present)`` counts.
 
     Raises:
         CanonNotConfiguredError: No endpoint or token. Raised before the import
@@ -363,9 +384,13 @@ def _apply(planned: Sequence[PlannedWrite], settings: CanonSettings) -> None:
         allow_insecure_http=settings.allow_insecure_http,
     )
     unknown_receipt = False
+    already_present = 0
     try:
         for call in planned:
             receipt = client.call_tool(call.tool, call.arguments)
+            already_present += int(
+                isinstance(receipt, Mapping) and receipt.get("duplicate") is True
+            )
             actual_namespace = _receipt_namespace(receipt)
             if actual_namespace is None:
                 unknown_receipt = True
@@ -378,7 +403,8 @@ def _apply(planned: Sequence[PlannedWrite], settings: CanonSettings) -> None:
                 raise NamespaceMismatchError(message)
         if unknown_receipt:
             readback = client.agent_context_pack(**_pack_readback_scope(settings))
-            _verify_readback(planned, readback, settings.agent)
+            _verify_readback(planned, readback, settings)
+        return len(planned) - already_present, already_present
     finally:
         client.close()
 
@@ -430,11 +456,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.apply and planned:
         try:
-            _apply(planned, settings)
+            applied, already_present = _apply(planned, settings)
         except Exception as error:  # noqa: BLE001 -- reported to the operator, then exit
             logger.error("apply failed ({})", type(error).__name__)
             return 2
-        logger.info("applied {} write(s)", len(planned))
+        logger.info(
+            "applied {} write(s); already present {}", applied, already_present
+        )
 
     return 1 if report.has_drift else 0
 

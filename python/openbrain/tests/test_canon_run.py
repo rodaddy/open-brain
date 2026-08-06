@@ -62,7 +62,28 @@ def planned_process_write() -> PlannedWrite:
     )
 
 
-def settings(*, agent: str = "claude") -> CanonSettings:
+def planned_repo_fact_write() -> PlannedWrite:
+    """One repo-fact write for read-back configuration tests."""
+    return PlannedWrite(
+        tool="record_repo_fact",
+        key="repo.hosts",
+        lane=Lane.REPO_FACTS,
+        arguments={
+            "metadata": {"subject": "hosts", "fact": "Two hosts."},
+        },
+    )
+
+
+def settings(
+    *,
+    agent: str = "claude",
+    repo: str | None = "open-brain",
+    sections: tuple[str, ...] = (
+        "profile_guidance",
+        "process_guidance",
+        "repo_facts",
+    ),
+) -> CanonSettings:
     """Canon settings with an endpoint and token, so nothing fails as unconfigured."""
     return CanonSettings(
         OPENBRAIN_BASE_URL="https://openbrain.invalid",  # type: ignore[call-arg]
@@ -70,6 +91,8 @@ def settings(*, agent: str = "claude") -> CanonSettings:
         # NEVER logged, so it has to be a recognisable sentinel.
         OPENBRAIN_TOKEN="not-a-real-token",  # type: ignore[call-arg]  # noqa: S106
         OPENBRAIN_CANON_AGENT=agent,  # type: ignore[call-arg]
+        OPENBRAIN_CANON_REPO=repo,  # type: ignore[call-arg]
+        OPENBRAIN_CANON_SECTIONS=sections,  # type: ignore[call-arg]
     )
 
 
@@ -144,8 +167,13 @@ def test_apply_sends_exactly_the_planned_writes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sent: list[PlannedWrite] = []
+
+    def apply(planned: list[PlannedWrite], _settings: CanonSettings) -> tuple[int, int]:
+        sent.extend(planned)
+        return len(planned), 0
+
     monkeypatch.setattr(canon_run, "read_live_pack", lambda _s: live())
-    monkeypatch.setattr(canon_run, "_apply", lambda planned, _s: sent.extend(planned))
+    monkeypatch.setattr(canon_run, "_apply", apply)
 
     canon_run.main([str(pack_file), "--apply"])
 
@@ -159,7 +187,7 @@ def test_apply_still_exits_one_because_the_rows_were_not_re_read(
 ) -> None:
     """A write is not an observation. Nothing has seen the row standing yet."""
     monkeypatch.setattr(canon_run, "read_live_pack", lambda _s: live())
-    monkeypatch.setattr(canon_run, "_apply", lambda _p, _s: None)
+    monkeypatch.setattr(canon_run, "_apply", lambda _p, _s: (1, 0))
     assert canon_run.main([str(pack_file), "--apply"]) == 1
 
 
@@ -190,6 +218,130 @@ def test_apply_rejects_a_receipt_from_the_token_namespace(
 
     with pytest.raises(canon_run.NamespaceMismatchError, match="landed in admin"):
         canon_run._apply([planned_process_write()], settings(agent="skippy"))
+
+
+def test_apply_accepts_header_receipt_without_an_agent_label(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The writer identity is the namespace even when X-Agent-Id was omitted."""
+    state = {"read_back": False}
+
+    class DelegatedClient:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        def call_tool(self, _tool: str, _arguments: dict[str, Any]) -> dict[str, Any]:
+            return {
+                "writer_identity": "skippy",
+                "token_identity": "admin",
+                "delegated_agent_id": None,
+                "namespace_source": "header",
+            }
+
+        def agent_context_pack(self, **_arguments: Any) -> dict[str, Any]:
+            state["read_back"] = True
+            raise AssertionError
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(memory_client, "OpenBrainClient", DelegatedClient)
+
+    assert canon_run._apply([planned_process_write()], settings(agent="skippy")) == (1, 0)
+    assert state["read_back"] is False
+
+
+def test_apply_rejects_header_receipt_using_writer_not_agent_label(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An X-Agent-Id label cannot disguise the namespace where the row landed."""
+
+    class MisScopedDelegatedClient:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        def call_tool(self, _tool: str, _arguments: dict[str, Any]) -> dict[str, Any]:
+            return {
+                "writer_identity": "admin",
+                "token_identity": "admin",
+                "delegated_agent_id": "skippy",
+                "namespace_source": "header",
+            }
+
+        def agent_context_pack(self, **_arguments: Any) -> dict[str, Any]:
+            raise AssertionError
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(memory_client, "OpenBrainClient", MisScopedDelegatedClient)
+
+    with pytest.raises(canon_run.NamespaceMismatchError, match="landed in admin"):
+        canon_run._apply([planned_process_write()], settings(agent="skippy"))
+
+
+def test_apply_reports_duplicate_receipt_as_already_present(
+    pack_file: Path,
+    wired: None,
+    monkeypatch: pytest.MonkeyPatch,
+    logged: io.StringIO,
+) -> None:
+    """A duplicate receipt is an observed prior row, not a new apply outcome."""
+
+    class DuplicateClient:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        def call_tool(self, _tool: str, _arguments: dict[str, Any]) -> dict[str, Any]:
+            return {
+                "duplicate": True,
+                "writer_identity": "claude",
+                "token_identity": "claude",
+                "delegated_agent_id": None,
+                "namespace_source": "token",
+            }
+
+        def agent_context_pack(self, **_arguments: Any) -> dict[str, Any]:
+            raise AssertionError
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(memory_client, "OpenBrainClient", DuplicateClient)
+    monkeypatch.setattr(canon_run, "read_live_pack", lambda _s: live())
+
+    assert canon_run.main([str(pack_file), "--apply"]) == 1
+    assert "applied 0 write(s); already present 1" in logged.getvalue()
+
+
+def test_readback_refuses_a_lane_missing_from_requested_sections() -> None:
+    """A configuration gap is not reported as a namespace incident."""
+    configured = settings(sections=("profile_guidance", "process_guidance"))
+
+    with pytest.raises(
+        canon_run.ReadbackConfigurationError,
+        match="repo_facts is not requested",
+    ):
+        canon_run._verify_readback(
+            [planned_repo_fact_write()],
+            {"scope": {"namespace": "claude"}},
+            configured,
+        )
+
+
+def test_readback_requires_a_repo_for_repo_facts() -> None:
+    """Repo-fact visibility cannot be checked without its exact repo binding."""
+    configured = settings(repo=None)
+
+    with pytest.raises(
+        canon_run.ReadbackConfigurationError,
+        match="repo_facts requires a repo",
+    ):
+        canon_run._verify_readback(
+            [planned_repo_fact_write()],
+            {"scope": {"namespace": "claude"}},
+            configured,
+        )
 
 
 def test_apply_reads_back_when_the_receipt_has_no_namespace_signal(
