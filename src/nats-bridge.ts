@@ -54,6 +54,13 @@ export interface NatsSubscriptionHandle {
 }
 
 export interface NatsBridgeDriver {
+  /**
+   * Deliver messages under the driver's native acknowledgement contract.
+   * A resolved handler means processing completed. A rejected handler must
+   * propagate unchanged: the driver must not synthesize an acknowledgement or
+   * swallow the rejection, so broker-native error/redelivery behavior remains
+   * authoritative.
+   */
   subscribe(
     subject: string,
     handler: (message: NatsRequestMessage) => Promise<void>,
