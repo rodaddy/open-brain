@@ -42,12 +42,28 @@ import {
   type MaintenanceQueueLogger,
 } from "./maintenance-queue.ts";
 import { ruleBasedDistiller } from "./distiller.ts";
+import type {
+  BackgroundTraceBody,
+  BackgroundTraceEmitter,
+} from "./background-tracing.ts";
 
 const silentLogger: MaintenanceQueueLogger = {
   info: () => {},
   warn: () => {},
   error: () => {},
 };
+
+function recordingTracing(): BackgroundTraceEmitter & {
+  bodies: BackgroundTraceBody[];
+} {
+  const bodies: BackgroundTraceBody[] = [];
+  return {
+    bodies,
+    emitBackground(body) {
+      bodies.push(body);
+    },
+  };
+}
 
 function collectingLogger() {
   const records: Array<{ level: string; msg: string; fields: unknown }> = [];
@@ -562,6 +578,54 @@ describe("makeMemoryDistillHandler", () => {
     });
     await handler(job());
     expect(corpus.candidates[0]!.distill_job_id).toBe("job-distill-1");
+  });
+
+  it("emits a trace with stage spans and row ids read and written", async () => {
+    const source = rawTurn({ content: "we are going with traced distillation" });
+    const corpus = fakeCorpus([source]);
+    const tracing = recordingTracing();
+    const handler = makeMemoryDistillHandler({
+      pool: corpus.pool,
+      logger: silentLogger,
+      tracing,
+      embedFn: async () => ({
+        embedding: Array(768).fill(0.1),
+        usageDetails: { promptTokens: 6, totalTokens: 6 },
+      }),
+    });
+
+    await handler(
+      job({
+        namespace: "rico",
+        payload: { session_key: "session-distill" },
+      }),
+    );
+
+    expect(tracing.bodies[0]).toMatchObject({
+      name: "memory.distill",
+      sessionId: "session-distill",
+      metadata: { status: "success" },
+      observations: [
+        {
+          name: "distill.claim",
+          output: { row_ids: [source.id], units: 1 },
+        },
+        { name: "distill.extract", type: "span" },
+        {
+          name: "embedding.provider",
+          type: "embedding",
+          usageDetails: { promptTokens: 6, totalTokens: 6 },
+        },
+        { name: "distill.embedding_batch", type: "span" },
+        {
+          name: "distill.persist",
+          output: {
+            written_candidate_ids: ["cand-1"],
+            stamped_turn_ids: [source.id],
+          },
+        },
+      ],
+    });
   });
 
   it("a global (null-namespace) job sweeps every namespace", async () => {

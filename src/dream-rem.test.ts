@@ -21,6 +21,11 @@
 import { describe, expect, it } from "bun:test";
 import type pg from "pg";
 import {
+  BackgroundTraceRecorder,
+  type BackgroundTraceBody,
+  type BackgroundTraceEmitter,
+} from "./background-tracing.ts";
+import {
   buildDreamRemEnqueue,
   DREAM_REM_JOB_KIND,
   DREAM_REM_JOB_VERSION,
@@ -49,6 +54,18 @@ const silentLogger: MaintenanceQueueLogger = {
   warn: () => {},
   error: () => {},
 };
+
+function recordingTracing(): BackgroundTraceEmitter & {
+  bodies: BackgroundTraceBody[];
+} {
+  const bodies: BackgroundTraceBody[] = [];
+  return {
+    bodies,
+    emitBackground(body) {
+      bodies.push(body);
+    },
+  };
+}
 
 function collectingLogger() {
   const records: Array<{ msg: string; fields: Record<string, unknown> }> = [];
@@ -297,6 +314,37 @@ describe("runRemGrading — the operator queue is untouchable", () => {
     const summary = await runRemGrading({ pool, logger: silentLogger });
     expect(summary.corroborated).toBe(1);
     expect(summary.by_grade.promoted).toBe(1);
+  });
+
+  it("records generation grading by candidate id without candidate content", async () => {
+    const candidate = candidateRow({
+      id: "candidate-trace-id",
+      content: "tenant candidate content must not be traced",
+    });
+    const { pool } = fakePool((sql) =>
+      sql.includes("FROM candidate_memory c") ? { rows: [candidate] } : undefined,
+    );
+    const emitter = recordingTracing();
+    const trace = new BackgroundTraceRecorder(emitter, {
+      name: "dream.rem",
+      tags: ["background-job", "dream"],
+    });
+    const grader: NamedRemGrader = {
+      name: "fixture-grader",
+      observationType: "generation",
+      grade: () => ({
+        grade: "promoted",
+        reason: "tenant candidate content must not be traced",
+      }),
+    };
+
+    await runRemGrading({ pool, logger: silentLogger, grader, trace });
+    trace.finish({ outcome: "succeeded" });
+
+    const observation = emitter.bodies[0]!.observations[0]!;
+    expect(observation.input).toEqual({ candidate_id: "candidate-trace-id" });
+    expect(observation.output).toEqual({ grade: "promoted", has_reason: true });
+    expect(JSON.stringify(observation)).not.toContain(candidate.content);
   });
 
   it("skips one bad grader verdict instead of stalling the whole pass", async () => {
@@ -579,6 +627,74 @@ describe("makeDreamRemHandler", () => {
       s.text.includes("FROM candidate_memory c"),
     )!;
     expect(select.values[0]).toBeNull();
+  });
+
+  it("keeps a global REM sweep off tenant sessions and attributes candidate namespaces", async () => {
+    const { pool } = fakePool((sql) =>
+      sql.includes("FROM candidate_memory c")
+        ? {
+            rows: [
+              candidateRow({ id: "candidate-rico", namespace: "rico" }),
+              candidateRow({ id: "candidate-other", namespace: "other" }),
+            ],
+          }
+        : undefined,
+    );
+    const tracing = recordingTracing();
+    const handler = makeDreamRemHandler({ pool, logger: silentLogger, tracing });
+
+    await handler(
+      job({
+        namespace: null,
+        payload: {
+          skip_dedupe: true,
+          skip_rewarm: true,
+          session_key: "tenant-session-must-not-bind",
+        },
+      }),
+    );
+
+    expect(tracing.bodies).toHaveLength(1);
+    expect(tracing.bodies[0]?.sessionId).toBeUndefined();
+    const grades = tracing.bodies[0]!.observations.filter(
+      (observation) => observation.name === "dream.rem.grade",
+    );
+    expect(grades.map((observation) => observation.metadata.namespace)).toEqual([
+      "rico",
+      "other",
+    ]);
+  });
+
+  it("emits one REM run trace with stage spans and session binding", async () => {
+    const { pool } = fakePool(() => undefined);
+    const tracing = recordingTracing();
+    const handler = makeDreamRemHandler({
+      pool,
+      logger: silentLogger,
+      tracing,
+    });
+
+    await handler(
+      job({
+        namespace: "rico",
+        payload: {
+          skip_dedupe: true,
+          skip_rewarm: true,
+          session_key: "session-rem",
+        },
+      }),
+    );
+
+    expect(tracing.bodies[0]).toMatchObject({
+      name: "dream.rem",
+      sessionId: "session-rem",
+      metadata: { status: "success" },
+      observations: [
+        { name: "dream.rem.dedupe", type: "span" },
+        { name: "dream.rem.grading", type: "span" },
+        { name: "dream.rem.rewarm", type: "span" },
+      ],
+    });
   });
 });
 

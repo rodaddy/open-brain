@@ -1416,6 +1416,60 @@ describe("outage alerts fire on state change only", () => {
   });
 });
 
+describe("background job tracing", () => {
+  test("uses the shared masking boundary for root and child observations", () => {
+    const sink = recordingSink();
+    const runtime = createTracingRuntime({ config: ENABLED_CONFIG, sink });
+    runtime.background!.emitBackground({
+      name: "memory.distill",
+      input: { prompt: "password=fake-background-secret" },
+      output: { status: "ok", api_key: "fake-opaque-value" },
+      tags: ["background-job", "dream"],
+      metadata: { status: "success" },
+      observations: [
+        {
+          name: "distill.extract",
+          type: "generation",
+          model: "fixture-model",
+          input: { text: "token=fake-child-secret" },
+          output: { answer: "kept around password=fake-output-secret" },
+          metadata: { authorization: "fake-bearer" },
+          usageDetails: { input: 12, output: 4 },
+          startedAt: 10,
+          endedAt: 20,
+        },
+      ],
+      startedAt: 1,
+      endedAt: 30,
+      sessionId: "session-569",
+    });
+
+    expect(sink.bodies[0]).toMatchObject({
+      input: { prompt: "password=[MASKED:labeled_secret]" },
+      output: { status: "ok", api_key: "[MASKED:sensitive_key]" },
+      sessionId: "session-569",
+      observations: [
+        {
+          type: "generation",
+          model: "fixture-model",
+          input: { text: "token=[MASKED:labeled_secret]" },
+          output: { answer: "kept around password=[MASKED:labeled_secret]" },
+          metadata: { authorization: "[MASKED:sensitive_key]" },
+          usageDetails: { input: 12, output: 4 },
+        },
+      ],
+    });
+  });
+
+  test("does not expose a background emitter when tracing is disabled", () => {
+    const runtime = createTracingRuntime({
+      config: { ...ENABLED_CONFIG, enabled: false },
+    });
+    expect(runtime.background).toBeUndefined();
+    expect(runtime.sink).toBeUndefined();
+  });
+});
+
 /**
  * The v3 review's MEDIUM finding, carried into v4: the SDK's own logger writes
  * export failures straight to `console.error` with the raw error attached, so a
@@ -1455,6 +1509,106 @@ describe("the SDK's own logger cannot bypass the content-free discipline", () =>
     const gated = getGlobalLogger() as unknown as Gated;
     expect(gated.shouldLog(LogLevel.ERROR)).toBe(false);
     expect(gated.shouldLog(LogLevel.WARN)).toBe(false);
+  });
+});
+
+const REAL_SINK_PROBE_SCRIPT = String.raw`
+      import { mock } from "bun:test";
+
+      const names = [];
+      let parentEnded = 0;
+      const child = { end: () => undefined };
+      const parent = {
+        otelSpan: {
+          spanContext: () => ({
+            traceId: "00000000000000000000000000000001",
+            spanId: "0000000000000001",
+            traceFlags: 1,
+          }),
+        },
+        updateTrace: () => undefined,
+        startObservation: (name) => {
+          names.push(name);
+          return child;
+        },
+        end: () => {
+          parentEnded += 1;
+        },
+      };
+
+      mock.module("@langfuse/tracing", () => ({
+        setLangfuseTracerProvider: () => undefined,
+        startObservation: (name) => {
+          names.push(name);
+          return name === "search_brain" ? parent : child;
+        },
+      }));
+
+      const { createTracingRuntime } = await import(
+        "./server/observability/langfuse-tracing.ts"
+      );
+      const runtime = createTracingRuntime({
+        config: {
+          enabled: true,
+          maskingEnabled: true,
+          endpoint: "http://127.0.0.1:1",
+          publicKey: "pk-lf-test",
+          secretKey: "sk-lf-test",
+        },
+      });
+      runtime.sink.emit({
+        name: "search_brain",
+        input: {},
+        output: {},
+        tags: ["open-brain-server"],
+        metadata: {},
+        spans: [
+          {
+            name: "retrieval.evidence",
+            input: {},
+            output: {},
+            metadata: {},
+          },
+        ],
+        observations: [
+          {
+            name: "background.observation",
+            type: "span",
+            input: {},
+            output: {},
+            metadata: {},
+            startedAt: 10,
+            endedAt: 20,
+          },
+        ],
+        startedAt: 1,
+        endedAt: 30,
+      });
+      await runtime.shutdown();
+      console.log(JSON.stringify({ names, parentEnded }));
+`;
+
+describe("the real default sink", () => {
+  test("emits retrieval spans and background observations before ending the parent", () => {
+    const result = Bun.spawnSync({
+      cmd: ["bun", "-e", REAL_SINK_PROBE_SCRIPT],
+      cwd: join(import.meta.dir, "../.."),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    expect(result.stderr.toString()).toBe("");
+    expect(result.success).toBe(true);
+    const emitted = JSON.parse(result.stdout.toString()) as {
+      names: string[];
+      parentEnded: number;
+    };
+    expect(emitted.names).toEqual([
+      "search_brain",
+      "retrieval.evidence",
+      "background.observation",
+    ]);
+    expect(emitted.parentEnded).toBe(1);
   });
 });
 

@@ -7,6 +7,10 @@ import {
   type NatsRequestMessage,
 } from "./nats-bridge.ts";
 import { logger } from "./logger.ts";
+import type {
+  BackgroundTraceBody,
+  BackgroundTraceEmitter,
+} from "./background-tracing.ts";
 import {
   envelopeFromBytes,
   readNatsRuntimeBoundary,
@@ -87,6 +91,18 @@ function depsWithWorkingSet(namespace = scope.namespace): ToolDeps {
 
 function data(payload: unknown): Uint8Array {
   return encoder.encode(JSON.stringify(payload));
+}
+
+function recordingTracing(): BackgroundTraceEmitter & {
+  bodies: BackgroundTraceBody[];
+} {
+  const bodies: BackgroundTraceBody[] = [];
+  return {
+    bodies,
+    emitBackground(body) {
+      bodies.push(body);
+    },
+  };
 }
 
 function localBoundary(extra: Record<string, string> = {}) {
@@ -543,6 +559,108 @@ describe("startNatsContextPackBridge", () => {
     await runtime?.close();
   });
 
+  it("does not trust a forged wire session key when auth rejects the request", async () => {
+    const tracing = recordingTracing();
+    const forgedSessionKey = "victim/session";
+    const driver: NatsBridgeDriver = {
+      subscribe: async (subject, handler) => {
+        await handler({
+          subject,
+          data: data(
+            envelope({
+              payload: {
+                ...requestPayload,
+                identity: {
+                  ...requestPayload.identity,
+                  session_key: forgedSessionKey,
+                },
+              },
+            }),
+          ),
+          headers: {},
+          respond: () => true,
+        } satisfies NatsRequestMessage);
+        return { close: () => undefined };
+      },
+      close: () => undefined,
+    };
+
+    const runtime = await startNatsContextPackBridge({
+      boundary: localBoundary({ OPENBRAIN_NATS_REQUIRE_AUTH: "true" }),
+      tokenMap: new Map([
+        ["valid-token", { role: "agent", clientId: "rico" }],
+      ]),
+      deps: depsWithWorkingSet("rico"),
+      driver,
+      tracing,
+    });
+
+    expect(tracing.bodies).toHaveLength(1);
+    expect(tracing.bodies[0]?.sessionId).toBeUndefined();
+    expect(tracing.bodies[0]?.metadata).toMatchObject({
+      declared_session_key_unverified: "[MASKED:unverified]",
+      status: "success",
+    });
+    expect(JSON.stringify(tracing.bodies)).not.toContain(forgedSessionKey);
+    await runtime?.close();
+  });
+
+  it("traces an undeliverable reply as a handled error-envelope outcome", async () => {
+    const tracing = recordingTracing();
+    const driver: NatsBridgeDriver = {
+      subscribe: async (subject, handler) => {
+        let firstPublish = true;
+        await handler({
+          subject,
+          data: data(envelope({ id: "req-traced", from: "rico" })),
+          headers: {},
+          respond: () => {
+            if (firstPublish) {
+              firstPublish = false;
+              return false;
+            }
+            return true;
+          },
+        } satisfies NatsRequestMessage);
+        return { close: () => undefined };
+      },
+      close: () => undefined,
+    };
+
+    const runtime = await startNatsContextPackBridge({
+      boundary: localBoundary(),
+      tokenMap: new Map(),
+      deps: depsWithWorkingSet("rico"),
+      driver,
+      tracing,
+    });
+
+    expect(tracing.bodies).toHaveLength(1);
+    expect(tracing.bodies[0]).toMatchObject({
+      name: "nats.message",
+      sessionId: scope.session_key,
+      output: {
+        subject: SUBJECT,
+        outcome: "ok",
+        reply_outcome: "undeliverable_error_published",
+        error: { code: "payload_too_large" },
+      },
+      observations: [
+        { name: "nats.handle", type: "span" },
+        {
+          name: "nats.reply",
+          type: "span",
+          output: {
+            outcome: "undeliverable_error_published",
+            error: { code: "payload_too_large" },
+          },
+        },
+      ],
+    });
+
+    await runtime?.close();
+  });
+
   it("answers with an error envelope without attempting a publish the broker's advertised figure rules out", async () => {
     const published: Array<ReturnType<typeof envelopeFromBytes>> = [];
     const attempts: number[] = [];
@@ -651,59 +769,56 @@ describe("startNatsContextPackBridge", () => {
     await runtime?.close();
   });
 
-  it("rethrows a respond failure that is not the client's payload refusal", async () => {
+  it("rethrows a generic respond failure and emits one exception trace", async () => {
     // A connection-closed throw is not ours to reinterpret as an undeliverable
-    // reply. It must reach the handler-error path, not be answered with a
-    // payload_too_large envelope that would misdescribe what happened.
+    // reply. It must reject the subscription callback unchanged, not be answered
+    // with a payload_too_large envelope that would misdescribe what happened.
     const published: Array<ReturnType<typeof envelopeFromBytes>> = [];
-    const loggedErrors: string[] = [];
-    const originalError = logger.error;
-    logger.error = (message, extra) => {
-      loggedErrors.push(`${message}:${JSON.stringify(extra ?? {})}`);
+    const tracing = recordingTracing();
+    const failure = new Error("connection closed") as Error & { code: string };
+    failure.code = "CONNECTION_CLOSED";
+    const driver: NatsBridgeDriver = {
+      subscribe: async (subject, handler) => {
+        await handler({
+          subject,
+          data: data(envelope({ id: "req-closed", from: "rico" })),
+          headers: {},
+          respond: (payload: Uint8Array) => {
+            published.push(envelopeFromBytes(payload));
+            throw failure;
+          },
+        } satisfies NatsRequestMessage);
+        return { close: () => undefined };
+      },
+      close: () => undefined,
     };
 
-    try {
-      let handlerRejection: unknown = null;
-      const driver: NatsBridgeDriver = {
-        subscribe: async (subject, handler) => {
-          await handler({
-            subject,
-            data: data(envelope({ id: "req-closed", from: "rico" })),
-            headers: {},
-            respond: (payload: Uint8Array) => {
-              published.push(envelopeFromBytes(payload));
-              const err = new Error("connection closed") as Error & {
-                code: string;
-              };
-              err.code = "CONNECTION_CLOSED";
-              throw err;
-            },
-          } satisfies NatsRequestMessage).catch((err) => {
-            handlerRejection = err;
-          });
-          return { close: () => undefined };
-        },
-        close: () => undefined,
-      };
-
-      const runtime = await startNatsContextPackBridge({
+    await expect(
+      startNatsContextPackBridge({
         boundary: localBoundary(),
         tokenMap: new Map(),
         deps: depsWithWorkingSet("rico"),
         driver,
-      });
+        tracing,
+      }),
+    ).rejects.toBe(failure);
 
-      expect((handlerRejection as { code?: string } | null)?.code).toBe(
-        "CONNECTION_CLOSED",
-      );
-      // Exactly one publish was attempted; no error envelope followed it.
-      expect(published).toHaveLength(1);
-      expect((published[0]!.payload as Record<string, any>).status).toBe("ok");
-
-      await runtime?.close();
-    } finally {
-      logger.error = originalError;
-    }
+    // Exactly one publish was attempted; no error envelope followed it.
+    expect(published).toHaveLength(1);
+    expect((published[0]!.payload as Record<string, any>).status).toBe("ok");
+    expect(tracing.bodies).toHaveLength(1);
+    expect(tracing.bodies[0]).toMatchObject({
+      name: "nats.message",
+      metadata: { status: "exception" },
+      observations: [
+        { name: "nats.handle", level: "DEFAULT" },
+        {
+          name: "nats.reply",
+          level: "ERROR",
+          statusMessage: "Error",
+        },
+      ],
+    });
   });
 
   it("carries the reply normally when it fits the broker's advertised figure", async () => {

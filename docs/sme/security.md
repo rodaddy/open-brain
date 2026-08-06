@@ -1101,3 +1101,25 @@ binary views expose credential bytes as numeric arrays.
 ### Pattern
 
 In any record that mixes server-derived authority fields (caller_role, caller_client_id, namespace_source, status) with handler- or caller-supplied maps, the spread/merge ORDER is a security control: `{...authFields, ...suppliedMap}` lets the supplied map silently displace the identity and outcome evidence — making a failed call read as success or a trace disagree with the audit log exactly where a review needs them to agree. Safe shape is supplied-first, authority-last, plus a regression that stamps a forged `caller_role`/`status` from inside a handler that then throws and asserts the emitted record keeps the token-derived values. "No current call site collides" is not a defense; the exported API is the surface.
+
+## [2026-08-06] Trace session identity must come from the server-resolved binding, never the unauthenticated wire
+
+**Severity:** HIGH
+**Source:** PR #600 review swarm, finding H2
+**Scope key:** `review.trace_session_identity_binds_after_auth`
+**Status:** active
+
+### Pattern
+
+Any observability record that carries a session/user identity must derive it AFTER the request passes auth and binding — never from a caller-declared field read off the wire before any control has run. PR #600 built the NATS trace recorder from `envelope.payload.identity.session_key` at the top of the subscription callback, before the size/kind/auth/namespace checks, and emitted the trace even for REJECTED requests — so any publisher could stamp another tenant's session key onto traces, and the field bypassed masking entirely (sessionId/userId spread through untouched). Fix shape: identity flows from the resolved binding via a post-auth callback; a wire-declared value may appear only as masked metadata under an explicitly untrusted name. Regression shape: forged key + no valid bearer → emitted body has no sessionId.
+
+## [2026-08-06] Global background sweeps must not join to any one session's trace
+
+**Severity:** HIGH
+**Source:** PR #600 review swarm, finding H3
+**Scope key:** `review.global_sweeps_never_session_joined`
+**Status:** active
+
+### Pattern
+
+A maintenance/dream/distill job that sweeps with `namespace IS NULL` touches every tenant; joining its trace to a job-supplied `session_key` renders all tenants' row identities and content inside one session's timeline — a namespace-isolation breach in the observability lane even though the data path is unchanged. Honour a job's session key only when the job is namespace-scoped; a global sweep emits no sessionId, and each observation stamps its own resolved namespace so cross-namespace evidence is visibly attributed. "No current enqueuer sets it" is not a defense — the job-row field is durable and the sweep is global by design.

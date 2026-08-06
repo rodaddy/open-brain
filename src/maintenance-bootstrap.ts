@@ -29,6 +29,7 @@
  *    the source snapshot and namespace checks owned by their existing producer.
  */
 import type pg from "pg";
+import type { BackgroundTraceEmitter } from "./background-tracing.ts";
 import { generateEmbeddingWithMetadata } from "./embedding.ts";
 import type { EmbedWithMetaFn } from "./embedding-repair.ts";
 import type { AuthInfo } from "./types.ts";
@@ -100,6 +101,8 @@ export interface StartMaintenanceQueueOptions {
   logger: MaintenanceQueueLogger;
   /** Injectable embed fn for tests; defaults to the configured provider. */
   embedFn?: EmbedWithMetaFn;
+  /** Process-owned background tracing emitter; omitted when tracing is disabled. */
+  tracing?: BackgroundTraceEmitter;
   /** Poll cadence override; else env, else the runner default. */
   pollIntervalMs?: number;
   /** Concurrency override; else env, else the runner default. */
@@ -141,6 +144,7 @@ export function composeMaintenanceHandlers(input: {
   logger: MaintenanceQueueLogger;
   embedFn: EmbedWithMetaFn;
   graphAuth: AuthInfo;
+  tracing?: BackgroundTraceEmitter;
 }): ReadonlyMap<string, MaintenanceJobHandler> {
   if (!input.graphAuth.role || !input.graphAuth.clientId) {
     throw new Error(
@@ -153,6 +157,7 @@ export function composeMaintenanceHandlers(input: {
       db: input.pool,
       logger: input.logger,
       embedFn: input.embedFn,
+      ...(input.tracing ? { tracing: input.tracing } : {}),
     }),
   );
   handlers.set(
@@ -184,6 +189,7 @@ export function composeMaintenanceHandlers(input: {
       logger: input.logger,
       embedFn: input.embedFn,
       auth: input.graphAuth,
+      ...(input.tracing ? { tracing: input.tracing } : {}),
     }),
   );
   handlers.set(
@@ -191,6 +197,7 @@ export function composeMaintenanceHandlers(input: {
     makeDreamLightHandler({
       pool: input.pool,
       logger: input.logger,
+      ...(input.tracing ? { tracing: input.tracing } : {}),
     }),
   );
   handlers.set(
@@ -198,6 +205,7 @@ export function composeMaintenanceHandlers(input: {
     makeDreamRemHandler({
       pool: input.pool,
       logger: input.logger,
+      ...(input.tracing ? { tracing: input.tracing } : {}),
     }),
   );
 
@@ -303,6 +311,7 @@ export function startMaintenanceQueue(
     logger: options.logger,
     embedFn: options.embedFn ?? generateEmbeddingWithMetadata,
     graphAuth: options.graphAuth ?? MAINTENANCE_GRAPH_AUTH,
+    ...(options.tracing ? { tracing: options.tracing } : {}),
   });
 
   const pollIntervalMs =
