@@ -241,6 +241,28 @@ def test_v23_manifest_missing_reflex_tool_contract_fails_closed():
     )
 
 
+def test_required_contract_pins_session_start_v2() -> None:
+    """The public contract validator must enforce session_start's v2 semantics."""
+    from openbrain_memory.client import REQUIRED_CONTRACT_TOOL_VERSIONS
+
+    assert REQUIRED_CONTRACT_TOOL_VERSIONS["session_start"] == 2
+
+    manifest = representative_contract_manifest()
+    for capability in manifest["capabilities"]:
+        if capability["name"] == "session_start":
+            capability["version"] = 1
+    manifest["tool_contracts"]["session_start"]["version"] = 1
+
+    result = validate_required_memory_contract(
+        manifest,
+        client_version=CURRENT_CLIENT_VERSION,
+    )
+
+    assert result.ok is False
+    assert "capability 'session_start'.version must be >= 2" in result.reasons
+    assert "tool_contracts['session_start'].version must be >= 2" in result.reasons
+
+
 def test_first_class_runtime_requires_reflex_at_published_version() -> None:
     """The first-class runtime authority pins the reflex at its published v1.
 

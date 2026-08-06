@@ -52,6 +52,25 @@ known fields, authority-bearing `scope` and `config` subobjects, reflex
 `prior_context` references, and server-response projections remain strict and
 fail closed.
 
+### Operator Provider Capture
+
+Load the provider identity from the maintained environment file, then send one
+JSON request on stdin. The request carries the complete runtime scope; namespace
+and bearer identity stay in the environment rather than the request body.
+
+```bash
+set -a
+. ~/.local/share/openbrain-memory/env/claudex-observation.env
+set +a
+printf '%s\n' '{"operation":"capture","content":"<distilled fact, decision, blocker, artifact, or receipt>","distilled":true,"event_type":"fact","scope":{"agent":"claude","platform":"operator","server_id":"local-dev","channel_id":"<work lane>","session_key":"<stable session key>"}}' | openbrain-memory
+```
+
+Success returns a structured receipt with `status: "saved"` and
+`durable: true`. The reviewed `session_start` v2 response must echo every exact
+scope coordinate; a missing, null, or conflicting echo fails closed. Any other
+status means the caller must treat the capture as not saved and preserve the fact
+through another authorized durable path.
+
 ### At Compaction
 1. Call `session_context` to gather current state
 2. Distill summary locally via LLM

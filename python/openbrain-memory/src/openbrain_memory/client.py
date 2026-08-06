@@ -79,6 +79,7 @@ FIRST_CLASS_RUNTIME_TOOL_VERSIONS: Mapping[str, int] = {
 }
 FIRST_CLASS_RUNTIME_TOOLS = tuple(FIRST_CLASS_RUNTIME_TOOL_VERSIONS)
 REQUIRED_CONTRACT_TOOL_VERSIONS: Mapping[str, int] = {
+    "session_start": FIRST_CLASS_RUNTIME_TOOL_VERSIONS["session_start"],
     "agent_context_pack": FIRST_CLASS_RUNTIME_TOOL_VERSIONS["agent_context_pack"],
     "agent_reflex_pointers": FIRST_CLASS_RUNTIME_TOOL_VERSIONS["agent_reflex_pointers"],
     "append_session_event": FIRST_CLASS_RUNTIME_TOOL_VERSIONS["append_session_event"],
