@@ -18,8 +18,10 @@ import { join } from "node:path";
 import {
   buildToolTraceBody,
   createTracingRuntime,
+  emitTraceBodyWithObservations,
   errorOutput,
   installMcpTracing,
+  MAX_ACTIVE_SPAN_BYTES,
   readMcpTracingConfig,
   readRuntimeDeployStamp,
   repoRelease,
@@ -33,6 +35,14 @@ import {
   type TraceBody,
   type TracingSink,
 } from "./langfuse-tracing.ts";
+import {
+  mergeFallbackSearchRows,
+  registerSearchBrain,
+  rrfMerge,
+  type SearchRow,
+} from "../../src/tools/search-brain.ts";
+import { registerSearchAll } from "../../src/tools/search-all.ts";
+import { mergeFallbackRows } from "../tools/search-engine.ts";
 
 const ENABLED_CONFIG: McpTracingConfig = {
   enabled: true,
@@ -176,6 +186,41 @@ const AUTH = {
     namespaceSource: "header" as const,
   },
 };
+
+function searchRow(id: string, content = `content ${id}`): SearchRow {
+  return {
+    source_type: "thought",
+    id,
+    namespace: "rico",
+    content_preview: content,
+    tags: [],
+    created_at: "2026-01-01T00:00:00.000Z",
+    usefulness: 0.5,
+    tier: "warm",
+    distance: 0.1,
+    fts_rank: 0.5,
+  };
+}
+
+function qmdSpawn(docs: unknown[]): typeof Bun.spawn {
+  return (() => {
+    const encoded = new TextEncoder().encode(JSON.stringify(docs));
+    return {
+      stdout: new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoded);
+          controller.close();
+        },
+      }),
+      stderr: new ReadableStream({
+        start(controller) {
+          controller.close();
+        },
+      }),
+      exited: Promise.resolve(0),
+    };
+  }) as unknown as typeof Bun.spawn;
+}
 
 describe("readMcpTracingConfig", () => {
   test("is disabled with no environment at all", () => {
@@ -425,6 +470,352 @@ describe("installMcpTracing", () => {
     expect(serialized).toContain("[MASKED:");
   });
 
+  test("a real registered src search emits its full retrieval stage list", async () => {
+    const sink = recordingSink();
+    const { server, handlers } = fakeServer();
+    installMcpTracing(server, {
+      config: ENABLED_CONFIG,
+      createSink: () => sink,
+    });
+    const longContent = "x".repeat(1_000);
+    const pool = {
+      query: async (sql: string) => {
+        if (sql.includes("FROM ob_links")) return { rows: [] };
+        if (sql.startsWith("UPDATE") || sql.startsWith("INSERT")) {
+          return { rows: [] };
+        }
+        return { rows: [searchRow("real-search-row", longContent)] };
+      },
+    };
+    registerSearchBrain(server, {
+      pool: pool as never,
+      embedFn: async () => Array(768).fill(0.1),
+    });
+
+    await handlers.get("search_brain")?.(
+      {
+        query: "real retrieval",
+        table: "thoughts",
+        search_mode: "keyword",
+        limit: 1,
+      },
+      AUTH,
+    );
+
+    const body = sink.bodies[0]!;
+    expect(body.spans?.map((span) => span.name)).toEqual([
+      "retrieval.keyword_query",
+      "retrieval.execute",
+    ]);
+    const serialized = JSON.stringify(body.spans);
+    expect(serialized).not.toContain(longContent);
+    expect(
+      (
+        (
+          body.spans?.[0]?.output as {
+            candidates: Array<{ content_preview: string }>;
+          }
+        ).candidates[0]?.content_preview ?? ""
+      ).length,
+    ).toBe(300);
+  });
+
+  test("handler metadata cannot overwrite auth identity or exception status", async () => {
+    const sink = recordingSink();
+    const { server, handlers } = fakeServer();
+    installMcpTracing(server, {
+      config: ENABLED_CONFIG,
+      createSink: () => sink,
+    });
+    server.registerTool(
+      "guarded_tool",
+      { inputSchema: {} } as never,
+      (() => {
+        setActiveMcpTraceMetadata({
+          caller_role: "readonly",
+          caller_client_id: "forged",
+          status: "success",
+        });
+        throw new Error("handler failed");
+      }) as never,
+    );
+
+    await expect(handlers.get("guarded_tool")?.({}, AUTH)).rejects.toThrow(
+      "handler failed",
+    );
+    expect(sink.bodies[0]?.metadata).toMatchObject({
+      caller_role: "admin",
+      caller_client_id: "rico",
+      status: "exception",
+    });
+  });
+
+  test("a throwing summarizer records instrumentation_error without changing the tool result", async () => {
+    const sink = recordingSink();
+    const { server, handlers } = fakeServer();
+    installMcpTracing(server, {
+      config: ENABLED_CONFIG,
+      createSink: () => sink,
+    });
+    const result = { content: [{ type: "text", text: "unchanged" }] };
+    server.registerTool(
+      "summarizer_guard",
+      { inputSchema: {} } as never,
+      (() =>
+        traceRetrievalSpanSync({
+          name: "retrieval.rank_rrf",
+          run: () => result,
+          output: () => {
+            throw new Error("summary exploded");
+          },
+        })) as never,
+    );
+
+    const returned = await handlers.get("summarizer_guard")?.({}, AUTH);
+    expect(returned).toBe(result);
+    expect(sink.bodies[0]?.spans?.[0]?.output).toEqual({
+      instrumentation_error: "Error",
+    });
+  });
+
+  test("active child spans degrade to counts-only after the total payload bound", async () => {
+    const sink = recordingSink();
+    const { server, handlers } = fakeServer();
+    installMcpTracing(server, {
+      config: ENABLED_CONFIG,
+      createSink: () => sink,
+    });
+    const large = "z".repeat(MAX_ACTIVE_SPAN_BYTES);
+    server.registerTool(
+      "bounded_spans",
+      { inputSchema: {} } as never,
+      (() => {
+        traceRetrievalSpanSync({
+          name: "retrieval.vector_query",
+          input: { large },
+          run: () => ({ large }),
+        });
+        return traceRetrievalSpanSync({
+          name: "retrieval.rank_rrf",
+          input: { large },
+          run: () => ({ ok: true }),
+        });
+      }) as never,
+    );
+
+    await handlers.get("bounded_spans")?.({}, AUTH);
+
+    const spans = sink.bodies[0]?.spans ?? [];
+    expect(spans).toHaveLength(2);
+    expect(
+      spans.every((span) => span.metadata.payload_degraded === true),
+    ).toBe(true);
+    expect(JSON.stringify(spans)).not.toContain(large);
+    expect(Buffer.byteLength(JSON.stringify(spans), "utf8")).toBeLessThan(
+      MAX_ACTIVE_SPAN_BYTES,
+    );
+  });
+
+  test("concurrent calls keep child spans attributed to their own trace", async () => {
+    const sink = recordingSink();
+    const { server, handlers } = fakeServer();
+    installMcpTracing(server, {
+      config: ENABLED_CONFIG,
+      createSink: () => sink,
+    });
+    const releases = new Map<string, () => void>();
+    server.registerTool(
+      "concurrent_search",
+      { inputSchema: {} } as never,
+      (async (args: { call: string }) => {
+        await traceRetrievalSpan({
+          name: `retrieval.${args.call}`,
+          run: () =>
+            new Promise<void>((resolve) => {
+              releases.set(args.call, resolve);
+            }),
+        });
+        return { call: args.call };
+      }) as never,
+    );
+
+    const callA = handlers.get("concurrent_search")?.({ call: "a" }, AUTH);
+    const callB = handlers.get("concurrent_search")?.({ call: "b" }, AUTH);
+    await Bun.sleep(0);
+    releases.get("b")?.();
+    await Bun.sleep(0);
+    releases.get("a")?.();
+    await Promise.all([callA, callB]);
+
+    const byCall = new Map(
+      sink.bodies.map((body) => [
+        (body.input as { call: string }).call,
+        body.spans?.map((span) => span.name),
+      ]),
+    );
+    expect(byCall.get("a")).toEqual(["retrieval.a"]);
+    expect(byCall.get("b")).toEqual(["retrieval.b"]);
+  });
+
+  test("rrf and fallback transforms are deep-equal with tracing active or absent", async () => {
+    const equalRows = [searchRow("a"), searchRow("b"), searchRow("c")];
+    const cases = [
+      { vector: [] as SearchRow[], keyword: [] as SearchRow[], limit: 3 },
+      { vector: equalRows, keyword: [], limit: 2 },
+    ];
+    const baseline = {
+      rrf: cases.map((item) =>
+        rrfMerge(item.vector, item.keyword, item.limit),
+      ),
+      srcFallback: [
+        mergeFallbackSearchRows([], [], 3),
+        mergeFallbackSearchRows(equalRows.slice(0, 2), [equalRows[2]!], 2),
+      ],
+      serverFallback: [
+        mergeFallbackRows([], [], 3),
+        mergeFallbackRows(equalRows.slice(0, 2), [equalRows[2]!], 2),
+      ],
+    };
+    const sink = recordingSink();
+    const { server, handlers } = fakeServer();
+    installMcpTracing(server, {
+      config: ENABLED_CONFIG,
+      createSink: () => sink,
+    });
+    server.registerTool(
+      "equivalence",
+      { inputSchema: {} } as never,
+      (() => ({
+        rrf: cases.map((item) =>
+          rrfMerge(item.vector, item.keyword, item.limit),
+        ),
+        srcFallback: [
+          mergeFallbackSearchRows([], [], 3),
+          mergeFallbackSearchRows(equalRows.slice(0, 2), [equalRows[2]!], 2),
+        ],
+        serverFallback: [
+          mergeFallbackRows([], [], 3),
+          mergeFallbackRows(equalRows.slice(0, 2), [equalRows[2]!], 2),
+        ],
+      })) as never,
+    );
+
+    const traced = await handlers.get("equivalence")?.({}, AUTH);
+    expect(traced).toEqual(baseline);
+  });
+
+  test("ranking inputs carry ids and counts instead of candidate content", async () => {
+    const sink = recordingSink();
+    const { server, handlers } = fakeServer();
+    installMcpTracing(server, {
+      config: ENABLED_CONFIG,
+      createSink: () => sink,
+    });
+    const content = "candidate content must not be copied into rank input";
+    server.registerTool(
+      "rank_input",
+      { inputSchema: {} } as never,
+      (() => rrfMerge([searchRow("ranked", content)], [], 1)) as never,
+    );
+
+    await handlers.get("rank_input")?.({}, AUTH);
+
+    const span = sink.bodies[0]?.spans?.[0];
+    expect(span?.input).toMatchObject({
+      vector: { count: 1, row_ids: ["ranked"] },
+      keyword: { count: 0, row_ids: [] },
+    });
+    expect(JSON.stringify(span?.input)).not.toContain(content);
+  });
+
+  test("fallback evidence uses the run's dedupe key and exact classifications", async () => {
+    const sink = recordingSink();
+    const { server, handlers } = fakeServer();
+    installMcpTracing(server, {
+      config: ENABLED_CONFIG,
+      createSink: () => sink,
+    });
+    server.registerTool(
+      "fallback_classification",
+      { inputSchema: {} } as never,
+      (() =>
+        mergeFallbackRows(
+          [searchRow("primary", "same content")],
+          [
+            searchRow("legacy-duplicate", "same   content"),
+            searchRow("legacy-chosen", "unique content"),
+          ],
+          2,
+        )) as never,
+    );
+
+    await handlers.get("fallback_classification")?.({}, AUTH);
+
+    const output = sink.bodies[0]?.spans?.[0]?.output as {
+      candidates: Array<{ row_id: string; chosen: boolean; filtered_by: string | null }>;
+    };
+    expect(output.candidates).toMatchObject([
+      { row_id: "primary", chosen: true, filtered_by: null },
+      {
+        row_id: "legacy-duplicate",
+        chosen: false,
+        filtered_by: "fallback_duplicate",
+      },
+      { row_id: "legacy-chosen", chosen: true, filtered_by: null },
+    ]);
+  });
+
+  test("federated ranking distinguishes duplicate qmd paths by pre-sort index", async () => {
+    const sink = recordingSink();
+    const { server, handlers } = fakeServer();
+    installMcpTracing(server, {
+      config: ENABLED_CONFIG,
+      createSink: () => sink,
+    });
+    registerSearchAll(server, {
+      pool: { query: async () => ({ rows: [] }) } as never,
+      embedFn: async () => Array(768).fill(0.1),
+    });
+    const originalSpawn = Bun.spawn;
+    Bun.spawn = qmdSpawn([
+      { path: "/same.md", content: "first", score: 1 },
+      { path: "/same.md", content: "second", score: 1 },
+      { path: "/same.md", content: "third", score: 1 },
+    ]);
+    try {
+      await handlers.get("search_all")?.(
+        {
+          query: "duplicate path",
+          sources: "qmd",
+          offset: 1,
+          limit: 1,
+        },
+        AUTH,
+      );
+    } finally {
+      Bun.spawn = originalSpawn;
+    }
+
+    const span = sink.bodies[0]?.spans?.find(
+      (candidate) => candidate.name === "retrieval.federated_rank",
+    );
+    const candidates = (
+      span?.output as {
+        candidates: Array<{ chosen: boolean; filtered_by: string | null }>;
+      }
+    ).candidates;
+    expect(candidates.map((candidate) => candidate.chosen)).toEqual([
+      false,
+      true,
+      false,
+    ]);
+    expect(candidates.map((candidate) => candidate.filtered_by)).toEqual([
+      "pagination_offset",
+      null,
+      "federated_rank_window",
+    ]);
+  });
+
   test("retrieval span helpers are direct no-ops outside an active traced call", async () => {
     const object = { row_id: "row-no-trace" };
     let calls = 0;
@@ -592,6 +983,47 @@ describe("installMcpTracing", () => {
         undefined,
       ),
     ).not.toThrow();
+  });
+});
+
+describe("child observation export", () => {
+  test("the parent observation ends when a child start throws", () => {
+    let parentEnded = 0;
+    let childStarts = 0;
+    const parent = {
+      updateTrace: () => undefined,
+      end: () => {
+        parentEnded += 1;
+      },
+      startObservation: () => {
+        childStarts += 1;
+        if (childStarts === 2) throw new Error("child start failed");
+        return {
+          updateTrace: () => undefined,
+          startObservation: () => {
+            throw new Error("unused");
+          },
+          end: () => undefined,
+        };
+      },
+    };
+    expect(() =>
+      emitTraceBodyWithObservations(
+        {
+          name: "tool",
+          input: {},
+          output: {},
+          metadata: {},
+          tags: [],
+          spans: [
+            { name: "one", input: {}, output: {}, metadata: {} },
+            { name: "two", input: {}, output: {}, metadata: {} },
+          ],
+        },
+        () => parent,
+      ),
+    ).toThrow("child start failed");
+    expect(parentEnded).toBe(1);
   });
 });
 
