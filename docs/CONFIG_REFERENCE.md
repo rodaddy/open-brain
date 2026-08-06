@@ -375,6 +375,33 @@ header — around both this module's content-free discipline and the shared
 logger's redaction (measured: the injected key-shaped string appeared in the
 output). The two lines above are how this lane reports its health instead.
 
+#### Operator trace forensics (#569)
+
+Source `/Volumes/ThunderBolt/open-brain-local/local-clone.env` before using
+`scripts/langfuse-trace.ts`; it supplies the Langfuse coordinates without putting
+values in arguments or output. The consumer uses Langfuse's Basic-authenticated
+public API. `repeat` drives the local dogfood server through the existing Python
+`openbrain-memory` `OpenBrainClient.call_tool` path via `uv run`.
+
+```bash
+# Compact trace identity plus its start-time-ordered observation timeline.
+bun scripts/langfuse-trace.ts get 28a6758fe84d34490816d28bfcd4ac20
+
+# Last five traces for one brain/MCP session, printed in chronological order.
+bun scripts/langfuse-trace.ts session e07dcb17-0026-4dfb-8d2c-c8a5280833d2 -n 5
+
+# Occurrence-aligned retrieval evidence comparison. Exit 1 means evidence
+# differs; exit 2 means the trace/API result is inconclusive or invalid.
+bun scripts/langfuse-trace.ts diff <trace-id-a> <trace-id-b>
+
+# Repeat one live search and report deterministic versus varying stage fields.
+# Traces are correlated to this run, ordered oldest-first, and exit 1 if any
+# retrieval evidence varies (exit 2 if the comparison is inconclusive).
+bun scripts/langfuse-trace.ts repeat search_brain --query "trace forensics" -n 3
+```
+
+Add `--json` to `get`, `session`, `diff`, or `repeat` for machine-readable output.
+
 ### Drop-folder collector
 
 `src/drop-folder-collector.ts` reads four scan bounds — `DROP_COLLECTOR_MAX_FILES`
