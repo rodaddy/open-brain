@@ -462,6 +462,7 @@ export async function runDistillUnit(
     output: (response: DistillResponse) => ({
       candidates: response.candidates,
     }),
+    metadata: { namespace: unit.current.namespace },
   };
   const response =
     trace && model.observationType === "generation"

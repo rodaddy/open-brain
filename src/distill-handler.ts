@@ -164,6 +164,7 @@ async function resolveEmbeddings(
       ? await trace.embedding("embedding.provider", call, {
           model: EMBEDDING_MODEL,
           input: { text: candidate.content },
+          metadata: { namespace: candidate.namespace },
           output: (value) => ({
             embedded: value.embedding !== null,
             error: value.error ?? null,
@@ -322,6 +323,9 @@ export async function runDistillSweep(
       : resolveEmbeddings(candidates, embedFn, deps.logger, deps.trace);
   const embeddings = deps.trace
     ? await deps.trace.span("distill.embedding_batch", resolve, {
+        metadata: {
+          namespaces: [...new Set(candidates.map((candidate) => candidate.namespace))],
+        },
         input: {
           model: EMBEDDING_MODEL,
           item_count: candidates.length,
@@ -366,6 +370,9 @@ export async function runDistillSweep(
   };
   if (deps.trace) {
     await deps.trace.span("distill.persist", persistWork, {
+      metadata: {
+        namespaces: [...new Set(candidates.map((candidate) => candidate.namespace))],
+      },
       input: {
         source_turn_ids: batch.consumedTurnIds,
         candidate_hashes: candidates.map((candidate) => candidate.content_hash),
@@ -427,7 +434,7 @@ export function makeMemoryDistillHandler(
       input: { job_id: job.id, namespace: job.namespace },
       tags: ["open-brain-server", "background-job", "dream", "distill"],
       metadata: { job_kind: job.kind, attempt: job.attempts },
-      sessionId: backgroundSessionId(job),
+      sessionId: job.namespace === null ? undefined : backgroundSessionId(job),
     });
     try {
       if (job.version !== MEMORY_DISTILL_JOB_VERSION) {

@@ -595,7 +595,10 @@ describe("makeMemoryDistillHandler", () => {
     });
 
     await handler(
-      job({ payload: { session_key: "session-distill" } }),
+      job({
+        namespace: "rico",
+        payload: { session_key: "session-distill" },
+      }),
     );
 
     expect(tracing.bodies[0]).toMatchObject({

@@ -597,6 +597,42 @@ describe("makeDreamRemHandler", () => {
     expect(select.values[0]).toBeNull();
   });
 
+  it("keeps a global REM sweep off tenant sessions and attributes candidate namespaces", async () => {
+    const { pool } = fakePool((sql) =>
+      sql.includes("FROM candidate_memory c")
+        ? {
+            rows: [
+              candidateRow({ id: "candidate-rico", namespace: "rico" }),
+              candidateRow({ id: "candidate-other", namespace: "other" }),
+            ],
+          }
+        : undefined,
+    );
+    const tracing = recordingTracing();
+    const handler = makeDreamRemHandler({ pool, logger: silentLogger, tracing });
+
+    await handler(
+      job({
+        namespace: null,
+        payload: {
+          skip_dedupe: true,
+          skip_rewarm: true,
+          session_key: "tenant-session-must-not-bind",
+        },
+      }),
+    );
+
+    expect(tracing.bodies).toHaveLength(1);
+    expect(tracing.bodies[0]?.sessionId).toBeUndefined();
+    const grades = tracing.bodies[0]!.observations.filter(
+      (observation) => observation.name === "dream.rem.grade",
+    );
+    expect(grades.map((observation) => observation.metadata.namespace)).toEqual([
+      "rico",
+      "other",
+    ]);
+  });
+
   it("emits one REM run trace with stage spans and session binding", async () => {
     const { pool } = fakePool(() => undefined);
     const tracing = recordingTracing();
@@ -608,6 +644,7 @@ describe("makeDreamRemHandler", () => {
 
     await handler(
       job({
+        namespace: "rico",
         payload: {
           skip_dedupe: true,
           skip_rewarm: true,

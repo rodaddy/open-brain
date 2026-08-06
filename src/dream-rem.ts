@@ -328,12 +328,14 @@ export async function runRemGrading(deps: RemDeps): Promise<RemGradeSummary> {
             model: grader.name,
             input: candidate,
             output: (result) => result,
+            metadata: { namespace: candidate.namespace },
             usageDetails: (result) => result.usageDetails,
           })
         : deps.trace
           ? await deps.trace.span("dream.rem.grade", grade, {
               input: { candidate_id: candidate.id },
               output: (result) => result,
+              metadata: { namespace: candidate.namespace },
             })
           : await grade();
 
@@ -637,7 +639,7 @@ export function makeDreamRemHandler(
       input: { job_id: job.id, namespace: job.namespace },
       tags: ["open-brain-server", "background-job", "dream", "rem"],
       metadata: { job_kind: job.kind, attempt: job.attempts },
-      sessionId: backgroundSessionId(job),
+      sessionId: job.namespace === null ? undefined : backgroundSessionId(job),
     });
     try {
       if (job.version !== DREAM_REM_JOB_VERSION) {
