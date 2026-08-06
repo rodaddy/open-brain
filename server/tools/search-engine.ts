@@ -120,7 +120,7 @@ function rowEvidence(row: SearchRow): Record<string, unknown> {
     row_id: row.id,
     source_type: row.source_type,
     namespace: row.namespace ?? null,
-    content_preview: row.content_preview?.slice(0, 300) ?? null,
+    content_preview: row.content_preview ?? null,
     distance: row.distance ?? null,
     similarity: row.distance === undefined ? null : 1 - row.distance,
     bm25_score: row.fts_rank ?? null,

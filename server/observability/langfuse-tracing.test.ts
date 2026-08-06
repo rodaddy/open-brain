@@ -42,7 +42,10 @@ import {
   type SearchRow,
 } from "../../src/tools/search-brain.ts";
 import { registerSearchAll } from "../../src/tools/search-all.ts";
-import { mergeFallbackRows } from "../tools/search-engine.ts";
+import {
+  executeSearch as executeServerSearch,
+  mergeFallbackRows,
+} from "../tools/search-engine.ts";
 
 const ENABLED_CONFIG: McpTracingConfig = {
   enabled: true,
@@ -470,14 +473,16 @@ describe("installMcpTracing", () => {
     expect(serialized).toContain("[MASKED:");
   });
 
-  test("a real registered src search emits its full retrieval stage list", async () => {
+  test("a real registered src search emits full masked retrieval evidence", async () => {
     const sink = recordingSink();
     const { server, handlers } = fakeServer();
     installMcpTracing(server, {
       config: ENABLED_CONFIG,
       createSink: () => sink,
     });
-    const longContent = "x".repeat(1_000);
+    const tail = "FULL_CONTENT_TAIL";
+    const secret = "sk-live-evidence-secret";
+    const longContent = `${"x".repeat(1_000)} api_key=${secret} ${tail}`;
     const pool = {
       query: async (sql: string) => {
         if (sql.includes("FROM ob_links")) return { rows: [] };
@@ -507,17 +512,73 @@ describe("installMcpTracing", () => {
       "retrieval.keyword_query",
       "retrieval.execute",
     ]);
-    const serialized = JSON.stringify(body.spans);
-    expect(serialized).not.toContain(longContent);
-    expect(
-      (
-        (
-          body.spans?.[0]?.output as {
-            candidates: Array<{ content_preview: string }>;
-          }
-        ).candidates[0]?.content_preview ?? ""
-      ).length,
-    ).toBe(300);
+    const evidence = (
+      body.spans?.[0]?.output as {
+        candidates: Array<{ content_preview: string }>;
+      }
+    ).candidates[0]?.content_preview;
+    expect(evidence).toContain(tail);
+    expect(evidence).toContain("[MASKED:");
+    expect(evidence).not.toContain(secret);
+  });
+
+  test("the server search tree emits full masked retrieval evidence", async () => {
+    const sink = recordingSink();
+    const { server, handlers } = fakeServer();
+    installMcpTracing(server, {
+      config: ENABLED_CONFIG,
+      createSink: () => sink,
+    });
+    const tail = "SERVER_FULL_CONTENT_TAIL";
+    const secret = "sk-live-server-evidence-secret";
+    const longContent = `${"y".repeat(1_000)} api_key=${secret} ${tail}`;
+    const pool = {
+      query: async () => ({
+        rows: [searchRow("server-search-row", longContent)],
+      }),
+    };
+    server.registerTool(
+      "server_search_evidence",
+      { inputSchema: {} } as never,
+      (async () => {
+        await executeServerSearch(
+          {
+            pool: pool as never,
+            embedFn: async () => Array(768).fill(0.1),
+            logger: {
+              warn() {},
+              error() {},
+              info() {},
+              debug() {},
+            } as never,
+          },
+          ["thoughts"],
+          "real retrieval",
+          1,
+          "keyword",
+          undefined,
+          0,
+          "rico",
+        );
+        return { content: [{ type: "text", text: "ok" }] };
+      }) as never,
+    );
+
+    await handlers.get("server_search_evidence")?.({}, AUTH);
+
+    const body = sink.bodies[0]!;
+    expect(body.spans?.map((span) => span.name)).toEqual([
+      "retrieval.keyword_query",
+      "retrieval.execute",
+    ]);
+    const evidence = (
+      body.spans?.[0]?.output as {
+        candidates: Array<{ content_preview: string }>;
+      }
+    ).candidates[0]?.content_preview;
+    expect(evidence).toContain(tail);
+    expect(evidence).toContain("[MASKED:");
+    expect(evidence).not.toContain(secret);
   });
 
   test("handler metadata cannot overwrite auth identity or exception status", async () => {
