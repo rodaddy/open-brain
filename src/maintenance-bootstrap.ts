@@ -101,6 +101,8 @@ export interface StartMaintenanceQueueOptions {
   logger: MaintenanceQueueLogger;
   /** Injectable embed fn for tests; defaults to the configured provider. */
   embedFn?: EmbedWithMetaFn;
+  /** Process-owned background tracing emitter; omitted when tracing is disabled. */
+  tracing?: BackgroundTraceEmitter;
   /** Poll cadence override; else env, else the runner default. */
   pollIntervalMs?: number;
   /** Concurrency override; else env, else the runner default. */
@@ -309,6 +311,7 @@ export function startMaintenanceQueue(
     logger: options.logger,
     embedFn: options.embedFn ?? generateEmbeddingWithMetadata,
     graphAuth: options.graphAuth ?? MAINTENANCE_GRAPH_AUTH,
+    ...(options.tracing ? { tracing: options.tracing } : {}),
   });
 
   const pollIntervalMs =

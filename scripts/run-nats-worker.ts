@@ -11,10 +11,12 @@ import {
   type NatsWorkerRuntime,
 } from "../src/nats-worker.ts";
 import type { AuthInfo } from "../src/types.ts";
+import { createTracingRuntime } from "../server/observability/langfuse-tracing.ts";
 
 type LoggerLike = Pick<typeof logger, "error" | "info">;
 type HealthServer = { stop(force?: boolean): void };
 type ServeFn = typeof Bun.serve;
+type TracingRuntime = ReturnType<typeof createTracingRuntime>;
 
 export interface NatsWorkerProcess {
   runtime: NatsWorkerRuntime;
@@ -29,6 +31,7 @@ export interface StartNatsWorkerProcessOptions {
   buildTokens?: typeof buildTokenMap;
   createDbPool?: typeof createPool;
   startWorker?: typeof startNatsWorker;
+  createTracing?: typeof createTracingRuntime;
   serve?: ServeFn;
 }
 
@@ -144,6 +147,18 @@ function closeHealthServer(
   }
 }
 
+async function closeTracing(
+  tracing: TracingRuntime | undefined,
+  log: LoggerLike,
+): Promise<void> {
+  if (!tracing) return;
+  try {
+    await tracing.shutdown();
+  } catch (err) {
+    log.error("Open Brain NATS worker tracing shutdown failed", safeWorkerError(err));
+  }
+}
+
 async function closePool(
   pool: pg.Pool | undefined,
   log: LoggerLike,
@@ -163,10 +178,12 @@ export async function startNatsWorkerProcess(
   const buildTokens = options.buildTokens ?? buildTokenMap;
   const createDbPool = options.createDbPool ?? createPool;
   const startWorker = options.startWorker ?? startNatsWorker;
+  const createTracing = options.createTracing ?? createTracingRuntime;
   const serve = options.serve ?? Bun.serve;
   const env = options.env;
 
   let pool: pg.Pool | undefined;
+  let tracing: TracingRuntime | undefined;
   let runtime: NatsWorkerRuntime | undefined;
   let healthServer: HealthServer | null = null;
   const shutdownTimeoutMs = shutdownTimeoutMsFromEnv(env);
@@ -178,10 +195,12 @@ export async function startNatsWorkerProcess(
     }
 
     pool = createDbPool();
+    tracing = createTracing();
     runtime = await startWorker({
       env,
       pool,
       tokenMap: tokenMap as Map<string, AuthInfo>,
+      ...(tracing.background ? { tracing: tracing.background } : {}),
     });
     healthServer = startHealthServer({ env, runtime, serve });
     log.info("Open Brain NATS worker started", {
@@ -197,6 +216,7 @@ export async function startNatsWorkerProcess(
         log.info("Shutting down Open Brain NATS worker");
         closeHealthServer(healthServer, log);
         await closeRuntime(runtime, log, shutdownTimeoutMs);
+        await closeTracing(tracing, log);
         await closePool(pool, log);
       },
     };
@@ -207,6 +227,7 @@ export async function startNatsWorkerProcess(
     });
     closeHealthServer(healthServer, log);
     await closeRuntime(runtime, log, shutdownTimeoutMs);
+    await closeTracing(tracing, log);
     await closePool(pool, log);
     throw err;
   }

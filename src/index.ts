@@ -39,6 +39,7 @@ import {
   startMaintenanceQueue,
   maintenanceQueueEnabled,
   type MaintenanceRuntime,
+  type StartMaintenanceQueueOptions,
 } from "./maintenance-bootstrap.ts";
 import { safeMaintenanceErrorCategory } from "./maintenance-queue.ts";
 import { validateLocalCloneMode } from "./local-clone-mode.ts";
@@ -77,11 +78,27 @@ const DEPLOYED_REVISION = readDeployedRevision(() =>
  */
 const HEALTH_PROBE_TIMEOUT_MS = 3000;
 
+type TracingRuntime = ReturnType<typeof createTracingRuntime>;
+
+/**
+ * Server composition seam for the maintenance worker tree. The process owns one
+ * tracing runtime and passes only its background emitter into job handlers.
+ */
+export function startServerMaintenanceQueue(
+  options: StartMaintenanceQueueOptions,
+  tracing: TracingRuntime,
+): MaintenanceRuntime {
+  return startMaintenanceQueue({
+    ...options,
+    ...(tracing.background ? { tracing: tracing.background } : {}),
+  });
+}
+
 export function createApp(
   pool: pg.Pool,
   tokenMap: Map<string, AuthInfo>,
   deps?: ToolDeps,
-  tracing?: ReturnType<typeof createTracingRuntime>,
+  tracing?: TracingRuntime,
 ): express.Express {
   const app = express();
   const natsRuntimeBoundary =
@@ -341,6 +358,7 @@ if (import.meta.main) {
         tokenMap,
         deps: toolDeps,
         health: natsBridgeHealth,
+        ...(tracing.background ? { tracing: tracing.background } : {}),
       });
       logger.info("NATS context-pack bridge started", {
         subject: natsBridge?.subject,
@@ -403,7 +421,7 @@ if (import.meta.main) {
   // per-worker with OPEN_BRAIN_MAINTENANCE_ENABLED=0.
   let maintenance: MaintenanceRuntime | null = null;
   if (maintenanceQueueEnabled()) {
-    maintenance = startMaintenanceQueue({ pool, logger });
+    maintenance = startServerMaintenanceQueue({ pool, logger }, tracing);
     logger.info("maintenance queue started", {
       handlers:
         "embedding.repair,graph.derive,memory.distill,dream.light,dream.rem",
