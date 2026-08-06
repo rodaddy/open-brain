@@ -30,9 +30,27 @@ import {
   type NamedDistillModel,
 } from "./distiller.ts";
 import { contentHash } from "./embedding.ts";
+import {
+  BackgroundTraceRecorder,
+  type BackgroundTraceBody,
+  type BackgroundTraceEmitter,
+} from "./background-tracing.ts";
 import type { DistillTurn, DistillUnit } from "./distill-window.ts";
 
 let n = 0;
+
+function recordingTracing(): BackgroundTraceEmitter & {
+  bodies: BackgroundTraceBody[];
+} {
+  const bodies: BackgroundTraceBody[] = [];
+  return {
+    bodies,
+    emitBackground(body) {
+      bodies.push(body);
+    },
+  };
+}
+
 function turn(over: Partial<DistillTurn> = {}): DistillTurn {
   n++;
   return {
@@ -421,5 +439,42 @@ describe("runDistillUnit — provenance and write guards", () => {
     expect(keys).not.toContain("reviewed_at");
     expect(keys).not.toContain("graded_by");
     expect(keys).not.toContain("machine_grade");
+  });
+
+  it("emits an LLM extractor as a generation with model usage", async () => {
+    const emitter = recordingTracing();
+    const trace = new BackgroundTraceRecorder(emitter, {
+      name: "memory.distill",
+      tags: ["background-job", "dream"],
+    });
+    const model: NamedDistillModel = {
+      name: "fixture-distiller",
+      observationType: "generation",
+      extract: async (request) => ({
+        candidates: [
+          {
+            candidate_type: "fact",
+            content: "provider-backed candidate",
+            source_turn_ids: [request.current.id],
+            uncertain: false,
+          },
+        ],
+        usageDetails: { input: 11, output: 4 },
+      }),
+    };
+
+    const prepared = await runDistillUnit(model, unit(), trace);
+    trace.finish({ candidates: prepared.length });
+
+    expect(emitter.bodies[0]).toMatchObject({
+      observations: [
+        {
+          name: "distill.extract",
+          type: "generation",
+          model: "fixture-distiller",
+          usageDetails: { input: 11, output: 4 },
+        },
+      ],
+    });
   });
 });

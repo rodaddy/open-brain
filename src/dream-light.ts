@@ -52,6 +52,12 @@
  */
 
 import type { Pool } from "pg";
+import {
+  BackgroundTraceRecorder,
+  backgroundSessionId,
+  type BackgroundTraceEmitter,
+} from "./background-tracing.ts";
+import type { MaintenanceJob } from "./maintenance-queue.ts";
 import { isHarnessNoise } from "./tools/ingest-raw-turn.ts";
 
 /** Job kind this stage registers under in the maintenance queue. */
@@ -228,6 +234,7 @@ export interface DreamLightDeps {
     warn: (msg: string, meta: Record<string, string | number>) => void;
   };
   batchSize?: number;
+  tracing?: BackgroundTraceEmitter;
 }
 
 interface SweepRow {
@@ -390,8 +397,28 @@ export async function runLightSweep(
  * retry policy re-deliver.
  */
 export function makeDreamLightHandler(deps: DreamLightDeps) {
-  return async function dreamLightHandler(): Promise<void> {
-    await runLightSweep(deps);
+  return async function dreamLightHandler(job: MaintenanceJob): Promise<void> {
+    const trace = new BackgroundTraceRecorder(deps.tracing, {
+      name: "dream.light",
+      input: { job_id: job.id, namespace: job.namespace },
+      tags: ["open-brain-server", "background-job", "dream", "light"],
+      metadata: { job_kind: job.kind, attempt: job.attempts },
+      sessionId: backgroundSessionId(job),
+    });
+    try {
+      const summary = await trace.span(
+        "dream.light.sweep",
+        () => runLightSweep(deps),
+        {
+          input: { namespace: job.namespace },
+          output: (result) => result,
+        },
+      );
+      trace.finish(summary);
+    } catch (error: unknown) {
+      trace.fail(error);
+      throw error;
+    }
   };
 }
 

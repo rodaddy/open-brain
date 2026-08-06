@@ -90,6 +90,7 @@ import { LangfuseSpanProcessor } from "@langfuse/otel";
 import {
   setLangfuseTracerProvider,
   startObservation,
+  type LangfuseSpan,
 } from "@langfuse/tracing";
 import { setGlobalErrorHandler } from "@opentelemetry/core";
 import { BasicTracerProvider } from "@opentelemetry/sdk-trace-base";
@@ -100,6 +101,11 @@ import {
   isSensitiveKey,
   SECRET_DETECTORS,
 } from "../../src/secret-patterns.ts";
+import type {
+  BackgroundObservation,
+  BackgroundTraceBody,
+  BackgroundTraceEmitter,
+} from "../../src/background-tracing.ts";
 import type { AuthInfo } from "../../src/types.ts";
 import { readDeployedRevision } from "../transport/server-identity.ts";
 
@@ -248,6 +254,9 @@ export interface TraceBody {
   metadata: Record<string, unknown>;
   sessionId?: string;
   userId?: string;
+  observations?: BackgroundObservation[];
+  startedAt?: number;
+  endedAt?: number;
 }
 
 /**
@@ -819,6 +828,7 @@ export function installMcpTracing(
 export function createTracingRuntime(deps: McpTracingDeps = {}): {
   readonly config: McpTracingConfig;
   readonly sink?: TracingSink;
+  readonly background?: BackgroundTraceEmitter;
   shutdown(): Promise<void>;
 } {
   const config = deps.config ?? readMcpTracingConfig();
@@ -847,7 +857,53 @@ export function createTracingRuntime(deps: McpTracingDeps = {}): {
   return {
     config,
     sink,
+    background: createBackgroundTraceEmitter(
+      sink,
+      sink.health,
+      config.maskingEnabled,
+    ),
     shutdown: () => shutdownSink(sink, deps.shutdownTimeoutMs),
+  };
+}
+
+function createBackgroundTraceEmitter(
+  sink: TracingSink,
+  tracker: SinkHealthTracker | undefined,
+  maskingEnabled: boolean,
+): BackgroundTraceEmitter {
+  return {
+    emitBackground(body: BackgroundTraceBody): void {
+      const traceBody: TraceBody = {
+        name: body.name,
+        input: maskingEnabled ? maskTraceValue(body.input) : body.input,
+        output: maskingEnabled ? maskTraceValue(body.output) : body.output,
+        tags: body.tags,
+        metadata: (maskingEnabled
+          ? maskTraceValue(body.metadata)
+          : body.metadata) as Record<string, unknown>,
+        observations: body.observations.map((observation) =>
+          maskBackgroundObservation(observation, maskingEnabled),
+        ),
+        startedAt: body.startedAt,
+        endedAt: body.endedAt,
+        ...(body.sessionId === undefined ? {} : { sessionId: body.sessionId }),
+        ...(body.userId === undefined ? {} : { userId: body.userId }),
+      };
+      emitBuiltTrace(sink, tracker, traceBody);
+    },
+  };
+}
+
+function maskBackgroundObservation(
+  observation: BackgroundObservation,
+  maskingEnabled: boolean,
+): BackgroundObservation {
+  if (!maskingEnabled) return observation;
+  return {
+    ...observation,
+    input: maskTraceValue(observation.input),
+    output: maskTraceValue(observation.output),
+    metadata: maskTraceValue(observation.metadata) as Record<string, unknown>,
   };
 }
 
@@ -881,14 +937,20 @@ function emitTrace(
   tracker: SinkHealthTracker | undefined,
   input: Parameters<typeof buildToolTraceBody>[0],
 ): void {
+  emitBuiltTrace(sink, tracker, buildToolTraceBody(input));
+}
+
+function emitBuiltTrace(
+  sink: TracingSink,
+  tracker: SinkHealthTracker | undefined,
+  body: TraceBody,
+): void {
   try {
-    sink.emit(buildToolTraceBody(input));
+    sink.emit(body);
     // A successful enqueue is the recovery signal for a FAKE sink (one that
     // throws while down). Against the REAL SDK an enqueue always succeeds even
     // with the endpoint dead, so nothing here fires during a real outage and
     // recovery is driven by the health probe in `defaultSinkFactory` instead.
-    //
-    // This trace is NOT counted as dropped: `emit` just accepted it.
     if (tracker) reportSinkSuccess(tracker);
   } catch (err: unknown) {
     if (tracker) reportSinkFailure(tracker, err);
@@ -935,6 +997,48 @@ function createSinkSafely(
  * socket. Together they are the outage contract: during an outage the brain
  * neither slows nor grows, and the window's traces are simply lost.
  */
+function emitChildObservation(
+  parent: LangfuseSpan,
+  observation: BackgroundObservation,
+): void {
+  const attributes = {
+    input: observation.input,
+    output: observation.output,
+    metadata: {
+      ...observation.metadata,
+      duration_ms: Math.max(0, observation.endedAt - observation.startedAt),
+    },
+    ...(observation.model === undefined ? {} : { model: observation.model }),
+    ...(observation.usageDetails === undefined
+      ? {}
+      : { usageDetails: observation.usageDetails }),
+    ...(observation.level === undefined ? {} : { level: observation.level }),
+    ...(observation.statusMessage === undefined
+      ? {}
+      : { statusMessage: observation.statusMessage }),
+  };
+  const options = {
+    startTime: new Date(observation.startedAt),
+    parentSpanContext: parent.otelSpan.spanContext(),
+  };
+  const child =
+    observation.type === "generation"
+      ? startObservation(observation.name, attributes, {
+          ...options,
+          asType: "generation",
+        })
+      : observation.type === "embedding"
+        ? startObservation(observation.name, attributes, {
+            ...options,
+            asType: "embedding",
+          })
+        : startObservation(observation.name, attributes, {
+            ...options,
+            asType: "span",
+          });
+  child.end(new Date(observation.endedAt));
+}
+
 function defaultSinkFactory(config: McpTracingConfig): TracingSink {
   // The SDK's own logger writes export failures straight to `console.error`
   // with the raw error attached (`@langfuse/core` Logger.error), which would
@@ -1049,25 +1153,33 @@ function defaultSinkFactory(config: McpTracingConfig): TracingSink {
   return {
     health: tracker,
     emit(body: TraceBody): void {
-      // The span ends immediately: the tool call already happened, so this is a
-      // record of it rather than a live scope.
-      const span = startObservation(body.name, {
-        input: body.input,
-        output: body.output,
-        metadata: body.metadata,
-      });
+      // These records are emitted after the work completes. Supplying the real
+      // timestamps preserves worker/provider duration instead of measuring the
+      // few microseconds spent enqueueing the completed trace.
+      const span = startObservation(
+        body.name,
+        {
+          input: body.input,
+          output: body.output,
+          metadata: body.metadata,
+        },
+        body.startedAt === undefined
+          ? undefined
+          : { startTime: new Date(body.startedAt) },
+      );
       span.updateTrace({
         name: body.name,
         tags: body.tags,
+        input: body.input,
+        output: body.output,
+        metadata: body.metadata,
         ...(body.sessionId === undefined ? {} : { sessionId: body.sessionId }),
         ...(body.userId === undefined ? {} : { userId: body.userId }),
       });
-      span.end();
-      // The enqueue above SUCCEEDS even with the endpoint dead — that is what
-      // makes an outage invisible from the request path. So while the sink is
-      // known-unhealthy, every span handed over is a span that will be dropped,
-      // and this is the only place with a per-trace view of it. A no-op while
-      // healthy.
+      for (const observation of body.observations ?? []) {
+        emitChildObservation(span, observation);
+      }
+      span.end(body.endedAt === undefined ? undefined : new Date(body.endedAt));
       tracker.recordEnqueued();
     },
     async forceFlush(): Promise<void> {

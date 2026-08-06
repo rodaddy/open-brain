@@ -1,4 +1,5 @@
 import type pg from "pg";
+import type { BackgroundTraceEmitter } from "./background-tracing.ts";
 import { generateEmbedding } from "./embedding.ts";
 import { createNatsBridgeHealth, startNatsContextPackBridge, type NatsBridgeDriver, type NatsBridgeHealth } from "./nats-bridge.ts";
 import { readNatsRuntimeBoundary, summarizeNatsUrlForLog, type NatsRuntimeBoundary } from "./nats-runtime.ts";
@@ -11,6 +12,7 @@ export interface StartNatsWorkerOptions {
   tokenMap: Map<string, AuthInfo>;
   driver?: NatsBridgeDriver;
   deps?: Partial<ToolDeps>;
+  tracing?: BackgroundTraceEmitter;
 }
 
 export interface NatsWorkerRuntime {
@@ -52,6 +54,7 @@ export async function startNatsWorker(
     deps,
     driver: options.driver,
     health,
+    ...(options.tracing ? { tracing: options.tracing } : {}),
   });
   if (!bridge) {
     throw new Error("Dedicated NATS worker did not start a bridge runtime");

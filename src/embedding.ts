@@ -52,6 +52,7 @@ export interface EmbeddingError {
 export interface EmbeddingResult {
   embedding: number[] | null;
   error?: EmbeddingError;
+  usageDetails?: Record<string, number>;
 }
 
 export interface EmbeddingOptions {
@@ -360,6 +361,7 @@ export async function generateEmbeddingWithMetadata(
       segments: segments.length,
     });
     const embedded: { embedding: number[]; weight: number }[] = [];
+    const usageDetails: Record<string, number> = {};
     for (const segment of segments) {
       const result = await embedOnce(segment.text, embeddingUrl, options);
       // One failed segment fails the whole embedding. Combining the survivors
@@ -379,8 +381,14 @@ export async function generateEmbeddingWithMetadata(
         embedding: result.embedding,
         weight: segment.text.length,
       });
+      for (const [key, value] of Object.entries(result.usageDetails ?? {})) {
+        usageDetails[key] = (usageDetails[key] ?? 0) + value;
+      }
     }
-    return { embedding: combineEmbeddings(embedded) };
+    return {
+      embedding: combineEmbeddings(embedded),
+      ...(Object.keys(usageDetails).length === 0 ? {} : { usageDetails }),
+    };
   }
 
   return embedOnce(text, embeddingUrl, options);
@@ -500,6 +508,10 @@ async function embedOnce(
 
       const json = (await response.json()) as {
         data?: Array<{ embedding?: unknown }>;
+        usage?: {
+          prompt_tokens?: unknown;
+          total_tokens?: unknown;
+        };
       };
 
       const embedding = json.data?.[0]?.embedding;
@@ -527,7 +539,17 @@ async function embedOnce(
       logger.info("Embedding generated", { latencyMs: latency, attempt });
 
       resetWatchdogFailures();
-      return { embedding: embedding as number[] };
+      const usageDetails: Record<string, number> = {};
+      if (typeof json.usage?.prompt_tokens === "number") {
+        usageDetails.promptTokens = json.usage.prompt_tokens;
+      }
+      if (typeof json.usage?.total_tokens === "number") {
+        usageDetails.totalTokens = json.usage.total_tokens;
+      }
+      return {
+        embedding: embedding as number[],
+        ...(Object.keys(usageDetails).length === 0 ? {} : { usageDetails }),
+      };
     } catch (err) {
       lastError = err;
 

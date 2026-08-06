@@ -485,6 +485,26 @@ describe("generateEmbeddingWithMetadata", () => {
     expect(result.error).toBeUndefined();
   });
 
+  it("preserves provider-reported token usage for Langfuse cost attribution", async () => {
+    mockFetch(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: [{ embedding: make768() }],
+            usage: { prompt_tokens: 9, total_tokens: 9 },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+
+    const result = await generateEmbeddingWithMetadata(
+      "usage fixture",
+      "http://fake:4000",
+    );
+
+    expect(result.usageDetails).toEqual({ promptTokens: 9, totalTokens: 9 });
+  });
+
   it("returns structured error with code on server failure", async () => {
     mockFetch(
       async () => new Response("Internal Server Error", { status: 500 }),

@@ -20,6 +20,10 @@
 
 import { describe, expect, it } from "bun:test";
 import type pg from "pg";
+import type {
+  BackgroundTraceBody,
+  BackgroundTraceEmitter,
+} from "./background-tracing.ts";
 import {
   buildDreamRemEnqueue,
   DREAM_REM_JOB_KIND,
@@ -49,6 +53,18 @@ const silentLogger: MaintenanceQueueLogger = {
   warn: () => {},
   error: () => {},
 };
+
+function recordingTracing(): BackgroundTraceEmitter & {
+  bodies: BackgroundTraceBody[];
+} {
+  const bodies: BackgroundTraceBody[] = [];
+  return {
+    bodies,
+    emitBackground(body) {
+      bodies.push(body);
+    },
+  };
+}
 
 function collectingLogger() {
   const records: Array<{ msg: string; fields: Record<string, unknown> }> = [];
@@ -579,6 +595,37 @@ describe("makeDreamRemHandler", () => {
       s.text.includes("FROM candidate_memory c"),
     )!;
     expect(select.values[0]).toBeNull();
+  });
+
+  it("emits one REM run trace with stage spans and session binding", async () => {
+    const { pool } = fakePool(() => undefined);
+    const tracing = recordingTracing();
+    const handler = makeDreamRemHandler({
+      pool,
+      logger: silentLogger,
+      tracing,
+    });
+
+    await handler(
+      job({
+        payload: {
+          skip_dedupe: true,
+          skip_rewarm: true,
+          session_key: "session-rem",
+        },
+      }),
+    );
+
+    expect(tracing.bodies[0]).toMatchObject({
+      name: "dream.rem",
+      sessionId: "session-rem",
+      metadata: { status: "success" },
+      observations: [
+        { name: "dream.rem.dedupe", type: "span" },
+        { name: "dream.rem.grading", type: "span" },
+        { name: "dream.rem.rewarm", type: "span" },
+      ],
+    });
   });
 });
 

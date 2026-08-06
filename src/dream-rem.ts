@@ -46,6 +46,11 @@
  */
 
 import type pg from "pg";
+import {
+  BackgroundTraceRecorder,
+  backgroundSessionId,
+  type BackgroundTraceEmitter,
+} from "./background-tracing.ts";
 import type { MaintenanceQueueLogger } from "./maintenance-queue.ts";
 import {
   MaintenanceTerminalError,
@@ -101,6 +106,8 @@ export interface RemGrade {
   grade: GradeValue;
   /** Free text; stored on the candidate as uncertainty_reason when doubtful. */
   reason?: string;
+  /** Provider-reported usage for an LLM-backed grader. */
+  usageDetails?: Record<string, number>;
 }
 
 /**
@@ -109,6 +116,8 @@ export interface RemGrade {
  */
 export interface NamedRemGrader {
   readonly name: string;
+  /** Set only when grade() itself calls an LLM provider. */
+  readonly observationType?: "generation";
   grade(candidate: RemCandidate): Promise<RemGrade> | RemGrade;
 }
 
@@ -212,6 +221,8 @@ export interface RemDeps {
   skipRewarm?: boolean;
   /** Re-engagement lookback. Defaults to {@link REWARM_WINDOW_DAYS}. */
   rewarmWindowDays?: number;
+  /** Recorder for the containing REM maintenance job. */
+  trace?: BackgroundTraceRecorder;
 }
 
 function emptyGradeSummary(): RemGradeSummary {
@@ -310,7 +321,21 @@ export async function runRemGrading(deps: RemDeps): Promise<RemGradeSummary> {
       reinforcement_count: Number(row.reinforcement_count),
     };
 
-    const verdict = await grader.grade(candidate);
+    const grade = () => Promise.resolve(grader.grade(candidate));
+    const verdict =
+      deps.trace && grader.observationType === "generation"
+        ? await deps.trace.generation("dream.rem.grade", grade, {
+            model: grader.name,
+            input: candidate,
+            output: (result) => result,
+            usageDetails: (result) => result.usageDetails,
+          })
+        : deps.trace
+          ? await deps.trace.span("dream.rem.grade", grade, {
+              input: { candidate_id: candidate.id },
+              output: (result) => result,
+            })
+          : await grade();
 
     // A grader returning an out-of-vocabulary value is a bug in the grader, and
     // the check-constraint would reject the row anyway -- catching it here
@@ -545,19 +570,43 @@ export async function runRemRewarm(deps: RemDeps): Promise<RemRewarmSummary> {
  * machine_grade IS NULL.
  */
 export async function runRemPass(deps: RemDeps): Promise<RemSummary> {
-  const dedupe = deps.skipDedupe
-    ? { examined: 0, merged: 0, reinforced: 0, skipped_no_embedding: 0 }
-    : await runCandidateDedupe({
-        pool: deps.pool,
-        logger: deps.logger,
-        ...(deps.namespace !== undefined ? { namespace: deps.namespace } : {}),
-      });
+  const dedupeWork = () =>
+    deps.skipDedupe
+      ? Promise.resolve({
+          examined: 0,
+          merged: 0,
+          reinforced: 0,
+          skipped_no_embedding: 0,
+        })
+      : runCandidateDedupe({
+          pool: deps.pool,
+          logger: deps.logger,
+          ...(deps.namespace !== undefined ? { namespace: deps.namespace } : {}),
+        });
+  const dedupe = deps.trace
+    ? await deps.trace.span("dream.rem.dedupe", dedupeWork, {
+        input: { namespace: deps.namespace ?? null, skipped: deps.skipDedupe === true },
+        output: (result) => result,
+      })
+    : await dedupeWork();
 
-  const grading = await runRemGrading(deps);
+  const grading = deps.trace
+    ? await deps.trace.span("dream.rem.grading", () => runRemGrading(deps), {
+        input: { namespace: deps.namespace ?? null },
+        output: (result) => result,
+      })
+    : await runRemGrading(deps);
 
-  const rewarm = deps.skipRewarm
-    ? { projects_seen: 0, warmed: 0, noticed_only: 0 }
-    : await runRemRewarm(deps);
+  const rewarmWork = () =>
+    deps.skipRewarm
+      ? Promise.resolve({ projects_seen: 0, warmed: 0, noticed_only: 0 })
+      : runRemRewarm(deps);
+  const rewarm = deps.trace
+    ? await deps.trace.span("dream.rem.rewarm", rewarmWork, {
+        input: { namespace: deps.namespace ?? null, skipped: deps.skipRewarm === true },
+        output: (result) => result,
+      })
+    : await rewarmWork();
 
   return { grading, dedupe, rewarm };
 }
@@ -567,6 +616,7 @@ export interface DreamRemHandlerDeps {
   pool: pg.Pool;
   logger: MaintenanceQueueLogger;
   grader?: NamedRemGrader;
+  tracing?: BackgroundTraceEmitter;
 }
 
 /**
@@ -582,27 +632,39 @@ export function makeDreamRemHandler(
   deps: DreamRemHandlerDeps,
 ): MaintenanceJobHandler {
   return async (job: MaintenanceJob): Promise<void> => {
-    if (job.version !== DREAM_REM_JOB_VERSION) {
-      throw new MaintenanceTerminalError(
-        "dream rem job version is not supported by this handler",
-      );
-    }
-
-    const payload = job.payload ?? {};
-    const batchSize =
-      typeof payload.batch_size === "number" ? payload.batch_size : undefined;
-
-    await runRemPass({
-      pool: deps.pool,
-      logger: deps.logger,
-      ...(deps.grader ? { grader: deps.grader } : {}),
-      // A null job namespace is a deliberate global pass, which is what a
-      // maintenance identity is for -- not an error.
-      ...(job.namespace !== null ? { namespace: job.namespace } : {}),
-      ...(batchSize !== undefined ? { batchSize } : {}),
-      ...(payload.skip_dedupe === true ? { skipDedupe: true } : {}),
-      ...(payload.skip_rewarm === true ? { skipRewarm: true } : {}),
+    const trace = new BackgroundTraceRecorder(deps.tracing, {
+      name: "dream.rem",
+      input: { job_id: job.id, namespace: job.namespace },
+      tags: ["open-brain-server", "background-job", "dream", "rem"],
+      metadata: { job_kind: job.kind, attempt: job.attempts },
+      sessionId: backgroundSessionId(job),
     });
+    try {
+      if (job.version !== DREAM_REM_JOB_VERSION) {
+        throw new MaintenanceTerminalError(
+          "dream rem job version is not supported by this handler",
+        );
+      }
+
+      const payload = job.payload ?? {};
+      const batchSize =
+        typeof payload.batch_size === "number" ? payload.batch_size : undefined;
+
+      const summary = await runRemPass({
+        pool: deps.pool,
+        logger: deps.logger,
+        trace,
+        ...(deps.grader ? { grader: deps.grader } : {}),
+        ...(job.namespace !== null ? { namespace: job.namespace } : {}),
+        ...(batchSize !== undefined ? { batchSize } : {}),
+        ...(payload.skip_dedupe === true ? { skipDedupe: true } : {}),
+        ...(payload.skip_rewarm === true ? { skipRewarm: true } : {}),
+      });
+      trace.finish(summary);
+    } catch (error: unknown) {
+      trace.fail(error);
+      throw error;
+    }
   };
 }
 

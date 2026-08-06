@@ -7,6 +7,10 @@ import {
   type NatsRequestMessage,
 } from "./nats-bridge.ts";
 import { logger } from "./logger.ts";
+import type {
+  BackgroundTraceBody,
+  BackgroundTraceEmitter,
+} from "./background-tracing.ts";
 import {
   envelopeFromBytes,
   readNatsRuntimeBoundary,
@@ -87,6 +91,18 @@ function depsWithWorkingSet(namespace = scope.namespace): ToolDeps {
 
 function data(payload: unknown): Uint8Array {
   return encoder.encode(JSON.stringify(payload));
+}
+
+function recordingTracing(): BackgroundTraceEmitter & {
+  bodies: BackgroundTraceBody[];
+} {
+  const bodies: BackgroundTraceBody[] = [];
+  return {
+    bodies,
+    emitBackground(body) {
+      bodies.push(body);
+    },
+  };
 }
 
 function localBoundary(extra: Record<string, string> = {}) {
@@ -539,6 +555,62 @@ describe("startNatsContextPackBridge", () => {
     expect(payload.error.code).toBe("payload_too_large");
     expect(payload.error.message).toContain("broker refused");
     expect(payload.error.message).toContain("working_set");
+
+    await runtime?.close();
+  });
+
+  it("traces an undeliverable reply as a handled error-envelope outcome", async () => {
+    const tracing = recordingTracing();
+    const driver: NatsBridgeDriver = {
+      subscribe: async (subject, handler) => {
+        let firstPublish = true;
+        await handler({
+          subject,
+          data: data(envelope({ id: "req-traced", from: "rico" })),
+          headers: {},
+          respond: () => {
+            if (firstPublish) {
+              firstPublish = false;
+              return false;
+            }
+            return true;
+          },
+        } satisfies NatsRequestMessage);
+        return { close: () => undefined };
+      },
+      close: () => undefined,
+    };
+
+    const runtime = await startNatsContextPackBridge({
+      boundary: localBoundary(),
+      tokenMap: new Map(),
+      deps: depsWithWorkingSet("rico"),
+      driver,
+      tracing,
+    });
+
+    expect(tracing.bodies).toHaveLength(1);
+    expect(tracing.bodies[0]).toMatchObject({
+      name: "nats.message",
+      sessionId: scope.session_key,
+      output: {
+        subject: SUBJECT,
+        outcome: "ok",
+        reply_outcome: "undeliverable_error_published",
+        error: { code: "payload_too_large" },
+      },
+      observations: [
+        { name: "nats.handle", type: "span" },
+        {
+          name: "nats.reply",
+          type: "span",
+          output: {
+            outcome: "undeliverable_error_published",
+            error: { code: "payload_too_large" },
+          },
+        },
+      ],
+    });
 
     await runtime?.close();
   });

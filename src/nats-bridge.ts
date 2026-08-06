@@ -1,5 +1,9 @@
 import type { AuthInfo } from "./types.ts";
 import type { ToolDeps } from "./tools/index.ts";
+import {
+  BackgroundTraceRecorder,
+  type BackgroundTraceEmitter,
+} from "./background-tracing.ts";
 import { z } from "zod";
 import { findAuthInfoForToken } from "./auth.ts";
 import { logger } from "./logger.ts";
@@ -88,6 +92,7 @@ export interface StartNatsContextPackBridgeOptions {
   deps: ToolDeps;
   driver?: NatsBridgeDriver;
   health?: NatsBridgeHealth;
+  tracing?: BackgroundTraceEmitter;
 }
 
 const MAX_NATS_REQUEST_BYTES = 64 * 1024;
@@ -137,14 +142,50 @@ export async function startNatsContextPackBridge(
   markNatsBridgeAvailable(health);
   const subject = options.boundary.nats.context_pack_subject;
   const subscription = await driver.subscribe(subject, async (message) => {
-    const response = await handleNatsContextPackMessage({
-      message,
-      boundary: options.boundary,
-      tokenMap: options.tokenMap,
-      deps: options.deps,
-      health,
+    const trace = new BackgroundTraceRecorder(options.tracing, {
+      name: "nats.message",
+      input: { subject: message.subject, bytes: message.data.byteLength },
+      tags: ["open-brain-server", "background-job", "nats"],
+      metadata: { subject: message.subject },
+      sessionId: natsSessionId(message.data),
     });
-    await respondWithinBrokerFigure(message, response);
+    try {
+      const response = await trace.span(
+        "nats.handle",
+        () =>
+          handleNatsContextPackMessage({
+            message,
+            boundary: options.boundary,
+            tokenMap: options.tokenMap,
+            deps: options.deps,
+            health,
+          }),
+        {
+          input: { subject: message.subject },
+          output: (value) => ({
+            outcome: responseOutcome(value),
+            correlation_id: value.correlation_id ?? null,
+          }),
+        },
+      );
+      const reply = await trace.span(
+        "nats.reply",
+        () => respondWithinBrokerFigure(message, response),
+        {
+          input: { subject: message.subject },
+          output: (value) => value,
+        },
+      );
+      trace.finish({
+        subject: message.subject,
+        outcome: responseOutcome(response),
+        reply_outcome: reply.outcome,
+        ...(reply.error === undefined ? {} : { error: reply.error }),
+      });
+    } catch (error: unknown) {
+      trace.fail(error);
+      throw error;
+    }
   });
 
   return {
@@ -170,6 +211,40 @@ export async function startNatsContextPackBridge(
       }
     },
   };
+}
+
+function natsSessionId(data: Uint8Array): string | undefined {
+  try {
+    const envelope = envelopeFromBytes(data);
+    const payload = envelope.payload as { identity?: unknown } | undefined;
+    const identity = payload?.identity as { session_key?: unknown } | undefined;
+    const sessionKey = identity?.session_key;
+    return typeof sessionKey === "string" && sessionKey.length > 0
+      ? sessionKey
+      : undefined;
+  } catch (error: unknown) {
+    logger.debug("NATS trace session key unavailable", {
+      error_type: safeErrorType(error),
+    });
+    return undefined;
+  }
+}
+
+function responseOutcome(response: FleetEnvelope): string {
+  const payload = response.payload as { status?: unknown; error?: unknown };
+  const status = typeof payload.status === "string" ? payload.status : "unknown";
+  if (status !== "error") return status;
+  const error = payload.error as { code?: unknown } | undefined;
+  return typeof error?.code === "string" ? `error:${error.code}` : "error";
+}
+
+interface NatsReplyResult {
+  outcome:
+    | "published"
+    | "undeliverable_error_published"
+    | "error_envelope_exceeded"
+    | "no_reply_inbox";
+  error?: Record<string, unknown>;
 }
 
 /**
@@ -217,7 +292,7 @@ export async function startNatsContextPackBridge(
 async function respondWithinBrokerFigure(
   message: NatsRequestMessage,
   response: FleetEnvelope,
-): Promise<void> {
+): Promise<NatsReplyResult> {
   const encoded = envelopeToBytes(response);
   const advertised = message.maxPayloadBytes;
   const exceedsAdvertised =
@@ -234,7 +309,7 @@ async function respondWithinBrokerFigure(
     // and hand the caller silence, which is the whole #549 defect.
     try {
       const responded = await message.respond(encoded);
-      if (responded !== false) return;
+      if (responded !== false) return { outcome: "published" };
     } catch (err) {
       if (!isMaxPayloadExceededError(err)) throw err;
     }
@@ -259,7 +334,14 @@ async function respondWithinBrokerFigure(
       reply_bytes: encoded.byteLength,
       broker_advertised_bytes: advertised ?? null,
     });
-    return;
+    return {
+      outcome: "error_envelope_exceeded",
+      error: {
+        code: "payload_too_large",
+        reply_bytes: encoded.byteLength,
+        broker_advertised_bytes: advertised ?? null,
+      },
+    };
   }
 
   if (respondedWithError === false) {
@@ -269,7 +351,10 @@ async function respondWithinBrokerFigure(
       subject: message.subject,
       reply_bytes: encoded.byteLength,
     });
-    return;
+    return {
+      outcome: "no_reply_inbox",
+      error: { code: "reply_inbox_missing", reply_bytes: encoded.byteLength },
+    };
   }
 
   logger.warn("NATS reply exceeded the broker's advertised payload figure", {
@@ -278,6 +363,14 @@ async function respondWithinBrokerFigure(
     broker_advertised_bytes: advertised ?? null,
     correlation_id: response.correlation_id,
   });
+  return {
+    outcome: "undeliverable_error_published",
+    error: {
+      code: "payload_too_large",
+      reply_bytes: encoded.byteLength,
+      broker_advertised_bytes: advertised ?? null,
+    },
+  };
 }
 
 /**

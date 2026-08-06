@@ -882,6 +882,60 @@ describe("outage alerts fire on state change only", () => {
   });
 });
 
+describe("background job tracing", () => {
+  test("uses the shared masking boundary for root and child observations", () => {
+    const sink = recordingSink();
+    const runtime = createTracingRuntime({ config: ENABLED_CONFIG, sink });
+    runtime.background!.emitBackground({
+      name: "memory.distill",
+      input: { prompt: "password=fake-background-secret" },
+      output: { status: "ok", api_key: "fake-opaque-value" },
+      tags: ["background-job", "dream"],
+      metadata: { status: "success" },
+      observations: [
+        {
+          name: "distill.extract",
+          type: "generation",
+          model: "fixture-model",
+          input: { text: "token=fake-child-secret" },
+          output: { answer: "kept around password=fake-output-secret" },
+          metadata: { authorization: "fake-bearer" },
+          usageDetails: { input: 12, output: 4 },
+          startedAt: 10,
+          endedAt: 20,
+        },
+      ],
+      startedAt: 1,
+      endedAt: 30,
+      sessionId: "session-569",
+    });
+
+    expect(sink.bodies[0]).toMatchObject({
+      input: { prompt: "password=[MASKED:labeled_secret]" },
+      output: { status: "ok", api_key: "[MASKED:sensitive_key]" },
+      sessionId: "session-569",
+      observations: [
+        {
+          type: "generation",
+          model: "fixture-model",
+          input: { text: "token=[MASKED:labeled_secret]" },
+          output: { answer: "kept around password=[MASKED:labeled_secret]" },
+          metadata: { authorization: "[MASKED:sensitive_key]" },
+          usageDetails: { input: 12, output: 4 },
+        },
+      ],
+    });
+  });
+
+  test("does not expose a background emitter when tracing is disabled", () => {
+    const runtime = createTracingRuntime({
+      config: { ...ENABLED_CONFIG, enabled: false },
+    });
+    expect(runtime.background).toBeUndefined();
+    expect(runtime.sink).toBeUndefined();
+  });
+});
+
 /**
  * The v3 review's MEDIUM finding, carried into v4: the SDK's own logger writes
  * export failures straight to `console.error` with the raw error attached, so a

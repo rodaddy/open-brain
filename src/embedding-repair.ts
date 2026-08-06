@@ -54,6 +54,7 @@ import {
   generateEmbeddingWithMetadata,
   type EmbeddingError,
   type EmbeddingOptions,
+  type EmbeddingResult,
 } from "./embedding.ts";
 import {
   getEmbeddingTarget,
@@ -71,7 +72,7 @@ export type EmbedWithMetaFn = (
   text: string,
   embeddingUrl?: string,
   options?: EmbeddingOptions,
-) => Promise<{ embedding: number[] | null; error?: EmbeddingError }>;
+) => Promise<EmbeddingResult>;
 
 export type StalenessReason = "missing" | "model_drift" | "source_drift";
 
