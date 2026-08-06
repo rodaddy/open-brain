@@ -14,6 +14,11 @@ import { join } from "node:path";
 const SOURCE_ROOT = join(import.meta.dir, "..");
 const DEPLOY_SCRIPT = join(SOURCE_ROOT, "scripts", "core01-deploy-local.sh");
 const GATE_SOURCE = join(SOURCE_ROOT, "scripts", "deploy-ref-gate.ts");
+const PACKAGE_SOURCE = join(
+  SOURCE_ROOT,
+  "scripts",
+  "core01-package-runtime.sh",
+);
 const ownedTempDirs: string[] = [];
 const GIT_ENV_KEYS = [
   "GIT_ALTERNATE_OBJECT_DIRECTORIES",
@@ -162,6 +167,12 @@ async function createGitFixture(
     join(checkout, "scripts", "deploy-ref-gate.ts"),
     await Bun.file(GATE_SOURCE).text(),
   );
+  // The deploy shell now delegates staging to this script, resolved from
+  // REPO_DIR — the fixture checkout must carry it (executable) or the run
+  // dies with exit 127 before the stage under test.
+  const packageScript = join(checkout, "scripts", "core01-package-runtime.sh");
+  await writeFile(packageScript, await Bun.file(PACKAGE_SOURCE).text());
+  await chmod(packageScript, 0o755);
 
   return {
     checkout,

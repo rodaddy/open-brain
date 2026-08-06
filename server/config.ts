@@ -182,9 +182,9 @@ export interface ServerConfig {
     readonly serverIps: readonly string[];
     /**
      * Short sha of the deployed tree, from the `.deployed-revision` stamp that
-     * `scripts/local-clone-deploy.sh` writes. Read once at startup — a running
-     * process does not change its own code — and absent on a dev tree that was
-     * never deployed through the script.
+     * the deployment scripts write. Read once at startup — a running process
+     * does not change its own code — and absent on a dev tree that was never
+     * deployed through one of those scripts.
      */
     readonly deployedRevision?: string;
     readonly sessionTtlMs: number;
