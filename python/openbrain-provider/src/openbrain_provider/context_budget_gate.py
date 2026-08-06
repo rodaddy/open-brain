@@ -63,7 +63,12 @@ from .gate_presentation import (
     readback_banner,
     transition_message,
 )
-from .gate_shell import ShellGateContext, is_checkpoint_activity, is_repair_capable_tool
+from .gate_shell import (
+    ShellGateContext,
+    is_checkpoint_activity,
+    is_repair_capable_tool,
+    unrecognised_hook_invocation_diagnostic,
+)
 from .gate_state import (
     CHECKPOINT_MAX_AGE_SECONDS,
     enter_repair_mode,
@@ -640,11 +645,17 @@ def _block(gate: _Gate, reason: str, banner: str) -> int:
     """
     record_transition(gate.state, "still-blocking-with-reason", gate.now, reason)
     gate.save()
+    # #81: if NO provider invocation form is recognised, the banner above is
+    # printing a command this gate would refuse, and a bare "blocked" gives the
+    # session nothing to act on. Say what was not recognised, in the block
+    # itself -- a silently-empty allowance is what makes a deadlock inescapable.
+    diagnostic = unrecognised_hook_invocation_diagnostic(gate.shell)
+    message = transition_message("still-blocking-with-reason", reason)
     gate.emit_json(
         {
             "decision": "block",
-            "reason": banner,
-            "systemMessage": transition_message("still-blocking-with-reason", reason),
+            "reason": f"{banner}\n{diagnostic}" if diagnostic else banner,
+            "systemMessage": f"{message}\n{diagnostic}" if diagnostic else message,
         }
     )
     return 0

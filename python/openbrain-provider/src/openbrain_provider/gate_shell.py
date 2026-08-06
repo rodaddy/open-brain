@@ -33,11 +33,14 @@ from .gate_state import SessionState
 
 __all__ = [
     "READONLY_BASH",
+    "WRAPPER_CONSOLE_EVENTS",
     "ShellGateContext",
     "activated_provider_script_paths",
     "is_checkpoint_activity",
     "is_repair_capable_tool",
     "shell_quote",
+    "unrecognised_hook_invocation_diagnostic",
+    "wrapper_console_invocations",
 ]
 
 #: context-budget-gate-shell.ts:5-11, byte-identical. Commands that read and do
@@ -126,6 +129,31 @@ _PROVIDER_EVENTS: Final[frozenset[str]] = frozenset(
 _ACTIVATED_PROVIDER_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"([^'\"\s]+/adapters/versions/sha256-[0-9a-f]{64})"
     r"/(?:context-budget-gate|ob-memory-provider)\.ts"
+)
+
+#: The packaged wrapper form settings.json actually uses (#81). Every hook now
+#: reads `sh <…>/openbrain-hook-env openbrain-session-start`, and the console
+#: script is a uv-installed Python entry point rather than a `bun` script. The
+#: allowlist recognised only the older `bun <…>.ts` spelling, so a session could
+#: be told to run one thing and refused for running it. The pattern captures the
+#: wrapper path so the recovery command can be DERIVED from what is wired up
+#: instead of written as a second literal that drifts.
+_HOOK_WRAPPER_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"([^'\"\s]+/openbrain-hook-env)\s+(openbrain-[a-z0-9-]+)"
+)
+
+#: The console scripts the wrapper may run to satisfy a read-back or a capture.
+#: Mapped to the provider event each one produces, because the allowance is per
+#: event: a read-back block is cleared only by a recall, never by a capture.
+WRAPPER_CONSOLE_EVENTS: Final[dict[str, str]] = {
+    "openbrain-session-start": "session-start",
+    "openbrain-capture-stop": "capture",
+    "openbrain-post-compact": "session-start",
+}
+
+#: `sh` spellings the wrapper form may be invoked through.
+_SHELL_BINARIES: Final[frozenset[str]] = frozenset(
+    {"sh", "/bin/sh", "bash", "/opt/homebrew/bin/bash", "zsh", "/opt/homebrew/bin/zsh"}
 )
 
 #: Characters that make a command something other than a simple pipeline.
@@ -316,6 +344,67 @@ def activated_provider_script_paths(settings_path: Path) -> list[str]:
     return candidates
 
 
+def wrapper_console_invocations(settings_path: Path) -> list[tuple[str, str]]:
+    """Return `(wrapper_path, console_script)` pairs wired up in settings.
+
+    This is the #81 half of provider discovery. `activated_provider_script_paths`
+    answers "which `bun` adapter generation is installed"; this answers "which
+    packaged console script is on the hook chain", which is the form every hook
+    has used since the #420 cutover.
+
+    Args:
+        settings_path: A Claude settings file.
+
+    Returns:
+        Every `(wrapper, console script)` pair whose wrapper exists on disk and
+        whose console script is one the gate knows how to credit. Empty on any
+        read or parse failure, matching the fail-closed posture of its sibling —
+        malformed settings never widen an allowance.
+    """
+    try:
+        parsed = json.loads(settings_path.read_text(encoding="utf8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(parsed, dict):
+        return []
+    hooks = parsed.get("hooks")
+    if not isinstance(hooks, dict):
+        return []
+
+    found: list[tuple[str, str]] = []
+    for event_hooks in hooks.values():
+        if not isinstance(event_hooks, list):
+            continue
+        for event_hook in event_hooks:
+            if not isinstance(event_hook, dict):
+                continue
+            commands = event_hook.get("hooks")
+            if not isinstance(commands, list):
+                continue
+            for hook in commands:
+                _collect_wrapper_invocation(hook, found)
+    return found
+
+
+def _collect_wrapper_invocation(hook: object, found: list[tuple[str, str]]) -> None:
+    """Append any wrapper/console-script pair named by one hook command."""
+    if not isinstance(hook, dict):
+        return
+    command = hook.get("command")
+    if not isinstance(command, str):
+        return
+    for match in _HOOK_WRAPPER_PATTERN.finditer(command):
+        wrapper, console = match.group(1), match.group(2)
+        if console not in WRAPPER_CONSOLE_EVENTS:
+            continue
+        pair = (wrapper, console)
+        try:
+            if Path(wrapper).is_file() and pair not in found:
+                found.append(pair)
+        except OSError:
+            continue
+
+
 def _collect_provider_path(hook: object, candidates: list[str]) -> None:
     """Append any existing provider path named by one hook command."""
     if not isinstance(hook, dict):
@@ -330,6 +419,44 @@ def _collect_provider_path(hook: object, candidates: list[str]) -> None:
                 candidates.append(candidate)
         except OSError:
             continue
+
+
+def unrecognised_hook_invocation_diagnostic(
+    context: ShellGateContext,
+) -> str:
+    """Return a diagnostic when NO provider invocation form is recognised.
+
+    The #81 defect class: an allowlist that resolves to nothing looks exactly
+    like an allowlist that is correctly empty, so the gate refuses its own
+    recovery command and says only "blocked". An empty allowance and a
+    deliberately-narrow one must not be indistinguishable — the same silent
+    failure family as #98 (untested wrapper allowlist) and #99 (a test run that
+    dies and exits 0).
+
+    Args:
+        context: The paths this gate would accept a recovery command at.
+
+    Returns:
+        A one-line operator-facing diagnostic naming what was not recognised and
+        what to do, or ``""`` when at least one form IS recognised (the normal
+        case, where staying quiet is correct).
+    """
+    if Path(context.provider_script_path).is_file():
+        return ""
+    if activated_provider_script_paths(context.settings_path):
+        return ""
+    if wrapper_console_invocations(context.settings_path):
+        return ""
+    return (
+        "OB ✗ gate cannot recognise ANY provider invocation form — the recovery "
+        f"command it prints will be refused. Checked: sibling script "
+        f"{context.provider_script_path} (absent), and {context.settings_path} "
+        "for a sha256 adapter generation or an openbrain-hook-env console "
+        "script (neither found). Repair with --provider-script-path pointing at "
+        "the installed provider, or run "
+        "'openbrain-context-budget-gate --event repair-enter' to open a repair "
+        "window."
+    )
 
 
 def is_checkpoint_activity(
@@ -526,6 +653,9 @@ def _parse_provider_invocation(
         The event name, or None when the segment is not a provider invocation
         naming a path this gate recognises.
     """
+    wrapper_event = _parse_wrapper_invocation(words, context)
+    if wrapper_event is not None:
+        return wrapper_event
     index = 0
     if index >= len(words) or words[index] not in _BUN_BINARIES:
         return None
@@ -539,6 +669,40 @@ def _parse_provider_invocation(
     if path != context.provider_script_path and path not in activated:
         return None
     return _parse_provider_flags(words, index + 1)
+
+
+def _parse_wrapper_invocation(
+    words: list[str], context: ShellGateContext
+) -> str | None:
+    """Return the provider event a packaged wrapper invocation produces.
+
+    Recognises `sh <…>/openbrain-hook-env <console-script>`, the shape every
+    hook in settings.json has used since the #420 cutover (#81). The pair must
+    be one settings actually names, so an arbitrary script cannot be smuggled
+    through by borrowing the wrapper's name.
+
+    Args:
+        words: One pipeline segment's words.
+        context: Provider paths this gate accepts.
+
+    Returns:
+        The provider event, or None when the segment is not a recognised
+        wrapper invocation.
+    """
+    index = 0
+    if index < len(words) and words[index] in _SHELL_BINARIES:
+        index += 1
+    if index + 1 >= len(words):
+        return None
+    wrapper, console = words[index], words[index + 1]
+    if (wrapper, console) not in wrapper_console_invocations(context.settings_path):
+        return None
+    # Trailing words are refused rather than ignored: the console scripts take
+    # their input on stdin, so an extra argument means this is not the command
+    # the gate would have printed, and an allowance must not guess.
+    if len(words) > index + 2:
+        return None
+    return WRAPPER_CONSOLE_EVENTS.get(console)
 
 
 def _parse_provider_flags(words: list[str], start: int) -> str | None:

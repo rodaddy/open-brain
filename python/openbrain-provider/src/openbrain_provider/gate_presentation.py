@@ -17,7 +17,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .gate_shell import activated_provider_script_paths, shell_quote
+from .gate_shell import (
+    WRAPPER_CONSOLE_EVENTS,
+    activated_provider_script_paths,
+    shell_quote,
+    wrapper_console_invocations,
+)
 from .gate_state import SessionState
 
 __all__ = [
@@ -86,10 +91,42 @@ def _provider_payload_command(
     # colon would change the quoted payload and make the printed command stop
     # matching the one the allowance accepts.
     encoded = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+    # #81: when no `bun` provider script is installed, the sibling default names
+    # a file that does not exist and the printed command cannot possibly work.
+    # Fall back to the packaged wrapper that settings.json actually wires up,
+    # chosen from the SAME lookup the allowance uses, so the banner cannot print
+    # a form the gate refuses.
+    if not activated and not Path(preferred).is_file():
+        wrapper = _wrapper_recovery_command(event_name, encoded, context)
+        if wrapper is not None:
+            return wrapper
     return (
         f"printf '%s' {shell_quote(encoded)} | bun {shell_quote(preferred)} "
         f"--runtime claude --event {event_name}"
     )
+
+
+def _wrapper_recovery_command(
+    event_name: str, encoded: str, context: PresentationContext
+) -> str | None:
+    """Return the packaged-wrapper recovery command, or None when none is wired.
+
+    Args:
+        event_name: The provider event the command must produce.
+        encoded: The already-encoded JSON payload.
+        context: Provider paths.
+
+    Returns:
+        A single-line shell command naming a wrapper/console-script pair the
+        allowance accepts, or None when settings names no usable pair.
+    """
+    for wrapper, console in wrapper_console_invocations(context.settings_path):
+        if WRAPPER_CONSOLE_EVENTS.get(console) != event_name:
+            continue
+        return (
+            f"printf '%s' {shell_quote(encoded)} | sh {shell_quote(wrapper)} {console}"
+        )
+    return None
 
 
 def capture_banner(state: SessionState, context: PresentationContext) -> str:
