@@ -17,8 +17,12 @@ import {
   selectRepeatedTraceSummaries,
 } from "./langfuse-trace.ts";
 
-async function fixture(name: string): Promise<LangfuseTrace> {
+async function jsonFixture<T>(name: string): Promise<T> {
   return Bun.file(new URL(`./fixtures/${name}`, import.meta.url)).json();
+}
+
+async function fixture(name: string): Promise<LangfuseTrace> {
+  return jsonFixture<LangfuseTrace>(name);
 }
 
 function comparison(equivalent: boolean | null): TraceComparison {
@@ -32,6 +36,46 @@ function comparison(equivalent: boolean | null): TraceComparison {
     namespaceB: "rico",
     stages: [],
   };
+}
+
+async function runCliSession(
+  tracePage: unknown,
+  trace: unknown,
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request) {
+      const payload = new URL(request.url).pathname === "/api/public/traces"
+        ? tracePage
+        : trace;
+      return Response.json(payload);
+    },
+  });
+  try {
+    const child = Bun.spawn(
+      ["bun", "scripts/langfuse-trace.ts", "session", "fixture-session", "-n", "1"],
+      {
+        cwd: new URL("../", import.meta.url).pathname,
+        env: {
+          ...process.env,
+          OPENBRAIN_TRACING_ENDPOINT: server.url.origin,
+          OPENBRAIN_TRACING_PUBLIC_KEY: "fixture-public",
+          OPENBRAIN_TRACING_SECRET_KEY: "fixture-secret",
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const [exitCode, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+    return { exitCode, stdout, stderr };
+  } finally {
+    server.stop(true);
+  }
 }
 
 async function runCliDiff(
@@ -307,6 +351,17 @@ describe("Langfuse trace forensics", () => {
     expect(repeatChildFailureMessage(7, "python traceback\n")).toBe(
       "OpenBrainClient repeat failed (exit 7): python traceback",
     );
+  });
+
+  test("session accepts captured real list rows with observation ids", async () => {
+    const result = await runCliSession(
+      await jsonFixture("langfuse-trace-list-live-sanitized.json"),
+      await fixture("langfuse-trace-a.json"),
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toStartWith("trace-a search_brain");
+    expect(result.stderr).toBe("");
   });
 
   test("CLI wires a differing comparison to exit 1", async () => {
