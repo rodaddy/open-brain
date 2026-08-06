@@ -460,7 +460,13 @@ export async function runDistillUnit(
       context_turn_ids: unit.context.map((turn) => turn.id),
     },
     output: (response: DistillResponse) => ({
-      candidates: response.candidates,
+      candidate_ids: response.candidates.map(
+        (_candidate, index) => `${unit.current.id}:${index}`,
+      ),
+      candidate_hashes: response.candidates.map((candidate) =>
+        contentHash(normalizeWhitespace(candidate.content ?? "")),
+      ),
+      candidate_count: response.candidates.length,
     }),
     metadata: { namespace: unit.current.namespace },
   };

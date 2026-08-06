@@ -1,5 +1,5 @@
 import { describe, it, expect, mock } from "bun:test";
-import type { EmbeddingError } from "./embedding.ts";
+import { contentHash, type EmbeddingError } from "./embedding.ts";
 import type {
   BackgroundTraceBody,
   BackgroundTraceEmitter,
@@ -261,6 +261,14 @@ describe("createEmbeddingRepairHandler", () => {
         },
       ],
     });
+    expect(
+      tracing.bodies[0]!.observations
+        .filter((observation) => observation.name === "embedding.provider")
+        .map((observation) => observation.input),
+    ).toEqual([
+      { row_id: "t1", char_count: 2, content_hash: contentHash("hi") },
+      { row_id: "t2", char_count: 2, content_hash: contentHash("hi") },
+    ]);
   });
 
   it("is a no-op on replay after a full repair (idempotent, selected:0)", async () => {
@@ -389,9 +397,11 @@ describe("createEmbeddingRepairHandler", () => {
       updateRowCount: 1,
     });
     const { logger, lines } = recordingLogger();
+    const tracing = recordingTracing();
     const handler = createEmbeddingRepairHandler({
       db,
       logger,
+      tracing,
       embedFn: okEmbed,
     });
     await handler(
@@ -400,8 +410,20 @@ describe("createEmbeddingRepairHandler", () => {
       }),
     );
     const payload = JSON.stringify(lines);
+    const tracePayload = JSON.stringify(tracing.bodies);
     expect(payload).not.toContain("SECRET SOURCE TEXT");
     expect(payload).not.toContain("ns-secret");
+    expect(tracePayload).not.toContain("SECRET SOURCE TEXT");
+    expect(tracePayload).not.toContain("ns-secret");
+    expect(
+      tracing.bodies[0]!.observations.find(
+        (observation) => observation.name === "embedding.provider",
+      )?.input,
+    ).toEqual({
+      row_id: "t1",
+      char_count: "SECRET SOURCE TEXT".length,
+      content_hash: contentHash("SECRET SOURCE TEXT"),
+    });
   });
 });
 

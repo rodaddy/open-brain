@@ -419,6 +419,10 @@ export interface RepairOptions {
   currentModel?: string;
   embeddingUrl?: string;
   signal?: AbortSignal;
+  observeEmbedding?: (
+    identity: { row_id: string; char_count: number; content_hash: string },
+    work: () => Promise<EmbeddingResult>,
+  ) => Promise<EmbeddingResult>;
   /**
    * REQUIRED namespace scope for the guarded UPDATE. A non-empty auth-derived
    * `{ namespaces: [...] }` binds namespace (directly or via the target FK) IN
@@ -485,9 +489,16 @@ export async function repairOne(
   }
 
   // --- Provider round trip: OUTSIDE any transaction/lock. ---
-  const result = await embedFn(embedText, options.embeddingUrl, {
-    signal: options.signal,
-  });
+  const embed = () =>
+    embedFn(embedText, options.embeddingUrl, {
+      signal: options.signal,
+    });
+  const result = options.observeEmbedding
+    ? await options.observeEmbedding(
+        { row_id: id, char_count: embedText.length, content_hash: freshHash },
+        embed,
+      )
+    : await embed();
 
   if (!result.embedding) {
     const code = result.error?.code;

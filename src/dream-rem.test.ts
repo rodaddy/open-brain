@@ -20,9 +20,10 @@
 
 import { describe, expect, it } from "bun:test";
 import type pg from "pg";
-import type {
-  BackgroundTraceBody,
-  BackgroundTraceEmitter,
+import {
+  BackgroundTraceRecorder,
+  type BackgroundTraceBody,
+  type BackgroundTraceEmitter,
 } from "./background-tracing.ts";
 import {
   buildDreamRemEnqueue,
@@ -313,6 +314,37 @@ describe("runRemGrading — the operator queue is untouchable", () => {
     const summary = await runRemGrading({ pool, logger: silentLogger });
     expect(summary.corroborated).toBe(1);
     expect(summary.by_grade.promoted).toBe(1);
+  });
+
+  it("records generation grading by candidate id without candidate content", async () => {
+    const candidate = candidateRow({
+      id: "candidate-trace-id",
+      content: "tenant candidate content must not be traced",
+    });
+    const { pool } = fakePool((sql) =>
+      sql.includes("FROM candidate_memory c") ? { rows: [candidate] } : undefined,
+    );
+    const emitter = recordingTracing();
+    const trace = new BackgroundTraceRecorder(emitter, {
+      name: "dream.rem",
+      tags: ["background-job", "dream"],
+    });
+    const grader: NamedRemGrader = {
+      name: "fixture-grader",
+      observationType: "generation",
+      grade: () => ({
+        grade: "promoted",
+        reason: "tenant candidate content must not be traced",
+      }),
+    };
+
+    await runRemGrading({ pool, logger: silentLogger, grader, trace });
+    trace.finish({ outcome: "succeeded" });
+
+    const observation = emitter.bodies[0]!.observations[0]!;
+    expect(observation.input).toEqual({ candidate_id: "candidate-trace-id" });
+    expect(observation.output).toEqual({ grade: "promoted", has_reason: true });
+    expect(JSON.stringify(observation)).not.toContain(candidate.content);
   });
 
   it("skips one bad grader verdict instead of stalling the whole pass", async () => {

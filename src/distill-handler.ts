@@ -163,7 +163,11 @@ async function resolveEmbeddings(
     const result = trace
       ? await trace.embedding("embedding.provider", call, {
           model: EMBEDDING_MODEL,
-          input: { text: candidate.content },
+          input: {
+            row_id: candidate.source_turn_ids[0] ?? null,
+            char_count: candidate.content.length,
+            content_hash: candidate.content_hash,
+          },
           metadata: { namespace: candidate.namespace },
           output: (value) => ({
             embedded: value.embedding !== null,
@@ -329,7 +333,9 @@ export async function runDistillSweep(
         input: {
           model: EMBEDDING_MODEL,
           item_count: candidates.length,
-          row_ids: candidates.flatMap((candidate) => candidate.source_turn_ids),
+          row_ids: [
+            ...new Set(candidates.flatMap((candidate) => candidate.source_turn_ids)),
+          ],
           skipped: deps.skipEmbeddings === true,
         },
         output: (result) => ({

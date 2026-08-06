@@ -326,15 +326,21 @@ export async function runRemGrading(deps: RemDeps): Promise<RemGradeSummary> {
       deps.trace && grader.observationType === "generation"
         ? await deps.trace.generation("dream.rem.grade", grade, {
             model: grader.name,
-            input: candidate,
-            output: (result) => result,
+            input: { candidate_id: candidate.id },
+            output: (result) => ({
+              grade: result.grade,
+              has_reason: Boolean(result.reason),
+            }),
             metadata: { namespace: candidate.namespace },
             usageDetails: (result) => result.usageDetails,
           })
         : deps.trace
           ? await deps.trace.span("dream.rem.grade", grade, {
               input: { candidate_id: candidate.id },
-              output: (result) => result,
+              output: (result) => ({
+              grade: result.grade,
+              has_reason: Boolean(result.reason),
+            }),
               metadata: { namespace: candidate.namespace },
             })
           : await grade();

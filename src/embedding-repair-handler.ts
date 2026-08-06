@@ -191,39 +191,34 @@ export function createEmbeddingRepairHandler(
     try {
       assertSupportedVersion(job);
       const payload = parsePayload(job);
-      const tracedEmbedFn: EmbedWithMetaFn = (text, embeddingUrl, options) =>
-        trace.embedding(
-          "embedding.provider",
-          () => embedFn(text, embeddingUrl, options),
-          {
-            model: currentModel,
-            input: { text },
-            output: (result) => ({
-              embedded: result.embedding !== null,
-              error: result.error ?? null,
-            }),
-            usageDetails: (result) => result.usageDetails,
-          },
-        );
-
       let summary: RepairBatchSummary;
       try {
         summary = await trace.span(
           "embedding.batch",
           () =>
-            repairStaleBatch(deps.db, payload.table, tracedEmbedFn, {
+            repairStaleBatch(deps.db, payload.table, embedFn, {
               scope: payload.scope,
               reasons: payload.reasons,
               limit: payload.limit ?? DEFAULT_BATCH,
               currentModel,
               embeddingUrl: deps.embeddingUrl,
+              observeEmbedding: (identity, work) =>
+                trace.embedding("embedding.provider", work, {
+                  model: currentModel,
+                  input: identity,
+                  output: (result) => ({
+                    embedded: result.embedding !== null,
+                    error: result.error ?? null,
+                  }),
+                  usageDetails: (result) => result.usageDetails,
+                }),
             }),
           {
             input: { model: currentModel, table: payload.table },
             output: (result) => ({
               model: currentModel,
               item_count: result.selected,
-              row_ids: result.results.map((item) => item.id),
+              row_ids: [...new Set(result.results.map((item) => item.id))],
               repaired: result.repaired,
               skipped: result.skipped,
               provider_errors: result.results

@@ -463,7 +463,8 @@ describe("runDistillUnit — provenance and write guards", () => {
       }),
     };
 
-    const prepared = await runDistillUnit(model, unit(), trace);
+    const sourceUnit = unit();
+    const prepared = await runDistillUnit(model, sourceUnit, trace);
     trace.finish({ candidates: prepared.length });
 
     expect(emitter.bodies[0]).toMatchObject({
@@ -472,6 +473,11 @@ describe("runDistillUnit — provenance and write guards", () => {
           name: "distill.extract",
           type: "generation",
           model: "fixture-distiller",
+          output: {
+            candidate_ids: [`${sourceUnit.current.id}:0`],
+            candidate_hashes: [contentHash("provider-backed candidate")],
+            candidate_count: 1,
+          },
           usageDetails: { input: 11, output: 4 },
         },
       ],
