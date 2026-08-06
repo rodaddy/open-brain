@@ -3,11 +3,13 @@ import { mkdir, mkdtemp, readFile, rename, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 
 const PACKAGE_SCRIPT = join(import.meta.dir, "core01-package-runtime.sh");
+// Repo-relative _scratch, the same convention operator-doctor.test.ts uses:
+// writable in every environment that can check the repo out (a hardcoded
+// host path here failed with EACCES on the CI runner, where the darwin/linux
+// workspace roots do not exist or are not writable).
 const TEMP_WORKSPACE =
   process.env.OPENBRAIN_TEMP_WORKSPACE ??
-  (process.platform === "darwin"
-    ? "/Volumes/ThunderBolt/_tmp/open-brain"
-    : "/mnt/collab/tmp_space/open-brain");
+  join(import.meta.dir, "..", "_scratch", "core01-package-runtime");
 const TEMP_ROOT = join(TEMP_WORKSPACE, "_scratch");
 const ARCHIVE_ROOT = join(TEMP_WORKSPACE, "_archive");
 const ownedTempDirs: string[] = [];
@@ -74,6 +76,7 @@ afterEach(async () => {
 
 describe("core01 runtime packaging", () => {
   test("replaces a stale source stamp with the packaged checkout revision", async () => {
+    await mkdir(TEMP_ROOT, { recursive: true });
     const root = await mkdtemp(join(TEMP_ROOT, "core01-package-runtime-"));
     ownedTempDirs.push(root);
     const source = join(root, "source");
