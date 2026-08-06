@@ -1,27 +1,27 @@
 """The format factory: turn one input line into a ``RawTurn``, by input type.
 
 Purpose:
-    A giant session file arrives in one of several shapes. Claude transcripts and
-    Codex rollout JSONL are built; Hermes remains unbuilt because no observed
-    transcript contract is charted for it. This module is the factory keyed on
-    input type, and it lives HERE by ruling: *"The factory keyed on input type
-    belongs THERE"* -- in the bulk app, never on the live adapter's
-    deadline-critical hook path (`_plans/python-port-sequence.md` §TWO
-    APPLICATIONS).
+    A giant session file arrives in one of several shapes. Claude transcripts,
+    Codex rollout JSONL, and JSON lines exported from Hermes's SQLite ``messages``
+    table are built. This module is the factory keyed on input type, and it lives
+    HERE by ruling: *"The factory keyed on input type belongs THERE"* -- in the
+    bulk app, never on the live adapter's deadline-critical hook path
+    (`_plans/python-port-sequence.md` §TWO APPLICATIONS).
 
 Architecture:
     A format adapter is a PURE function ``(str) -> RawTurn | None`` over one line
     of the input, exactly the shape ``records.raw_turn_from_line`` already has.
     The Claude adapter IS ``records.raw_turn_from_line``, imported -- not copied.
     The Codex adapter validates the observed rollout envelope and dispatches known
-    ``event_msg`` payloads through a table. Adding a format is adding one function
-    to :data:`_ADAPTERS`, not editing a chain of ``if`` branches.
+    ``event_msg`` payloads through a table. The Hermes adapter validates one row
+    exported from the observed SQLite schema. Adding a format is adding one
+    function to :data:`_ADAPTERS`, not editing a chain of ``if`` branches.
 
 Pattern/Convention:
-    An UNBUILT format and a malformed built-format line fail LOUD, never silent.
-    Valid records that are not conversational turns return ``None``. Nothing here
-    shortens or samples content: an adapter either yields a whole ``RawTurn`` or
-    declines a valid non-turn record.
+    A malformed built-format line fails LOUD, never silent. Valid records that are
+    not conversational turns return ``None``. Nothing here shortens or samples
+    content: an adapter either yields a whole ``RawTurn`` or declines a valid
+    non-turn record.
 
 Example:
     >>> line = (
@@ -55,6 +55,7 @@ from openbrain.models.turn import RawTurn, TurnRole
 LineAdapter = Callable[[str], RawTurn | None]
 
 CODEX_EVENT_RECORD = "event_msg"
+HERMES_BLANK_LINE_FIELD = "line (blank)"
 
 
 class InputFormat(StrEnum):
@@ -63,20 +64,6 @@ class InputFormat(StrEnum):
     CLAUDE = "claude"
     CODEX = "codex"
     HERMES = "hermes"
-
-
-class FormatNotImplementedError(NotImplementedError):
-    """A recognised input format has no observed adapter contract yet."""
-
-    def __init__(self, input_format: InputFormat) -> None:
-        """Name the gap and the action that resolves it."""
-        super().__init__(
-            f"the {input_format.value!r} input format is recognised but its "
-            "adapter is not built because no observed transcript contract is "
-            "charted for it. Claude and Codex are implemented. "
-            "ACTION REQUIRED: ingest a Claude/Codex transcript, or chart the "
-            "format from a sanitized observed sample before building its adapter."
-        )
 
 
 class MalformedCodexRecordError(ValueError):
@@ -94,6 +81,43 @@ class MalformedCodexRecordError(ValueError):
             "error. ACTION REQUIRED: inspect or sanitize that JSONL line and "
             "update the adapter only from an observed Codex format change."
         )
+
+
+class MalformedHermesRecordError(ValueError):
+    """A Hermes message row violates the observed SQLite export structure."""
+
+    def __init__(self, fields: str, location: str = "the supplied line") -> None:
+        """Report invalid fields without copying corpus content into the error."""
+        self.fields = fields
+        super().__init__(
+            f"malformed Hermes messages row at {location}; observed shape failed "
+            f"at {fields}. No message content is included in this error. "
+            "ACTION REQUIRED: inspect or sanitize that exported SQLite row and "
+            "update the adapter only from an observed Hermes schema change."
+        )
+
+
+class HermesMessageRole(StrEnum):
+    """Roles observed in Hermes's SQLite ``messages`` table."""
+
+    USER = "user"
+    ASSISTANT = "assistant"
+    TOOL = "tool"
+    SYSTEM = "system"
+
+
+class HermesMessageRecord(BaseModel):
+    """One JSON-serialized row exported from Hermes's ``messages`` table."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: str | int
+    session_id: str
+    role: HermesMessageRole
+    content: str | None
+    timestamp: str | int | None = None
+    active: int | None = None
+    compacted: int | None = None
 
 
 class CodexEnvelope(BaseModel):
@@ -201,6 +225,50 @@ def codex_raw_turn_from_line(line: str) -> RawTurn | None:
     return None if adapter is None else adapter(envelope, line)
 
 
+def hermes_raw_turn_from_line(line: str) -> RawTurn | None:
+    """Build a normalized turn from one Hermes SQLite ``messages`` row.
+
+    The SQLite source is exported as one JSON object per line before it enters the
+    existing bulk spine. The adapter consumes only the charted message columns;
+    richer columns such as tool calls and reasoning remain present in the export
+    but cannot be represented by ``RawTurn`` and are ignored by validation.
+
+    Args:
+        line: One complete JSON object produced from a ``messages`` row.
+
+    Returns:
+        A user, assistant, or tool turn when the row carries live conversational
+        content, or ``None`` for inactive, compacted, system, and content-free rows.
+
+    Raises:
+        MalformedHermesRecordError: When JSON or the observed row shape is invalid.
+    """
+    if not line.strip():
+        raise MalformedHermesRecordError(HERMES_BLANK_LINE_FIELD)
+
+    try:
+        message = HermesMessageRecord.model_validate_json(line)
+    except ValidationError as error:
+        raise _malformed_hermes(error) from error
+
+    if message.active == 0 or message.compacted == 1:
+        return None
+
+    turn_role = _HERMES_TURN_ROLES.get(message.role)
+    if turn_role is None or message.content is None or not message.content.strip():
+        return None
+
+    occurred_at = str(message.timestamp) if message.timestamp is not None else None
+    return RawTurn(
+        turn_uuid=f"hermes:{message.session_id}:{message.id}",
+        content=message.content,
+        role=turn_role,
+        is_human_prompt=turn_role is TurnRole.USER,
+        occurred_at=occurred_at,
+        session_ref=message.session_id,
+    )
+
+
 def _codex_user_turn(envelope: CodexEnvelope, line: str) -> RawTurn:
     """Normalize the human event with a deterministic whole-record identity."""
     payload = _payload(CodexUserMessagePayload, envelope)
@@ -259,13 +327,23 @@ def _malformed(record: str, error: ValidationError) -> MalformedCodexRecordError
     return MalformedCodexRecordError(record, locations)
 
 
-def _unbuilt(input_format: InputFormat) -> LineAdapter:
-    """Return a placeholder adapter that raises on first use."""
+def _malformed_hermes(error: ValidationError) -> MalformedHermesRecordError:
+    """Convert pydantic errors into content-free field locations."""
+    locations = (
+        ", ".join(
+            ".".join(str(part) for part in item["loc"]) for item in error.errors()
+        )
+        or "unknown field"
+    )
+    return MalformedHermesRecordError(locations)
 
-    def adapter(_line: str) -> RawTurn | None:
-        raise FormatNotImplementedError(input_format)
 
-    return adapter
+#: Hermes system rows are context metadata, not participant or tool turns.
+_HERMES_TURN_ROLES: dict[HermesMessageRole, TurnRole] = {
+    HermesMessageRole.USER: TurnRole.USER,
+    HermesMessageRole.ASSISTANT: TurnRole.ASSISTANT,
+    HermesMessageRole.TOOL: TurnRole.TOOL,
+}
 
 
 #: Known Codex events use table dispatch; unknown valid events are non-turns.
@@ -280,7 +358,7 @@ _CODEX_EVENT_ADAPTERS: dict[str, CodexEventAdapter] = {
 _ADAPTERS: dict[InputFormat, LineAdapter] = {
     InputFormat.CLAUDE: raw_turn_from_line,
     InputFormat.CODEX: codex_raw_turn_from_line,
-    InputFormat.HERMES: _unbuilt(InputFormat.HERMES),
+    InputFormat.HERMES: hermes_raw_turn_from_line,
 }
 
 

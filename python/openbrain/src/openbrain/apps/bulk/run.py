@@ -22,7 +22,7 @@ Architecture:
 
 Pattern/Convention:
     LOUD, NOT SWALLOWED. This is the inverse of the live entrypoint's exit-0
-    contract. A missing endpoint, an unbuilt format, an unreadable file, a
+    contract. A missing endpoint, a malformed source row, an unreadable file, a
     quarantined turn -- each is reported to the operator and the process exits
     NON-ZERO when the run did not fully land, because a person is watching and
     can act. Silence is the one thing a bulk run must never do.
