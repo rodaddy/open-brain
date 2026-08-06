@@ -26,6 +26,7 @@ from openbrain.apps.bulk.formats import (
     InputFormat,
     LineAdapter,
     MalformedCodexRecordError,
+    MalformedHermesRecordError,
     adapter_for,
 )
 from openbrain.apps.bulk.staging import StagingStore
@@ -83,9 +84,8 @@ def stage_file(
         path: The giant session file. Read WHOLE -- the bulk signature, and the
             reason staging exists (holding a 27 MB parse in memory peaked at
             +90 MB RSS).
-        input_format: Which format adapter to key on. An unbuilt format's adapter
-            raises :class:`~openbrain.apps.bulk.formats.FormatNotImplementedError`
-            on the first line, so selection is loud.
+        input_format: Which observed format adapter to key on. A malformed source
+            row raises a content-free format error naming its file and line.
         store: Where the parsed turns are staged, in file order.
 
     Returns:
@@ -181,5 +181,8 @@ def _parsed_turns(path: Path, adapter: LineAdapter) -> Iterator[RawTurn]:
                 raise MalformedCodexRecordError(
                     error.record, error.fields, location
                 ) from error
+            except MalformedHermesRecordError as error:
+                location = f"{path}:{line_number}"
+                raise MalformedHermesRecordError(error.fields, location) from error
             if turn is not None:
                 yield turn

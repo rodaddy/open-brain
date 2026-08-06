@@ -12,7 +12,7 @@ The properties proved here:
     - content arrives whole, byte for byte, at every input size;
     - a re-run RESUMES -- already-sent turns are not sent again;
     - a turn the server rejects is QUARANTINED, not dropped, and the rest land;
-    - an unbuilt format fails LOUD the moment it is selected.
+    - each observed source format normalizes through the same staging spine.
 
 Only the ``-m live`` suite (``test_bulk_ingest_live``) proves a write survives
 Postgres; here a recording lane proves order and payload shape.
@@ -28,11 +28,12 @@ from typing import Any
 import pytest
 
 from openbrain.apps.bulk.formats import (
-    FormatNotImplementedError,
     InputFormat,
     MalformedCodexRecordError,
+    MalformedHermesRecordError,
     adapter_for,
     codex_raw_turn_from_line,
+    hermes_raw_turn_from_line,
 )
 from openbrain.apps.bulk.ingest import ingest, stage_file
 from openbrain.apps.bulk.staging import StagingStore
@@ -42,6 +43,9 @@ from openbrain.models.turn import TurnRole
 FIXTURE = Path(__file__).parent / "fixtures" / "bulk" / "claude-transcript.jsonl"
 CODEX_FIXTURE = (
     Path(__file__).parent / "fixtures" / "bulk" / "codex-rollout-sanitized.jsonl"
+)
+HERMES_FIXTURE = (
+    Path(__file__).parent / "fixtures" / "bulk" / "hermes-messages-sanitized.jsonl"
 )
 
 #: The CONVERSATION the fixture contains, in file order, with exact text.
@@ -254,16 +258,74 @@ class TestRejectedTurnsAreQuarantinedNotDropped:
         assert error == "TurnRejectedError"
 
 
-class TestUnbuiltFormatsFailLoud:
-    """Hermes remains unbuilt until an observed contract is charted."""
+class TestHermesObservedSQLiteAdapter:
+    """Observed Hermes message rows normalize through the existing bulk spine."""
 
-    @pytest.mark.parametrize("input_format", [InputFormat.HERMES])
-    def test_selecting_an_unbuilt_format_raises(
-        self, tmp_path: Path, input_format: InputFormat
-    ) -> None:
+    def test_sanitized_schema_sample_reaches_fake_lane(self, tmp_path: Path) -> None:
+        assert adapter_for(InputFormat.HERMES) is hermes_raw_turn_from_line
+        store = StagingStore(tmp_path / "hermes.sqlite")
+        staged = stage_file(HERMES_FIXTURE, InputFormat.HERMES, store)
+        lane = RecordingLane()
+
+        result = ingest(store, lane)
+
+        assert staged.staged == 3
+        assert result.sent == 3
+        assert result.quarantined == 0
+        user_turn, assistant_turn, tool_turn = lane.turns
+        assert user_turn == {
+            "turn_uuid": "hermes:fixture-hermes-session:4101",
+            "content": "structural Hermes user sample",
+            "role": TurnRole.USER,
+            "is_human_prompt": True,
+            "occurred_at": "2026-07-13T14:22:01.000Z",
+            "session_ref": "fixture-hermes-session",
+            "turn_index": 0,
+        }
+        assert assistant_turn["turn_uuid"] == "hermes:fixture-hermes-session:4102"
+        assert assistant_turn["content"] == "structural Hermes assistant sample"
+        assert assistant_turn["role"] == TurnRole.ASSISTANT
+        assert assistant_turn["is_human_prompt"] is False
+        assert tool_turn["turn_uuid"] == "hermes:fixture-hermes-session:4103"
+        assert tool_turn["content"] == '{"status":"fixture-ok"}'
+        assert tool_turn["role"] == TurnRole.TOOL
+        assert tool_turn["is_human_prompt"] is False
+
+    def test_identity_includes_session_and_nonturn_rows_are_declined(self) -> None:
+        def row(session_id: str, role: str, content: str | None) -> str:
+            return json.dumps({
+                "id": 7,
+                "session_id": session_id,
+                "role": role,
+                "content": content,
+                "timestamp": "2026-07-13T14:22:00.000Z",
+            })
+
+        first = hermes_raw_turn_from_line(row("session-a", "user", "same row id"))
+        second = hermes_raw_turn_from_line(row("session-b", "user", "same row id"))
+        assert first is not None
+        assert second is not None
+        assert first.turn_uuid != second.turn_uuid
+        assert hermes_raw_turn_from_line(row("session-a", "system", "context")) is None
+        assert hermes_raw_turn_from_line(row("session-a", "assistant", None)) is None
+
+    def test_malformed_row_names_location_without_content(self, tmp_path: Path) -> None:
+        source = tmp_path / "broken-hermes.jsonl"
+        source.write_text(
+            HERMES_FIXTURE.read_text(encoding="utf-8").splitlines()[0]
+            + '\n{"id":4102,"content":"must not appear"}\n',
+            encoding="utf-8",
+        )
         store = StagingStore(tmp_path / "stage.sqlite")
-        with pytest.raises(FormatNotImplementedError):
-            stage_file(FIXTURE, input_format, store)
+
+        with pytest.raises(MalformedHermesRecordError) as raised:
+            stage_file(source, InputFormat.HERMES, store)
+
+        message = str(raised.value)
+        assert f"{source}:2" in message
+        assert "ACTION REQUIRED" in message
+        assert "must not appear" not in message
+        assert store.counts().staged == 0
 
 
 class TestCodexObservedRolloutAdapter:

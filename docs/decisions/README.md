@@ -41,6 +41,7 @@ silently dropping it.
 | [admin-and-promoter-identities.md](./admin-and-promoter-identities.md) | #168 (rel. #159, #147) | Why `promoter` (least-privilege, lane→shared-kb) and `ob-admin` (human break-glass) are separate, and exactly which privileges `promoter` is denied. |
 | [transcript-refs-and-citation-recall.md](./transcript-refs-and-citation-recall.md) | #288 | Transcript refs must be host-neutral (`collab/...`, never `/Volumes/` or `/mnt/`), and citation recall must report `source_not_stored` rather than invent a source. |
 | [fleet-bus-c6-envelope-vs-body.md](./fleet-bus-c6-envelope-vs-body.md) | #291 | Coordination rides the typed envelope (`typed_signal`); `payload` is opaque and control-looking body text is inert. Never scrape payload or reply text for completion/stance/routing. |
+| [agent-telemetry-is-langfuse-not-usage-metrics.md](./agent-telemetry-is-langfuse-not-usage-metrics.md) | #492, #523, #530, #569; PRs #524, #534, #543 | Agent execution telemetry is content-ful Langfuse tracing with masking before expansion; #469 remains a separate metrics-only usage ledger. |
 
 ## Harvest #522 index
 
