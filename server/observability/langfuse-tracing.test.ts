@@ -13,11 +13,19 @@
 import { describe, expect, test } from "bun:test";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
+  existsSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { join } from "node:path";
+import {
   buildToolTraceBody,
   createTracingRuntime,
   errorOutput,
   installMcpTracing,
   readMcpTracingConfig,
+  readRuntimeDeployStamp,
   repoRelease,
   resolveRepoRelease,
   resolveSessionId,
@@ -982,7 +990,42 @@ describe("trace body helpers", () => {
  * `LangfuseSpanProcessor` would build an exporter and this suite dials nothing.
  */
 describe("the release stamped on every trace", () => {
-  test("uses the deploy stamp when the runtime has no git checkout", () => {
+  test("reads the runtime stamp from the deployed tree root", () => {
+    const stampPath = join(import.meta.dir, "..", "..", ".deployed-revision");
+    const previousStamp = existsSync(stampPath)
+      ? readFileSync(stampPath, "utf8")
+      : undefined;
+
+    try {
+      writeFileSync(
+        stampPath,
+        "sha=0123456789abcdef\nshort_sha=0123456\n",
+      );
+      expect(readRuntimeDeployStamp()).toContain("short_sha=0123456");
+      expect(
+        resolveRepoRelease({
+          resolveGit: () => {
+            throw new Error("git checkout unavailable");
+          },
+        }),
+      ).toBe("0123456");
+    } finally {
+      if (previousStamp === undefined) unlinkSync(stampPath);
+      else writeFileSync(stampPath, previousStamp);
+    }
+  });
+
+  test("contains stamp parser failures inside the tracing boundary", () => {
+    expect(
+      resolveRepoRelease({
+        parseStamp: () => {
+          throw new Error("stamp parser unavailable");
+        },
+      }),
+    ).toBeUndefined();
+  });
+
+  test("uses an injected deploy stamp when the runtime has no git checkout", () => {
     expect(
       resolveRepoRelease({
         readStamp: () => "sha=0123456789abcdef\nshort_sha=0123456\n",

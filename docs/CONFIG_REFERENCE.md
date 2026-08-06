@@ -170,9 +170,10 @@ RFC6598). `/health` is unauthenticated, so a public address is never volunteered
 automatically; an operator who wants one advertised sets
 `OPEN_BRAIN_SERVER_IP` and owns that decision.
 
-`revision` is the `short_sha` from the `.deployed-revision` stamp that
-`scripts/local-clone-deploy.sh` writes into a deployed tree. It is absent on a
-dev tree that was never deployed through the script, which is normal.
+`revision` is the `short_sha` from the `.deployed-revision` stamp that the
+core01 and local-clone deployment scripts write into a deployed tree. It is
+absent on a dev tree that was never deployed through either script, which is
+normal.
 | `ALLOWED_ORIGINS` | `[]` (none) | `src/index.ts:78`, comma-separated |
 | `OPEN_BRAIN_RUN_MIGRATIONS` | `1` | `src/index.ts:272`; `"0"` disables |
 | `OPENBRAIN_RAW_TURN_TTL_SECONDS` | `604800` (7 days) | `src/operator-doctor.ts`; alarm denominator only, retention/eviction belongs to #395 |

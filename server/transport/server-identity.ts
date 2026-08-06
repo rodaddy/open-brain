@@ -212,8 +212,8 @@ export function resolveServerIdentity(
 /**
  * The deploy stamp's short sha, or `undefined` when the tree carries none.
  *
- * `scripts/local-clone-deploy.sh` writes `.deployed-revision` as plain
- * `key=value` lines (deliberately not JSON — the commit subject is arbitrary
+ * The deployment scripts write `.deployed-revision` as plain `key=value` lines
+ * (deliberately not JSON — the commit subject is arbitrary
  * text). Only `short_sha` is read here: it is the which-code discriminator, and
  * the subject line is free-form text that does not belong on a public endpoint.
  * A dev tree that was never deployed has no stamp, which is normal, not a fault.

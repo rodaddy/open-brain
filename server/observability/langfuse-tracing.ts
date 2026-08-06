@@ -184,6 +184,7 @@ let cachedRelease: string | undefined | null = null;
 
 interface RepoReleaseDeps {
   readStamp?: () => string | undefined;
+  parseStamp?: typeof readDeployedRevision;
   resolveGit?: () => string | undefined;
 }
 
@@ -191,9 +192,10 @@ interface RepoReleaseDeps {
 export function resolveRepoRelease(
   deps: RepoReleaseDeps = {},
 ): string | undefined {
-  const stamped = readDeployedRevision(deps.readStamp ?? readRuntimeDeployStamp);
-  if (stamped !== undefined) return stamped;
   try {
+    const parseStamp = deps.parseStamp ?? readDeployedRevision;
+    const stamped = parseStamp(deps.readStamp ?? readRuntimeDeployStamp);
+    if (stamped !== undefined) return stamped;
     return (deps.resolveGit ?? resolveGitCheckoutRelease)();
   } catch {
     // Not knowing the release is never a reason to lose tracing.
@@ -201,7 +203,7 @@ export function resolveRepoRelease(
   }
 }
 
-function readRuntimeDeployStamp(): string | undefined {
+export function readRuntimeDeployStamp(): string | undefined {
   return readFileSync(
     new URL("../../.deployed-revision", import.meta.url),
     "utf8",

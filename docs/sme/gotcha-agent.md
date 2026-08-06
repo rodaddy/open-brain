@@ -1156,9 +1156,10 @@ Verbatim, from the source:
 
 A resolver added for Langfuse release attribution used `git rev-parse`, which
 worked in development checkouts but returned nothing in deployed runtimes. The
-deploy scripts intentionally ship `git archive` output with no `.git` directory
-and stamp `.deployed-revision` into the artifact; `/health` already read that
-stamp correctly. The new tracing resolver ignored the deployment authority and
+local-clone deploy ships `git archive` output, while the core01 packager excludes
+checkout metadata and any inherited stamp; both write a fresh
+`.deployed-revision` into the artifact. `/health` already read that stamp
+correctly. The new tracing resolver ignored the deployment authority and
 therefore emitted no release on every deployed trace.
 
 ### Review Questions
