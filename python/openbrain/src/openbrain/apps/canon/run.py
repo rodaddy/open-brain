@@ -53,24 +53,26 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from openbrain.apps.canon.pack import Pack
+from openbrain.apps.canon.pack import Lane, Pack
 from openbrain.apps.canon.reconcile import (
     DriftReport,
     diff_pack,
     format_report,
+    live_items,
+    live_key_of,
+    live_text_of,
 )
 from openbrain.apps.canon.writes import FactProvenance, PlannedWrite, plan_promote
 from openbrain.apps.hooks.session import SessionStartHook, run_session_start
 from openbrain.config import load_canon_settings
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
-
     from openbrain.config import CanonSettings
 
 #: The ``source`` on the synthesised SessionStart payload. ``startup`` is the
@@ -141,23 +143,44 @@ def read_live_pack(settings: CanonSettings) -> Any:
     return asyncio.run(run_session_start(payload, settings))
 
 
+def _repo_relative_pack_path(pack_path: Path) -> str | None:
+    """Return the pack's path below its nearest git root.
+
+    The pack file is the reviewed artifact the repo fact cites. A worktree's
+    ``.git`` marker is a file rather than a directory, so ``exists`` deliberately
+    accepts either shape. No marker means the path cannot be proven repo-relative
+    and repo-fact planning must stop before a write is sent.
+    """
+    resolved = pack_path.resolve()
+    for parent in resolved.parents:
+        if (parent / ".git").exists():
+            return resolved.relative_to(parent).as_posix()
+    return None
+
+
 def provenance_from(
     args: argparse.Namespace, settings: CanonSettings
 ) -> FactProvenance | None:
-    """Assemble the repo-fact provenance, or ``None`` when it was not supplied.
+    """Assemble the repo-fact provenance, or ``None`` when it is incomplete.
 
     Args:
-        args: The parsed command line, carrying the commit, URL, and instant.
+        args: The parsed command line, carrying the pack path, commit, URL, and
+            verification instant.
         settings: The canon configuration, carrying the repo the facts bind to.
 
     Returns:
         The provenance, or ``None`` when any part is absent. All-or-nothing:
         ``repoFactMetadata`` refuses a write whose ``source_url`` does not
-        contain both the commit and the path, so a half-filled provenance is
-        never closer to valid than none at all -- it just fails later, at the
-        server.
+        contain both the commit and the pack's exact repo-relative path, so a
+        half-filled provenance is never closer to valid than none at all.
     """
-    if not (args.repo_source_commit and args.repo_source_url and args.repo_verified_at):
+    source_path = _repo_relative_pack_path(args.pack)
+    if not (
+        source_path
+        and args.repo_source_commit
+        and args.repo_source_url
+        and args.repo_verified_at
+    ):
         return None
     if settings.repo is None:
         # Same all-or-nothing rule: a fact cannot bind without a repo, and the
@@ -165,6 +188,7 @@ def provenance_from(
         return None
     return FactProvenance(
         repo=settings.repo,
+        source_path=source_path,
         source_commit=args.repo_source_commit,
         source_url=args.repo_source_url,
         verified_at=args.repo_verified_at,
@@ -218,18 +242,101 @@ def _describe(planned: Sequence[PlannedWrite]) -> str:
     return "\n".join(lines)
 
 
+class NamespaceMismatchError(RuntimeError):
+    """A canon write or verification read resolved outside the intended agent."""
+
+
+def _receipt_namespace(receipt: Any) -> str | None:
+    """Resolve the namespace named directly or through writer provenance."""
+    if not isinstance(receipt, Mapping):
+        return None
+    namespace = receipt.get("namespace")
+    if isinstance(namespace, str) and namespace:
+        return namespace
+    namespace_source = receipt.get("namespace_source")
+    if not isinstance(namespace_source, str):
+        return None
+    identity_field = {
+        "token": "token_identity",
+        "header": "delegated_agent_id",
+    }.get(namespace_source)
+    if identity_field is None:
+        return None
+    identity = receipt.get(identity_field)
+    return identity if isinstance(identity, str) and identity else None
+
+
+def _pack_readback_scope(settings: CanonSettings) -> dict[str, Any]:
+    """Build the same scoped read arguments the SessionStart canon path uses."""
+    scope: dict[str, Any] = {
+        "agent": settings.agent,
+        "platform": settings.platform,
+        "server_id": settings.server_id,
+        "channel_id": settings.channel_id,
+        "session_key": settings.session_key,
+        "requested_sections": list(settings.sections),
+    }
+    if settings.repo is not None:
+        scope["repo"] = settings.repo
+    return scope
+
+
+def _verify_readback(
+    planned: Sequence[PlannedWrite], payload: Any, intended_namespace: str
+) -> None:
+    """Prove unknown-receipt writes are visible under the intended namespace."""
+    if not isinstance(payload, Mapping):
+        message = "canon write read-back returned no scoped pack"
+        raise NamespaceMismatchError(message)
+    scope = payload.get("scope")
+    actual_namespace = scope.get("namespace") if isinstance(scope, Mapping) else None
+    if isinstance(actual_namespace, str) and actual_namespace != intended_namespace:
+        message = (
+            f"canon writes intended for {intended_namespace} read back from "
+            f"{actual_namespace}"
+        )
+        raise NamespaceMismatchError(message)
+
+    missing: list[str] = []
+    for call in planned:
+        metadata = call.arguments.get("metadata", {})
+        expected_key = metadata.get("subject") if call.lane is Lane.REPO_FACTS else call.key
+        expected_text = (
+            metadata.get("fact")
+            if call.lane is Lane.REPO_FACTS
+            else call.arguments.get("content")
+        )
+        items = live_items(payload, call.lane)
+        if not any(
+            live_key_of(item) == expected_key and live_text_of(item) == expected_text
+            for item in items
+        ):
+            missing.append(call.key)
+    if missing:
+        message = f"canon writes not visible for {intended_namespace}: {', '.join(missing)}"
+        raise NamespaceMismatchError(message)
+
+
 def _apply(planned: Sequence[PlannedWrite], settings: CanonSettings) -> None:
-    """Send every planned write through one client.
+    """Send every planned write through one client and verify its namespace.
 
     The client is built here rather than in a capability for the same reason
     ``apps.bulk.run`` builds its own: this is the operator path, so it does NOT
     inherit the hook path's single-attempt, deadline-pinned policy -- an operator
     run may retry, which is the sibling client's default.
 
+    Every write receipt is checked against ``settings.agent``. The append-event
+    receipt identifies whether the token or delegated header supplied the writer;
+    repo-fact writes return ``namespace`` directly. If a future write surface
+    carries neither signal, one scoped pack read verifies the exact written keys
+    and texts instead of reporting success from an unverified call count.
+
     Raises:
         CanonNotConfiguredError: No endpoint or token. Raised before the import
             so an unconfigured run fails identically whether or not the sibling
             package is installed.
+        NamespaceMismatchError: A receipt or verification read resolves outside
+            the intended agent namespace.
     """
     from openbrain.apps.hooks.session import CanonNotConfiguredError
 
@@ -255,9 +362,23 @@ def _apply(planned: Sequence[PlannedWrite], settings: CanonSettings) -> None:
         # hitting the client's loopback-only refusal.
         allow_insecure_http=settings.allow_insecure_http,
     )
+    unknown_receipt = False
     try:
         for call in planned:
-            client.call_tool(call.tool, call.arguments)
+            receipt = client.call_tool(call.tool, call.arguments)
+            actual_namespace = _receipt_namespace(receipt)
+            if actual_namespace is None:
+                unknown_receipt = True
+                continue
+            if actual_namespace != settings.agent:
+                message = (
+                    f"canon write {call.key} intended for {settings.agent} "
+                    f"landed in {actual_namespace}"
+                )
+                raise NamespaceMismatchError(message)
+        if unknown_receipt:
+            readback = client.agent_context_pack(**_pack_readback_scope(settings))
+            _verify_readback(planned, readback, settings.agent)
     finally:
         client.close()
 
