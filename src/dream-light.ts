@@ -57,11 +57,15 @@ import {
   backgroundSessionId,
   type BackgroundTraceEmitter,
 } from "./background-tracing.ts";
-import type { MaintenanceJob } from "./maintenance-queue.ts";
+import {
+  MaintenanceTerminalError,
+  type MaintenanceJob,
+} from "./maintenance-queue.ts";
 import { isHarnessNoise } from "./tools/ingest-raw-turn.ts";
 
 /** Job kind this stage registers under in the maintenance queue. */
 export const DREAM_LIGHT_JOB_KIND = "dream.light";
+export const DREAM_LIGHT_JOB_VERSION = 1;
 
 /**
  * Turns processed per sweep. Bounded because an unbounded sweep over a growing
@@ -398,14 +402,20 @@ export async function runLightSweep(
  */
 export function makeDreamLightHandler(deps: DreamLightDeps) {
   return async function dreamLightHandler(job: MaintenanceJob): Promise<void> {
-    const trace = new BackgroundTraceRecorder(deps.tracing, {
-      name: "dream.light",
-      input: { job_id: job.id, namespace: job.namespace },
-      tags: ["open-brain-server", "background-job", "dream", "light"],
-      metadata: { job_kind: job.kind, attempt: job.attempts },
-      sessionId: backgroundSessionId(job),
-    });
+    let trace: BackgroundTraceRecorder | undefined;
     try {
+      trace = new BackgroundTraceRecorder(deps.tracing, {
+        name: "dream.light",
+        input: { job_id: job.id, namespace: job.namespace },
+        tags: ["open-brain-server", "background-job", "dream", "light"],
+        metadata: { job_kind: job.kind, attempt: job.attempts },
+        sessionId: backgroundSessionId(job),
+      });
+      if (job.version !== DREAM_LIGHT_JOB_VERSION) {
+        throw new MaintenanceTerminalError(
+          "dream light job version is not supported by this handler",
+        );
+      }
       const summary = await trace.span(
         "dream.light.sweep",
         () => runLightSweep(deps),
@@ -416,7 +426,7 @@ export function makeDreamLightHandler(deps: DreamLightDeps) {
       );
       trace.finish(summary);
     } catch (error: unknown) {
-      trace.fail(error);
+      trace?.fail(error);
       throw error;
     }
   };
