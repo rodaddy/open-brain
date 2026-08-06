@@ -66,8 +66,10 @@ printf '%s\n' '{"operation":"capture","content":"<distilled fact, decision, bloc
 ```
 
 Success returns a structured receipt with `status: "saved"` and
-`durable: true`. Any other status means the caller must treat the capture as not
-saved and preserve the fact through another authorized durable path.
+`durable: true`. The reviewed `session_start` v2 response must echo every exact
+scope coordinate; a missing, null, or conflicting echo fails closed. Any other
+status means the caller must treat the capture as not saved and preserve the fact
+through another authorized durable path.
 
 ### At Compaction
 1. Call `session_context` to gather current state

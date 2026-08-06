@@ -16,7 +16,11 @@ import pytest
 
 from openbrain_memory.cli import execute_json, usage_output
 
-from ._runtime_fakes import LaneAwareTransport, StartThenFailClient
+from ._runtime_fakes import (
+    LaneAwareTransport,
+    StartThenFailClient,
+    runtime_contract_manifest,
+)
 
 _FULL_SCOPE = {
     "agent": "agent-name",
@@ -40,8 +44,8 @@ _CONFIG = {
 }
 
 
-class OperatorCaptureClient(StartThenFailClient):
-    """Return the sparse session_start lane seen by operator capture."""
+class SparseStartClient(StartThenFailClient):
+    """Return a session_start lane that does not prove exact scope."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -65,6 +69,35 @@ class OperatorCaptureClient(StartThenFailClient):
         }
 
 
+class NullScopeStartClient(SparseStartClient):
+    """Return explicit nulls for every nullable exact-scope coordinate."""
+
+    def session_start(self, **arguments: Any) -> dict[str, Any]:
+        return {
+            "lane": {
+                "namespace": "bilby",
+                "session_key": arguments["session_key"],
+                "agent": None,
+                "source": None,
+                "channel_id": None,
+                "thread_id": arguments.get("thread_id"),
+                "metadata": {"server_id": None},
+            }
+        }
+
+
+class UnderVersionedSparseStartClient(SparseStartClient):
+    """Advertise session_start v1 while returning the same sparse lane."""
+
+    def get_contract(self, **arguments: Any) -> dict[str, Any]:
+        manifest = runtime_contract_manifest()
+        for capability in manifest["capabilities"]:
+            if capability["name"] == "session_start":
+                capability["version"] = 1
+        manifest["tool_contracts"]["session_start"]["version"] = 1
+        return manifest
+
+
 def _error(request: dict[str, object]) -> str:
     output = execute_json(
         {"config": _CONFIG, **request},
@@ -75,10 +108,11 @@ def _error(request: dict[str, object]) -> str:
     return str(receipt["error"])
 
 
-def test_operator_capture_accepts_contract_proven_sparse_start_lane() -> None:
-    """Reproduce #529's full-scope stdin capture against its sparse lane echo."""
-    client = OperatorCaptureClient()
-
+@pytest.mark.parametrize("client", [SparseStartClient(), NullScopeStartClient()])
+def test_operator_capture_rejects_unproven_start_scope(
+    client: SparseStartClient,
+) -> None:
+    """A success receipt requires server-returned exact-scope coordinates."""
     output = execute_json(
         {
             "config": _CONFIG,
@@ -91,16 +125,35 @@ def test_operator_capture_accepts_contract_proven_sparse_start_lane() -> None:
         client=client,
     )
 
-    assert output["receipt"]["status"] == "saved"
-    assert output["receipt"]["durable"] is True
-    assert client.appended is not None
-    assert {
-        name: client.appended[name]
-        for name in ("agent", "platform", "server_id", "channel_id")
-    } == {
-        name: _FULL_SCOPE[name]
-        for name in ("agent", "platform", "server_id", "channel_id")
-    }
+    receipt = output["receipt"]
+    assert receipt["status"] == "lost"
+    assert receipt["durable"] is False
+    assert "did not prove exact Open Brain scope" in receipt["error"]
+    assert client.appended is None
+
+
+def test_operator_capture_rejects_sparse_lane_before_v2_dispatch() -> None:
+    """A server below session_start v2 cannot supply handshake scope proof."""
+    client = UnderVersionedSparseStartClient()
+
+    output = execute_json(
+        {
+            "config": _CONFIG,
+            "operation": "capture",
+            "content": "Operator capture contract proof",
+            "distilled": True,
+            "event_type": "fact",
+            "scope": _FULL_SCOPE,
+        },
+        client=client,
+    )
+
+    receipt = output["receipt"]
+    assert receipt["status"] == "lost"
+    assert receipt["durable"] is False
+    assert "session_start" in receipt["error"]
+    assert "version must be >= 2" in receipt["error"]
+    assert client.appended is None
 
 
 def test_missing_scope_fields_are_all_named_in_one_receipt() -> None:
