@@ -120,7 +120,7 @@ function rowEvidence(row: SearchRow): Record<string, unknown> {
     row_id: row.id,
     source_type: row.source_type,
     namespace: row.namespace ?? null,
-    content_preview: row.content_preview,
+    content_preview: row.content_preview?.slice(0, 300) ?? null,
     distance: row.distance ?? null,
     similarity: row.distance === undefined ? null : 1 - row.distance,
     bm25_score: row.fts_rank ?? null,
@@ -135,6 +135,10 @@ function rowsEvidence(rows: readonly SearchRow[]): Record<string, unknown> {
     row_ids: rows.map((row) => row.id),
     candidates: rows.map(rowEvidence),
   };
+}
+
+function rowIdsEvidence(rows: readonly SearchRow[]): Record<string, unknown> {
+  return { count: rows.length, row_ids: rows.map((row) => row.id) };
 }
 
 /** Resolve the embedding timeout, ignoring an unusable environment value. */
@@ -540,8 +544,8 @@ function rrfMerge(
     name: "retrieval.rank_rrf",
     input: {
       limit,
-      vector: rowsEvidence(vectorRows),
-      keyword: rowsEvidence(ftsRows),
+      vector: rowIdsEvidence(vectorRows),
+      keyword: rowIdsEvidence(ftsRows),
     },
     metadata: { stage: "scoring_ranking", filter_names: ["rrf_limit"] },
     run: () => {
@@ -771,12 +775,69 @@ function dedupeFallbackRows(rows: readonly SearchRow[]): SearchRow[] {
  * displaced so the caller can SEE that unmigrated content exists — a silent
  * omission is what makes a stalled migration invisible.
  */
-function mergeFallbackRows(
+type FallbackClassification = {
+  row: SearchRow;
+  chosen: boolean;
+  filtered_by: "fallback_duplicate" | "fallback_limit" | null;
+};
+
+function selectedFallbackRows(
+  primary: SearchRow[],
+  legacy: SearchRow[],
+  limit: number,
+): SearchRow[] {
+  if (legacy.length === 0) return primary.slice(0, limit);
+  const firstLegacy = legacy[0];
+  if (!firstLegacy) return primary.slice(0, limit);
+  if (primary.length >= limit) {
+    return [...primary.slice(0, Math.max(0, limit - 1)), firstLegacy];
+  }
+  return [...primary, ...legacy.slice(0, limit - primary.length)];
+}
+
+function fallbackFilteredBy(
+  chosen: boolean,
+  duplicate: boolean,
+): FallbackClassification["filtered_by"] {
+  if (chosen) return null;
+  return duplicate ? "fallback_duplicate" : "fallback_limit";
+}
+
+function computeFallbackRows(
+  primaryRows: readonly SearchRow[],
+  legacyRows: readonly SearchRow[],
+  limit: number,
+): { rows: SearchRow[]; classifications: FallbackClassification[] } {
+  const primary = dedupeFallbackRows(primaryRows);
+  const primaryKeys = new Set(primary.map(fallbackDedupeKey));
+  const legacy = dedupeFallbackRows(
+    legacyRows.filter((row) => !primaryKeys.has(fallbackDedupeKey(row))),
+  );
+  const rows = selectedFallbackRows(primary, legacy, limit);
+  const selectedKeys = new Set(rows.map(fallbackDedupeKey));
+  const seen = new Set<string>();
+  const classifications = [...primaryRows, ...legacyRows].map((row, index) => {
+    const key = fallbackDedupeKey(row);
+    const duplicate =
+      seen.has(key) ||
+      (index >= primaryRows.length && primaryKeys.has(key));
+    seen.add(key);
+    const chosen = !duplicate && selectedKeys.has(key);
+    return {
+      row,
+      chosen,
+      filtered_by: fallbackFilteredBy(chosen, duplicate),
+    } satisfies FallbackClassification;
+  });
+  return { rows, classifications };
+}
+
+export function mergeFallbackRows(
   primaryRows: readonly SearchRow[],
   legacyRows: readonly SearchRow[],
   limit: number,
 ): SearchRow[] {
-  return traceRetrievalSpanSync({
+  const result = traceRetrievalSpanSync({
     name: "retrieval.fallback_dedupe",
     input: {
       limit,
@@ -787,45 +848,19 @@ function mergeFallbackRows(
       stage: "filtering",
       filter_names: ["fallback_duplicate", "fallback_limit"],
     },
-    run: () => {
-      const primary = dedupeFallbackRows(primaryRows);
-      const primaryKeys = new Set(primary.map(fallbackDedupeKey));
-      const legacy = dedupeFallbackRows(
-        legacyRows.filter((row) => !primaryKeys.has(fallbackDedupeKey(row))),
-      );
-      if (legacy.length === 0) return primary.slice(0, limit);
-      if (primary.length >= limit) {
-        const first = legacy[0];
-        if (!first) return primary.slice(0, limit);
-        return [...primary.slice(0, Math.max(0, limit - 1)), first];
-      }
-      return [...primary, ...legacy.slice(0, limit - primary.length)];
-    },
-    output: (selected) => {
-      const selectedIds = new Set(selected.map((row) => row.id));
-      const primaryKeys = new Set(primaryRows.map(fallbackDedupeKey));
-      const seen = new Set<string>();
-      const candidates = [...primaryRows, ...legacyRows].map((row, index) => {
-        const key = fallbackDedupeKey(row);
-        const duplicate =
-          seen.has(key) ||
-          (index >= primaryRows.length && primaryKeys.has(key));
-        seen.add(key);
-        const chosen = selectedIds.has(row.id);
-        let filteredBy: string | null = null;
-        if (!chosen) {
-          filteredBy = duplicate ? "fallback_duplicate" : "fallback_limit";
-        }
-        return { ...rowEvidence(row), chosen, filtered_by: filteredBy };
-      });
-      return {
-        candidate_count: candidates.length,
-        selected_count: selected.length,
-        selected_row_ids: selected.map((row) => row.id),
-        candidates,
-      };
-    },
+    run: () => computeFallbackRows(primaryRows, legacyRows, limit),
+    output: ({ rows, classifications }) => ({
+      candidate_count: classifications.length,
+      selected_count: rows.length,
+      selected_row_ids: rows.map((row) => row.id),
+      candidates: classifications.map(({ row, chosen, filtered_by }) => ({
+        ...rowEvidence(row),
+        chosen,
+        filtered_by,
+      })),
+    }),
   });
+  return result.rows;
 }
 
 /**

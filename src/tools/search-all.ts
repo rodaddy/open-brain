@@ -52,6 +52,16 @@ interface QmdSourceRef {
   collection?: string;
 }
 
+function federatedFilteredBy(
+  chosen: boolean,
+  rankIndex: number,
+  offset: number,
+): "pagination_offset" | "federated_rank_window" | null {
+  if (chosen) return null;
+  if (rankIndex < offset) return "pagination_offset";
+  return "federated_rank_window";
+}
+
 interface QmdDocument {
   id?: string;
   path?: string;
@@ -323,11 +333,12 @@ export function registerSearchAll(server: McpServer, deps: ToolDeps): void {
       for (let i = 0; i < qmdResults.length; i++) {
         withRrf.push({ ...qmdResults[i]!, rrf: 1 / (RRF_K + i + 1) });
       }
-      const merged = withRrf
-        .sort((a, b) => b.rrf - a.rrf)
-        .slice(offset, offset + limit)
-        .map(({ rrf, ...rest }) => ({ ...rest, score: rrf }));
-      const tracedMerged = traceRetrievalSpanSync({
+      type RankedCandidate = UnifiedResult & {
+        rrf: number;
+        trace_index: number;
+      };
+      let rankedCandidates: RankedCandidate[] = [];
+      const selectedCandidates = traceRetrievalSpanSync({
         name: "retrieval.federated_rank",
         input: {
           brain_count: brainResults.length,
@@ -335,22 +346,26 @@ export function registerSearchAll(server: McpServer, deps: ToolDeps): void {
         },
         metadata: {
           stage: "scoring_ranking",
-          filter_names: ["federated_rank_window"],
+          filter_names: ["pagination_offset", "federated_rank_window"],
         },
-        run: () => merged,
+        run: () => {
+          rankedCandidates = withRrf
+            .map((row, trace_index) => ({ ...row, trace_index }))
+            .sort((a, b) => b.rrf - a.rrf);
+          return rankedCandidates.slice(offset, offset + limit);
+        },
         output: (selected) => {
-          const selectedKeys = new Set(
-            selected.map((row) => row.id ?? `qmd:${row.path ?? ""}`),
+          const selectedIndexes = new Set(
+            selected.map((row) => row.trace_index),
           );
           return {
-            candidate_count: withRrf.length,
+            candidate_count: rankedCandidates.length,
             selected_count: selected.length,
             returned_row_ids: selected
               .filter((row) => row.source === "brain")
               .map((row) => row.id),
-            candidates: withRrf.map((row) => {
-              const key = row.id ?? `qmd:${row.path ?? ""}`;
-              const chosen = selectedKeys.has(key);
+            candidates: rankedCandidates.map((row, rankIndex) => {
+              const chosen = selectedIndexes.has(row.trace_index);
               return {
                 source: row.source,
                 row_id: row.id ?? null,
@@ -359,19 +374,25 @@ export function registerSearchAll(server: McpServer, deps: ToolDeps): void {
                 raw_score: row.score,
                 rrf_score: row.rrf,
                 chosen,
-                filtered_by: chosen ? null : "federated_rank_window",
+                filtered_by: federatedFilteredBy(chosen, rankIndex, offset),
               };
             }),
           };
         },
       });
+      const tracedMerged = selectedCandidates.map(
+        ({ rrf, trace_index: _traceIndex, ...rest }) => ({
+          ...rest,
+          score: rrf,
+        }),
+      );
 
       return {
         content: [
           {
             type: "text" as const,
             text: JSON.stringify({
-              total: merged.length,
+              total: tracedMerged.length,
               brain_hits: brainResults.length,
               qmd_hits: qmdResults.length,
               results: tracedMerged,

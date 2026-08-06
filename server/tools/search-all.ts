@@ -80,6 +80,16 @@ interface UnifiedResult {
   tier?: string;
 }
 
+function federatedFilteredBy(
+  chosen: boolean,
+  rankIndex: number,
+  offset: number,
+): "pagination_offset" | "federated_rank_window" | null {
+  if (chosen) return null;
+  if (rankIndex < offset) return "pagination_offset";
+  return "federated_rank_window";
+}
+
 /** One qmd hit; every field is optional because the shape varies by version. */
 interface QmdDocument {
   path?: string;
@@ -412,11 +422,12 @@ export function registerSearchAllTool(
         fused.push({ ...result, rrf: 1 / (RRF_K + index + 1) });
       });
 
-      const merged = fused
-        .sort((a, b) => b.rrf - a.rrf)
-        .slice(offset, offset + limit)
-        .map(({ rrf, ...rest }) => ({ ...rest, score: rrf }));
-      const tracedMerged = traceRetrievalSpanSync({
+      type RankedCandidate = UnifiedResult & {
+        rrf: number;
+        trace_index: number;
+      };
+      let rankedCandidates: RankedCandidate[] = [];
+      const selectedCandidates = traceRetrievalSpanSync({
         name: "retrieval.federated_rank",
         input: {
           brain_count: brainResults.length,
@@ -424,22 +435,26 @@ export function registerSearchAllTool(
         },
         metadata: {
           stage: "scoring_ranking",
-          filter_names: ["federated_rank_window"],
+          filter_names: ["pagination_offset", "federated_rank_window"],
         },
-        run: () => merged,
+        run: () => {
+          rankedCandidates = fused
+            .map((row, trace_index) => ({ ...row, trace_index }))
+            .sort((a, b) => b.rrf - a.rrf);
+          return rankedCandidates.slice(offset, offset + limit);
+        },
         output: (selected) => {
-          const selectedKeys = new Set(
-            selected.map((row) => row.id ?? `qmd:${row.path ?? ""}`),
+          const selectedIndexes = new Set(
+            selected.map((row) => row.trace_index),
           );
           return {
-            candidate_count: fused.length,
+            candidate_count: rankedCandidates.length,
             selected_count: selected.length,
             returned_row_ids: selected
               .filter((row) => row.source === "brain")
               .map((row) => row.id),
-            candidates: fused.map((row) => {
-              const key = row.id ?? `qmd:${row.path ?? ""}`;
-              const chosen = selectedKeys.has(key);
+            candidates: rankedCandidates.map((row, rankIndex) => {
+              const chosen = selectedIndexes.has(row.trace_index);
               return {
                 source: row.source,
                 row_id: row.id ?? null,
@@ -448,15 +463,21 @@ export function registerSearchAllTool(
                 raw_score: row.score,
                 rrf_score: row.rrf,
                 chosen,
-                filtered_by: chosen ? null : "federated_rank_window",
+                filtered_by: federatedFilteredBy(chosen, rankIndex, offset),
               };
             }),
           };
         },
       });
+      const tracedMerged = selectedCandidates.map(
+        ({ rrf, trace_index: _traceIndex, ...rest }) => ({
+          ...rest,
+          score: rrf,
+        }),
+      );
 
       return textResult({
-        total: merged.length,
+        total: tracedMerged.length,
         brain_hits: brainResults.length,
         qmd_hits: qmdResults.length,
         results: tracedMerged,

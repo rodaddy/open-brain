@@ -51,7 +51,6 @@
 
 import type pg from "pg";
 import type { MaintenanceQueueLogger } from "./maintenance-queue.ts";
-import { traceRetrievalSpanSync } from "../server/observability/langfuse-tracing.ts";
 
 /**
  * Cosine DISTANCE at or below which two candidates are the same claim.
@@ -242,35 +241,6 @@ export async function runCandidateDedupe(
         WHERE t.terminal <> n.dup_id`,
       [deps.namespace ?? null, batchSize, distance],
     );
-
-    traceRetrievalSpanSync({
-      name: "retrieval.candidate_dedupe",
-      input: {
-        namespace: deps.namespace ?? null,
-        distance_threshold: distance,
-        skipped_no_embedding: summary.skipped_no_embedding,
-      },
-      metadata: {
-        stage: "filtering",
-        filter_names: ["no_embedding", "distance_threshold", "oldest_survivor"],
-      },
-      run: () => pairs.rows,
-      output: (rows) => ({
-        candidate_count: rows.length,
-        chosen_count: rows.length,
-        candidates: rows.map((row) => ({
-          row_id: row.dup_id,
-          survivor_row_id: row.survivor_id,
-          namespace: row.namespace,
-          distance: row.distance,
-          similarity: 1 - row.distance,
-          chosen: true,
-          filtered_by: null,
-        })),
-        filtered: summary.skipped_no_embedding,
-        filtered_by: "no_embedding",
-      }),
-    });
 
     summary.examined = pairs.rows.length;
 
