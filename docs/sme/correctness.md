@@ -1829,3 +1829,14 @@ A span or timing wrapper around `run: () => alreadyComputedValue` measures nothi
 ### Pattern
 
 A diff/comparison tool is an operator trust surface: what it prints is what the operator believes happened, so its worst failure is a false "identical". PR #601 shipped three ways to produce one: (1) same-named spans unioned into one bucket, so swapped per-occurrence results compared equal — align occurrences pairwise by index, never union; (2) two traces with zero observations compared equal — but batched exporters make "not flushed yet" and "identical" indistinguishable, so zero compared evidence is `unknown` with its own exit code, never `equivalent`; (3) stages whose evidence is counts-only (the degraded shape) compared equal because only row-id sets were consulted — when the primary evidence is absent, compare the fallback fields and NAME the basis in the output. Also: ranked selections compare as ordered sequences (order IS the ranking; a Set comparison hides a pure reordering regression). Review question for any comparison/verification tool: enumerate every path that can print "same" and prove each one actually compared something.
+
+## [2026-08-06] External API fixtures must come from the endpoint being validated
+
+**Severity:** MEDIUM
+**Source:** issue #602, post-merge failure of PR #601 trace forensics tooling
+**Scope key:** `review.external_api_fixtures_match_endpoint`
+**Status:** active
+
+### Pattern
+
+A hand-written stub proves conformance to the stub, not to the external API. Langfuse detail responses return full observation objects, but list rows return observation ID strings; reusing the detail shape in list fixtures made every test pass while every live `session` and `repeat` call failed validation. For each external endpoint, capture and sanitize a real response, preserve its envelope and value types, and drive the public caller through that fixture. Do not reuse a sibling endpoint's richer response shape unless the live wire contract proves they are identical.

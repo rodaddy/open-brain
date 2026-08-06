@@ -54,10 +54,12 @@ const traceSchema = z.object({
   observations: z.array(observationSchema).optional(),
 }).passthrough();
 
+const traceListRowSchema = traceSchema.omit({ observations: true });
+
 const tracePageSchema = z.union([
-  z.array(traceSchema),
+  z.array(traceListRowSchema),
   z.object({
-    data: z.array(traceSchema),
+    data: z.array(traceListRowSchema),
     meta: z.record(z.string(), z.unknown()).optional(),
   }).passthrough(),
 ]);
