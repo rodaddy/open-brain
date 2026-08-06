@@ -14,6 +14,27 @@ const ownedTempDirs: string[] = [];
 
 type ProcessEnv = Record<string, string | undefined>;
 
+const GIT_ENV_KEYS = [
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+  "GIT_COMMON_DIR",
+  "GIT_CONFIG",
+  "GIT_CONFIG_COUNT",
+  "GIT_CONFIG_GLOBAL",
+  "GIT_CONFIG_PARAMETERS",
+  "GIT_CONFIG_SYSTEM",
+  "GIT_DIR",
+  "GIT_GRAFT_FILE",
+  "GIT_IMPLICIT_WORK_TREE",
+  "GIT_INDEX_FILE",
+  "GIT_NO_REPLACE_OBJECTS",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_PREFIX",
+  "GIT_REPLACE_REF_BASE",
+  "GIT_SHALLOW_FILE",
+  "GIT_TEMPLATE_DIR",
+  "GIT_WORK_TREE",
+] as const;
+
 async function run(
   command: string[],
   options: { cwd: string; env: ProcessEnv },
@@ -60,12 +81,16 @@ describe("core01 runtime packaging", () => {
     const home = join(root, "home");
     await Promise.all([mkdir(source), mkdir(staging), mkdir(home)]);
 
-    const env: ProcessEnv = {
-      ...process.env,
+    const env: ProcessEnv = { ...process.env };
+    for (const key of GIT_ENV_KEYS) delete env[key];
+    for (const key of Object.keys(env)) {
+      if (/^GIT_CONFIG_(KEY|VALUE)_\d+$/.test(key)) delete env[key];
+    }
+    Object.assign(env, {
       HOME: home,
       GIT_CONFIG_GLOBAL: "/dev/null",
       GIT_CONFIG_NOSYSTEM: "1",
-    };
+    });
     await git(source, env, "init", "-b", "fixture-main");
     await git(source, env, "config", "user.name", "Core01 Package Test");
     await git(
