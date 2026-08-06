@@ -1,0 +1,90 @@
+# KING-OPS REPO FACTS
+#
+# STATUS: WRITTEN. This pack is the reviewable source for the live repo facts.
+# Older rows were mirrored from dogfood with their stored provenance; their
+# historical sources were not re-verified in this run. The five issue #520
+# target packs add source-verified rows written through OpenBrainClient and
+# read back. Canon reconciler repo-fact apply remains tracked by issue #588.
+# Pack assembled 2026-08-05T23:58:51Z.
+
+kind = "canon"
+
+[[entries]]
+key = "repo.king_ops.ci_scope"
+lane = "repo_facts"
+subject = "CI runs unit tests only"
+fact_type = "validation"
+text = """
+Pull request CI runs lint, typecheck, unit tests, and build on the self-hosted king-capital runner. The test job explicitly runs `bun test:unit`; integration tests are excluded because they require DATABASE_URL.\
+"""
+source = ".github/workflows/ci.yml; https://github.com/King-Capital/king-ops/blob/d29c642f02bce0314ff63f8d83e708fb50b69201/.github/workflows/ci.yml; verified_at=2026-08-05T23:58:51Z; source_commit=d29c642f02bce0314ff63f8d83e708fb50b69201"
+
+[[entries]]
+key = "repo.king_ops.factory"
+lane = "repo_facts"
+subject = "Factory execution pipelines"
+fact_type = "workflow"
+text = """
+The factory reads king-signals model positions, sizes accounts, computes position deltas, and routes outputs through QRT, TT TWAP, or LME voice pipelines. Factory run lineage and artifact provenance are stored durably in PostgreSQL through factory/run-store.ts.\
+"""
+source = "src/factory/README.md; https://github.com/King-Capital/king-ops/blob/d29c642f02bce0314ff63f8d83e708fb50b69201/src/factory/README.md; verified_at=2026-08-05T23:58:51Z; source_commit=d29c642f02bce0314ff63f8d83e708fb50b69201"
+
+[[entries]]
+key = "repo.king_ops.service_boundary"
+lane = "repo_facts"
+subject = "Post-execution API boundary"
+fact_type = "api_contract"
+text = """
+king-ops is a Bun/Hono service on port 3600. GET /health is public; every /api route passes through bearer-key authentication. The API covers allocation, allocate-and-reconcile, rebalance sessions, approvals, factory runs, positions, and leaves.\
+"""
+source = "src/server.ts; https://github.com/King-Capital/king-ops/blob/d29c642f02bce0314ff63f8d83e708fb50b69201/src/server.ts; verified_at=2026-08-05T23:58:51Z; source_commit=d29c642f02bce0314ff63f8d83e708fb50b69201"
+
+[[entries]]
+key = "repo.king_ops.post_execution_ops"
+lane = "repo_facts"
+subject = "post-execution ops"
+fact_type = "workflow"
+text = """
+king-ops owns post-execution operations such as fill allocation, FCM, and leaves; king-dashboard consumes it via KING_OPS_URL with bearer API key.\
+"""
+source = "package.json; https://github.com/King-Capital/king-ops/blob/ae3897140a793b2388dc6617b59b52c58e469321/package.json; verified_at=2026-06-18T08:00:00.000Z; source_commit=ae3897140a793b2388dc6617b59b52c58e469321"
+
+[[entries]]
+key = "repo.king_ops.auth_mode"
+lane = "repo_facts"
+subject = "Production API key failure mode"
+fact_type = "gotcha"
+text = """
+If API_KEY is absent in production, king-ops fails closed per request with HTTP 503. Outside production an absent key permits development traffic. When configured, the Authorization bearer value is checked with timingSafeEqual and invalid or malformed values produce HTTP 401.\
+"""
+source = "src/lib/auth.ts; https://github.com/King-Capital/king-ops/blob/d29c642f02bce0314ff63f8d83e708fb50b69201/src/lib/auth.ts; verified_at=2026-08-05T23:58:51Z; source_commit=d29c642f02bce0314ff63f8d83e708fb50b69201"
+
+[[entries]]
+key = "repo.king_ops.session_cas"
+lane = "repo_facts"
+subject = "Rebalance session state machine"
+fact_type = "api_contract"
+text = """
+Rebalance sessions follow INITIATED -> ORDERS_GENERATED -> PARTIALLY_FILLED or FULLY_FILLED -> ALLOCATED -> RECONCILED. Transitions validate the allowed edge and use an UPDATE constrained by the previously read status, so concurrent callers receive a conflict instead of silently overwriting state.\
+"""
+source = "src/session/state-machine.ts; https://github.com/King-Capital/king-ops/blob/d29c642f02bce0314ff63f8d83e708fb50b69201/src/session/state-machine.ts; verified_at=2026-08-05T23:58:51Z; source_commit=d29c642f02bce0314ff63f8d83e708fb50b69201"
+
+[[entries]]
+key = "repo.king_ops.deploy_contract"
+lane = "repo_facts"
+subject = "Tag-driven user-service deployment"
+fact_type = "workflow"
+text = """
+Version tags trigger validation and deployment. The target host comes from repository variable KING_OPS_HOST, files install under /home/king/ops, and the service is managed as the king user's systemd unit. Deployment checks GET /health on port 3600 and restores the pre-deploy snapshot on failure.\
+"""
+source = ".github/workflows/deploy.yml; https://github.com/King-Capital/king-ops/blob/d29c642f02bce0314ff63f8d83e708fb50b69201/.github/workflows/deploy.yml; verified_at=2026-08-05T23:58:51Z; source_commit=d29c642f02bce0314ff63f8d83e708fb50b69201"
+
+[[entries]]
+key = "repo.king_ops.allocator"
+lane = "repo_facts"
+subject = "Trade allocator responsibilities"
+fact_type = "workflow"
+text = """
+The allocator parses TT raw CSV exports into single-lot fills, maps contracts to Bloomberg symbols, computes VWAP, applies largest-remainder pari passu allocation, generates per-FCM CSV and Excel outputs, and persists allocation results.\
+"""
+source = "src/allocator/README.md; https://github.com/King-Capital/king-ops/blob/d29c642f02bce0314ff63f8d83e708fb50b69201/src/allocator/README.md; verified_at=2026-08-05T23:58:51Z; source_commit=d29c642f02bce0314ff63f8d83e708fb50b69201"

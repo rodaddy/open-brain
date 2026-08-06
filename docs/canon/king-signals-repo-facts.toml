@@ -1,0 +1,90 @@
+# KING-SIGNALS REPO FACTS
+#
+# STATUS: WRITTEN. This pack is the reviewable source for the live repo facts.
+# Older rows were mirrored from dogfood with their stored provenance; their
+# historical sources were not re-verified in this run. The five issue #520
+# target packs add source-verified rows written through OpenBrainClient and
+# read back. Canon reconciler repo-fact apply remains tracked by issue #588.
+# Pack assembled 2026-08-05T23:58:51Z.
+
+kind = "canon"
+
+[[entries]]
+key = "repo.king_signals.active_intraday_signals_service"
+lane = "repo_facts"
+subject = "active intraday signals service"
+fact_type = "workflow"
+text = """
+king-signals is the active Python intraday signal service; it depends on king-core DB contracts and writes payload metadata source='king-signals'.\
+"""
+source = "pyproject.toml; https://github.com/King-Capital/king-signals/blob/d95bfd1e35e6247fe7bec91ac732f486c7351b98/pyproject.toml; verified_at=2026-06-18T08:00:00.000Z; source_commit=d95bfd1e35e6247fe7bec91ac732f486c7351b98"
+
+[[entries]]
+key = "repo.king_signals.default_branch_is_production_not_main"
+lane = "repo_facts"
+subject = "Default branch is production, not main"
+fact_type = "workflow"
+text = """
+The default and only protected branch in king-signals is `production`; all PRs target it, and CI (.github/workflows/test.yml) only runs pushes against `production`. `main` is deprecated and must not be used, targeted, or referenced — when anyone says "main branch" here they mean `production`.\
+"""
+source = "CLAUDE.md; https://github.com/King-Capital/king-signals/blob/db0694e7e6aae157b52ff9c389357b053742dc65/CLAUDE.md#L11; verified_at=2026-08-03T16:17:42Z; source_commit=db0694e7e6aae157b52ff9c389357b053742dc65"
+
+[[entries]]
+key = "repo.king_signals.deploy_pipeline_to_ct304_via_self_hosted_runner"
+lane = "repo_facts"
+subject = "Deploy pipeline to CT304 via self-hosted runner"
+fact_type = "workflow"
+text = """
+Merging a PR into `production` triggers .github/workflows/deploy.yml, which auto-bumps a semver tag, publishes a build to the `/mnt/builds/king-signals` share, rsyncs it to `/home/king/king-signals` on CT304 (Proxmox LXC, signal computation host), installs systemd units/timers from `infrastructure/`, and health-checks by running `uv run king-signals --help`. Every CI and deploy job runs on `[self-hosted, king-runner]`, not GitHub-hosted runners.\
+"""
+source = ".github/workflows/deploy.yml; https://github.com/King-Capital/king-signals/blob/db0694e7e6aae157b52ff9c389357b053742dc65/.github/workflows/deploy.yml#L145; verified_at=2026-08-03T16:17:42Z; source_commit=db0694e7e6aae157b52ff9c389357b053742dc65"
+
+[[entries]]
+key = "repo.king_signals.no_magic_numbers_rule"
+lane = "repo_facts"
+subject = "No magic numbers rule"
+fact_type = "workflow"
+text = """
+Hardcoded numeric parameters are forbidden in signal computation, backtest logic, and test assertions — every value comes from `DEFAULT_CONFIG` (SignalConfig) or `PortfolioConfig`, and tests must reference config values (e.g. `DEFAULT_CONFIG.sector_caps["Energy"][1]`) rather than raw numbers. New parameters are added to `SignalConfig` in `constants.py` with a default, never as module-level constants with raw values.\
+"""
+source = "CLAUDE.md; https://github.com/King-Capital/king-signals/blob/db0694e7e6aae157b52ff9c389357b053742dc65/CLAUDE.md#L113; verified_at=2026-08-03T16:17:42Z; source_commit=db0694e7e6aae157b52ff9c389357b053742dc65"
+
+[[entries]]
+key = "repo.king_signals.python_3_14_free_threaded_runtime"
+lane = "repo_facts"
+subject = "Python 3.14 free-threaded runtime"
+fact_type = "dependency"
+text = """
+king-signals targets the Python 3.14 free-threaded (no-GIL) runtime — install with `uv sync --python 3.14t` and set `PYTHON_GIL=0` so the runtime stays in no-GIL mode when extension modules load. It uses psycopg3 for GIL-free concurrent DB access and ThreadPoolExecutor for parallel commodity processing; mypy and ruff are both pinned to py314.\
+"""
+source = "CLAUDE.md; https://github.com/King-Capital/king-signals/blob/db0694e7e6aae157b52ff9c389357b053742dc65/CLAUDE.md#L124; verified_at=2026-08-03T16:17:42Z; source_commit=db0694e7e6aae157b52ff9c389357b053742dc65"
+
+[[entries]]
+key = "repo.king_signals.required_environment_variables_and_database"
+lane = "repo_facts"
+subject = "Required environment variables and database"
+fact_type = "migration"
+text = """
+Running king-signals requires `MARKET_DATA_DATABASE_URL` and `KING_DATA_DIR` to be set; `config.py` raises `RuntimeError("KING_DATA_DIR must be set. No default path configured.")` with no fallback. Both database URLs point at the single `king_capital` Postgres database on CT304 (localhost in deployment), and `KING_DATA_DIR` must contain `Signals/`, `Input/`, and `Output/` subdirectories.\
+"""
+source = ".env.example; https://github.com/King-Capital/king-signals/blob/db0694e7e6aae157b52ff9c389357b053742dc65/.env.example#L2; verified_at=2026-08-03T16:17:42Z; source_commit=db0694e7e6aae157b52ff9c389357b053742dc65"
+
+[[entries]]
+key = "repo.king_signals.run_and_validation_commands_use_uv"
+lane = "repo_facts"
+subject = "Run and validation commands use uv"
+fact_type = "validation"
+text = """
+The pipeline runs as `uv run king-signals` (steps 1-4) or `uv run king-signals --charts` (adds steps 5-6). Validation before every commit is `uv run mypy src/king_signals/` and `uv run ruff check src/`, both required to pass with zero errors, plus `uv run pytest tests/ -v`. The package manager is `uv` — never pip or pip3.\
+"""
+source = "CLAUDE.md; https://github.com/King-Capital/king-signals/blob/db0694e7e6aae157b52ff9c389357b053742dc65/CLAUDE.md#L25; verified_at=2026-08-03T16:17:42Z; source_commit=db0694e7e6aae157b52ff9c389357b053742dc65"
+
+[[entries]]
+key = "repo.king_signals.two_distinct_frozen_dataclass_config_systems"
+lane = "repo_facts"
+subject = "Two distinct frozen-dataclass config systems"
+fact_type = "dependency"
+text = """
+king-signals has two separate config systems that are NOT duplicates: `SignalConfig`/`DEFAULT_CONFIG` in `src/king_signals/constants.py` owns backtest, siggen, and research parameters (vol target 0.10, 252 trading days), while `PortfolioConfig` in `src/king_signals/config.py` owns the daily signal pipeline and dashboard (vol target 0.045, 256 trading days). Using the wrong one, or hardcoding a value that belongs in either, is a bug.\
+"""
+source = "CLAUDE.md; https://github.com/King-Capital/king-signals/blob/db0694e7e6aae157b52ff9c389357b053742dc65/CLAUDE.md#L46; verified_at=2026-08-03T16:17:42Z; source_commit=db0694e7e6aae157b52ff9c389357b053742dc65"

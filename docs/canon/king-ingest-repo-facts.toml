@@ -1,0 +1,80 @@
+# KING-INGEST REPO FACTS
+#
+# STATUS: WRITTEN. This pack is the reviewable source for the live repo facts.
+# Older rows were mirrored from dogfood with their stored provenance; their
+# historical sources were not re-verified in this run. The five issue #520
+# target packs add source-verified rows written through OpenBrainClient and
+# read back. Canon reconciler repo-fact apply remains tracked by issue #588.
+# Pack assembled 2026-08-05T23:58:51Z.
+
+kind = "canon"
+
+[[entries]]
+key = "repo.king_ingest.ci_and_local_verification_commands"
+lane = "repo_facts"
+subject = "CI and local verification commands"
+fact_type = "validation"
+text = """
+CI runs on PRs to `main` across four jobs (lint, typecheck, test, then build) on the self-hosted runner label `[self-hosted, king-ingest]`, pinned to Bun 1.3.10, and every job requires the `GH_PAT` secret to install the private `@king-capital/core` dependency. Reproduce locally with `bun run lint` (Biome), `bun run typecheck` (`tsc --noEmit`), and `bun test`.\
+"""
+source = ".github/workflows/ci.yml; https://github.com/King-Capital/king-ingest/blob/99c3828c883aa19b561fb64d79eb6d601bd1efd7/.github/workflows/ci.yml#L15; verified_at=2026-08-03T16:17:42Z; source_commit=99c3828c883aa19b561fb64d79eb6d601bd1efd7"
+
+[[entries]]
+key = "repo.king_ingest.databases_written"
+lane = "repo_facts"
+subject = "Databases written"
+fact_type = "migration"
+text = """
+Pipelines write to the market data PostgreSQL DB on CT 304 via `MARKET_DATA_DATABASE_URL`, which is required (`src/lib/env.ts:12`; `src/lib/db.ts:18` throws without it) and is the write target for futures bars, weather, COT, EIA, and warehouse stocks. `DATABASE_URL` (the king_dashboard DB) is documented in the README config table but is `optional()` in the env schema and is not read anywhere in `src/` -- treat it as legacy, not a requirement for a full run.\
+"""
+source = "src/lib/env.ts; https://github.com/King-Capital/king-ingest/blob/99c3828c883aa19b561fb64d79eb6d601bd1efd7/src/lib/env.ts#L12; verified_at=2026-08-03T16:17:42Z; source_commit=99c3828c883aa19b561fb64d79eb6d601bd1efd7"
+
+[[entries]]
+key = "repo.king_ingest.deploy_target_and_scheduling"
+lane = "repo_facts"
+subject = "Deploy target and scheduling"
+fact_type = "workflow"
+text = """
+This service deploys only to CT 304 at 10.71.20.16 (the market data DB LXC, co-located with the data) and never to CT 302 prod. Scheduling is systemd timers, not cron: `infrastructure/*.service` and `*.timer` units are copied to `/etc/systemd/system/` by the deploy workflow. The `.env` file lives at `/home/king/king-ingest/.env` on CT 304 and survives deploys.\
+"""
+source = ".github/workflows/deploy.yml; https://github.com/King-Capital/king-ingest/blob/99c3828c883aa19b561fb64d79eb6d601bd1efd7/.github/workflows/deploy.yml#L22; verified_at=2026-08-03T16:17:42Z; source_commit=99c3828c883aa19b561fb64d79eb6d601bd1efd7"
+
+[[entries]]
+key = "repo.king_ingest.frd_bulk_ingest_uses_psql_copy_not_bun"
+lane = "repo_facts"
+subject = "FRD bulk ingest uses psql COPY, not Bun"
+fact_type = "dependency"
+text = """
+The FRD futures-bar pipeline delegates bulk loading to the shell script `infrastructure/frd-ingest.sh` (curl to 7z to `xargs -P4 psql COPY`), which TypeScript spawns via `Bun.spawn`. This is deliberate: Bun/V8 OOM'd at 14 GB on the 1min zip (3.9 GB, 33.5M rows) while psql COPY does it in 281 MB peak over 3.5 minutes. Do not rewrite the bulk path in TypeScript; TS keeps only trading-day detection, `run_log` logging, gap detection, CSV parsing, and symbol mapping.\
+"""
+source = "README.md; https://github.com/King-Capital/king-ingest/blob/99c3828c883aa19b561fb64d79eb6d601bd1efd7/README.md#L154; verified_at=2026-08-03T16:17:42Z; source_commit=99c3828c883aa19b561fb64d79eb6d601bd1efd7"
+
+[[entries]]
+key = "repo.king_ingest.market_data_ingestion_pipelines"
+lane = "repo_facts"
+subject = "market-data ingestion pipelines"
+fact_type = "workflow"
+text = """
+king-ingest owns ingestion pipelines for EIA, NOAA, CPC, CFTC, FRD, Databento, Kalshi, GIE, COMEX, LME, SHFE, USDA, FRED, Bloomberg, and TACO/RSS.\
+"""
+source = "package.json; https://github.com/King-Capital/king-ingest/blob/6d51e2f4b600e10048319aa88784f7acd686f49a/package.json; verified_at=2026-06-18T08:00:00.000Z; source_commit=6d51e2f4b600e10048319aa88784f7acd686f49a"
+
+[[entries]]
+key = "repo.king_ingest.pre_commit_hook_is_blocking"
+lane = "repo_facts"
+subject = "Pre-commit hook is blocking"
+fact_type = "workflow"
+text = """
+`.githooks/pre-commit` (wired up by the `prepare` script setting `core.hooksPath`) runs ggshield secret scanning when installed, then blocks the commit if any staged `.ts`/`.tsx` file is missing TSDoc `@module`/`@description` tags. It then auto-generates per-folder `src/**/README.md` files and applies `biome check --write`, re-staging both -- so a commit can add files you did not stage. The TSDoc/README steps run via the parent workspace's `scripts/check-tsdoc.ts` and `scripts/gen-readme.ts`; if king-ingest is checked out outside the king-capital workspace the hook prints "workspace scripts not found" and exits 0.\
+"""
+source = ".githooks/pre-commit; https://github.com/King-Capital/king-ingest/blob/99c3828c883aa19b561fb64d79eb6d601bd1efd7/.githooks/pre-commit#L47; verified_at=2026-08-03T16:17:42Z; source_commit=99c3828c883aa19b561fb64d79eb6d601bd1efd7"
+
+[[entries]]
+key = "repo.king_ingest.runtime_and_entrypoints"
+lane = "repo_facts"
+subject = "Runtime and entrypoints"
+fact_type = "dependency"
+text = """
+king-ingest is a Bun/TypeScript service with two entrypoints: the pipeline orchestrator `bun src/main.ts --pipeline <name>` (or `--all`), which runs an ingestion pipeline and exits, and a Hono API server `bun src/server.ts` (npm script `service:api`) that listens on `PORT` defaulting to 3500 and receives Bloomberg data pushes from WSL2. Auth on the API server is fail-closed and requires `API_KEY` in the environment.\
+"""
+source = "CLAUDE.md; https://github.com/King-Capital/king-ingest/blob/99c3828c883aa19b561fb64d79eb6d601bd1efd7/CLAUDE.md#L67; verified_at=2026-08-03T16:17:42Z; source_commit=99c3828c883aa19b561fb64d79eb6d601bd1efd7"

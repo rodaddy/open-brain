@@ -1,0 +1,80 @@
+# KING-DASHBOARD REPO FACTS
+#
+# STATUS: WRITTEN. This pack is the reviewable source for the live repo facts.
+# Older rows were mirrored from dogfood with their stored provenance; their
+# historical sources were not re-verified in this run. The five issue #520
+# target packs add source-verified rows written through OpenBrainClient and
+# read back. Canon reconciler repo-fact apply remains tracked by issue #588.
+# Pack assembled 2026-08-05T23:58:51Z.
+
+kind = "canon"
+
+[[entries]]
+key = "repo.king_dashboard.ci_does_not_run_tests"
+lane = "repo_facts"
+subject = "CI does not run tests"
+fact_type = "validation"
+text = """
+The CI workflow has only four jobs -- `lint`, `no-sudo-check`, `build`, and `gate` -- and never invokes `bun test`, so a green CI run proves nothing about the Vitest suite. Tests are the author's responsibility: run `bun test` and `bun run build` locally before pushing.\
+"""
+source = ".github/workflows/ci.yml; https://github.com/King-Capital/king-dashboard/blob/4c39989a2729539710ba5961dc84fadd93e82cac/.github/workflows/ci.yml#L14; verified_at=2026-08-03T16:17:42Z; source_commit=4c39989a2729539710ba5961dc84fadd93e82cac"
+
+[[entries]]
+key = "repo.king_dashboard.dashboard_consumer_hub"
+lane = "repo_facts"
+subject = "dashboard consumer hub"
+fact_type = "dependency"
+text = """
+king-dashboard depends on king-core and consumes king-agents, king-signals, king-ops, king-ingest, and king-trading; treat it as the heaviest UI/API consumer.\
+"""
+source = "package.json; https://github.com/King-Capital/king-dashboard/blob/4c39989a2729539710ba5961dc84fadd93e82cac/package.json; verified_at=2026-06-18T08:00:00.000Z; source_commit=4c39989a2729539710ba5961dc84fadd93e82cac"
+
+[[entries]]
+key = "repo.king_dashboard.deploy_target_and_release_trigger"
+lane = "repo_facts"
+subject = "Deploy target and release trigger"
+fact_type = "workflow"
+text = """
+The app deploys to Proxmox LXC container CT 302 at 10.71.20.62, running as user `king` out of `/home/king/app/`, served on port 3100 behind Caddy and restarted with `systemctl restart king-dashboard`. Deployment is triggered by pushing a `v[0-9]*` version tag (or manual `gh workflow run deploy.yml`). Note: README says the build job runs on ubuntu-latest, but .github/workflows/deploy.yml is stricter and correct -- all three jobs (version, build, deploy-prod) run on `[self-hosted, king-runner]`; there is no GitHub-hosted runner in the deploy path.\
+"""
+source = ".github/workflows/deploy.yml; https://github.com/King-Capital/king-dashboard/blob/4c39989a2729539710ba5961dc84fadd93e82cac/.github/workflows/deploy.yml#L34; verified_at=2026-08-03T16:17:42Z; source_commit=4c39989a2729539710ba5961dc84fadd93e82cac"
+
+[[entries]]
+key = "repo.king_dashboard.dev_server_port_and_local_database"
+lane = "repo_facts"
+subject = "Dev server port and local database"
+fact_type = "dependency"
+text = """
+The dev server runs on port 3100 (`next dev --port 3100`), not the Next.js default 3000. Local development needs a `.env.local` with `DATABASE_URL=postgresql://king:king@localhost:5432/king_dashboard` plus `BETTER_AUTH_SECRET` (min 32 chars) and `BETTER_AUTH_URL`; the database `king_dashboard` must be owned by the `king` role.\
+"""
+source = "README.md; https://github.com/King-Capital/king-dashboard/blob/4c39989a2729539710ba5961dc84fadd93e82cac/README.md#L119; verified_at=2026-08-03T16:17:42Z; source_commit=4c39989a2729539710ba5961dc84fadd93e82cac"
+
+[[entries]]
+key = "repo.king_dashboard.logging_and_server_action_invariants"
+lane = "repo_facts"
+subject = "Logging and server-action invariants"
+fact_type = "workflow"
+text = """
+`console.log/warn/error` is banned -- all logging goes through Pino via `rootLogger.child({ module: "domain:name" })` from `@/lib/logging/logger`, and `sanitizePreview()` must wrap all LLM response content before it reaches logs. In every server action `verifySession()` plus the role assertion runs FIRST, before any Zod or UUID validation, so unauthenticated callers always get "Unauthorized" regardless of input shape; cron endpoints instead authenticate with a `CRON_SECRET` header compared using `timingSafeEqual()`.\
+"""
+source = "CLAUDE.md; https://github.com/King-Capital/king-dashboard/blob/4c39989a2729539710ba5961dc84fadd93e82cac/CLAUDE.md#L64; verified_at=2026-08-03T16:17:42Z; source_commit=4c39989a2729539710ba5961dc84fadd93e82cac"
+
+[[entries]]
+key = "repo.king_dashboard.migrations_never_db_push"
+lane = "repo_facts"
+subject = "Migrations, never db:push"
+fact_type = "migration"
+text = """
+Always generate a Drizzle migration (`bun run db:generate`, i.e. `bun --env-file=.env.local drizzle-kit generate`) for anything that will be deployed; the LXC applies changes via `migrate.ts` and `db:push` must never be used for deployed code. Additionally, migrations must never ALTER TABLE OWNER, GRANT across roles, or ALTER DEFAULT PRIVILEGES -- the single role `king` owns every table and sequence, and ownership drift is fixed at the DB level as a superuser, not in a migration file.\
+"""
+source = "CLAUDE.md; https://github.com/King-Capital/king-dashboard/blob/4c39989a2729539710ba5961dc84fadd93e82cac/CLAUDE.md#L84; verified_at=2026-08-03T16:17:42Z; source_commit=4c39989a2729539710ba5961dc84fadd93e82cac"
+
+[[entries]]
+key = "repo.king_dashboard.stack_and_package_manager"
+lane = "repo_facts"
+subject = "Stack and package manager"
+fact_type = "dependency"
+text = """
+king-dashboard is a Next.js 16 / React 19 / TypeScript 5 / Tailwind 4 app over PostgreSQL, using Drizzle ORM for schema and migrations. The package manager is bun and only bun -- never npm or yarn. Core commands are `bun run dev`, `bun run build`, `bun run lint`, and `bun test`.\
+"""
+source = "CLAUDE.md; https://github.com/King-Capital/king-dashboard/blob/4c39989a2729539710ba5961dc84fadd93e82cac/CLAUDE.md#L24; verified_at=2026-08-03T16:17:42Z; source_commit=4c39989a2729539710ba5961dc84fadd93e82cac"

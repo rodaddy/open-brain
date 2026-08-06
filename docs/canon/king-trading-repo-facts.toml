@@ -1,0 +1,90 @@
+# KING-TRADING REPO FACTS
+#
+# STATUS: WRITTEN. This pack is the reviewable source for the live repo facts.
+# Older rows were mirrored from dogfood with their stored provenance; their
+# historical sources were not re-verified in this run. The five issue #520
+# target packs add source-verified rows written through OpenBrainClient and
+# read back. Canon reconciler repo-fact apply remains tracked by issue #588.
+# Pack assembled 2026-08-05T23:58:51Z.
+
+kind = "canon"
+
+[[entries]]
+key = "repo.king_trading.deploy_target"
+lane = "repo_facts"
+subject = "CT306 deploy and dual-service health checks"
+fact_type = "workflow"
+text = """
+Pushes to the default branch deploy to CT306 as user king under /home/king/king-trading. The workflow builds and tests first, restarts separate king-trading-server and king-trading-ui systemd units, then checks server liveness on port 3400 and UI liveness on port 3000.\
+"""
+source = ".github/workflows/deploy.yml; https://github.com/King-Capital/king-trading/blob/3330edb8a367279a3c5d2c983a1d38a711bf7bf0/.github/workflows/deploy.yml; verified_at=2026-08-05T23:58:51Z; source_commit=3330edb8a367279a3c5d2c983a1d38a711bf7bf0"
+
+[[entries]]
+key = "repo.king_trading.health_semantics"
+lane = "repo_facts"
+subject = "Liveness and readiness are different endpoints"
+fact_type = "api_contract"
+text = """
+Use GET /health/live for deployment liveness: it returns 200 when the HTTP server is running even if CQG is not ready. GET /health is readiness and returns 503 until server startup is complete and the trading client reports loggedIn.\
+"""
+source = "src/server.ts; https://github.com/King-Capital/king-trading/blob/3330edb8a367279a3c5d2c983a1d38a711bf7bf0/src/server.ts; verified_at=2026-08-05T23:58:51Z; source_commit=3330edb8a367279a3c5d2c983a1d38a711bf7bf0"
+
+[[entries]]
+key = "repo.king_trading.pretrade_risk"
+lane = "repo_facts"
+subject = "Pre-trade risk checks"
+fact_type = "validation"
+text = """
+Order submission validates maximum order size, resulting position size, per-position daily P&L, and limit/stop price reasonability against last price and ATR. Portfolio P&L has a separate aggregate daily-loss check; callers must route orders through OrderManager rather than bypass these checks.\
+"""
+source = "src/lib/orders/risk-checks.ts; https://github.com/King-Capital/king-trading/blob/3330edb8a367279a3c5d2c983a1d38a711bf7bf0/src/lib/orders/risk-checks.ts; verified_at=2026-08-05T23:58:51Z; source_commit=3330edb8a367279a3c5d2c983a1d38a711bf7bf0"
+
+[[entries]]
+key = "repo.king_trading.ci_gates"
+lane = "repo_facts"
+subject = "Pull request CI gates"
+fact_type = "validation"
+text = """
+Pull request CI runs on the self-hosted king-trading runner and has separate lint, typecheck, and test jobs. The typecheck job performs a Next.js build before `tsc --noEmit`; the test job runs the full `bun test` suite.\
+"""
+source = ".github/workflows/ci.yml; https://github.com/King-Capital/king-trading/blob/3330edb8a367279a3c5d2c983a1d38a711bf7bf0/.github/workflows/ci.yml; verified_at=2026-08-05T23:58:51Z; source_commit=3330edb8a367279a3c5d2c983a1d38a711bf7bf0"
+
+[[entries]]
+key = "repo.king_trading.signal_subscription"
+lane = "repo_facts"
+subject = "Signal subscription and execution path"
+fact_type = "workflow"
+text = """
+king-trading subscribes with `NatsSubjects.signal(envPrefix, "*", ">")`. Received king-signals payloads are queued; qualifying auto-execution either submits to the netting coordinator or calls OrderManager directly, so both paths retain the order risk boundary. NATS unavailability disables the subscriber but does not stop the server.\
+"""
+source = "src/lib/signals/subscriber.ts; https://github.com/King-Capital/king-trading/blob/3330edb8a367279a3c5d2c983a1d38a711bf7bf0/src/lib/signals/subscriber.ts; verified_at=2026-08-05T23:58:51Z; source_commit=3330edb8a367279a3c5d2c983a1d38a711bf7bf0"
+
+[[entries]]
+key = "repo.king_trading.trading_app_dependencies"
+lane = "repo_facts"
+subject = "trading app dependencies"
+fact_type = "dependency"
+text = """
+king-trading depends on king-core, king-market-data, and king-signals; it owns CQG trading REST/WebSocket behavior, order management, and risk controls.\
+"""
+source = "package.json; https://github.com/King-Capital/king-trading/blob/9906157bd1e2487a74d8dcfd456528ecf4376b61/package.json; verified_at=2026-06-18T08:00:00.000Z; source_commit=9906157bd1e2487a74d8dcfd456528ecf4376b61"
+
+[[entries]]
+key = "repo.king_trading.mode_and_ws_guard"
+lane = "repo_facts"
+subject = "Trading modes and WebSocket command guard"
+fact_type = "gotcha"
+text = """
+TRADING_MODE is one of mock, paper, or live and defaults to mock. Mock mode requires the built-in gateway. Inbound UI WebSocket commands require WS_COMMAND_TOKEN of at least 16 characters, and the server binds to 127.0.0.1 unless SERVER_BIND_ADDRESS is explicitly changed.\
+"""
+source = "src/config/env.ts; https://github.com/King-Capital/king-trading/blob/3330edb8a367279a3c5d2c983a1d38a711bf7bf0/src/config/env.ts; verified_at=2026-08-05T23:58:51Z; source_commit=3330edb8a367279a3c5d2c983a1d38a711bf7bf0"
+
+[[entries]]
+key = "repo.king_trading.runtime_shape"
+lane = "repo_facts"
+subject = "Two-process runtime shape"
+fact_type = "workflow"
+text = """
+Run king-trading as two processes: `bun run server` owns CQG, orders, NATS, HTTP health, and UI WebSockets on SERVER_PORT (default 3400); `bun run dev` owns the Next.js dashboard. Both are required for the full application.\
+"""
+source = "CLAUDE.md; https://github.com/King-Capital/king-trading/blob/3330edb8a367279a3c5d2c983a1d38a711bf7bf0/CLAUDE.md; verified_at=2026-08-05T23:58:51Z; source_commit=3330edb8a367279a3c5d2c983a1d38a711bf7bf0"
