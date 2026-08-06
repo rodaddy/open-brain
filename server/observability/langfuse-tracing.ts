@@ -1253,16 +1253,27 @@ interface TraceObservation {
   updateTrace(input: {
     name: string;
     tags: string[];
+    input?: unknown;
+    output?: unknown;
+    metadata?: Record<string, unknown>;
     sessionId?: string;
     userId?: string;
   }): void;
-  end(): void;
+  end(endTime?: Date): void;
+}
+
+interface TraceEmissionOptions<T extends TraceObservation> {
+  emitObservation?: (
+    parent: T,
+    observation: BackgroundObservation,
+  ) => void;
 }
 
 /** Materialize one completed trace body through the SDK observation surface. */
-export function emitTraceBodyWithObservations(
+export function emitTraceBodyWithObservations<T extends TraceObservation>(
   body: TraceBody,
-  start: (name: string, body: Record<string, unknown>) => TraceObservation,
+  start: (name: string, body: Record<string, unknown>) => T,
+  options: TraceEmissionOptions<T> = {},
 ): void {
   const span = start(body.name, {
     input: body.input,
@@ -1273,6 +1284,9 @@ export function emitTraceBodyWithObservations(
     span.updateTrace({
       name: body.name,
       tags: body.tags,
+      input: body.input,
+      output: body.output,
+      metadata: body.metadata,
       ...(body.sessionId === undefined ? {} : { sessionId: body.sessionId }),
       ...(body.userId === undefined ? {} : { userId: body.userId }),
     });
@@ -1284,8 +1298,11 @@ export function emitTraceBodyWithObservations(
       });
       child.end();
     }
+    for (const observation of body.observations ?? []) {
+      options.emitObservation?.(span, observation);
+    }
   } finally {
-    span.end();
+    span.end(body.endedAt === undefined ? undefined : new Date(body.endedAt));
   }
 }
 
@@ -1466,30 +1483,18 @@ function defaultSinkFactory(config: McpTracingConfig): TracingSink {
       // These records are emitted after the work completes. Supplying the real
       // timestamps preserves worker/provider duration instead of measuring the
       // few microseconds spent enqueueing the completed trace.
-      const span = startObservation(
-        body.name,
-        {
-          input: body.input,
-          output: body.output,
-          metadata: body.metadata,
-        },
-        body.startedAt === undefined
-          ? undefined
-          : { startTime: new Date(body.startedAt) },
+      emitTraceBodyWithObservations(
+        body,
+        (name, attributes) =>
+          startObservation(
+            name,
+            attributes,
+            body.startedAt === undefined
+              ? undefined
+              : { startTime: new Date(body.startedAt) },
+          ),
+        { emitObservation: emitChildObservation },
       );
-      span.updateTrace({
-        name: body.name,
-        tags: body.tags,
-        input: body.input,
-        output: body.output,
-        metadata: body.metadata,
-        ...(body.sessionId === undefined ? {} : { sessionId: body.sessionId }),
-        ...(body.userId === undefined ? {} : { userId: body.userId }),
-      });
-      for (const observation of body.observations ?? []) {
-        emitChildObservation(span, observation);
-      }
-      span.end(body.endedAt === undefined ? undefined : new Date(body.endedAt));
       tracker.recordEnqueued();
     },
     async forceFlush(): Promise<void> {
