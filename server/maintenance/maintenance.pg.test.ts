@@ -421,6 +421,72 @@ dbDescribe("maintenance runtime lease boundary (live Postgres)", () => {
     await deleteKind(ordinaryKind);
   });
 
+  it("starts a producer, so an autostarted runtime enqueues without an operator", async () => {
+    // THE #384 REGRESSION. This boundary composed the CONSUMER half and nothing
+    // else: `createMaintenanceRuntime` built a runner, `src/maintenance-
+    // bootstrap.ts` built a runner AND started the sweep, and `server/main.ts`
+    // — the post-Phase-6 serving entrypoint — reached only the first. Measured
+    // on the local clone 2026-08-07: 319 "maintenance queue idle" lines, zero
+    // `maintenance_sweep_complete`, maintenance enabled throughout. The runner
+    // polled a queue nothing filled.
+    //
+    // WHAT MAKES THIS TEST ABLE TO FAIL. It asserts on OBSERVED PRODUCTION, not
+    // on the presence of a field: a runtime is composed with autoStart, given a
+    // real derivable source, and then the DATABASE is read to see whether a job
+    // appeared that no test enqueued. Every enqueue here is the server's own.
+    // Asserting `runtime.sweep !== undefined` would pass against a sweep that
+    // is constructed and never ticks, which is the defect's own shape one level
+    // up.
+    const client = await db();
+    const namespace = `${KIND_PREFIX}.producer`;
+    const contentHash = "a".repeat(64);
+
+    await client.query(`DELETE FROM ob_sources WHERE namespace = $1`, [
+      namespace,
+    ]);
+    await client.query(
+      `INSERT INTO ob_sources
+         (namespace, source_kind, external_id, title, approval_state,
+          approved_by, approved_at, lifecycle_state, content_hash, created_by)
+       VALUES ($1, 'drop', $2, 'producer proof', 'approved', 'test', now(),
+               'active', $3, 'test')`,
+      [namespace, `${KIND_PREFIX}-producer`, contentHash],
+    );
+
+    // A short interval so the proof does not depend on the 5s default, and no
+    // handlers for graph.derive: this asserts the PRODUCER ran, and letting the
+    // real deriver execute would drag an embedding provider into a lease test.
+    const runtime = createMaintenanceRuntime({
+      config: config({ pollIntervalMs: 50, graphDerivationLimit: 10 }),
+      logger: silentLogger(),
+      pool: client,
+      handlers: new Map([[`${KIND_PREFIX}.noop`, async () => {}]]),
+    });
+    if (!runtime) throw new Error("maintenance runtime should be composed");
+
+    try {
+      let produced = 0;
+      for (let attempt = 0; attempt < 40 && produced === 0; attempt += 1) {
+        const { rows } = await client.query<{ count: string }>(
+          `SELECT count(*)::text AS count FROM maintenance_jobs
+            WHERE namespace = $1 AND job_kind = 'graph.derive'`,
+          [namespace],
+        );
+        produced = Number.parseInt(rows[0]?.count ?? "0", 10);
+        if (produced === 0) await new Promise((r) => setTimeout(r, 50));
+      }
+      expect(produced).toBeGreaterThan(0);
+    } finally {
+      await runtime.stop();
+      await client.query(`DELETE FROM maintenance_jobs WHERE namespace = $1`, [
+        namespace,
+      ]);
+      await client.query(`DELETE FROM ob_sources WHERE namespace = $1`, [
+        namespace,
+      ]);
+    }
+  });
+
   it("composes no runtime when the operator disabled maintenance", async () => {
     // A disabled process must hold no poller at all. Returning `undefined`
     // rather than an idle runner is what keeps "disabled" and "absent from the
