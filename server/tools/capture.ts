@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { authIdentity, textResult, type MemoryToolDependencies } from "./types.ts";
 import { authorize, contentHash, decisionText, embeddingFields } from "./memory-helpers.ts";
+import { writeThoughtChunks, chunkReceiptFields } from "../../src/chunk-write.ts";
 
 const sourceRefsSchema = z.array(z.record(z.string(), z.unknown())).max(20);
 
@@ -108,6 +109,23 @@ async function writeThought(
     ],
   );
   const row = rows.rows[0];
+
+  // CHUNK ROWS FOR A LONG ENTRY (#605). The parent above holds the full text
+  // and its own whole-text vector; these add per-section resolution. This tree
+  // previously reported a hardcoded chunks_written: 0 while writing no chunks
+  // at all, which read as "short entry" for entries of any length.
+  const chunks = await writeThoughtChunks(dependencies.pool, {
+    parentId: row.id as string,
+    namespace,
+    createdBy,
+    content: args.content,
+    tags: args.tags ?? [],
+    embedFn: dependencies.embedFn,
+    source: "mcp-chunk",
+    isNew: row.is_new as boolean,
+    caller: "server/log_thought",
+  });
+
   dependencies.logger.info({ tool: "log_thought", embedded: embedded.embedded }, "tool_result");
   return textResult({
     id: row.id,
@@ -115,8 +133,7 @@ async function writeThought(
     embedded: embedded.embedded,
     merged: !row.is_new,
     source_refs: row.source_refs,
-    chunks_written: 0,
-    chunks_unembedded: 0,
+    ...chunkReceiptFields(chunks),
   });
 }
 
