@@ -1,0 +1,1135 @@
+diff --git a/scripts/decompose-oversize-thoughts.pg.test.ts b/scripts/decompose-oversize-thoughts.pg.test.ts
+new file mode 100644
+index 0000000..becd9b9
+--- /dev/null
++++ b/scripts/decompose-oversize-thoughts.pg.test.ts
+@@ -0,0 +1,260 @@
++/**
++ * Live-Postgres coverage for the issue #604 remediation apply path.
++ *
++ * Gated on OPENBRAIN_TEST_DATABASE_URL because the conflict target, transaction
++ * isolation, partial unique index, and JSONB source_refs behavior are decisions
++ * made by Postgres rather than by the TypeScript planner.
++ */
++import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
++import { Pool } from "pg";
++import { runMigrations } from "../src/db/migrate.ts";
++import { contentHash } from "../src/embedding.ts";
++import {
++  applyTargets,
++  dryRunReceipt,
++  readTargets,
++} from "./decompose-oversize-thoughts.ts";
++
++const DB_URL = process.env.OPENBRAIN_TEST_DATABASE_URL;
++const dbDescribe = DB_URL ? describe : describe.skip;
++const TEST_NAMESPACE = "issue-604-remediation-pg-test";
++const TEST_ACTOR = "issue-604-remediation-pg-test";
++const TARGET_SOURCE = "planning-skippy-agentspace";
++
++function transcript(marker: string, records = 120): string {
++  return Array.from({ length: records }, (_, index) =>
++    JSON.stringify({
++      type: index % 2 === 0 ? "user" : "assistant",
++      uuid: `${marker}-${index}`,
++      sessionId: marker,
++      message: { role: "user", content: `${marker} ${"x".repeat(80)}` },
++    }),
++  ).join("\n");
++}
++
++function repeatedTranscript(records = 120): string {
++  const shell = JSON.stringify({
++    type: "user",
++    uuid: "repeat",
++    sessionId: "repeat",
++    message: { role: "user", content: "" },
++  });
++  const padding = 199 - shell.length;
++  if (padding < 1) throw new Error("repeated transcript fixture is too large");
++  const line = JSON.stringify({
++    type: "user",
++    uuid: "repeat",
++    sessionId: "repeat",
++    message: { role: "user", content: "x".repeat(padding) },
++  });
++  if (line.length !== 199) {
++    throw new Error(`repeated transcript line must be 199 chars, got ${line.length}`);
++  }
++  return Array.from({ length: records }, () => line).join("\n");
++}
++
++dbDescribe("decompose-oversize-thoughts apply path (live Postgres)", () => {
++  let pool: Pool;
++
++  beforeAll(async () => {
++    pool = new Pool({ connectionString: DB_URL });
++    await pool.query("CREATE EXTENSION IF NOT EXISTS vector");
++    await runMigrations(pool);
++    await cleanup();
++  });
++
++  afterEach(cleanup);
++
++  afterAll(async () => {
++    await cleanup();
++    await pool.end();
++  });
++
++  async function cleanup(): Promise<void> {
++    await pool.query("DELETE FROM discarded_entries WHERE namespace = $1", [
++      TEST_NAMESPACE,
++    ]);
++    await pool.query("DELETE FROM thoughts WHERE namespace = $1", [
++      TEST_NAMESPACE,
++    ]);
++  }
++
++  async function seedTarget(content: string): Promise<string> {
++    const { rows } = await pool.query<{ id: string }>(
++      `INSERT INTO thoughts (content, created_by, namespace, source, tier)
++       VALUES ($1, $2, $3, $4, 'warm')
++       RETURNING id`,
++      [content, TEST_ACTOR, TEST_NAMESPACE, TARGET_SOURCE],
++    );
++    return rows[0]!.id;
++  }
++
++  async function activePieces(): Promise<Array<Record<string, unknown>>> {
++    const { rows } = await pool.query(
++      `SELECT id, content, parent_id, chunk_index, source_refs
++         FROM thoughts
++        WHERE namespace = $1
++          AND source = 'issue-604-transcript-decomposition'
++          AND archived_at IS NULL
++        ORDER BY id`,
++      [TEST_NAMESPACE],
++    );
++    return rows;
++  }
++
++  it("reports skipped oversized rows and reuse-resolved dry-run pieces", async () => {
++    const targetId = await seedTarget(transcript("dry-run-reuse"));
++    await seedTarget("oversized prose without transcript records ".repeat(100));
++    const initialScan = await readTargets(pool, TEST_NAMESPACE);
++    const target = initialScan.targets.find((item) => item.row.id === targetId);
++    expect(target).toBeDefined();
++    const reused = target!.decomposition.proposed_replacements[0]!;
++    await pool.query(
++      `INSERT INTO thoughts (content, content_hash, created_by, namespace)
++       VALUES ($1, $2, $3, $4)`,
++      [reused.content, contentHash(reused.content), TEST_ACTOR, TEST_NAMESPACE],
++    );
++
++    const scan = await readTargets(pool, TEST_NAMESPACE);
++    const receipt = (await dryRunReceipt(pool, scan)) as {
++      skipped_oversized_count: number;
++      total_proposed_pieces: number;
++      total_planned_pieces: number;
++      total_reuse_resolved_pieces: number;
++    };
++
++    expect(receipt.skipped_oversized_count).toBe(1);
++    expect(receipt.total_reuse_resolved_pieces).toBe(1);
++    expect(receipt.total_planned_pieces).toBeLessThan(
++      receipt.total_proposed_pieces,
++    );
++  });
++
++  it("is a no-op when apply is run a second time", async () => {
++    const originalId = await seedTarget(transcript("idempotent"));
++    const firstScan = await readTargets(pool, TEST_NAMESPACE);
++    const first = await applyTargets(pool, firstScan.targets);
++
++    expect(first).toHaveLength(1);
++    expect(first[0]?.status).toBe("applied");
++    const pieceCount = (await activePieces()).length;
++    expect(pieceCount).toBeGreaterThan(1);
++
++    const secondScan = await readTargets(pool, TEST_NAMESPACE);
++    const second = await applyTargets(pool, secondScan.targets);
++
++    expect(secondScan.targets).toHaveLength(0);
++    expect(second).toEqual([]);
++    expect(await activePieces()).toHaveLength(pieceCount);
++    const lifecycle = await pool.query(
++      "SELECT archived_at FROM thoughts WHERE id = $1",
++      [originalId],
++    );
++    expect(lifecycle.rows[0]?.archived_at).not.toBeNull();
++  });
++
++  it("skips an archived hash collision and commits the other target", async () => {
++    const blockedId = await seedTarget(transcript("blocked"));
++    const healthyId = await seedTarget(transcript("healthy"));
++    const scan = await readTargets(pool, TEST_NAMESPACE);
++    const blocked = scan.targets.find((target) => target.row.id === blockedId);
++    expect(blocked).toBeDefined();
++    const collisionPiece = blocked!.decomposition.proposed_replacements[0]!;
++    await pool.query(
++      `INSERT INTO thoughts
++         (content, content_hash, created_by, namespace, archived_at)
++       VALUES ($1, $2, $3, $4, NOW())`,
++      [
++        collisionPiece.content,
++        contentHash(collisionPiece.content),
++        TEST_ACTOR,
++        TEST_NAMESPACE,
++      ],
++    );
++
++    const results = await applyTargets(pool, scan.targets);
++    const blockedResult = results.find(
++      (result) => result.original_id === blockedId,
++    );
++    const healthyResult = results.find(
++      (result) => result.original_id === healthyId,
++    );
++
++    expect(blockedResult).toMatchObject({
++      status: "skipped",
++      reason: "archived_hash_collision",
++      planned_pieces: 0,
++    });
++    expect(healthyResult?.status).toBe("applied");
++    const originals = await pool.query(
++      "SELECT id, archived_at FROM thoughts WHERE id = ANY($1::uuid[]) ORDER BY id",
++      [[blockedId, healthyId]],
++    );
++    const archivedById = new Map(
++      originals.rows.map((row) => [row.id as string, row.archived_at]),
++    );
++    expect(archivedById.get(blockedId)).toBeNull();
++    expect(archivedById.get(healthyId)).not.toBeNull();
++  });
++
++  it("dedupes identical chunks with coherent refs and receipt counts", async () => {
++    const originalId = await seedTarget(repeatedTranscript());
++    const scan = await readTargets(pool, TEST_NAMESPACE);
++    const results = await applyTargets(pool, scan.targets);
++    const result = results[0];
++
++    expect(result?.status).toBe("applied");
++    if (!result || result.status !== "applied") return;
++    expect(result.intra_batch_duplicate_pieces).toBeGreaterThan(0);
++    expect(
++      result.planned_pieces +
++        result.reuse_resolved_pieces +
++        result.intra_batch_duplicate_pieces,
++    ).toBe(result.proposed_pieces);
++    expect(result.piece_ids).toHaveLength(result.proposed_pieces);
++
++    const pieces = await activePieces();
++    expect(pieces).toHaveLength(result.written_ids.length);
++    for (const piece of pieces) {
++      const refs = piece.source_refs as Array<Record<string, unknown>>;
++      expect(refs.length).toBeLessThanOrEqual(25);
++      expect(refs).toContainEqual(
++        expect.objectContaining({ document_id: originalId }),
++      );
++    }
++  });
++
++  it("adds a source_ref when another original reuses an existing chunk", async () => {
++    const content = transcript("cross-original");
++    const firstId = await seedTarget(content);
++    const firstScan = await readTargets(pool, TEST_NAMESPACE);
++    const first = await applyTargets(pool, firstScan.targets);
++    expect(first[0]?.status).toBe("applied");
++
++    const secondId = await seedTarget(content);
++    const secondScan = await readTargets(pool, TEST_NAMESPACE);
++    const second = await applyTargets(pool, secondScan.targets);
++    const result = second.find((item) => item.original_id === secondId);
++    expect(result?.status).toBe("applied");
++    if (!result || result.status !== "applied") return;
++    expect(result.reuse_resolved_pieces).toBeGreaterThan(0);
++
++    const pieces = await activePieces();
++    const linked = pieces.filter((piece) => {
++      const refs = piece.source_refs as Array<Record<string, unknown>>;
++      return refs.some((ref) => ref.document_id === secondId);
++    });
++    expect(linked.length).toBeGreaterThan(0);
++    expect(
++      linked.some((piece) =>
++        (piece.source_refs as Array<Record<string, unknown>>).some(
++          (ref) =>
++            ref.document_id === secondId &&
++            typeof ref.section === "string" &&
++            ref.section.startsWith("chunk:"),
++        ),
++      ),
++    ).toBe(true);
++    expect(firstId).not.toBe(secondId);
++  });
++});
+diff --git a/scripts/decompose-oversize-thoughts.test.ts b/scripts/decompose-oversize-thoughts.test.ts
+index 71c052c..900e80a 100644
+--- a/scripts/decompose-oversize-thoughts.test.ts
++++ b/scripts/decompose-oversize-thoughts.test.ts
+@@ -24,11 +24,14 @@ describe("decompose-oversize-thoughts", () => {
+     });
+   });
+ 
+-  test("rejects prose, short JSONL, and malformed transcript rows", () => {
++  test("uses the 80 percent signature threshold even with malformed rows", () => {
+     expect(isRawTranscriptDump("ordinary thought prose").matched).toBe(false);
+     expect(isRawTranscriptDump(transcript(10)).matched).toBe(false);
++    expect(isRawTranscriptDump(`${transcript(120)}\nnot-json`).matched).toBe(
++      true,
++    );
+     expect(
+-      isRawTranscriptDump(`${transcript(120)}\nnot-json`).matched,
++      isRawTranscriptDump(`${transcript(100)}\n${"not-json\n".repeat(26)}`).matched,
+     ).toBe(false);
+   });
+ 
+diff --git a/scripts/decompose-oversize-thoughts.ts b/scripts/decompose-oversize-thoughts.ts
+index e096525..8923e0b 100644
+--- a/scripts/decompose-oversize-thoughts.ts
++++ b/scripts/decompose-oversize-thoughts.ts
+@@ -2,6 +2,7 @@
+ 
+ import { parseArgs } from "node:util";
+ import { Pool, type PoolClient } from "pg";
++import { CHUNK_THRESHOLD } from "../src/chunking.ts";
+ import { contentHash } from "../src/embedding.ts";
+ import {
+   planEntryDecomposition,
+@@ -34,20 +35,66 @@ type TargetPlan = {
+   decomposition: DecompositionPlan;
+ };
+ 
++type SkippedOversized = {
++  id: string;
++  namespace: string;
++  bytes: number;
++  records: number;
++  reason: "transcript_signature_below_threshold";
++};
++
++type TargetScan = {
++  targets: TargetPlan[];
++  skippedOversized: SkippedOversized[];
++};
++
+ type AppliedTarget = {
++  status: "applied";
+   original_id: string;
+   namespace: string;
+   original_bytes: number;
+   record_count: number;
++  proposed_pieces: number;
+   planned_pieces: number;
++  reuse_resolved_pieces: number;
++  intra_batch_duplicate_pieces: number;
+   written_ids: string[];
+   reused_ids: string[];
++  intra_batch_duplicate_ids: string[];
+   piece_ids: string[];
+   archived: boolean;
+   discard_recorded: boolean;
+   embedding_status: "pending";
+ };
+ 
++type SkippedTarget = {
++  status: "skipped";
++  original_id: string;
++  namespace: string;
++  original_bytes: number;
++  record_count: number;
++  proposed_pieces: number;
++  planned_pieces: 0;
++  reason: "archived_hash_collision";
++  collision_piece_index: number;
++  collision_row_id: string;
++};
++
++type FailedTarget = {
++  status: "failed";
++  original_id: string;
++  namespace: string;
++  original_bytes: number;
++  record_count: number;
++  proposed_pieces: number;
++  planned_pieces: 0;
++  reason: "target_error";
++  error_name: string;
++  error_message: string;
++};
++
++type ApplyTargetResult = AppliedTarget | SkippedTarget | FailedTarget;
++
+ type SourceReference = {
+   source_type: "document";
+   document_id: string;
+@@ -56,6 +103,29 @@ type SourceReference = {
+   source_hash: string;
+ };
+ 
++type PieceWriteResult = {
++  id: string;
++  hash: string;
++  written: boolean;
++};
++
++type PiecesResult = {
++  writtenIds: string[];
++  reusedIds: string[];
++  intraBatchDuplicateIds: string[];
++  pieceIds: string[];
++};
++
++class ArchivedHashCollisionError extends Error {
++  constructor(
++    readonly pieceIndex: number,
++    readonly rowId: string,
++  ) {
++    super(`piece ${pieceIndex} collides with archived row ${rowId}`);
++    this.name = "ArchivedHashCollisionError";
++  }
++}
++
+ export function isRawTranscriptDump(content: string): {
+   matched: boolean;
+   recordCount: number;
+@@ -71,9 +141,9 @@ export function isRawTranscriptDump(content: string): {
+     try {
+       record = JSON.parse(line);
+     } catch {
+-      return { matched: false, recordCount: lines.length };
++      continue;
+     }
+-    if (!isObjectRecord(record)) return { matched: false, recordCount: lines.length };
++    if (!isObjectRecord(record)) continue;
+     const hasSignature = REQUIRED_RECORD_FIELDS.every(
+       (field) => typeof record[field] === "string",
+     );
+@@ -104,20 +174,54 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
+   return typeof value === "object" && value !== null && !Array.isArray(value);
+ }
+ 
+-async function readTargets(pool: Pool): Promise<TargetPlan[]> {
++function inspectCandidate(row: ThoughtRow): TargetPlan | SkippedOversized | null {
++  if (row.content.length <= CHUNK_THRESHOLD) return null;
++  const classification = isRawTranscriptDump(row.content);
++  if (!classification.matched) {
++    return {
++      id: row.id,
++      namespace: row.namespace,
++      bytes: Buffer.byteLength(row.content, "utf8"),
++      records: classification.recordCount,
++      reason: "transcript_signature_below_threshold",
++    };
++  }
++  const decomposition = planEntryDecomposition({
++    table: "thoughts",
++    id: row.id,
++    namespace: row.namespace,
++    content: row.content,
++  });
++  return {
++    row,
++    recordCount: classification.recordCount,
++    decomposition,
++  };
++}
++
++export async function readTargets(
++  pool: Pool,
++  namespace?: string,
++): Promise<TargetScan> {
+   const { rows } = await pool.query<ThoughtRow>(
+     `SELECT id, content, tags, source, created_by, namespace, tier, created_at, archived_at
+        FROM thoughts
+       WHERE source = $1
+         AND archived_at IS NULL
+         AND parent_id IS NULL
++        AND ($2::text IS NULL OR namespace = $2)
+       ORDER BY created_at, id`,
+-    [TARGET_SOURCE],
++    [TARGET_SOURCE, namespace ?? null],
+   );
+-  return rows.flatMap((row) => {
+-    const plan = buildTargetPlan(row);
+-    return plan ? [plan] : [];
+-  });
++  const targets: TargetPlan[] = [];
++  const skippedOversized: SkippedOversized[] = [];
++  for (const row of rows) {
++    const inspected = inspectCandidate(row);
++    if (!inspected) continue;
++    if ("row" in inspected) targets.push(inspected);
++    else skippedOversized.push(inspected);
++  }
++  return { targets, skippedOversized };
+ }
+ 
+ function sourceReference(
+@@ -190,7 +294,7 @@ async function writeProposal(
+   client: PoolClient,
+   target: TargetPlan,
+   proposal: ReplacementProposal,
+-): Promise<{ id: string; written: boolean }> {
++): Promise<PieceWriteResult> {
+   const hash = contentHash(proposal.content);
+   const reference = sourceReference(target, proposal);
+   const provenance = promotedFrom(target, proposal);
+@@ -219,36 +323,51 @@ async function writeProposal(
+     ],
+   );
+   const insertedId = rows[0]?.id;
+-  if (insertedId) return { id: insertedId, written: true };
++  if (insertedId) return { id: insertedId, hash, written: true };
+ 
+-  const existing = await client.query<{ id: string }>(
+-    `SELECT id
++  const existing = await client.query<{
++    id: string;
++    archived_at: Date | string | null;
++  }>(
++    `SELECT id, archived_at
+        FROM thoughts
+       WHERE content_hash = $1
+-        AND namespace = $2
+-        AND archived_at IS NULL`,
++        AND namespace = $2`,
+     [hash, target.row.namespace],
+   );
+-  const existingId = existing.rows[0]?.id;
+-  if (!existingId) throw new Error("piece conflict resolved without a live row");
+-  await appendSourceReference(client, existingId, reference, provenance);
+-  return { id: existingId, written: false };
++  const collision = existing.rows[0];
++  if (!collision) throw new Error("piece conflict resolved without a row");
++  if (collision.archived_at !== null) {
++    throw new ArchivedHashCollisionError(proposal.chunk_index, collision.id);
++  }
++  await appendSourceReference(client, collision.id, reference, provenance);
++  return { id: collision.id, hash, written: false };
+ }
+ 
+ async function writePieces(
+   client: PoolClient,
+   target: TargetPlan,
+-): Promise<{ writtenIds: string[]; reusedIds: string[]; pieceIds: string[] }> {
++): Promise<PiecesResult> {
+   const writtenIds: string[] = [];
+   const reusedIds: string[] = [];
++  const intraBatchDuplicateIds: string[] = [];
+   const pieceIds: string[] = [];
++  const resolvedIdsByHash = new Map<string, string>();
+   for (const proposal of target.decomposition.proposed_replacements) {
++    const hash = contentHash(proposal.content);
++    const resolvedId = resolvedIdsByHash.get(hash);
++    if (resolvedId) {
++      intraBatchDuplicateIds.push(resolvedId);
++      pieceIds.push(resolvedId);
++      continue;
++    }
+     const result = await writeProposal(client, target, proposal);
++    resolvedIdsByHash.set(result.hash, result.id);
+     pieceIds.push(result.id);
+     if (result.written) writtenIds.push(result.id);
+     else reusedIds.push(result.id);
+   }
+-  return { writtenIds, reusedIds, pieceIds };
++  return { writtenIds, reusedIds, intraBatchDuplicateIds, pieceIds };
+ }
+ 
+ async function archiveOriginal(
+@@ -287,70 +406,169 @@ async function archiveOriginal(
+   };
+ }
+ 
+-async function applyTargets(pool: Pool, targets: TargetPlan[]): Promise<AppliedTarget[]> {
++function targetIdentity(target: TargetPlan) {
++  return {
++    original_id: target.row.id,
++    namespace: target.row.namespace,
++    original_bytes: Buffer.byteLength(target.row.content, "utf8"),
++    record_count: target.recordCount,
++    proposed_pieces: target.decomposition.would_write,
++  };
++}
++
++async function applyTarget(
++  pool: Pool,
++  target: TargetPlan,
++): Promise<ApplyTargetResult> {
+   const client = await pool.connect();
+-  const applied: AppliedTarget[] = [];
+   try {
+     await client.query("BEGIN");
+-    for (const target of targets) {
+-      const pieces = await writePieces(client, target);
+-      const replacementId = pieces.pieceIds[0];
+-      if (!replacementId) throw new Error("oversized transcript produced no pieces");
+-      const lifecycle = await archiveOriginal(client, target, replacementId);
+-      if (!lifecycle.archived || !lifecycle.discardRecorded) {
+-        throw new Error("original lifecycle transition did not complete");
+-      }
+-      applied.push({
+-        original_id: target.row.id,
+-        namespace: target.row.namespace,
+-        original_bytes: Buffer.byteLength(target.row.content, "utf8"),
+-        record_count: target.recordCount,
+-        planned_pieces: target.decomposition.would_write,
+-        written_ids: pieces.writtenIds,
+-        reused_ids: pieces.reusedIds,
+-        piece_ids: pieces.pieceIds,
+-        archived: lifecycle.archived,
+-        discard_recorded: lifecycle.discardRecorded,
+-        embedding_status: "pending",
+-      });
++    const pieces = await writePieces(client, target);
++    const replacementId = pieces.pieceIds[0];
++    if (!replacementId) throw new Error("oversized transcript produced no pieces");
++    const lifecycle = await archiveOriginal(client, target, replacementId);
++    if (!lifecycle.archived || !lifecycle.discardRecorded) {
++      throw new Error("original lifecycle transition did not complete");
+     }
+     await client.query("COMMIT");
+-    return applied;
++    return {
++      status: "applied",
++      ...targetIdentity(target),
++      planned_pieces: pieces.writtenIds.length,
++      reuse_resolved_pieces: pieces.reusedIds.length,
++      intra_batch_duplicate_pieces: pieces.intraBatchDuplicateIds.length,
++      written_ids: pieces.writtenIds,
++      reused_ids: pieces.reusedIds,
++      intra_batch_duplicate_ids: pieces.intraBatchDuplicateIds,
++      piece_ids: pieces.pieceIds,
++      archived: lifecycle.archived,
++      discard_recorded: lifecycle.discardRecorded,
++      embedding_status: "pending",
++    };
+   } catch (error) {
+-    await client.query("ROLLBACK");
+-    throw error;
++    await client.query("ROLLBACK").catch(() => undefined);
++    if (error instanceof ArchivedHashCollisionError) {
++      return {
++        status: "skipped",
++        ...targetIdentity(target),
++        planned_pieces: 0,
++        reason: "archived_hash_collision",
++        collision_piece_index: error.pieceIndex,
++        collision_row_id: error.rowId,
++      };
++    }
++    return {
++      status: "failed",
++      ...targetIdentity(target),
++      planned_pieces: 0,
++      reason: "target_error",
++      error_name: error instanceof Error ? error.name : "unknown",
++      error_message: error instanceof Error ? error.message : String(error),
++    };
+   } finally {
+     client.release();
+   }
+ }
+ 
+-function dryRunReceipt(targets: TargetPlan[]): Record<string, unknown> {
++export async function applyTargets(
++  pool: Pool,
++  targets: TargetPlan[],
++): Promise<ApplyTargetResult[]> {
++  const applied: ApplyTargetResult[] = [];
++  for (const target of targets) applied.push(await applyTarget(pool, target));
++  return applied;
++}
++
++async function dryRunTarget(pool: Pool, target: TargetPlan) {
++  const proposals = target.decomposition.proposed_replacements;
++  const hashes = Array.from(
++    new Set(proposals.map((proposal) => contentHash(proposal.content))),
++  );
++  const { rows } = await pool.query<{
++    id: string;
++    content_hash: string;
++    archived_at: Date | string | null;
++  }>(
++    `SELECT id, content_hash, archived_at
++       FROM thoughts
++      WHERE namespace = $1
++        AND content_hash = ANY($2::text[])`,
++    [target.row.namespace, hashes],
++  );
++  const existingByHash = new Map(rows.map((row) => [row.content_hash, row]));
++  const seen = new Set<string>();
++  let plannedPieces = 0;
++  let reuseResolvedPieces = 0;
++  let intraBatchDuplicatePieces = 0;
++  let archivedConflictPieces = 0;
++  for (const proposal of proposals) {
++    const hash = contentHash(proposal.content);
++    if (seen.has(hash)) {
++      intraBatchDuplicatePieces++;
++      continue;
++    }
++    seen.add(hash);
++    const existing = existingByHash.get(hash);
++    if (!existing) {
++      plannedPieces++;
++      continue;
++    }
++    if (existing.archived_at === null) reuseResolvedPieces++;
++    else archivedConflictPieces++;
++  }
++  return {
++    id: target.row.id,
++    namespace: target.row.namespace,
++    bytes: Buffer.byteLength(target.row.content, "utf8"),
++    records: target.recordCount,
++    proposed_pieces: target.decomposition.would_write,
++    planned_pieces: archivedConflictPieces > 0 ? 0 : plannedPieces,
++    reuse_resolved_pieces: reuseResolvedPieces,
++    intra_batch_duplicate_pieces: intraBatchDuplicatePieces,
++    archived_conflict_pieces: archivedConflictPieces,
++    disposition:
++      archivedConflictPieces > 0 ? "would_skip_target" : "would_apply",
++    largest_piece_chars: Math.max(
++      ...proposals.map((proposal) => proposal.content_length),
++    ),
++    lifecycle: "copy to discarded_entries, then set thoughts.archived_at",
++    embeddings: "new rows are written pending embedding repair",
++  };
++}
++
++export async function dryRunReceipt(
++  pool: Pool,
++  scan: TargetScan,
++): Promise<Record<string, unknown>> {
++  const originals = [];
++  for (const target of scan.targets) originals.push(await dryRunTarget(pool, target));
+   return {
+     remediation_version: REMEDIATION_VERSION,
+     mode: "dry-run",
+-    matched_originals: targets.length,
+-    total_original_bytes: targets.reduce(
++    matched_originals: scan.targets.length,
++    skipped_oversized_count: scan.skippedOversized.length,
++    skipped_oversized: scan.skippedOversized,
++    total_original_bytes: scan.targets.reduce(
+       (sum, target) => sum + Buffer.byteLength(target.row.content, "utf8"),
+       0,
+     ),
+-    total_planned_pieces: targets.reduce(
+-      (sum, target) => sum + target.decomposition.would_write,
++    total_proposed_pieces: originals.reduce(
++      (sum, target) => sum + target.proposed_pieces,
++      0,
++    ),
++    total_planned_pieces: originals.reduce(
++      (sum, target) => sum + target.planned_pieces,
++      0,
++    ),
++    total_reuse_resolved_pieces: originals.reduce(
++      (sum, target) => sum + target.reuse_resolved_pieces,
++      0,
++    ),
++    total_intra_batch_duplicate_pieces: originals.reduce(
++      (sum, target) => sum + target.intra_batch_duplicate_pieces,
+       0,
+     ),
+-    originals: targets.map((target) => ({
+-      id: target.row.id,
+-      namespace: target.row.namespace,
+-      bytes: Buffer.byteLength(target.row.content, "utf8"),
+-      records: target.recordCount,
+-      planned_pieces: target.decomposition.would_write,
+-      largest_piece_chars: Math.max(
+-        ...target.decomposition.proposed_replacements.map(
+-          (proposal) => proposal.content_length,
+-        ),
+-      ),
+-      lifecycle: "copy to discarded_entries, then set thoughts.archived_at",
+-      embeddings: "new rows are written pending embedding repair",
+-    })),
++    originals,
+   };
+ }
+ 
+@@ -361,15 +579,17 @@ async function main(): Promise<void> {
+   });
+   const pool = new Pool();
+   try {
+-    const targets = await readTargets(pool);
++    const scan = await readTargets(pool);
+     const receipt = values.apply
+       ? {
+           remediation_version: REMEDIATION_VERSION,
+           mode: "apply",
+-          matched_originals: targets.length,
+-          originals: await applyTargets(pool, targets),
++          matched_originals: scan.targets.length,
++          skipped_oversized_count: scan.skippedOversized.length,
++          skipped_oversized: scan.skippedOversized,
++          originals: await applyTargets(pool, scan.targets),
+         }
+-      : dryRunReceipt(targets);
++      : await dryRunReceipt(pool, scan);
+     process.stdout.write(`${JSON.stringify(receipt, null, 2)}\n`);
+   } finally {
+     await pool.end();
+@@ -378,8 +598,11 @@ async function main(): Promise<void> {
+ 
+ if (import.meta.main) {
+   main().catch((error: unknown) => {
+-    const name = error instanceof Error ? error.name : "unknown";
+-    process.stderr.write(`decompose-oversize-thoughts failed: ${name}\n`);
++    const errorName = error instanceof Error ? error.name : "unknown";
++    const errorMessage = error instanceof Error ? error.message : String(error);
++    process.stderr.write(
++      `decompose-oversize-thoughts failed: error_name=${errorName} error_message=${errorMessage}\n`,
++    );
+     process.exitCode = 1;
+   });
+ }
+diff --git a/server/observability/langfuse-tracing.test.ts b/server/observability/langfuse-tracing.test.ts
+index bcd3fb5..986e7bd 100644
+--- a/server/observability/langfuse-tracing.test.ts
++++ b/server/observability/langfuse-tracing.test.ts
+@@ -42,6 +42,7 @@ import {
+   type SearchRow,
+ } from "../../src/tools/search-brain.ts";
+ import { registerSearchAll } from "../../src/tools/search-all.ts";
++import { logger } from "../../src/logger.ts";
+ import {
+   executeSearch as executeServerSearch,
+   mergeFallbackRows,
+@@ -68,6 +69,25 @@ function recordingSink(): TracingSink & { bodies: TraceBody[] } {
+   };
+ }
+ 
++async function captureWarnings(
++  run: () => Promise<void>,
++): Promise<Array<{ message: string; fields: Record<string, unknown> }>> {
++  const warnings: Array<{
++    message: string;
++    fields: Record<string, unknown>;
++  }> = [];
++  const originalWarn = logger.warn;
++  logger.warn = (message, fields) => {
++    warnings.push({ message, fields: fields ?? {} });
++  };
++  try {
++    await run();
++  } finally {
++    logger.warn = originalWarn;
++  }
++  return warnings;
++}
++
+ /**
+  * A sink whose drain NEVER settles — the real adversary for shutdown.
+  *
+@@ -501,25 +521,29 @@ describe("installMcpTracing", () => {
+       {
+         query: "real retrieval",
+         table: "thoughts",
+-        search_mode: "keyword",
++        search_mode: "hybrid",
+         limit: 1,
+       },
+       AUTH,
+     );
+ 
+     const body = sink.bodies[0]!;
+-    expect(body.spans?.map((span) => span.name)).toEqual([
+-      "retrieval.keyword_query",
+-      "retrieval.execute",
+-    ]);
+-    const evidence = (
+-      body.spans?.[0]?.output as {
+-        candidates: Array<{ content_preview: string }>;
+-      }
+-    ).candidates[0]?.content_preview;
+-    expect(evidence).toContain(tail);
+-    expect(evidence).toContain("[MASKED:");
+-    expect(evidence).not.toContain(secret);
++    const spans = body.spans ?? [];
++    expect(new Set(spans.map((span) => span.name))).toEqual(
++      new Set([
++        "retrieval.embedding",
++        "retrieval.vector_query",
++        "retrieval.keyword_query",
++        "retrieval.rank_rrf",
++        "retrieval.execute",
++      ]),
++    );
++    const serialized = JSON.stringify(spans);
++    expect(serialized.split(tail)).toHaveLength(2);
++    expect(serialized).toContain("[MASKED:");
++    expect(serialized).not.toContain(secret);
++    expect(serialized).toContain('"selected_row_ids":["real-search-row"]');
++    expect(serialized.match(/"row_id":"real-search-row"/g)?.length).toBeGreaterThan(1);
+   });
+ 
+   test("the server search tree emits full masked retrieval evidence", async () => {
+@@ -555,7 +579,7 @@ describe("installMcpTracing", () => {
+           ["thoughts"],
+           "real retrieval",
+           1,
+-          "keyword",
++          "hybrid",
+           undefined,
+           0,
+           "rico",
+@@ -567,18 +591,26 @@ describe("installMcpTracing", () => {
+     await handlers.get("server_search_evidence")?.({}, AUTH);
+ 
+     const body = sink.bodies[0]!;
+-    expect(body.spans?.map((span) => span.name)).toEqual([
+-      "retrieval.keyword_query",
+-      "retrieval.execute",
+-    ]);
+-    const evidence = (
+-      body.spans?.[0]?.output as {
+-        candidates: Array<{ content_preview: string }>;
+-      }
+-    ).candidates[0]?.content_preview;
+-    expect(evidence).toContain(tail);
+-    expect(evidence).toContain("[MASKED:");
+-    expect(evidence).not.toContain(secret);
++    const spans = body.spans ?? [];
++    expect(new Set(spans.map((span) => span.name))).toEqual(
++      new Set([
++        "retrieval.embedding",
++        "retrieval.vector_query",
++        "retrieval.keyword_query",
++        "retrieval.rank_rrf",
++        "retrieval.execute",
++      ]),
++    );
++    const serialized = JSON.stringify(spans);
++    expect(serialized.split(tail)).toHaveLength(2);
++    expect(serialized).toContain("[MASKED:");
++    expect(serialized).not.toContain(secret);
++    expect(serialized).toContain(
++      '"selected_row_ids":["server-search-row"]',
++    );
++    expect(
++      serialized.match(/"row_id":"server-search-row"/g)?.length,
++    ).toBeGreaterThan(1);
+   });
+ 
+   test("handler metadata cannot overwrite auth identity or exception status", async () => {
+@@ -664,7 +696,9 @@ describe("installMcpTracing", () => {
+       }) as never,
+     );
+ 
+-    await handlers.get("bounded_spans")?.({}, AUTH);
++    const warnings = await captureWarnings(async () => {
++      await handlers.get("bounded_spans")?.({}, AUTH);
++    });
+ 
+     const spans = sink.bodies[0]?.spans ?? [];
+     expect(spans).toHaveLength(2);
+@@ -675,6 +709,46 @@ describe("installMcpTracing", () => {
+     expect(Buffer.byteLength(JSON.stringify(spans), "utf8")).toBeLessThan(
+       MAX_ACTIVE_SPAN_BYTES,
+     );
++    expect(warnings).toEqual([
++      {
++        message: "mcp_tool_trace_span_payload_degraded",
++        fields: expect.objectContaining({
++          tool_name: "bounded_spans",
++          span_count: 1,
++          active_span_bytes: expect.any(Number),
++          payload_limit_bytes: MAX_ACTIVE_SPAN_BYTES,
++          reason: "active_span_bytes_limit",
++        }),
++      },
++    ]);
++    expect(warnings[0]?.fields.active_span_bytes).toBeGreaterThan(
++      MAX_ACTIVE_SPAN_BYTES,
++    );
++  });
++
++  test("normal child spans do not emit a payload degradation warning", async () => {
++    const sink = recordingSink();
++    const { server, handlers } = fakeServer();
++    installMcpTracing(server, {
++      config: ENABLED_CONFIG,
++      createSink: () => sink,
++    });
++    server.registerTool(
++      "ordinary_spans",
++      { inputSchema: {} } as never,
++      (() =>
++        traceRetrievalSpanSync({
++          name: "retrieval.vector_query",
++          run: () => ({ row_ids: ["row-1"] }),
++        })) as never,
++    );
++
++    const warnings = await captureWarnings(async () => {
++      await handlers.get("ordinary_spans")?.({}, AUTH);
++    });
++
++    expect(warnings).toEqual([]);
++    expect(sink.bodies[0]?.spans).toHaveLength(1);
+   });
+ 
+   test("concurrent calls keep child spans attributed to their own trace", async () => {
+diff --git a/server/observability/langfuse-tracing.ts b/server/observability/langfuse-tracing.ts
+index 0ed1c1d..1308323 100644
+--- a/server/observability/langfuse-tracing.ts
++++ b/server/observability/langfuse-tracing.ts
+@@ -169,10 +169,16 @@ const SINK_HEALTH_PROBE_MS = 5_000;
+ 
+ /**
+  * Emergency circuit breaker for pathological payloads such as the issue #604
+- * transcript-dump class. Per the operator ruling, a healthy corpus must never
+- * reach this branch; ordinary retrieval evidence flows in full.
++ * transcript-dump class. Measured 2026-08-06 against all 68,056 active rows in
++ * open_brain_local_20260724 after single-copy retrieval evidence: the worst
++ * default hybrid window (limit 10, at most 60 arm candidates) serializes about
++ * 2,590,357 bytes, and the public maximum (limit 250, at most 1,500 candidates)
++ * about 17,472,017 bytes including later id/score references. 32 MiB leaves
++ * roughly 1.9x headroom over that measured healthy-corpus maximum, so ordinary
++ * retrieval stays content-full while the backstop still bounds pathological
++ * growth.
+  */
+-export const MAX_ACTIVE_SPAN_BYTES = 256 * 1024;
++export const MAX_ACTIVE_SPAN_BYTES = 32 * 1024 * 1024;
+ 
+ const COMPILED_SECRET_DETECTORS = SECRET_DETECTORS.map((detector) => ({
+   kind: detector.kind,
+@@ -365,8 +371,10 @@ const INACTIVE_HANDLE: McpTracingHandle = {
+ };
+ 
+ interface ActiveMcpTrace {
++  readonly toolName: string;
+   readonly spans: TraceSpanBody[];
+   readonly metadata: Record<string, unknown>;
++  readonly evidencedRowKeys: Set<string>;
+   spanBytes: number;
+   payloadDegraded: boolean;
+ }
+@@ -382,6 +390,22 @@ export function setActiveMcpTraceMetadata(
+   Object.assign(active.metadata, metadata);
+ }
+ 
++/**
++ * Claim the one child span allowed to carry a retrieval row's full content.
++ *
++ * Candidate generation spans race in hybrid mode, so the first completed stage
++ * wins by recording the row key in the active tool trace. Later ranking,
++ * execute, and fallback spans retain ids and stage-specific scores without
++ * serializing the same content again.
++ */
++export function claimTraceRowContent(rowKey: string): boolean {
++  const active = activeMcpTrace.getStore();
++  if (!active) return true;
++  if (active.evidencedRowKeys.has(rowKey)) return false;
++  active.evidencedRowKeys.add(rowKey);
++  return true;
++}
++
+ function traceValueCounts(value: unknown): Record<string, number> {
+   const counts = {
+     values: 0,
+@@ -460,11 +484,19 @@ function recordTraceSpanUnsafe(
+   }
+   try {
+     const spanBytes = Buffer.byteLength(JSON.stringify(span), "utf8");
+-    if (active.spanBytes + spanBytes <= MAX_ACTIVE_SPAN_BYTES) {
++    const attemptedBytes = active.spanBytes + spanBytes;
++    if (attemptedBytes <= MAX_ACTIVE_SPAN_BYTES) {
+       active.spans.push(span);
+       active.spanBytes += spanBytes;
+       return;
+     }
++    logger.warn("mcp_tool_trace_span_payload_degraded", {
++      tool_name: active.toolName,
++      span_count: active.spans.length + 1,
++      active_span_bytes: attemptedBytes,
++      payload_limit_bytes: MAX_ACTIVE_SPAN_BYTES,
++      reason: "active_span_bytes_limit",
++    });
+     const degraded = active.spans.map((recorded) =>
+       degradedTraceSpan(recorded, "active_span_bytes_limit"),
+     );
+@@ -1027,8 +1059,10 @@ export function installMcpTracing(
+     const wrapped = async (args: unknown, extra: unknown) => {
+       const started = Date.now();
+       const active: ActiveMcpTrace = {
++        toolName: name,
+         spans: [],
+         metadata: {},
++        evidencedRowKeys: new Set<string>(),
+         spanBytes: 0,
+         payloadDegraded: false,
+       };
+diff --git a/server/tools/search-engine.ts b/server/tools/search-engine.ts
+index 5f8a4cf..f63f357 100644
+--- a/server/tools/search-engine.ts
++++ b/server/tools/search-engine.ts
+@@ -58,6 +58,7 @@ import {
+ } from "./shared-namespace.ts";
+ import type { NamespaceFilter } from "./read-scope.ts";
+ import {
++  claimTraceRowContent,
+   traceRetrievalSpan,
+   traceRetrievalSpanSync,
+ } from "../observability/langfuse-tracing.ts";
+@@ -116,11 +117,15 @@ export interface ExecuteSearchOptions {
+ }
+ 
+ function rowEvidence(row: SearchRow): Record<string, unknown> {
++  const rowKey = `${row.source_type}:${row.id}`;
++  const includeContent = claimTraceRowContent(rowKey);
+   return {
+     row_id: row.id,
+     source_type: row.source_type,
+     namespace: row.namespace ?? null,
+-    content_preview: row.content_preview ?? null,
++    ...(includeContent
++      ? { content_preview: row.content_preview ?? null }
++      : {}),
+     distance: row.distance ?? null,
+     similarity: row.distance === undefined ? null : 1 - row.distance,
+     bm25_score: row.fts_rank ?? null,
+@@ -581,6 +586,7 @@ function rrfMerge(
+       return {
+         candidate_count: ranked.length,
+         selected_count: selected.length,
++        selected_row_ids: selected.map((row) => row.id),
+         candidates: ranked.map(({ row, rrf }) => ({
+           ...rowEvidence(row),
+           rrf_score: rrf,
+diff --git a/src/tools/search-brain.ts b/src/tools/search-brain.ts
+index 0f1ae53..5d9f4bb 100644
+--- a/src/tools/search-brain.ts
++++ b/src/tools/search-brain.ts
+@@ -29,6 +29,7 @@ import {
+   VALID_TIERS,
+ } from "./table-constants.ts";
+ import {
++  claimTraceRowContent,
+   setActiveMcpTraceMetadata,
+   traceRetrievalSpan,
+   traceRetrievalSpanSync,
+@@ -278,11 +279,15 @@ export interface SearchRow {
+ }
+ 
+ function rowEvidence(row: SearchRow): Record<string, unknown> {
++  const rowKey = `${row.source_type}:${row.id}`;
++  const includeContent = claimTraceRowContent(rowKey);
+   return {
+     row_id: row.id,
+     source_type: row.source_type,
+     namespace: row.namespace ?? null,
+-    content_preview: row.content_preview ?? null,
++    ...(includeContent
++      ? { content_preview: row.content_preview ?? null }
++      : {}),
+     distance: row.distance ?? null,
+     similarity: row.distance === undefined ? null : 1 - row.distance,
+     bm25_score: row.fts_rank ?? null,
