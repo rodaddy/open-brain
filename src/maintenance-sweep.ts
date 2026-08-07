@@ -8,9 +8,10 @@ import {
   DEFAULT_MAX_DISTILL_SESSIONS,
   DISTILL_ORDER_BY,
 } from "./distill-window.ts";
-import type {
-  MaintenanceJob,
-  MaintenanceQueueLogger,
+import {
+  safeMaintenanceErrorCategory,
+  type MaintenanceJob,
+  type MaintenanceQueueLogger,
 } from "./maintenance-queue.ts";
 
 const DEFAULT_DISTILL_BATCH_SIZE = 1_500;
@@ -262,4 +263,73 @@ export async function runMaintenanceSweep(
     graph_limit_reached: summary.graphLimitReached ? 1 : 0,
   });
   return summary;
+}
+
+export interface RecurringMaintenanceSweep {
+  stop(): Promise<void>;
+}
+
+/**
+ * Start the recurring producer: one bounded sweep now, then one per interval.
+ *
+ * THIS LIVES HERE, NOT IN A BOOTSTRAP, BECAUSE THERE ARE TWO COMPOSITIONS OF
+ * THE MAINTENANCE RUNNER AND ONLY ONE OF THEM USED TO START A PRODUCER.
+ * `src/maintenance-bootstrap.ts` (reached from the LEGACY `src/index.ts`) has
+ * started the sweep since #577. `server/maintenance/index.ts` — reached from
+ * `server/main.ts`, which the Phase 6 cutover made the SERVING entrypoint —
+ * composed the runner and nothing else. So #384's exact symptom survived the PR
+ * that added the producer: the serving process polled a queue that no producer
+ * filled, emitting "maintenance queue idle" indefinitely and never one
+ * `maintenance_sweep_complete`.
+ *
+ * Placing the loop in this module — which imports only the sweep's own leaf
+ * dependencies — lets the server boundary reach it WITHOUT importing the
+ * bootstrap's embedding providers and handler composition. Writing a second
+ * copy of the loop for the server was the alternative and is rejected for the
+ * reason `server/maintenance/index.ts` already gives about the runner: a
+ * duplicated loop whose failure mode is silence drifts precisely where drift is
+ * invisible.
+ *
+ * Bounded and non-overlapping, mirroring the runner's own discipline: a tick
+ * already in flight is returned rather than a second one started, a failed tick
+ * logs a content-free category and the interval survives it, and `stop()`
+ * refuses new ticks and awaits the in-flight one so the producer cannot add
+ * work after the runner has begun draining.
+ */
+export function startRecurringMaintenanceSweep(
+  input: MaintenanceSweepOptions & { intervalMs: number },
+): RecurringMaintenanceSweep {
+  let interval: ReturnType<typeof setInterval> | null = null;
+  let active: Promise<void> | null = null;
+  let stopping = false;
+
+  const runOnce = (): Promise<void> => {
+    if (stopping) return Promise.resolve();
+    if (active) return active;
+
+    const run = runMaintenanceSweep(input)
+      .then(() => undefined)
+      .catch((error: unknown) => {
+        input.logger.error("maintenance_sweep_failed", {
+          error_category: safeMaintenanceErrorCategory(error),
+        });
+      })
+      .finally(() => {
+        active = null;
+      });
+    active = run;
+    return run;
+  };
+
+  void runOnce();
+  interval = setInterval(() => void runOnce(), input.intervalMs);
+
+  return {
+    async stop(): Promise<void> {
+      stopping = true;
+      if (interval) clearInterval(interval);
+      interval = null;
+      await active;
+    },
+  };
 }
