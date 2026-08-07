@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: none
 Created: 2026-08-03T16:07:34Z
-Updated: 2026-08-03T18:27:16Z
+Updated: 2026-08-05T22:01:21Z
 
 ---
 
@@ -39,7 +39,7 @@ Related: #492 (Hermes/Skippy chat corpus), #520 (file-grounded repo facts, in fl
 
 ---
 
-## Discussion (2)
+## Discussion (3)
 
 ### rodaddy — 2026-08-03T17:05:53Z
 
@@ -120,3 +120,9 @@ Key-collision check vs the doc-harvest batch: literal collisions are structurall
 Routing per operator direction 2026-08-03: canon promotion covers preferences/process rules/repo facts; decision records document known problem areas in `docs/decisions/`; SME findings steer future swarms via `docs/sme/`.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+---
+
+### rodaddy — 2026-08-05T22:01:21Z
+
+Post-merge apply status (2026-08-05): #538 and #539 merged. Reconcile applied CLEAN for rico (10 profile + 27 process rules, DB-verified in namespace rico). Repo-facts pack and the skippy/nagatha/bilby fan-out are BLOCKED by two apply-path defects found on first live use — filed with full receipts (see the new canon-apply issue). #522 stays open until those apply receipts complete.

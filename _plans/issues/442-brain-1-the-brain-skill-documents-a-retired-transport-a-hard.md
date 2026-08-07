@@ -3,11 +3,12 @@
 
 # #442 — BRAIN-1: the brain skill documents a retired transport, a hardcoded host, and a stale tool table
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: documentation
 Created: 2026-07-29T18:23:37Z
-Updated: 2026-08-04T23:27:30Z
+Updated: 2026-08-05T08:52:15Z
+Closed: 2026-08-05T08:52:15Z
 
 ---
 
@@ -54,8 +55,54 @@ Design: `_plans/canon-always-known.md`
 
 ---
 
-## Discussion (1)
+## Discussion (3)
 
 ### rodaddy — 2026-08-04T23:27:30Z
 
 2026-08-04 — still valid, and now UNBLOCKED. All four measured defects are WRITTEN-as-is in `_ob/skills/brain/`, re-verified today: hardcoded core01 endpoint at `SKILL.md:10` and `ob.json:17` (`http://10.71.1.21:3100/mcp`); stale table header at `SKILL.md:52` ("live -- 46 tools, verified 2026-07-02 against v0.3.13"); the `/tmp`-writing drift check at `SKILL.md:139` and `_DOCS/procedure.md:68` (`> /tmp/ob-live.txt`, a hard-rule violation); retired `mcp2cli open-brain` recipes as the spine. What changed: the stated blocker is gone. This body says the work is "downstream of #438/#439" — both are now CLOSED (CANON-1 content authored, CANON-2 loader landed), so the objection that rewriting the skill first would leave it describing an empty room no longer holds. Also worth noting the live tool count is now 65, not the 63 this body cites. Ready to execute as scoped: delete the stale table, delete the drift check, demote the operator-CLI recipes to a Codex appendix, no hardcoded endpoint anywhere.
+
+---
+
+### rodaddy — 2026-08-05T06:33:55Z
+
+Fix is WRITTEN and PR-OPEN, in the **Development** repo — the canonical skill
+lives at `_ob/skills/brain/` there, not in open-brain.
+
+- PR: rodaddy/development#93 — `fix/442-brain-skill-docs`, commit `fd39665`
+- Not merged. This issue stays open until that PR lands.
+
+All four defects in the body were re-verified against the live files before
+editing; all four held.
+
+| Defect | Disposition |
+|---|---|
+| Retired transport as the spine | `mcp2cli` recipes relocated to a labelled Codex/operator appendix at the bottom, Claude direct-provider + env-driven Python client first |
+| Hardcoded endpoint, 3 places | removed from `SKILL.md:10`, `_DOCS/procedure.md:16`, `ob.json:17`; `OPENBRAIN_BASE_URL`/`OPENBRAIN_TOKEN` are the only source |
+| Stale tool table | table deleted, plus its backing `_DOCS/references/tool-list.frozen.txt`; replaced by live `tools/list` + `inputSchema` guidance |
+| Drift check writing to a sandbox-local temp path | deleted from both files — it existed only to maintain the table |
+
+`ob.json` also lost the `live_snapshot` block (tool count, mcp2cli version,
+endpoint, drift-check metadata) and the note was rewritten to describe the skill
+as it now is.
+
+**On the tool count:** this body said 63, the 2026-08-04 comment said 65. Counted
+today from source — `rg -A2 'server\.registerTool\(' src/tools -g '!__tests__'`,
+distinct names — the current checkout registers **63**. Rather than settle which
+number is right, no number was written into the skill at all. That disagreement
+is the whole argument against caching an inventory.
+
+**One deliberate non-change:** `workflows/canon.md:69` still contains the literal
+`10.71.1.21` and a loopback address. They are the negative examples in "Never
+hardcode a host." Stripping them to satisfy a whole-directory grep would delete
+the rule that stops this recurring. `workflows/`, `scripts/resume.py`, and the
+other references are untouched — verbs, not transport.
+
+Verified independently rather than taken from the worker's report: stale-string
+scan (no hits), temp-path scan (no hits), `jq empty` on `ob.json` (valid),
+`git diff --check` (clean). Diffstat: 4 files, +179 / -206.
+
+---
+
+### rodaddy — 2026-08-05T08:52:15Z
+
+Closed by rodaddy/development#93 (MERGED — the canonical skill lives in that repo at _ob/skills/brain/). All four staleness defects re-verified live before rewrite, then fixed: retired transport removed, hardcoded host removed, frozen 46-tool table replaced with discovery guidance that documents only commands proven to execute on this box (the review swarm caught the first draft documenting a nonexistent MCP tools/list surface — fixed to the direct provider's help operation), mcp2cli recipes relocated to a labelled Codex/operator appendix. Fix-delta verified; every documented command was executed read-only before being documented.

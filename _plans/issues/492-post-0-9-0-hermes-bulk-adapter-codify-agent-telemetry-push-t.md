@@ -3,11 +3,12 @@
 
 # #492 — post-0.9.0: Hermes bulk adapter + codify agent-telemetry push to Langfuse
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: none
 Created: 2026-08-02T18:12:12Z
-Updated: 2026-08-04T23:27:29Z
+Updated: 2026-08-06T00:56:44Z
+Closed: 2026-08-06T00:56:44Z
 
 ---
 
@@ -25,7 +26,7 @@ State: PROPOSED — nothing here is written. Do not start until 0.9.0 is tagged.
 
 ---
 
-## Discussion (5)
+## Discussion (6)
 
 ### rodaddy — 2026-08-03T16:06:54Z
 
@@ -90,3 +91,14 @@ Next concrete step: copy the two .db files (read-only source) to `{temp_workspac
 ### rodaddy — 2026-08-04T23:27:29Z
 
 Split status 2026-08-04. **Item 2 (Langfuse telemetry) is substantially DELIVERED** — MERGED: PR #524 (capture observation sink, 2026-08-03), PR #534 (content-ful Langfuse trace per MCP tool call, rebuilt on SDK v4, 2026-08-04), PR #543 (launcher passes `OPENBRAIN_TRACING_*` through to the server child). Server-side tracing is RUNNING against the local dogfood service. **Item 1 (Hermes bulk adapter) is UNCHANGED** — MERGED main 2a8d2db still has `python/openbrain/src/openbrain/apps/bulk/formats.py:283` registering `InputFormat.HERMES: _unbuilt(InputFormat.HERMES)`, i.e. the loud named gap from 0.9.0. The corpus contract this issue asked to chart first is now RUNNING-verified in the comment above (`skippy@10.71.20.111:~/.hermes`, SQLite, 543 sessions / 25,054 messages, schema read), and #522's second harvest batch already normalized 122 of those sessions end-to-end — so the remaining work is registering that normalizer as the real `_ADAPTERS` entry, not discovery. Suggest the issue narrow to the Hermes adapter alone.
+
+---
+
+### rodaddy — 2026-08-05T22:43:24Z
+
+**Stale-blocker sweep verdict (2026-08-05): NOT_DONE** — every issue this one references is closed, so it was audited against live state (scripts/stale-blockers.ts flagged it; a verification lane checked the acceptance itself).
+
+**What actually remains:**
+1. Hermes bulk adapter: implement the SQLite→RawTurn normalizer against the verified `~/.hermes` schema and replace `InputFormat.HERMES: _unbuilt(...)` at python/openbrain/src/openbrain/apps/bulk/formats.py:283 with the real adapter; drop/replace the `TestUnbuiltFormatsFailLoud` HERMES parametrization at python/openbrain/tests/test_bulk_ingest.py:257 with a sanitized-observed-sample test mirroring `TestCodexObservedRolloutAdapter`. 2. Item 2 charter: write the agent-telemetry→Langfuse contract doc (docs/decisions/ or docs/) stating the enforced shape/route and its explicit relationship to the #469 usage-telemetry surface; the remaining enforcement work is tracked under open epic #571 members #561 (emitter-side pre-enqueue masking) and #569 (trace-completeness decisions). 3. Operator decision available and recommended: per the 2026-08-04 split comment and epic #571's framing, narrow #492 to the Hermes adapter alone and let #571 own the telemetry-codification half — that is a Rico call, not an agent's.
+
+**Stale text in this issue corrected by this comment:** Verification 2026-08-05 against trunk 9fedefc: item 1 is still unbuilt — `python/openbrain/src/openbrain/apps/bulk/formats.py:283` registers `InputFormat.HERMES: _unbuilt(InputFormat.HERMES)` and `adapter_for(InputFormat.HERMES)` raises `FormatNotImplementedError` at runtime, with `test_bulk_ingest.py:257 TestUnbuiltFormatsFailLoud` still asserting that state; item 2's tracing lanes (#524/#534/#543) are merged and RUNNING but the charted contract naming its relationship to #469 does not exist and the remaining half is already tracked as an unchecked member of open epic #571 — so the "PROPOSED, nothing here is written" body is now only half true (corpus charted, telemetry partially shipped) and the issue should either narrow to the Hermes adapter or hand item 2 to #571.

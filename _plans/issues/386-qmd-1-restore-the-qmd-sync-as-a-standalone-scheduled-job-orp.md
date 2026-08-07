@@ -3,11 +3,12 @@
 
 # #386 — QMD-1: Restore the qmd sync as a standalone scheduled job (orphaned when session-wrap was removed)
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: enhancement
 Created: 2026-07-25T00:19:15Z
-Updated: 2026-08-04T23:29:28Z
+Updated: 2026-08-06T00:31:43Z
+Closed: 2026-08-06T00:31:43Z
 
 ---
 
@@ -69,8 +70,14 @@ Session-wrap was also the wrong home:
 
 ---
 
-## Discussion (1)
+## Discussion (2)
 
 ### rodaddy — 2026-08-04T23:29:28Z
 
 2026-08-04 status. NOT DELIVERED: there is still no machine-owned scheduled qmd sync — `~/Library/LaunchAgents` holds no qmd plist, `launchctl list | rg qmd` is empty, and crontab is empty. Refresh today is the manual `aqmd up` an agent is expected to run after writing files, which is the same 'fires only when someone remembers' failure this issue names. WRITTEN: every measurement in the body is obsolete. The single 52,337-file / 2.2 GB / 39-day-stale global index was retired 2026-07-29/30 (`docs/standards/QMD_INDEXES.md`) in favour of one project-local `.qmd/` per repo. RUNNING: `qmd status` in open-brain reports 1,096 files, 8,248 vectors, updated 57m ago — the `open-brain` collection is no longer absent. Rescope: a scheduled job now means iterating the 54 per-repo indexes (via `_ob/bin/qmd-backfill`-style traversal) plus the `global_docs_instructions` index, not one `qmd update && qmd embed` pair. The Out-of-scope note deferring to a dream/deep stage is still sound.
+
+---
+
+### rodaddy — 2026-08-05T08:52:12Z
+
+Reopening deliberately: PR #575 MERGED (script + launchd template + doc, review-hardened: comma-tolerant parsing proven against captured qmd output, fallback logs moved off-volume). But this issue's acceptance is a RUNNING scheduled job, and nothing is installed or loaded — deploy is the documented operator step. Merged is not scheduled. Closes when the launchd job is loaded and a first sync run is observed in its log.

@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: enhancement, memory, closure-audit
 Created: 2026-07-19T02:21:08Z
-Updated: 2026-07-24T19:26:26Z
+Updated: 2026-08-05T22:43:23Z
 
 ---
 
@@ -32,7 +32,7 @@ The controlled canary replayed one session_start + one session_wrap successfully
 
 ---
 
-## Discussion (4)
+## Discussion (5)
 
 ### rodaddy — 2026-07-20T07:21:30Z
 
@@ -90,3 +90,14 @@ The acceptance contract still exceeds the implementation:
 
 **Remediation required before closure**
 Add persisted next-attempt timing with bounded backoff, a content-free stuck-queue/degraded signal with alert thresholds, and restart/concurrent-replayer/restore-then-replay integration tests. Preserve the existing receipts, quarantine, and exact-scope custody.
+
+---
+
+### rodaddy — 2026-08-05T22:43:23Z
+
+**Stale-blocker sweep verdict (2026-08-05): NOT_DONE** — every issue this one references is closed, so it was audited against live state (scripts/stale-blockers.ts flagged it; a verification lane checked the acceptance itself).
+
+**What actually remains:**
+1. Persisted per-unit next-attempt timing with bounded retry backoff in `spool.py` `_UnitRetryState` + eligibility gating in the replay pass (currently every drain retries immediately; only a consecutive-failure counter exists). 2. A content-free stuck-queue/degraded signal with alert thresholds on top of `SpoolStatus`/`DrainReport`, and removal of the `docs/memory-limits.md:77-80` deferral. 3. A concurrent-replayer/ownership integration test (none exists) and the full python-client restore-then-replay drill, currently deferred at `docs/backup-restore.md:204`.
+
+**Stale text in this issue corrected by this comment:** Re-verified 2026-08-05 against trunk 9fedefc: all three items named in the 2026-07-24 closure audit are still unmet — no persisted next-attempt/backoff timing (`spool.py:134-146` carries counters and failure timestamps only, never used to gate a retry), no stuck-queue/alert-threshold signal (still deferred in `docs/memory-limits.md:77-80`), and no concurrent-replayer test plus a still-deferred python-client restore-then-replay drill (`docs/backup-restore.md:204`). The PR #317 mechanisms (auto-drain, quarantine, content-free DrainReport receipts, redact-before-disk) remain in place and correct; this issue is the remaining orchestration-policy delta only.

@@ -3,11 +3,12 @@
 
 # #381 — INGEST-2: Alarm when distillation falls behind ingest (oldest undistilled age vs TTL)
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: enhancement, memory
 Created: 2026-07-24T21:30:35Z
-Updated: 2026-07-25T00:23:32Z
+Updated: 2026-08-05T08:52:33Z
+Closed: 2026-08-05T08:52:33Z
 
 ---
 

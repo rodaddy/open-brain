@@ -3,11 +3,12 @@
 
 # #392 — DREAM-3: REM re-warming — sustained re-engagement pulls a dormant project cluster back toward hot
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: enhancement
 Created: 2026-07-25T00:20:57Z
-Updated: 2026-07-25T00:20:57Z
+Updated: 2026-08-05T05:07:28Z
+Closed: 2026-08-05T05:07:28Z
 
 ---
 
@@ -77,3 +78,11 @@ used) which is the structure meant for exactly this.
   single matched row.
 - An untouched project does not warm from one incidental search hit.
 - Re-warming performs no model calls.
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-05T05:07:27Z
+
+Audit close (2026-08-05, issue-state audit): implemented and tested on main. `runRemRewarm` src/dream-rem.ts:442-530, wired at :558-562, `skip_rewarm` payload :604, CLI scripts/dream-rem-run.ts:99-102. Verification bullets map to code: cluster-not-row (UPDATE by project tag, :513-524), one-hit-does-not-warm (REWARM_MIN_SESSIONS=2, noticed_only :476-481), no model calls (two SQL statements). Tests src/dream-rem.test.ts:351-535. Landed via #455 (eb84b02). State: MERGED and code-verified; no production run receipt was captured — hot→cold decay is explicitly out of scope per src/dream-rem.ts:424-430.

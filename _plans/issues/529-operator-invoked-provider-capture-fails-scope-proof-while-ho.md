@@ -3,11 +3,12 @@
 
 # #529 — Operator-invoked provider capture fails scope proof while hook capture works
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: none
 Created: 2026-08-04T00:33:46Z
-Updated: 2026-08-04T23:27:28Z
+Updated: 2026-08-06T00:52:11Z
+Closed: 2026-08-06T00:52:11Z
 
 ---
 
@@ -35,8 +36,33 @@ The AGENTS.md contract tells Claude to capture distilled in-flight events throug
 
 ---
 
-## Discussion (1)
+## Discussion (4)
 
 ### rodaddy — 2026-08-04T23:27:28Z
 
 Status check 2026-08-04. Core defect UNCHANGED (MERGED main 2a8d2db): the exact-scope gate still fires from `_runtime_validation.py:689` / `_require_session_start_scope` (line 72), so operator-invoked capture still fails scope proof while hook capture writes. Partial delivery on the third Wanted bullet: PR #533 (MERGED 2026-08-04, closed #464) forwards `candidate_type`/`memory_lifecycle_action`/`candidate_scope` through the capture allowlist and adds `ignored_optional_request_keys` to the receipt, so silently-dropped keys are now named. Still owed here: the session_start handshake proving `agent`/`channel_id`/`source` (or the gate demanding only what it proves), a named rejection for the top-level `namespace` key, and a live-canary-verified operator recipe in `docs/memory-contract.md`.
+
+---
+
+### rodaddy — 2026-08-05T03:56:49Z
+
+Reproduced 2026-08-05 ~01:55 from a mini Development session wrap: `printf '<distilled json>' | bun _ob/scripts/ob-memory-provider.ts --runtime claude --event capture` -> **exit 0, zero stdout/stderr, no receipt, ~/.local/state/openbrain-memory/claude-spool.jsonl untouched (empty since Aug 3)**. Session capture was silently dropped.
+
+Same-day context makes this sting: the Air incident write-up (development `_DOCS/_handoff/AIR-session-handoff-20260804.md` section 10) ratified 'silent failure is the multiplier -- every one of these exited 0.' Operator-invoked capture is currently another instance of that exact class. Whatever the scope-proof fix is, the floor is: a capture that saves nothing must exit non-zero and say why.
+
+---
+
+### rodaddy — 2026-08-05T05:25:46Z
+
+Fresh reproduction 2026-08-05 (head session, operator-invoked capture via ~/.local/bin/openbrain-memory with claudex-observation.env): request with distilled=true and full scope {agent, platform, channel_id, server_id, session_key} fails with `session_start result did not prove exact Open Brain scope: agent, channel_id, server_id, source` — receipt status `lost`, durable=false. Note this one was LOUD (a real receipt with a named error), unlike the 2026-08-05T03:56 silent exit-0 reproduction — so the silent-drop regression and the scope-proof gap are distinct defects on the same path. Also observed: `kind` is silently relegated to ignored_optional_request_keys, so operator captures lose their event type. Practical impact today: a goal-run authority directive could not be captured to OB and had to persist in a doc instead.
+
+---
+
+### rodaddy — 2026-08-05T22:43:27Z
+
+**Stale-blocker sweep verdict (2026-08-05): PARTIAL** — every issue this one references is closed, so it was audited against live state (scripts/stale-blockers.ts flagged it; a verification lane checked the acceptance itself).
+
+**What actually remains:**
+1) Core defect (bullet 1): make the provider's session_start handshake prove `agent`, `channel_id`, `server_id`, and `source`, OR narrow `validate_started_lane` (_runtime_validation.py:67-95) so the demanded set matches what session_start actually returns in the lane object. Needs a regression test that fails on today's behavior. 2) Bullet 3: add one working operator capture recipe to docs/memory-contract.md (or the provider README) and prove it with a live canary that lands a row in ob_session_events — blocked until (1) lands. 3) Related but arguably separable: `ob-memory-provider.ts --event capture` must not exit 0 with no receipt when nothing was saved (the floor Rico stated in the 2026-08-05 comment: "a capture that saves nothing must exit non-zero and say why"). 4) Optional per the 2026-08-05 comment: stop relegating `kind` to ignored_optional_request_keys so operator captures keep their event type. Bullet 2 (named `namespace` rejection) is DONE and needs no further work.
+
+**Stale text in this issue corrected by this comment:** Status check 2026-08-05 against trunk (origin/main; dogfood service revision a5a1274): only Wanted bullet 2 is satisfied — the top-level `namespace` named rejection landed as collateral in 5a97dac (#553) with a regression at `python/openbrain-memory/tests/test_cli_request_diagnostics.py:85`. The core defect is unchanged and freshly reproduced: an operator capture through `~/.local/bin/openbrain-memory` with `claudex-observation.env` returns `status:lost, durable:false, error:"session_start result did not prove exact Open Brain scope: agent, channel_id, server_id, source"`, and `select count(*)` over `ob_session_events` for the canary content is 0. The installed uv tool is not stale — `diff -q` of `_runtime_validation.py` and `cli.py` against repo source shows no difference — so `validate_started_lane` (`_runtime_validation.py:67-95`) is trunk behavior. Bullet 3 is also still owed: `docs/memory-contract.md` contains no operator stdin capture recipe. The silent exit-0 path also still reproduces via `ob-memory-provider.ts --event capture` (EXIT=0, no stdout/stderr, no row). Keeping this open.

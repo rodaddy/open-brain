@@ -3,11 +3,12 @@
 
 # #461 — CI flake: chunk-write.pg.test.ts fails under concurrent jobs sharing the check Postgres (5s stall / FK violation signature)
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: none
 Created: 2026-08-01T10:10:52Z
-Updated: 2026-08-01T10:10:52Z
+Updated: 2026-08-05T05:45:38Z
+Closed: 2026-08-05T05:45:38Z
 
 ---
 
@@ -28,3 +29,11 @@ Concurrent CI runs (push + pull_request, and `check` + `db-integration` where th
 - Cost so far: three diagnosis rounds across #455/#457/#460, and PR #460 was merged with this check red (classified after merge).
 
 Fix direction is open — the isolation the mitigation missed has to hold across *jobs*, not just processes.
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-05T05:45:37Z
+
+Closing on verification, not new work (close-run 1, lane issue461 — full receipts in the run ledger). The fix this issue asks for already exists on main, three layers deep: (1) per-run DB isolation in .github/workflows/ci.yml:36-44 — every workflow run owns open_brain_test_${run_id}_${run_attempt}, with an inline comment stating exactly this rationale; (2) root cause of the FK/stall signature fixed by ccb80c7 (chunking split-loop, #505, ancestor of main — the same signature was attributed there in #498's closing correction: 'This was not infrastructure'); (3) per-process namespace mitigation in src/chunk-write.pg.test.ts:35. Reproduction attempt under HARSHER conditions than CI (five simultaneous `bun test src/chunk-write.pg.test.ts` against one shared scratch DB, migrated fresh): 5/5 runs 6-pass-0-fail, ~140ms each vs the issue's 5,400ms stall; zero FK violations, zero timeouts across all five logs. Caveat recorded honestly: local M4 cannot fully model runner load — state is merged-and-locally-verified, not observed-green-on-runner this session. If the signature ever fires again on a run_id-isolated database, that is a NEW defect and deserves a new issue with the fresh log.

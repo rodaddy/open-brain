@@ -3,11 +3,12 @@
 
 # #448 — The policy layer is in no index — agents cannot find the rules they are judged by
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: wayfinder:task
 Created: 2026-07-29T19:21:33Z
-Updated: 2026-08-01T06:04:43Z
+Updated: 2026-08-05T02:41:03Z
+Closed: 2026-08-05T02:41:03Z
 
 ---
 
@@ -46,7 +47,7 @@ Type: task (AFK).
 
 ---
 
-## Discussion (1)
+## Discussion (2)
 
 ### rodaddy — 2026-08-01T06:04:43Z
 
@@ -77,3 +78,67 @@ No open-brain source change is required: this feature lives in the **Development
 ### Why still OPEN
 
 Criterion 2's literal `policy` name is unmet and only Rico can decide it. Closing now would be flipping state without meeting the named contract. Everything the ticket exists to prevent — an agent unable to find a `_DOCS`-only procedure — is RUNNING; the residue is a naming decision, above.
+
+---
+
+### rodaddy — 2026-08-05T02:40:59Z
+
+## Closing — 2026-08-04 — the policy index is RUNNING (operator-approved)
+
+Re-verified read-only today before closing. Both halves of the scope in this issue
+are built and live.
+
+**RUNNING — the index exists and holds the policy layer.**
+
+    $ ls -la ~/.cache/qmd/global_docs_instructions.sqlite
+    -rw-r--r-- 1 rico 22773760 Aug  4 19:05 .../global_docs_instructions.sqlite
+
+    $ sqlite3 ~/.cache/qmd/global_docs_instructions.sqlite "select count(*) from documents;"
+    861
+
+Against the measurement in this issue — "the fleet index holds 10,900 documents
+across 40+ repo collections and **zero** from either tree" — the per-collection
+breakdown now reads:
+
+    _DOCS               85
+    _ob                568
+    claude.skills       14      codex.skills        80
+    claude.commands     17      codex.hooks          5
+    claude.agents        3      claude.docs          8
+    claudex.workflows    6      claudex.plans       16      claudex.profiles  2
+
+Zero has become 653 across `_DOCS` + `_ob`, plus the agent-harness config that
+ships with the shared policy (routing, hooks, skills, workflows). The two
+documents this issue named as unreachable — `_DOCS/QMD_INDEXES.md` and
+`_ob/skills/skill-maintainer/workflows/update.md` — are inside the `_DOCS` and
+`_ob` collections respectively.
+
+**RUNNING — routing reaches it from an ordinary search.**
+
+`/Volumes/ThunderBolt/Development/_ob/bin/aqmd` line 63:
+
+    SHARED_INDEX="global_docs_instructions"
+
+and the default (bare-question) branch appends it to every local search rather
+than requiring a second command:
+
+    *)
+      run_query query "$*"
+      # SHARED POLICY IS APPENDED TO EVERY LOCAL SEARCH (Rico, 2026-07-29).
+      if [[ -f "$HOME/.config/qmd/${SHARED_INDEX}.yml" ]]; then
+        print -r -- "--- shared policy: _DOCS + _ob (aqmd internal) ---"
+        run_query query "$*" --index "$SHARED_INDEX"
+      fi
+
+That is the routing requirement stated here — the guard against widening the repo
+index is respected: this is a separate named index queried a second time, not a
+merge, so one edit to a standard does not leave ~45 stale per-repo copies.
+`aqmd internal "q"` serves the policy alone; `ensure_named_index` self-heals a
+fresh box, and `aqmd up internal` refreshes it (the stale-forever defect is fixed).
+
+**Scope note.** This issue was explicit that it covers the *retrieval* half only;
+the always-known half is canon (#438/#439/#444) and is tracked there, not here.
+
+Twin of #440, closed together with the same evidence.
+
+Closing as completed.

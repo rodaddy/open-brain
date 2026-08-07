@@ -3,11 +3,12 @@
 
 # #388 — QMD-3: Report qmd index freshness in operator-doctor so staleness alarms instead of passing silently
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: enhancement
 Created: 2026-07-25T00:19:41Z
-Updated: 2026-08-04T23:27:36Z
+Updated: 2026-08-05T09:02:36Z
+Closed: 2026-08-05T09:02:36Z
 
 ---
 

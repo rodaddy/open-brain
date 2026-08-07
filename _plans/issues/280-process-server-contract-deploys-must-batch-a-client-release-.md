@@ -3,11 +3,12 @@
 
 # #280 — process: server contract deploys must batch a client release + fleet pin bump (v19 drift broke fleet restarts)
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: closure-audit
 Created: 2026-07-08T03:21:31Z
-Updated: 2026-07-24T19:26:27Z
+Updated: 2026-08-05T02:41:59Z
+Closed: 2026-08-05T02:41:59Z
 
 ---
 
@@ -21,7 +22,7 @@ Ask: make that lockstep a deploy-gate (CI check or runbook hard step) — e.g. b
 
 ---
 
-## Discussion (5)
+## Discussion (6)
 
 ### rodaddy — 2026-07-08T04:43:25Z
 
@@ -126,3 +127,13 @@ The external fleet claim is stronger than the enforcement. Neither CI nor `scrip
 
 **Remediation required before closure**
 Require a machine-readable downstream compatibility/pin receipt (or explicit reviewed N/A classification) at deploy time, and emit/verify the fleet pin-bump checklist from the deployment path. If manual runbook enforcement is intentionally the final boundary, narrow the closure wording from “structurally blocked” to “in-tree blocked; external fleet guarded procedurally.”
+
+---
+
+### rodaddy — 2026-08-05T02:41:58Z
+
+Adopted and closing (operator approval 2026-08-04).
+
+Process half: already canon — `docs/canon/process-pack.toml:141` carries `process.contract_bump_requires_lockstep_client_release` ("NEVER deploy a server contract-version bump alone. The matching client release and downstream pin bumps ship in the same batch"), sourced to this issue, approved 2026-08-03, riding PR #538 (WRITTEN, merges with the pack). A possible wording widen (tool schemas / wire shapes as explicit triggers) is flagged on PR #538 for the operator read-through; no duplicate entry was added.
+
+Enforcement half: MERGED and verified at main 64c9b9f — `contracts/check-parity.ts:282-299` binds the contract-declaration fixture to the live server contractVersion + schemaHash (`:304-308` fails when nothing asserts it); `.github/workflows/ci.yml:498-506` gates deploy on contract-parity; `src/middleware/request-logger.ts:27-65` warn-logs `client_contract_mismatch` on a drifted `x-ob-contract` header. Python client binding replays in `python/openbrain-memory/tests/test_contract_fixtures.py` at `ci.yml:487-492`.

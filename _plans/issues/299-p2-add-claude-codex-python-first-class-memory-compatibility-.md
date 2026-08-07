@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: enhancement, memory, closure-audit
 Created: 2026-07-19T02:21:13Z
-Updated: 2026-07-24T19:26:24Z
+Updated: 2026-08-05T22:43:22Z
 
 ---
 
@@ -30,7 +30,7 @@ Hermes remains shelved and does not block this matrix.
 
 ---
 
-## Discussion (4)
+## Discussion (5)
 
 ### rodaddy — 2026-07-20T07:23:16Z
 
@@ -88,3 +88,21 @@ The matrix also does not execute the issue's full migration, restore, outage, an
 
 **Remediation required before closure**
 Add a release-blocking cross-runtime fixture runner over one intended lane, cover every directional handoff, and add stateful mixed-version install/upgrade/rollback/outage/migration/restore fixtures. Keep the current same-runtime parity gate as the lower layer.
+
+---
+
+### rodaddy — 2026-08-05T22:43:22Z
+
+**Stale-blocker sweep verdict (2026-08-05): PARTIAL** — every issue this one references is closed, so it was audited against live state (scripts/stale-blockers.ts flagged it; a verification lane checked the acceptance itself).
+
+**What actually remains:**
+Two acceptance bullets, both self-declared open in `docs/compatibility-matrix.md:69-77` on trunk:
+
+1. Executable cross-runtime continuity fixtures on one intended lane, covering all four directions named in the issue: Claude→Codex, Codex→Claude, Claude→Python, Python→Claude. Must be a release-blocking CI job (or an added step in the existing `contract-parity` job at `.github/workflows/ci.yml:428`, which `deploy` already `needs`). The existing same-runtime parity harness stays as the lower layer.
+2. Stateful fixtures for clean install, existing-state upgrade, rollback, outage, mixed client versions, migration, and restore-after-upgrade. Currently covered only operationally by `docs/downstream-rollout.md` and #298, which the matrix doc admits is not the fixture coverage the issue asked for.
+
+When both land, delete the "What this matrix does not claim" bullets at `docs/compatibility-matrix.md:71-77` in the same PR — that block is the live marker for this issue's remaining scope. Item 7 (#293's gate) follows automatically once the recovery/continuity half is executable.
+
+Alternative disposition, needs Rico: if cross-runtime lane handoff is still not a live workflow (the #315 deferral rationale, and the matrix doc's own "revisit if cross-runtime lane handoff becomes a live workflow" trigger), this could be deliberately descoped to the delivered same-runtime parity gate and closed with the two remaining items split into a new lower-priority issue. That is a product-shape call, not something the repo state decides.
+
+**Stale text in this issue corrected by this comment:** Status check 2026-08-05 against trunk `origin/main`: still PARTIAL, and the two gaps named in the 2026-07-24 closure audit are unchanged. MET and machine-enforced: supported client/version combinations (`src/contract.ts` `CONTRACT_VERSION = 2026-07-23.memory-tools.v23`, `min_client_versions`, `compatible_client_ranges`, rendered at `docs/compatibility-matrix.md:15-21` with Codex correctly mapped to mcp2cli >=0.3.6); upgrade sequencing and deprecation policy (`docs/compatibility-matrix.md:57-67`); release blocking for the same-runtime layer (`.github/workflows/ci.yml:428` `contract-parity` replays the 13 `contracts/memory/` fixtures against Python, and `deploy` at line 494 lists it in `needs`). NOT MET: (a) executable Claude→Codex / Codex→Claude / Claude↔Python continuity on one lane, and (b) mixed-version stateful install/upgrade/rollback/outage/migration/restore fixtures — both still self-declared open in this repo's own `docs/compatibility-matrix.md:69-77` ("No executable cross-runtime handoff tests exist yet"; "No mixed-version stateful upgrade/rollback fixtures"), and `fd` finds no such test files. `git log origin/main -- docs/compatibility-matrix.md contracts/` shows no commit since #315/#313 that addresses either. Keep open, or make an explicit descope call on whether cross-runtime lane handoff is a live enough workflow to fund.

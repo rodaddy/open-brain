@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: enhancement, memory
 Created: 2026-07-22T14:33:59Z
-Updated: 2026-07-24T21:31:42Z
+Updated: 2026-08-05T05:17:54Z
 
 ---
 
@@ -60,6 +60,9 @@ Create one durable server-owned maintenance queue and scheduler for spool replay
 - Prompt placement stays client/runtime-owned; no implicit MCP `_meta` injection.
 - Observability remains content-free.
 - Dream planning remains dry-run-safe unless a separately authorized mutating wrapper is used.
+
+## Close-run map (2026-08-05 audit)
+Maintenance/scheduling members now tracked here: #381 (distillation-lag alarm), #384 (MAINT-6 runner + sweep producer), #386 #387 #388 (QMD-1..3 index jobs). Candidate for an early close run — small, mechanical, mostly wiring scheduled jobs.
 
 ---
 

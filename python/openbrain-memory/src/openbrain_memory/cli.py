@@ -7,7 +7,7 @@ import logging
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, cast
 
-from .agent import MemorySpool
+from .agent import EVENT_TYPES, MemorySpool
 from .client import OpenBrainClient, Transport
 from .policy import redact_text
 from .runtime import (
@@ -182,6 +182,51 @@ def _reject_misplaced_config_keys(
     for key in sorted(_MISPLACED_CONFIG_KEYS):
         if key in payload and key not in allowed:
             raise ValueError(_MISPLACED_CONFIG_KEYS[key])
+
+
+# Wrong spellings of a request field this lane DOES have, mapped to the field
+# they were reaching for. Distinct from `_MISPLACED_CONFIG_KEYS`: those name a
+# real setting that lives somewhere else, these name a real field under a name
+# the contract never had.
+#
+# `kind` is the measured case (#598). It landed in
+# `ignored_optional_request_keys`, so a capture that meant `event_type:
+# "decision"` was accepted, stored as the default type, and exited 0 -- the
+# caller's classification silently lost with a success receipt on top of it.
+# Naming a dropped key (#464) is the right answer for a key that means nothing;
+# it is the wrong answer for a key that means something the caller expected to
+# take effect.
+#
+# Rejecting rather than aliasing is the operator ruling of 2026-08-07: the
+# request is reworded to fit the vocabulary, the vocabulary is not widened to
+# absorb the request. Honoring `kind` would mint a second undocumented spelling
+# of `event_type` and defer the vocabulary question (#403) behind an alias
+# nobody could later remove.
+_MISSPELLED_REQUEST_KEYS = {"kind": "event_type"}
+
+
+def _reject_misspelled_request_keys(
+    payload: Mapping[str, Any],
+    allowed: set[str],
+) -> None:
+    """Fail a request naming a real field by a name the contract does not have.
+
+    The legal values come from `EVENT_TYPES` in `agent.py`, the one definition
+    of the vocabulary (#412), because two hand-maintained copies of one list is
+    exactly the drift #409 found. A rejection that named the key without the
+    accepted set would leave the caller no way to be right, which is the
+    correction already applied to `unsupported_event_type`.
+    """
+    for key in sorted(_MISSPELLED_REQUEST_KEYS):
+        if key not in payload or key in allowed:
+            continue
+        target = _MISSPELLED_REQUEST_KEYS[key]
+        if target not in allowed:
+            continue
+        raise ValueError(
+            f"{key} is not a request key; this lane spells it {target}; "
+            f"accepted {target} values: {', '.join(sorted(EVENT_TYPES))}"
+        )
 
 
 def execute_json(
@@ -401,6 +446,7 @@ def _project_request(
             f"valid operations: {_OPERATION_VOCABULARY}"
         )
     _reject_misplaced_config_keys(payload, allowed)
+    _reject_misspelled_request_keys(payload, allowed)
     known_keys = _COMMON_KEYS | allowed
     projected = {key: value for key, value in payload.items() if key in known_keys}
     ignored_keys = sorted(

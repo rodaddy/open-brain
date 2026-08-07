@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: enhancement
 Created: 2026-07-25T00:19:31Z
-Updated: 2026-08-04T23:27:37Z
+Updated: 2026-08-05T06:18:51Z
 
 ---
 
@@ -62,8 +62,65 @@ re-litigate it.
 
 ---
 
-## Discussion (1)
+## Discussion (2)
 
 ### rodaddy — 2026-08-04T23:27:36Z
 
 2026-08-04 status. WRITTEN: the shared 53-repo qmd index this issue is written against was retired 2026-07-29/30 — see `docs/standards/QMD_INDEXES.md`, which records that merging all repos into one bucket is what made cross-repo search return stale hits. The "27 of 82 registered / 55 invisible" count no longer describes anything. RUNNING: 54 repos under `/Volumes/ThunderBolt/Development` now carry their own project-local `.qmd/index.sqlite`, covering 6 of the 9 repos named here (mcp2cli, rtech-mcps, rtech-infra, rtech-agents, king-capital, skippy-agentspace). The two flagged as most consequential, `_ob` and `_DOCS`, are indexed in `~/.cache/qmd/global_docs_instructions.sqlite` and appended to every bare `aqmd` query, so the "agents cannot fast-look-up the rules that govern them" problem is solved. RESIDUAL: `bulkbridge` has no index, and the durable exclusion rule this issue asks for is documented in `QMD_INDEXES.md` but not enforced by tooling. Worth rescoping to those two items or closing in favour of #388's per-repo coverage check.
+
+---
+
+### rodaddy — 2026-08-05T06:18:51Z
+
+## QMD-2 triage (report-only; no registration performed)
+
+Measured 2026-08-05 on this Mac, by testing `<dir>/.qmd/index.sqlite` for every top-level entry under `/Volumes/ThunderBolt/Development`. **81 top-level dirs: 54 carry a project-local index, 27 do not.** The original "27 of 82 registered / 55 invisible" framing is dead — it described the retired shared 53-repo index (see `docs/standards/QMD_INDEXES.md`). What follows triages the 27 that are actually unindexed today.
+
+File counts are `fd -t f -I -H -E node_modules -E .git` (no-ignore, so gitignored source is counted).
+
+| Dir | files / md / code | Verdict | Reason |
+|---|---|---|---|
+| `_DOCS` | 217 / 60 / 58 | **already covered — skip** | indexed in `~/.cache/qmd/global_docs_instructions.sqlite`, appended to every bare `aqmd` query |
+| `_ob` | 711 / 373 / 121 | **already covered — skip** | same global docs index; skill registry is retrievable today |
+| `bulkbridge` | 5238 / 453 / 2207 | **index — per sub-repo, not the umbrella** | not one repo: 4 git sub-repos (`admin-app`, `bulkbridge-ai`, `client-app`, `ops`) plus non-source `_reports/`, `outputs/`. Index the four; exclude the two. This is the residual item from the 2026-08-04 status comment. |
+| `mcp` | 6543 / 475 / 3180 | **index — partial** | umbrella. `browser-harness` and `unifi-network-mcp` are git repos worth indexing; `servers/`, `shared/`, `docs/`, `scripts/`, `bin/` are loose source with real value; `tempFiles/` excluded. |
+| `WorkStuff` | 5410 / 462 / 1748 | **index — per sub-repo** | 5 git repos (`b1x-message-coordinator`, `b1x-telegram-admin`, `BullishAITelegramBot`, `TechOps-FIX`, `TelegramBackupBot`). Client work; index each on its own, never the umbrella. |
+| `openclaw` | 367 / 31 / 20 | **index — remainder only** | `ai-second-brain` already has its own index. The parent's `docs/`, `planning/`, `tools/`, `hooks/`, `CLAUDE.md` are unindexed and are real prose. |
+| `remotion-visual-lab` | 178 / 47 / 17 | **index** | active project, 47 md + `src/`, `docs/`, `skills-lock.json`; exclude `node_modules/`, `out/`, `assets/`, `public/`. |
+| `digital-product-factory` | 315 / 19 / 52 | **index** | live TS project with `CLAUDE.md`, `.prd`, listing tooling. Carries `.env` and `.etsy-tokens.json` — **must be excluded from the pattern** before any registration. |
+| `skippy` | 106 / 13 / 23 | **index — per sub-repo** | `skippy-dashboard` and `skippy-matrix` are git repos; `skippy_pics/` is images, exclude. |
+| `resumeUpdate` | 361 / 185 / 3 | **index (low priority)** | 185 md, essentially a document set; useful for retrieval, no code risk. |
+| `fleet-a2a-project` | 12 / 8 / 1 | **index (cheap)** | 8 md of design notes; trivial cost. |
+| `vpn_info` | 12 / 3 / 1 | **skip** | tiny; likely holds connection details/credentials. Not worth an index and wrong content to embed. |
+| `paperless-ngx` | 2 / 2 / 0 | **skip** | two notes files; below any useful threshold. |
+| `specs` | 3 / 0 / 1 | **skip** | 3 files, no prose. |
+| `_temp` | 53 / 1 / 17 | **skip (excluded class)** | temp workspace. |
+| `_tmp` | 8844 / 274 / 3827 | **skip (excluded class)** | temp workspace — the single biggest bloat trap in the tree, and exactly what the exclusion rule exists to stop. |
+| `tmp`, `temp` | 22 / 3 | **skip (excluded class)** | temp. |
+| `_sandbox` | 7 / 0 / 0 | **skip (excluded class)** | scratch. |
+| `_archive` | 1 / 0 / 0 | **archive — skip** | already the archive bucket. |
+| `ClaudeStuff` | 3869 / 193 / 11 | **archive, do NOT index** | 4 service-account/Vertex credential JSONs sit at its root (`vertex_ai_creds.json`, `message-coordinator-VertexAI.json`, two `be-d-pto-techops-*.json`). Contents are vendored upstream dumps (`agents-main`, `commands-main`). Secrets-in-tree is a separate action item independent of qmd. |
+| `herdr` | 0 / 0 / 0 | **archive — skip** | empty; Herdr is deprecated (2026-07-14). |
+| `fabric-outputs` | 15 / 15 / 0 | **skip (excluded class)** | generated output. |
+| `outputs` | (generated) | **skip (excluded class)** | generated output. |
+| `reports` | 109 / 107 / 0 | **skip (excluded class)** | generated reports; named in the issue's own exclude list. |
+| `vaultwarden-secrets.bfg-report` | 3 / 0 / 0 | **archive — skip** | BFG run artifact from a secret-scrub; by definition references secret material. |
+| `node_modules` | — | **skip (excluded class)** | dependency tree. |
+
+### Roll-up
+
+- **Index (9 targets, mostly per-sub-repo):** `bulkbridge` x4, `WorkStuff` x5, `mcp` (2 git repos + loose source), `openclaw` remainder, `remotion-visual-lab`, `digital-product-factory`, `skippy` x2, `resumeUpdate`, `fleet-a2a-project`.
+- **Already covered, no action:** `_ob`, `_DOCS` — the issue's two headline items are solved.
+- **Archive / never index:** `ClaudeStuff` (credentials), `vaultwarden-secrets.bfg-report`, `herdr`, `_archive`.
+- **Skip (temp/generated/too small):** `_tmp`, `_temp`, `tmp`, `temp`, `_sandbox`, `outputs`, `reports`, `fabric-outputs`, `node_modules`, `specs`, `paperless-ngx`, `vpn_info`.
+
+### Two things this triage changes about the original scope
+
+1. **The unit is the sub-repo, not the top-level directory.** `bulkbridge`, `mcp`, `WorkStuff`, `skippy`, and `ClaudeStuff` are umbrellas holding 2-5 independent git repos each. Registering the umbrella would merge unrelated projects into one bucket — the exact failure that retired the shared index. Five of the 27 "unindexed repos" are really 14+ candidate repos.
+2. **Two entries are secret-bearing, and that is a blocker rather than a preference.** `ClaudeStuff` (4 credential JSONs at root) and `digital-product-factory` (`.env`, `.etsy-tokens.json`). Embedding either puts credential material into a queryable index. `digital-product-factory` is still worth indexing with those paths excluded; `ClaudeStuff` is not worth it at all.
+
+### Residual, unaddressed by this lane
+
+The durable exclusion rule is documented in `docs/standards/QMD_INDEXES.md` ("Why the pattern is an allowlist" — allowlist from `git ls-files`, never `/**/` recursion, gitignored source named back via `_ob/etc/qmd-index-overrides.yml`) but is **not enforced by tooling**. Nothing prevents the next pass from re-litigating it. That is #388's territory (per-repo coverage check), not something registration alone fixes.
+
+State: PROPOSED triage from measurement taken this session. No index was created, no config changed, no commit made. Registration runs later with operator eyes.

@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: enhancement, memory
 Created: 2026-07-24T21:31:05Z
-Updated: 2026-07-24T21:31:05Z
+Updated: 2026-08-05T08:52:14Z
 
 ---
 
@@ -56,3 +56,11 @@ That is the difference between a queue that exists and a server that works.
 
 Step 1-2 need nothing else and can land first. Step 3's `memory.distill` arm
 depends on #382.
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-05T08:52:14Z
+
+Reopening deliberately: PR #577 MERGED (sweep producer + idempotency rekey + real ON CONFLICT pg test, fix-delta verified). Remaining acceptance is operator-gated and explicitly out of the PR's scope: the runner observed processing on the local clone, core01 enablement, and disposition of the pre-existing dead-lettered canary job. Merged is not running. Closes with a live processing receipt.

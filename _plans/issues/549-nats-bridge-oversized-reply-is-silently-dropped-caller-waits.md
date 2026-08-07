@@ -3,12 +3,72 @@
 
 # #549 — NATS bridge: oversized reply is silently dropped — caller waits out its timeout with no error (measured 58.5MB pack reply)
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: none
 Created: 2026-08-04T15:26:04Z
-Updated: 2026-08-04T15:26:04Z
+Updated: 2026-08-05T03:22:14Z
+Closed: 2026-08-05T03:15:06Z
 
 ---
 
 Found live 2026-08-04 during local NATS wiring: a durable_memory context pack for namespace rico builds a 58.5MB reply (durable_memory alone 39.9MB). The broker refuses to publish it, message.respond() returns false, and startNatsContextPackBridge throws 'NATS request did not include a reply inbox' — the CALLER GETS NOTHING and waits out its own timeout with no client-visible reason. src/nats-bridge.ts guards the REQUEST at MAX_NATS_REQUEST_BYTES (64KB) but has no guard on the RESPONSE. Affects the fleet bus too (protocol default max_payload is smaller than this broker's 8MB). Needs: a response-size guard that returns a structured error (or a truncated pack with a shortfall receipt per the #535 sections_receipt pattern) instead of silence. Silent no-reply is the defect class this whole epic exists to kill.
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-05T03:22:14Z
+
+## Live NATS round-trip receipt — post-merge item complete
+
+The deferred post-merge step (live round-trip against the local broker) is done. Deployed current `main` `d46d68e` to the local dogfood clone and ran the exact request that measured the original defect.
+
+**Deploy**
+
+```
+local-clone-deploy: swapped d46d68e into /Volumes/ThunderBolt/open-brain-local/app
+local-clone-deploy: revision proof PASSED: pid 29788 -> 23876, cwd /Volumes/ThunderBolt/open-brain-local/app, revision d46d68e
+```
+
+`http://127.0.0.1:3100/health` → `revision d46d68e`, `hostname Mini-M4-Pro.local`, `server_ip 10.71.1.20`.
+NATS worker kickstarted by the deploy script itself (`OPENBRAIN_NATS_WORKER_LABEL`, the #545 lineage); `http://127.0.0.1:3110/health` → `nats.availability: available` on `dev.ob.memory.context_pack`.
+
+**Oversize request — a reply ARRIVES**
+
+Published on `dev.ob.memory.context_pack`: `durable_memory` in namespace `rico`, `query: "open brain"`. Previously this was silence until the caller's own timeout. Now, reply received, 535 bytes:
+
+```json
+{
+  "id": "ob549-proof-oversize-b-20260805",
+  "from": "open-brain",
+  "kind": "context_pack_response",
+  "payload": {
+    "status": "error",
+    "operation": "agent_context_pack",
+    "namespace_source": "override",
+    "error": {
+      "code": "payload_too_large",
+      "message": "The broker refused to carry this context pack reply. Reply was 63370799 bytes; the broker advertises 8388608 bytes. Requested sections: durable_memory."
+    }
+  },
+  "correlation_id": "ob549-proof-oversize-b-20260805",
+  "version": 1
+}
+```
+
+Every asserted property holds live:
+
+- reply arrives, no timeout
+- `status: error`, `code: payload_too_large`
+- `correlation_id` echoes the request `id` exactly
+- names the measured bytes (63,370,799) and the broker's own advertised figure (8,388,608 = 8 MiB), read off the connection rather than hardcoded
+- content-free: names the requested section, carries no pack data
+
+**Small request still OK**
+
+`repo_facts`, same identity/namespace, returned in ~1s: `status: ok`, `sections_receipt: {"requested":["repo_facts"],"served":["repo_facts"],"requested_not_served":[]}`, `correlation_id` echoed.
+
+**One note for the record.** The same `durable_memory` request WITHOUT a `query` returns `status: ok` with an empty section (`empty_reason: "no_query"`) — recall is query-gated, so an unqualified `durable_memory` ask never reaches the oversize path. The oversize reply needs a query. Measured 63.4 MB here vs the 58.5 MB recorded on 2026-08-04; the corpus has grown since, and the point stands either way.
+
+**Still open, unchanged:** the reply does not fit an 8 MB broker. The caller now gets a clear, correlated error rather than a pack. Resolving the size remains the operator's call, as the runbook says.

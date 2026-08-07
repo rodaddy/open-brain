@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: none
 Created: 2026-07-24T00:59:09Z
-Updated: 2026-08-04T00:39:51Z
+Updated: 2026-08-05T05:17:55Z
 
 ---
 
@@ -37,6 +37,9 @@ Parent program: #320
 ## Completion
 
 All child issues are locally and functionally verified, Claude/Claudex canaries use the local server, Langfuse stores allowlisted metadata only, #347 completes against the local stack, and Project #8 reflects live state.
+
+## Close-run map (2026-08-05 audit)
+Adapter/capture-correctness members now tracked here: #371 (total-recall hooks), #511 (Pi adapter), #512 (Codex adapter), #529 (scope-proof failure — REGRESSED 2026-08-05 to silent exit-0 zero-capture, priority raised), #562 (ENV_FILE derivation — PR #570 open, red CI), #442 (brain skill stale docs).
 
 ---
 

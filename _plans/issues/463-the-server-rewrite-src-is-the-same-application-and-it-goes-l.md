@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: wayfinder:task
 Created: 2026-08-01T22:38:09Z
-Updated: 2026-08-02T05:19:07Z
+Updated: 2026-08-05T22:43:26Z
 
 ---
 
@@ -25,7 +25,7 @@ Type: task (AFK). This records the final rewrite phase and its sequencing gate; 
 
 ---
 
-## Discussion (1)
+## Discussion (2)
 
 ### rodaddy — 2026-08-02T05:19:07Z
 
@@ -49,3 +49,14 @@ Validation receipts:
 Draft PR: https://github.com/rodaddy/open-brain/pull/476
 
 No issue was closed and the map was not edited.
+
+---
+
+### rodaddy — 2026-08-05T22:43:26Z
+
+**Stale-blocker sweep verdict (2026-08-05): PARTIAL** — every issue this one references is closed, so it was audited against live state (scripts/stale-blockers.ts flagged it; a verification lane checked the acceptance itself).
+
+**What actually remains:**
+1. Cut core01 (10.71.1.21) over to the rewrite and prove it: hosted /health must show `revision` + `hostname` on each worker body, plus session affinity under the two-worker front. 2. Switch package.json `start` / `start:two-worker` off `src/index.ts`. 3. Retire `src/` modules in reviewable slices per the strangler rule (353 files / 125,207 LOC still on trunk). 4. Run the remaining Phase 6 canaries: representative MCP calls against the rewrite, Python client/provider and hook canaries, and the applicable `docs/downstream-rollout.md:24-159` steps. 5. Clear the #443 Python-tail sequencing gate (#443 OPEN, ~50 open children). 6. Fix the stale `server/README.md` and charter §5 text that still claim scaffold-only/serves-nothing.
+
+**Stale text in this issue corrected by this comment:** Stale as written: the single comment on this issue records "Cutover: **NOT STARTED**" and "Running application: unchanged", but as of 2026-08-05 the rewrite is RUNNING locally — `lsof -iTCP:3100` shows PID 51594 = `bun run server/main.ts`, and `server/state.ts` on trunk declares `{phase:"cutover", servesTraffic:true, cutoverStarted:true}`; what actually remains is the core01 hosted cutover/canary (its worker `/health` bodies still lack the rewrite's `revision`/`hostname` fields), the `package.json` entrypoint switch, and `src/` retirement.
