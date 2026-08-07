@@ -52,8 +52,15 @@ import {
   ftsConfigLiteral,
   type FtsConfig,
 } from "./fts-config.ts";
-import { canonicalNamespace, sharedNamespaceConfig } from "./shared-namespace.ts";
+import {
+  canonicalNamespace,
+  sharedNamespaceConfig,
+} from "./shared-namespace.ts";
 import type { NamespaceFilter } from "./read-scope.ts";
+import {
+  traceRetrievalSpan,
+  traceRetrievalSpanSync,
+} from "../observability/langfuse-tracing.ts";
 
 export type SearchMode = "hybrid" | "vector" | "keyword";
 
@@ -108,6 +115,32 @@ export interface ExecuteSearchOptions {
   readonly ftsConfig?: FtsConfig;
 }
 
+function rowEvidence(row: SearchRow): Record<string, unknown> {
+  return {
+    row_id: row.id,
+    source_type: row.source_type,
+    namespace: row.namespace ?? null,
+    content_preview: row.content_preview ?? null,
+    distance: row.distance ?? null,
+    similarity: row.distance === undefined ? null : 1 - row.distance,
+    bm25_score: row.fts_rank ?? null,
+    usefulness: row.usefulness,
+    tier: row.tier ?? null,
+  };
+}
+
+function rowsEvidence(rows: readonly SearchRow[]): Record<string, unknown> {
+  return {
+    count: rows.length,
+    row_ids: rows.map((row) => row.id),
+    candidates: rows.map(rowEvidence),
+  };
+}
+
+function rowIdsEvidence(rows: readonly SearchRow[]): Record<string, unknown> {
+  return { count: rows.length, row_ids: rows.map((row) => row.id) };
+}
+
 /** Resolve the embedding timeout, ignoring an unusable environment value. */
 function searchEmbeddingTimeoutMs(): number {
   const raw =
@@ -134,22 +167,33 @@ async function generateSearchEmbedding(
 ): Promise<number[] | null> {
   const timeoutMs = searchEmbeddingTimeoutMs();
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      dependencies.embedFn(query),
-      new Promise<null>((resolve) => {
-        timeoutId = setTimeout(() => {
-          dependencies.logger.warn(
-            { timeout_ms: timeoutMs, query_chars: query.length },
-            "search_embedding_timeout",
-          );
-          resolve(null);
-        }, timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timeoutId) clearTimeout(timeoutId);
-  }
+  return traceRetrievalSpan({
+    name: "retrieval.embedding",
+    input: { query, timeout_ms: timeoutMs },
+    metadata: { stage: "candidate_generation" },
+    run: async () => {
+      try {
+        return await Promise.race([
+          dependencies.embedFn(query),
+          new Promise<null>((resolve) => {
+            timeoutId = setTimeout(() => {
+              dependencies.logger.warn(
+                { timeout_ms: timeoutMs, query_chars: query.length },
+                "search_embedding_timeout",
+              );
+              resolve(null);
+            }, timeoutMs);
+          }),
+        ]);
+      } finally {
+        if (timeoutId) clearTimeout(timeoutId);
+      }
+    },
+    output: (embedding) => ({
+      generated: embedding !== null,
+      dimensions: embedding?.length ?? 0,
+    }),
+  });
 }
 
 /**
@@ -239,7 +283,11 @@ function buildVectorCTE(
   assertTier(tier);
   const alias = TABLE_ALIAS[table];
   const tierFilter = tier ? ` AND ${alias}.tier = '${tier}'` : "";
-  const nsFilter = namespaceFilterSql(alias, namespaceParamIndex, namespaceIsArray);
+  const nsFilter = namespaceFilterSql(
+    alias,
+    namespaceParamIndex,
+    namespaceIsArray,
+  );
   const distance = `${alias}.embedding <=> (SELECT emb FROM query_embedding)`;
   return `${table}_results AS (
   SELECT ${selectColumns(table, `${distance} AS distance`)}
@@ -292,7 +340,11 @@ function buildFtsCTE(
   assertTier(tier);
   const alias = TABLE_ALIAS[table];
   const tierFilter = tier ? ` AND ${alias}.tier = '${tier}'` : "";
-  const nsFilter = namespaceFilterSql(alias, namespaceParamIndex, namespaceIsArray);
+  const nsFilter = namespaceFilterSql(
+    alias,
+    namespaceParamIndex,
+    namespaceIsArray,
+  );
   const { vectorSql, querySql } = ftsMatchExpressions(table, ftsConfig);
   return `${table}_fts AS (
   SELECT ${selectColumns(table, `ts_rank_cd(${vectorSql}, ${querySql}) AS fts_rank`)}
@@ -340,7 +392,9 @@ function withSourceRefs(rows: SearchRow[]): SearchRow[] {
 function withCanonicalNamespaces(rows: SearchRow[]): SearchRow[] {
   return rows.map((row) => ({
     ...row,
-    namespace: row.namespace ? canonicalNamespace(row.namespace) : row.namespace,
+    namespace: row.namespace
+      ? canonicalNamespace(row.namespace)
+      : row.namespace,
     source_ref: row.source_ref
       ? {
           ...row.source_ref,
@@ -366,7 +420,13 @@ async function vectorSearch(
   const namespaceParamIndex = appendNamespaceParam(params, namespace);
   const namespaceIsArray = Array.isArray(namespace);
   const ctes = tables.map((table) =>
-    buildVectorCTE(table, fetchLimit, tier, namespaceParamIndex, namespaceIsArray),
+    buildVectorCTE(
+      table,
+      fetchLimit,
+      tier,
+      namespaceParamIndex,
+      namespaceIsArray,
+    ),
   );
   const unionAll = tables
     .map((table) => `SELECT * FROM ${table}_results`)
@@ -384,8 +444,19 @@ ORDER BY (distance * ${VECTOR_WEIGHT}
   + EXTRACT(EPOCH FROM (NOW() - created_at)) / 86400.0 * ${AGE_WEIGHT}) ASC
 LIMIT $2 OFFSET $3`;
 
-  const { rows } = await dependencies.pool.query(sql, params);
-  return withSourceRefs(rows as SearchRow[]);
+  return traceRetrievalSpan({
+    name: "retrieval.vector_query",
+    input: { tables, fetch_limit: fetchLimit, offset, tier, namespace },
+    metadata: {
+      stage: "candidate_generation",
+      filter_names: ["namespace", "tier", "archived_at"],
+    },
+    run: async () => {
+      const { rows } = await dependencies.pool.query(sql, params);
+      return withSourceRefs(rows as SearchRow[]);
+    },
+    output: rowsEvidence,
+  });
 }
 
 /** Run the lexical arm across every accessible table. */
@@ -426,8 +497,27 @@ ${unionAll}
 ORDER BY fts_rank DESC
 LIMIT $2 OFFSET $3`;
 
-  const { rows } = await dependencies.pool.query(sql, params);
-  return withSourceRefs(rows as SearchRow[]);
+  return traceRetrievalSpan({
+    name: "retrieval.keyword_query",
+    input: {
+      query,
+      tables,
+      fetch_limit: fetchLimit,
+      offset,
+      tier,
+      namespace,
+      fts_config: ftsConfig,
+    },
+    metadata: {
+      stage: "candidate_generation",
+      filter_names: ["namespace", "tier", "archived_at"],
+    },
+    run: async () => {
+      const { rows } = await dependencies.pool.query(sql, params);
+      return withSourceRefs(rows as SearchRow[]);
+    },
+    output: rowsEvidence,
+  });
 }
 
 /**
@@ -449,34 +539,59 @@ function rrfMerge(
   ftsRows: readonly SearchRow[],
   limit: number,
 ): SearchRow[] {
-  const scored = new Map<string, { row: SearchRow; rrf: number }>();
-
-  const accumulate = (rows: readonly SearchRow[]): void => {
-    rows.forEach((row, index) => {
-      const key = `${row.source_type}:${row.id}`;
-      const contribution = 1 / (RRF_K + index + 1);
-      const existing = scored.get(key);
-      if (existing) existing.rrf += contribution;
-      else scored.set(key, { row, rrf: contribution });
-    });
-  };
-
-  accumulate(vectorRows);
-  accumulate(ftsRows);
-
-  return Array.from(scored.values())
-    .map(({ row, rrf }) => ({
-      row,
-      rrf: Math.max(
-        0,
-        (rrf + TIER_BOOST[(row.tier ?? "warm") as Tier]) *
-          (TABLE_WEIGHT[row.source_type] ?? 1) *
-          recencyFactor(row.created_at),
-      ),
-    }))
-    .sort((a, b) => b.rrf - a.rrf)
-    .slice(0, limit)
-    .map(({ row }) => row);
+  let ranked: Array<{ row: SearchRow; rrf: number }> = [];
+  return traceRetrievalSpanSync({
+    name: "retrieval.rank_rrf",
+    input: {
+      limit,
+      vector: rowIdsEvidence(vectorRows),
+      keyword: rowIdsEvidence(ftsRows),
+    },
+    metadata: { stage: "scoring_ranking", filter_names: ["rrf_limit"] },
+    run: () => {
+      const scored = new Map<string, { row: SearchRow; rrf: number }>();
+      const accumulate = (rows: readonly SearchRow[]): void => {
+        rows.forEach((row, index) => {
+          const key = `${row.source_type}:${row.id}`;
+          const contribution = 1 / (RRF_K + index + 1);
+          const existing = scored.get(key);
+          if (existing) existing.rrf += contribution;
+          else scored.set(key, { row, rrf: contribution });
+        });
+      };
+      accumulate(vectorRows);
+      accumulate(ftsRows);
+      ranked = Array.from(scored.values())
+        .map(({ row, rrf }) => ({
+          row,
+          rrf: Math.max(
+            0,
+            (rrf + TIER_BOOST[(row.tier ?? "warm") as Tier]) *
+              (TABLE_WEIGHT[row.source_type] ?? 1) *
+              recencyFactor(row.created_at),
+          ),
+        }))
+        .sort((a, b) => b.rrf - a.rrf);
+      return ranked.slice(0, limit).map(({ row }) => row);
+    },
+    output: (selected) => {
+      const selectedKeys = new Set(
+        selected.map((row) => `${row.source_type}:${row.id}`),
+      );
+      return {
+        candidate_count: ranked.length,
+        selected_count: selected.length,
+        candidates: ranked.map(({ row, rrf }) => ({
+          ...rowEvidence(row),
+          rrf_score: rrf,
+          chosen: selectedKeys.has(`${row.source_type}:${row.id}`),
+          filtered_by: selectedKeys.has(`${row.source_type}:${row.id}`)
+            ? null
+            : "rrf_limit",
+        })),
+      };
+    },
+  });
 }
 
 /**
@@ -496,7 +611,7 @@ function rrfMerge(
  * @param options Lexical-arm configuration.
  * @throws When `mode` is `vector` and the embedding could not be generated.
  */
-export async function executeSearch(
+async function executeSearchInternal(
   dependencies: SearchDependencies,
   tables: readonly ResourceTable[],
   query: string,
@@ -565,7 +680,15 @@ export async function executeSearch(
   const totalNeeded = offset + limit;
   const fetchLimit = totalNeeded * HYBRID_FETCH_MULTIPLIER;
   const [vectorRows, ftsRows] = await Promise.all([
-    vectorSearch(dependencies, tables, embedding, fetchLimit, tier, 0, namespace),
+    vectorSearch(
+      dependencies,
+      tables,
+      embedding,
+      fetchLimit,
+      tier,
+      0,
+      namespace,
+    ),
     ftsSearch(
       dependencies,
       tables,
@@ -578,6 +701,47 @@ export async function executeSearch(
     ),
   ]);
   return rrfMerge(vectorRows, ftsRows, totalNeeded).slice(offset);
+}
+
+export function executeSearch(
+  dependencies: SearchDependencies,
+  tables: readonly ResourceTable[],
+  query: string,
+  limit: number,
+  mode: SearchMode = "hybrid",
+  tier?: Tier,
+  offset = 0,
+  namespace?: NamespaceFilter,
+  options: ExecuteSearchOptions = {},
+): Promise<SearchRow[]> {
+  return traceRetrievalSpan({
+    name: "retrieval.execute",
+    input: { query, tables, limit, mode, tier, offset, namespace, options },
+    metadata: {
+      stage: "retrieval_pipeline",
+      resolved_namespace: namespace ?? null,
+      filter_names: [
+        "permissions",
+        "namespace",
+        "tier",
+        "archived_at",
+        "pagination",
+      ],
+    },
+    run: () =>
+      executeSearchInternal(
+        dependencies,
+        tables,
+        query,
+        limit,
+        mode,
+        tier,
+        offset,
+        namespace,
+        options,
+      ),
+    output: rowsEvidence,
+  });
 }
 
 /** Dedupe key used when topping up from the legacy namespace. */
@@ -611,23 +775,92 @@ function dedupeFallbackRows(rows: readonly SearchRow[]): SearchRow[] {
  * displaced so the caller can SEE that unmigrated content exists — a silent
  * omission is what makes a stalled migration invisible.
  */
-function mergeFallbackRows(
+type FallbackClassification = {
+  row: SearchRow;
+  chosen: boolean;
+  filtered_by: "fallback_duplicate" | "fallback_limit" | null;
+};
+
+function selectedFallbackRows(
+  primary: SearchRow[],
+  legacy: SearchRow[],
+  limit: number,
+): SearchRow[] {
+  if (legacy.length === 0) return primary.slice(0, limit);
+  const firstLegacy = legacy[0];
+  if (!firstLegacy) return primary.slice(0, limit);
+  if (primary.length >= limit) {
+    return [...primary.slice(0, Math.max(0, limit - 1)), firstLegacy];
+  }
+  return [...primary, ...legacy.slice(0, limit - primary.length)];
+}
+
+function fallbackFilteredBy(
+  chosen: boolean,
+  duplicate: boolean,
+): FallbackClassification["filtered_by"] {
+  if (chosen) return null;
+  return duplicate ? "fallback_duplicate" : "fallback_limit";
+}
+
+function computeFallbackRows(
   primaryRows: readonly SearchRow[],
   legacyRows: readonly SearchRow[],
   limit: number,
-): SearchRow[] {
+): { rows: SearchRow[]; classifications: FallbackClassification[] } {
   const primary = dedupeFallbackRows(primaryRows);
   const primaryKeys = new Set(primary.map(fallbackDedupeKey));
   const legacy = dedupeFallbackRows(
     legacyRows.filter((row) => !primaryKeys.has(fallbackDedupeKey(row))),
   );
-  if (legacy.length === 0) return primary.slice(0, limit);
-  if (primary.length >= limit) {
-    const first = legacy[0];
-    if (!first) return primary.slice(0, limit);
-    return [...primary.slice(0, Math.max(0, limit - 1)), first];
-  }
-  return [...primary, ...legacy.slice(0, limit - primary.length)];
+  const rows = selectedFallbackRows(primary, legacy, limit);
+  const selectedKeys = new Set(rows.map(fallbackDedupeKey));
+  const seen = new Set<string>();
+  const classifications = [...primaryRows, ...legacyRows].map((row, index) => {
+    const key = fallbackDedupeKey(row);
+    const duplicate =
+      seen.has(key) ||
+      (index >= primaryRows.length && primaryKeys.has(key));
+    seen.add(key);
+    const chosen = !duplicate && selectedKeys.has(key);
+    return {
+      row,
+      chosen,
+      filtered_by: fallbackFilteredBy(chosen, duplicate),
+    } satisfies FallbackClassification;
+  });
+  return { rows, classifications };
+}
+
+export function mergeFallbackRows(
+  primaryRows: readonly SearchRow[],
+  legacyRows: readonly SearchRow[],
+  limit: number,
+): SearchRow[] {
+  const result = traceRetrievalSpanSync({
+    name: "retrieval.fallback_dedupe",
+    input: {
+      limit,
+      primary: rowsEvidence(primaryRows),
+      legacy: rowsEvidence(legacyRows),
+    },
+    metadata: {
+      stage: "filtering",
+      filter_names: ["fallback_duplicate", "fallback_limit"],
+    },
+    run: () => computeFallbackRows(primaryRows, legacyRows, limit),
+    output: ({ rows, classifications }) => ({
+      candidate_count: classifications.length,
+      selected_count: rows.length,
+      selected_row_ids: rows.map((row) => row.id),
+      candidates: classifications.map(({ row, chosen, filtered_by }) => ({
+        ...rowEvidence(row),
+        chosen,
+        filtered_by,
+      })),
+    }),
+  });
+  return result.rows;
 }
 
 /**

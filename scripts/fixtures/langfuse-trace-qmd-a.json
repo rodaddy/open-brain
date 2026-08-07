@@ -1,0 +1,17 @@
+{
+  "id": "trace-qmd-a",
+  "name": "search_all",
+  "observations": [
+    {
+      "id": "qmd-a",
+      "name": "retrieval.qmd_query",
+      "output": {
+        "candidate_count": 2,
+        "candidates": [
+          {"row_id": null, "path": "docs/a.md"},
+          {"row_id": null, "path": "docs/b.md"}
+        ]
+      }
+    }
+  ]
+}

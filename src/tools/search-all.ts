@@ -20,6 +20,11 @@ import {
 import { isSharedNamespace } from "../shared-namespace.ts";
 import { resolveQmdPath } from "../qmd-path.ts";
 import {
+  setActiveMcpTraceMetadata,
+  traceRetrievalSpan,
+  traceRetrievalSpanSync,
+} from "../../server/observability/langfuse-tracing.ts";
+import {
   sourceScopeAuthorizationError,
   sourceScopeSchema,
 } from "../source-refs.ts";
@@ -47,6 +52,16 @@ interface QmdSourceRef {
   collection?: string;
 }
 
+function federatedFilteredBy(
+  chosen: boolean,
+  rankIndex: number,
+  offset: number,
+): "pagination_offset" | "federated_rank_window" | null {
+  if (chosen) return null;
+  if (rankIndex < offset) return "pagination_offset";
+  return "federated_rank_window";
+}
+
 interface QmdDocument {
   id?: string;
   path?: string;
@@ -62,7 +77,7 @@ interface QmdDocument {
 
 const QMD_TIMEOUT_MS = 10_000;
 
-async function searchQmd(
+async function searchQmdInternal(
   query: string,
   limit: number,
   collection?: string,
@@ -81,10 +96,7 @@ async function searchQmd(
     ];
     if (collection) qmdArgs.push("-c", collection);
 
-    const proc = Bun.spawn(
-      qmdArgs,
-      { stdout: "pipe", stderr: "pipe" },
-    );
+    const proc = Bun.spawn(qmdArgs, { stdout: "pipe", stderr: "pipe" });
 
     const result = await Promise.race([
       (async () => {
@@ -140,6 +152,28 @@ async function searchQmd(
     });
     return [];
   }
+}
+
+function searchQmd(
+  query: string,
+  limit: number,
+  collection?: string,
+): Promise<UnifiedResult[]> {
+  return traceRetrievalSpan({
+    name: "retrieval.qmd_query",
+    input: { query, limit, collection },
+    metadata: { stage: "candidate_generation", source: "qmd" },
+    run: () => searchQmdInternal(query, limit, collection),
+    output: (rows) => ({
+      count: rows.length,
+      candidates: rows.map((row) => ({
+        path: row.path ?? null,
+        collection: row.collection ?? null,
+        content: row.content,
+        score: row.score,
+      })),
+    }),
+  });
 }
 
 export function registerSearchAll(server: McpServer, deps: ToolDeps): void {
@@ -255,6 +289,7 @@ export function registerSearchAll(server: McpServer, deps: ToolDeps): void {
         };
       }
       const namespace = namespaceFilterFor(auth, requestedNamespace);
+      setActiveMcpTraceMetadata({ resolved_namespace: namespace ?? null });
       const searchBrain = sources === "all" || sources === "brain";
       const searchQmdSource =
         !sourceScope && (sources === "all" || sources === "qmd");
@@ -298,20 +333,69 @@ export function registerSearchAll(server: McpServer, deps: ToolDeps): void {
       for (let i = 0; i < qmdResults.length; i++) {
         withRrf.push({ ...qmdResults[i]!, rrf: 1 / (RRF_K + i + 1) });
       }
-      const merged = withRrf
-        .sort((a, b) => b.rrf - a.rrf)
-        .slice(offset, offset + limit)
-        .map(({ rrf, ...rest }) => ({ ...rest, score: rrf }));
+      type RankedCandidate = UnifiedResult & {
+        rrf: number;
+        trace_index: number;
+      };
+      let rankedCandidates: RankedCandidate[] = [];
+      const selectedCandidates = traceRetrievalSpanSync({
+        name: "retrieval.federated_rank",
+        input: {
+          brain_count: brainResults.length,
+          qmd_count: qmdResults.length,
+        },
+        metadata: {
+          stage: "scoring_ranking",
+          filter_names: ["pagination_offset", "federated_rank_window"],
+        },
+        run: () => {
+          rankedCandidates = withRrf
+            .map((row, trace_index) => ({ ...row, trace_index }))
+            .sort((a, b) => b.rrf - a.rrf);
+          return rankedCandidates.slice(offset, offset + limit);
+        },
+        output: (selected) => {
+          const selectedIndexes = new Set(
+            selected.map((row) => row.trace_index),
+          );
+          return {
+            candidate_count: rankedCandidates.length,
+            selected_count: selected.length,
+            returned_row_ids: selected
+              .filter((row) => row.source === "brain")
+              .map((row) => row.id),
+            candidates: rankedCandidates.map((row, rankIndex) => {
+              const chosen = selectedIndexes.has(row.trace_index);
+              return {
+                source: row.source,
+                row_id: row.id ?? null,
+                path: row.path ?? null,
+                content: row.content,
+                raw_score: row.score,
+                rrf_score: row.rrf,
+                chosen,
+                filtered_by: federatedFilteredBy(chosen, rankIndex, offset),
+              };
+            }),
+          };
+        },
+      });
+      const tracedMerged = selectedCandidates.map(
+        ({ rrf, trace_index: _traceIndex, ...rest }) => ({
+          ...rest,
+          score: rrf,
+        }),
+      );
 
       return {
         content: [
           {
             type: "text" as const,
             text: JSON.stringify({
-              total: merged.length,
+              total: tracedMerged.length,
               brain_hits: brainResults.length,
               qmd_hits: qmdResults.length,
-              results: merged,
+              results: tracedMerged,
             }),
           },
         ],

@@ -31,6 +31,7 @@ import {
 import type { NatsRuntimeBoundary } from "../../src/nats-runtime.ts";
 import type { ToolDeps } from "../../src/tools/index.ts";
 import type { AuthInfo } from "../../src/types.ts";
+import type { BackgroundTraceEmitter } from "../../src/background-tracing.ts";
 import type { BackgroundRuntime } from "./index.ts";
 
 /** Project the parsed config onto the bridge's runtime-boundary shape. */
@@ -57,6 +58,7 @@ export interface NatsBridgeInput {
   readonly tokenMap: Map<string, AuthInfo>;
   readonly deps: ToolDeps;
   readonly health: NatsBridgeHealth;
+  readonly tracing?: BackgroundTraceEmitter;
   readonly start?: typeof startNatsContextPackBridge;
 }
 
@@ -112,6 +114,7 @@ export async function startNatsBridgeRuntime(
       tokenMap: input.tokenMap,
       deps: input.deps,
       health,
+      ...(input.tracing ? { tracing: input.tracing } : {}),
     });
   } catch (error: unknown) {
     health.availability = "not_runtime_available";

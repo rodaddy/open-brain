@@ -1,5 +1,9 @@
 import { describe, it, expect, mock } from "bun:test";
-import type { EmbeddingError } from "./embedding.ts";
+import { contentHash, type EmbeddingError } from "./embedding.ts";
+import type {
+  BackgroundTraceBody,
+  BackgroundTraceEmitter,
+} from "./background-tracing.ts";
 import {
   MaintenanceQueueRunner,
   type MaintenanceJob,
@@ -38,6 +42,18 @@ function recordingLogger(): {
   return {
     lines,
     logger: { info: push("info"), warn: push("warn"), error: push("error") },
+  };
+}
+
+function recordingTracing(): BackgroundTraceEmitter & {
+  bodies: BackgroundTraceBody[];
+} {
+  const bodies: BackgroundTraceBody[] = [];
+  return {
+    bodies,
+    emitBackground(body) {
+      bodies.push(body);
+    },
   };
 }
 
@@ -190,6 +206,71 @@ describe("createEmbeddingRepairHandler", () => {
     expect(done?.fields.table).toBe("thoughts");
   });
 
+  it("emits a batch span with row ids and provider embedding usage", async () => {
+    const { db } = mockDb({
+      selectRowsByCall: [[missingThought("t1"), missingThought("t2")]],
+      updateRowCount: 1,
+    });
+    const { logger } = recordingLogger();
+    const tracing = recordingTracing();
+    const handler = createEmbeddingRepairHandler({
+      db,
+      logger,
+      tracing,
+      embedFn: async () => ({
+        embedding: Array(768).fill(0.1),
+        usageDetails: { promptTokens: 5, totalTokens: 5 },
+      }),
+    });
+
+    await handler(
+      job({
+        payload: {
+          table: "thoughts",
+          scope: { global: true },
+          session_key: "session-embedding",
+        },
+      }),
+    );
+
+    expect(tracing.bodies).toHaveLength(1);
+    expect(tracing.bodies[0]).toMatchObject({
+      name: "embedding.repair",
+      sessionId: "session-embedding",
+      observations: [
+        {
+          name: "embedding.provider",
+          type: "embedding",
+          usageDetails: { promptTokens: 5, totalTokens: 5 },
+        },
+        {
+          name: "embedding.provider",
+          type: "embedding",
+          usageDetails: { promptTokens: 5, totalTokens: 5 },
+        },
+        {
+          name: "embedding.batch",
+          type: "span",
+          output: {
+            model: expect.any(String),
+            item_count: 2,
+            row_ids: ["t1", "t2"],
+            repaired: 2,
+            provider_errors: [],
+          },
+        },
+      ],
+    });
+    expect(
+      tracing.bodies[0]!.observations
+        .filter((observation) => observation.name === "embedding.provider")
+        .map((observation) => observation.input),
+    ).toEqual([
+      { row_id: "t1", char_count: 2, content_hash: contentHash("hi") },
+      { row_id: "t2", char_count: 2, content_hash: contentHash("hi") },
+    ]);
+  });
+
   it("is a no-op on replay after a full repair (idempotent, selected:0)", async () => {
     // First call sees two stale rows; the (idempotent) second call sees none,
     // modeling that the repair converged and nothing is stale anymore.
@@ -316,9 +397,11 @@ describe("createEmbeddingRepairHandler", () => {
       updateRowCount: 1,
     });
     const { logger, lines } = recordingLogger();
+    const tracing = recordingTracing();
     const handler = createEmbeddingRepairHandler({
       db,
       logger,
+      tracing,
       embedFn: okEmbed,
     });
     await handler(
@@ -327,8 +410,20 @@ describe("createEmbeddingRepairHandler", () => {
       }),
     );
     const payload = JSON.stringify(lines);
+    const tracePayload = JSON.stringify(tracing.bodies);
     expect(payload).not.toContain("SECRET SOURCE TEXT");
     expect(payload).not.toContain("ns-secret");
+    expect(tracePayload).not.toContain("SECRET SOURCE TEXT");
+    expect(tracePayload).not.toContain("ns-secret");
+    expect(
+      tracing.bodies[0]!.observations.find(
+        (observation) => observation.name === "embedding.provider",
+      )?.input,
+    ).toEqual({
+      row_id: "t1",
+      char_count: "SECRET SOURCE TEXT".length,
+      content_hash: contentHash("SECRET SOURCE TEXT"),
+    });
   });
 });
 

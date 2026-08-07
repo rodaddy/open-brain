@@ -129,6 +129,9 @@ cp -p "$SOURCE_ENV_DIR/openbrain-hook-env" "$STAGE/env/"
 chmod 600 "$STAGE/env/claudex-observation.env"
 chmod 755 "$STAGE/env/openbrain-hook-env"
 
+# setup-client.sh normalizes the wrapper's ENV_FILE block on every install, so
+# the bundle deliberately does not carry a second copy of that rewrite logic.
+
 # --- 2b. Development root, staged -------------------------------------------
 # The staged env dir is a copy of THIS machine's live installation, and this
 # machine is the one box where the provider's built-in default happens to be

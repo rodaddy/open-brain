@@ -269,6 +269,25 @@ describe("claimDistillBatch — ordering key and stamping", () => {
     expect(db.seen[0]!.values[0]).toBe("rico");
   });
 
+  it("binds both due selection and context reads to the producer's lane", async () => {
+    const db = fakeDb([]);
+    const laneId = "77777777-7777-4777-8777-777777777777";
+    await claimDistillBatch(db, { namespace: "rico", laneId });
+    const sql = db.seen[0]!.text;
+    expect(sql).toContain("AND lane_id = $2::uuid");
+    expect(sql).toContain("AND t.lane_id = $2::uuid");
+    expect(db.seen[0]!.values.slice(0, 2)).toEqual(["rico", laneId]);
+  });
+
+  it("keeps lane-less turns in their own producer batch", async () => {
+    const db = fakeDb([]);
+    await claimDistillBatch(db, { namespace: "rico", laneId: null });
+    const sql = db.seen[0]!.text;
+    expect(sql).toContain("AND lane_id IS NULL");
+    expect(sql).toContain("AND t.lane_id IS NULL");
+    expect(db.seen[0]!.values[0]).toBe("rico");
+  });
+
   it("bounds both the session and turn limits so one sweep cannot read the table", async () => {
     const db = fakeDb([]);
     await claimDistillBatch(db, { maxSessions: 10_000, maxTurns: 10_000_000 });

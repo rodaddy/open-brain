@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.rico.qmd-sync</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__QMD_SYNC_SCRIPT__</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__QMD_SYNC_WORKING_DIRECTORY__</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>__HOME__</string>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/Users/rico/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>LOG_DIR</key>
+    <string>__QMD_SYNC_LOG_DIR__</string>
+  </dict>
+
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>4</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+
+  <key>StandardOutPath</key>
+  <string>__QMD_SYNC_STDOUT__</string>
+  <key>StandardErrorPath</key>
+  <string>__QMD_SYNC_STDERR__</string>
+</dict>
+</plist>

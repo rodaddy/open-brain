@@ -264,6 +264,7 @@ export async function startServer(
       tokenMap,
       deps: toolDeps,
       health: natsHealth,
+      ...(tracing.background ? { tracing: tracing.background } : {}),
     });
 
     const authenticate = createAuthMiddleware(config.authTokens);
@@ -309,6 +310,7 @@ export async function startServer(
         logger: handlerLogger(logger.child({ component: "maintenance" })),
         embedFn: generateEmbeddingWithMetadata,
         graphAuth: MAINTENANCE_GRAPH_AUTH,
+        ...(tracing.background ? { tracing: tracing.background } : {}),
       }),
       // A LIVE bridge knows its own failure counters; config cannot. Health
       // therefore reads the running health object, falling back to the parsed

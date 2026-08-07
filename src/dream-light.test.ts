@@ -1,5 +1,14 @@
 import { describe, expect, it } from "bun:test";
-import { isCountable } from "./dream-light.ts";
+import {
+  DREAM_LIGHT_JOB_KIND,
+  DREAM_LIGHT_JOB_VERSION,
+  isCountable,
+  makeDreamLightHandler,
+} from "./dream-light.ts";
+import {
+  MaintenanceTerminalError,
+  type MaintenanceJob,
+} from "./maintenance-queue.ts";
 
 /**
  * Functional tests for Light's countability boundary (Issue #390).
@@ -76,6 +85,47 @@ describe("isCountable — only speech corroborates", () => {
 
   it("treats a missing role as speech", () => {
     expect(isCountable("a genuine utterance with no role given")).toBe(true);
+  });
+});
+
+describe("makeDreamLightHandler", () => {
+  it("rejects an unsupported job version before running the sweep", async () => {
+    let queried = false;
+    const handler = makeDreamLightHandler({
+      pool: {
+        query: async () => {
+          queried = true;
+          return { rows: [], rowCount: 0 };
+        },
+      } as any,
+      logger: { info: () => undefined, warn: () => undefined },
+    });
+    const now = new Date("2026-08-06T00:00:00.000Z");
+    const job: MaintenanceJob = {
+      id: "job-light-version",
+      kind: DREAM_LIGHT_JOB_KIND,
+      version: DREAM_LIGHT_JOB_VERSION + 1,
+      payload: {},
+      idempotencyKey: "light-version",
+      state: "running",
+      runAfter: now,
+      leaseToken: "00000000-0000-4000-8000-000000000001",
+      leaseUntil: new Date("2026-08-06T00:00:30.000Z"),
+      attempts: 1,
+      maxAttempts: 3,
+      backoffBaseMs: 1_000,
+      backoffMaxMs: 4_000,
+      lastErrorCategory: null,
+      terminalAt: null,
+      deadLetteredAt: null,
+      namespace: "rico",
+      provenance: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    await expect(handler(job)).rejects.toBeInstanceOf(MaintenanceTerminalError);
+    expect(queried).toBe(false);
   });
 });
 

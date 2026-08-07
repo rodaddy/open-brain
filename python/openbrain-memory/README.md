@@ -292,10 +292,13 @@ per-identity authentication, not the direct client's bearer token. Captured
 stdout and stderr are rejected above 1 MB; the trusted local command can still
 allocate output before `subprocess.run` returns. The adapter requires the real
 mcp2cli envelope shape, `{"success":true,"result":{...}}`, and returns only the
-inner tool result. `session_start` must prove the public lane authority fields
-it returns: namespace, session key, and agent (plus project when returned).
-`agent_context_pack` must prove every coordinate in its inner result's top-level
-`scope`, and `agent_reflex_pointers` must prove both that scope and the published
+inner tool result. The public contract requires `session_start` v2, and every
+successful start must return a lane that proves namespace, session key, agent,
+platform/source, server, channel, and nullable thread coordinates (plus project
+when returned). Missing, null, or conflicting exact-scope echoes fail closed.
+`agent_context_pack` must prove every coordinate in its inner
+result's top-level `scope`, and `agent_reflex_pointers` must prove both that scope
+and the published
 `openbrain.agent_reflex_pointers.v1` envelope before its projected body-free
 result is surfaced. Every direct or fallback semantic operation first validates a
 fresh live `get_contract` result against the reviewed v23 contract, schema

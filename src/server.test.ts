@@ -253,9 +253,11 @@ describe("GET /health", () => {
 
 describe("GET /api/v1/operator/doctor", () => {
   beforeEach(() => {
+    process.env.QMD_INDEX_PATH = "/nonexistent/operator-doctor-test-index.sqlite";
     resetOperatorDoctorCache();
   });
   afterEach(() => {
+    delete process.env.QMD_INDEX_PATH;
     resetOperatorDoctorCache();
   });
 
@@ -326,7 +328,7 @@ describe("GET /api/v1/operator/doctor", () => {
       };
       const serialized = JSON.stringify(body);
       expect(body.status).toBe("healthy");
-      expect(body.contract_version).toBe("2026-07-08.operator-doctor.v2");
+      expect(body.contract_version).toBe("2026-08-05.operator-doctor.v4");
       expect(body.runtime.contract_version).toBe("2026-07-23.memory-tools.v23");
       expect(body.embedding_provider.available).toBe(true);
       expect(serialized).not.toContain(secret);

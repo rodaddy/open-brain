@@ -1,0 +1,90 @@
+# KING-AGENTS REPO FACTS
+#
+# STATUS: WRITTEN. This pack is the reviewable source for the live repo facts.
+# Older rows were mirrored from dogfood with their stored provenance; their
+# historical sources were not re-verified in this run. The five issue #520
+# target packs add source-verified rows written through OpenBrainClient and
+# read back. Canon reconciler repo-fact apply remains tracked by issue #588.
+# Pack assembled 2026-08-05T23:58:51Z.
+
+kind = "canon"
+
+[[entries]]
+key = "repo.king_agents.agent_inventory_readme_is_current_claude_md_is_stale"
+lane = "repo_facts"
+subject = "Agent inventory (README is current, CLAUDE.md is stale)"
+fact_type = "dependency"
+text = """
+The service runs 8 agents: the sequential core pipeline Sentinel -> Analyst -> Strategist -> Executor (each writes to the DB before the next runs), plus independent Enforcer, Monitor, Quant, QuantOps, and SuperQuant. Repo `CLAUDE.md` still describes only 4 agents and an unstarted extraction from king-dashboard; treat README.md as the current truth.\
+"""
+source = "README.md; https://github.com/King-Capital/king-agents/blob/420a22e22498cad7574a5f9e7893e7d08cdb80ee/README.md#L37; verified_at=2026-08-03T16:17:42Z; source_commit=420a22e22498cad7574a5f9e7893e7d08cdb80ee"
+
+[[entries]]
+key = "repo.king_agents.agent_mesh_dependencies"
+lane = "repo_facts"
+subject = "agent mesh dependencies"
+fact_type = "dependency"
+text = """
+king-agents depends on king-core and king-signals; king-dashboard invokes it for agent runs, and production requires AGENT_API_KEY.\
+"""
+source = "package.json; https://github.com/King-Capital/king-agents/blob/345aed9eaa37cfb7209aee1529f75789c97654d8/package.json; verified_at=2026-06-18T08:00:00.000Z; source_commit=345aed9eaa37cfb7209aee1529f75789c97654d8"
+
+[[entries]]
+key = "repo.king_agents.daily_post_signal_chain_endpoint"
+lane = "repo_facts"
+subject = "Daily post-signal chain endpoint"
+fact_type = "workflow"
+text = """
+`POST /api/daily-chain/run` is the local orchestration entrypoint that runs after king-signals writes daily `pipeline_output_records`: it loads the latest completed king-signals daily batch, runs analyst reports, synthesizes the strategist report, runs portfolio risk, and optionally posts to `DAILY_REPORT_WEBHOOK_URL`. It is API-key protected via `AGENT_API_KEY` in production; pass `skipDelivery: true` to run without sending the report.\
+"""
+source = "README.md; https://github.com/King-Capital/king-agents/blob/420a22e22498cad7574a5f9e7893e7d08cdb80ee/README.md#L55; verified_at=2026-08-03T16:17:42Z; source_commit=420a22e22498cad7574a5f9e7893e7d08cdb80ee"
+
+[[entries]]
+key = "repo.king_agents.deployment_target"
+lane = "repo_facts"
+subject = "Deployment target"
+fact_type = "workflow"
+text = """
+Production runs on CT 302 (10.71.20.62) on port 3400, restarted with `systemctl restart king-agents`. Agents are long-running, so callers must not set aggressive HTTP timeouts.\
+"""
+source = "README.md; https://github.com/King-Capital/king-agents/blob/420a22e22498cad7574a5f9e7893e7d08cdb80ee/README.md#L137; verified_at=2026-08-03T16:17:42Z; source_commit=420a22e22498cad7574a5f9e7893e7d08cdb80ee"
+
+[[entries]]
+key = "repo.king_agents.pre_commit_hook_enforces_tsdoc_and_blocks_protected_branches"
+lane = "repo_facts"
+subject = "Pre-commit hook enforces TSDoc and blocks protected branches"
+fact_type = "workflow"
+text = """
+`core.hooksPath` is set to `.githooks` by the package `prepare` script, and `.githooks/pre-commit` blocks commits on main/master/develop/production/staging, runs ggshield secret scanning, and BLOCKS the commit when staged `.ts`/`.tsx` files lack TSDoc `@module` and `@description` tags. It also regenerates and auto-stages per-folder `src/**/README.md` files.\
+"""
+source = ".githooks/pre-commit; https://github.com/King-Capital/king-agents/blob/420a22e22498cad7574a5f9e7893e7d08cdb80ee/.githooks/pre-commit#L47; verified_at=2026-08-03T16:17:42Z; source_commit=420a22e22498cad7574a5f9e7893e7d08cdb80ee"
+
+[[entries]]
+key = "repo.king_agents.private_king_capital_dependency_requires_a_token"
+lane = "repo_facts"
+subject = "Private @king-capital dependency requires a token"
+fact_type = "dependency"
+text = """
+The repo depends on `@king-capital/core` from the GitHub Packages registry, and `.npmrc` authenticates with `${NODE_AUTH_TOKEN}`. `bun install --frozen-lockfile` fails without that token exported (CI supplies it from the `GH_PAT` secret and hard-fails when it is unset).\
+"""
+source = ".npmrc; https://github.com/King-Capital/king-agents/blob/420a22e22498cad7574a5f9e7893e7d08cdb80ee/.npmrc#L2; verified_at=2026-08-03T16:17:42Z; source_commit=420a22e22498cad7574a5f9e7893e7d08cdb80ee"
+
+[[entries]]
+key = "repo.king_agents.runtime_stack_and_service_shape"
+lane = "repo_facts"
+subject = "Runtime stack and service shape"
+fact_type = "dependency"
+text = """
+king-agents is a Bun + Hono HTTP service on port 3400 (env `PORT`) for King Capital. All LLM inference routes through a LiteLLM proxy at `LITELLM_BASE_URL`; persistence is PostgreSQL (`DATABASE_URL` = king_dashboard DB, `MARKET_DATABASE_URL` = read-only CT 304 market data DB). Logging is Pino via `src/lib/logger.ts` and `console.log` is banned anywhere in the repo (CLAUDE.md:47,89).\
+"""
+source = "README.md; https://github.com/King-Capital/king-agents/blob/420a22e22498cad7574a5f9e7893e7d08cdb80ee/README.md#L117; verified_at=2026-08-03T16:17:42Z; source_commit=420a22e22498cad7574a5f9e7893e7d08cdb80ee"
+
+[[entries]]
+key = "repo.king_agents.test_environment_is_preloaded_and_stubbed"
+lane = "repo_facts"
+subject = "Test environment is preloaded and stubbed"
+fact_type = "validation"
+text = """
+`bunfig.toml` preloads `tests/setup.ts` for every `bun test` run, which forces `DATABASE_URL` to a throwaway `postgresql://test:test@localhost:5432/test`, points `LITELLM_BASE_URL` at a mock `http://localhost:9999`, silences logs, and deletes `AGENT_API_KEY`. Tests therefore never hit the real DB or LLM proxy, and auth-dependent code paths see no API key by default.\
+"""
+source = "bunfig.toml; https://github.com/King-Capital/king-agents/blob/420a22e22498cad7574a5f9e7893e7d08cdb80ee/bunfig.toml#L2; verified_at=2026-08-03T16:17:42Z; source_commit=420a22e22498cad7574a5f9e7893e7d08cdb80ee"

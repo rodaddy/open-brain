@@ -1,0 +1,70 @@
+{
+  "data": [
+    {
+      "id": "id-redacted-1",
+      "projectId": "projectid-redacted-2",
+      "name": "redacted-3",
+      "timestamp": "2026-08-06T00:00:00.000Z",
+      "environment": "redacted-5",
+      "tags": [
+        "redacted-6",
+        "redacted-7"
+      ],
+      "bookmarked": false,
+      "release": "redacted-8",
+      "version": null,
+      "userId": "userid-redacted-9",
+      "sessionId": "sessionid-redacted-10",
+      "public": false,
+      "input": {
+        "session_key": "redacted-11",
+        "include_events": true,
+        "event_limit": 50
+      },
+      "output": {
+        "content": [
+          {
+            "type": "redacted-12",
+            "text": "redacted-13"
+          }
+        ]
+      },
+      "metadata": {
+        "caller_role": "redacted-14",
+        "caller_client_id": "caller-client-id-redacted-15",
+        "caller_token_client_id": "caller-token-client-id-redacted-16",
+        "caller_agent_id": "caller-agent-id-redacted-17",
+        "namespace_source": "redacted-18",
+        "duration_ms": 3,
+        "status": "redacted-19",
+        "resourceAttributes": {
+          "service.name": "redacted-20",
+          "telemetry.sdk.language": "redacted-21",
+          "telemetry.sdk.name": "redacted-22",
+          "telemetry.sdk.version": "redacted-23"
+        },
+        "scope": {
+          "name": "redacted-24",
+          "version": "redacted-25",
+          "attributes": {}
+        }
+      },
+      "createdAt": "2026-08-06T00:00:00.000Z",
+      "updatedAt": "2026-08-06T00:00:00.000Z",
+      "observations": [
+        "observations-redacted-28"
+      ],
+      "scores": [],
+      "totalCost": 0,
+      "latency": 0,
+      "htmlPath": "redacted-29",
+      "externalId": null
+    }
+  ],
+  "meta": {
+    "page": 1,
+    "limit": 1,
+    "totalItems": 1,
+    "totalPages": 1
+  }
+}

@@ -13,30 +13,30 @@
  * which the server's shutdown path awaits before `pool.end()` so in-flight jobs
  * drain (their leases are honored) instead of being stranded mid-run.
  *
- * The bootstrap enqueues nothing and defines no recurring sweep: the maintenance
- * queue has no recurrence primitive. graph.derive jobs are produced only by the
- * explicit, bounded `enqueueGraphDerivationJobs` producer, which an operator or
- * a future scheduler (#347) must call. This bootstrap only DISPATCHES claimed
- * graph.derive jobs; it never invents or schedules them, and there is no
- * automatic continuous derivation.
+ * The bootstrap also starts the missing recurring producer from #384. Each
+ * producer tick selects lane-owned undistilled work for memory.distill and reuses
+ * enqueueGraphDerivationJobs for changed source hashes. The producer is
+ * single-flight, uses configured batch bounds, and stops before the runner drains
+ * so shutdown cannot add work after polling has halted.
  *
  * #343 invariants preserved verbatim — this only wires them, it changes none:
  *  - Bounded concurrency: the runner clamps to [1, MAX_CONCURRENCY].
  *  - No overlapping ticks: `runOnce` is single-flight; `start()` reuses it.
  *  - Persisted retries/backoff: owned by `MaintenanceQueue.fail`, durable-row-derived.
- *  - Content-free logs: the handler and runner log counts/table/kind only.
- *  - No Dream/MCP mutation path: this bootstrap touches only `maintenance_jobs`
- *    and the embedding columns via the repair primitive; it never enqueues jobs.
- *    Enqueue stays an explicit, auth-scoped operator/caller boundary (a job
- *    payload MUST carry an explicit namespace scope — the bootstrap invents none).
+ *  - Content-free logs: handlers, runner, and producer log counts/kinds only.
+ *  - No Dream/MCP mutation path: the producer writes only durable maintenance
+ *    jobs. Distill jobs bind the selected lane and namespace; graph jobs retain
+ *    the source snapshot and namespace checks owned by their existing producer.
  */
 import type pg from "pg";
+import type { BackgroundTraceEmitter } from "./background-tracing.ts";
 import { generateEmbeddingWithMetadata } from "./embedding.ts";
 import type { EmbedWithMetaFn } from "./embedding-repair.ts";
 import type { AuthInfo } from "./types.ts";
 import {
   MaintenanceQueue,
   MaintenanceQueueRunner,
+  safeMaintenanceErrorCategory,
   type MaintenanceJobHandler,
   type MaintenanceQueueLogger,
 } from "./maintenance-queue.ts";
@@ -51,6 +51,7 @@ import {
   MEMORY_DISTILL_JOB_KIND,
   makeMemoryDistillHandler,
 } from "./distill-handler.ts";
+import { runMaintenanceSweep } from "./maintenance-sweep.ts";
 
 /**
  * The deliberate, server-owned identity the graph-derivation handler derives
@@ -100,13 +101,21 @@ export interface StartMaintenanceQueueOptions {
   logger: MaintenanceQueueLogger;
   /** Injectable embed fn for tests; defaults to the configured provider. */
   embedFn?: EmbedWithMetaFn;
+  /** Process-owned background tracing emitter; omitted when tracing is disabled. */
+  tracing?: BackgroundTraceEmitter;
   /** Poll cadence override; else env, else the runner default. */
   pollIntervalMs?: number;
   /** Concurrency override; else env, else the runner default. */
   concurrency?: number;
   /** Lease duration override; else env, else the runner default. */
   leaseMs?: number;
-  /** Start automatic polling immediately (default true). Set false to wire without polling. */
+  /** Maximum turns assigned to one memory.distill job. */
+  distillBatchSize?: number;
+  /** Maximum memory.distill jobs produced by one recurring sweep. */
+  maxDistillBatchesPerTick?: number;
+  /** Maximum graph.derive jobs produced by one recurring sweep. */
+  graphDerivationLimit?: number;
+  /** Start automatic polling and recurring production immediately (default true). */
   autoStart?: boolean;
   /**
    * The server-owned identity the graph-derivation handler derives under.
@@ -135,6 +144,7 @@ export function composeMaintenanceHandlers(input: {
   logger: MaintenanceQueueLogger;
   embedFn: EmbedWithMetaFn;
   graphAuth: AuthInfo;
+  tracing?: BackgroundTraceEmitter;
 }): ReadonlyMap<string, MaintenanceJobHandler> {
   if (!input.graphAuth.role || !input.graphAuth.clientId) {
     throw new Error(
@@ -147,6 +157,7 @@ export function composeMaintenanceHandlers(input: {
       db: input.pool,
       logger: input.logger,
       embedFn: input.embedFn,
+      ...(input.tracing ? { tracing: input.tracing } : {}),
     }),
   );
   handlers.set(
@@ -169,9 +180,8 @@ export function composeMaintenanceHandlers(input: {
   // through the manual entrypoint scripts/dream-light-run.ts.
   //
   // NONE OF THESE ENQUEUE ANYTHING. Registration is dispatch only. The
-  // maintenance queue has no recurrence primitive (see the module note above),
-  // so a DREAM cycle still starts from an explicit producer -- an operator
-  // running scripts/dream-cycle.ts, or a future scheduler (#347).
+  // recurring producer starts below after this map and the durable queue exist;
+  // manual DREAM cycles remain available through scripts/dream-cycle.ts.
   handlers.set(
     MEMORY_DISTILL_JOB_KIND,
     makeMemoryDistillHandler({
@@ -179,6 +189,7 @@ export function composeMaintenanceHandlers(input: {
       logger: input.logger,
       embedFn: input.embedFn,
       auth: input.graphAuth,
+      ...(input.tracing ? { tracing: input.tracing } : {}),
     }),
   );
   handlers.set(
@@ -186,6 +197,7 @@ export function composeMaintenanceHandlers(input: {
     makeDreamLightHandler({
       pool: input.pool,
       logger: input.logger,
+      ...(input.tracing ? { tracing: input.tracing } : {}),
     }),
   );
   handlers.set(
@@ -193,6 +205,7 @@ export function composeMaintenanceHandlers(input: {
     makeDreamRemHandler({
       pool: input.pool,
       logger: input.logger,
+      ...(input.tracing ? { tracing: input.tracing } : {}),
     }),
   );
 
@@ -227,15 +240,62 @@ export function maintenanceQueueEnabled(
   return raw !== "0" && raw !== "false";
 }
 
+function startRecurringMaintenanceSweep(input: {
+  pool: pg.Pool;
+  queue: MaintenanceQueue;
+  logger: MaintenanceQueueLogger;
+  intervalMs: number;
+  distillBatchSize?: number;
+  maxDistillBatchesPerTick?: number;
+  graphDerivationLimit?: number;
+}): { stop(): Promise<void> } {
+  let interval: ReturnType<typeof setInterval> | null = null;
+  let active: Promise<void> | null = null;
+  let stopping = false;
+
+  const runOnce = (): Promise<void> => {
+    if (stopping) return Promise.resolve();
+    if (active) return active;
+
+    const run = runMaintenanceSweep(input)
+      .then(() => undefined)
+      .catch((error: unknown) => {
+        input.logger.error("maintenance_sweep_failed", {
+          error_category: safeMaintenanceErrorCategory(error),
+        });
+      })
+      .finally(() => {
+        active = null;
+      });
+    active = run;
+    return run;
+  };
+
+  void runOnce();
+  interval = setInterval(() => void runOnce(), input.intervalMs);
+
+  return {
+    async stop(): Promise<void> {
+      stopping = true;
+      if (interval) clearInterval(interval);
+      interval = null;
+      await active;
+    },
+  };
+}
+
 /**
  * Construct the durable queue + runner, register the embedding-repair handler,
  * and (by default) start bounded automatic polling. Caller owns `stop()` in its
  * shutdown lifecycle.
  *
  * Env-configurable safe defaults (each clamped again by the runner):
- *  - OPEN_BRAIN_MAINTENANCE_POLL_MS         poll cadence (runner default 5000)
- *  - OPEN_BRAIN_MAINTENANCE_CONCURRENCY     max concurrent jobs (runner default 2)
- *  - OPEN_BRAIN_MAINTENANCE_LEASE_MS        job lease window (runner default 30000)
+ *  - OPEN_BRAIN_MAINTENANCE_POLL_MS              runner + producer cadence (5000)
+ *  - OPEN_BRAIN_MAINTENANCE_CONCURRENCY          concurrent jobs (runner default 2)
+ *  - OPEN_BRAIN_MAINTENANCE_LEASE_MS             job lease window (default 30000)
+ *  - OPEN_BRAIN_MAINTENANCE_DISTILL_BATCH_SIZE   turns assigned per distill job
+ *  - OPEN_BRAIN_MAINTENANCE_MAX_DISTILL_BATCHES  distill jobs produced per tick
+ *  - OPEN_BRAIN_MAINTENANCE_GRAPH_LIMIT          graph jobs produced per tick
  */
 export function startMaintenanceQueue(
   options: StartMaintenanceQueueOptions,
@@ -251,8 +311,13 @@ export function startMaintenanceQueue(
     logger: options.logger,
     embedFn: options.embedFn ?? generateEmbeddingWithMetadata,
     graphAuth: options.graphAuth ?? MAINTENANCE_GRAPH_AUTH,
+    ...(options.tracing ? { tracing: options.tracing } : {}),
   });
 
+  const pollIntervalMs =
+    options.pollIntervalMs ??
+    envPositiveInt("OPEN_BRAIN_MAINTENANCE_POLL_MS") ??
+    5_000;
   const runner = new MaintenanceQueueRunner({
     queue,
     handlers,
@@ -260,14 +325,30 @@ export function startMaintenanceQueue(
     concurrency:
       options.concurrency ??
       envPositiveInt("OPEN_BRAIN_MAINTENANCE_CONCURRENCY"),
-    pollIntervalMs:
-      options.pollIntervalMs ??
-      envPositiveInt("OPEN_BRAIN_MAINTENANCE_POLL_MS"),
+    pollIntervalMs,
     leaseMs:
       options.leaseMs ?? envPositiveInt("OPEN_BRAIN_MAINTENANCE_LEASE_MS"),
   });
 
-  if (options.autoStart !== false) runner.start();
+  const autoStart = options.autoStart !== false;
+  if (autoStart) runner.start();
+  const sweep = autoStart
+    ? startRecurringMaintenanceSweep({
+        pool: options.pool,
+        queue,
+        logger: options.logger,
+        intervalMs: pollIntervalMs,
+        distillBatchSize:
+          options.distillBatchSize ??
+          envPositiveInt("OPEN_BRAIN_MAINTENANCE_DISTILL_BATCH_SIZE"),
+        maxDistillBatchesPerTick:
+          options.maxDistillBatchesPerTick ??
+          envPositiveInt("OPEN_BRAIN_MAINTENANCE_MAX_DISTILL_BATCHES"),
+        graphDerivationLimit:
+          options.graphDerivationLimit ??
+          envPositiveInt("OPEN_BRAIN_MAINTENANCE_GRAPH_LIMIT"),
+      })
+    : null;
 
   let stopped = false;
   return {
@@ -278,6 +359,7 @@ export function startMaintenanceQueue(
       // null tick, empty active set). Guard only against a double shutdown call.
       if (stopped) return;
       stopped = true;
+      await sweep?.stop();
       await runner.stop();
     },
   };

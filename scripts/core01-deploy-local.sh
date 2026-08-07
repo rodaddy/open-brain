@@ -117,23 +117,7 @@ rm -rf "$STAGING_DIR"
 cleanup_previous_dir pre-deploy
 mkdir -p "$STAGING_DIR"
 
-tar \
-  --exclude "./.git" \
-  --exclude "./.github" \
-  --exclude "./.forgejo" \
-  --exclude "./.planning" \
-  --exclude "./.pi" \
-  --exclude "./.omc" \
-  --exclude "./.DS_Store" \
-  --exclude "./node_modules" \
-  --exclude "./dist" \
-  --exclude "./python/.venv" \
-  --exclude "./python/dist" \
-  --exclude "./python/openbrain-memory/.venv" \
-  --exclude "./python/openbrain-memory/dist" \
-  --exclude "./.env" \
-  --exclude "./.env.*" \
-  -C "$REPO_DIR" -cf - . | tar -C "$STAGING_DIR" -xf -
+"$REPO_DIR/scripts/core01-package-runtime.sh" "$REPO_DIR" "$STAGING_DIR"
 
 "$BUN_BIN" install --cwd "$STAGING_DIR" --frozen-lockfile
 

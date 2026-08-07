@@ -39,9 +39,14 @@ import {
   startMaintenanceQueue,
   maintenanceQueueEnabled,
   type MaintenanceRuntime,
+  type StartMaintenanceQueueOptions,
 } from "./maintenance-bootstrap.ts";
 import { safeMaintenanceErrorCategory } from "./maintenance-queue.ts";
 import { validateLocalCloneMode } from "./local-clone-mode.ts";
+import {
+  createTracingRuntime,
+  installMcpTracing,
+} from "../server/observability/langfuse-tracing.ts";
 
 const EMBEDDING_BASE_URL = process.env.EMBEDDING_BASE_URL;
 
@@ -73,10 +78,27 @@ const DEPLOYED_REVISION = readDeployedRevision(() =>
  */
 const HEALTH_PROBE_TIMEOUT_MS = 3000;
 
+type TracingRuntime = ReturnType<typeof createTracingRuntime>;
+
+/**
+ * Server composition seam for the maintenance worker tree. The process owns one
+ * tracing runtime and passes only its background emitter into job handlers.
+ */
+export function startServerMaintenanceQueue(
+  options: StartMaintenanceQueueOptions,
+  tracing: TracingRuntime,
+): MaintenanceRuntime {
+  return startMaintenanceQueue({
+    ...options,
+    ...(tracing.background ? { tracing: tracing.background } : {}),
+  });
+}
+
 export function createApp(
   pool: pg.Pool,
   tokenMap: Map<string, AuthInfo>,
   deps?: ToolDeps,
+  tracing?: TracingRuntime,
 ): express.Express {
   const app = express();
   const natsRuntimeBoundary =
@@ -234,6 +256,12 @@ export function createApp(
   // "Already connected to a transport" errors with concurrent clients
   const serverFactory = () => {
     const s = createBrainServer();
+    if (tracing?.sink) {
+      installMcpTracing(s, {
+        config: tracing.config,
+        sink: tracing.sink,
+      });
+    }
     registerAllTools(s, toolDeps);
     return s;
   };
@@ -287,6 +315,7 @@ if (import.meta.main) {
   }
 
   const pool = createPool();
+  const tracing = createTracingRuntime();
 
   if (process.env.OPEN_BRAIN_RUN_MIGRATIONS !== "0") {
     try {
@@ -329,6 +358,7 @@ if (import.meta.main) {
         tokenMap,
         deps: toolDeps,
         health: natsBridgeHealth,
+        ...(tracing.background ? { tracing: tracing.background } : {}),
       });
       logger.info("NATS context-pack bridge started", {
         subject: natsBridge?.subject,
@@ -364,7 +394,7 @@ if (import.meta.main) {
     process.exit(1);
   }
 
-  const app = createApp(pool, tokenMap, toolDeps);
+  const app = createApp(pool, tokenMap, toolDeps, tracing);
   const port = parseInt(process.env.PORT || "3100", 10);
 
   const bindHost = localClone.enabled
@@ -391,7 +421,7 @@ if (import.meta.main) {
   // per-worker with OPEN_BRAIN_MAINTENANCE_ENABLED=0.
   let maintenance: MaintenanceRuntime | null = null;
   if (maintenanceQueueEnabled()) {
-    maintenance = startMaintenanceQueue({ pool, logger });
+    maintenance = startServerMaintenanceQueue({ pool, logger }, tracing);
     logger.info("maintenance queue started", {
       handlers:
         "embedding.repair,graph.derive,memory.distill,dream.light,dream.rem",
@@ -441,6 +471,7 @@ if (import.meta.main) {
         );
       }
     }
+    await tracing.shutdown();
     try {
       await pool.end();
     } catch (err) {

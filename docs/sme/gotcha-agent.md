@@ -1060,6 +1060,174 @@ receipt can reposition a cursor or recolor the terminal of whoever displays it.
   message?** Treat C0/C1 bytes as untrusted payload in anything an operator will
   display, on the same footing as row content and secrets.
 
+---
+
+# Harvest #522 — findings recovered from issue/PR history (2026-08-03)
+
+Routed here by operator ruling on the #522 canon harvest: these are review
+findings from closed issues and PRs that never reached this lane file. Each
+carries its source and a verbatim quote. Severity is recorded as stated in the
+source; where the source did not state one, it says so rather than inventing a
+level.
+
+## [2026-08-03] Replacing a CI review workflow has a bootstrap and branch-protection problem
+
+**Severity:** not stated in source
+**Source:** https://github.com/rodaddy/open-brain/issues/231; harvested in #522
+**Scope key:** `sme.workflow_replacement_bootstrap_and_branch_protection`
+**Status:** active
+
+### Pattern
+
+A change that replaces a CI review workflow has a bootstrap problem: the new job's untriggered branches (here, the deep-review path) cannot be verified by the PR that introduces them, and the OLD job name may still be a required status check in branch protection — which blocks every future PR until an admin swaps it. Reviewing a workflow-replacement PR means checking branch-protection required-check names and either proving or explicitly waiving each untriggered branch.
+
+Verbatim, from the source:
+
+> Gauntlet call: do not merge yet as `Zero Known Issues`; Phase 3/deep-path verification is still unresolved. ... If `claude-code-review` is a required status check in branch protection, that requirement must be swapped to `codex-review` by an admin or this PR (and future PRs) cannot merge.
+
+## [2026-08-03] Cross-language wire bugs are invisible to same-language review lanes
+
+**Severity:** not stated in source
+**Source:** issue #282 (pre-merge gauntlet comment); harvested in #522
+**Scope key:** `review.cross_language_wire_needs_shared_fixture`
+**Status:** active
+
+### Pattern
+
+Cross-language wire bugs are structurally invisible to same-language review lanes: each lane validates its own side's shape, so a TS/Python mismatch (response `kind` string, override field path) passes both reviews and fails only end-to-end. When a change spans two runtimes on one wire, require a shared cross-language fixture both sides validate against, and add a review lane (or opposite-runtime auditor) whose explicit job is comparing the two implementations field-by-field.
+
+Verbatim, from the source:
+
+> Codex caught two end-to-end blockers the same-language reviewers structurally could not (each swarm tested one side's own shape; the bugs are in the TS↔Python mismatch). ... **Root cause:** no shared cross-language wire fixture — TS and Python drifted independently.
+
+## [2026-08-03] An enum-drift guard must enumerate every declaration surface
+
+**Severity:** not stated in source
+**Source:** PR #428 (feat(412): one event vocabulary); harvested in #522
+**Scope key:** `sme.enum_drift_guard_enumerates_every_surface`
+**Status:** active
+
+### Pattern
+
+Reusable review check: when guarding an enum/vocabulary against drift, enumerate ALL declaration surfaces — here there were eight (Python definition, TS client, TS server set, a TS union, MCP tool schema, tiering union, SQL table constants, and the migration CHECK constraint), where the issue named only two. The database CHECK constraint matters most: code drifting wider than it means validation passes, the insert is refused, and the caller sees exit 0 with no row. The guard must include a 'no seventh copy appeared' assertion, and its path filter must match path components (`tests/`, `*.test.ts`) rather than the substring 'test', which silently skipped `latest.ts`, `manifest.ts`, and `attestation.ts`.
+
+Verbatim, from the source:
+
+> **There were not two copies. There are six, plus SQL.** [...] **The SQL constraint is included and matters most.** Postgres is the authority, so a code set drifting *wider* than the constraint reproduces the exact reported symptom: validation passes, the insert is refused, and the caller sees exit 0 with no row.
+
+## [2026-08-03] GIT_DIR/GIT_WORK_TREE leak into hooks and override git -C
+
+**Severity:** not stated in source
+**Source:** https://github.com/rodaddy/open-brain/pull/510 (with issue #483); harvested in #522
+**Scope key:** `review.git_env_leaks_into_hooks`
+**Status:** active
+
+### Pattern
+
+Git exports GIT_DIR and GIT_WORK_TREE into hook environments, and GIT_WORK_TREE overrides `git -C <path>`, so any code that shells out to git from inside a git hook resolves against the REAL repo regardless of the directory it was asked about. Strip GIT_DIR/GIT_WORK_TREE from a copy of the environment before spawning git children in hooks and hook-invoked tests. This class of defect is silent -- no raise, no log -- and issue #483 shows its worse form: a test that inherited GIT_DIR committed two 'reachable tag commit' junk commits onto the branch being pushed during a pre-push run, recovered only via reflog.
+
+Verbatim, from the source:
+
+> `git push` exports `GIT_DIR`/`GIT_WORK_TREE` to its hooks, and **`GIT_WORK_TREE` beats `git -C`** — `rev-parse --show-toplevel` answered `/Volumes/ThunderBolt/Development` for every directory asked about, so every project resolved to the slug `Development`.
+
+## [2026-08-03] SessionStart additionalContext has a practical inline bound
+
+**Severity:** not stated in source
+**Source:** https://github.com/rodaddy/open-brain/pull/465; harvested in #522
+**Scope key:** `hooks.session_start_context_inline_bound`
+**Status:** active
+
+### Pattern
+
+Claude Code's SessionStart additionalContext has an observed practical inline bound: an oversized payload is persisted to a file and surfaced as a short preview, so the session silently receives a fraction of it. Emit canon as plain text (one line per rule, full body) rather than a raw JSON envelope, and split large packs across independently registered SessionStart emissions. This is formatting, not content reduction -- rule bodies stay byte-for-byte whole, and the fix must be validated by a whole-rule check that each body appears exactly once across the emissions.
+
+Verbatim, from the source:
+
+> `openbrain-session-start` dumped the raw `agent_context_pack` JSON envelope (~30 KB of nested items, ids, citations, confidences, warnings) into `additionalContext`, and Claude Code persisted a payload that large to a file it surfaced as only a ~2 KB preview -- the session saw 2-3 of 31 items
+
+## [2026-08-05] Apply receipts must prove both source identity and destination scope
+
+**Severity:** HIGH
+**Source:** issue #588, first live canon reconcile apply after PR #538
+**Scope key:** `canon.apply_receipt_proves_source_and_namespace`
+**Status:** active
+
+### Pattern
+
+Two false assumptions can make an apply path report success while producing no
+usable state. First, a human provenance field is not a machine source pointer:
+repo-fact `source` prose was copied into `metadata.path`, while the server
+requires that path to equal the GitHub URL's repo-relative path exactly. The
+owning entrypoint must carry the pack artifact path separately and preserve the
+human citation in a prose provenance field.
+
+Second, a client's requested identity is not evidence of the namespace the
+server authorized. An admin-token fan-out reported 27 applied writes for
+`skippy`, but the write receipts identified token authority and the rows landed
+under `admin`. An apply command must inspect the returned receipt for the actual
+namespace authority. PR #594's opposite-family review found that the server's
+`writer_identity` is that authority on both token and delegated-header paths;
+`delegated_agent_id` is an independent agent label and cannot prove destination.
+If the receipt has no usable namespace signal, perform one scoped read-back and
+verify the expected keys and texts before printing success. That read-back must
+request every planned lane and carry the exact repo binding for repo facts, or a
+configuration gap can be mislabeled as a namespace incident.
+
+A duplicate receipt is also not a new write. Count it as already present and
+report it separately, so a retry cannot turn prior state into an applied count.
+
+### Review Questions
+
+- Does any field serve as both human citation prose and a machine-exact path,
+  identifier, or URL component? Split those meanings at the owning boundary.
+- Does a write receipt prove where the row landed, or only that the request
+  returned without an error?
+- When client configuration requests another identity, does the server honor it
+  under this token role, and does the receipt expose which authority won?
+- Is namespace validation based on the server's persisted writer identity rather
+  than an independent agent label or the caller's requested identity?
+- Are duplicate receipts reported as already present instead of newly applied?
+- If a receipt cannot identify the destination, does the apply path read back
+  the exact expected keys and values before claiming success?
+- Can that read-back observe every planned lane under the exact repo binding, or
+  will a configuration gap be reported as a namespace mismatch?
+
+## [2026-08-05] Build identity must come from the deployed artifact before git
+
+**Severity:** MEDIUM
+**Source:** issue #587, discovered after the #560 release-attribution change
+**Scope key:** `observability.deployed_identity_precedes_git`
+**Status:** fixed by the issue #587 implementation
+
+### Pattern
+
+A resolver added for Langfuse release attribution used `git rev-parse`, which
+worked in development checkouts but returned nothing in deployed runtimes. The
+local-clone deploy ships `git archive` output, while the core01 packager excludes
+checkout metadata and any inherited stamp; both write a fresh
+`.deployed-revision` into the artifact. `/health` already read that stamp
+correctly. The new tracing resolver ignored the deployment authority and
+therefore emitted no release on every deployed trace.
+
+### Review Questions
+
+- Does runtime build identity use the same artifact stamp as `/health` before
+  consulting checkout metadata?
+- Does the test model the deployed shape: a readable stamp and no usable git
+  checkout?
+- When development fallback behavior remains, is it exercised separately from
+  the deployed-artifact path?
+
+## [2026-08-06] A fix lane's trunk merge silently reverted the sibling feature — both suites green
+
+**Severity:** HIGH (caught pre-merge by delta verification)
+**Source:** PR #600 fix lane, merge commit 55d701d; detected in the 3cfbd75..06430ef delta verify
+**Scope key:** `review.trunk_merge_verified_against_sibling_features`
+**Status:** active
+
+### Pattern
+
+When a fix lane merges trunk into its branch and both branches touched the same module, the merge resolution is new, unreviewed code — and the failure mode is silent feature reversion: PR #600's merge rewrote the real sink's `emit` for its background lane and dropped the only call that renders `body.spans`, so PR #599's retrieval-evidence children would have been built, masked, and discarded in production. Every test stayed green on both sides because both features asserted against fake sinks; no test drove the REAL sink with the sibling's payload. Review checks: (1) diff the merge commit itself, not just the fix commits; (2) any shared-module merge needs a behavioral check that BOTH features still function through the real seam; (3) uncovered rendering/dispatch seams (a helper whose only callers are its export and a test) are where reverts hide. The catch here came from a delta verifier running the same mocked-SDK script against both refs — cheap, decisive, worth repeating.
 ## [2026-08-05] `??` on an env read treats a deploy-wrapper empty string as configured
 
 **Severity:** MEDIUM. **Status:** fixed — PR #586 review finding, corrected in

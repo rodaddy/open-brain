@@ -10,12 +10,18 @@ full on the first call.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from openbrain_memory.agent import EVENT_TYPES
 from openbrain_memory.cli import execute_json, usage_output
 
-from ._runtime_fakes import LaneAwareTransport
+from ._runtime_fakes import (
+    LaneAwareTransport,
+    StartThenFailClient,
+    runtime_contract_manifest,
+)
 
 _FULL_SCOPE = {
     "agent": "agent-name",
@@ -39,6 +45,60 @@ _CONFIG = {
 }
 
 
+class SparseStartClient(StartThenFailClient):
+    """Return a session_start lane that does not prove exact scope."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.appended: dict[str, Any] | None = None
+
+    def session_start(self, **arguments: Any) -> dict[str, Any]:
+        return {
+            "lane": {
+                "namespace": "bilby",
+                "session_key": arguments["session_key"],
+                "thread_id": arguments.get("thread_id"),
+            }
+        }
+
+    def append_session_event(self, **arguments: Any) -> dict[str, Any]:
+        self.appended = dict(arguments)
+        return {
+            "event_id": "event-1",
+            "lane_id": "lane-1",
+            "lane_created": False,
+        }
+
+
+class NullScopeStartClient(SparseStartClient):
+    """Return explicit nulls for every nullable exact-scope coordinate."""
+
+    def session_start(self, **arguments: Any) -> dict[str, Any]:
+        return {
+            "lane": {
+                "namespace": "bilby",
+                "session_key": arguments["session_key"],
+                "agent": None,
+                "source": None,
+                "channel_id": None,
+                "thread_id": arguments.get("thread_id"),
+                "metadata": {"server_id": None},
+            }
+        }
+
+
+class UnderVersionedSparseStartClient(SparseStartClient):
+    """Advertise session_start v1 while returning the same sparse lane."""
+
+    def get_contract(self, **arguments: Any) -> dict[str, Any]:
+        manifest = runtime_contract_manifest()
+        for capability in manifest["capabilities"]:
+            if capability["name"] == "session_start":
+                capability["version"] = 1
+        manifest["tool_contracts"]["session_start"]["version"] = 1
+        return manifest
+
+
 def _error(request: dict[str, object]) -> str:
     output = execute_json(
         {"config": _CONFIG, **request},
@@ -47,6 +107,54 @@ def _error(request: dict[str, object]) -> str:
     receipt = output["receipt"]
     assert receipt["status"] == "failed"
     return str(receipt["error"])
+
+
+@pytest.mark.parametrize("client", [SparseStartClient(), NullScopeStartClient()])
+def test_operator_capture_rejects_unproven_start_scope(
+    client: SparseStartClient,
+) -> None:
+    """A success receipt requires server-returned exact-scope coordinates."""
+    output = execute_json(
+        {
+            "config": _CONFIG,
+            "operation": "capture",
+            "content": "Operator capture scope proof",
+            "distilled": True,
+            "event_type": "fact",
+            "scope": _FULL_SCOPE,
+        },
+        client=client,
+    )
+
+    receipt = output["receipt"]
+    assert receipt["status"] == "lost"
+    assert receipt["durable"] is False
+    assert "did not prove exact Open Brain scope" in receipt["error"]
+    assert client.appended is None
+
+
+def test_operator_capture_rejects_sparse_lane_before_v2_dispatch() -> None:
+    """A server below session_start v2 cannot supply handshake scope proof."""
+    client = UnderVersionedSparseStartClient()
+
+    output = execute_json(
+        {
+            "config": _CONFIG,
+            "operation": "capture",
+            "content": "Operator capture contract proof",
+            "distilled": True,
+            "event_type": "fact",
+            "scope": _FULL_SCOPE,
+        },
+        client=client,
+    )
+
+    receipt = output["receipt"]
+    assert receipt["status"] == "lost"
+    assert receipt["durable"] is False
+    assert "session_start" in receipt["error"]
+    assert "version must be >= 2" in receipt["error"]
+    assert client.appended is None
 
 
 def test_missing_scope_fields_are_all_named_in_one_receipt() -> None:

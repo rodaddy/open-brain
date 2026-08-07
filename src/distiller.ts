@@ -40,6 +40,7 @@
  * grade on day one.
  */
 
+import type { BackgroundTraceRecorder } from "./background-tracing.ts";
 import { contentHash } from "./embedding.ts";
 import { isHarnessNoise } from "./tools/ingest-raw-turn.ts";
 import type { DistillTurn, DistillUnit } from "./distill-window.ts";
@@ -89,6 +90,8 @@ export interface DistillRequest {
 
 export interface DistillResponse {
   candidates: DistillCandidate[];
+  /** Provider-reported usage for an LLM-backed extractor. */
+  usageDetails?: Record<string, number>;
 }
 
 /**
@@ -107,6 +110,8 @@ export type DistillModel = (req: DistillRequest) => Promise<DistillResponse>;
 /** Names the producer in `candidate_memory.model`. Required for ethereal-run comparison. */
 export interface NamedDistillModel {
   name: string;
+  /** Set only for a server-side LLM implementation; deterministic rules stay spans. */
+  observationType?: "generation";
   extract: DistillModel;
 }
 
@@ -442,11 +447,39 @@ export interface PreparedCandidate extends DistillCandidate {
 export async function runDistillUnit(
   model: NamedDistillModel,
   unit: DistillUnit,
+  trace?: BackgroundTraceRecorder,
 ): Promise<PreparedCandidate[]> {
-  const response = await model.extract({
+  const request = {
     current: unit.current,
     context: unit.context,
-  });
+  };
+  const observe = () => model.extract(request);
+  const options = {
+    input: {
+      current_turn_id: unit.current.id,
+      context_turn_ids: unit.context.map((turn) => turn.id),
+    },
+    output: (response: DistillResponse) => ({
+      candidate_ids: response.candidates.map(
+        (_candidate, index) => `${unit.current.id}:${index}`,
+      ),
+      candidate_hashes: response.candidates.map((candidate) =>
+        contentHash(normalizeWhitespace(candidate.content ?? "")),
+      ),
+      candidate_count: response.candidates.length,
+    }),
+    metadata: { namespace: unit.current.namespace },
+  };
+  const response =
+    trace && model.observationType === "generation"
+      ? await trace.generation("distill.extract", observe, {
+          ...options,
+          model: model.name,
+          usageDetails: (result) => result.usageDetails,
+        })
+      : trace
+        ? await trace.span("distill.extract", observe, options)
+        : await observe();
 
   const out: PreparedCandidate[] = [];
   for (const candidate of response.candidates) {

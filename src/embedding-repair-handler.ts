@@ -43,6 +43,11 @@
  */
 import { z } from "zod";
 import type pg from "pg";
+import {
+  BackgroundTraceRecorder,
+  backgroundSessionId,
+  type BackgroundTraceEmitter,
+} from "./background-tracing.ts";
 import { generateEmbeddingWithMetadata, EMBEDDING_MODEL } from "./embedding.ts";
 import {
   repairStaleBatch,
@@ -114,6 +119,8 @@ export interface EmbeddingRepairHandlerDeps {
   currentModel?: string;
   /** Provider URL override (defaults to the configured endpoint). */
   embeddingUrl?: string;
+  /** Optional shared Langfuse background-job emitter. */
+  tracing?: BackgroundTraceEmitter;
 }
 
 /**
@@ -173,51 +180,84 @@ export function createEmbeddingRepairHandler(
   return async function embeddingRepairHandler(
     job: MaintenanceJob,
   ): Promise<void> {
-    assertSupportedVersion(job);
-    const payload = parsePayload(job);
-
-    let summary: RepairBatchSummary;
-    try {
-      summary = await repairStaleBatch(deps.db, payload.table, embedFn, {
-        scope: payload.scope,
-        reasons: payload.reasons,
-        limit: payload.limit ?? DEFAULT_BATCH,
-        currentModel,
-        embeddingUrl: deps.embeddingUrl,
-      });
-    } catch (error) {
-      // A thrown scope/registry error here is a permanent input problem (an
-      // unscoped or unknown-target payload that slipped a shape check). Surface
-      // it content-free; the runner dead-letters after the retry bound.
-      deps.logger.error("embedding_repair_job_input_error", {
-        job_kind: job.kind,
-        table: payload.table,
-      });
-      throw error;
-    }
-
-    // Content-free: counts and the target table name only.
-    deps.logger.info("embedding_repair_job_done", {
-      job_kind: job.kind,
-      table: summary.table,
-      selected: summary.selected,
-      repaired: summary.repaired,
-      skipped: summary.skipped,
-      retryable_failures: summary.retryableFailures,
-      permanent_failures: summary.permanentFailures,
+    const trace = new BackgroundTraceRecorder(deps.tracing, {
+      name: "embedding.repair",
+      input: { job_id: job.id, table: job.payload.table ?? null },
+      tags: ["open-brain-server", "background-job", "embedding"],
+      metadata: { job_kind: job.kind, attempt: job.attempts },
+      sessionId: backgroundSessionId(job),
     });
 
-    // Retryable provider failures mean some units could not be repaired due to a
-    // transient outage. Throw so the queue re-delivers with backoff; the replay
-    // re-selects only the still-stale units (repaired ones no-op) until the
-    // provider recovers or the job hits its retry bound and dead-letters.
-    if (summary.retryableFailures > 0) {
-      throw new Error(
-        `embedding repair deferred: ${summary.retryableFailures} unit(s) hit a retryable provider failure`,
-      );
+    try {
+      assertSupportedVersion(job);
+      const payload = parsePayload(job);
+      let summary: RepairBatchSummary;
+      try {
+        summary = await trace.span(
+          "embedding.batch",
+          () =>
+            repairStaleBatch(deps.db, payload.table, embedFn, {
+              scope: payload.scope,
+              reasons: payload.reasons,
+              limit: payload.limit ?? DEFAULT_BATCH,
+              currentModel,
+              embeddingUrl: deps.embeddingUrl,
+              observeEmbedding: (identity, work) =>
+                trace.embedding("embedding.provider", work, {
+                  model: currentModel,
+                  input: identity,
+                  output: (result) => ({
+                    embedded: result.embedding !== null,
+                    error: result.error ?? null,
+                  }),
+                  usageDetails: (result) => result.usageDetails,
+                }),
+            }),
+          {
+            input: { model: currentModel, table: payload.table },
+            output: (result) => ({
+              model: currentModel,
+              item_count: result.selected,
+              row_ids: [...new Set(result.results.map((item) => item.id))],
+              repaired: result.repaired,
+              skipped: result.skipped,
+              provider_errors: result.results
+                .filter((item) => "errorCode" in item)
+                .map((item) => ({ id: item.id, code: item.errorCode })),
+            }),
+          },
+        );
+      } catch (error: unknown) {
+        deps.logger.error("embedding_repair_job_input_error", {
+          job_kind: job.kind,
+          table: payload.table,
+        });
+        throw error;
+      }
+
+      deps.logger.info("embedding_repair_job_done", {
+        job_kind: job.kind,
+        table: summary.table,
+        selected: summary.selected,
+        repaired: summary.repaired,
+        skipped: summary.skipped,
+        retryable_failures: summary.retryableFailures,
+        permanent_failures: summary.permanentFailures,
+      });
+
+      if (summary.retryableFailures > 0) {
+        throw new Error(
+          `embedding repair deferred: ${summary.retryableFailures} unit(s) hit a retryable provider failure`,
+        );
+      }
+      trace.finish({
+        outcome: "succeeded",
+        row_ids: summary.results.map((item) => item.id),
+      });
+    } catch (error: unknown) {
+      trace.fail(error);
+      throw error;
     }
-    // Resolving here marks the job succeeded. Permanent per-unit failures were
-    // already recorded content-free by the primitive and do not re-queue.
   };
 }
 

@@ -21,10 +21,19 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { canRead } from "../auth/permissions.ts";
-import { authIdentity, errorResult, textResult, type MemoryToolDependencies } from "./types.ts";
+import {
+  authIdentity,
+  errorResult,
+  textResult,
+  type MemoryToolDependencies,
+} from "./types.ts";
 import { canReadNamespace, namespaceFilterFor } from "./read-scope.ts";
 import { isSharedNamespace } from "./shared-namespace.ts";
 import { ALL_TABLES, type Tier } from "./search-constants.ts";
+import {
+  setActiveMcpTraceMetadata,
+  traceRetrievalSpanSync,
+} from "../observability/langfuse-tracing.ts";
 import {
   executeSearchWithSharedFallback,
   type SearchMode,
@@ -215,11 +224,16 @@ export function registerBrainAnswerTool(
       if (!identity) return errorResult(NOT_AUTHENTICATED);
 
       const requestedNamespace = args.namespace;
-      if (requestedNamespace && !canReadNamespace(identity, requestedNamespace)) {
+      if (
+        requestedNamespace &&
+        !canReadNamespace(identity, requestedNamespace)
+      ) {
         return errorResult(NAMESPACE_DENIED);
       }
 
-      const tables = ALL_TABLES.filter((table) => canRead(identity.role, table));
+      const tables = ALL_TABLES.filter((table) =>
+        canRead(identity.role, table),
+      );
       if (tables.length === 0) return errorResult(NO_READABLE_TABLES);
 
       const query = args.query;
@@ -228,6 +242,7 @@ export function registerBrainAnswerTool(
       const tier = args.tier as Tier | undefined;
       const maxAgeDays = args.max_age_days ?? DEFAULT_MAX_AGE_DAYS;
       const namespace = namespaceFilterFor(identity, requestedNamespace);
+      setActiveMcpTraceMetadata({ resolved_namespace: namespace ?? null });
 
       let rows: SearchRow[];
       try {
@@ -241,7 +256,8 @@ export function registerBrainAnswerTool(
           0,
           namespace,
           {},
-          requestedNamespace !== undefined && isSharedNamespace(requestedNamespace),
+          requestedNamespace !== undefined &&
+            isSharedNamespace(requestedNamespace),
         );
       } catch (error) {
         // Retrieval failed. An empty citation list here would read as "the brain
@@ -251,7 +267,8 @@ export function registerBrainAnswerTool(
             namespace,
             mode,
             tier,
-            error_message: error instanceof Error ? error.message : String(error),
+            error_message:
+              error instanceof Error ? error.message : String(error),
           },
           "brain_answer_retrieval_failed",
         );
@@ -271,24 +288,59 @@ export function registerBrainAnswerTool(
         });
       }
 
-      const evidence: Evidence[] = [];
-      const knownGaps: string[] = [];
+      const filtered = traceRetrievalSpanSync({
+        name: "retrieval.citation_filter",
+        input: {
+          candidate_count: rows.length,
+          candidates: rows.map((row) => ({
+            row_id: row.id,
+            source_type: row.source_type,
+            namespace: row.namespace ?? null,
+            content_preview: row.content_preview,
+            distance: row.distance ?? null,
+            similarity: row.distance === undefined ? null : 1 - row.distance,
+            bm25_score: row.fts_rank ?? null,
+          })),
+        },
+        metadata: {
+          stage: "filtering",
+          filter_names: ["missing_source_ref", "empty_excerpt"],
+        },
+        run: () => {
+          const evidence: Evidence[] = [];
+          const knownGaps: string[] = [];
+          for (const row of rows) {
+            const excerpt = excerptFor(row);
+            if (!row.source_ref || !excerpt) {
+              knownGaps.push(
+                `Skipped ${row.source_type}:${row.id} because it lacked citation metadata or usable preview text.`,
+              );
+              continue;
+            }
+            evidence.push({ row, excerpt, source_ref: row.source_ref });
+          }
+          return { evidence, knownGaps };
+        },
+        output: ({ evidence }) => {
+          const selected = new Set(evidence.map((item) => item.row.id));
+          return {
+            selected_count: evidence.length,
+            selected_row_ids: evidence.map((item) => item.row.id),
+            candidates: rows.map((row) => {
+              const chosen = selected.has(row.id);
+              let filteredBy: string | null = null;
+              if (!chosen) {
+                filteredBy = row.source_ref
+                  ? "empty_excerpt"
+                  : "missing_source_ref";
+              }
+              return { row_id: row.id, chosen, filtered_by: filteredBy };
+            }),
+          };
+        },
+      });
+      const { evidence, knownGaps } = filtered;
       const uncertainty: string[] = [];
-
-      for (const row of rows) {
-        const excerpt = excerptFor(row);
-        // A row with no source_ref cannot be cited, and a row with no excerpt has
-        // nothing to quote. Either way it is named in known_gaps rather than
-        // dropped silently, so the caller sees that something was retrieved and
-        // deliberately not used.
-        if (!row.source_ref || !excerpt) {
-          knownGaps.push(
-            `Skipped ${row.source_type}:${row.id} because it lacked citation metadata or usable preview text.`,
-          );
-          continue;
-        }
-        evidence.push({ row, excerpt, source_ref: row.source_ref });
-      }
 
       if (evidence.length === 0) {
         return textResult({
@@ -300,7 +352,9 @@ export function registerBrainAnswerTool(
             ...knownGaps,
             "No retrieved evidence had both citation metadata and usable preview text.",
           ],
-          uncertainty: ["Readable rows were retrieved, but none were safe to cite."],
+          uncertainty: [
+            "Readable rows were retrieved, but none were safe to cite.",
+          ],
           raw_results: args.include_raw ? rows : undefined,
         });
       }
@@ -341,7 +395,9 @@ export function registerBrainAnswerTool(
       const answer = [
         "Cited Open Brain evidence:",
         "",
-        ...citations.map((citation) => `- ${citation.excerpt} [${citation.index}]`),
+        ...citations.map(
+          (citation) => `- ${citation.excerpt} [${citation.index}]`,
+        ),
       ].join("\n");
 
       return textResult({

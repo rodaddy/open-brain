@@ -170,11 +170,13 @@ RFC6598). `/health` is unauthenticated, so a public address is never volunteered
 automatically; an operator who wants one advertised sets
 `OPEN_BRAIN_SERVER_IP` and owns that decision.
 
-`revision` is the `short_sha` from the `.deployed-revision` stamp that
-`scripts/local-clone-deploy.sh` writes into a deployed tree. It is absent on a
-dev tree that was never deployed through the script, which is normal.
+`revision` is the `short_sha` from the `.deployed-revision` stamp that the
+core01 and local-clone deployment scripts write into a deployed tree. It is
+absent on a dev tree that was never deployed through either script, which is
+normal.
 | `ALLOWED_ORIGINS` | `[]` (none) | `src/index.ts:78`, comma-separated |
 | `OPEN_BRAIN_RUN_MIGRATIONS` | `1` | `src/index.ts:272`; `"0"` disables |
+| `OPENBRAIN_RAW_TURN_TTL_SECONDS` | `604800` (7 days) | `src/operator-doctor.ts`; alarm denominator only, retention/eviction belongs to #395 |
 | `OPEN_BRAIN_MAINTENANCE_ENABLED` | unset | `src/index.ts:383` |
 | `NODE_ENV` | unset | `src/operator-doctor.ts:375`; `production` / `development` / `test` |
 | `SERVICE_NAME` | `open-brain` | `src/logger.ts:202` |
@@ -272,6 +274,7 @@ stemmers split multibyte accented characters and every non-English FTS assertion
 | `OPENBRAIN_MCP_AUDIT_ENABLED` | on | `src/audit-log.ts:138` | `"0"` disables MCP audit logging |
 | `OPENBRAIN_RECOVERY_WAL_PATH` | `null` | `src/tools/index.ts:88` | recovery WAL location |
 | `QMD_PATH` | `/opt/qmd/src/qmd.ts` | `src/qmd-path.ts:7` | must be set **empty** in local-clone mode |
+| `QMD_INDEX_PATH` | repo `.qmd/index.sqlite` | `src/operator-doctor.ts:30` | operator-doctor qmd freshness/count probe |
 | `OPENBRAIN_LOCAL_CLONE` | `0` | `.env.example:41` | |
 | `OPENBRAIN_LOCAL_CLONE_ROOT` | unset | `.env.example:42` | |
 
@@ -284,14 +287,18 @@ tool name, caller identity, full arguments, full result (or error class and
 message), duration, and session grouping.
 
 **CONTENT-FUL is the point, and it is deliberate.** #530 explicitly supersedes
-#372's content-free spec for the local dogfood deployment. Payloads are sent
-verbatim: no redaction, no summarisation, no size bucketing. `OPENBRAIN_MCP_AUDIT_*`
-(above) remains the separate content-FREE durable Postgres record and is
-unchanged — the two lanes coexist and neither replaces the other.
+#372's content-free spec for the local dogfood deployment. #561 adds the required
+emitter-boundary protection before coverage widens: every string value passes
+`src/secret-patterns.ts` detectors, and each matched span becomes
+`[MASKED:<detector>]`. Surrounding content, object fields, and array items remain
+present. `OPENBRAIN_MCP_AUDIT_*` (above) remains the separate content-FREE durable
+Postgres record and is unchanged — the two lanes coexist and neither replaces
+the other.
 
 | variable | default | notes |
 |---|---|---|
 | `OPENBRAIN_TRACING_ENABLED` | unset (off) | tracing runs only when this is exactly `"1"` |
+| `OPENBRAIN_TRACING_MASKING_ENABLED` | unset (on) | detector-based masking is disabled only when this is exactly `"0"`; explicit operator bypass only |
 | `OPENBRAIN_TRACING_ENDPOINT` | — | Langfuse base URL (the SDK appends its own paths) |
 | `OPENBRAIN_TRACING_PUBLIC_KEY` | — | Langfuse `pk-lf-...` |
 | `OPENBRAIN_TRACING_SECRET_KEY` | — | Langfuse `sk-lf-...` |
@@ -367,6 +374,33 @@ would route a transport message — potentially carrying the endpoint or an auth
 header — around both this module's content-free discipline and the shared
 logger's redaction (measured: the injected key-shaped string appeared in the
 output). The two lines above are how this lane reports its health instead.
+
+#### Operator trace forensics (#569)
+
+Source `/Volumes/ThunderBolt/open-brain-local/local-clone.env` before using
+`scripts/langfuse-trace.ts`; it supplies the Langfuse coordinates without putting
+values in arguments or output. The consumer uses Langfuse's Basic-authenticated
+public API. `repeat` drives the local dogfood server through the existing Python
+`openbrain-memory` `OpenBrainClient.call_tool` path via `uv run`.
+
+```bash
+# Compact trace identity plus its start-time-ordered observation timeline.
+bun scripts/langfuse-trace.ts get 28a6758fe84d34490816d28bfcd4ac20
+
+# Last five traces for one brain/MCP session, printed in chronological order.
+bun scripts/langfuse-trace.ts session e07dcb17-0026-4dfb-8d2c-c8a5280833d2 -n 5
+
+# Occurrence-aligned retrieval evidence comparison. Exit 1 means evidence
+# differs; exit 2 means the trace/API result is inconclusive or invalid.
+bun scripts/langfuse-trace.ts diff <trace-id-a> <trace-id-b>
+
+# Repeat one live search and report deterministic versus varying stage fields.
+# Traces are correlated to this run, ordered oldest-first, and exit 1 if any
+# retrieval evidence varies (exit 2 if the comparison is inconclusive).
+bun scripts/langfuse-trace.ts repeat search_brain --query "trace forensics" -n 3
+```
+
+Add `--json` to `get`, `session`, `diff`, or `repeat` for machine-readable output.
 
 ### Drop-folder collector
 

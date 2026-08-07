@@ -912,3 +912,214 @@ where the boundary must hold.
   across the boundary.
 - Is there a regression that writes the SAME client id in two namespaces and
   proves one namespace's write leaves the other's derived columns untouched?
+
+---
+
+# Harvest #522 — findings recovered from issue/PR history (2026-08-03)
+
+Routed here by operator ruling on the #522 canon harvest: these are review
+findings from closed issues and PRs that never reached this lane file. Each
+carries its source and a verbatim quote. Severity is recorded as stated in the
+source; where the source did not state one, it says so rather than inventing a
+level.
+
+## [2026-08-03] A wildcard namespace value must not erase the scope for a delegated caller
+
+**Severity:** not stated in source
+**Source:** rodaddy/open-brain#65 (review swarm comment by rodaddy); harvested in #522
+**Scope key:** `sme.security.wildcard_namespace_erases_scope`
+**Status:** active
+
+### Pattern
+
+When a namespace-scoping layer has a wildcard value (`all`, `*`), check that a delegated/header-scoped caller cannot pass it to erase the scope: a wildcard that resolves to an undefined filter is an isolation bypass, not a convenience. Delegated requests must stay scoped and the wildcard must only expand for non-delegated privileged callers; also verify the wildcard does not become a literal string predicate (`namespace = 'all'`) for the callers who are allowed it.
+
+Verbatim, from the source:
+
+> `src/read-policy.ts` allowed header-sourced admin/n8n callers to pass `namespace=all`, which made `namespaceFilterFor()` return `undefined` and removed namespace filtering entirely. Impact: a delegated request with `X-Namespace: bilby` could still request all namespaces on supported read paths.
+
+## [2026-08-03] Session reuse must bind the effective delegated identity, not just the token
+
+**Severity:** not stated in source
+**Source:** rodaddy/open-brain#90 (issue body); harvested in #522
+**Scope key:** `sme.security.session_reuse_must_bind_effective_identity`
+**Status:** active
+
+### Pattern
+
+Where identity can be delegated per-request (headers) but sessions are cached by token, check that session reuse keys on the EFFECTIVE identity, not just the bearer-token identity — otherwise one long-lived session is reusable across tenants. A test that asserts the permissive behavior is itself the finding: it must be replaced with a denial test covering POST, GET, and DELETE reuse paths.
+
+Verbatim, from the source:
+
+> MCP session reuse is bound to token identity and role, but not to the effective delegated namespace or agent id. ... `src/server.test.ts:188` explicitly asserts that the same token can initialize a session under `X-Namespace: bilby` and then reuse the same `Mcp-Session-Id` under `X-Namespace: skippy`.
+
+## [2026-08-03] Authority-key filters need normalization, recursion, and a depth bound
+
+**Severity:** not stated in source
+**Source:** rodaddy/open-brain#86 (comment by rodaddy); harvested in #522
+**Scope key:** `sme.security.authority_key_filters_need_normalization_and_depth_bound`
+**Status:** active
+
+### Pattern
+
+A reserved/authority-key rejection filter must normalize case and underscore-vs-dash before matching, and must recurse into nested metadata — otherwise `Authorization` or `headers: {"X-Namespace": "other"}` slips through a filter that only blocks `namespace`. Balance it the other way too: scope the recursive scan to authority/control keys so semantic keys like `source`, `summary`, `title`, and `rationale` are not blocked, and bound the recursion depth so user-controlled nesting cannot raise RecursionError.
+
+Verbatim, from the source:
+
+> Final gotcha lane found nested authority checks were case-sensitive and missed header-shaped values like `Authorization` or `headers: {"X-Namespace": "other"}`. Fixed by normalizing key names with lowercase and underscore-to-dash handling
+
+## [2026-08-03] Redaction changes need both directions tested and one shared helper
+
+**Severity:** MEDIUM (stated in source)
+**Source:** rodaddy/open-brain#88 (comment by rodaddy); harvested in #522
+**Scope key:** `sme.security.redaction_needs_both_directions_and_one_helper`
+**Status:** active
+
+### Pattern
+
+Redaction changes need both directions tested: a broadened unlabeled pattern must not eat benign values of the same shape (a 40-char SHA is not an AWS secret), and narrowing must be paired with contextual labelled matching so real secrets are not newly missed. Every diagnostic surface must call the ONE shared redaction helper — a client that keeps its own private patterns silently misses each new shape added to the shared one.
+
+Verbatim, from the source:
+
+> MEDIUM: AWS secret-like redaction was too broad and could redact benign 40-character hashes. ... MEDIUM: Client diagnostics still had separate redaction patterns, so new shared redaction shapes would not apply to `OpenBrainHTTPError` bodies.
+
+## [2026-08-03] Privileged batch/promotion runners: a four-point review checklist
+
+**Severity:** HIGH (stated in source)
+**Source:** issue #145 / #156 (privileged runner design and swarm findings); harvested in #522
+**Scope key:** `review.privileged_batch_runner_checklist`
+**Status:** active
+
+### Pattern
+
+Review privileged batch/promotion runners for four specific defects: arbitrary source/target namespace flags (constrain to the one configured route and reject legacy aliases as targets), resumed state files whose stored source/target are not revalidated against current args, durable state defaulting into temp-workspace paths that get cleaned, and missing dry-run default / bounded --max-apply / kill switch / per-batch receipts. (The cursor-advance-past-failed-rows half is already captured in adversarial.md 2026-06-19.)
+
+Verbatim, from the source:
+
+> - HIGH: privileged runner accepts arbitrary `--source-namespace` and `--target-namespace`, creating too broad a cross-namespace promotion path. Fix required: constrain this legacy runner to configured legacy shared namespace -> canonical shared namespace only.
+
+## [2026-08-03] Citation provenance is a namespace-isolation surface
+
+**Severity:** HIGH (stated in source)
+**Source:** PR #112 / #113 (review findings and fixes); harvested in #522
+**Scope key:** `review.provenance_in_citations_is_a_leak_surface`
+**Status:** active
+
+### Pattern
+
+Citation and provenance metadata is a namespace-isolation surface: exposing a promoted row's source namespace and source id leaks private metadata to any caller who can read the promoted copy. Citation refs must carry only citation-safe identity for the row the caller can actually read. Related checks from the same lane: guard `new Date(row.created_at).toISOString()` against malformed timestamps so one bad row cannot break search, and require both source_ref metadata and usable preview text before rendering an answer bullet so malformed evidence cannot produce uncited output.
+
+Verbatim, from the source:
+
+> HIGH security: `source_ref.promoted_from` exposes raw source namespace and source id from promoted rows. A caller who can read a promoted `collab` row could learn private source namespace metadata they cannot otherwise read.
+
+## [2026-08-03] Audit the write paths that have no caller who can self-censor
+
+**Severity:** not stated in source
+**Source:** https://github.com/rodaddy/open-brain/issues/236; harvested in #522
+**Scope key:** `sme.audit_write_paths_lacking_a_composer`
+**Status:** active
+
+### Pattern
+
+When a system's secret safety rests on "the caller does not write secrets," the security question is: which write paths have no caller who can self-censor? Automated importers, backfill scripts, and LLM-summarization pipelines fed by raw transcripts have no composer and therefore inherit no protection — they need explicit redaction at their own boundary. Audit write paths by composer presence, not by tool surface.
+
+Verbatim, from the source:
+
+> Found during an OB write-path audit (does anything write to OB from a source that cannot self-censor?). Answer: exactly one path, this one. ... `scripts/ob-backfill.ts` is an automated importer with **no human/agent composing the payload** and **no secret redaction** ... it bypasses [the contract] because there is no composer and no redactor.
+
+## [2026-08-03] Replay must derive scope from the record, not from the current scope
+
+**Severity:** not stated in source
+**Source:** issue #310; harvested in #522
+**Scope key:** `review.replay_must_be_scope_aware_not_current_scope`
+**Status:** active
+
+### Pattern
+
+When a strict scope/tenant proof gates dispatch, any replay or drain loop must derive each record's scope from the record's own persisted payload -- or filter to scope-matching units without dispatching the rest. Replaying every parked unit through the *current* runtime scope makes cross-scope records undeliverable indefinitely and burns a wasted live round trip per unit per drain, with the failure swallowed as a warning.
+
+Verbatim, from the source:
+
+> A unit parked under project A ... therefore fails dispatch with `session_start result did not prove exact Open Brain scope` when the drain is triggered by a healthy operation in project B ... Units can sit undelivered indefinitely if the client rarely operates in that project again. Every drain attempt re-dispatches mismatched units, issuing a wasted live `session_start` per unit per healthy operation, plus a swallowed warning.
+
+## [2026-08-05] Content-ful observability needs masking at the final emitter boundary
+
+**Severity:** HIGH
+**Source:** issue #561, operator ruling after the Langfuse egress census
+**Scope key:** `sme.security.contentful_observability_masks_at_emitter`
+**Status:** active
+
+### Pattern
+
+A content-ful observability lane can preserve complete arguments, results, and
+surrounding context while still preventing credential-shaped spans from leaving
+the process. Apply the shared labeled detectors at the final emitter boundary,
+not at individual callers and not after transport. Replace each matched span
+with a stable classifier marker such as `[MASKED:github_token]`; retain every
+field, array item, and unmatched substring. Keep masking on by default, with any
+bypass requiring an explicit operator configuration value.
+
+Issue #561 measured the failure mode directly: PR #534 intentionally attached
+full tool inputs and outputs to Langfuse, while the live corpus had not exercised
+the highest-risk credential-return path. The fix belongs in
+`buildToolTraceBody()` so future tracing surfaces inherit the same protection
+without maintaining caller-specific detector forks.
+
+PR #593's opposite-family review proved three additional bypass shapes at this
+same boundary. Value-shaped detectors do not see opaque values carried under a
+sensitive object key. Replacing an entire labeled JSON pair removes the label
+and can make serialized JSON invalid. Non-plain carriers need normalization:
+Map and Set content otherwise disappears, nested Error messages disappear, and
+binary views expose credential bytes as numeric arrays.
+
+### Review Questions
+
+- Does every string value in tool arguments and results pass the shared
+  `src/secret-patterns.ts` detectors before the sink receives it?
+- Does the recursive walk also apply `isSensitiveKey()` while the field name is
+  available, including nested argument and result objects?
+- Do pair-shaped detector replacements retain the label and leave serialized
+  JSON parseable?
+- Are Map, Set, Error, Buffer, and typed-array carriers converted to observable,
+  maskable shapes without exposing binary bytes?
+- Are only matched spans replaced, with surrounding content and structure still
+  present?
+- Is masking on when its environment variable is absent, and can it be bypassed
+  only through the documented explicit value?
+- Does a regression seed obviously fake detector-shaped text in both tool
+  arguments and tool results and assert the emitted body rather than a private
+  helper?
+
+## [2026-08-06] Handler-supplied metadata spread after auth-derived fields can rewrite trace identity
+
+**Severity:** MEDIUM
+**Source:** PR #599 review swarm, finding M1 (found independently by the security AND adversarial lanes)
+**Scope key:** `review.auth_derived_fields_win_merge_order`
+**Status:** active
+
+### Pattern
+
+In any record that mixes server-derived authority fields (caller_role, caller_client_id, namespace_source, status) with handler- or caller-supplied maps, the spread/merge ORDER is a security control: `{...authFields, ...suppliedMap}` lets the supplied map silently displace the identity and outcome evidence — making a failed call read as success or a trace disagree with the audit log exactly where a review needs them to agree. Safe shape is supplied-first, authority-last, plus a regression that stamps a forged `caller_role`/`status` from inside a handler that then throws and asserts the emitted record keeps the token-derived values. "No current call site collides" is not a defense; the exported API is the surface.
+
+## [2026-08-06] Trace session identity must come from the server-resolved binding, never the unauthenticated wire
+
+**Severity:** HIGH
+**Source:** PR #600 review swarm, finding H2
+**Scope key:** `review.trace_session_identity_binds_after_auth`
+**Status:** active
+
+### Pattern
+
+Any observability record that carries a session/user identity must derive it AFTER the request passes auth and binding — never from a caller-declared field read off the wire before any control has run. PR #600 built the NATS trace recorder from `envelope.payload.identity.session_key` at the top of the subscription callback, before the size/kind/auth/namespace checks, and emitted the trace even for REJECTED requests — so any publisher could stamp another tenant's session key onto traces, and the field bypassed masking entirely (sessionId/userId spread through untouched). Fix shape: identity flows from the resolved binding via a post-auth callback; a wire-declared value may appear only as masked metadata under an explicitly untrusted name. Regression shape: forged key + no valid bearer → emitted body has no sessionId.
+
+## [2026-08-06] Global background sweeps must not join to any one session's trace
+
+**Severity:** HIGH
+**Source:** PR #600 review swarm, finding H3
+**Scope key:** `review.global_sweeps_never_session_joined`
+**Status:** active
+
+### Pattern
+
+A maintenance/dream/distill job that sweeps with `namespace IS NULL` touches every tenant; joining its trace to a job-supplied `session_key` renders all tenants' row identities and content inside one session's timeline — a namespace-isolation breach in the observability lane even though the data path is unchanged. Honour a job's session key only when the job is namespace-scoped; a global sweep emits no sessionId, and each observation stamps its own resolved namespace so cross-namespace evidence is visibly attributed. "No current enqueuer sets it" is not a defense — the job-row field is durable and the sweep is global by design.

@@ -35,6 +35,12 @@
 import type pg from "pg";
 import { toSql } from "pgvector/pg";
 import {
+  BackgroundTraceRecorder,
+  backgroundSessionId,
+  type BackgroundTraceEmitter,
+} from "./background-tracing.ts";
+import {
+  EMBEDDING_MODEL,
   generateEmbeddingWithMetadata,
   type EmbeddingResult,
 } from "./embedding.ts";
@@ -101,8 +107,10 @@ export interface DistillSweepDeps {
   model?: NamedDistillModel;
   /** Injectable embed fn; defaults to the configured provider. */
   embedFn?: DistillEmbedFn;
-  /** Restrict the sweep to one namespace. Omit to sweep every namespace. */
+  /** Bind the sweep to one namespace. Omit to sweep every namespace. */
   namespace?: string;
+  /** Bind a queued batch to one owning lane. */
+  laneId?: string | null;
   maxSessions?: number;
   maxTurns?: number;
   contextWindow?: number;
@@ -110,6 +118,8 @@ export interface DistillSweepDeps {
   distillJobId?: string | null;
   /** Skip the embedding call entirely. For runs where the provider is known down. */
   skipEmbeddings?: boolean;
+  /** Recorder for the containing maintenance job trace. */
+  trace?: BackgroundTraceRecorder;
 }
 
 function emptySummary(): DistillSweepSummary {
@@ -141,6 +151,7 @@ async function resolveEmbeddings(
   candidates: readonly PreparedCandidate[],
   embedFn: DistillEmbedFn,
   logger: MaintenanceQueueLogger,
+  trace?: BackgroundTraceRecorder,
 ): Promise<Map<string, number[] | null>> {
   const byHash = new Map<string, number[] | null>();
   let failures = 0;
@@ -148,7 +159,23 @@ async function resolveEmbeddings(
 
   for (const candidate of candidates) {
     if (byHash.has(candidate.content_hash)) continue;
-    const result = await embedFn(candidate.content);
+    const call = () => embedFn(candidate.content);
+    const result = trace
+      ? await trace.embedding("embedding.provider", call, {
+          model: EMBEDDING_MODEL,
+          input: {
+            row_id: candidate.source_turn_ids[0] ?? null,
+            char_count: candidate.content.length,
+            content_hash: candidate.content_hash,
+          },
+          metadata: { namespace: candidate.namespace },
+          output: (value) => ({
+            embedded: value.embedding !== null,
+            error: value.error ?? null,
+          }),
+          usageDetails: (value) => value.usageDetails,
+        })
+      : await call();
     if (result.embedding) {
       byHash.set(candidate.content_hash, result.embedding);
       continue;
@@ -187,7 +214,8 @@ async function persist(
   consumedTurnIds: readonly string[],
   distillJobId: string | null,
   summary: DistillSweepSummary,
-): Promise<void> {
+): Promise<string[]> {
+  const writtenRowIds: string[] = [];
   for (const candidate of candidates) {
     const vector = embeddings.get(candidate.content_hash) ?? null;
     if (vector === null) summary.embeddings_missing++;
@@ -222,6 +250,8 @@ async function persist(
 
     if (inserted.rowCount && inserted.rowCount > 0) {
       summary.candidates_written++;
+      const insertedId = (inserted.rows[0] as { id?: unknown } | undefined)?.id;
+      if (typeof insertedId === "string") writtenRowIds.push(insertedId);
       if (candidate.uncertain) summary.candidates_uncertain++;
     } else {
       // The dedupe fired. Not an error: the distiller is re-runnable by design
@@ -241,6 +271,7 @@ async function persist(
     );
     summary.turns_stamped = stamped.rowCount ?? 0;
   }
+  return writtenRowIds;
 }
 
 /**
@@ -257,14 +288,26 @@ export async function runDistillSweep(
   const embedFn = deps.embedFn ?? generateEmbeddingWithMetadata;
   const summary = emptySummary();
 
-  const batch = await claimDistillBatch(deps.pool, {
-    ...(deps.namespace !== undefined ? { namespace: deps.namespace } : {}),
-    ...(deps.maxSessions !== undefined
-      ? { maxSessions: deps.maxSessions }
-      : {}),
-    ...(deps.maxTurns !== undefined ? { maxTurns: deps.maxTurns } : {}),
-    contextWindow: deps.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
-  });
+  const claim = () =>
+    claimDistillBatch(deps.pool, {
+      ...(deps.namespace !== undefined ? { namespace: deps.namespace } : {}),
+      ...(deps.laneId !== undefined ? { laneId: deps.laneId } : {}),
+      ...(deps.maxSessions !== undefined
+        ? { maxSessions: deps.maxSessions }
+        : {}),
+      ...(deps.maxTurns !== undefined ? { maxTurns: deps.maxTurns } : {}),
+      contextWindow: deps.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+    });
+  const batch = deps.trace
+    ? await deps.trace.span("distill.claim", claim, {
+        input: { namespace: deps.namespace ?? null, lane_id: deps.laneId ?? null },
+        output: (result) => ({
+          row_ids: result.consumedTurnIds,
+          units: result.units.length,
+          missing_session_seq: result.missingSessionSeq,
+        }),
+      })
+    : await claim();
 
   summary.units = batch.units.length;
   summary.missing_session_seq = batch.missingSessionSeq;
@@ -273,39 +316,80 @@ export async function runDistillSweep(
 
   const candidates: PreparedCandidate[] = [];
   for (const unit of batch.units) {
-    candidates.push(...(await runDistillUnit(model, unit)));
+    candidates.push(...(await runDistillUnit(model, unit, deps.trace)));
   }
   summary.candidates_extracted = candidates.length;
 
   // Outside the transaction -- see the module note on why.
-  const embeddings = deps.skipEmbeddings
-    ? new Map<string, number[] | null>()
-    : await resolveEmbeddings(candidates, embedFn, deps.logger);
+  const resolve = () =>
+    deps.skipEmbeddings
+      ? Promise.resolve(new Map<string, number[] | null>())
+      : resolveEmbeddings(candidates, embedFn, deps.logger, deps.trace);
+  const embeddings = deps.trace
+    ? await deps.trace.span("distill.embedding_batch", resolve, {
+        metadata: {
+          namespaces: [...new Set(candidates.map((candidate) => candidate.namespace))],
+        },
+        input: {
+          model: EMBEDDING_MODEL,
+          item_count: candidates.length,
+          row_ids: [
+            ...new Set(candidates.flatMap((candidate) => candidate.source_turn_ids)),
+          ],
+          skipped: deps.skipEmbeddings === true,
+        },
+        output: (result) => ({
+          model: EMBEDDING_MODEL,
+          item_count: result.size,
+          provider_errors: [...result.entries()]
+            .filter(([, vector]) => vector === null)
+            .map(([contentHash]) => contentHash),
+        }),
+      })
+    : await resolve();
 
-  const client = await deps.pool.connect();
-  try {
-    await client.query("BEGIN");
-    await persist(
-      client,
-      candidates,
-      embeddings,
-      batch.consumedTurnIds,
-      deps.distillJobId ?? null,
-      summary,
-    );
-    await client.query("COMMIT");
-  } catch (err) {
-    await client.query("ROLLBACK").catch(() => undefined);
-    // Logged before it propagates, so a failed sweep is never silent even if
-    // the queue's own failure record is later pruned.
-    deps.logger.error("distill_sweep_failed", {
-      units: summary.units,
-      candidates_extracted: summary.candidates_extracted,
-      reason: err instanceof Error ? err.name : "non_error",
+  const persistWork = async (): Promise<string[]> => {
+    const client = await deps.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const written = await persist(
+        client,
+        candidates,
+        embeddings,
+        batch.consumedTurnIds,
+        deps.distillJobId ?? null,
+        summary,
+      );
+      await client.query("COMMIT");
+      return written;
+    } catch (err: unknown) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      deps.logger.error("distill_sweep_failed", {
+        units: summary.units,
+        candidates_extracted: summary.candidates_extracted,
+        reason: err instanceof Error ? err.name : "non_error",
+      });
+      throw err;
+    } finally {
+      client.release();
+    }
+  };
+  if (deps.trace) {
+    await deps.trace.span("distill.persist", persistWork, {
+      metadata: {
+        namespaces: [...new Set(candidates.map((candidate) => candidate.namespace))],
+      },
+      input: {
+        source_turn_ids: batch.consumedTurnIds,
+        candidate_hashes: candidates.map((candidate) => candidate.content_hash),
+      },
+      output: (writtenRowIds) => ({
+        written_candidate_ids: writtenRowIds,
+        stamped_turn_ids: batch.consumedTurnIds,
+      }),
     });
-    throw err;
-  } finally {
-    client.release();
+  } else {
+    await persistWork();
   }
 
   // Content-free telemetry: counts and a model name, never content or hashes.
@@ -332,6 +416,7 @@ export interface MemoryDistillHandlerDeps {
   /** Present for signature parity with the other registered handlers. */
   auth?: unknown;
   model?: NamedDistillModel;
+  tracing?: BackgroundTraceEmitter;
 }
 
 /**
@@ -350,37 +435,49 @@ export function makeMemoryDistillHandler(
   deps: MemoryDistillHandlerDeps,
 ): MaintenanceJobHandler {
   return async (job: MaintenanceJob): Promise<void> => {
-    if (job.version !== MEMORY_DISTILL_JOB_VERSION) {
-      throw new MaintenanceTerminalError(
-        "memory distill job version is not supported by this handler",
-      );
-    }
-
-    // The payload is optional scoping, not a contract the sweep depends on:
-    // an empty payload means "sweep the oldest due work", which is the useful
-    // default for a recurring maintenance job. Values are read defensively
-    // because a job row is durable and may predate a code change.
-    const payload = job.payload ?? {};
-    const maxSessions =
-      typeof payload.max_sessions === "number"
-        ? payload.max_sessions
-        : undefined;
-    const maxTurns =
-      typeof payload.max_turns === "number" ? payload.max_turns : undefined;
-
-    await runDistillSweep({
-      pool: deps.pool,
-      logger: deps.logger,
-      embedFn: deps.embedFn,
-      ...(deps.model ? { model: deps.model } : {}),
-      // The job's own namespace is the only namespace this run may touch when
-      // one was scoped. A null namespace is a deliberate global sweep, which is
-      // what a maintenance identity is for -- not an error.
-      ...(job.namespace !== null ? { namespace: job.namespace } : {}),
-      ...(maxSessions !== undefined ? { maxSessions } : {}),
-      ...(maxTurns !== undefined ? { maxTurns } : {}),
-      distillJobId: job.id,
+    const trace = new BackgroundTraceRecorder(deps.tracing, {
+      name: "memory.distill",
+      input: { job_id: job.id, namespace: job.namespace },
+      tags: ["open-brain-server", "background-job", "dream", "distill"],
+      metadata: { job_kind: job.kind, attempt: job.attempts },
+      sessionId: job.namespace === null ? undefined : backgroundSessionId(job),
     });
+    try {
+      if (job.version !== MEMORY_DISTILL_JOB_VERSION) {
+        throw new MaintenanceTerminalError(
+          "memory distill job version is not supported by this handler",
+        );
+      }
+
+      const payload = job.payload ?? {};
+      const laneId =
+        payload.lane_id === null || typeof payload.lane_id === "string"
+          ? payload.lane_id
+          : undefined;
+      const maxSessions =
+        typeof payload.max_sessions === "number"
+          ? payload.max_sessions
+          : undefined;
+      const maxTurns =
+        typeof payload.max_turns === "number" ? payload.max_turns : undefined;
+
+      const summary = await runDistillSweep({
+        pool: deps.pool,
+        logger: deps.logger,
+        embedFn: deps.embedFn,
+        trace,
+        ...(deps.model ? { model: deps.model } : {}),
+        ...(job.namespace !== null ? { namespace: job.namespace } : {}),
+        ...(laneId !== undefined ? { laneId } : {}),
+        ...(maxSessions !== undefined ? { maxSessions } : {}),
+        ...(maxTurns !== undefined ? { maxTurns } : {}),
+        distillJobId: job.id,
+      });
+      trace.finish(summary);
+    } catch (error: unknown) {
+      trace.fail(error);
+      throw error;
+    }
   };
 }
 
@@ -398,10 +495,12 @@ export function makeMemoryDistillHandler(
 export function buildMemoryDistillEnqueue(input: {
   sweepLabel: string;
   namespace?: string;
+  laneId?: string | null;
   maxSessions?: number;
   maxTurns?: number;
 }) {
   const payload: Record<string, unknown> = {};
+  if (input.laneId !== undefined) payload.lane_id = input.laneId;
   if (input.maxSessions !== undefined) payload.max_sessions = input.maxSessions;
   if (input.maxTurns !== undefined) payload.max_turns = input.maxTurns;
 
