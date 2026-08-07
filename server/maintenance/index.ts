@@ -62,6 +62,7 @@ import {
   type MaintenanceJobHandler,
   type MaintenanceQueueLogger,
 } from "../../src/maintenance-queue.ts";
+import { startRecurringMaintenanceSweep } from "../../src/maintenance-sweep.ts";
 
 export const MAINTENANCE_BOUNDARY: ServerModuleBoundary = {
   name: "maintenance",
@@ -71,6 +72,13 @@ export const MAINTENANCE_BOUNDARY: ServerModuleBoundary = {
 
 /** The name this runtime reports in ordered-shutdown logs. */
 export const MAINTENANCE_RUNTIME_NAME = "maintenance";
+
+/**
+ * Producer cadence when `OPEN_BRAIN_MAINTENANCE_POLL_MS` is unset. Matches the
+ * runner's own 5s default (`src/maintenance-bootstrap.ts`), so a process that
+ * configures neither produces and consumes on the same tick.
+ */
+const DEFAULT_SWEEP_INTERVAL_MS = 5_000;
 
 export interface MaintenanceRuntimeInput {
   readonly config: MaintenanceConfig;
@@ -172,6 +180,44 @@ export function createMaintenanceRuntime(
   // strictly better than discovering it as a growing dead-letter table.
   if (input.autoStart !== false) runner.start();
 
+  // THE PRODUCER (#384). A runner without one polls forever over a queue that
+  // nothing fills, which is exactly what this process did: measured 2026-08-07
+  // on the local clone, 319 "maintenance queue idle" lines and zero
+  // `maintenance_sweep_complete`, with maintenance ENABLED the whole time.
+  //
+  // The cause was compositional, not a disabled flag. `startMaintenanceQueue`
+  // in `src/maintenance-bootstrap.ts` starts the sweep, but it is reached only
+  // from the legacy `src/index.ts`; this boundary serves `server/main.ts`, the
+  // post-Phase-6 serving entrypoint, and composed the consumer half alone. The
+  // one shared implementation now lives in `src/maintenance-sweep.ts` so the
+  // two compositions cannot diverge on whether work gets produced at all.
+  //
+  // Started only when polling is (`autoStart !== false`): producing jobs no
+  // runner will claim would grow the backlog rather than turn the loop, and a
+  // test driving `runOnce()` deterministically must not race a live timer.
+  //
+  // The cadence is the poll interval, and `undefined` here means the sweep's
+  // own default, matching how the runner knobs above are forwarded. Every bound
+  // is re-clamped inside `runMaintenanceSweep`.
+  const sweep =
+    input.autoStart !== false
+      ? startRecurringMaintenanceSweep({
+          pool: input.pool,
+          queue,
+          logger,
+          intervalMs: input.config.pollIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS,
+          ...(input.config.distillBatchSize !== undefined
+            ? { distillBatchSize: input.config.distillBatchSize }
+            : {}),
+          ...(input.config.maxDistillBatchesPerTick !== undefined
+            ? { maxDistillBatchesPerTick: input.config.maxDistillBatchesPerTick }
+            : {}),
+          ...(input.config.graphDerivationLimit !== undefined
+            ? { graphDerivationLimit: input.config.graphDerivationLimit }
+            : {}),
+        })
+      : undefined;
+
   let stopped = false;
   return {
     name: MAINTENANCE_RUNTIME_NAME,
@@ -189,6 +235,12 @@ export function createMaintenanceRuntime(
     stop: async (): Promise<void> => {
       if (stopped) return;
       stopped = true;
+      // Producer first, ALWAYS. Stopping the runner while the sweep still ticks
+      // would let a producer add rows after polling has halted, so shutdown
+      // would leave freshly-queued work with nothing left to claim it. `stop()`
+      // on the sweep awaits its in-flight tick, so no enqueue is in progress by
+      // the time the drain below begins.
+      await sweep?.stop();
       await runner.stop();
     },
   };

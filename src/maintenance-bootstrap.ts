@@ -19,6 +19,14 @@
  * single-flight, uses configured batch bounds, and stops before the runner drains
  * so shutdown cannot add work after polling has halted.
  *
+ * THE PRODUCER LOOP ITSELF NOW LIVES IN `maintenance-sweep.ts`, not here. This
+ * bootstrap is reached only from the LEGACY `src/index.ts`; the serving
+ * entrypoint since the Phase 6 cutover is `server/main.ts`, which composes
+ * maintenance through `server/maintenance/index.ts`. While the loop was private
+ * to this file, only one of those two compositions produced any work at all, so
+ * the serving process polled a queue nothing filled — #384's symptom, surviving
+ * the PR that added the producer. Both compositions now start the same loop.
+ *
  * #343 invariants preserved verbatim — this only wires them, it changes none:
  *  - Bounded concurrency: the runner clamps to [1, MAX_CONCURRENCY].
  *  - No overlapping ticks: `runOnce` is single-flight; `start()` reuses it.
@@ -36,7 +44,6 @@ import type { AuthInfo } from "./types.ts";
 import {
   MaintenanceQueue,
   MaintenanceQueueRunner,
-  safeMaintenanceErrorCategory,
   type MaintenanceJobHandler,
   type MaintenanceQueueLogger,
 } from "./maintenance-queue.ts";
@@ -51,7 +58,7 @@ import {
   MEMORY_DISTILL_JOB_KIND,
   makeMemoryDistillHandler,
 } from "./distill-handler.ts";
-import { runMaintenanceSweep } from "./maintenance-sweep.ts";
+import { startRecurringMaintenanceSweep } from "./maintenance-sweep.ts";
 
 /**
  * The deliberate, server-owned identity the graph-derivation handler derives
@@ -238,50 +245,6 @@ export function maintenanceQueueEnabled(
 ): boolean {
   const raw = env.OPEN_BRAIN_MAINTENANCE_ENABLED?.trim().toLowerCase();
   return raw !== "0" && raw !== "false";
-}
-
-function startRecurringMaintenanceSweep(input: {
-  pool: pg.Pool;
-  queue: MaintenanceQueue;
-  logger: MaintenanceQueueLogger;
-  intervalMs: number;
-  distillBatchSize?: number;
-  maxDistillBatchesPerTick?: number;
-  graphDerivationLimit?: number;
-}): { stop(): Promise<void> } {
-  let interval: ReturnType<typeof setInterval> | null = null;
-  let active: Promise<void> | null = null;
-  let stopping = false;
-
-  const runOnce = (): Promise<void> => {
-    if (stopping) return Promise.resolve();
-    if (active) return active;
-
-    const run = runMaintenanceSweep(input)
-      .then(() => undefined)
-      .catch((error: unknown) => {
-        input.logger.error("maintenance_sweep_failed", {
-          error_category: safeMaintenanceErrorCategory(error),
-        });
-      })
-      .finally(() => {
-        active = null;
-      });
-    active = run;
-    return run;
-  };
-
-  void runOnce();
-  interval = setInterval(() => void runOnce(), input.intervalMs);
-
-  return {
-    async stop(): Promise<void> {
-      stopping = true;
-      if (interval) clearInterval(interval);
-      interval = null;
-      await active;
-    },
-  };
 }
 
 /**
