@@ -12,6 +12,7 @@ import {
   sessionSourceHashInput,
 } from "./embedding-canonical.ts";
 import { backgroundExtract } from "./extraction.ts";
+import { writeThoughtChunks, chunkReceiptFields } from "./chunk-write.ts";
 import {
   executeSearch,
   executeSearchWithScopedSharedFallback,
@@ -204,6 +205,21 @@ export function createRestRouter(deps: RestDeps): Router {
       const entryId = rows[0].id as string;
       const isNew = rows[0].is_new as boolean;
 
+      // CHUNK ROWS FOR A LONG ENTRY (#605). A thought created over REST is the
+      // same object as one created over MCP and must be stored the same way:
+      // complete parent plus per-section rows.
+      const chunks = await writeThoughtChunks(deps.pool, {
+        parentId: entryId,
+        namespace: ns,
+        createdBy: auth.clientId,
+        content,
+        tags: tags ?? [],
+        embedFn: deps.embedFn,
+        source: "rest-chunk",
+        isNew,
+        caller: "rest/POST /thoughts",
+      });
+
       if (isNew) {
         backgroundExtract(
           deps.pool,
@@ -222,6 +238,7 @@ export function createRestRouter(deps: RestDeps): Router {
           namespace: ns,
           embedded: !!embedding,
           merged: !isNew,
+          ...chunkReceiptFields(chunks),
         });
     }),
   );

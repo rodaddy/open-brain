@@ -5,7 +5,7 @@ import { canWrite } from "../permissions.ts";
 import { canWriteNamespace } from "../namespace-policy.ts";
 import { canonicalNamespace, physicalNamespace } from "../shared-namespace.ts";
 import { contentHash, EMBEDDING_MODEL } from "../embedding.ts";
-import { writeEntryChunks, type ChunkWriteResult } from "../chunk-write.ts";
+import { writeThoughtChunks, chunkReceiptFields } from "../chunk-write.ts";
 import { backgroundExtract } from "../extraction.ts";
 import type { AuthInfo } from "../types.ts";
 import { logger } from "../logger.ts";
@@ -114,47 +114,17 @@ export function registerLogThought(server: McpServer, deps: ToolDeps): void {
       // text and its own whole-text vector; these add per-section resolution so
       // a detail buried deep in a long entry is retrievable on its own terms.
       // Only on first write: a merge means the chunks already exist.
-      let chunkResult: ChunkWriteResult | null = null;
-      let chunkingFailed = false;
-      if (isNew) {
-        try {
-          chunkResult = await writeEntryChunks(deps.pool, {
-            table: "thoughts",
-            parentId: entryId,
-            namespace: ns,
-            createdBy: auth.clientId,
-            content: args.content,
-            tags: args.tags ?? [],
-            embedFn: deps.embedFn,
-            source: "mcp-chunk",
-          });
-        } catch (error) {
-          // The parent is already committed with the complete text, so the
-          // entry is not lost -- only its per-section resolution is. Reported
-          // rather than swallowed, and the caller is told, because silence here
-          // would read as a fully chunked entry.
-          //
-          // chunkingFailed is what the response uses to say so. Without it the
-          // response omits the chunk fields entirely on failure -- byte-identical
-          // to a short entry that was never chunked -- so the caller could not
-          // tell "not chunked" from "chunking failed", exactly the distinction
-          // this branch exists to preserve. NOTE: a merge on retry (isNew=false)
-          // skips chunking, so a parent left partially chunked here is not
-          // repaired by re-sending; that repair belongs to the embedding/chunk
-          // repair pass, and this signal is what lets a caller or that pass know
-          // the parent needs it.
-          chunkingFailed = true;
-          logger.error("entry_chunk_write_failed", {
-            tool: "log_thought",
-            parent_id: entryId,
-            content_length: args.content.length,
-            error_name: error instanceof Error ? error.name : "unknown",
-            error_message:
-              error instanceof Error ? error.message : String(error),
-          });
-        }
-      }
-
+      const chunkAttempt = await writeThoughtChunks(deps.pool, {
+        parentId: entryId,
+        namespace: ns,
+        createdBy: auth.clientId,
+        content: args.content,
+        tags: args.tags ?? [],
+        embedFn: deps.embedFn,
+        source: "mcp-chunk",
+        isNew,
+        caller: "src/log_thought",
+      });
       if (isNew) {
         backgroundExtract(
           deps.pool,
@@ -181,15 +151,9 @@ export function registerLogThought(server: McpServer, deps: ToolDeps): void {
               // without reading the server log: chunking_status is "failed" when
               // the parent committed but chunk generation threw, and is absent
               // when chunking either succeeded or was not applicable (short
-              // entry / merge). chunkResult is null in the failure case, so
-              // without this field the two are indistinguishable.
-              ...(chunkResult
-                ? {
-                    chunks_written: chunkResult.written,
-                    chunks_unembedded: chunkResult.unembedded,
-                  }
-                : {}),
-              ...(chunkingFailed ? { chunking_status: "failed" as const } : {}),
+              // entry / merge). Shared with the other three thought writers so
+              // every one of them reports the same receipt shape (#605).
+              ...chunkReceiptFields(chunkAttempt),
             }),
           },
         ],
