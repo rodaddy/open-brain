@@ -477,9 +477,39 @@ dbDescribe("maintenance runtime lease boundary (live Postgres)", () => {
       }
       expect(produced).toBeGreaterThan(0);
     } finally {
+      // ORDER MATTERS: stop the producer BEFORE deleting, or a tick landing
+      // between the DELETE and the runtime's halt re-enqueues what was just
+      // removed.
       await runtime.stop();
-      await client.query(`DELETE FROM maintenance_jobs WHERE namespace = $1`, [
-        namespace,
+
+      // DELETE EVERY graph.derive JOB, NOT JUST THIS NAMESPACE'S.
+      //
+      // The sweep is deliberately global — `selectSourcesNeedingDerivation`
+      // carries a namespace predicate only when the caller passes writable
+      // namespaces, and the maintenance sweep passes `undefined` because a
+      // server-owned sweep must serve every namespace. So this runtime derives
+      // from EVERY approved/active source in the database, not only the one
+      // seeded here.
+      //
+      // That makes leftover fixture sources from other suites this test's mess
+      // to clean: `ob_sources` rows in `parity-source-registry-*` namespaces
+      // survive their own suite (observed on origin/main, which leaves those
+      // rows behind with zero maintenance_jobs). Before this file started a
+      // producer, nothing acted on them. Now they become real queued
+      // `graph.derive` rows.
+      //
+      // Left behind, they break `026 maintenance queue > allows only one
+      // concurrent runner to claim a due job`, whose two racing claims expect
+      // exactly one due job to exist ANYWHERE: `claimDueJobs` filters on
+      // `state`/`run_after` only, with no namespace or kind predicate, so any
+      // stray due row is claimable and both racers win one. That failure is
+      // real and was caused here — CI showed it on this branch while clean
+      // origin/main passed the identical suite.
+      // Both sweep-produced kinds, for the same reason: leftover
+      // `ob_raw_turns` fixtures (`parity-raw-turn-*`) make the distill arm
+      // produce `memory.distill` rows just as globally.
+      await client.query(`DELETE FROM maintenance_jobs WHERE job_kind = ANY($1)`, [
+        ["graph.derive", "memory.distill"],
       ]);
       await client.query(`DELETE FROM ob_sources WHERE namespace = $1`, [
         namespace,
