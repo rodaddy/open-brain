@@ -482,3 +482,227 @@ def test_another_tools_memory_command_is_not_this_gates_evidence(
 
     assert run_gate(paths, "pre-tool-use", _bash(command)).blocked
     assert read_session_state(paths)["readbackRequired"] is True
+
+
+def _wrapper_settings(root: Path, create_wrapper: bool = True) -> tuple[str, Path]:
+    """Write a settings file wiring hooks through the packaged wrapper.
+
+    This is the shape `~/.claude/settings.json` has actually used since the #420
+    cutover: no `bun` script anywhere, every hook a console script run through
+    `openbrain-hook-env`.
+
+    Args:
+        root: Scratch directory.
+        create_wrapper: Whether the wrapper file exists on disk.
+
+    Returns:
+        ``(wrapper_path, settings_path)``.
+    """
+    env_dir = root / "openbrain-memory" / "env"
+    wrapper = env_dir / "openbrain-hook-env"
+    if create_wrapper:
+        env_dir.mkdir(parents=True, exist_ok=True)
+        wrapper.write_text("#!/bin/sh\n", encoding="utf8")
+    settings = root / "wrapper-settings.json"
+    settings.write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "SessionStart": [
+                        {
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": (
+                                        f"sh {wrapper} openbrain-session-start"
+                                    ),
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        ),
+        encoding="utf8",
+    )
+    return str(wrapper), settings
+
+
+def _with_settings(paths: GatePaths, settings: Path) -> GatePaths:
+    """Return the same scratch paths with a different settings file."""
+    return GatePaths(
+        root=paths.root,
+        state=paths.state,
+        receipts=paths.receipts,
+        settings=settings,
+        policy_state=paths.policy_state,
+        spool=paths.spool,
+    )
+
+
+def _any_recovery_command(output: str) -> str:
+    """Extract the recovery command whatever invocation form it names.
+
+    Deliberately NOT reusing `_recovery_command`: that helper requires the line
+    to contain `ob-memory-provider.ts`, which is exactly the assumption #81 is
+    about. A checker that can only see one spelling cannot prove the banner and
+    the allowance agree in the other.
+    """
+    banner = output
+    parsed = json.loads(output)
+    if isinstance(parsed.get("reason"), str):
+        banner = parsed["reason"]
+    else:
+        hook_output = parsed.get("hookSpecificOutput")
+        if isinstance(hook_output, dict):
+            banner = hook_output.get("additionalContext", output)
+    for line in banner.split("\n"):
+        stripped = line.strip()
+        if stripped.startswith("printf '%s' "):
+            return stripped
+    raise AssertionError(f"no executable recovery command in:\n{output}")
+
+
+def test_the_wrapper_invocation_form_is_admitted(tmp_path: Path) -> None:
+    # #81: every hook in settings.json runs `sh <…>/openbrain-hook-env
+    # openbrain-session-start`. The allowance recognised only the older
+    # `bun <…>.ts` spelling, so a post-compact session was refused for running
+    # the packaged recovery command -- the form that actually works.
+    paths = gate_paths(tmp_path)
+    wrapper, settings = _wrapper_settings(tmp_path)
+    paths = _with_settings(paths, settings)
+    correlation = start_compact_cycle(paths.receipts)
+    run_gate(paths, "post-compact")
+
+    payload = json.dumps(
+        {
+            "cwd": DEVELOPMENT_CWD,
+            "session_id": SESSION,
+            "source": "compact",
+            "correlation_id": correlation,
+        },
+        separators=(",", ":"),
+    )
+    command = (
+        f"printf '%s' {shell_quote(payload)} | "
+        f"sh {shell_quote(wrapper)} openbrain-session-start"
+    )
+
+    allowed = run_gate(paths, "pre-tool-use", _bash(command))
+    assert allowed.code == 0
+    assert allowed.stdout == ""
+
+
+def test_an_unwired_wrapper_console_script_is_refused(tmp_path: Path) -> None:
+    # The wrapper allowance is bounded by what settings NAMES. Borrowing the
+    # wrapper's path to run some other console script must not pass, or the
+    # allowance becomes "any argument to a trusted binary".
+    paths = gate_paths(tmp_path)
+    wrapper, settings = _wrapper_settings(tmp_path)
+    paths = _with_settings(paths, settings)
+    correlation = start_compact_cycle(paths.receipts)
+    run_gate(paths, "post-compact")
+
+    payload = json.dumps(
+        {
+            "cwd": DEVELOPMENT_CWD,
+            "session_id": SESSION,
+            "source": "compact",
+            "correlation_id": correlation,
+        },
+        separators=(",", ":"),
+    )
+    command = (
+        f"printf '%s' {shell_quote(payload)} | "
+        f"sh {shell_quote(wrapper)} openbrain-capture-stop"
+    )
+
+    assert run_gate(paths, "pre-tool-use", _bash(command)).blocked
+
+
+def test_the_banner_command_is_admitted_under_the_wrapper_only_install(
+    tmp_path: Path,
+) -> None:
+    # THE invariant, and the one worth more than the point fix: whatever
+    # invocation form is installed, the command the gate PRINTS is a command the
+    # gate ACCEPTS. Asserted here against a wrapper-only install -- no `bun`
+    # provider script exists -- which is the live configuration in #81.
+    paths = gate_paths(tmp_path)
+    _wrapper, settings = _wrapper_settings(tmp_path)
+    paths = _with_settings(paths, settings)
+    start_compact_cycle(paths.receipts)
+    run_gate(paths, "post-compact")
+
+    absent = str(tmp_path / "no-such-provider.ts")
+    prompted = run_gate(
+        paths, "user-prompt-submit", extra=["--provider-script-path", absent]
+    )
+    command = _any_recovery_command(prompted.stdout)
+
+    # Half one: admitted. On its own this is satisfiable by a command that
+    # cannot run -- the unfixed gate admitted a `bun` invocation naming a file
+    # that does not exist, so this assertion passed while the operator was still
+    # deadlocked. Asserted anyway, because it is the property that regresses.
+    admitted = run_gate(
+        paths,
+        "pre-tool-use",
+        _bash(command),
+        extra=["--provider-script-path", absent],
+    )
+    assert admitted.stdout == "", (
+        "the gate refused the command it just printed:\n"
+        f"  printed: {command}\n  verdict: {admitted.stdout}"
+    )
+
+    # Half two, and the half that makes the invariant real: the executable the
+    # printed command names must EXIST. "Admitted" and "runnable" are different
+    # claims, and #81 is what happens when only the first is checked.
+    executable = re.search(r"\|\s*(?:sh|bun)\s+'([^']+)'", command)
+    assert executable is not None, f"no executable in printed command: {command}"
+    assert Path(executable.group(1)).is_file(), (
+        "the printed recovery command names an executable that does not exist, "
+        "so running it cannot clear the block:\n"
+        f"  printed: {command}\n  missing: {executable.group(1)}"
+    )
+
+
+def test_an_unrecognised_install_says_so_instead_of_failing_silently(
+    tmp_path: Path,
+) -> None:
+    # #81 property 2. With no provider script, no adapter generation, and no
+    # wrapper, the allowance resolves EMPTY -- which used to be indistinguishable
+    # from a correctly-narrow one. The block must name what it did not recognise.
+    paths = gate_paths(tmp_path)
+    run_gate(paths, "session-start", {"source": "compact"})
+
+    absent = str(tmp_path / "no-such-provider.ts")
+    blocked = run_gate(
+        paths,
+        "pre-tool-use",
+        _bash("touch " + str(tmp_path / "x")),
+        extra=["--provider-script-path", absent],
+    )
+
+    assert blocked.blocked
+    assert "cannot recognise ANY provider invocation form" in blocked.stdout
+    assert absent in blocked.stdout
+
+
+def test_a_recognised_install_emits_no_diagnostic(tmp_path: Path) -> None:
+    # The other half: a correctly-configured gate must stay quiet. A diagnostic
+    # that fires on every block is noise, and noise is how a real one gets
+    # ignored.
+    paths = gate_paths(tmp_path)
+    _wrapper, settings = _wrapper_settings(tmp_path)
+    paths = _with_settings(paths, settings)
+    run_gate(paths, "session-start", {"source": "compact"})
+
+    blocked = run_gate(
+        paths,
+        "pre-tool-use",
+        _bash("touch " + str(tmp_path / "x")),
+        extra=["--provider-script-path", str(tmp_path / "no-such-provider.ts")],
+    )
+
+    assert blocked.blocked
+    assert "cannot recognise ANY provider invocation form" not in blocked.stdout

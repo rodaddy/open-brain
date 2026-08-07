@@ -60,7 +60,37 @@ def _install_development_root() -> None:
         capture_output=True,
         timeout=30,
     )
+    _install_sibling_provider_script(root)
     os.environ["OPENBRAIN_DEVELOPMENT_ROOT"] = str(root)
+
+
+def _install_sibling_provider_script(root: Path) -> None:
+    """Create the sibling provider script the real Development root carries.
+
+    The gate decides whether a recovery command is runnable by ASKING THE
+    FILESYSTEM whether `_ob/scripts/ob-memory-provider.ts` exists. On Rico's Mac
+    it does, so the recorded TypeScript parity fixtures were captured with it
+    present. A stand-in root that is only an empty git repository answers that
+    probe differently, and the gate then appends its "cannot recognise ANY
+    provider invocation form" diagnostic to a block the recording does not carry
+    it on -- the suite passed locally and failed on CI, for the environment
+    rather than for the behaviour.
+
+    A faithful stand-in therefore has to reproduce the file the probe looks for,
+    not just the directory. The contents are never executed by these tests; only
+    `Path.is_file()` is consulted, so a placeholder is enough and pretending
+    otherwise would be the more misleading fixture.
+
+    Args:
+        root: The stand-in Development root to populate.
+    """
+    script = root / "_ob" / "scripts" / "ob-memory-provider.ts"
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text(
+        "// Test stand-in. Present so the gate's `is_file()` probe matches the\n"
+        "// real Development root; never executed by the suite.\n",
+        encoding="utf-8",
+    )
 
 
 _install_development_root()
