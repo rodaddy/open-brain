@@ -480,6 +480,17 @@ jobs:
         if: steps.contract-paths.outputs.required == 'true'
         run: uv python install "${PYTHON_VERSION}"
 
+      - name: Install dependencies
+        # `check-parity.ts` imports the tracing stack transitively, so it needs
+        # real `node_modules`. Without this the job ran straight off the
+        # self-hosted runner's shared Bun cache and passed only while that cache
+        # happened to be warm: on 2026-08-07 the same commit passed on the
+        # `pull_request` run and failed on the `push` run with `Cannot find
+        # module '@opentelemetry/api'` resolved out of the cache. Every other
+        # Bun job here installs first; this one was the exception.
+        if: steps.contract-paths.outputs.required == 'true'
+        run: bun install --frozen-lockfile
+
       - name: Validate parity manifest and fixtures
         if: steps.contract-paths.outputs.required == 'true'
         run: bun contracts/check-parity.ts
