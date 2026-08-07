@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import pytest
 
+from openbrain_memory.agent import EVENT_TYPES
 from openbrain_memory.cli import execute_json, usage_output
 
 from ._runtime_fakes import LaneAwareTransport
@@ -164,3 +165,104 @@ def test_help_example_carries_the_full_required_scope() -> None:
     example = usage_output()["result"]["example"]
 
     assert set(example["scope"]) == set(_FULL_SCOPE)
+
+
+def test_capture_rejects_kind_by_name_instead_of_ignoring_it() -> None:
+    """`kind` was accepted-and-dropped, so a misclassified event exited 0 (#598).
+
+    It landed in `ignored_optional_request_keys`: the caller asked for
+    `decision`, the row was stored with the default type, and the receipt said
+    fine. A key that names a real field the caller expected to take effect is
+    rejected, not relegated.
+    """
+    output = execute_json(
+        {
+            "config": _CONFIG,
+            "operation": "capture",
+            "distilled": True,
+            "event_type": "fact",
+            "kind": "decision",
+            "content": "kind must not be silently dropped",
+            "scope": _FULL_SCOPE,
+        },
+        transport=LaneAwareTransport(),
+    )
+    receipt = output["receipt"]
+    error = str(receipt["error"])
+
+    assert receipt["status"] == "failed"
+    assert receipt["durable"] is False
+    # Rejected BY NAME, and pointed at the spelling that works.
+    assert "kind" in error
+    assert "event_type" in error
+    # The key that killed the request is never also advertised as ignorable.
+    assert "kind" not in receipt.get("ignored_optional_request_keys", [])
+
+
+def test_kind_rejection_lists_the_legal_event_types_from_the_one_vocabulary() -> None:
+    """Naming the key without the accepted set leaves no way to be right.
+
+    The values are asserted against `EVENT_TYPES` itself rather than a literal
+    list, so this test cannot become the second hand-maintained copy of the
+    vocabulary it exists to protect (#412).
+    """
+    error = _error(
+        {
+            "operation": "capture",
+            "distilled": True,
+            "event_type": "fact",
+            "kind": "decision",
+            "content": "vocabulary must arrive whole",
+            "scope": _FULL_SCOPE,
+        }
+    )
+
+    for event_type in EVENT_TYPES:
+        assert event_type in error
+
+
+def test_unrecognised_optional_keys_are_still_ignored_not_rejected() -> None:
+    """Only `kind` changes behavior; a key that means nothing still ignores.
+
+    The #464 named-ignore machinery is the right answer for a key the runtime
+    has no field for, and turning every unknown key into a hard failure would
+    be a different, larger change than #598 asks for.
+    """
+    output = execute_json(
+        {
+            "config": _CONFIG,
+            "operation": "capture",
+            "distilled": True,
+            "event_type": "fact",
+            "totally_unknown_key": "value",
+            "content": "unknown keys stay ignorable",
+            "scope": _FULL_SCOPE,
+        },
+        transport=LaneAwareTransport(),
+    )
+    receipt = output["receipt"]
+
+    assert receipt["status"] != "failed"
+    assert "totally_unknown_key" in receipt["ignored_optional_request_keys"]
+
+
+def test_kind_is_only_rejected_where_event_type_is_a_real_field() -> None:
+    """`recall` has no `event_type`, so `kind` there is merely unrecognised.
+
+    The guard fires on the operation that owns the field it redirects to; on
+    every other lane `kind` keeps the documented ignore behavior.
+    """
+    output = execute_json(
+        {
+            "config": _CONFIG,
+            "operation": "recall",
+            "query": "kind on a lane without event_type",
+            "kind": "decision",
+            "scope": _FULL_SCOPE,
+        },
+        transport=LaneAwareTransport(),
+    )
+    receipt = output["receipt"]
+
+    assert receipt["status"] != "failed"
+    assert "kind" in receipt["ignored_optional_request_keys"]
