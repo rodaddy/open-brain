@@ -1017,11 +1017,11 @@ Verbatim, from the source:
 **Severity:** HIGH
 **Source:** PR #599 review swarm, finding H2 (measured: 47.6 MB / 528 ms on one traced search)
 **Scope key:** `review.evidence_payload_bounded_and_deduplicated`
-**Status:** active
+**Status:** superseded by issue #604 operator ruling (2026-08-06)
 
 ### Pattern
 
-`content_preview` in this repo is defined as the FULL `t.content` (src/tools/table-constants.ts) — the name promises a bound the projection does not have. Evidence/observability payloads that embed row content must (1) apply a real character bound at the projection, (2) not re-serialize the same rows into multiple spans of one call (query output + rank input + rank output + execute output was 4-5 copies), and (3) bound total payload with an explicit degradation recorded in the emitted record. Also check WHERE masking runs: synchronous masking on the tool's own path multiplies per-string regex cost by payload size, and per-string `new RegExp` compilation belongs at module scope. Measure worst-case with the live corpus (max content size × caller-controlled limit × fetch multiplier), not the happy path.
+`content_preview` in this repo is defined as the FULL `t.content` (src/tools/table-constants.ts). PR #599 initially responded to the measured transcript-dump payload by slicing every evidence row to 300 characters. Issue #604 reversed that remedy at the owning boundary: healthy retrieval evidence flows in full after masking; rank input stays ids/counts-only so rows are not serialized redundantly; the whole-call byte guard remains only as an emergency circuit breaker for pathological corpus rows; and the four raw-JSONL transcript dumps were decomposed and archived through the normal lifecycle. Do not reintroduce routine per-row shortening. Review the corpus shape first, preserve full evidence, deduplicate repeated span payloads, and keep detector compilation at module scope.
 
 ## [2026-08-06] Chosen-vs-filtered evidence keyed on a collapsing identity reports dropped rows as chosen
 

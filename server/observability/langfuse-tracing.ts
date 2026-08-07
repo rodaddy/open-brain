@@ -167,7 +167,11 @@ const DEFAULT_FLAP_COOLDOWN_MS = 30_000;
  */
 const SINK_HEALTH_PROBE_MS = 5_000;
 
-/** Maximum serialized child-span payload retained for one tool call. */
+/**
+ * Emergency circuit breaker for pathological payloads such as the issue #604
+ * transcript-dump class. Per the operator ruling, a healthy corpus must never
+ * reach this branch; ordinary retrieval evidence flows in full.
+ */
 export const MAX_ACTIVE_SPAN_BYTES = 256 * 1024;
 
 const COMPILED_SECRET_DETECTORS = SECRET_DETECTORS.map((detector) => ({
