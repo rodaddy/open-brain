@@ -1083,3 +1083,139 @@ Review checks for the next swarm:
 - **A documented alias/fallback needs a test where the primary is `""`,** not
   only a test where it is absent. The absent-case test passes with either
   operator and proves nothing about the deployed shape.
+
+## [2026-08-07] Ranking design options by imagined risk when the corpus can answer in 60 seconds
+
+**Severity:** MEDIUM. **Status:** open process rule — found while building
+`scripts/issue-graph.ts`; operator correction, 2026-08-07.
+
+A parser for declared issue dependencies added one deliberately loose pattern
+(`Blocked by #NNN` matched mid-sentence, not line-anchored) to catch a real
+case in #437. The agent then produced a five-option pro/con analysis over the
+false-positive risk of that pattern — negation guards, strict-only, separate
+reporting sections — **without ever running the pattern against the corpus it
+would parse.** Every option was ranked on a theory.
+
+The measurement took one `rg` over the issue bodies and inverted the answer:
+
+| Corpus | `blocked by` occurrences | False edges |
+|---|---|---|
+| 49 open issues | 1 (#437) | 0 |
+| 288 closed issues | 4 (#161 x2, #446, #282) | 0 |
+
+Both prose cases that are *not* dependencies (#446 "blocked by the writer
+question", #282 "blocked by the current 1GB storage cap") are naturally immune
+because the pattern requires `#NNN` immediately after the phrase. **Zero
+negations exist anywhere in 337 issues** — no "not blocked by", no "was blocked
+by" — so the proposed negation-guard option would have been dead code guarding
+a phrasing this repo has never used.
+
+The measurement also surfaced a fact no amount of reasoning would have: #161
+already uses the clean `Blocked by: #159` field form, so the repo *has* a
+convention and #437 is the outlier. That reframes the fix from "build parser
+machinery for prose" to "normalize the one outlier".
+
+Operator, 2026-08-07: *"if we branch off and do a little bit of actual testing
+of the different decisions instead of just calling them wrong and blocking them
+off, if we do a small prototype, when we come back we actually have the ability
+to do an informed decision."*
+
+Review checks for the next swarm:
+
+- **A pro/con analysis with no measurement in it is a guess with formatting.**
+  If the question is "does this pattern/threshold/heuristic misfire on real
+  data", and the real data is in the repo, in the database, or one `gh` call
+  away, the analysis is not ready to present until it has been run.
+- **"Could produce false positives" is a hypothesis, not a con.** State the
+  measured rate, or state UNVERIFIED and say what you did not run. A risk that
+  measures zero on the entire corpus is not a tie-breaker between options.
+- **Cheap concrete probes are already canon** — `_ob/skills/wayfinder` routes
+  them through `_DOCS/references/prototype.md`, and this repo has
+  `docs/dream-ethereal-runs.md` for disposable-output runs. Reaching for a
+  prototype is the documented move, not an extra step.
+- **Watch for options that only exist to be rejected.** Three of the five
+  options offered here were defending against a phrasing that does not occur.
+  `pro-con-analysis/_DOCS/procedure.md` Step 2 already forbids strawman padding;
+  unmeasured risk is how strawmen get in while looking rigorous.
+
+## [2026-08-07] `_DOCS/STANDARDS-*.md` in this repo are generated — lessons written there are erased
+
+**Severity:** MEDIUM. **Status:** open — near-miss caught before writing,
+2026-08-07.
+
+Asked to record a durable lesson in `_DOCS/`, the obvious move is to append it
+to the matching `_DOCS/STANDARDS-*.md`. **Every file in this repo's `_DOCS/` is
+generated** and carries a `source-hash` (verified 2026-08-07: all 8 files
+match `rg -l 'source-hash' _DOCS/`). `AGENTS.md` states they must never be
+hand-edited; a rule change goes in the Development `_DOCS/` source, then
+`bun _ob/scripts/sync-repo-standards.ts open-brain` regenerates the copies.
+
+A lesson appended to a generated file survives until the next sync and then
+vanishes with no error and no diff anyone reads — the precise failure mode that
+"we should only have to figure this out once" is meant to prevent.
+
+Review checks for the next swarm:
+
+- **Before writing to any `_DOCS/` path, check for a `source-hash`.** If it has
+  one, the file is a build artifact.
+- **Route by lesson type, not by which directory came to mind first:** a review
+  blind spot goes in `docs/sme/<lane>.md`; a design choice with rationale worth
+  not re-litigating goes in `docs/decisions/` (its README explains why issues
+  alone are insufficient).
+- **Repo-local first; promotion is a separate, later, operator decision.**
+  While a practice is still being worked out it stays in this repo's `docs/`.
+  Operator, 2026-08-07: *"right now we're doing our own docs in this repo and
+  once we've sussed it out, we might put something in `_DOCS` where it'll live
+  forever. But right now we're just sussing it out."* Promoting an unproven
+  practice makes every other repo inherit a rule that has not earned it yet.
+  Do not treat promotion as a tidy-up step at the end of a task.
+
+## [2026-08-07] The 3-4 rule: repetition is the trigger for building an agent, not predicted value
+
+**Severity:** MEDIUM. **Status:** open process rule — operator direction,
+2026-08-07.
+
+Asked when a project-specific agent is worth creating, the agent proposed a
+predictive test ("does the knowledge accumulate?"). The operator replaced it
+with an observable one:
+
+> "anything that you've had to do manually 3 or 4 times or in your personal
+> context 3 or 4 times should have enough information to make an agent to do
+> that for you."
+
+The difference matters. "Will this accumulate knowledge?" requires predicting
+the future and is answered by opinion. "Have I done this four times?" is
+counted. It is the same measure-don't-theorize discipline as the
+[2026-08-07] pro/con entry above, applied to tooling decisions.
+
+Evidence from the session that produced this entry — work done by hand,
+repeatedly, in ONE session:
+
+| Repeated action | Count | Outcome |
+|---|---|---|
+| `aqmd search` to clear the design-lookup gate | 6 | Same three-step dance every time |
+| "read the existing skill before proposing" | 5 | **Skipped 3 of 5 until corrected** |
+| Probe before deciding | 3 | Only done after two operator corrections |
+
+The middle row is the load-bearing one: a full grilling procedure was
+improvised while `_ob/skills/what-did-i-not-ask/_DOCS/grill-with-docs-procedure.md`
+already existed on disk and specified it. That is not a knowledge-accumulation
+gap; it is a check-whether-this-is-already-solved step failed four separate
+times in one session — precisely the 3-4 threshold.
+
+Checks for the next swarm:
+
+- **Count, do not predict.** If a manual action has happened 3-4 times in this
+  repo or this session, it has enough information to be encoded. Do not argue
+  about whether it will pay off later.
+- **Pick the cheapest mechanism that holds** (`AGENTS.md` mechanism hierarchy:
+  deny rule → environment → hook → prose). Deterministic and repeatable → a
+  script. Judgment that varies per case → an agent. The 3-4 rule says *build
+  something*; the hierarchy says *what*.
+- **Repo-local agents live in `.claude/agents/`.** Verified 2026-08-07: this
+  repo has no such directory and all 8 available agents are global
+  (`~/.claude/agents/`). A project-specific agent here would be the first, so
+  there is no local convention to copy yet — check again before assuming one.
+- **Agent creation is not `skill-maintainer`'s job.** That skill owns
+  `_ob/skills/<slug>/` canonicals and their runtime adapters (four verbs:
+  create/update/audit/sync). An agent definition is a different artifact.
