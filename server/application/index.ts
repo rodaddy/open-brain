@@ -149,6 +149,24 @@ export function createShadowApplication(
     // cannot.
     natsHealth:
       input.natsHealth ?? (() => natsHealthFromConfig(input.config.nats)),
+    // #625. Deliberately LATE-BOUND: `maintenance` is composed below this
+    // object, because the health block is an input to the transport app and
+    // the runner is a shutdown-order concern. Reading `maintenance` through a
+    // closure invoked per request — rather than reordering the composition —
+    // keeps that ordering intact and, more importantly, keeps the reading
+    // LIVE. A value captured here would be the producer's liveness at boot,
+    // which is exactly the stale-but-confident answer the issue is about.
+    producerHealth: () => {
+      const liveness = maintenance?.producerLiveness();
+      if (!liveness) return undefined;
+      return {
+        quiet_ms: liveness.quietMs,
+        stale: liveness.stale,
+        quiet_threshold_ms: liveness.quietThresholdMs,
+        overlapped_ticks: liveness.overlappedTicks,
+        completed_ticks: liveness.completedTicks,
+      };
+    },
   };
   const app = createSingleWorkerTransportApp({
     authenticate: input.authenticate,

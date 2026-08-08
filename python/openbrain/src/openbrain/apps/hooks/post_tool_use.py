@@ -1,17 +1,28 @@
-"""The ``PostToolUse`` hook entrypoint: count skill invocations.
+"""The ``PostToolUse`` hook entrypoint: count skill and recall invocations.
 
 Purpose:
     Fires after a tool runs, carrying ``tool_name``, ``tool_input``,
     ``tool_response``, ``tool_use_id``, and ``duration_ms``. It reads that
-    payload and, for ``Skill`` calls only, records ONE usage metric -- which
-    skill, which agent, which repo, which session -- through the server's
-    ``record_skill_usage`` tool (issue #469).
+    payload and, for ``Skill`` calls and Open Brain RECALL reads only, records
+    ONE usage metric -- which slug, which agent, which repo, which session --
+    through the server's ``record_skill_usage`` tool (issues #469 and #451).
 
     METRICS ONLY, and the operator's ruling is why: "no automatic retirement.
     What I need is something that gives me metrics so that decisions can be made
     on facts and not on feel." This counts invocations. It does not categorize,
     recommend, rotate, shelve, or retire anything, and the server tool it calls
     cannot either.
+
+    RECALL IS THE SAME RULE, DELIBERATELY. #451's operator ruling (2026-08-08,
+    ledger item 24) made recall the MEASURE tier of a three-tier design whose
+    other two tiers DO enforce: capture is a hard gate at merge
+    (``.claude/hooks/capture-gate.ts``) and hydration stamps
+    (``.claude/hooks/hydration-stamp.ts``). Recall was ruled measure-only
+    because "recall before re-deriving" is unfalsifiable -- no gate can tell
+    that canon already answered a question the agent chose to ask again -- so a
+    recall ENFORCEMENT would fire on guesses. Counting is what an unfalsifiable
+    property supports: the operator reads the trend and rules on it. Anything
+    here that grows a recommendation has changed tiers without a ruling.
 
 Non-goals:
     THE OPEN QUESTION STAYS OPEN. Tool input and output are the ~96% of

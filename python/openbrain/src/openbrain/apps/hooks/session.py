@@ -91,6 +91,29 @@ from openbrain.models.turn import RawTurn, TurnRole
 #: (``tests/fixtures/captured_hooks/README.md``).
 COMPACT_SESSION_SOURCE = "compact"
 
+#: The Open Brain reads that count as a RECALL for the #451 measure tier.
+#:
+#: A fixed allowlist of tool NAMES, not a pattern. The tier's product is a trend
+#: the operator reads, and a heuristic denominator that silently widens or
+#: narrows as unrelated tools are renamed would move that trend without saying
+#: so -- a number that changes for reasons outside the thing it measures is
+#: worse than no number.
+#:
+#: These are the four ways a session asks Open Brain what it already knows:
+#: ``brain_answer`` (the question interface), ``agent_context_pack`` (canon
+#: hydration), ``session_context`` (lane history), and ``search_all`` (the
+#: cross-corpus search). Writes are deliberately absent -- capture is the
+#: separate tier with its own enforcement, and counting a write as a recall
+#: would make the trend unreadable.
+RECALL_TOOL_NAMES = frozenset(
+    {
+        "brain_answer",
+        "agent_context_pack",
+        "session_context",
+        "search_all",
+    }
+)
+
 #: The Stop harness deadline, in seconds. NOT a content bound -- this is a TIME
 #: budget tied to an EXTERNAL limit: Claude Code kills a Stop hook that has not
 #: exited within 5 seconds, and a killed process cannot honour the exit-0
@@ -380,6 +403,43 @@ class PostToolUseHook(BaseModel):
             return None
         slug = raw.strip()
         return slug or None
+
+    def recall_slug(self) -> str | None:
+        """Return the recall tool's name, or ``None`` when this is not a recall call.
+
+        Returns:
+            The canonical recall tool name (e.g. ``brain_answer``) when this
+            payload is one of the Open Brain reads in :data:`RECALL_TOOL_NAMES`;
+            ``None`` for every other tool.
+
+        The RECALL tier of #451 (operator ruling 2026-08-08, ledger item 24) is
+        **MEASURE ONLY**: "counts into existing telemetry, facts only; the
+        operator reads the trend." This is the filter that decides what counts
+        as a recall, and it is deliberately a fixed allowlist of tool NAMES
+        rather than a pattern: a heuristic would silently start or stop counting
+        as unrelated tools are renamed, and a trend line whose denominator moves
+        without saying so is worse than no trend line.
+
+        ``tool_input`` IS NOT READ. The tool's name is the whole metric; the
+        arguments are a recall QUERY, which is content, and content is the open
+        memory-versus-observability question
+        (``docs/decisions/capture-never-drops-a-turn.md``) that counting must
+        not resolve by accident. Recall queries are also the most sensitive
+        thing an agent sends -- the questions it asks about the operator -- so
+        the name-only rule is a privacy boundary here, not only a scope one.
+
+        MCP tool names arrive namespaced (``mcp__open-brain__brain_answer``), so
+        the trailing segment is compared rather than the whole string.
+        """
+        if self.tool_name is None:
+            return None
+        name = self.tool_name.strip()
+        if not name:
+            return None
+        # MCP namespacing: `mcp__<server>__<tool>`. The bare name is also
+        # accepted so a non-MCP runtime calling the same tool still counts.
+        leaf = name.rsplit("__", 1)[-1]
+        return leaf if leaf in RECALL_TOOL_NAMES else None
 
     def repo(self) -> str | None:
         """Return the repository name derived from ``cwd``.
@@ -715,7 +775,7 @@ async def run_post_tool_use(
     *,
     recorder: Callable[[CaptureSettings, str, dict[str, Any]], None] | None = None,
 ) -> bool:
-    """Record one skill invocation from a ``PostToolUse`` payload as a usage metric.
+    """Record one skill or recall invocation from a ``PostToolUse`` payload.
 
     Args:
         payload: The parsed ``PostToolUse`` hook fields.
@@ -725,21 +785,36 @@ async def run_post_tool_use(
             ``openbrain_memory`` client calling ``record_skill_usage``.
 
     Returns:
-        ``True`` when a metric was sent, ``False`` when the payload was not a
-        Skill invocation or carried no session -- there is nothing to count then.
+        ``True`` when a metric was sent, ``False`` when the payload was neither a
+        Skill nor a recall invocation, or carried no session -- there is nothing
+        to count then.
 
-    METRICS ONLY (#469). What goes over the wire is the skill slug, the agent,
-    the repo, the session, and the runtime -- who invoked what, where, and how
-    often. NOT ``tool_input`` beyond the skill name, and NOT ``tool_response`` at
-    all: that content stream is the open memory-versus-observability question in
+    METRICS ONLY (#469, and the same rule governs the #451 recall tier). What
+    goes over the wire is the slug, the agent, the repo, the session, and the
+    runtime -- who invoked what, where, and how often. NOT ``tool_input`` beyond
+    the skill name, and NOT ``tool_response`` at all: that content stream is the
+    open memory-versus-observability question in
     ``docs/decisions/capture-never-drops-a-turn.md``, and counting invocations
     does not require answering it. :class:`PostToolUseHook` drops those fields at
     the parse boundary so they cannot reach this function to be sent by mistake.
 
+    TWO KINDS, ONE PATH. A ``Skill`` call counts as ``usage_kind="skill"``
+    (#469); an Open Brain read in :data:`RECALL_TOOL_NAMES` counts as
+    ``usage_kind="canon"`` -- the RECALL tier of #451 (operator ruling
+    2026-08-08, ledger item 24: "counts into existing telemetry, facts only").
+    Recall reuses the EXISTING ``canon`` kind rather than adding a third: the
+    value is pinned by a Zod enum (``server/tools/skill-usage.ts:119-122``) AND
+    a database CHECK constraint (``src/db/migrations/046_skill_usage_log.sql``),
+    so a new kind would be a schema change -- an explicit non-goal of #451.
+    ``canon`` is also honest rather than merely convenient: every tool in the
+    allowlist is a read of assembled canon, which is what that kind already
+    names. The recall trend is therefore read as ``usage_kind='canon'`` filtered
+    to those slugs.
+
     ``PostToolUse`` fires on EVERY tool call, so the filter matters more here
-    than in the other capabilities: everything that is not a ``Skill`` call
-    returns ``False`` before any client is built, which means the common case
-    costs one dict lookup and no network at all.
+    than in the other capabilities: everything that is neither a ``Skill`` call
+    nor a recall returns ``False`` before any client is built, which means the
+    common case costs two dict lookups and no network at all.
 
     Namespace stays token-derived server-side; nothing here sets one.
 
@@ -748,12 +823,17 @@ async def run_post_tool_use(
         metric must never break the session it observes.
     """
     slug = payload.skill_slug()
+    usage_kind = "skill"
+    if slug is None:
+        # Not a Skill call. It may still be a recall, which is the #451 tier.
+        slug = payload.recall_slug()
+        usage_kind = "canon"
     if slug is None or payload.session_id is None:
         return False
 
     arguments: dict[str, Any] = {
         "skill_slug": slug,
-        "usage_kind": "skill",
+        "usage_kind": usage_kind,
         "session_id": payload.session_id,
         "runtime": "claude-code",
         # `agent_id` is a required non-empty field on CaptureSettings, so this

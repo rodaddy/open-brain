@@ -187,7 +187,9 @@
             "durable_memory": {
               "content_char_limit": 9007199254740991,
               "content_chars_used": 0,
-              "max_items": 9007199254740991,
+              "burst_items": 10,
+              "burst_offset": 0,
+              "recalled_net_new": 0,
               "max_item_chars": 9007199254740991
             }
           },
