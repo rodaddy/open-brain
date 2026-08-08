@@ -87,6 +87,42 @@ Every lane, no exceptions:
 
 Newest first. Every entry: what changed, and the observation that forced it.
 
+### 2026-08-08 (round 10) — harvest of the #636 neutrality-scrub lanes (PR #645, Sol + Claude continuation)
+
+- **A placeholder only neutralizes a value nothing compares to reality.** A
+  find-and-replace sweep treats every match as an example, but a literal that
+  the filesystem, an equality check, a skip condition, a recorded fixture, or
+  a pasting human actually READS is behaviour — substituting it silently
+  disables what it was for. 8 of the inherited sweep's edits looked correct
+  in the diff and broke real things (a safety handshake, 18 identity tests,
+  a documented deploy command). Companion SME entry: gotcha-agent order 66.
+- **Check the SKIP count after a sweep, not just the pass count.** 25 Python
+  tests silently stopped running (581/26 skip → 606/1) because a gate path
+  became a placeholder; the suite reported green throughout.
+- **Every done-means check with an exception mechanism needs a negative
+  control.** The inherited gate piped violations into `| while read`, which
+  cannot count across the subshell — it printed its own VIOLATIONs and
+  exited 0. The repaired gate injects a violation into an excepted file and
+  must still catch it.
+- **192.0.2.x is TEST-NET-1, not RFC1918.** A fixture standing in for a LAN
+  host must stay inside the address class the code under test classifies;
+  the wrong placeholder family failed 18 server-identity tests.
+- **Continuation-lane audit duty is load-bearing:** ~90% of the dead Sol
+  lane's sweep was kept, 8 defects corrected, 2 suspicious edits verified
+  and kept with reasons — inherited commits are salvage to audit, never
+  truth to build on (round-7 rule, proven at scale).
+- **Fail-closed deviation, flagged and resolved:** deploy runner labels are
+  now a REQUIRED repo variable with no fallback (an unset variable used to
+  still schedule onto any matching macOS runner). Controller set
+  OPENBRAIN_DEPLOY_RUNNER_LABELS to the prior label set same-session, so the
+  next deploy schedules unchanged. Ratification belongs to the next
+  decisions pass.
+- **GitGuardian flags credential-SHAPED fixture strings on every diff that
+  touches them** — the hunter2-family fakes exist to prove redaction and
+  re-trigger the scanner whenever scrubbed. Expected noise on neutrality
+  work; the finding to check is whether the HOST half is real, not the
+  fake secret.
+
 ### 2026-08-08 (round 9) — harvest of the #451 tiered-coverage lane (PR #642)
 
 - **`rg -E` can manufacture a false GREEN, not just an error.** Inside an
