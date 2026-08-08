@@ -33,9 +33,9 @@ function handlerWith(options: {
 }) {
   const input: WorkerProxyInput = {
     workers: options.workers ?? WORKERS,
-    hostname: "core01",
-    serverIp: "10.71.1.21",
-    serverIps: ["10.71.1.21"],
+    hostname: "production-host",
+    serverIp: "192.0.2.21",
+    serverIps: ["192.0.2.21"],
     healthProbeTimeoutMs: 3_000,
     logger: silentLogger(),
     fetch: (async (url: string | URL | Request, init?: RequestInit) => {
@@ -57,10 +57,10 @@ function mcpRequest(options?: {
   readonly method?: string;
   readonly sessionId?: string;
 }): Request {
-  const headers = new Headers({ host: "10.71.1.21:3100" });
+  const headers = new Headers({ host: "192.0.2.21:3100" });
   if (options?.sessionId) headers.set("mcp-session-id", options.sessionId);
   const method = options?.method ?? "POST";
-  return new Request("http://10.71.1.21:3100/mcp", {
+  return new Request("http://192.0.2.21:3100/mcp", {
     method,
     headers,
     ...(method === "GET" || method === "HEAD" ? {} : { body: "{}" }),
@@ -74,12 +74,12 @@ function healthResponse(status = 200): Response {
 describe("aggregate worker front boundary", () => {
   it("reports every worker in the aggregate health roster", async () => {
     const handler = handlerWith({ onFetch: () => healthResponse() });
-    const response = await handler(new Request("http://10.71.1.21:3100/health"));
+    const response = await handler(new Request("http://192.0.2.21:3100/health"));
     const body = (await response.json()) as AggregateHealth;
 
     expect(response.status).toBe(200);
     expect(body.status).toBe("healthy");
-    expect(body.server_ip).toBe("10.71.1.21");
+    expect(body.server_ip).toBe("192.0.2.21");
     expect(body.workers.map((worker) => worker.name)).toEqual([
       "open-brain-worker-1",
       "open-brain-worker-2",
@@ -91,7 +91,7 @@ describe("aggregate worker front boundary", () => {
     const handler = handlerWith({
       onFetch: (url) => healthResponse(url.port === "3102" ? 503 : 200),
     });
-    const response = await handler(new Request("http://10.71.1.21:3100/health"));
+    const response = await handler(new Request("http://192.0.2.21:3100/health"));
     const body = (await response.json()) as AggregateHealth;
 
     expect(response.status).toBe(503);
@@ -108,7 +108,7 @@ describe("aggregate worker front boundary", () => {
       },
     });
     const body = (await (
-      await handler(new Request("http://10.71.1.21:3100/health"))
+      await handler(new Request("http://192.0.2.21:3100/health"))
     ).json()) as AggregateHealth;
 
     const failed = body.workers.find((worker) => worker.port === 3101);
@@ -180,9 +180,9 @@ describe("aggregate worker front boundary", () => {
     const handler = handlerWith({ calls, onFetch: () => new Response("ok") });
 
     await handler(
-      new Request("http://10.71.1.21:3100/mcp?trace=1", {
+      new Request("http://192.0.2.21:3100/mcp?trace=1", {
         method: "POST",
-        headers: { host: "10.71.1.21:3100" },
+        headers: { host: "192.0.2.21:3100" },
         body: "{}",
       }),
     );
@@ -196,9 +196,9 @@ describe("aggregate worker front boundary", () => {
     expect(() =>
       createWorkerProxyHandler({
         workers: [],
-        hostname: "core01",
-        serverIp: "10.71.1.21",
-        serverIps: ["10.71.1.21"],
+        hostname: "production-host",
+        serverIp: "192.0.2.21",
+        serverIps: ["192.0.2.21"],
         healthProbeTimeoutMs: 3_000,
         logger: silentLogger(),
       }),

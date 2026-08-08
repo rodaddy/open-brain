@@ -71,7 +71,7 @@ Required sections:
 
 ## Clones
 
-`/Volumes/ThunderBolt/open-brain-local/research/` — outside this repo, so 400MB
+`/opt/open-brain-local/research/` — outside this repo, so 400MB
 of vendor source never enters our git history. Read-only reference material.
 
 ## Status

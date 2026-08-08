@@ -10,7 +10,7 @@ Nothing here comes from a README, a blog post, or marketing.
 |---|---|
 | Upstream | `github.com/topoteretes/cognee` and `github.com/topoteretes/cognee-integrations` |
 | Clone commit | cognee `90b4aca` (2026-07-21), cognee-integrations `6b13330` (2026-07-24) |
-| Local path | `/Volumes/ThunderBolt/open-brain-local/research/` |
+| Local path | `/opt/open-brain-local/research/` |
 | License | cognee **Apache-2.0**; cognee-integrations ships **no LICENSE file** |
 | Code reuse | **No.** We take ideas only. cognee-integrations is unlicensed, so its files could not be copied even if we wanted to. |
 

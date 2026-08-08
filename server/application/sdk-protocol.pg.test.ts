@@ -631,7 +631,7 @@ dbDescribe("rewrite candidate over the real MCP SDK and real HTTP transport (liv
   });
 
   test("the two-worker front aggregates real worker health off real sockets", async () => {
-    // Charter section 1.5: core01 runs the aggregate front and each nested
+    // Charter section 1.5: production-host runs the aggregate front and each nested
     // worker body must be preserved. `server/transport/worker-proxy.test.ts`
     // proves the aggregation logic, but only against an injected `fetch` that
     // returns a hand-written `{status}` object -- so the thing it never checks

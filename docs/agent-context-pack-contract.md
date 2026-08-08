@@ -239,7 +239,7 @@ Default recovery budget:
 
 The store writes an append-only JSONL WAL when
 `OPENBRAIN_RECOVERY_WAL_PATH` is configured. Without that env var it remains
-in-memory for local tests and no hidden repo state is created. Hosted/core01
+in-memory for local tests and no hidden repo state is created. Hosted/production-host
 deployment of this WAL path is release-gated separately and must not happen
 until deploy is explicitly approved.
 
@@ -710,7 +710,7 @@ behavior changes. `openbrain-memory` 0.1.8 fails closed on v21 and on manifests
 that advertise earlier context-pack or append semantics; v21 is not represented
 by a v22-shaped compatibility fixture. The post-merge sequence in
 `docs/downstream-rollout.md`
-therefore applies: deploy through the current gated core01 workflow, verify the
+therefore applies: deploy through the current gated production-host workflow, verify the
 hosted v22 manifest and changed operations, complete the authoritative rtech-mcps
 handoff, then refresh and verify mcp2cli through the documented local-direct and
 daemon-credential paths, regenerate skills when agent guidance changes, and

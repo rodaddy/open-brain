@@ -2,7 +2,7 @@
 # client-bundle.sh — build the offline install bundle that puts the Open Brain
 # direct client stack onto a machine that CANNOT reach GitHub.
 #
-# RUN THIS ON THE MINI (10.71.1.20). It reads this machine's live, working
+# RUN THIS ON THE MINI (192.0.2.20). It reads this machine's live, working
 # installation and freezes it into a directory the client can copy from.
 #
 # Why this exists: the clients (the Air, and every other family-A box) have no
@@ -42,7 +42,7 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BUNDLE_HOME="${BUNDLE_HOME:-/Volumes/ThunderBolt/open-brain-local/air-bundle}"
+BUNDLE_HOME="${BUNDLE_HOME:-$HOME/.local/share/openbrain/air-bundle}"
 SOURCE_ENV_DIR="${SOURCE_ENV_DIR:-$HOME/.local/share/openbrain-memory/env}"
 SOURCE_SETTINGS="${SOURCE_SETTINGS:-$HOME/.claude/settings.json}"
 
@@ -148,14 +148,15 @@ log "==> staging the Development root marker"
 # The build machine's own root, by the same order setup-client.sh uses.
 BUILD_DEV_ROOT="${OPENBRAIN_DEVELOPMENT_ROOT:-${DEV_ROOT:-}}"
 if [ -z "$BUILD_DEV_ROOT" ]; then
-  for candidate in /Volumes/ThunderBolt/Development "$HOME/Development"; do
+  for candidate in "$HOME/Development"; do
     if [ -d "$candidate" ]; then
       BUILD_DEV_ROOT="$candidate"
       break
     fi
   done
 fi
-[ -n "$BUILD_DEV_ROOT" ] || BUILD_DEV_ROOT="/Volumes/ThunderBolt/Development"
+[ -n "$BUILD_DEV_ROOT" ] || \
+  die "set OPENBRAIN_DEVELOPMENT_ROOT (or DEV_ROOT) to the build machine's Development root"
 
 python3 - "$STAGE/env/claudex-observation.env" "$BUILD_DEV_ROOT" <<'PY'
 import re

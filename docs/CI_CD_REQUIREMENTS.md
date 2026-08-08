@@ -17,7 +17,7 @@ unenforced.
 | pre-commit | local, every commit | seconds | formatting, lint, types, docs generation, secrets, debug leftovers |
 | pre-push | local, every push | ~a minute | contract parity, fast tests |
 | CI | rodaddy self-hosted runners | minutes | full suite against a real database |
-| deploy | core01 macOS runner | manual/tag | production rollout |
+| deploy | production-host macOS runner | manual/tag | production rollout |
 
 **A rule enforced only in CI is a rule the author learns about ten minutes
 later, on a branch, after the mistake is already committed.** Push what can be
@@ -43,7 +43,7 @@ versioned .githooks (#311)."*
 - `.githooks/` exists and is tracked, containing **only `pre-push`**. There is
   no versioned `pre-commit`.
 - `core.hooksPath` is set to
-  `/Volumes/ThunderBolt/Development/open-brain/.git/hooks` — the *untracked*
+  `/workspace/open-brain/.git/hooks` — the *untracked*
   directory.
 
 So the tracked `.githooks/pre-push` **is not the hook git executes**; the
@@ -80,7 +80,7 @@ Every check below **blocks the commit**. None warns. None exits 0 on a skip.
 | 7 | bare except | `except:` and `except ...: pass` | a bound-but-unlogged handler counts |
 | 8 | debug leftovers | `pdb`, `ipdb`, `set_trace`, stray `print()` in library code | |
 | 9 | naive datetime | `datetime.now()` with no timezone | |
-| 10 | hardcoded hosts | IP literals and credential-shaped strings | never `10.71.1.21`, never `127.0.0.1` |
+| 10 | hardcoded hosts | IP literals and credential-shaped strings | never `192.0.2.21`, never `127.0.0.1` |
 | 11 | manifest sync | lockfile matches the project file | |
 
 ### The mypy path trap — verify this specifically
@@ -165,7 +165,7 @@ if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || g
 | `python-package` | same | `ruff check`, `mypy src/openbrain_memory`, `pytest`, `uv build` |
 | `python-provider` | same | `ruff format --check`, `ruff check`, `mypy` on **src and tests**, `pytest`, `uv build` |
 | `contract-parity` | same | TS↔Python fixture replay, only when watched paths changed |
-| `deploy` | `[self-hosted, macOS, core01]` | production rollout; needs all five above |
+| `deploy` | `[self-hosted, macOS, production-host]` | production rollout; needs all five above |
 
 ### The anti-skip guard — the most important line in the file
 
@@ -228,11 +228,11 @@ the credential never appears in `argv`.
 All five must pass.
 
 Triggers, and only these:
-- `workflow_dispatch` with `deploy_core01: true` **on `main`**
+- `workflow_dispatch` with `deploy_production: true` **on `main`**
 - a push of a `v*` tag
 
-Runs on `[self-hosted, macOS, core01]` with
-`concurrency: { group: deploy-core01-production, cancel-in-progress: false }` —
+Runs on `[self-hosted, macOS, production-host]` with
+`concurrency: { group: deploy-production-production, cancel-in-progress: false }` —
 deploys queue, they never cancel each other mid-rollout.
 
 Docker is deliberately absent from this runner: the production host must not run
@@ -245,7 +245,7 @@ it. That is why `db-integration` is pinned to the Linux runners.
 | runner | labels | role |
 |---|---|---|
 | ct106 / ct107 / ct108 | `self-hosted, Linux, rodaddy` | all validation; Docker-capable; ct106/ct107 cannot bridge-forward |
-| core01 | `self-hosted, macOS, core01` | production deploy only |
+| production-host | `self-hosted, macOS, production-host` | production deploy only |
 
 Runners see the shared volume as `/mnt`, the Mac sees it as `/Volumes`. Write
 paths as `/mnt`.

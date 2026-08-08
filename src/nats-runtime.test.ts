@@ -277,7 +277,7 @@ describe("readNatsRuntimeBoundary", () => {
     const boundary = readNatsRuntimeBoundary({
       OPENBRAIN_TRANSPORT: "nats",
       OPENBRAIN_NATS_ENABLE_BRIDGE: "true",
-      OPENBRAIN_NATS_URL: "nats://10.71.1.21:4222",
+      OPENBRAIN_NATS_URL: "nats://192.0.2.21:4222",
     });
 
     expect(boundary.nats.availability).toBe("not_runtime_available");
@@ -287,7 +287,7 @@ describe("readNatsRuntimeBoundary", () => {
     const boundary = readNatsRuntimeBoundary({
       OPENBRAIN_TRANSPORT: "nats",
       OPENBRAIN_NATS_ENABLE_BRIDGE: "true",
-      OPENBRAIN_NATS_URL: "nats://10.71.1.21:4222",
+      OPENBRAIN_NATS_URL: "nats://192.0.2.21:4222",
       OPENBRAIN_NATS_ALLOW_INSECURE_REMOTE: "true",
     });
 

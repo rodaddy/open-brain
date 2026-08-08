@@ -9,7 +9,7 @@ Never commit real IP addresses, hostnames, credentials, or internal URLs.
 ```typescript
 // WRONG — exposes your network topology
 const EMBEDDING_BASE_URL =
-  process.env.EMBEDDING_BASE_URL ?? "http://10.71.20.53:8791/v1";
+  process.env.EMBEDDING_BASE_URL ?? "http://192.0.2.53:8791/v1";
 
 // RIGHT — safe default, real value comes from env
 const EMBEDDING_BASE_URL =

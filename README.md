@@ -14,7 +14,7 @@ durable memory until a human grades it. This page is where that happens.
 
 ```bash
 # Load the database credentials for the local dogfood clone.
-set -a; . /Volumes/ThunderBolt/open-brain-local/local-clone.env; set +a
+set -a; . /opt/open-brain-local/local-clone.env; set +a
 
 bun scripts/grading-server-run.ts
 ```

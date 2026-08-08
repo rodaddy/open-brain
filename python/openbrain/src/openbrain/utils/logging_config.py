@@ -22,7 +22,7 @@ Architecture:
     - **JSON** answers "what happened across all instances last Tuesday", by
       being ingestible into a log platform. One object per line.
 
-    core01 runs two Open Brain workers behind one port (``AGENTS.md``), so the
+    production-host runs two Open Brain workers behind one port (``AGENTS.md``), so the
     third sink is not hypothetical here: with two instances, reading two plain
     text files is guesswork, and the structured sink is the only one that
     aggregates. ``worker_name`` is bound onto every record for exactly that.

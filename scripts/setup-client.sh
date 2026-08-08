@@ -84,7 +84,7 @@ elif [ -n "${DEV_ROOT:-}" ]; then
   DEV_ROOT_RESOLVED="$DEV_ROOT"
   DEV_ROOT_SOURCE="DEV_ROOT in the environment"
 else
-  for candidate in /Volumes/ThunderBolt/Development "$HOME/Development"; do
+  for candidate in "$HOME/Development"; do
     if [ -d "$candidate" ]; then
       DEV_ROOT_RESOLVED="$candidate"
       DEV_ROOT_SOURCE="probed (found on disk)"
@@ -115,8 +115,8 @@ if [ -z "$DEV_ROOT_RESOLVED" ]; then
   else
     die "cannot determine this machine's Development root.
 
-    Neither /Volumes/ThunderBolt/Development nor \$HOME/Development exists here,
-    and neither OPENBRAIN_DEVELOPMENT_ROOT nor DEV_ROOT was set.
+    \$HOME/Development does not exist here, and neither
+    OPENBRAIN_DEVELOPMENT_ROOT nor DEV_ROOT was set.
 
     Without it the provider keeps the build machine's default, every cwd
     resolves to no scope, and the context-budget gate blocks every tool call
@@ -495,13 +495,13 @@ case "$BASE_URL" in
 
     Preferred -- TLS, so it needs no extra variable and works off the LAN:
 
-      OPENBRAIN_BASE_URL=https://ob.rodaddy.live
+      OPENBRAIN_BASE_URL=https://ob.example.com
 
     Fallback, only if DNS or Caddy is down AND this box is on the LAN. Plain
     http to a non-loopback address is refused by the client unless you ALSO add
     OPENBRAIN_ALLOW_INSECURE_HTTP=1 to that same file -- both lines or neither:
 
-      OPENBRAIN_BASE_URL=http://10.71.1.20:3100
+      OPENBRAIN_BASE_URL=http://192.0.2.20:3100
       OPENBRAIN_ALLOW_INSECURE_HTTP=1
 
     Running this script ON the Mini itself, where loopback is correct? Set

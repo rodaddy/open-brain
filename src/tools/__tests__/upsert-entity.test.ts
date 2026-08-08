@@ -172,7 +172,7 @@ describe("upsert_entity", () => {
           name: "ct235",
           namespace: "team-kb",
           canonical_id: "host:ct235",
-          metadata: { ip: "10.71.20.35" },
+          metadata: { ip: "192.0.2.35" },
         },
       });
 

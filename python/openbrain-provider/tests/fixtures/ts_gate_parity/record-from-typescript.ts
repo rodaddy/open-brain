@@ -4,10 +4,10 @@ import { mkdirSync, writeFileSync, mkdtempSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 
-const OUT = "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gateport-fixtures";
-const SCRIPTS = "/Volumes/ThunderBolt/Development/_ob/scripts";
+const OUT = "/workspace/_tmp/open-brain/_scratch/gateport-fixtures";
+const SCRIPTS = "/workspace/_ob/scripts";
 mkdirSync(OUT, { recursive: true });
-const scratch = mkdtempSync(join("/Volumes/ThunderBolt/_tmp/open-brain/_scratch", "gaterec-"));
+const scratch = mkdtempSync(join("/workspace/_tmp/open-brain/_scratch", "gaterec-"));
 const settings = join(scratch, "settings.json");
 writeFileSync(settings, "{}");
 
@@ -47,7 +47,7 @@ function policyArgs(event: string, sessionId: string, extra: string[] = []): str
   ];
 }
 
-const cwd = "/Volumes/ThunderBolt/Development";
+const cwd = "/workspace";
 const probes: Probe[] = [
   // --- context-budget-gate ---
   { name: "budget-status-fresh", script: "budget", argv: budgetArgs("status", "rec-1"), stdin: { session_id: "rec-1", cwd } },
@@ -80,8 +80,8 @@ const probes: Probe[] = [
   { name: "policy-pre-tool-use-agent", script: "policy", argv: policyArgs("pre-tool-use", "pol-1"), stdin: { session_id: "pol-1", cwd, tool_name: "Agent", tool_input: {} } },
   { name: "policy-post-compact", script: "policy", argv: policyArgs("post-compact", "pol-2"), stdin: { session_id: "pol-2", cwd } },
   { name: "policy-pre-compact", script: "policy", argv: policyArgs("pre-compact", "pol-3"), stdin: { session_id: "pol-3", cwd } },
-  { name: "policy-blocked-risky-write", script: "policy", argv: policyArgs("pre-tool-use", "pol-2"), stdin: { session_id: "pol-2", cwd, tool_name: "Write", tool_input: { file_path: "/Volumes/ThunderBolt/Development/x.md" } } },
-  { name: "policy-blocked-allows-refresh-cmd", script: "policy", argv: policyArgs("pre-tool-use", "pol-2"), stdin: { session_id: "pol-2", cwd, tool_name: "Bash", tool_input: { command: "bun /Volumes/ThunderBolt/Development/_ob/scripts/policy-refresh-gate.ts --event refresh --agent claude" } } },
+  { name: "policy-blocked-risky-write", script: "policy", argv: policyArgs("pre-tool-use", "pol-2"), stdin: { session_id: "pol-2", cwd, tool_name: "Write", tool_input: { file_path: "/workspace/x.md" } } },
+  { name: "policy-blocked-allows-refresh-cmd", script: "policy", argv: policyArgs("pre-tool-use", "pol-2"), stdin: { session_id: "pol-2", cwd, tool_name: "Bash", tool_input: { command: "bun /workspace/_ob/scripts/policy-refresh-gate.ts --event refresh --agent claude" } } },
   { name: "policy-refresh", script: "policy", argv: policyArgs("refresh", "pol-2"), stdin: { session_id: "pol-2", cwd } },
   { name: "policy-empty-stdin", script: "policy", argv: policyArgs("user-prompt-submit", "pol-9"), stdin: {} },
 ];

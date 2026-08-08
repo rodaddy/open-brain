@@ -86,6 +86,16 @@ try {
       tags.push(branchType);
   }
 
+  // The policy-refresh gate lives outside this repo, so its location is
+  // deployment-specific and comes from the environment (#636). Same variable
+  // and same fallback as the Python gate
+  // (openbrain_provider.policy_refresh_gate), because this string is an
+  // instruction to RUN that file: a neutral placeholder would read as
+  // authoritative and send the next agent to a path that exists nowhere.
+  const policyGatePath =
+    process.env.OPENBRAIN_POLICY_REFRESH_GATE?.trim() ||
+    "/Volumes/ThunderBolt/Development/_ob/scripts/policy-refresh-gate.ts";
+
   // Save via mcp2cli
   const params = JSON.stringify({
     summary,
@@ -95,7 +105,7 @@ try {
       "Reread active AGENTS/CLAUDE router and triggered SOPs before risky action.",
       "Restate Pony style, critical mode, source-of-truth order, and next concrete action.",
       "Inspect cwd, branch, and dirty state before editing; do not mix unrelated dirty files into the next phase.",
-      "Run /Volumes/ThunderBolt/Development/_ob/scripts/policy-refresh-gate.ts --event refresh --agent claude after refresh.",
+      `Run ${policyGatePath} --event refresh --agent claude after refresh.`,
     ],
     key_decisions: [
       "Compaction requires forced relearn before risky action.",

@@ -141,7 +141,7 @@ class TestJsonSink:
     def test_carries_service_and_worker_as_real_keys(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """core01 runs two workers; a line must say which one emitted it."""
+        """production-host runs two workers; a line must say which one emitted it."""
         target = tmp_path / "open-brain.jsonl"
         setup_logging(
             log_settings(

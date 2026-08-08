@@ -21,7 +21,7 @@ bun run eval:memory -- --report eval/open-brain/reports/latest.json
 
 Reports are only written when `--report` is supplied. Use a visible repo path
 when the report is intended to be durable; otherwise write scratch reports under
-`/Volumes/ThunderBolt/_tmp`.
+`/workspace/_tmp`.
 
 ## Fixture Layout
 
@@ -63,7 +63,7 @@ smoke suite and exercises the real contract, auth, and namespace boundary.
 ```bash
 bun run eval:live
 bun run eval:live -- --json
-bun run eval:live -- --report /Volumes/ThunderBolt/_tmp/open-brain/live-recall.json
+bun run eval:live -- --report /workspace/_tmp/open-brain/live-recall.json
 ```
 
 ### Opt-in and required environment
@@ -168,10 +168,10 @@ owns the live run; the precise command to record a fresh baseline is:
 OPEN_BRAIN_LIVE_EVAL=1 \
 OPEN_BRAIN_LIVE_EVAL_BASE_URL=<server-url> \
 OPEN_BRAIN_LIVE_EVAL_TOKEN=<admin-or-ob-admin-token> \
-bun run eval:live -- --report /Volumes/ThunderBolt/_tmp/open-brain/live-recall-baseline.json
+bun run eval:live -- --report /workspace/_tmp/open-brain/live-recall-baseline.json
 ```
 
-Write reports to a scratch path under `/Volumes/ThunderBolt/_tmp` unless a
+Write reports to a scratch path under `/workspace/_tmp` unless a
 durable, intentionally-pinned baseline path is chosen.
 
 ### Exit statuses
@@ -237,7 +237,7 @@ run directly:
 ```bash
 bun run eval/open-brain/live/complete-pack-cli.ts
 bun run eval/open-brain/live/complete-pack-cli.ts --json
-bun run eval/open-brain/live/complete-pack-cli.ts --report /Volumes/ThunderBolt/_tmp/open-brain/complete-pack.json
+bun run eval/open-brain/live/complete-pack-cli.ts --report /workspace/_tmp/open-brain/complete-pack.json
 ```
 
 ## Reflex A/B Suppression Gate (REFLEX-4, issue #335)
@@ -252,7 +252,7 @@ evidence preserved.
 ```bash
 bun run eval:reflex-ab
 bun run eval:reflex-ab -- --json
-bun run eval:reflex-ab -- --report /Volumes/ThunderBolt/_tmp/open-brain/reflex-ab.json
+bun run eval:reflex-ab -- --report /workspace/_tmp/open-brain/reflex-ab.json
 bun run eval:reflex-ab -- --budget-tokens 8000
 ```
 
