@@ -87,6 +87,49 @@ Every lane, no exceptions:
 
 Newest first. Every entry: what changed, and the observation that forced it.
 
+### 2026-08-08 (round 8) — harvest of the #625 (PR #640) and #563 (PR #639) lanes
+
+- **A done-means clause can silently measure its own harness — optional
+  chaining on the subject's API is the newest mechanism.** #625's clause (a)
+  called `sweep.runOnce?.()` on a method that did not exist, attempted
+  nothing, and would have "passed" while proving zero. When a clause drives a
+  subject, assert the drive actually happened (round 6's measures-the-guard
+  pattern, new spelling).
+- **A rewritten or repaired clause has never failed in its current form — RED
+  must be re-proven after ANY edit to the check.** Both lanes hit this
+  independently (#625 after repairing clause (a); #563 after rewriting clause
+  5's instrument). A correct-looking aggregate FAIL can hide a clause that
+  measured nothing.
+- **Every failure-signal check needs a control clause proving the healthy path
+  stays healthy** (#624 clause-z, generalized): assert the signal appears when
+  it should AND does not when it should not.
+- **Measure the envelope before blaming the payload** (#563): a size probe
+  showed the "oversized" reply was the honest cost of ten whole records;
+  guessing would have trimmed real data to satisfy a self-imposed threshold —
+  exactly what the no-reduction rule forbids.
+- **"Absence is not staleness"** (#625): a component that is not composed must
+  not be reported broken, or every opted-out worker degrades itself.
+- **pr-body-gate wrong-version defect confirmed by THREE independent lanes**
+  (#637, #625, #563); mechanism pinned to pr-body-gate.ts:95-96 +
+  validate-pr-body.ts:70 resolving repoRoot from the hook's own location.
+  Tracked as #641. Interim sanctioned workaround (the cleanest of the three
+  observed): run `CLAUDE_PROJECT_DIR="$PWD" gh pr create` FROM the lane
+  worktree so the gate validates the correct tree — enforcement stays live,
+  no materializing files into the primary checkout.
+- **Two runs of the same SHA disagreeing is the flake signal** (#563): check
+  headSha on both runs before concluding anything from a red check; file the
+  flake (#643) instead of absorbing it.
+- **Gate false positives, new shapes for the #637 fixture corpus:** "limit"
+  inside a QUOTED phrase from the observability standard (#625); firing on
+  READS of pre-existing field names — including while removing that very
+  field (#563 ×3).
+- **Flagged deviation awaiting ruling** (#625): issue text asked for a
+  wall-clock live-watch clause; lane implemented injected-clock event counts
+  per the round-5 flake rule. Open question for the decisions pass: is
+  hermetic-deterministic the standard for this class, or does a live-clone
+  control clause get added alongside (the #384/#612 checks drive the live
+  clone)?
+
 ### 2026-08-08 (round 7) — harvest of the #637 gate-precision lane (PR #638) and the Sol runtime failures
 
 - **A guard's own repair is the hardest thing to write past it.** The #637 lane
