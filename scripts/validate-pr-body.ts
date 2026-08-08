@@ -1,3 +1,6 @@
+import { existsSync } from "node:fs";
+import { isAbsolute, resolve, sep } from "node:path";
+
 interface ValidationResult {
   errors: string[];
 }
@@ -33,6 +36,7 @@ function requireSpecificLine(
   sectionBody: string,
   label: string,
   errors: string[],
+  sectionName = "Critical Self-Review",
 ): void {
   const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = sectionBody.match(
@@ -41,7 +45,35 @@ function requireSpecificLine(
   const value = match?.[1]?.trim() ?? "";
   if (!value || value === "-" || value.toLowerCase() === "n/a") {
     errors.push(
-      `Critical Self-Review field '${label}' needs specific content.`,
+      `${sectionName} field '${label}' needs specific content.`,
+    );
+  }
+}
+
+function requireDoneMeans(sectionBody: string, errors: string[]): void {
+  const match = sectionBody.match(
+    /^-\s*Done-means:[^\S\r\n]*([^\r\n]+)$/im,
+  );
+  const value = match?.[1]?.trim() ?? "";
+  const notApplicable = /^not applicable because:\s*(.*)$/i.exec(value);
+  if (notApplicable) {
+    if (isPlaceholderReason(notApplicable[1]?.trim() ?? "")) {
+      errors.push(
+        "Verification field 'Done-means' not-applicable form needs a specific reason.",
+      );
+    }
+    return;
+  }
+
+  if (!value || value === "-" || value.toLowerCase() === "n/a") return;
+
+  const repoRoot = resolve(import.meta.dir, "..");
+  const candidate = resolve(repoRoot, value);
+  const insideRepo =
+    candidate === repoRoot || candidate.startsWith(`${repoRoot}${sep}`);
+  if (isAbsolute(value) || !insideRepo || !existsSync(candidate)) {
+    errors.push(
+      `Verification field 'Done-means' must name an existing repo-relative path; not found: ${value}`,
     );
   }
 }
@@ -98,6 +130,14 @@ export function validatePrBody(
   options: ValidationOptions = {},
 ): ValidationResult {
   const errors: string[] = [];
+  const verification = section(body, "Verification");
+  if (!verification) {
+    errors.push("Missing '## Verification' section.");
+  } else {
+    requireSpecificLine(verification, "Done-means", errors, "Verification");
+    requireDoneMeans(verification, errors);
+  }
+
   const criticalSelfReview = section(body, "Critical Self-Review");
   if (!criticalSelfReview) {
     errors.push("Missing '## Critical Self-Review' section.");

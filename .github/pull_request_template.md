@@ -4,6 +4,7 @@
 
 ## Verification
 
+- Done-means:
 - [ ] Relevant Open Brain tests/typecheck/migrations passed
 - [ ] Python package checks passed or are not applicable
 - [ ] Live Open Brain smoke passed or is not applicable
