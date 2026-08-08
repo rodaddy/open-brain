@@ -339,8 +339,19 @@ function main(): void {
     const prefix = "lane_";
     const laneSuffix = `_${suffix}`;
     const room = 63 - prefix.length - laneSuffix.length;
-    const slugPart = slug.replace(/-/g, "_").slice(0, Math.max(0, room));
+    const fullSlug = slug.replace(/-/g, "_");
+    const slugPart = fullSlug.slice(0, Math.max(0, room));
     dbName = `${prefix}${slugPart}${laneSuffix}`;
+    if (slugPart !== fullSlug) {
+      // Operator ruling 2026-08-07: nothing is adjusted silently. The name is
+      // still collision-proof (suffix whole); only the readable part shrank,
+      // and the lane transcript must say so rather than leave a name that
+      // doesn't match the branch unexplained.
+      step(
+        "db-name",
+        `NOTICE: branch slug shortened to fit Postgres's 63-byte identifier bound: "${fullSlug}" -> "${slugPart}" (uniqueness suffix kept whole; database is ${dbName})`,
+      );
+    }
 
     const pgEnv: NodeJS.ProcessEnv = { ...process.env };
     if (password) pgEnv.PGPASSWORD = password;
