@@ -21,6 +21,11 @@
             "type": "command",
             "command": "bun run \"$CLAUDE_PROJECT_DIR/.claude/hooks/pr-body-gate.ts\" --event pre-tool-use",
             "timeout": 20
+          },
+          {
+            "type": "command",
+            "command": "bun run \"$CLAUDE_PROJECT_DIR/.claude/hooks/merge-gate.ts\" --event pre-tool-use",
+            "timeout": 30
           }
         ]
       }

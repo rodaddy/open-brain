@@ -76,6 +76,12 @@ import { readFileSync, existsSync } from "node:fs";
 import { isAbsolute, join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import {
+  type Token,
+  parseSimpleCommands,
+  executableWords,
+  isGhBinary,
+} from "./lib/shell-command-parse.ts";
 
 type HookInput = {
   session_id?: string;
@@ -108,167 +114,16 @@ function readInput(): HookInput {
 }
 
 /**
- * Remove heredoc BODIES from a command string, leaving the redirection operator.
+ * THE PARSER LIVES IN ./lib/shell-command-parse.ts.
  *
- * A heredoc body is data the shell feeds to a process; it is not command syntax
- * and must never be scanned for one. This is the #618 failure mode in its purest
- * form -- a lane writing a doc that quotes an invalid PR body inside
- * `git commit -F - <<'EOF' ... EOF` is not creating a PR.
- *
- * Handles `<<WORD`, `<<'WORD'`, `<<"WORD"`, and the `<<-` indented form (whose
- * terminator may be preceded by tabs).
+ * It was extracted there when merge-gate.ts arrived needing exactly the same
+ * #618-proof tokenizer. A second copy would have been identical on the day of
+ * the split and would have drifted afterwards, so a #618 fix landing in one gate
+ * would leave the other still taxing lanes -- the
+ * `sme.duplicated_selection_lists_diverge` pattern. Behaviour is unchanged;
+ * clauses 4a-4c of scripts/done-means/pr-body-gate-fires.sh still hold it.
  */
-function stripHeredocBodies(command: string): string {
-  const lines = command.split("\n");
-  const out: string[] = [];
-  let i = 0;
 
-  while (i < lines.length) {
-    const line = lines[i]!;
-    out.push(line);
-    i += 1;
-
-    // Collect every heredoc opened on this line, in order.
-    const opens = [...line.matchAll(/<<(-?)\s*(["']?)([A-Za-z_][A-Za-z0-9_]*)\2/g)];
-    for (const open of opens) {
-      const dashed = open[1] === "-";
-      const terminator = open[3]!;
-      while (i < lines.length) {
-        const candidate = dashed ? lines[i]!.replace(/^\t+/, "") : lines[i]!;
-        i += 1;
-        if (candidate.trim() === terminator) break;
-      }
-    }
-  }
-
-  return out.join("\n");
-}
-
-type Token = { value: string; quoted: boolean };
-
-/**
- * Tokenize with shell quoting rules.
- *
- * `quoted` records whether any part of the token came from inside quotes. That
- * flag is what keeps `echo 'gh pr create'` from ever being read as a command:
- * the whole phrase is ONE token, and a quoted token is never treated as an
- * executable name or a separator.
- */
-function tokenize(command: string): Token[] {
-  const tokens: Token[] = [];
-  let current = "";
-  let quoted = false;
-  let started = false;
-  let mode: "none" | "single" | "double" = "none";
-
-  const push = () => {
-    if (started) tokens.push({ value: current, quoted });
-    current = "";
-    quoted = false;
-    started = false;
-  };
-
-  for (let i = 0; i < command.length; i += 1) {
-    const ch = command[i]!;
-
-    if (mode === "single") {
-      if (ch === "'") mode = "none";
-      else current += ch;
-      continue;
-    }
-
-    if (mode === "double") {
-      if (ch === '"') mode = "none";
-      else if (ch === "\\" && i + 1 < command.length) {
-        i += 1;
-        current += command[i]!;
-      } else current += ch;
-      continue;
-    }
-
-    if (ch === "'") {
-      mode = "single";
-      quoted = true;
-      started = true;
-      continue;
-    }
-    if (ch === '"') {
-      mode = "double";
-      quoted = true;
-      started = true;
-      continue;
-    }
-    if (ch === "\\" && i + 1 < command.length) {
-      i += 1;
-      current += command[i]!;
-      started = true;
-      continue;
-    }
-    if (/\s/.test(ch)) {
-      push();
-      continue;
-    }
-
-    current += ch;
-    started = true;
-  }
-
-  push();
-  return tokens;
-}
-
-/**
- * Split a token stream into simple commands on UNQUOTED separators.
- *
- * `a && gh pr create ...` must still be inspected; `echo '&& gh pr create'`
- * must not be split at all, because that separator is inside a quoted token.
- */
-const SEPARATORS = new Set(["&&", "||", ";", "|", "&", "\n"]);
-
-function splitCommands(tokens: Token[]): Token[][] {
-  const commands: Token[][] = [];
-  let current: Token[] = [];
-
-  for (const token of tokens) {
-    if (!token.quoted && SEPARATORS.has(token.value)) {
-      if (current.length > 0) commands.push(current);
-      current = [];
-      continue;
-    }
-    current.push(token);
-  }
-  if (current.length > 0) commands.push(current);
-  return commands;
-}
-
-/**
- * Drop leading env assignments and common wrappers so `FOO=1 command gh pr ...`
- * and `env X=y gh pr ...` still resolve to `gh`. Deliberately small: this is
- * about not being trivially evaded by a habitual prefix, not about emulating a
- * shell.
- */
-function executableWords(command: Token[]): Token[] {
-  let index = 0;
-  while (index < command.length) {
-    const token = command[index]!;
-    if (!token.quoted && /^[A-Za-z_][A-Za-z0-9_]*=/.test(token.value)) {
-      index += 1;
-      continue;
-    }
-    if (!token.quoted && (token.value === "env" || token.value === "command")) {
-      index += 1;
-      continue;
-    }
-    break;
-  }
-  return command.slice(index);
-}
-
-function isGhBinary(word: string): boolean {
-  if (word === "gh") return true;
-  // An absolute or relative path to the gh binary is still gh.
-  return /(^|\/)gh$/.test(word) && word.includes("/");
-}
 
 type BodySource =
   | { kind: "inline"; flag: string; value: string }
@@ -399,7 +254,7 @@ const rawCommand =
   typeof input.tool_input?.command === "string" ? input.tool_input.command : "";
 if (!rawCommand.trim()) process.exit(0);
 
-const commands = splitCommands(tokenize(stripHeredocBodies(rawCommand)));
+const commands = parseSimpleCommands(rawCommand);
 
 let target: PrCommand | null = null;
 for (const command of commands) {
