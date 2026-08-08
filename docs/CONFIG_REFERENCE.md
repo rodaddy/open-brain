@@ -41,7 +41,7 @@ line.
 | CI job `env:` blocks | `.github/workflows/ci.yml` | throwaway per-run database coordinates |
 | runtime `config` mapping | Python CLI JSON envelope | per-call override of base_url / namespace / role / timeout |
 
-**Never hardcode a host.** Not `10.71.1.21`, not `127.0.0.1`. The endpoint comes
+**Never hardcode a host.** Not `192.0.2.21`, not `127.0.0.1`. The endpoint comes
 from the environment. This is a repo-local hook-enforced rule.
 
 ---
@@ -171,7 +171,7 @@ automatically; an operator who wants one advertised sets
 `OPEN_BRAIN_SERVER_IP` and owns that decision.
 
 `revision` is the `short_sha` from the `.deployed-revision` stamp that the
-core01 and local-clone deployment scripts write into a deployed tree. It is
+production-host and local-clone deployment scripts write into a deployed tree. It is
 absent on a dev tree that was never deployed through either script, which is
 normal.
 | `ALLOWED_ORIGINS` | `[]` (none) | `src/index.ts:78`, comma-separated |
@@ -377,7 +377,7 @@ output). The two lines above are how this lane reports its health instead.
 
 #### Operator trace forensics (#569)
 
-Source `/Volumes/ThunderBolt/open-brain-local/local-clone.env` before using
+Source `/opt/open-brain-local/local-clone.env` before using
 `scripts/langfuse-trace.ts`; it supplies the Langfuse coordinates without putting
 values in arguments or output. The consumer uses Langfuse's Basic-authenticated
 public API. `repeat` drives the local dogfood server through the existing Python
@@ -484,7 +484,7 @@ an `OPENBRAIN_`-prefixed variable matching no declared field is rejected by
 silent zero capture. So a LAN host had no legal way to say it: exporting the
 variable killed the whole environment, and not exporting it left the client
 refusing the URL. Measured 2026-08-02 (#525): a hook process pointing at
-`http://10.71.1.20:3100` declined canon **and** capture with no error anywhere —
+`http://192.0.2.20:3100` declined canon **and** capture with no error anywhere —
 a Claude-family agent on a LAN box woke with the policy hook firing and zero
 hydration.
 
@@ -513,7 +513,7 @@ never land in different scopes.
 
 | variable | default | notes |
 |---|---|---|
-| `OPENBRAIN_DEVELOPMENT_ROOT` | `/Volumes/ThunderBolt/Development` | this machine's Development lane root; written by `setup-client.sh` at install time, because the shipped default is the BUILD machine's volume. Empty reads as unset |
+| `OPENBRAIN_DEVELOPMENT_ROOT` | none (required) | this machine's Development lane root, written by `setup-client.sh` at install time. There is no shipped default: the installer takes an exported value, then `DEV_ROOT`, then probes `$HOME/Development`, and refuses the install if none resolves (#636 — the previous default was the build machine's own volume). Empty reads as unset |
 
 **Why it had to be declared even though nothing in `config.py` reads it.** The
 `openbrain` package had consumed this variable since #556 — but through

@@ -23,6 +23,15 @@ python/README.md:core01-deploy-local.sh
 # `docs/core01-nats-worker-runbook.md` is a tracked file; this is its link.
 docs/README.md:core01-nats-worker-runbook.md
 
+# `deploy:core01` / `qmd:core01:bootstrap` are package.json script NAMES, and
+# the values run `scripts/core01-*.sh` -- tracked files. The name is a
+# repo-internal identifier, not an address: renaming it neutralises nothing and
+# breaks the command `_AGENTS.md` and docs/README.md tell an operator to run.
+package.json:deploy:core01
+package.json:qmd:core01:bootstrap
+docs/README.md:bun run deploy:core01
+docs/README.md:bun run qmd:core01:bootstrap
+
 # A fixed handshake token the operator exports verbatim. The value is compared
 # for equality against what `docs/collab-retirement-preflight.md` instructs
 # them to type, so it is an opaque string, not a hostname reference. Changing

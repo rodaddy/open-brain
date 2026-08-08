@@ -188,7 +188,7 @@ release-candidate worktree named in the SOP, after the same recorded release
 gate has passed:
 
 ```bash
-bun run deploy:production-host
+bun run deploy:core01
 ```
 
 That command installs the checked-out repo version into
@@ -196,8 +196,13 @@ That command installs the checked-out repo version into
 `/workspace`; that is the source/mirror area, not the
 runtime. Do not install qmd or Postgres data under the source checkout either.
 
-On GitHub, the `deploy` job targets a production-host macOS self-hosted runner with
-labels `[self-hosted, macOS, production-host]`. It runs only for a `v*` tag push whose
+On GitHub, the `deploy` job targets a macOS self-hosted runner whose label set
+comes from the repository variable `OPENBRAIN_DEPLOY_RUNNER_LABELS` — a JSON
+array, for example `["self-hosted","macOS","<deploy-host>","open-brain-deploy"]`.
+The variable is REQUIRED and has no fallback: a default that dropped the
+host-identifying label would still match some other macOS runner, which is a
+production deploy landing on an unintended machine, so an unset variable fails
+to schedule instead. It runs only for a `v*` tag push whose
 commit is reachable from `origin/main`, or a manual workflow dispatch from
 the current `origin/main` tip with `deploy_production=true`. The deploy script is
 the authoritative deploy-ref guard: tag deploys must be reachable from
@@ -217,7 +222,7 @@ Homebrew bash path explicitly in automation:
 qmd is pinned and bootstrapped by:
 
 ```bash
-bun run qmd:production:bootstrap
+bun run qmd:core01:bootstrap
 ```
 
 The Open Brain runtime reads qmd through `QMD_PATH`, normally:
