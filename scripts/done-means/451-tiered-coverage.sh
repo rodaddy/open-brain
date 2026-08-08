@@ -12,9 +12,16 @@
 # THREE TIERS, each with a DIFFERENT enforcement strength, and the whole point
 # of this check is that the three strengths stay distinguishable:
 #
-#   CAPTURE   HARD GATE at merge. A server-side receipt for the session must
-#             exist. Server receipt is the proof; a local file is forgeable, so
-#             local state is only ever a cache.
+#   CAPTURE   RETIRED 2026-08-08 by ledger item 25, which AMENDS item 24. It
+#             was a HARD GATE at merge requiring a server-side receipt; its
+#             first live firing wedged the pipeline, and the decisive reason
+#             was that raw capture is already AUTOMATIC (spool) while
+#             distillation is the DREAM pipeline's job — the gate was forcing a
+#             hand-made duplicate of a designed automatic step. Clauses A/B/C/F
+#             below are INVERTED to assert the retirement instead of the
+#             refusal; the source is kept at .claude/hooks/_retired/ as prior
+#             art for the #647 liveness check. Retirement is gated in full by
+#             scripts/done-means/648-capture-gate-retired.sh.
 #   HYDRATION VERIFY + STAMP. Session start checks the canon pack arrived with
 #             sections > 0; absence lands a loud visible marker. NEVER a block —
 #             a hydration block can only fire during an outage, which makes it a
@@ -25,7 +32,14 @@
 #             on feel").
 #
 # ---------------------------------------------------------------------------
-# The clause that matters most: SKIP and OUTAGE must never look alike
+# HISTORICAL (item 24) — the capture gate's design, retained because #647 has
+# to solve the same discrimination without the block
+# ---------------------------------------------------------------------------
+# The section below describes the gate AS IT WAS. It is not live: clauses
+# A/B/C/F assert retirement now. It is kept because the outage-vs-skip problem
+# it solved is real and the liveness check inherits it.
+#
+# The clause that mattered most: SKIP and OUTAGE must never look alike
 # ---------------------------------------------------------------------------
 # The naive capture gate — "no receipt, refuse" — is WRONG here, and the
 # operator's own refinement is why. Capture already spools durably
@@ -51,19 +65,25 @@
 # ---------------------------------------------------------------------------
 # Clauses
 # ---------------------------------------------------------------------------
-#   A   service UP, no receipt, empty spool  -> REFUSED (exit 2), naming the
-#                                               reason, the session, and the
-#                                               drain that produced nothing
-#   B   receipt present for the session      -> ALLOWED (exit 0)
-#   C   service DOWN, no receipt             -> ALLOWED **and** the stamp text
-#                                               is emitted naming outage+session
+#   A   capture tier is RETIRED: no gate on the live hook path  (was: service
+#       UP, no receipt, empty spool -> REFUSED naming reason/session/drain)
+#   B   capture tier is RETIRED                                 (was: receipt
+#       present -> ALLOWED clean)
+#   C   capture tier is RETIRED                                 (was: service
+#       DOWN -> ALLOWED with an outage stamp naming the session)
+#   F   the retired source is KEPT at .claude/hooks/_retired/ and registered
+#       nowhere                                                 (was: the gate
+#       is REGISTERED in .claude/settings.json)
+#
+#   A/B/C/F FAIL if the source is absent from BOTH paths — deleting it loses
+#   the prior art #647 needs, and item 25 says retire.
+#
 #   D   canon pack absent / sections == 0    -> hydration marker emitted,
 #                                               exit 0 (STAMP, NEVER A BLOCK)
 #   D2  canon pack present, sections > 0     -> NO marker (the control: a
 #                                               marker that always fires is
 #                                               decoration, not a signal)
 #   E   recall counts reach the EXISTING telemetry lane as facts only
-#   F   the capture gate is REGISTERED in .claude/settings.json
 #
 # CONTROL CLAUSE 0 (harvest of #624, lane-contract.md): a check needs proof its
 # observation window is live, or a dead harness hands every clause a false
@@ -92,6 +112,7 @@ set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 GATE="$REPO_ROOT/.claude/hooks/capture-gate.ts"
+RETIRED_GATE="$REPO_ROOT/.claude/hooks/_retired/capture-gate.ts"
 HYDRATION="$REPO_ROOT/.claude/hooks/hydration-stamp.ts"
 SETTINGS="$REPO_ROOT/.claude/settings.json"
 
@@ -280,13 +301,25 @@ run_gate() {
 
 MERGE_CMD="gh pr merge 999 --squash --delete-branch"
 
-if [ ! -r "$GATE" ]; then
-  # RED state: nothing enforces capture at merge. Each clause fails for one
-  # honest reason rather than erroring out, so the RED transcript stays legible.
+if [ ! -e "$GATE" ] && [ -r "$RETIRED_GATE" ]; then
+  # RETIRED state (ledger item 25) — the EXPECTED state since 2026-08-08.
+  # Clauses A/B/C/F are inverted: the tier's correctness is now that it does
+  # NOT fire, and the assertion is on the retirement being complete rather
+  # than on the refusal behaviour. The strong form of that assertion lives in
+  # scripts/done-means/648-capture-gate-retired.sh, which also re-runs THIS
+  # check; duplicating it here would make the two checks mutually recursive.
+  record A PASS "RETIRED (item 25): no capture gate on the hook path — nothing can wedge a merge on a receipt"
+  record B PASS "RETIRED (item 25): capture is automatic (spool) and distillation is DREAM's job — no merge-time receipt requirement"
+  record C PASS "RETIRED (item 25): with no gate there is no outage-vs-skip verdict to keep honest"
+  record F PASS "RETIRED (item 25): source kept at $RETIRED_GATE as #647 prior art, and registered nowhere"
+elif [ ! -r "$GATE" ]; then
+  # NEITHER present: the source was DELETED rather than retired, which loses
+  # the receipt-probe prior art #647 depends on. That is a real failure, and
+  # keeping it a failure is why the retired branch above tests for the file.
   for c in A B C; do
-    record "$c" FAIL "no capture gate at $GATE — nothing requires a capture receipt at merge"
+    record "$c" FAIL "capture gate is absent from BOTH $GATE and $RETIRED_GATE — deleted, not retired (ledger item 25 says retire)"
   done
-  record F FAIL "no capture gate to register"
+  record F FAIL "no capture gate at either path"
 else
   # =========================================================================
   # CLAUSE A — service UP, no receipt, empty spool -> REFUSED with the reason.

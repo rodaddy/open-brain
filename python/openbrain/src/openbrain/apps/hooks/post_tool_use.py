@@ -14,9 +14,10 @@ Purpose:
     cannot either.
 
     RECALL IS THE SAME RULE, DELIBERATELY. #451's operator ruling (2026-08-08,
-    ledger item 24) made recall the MEASURE tier of a three-tier design whose
-    other two tiers DO enforce: capture is a hard gate at merge
-    (``.claude/hooks/capture-gate.ts``) and hydration stamps
+    ledger item 24) made recall the MEASURE tier of a three-tier design. The
+    capture tier was a hard merge gate until ledger item 25 (2026-08-08)
+    retired it (source kept at ``.claude/hooks/_retired/capture-gate.ts``);
+    hydration stamps and does not block
     (``.claude/hooks/hydration-stamp.ts``). Recall was ruled measure-only
     because "recall before re-deriving" is unfalsifiable -- no gate can tell
     that canon already answered a question the agent chose to ask again -- so a

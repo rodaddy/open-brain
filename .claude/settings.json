@@ -26,11 +26,6 @@
             "type": "command",
             "command": "bun run \"$CLAUDE_PROJECT_DIR/.claude/hooks/merge-gate.ts\" --event pre-tool-use",
             "timeout": 30
-          },
-          {
-            "type": "command",
-            "command": "bun run \"$CLAUDE_PROJECT_DIR/.claude/hooks/capture-gate.ts\" --event pre-tool-use",
-            "timeout": 30
           }
         ]
       }

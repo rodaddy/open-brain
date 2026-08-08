@@ -1,5 +1,45 @@
 #!/usr/bin/env bun
 /**
+ * ===========================================================================
+ * RETIRED 2026-08-08 — NOT REGISTERED, NOT RUNNING. DO NOT RE-REGISTER.
+ * ===========================================================================
+ * Ruling: operator, 2026-08-08, ledger item 25 (`docs/issue-graph.md`), which
+ * AMENDS item 24. This gate fired live exactly once and wedged the pipeline:
+ * it blocked the controller's merge of PR #645, and structurally blocked the
+ * merge of any fix for itself.
+ *
+ * Two reasons it is retired rather than repaired:
+ *
+ *   1. Its live defects were the same gaps PR #642 had disclosed as PROPOSED —
+ *      the receipt probe hit a nonexistent endpoint (HTML 404), the provider
+ *      scope-proof demanded a key it simultaneously rejected, and the drain
+ *      step could not import openbrain_memory in the hook interpreter (#646).
+ *      #646 is fixed regardless: a tool demanding a key it rejects is a defect
+ *      with or without a consumer.
+ *   2. The reason that actually decided it — raw capture is AUTOMATIC (Stop
+ *      hooks -> watermark -> durable spool, running regardless of any gate),
+ *      and distilling raw sessions into durable memory is the DREAM pipeline's
+ *      designed job (`docs/dream-design.md`). So this gate was hard-blocking
+ *      merges to force HAND distillation of something the architecture intends
+ *      to automate. Enforcing a manual duplicate of a designed automatic step
+ *      is backwards.
+ *
+ * WHAT REPLACES IT: an automatic-capture LIVENESS check (#647), built on the
+ * #625 pattern — prove the raw capture lane DELIVERED for recent sessions and
+ * be loud on silence. The real risk is the automatic lane dying quietly, not
+ * an agent skipping a hand-written receipt.
+ *
+ * WHY THE FILE IS KEPT: the server-side receipt probe, the drain step, and the
+ * outage-vs-skip discrimination below are prior art for #647, which has to
+ * answer the same question ("did capture deliver for this session?") without
+ * the block. Deleting it would make that lane rediscover it. Retirement is
+ * enforced by `scripts/done-means/648-capture-gate-retired.sh`.
+ *
+ * Everything below this header describes the gate AS IT WAS and is retained
+ * verbatim as the record of the design; the KEPT tiers of item 24 are
+ * hydration (`.claude/hooks/hydration-stamp.ts`) and recall telemetry.
+ * ===========================================================================
+ *
  * capture-gate — repo-local hard gate on `gh pr merge` requiring a SERVER-SIDE
  * capture receipt for the current session.
  *
