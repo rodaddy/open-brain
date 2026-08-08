@@ -254,6 +254,25 @@ uv run ruff check src tests
 uv run pytest -q
 ```
 
+## Operating Mode: RLVR Lanes (repo default)
+
+Adopted by operator decision 2026-08-08 (ledger item 12, `docs/issue-graph.md`)
+and codified in `docs/sop-rlvr-lanes.md` — READ IT before dispatching or
+accepting implementation work in this repo. The short form: work dispatches
+from the computed frontier (`bun scripts/issue-graph.ts`) to worker lanes
+briefed from `docs/lane-contract.md`; every lane carries an executable
+done-means check written red-first; the checker declares done, never the lane;
+the controller re-runs the check before merge; every lane report is harvested
+into the lane contract's Tightenings (mandatory merge-pass step); decisions are
+reviewed WITH the operator and recorded in the ledger. INLINE work remains
+correct for conversation, exact lookups, and tiny deterministic changes.
+**No variations** (operator, 2026-08-08): the process is used all the time as
+the default standard; a deviation is flagged for a ruling, never taken
+silently, and a broken process step fails HARD and gets fixed through the
+decisions loop — never worked around. Where compliance needs forcing, the
+step gets a hook (last-ditch tier, per the controller contract's enforcement
+migration).
+
 ## Coding Standards
 
 - Do not code on `main`; branch first and keep unrelated local files out of commits.

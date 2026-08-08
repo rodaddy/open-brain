@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: enhancement, memory
 Created: 2026-07-24T21:31:05Z
-Updated: 2026-08-05T08:52:14Z
+Updated: 2026-08-07T23:03:39Z
 
 ---
 
@@ -59,8 +59,16 @@ depends on #382.
 
 ---
 
-## Discussion (1)
+## Discussion (2)
 
 ### rodaddy — 2026-08-05T08:52:14Z
 
 Reopening deliberately: PR #577 MERGED (sweep producer + idempotency rekey + real ON CONFLICT pg test, fix-delta verified). Remaining acceptance is operator-gated and explicitly out of the PR's scope: the runner observed processing on the local clone, core01 enablement, and disposition of the pre-existing dead-lettered canary job. Merged is not running. Closes with a live processing receipt.
+
+---
+
+### rodaddy — 2026-08-07T23:03:39Z
+
+PR #609 merged (squash). Producer + runner delivered and proven RUNNING: done-means check `scripts/done-means/384-maintenance-loop-turns.sh` controller-verified (`graph.derive | succeeded` on the live clone, revision 098169f); canary retired.
+
+Remaining open criterion: warn-level bound-reached lines are emitted on an unrouted child-logger stream and never reach the clone log files. That defect is now #612 and this issue carries a native blocked-by edge on it. #384 closes when #612 lands and the bound-reached line is observed in the clone logs.
