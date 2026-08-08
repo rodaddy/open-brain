@@ -87,6 +87,52 @@ Every lane, no exceptions:
 
 Newest first. Every entry: what changed, and the observation that forced it.
 
+### 2026-08-08 (round 18) — harvest of the #659 launcher-env lane (PR #660) and the controller-side discovery
+
+- **A revision proof is not a feature-live proof.** The clone redeploy
+  PASSED its revision proof at the right SHA while the merged feature
+  stayed dark: the launcher's env allowlist dropped the new config keys.
+  After any deploy that is supposed to light up a feature, read the
+  FEATURE's own signal (/health block, log event), not just the revision.
+  (#659 exists because these were conflated for ~10 minutes.)
+- **When a merged feature fails in deployment, ask which seam the passing
+  check could not see.** #656's done-means drove `createShadowApplication`
+  directly, so the entire launcher spawn chain was outside its vantage —
+  the check was honest about its seam and the seam was where the defect
+  lived. Chain-level clauses driving the real launcher through its
+  injected boundaries were cheap and were the only ones reproducing the
+  live symptom.
+- **An env allowlist between launcher and child is a standing drop
+  hazard** — third instance of the class (#530 tracing, then AUTH_TOKEN_USER_,
+  now capture-health). The fix is announce-on-drop, not abolishing the
+  allowlist; six more silently-dropped configured keys surfaced the moment
+  drops became visible (PROPOSED, need an operator ruling each).
+- **A done-means check for a NEW export must import it dynamically.** A
+  static import at the pre-fix tree dies at module resolution before any
+  clause prints — a false RED identical in shape to a real one, reached by
+  the ORDINARY act of writing a check for a function that does not exist
+  yet. Round 16's broken-import lesson generalized: this is the default
+  path, not an edge case.
+- **A scope rule needs both halves in ONE clause, and only a mutation
+  proves it.** "Ambient vars NOT announced AND configured key IS" was the
+  only clause catching an announce-everything filter; an unscoped drop
+  report is boot noise an operator learns to skip — silence with extra
+  steps. Companion rule: a drop report names KEYS, never values (the
+  dropped set contains secrets in the general case).
+- **Read WHY each RED clause failed, not just the tally.** Three fixture
+  defects (WAL path, clone root, QMD_PATH) failed identically to the
+  defect under test at the shell. A false RED banks confidence in a check
+  that measured nothing.
+- **Suspect your own formatting before a known gate defect.** #641 being
+  real made it the attractive explanation for a validator refusal that was
+  the lane's own backticks-in-field-value. Reading the validator's five
+  lines of path resolution beat another workaround attempt.
+- **Self-reported violation, harvested not punished:** a reflexive bare
+  `rm -rf` (argument-less, deleted nothing, error swallowed by
+  `2>/dev/null`) ran inside a clean-clone command. The reflex fires inside
+  otherwise-correct compound commands — which is exactly why the ban is
+  unconditional and why `2>/dev/null` on cleanup steps deserves suspicion.
+
 ### 2026-08-08 (round 17) — harvest of the #656 observer-wiring lane
 
 - **`includes("<event_name>")` on a raw log line is a substring match, and
