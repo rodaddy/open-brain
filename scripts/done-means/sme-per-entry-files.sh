@@ -35,6 +35,11 @@
 #   -------------------------------
 #   TOTAL                       226
 #
+# There are 236 entry FILES, not 226: ten findings were written without a date
+# prefix and are counted by clause 1 (which counts `^## ` headings) but not by
+# clause 4 (which counts `^## \[20`). The two numbers measure different things
+# on purpose and both are load-bearing.
+#
 # That number is pinned as EXPECTED_ENTRY_COUNT below and is the whole point of
 # clause 4: a migration that silently drops entries is the failure mode that
 # matters, and "the lane files still look fine" cannot detect it, because the
@@ -189,28 +194,38 @@ else
       printf '%s\n' "$EXTRA" | head -20 | sed 's/^/          /'
     fi
 
-    # Exactly one: each entry file carries exactly one dated heading, and no
+    # Exactly one: each entry file carries exactly one FINDING heading, and no
     # heading is split across two files.
+    #
+    # The heading counted here is `^## ` generally, not `^## \[20`. Ten
+    # findings across four lanes were written without a date prefix
+    # (`## PR #421 — ...`, `## Pattern: ...`, `## A port is complete when ...`)
+    # using inline `Severity: ... Status: ... Provenance: ...` prose instead of
+    # the bold block. They are findings by every property except their heading
+    # format, and they are exactly the entries a date-keyed split is most
+    # likely to mangle — so the one-heading-per-file invariant has to cover
+    # them. Clause 4 separately pins the DATED count, so narrowing this to the
+    # dated form would only make the check blind to the risky cases.
     MULTI=0
     SINGLE=0
     while IFS= read -r f; do
       [[ -z "$f" ]] && continue
-      n="$(rg -c '^## \[20' "$f" || true)"
+      n="$(rg -c '^## ' "$f" || true)"
       n="${n:-0}"
       if [[ "$n" -eq 1 ]]; then
         SINGLE=$((SINGLE + 1))
       else
         MULTI=$((MULTI + 1))
-        info "entry file with $n dated headings (expected 1): $f"
+        info "entry file with $n finding headings (expected 1): $f"
       fi
     done < <(fd -e md . "$ENTRIES_DIR" 2>/dev/null)
 
     if [[ "$MULTI" -gt 0 ]]; then
-      fail "$MULTI entry file(s) do not carry exactly one dated heading"
+      fail "$MULTI entry file(s) do not carry exactly one finding heading"
     elif [[ "$SINGLE" -eq 0 ]]; then
       fail "no entry files found under $ENTRIES_DIR"
     else
-      pass "all $SINGLE entry file(s) carry exactly one dated heading"
+      pass "all $SINGLE entry file(s) carry exactly one finding heading"
     fi
 
     # Duplicate detection: two entry files claiming the same heading would let
