@@ -4,7 +4,7 @@
 standard was violated. Fix the code, not the hook.
 
 Repo-local and authoritative for this repo. Development-wide policy lives in
-`/Volumes/ThunderBolt/Development/_DOCS/CODING_STANDARDS.md`; where this file is
+`/workspace/_DOCS/CODING_STANDARDS.md`; where this file is
 stricter or more specific, this file wins.
 
 ---

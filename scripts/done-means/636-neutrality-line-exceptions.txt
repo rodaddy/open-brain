@@ -1,0 +1,71 @@
+# Neutrality line exceptions (#636).
+#
+# Format: <repo-relative-path>:<literal substring that must appear in the line>
+#
+# An entry here means the matching token is NOT a leaked deployment value: it
+# is a real in-repo filename or a fixed handshake string, and neutralising it
+# would break a link, a call site, or an operator procedure. Exceptions are
+# anchored to one exact file AND one exact substring, so they cannot widen to
+# cover a genuine leak that appears later in the same file.
+#
+# Do not add an entry to silence an inconvenient hit. If the value identifies
+# OUR environment, scrub it; an exception is only for a token that happens to
+# match the pattern while naming something inside this repo.
+
+# `scripts/core01-deploy-local.sh` is a tracked file in this repo (the deploy
+# entrypoint the gate is called from). Renaming the references without renaming
+# the file produced six citations to a path that does not exist.
+scripts/deploy-ref-gate.ts:core01-deploy-local.sh
+docs/README.md:core01-deploy-local.sh
+docs/downstream-rollout.md:core01-deploy-local.sh
+python/README.md:core01-deploy-local.sh
+
+# `docs/core01-nats-worker-runbook.md` is a tracked file; this is its link.
+docs/README.md:core01-nats-worker-runbook.md
+
+# `deploy:core01` / `qmd:core01:bootstrap` are package.json script NAMES, and
+# the values run `scripts/core01-*.sh` -- tracked files. The name is a
+# repo-internal identifier, not an address: renaming it neutralises nothing and
+# breaks the command `_AGENTS.md` and docs/README.md tell an operator to run.
+package.json:deploy:core01
+package.json:qmd:core01:bootstrap
+docs/README.md:bun run deploy:core01
+docs/README.md:bun run qmd:core01:bootstrap
+
+# BEHAVIOURAL defaults compared against the real filesystem, and one half of a
+# cross-runtime parity contract with `_ob/scripts/ob-memory-provider.ts` (which
+# lives outside this repo and still carries these values). A placeholder that
+# exists nowhere makes every scope resolve to None and the gate fall silent --
+# the exact failure development_root()'s own docstring describes. Operators on
+# another layout export OPENBRAIN_DEVELOPMENT_ROOT.
+python/openbrain-provider/src/openbrain_provider/development_scope.py:Path("/Volumes/ThunderBolt/Development")
+python/openbrain-provider/src/openbrain_provider/development_scope.py:Path("/Volumes/ThunderBolt/_tmp")
+python/openbrain/src/openbrain/receipts/scope.py:Path("/Volumes/ThunderBolt/Development")
+python/openbrain/src/openbrain/receipts/scope.py:Path("/Volumes/ThunderBolt/_tmp")
+
+# Byte-parity ports of `_ob/scripts/policy-refresh-gate.ts` (lines 320 and 475).
+# tests/test_ts_parity.py replays the TypeScript gate's recorded answers and
+# asserts the Python output is identical, so neutralising only this side fails
+# that contract. Scrubbing these means changing the TypeScript twin first.
+python/openbrain-provider/src/openbrain_provider/policy_safety.py:/Volumes/ThunderBolt/_tmp on this Mac
+python/openbrain-provider/src/openbrain_provider/policy_safety.py:image to /Volumes/ThunderBolt/_tmp/_image-gen2/
+python/openbrain-provider/src/openbrain_provider/policy_context.py:/Volumes/ThunderBolt/Development/_ob/repo-context/
+python/openbrain-provider/src/openbrain_provider/policy_context.py:/Volumes/ThunderBolt/Development/_ob/skills/
+
+# Instructions to RUN a real file. The policy-refresh gate lives outside this
+# repo; both the Python gate and the TypeScript hook quote the same path and
+# honour OPENBRAIN_POLICY_REFRESH_GATE. A neutral placeholder here reads as
+# authoritative and leaves the block unclearable.
+python/openbrain-provider/src/openbrain_provider/policy_refresh_gate.py:/Volumes/ThunderBolt/Development/_ob/scripts/policy-refresh-gate.ts
+hooks/open-brain-session-save.ts:/Volumes/ThunderBolt/Development/_ob/scripts/policy-refresh-gate.ts
+
+# The one cross-language proof in the Python suite runs the REAL gate; the whole
+# module skips when this path is not a file, so a placeholder would convert it
+# into a permanent silent skip that still reports green.
+python/openbrain/tests/test_receipts_gate_crosslang.py:/Volumes/ThunderBolt/Development/_ob/scripts/context-budget-gate.ts
+
+# A fixed handshake token the operator exports verbatim. The value is compared
+# for equality against what `docs/collab-retirement-preflight.md` instructs
+# them to type, so it is an opaque string, not a hostname reference. Changing
+# one side alone silently disables the release gate.
+scripts/retire-collab-migration.ts:core01-live-db-after-backup

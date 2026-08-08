@@ -36,6 +36,7 @@ See Also:
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from datetime import UTC, datetime, timedelta
@@ -53,13 +54,19 @@ from openbrain.receipts import (
 #: The gate under test, in the Development checkout it is registered from. An
 #: absolute path because that is where the LIVE hook runs it from -- pointing at a
 #: copy would prove a copy works.
+#:
+#: Overridable for a different checkout layout (#636), but NOT scrubbed to a
+#: placeholder: the whole test skips when this path is not a file, so a neutral
+#: default that exists nowhere converts the one cross-language proof in the
+#: suite into a permanent silent skip that still reports green.
 GATE_SCRIPT = Path(
-    "/Volumes/ThunderBolt/Development/_ob/scripts/context-budget-gate.ts"
+    os.environ.get("OPENBRAIN_CONTEXT_BUDGET_GATE")
+    or "/Volumes/ThunderBolt/Development/_ob/scripts/context-budget-gate.ts"
 )
 
 #: A directory the gate resolves to a Development project. It only has to exist
 #: and be in scope; nothing is written to it.
-GATE_CWD = Path("/Volumes/ThunderBolt/Development/open-brain")
+GATE_CWD = Path("/workspace/open-brain")
 
 #: The project slug the receipts are filed under. Passed to the gate explicitly
 #: with ``--project`` so the assertion does not depend on the git layout of

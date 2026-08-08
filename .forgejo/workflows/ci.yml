@@ -12,7 +12,7 @@
 #
 # Runner: [self-hosted, Linux, X64, rodaddy, forgejo-ci-small]. The extra
 # `forgejo-ci-small` / `X64` labels scope these Docker-capable Linux jobs to
-# the Forgejo CI runner pool and away from the macOS/core01 deploy runner.
+# the Forgejo CI runner pool and away from the macOS/production-host deploy runner.
 #
 # Forgejo Actions runs the GitHub-compatible expression engine, so the `github`
 # and `runner` contexts below populate the same way they do on GitHub Actions
@@ -111,7 +111,7 @@ jobs:
   # Digest-pinned image: this job gates deploy, so a mutable tag must not be able
   # to change under us. Isolation: unique container name + unique port per run,
   # loopback-only listener, and `if: always()` teardown. Pinned to the
-  # Docker-capable Linux CI runners; the macOS/core01 deploy runner must not run
+  # Docker-capable Linux CI runners; the macOS/production-host deploy runner must not run
   # Docker.
   db-integration:
     runs-on: [self-hosted, Linux, X64, rodaddy, forgejo-ci-small]

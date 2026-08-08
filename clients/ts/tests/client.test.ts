@@ -474,7 +474,7 @@ describe("OpenBrainClient base-url policy", () => {
     ).not.toThrow();
     expect(
       () =>
-        new OpenBrainClient("http://10.71.1.21:3100", {
+        new OpenBrainClient("http://192.0.2.21:3100", {
           token: TEST_TOKEN,
           namespace: "bilby",
           allowInsecureHttp: true,

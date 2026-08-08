@@ -1,0 +1,49 @@
+# Repo-relative internal operations areas permitted to retain deployment-specific values.
+# Every non-comment entry is an explicit path prefix.
+.claude/
+.qmd/
+_DOCS/
+_plans/
+docs/canon/
+docs/core01-
+docs/decisions/
+docs/deploy/
+docs/sme/
+docs/standards/
+docs/420-cutover-rollback.md
+docs/backup-restore.md
+docs/code-brain-design.md
+docs/collab-retirement-preflight.md
+docs/dream-design.md
+docs/dream-ethereal-runs.md
+docs/dream-pipeline-status.md
+docs/fleet-nats-integration.md
+docs/fts-operations.md
+docs/full-send-derivation-spec.md
+docs/GOTCHAS.md
+docs/LEARNINGS.md
+docs/local-playground.md
+docs/local-release-deploy-sop.md
+docs/nats-jetstream-foundation.md
+docs/plan-3f-gbrain-sprint.md
+docs/plan-3f-open-issues.md
+docs/qmd-ob-layered-recall.md
+docs/realtime-agent-memory-research.md
+docs/roadmap/
+scripts/core01-
+scripts/done-means/
+# A verbatim RECORDING of the TypeScript gate that lives outside this repo,
+# replayed byte-for-byte by tests/test_ts_parity.py. Editing it does not
+# neutralise anything -- it just makes the Python port disagree with the
+# TypeScript it is a port of. Re-recording is the only valid way to change it,
+# and that means changing the TypeScript twin first (#636).
+python/openbrain-provider/tests/fixtures/ts_gate_parity/recorded.json
+python/openbrain-provider/tests/parity_runner.py
+scripts/install-qmd-sync-launchagent.sh
+scripts/local-clone-
+scripts/qmd-sync
+specs/
+AGENTS.md
+CLAUDE.md
+_AGENTS.md
+goal-run.md

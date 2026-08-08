@@ -51,10 +51,10 @@ describe("Open Brain contract manifest", () => {
       "OB_PROMOTION_CANDIDATES",
     ]);
     expect(contract.realtime_transport.nats_jetstream.server).toMatchObject({
-      planned_host: "core01",
+      planned_host: "production-host",
       client_listen: "127.0.0.1:4222",
       monitoring_listen: "127.0.0.1:8222",
-      jetstream_store_dir: "/Volumes/ThunderBolt/open-brain/nats/jetstream",
+      jetstream_store_dir: "/opt/open-brain/nats/jetstream",
     });
     expect(contract.interchange_profiles.okf.status).toBe(
       "compatibility-hooks",

@@ -13,7 +13,7 @@
  * Database credentials come from the environment the same way every other
  * script here reads them (DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD). For the
  * dogfood clone:
- *   set -a; . /Volumes/ThunderBolt/open-brain-local/local-clone.env; set +a
+ *   set -a; . /opt/open-brain-local/local-clone.env; set +a
  *
  * The listener is loopback-only and not configurable (see GRADING_BIND_HOST).
  */

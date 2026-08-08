@@ -171,7 +171,7 @@ def test_a_worktree_of_development_itself_resolves() -> None:
     if not (DEVELOPMENT_ROOT / ".git").exists():
         pytest.skip("the Development repository is not present in this checkout")
 
-    root = Path("/Volumes/ThunderBolt/_tmp/Development/_worktrees")
+    root = Path("/workspace/_tmp/Development/_worktrees")
     if not root.parent.parent.is_dir():
         pytest.skip("the temp workspace volume is not mounted")
     root.mkdir(parents=True, exist_ok=True)

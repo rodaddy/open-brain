@@ -11,7 +11,7 @@ recognise an unsuccessful one.
 |---|---|
 | Upstream | `github.com/getzep/graphiti` |
 | Clone commit | `3bb2d0b` (2026-07-23) |
-| Local path | `/Volumes/ThunderBolt/open-brain-local/research/graphiti` |
+| Local path | `/opt/open-brain-local/research/graphiti` |
 | License | **Apache-2.0** |
 | Code reuse | **No.** Idea only. |
 

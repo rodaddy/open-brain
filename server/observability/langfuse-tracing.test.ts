@@ -50,7 +50,7 @@ import {
 const ENABLED_CONFIG: McpTracingConfig = {
   enabled: true,
   maskingEnabled: true,
-  endpoint: "http://10.71.20.50:3000",
+  endpoint: "http://192.0.2.50:3000",
   publicKey: "pk-lf-test",
   secretKey: "sk-lf-test",
 };

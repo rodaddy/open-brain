@@ -57,7 +57,7 @@ if TYPE_CHECKING:
 #: literal is a TEST FIXTURE, not configuration -- nothing here reads it as a
 #: real endpoint, and the repo's never-hardcode-a-host rule is about the code
 #: that connects, which takes its address from the environment.
-LAN_BASE_URL = "http://10.71.1.20:3100"
+LAN_BASE_URL = "http://192.0.2.20:3100"
 
 #: A throwaway bearer value. Named rather than inlined so the linter's
 #: hardcoded-credential check is satisfied by construction: there is one obvious

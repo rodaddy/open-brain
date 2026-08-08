@@ -1,7 +1,7 @@
 /**
- * Pre-mutation deploy ref gate for the core01 production deploy.
+ * Pre-mutation deploy ref gate for the production-host production deploy.
  *
- * This is the single decision point that decides whether a core01 deploy is
+ * This is the single decision point that decides whether a production-host deploy is
  * ALLOWED to mutate production, independent of which CI provider triggered it.
  * `scripts/core01-deploy-local.sh` calls this BEFORE any staging, swap,
  * launchd, or migration step. The gate must fail CLOSED: an unsupported,
@@ -9,7 +9,7 @@
  *
  * Two providers are supported today:
  *   - github  (the active deploy path)
- *   - forgejo (prepared for a future repository-scoped core01 runner)
+ *   - forgejo (prepared for a future repository-scoped production-host runner)
  *
  * Allowed triggers (identical policy for both providers):
  *   - a manual dispatch whose HEAD is EXACTLY the current main tip; or
@@ -71,7 +71,7 @@ function isMainBranchRef(ref: string): boolean {
 }
 
 /**
- * Decide whether a core01 deploy is allowed. Pure: no I/O, no git, no env.
+ * Decide whether a production-host deploy is allowed. Pure: no I/O, no git, no env.
  * Fails closed on any missing, unsupported, or stale metadata.
  */
 export function evaluateDeployGate(
@@ -93,39 +93,39 @@ export function evaluateDeployGate(
   if (!provider) {
     return {
       allowed: false,
-      reason: "refusing core01 deploy: missing CI provider metadata",
+      reason: "refusing production-host deploy: missing CI provider metadata",
     };
   }
   if (!SUPPORTED_PROVIDERS.includes(provider as DeployProvider)) {
     return {
       allowed: false,
       reason:
-        `refusing core01 deploy from unsupported provider: ${provider} ` +
+        `refusing production-host deploy from unsupported provider: ${provider} ` +
         `(supported: ${SUPPORTED_PROVIDERS.join(", ")})`,
     };
   }
   if (!event) {
     return {
       allowed: false,
-      reason: "refusing core01 deploy: missing CI event metadata",
+      reason: "refusing production-host deploy: missing CI event metadata",
     };
   }
   if (!ref) {
     return {
       allowed: false,
-      reason: "refusing core01 deploy: missing CI ref metadata",
+      reason: "refusing production-host deploy: missing CI ref metadata",
     };
   }
   if (!headSha) {
     return {
       allowed: false,
-      reason: "refusing core01 deploy: missing HEAD commit metadata",
+      reason: "refusing production-host deploy: missing HEAD commit metadata",
     };
   }
   if (!mainSha) {
     return {
       allowed: false,
-      reason: "refusing core01 deploy: missing main-tip commit metadata",
+      reason: "refusing production-host deploy: missing main-tip commit metadata",
     };
   }
 
@@ -134,7 +134,7 @@ export function evaluateDeployGate(
       return {
         allowed: false,
         reason:
-          "refusing manual core01 deploy because HEAD is not the current " +
+          "refusing manual production-host deploy because HEAD is not the current " +
           `main tip: head=${headSha} main=${mainSha}`,
       };
     }
@@ -149,7 +149,7 @@ export function evaluateDeployGate(
       return {
         allowed: false,
         reason:
-          "refusing tag core01 deploy because HEAD is not reachable from " +
+          "refusing tag production-host deploy because HEAD is not reachable from " +
           `main: ${headSha}`,
       };
     }
@@ -161,7 +161,7 @@ export function evaluateDeployGate(
 
   return {
     allowed: false,
-    reason: `refusing core01 deploy from unsupported trigger: event=${event} ref=${ref}`,
+    reason: `refusing production-host deploy from unsupported trigger: event=${event} ref=${ref}`,
   };
 }
 

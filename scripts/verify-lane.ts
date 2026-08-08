@@ -74,11 +74,33 @@
 
 import { spawnSync } from "node:child_process";
 import { existsSync, writeFileSync, mkdirSync } from "node:fs";
+import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const WORKTREE_BASE = "/Volumes/ThunderBolt/_tmp/open-brain/_worktrees";
+// Machine-specific (#636), so read rather than hardcoded. The fallback
+// announces itself for the same reason lane-bootstrap's does: a verification
+// worktree quietly created on a different volume is one the operator's
+// teardown sweep will not find.
+const TEMP_WORKSPACE_SOURCE = process.env.OPENBRAIN_TEMP_WORKSPACE?.trim()
+  ? "OPENBRAIN_TEMP_WORKSPACE"
+  : process.env.DEV_TMP?.trim()
+    ? "DEV_TMP"
+    : "fallback";
+const TEMP_WORKSPACE =
+  process.env.OPENBRAIN_TEMP_WORKSPACE?.trim() ||
+  process.env.DEV_TMP?.trim() ||
+  join(homedir(), ".cache");
+const WORKTREE_BASE = join(TEMP_WORKSPACE, "open-brain", "_worktrees");
+
+if (TEMP_WORKSPACE_SOURCE === "fallback") {
+  console.warn(
+    `[verify-lane] ADJUSTED: neither OPENBRAIN_TEMP_WORKSPACE nor DEV_TMP is set, ` +
+      `so the verification worktree goes under ${WORKTREE_BASE}. ` +
+      `Set OPENBRAIN_TEMP_WORKSPACE to place it with your other lane artifacts.`,
+  );
+}
 const RECEIPT_PREFIX = "verify-lane receipt:";
 
 interface Args {
