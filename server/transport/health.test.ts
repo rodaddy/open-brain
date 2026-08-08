@@ -163,4 +163,44 @@ describe("single worker health boundary", () => {
     );
     expect(health.nats.last_error).toBe("redacted");
   });
+
+  // #625 — a quiet maintenance producer must be able to move this endpoint off
+  // "healthy". Before this, status came from the database and NATS alone, so a
+  // wedged sweep stayed invisible for as long as it stayed wedged.
+  const producer = (stale: boolean, quietMs: number) => ({
+    quiet_ms: quietMs,
+    stale,
+    quiet_threshold_ms: 60_000,
+    overlapped_ticks: stale ? 216 : 0,
+    completed_ticks: 12,
+  });
+
+  it("degrades when the maintenance producer has gone quiet past its threshold", async () => {
+    const health = await getSingleWorkerHealth(
+      input({ producerHealth: () => producer(true, 1_080_000) }),
+    );
+
+    expect(health.status).toBe("degraded");
+    expect(health.maintenance_producer?.stale).toBe(true);
+    expect(health.maintenance_producer?.quiet_ms).toBe(1_080_000);
+    expect(health.maintenance_producer?.overlapped_ticks).toBe(216);
+  });
+
+  it("stays healthy while the producer is within its quiet threshold", async () => {
+    const health = await getSingleWorkerHealth(
+      input({ producerHealth: () => producer(false, 4_000) }),
+    );
+
+    expect(health.status).toBe("healthy");
+    expect(health.maintenance_producer?.stale).toBe(false);
+  });
+
+  // Absence is not staleness: a worker that composes no producer is opted out,
+  // not broken, and must not be degraded by a component it does not run.
+  it("omits the producer block and stays healthy when no producer is composed", async () => {
+    const health = await getSingleWorkerHealth(input({}));
+
+    expect(health.status).toBe("healthy");
+    expect(health.maintenance_producer).toBeUndefined();
+  });
 });
