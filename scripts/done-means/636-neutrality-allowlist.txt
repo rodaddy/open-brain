@@ -32,6 +32,13 @@ docs/realtime-agent-memory-research.md
 docs/roadmap/
 scripts/core01-
 scripts/done-means/
+# A verbatim RECORDING of the TypeScript gate that lives outside this repo,
+# replayed byte-for-byte by tests/test_ts_parity.py. Editing it does not
+# neutralise anything -- it just makes the Python port disagree with the
+# TypeScript it is a port of. Re-recording is the only valid way to change it,
+# and that means changing the TypeScript twin first (#636).
+python/openbrain-provider/tests/fixtures/ts_gate_parity/recorded.json
+python/openbrain-provider/tests/parity_runner.py
 scripts/install-qmd-sync-launchagent.sh
 scripts/local-clone-
 scripts/qmd-sync

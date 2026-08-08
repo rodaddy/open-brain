@@ -123,7 +123,7 @@ _SLUG_UNSAFE = re.compile(r"[^a-zA-Z0-9._-]")
 #: This is not hypothetical tidiness -- it was measured. ``git push`` exports
 #: ``GIT_DIR`` and ``GIT_WORK_TREE`` to its hooks, and ``GIT_WORK_TREE`` beats
 #: ``-C``: inside a pre-push hook, ``git -C <any path> rev-parse --show-toplevel``
-#: answered ``/Volumes/ThunderBolt/Development`` for EVERY directory asked about.
+#: answered the Development root for EVERY directory asked about.
 #: Every receipt in every repo would then be filed under the single project slug
 #: ``Development``, and the gate -- which keys its blocks per project -- would
 #: never match one.

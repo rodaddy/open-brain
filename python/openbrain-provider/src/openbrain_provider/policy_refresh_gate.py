@@ -390,8 +390,15 @@ def _shell_quote(value: str) -> str:
 def _stale_block_reason(gate: _Gate) -> str:
     """Render the refusal text, including the exact command that clears it."""
     reason = gate.state.reason or "refresh marked stale"
+    # This is the command an operator PASTES to clear the block, so a path that
+    # exists nowhere leaves the gate permanently unclearable (#636). Deployment
+    # -specific, hence the override; the fallback stays a real location rather
+    # than a neutral placeholder for that reason.
+    gate_script = os.environ.get("OPENBRAIN_POLICY_REFRESH_GATE", "").strip() or (
+        "/Volumes/ThunderBolt/Development/_ob/scripts/policy-refresh-gate.ts"
+    )
     command = (
-        "bun /Volumes/ThunderBolt/Development/_ob/scripts/policy-refresh-gate.ts "
+        f"bun {gate_script} "
         f"--event refresh --agent {gate.args.agent} "
         f"--session-id {_shell_quote(gate.session_id)}"
     )
