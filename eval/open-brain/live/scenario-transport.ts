@@ -3,6 +3,7 @@ import { Pool } from "pg";
 import { summarizeChildStderr } from "../../../src/child-stderr.ts";
 import type { LiveEvalConfig } from "./config.ts";
 import { teardownRecords } from "./gate.ts";
+import { purgeNamespace } from "./namespace-purge.ts";
 import type {
   ProviderExecution,
   ProviderReceipt,
@@ -163,6 +164,39 @@ export class LiveScenarioTransport implements ScenarioTransport {
     });
   }
 
+  /**
+   * Record teardown, then the namespace purge.
+   *
+   * The record pass is unchanged and stays first: it removes each seeded row by
+   * exact id, which is the precise, reviewable operation and the one that
+   * produces the tally the receipt reports.
+   *
+   * The purge that follows exists because record teardown, run perfectly,
+   * still cannot remove a NAMESPACE (issue #655). Two independent reasons, both
+   * measured in the dogfood database on 2026-08-08 rather than inferred:
+   *
+   *   - `archive_entry` is a SOFT delete (src/tools/archive-entry.ts:54). It
+   *     sets `archived_at` and the row stays. Since a namespace in this schema
+   *     is not a registry row — it exists exactly as long as some row carries
+   *     it — an archived row keeps its namespace alive permanently. 21
+   *     `eval-live-recall-*` namespaces held nothing but archived rows.
+   *   - When the archive call THROWS, the tally counts `failed` and the row is
+   *     left fully LIVE. Six `eval-live-recall-scenario-*` namespaces were in
+   *     that state, from a receipt reading `attempted=1 archived=0
+   *     already_absent=0 failed=1`.
+   *
+   * So this is an ADDITION, not a replacement, and it is not the "broad
+   * namespace sweep" `cleanupRecord` below rules out: it targets one namespace
+   * this process generated from a per-invocation crypto nonce, and
+   * `purgeNamespace` refuses — before executing anything — any name outside the
+   * eval prefix. That narrow shape is what `docs/issue-graph.md` ledger item 20
+   * permits, and nothing wider.
+   *
+   * A purge failure is reported as a teardown failure rather than thrown: the
+   * receipt is the artifact an operator reads after a bad run, and a throw here
+   * would discard the record tally that explains what did get cleaned. Silently
+   * swallowing it would rebuild the exact defect #655 is about.
+   */
   async cleanup(
     records: ScenarioRecord[],
     namespace: string,
@@ -176,9 +210,23 @@ export class LiveScenarioTransport implements ScenarioTransport {
       lane: 2,
     };
     unique.sort((a, b) => order[a.kind] - order[b.kind]);
-    return teardownRecords(unique, (record) =>
+    const tally = await teardownRecords(unique, (record) =>
       this.cleanupRecord(record, namespace),
     );
+
+    try {
+      const purge = await purgeNamespace(this.pool, namespace);
+      const failedTables = Object.keys(purge.failed_tables);
+      if (failedTables.length > 0) {
+        tally.failed += failedTables.length;
+      }
+    } catch {
+      // A refusal or a connection failure. Counted, never hidden: a nonzero
+      // `failed` is what the #578 gate's clause (e) reads.
+      tally.failed += 1;
+    }
+
+    return tally;
   }
 
   /**
