@@ -92,7 +92,19 @@ def validate_started_lane(
         candidate["server_id"] = metadata["server_id"]
     expected = exact_scope_fields(namespace, scope)
     expected["source"] = expected.pop("platform")
-    validate_exact_fields(candidate, expected, "session_start result")
+    # The server stores/returns `platform` under the lane column `source`
+    # (src/tools/session-start.ts:9,45,84), so the COMPARISON must use the
+    # response spelling. The REPORT must not: `source` is not in the contract's
+    # scope vocabulary (docs/agent-context-pack-contract.md:99-105, restated as
+    # a closed set at :671-674) and `_SCOPE_KEYS` (runtime.py) rejects it on
+    # input. Naming it told operators to add a key the provider then refused —
+    # the #646 contradiction, where no spelling could succeed.
+    validate_exact_fields(
+        candidate,
+        expected,
+        "session_start result",
+        report_names={"source": "platform"},
+    )
 
 
 def validate_context_pack_scope(
@@ -677,10 +689,19 @@ def validate_exact_fields(
     candidate: Mapping[str, Any],
     expected: Mapping[str, Any],
     label: str,
+    report_names: Mapping[str, str] | None = None,
 ) -> None:
-    """Require every expected field to be present with its exact value."""
+    """Require every expected field to be present with its exact value.
+
+    ``report_names`` maps a comparison key to the name the CALLER may actually
+    supply, for the cases where the server's response spelling differs from the
+    request vocabulary. An error must only ever name keys a request can carry;
+    naming a response-only key is an instruction the validator itself rejects
+    (#646).
+    """
+    renames = report_names or {}
     mismatches = sorted(
-        name
+        renames.get(name, name)
         for name, value in expected.items()
         if name not in candidate or candidate[name] != value
     )
