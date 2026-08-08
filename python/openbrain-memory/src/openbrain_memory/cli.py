@@ -130,6 +130,13 @@ _HELP_ENVIRONMENT = {
         "OPENBRAIN_NAMESPACE -- namespace for every request; NOT a request key",
         "OPENBRAIN_TOKEN -- the bearer value sent as the Authorization header",
     ],
+    "optional": [
+        "OPENBRAIN_DELEGATE_NAMESPACE -- 1 to send OPENBRAIN_NAMESPACE as the "
+        "X-Namespace header, binding a namespace the token does not already "
+        "grant; requires an admin/ob-admin token and is refused for other "
+        "roles. Off by default: without it the server uses the token's own "
+        "namespace",
+    ],
     "note": (
         "The example is a request body and carries no identity. base_url, "
         "token, and namespace are read from these variables, or from an "

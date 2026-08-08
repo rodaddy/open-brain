@@ -90,6 +90,31 @@ def validate_started_lane(
     }
     if isinstance(metadata, Mapping) and "server_id" in metadata:
         candidate["server_id"] = metadata["server_id"]
+    # A namespace mismatch is diagnosed separately, BEFORE the generic
+    # comparison, because it is the one scope key an operator cannot fix by
+    # editing the request (#654). `namespace` is env-carried and never a
+    # request key (the provider's own `--help` says so), so the generic
+    # "did not prove exact Open Brain scope: namespace" pointed at a key there
+    # is no way to send — the same shape of dead end as the #646 `source`
+    # contradiction, one key over.
+    #
+    # What it actually means is that the server bound the lane to the TOKEN's
+    # namespace rather than the configured one, because the request carried no
+    # `X-Namespace` delegation header. Naming the cause and the remedy turns an
+    # opaque refusal into an actionable one, and it must stay a REFUSAL: writing
+    # into whatever namespace came back is the silent mis-scope this issue is
+    # about (server/auth/middleware.ts:9-13).
+    served = lane.get("namespace")
+    if "namespace" in lane and served != namespace:
+        raise ValueError(
+            "session_start bound the lane to namespace "
+            f"'{served}', not the configured '{namespace}'. The namespace is "
+            "carried by OPENBRAIN_NAMESPACE and is never a request key; to bind "
+            "a namespace your token does not already grant, set "
+            "OPENBRAIN_DELEGATE_NAMESPACE=1 with an admin/ob-admin token so the "
+            "request sends the X-Namespace header. Nothing was written to "
+            f"'{namespace}'."
+        )
     expected = exact_scope_fields(namespace, scope)
     expected["source"] = expected.pop("platform")
     # The server stores/returns `platform` under the lane column `source`
