@@ -12,11 +12,18 @@ import { withCorrelation } from "./context.ts";
 import { createLogger, withOperation, workerLogPath } from "./logger.ts";
 import { sanitizeValue } from "./sanitize.ts";
 
-// The shared temp workspace, never `/tmp` or `$TMPDIR`: those are sandbox-local,
-// so a runner, a sandbox, and the host each see a different one and anything
-// written there is invisible to the others (Development AGENTS.md, hard rule).
+// A repo-relative scratch dir, never `/tmp` or `$TMPDIR`: those are
+// sandbox-local, so a runner, a sandbox, and the host each see a different one
+// and anything written there is invisible to the others (Development
+// AGENTS.md, hard rule).
+//
+// Repo-relative rather than the shared `{temp_workspace}` path, because this
+// runs in CI too. An absolute `/Volumes/...` default is unwritable on the Linux
+// runner and fails with `EACCES: permission denied, mkdir '/Volumes'` — which
+// is exactly how the first push of this test failed. `_scratch/` is already
+// gitignored and already used by `src/operator-doctor.test.ts`.
 const SCRATCH_ROOT =
-  process.env.OPENBRAIN_TEST_SCRATCH_DIR ?? "/Volumes/ThunderBolt/_tmp/open-brain/_scratch";
+  process.env.OPENBRAIN_TEST_SCRATCH_DIR ?? join(import.meta.dir, "../../_scratch/logging");
 await mkdir(SCRATCH_ROOT, { recursive: true });
 
 const CONFIG = {
