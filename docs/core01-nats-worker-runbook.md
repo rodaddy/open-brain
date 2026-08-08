@@ -387,9 +387,30 @@ inbox, which is the accurate reading of that case.
 The handler still builds the full pack first, and nothing about what it builds
 changed; this changed only how an undeliverable reply is answered.
 
-**Still open:** the 58.5 MB reply does not fit an 8 MB broker, so a
-`durable_memory` request on this namespace gets a clear error rather than a
+**Resolved (#563, operator ruling 2026-08-08, ledger item 23 in
+`docs/issue-graph.md`).** The 58.5 MB reply — re-measured at 60.4 MiB on
+2026-08-05, because the corpus grows daily — did not fit an 8 MB broker, so a
+`durable_memory` request on this namespace got a clear error rather than a
 pack. The 8 MB figure is the NATS server's own `max_payload`, not an Open Brain
-choice — it is reported here as a measurement, and how to resolve it is the
-operator's call, not something this runbook prescribes.
+choice.
+
+The resolution was not to make the reply fit. It was that a whole-corpus reply
+is not a shape the server should ever produce: "I don't see any reason why this
+whole thing would ship in a single shot to anywhere. It defeats the whole
+purpose of this." A `durable_memory` reply now carries a BURST of records
+(`DURABLE_MEMORY_BURST_ITEMS`, 10 — the top of the 5–10 range the ruling names)
+plus the `pointers` pool the pack already builds, and a `next` handle. A caller
+that legitimately wants the whole corpus replays the request with that handle
+and receives the rest as further bursts, server→client, "not ever as the whole
+file."
+
+**This changed delivery, not data.** Records are still stored whole and
+returned whole; every record the query matches is still retrievable, in bursts,
+by walking the handle to completion. Nothing is truncated for being late in the
+ranking, and the storage side is untouched (#604/#606). A pack whose largest
+single reply is now the size of ten records rather than the size of the
+namespace fits any broker by construction, so the `max_payload` measurement
+above is no longer the binding constraint on this path.
+
+Executable acceptance: `scripts/done-means/563-bounded-recall.sh`.
 

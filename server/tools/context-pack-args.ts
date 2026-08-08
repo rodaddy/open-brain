@@ -99,6 +99,27 @@ export const contextPackBudgetInputSchema = z
   })
   .optional();
 
+/**
+ * The continuation handle a caller replays to receive the NEXT burst of a
+ * durable_memory walk (#563, ledger item 23).
+ *
+ * A reply that still has undelivered records carries `durable_memory.next`;
+ * passing it back verbatim resumes the same ranked recall where the previous
+ * burst stopped. It is a delivery position, never a filter — nothing about it
+ * narrows what the query matches, and a walk run to completion has received
+ * every record the query found.
+ */
+export const contextPackContinuationInputSchema = z
+  .object({
+    offset: z.number().int().min(0),
+  })
+  .optional()
+  .describe(
+    "Resume a durable_memory walk: pass back the `next` object from the " +
+      "previous reply to receive the following burst of the same ranked " +
+      "recall. Absent, delivery starts at the top of the ranking.",
+  );
+
 export const agentContextPackInputSchema = {
   ...scopeInputSchema,
   query: z.string().max(4000).optional(),
@@ -134,6 +155,7 @@ export const agentContextPackInputSchema = {
     .boolean()
     .optional()
     .describe("Explicitly include exact-scope quarantined recovery summary"),
+  continue_from: contextPackContinuationInputSchema,
   budget: contextPackBudgetInputSchema,
 };
 
