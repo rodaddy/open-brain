@@ -59,6 +59,23 @@ Every lane, no exceptions:
 
 Newest first. Every entry: what changed, and the observation that forced it.
 
+### 2026-08-08 (later) — harvest of the #614 lane (PR #623) and its ruling
+
+- **Deviating from a recorded decision is allowed exactly one way: implement
+  the better behavior, FLAG it as a deliberate divergence naming the decision
+  it reverses, and request a ruling.** The #614 lane did this (auto-drop vs
+  ledger item 15's printed-never-executed) and the operator ratified narrow.
+  Burying the same deviation would have been a violation; flagging it made it
+  the new rule. This is the model.
+- **Auto-removal exception (ledger item 20, narrow):** a process may remove a
+  resource on exit/interrupt only when it is (1) self-created this run,
+  (2) prefix-guarded so it structurally cannot name anything it did not
+  create, and (3) session-scoped throwaway content. All other teardown stays
+  printed-never-executed.
+- **Push with an explicit refspec** (`git push origin HEAD:refs/heads/<branch>`)
+  when the git guard (#618) rejects `push -u` — more specific, not a variant
+  retry.
+
 ### 2026-08-08 — harvest of the tooling + fixture lanes (PRs #615, #616, #617, #619, #620, #621)
 
 - **`validate-pr-body.ts` reads `PR_BODY`/`PR_TITLE` from ENV, not argv or
