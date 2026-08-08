@@ -33,6 +33,50 @@ export interface TransportProducerHealth {
   readonly completed_ticks: number;
 }
 
+/**
+ * The raw-capture lane's liveness, as `/health` reports it.
+ *
+ * WHY THIS IS A HEALTH INPUT AT ALL (#647, ledger item 25). Raw capture is
+ * AUTOMATIC — a `Stop` hook reads since the watermark and delivers — and
+ * automatic is what makes it dangerous: nothing was ever asked to notice it
+ * stopping. `ob_raw_turns` records ARRIVALS; nothing anywhere read ABSENCE, so
+ * a silently-dead capture lane was server-side indistinguishable from an idle
+ * one. This is the #625 producer argument applied to the second background
+ * lane, and it replaces an enforcement tier rather than adding a test: ledger
+ * item 25 retired the capture merge-gate on the reasoning that gating a
+ * human's PR is the wrong instrument for a background pipeline.
+ *
+ * Every field is derived from EVENT COUNTS by
+ * `openbrain.apps.capture.liveness`. `silence_seconds` is reported, never
+ * compared — a wall-clock verdict cannot tell a wedged pipeline from a quiet
+ * afternoon (`docs/lane-contract.md`, Tightenings round 5).
+ */
+export interface TransportCaptureHealth {
+  /** True once any capture fault below fired. */
+  readonly stale: boolean;
+  /** Sessions ran and the watermark advanced zero bytes. */
+  readonly watermark_wedged: boolean;
+  /** The spool holds records and the outage latch announced nothing. */
+  readonly spool_unannounced: boolean;
+  /**
+   * Speakers that delivered nothing while the lane was active.
+   *
+   * PER ROLE, not per lane, and this field is the reason the block exists in
+   * this shape: `docs/decisions/capture-never-drops-a-turn.md:188-200` records
+   * that the operator's numbers stayed healthy for six days while the
+   * assistant side sat at zero (#447). A lane total reads as busy traffic;
+   * only the per-role view sees a dead speaker.
+   */
+  readonly silent_roles: readonly string[];
+  readonly sessions_observed: number;
+  readonly turns_delivered: number;
+  readonly spool_pending: number;
+  /** Reported for an operator; no verdict is derived from it. */
+  readonly silence_seconds: number;
+  /** Content-free sentence naming which fault fired. */
+  readonly reason: string;
+}
+
 export interface SingleWorkerHealth {
   readonly status: "healthy" | "degraded";
   /** Machine hostname — the human half of "which brain did I reach?". */
@@ -54,6 +98,14 @@ export interface SingleWorkerHealth {
    * job"; `stale: true` means "my job and I am not doing it".
    */
   readonly maintenance_producer?: TransportProducerHealth;
+  /**
+   * Absent on a process that composes no capture lane — a server no hook
+   * reports to, or a worker that opted out. Distinct from a lane that is
+   * present and silent, exactly as `maintenance_producer` is: absent means
+   * "not my job"; `stale: true` means "my job and I am not doing it"
+   * (`docs/lane-contract.md`, Tightenings round 8).
+   */
+  readonly capture?: TransportCaptureHealth;
   readonly timestamp: string;
 }
 
@@ -76,6 +128,14 @@ export interface SingleWorkerHealthInput {
    * the status.
    */
   readonly producerHealth?: () => TransportProducerHealth | undefined;
+  /**
+   * The capture lane's liveness reading, injected the same way `natsHealth`
+   * and `producerHealth` are: the live component knows its counters and this
+   * module must not guess them. Omitted composes no capture block and cannot
+   * degrade the status — which is the ordinary case for most workers, not an
+   * edge (core01 runs several; `AGENTS.md`).
+   */
+  readonly captureHealth?: () => TransportCaptureHealth | undefined;
 }
 
 const HTTP_NATS_HEALTH: TransportNatsHealth = {
@@ -128,8 +188,13 @@ export async function getSingleWorkerHealth(
   // producer supplies nothing here and is unaffected — absence is not staleness.
   const producer = input.producerHealth?.();
   const producerDegraded = producer?.stale === true;
+  // #647: a silent capture lane degrades this worker, on the same argument as
+  // the producer above. A process that composes no capture lane supplies
+  // nothing here and is unaffected — absence is not staleness.
+  const capture = input.captureHealth?.();
+  const captureDegraded = capture?.stale === true;
   const status =
-    database.connected && !natsDegraded && !producerDegraded
+    database.connected && !natsDegraded && !producerDegraded && !captureDegraded
       ? "healthy"
       : "degraded";
   input.logger.info(
@@ -148,6 +213,19 @@ export async function getSingleWorkerHealth(
             maintenance_producer_overlapped_ticks: producer.overlapped_ticks,
           }
         : {}),
+      // Emitted whenever a capture lane exists, not only when it is stale, for
+      // the same reason as the producer block above: a field that appears only
+      // on failure cannot be graphed, and the healthy reading is what makes a
+      // later stale one comparable.
+      ...(capture
+        ? {
+            capture_stale: capture.stale ? 1 : 0,
+            capture_sessions_observed: capture.sessions_observed,
+            capture_turns_delivered: capture.turns_delivered,
+            capture_spool_pending: capture.spool_pending,
+            capture_silent_roles: capture.silent_roles.length,
+          }
+        : {}),
     },
     "worker_health_result",
   );
@@ -160,6 +238,20 @@ export async function getSingleWorkerHealth(
         completed_ticks: producer.completed_ticks,
       },
       "maintenance_producer_health_degraded",
+    );
+  }
+  if (captureDegraded) {
+    input.logger.warn(
+      {
+        reason: capture.reason,
+        sessions_observed: capture.sessions_observed,
+        turns_delivered: capture.turns_delivered,
+        spool_pending: capture.spool_pending,
+        watermark_wedged: capture.watermark_wedged,
+        spool_unannounced: capture.spool_unannounced,
+        silent_roles: capture.silent_roles.join(","),
+      },
+      "capture_lane_health_degraded",
     );
   }
   return {
@@ -175,6 +267,7 @@ export async function getSingleWorkerHealth(
     },
     nats,
     ...(producer ? { maintenance_producer: producer } : {}),
+    ...(capture ? { capture } : {}),
     timestamp: new Date().toISOString(),
   };
 }
