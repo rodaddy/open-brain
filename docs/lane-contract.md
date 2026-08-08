@@ -87,6 +87,50 @@ Every lane, no exceptions:
 
 Newest first. Every entry: what changed, and the observation that forced it.
 
+### 2026-08-08 (round 11) — harvest of the #645 conflict lane, the ledger-25 retirement lane (PR #649), and the worker-48 pin failure
+
+- **A recorded ruling is not an implemented one, and the gap is invisible to
+  every check that predates it.** Ledger item 25 retired the capture gate;
+  main kept it registered, and nothing failed because no check asserted the
+  retirement. A ruling that retires a mechanism needs its own done-means
+  check on the same pass, or ledger and tree drift silently.
+- **The worker-48 model pin does not bind through direct Agent dispatch:**
+  the lane self-reported claude-fable-5 — the head's model — despite the
+  agent definition pinning claude-opus-4-8. Requested-model provenance
+  recorded what was asked, not what answered (the ledger-18 provenance
+  warning proven live). A/B still has ZERO valid 4.8 samples; model-pinned
+  dispatch must go through the route that actually places the model.
+- **A generated file in conflict is regenerated, never hand-merged** — the
+  conflict lives in the inputs, and usually is not one (SME index rebuilt
+  from entries; both sides' entries survived).
+- **A conflict-free merge is not a clean merge: a merge is a fresh RED
+  opportunity for every gate the branch owns.** The neutrality gate caught a
+  literal #642 introduced after the branch cut — correct on each side,
+  wrong only in combination. Re-run the branch's own checks AFTER merging
+  main.
+- **Inverting a done-means clause needs its own RED** (extends round 9's
+  rewritten-clause rule), and **retired-vs-deleted must be distinguished by
+  the check** — the 451 clauses now fail loudly if a cleanup deletes the
+  #647 prior art instead of retiring it.
+- **A hook-set assertion needs both directions:** "none missing" passes
+  while a sixth hook creeps in; the "none extra" half catches config drift.
+- **FETCH_HEAD is per-worktree**; fetch inside the worktree you merge in.
+  **lane-bootstrap refuses a leftover worktree** — on a continuation lane
+  for the same branch, reuse it after verifying clean/synced/.env, and flag.
+- **Gate defects, minimal-paired this round:** git guard fires on the word
+  "main" in commit MESSAGE prose on a correctly-named branch (say "the
+  default branch"; guard should read `git branch --show-current`);
+  design-lookup-gate fires on a gitignored scratch PR-body file; the
+  PRE-PUSH hook runs the suite against the shared dogfood DB — the exact
+  inadmissible path of the #614 ruling (1 fail → 0 fail on an identical
+  tree, skip counts 485 apart). `aqmd search` can exceed 120s — wrap in
+  `timeout`.
+- **Announced by tooling, needs a home:** verify-lane/lane-bootstrap print
+  `ADJUSTED: neither OPENBRAIN_TEMP_WORKSPACE nor DEV_TMP is set` and place
+  worktrees under ~/.cache instead of the configured temp workspace. Set the
+  variable in controller/verifier environments or teach the scripts the
+  Development default.
+
 ### 2026-08-08 (round 10) — harvest of the #636 neutrality-scrub lanes (PR #645, Sol + Claude continuation)
 
 - **A placeholder only neutralizes a value nothing compares to reality.** A
