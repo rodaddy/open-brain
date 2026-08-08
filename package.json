@@ -11,6 +11,7 @@
     "db": "bun run --env-file=.env scripts/db.ts",
     "sync-issues": "bun run scripts/sync-issues.ts",
     "test": "bun test",
+    "test:isolated": "bun run scripts/test-isolated.ts",
     "typecheck": "bunx tsc --noEmit",
     "backfill": "bun run scripts/backfill.ts",
     "codex-memory-smoke": "bun run scripts/codex-memory-smoke.ts",
