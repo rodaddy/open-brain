@@ -87,6 +87,31 @@ Every lane, no exceptions:
 
 Newest first. Every entry: what changed, and the observation that forced it.
 
+### 2026-08-08 (round 6) — harvest of the #629 clause-8 fix (the check that measured its own guard)
+
+- **A done-means check that exercises its own tooling inherits that tooling's
+  ambient environment.** The controller's clause-8 RED was real but blamed the
+  wrong component: verify-lane's re-entry guard (`MGVL_VERIFY_LANE_PRS`) fired
+  BEFORE done-means resolution, so the nested probe died at the guard and never
+  reached the error text the clause asserted on. A clause must clear the
+  ambient state its subject reacts to, or it measures the guard — **and
+  reports a wrong cause that sends the next agent to fix code that was never
+  broken.** The misdirection is the dangerous half.
+- **"Fixing the wrong layer" is a lane-level pattern, not an incident.** Three
+  distinct instances in one lane (two recursion-guard attempts against a
+  selection defect, then a message-text fix against a pre-emption defect).
+  Before writing a fix, state which layer produced the observed symptom and
+  what evidence puts it there.
+- **Named-env coupling flagged, not buried:** clause 8's correctness now
+  depends on clearing two specifically named env vars; a future guard reading
+  a different name silently regresses the clause to measuring the guard again.
+  No test enforces the coupling; the refusal text is the only mitigation.
+  (Lane-flagged residual risk, PR #629.)
+- **Bootstrap refuses loudly without `.env` in the invoking checkout** — the
+  controller's first fresh-worktree verify run failed at exactly the
+  missing-.env failure the script exists to prevent, and no receipt was
+  posted. Copy `.env` into any bare worktree you run verify-lane from.
+
 ### 2026-08-08 (round 5) — harvest of the merge-gate lane (PR #629) and the Terra ruling
 
 - **A repo guard cannot protect a run that checks out an older commit of the
