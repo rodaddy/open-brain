@@ -214,13 +214,76 @@ function restoreEnv(key: string, value: string | undefined): void {
   else process.env[key] = value;
 }
 
+// Every namespace this suite writes into, recorded as each test builds one.
+// Teardown deletes exactly these — not a `parity-%` wildcard sweep, which would
+// also delete a concurrently running lane's rows out from under it, and not a
+// hardcoded list, which silently stops covering a fixture the moment one is
+// added.
+const seededNamespaces = new Set<string>();
+
+// Tables the fixtures actually write, in FOREIGN-KEY-SAFE order.
+//
+// Measured, not guessed: a full parity run against a freshly migrated database
+// left rows in exactly these, and only these, under `parity-%` namespaces
+// (#613). Children precede their parents — `ob_raw_turns` references
+// `ob_session_lanes`, and `ob_source_files` references `ob_sources` — so a
+// delete in list order never trips a constraint.
+//
+// This list is deliberately explicit rather than derived from
+// `information_schema` at runtime. A schema-walking teardown would silently
+// widen its own blast radius every time a namespaced table is added, which is
+// the opposite of what a test fixture should do; when a new fixture starts
+// writing somewhere new, the done-means check (#613) fails and this list is
+// updated on purpose.
+const SEEDED_TABLES = [
+  "ob_raw_turns",
+  "ob_session_lanes",
+  "ob_source_files",
+  "ob_sources",
+  "ob_links",
+  "ob_entities",
+  "content_occurrences",
+  "decisions",
+  "relationships",
+  "sessions",
+  "thoughts",
+] as const;
+
+/**
+ * Delete every row this suite seeded, in every namespace it used.
+ *
+ * WHY THIS EXISTS (#613): these fixtures were leaving approved/active
+ * `ob_sources` rows behind. On `main` that was invisible because nothing
+ * produced from them. The maintenance sweep is a CROSS-NAMESPACE producer by
+ * design (`selectSourcesNeedingDerivation` receives `undefined` writable
+ * namespaces, because a server-owned sweep must serve every namespace), so the
+ * moment a producer runs anywhere in the suite, these leftovers become real
+ * queued `graph.derive` jobs and break an unrelated test — observed in PR #609
+ * as `026 maintenance queue` losing its concurrent-claim race (Expected 1,
+ * Received 2). A suite that leaks rows is not a self-contained suite; it is a
+ * time bomb for whoever next turns on a producer.
+ */
+async function deleteSeededRows(): Promise<void> {
+  if (!pool || seededNamespaces.size === 0) return;
+  const namespaces = [...seededNamespaces];
+  for (const table of SEEDED_TABLES) {
+    await pool.query(`DELETE FROM ${table} WHERE namespace = ANY($1)`, [namespaces]);
+  }
+}
+
 dbDescribe("server parity fixtures by implemented provider capability (live Postgres)", () => {
   beforeAll(() => {
     process.env.SHARED_NAMESPACE_CANONICAL = SHARED_NAMESPACE_ISOLATION;
     process.env.SHARED_NAMESPACE_PHYSICAL = SHARED_NAMESPACE_ISOLATION;
   });
 
-  afterAll(() => {
+  afterAll(async () => {
+    // Delete BEFORE restoring the shared-namespace override. The deletes are
+    // plain namespace-predicated SQL and do not read that config, so the order
+    // is not load-bearing today — but keeping cleanup inside the isolated
+    // window means it stays correct if a future teardown ever routes through
+    // application code that resolves the shared namespace.
+    await deleteSeededRows();
     restoreEnv("SHARED_NAMESPACE_CANONICAL", priorSharedNamespaceEnv.canonical);
     restoreEnv("SHARED_NAMESPACE_PHYSICAL", priorSharedNamespaceEnv.physical);
   });
@@ -231,11 +294,18 @@ dbDescribe("server parity fixtures by implemented provider capability (live Post
       test(`${provider}: ${fixture.id}`, async () => {
         const providerSlug = provider.replaceAll("-", "_");
         const namespace = `${fixture.auth.client_id}-${providerSlug}-${process.pid}`;
+        const otherNamespace = `${namespace}-other`;
+        // Recorded BEFORE the steps run, not after. A fixture that throws
+        // partway has still written rows, and those are exactly the ones most
+        // worth cleaning up; registering on the way in makes teardown cover the
+        // failure path too.
+        seededNamespaces.add(namespace);
+        seededNamespaces.add(otherNamespace);
         // Captured ids are added to this same map as steps run, so a fixture
         // substitutes namespace tokens and prior-step ids through one mechanism.
         const replacements: Record<string, string> = {
           "{{namespace}}": namespace,
-          "{{other_namespace}}": `${namespace}-other`,
+          "{{other_namespace}}": otherNamespace,
         };
         const auth: AuthInfo = {
           role: fixture.auth.role,
