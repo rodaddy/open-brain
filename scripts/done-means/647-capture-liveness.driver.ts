@@ -185,4 +185,19 @@ async function main(): Promise<void> {
   process.exit(failed.length > 0 ? 1 : 0);
 }
 
-await main();
+// An exception escaping `main` must FAIL, loudly. Without this the top-level
+// `await` rejects, Bun prints the trace, and the process still exits 0 — a
+// crashing subject would bank a false GREEN. Observed for real while mutation-
+// testing this very check: a mutation that made `captureDegraded` true for an
+// ABSENT reading threw inside the warn branch, and the shell script read the
+// crash as success. Same class as docs/lane-contract.md Tightenings round 9,
+// "a green clause is not evidence until it has been seen to fail".
+main().catch((error: unknown) => {
+  console.log();
+  console.log(
+    `FAIL  (driver) threw before completing: ${
+      error instanceof Error ? error.message : String(error)
+    }`,
+  );
+  process.exit(1);
+});
