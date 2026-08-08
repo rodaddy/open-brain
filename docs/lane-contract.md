@@ -21,7 +21,10 @@ on a change we are already confident about buys little. Two tiers:
 
 **FAST LANE** — eligible when the change matches a KNOWN class (an SME scope
 key with a covering `scripts/done-means/` check — the verifier agent's tier-1
-test) and the diff is bounded. Route: Sol low/medium. Skips: the deep research
+test) and the diff is bounded. Route: Sol low/medium, or Terra medium when the
+known class still carries weight (Terra runs low/medium/high — operator ruling
+2026-08-08, proven live; the high-only line was a stale claudex-launcher gate,
+now removed). Skips: the deep research
 phase, the full-suite three-way differential, exploratory root-causing.
 Keeps (the floor is not negotiable): the covering check run RED-first against
 the claim, PR-body validation (hook enforces it anyway), the required report
