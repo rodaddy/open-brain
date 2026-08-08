@@ -87,6 +87,38 @@ Every lane, no exceptions:
 
 Newest first. Every entry: what changed, and the observation that forced it.
 
+### 2026-08-08 (round 7) — harvest of the #637 gate-precision lane (PR #638) and the Sol runtime failures
+
+- **A guard's own repair is the hardest thing to write past it.** The #637 lane
+  was refused 12 times by the hook it was fixing — including on an `import`
+  path, a file rename, and a read-only `rg` — plus a 13th firing on the
+  controller while filing the follow-up issue. Hold precision-check fixtures in
+  DATA FILES, never inline in code or commands; otherwise every agent editing a
+  checker is refused by the guard under repair.
+- **Assert the RIGHT refusal, then check whether the assertion is the bug.**
+  The lane's first driver asserted a specific banner; RED revealed a sibling
+  clause refusing those cases correctly. Satisfying the naive assertion would
+  have weakened a layer that was never broken — the round-6 wrong-layer
+  pattern, this time caught before it cost anything.
+- **Text passes have different jobs: detection may strip, classification must
+  read the sentence as written.** Path-stripping fed into the intent classifier
+  deleted the subject noun a defect-report fixture's grammar needed. Never feed
+  a stripped string to the pass that asks "what is this text DOING?"
+- **pr-body-gate judges done-means paths at the wrong version** — it resolves
+  against the primary checkout, so a PR introducing a NEW check is refused even
+  though the path exists at the PR's own head. Filed as #641 with the
+  read-only-`rg` classifier gap. Same wrong-version class as round 5.
+- **Sol runtime instability is A/B data:** two consecutive process deaths on
+  one dispatch (exit-144 with zero work; mid-work death that printed a false
+  "RUNNING" and exited 0). The recovery pattern that worked: a continuation
+  lane inheriting the dead lane's worktree, auditing the inherited commits as
+  PROPOSED before building on them. A dead worker's branch state is salvage,
+  not trash — and not truth.
+- **Operator-attention flag (unresolved):** PR #638's conventional-commit-prefix
+  exemption is its widest exemption and likeliest future false pass; the lane
+  flagged it as known residual risk rather than silently narrowing or keeping
+  it. Needs a ruling at the next decisions pass.
+
 ### 2026-08-08 (round 6) — harvest of the #629 clause-8 fix (the check that measured its own guard)
 
 - **A done-means check that exercises its own tooling inherits that tooling's
