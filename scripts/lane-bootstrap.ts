@@ -325,7 +325,22 @@ function main(): void {
     const suffix = `${process.pid}_${Date.now().toString(36)}${Math.floor(Math.random() * 1296)
       .toString(36)
       .padStart(2, "0")}`;
-    dbName = `lane_${slug.replace(/-/g, "_")}_${suffix}`.slice(0, 63);
+
+    // Postgres identifiers are bounded at NAMEDATALEN-1 = 63 bytes; this is a
+    // compile-time server constant (`show max_identifier_length` = 63 on the
+    // dogfood cluster), not a policy choice, and the server silently TRUNCATES
+    // anything longer rather than erroring. Silent truncation is the danger:
+    // it would cut the tail, which is precisely where the uniqueness suffix
+    // lives, so two long branch names would collapse to the same database and
+    // truncate each other's tables — the exact collision --fresh-db exists to
+    // prevent. The uniqueness suffix is therefore kept WHOLE and the
+    // human-readable slug yields the space instead; the name stays unique no
+    // matter how long the branch is.
+    const prefix = "lane_";
+    const laneSuffix = `_${suffix}`;
+    const room = 63 - prefix.length - laneSuffix.length;
+    const slugPart = slug.replace(/-/g, "_").slice(0, Math.max(0, room));
+    dbName = `${prefix}${slugPart}${laneSuffix}`;
 
     const pgEnv: NodeJS.ProcessEnv = { ...process.env };
     if (password) pgEnv.PGPASSWORD = password;
