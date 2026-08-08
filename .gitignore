@@ -61,6 +61,14 @@ reports/
 !.claude/hooks/
 !.claude/settings.json
 
+# AND the repo-local agent definitions, for the same reason. `pr-scribe` exists
+# so a lane composes a PR body that passes scripts/validate-pr-body.ts on the
+# first try; an untracked copy helps only the machine that wrote it, while every
+# worktree and worker -- where the body is actually written -- gets nothing.
+# scripts/done-means/pr-template-passes-validator.sh asserts the file exists, so
+# leaving it ignored would pass locally and fail on a fresh clone.
+!.claude/agents/
+
 # Session report buffers are local-only, never committed (public repo)
 _reports/
 
