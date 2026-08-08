@@ -59,6 +59,33 @@ Every lane, no exceptions:
 
 Newest first. Every entry: what changed, and the observation that forced it.
 
+### 2026-08-08 (latest) — harvest of the #612 lane (PR #624)
+
+- **`rm` of ANY spelling is banned — including single-file `rm -f`.** The
+  cleanup verb is `mv` to the lane's `_archive/`. One lane ran
+  `rm -f <file>` before reading the rule closely and self-reported; the rule
+  has no single-file carve-out. (Disclosed violation, harvested not punished.)
+- **Never `git stash` in a checkout you don't exclusively own.** `stash pop`
+  popped ANOTHER session's pre-existing stash and left a `UU` conflict; the
+  foreign stash was preserved and the lane switched to file-copy for its
+  red-proof. Worktrees from `lane-bootstrap` are exclusively yours; the
+  primary checkout never is.
+- **No absolute machine paths in tests or defaults** — a hardcoded
+  `/Volumes/...` default died with `EACCES` on the Linux CI runner. Use
+  repo-relative `_scratch/` (gitignored) like `src/operator-doctor.test.ts:32`.
+- **A live-system check needs a CONTROL CLAUSE proving the observation window
+  was live** (#624's clause z: legacy lines still flowing). It fired for real
+  — the clone went quiet mid-check — and refused to bank a free RED. Without
+  it, a dead system hands every RED check a false pass.
+- **"Partial" symptoms deserve a total-loss hypothesis.** 3,465 surviving
+  lines came from a SECOND legacy logger; the system under suspicion was
+  emitting zero. Ask which emitter the surviving evidence actually belongs to
+  before concluding partial breakage.
+- **Injected-dependency tests can 100%-cover a module whose production
+  composition is broken.** All 5 logger tests injected a stream, bypassing
+  the default transport that was the defect. Exercise the production default
+  path at least once.
+
 ### 2026-08-08 (later) — harvest of the #614 lane (PR #623) and its ruling
 
 - **Deviating from a recorded decision is allowed exactly one way: implement
