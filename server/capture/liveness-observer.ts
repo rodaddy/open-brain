@@ -190,6 +190,18 @@ export interface CaptureLivenessObserver {
    * monitor into load. The refresh runs on its own cadence, below.
    */
   reading(): TransportCaptureHealth | undefined;
+  /**
+   * The raw counts behind the latest reading, or `undefined` when nothing has
+   * been observed yet.
+   *
+   * The application's health port takes an OBSERVATION and judges it with
+   * `readCaptureLiveness` per request (`server/application/index.ts:204`), so
+   * a composition root needs the counts, not the verdict. Retaining them is
+   * what keeps ONE judge of record: deriving an observation back out of a
+   * finished reading would have to invent a per-role split from a total, and
+   * the per-role split is the entire point (#447).
+   */
+  observation(): CaptureObservation | undefined;
   /** Gather once. Exposed so a caller (and a check) can drive it explicitly. */
   refresh(): Promise<void>;
   stop(): void;
@@ -271,11 +283,14 @@ export function createCaptureLivenessObserver(
   options: { readonly refreshIntervalMs?: number; readonly autoStart?: boolean } = {},
 ): CaptureLivenessObserver {
   let latest: TransportCaptureHealth | undefined;
+  let latestObservation: CaptureObservation | undefined;
   let timer: ReturnType<typeof setInterval> | undefined;
 
   const refresh = async (): Promise<void> => {
     try {
-      latest = readCaptureLiveness(await gather(input));
+      const observed = await gather(input);
+      latestObservation = observed;
+      latest = readCaptureLiveness(observed);
     } catch (error: unknown) {
       // A failed gather must not fabricate either verdict. Keeping the previous
       // reading and logging the category preserves "absence is not staleness"
@@ -303,10 +318,161 @@ export function createCaptureLivenessObserver(
 
   return {
     reading: () => latest,
+    observation: () => latestObservation,
     refresh,
     stop: () => {
       if (timer !== undefined) clearInterval(timer);
       timer = undefined;
     },
   };
+}
+
+/** Env var naming the tenant whose capture lane this process reports on. */
+export const CAPTURE_HEALTH_NAMESPACE_ENV = "OPENBRAIN_CAPTURE_HEALTH_NAMESPACE";
+/** Env var overriding the observation window, in minutes. */
+export const CAPTURE_HEALTH_WINDOW_ENV = "OPENBRAIN_CAPTURE_HEALTH_WINDOW_MINUTES";
+/** Env var overriding the refresh cadence, in milliseconds. */
+export const CAPTURE_HEALTH_REFRESH_ENV = "OPENBRAIN_CAPTURE_HEALTH_REFRESH_MS";
+
+/** Ruled default observation window: 6 hours (ledger item 28). */
+export const DEFAULT_CAPTURE_WINDOW_MINUTES = 360;
+/** Ruled default refresh cadence: 60 seconds (ledger item 28). */
+export const DEFAULT_CAPTURE_REFRESH_MS = 60_000;
+
+export interface CaptureHealthRuntime {
+  /**
+   * The port `createShadowApplication` takes, or `undefined` when this
+   * deployment composes no capture lane. Absence, not a neutral value: the
+   * application omits the block entirely and the health verdict is untouched.
+   */
+  readonly captureObserver?: () => CaptureObservation | undefined;
+  /** Stop the refresh timer. Safe to call when no observer was built. */
+  stop(): void;
+}
+
+export interface CaptureHealthRuntimeInput {
+  readonly env: Record<string, string | undefined>;
+  readonly pool: Pool;
+  readonly logger: Logger;
+  /** Injected for checks; skips the timer and the boot refresh. */
+  readonly autoStart?: boolean;
+}
+
+/**
+ * Build the capture-health observer this PROCESS should run, from config.
+ *
+ * WHY THE NAMESPACE IS REQUIRED AND HAS NO FALLBACK (operator ruling
+ * 2026-08-08, ledger item 28 in `docs/issue-graph.md`). The namespace is the
+ * Open Brain data-tenant column on `ob_*` rows — the auth-derived security
+ * boundary — so guessing one is not a convenience, it is this process
+ * reporting on someone else's data and calling the answer its own health. The
+ * ruling generalizes past this observer: identity-selecting config is explicit
+ * per deployment, loud on absence, never silently substituted, and a literal
+ * "default" tenant is a symptom to fix rather than a value to fall back on.
+ *
+ * ABSENCE IS LOUD IN THE LOG AND QUIET IN /health, WHICH ARE TWO DIFFERENT
+ * AUDIENCES. Unset namespace means no observer, so `/health` publishes no
+ * capture block and stays green — a deployment that runs no capture lane must
+ * not report itself broken for a job it was never given
+ * (`docs/lane-contract.md` Tightenings rounds 8 and 13). But a deployment that
+ * MEANT to run one and forgot the variable would then be indistinguishable
+ * from one that opted out, so the config notice is emitted at WARN, naming the
+ * variable. The health verdict is for the monitor; the notice is for the
+ * operator who has to fix the deploy.
+ *
+ * NOTHING IS ADJUSTED SILENTLY (AGENTS.md Coding Standards). When a ruled
+ * default applies it is announced with the values it applied, and an
+ * unparseable override is announced together with the default that replaced
+ * it — never accepted as a number and never accepted as silence.
+ */
+export function createCaptureHealthRuntime(
+  input: CaptureHealthRuntimeInput,
+): CaptureHealthRuntime {
+  const namespace = (input.env[CAPTURE_HEALTH_NAMESPACE_ENV] ?? "").trim();
+
+  if (namespace === "") {
+    input.logger.warn(
+      {
+        config_key: CAPTURE_HEALTH_NAMESPACE_ENV,
+        capture_health_enabled: false,
+        health_effect: "no capture block published; status unaffected",
+      },
+      "capture_health_namespace_missing",
+    );
+    return { stop: () => {} };
+  }
+
+  const windowMinutes = readPositiveInteger(
+    input,
+    CAPTURE_HEALTH_WINDOW_ENV,
+    DEFAULT_CAPTURE_WINDOW_MINUTES,
+  );
+  const refreshIntervalMs = readPositiveInteger(
+    input,
+    CAPTURE_HEALTH_REFRESH_ENV,
+    DEFAULT_CAPTURE_REFRESH_MS,
+  );
+
+  input.logger.info(
+    {
+      config_key: CAPTURE_HEALTH_NAMESPACE_ENV,
+      capture_health_enabled: true,
+      window_minutes: windowMinutes,
+      window_source:
+        input.env[CAPTURE_HEALTH_WINDOW_ENV] === undefined ? "default" : "env",
+      refresh_interval_ms: refreshIntervalMs,
+      refresh_source:
+        input.env[CAPTURE_HEALTH_REFRESH_ENV] === undefined ? "default" : "env",
+      observable_faults: OBSERVABLE_FAULTS,
+    },
+    "capture_health_defaults",
+  );
+
+  const observer = createCaptureLivenessObserver(
+    {
+      pool: input.pool,
+      logger: input.logger,
+      window: { windowMinutes, namespace },
+    },
+    {
+      refreshIntervalMs,
+      ...(input.autoStart === false ? { autoStart: false } : {}),
+    },
+  );
+
+  // The port is the observer's RAW COUNTS, read per request. The application
+  // judges them with `readCaptureLiveness` (`server/application/index.ts:204`),
+  // which is the same judge this module exports — so there is exactly one
+  // definition of "stale" in the process, and the refresh cadence stays the
+  // only thing that decides how often the database is asked.
+  return {
+    captureObserver: () => observer.observation(),
+    stop: () => observer.stop(),
+  };
+}
+
+/**
+ * Read a positive integer override, announcing whichever value wins.
+ *
+ * An unparseable or non-positive override is a CONFIG DEFECT, not a reason to
+ * pretend the variable was unset: it is announced at WARN with both the
+ * rejected text and the default that replaced it, so the transcript lets an
+ * operator map what was asked for to what exists.
+ */
+function readPositiveInteger(
+  input: CaptureHealthRuntimeInput,
+  key: string,
+  fallback: number,
+): number {
+  const raw = input.env[key];
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const parsed = Number(raw.trim());
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed <= 0) {
+    input.logger.warn(
+      { config_key: key, rejected: raw.trim(), applied: fallback },
+      "capture_health_override_invalid",
+    );
+    return fallback;
+  }
+  return parsed;
 }
