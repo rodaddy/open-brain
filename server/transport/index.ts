@@ -29,6 +29,13 @@ export type {
   SingleWorkerHealth,
   SingleWorkerHealthInput,
   TransportNatsHealth,
+  // #652: the capture block's type crosses the boundary now that a composition
+  // root builds one. `TransportProducerHealth` is exported alongside it because
+  // the two are the same kind of thing — a background lane's liveness, injected
+  // by whoever composes that lane — and a barrel that exports one but not the
+  // other invites the next composer to import through a deep path.
+  TransportCaptureHealth,
+  TransportProducerHealth,
 } from "./health.ts";
 
 export { createSingleWorkerTransportApp } from "./http-app.ts";

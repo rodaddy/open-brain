@@ -4,6 +4,10 @@ import { natsHealthFromConfig, type ServerConfig } from "../config.ts";
 import type { Database } from "../db/pool.ts";
 import type { ServerModuleBoundary } from "../module.ts";
 import { createMaintenanceRuntime } from "../maintenance/index.ts";
+import {
+  readCaptureLiveness,
+  type CaptureObservation,
+} from "../capture/liveness-observer.ts";
 import type { MaintenanceJobHandler } from "../../src/maintenance-queue.ts";
 import {
   createSingleWorkerTransportApp,
@@ -83,6 +87,26 @@ export interface ShadowApplicationInput {
     readonly path: string;
     readonly handler: RequestHandler;
   }>;
+  /**
+   * This process's view of the raw-capture lane (#652).
+   *
+   * Supplying it composes the capture block into `/health`; omitting it
+   * publishes no block and cannot degrade the status. That asymmetry is the
+   * whole contract: a deployment that legitimately runs no capture lane — an
+   * opted-out worker, a process no hook reports to — must not report itself
+   * broken for a job it was never given. Absent means "not my job"; `stale`
+   * means "my job and I am not doing it" (`docs/lane-contract.md` Tightenings
+   * rounds 8 and 13).
+   *
+   * It is a PORT rather than a construction here for the same reason the
+   * background runtimes are: the observer owns a query cadence and a timer, and
+   * the composition's job is to place its reading, not to decide how often the
+   * database is asked. `server/capture/liveness-observer.ts` builds one.
+   *
+   * Returning `undefined` from the observer is the ordinary not-yet-observed
+   * case — a fresh process, a quiet window — and is treated exactly as absence.
+   */
+  readonly captureObserver?: () => CaptureObservation | undefined;
 }
 
 /**
@@ -167,6 +191,17 @@ export function createShadowApplication(
         completed_ticks: liveness.completedTicks,
       };
     },
+    // #652. The reading #648 built and nothing composed. Same LATE-BINDING as
+    // `producerHealth` above and for the same reason: the closure is invoked
+    // per request, so `/health` publishes what the capture lane looks like NOW
+    // rather than what it looked like at boot — which is precisely the
+    // stale-but-confident answer this feature exists to replace.
+    //
+    // No observer composes no block: `readCaptureLiveness(undefined)` returns
+    // `undefined`, `getSingleWorkerHealth` omits the field, and the status is
+    // untouched. Absence is not staleness, and it is the ordinary case for
+    // most workers rather than an edge (core01 runs several — `AGENTS.md`).
+    captureHealth: () => readCaptureLiveness(input.captureObserver?.()),
   };
   const app = createSingleWorkerTransportApp({
     authenticate: input.authenticate,
