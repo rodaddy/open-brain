@@ -98,6 +98,7 @@ MAX_DISTILLED_CONTENT_BYTES = _runtime_validation.MAX_DISTILLED_CONTENT_BYTES
 _CONFIG_KEYS = {
     "allow_insecure_http",
     "base_url",
+    "delegate_namespace",
     "fallback_enabled",
     "namespace",
     "project",
@@ -307,6 +308,22 @@ class RuntimeConfig:
     timeout: float = 30.0
     fallback_enabled: bool = False
     spool_path: Path | None = None
+    # Send the configured namespace as `X-Namespace` so the server binds THIS
+    # namespace instead of the token's own (#654).
+    #
+    # Off by default, and that default is not timidity — the server gates the
+    # header on ROLE, not on the value: an `agent`-role token presenting
+    # `X-Namespace: rico` is a 403 even though `rico` is already its own
+    # namespace (observed live 2026-08-08 against revision 212f916). Sending it
+    # unconditionally would therefore 403 every non-admin caller in the fleet,
+    # all of whom are correctly served by their token's namespace today.
+    #
+    # It must nonetheless be REACHABLE, because without it a caller configured
+    # for a namespace its token does not grant is silently written to the
+    # token's namespace instead. That is the exact failure
+    # `server/auth/middleware.ts:9-13` names as the dangerous variant: "the
+    # caller believes it wrote somewhere it did not."
+    delegate_namespace: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "base_url", _require_text(self.base_url, "base_url"))
@@ -374,6 +391,12 @@ class RuntimeConfig:
                 "fallback_enabled",
                 env,
                 "OPENBRAIN_MCP2CLI_FALLBACK",
+            ),
+            delegate_namespace=_source_bool(
+                values,
+                "delegate_namespace",
+                env,
+                "OPENBRAIN_DELEGATE_NAMESPACE",
             ),
             spool_path=Path(str(spool_value)) if spool_value is not None else None,
         )
@@ -517,7 +540,7 @@ class FirstClassMemoryRuntime:
                     timeout=config.timeout,
                     transport=transport,
                     allow_insecure_http=config.allow_insecure_http,
-                    delegate_namespace=False,
+                    delegate_namespace=config.delegate_namespace,
                 )
             except Exception as error:
                 # Threaded into the router, which surfaces it on the first call
