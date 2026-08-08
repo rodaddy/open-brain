@@ -143,6 +143,26 @@ and a body composed in chat arrives wrapped in a code fence. The `pr-scribe`
 agent (`.claude/agents/pr-scribe.md`) composes a body from a lane's real
 evidence and returns one only after it has seen the validator exit 0.
 
+**This is FORCED, not advisory** (ledger item 17, operator 2026-08-08 — "if
+it's not enforced, it's pretty much useless"). `.claude/hooks/pr-body-gate.ts`
+is registered as a repo-local `PreToolUse` hook on `Bash`: a `gh pr create` or
+`gh pr edit` carrying `--body`/`-b`/`--body-file`/`-F` has that body run
+through `scripts/validate-pr-body.ts` before the command executes, and a
+failing body is refused with the validator's own errors. CI stays the backstop
+rather than the first detector. Nothing about the local step changes — running
+the validator yourself is still how you avoid meeting the hook at all.
+
+The gate judges by **parsed arguments**, never substring matching: it strips
+heredoc bodies, tokenizes with shell quoting rules, and only inspects
+`--body`-family flags once the executable word is `gh`, the subcommand `pr`,
+and the verb `create`/`edit`. So `gh pr view`, an `echo` of a string containing
+"gh pr create", and a commit heredoc quoting an invalid PR body all pass
+untouched — #618 is the standing example of a text-matching guard misfiring on
+heredoc TEXT and taxing every lane. Those non-firing cases are asserted by
+`scripts/done-means/pr-body-gate-fires.sh`, alongside the firing ones and an
+unreadable `--body-file`, which is refused out loud rather than silently
+allowed or silently blocked (AGENTS.md, no silent adjustments).
+
 ## Relationship to existing skills
 
 **Existing patterns, deliberately reused — and a new paradigm built on them.**
