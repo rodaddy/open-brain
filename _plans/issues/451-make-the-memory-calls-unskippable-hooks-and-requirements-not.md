@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: wayfinder:grilling
 Created: 2026-07-30T01:04:26Z
-Updated: 2026-08-04T23:27:30Z
+Updated: 2026-08-08T17:00:10Z
 
 ---
 
@@ -50,7 +50,7 @@ Type: grilling (HITL). Where the hard edges go is Rico's call.
 
 ---
 
-## Discussion (2)
+## Discussion (5)
 
 ### rodaddy — 2026-08-03T01:03:51Z
 
@@ -104,3 +104,81 @@ Latency, measured over 10 invocations: ~76 ms for the Python against ~20 ms for 
 ### rodaddy — 2026-08-04T23:27:30Z
 
 2026-08-04 — state correction, not a resolution. The design question this issue owns (PreToolUse as observation vs enforcement) is still OPEN; `python/openbrain/src/openbrain/apps/hooks/pre_tool_use.py` remains the deliberate stub. What changed: the operator settings swap the 2026-08-01 comment listed as pending is DONE. RUNNING — `~/.claude/settings.json:334` now registers `sh /Users/rico/.local/share/openbrain-memory/env/openbrain-hook-env ob-guard`, not `bun .../guard.ts`. Read the earlier "Live registration: UNCHANGED" line as superseded. Consequence for this ticket: the two pinned known gaps (`( mcp2cli open-brain search_all )` and `if true; then mcp2cli open-brain search_all; fi`, both pinned in `TestKnownGapsArePinned`) are now live in the Python guard rather than the TypeScript one. If this issue resolves to "enforcement, and it must hold", those two are the concrete work items and the recorded fixture harness makes them cheap to prove.
+
+---
+
+### rodaddy — 2026-08-08T16:30:39Z
+
+## Lane STOP — this needs the ruling before it needs code
+
+Dispatched as an implementation lane ("smallest correct enforcement that makes capture/checkpoint/hydration unskippable"). Stopping at a written design delta instead, per the lane's own STOP clause. Reason is specific, not a dodge: **every candidate gate here contradicts a live design contract that only Rico can overturn**, and the issue body already says where the hard edges go is his call.
+
+### What is actually RUNNING today (measured this session, not recalled)
+
+Hydration works. Probed the real hook with a synthetic `SessionStart` payload:
+
+```
+BASE=http://127.0.0.1:3100   health=200
+openbrain-session-start -> CANON PACK 1/2 (openbrain.agent_context_pack.v1)
+  namespace=rico | profile_guidance=20, process_guidance=49   exit 0
+```
+
+So the premise "the memory calls get skipped" is **not** currently a hydration-content failure. The three lanes that `_plans/canon-always-known.md:23-27` measured at 0 items are populated now.
+
+Registration is **global, not repo-local** — `~/.claude/settings.json` lines 334-419 carry `SessionStart` (`openbrain-session-start`, `-remaining`), `SessionEnd`, `Stop` (`openbrain-capture-stop`), `SubagentStop`, `PreCompact`/`PostCompact`. This repo's `.claude/settings.json` registers **no** session-lifecycle hook at all; it carries only `design-lookup-gate`, `pr-body-gate`, `merge-gate`, `design-contract`.
+
+### The blocker: "unskippable" collides with a written contract at every point
+
+Every lifecycle hook is **fail-open by explicit, documented design**:
+
+- `python/openbrain/src/openbrain/apps/hooks/session_end.py:23-27` — "ALWAYS EXIT 0 WITH EMPTY STDOUT. A hook that observes a session must never block or break one."
+- `.../hooks/stop.py:16-19` — same contract for capture.
+- `.../hooks/session_start.py:41-43` — "FAIL OPEN. A hook that opens a session must never block or break one."
+- `.../hooks/post_tool_use.py:38-41` — same.
+
+That is not an oversight to patch. It is the same constraint the issue itself names: *"a memory service that is down must not brick the session."* Making a fail-open observer hard-fail is a **reversal of a recorded decision**, which per lane-contract clause on deviations (`docs/lane-contract.md:205-210`) must be flagged for a ruling, never taken silently by a lane.
+
+`.../hooks/pre_tool_use.py:1-20` is a deliberate stub whose docstring says **"do not conflate observation with enforcement here"** — the exact question this issue owns, left open on purpose.
+
+### The four decisions, each with the option I'd argue for
+
+Not asking for a blank check — one item, one recommendation, TL;DR each.
+
+**1. Which call is gated?** Hydration, capture, or recall.
+Recommend: **capture-at-boundary only.** Hydration already runs and a gate on it can only fire when OB is down — a pure false-block generator. Recall-before-rederiving is unfalsifiable (no gate can tell that canon already answered a question). Capture is the one with a checkable receipt.
+
+**2. Hard block or loud warn?** Precedent inside this repo is hard-block: `design-lookup-gate.ts` uses `process.exit(2)` at five sites (`:588,836,874,916,965`), which returns stderr to the model and is what makes it corrective. But those gate a **tool call the agent chose**; a memory gate would gate a session boundary.
+Recommend: **hard block on `PreToolUse` for the mutation the session is trying to land, never on the session itself.** A session that cannot start is bricked; a `gh pr merge` that refuses until a capture receipt exists is recoverable and is exactly the merge-gate shape already proven at `.claude/hooks/merge-gate.ts`.
+
+**3. Where does the receipt live?** `design-lookup-gate.ts:257-277` keeps its own JSON state keyed by session id, with corrupt-file tolerance ("a corrupt state file must not wedge every tool call"). Memory calls have server-side receipts, so there are two candidate sources of truth and they can disagree.
+Recommend: **server receipt is the proof, local state is a cache.** Otherwise a gate can be satisfied by writing a local file, which is a gate an agent can forge.
+
+**4. Service-down semantics.** The one that decides whether any of this is safe. If OB is unreachable: block (honest, bricks work), or pass with a recorded degradation (safe, and the skip case becomes indistinguishable from an outage).
+Recommend: **pass, and stamp the degradation into the session** so the gap is visible after the fact rather than silently absorbed.
+
+### What I did NOT do, deliberately
+
+No hook written, no `scripts/done-means/451-unskippable-memory.sh`, no branch, no PR. A done-means check must encode the accept/reject boundary, and that boundary is precisely decisions 1-4 — a check written before the ruling would hard-code my guess at Rico's policy into the repo's enforcement layer, which is the failure mode the issue warns about ("a false block teaches agents to route around the guard, which is exactly how the `Grep`-with-a-capital-G workaround happened").
+
+Ready to implement immediately on a ruling; the concrete shape I'd build is decisions 1+2+3+4 as recommended, which is a repo-local `PreToolUse` gate on merge/PR-landing that requires a current capture receipt and degrades open when OB is unreachable. Estimated as a FAST LANE against the known merge-gate class.
+
+---
+
+### rodaddy — 2026-08-08T16:39:51Z
+
+**Operator ruling (2026-08-08, ledger item 24, docs/issue-graph.md):** TIERED ALL-THREE coverage.
+
+- **Capture — HARD GATE** at merge/wrap-landing: requires a server-side receipt for the session. Server receipt is the proof; local state is only a cache.
+- **Hydration — VERIFY + STAMP**: session start verifies the canon pack arrived (sections > 0); absence lands a loud visible marker on the session and its PRs. Never a block.
+- **Recall — MEASURE**: counts into existing telemetry, facts only; the operator reads the trend.
+- **Outage**: capture already spools durably (capture/outage.py, watermark.py, openbrain-memory _runtime_spool.py). The merge gate attempts a spool drain first — drain success produces the receipt and passes clean; a still-unreachable service passes WITH the visible stamp, and the spool guarantees eventual delivery. Skip and outage remain distinguishable in the record permanently.
+
+Decisions 1–4 from the lane's delta: 1=capture (with hydration verify-stamp and recall telemetry as sibling tiers), 2=gate-the-merge, 3=server receipt, 4=pass+stamp augmented with drain-first. Implementation is a FAST LANE against the known merge-gate class.
+
+---
+
+### rodaddy — 2026-08-08T17:00:10Z
+
+PR #642 MERGED — tiered coverage per ledger item 24 is implemented and controller-verified (verify-lane receipt at 7b13131; red-first 7-clause check, all green + mutation-proven): capture-gate.ts (merge refusal without server receipt, drain-first), hydration-stamp.ts, recall counter reusing usage_kind=canon (schema pinned by Zod enum + DB CHECK; new kind was a forbidden schema change).
+
+REMAINS OPEN for the named PROPOSED gaps before this is called done against LIVE Open Brain: (1) drain-DELIVERS direction unproven — needs a seeded-spool clause flipping a refusal to a pass; (2) hung-TCP outage shape untested (only closed-port refusal proven); (3) session_id/session_key equivalence assumed, enforced nowhere. MERGED, unverified-live.

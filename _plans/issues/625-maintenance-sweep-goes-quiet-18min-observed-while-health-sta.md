@@ -3,11 +3,12 @@
 
 # #625 — Maintenance sweep goes quiet (~18min observed) while /health stays green
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: bug
 Created: 2026-08-08T04:49:18Z
-Updated: 2026-08-08T04:49:18Z
+Updated: 2026-08-08T16:58:38Z
+Closed: 2026-08-08T16:58:38Z
 
 ---
 
