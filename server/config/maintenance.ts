@@ -33,6 +33,15 @@ export interface MaintenanceConfig {
   readonly concurrency?: number;
   readonly pollIntervalMs?: number;
   readonly leaseMs?: number;
+  /**
+   * Producer bounds (#384). Absent means "the sweep's own default", for the
+   * same single-owner reason as the runner knobs above: `maintenance-sweep.ts`
+   * clamps every one of these to its own safe maximum, so re-defaulting them
+   * here would create a second opinion that the sweep silently overrides.
+   */
+  readonly distillBatchSize?: number;
+  readonly maxDistillBatchesPerTick?: number;
+  readonly graphDerivationLimit?: number;
 }
 
 type Environment = Record<string, string | undefined>;
@@ -62,10 +71,24 @@ export function parseMaintenanceConfig(
     environment.OPEN_BRAIN_MAINTENANCE_POLL_MS,
   );
   const leaseMs = positiveInteger(environment.OPEN_BRAIN_MAINTENANCE_LEASE_MS);
+  const distillBatchSize = positiveInteger(
+    environment.OPEN_BRAIN_MAINTENANCE_DISTILL_BATCH_SIZE,
+  );
+  const maxDistillBatchesPerTick = positiveInteger(
+    environment.OPEN_BRAIN_MAINTENANCE_MAX_DISTILL_BATCHES,
+  );
+  const graphDerivationLimit = positiveInteger(
+    environment.OPEN_BRAIN_MAINTENANCE_GRAPH_LIMIT,
+  );
   return {
     enabled: raw !== "0" && raw !== "false",
     ...(concurrency !== undefined ? { concurrency } : {}),
     ...(pollIntervalMs !== undefined ? { pollIntervalMs } : {}),
     ...(leaseMs !== undefined ? { leaseMs } : {}),
+    ...(distillBatchSize !== undefined ? { distillBatchSize } : {}),
+    ...(maxDistillBatchesPerTick !== undefined
+      ? { maxDistillBatchesPerTick }
+      : {}),
+    ...(graphDerivationLimit !== undefined ? { graphDerivationLimit } : {}),
   };
 }

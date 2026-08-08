@@ -1841,6 +1841,45 @@ A diff/comparison tool is an operator trust surface: what it prints is what the 
 
 A hand-written stub proves conformance to the stub, not to the external API. Langfuse detail responses return full observation objects, but list rows return observation ID strings; reusing the detail shape in list fixtures made every test pass while every live `session` and `repeat` call failed validation. For each external endpoint, capture and sanitize a real response, preserve its envelope and value types, and drive the public caller through that fixture. Do not reuse a sibling endpoint's richer response shape unless the live wire contract proves they are identical.
 
+## [2026-08-07] Starting a global producer makes other suites' leftover fixtures live
+
+**Severity:** MEDIUM
+**Source:** PR #609 CI failure (#384 maintenance producer), self-caught
+**Scope key:** `review.producer_activation_promotes_inert_fixtures`
+**Status:** active
+
+### Pattern
+
+Turning on a background PRODUCER changes the meaning of every row already in the test database. The maintenance sweep selects across ALL namespaces by design (`selectSourcesNeedingDerivation` receives `undefined` writable namespaces, because a server-owned sweep must serve every namespace), so a test that composes an autostarted runtime derives from every approved/active `ob_sources` row present — not only the one it seeded. Other suites leave such fixtures behind (`parity-source-registry-*`); on `main` they sit inert with zero `maintenance_jobs` because nothing was producing. The new test converted them into real queued `graph.derive` rows, and its namespace-scoped `DELETE` could not see them.
+
+The victim is a DIFFERENT suite: `026 maintenance queue > allows only one concurrent runner to claim a due job` races two claims and expects exactly one due job to exist ANYWHERE. `claimDueJobs` filters on `state`/`run_after` only — no namespace and no job-kind predicate — so any stray due row is claimable and both racers win one (`Expected: 1, Received: 2`).
+
+Guards, in order of importance:
+
+1. A test that starts a producer cleans up by the DIMENSION THE PRODUCER USES, not the dimension the test seeds. Namespace-scoped cleanup is wrong for a cross-namespace producer; delete by `job_kind` for every kind the sweep can emit.
+2. Stop the runtime BEFORE deleting, or a tick landing between the `DELETE` and the halt re-enqueues what was just removed.
+3. **Do not conclude "pre-existing" from a single-file run.** This failure passes when its file runs alone and only appears after the full suite, because the defect is ordering-dependent leakage. The claim was made once on this branch and was wrong. The proof that actually settles it is the FULL suite run against clean `origin/main` in a separate worktree and a separate freshly-created database, compared against the same run on the branch — here, main 3701/0 versus branch 3701/1.
+
+## [2026-08-07] One helper does not make a boundary until every writer of the table reaches it
+
+**Severity:** HIGH
+**Source:** issue #605, PR #611 (thought-write chunk routing)
+**Scope key:** `review.shared_write_boundary_reaches_all_writers`
+**Status:** active
+
+### Pattern
+
+`src/chunk-write.ts` defined how a long thought must be stored — complete parent plus per-section chunk rows — and only ONE of the four writers that insert into `thoughts` called it. The rewrite-tree `log_thought` (`server/tools/capture.ts`), REST `POST /api/v1/thoughts` (`src/rest-api.ts`), and lane graduation (`src/tiering.ts`) each wrote a parent and stopped, so whether a 6 KB thought kept its per-section resolution depended on which door it came through. The storage rule existed, was documented, was tested, and was still false for three of four callers.
+
+The tell was a receipt field hardcoded to a constant: `capture.ts` returned `chunks_written: 0` unconditionally. A literal in a count field reports the shape of a code path rather than the state of the row, and it reads as a legitimate value (a short entry really does write zero chunks), so it survives review and makes the bypass invisible in the response.
+
+Review questions when any helper is described as "the" boundary for a table:
+
+- Count the writers first (`rg` the INSERT against the table name), then name which ones call the helper. "The write path" is a claim about a set, not about one file.
+- Refactor the already-compliant caller ONTO the shared function rather than leaving it as a fourth copy that happens to agree. Four implementations that agree today are not one boundary; they are four things that will drift.
+- Fixtures do not catch this when they exercise the trivial case. The parity fixture asserting `chunks_written: 0` passed both before and after the fix, because its thought was under the threshold — the field is genuinely 0 on both sides. A fixture that can never distinguish the defect from correct behavior is not coverage.
+- In the acceptance gate, drive each path at its REAL entry point and assert on distinct provenance (here: `source` values `mcp` / `rest` / `lane-tiering`). Calling the shared helper three times, or driving three paths that quietly funnel into one, proves nothing about routing.
+
 ## [2026-08-07] One selection rule, duplicated per caller, diverges silently
 
 **Severity:** HIGH

@@ -356,6 +356,7 @@ export async function runLaneTiering(args: Args): Promise<Receipt> {
             "openbrain-lane-tiering",
             embedding,
             `lane tiering: ${event.event_type}/${event.importance}`,
+            generateEmbedding,
           );
           applied += 1;
           addCount(receipt, namespace, "graduated");

@@ -4,6 +4,10 @@ import { contentHash, EMBEDDING_MODEL } from "./embedding.ts";
 import type { generateEmbedding } from "./embedding.ts";
 import { logger } from "./logger.ts";
 import { describeError } from "./observability/index.ts";
+import {
+  writeThoughtChunks,
+  type ChunkWriteResult,
+} from "./chunk-write.ts";
 
 /**
  * Lane → own-durable memory tiering (Issue #160).
@@ -198,6 +202,10 @@ export interface LaneGraduationProvenance {
 export interface GraduateResult {
   thought_id: string;
   is_new: boolean;
+  /** Chunk receipt for a long graduated event; null when chunking did not run. */
+  chunks?: ChunkWriteResult | null;
+  /** True when the parent committed but per-section writing threw. */
+  chunking_failed?: boolean;
 }
 
 /**
@@ -205,6 +213,13 @@ export interface GraduateResult {
  * Idempotent via ON CONFLICT (content_hash, namespace) — re-running a batch
  * produces no duplicate rows (mirrors log-thought.ts). Provenance is stored in
  * `promoted_from` (the existing provenance column) and surfaced in tags.
+ *
+ * A graduated event becomes an ordinary thought, so it is stored like one:
+ * when `embedFn` is supplied and the content is long, the parent is followed
+ * by per-section chunk rows via the shared thought-write boundary (#605).
+ * `embedFn` is optional so an existing caller that has no embedder still
+ * graduates — it simply does not chunk, which is the pre-#605 behavior rather
+ * than a new failure.
  */
 export async function graduateLaneEvent(
   pool: pg.Pool,
@@ -213,6 +228,7 @@ export async function graduateLaneEvent(
   createdBy: string,
   embedding: number[] | null,
   reason: string,
+  embedFn?: (text: string) => Promise<number[] | null>,
 ): Promise<GraduateResult> {
   // Defense-in-depth: a lane event must only graduate into ITS OWN namespace.
   // Callers already scope the source read by namespace, but assert here so a
@@ -268,9 +284,28 @@ export async function graduateLaneEvent(
     ],
   );
 
+  const thoughtId = rows[0].id as string;
+  const isNew = rows[0].is_new as boolean;
+
+  if (!embedFn) return { thought_id: thoughtId, is_new: isNew };
+
+  const chunks = await writeThoughtChunks(pool, {
+    parentId: thoughtId,
+    namespace,
+    createdBy,
+    content: event.content,
+    tags,
+    embedFn,
+    source: "lane-tiering-chunk",
+    isNew,
+    caller: "tiering/graduateLaneEvent",
+  });
+
   return {
-    thought_id: rows[0].id as string,
-    is_new: rows[0].is_new as boolean,
+    thought_id: thoughtId,
+    is_new: isNew,
+    chunks: chunks.result,
+    chunking_failed: chunks.failed,
   };
 }
 
@@ -379,6 +414,7 @@ export async function tierLaneEvent(
     opts.createdBy,
     embedding,
     `lane tiering: ${event.event_type}/${event.importance}`,
+    opts.embedFn,
   );
   receipt.graduated += 1;
 }
