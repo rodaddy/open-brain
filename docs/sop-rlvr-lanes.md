@@ -52,7 +52,38 @@ item at a time.
 | Lane environment | `scripts/lane-bootstrap.ts` | one-command known-good worktree/env/DB; stated reason required |
 | PR-body enforcement | `.claude/hooks/pr-body-gate.ts` + `scripts/validate-pr-body.ts` + `.github/pull_request_template.md` | invalid bodies impossible at the boundary; CI backstop |
 | Review knowledge | `docs/sme/entries/` + generated lane files | reviewer-facing lessons, one file per entry |
+| Verifier agent | `.claude/agents/verifier.md` | classifies a change against known classes and runs the covering done-means checks; produces receipts, gates nothing |
 | Truth grammar | RUNNING / MERGED / WRITTEN / PROPOSED | every claim, everywhere (LAW 0) |
+
+### Verifier agent
+
+`.claude/agents/verifier.md` (built 2026-08-08, ledger item 8 — the first agent
+candidate to graduate). It exists because step 3 of the loop below was being
+done by hand every time: work out which class of change this is, remember which
+check covers that class, run it, read the exit code.
+
+Its design is deliberately thin. Its **brain is files, read fresh every
+invocation** — `docs/sme/entries/` (the `Scope key:` lines are the known-goods
+matrix), `docs/lane-contract.md` (the Tightenings), and `scripts/done-means/`
+(the toolbox). Its **hands are deterministic scripts only**: it runs checks and
+reads exit codes, and never re-implements a check's logic in prose. The
+consequence worth stating: **every check merged into `scripts/done-means/` is
+automatically a new tool for it, so its capability grows without its definition
+changing.**
+
+It works in tiers — known class with a covering check (run it, cheap); known
+class with no check (partial coverage, gap named); or `NOVEL CLASS`, announced
+loudly and punted to the head. That last path is never an error to take. The
+design has exactly one failure mode — forcing an unfamiliar change into a known
+class and returning a green receipt that proves nothing — and the loud unknown
+is the only thing standing against it.
+
+**It is not enforcement.** Agent produces, script judges, hook enforces. The
+receipt it emits is evidence; the merge gate demands a receipt that came from
+an executed script. `scripts/done-means/verifier-agent-grounded.sh` gates the
+definition itself: committed and visible in a fresh clone (the `.gitignore`
+`.claude/*` trap), every referenced path resolving, and the guardrail,
+loud-unknown, and three brain sources still present.
 
 ## The head-session loop
 
