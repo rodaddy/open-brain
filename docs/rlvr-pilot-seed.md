@@ -124,6 +124,24 @@ CURRENT head SHA and (b) harvest proof.
   tracks the CONTRACT (tight brief + verifiable output), not model choice
   (operator ruling, ledger item 26). Requested-model provenance is never
   attestation — lanes self-report, controllers treat it as weak evidence.
+- A deploy's revision proof is not a feature-live proof. After any deploy
+  meant to light up a feature, read the FEATURE's own signal (its /health
+  block, its log event), never just the revision. When a merged feature
+  fails in deployment, ask which seam the passing check could not see.
+- A teardown/cleanup that reports success is not evidence of removal —
+  the tally is the thing under test. Assert a row/file COUNT from outside
+  the run.
+- A live-service check reads the SERVING process's credentials, never the
+  checkout's; and a security control is unproven until something REQUESTS
+  the forbidden thing and is refused by name.
+- A ruling that enumerates items from a log or report inherits that
+  filter's classification errors — a lane validates each enumerated item
+  against source before implementing, and HOLDS AT PROVEN RED to escalate
+  when the premise is wrong, rather than obeying or deviating silently.
+- Errors must name what the caller can change. An error naming an
+  internal key the caller has no way to send is a dead-end; fixing one
+  case of it (mismatch) does not fix its sibling (absent) — enumerate the
+  cases at the boundary.
 
 ## Adopted amendments (2026-08-08 — from the first pilot's own friction report)
 
