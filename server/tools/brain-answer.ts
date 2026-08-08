@@ -29,13 +29,14 @@ import {
 } from "./types.ts";
 import { canReadNamespace, namespaceFilterFor } from "./read-scope.ts";
 import { isSharedNamespace } from "./shared-namespace.ts";
-import { ALL_TABLES, type Tier } from "./search-constants.ts";
+import type { Tier } from "./search-constants.ts";
 import {
   setActiveMcpTraceMetadata,
   traceRetrievalSpanSync,
 } from "../observability/langfuse-tracing.ts";
 import {
   executeSearchWithSharedFallback,
+  readableSearchSources,
   type SearchMode,
   type SearchRow,
   type SourceRef,
@@ -231,9 +232,15 @@ export function registerBrainAnswerTool(
         return errorResult(NAMESPACE_DENIED);
       }
 
-      const tables = ALL_TABLES.filter((table) =>
-        canRead(identity.role, table),
-      );
+      // #433 defect 1: brain_answer could not see `ob_session_events` at all.
+      // It filtered ALL_TABLES -- the PHYSICAL-table list, which drives
+      // PERMISSIONS and the write paths -- so the session-event corpus was
+      // structurally absent from every question this tool answered. "What
+      // happened in the last day" answered from months-old thoughts while the
+      // day's events sat unread. The selection now lives in ONE exported
+      // function so a new recall source cannot reach one caller and miss
+      // another, which is the shape of this defect.
+      const tables = readableSearchSources(identity.role);
       if (tables.length === 0) return errorResult(NO_READABLE_TABLES);
 
       const query = args.query;

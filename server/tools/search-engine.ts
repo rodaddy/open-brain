@@ -34,6 +34,7 @@ import { toSql } from "pgvector/pg";
 import type { Logger } from "pino";
 import type { Pool } from "pg";
 import type { ResourceTable } from "../auth/types.ts";
+import { canRead } from "../auth/permissions.ts";
 import {
   ALL_TABLES,
   CONTENT_PREVIEW,
@@ -272,6 +273,133 @@ function selectColumns(table: ResourceTable, rankExpression: string): string {
     ${metadata}`;
 }
 
+/**
+ * A source the search arms can read.
+ *
+ * `ResourceTable` is the PHYSICAL-table union: it drives `PERMISSIONS`, the
+ * REST enum, and every write path, so widening it would demand a permission
+ * row and a write contract for a corpus that has neither. `session_events` is
+ * a read-only retrieval source instead -- searchable here, never written
+ * through this surface -- and carries its own CTE builders below because its
+ * columns do not match the shared shape.
+ */
+export type SearchSource = ResourceTable | "session_events";
+
+/**
+ * The recall sources a role may read, in one place.
+ *
+ * This exists because the selection was OPEN-CODED at each call site, and that
+ * is exactly how #433 defect 1 happened: every caller filtered `ALL_TABLES`
+ * independently and nothing added the session-event corpus anywhere, so
+ * 11,136 rows were unreachable from the tool agents actually ask. One copy per
+ * caller is one chance per caller to forget. Callers needing the default set
+ * MUST use this function, so a new source is added once and appears on every
+ * recall surface at once.
+ *
+ * `session_events` has no PERMISSIONS row: it is a read-only retrieval source,
+ * never written through this surface, and it rides the `sessions` read
+ * permission because a session event is session-scoped content.
+ */
+export function readableSearchSources(
+  role: Parameters<typeof canRead>[0],
+): SearchSource[] {
+  const sources: SearchSource[] = ALL_TABLES.filter((table) =>
+    canRead(role, table),
+  );
+  if (canRead(role, "sessions")) sources.push("session_events");
+  return sources;
+}
+
+/**
+ * Session events are namespaced INDIRECTLY.
+ *
+ * `ob_session_events` has no `namespace` column at all (verified against
+ * information_schema on the dogfood DB, 2026-08-07); scope lives on
+ * `ob_session_lanes` and is reachable only through
+ * `ob_session_events.lane_id`. Both builders below therefore JOIN the lane
+ * table and apply the auth-derived namespace predicate to `sl.namespace`.
+ * Omitting that join would not merely widen results -- it would expose every
+ * agent's session history to every other namespace.
+ *
+ * The corpus also lacks `archived_at`, `tier`, `tags`, `usefulness_score`,
+ * `access_count`, and `search_vector`. Those slots are filled with typed
+ * literals so the UNION arms stay type-compatible, and two consequences are
+ * deliberate:
+ *   - no stored `search_vector` -> the lexical arm matches `content` with
+ *     ILIKE, so it is substring matching, not stemming. That is the honest
+ *     capability of a column that does not exist, and it is why `ftsConfig`
+ *     has nothing to configure for this source.
+ *   - no `tier` -> `importance` carries the same hot/warm/cold vocabulary
+ *     under the same CHECK constraint, so it fills the tier slot.
+ */
+const SESSION_EVENTS_LABEL = "session_event";
+
+/** Shared SELECT list for the session-event arms; `rank` differs per arm. */
+function sessionEventColumns(rankExpression: string): string {
+  return `'${SESSION_EVENTS_LABEL}' AS source_type,
+    se.id,
+    sl.namespace,
+    se.content AS content_preview,
+    NULL::text[] AS tags,
+    se.created_by,
+    se.created_at,
+    se.created_at AS updated_at,
+    se.importance AS tier,
+    ${rankExpression},
+    0.5 AS usefulness,
+    0 AS access_count,
+    se.metadata AS extracted_metadata`;
+}
+
+/** Build the session-event vector-similarity CTE. */
+function buildSessionEventsVectorCTE(
+  perTableLimit: number,
+  tier: Tier | undefined,
+  namespaceParamIndex: number | undefined,
+  namespaceIsArray: boolean,
+): string {
+  assertTier(tier);
+  const tierFilter = tier ? ` AND se.importance = '${tier}'` : "";
+  const nsFilter = namespaceFilterSql(
+    "sl",
+    namespaceParamIndex,
+    namespaceIsArray,
+  );
+  const distance = `se.embedding <=> (SELECT emb FROM query_embedding)`;
+  return `session_events_results AS (
+  SELECT ${sessionEventColumns(`${distance} AS distance`)}
+  FROM ob_session_events se
+  JOIN ob_session_lanes sl ON sl.id = se.lane_id
+  WHERE se.embedding IS NOT NULL${tierFilter}${nsFilter}
+  ORDER BY ${distance} ASC
+  LIMIT ${perTableLimit}
+)`;
+}
+
+/** Build the session-event lexical CTE. */
+function buildSessionEventsFtsCTE(
+  perTableLimit: number,
+  tier: Tier | undefined,
+  namespaceParamIndex: number | undefined,
+  namespaceIsArray: boolean,
+): string {
+  assertTier(tier);
+  const tierFilter = tier ? ` AND se.importance = '${tier}'` : "";
+  const nsFilter = namespaceFilterSql(
+    "sl",
+    namespaceParamIndex,
+    namespaceIsArray,
+  );
+  return `session_events_fts AS (
+  SELECT ${sessionEventColumns("1.0 AS fts_rank")}
+  FROM ob_session_events se
+  JOIN ob_session_lanes sl ON sl.id = se.lane_id
+  WHERE se.content ILIKE '%' || (SELECT q FROM fts_query) || '%'${tierFilter}${nsFilter}
+  ORDER BY se.created_at DESC
+  LIMIT ${perTableLimit}
+)`;
+}
+
 /** Build one table's vector-similarity CTE. */
 function buildVectorCTE(
   table: ResourceTable,
@@ -409,7 +537,7 @@ function withCanonicalNamespaces(rows: SearchRow[]): SearchRow[] {
 /** Run the vector arm across every accessible table. */
 async function vectorSearch(
   dependencies: SearchDependencies,
-  tables: readonly ResourceTable[],
+  tables: readonly SearchSource[],
   embedding: number[],
   fetchLimit: number,
   tier: Tier | undefined,
@@ -420,13 +548,20 @@ async function vectorSearch(
   const namespaceParamIndex = appendNamespaceParam(params, namespace);
   const namespaceIsArray = Array.isArray(namespace);
   const ctes = tables.map((table) =>
-    buildVectorCTE(
-      table,
-      fetchLimit,
-      tier,
-      namespaceParamIndex,
-      namespaceIsArray,
-    ),
+    table === "session_events"
+      ? buildSessionEventsVectorCTE(
+          fetchLimit,
+          tier,
+          namespaceParamIndex,
+          namespaceIsArray,
+        )
+      : buildVectorCTE(
+          table,
+          fetchLimit,
+          tier,
+          namespaceParamIndex,
+          namespaceIsArray,
+        ),
   );
   const unionAll = tables
     .map((table) => `SELECT * FROM ${table}_results`)
@@ -462,7 +597,7 @@ LIMIT $2 OFFSET $3`;
 /** Run the lexical arm across every accessible table. */
 async function ftsSearch(
   dependencies: SearchDependencies,
-  tables: readonly ResourceTable[],
+  tables: readonly SearchSource[],
   query: string,
   fetchLimit: number,
   tier: Tier | undefined,
@@ -474,14 +609,21 @@ async function ftsSearch(
   const namespaceParamIndex = appendNamespaceParam(params, namespace);
   const namespaceIsArray = Array.isArray(namespace);
   const ctes = tables.map((table) =>
-    buildFtsCTE(
-      table,
-      fetchLimit,
-      ftsConfig,
-      tier,
-      namespaceParamIndex,
-      namespaceIsArray,
-    ),
+    table === "session_events"
+      ? buildSessionEventsFtsCTE(
+          fetchLimit,
+          tier,
+          namespaceParamIndex,
+          namespaceIsArray,
+        )
+      : buildFtsCTE(
+          table,
+          fetchLimit,
+          ftsConfig,
+          tier,
+          namespaceParamIndex,
+          namespaceIsArray,
+        ),
   );
   const unionAll = tables
     .map((table) => `SELECT * FROM ${table}_fts`)
@@ -613,7 +755,7 @@ function rrfMerge(
  */
 async function executeSearchInternal(
   dependencies: SearchDependencies,
-  tables: readonly ResourceTable[],
+  tables: readonly SearchSource[],
   query: string,
   limit: number,
   mode: SearchMode = "hybrid",
@@ -705,7 +847,7 @@ async function executeSearchInternal(
 
 export function executeSearch(
   dependencies: SearchDependencies,
-  tables: readonly ResourceTable[],
+  tables: readonly SearchSource[],
   query: string,
   limit: number,
   mode: SearchMode = "hybrid",
@@ -880,7 +1022,7 @@ export function mergeFallbackRows(
  */
 export async function executeSearchWithSharedFallback(
   dependencies: SearchDependencies,
-  tables: readonly ResourceTable[],
+  tables: readonly SearchSource[],
   query: string,
   limit: number,
   mode: SearchMode,

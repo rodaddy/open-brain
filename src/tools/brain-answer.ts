@@ -1,16 +1,16 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { canRead } from "../permissions.ts";
 import { canReadNamespace, namespaceFilterFor } from "../read-policy.ts";
 import type { AuthInfo, Tier } from "../types.ts";
 import type { ToolDeps } from "./index.ts";
 import {
-  ALL_TABLES,
   executeSearch,
   executeSearchWithScopedSharedFallback,
   executeSearchWithSharedFallback,
   type SearchMode,
   type SearchRow,
+  type SearchTable,
+  readableSearchTables,
   type SourceScope,
   type SourceRef,
 } from "./search-brain.ts";
@@ -207,9 +207,16 @@ export function registerBrainAnswer(server: McpServer, deps: ToolDeps): void {
         };
       }
 
-      const accessibleTables = ALL_TABLES.filter((table) =>
-        canRead(auth.role, table),
-      );
+      // #433 defect 1: brain_answer could not see `ob_session_events` at all.
+      // It filtered ALL_TABLES -- the PHYSICAL-table list, which drives
+      // PERMISSIONS and the write paths -- so the session-event corpus was
+      // structurally absent from every question this tool answered. "What
+      // happened in the last day" answered from months-old thoughts while the
+      // day's events sat unread. search_brain had already grown a second,
+      // divergent copy of this list (it added `entities`; this one did not),
+      // which is why the selection now lives in ONE exported function that
+      // both call. Adding a source there adds it to every recall surface.
+      const accessibleTables: SearchTable[] = readableSearchTables(auth.role);
       if (accessibleTables.length === 0) {
         return {
           content: [
