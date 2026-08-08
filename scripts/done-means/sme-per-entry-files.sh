@@ -79,7 +79,10 @@ ENTRIES_DIR="$SME_DIR/entries"
 BUILD_SCRIPT="scripts/build-sme-indexes.ts"
 
 # Pinned pre-migration measurement. See the header block for provenance.
-EXPECTED_ENTRY_COUNT=226
+# 226 at migration (PR #617); +1 = the 2026-08-08 no-silent-adjustments entry
+# (operator ruling) — raised in the same commit that adds it, as the gate's
+# own failure text instructs.
+EXPECTED_ENTRY_COUNT=227
 
 LANE_FILES=(
   "$SME_DIR/correctness.md"
