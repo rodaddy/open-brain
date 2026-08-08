@@ -87,6 +87,36 @@ Every lane, no exceptions:
 
 Newest first. Every entry: what changed, and the observation that forced it.
 
+### 2026-08-08 (round 9) — harvest of the #451 tiered-coverage lane (PR #642)
+
+- **`rg -E` can manufacture a false GREEN, not just an error.** Inside an
+  if/elif verdict chain, rg's flag-parse failure exits non-zero, which reads
+  identically to "pattern not found" — the clause silently advances to PASS.
+  Second `rg -E` incident in these Tightenings; first that PASSED instead of
+  failing. Use `rg -e`; mutation-check any clause whose PASS comes from a
+  negative match — those pass both when the thing is absent and when the
+  check is broken.
+- **A green clause is not evidence until it has been seen to fail.** Both of
+  the lane's self-caught defects were invisible in a fully-green run and
+  surfaced only under deliberate mutation. The mutation-test Tightening
+  (#615/#620) extends to every negative-match clause.
+- **Check the enum before designing a new dimension.** The natural
+  `usage_kind="recall"` would have required a Zod enum change AND a DB CHECK
+  migration — two greps found the pin before any code was written. Read the
+  constraint, not just the field.
+- **An outage path is testable without an outage:** a closed port in
+  7100-7199 yields a real connection refusal with no waiting and no
+  wall-clock assertion; "service up" cases differ only by fixture data.
+  Reusable for any gate distinguishing unreachable from empty.
+- **Verify "pre-existing" by stashing, not asserting** — the #609 full-suite
+  differential applied cheaply to a formatter: stash the lane's changes,
+  re-run, identical 42 files → main-owned.
+- **Honest gaps carried forward (PROPOSED, named in PR #642):** the
+  drain-DELIVERS direction (a drain that produces the receipt flipping a
+  refusal to a pass) is unproven — needs a seeded-spool clause; hung-TCP
+  outage shape untested; session_id/session_key equivalence assumed, enforced
+  nowhere.
+
 ### 2026-08-08 (round 8) — harvest of the #625 (PR #640) and #563 (PR #639) lanes
 
 - **A done-means clause can silently measure its own harness — optional
