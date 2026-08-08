@@ -90,6 +90,7 @@ INVALID_BODY_FILE="$SCRATCH/invalid-body.md"
 sed \
   -e 's/\[ \]\(.*\)or \[ \] not applicable because:.*$/[x]\1or [ ] not applicable because:/' \
   -e 's/^- \[ \]/- [x]/' \
+  -e 's|^- Done-means:.*$|- Done-means: scripts/validate-pr-body.ts|' \
   -e "s/^\(- [^][]*:\)[[:space:]]*$/\1 $DUMMY/" \
   "$TEMPLATE" > "$VALID_BODY_FILE" || fail_hard "could not build valid body"
 cp "$TEMPLATE" "$INVALID_BODY_FILE" || fail_hard "could not build invalid body"

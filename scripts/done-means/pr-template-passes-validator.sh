@@ -94,11 +94,13 @@ CLAUSE3_EVIDENCE=""
 # The validator's own requirements, enumerated. Kept in sync by clause 2(b).
 # ---------------------------------------------------------------------------
 # Section headings the validator looks up via section().
-REQUIRED_SECTIONS="Critical Self-Review
+REQUIRED_SECTIONS="Verification
+Critical Self-Review
 Review Gate"
 
 # Labels the validator anchors with /^-\s*<label>:/ via requireSpecificLine().
-REQUIRED_LABELS="Highest-risk behavior
+REQUIRED_LABELS="Done-means
+Highest-risk behavior
 Assumptions that could be wrong
 Missing/weak tests
 Security/permission risk
@@ -130,6 +132,7 @@ else
     sed \
       -e 's/\[ \]\(.*\)or \[ \] not applicable because:.*$/[x]\1or [ ] not applicable because:/' \
       -e 's/^- \[ \]/- [x]/' \
+      -e 's|^- Done-means:.*$|- Done-means: scripts/validate-pr-body.ts|' \
       -e "s/^\(- [^][]*:\)[[:space:]]*$/\1 $DUMMY/" \
       "$TEMPLATE"
   )"
@@ -192,10 +195,14 @@ EOF
 $V_SECTIONS
 EOF
 
-  # requireSpecificLine labels live in the single array literal that feeds it.
+  # requireSpecificLine labels live in the array literal or direct literal calls.
   V_LABELS="$(
-    awk '/requireSpecificLine\(criticalSelfReview/{exit} /for \(const label of \[/{f=1;next} f&&/^\s*\]/{f=0} f' "$VALIDATOR" \
-      | grep -oE '"[^"]+"' | tr -d '"'
+    {
+      awk '/requireSpecificLine\(criticalSelfReview/{exit} /for \(const label of \[/{f=1;next} f&&/^\s*\]/{f=0} f' "$VALIDATOR" \
+        | grep -oE '"[^"]+"' | tr -d '"'
+      grep -oE 'requireSpecificLine\([^,]+, "[^"]+"' "$VALIDATOR" \
+        | sed 's/.*"\([^"]*\)"/\1/'
+    } | sort -u
   )"
   [ -n "$V_LABELS" ] || fail_hard "could not extract requireSpecificLine labels from $VALIDATOR — the extraction, not the template, is broken"
   while IFS= read -r l; do

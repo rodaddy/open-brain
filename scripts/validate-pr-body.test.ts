@@ -5,6 +5,10 @@ const validBody = `## Summary
 
 - test
 
+## Verification
+
+- Done-means: scripts/done-means/done-means-field-required.sh
+
 ## Critical Self-Review
 
 - Highest-risk behavior: delegated auth provenance can drift
