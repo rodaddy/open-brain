@@ -259,10 +259,13 @@ uv run pytest -q
 
 **Before spawning a review swarm**, read and inject the matching SME file into each reviewer's prompt. The gotcha-agent lane is **mandatory** for any PR touching `python/openbrain-memory/`.
 
-**After each swarm cycle**, update the SME files:
-- Promote new MEDIUM+ findings into the matching lane file with provenance (issue/PR, severity, status).
+**After each swarm cycle**, update the SME knowledge base. The lane files are
+GENERATED — write one file per finding in `docs/sme/entries/` and run
+`bun scripts/build-sme-indexes.ts`. Never edit a lane file directly; the next
+build overwrites it. Format and `order` rules: `docs/sme/README.md`.
+- Promote new MEDIUM+ findings as new entry files with `lane:` set to the matching lane, carrying provenance (issue/PR, severity, status).
 - Mark resolved patterns as `Status: superseded` -- don't delete, the history matters.
-- If the swarm missed something that surfaces post-merge, add it to `gotcha-agent.md` so the next cycle catches it.
+- If the swarm missed something that surfaces post-merge, add an entry with `lane: gotcha-agent` so the next cycle catches it.
 
 **Periodic validation:** The KB can go stale. Run a validation pass occasionally -- an agent reads each SME file, checks whether the findings still apply against current code (grep for the functions/patterns named, check if issues are closed, verify the code paths still exist), and either confirms, updates, or marks entries superseded. Stale findings waste reviewer attention and erode trust in the KB. A good trigger is after a significant refactor, a batch of issue closures, or if it's been more than a few weeks since the last check.
 
