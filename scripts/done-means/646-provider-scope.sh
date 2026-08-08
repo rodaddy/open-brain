@@ -116,11 +116,19 @@ PARTIAL_KEY="done-means-646-partial-${RUN_ID}"
 FRESH_KEY="done-means-646-fresh-${RUN_ID}"
 IMPOSSIBLE_KEY="done-means-646-impossible-${RUN_ID}"
 
-# The conflicting agent value head sessions actually leave on their lanes.
-# Verified on the dogfood DB 2026-08-08: head-created lanes carried
-# agent='openbrain-capture' with source/channel_id/server_id NULL.
-STALE_AGENT="openbrain-capture"
+# The shape head sessions actually leave behind, verified on the dogfood DB
+# 2026-08-08: 2011 lanes with `agent` SET and source/channel_id/server_id NULL.
+#
+# The partial lane carries the SAME agent the capture will send. That is the
+# real-world case and the one the fix must serve: the agent identity is the one
+# scope field a lane does get at creation, and the contract is explicit that a
+# DIFFERENT agent must be denied working-set context
+# (docs/agent-context-pack-contract.md:537). An earlier draft of this gate
+# seeded a CONFLICTING agent and then read the resulting (correct) refusal as a
+# clause-(b) failure — the fixture was wrong, not the server. The conflicting
+# case is still exercised, deliberately, by the IMPOSSIBLE lane in clause (c).
 REQ_AGENT="done-means-646"
+STALE_AGENT="$REQ_AGENT"
 
 scope_json() { # scope_json <session_key> [extra_kv_json]
   printf '{"agent":"%s","platform":"cli","channel_id":"done-means","server_id":"done-means","session_key":"%s"%s}' \
