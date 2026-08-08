@@ -236,6 +236,65 @@ function main(): void {
   process.stdout.write("verify-lane\n");
   process.stdout.write(`  PR:        #${args.pr}\n\n`);
 
+  // --- 0. re-entry guard ----------------------------------------------------
+  // THE GUARD LIVES IN THE ENVIRONMENT, NOT IN THE CHECKED-OUT CODE.
+  //
+  // Measured twice on 2026-08-08, and the second time is the instructive one:
+  //
+  //   Attempt 1 — verify-lane ran the merge-gate check, whose live clause found
+  //   the very PR under verification open, and called verify-lane on it again.
+  //   331 worktrees (one `bun install` each) before it was killed by hand.
+  //
+  //   Attempt 2 — a SKIP-BY-GUARD clause was added to the check, verified
+  //   working, and it recursed anyway: 747 processes. The reason is the whole
+  //   lesson. verify-lane runs the check from a FRESH WORKTREE AT THE PR HEAD
+  //   SHA, which is by definition the code as it was BEFORE the fix. A guard
+  //   that lives in the repo cannot protect the run that checks out an older
+  //   commit of that repo — the guarded copy is never the copy that executes.
+  //
+  // So the authoritative guard is HERE, in the process that does the spawning,
+  // and it is carried in the ENVIRONMENT, which every descendant inherits
+  // regardless of which commit it was checked out from. Depth is counted rather
+  // than only matching PR numbers, so an A->B->A cycle through different PRs
+  // still terminates.
+  //
+  // The check's own MGVL_IN_VERIFY_LANE clause is kept as the POLITE layer: it
+  // makes a nested run report SKIP-BY-GUARD legibly instead of being refused.
+  // This one is the LOAD-BEARING layer and does not depend on the check
+  // cooperating, or even on the check being a version that knows the rule.
+  const ancestry = (process.env.MGVL_VERIFY_LANE_PRS ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const MAX_DEPTH = 1;
+
+  if (ancestry.length >= MAX_DEPTH) {
+    throw new VerifyLaneError(
+      "re-entry",
+      `refusing to nest verify-lane (depth ${ancestry.length + 1} > ${MAX_DEPTH}).`,
+      [
+        `  ancestry: ${ancestry.join(" -> ")} -> ${args.pr}`,
+        "",
+        "verify-lane runs a PR's done-means check in a fresh worktree AT THE PR",
+        "HEAD. If that check calls verify-lane, the nested run checks out the same",
+        "head and runs the same check — unbounded recursion, each level paying for",
+        "a worktree and a full dependency install.",
+        "",
+        "Measured 2026-08-08: 331 worktrees on the first occurrence, then 747",
+        "processes on the second — the second AFTER the check itself had been",
+        "given a skip clause, because the nested run checks out the PR head, which",
+        "predates the fix. A guard in the repo cannot protect a run that checks out",
+        "an older commit of that repo, which is why this guard is in the",
+        "environment instead.",
+        "",
+        "A done-means check that wants to exercise verify-lane should read",
+        "MGVL_IN_VERIFY_LANE and skip its own live clause when it is set. The",
+        "OUTER run is the live proof.",
+      ].join("\n"),
+    );
+  }
+  const alreadyVerifying = ancestry;
+
   // --- 1. read the PR -------------------------------------------------------
   const raw = capture("pr-view", "gh", [
     "pr",
@@ -370,10 +429,21 @@ function main(): void {
   }
 
   note("run-check", `bash ${resolved.path} (cwd ${worktreePath})`);
+  // RE-ENTRY MARKER. A done-means check may legitimately want to exercise
+  // verify-lane (this repo's own merge-gate check does). Without a marker that
+  // is unbounded recursion: verify-lane runs the check, the check calls
+  // verify-lane on the same PR, forever. Measured 2026-08-08 — 331 worktrees
+  // before it was killed by hand. The check reads this variable and reports
+  // SKIP-BY-GUARD rather than recursing; the guard below refuses outright.
   const check = spawnSync("bash", [checkPath], {
     cwd: worktreePath,
     encoding: "utf-8",
     maxBuffer: 64 * 1024 * 1024,
+    env: {
+      ...process.env,
+      MGVL_IN_VERIFY_LANE: `pr-${args.pr}`,
+      MGVL_VERIFY_LANE_PRS: [...alreadyVerifying, args.pr].join(","),
+    },
   });
   const checkOutput = `${check.stdout ?? ""}${check.stderr ?? ""}`.trimEnd();
   process.stdout.write(

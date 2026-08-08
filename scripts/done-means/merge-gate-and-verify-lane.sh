@@ -422,20 +422,52 @@ else
   fi
 
   # -- CLAUSE 9: LIVE. Real PR, real worktree, real receipt comment. --
-  if [ "$CONTROL_OK" -ne 1 ]; then
+  #
+  # RE-ENTRY GUARD. Measured 2026-08-08, running this check for real: when the
+  # controller runs `verify-lane <pr>` on the PR that CONTAINS this check,
+  # verify-lane runs this file, whose live clause finds that same PR open and
+  # calls verify-lane on it again — unbounded recursion, each level standing up
+  # a fresh worktree and a bun install. It spawned 331 worktrees before it was
+  # killed by hand.
+  #
+  # This is the check being its own subject: nothing else in scripts/done-means/
+  # invokes the tool that invokes it. verify-lane exports MGVL_IN_VERIFY_LANE so
+  # the live clause can recognise it is already INSIDE the mechanism it wants to
+  # exercise, and report that honestly instead of recursing. The outer run is
+  # the one that proves clause 9; a nested run skipping it is not a silent pass,
+  # because the reason is printed and the clause is marked SKIP-BY-GUARD.
+  if [ -n "${MGVL_IN_VERIFY_LANE:-}" ]; then
+    record 9 PASS "SKIP-BY-GUARD: already running inside verify-lane (MGVL_IN_VERIFY_LANE=${MGVL_IN_VERIFY_LANE}); re-entering would recurse without bound. The outer verify-lane run is the live proof."
+  elif [ "$CONTROL_OK" -ne 1 ]; then
     record 9 FAIL "CONTROL clause failed — refusing to bank a live verdict against a dead gh"
   else
     LIVE_PR="${MGVL_LIVE_PR:-}"
     CREATED_PR=""
     CREATED_BRANCH=""
 
+    # ALWAYS a purpose-made throwaway PR. NEVER "whatever PR happens to be open".
+    #
+    # The earlier version preferred an existing open PR, and that is a
+    # self-targeting bug rather than an optimisation: the PR most likely to be
+    # open when this check runs is THE PR THAT CONTAINS THIS CHECK. Verifying it
+    # makes verify-lane run this check, whose live clause finds the same PR open
+    # and verifies it again — unbounded recursion.
+    #
+    # Measured 2026-08-08, three times, each fix addressing the wrong layer:
+    #   331 worktrees  — no guard at all
+    #   747 processes  — guard added to the check; the nested run checks out the
+    #                    PR HEAD, which predates the guard, so it never ran
+    #   142 worktrees  — depth guard added to verify-lane's environment; the
+    #                    OUTER call starts at depth 0, so its child still gets
+    #                    one free level and that child ran the old committed check
+    #
+    # The depth guard is retained as a backstop (it bounds any nesting), but the
+    # actual defect was the SELECTION: a check must not choose its own PR as its
+    # subject. A throwaway PR is created unconditionally, so the subject is
+    # always something this run made and can prove against without re-entering
+    # itself. MGVL_LIVE_PR remains as an explicit operator override.
     if [ -z "$LIVE_PR" ]; then
-      # Prefer an existing open PR. Only make one if there is none.
-      LIVE_PR="$(gh pr list --state open --limit 1 --json number -q '.[0].number' 2>/dev/null)"
-    fi
-
-    if [ -z "$LIVE_PR" ]; then
-      printf '  [live] no open PR exists; creating a throwaway draft PR to prove verify-lane end to end\n' >&2
+      printf '  [live] creating a purpose-made throwaway draft PR (never an existing PR — that self-targets and recurses)\n' >&2
       # PREFIX-GUARDED throwaway branch (ledger item 20 conditions: self-created
       # this run, prefix-guarded, session-scoped). The prefix is what makes the
       # later cleanup structurally unable to name anything it did not create.
@@ -478,7 +510,9 @@ LIVECHK
         printf '  [live] created draft PR #%s on %s\n' "$LIVE_PR" "$CREATED_BRANCH" >&2
       fi
     else
-      printf '  [live] using existing open PR #%s\n' "$LIVE_PR" >&2
+      # Operator override only (MGVL_LIVE_PR). Announced loudly because pointing
+      # this at the PR that contains this check is the recursion described above.
+      printf '  [live] MGVL_LIVE_PR override: using PR #%s (operator-supplied; must NOT be the PR containing this check)\n' "$LIVE_PR" >&2
     fi
 
     if [ -z "$LIVE_PR" ]; then
