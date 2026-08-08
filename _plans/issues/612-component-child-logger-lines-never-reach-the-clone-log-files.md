@@ -3,11 +3,12 @@
 
 # #612 — Component child-logger lines never reach the clone log files
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: bug
 Created: 2026-08-07T23:03:08Z
-Updated: 2026-08-07T23:03:08Z
+Updated: 2026-08-08T04:48:43Z
+Closed: 2026-08-08T04:48:43Z
 
 ---
 

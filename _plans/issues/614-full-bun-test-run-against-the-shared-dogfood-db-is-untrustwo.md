@@ -3,11 +3,12 @@
 
 # #614 — Full bun test run against the shared dogfood DB is untrustworthy as a gate
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: bug
 Created: 2026-08-07T23:03:29Z
-Updated: 2026-08-07T23:03:29Z
+Updated: 2026-08-08T04:35:31Z
+Closed: 2026-08-08T04:35:31Z
 
 ---
 

@@ -3,11 +3,12 @@
 
 # #613 — Test suites leave parity-source-registry-* fixtures behind; any global producer makes them live
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: bug
 Created: 2026-08-07T23:03:15Z
-Updated: 2026-08-07T23:03:15Z
+Updated: 2026-08-08T04:34:10Z
+Closed: 2026-08-08T04:34:10Z
 
 ---
 

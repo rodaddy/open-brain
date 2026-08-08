@@ -3,11 +3,12 @@
 
 # #384 — MAINT-6: Enable the maintenance runner and add the missing sweep producer
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: enhancement, memory
 Created: 2026-07-24T21:31:05Z
-Updated: 2026-08-07T23:03:39Z
+Updated: 2026-08-08T04:49:30Z
+Closed: 2026-08-08T04:48:44Z
 
 ---
 
@@ -59,7 +60,7 @@ depends on #382.
 
 ---
 
-## Discussion (2)
+## Discussion (3)
 
 ### rodaddy — 2026-08-05T08:52:14Z
 
@@ -72,3 +73,12 @@ Reopening deliberately: PR #577 MERGED (sweep producer + idempotency rekey + rea
 PR #609 merged (squash). Producer + runner delivered and proven RUNNING: done-means check `scripts/done-means/384-maintenance-loop-turns.sh` controller-verified (`graph.derive | succeeded` on the live clone, revision 098169f); canary retired.
 
 Remaining open criterion: warn-level bound-reached lines are emitted on an unrouted child-logger stream and never reach the clone log files. That defect is now #612 and this issue carries a native blocked-by edge on it. #384 closes when #612 lands and the bound-reached line is observed in the clone logs.
+
+---
+
+### rodaddy — 2026-08-08T04:49:30Z
+
+Evidence record for the closure, end to end:
+- Producer + runner: PR #609 (merged), done-means `scripts/done-means/384-maintenance-loop-turns.sh` controller-verified on the live clone (`graph.derive | succeeded`), canary retired.
+- Final criterion (warn-level bound-reached lines actually logged): was blocked by #612 (native blocked-by edge); PR #624 (merged) fixed total pino log loss on the serving tree, and both the lane's and the controller's independent done-means runs against the RUNNING clone show the on-disk line carrying `component:"maintenance"` and `graph_limit_reached` — the specific field this issue required.
+Follow-on runtime observation tracked separately: #625 (sweep can go quiet while /health stays green).
