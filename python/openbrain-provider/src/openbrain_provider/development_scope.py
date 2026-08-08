@@ -1,7 +1,8 @@
 """Decide whether a working directory is inside the Development lane.
 
-The gate enforces nothing outside `/Volumes/ThunderBolt/Development` and the
-approved temp worktree roots. A cwd that resolves to neither yields no project,
+The gate enforces nothing outside the configured Development root
+(`DEFAULT_DEVELOPMENT_ROOT`, overridable via `OPENBRAIN_DEVELOPMENT_ROOT`) and
+the approved temp worktree roots. A cwd that resolves to neither yields no project,
 and a gate with no project emits nothing — that is what keeps the hook silent in
 somebody else's repository.
 
@@ -50,6 +51,16 @@ DEVELOPMENT_ROOT_ENV_VAR: Final[str] = "OPENBRAIN_DEVELOPMENT_ROOT"
 
 #: ob-memory-provider.ts:143. The one lane root, as shipped. Public because the
 #: parity fixtures were recorded against it and have to recognise it by name.
+#:
+#: NOT scrubbed to a neutral placeholder (#636), for two reasons. It is a
+#: BEHAVIOURAL default, not an example: `development_root()` compares it against
+#: the real filesystem, so pointing it at a path that exists nowhere makes every
+#: scope resolve to None and the gate fall permanently silent — the exact
+#: failure the docstring below describes. And it is one half of a cross-runtime
+#: parity contract with `ob-memory-provider.ts`, which lives outside this repo
+#: and still carries this value; changing only this side breaks the fixtures.
+#: Operators on another layout export `OPENBRAIN_DEVELOPMENT_ROOT`, which is the
+#: supported seam and takes precedence.
 DEFAULT_DEVELOPMENT_ROOT: Final[Path] = Path("/Volumes/ThunderBolt/Development")
 
 

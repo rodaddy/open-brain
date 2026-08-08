@@ -30,7 +30,7 @@ def _install_development_root() -> None:
 
     `resolve_development_scope` asks the FILESYSTEM: the root must exist, be a
     directory, and share a git object store with the cwd under test. On Rico's
-    Mac `/Volumes/ThunderBolt/Development` satisfies that by accident of where
+    Mac `/workspace` satisfies that by accident of where
     the work happens, so the suite passed locally and 11 tests failed on the
     Linux CI runner where the path does not exist -- every scope resolved to
     None and the gate correctly fell silent, which reads as a broken gate.
@@ -46,7 +46,7 @@ def _install_development_root() -> None:
     """
     if os.environ.get("OPENBRAIN_DEVELOPMENT_ROOT"):
         return
-    default = Path("/Volumes/ThunderBolt/Development")
+    default = Path("/workspace")
     if default.is_dir():
         return
 

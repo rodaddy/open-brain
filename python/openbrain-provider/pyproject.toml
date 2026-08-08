@@ -50,7 +50,7 @@ dependencies = [
 # The stable command name is the point: it replaces hook entries that hardcode
 # an absolute script path.
 [project.scripts]
-# Replaces `bun /Volumes/ThunderBolt/Development/_ob/scripts/ob-memory-provider/guard.ts`,
+# Replaces `bun /workspace/_ob/scripts/ob-memory-provider/guard.ts`,
 # the PreToolUse/Bash registration in both the Claude and Codex-sol profiles.
 # The port is behaviour-preserving; whether PreToolUse should observe or
 # enforce remains OPEN as open-brain#451.

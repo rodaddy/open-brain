@@ -41,7 +41,7 @@ line.
 | CI job `env:` blocks | `.github/workflows/ci.yml` | throwaway per-run database coordinates |
 | runtime `config` mapping | Python CLI JSON envelope | per-call override of base_url / namespace / role / timeout |
 
-**Never hardcode a host.** Not `10.71.1.21`, not `127.0.0.1`. The endpoint comes
+**Never hardcode a host.** Not `192.0.2.21`, not `127.0.0.1`. The endpoint comes
 from the environment. This is a repo-local hook-enforced rule.
 
 ---
@@ -171,7 +171,7 @@ automatically; an operator who wants one advertised sets
 `OPEN_BRAIN_SERVER_IP` and owns that decision.
 
 `revision` is the `short_sha` from the `.deployed-revision` stamp that the
-core01 and local-clone deployment scripts write into a deployed tree. It is
+production-host and local-clone deployment scripts write into a deployed tree. It is
 absent on a dev tree that was never deployed through either script, which is
 normal.
 | `ALLOWED_ORIGINS` | `[]` (none) | `src/index.ts:78`, comma-separated |
@@ -377,7 +377,7 @@ output). The two lines above are how this lane reports its health instead.
 
 #### Operator trace forensics (#569)
 
-Source `/Volumes/ThunderBolt/open-brain-local/local-clone.env` before using
+Source `/opt/open-brain-local/local-clone.env` before using
 `scripts/langfuse-trace.ts`; it supplies the Langfuse coordinates without putting
 values in arguments or output. The consumer uses Langfuse's Basic-authenticated
 public API. `repeat` drives the local dogfood server through the existing Python
@@ -484,7 +484,7 @@ an `OPENBRAIN_`-prefixed variable matching no declared field is rejected by
 silent zero capture. So a LAN host had no legal way to say it: exporting the
 variable killed the whole environment, and not exporting it left the client
 refusing the URL. Measured 2026-08-02 (#525): a hook process pointing at
-`http://10.71.1.20:3100` declined canon **and** capture with no error anywhere —
+`http://192.0.2.20:3100` declined canon **and** capture with no error anywhere —
 a Claude-family agent on a LAN box woke with the policy hook firing and zero
 hydration.
 
@@ -513,7 +513,14 @@ never land in different scopes.
 
 | variable | default | notes |
 |---|---|---|
-| `OPENBRAIN_DEVELOPMENT_ROOT` | `/Volumes/ThunderBolt/Development` | this machine's Development lane root; written by `setup-client.sh` at install time, because the shipped default is the BUILD machine's volume. Empty reads as unset |
+| `OPENBRAIN_DEVELOPMENT_ROOT` | none (required) | this machine's Development lane root, written by `setup-client.sh` at install time. There is no shipped default: the installer takes an exported value, then `DEV_ROOT`, then probes `$HOME/Development`, and refuses the install if none resolves (#636 — the previous default was the build machine's own volume). Empty reads as unset |
+| `OPENBRAIN_TEMP_WORKSPACE` | `$HOME/.cache` (announced) | where `scripts/lane-bootstrap.ts` and `scripts/verify-lane.ts` place lane worktrees, as `<workspace>/open-brain/_worktrees` (#636). `DEV_TMP` is accepted as a second spelling. Both scripts PRINT an `ADJUSTED:` warning when they fall back, because a worktree created on an unexpected volume is one the teardown sweep will not find |
+| `OPENBRAIN_POLICY_REFRESH_GATE` | `_ob/scripts/policy-refresh-gate.ts` | path to the policy-refresh gate quoted in the PreCompact hook's next-steps (#636). The gate lives outside this repo, so the location is deployment-specific; the fallback is repo-relative on purpose, since a wrong absolute path reads as authoritative |
+
+Deploy CI additionally requires the repository VARIABLE
+`OPENBRAIN_DEPLOY_RUNNER_LABELS` (a JSON array such as
+`["self-hosted","macOS","<deploy-host>","open-brain-deploy"]`). It has no
+fallback by design — see `docs/README.md`.
 
 **Why it had to be declared even though nothing in `config.py` reads it.** The
 `openbrain` package had consumed this variable since #556 — but through

@@ -56,7 +56,7 @@ const EMBEDDING_BASE_URL = process.env.EMBEDDING_BASE_URL;
  * This used to read `OPEN_BRAIN_SERVER_IP` and return the literal `"unknown"`
  * when it was unset (#197), which is exactly what every local clone reported.
  * Resolution now lives in `server/transport/server-identity.ts` so both serving
- * trees answer identically — this file still serves core01
+ * trees answer identically — this file still serves production-host
  * (`deploy/open-brain.service`), while the local clone runs `server/main.ts`.
  *
  * Read once: a process does not change hosts or change its own code.

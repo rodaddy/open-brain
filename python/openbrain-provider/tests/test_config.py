@@ -183,7 +183,7 @@ def test_unusable_base_urls_are_rejected(url: str) -> None:
         "https://open-brain.example.com",
         "http://localhost",
         "https://example.com/base/path",
-        "http://10.71.1.21:3100",
+        "http://192.0.2.21:3100",
     ],
 )
 def test_usable_base_urls_are_accepted(url: str) -> None:

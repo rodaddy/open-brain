@@ -2244,7 +2244,7 @@ describe("append_session_event", () => {
           session_key: "capture:288",
           event_type: "decision",
           content: "This must not write.",
-          transcript_ref: "/Volumes/ThunderBolt/transcripts/288.jsonl",
+          transcript_ref: "/var/lib/open-brain/transcripts/288.jsonl",
         },
       });
 

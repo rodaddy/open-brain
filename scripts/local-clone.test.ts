@@ -214,7 +214,7 @@ describe("local clone launcher", () => {
       ...cloneEnv(),
       PATH: "/should/not/be/inherited",
       SSH_AUTH_SOCK: "/should/not/be/inherited",
-      CORE01_HOST: "10.71.1.21",
+      CORE01_HOST: "192.0.2.21",
       AUTH_TOKEN_USER_LOCAL: "rico:local-user-token",
       OPENBRAIN_TRACING_ENABLED: "1",
       OPENBRAIN_TRACING_ENDPOINT: "http://langfuse.local:3000",

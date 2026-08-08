@@ -80,6 +80,11 @@ _TMP_REMEDY: Final[str] = (
     "There is no writable system temp directory on this machine. $TMPDIR is "
     "already pointed at this repo's temp workspace, so just use it, or write to "
     "{temp_workspace}/{project-or-repo}/_scratch/ directly "
+    # NOT scrubbed (#636): this module is a byte-parity port of
+    # `_ob/scripts/policy-refresh-gate.ts:320`, which lives outside this repo and
+    # still emits this exact sentence. `tests/test_ts_parity.py` asserts the two
+    # answers are identical, so neutralising only this side fails that contract.
+    # Scrubbing it means changing the TypeScript twin first.
     "(/Volumes/ThunderBolt/_tmp on this Mac, /mnt/collab/tmp_space on cc-* boxes). "
     "Temp policy: _DOCS/CODING_STANDARDS.md ## Workspace Hygiene."
 )
@@ -333,6 +338,8 @@ def _shell_safety_block_reason(command: str, command_cwd: str) -> str | None:
 
     if _WRITES_INTO_GENERATED.search(command) and not _GENERATED_EGRESS.search(command):
         return (
+            # Byte-parity with `policy-refresh-gate.ts:475`; see the note on
+            # TEMP_GUIDANCE above. Not scrubbed for the same reason (#636).
             "Treat ~/.codex/generated_images as transient output. Move the selected "
             "image to /Volumes/ThunderBolt/_tmp/_image-gen2/ or the user-requested "
             "destination."

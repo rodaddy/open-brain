@@ -12,7 +12,7 @@ does not move the Open Brain service or database onto that host.
 
 | Component | Runs where | Responsibility |
 | --- | --- | --- |
-| Open Brain service | Remote service, for example `https://open-brain.rodaddy.live` or trusted lab `http://10.71.1.21:3100` | Owns direct HTTP `/mcp`, auth, namespace policy, storage, search, curation tools. |
+| Open Brain service | Remote service, for example `https://open-brain.example.com` or trusted lab `http://192.0.2.21:3100` | Owns direct HTTP `/mcp`, auth, namespace policy, storage, search, curation tools. |
 | `openbrain-memory` | Bilby, Skippy, Nagatha, automation hosts, or any Python agent runtime | Reusable Python client, memory facade, safety/retry/spool helpers, and dry-run dream planning. |
 | Hermes provider | `rtech-hermes` | Thin adapter from Hermes lifecycle/events into this package. |
 
@@ -107,23 +107,23 @@ Current production-style examples:
 
 ```bash
 # Caddy/TLS in front of the Mac Mini Open Brain service
-export OPENBRAIN_BASE_URL="https://open-brain.rodaddy.live"
+export OPENBRAIN_BASE_URL="https://open-brain.example.com"
 
 # Trusted lab direct endpoint; requires explicit insecure-HTTP opt-in
-export OPENBRAIN_BASE_URL="http://10.71.1.21:3100"
+export OPENBRAIN_BASE_URL="http://192.0.2.21:3100"
 export OPENBRAIN_ALLOW_INSECURE_HTTP="1"
 ```
 
 Do not point canaries at a retired LXC host. Only two hosts belong to this
-project: this machine while developing, and core01 when the dev work is done. A
+project: this machine while developing, and production-host when the dev work is done. A
 retired host may still answer and still hold old Open Brain data — reachability
 is not scope.
 
-For trusted lab-only HTTP endpoints, such as `http://10.71.1.21:3100`, opt in
+For trusted lab-only HTTP endpoints, such as `http://192.0.2.21:3100`, opt in
 explicitly:
 
 ```bash
-export OPENBRAIN_BASE_URL="http://10.71.1.21:3100"
+export OPENBRAIN_BASE_URL="http://192.0.2.21:3100"
 export OPENBRAIN_ALLOW_INSECURE_HTTP="1"
 ```
 

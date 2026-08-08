@@ -3,7 +3,7 @@
 // Both the real qmd caller (src/tools/search-all.ts) and the operator doctor
 // (src/operator-doctor.ts) MUST consume resolveQmdPath() so their view of the
 // qmd binary location can never diverge. The default matches the documented
-// prod layout on core01.
+// prod layout on production-host.
 export const DEFAULT_QMD_PATH = "/opt/qmd/src/qmd.ts";
 
 export interface ResolvedQmdPath {

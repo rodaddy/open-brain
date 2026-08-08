@@ -65,7 +65,7 @@ describe("nats config boundary", () => {
   it("refuses a remote plaintext broker url by default", () => {
     const config = parseNatsConfig({
       ...NATS_ON,
-      OPENBRAIN_NATS_URL: "nats://10.71.1.99:4222",
+      OPENBRAIN_NATS_URL: "nats://192.0.2.99:4222",
     });
     expect(config.availability).toBe("not_runtime_available");
     expect(config.unavailableReason).toBe("url_remote_not_allowed");
@@ -74,7 +74,7 @@ describe("nats config boundary", () => {
   it("allows a remote broker url only under the explicit lab override", () => {
     const config = parseNatsConfig({
       ...NATS_ON,
-      OPENBRAIN_NATS_URL: "nats://10.71.1.99:4222",
+      OPENBRAIN_NATS_URL: "nats://192.0.2.99:4222",
       OPENBRAIN_NATS_ALLOW_INSECURE_REMOTE: "true",
     });
     expect(config.availability).toBe("available");

@@ -37,7 +37,7 @@ function testConfig(overrides: Record<string, string> = {}): ServerConfig {
     DB_NAME: "open_brain_test",
     DB_USER: "open_brain",
     LOG_FILE: "logs/open-brain.log",
-    OPEN_BRAIN_SERVER_IP: "10.71.1.21",
+    OPEN_BRAIN_SERVER_IP: "192.0.2.21",
     ...overrides,
   });
   if (!result.ok) {
@@ -120,7 +120,7 @@ describe("shadow application composition", () => {
 
     expect(response.status).toBe(200);
     expect(body.status).toBe("healthy");
-    expect(body.server_ip).toBe("10.71.1.21");
+    expect(body.server_ip).toBe("192.0.2.21");
     expect(body).not.toHaveProperty("workers");
   });
 
@@ -163,7 +163,7 @@ describe("shadow application composition", () => {
       config: testConfig({
         OPENBRAIN_TRANSPORT: "nats",
         OPENBRAIN_NATS_ENABLE_BRIDGE: "true",
-        OPENBRAIN_NATS_URL: "nats://10.71.1.99:4222",
+        OPENBRAIN_NATS_URL: "nats://192.0.2.99:4222",
       }),
     });
     const response = await fetch(`${base}/health`);
@@ -380,6 +380,6 @@ describe("shadow application composition", () => {
     });
     expect(config.transport.sessionTtlMs).toBe(45_000);
     expect(config.transport.retryAfterSeconds).toBe(9);
-    expect(config.transport.serverIp).toBe("10.71.1.21");
+    expect(config.transport.serverIp).toBe("192.0.2.21");
   });
 });

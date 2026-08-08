@@ -6,7 +6,7 @@ import os from "node:os";
  * `/health` is the only surface a client can hit to answer "am I pointed at the
  * right brain?", and until now it could not: `server_ip` came from
  * `OPEN_BRAIN_SERVER_IP` alone (#197, `db2e05b`), so a host that never set the
- * variable — every local clone — reported the literal string `unknown`. core01
+ * variable — every local clone — reported the literal string `unknown`. production-host
  * looked correct only because its env happens to carry the value. The field
  * existed; the resolution did not.
  *
