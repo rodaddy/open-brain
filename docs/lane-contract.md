@@ -87,6 +87,38 @@ Every lane, no exceptions:
 
 Newest first. Every entry: what changed, and the observation that forced it.
 
+### 2026-08-08 (round 13) — harvest of the #647 capture-liveness lane (PR #648)
+
+- **The design may already exist and simply never have been executed.** #647
+  read as "invent a liveness check"; `docs/decisions/capture-never-drops-a-turn.md:182-200`
+  had specified it — per-role, count-based — for eleven days, with its own
+  record that it "was never run." Treat "has this been specified and left
+  unrun?" as the FIRST question of any build lane, not a formality: the
+  lookup materially changed the deliverable and avoided rebuilding the #447
+  per-role blind spot.
+- **A top-level `await main()` with no `.catch` exits 0 when it throws** —
+  a crashing subject banks a false GREEN, and the shell wrapper's careful
+  status capture cannot save you because the defect is upstream of it.
+  Verify the crash path's exit code under mutation. (SME entry order 67;
+  invisible in every green run.)
+- **A control clause that passes PRE-fix is the signal the check
+  discriminates.** 10/13 red with the two controls green is stronger
+  evidence than 13/13 red — a check that fails everywhere proves only that
+  it fails.
+- **The stash stack is shared even when the worktree is exclusively yours.**
+  Second lane this session to pop a foreign stash from a bootstrapped
+  worktree (third incident overall). New rule: lanes do not use `git stash`
+  for red/green proofs — file-copy instead. The round-1 "checkout you don't
+  own" wording under-scoped the hazard.
+- **Gate-precision datapoints:** design-lookup accepted `aqmd` but refused a
+  direct `sqlite3` query of the same index (#637 corpus); git guard fired on
+  a protected-branch name inside a merge-commit MESSAGE (fifth #618 shape —
+  say "upstream default branch").
+- **Capability state named honestly:** the liveness reader is MERGED code,
+  but no process composes it yet — no live /health reports capture until a
+  composition change ships. WRITTEN-not-RUNNING, stated in the PR rather
+  than implied away.
+
 ### 2026-08-08 (round 12) — harvest of the #646 provider-scope lane (PR #650)
 
 - **Verify which tree the process actually runs before reading source as
