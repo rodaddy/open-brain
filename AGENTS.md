@@ -239,6 +239,7 @@ uv run pytest -q
 - Python client behavior must be covered by fake transport tests for headers, session lifecycle, error redaction, and wrapper call shapes. Live canaries stay env-gated.
 - Python package source must pass `uv run mypy src/openbrain_memory` and `uv run ruff check src tests` with zero errors, matching the quality bar used by `/Volumes/ThunderBolt/Development/king-capital/king-signals`.
 - Keep fixes scoped to the issue. Avoid broad refactors unless they are required to close the bug safely.
+- **Nothing is adjusted silently** (operator ruling, 2026-08-08). Any script, tool, or lane that transforms its input to satisfy a constraint — shortens a name to fit a bound, substitutes a default, skips a step as N/A, coerces a value — announces the adjustment in its normal output: original → adjusted, and why. Provably-safe and cosmetic adjustments are not exempt; the transcript must let the reader map what was asked for to what exists. SME entry: `docs/sme/entries/2026-08-08-nothing-is-adjusted-silently-tools-announce-every-self-made-decision.md`.
 - When a review or post-merge issue exposes a missed pattern, update `docs/sme/` so the next swarm checks for it.
 - For contract-changing MCP, transport, Python client, or agent-facing changes,
   follow `docs/downstream-rollout.md`; do not treat local tests or hosted
