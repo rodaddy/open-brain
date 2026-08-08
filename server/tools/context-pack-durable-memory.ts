@@ -35,14 +35,36 @@ import {
 } from "./prior-context-suppression.ts";
 
 /**
- * Unbounded by default. These were once 8,000 content chars / 8 items / 1,000
+ * Unbounded content by default. These were once 8,000 content chars / 1,000
  * chars per item — numbers an agent wrote, never numbers anyone asked for. A
- * caller that explicitly passes `budget.max_tokens` still gets a bounded pack;
- * absent that, recall means total recall.
+ * caller that explicitly passes `budget.max_tokens` still gets a pack sized to
+ * that request; absent that, a record that IS delivered is delivered whole.
  */
 const DURABLE_MEMORY_MAX_CONTENT_CHARS = Number.MAX_SAFE_INTEGER;
-const DURABLE_MEMORY_MAX_ITEMS = Number.MAX_SAFE_INTEGER;
 const DURABLE_MEMORY_MAX_ITEM_CHARS = Number.MAX_SAFE_INTEGER;
+
+/**
+ * How many recalled records one reply carries — the BURST SIZE (#563, operator
+ * ruling 2026-08-08, ledger item 23).
+ *
+ * This is a DELIVERY SHAPE, not a bound on recall, storage, or what a caller
+ * can obtain. Every record the query matched stays retrievable: rows beyond
+ * this burst are emitted as `pointers` (the resolvable-reference surface
+ * docs/agent-context-pack-contract.md already designates for follow-up fetch)
+ * and the section carries a `next` handle that walks the SAME ranked recall in
+ * further bursts until the caller holds all of it. Nothing is dropped, nothing
+ * is stored smaller, and no record comes back trimmed for being late in the
+ * ranking.
+ *
+ * The operator's words: "it still should come through as single input outputs
+ * or maybe bursts of 5 to 10 input outputs that are sent from the server to the
+ * client, but not ever as the whole file." Ten is the top of the range he
+ * named. Serializing the whole corpus into one reply — 60.4 MiB measured
+ * 2026-08-05, which no broker will carry — is the shape this makes
+ * unproducible: "I don't see any reason why this whole thing would ship in a
+ * single shot to anywhere. It defeats the whole purpose of this."
+ */
+export const DURABLE_MEMORY_BURST_ITEMS = 10;
 
 /**
  * Extra rows fetched beyond the item cap so `pointers` has a net-new pool
@@ -198,10 +220,15 @@ export async function loadDurableMemoryContext(
   );
   const query = args.query?.trim() ?? "";
 
+  // Where in the ranked recall this reply's burst starts. A caller walking the
+  // corpus replays the same request carrying the handle the previous reply
+  // returned; absent one, the walk starts at the top of the ranking.
+  const burstOffset = Math.max(0, Math.trunc(args.continue_from?.offset ?? 0));
+
   const emptyBudget = () => ({
     content_char_limit: maxContentChars,
     content_chars_used: 0,
-    max_items: DURABLE_MEMORY_MAX_ITEMS,
+    burst_items: DURABLE_MEMORY_BURST_ITEMS,
     max_item_chars: DURABLE_MEMORY_MAX_ITEM_CHARS,
   });
 
@@ -268,14 +295,16 @@ export async function loadDurableMemoryContext(
       dependencies,
       accessibleTables,
       query,
-      // Everything the query matches, plus the pointer over-fetch. Guard the
+      // Everything the query matches, plus the pointer over-fetch. Retrieval is
+      // UNCHANGED by #563: the burst shape governs how many records one REPLY
+      // carries, never how many the query is allowed to find. Guard the
       // addition: MAX_SAFE_INTEGER + 20 is no longer an exact integer and
       // Postgres rejects it, so an unbounded ask is passed through as-is.
       Number.isSafeInteger(
-        DURABLE_MEMORY_MAX_ITEMS + DURABLE_MEMORY_POINTER_OVERFETCH,
+        Number.MAX_SAFE_INTEGER + DURABLE_MEMORY_POINTER_OVERFETCH,
       )
-        ? DURABLE_MEMORY_MAX_ITEMS + DURABLE_MEMORY_POINTER_OVERFETCH
-        : DURABLE_MEMORY_MAX_ITEMS,
+        ? Number.MAX_SAFE_INTEGER + DURABLE_MEMORY_POINTER_OVERFETCH
+        : Number.MAX_SAFE_INTEGER,
       "hybrid",
       undefined,
       0,
@@ -340,11 +369,19 @@ export async function loadDurableMemoryContext(
   let itemsTruncated = false;
   const pointerCandidatePool: SearchRow[] = [...netNewRows];
 
-  for (const row of netNewRows) {
-    // Hard item cap. Rows beyond it are surfaced as POINTERS, not counted as a
-    // durable truncation, and they remain in the pool above.
-    if (items.length >= DURABLE_MEMORY_MAX_ITEMS) continue;
+  // The burst window: the slice of the ranked net-new recall THIS reply
+  // delivers (#563). Rows before it were delivered by an earlier burst in the
+  // walk; rows after it are delivered by a later one and stay pointer-eligible
+  // meanwhile. Every row is in exactly one burst, so a full walk reconstructs
+  // the complete recalled set — this re-shapes delivery, it does not discard.
+  const burstRows = netNewRows.slice(
+    burstOffset,
+    burstOffset + DURABLE_MEMORY_BURST_ITEMS,
+  );
+  const burstEnd = burstOffset + burstRows.length;
+  const moreAfterBurst = netNewRows.length > burstEnd;
 
+  for (const row of burstRows) {
     const bounded = boundedText(
       row.content_preview,
       Math.min(DURABLE_MEMORY_MAX_ITEM_CHARS, remainingChars),
@@ -385,7 +422,14 @@ export async function loadDurableMemoryContext(
   // body, durable_memory reports zero items with a truncated empty state: the
   // diverted rows still resurface as pointers, but the durable section says
   // truthfully that it emitted no content for a net-new match.
-  if (items.length === 0 && suppression.suppression.net_new > 0) {
+  // Scoped to the burst window: a later burst that is legitimately empty
+  // because the walk has run past the end of the recall must not be reported as
+  // unemittable content.
+  if (
+    items.length === 0 &&
+    burstRows.length > 0 &&
+    suppression.suppression.net_new > 0
+  ) {
     itemsTruncated = true;
   }
 
@@ -393,7 +437,7 @@ export async function loadDurableMemoryContext(
   if (itemsTruncated) {
     truncation.push({
       source: "durable_memory.items",
-      max_items: DURABLE_MEMORY_MAX_ITEMS,
+      burst_items: DURABLE_MEMORY_BURST_ITEMS,
       max_item_chars: DURABLE_MEMORY_MAX_ITEM_CHARS,
       content_char_limit: maxContentChars,
     });
@@ -406,13 +450,21 @@ export async function loadDurableMemoryContext(
   //     body (null/empty preview, or the budget admitted none).
   //   - all_suppressed: recall returned rows and suppression removed every one.
   //   - no_matches: recall genuinely found nothing.
+  // `walk_complete` is the fourth genuine zero-item cause, introduced with the
+  // burst shape (#563): the caller walked past the end of the recall, so this
+  // reply is empty for the one benign reason — everything was already
+  // delivered. Checked FIRST because it is a property of the WALK, not of the
+  // records; reporting it as no_matches would tell a caller who now holds the
+  // whole corpus that nothing matched.
   const emptyReason =
     items.length === 0
-      ? suppression.suppression.net_new > 0
-        ? "content_unavailable"
-        : rows.length > 0 && suppression.suppression.suppressed === rows.length
-          ? "all_suppressed"
-          : "no_matches"
+      ? burstRows.length === 0 && burstOffset > 0
+        ? "walk_complete"
+        : suppression.suppression.net_new > 0
+          ? "content_unavailable"
+          : rows.length > 0 && suppression.suppression.suppressed === rows.length
+            ? "all_suppressed"
+            : "no_matches"
       : undefined;
 
   return {
@@ -424,6 +476,18 @@ export async function loadDurableMemoryContext(
       items,
       item_count: items.length,
       truncated: truncation.length > 0,
+      // How to ask for the next burst of this walk (#563). Present ONLY while
+      // records remain undelivered, so a caller walks until it disappears and a
+      // client that ignores it is never left believing a burst was the whole
+      // answer. Its absence IS the completeness signal, which is why no
+      // separate `complete` flag is emitted: one fact, one field, and no way
+      // for the two to disagree. The burst size and the delivery position live
+      // in `budget` (below) rather than being restated here — a tight
+      // whole-pack budget must spend its bytes on records, not on an envelope
+      // describing itself.
+      ...(moreAfterBurst
+        ? { next: { offset: burstEnd, delivered_through: burstEnd } }
+        : {}),
       // Content-free suppression counters (#333): counts only, never an id, a
       // reference, or a body.
       prior_context_suppression: {
@@ -439,7 +503,9 @@ export async function loadDurableMemoryContext(
     budget: {
       content_char_limit: maxContentChars,
       content_chars_used: maxContentChars - remainingChars,
-      max_items: DURABLE_MEMORY_MAX_ITEMS,
+      burst_items: DURABLE_MEMORY_BURST_ITEMS,
+      burst_offset: burstOffset,
+      recalled_net_new: netNewRows.length,
       max_item_chars: DURABLE_MEMORY_MAX_ITEM_CHARS,
     },
     citations,
