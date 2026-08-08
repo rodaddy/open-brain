@@ -54,12 +54,12 @@ from openbrain.receipts import (
 #: absolute path because that is where the LIVE hook runs it from -- pointing at a
 #: copy would prove a copy works.
 GATE_SCRIPT = Path(
-    "/Volumes/ThunderBolt/Development/_ob/scripts/context-budget-gate.ts"
+    "/workspace/_ob/scripts/context-budget-gate.ts"
 )
 
 #: A directory the gate resolves to a Development project. It only has to exist
 #: and be in scope; nothing is written to it.
-GATE_CWD = Path("/Volumes/ThunderBolt/Development/open-brain")
+GATE_CWD = Path("/workspace/open-brain")
 
 #: The project slug the receipts are filed under. Passed to the gate explicitly
 #: with ``--project`` so the assertion does not depend on the git layout of

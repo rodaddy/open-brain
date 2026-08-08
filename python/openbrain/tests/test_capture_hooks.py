@@ -664,7 +664,7 @@ class TestPostToolUseParsesTheCapturedPayload:
                     "tool_name": "Skill",
                     "tool_input": {"skill": "brain", "args": "recall"},
                     "session_id": "sess-1",
-                    "cwd": "/Volumes/ThunderBolt/Development/open-brain",
+                    "cwd": "/workspace/open-brain",
                 }
             )
         )
@@ -692,7 +692,7 @@ class TestPostToolUseRecordsOneUsageMetric:
             tool_name="Skill",
             tool_input={"skill": "wayfinder", "args": "chart"},
             session_id="sess-1",
-            cwd="/Volumes/ThunderBolt/Development/open-brain",
+            cwd="/workspace/open-brain",
         )
 
         recorded = await run_post_tool_use(

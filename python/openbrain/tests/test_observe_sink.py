@@ -8,7 +8,7 @@ affects the memory delivery or its watermark.
 
 The emitter here is always a recorder or a deliberate failure; the real
 Langfuse client is covered by the live canary
-(``/Volumes/ThunderBolt/_tmp/open-brain/_scratch/langfuse-canary``), not by
+(``/workspace/_tmp/open-brain/_scratch/langfuse-canary``), not by
 unit tests that would dial a server.
 """
 

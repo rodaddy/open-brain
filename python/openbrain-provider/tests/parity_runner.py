@@ -50,7 +50,7 @@ _UUID: Final[re.Pattern[str]] = re.compile(
 
 #: Scratch paths baked into a recording's arguments.
 _SCRATCH_PATH: Final[re.Pattern[str]] = re.compile(
-    r"/Volumes/ThunderBolt/_tmp/open-brain/_scratch/gate[a-zA-Z0-9-]+"
+    r"/workspace/_tmp/open-brain/_scratch/gate[a-zA-Z0-9-]+"
 )
 
 
@@ -118,7 +118,7 @@ def normalise(text: str, scratch: Path) -> str:
     replaced = replaced.replace(str(scratch), "<SCRATCH>")
     replaced = _SCRATCH_PATH.sub("<SCRATCH>", replaced)
     # The recordings were made on Rico's Mac, where the Development root is
-    # `/Volumes/ThunderBolt/Development`. On a machine without that volume the
+    # `/workspace`. On a machine without that volume the
     # suite runs against a provisioned stand-in root, so the root is environment
     # exactly like a scratch path is -- NOT behaviour. Both spellings collapse to
     # one marker, which keeps every other byte of the banner compared literally.

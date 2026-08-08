@@ -262,7 +262,7 @@ describe("redaction covers the whole entry", () => {
     captured.length = 0;
 
     logger.error("nats_connect_failed", {
-      dsn: "nats://user:hunter2@10.71.1.21:4222",
+      dsn: "nats://user:hunter2@192.0.2.21:4222",
     });
 
     const line = captured.find((l) => l.message === "nats_connect_failed");
@@ -308,7 +308,7 @@ describe("redaction covers the whole entry", () => {
     // cannot create a secret but it can destroy the evidence of one, so
     // redaction now runs first and the bound is applied to the result.
     captured.length = 0;
-    const secret = "postgres://user:hunter2straddle@10.71.1.21:5432/openbrain";
+    const secret = "postgres://user:hunter2straddle@192.0.2.21:5432/openbrain";
     const blob = `${"x".repeat(16_384 - 20)}${secret}`;
 
     logger.info("straddling_secret", { blob });

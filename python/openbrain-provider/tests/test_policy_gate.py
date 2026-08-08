@@ -217,7 +217,7 @@ def test_a_stale_session_can_always_run_the_refresh_command(tmp_path: Path) -> N
     run_policy_gate(state_path, "post-compact")
 
     command = (
-        "bun /Volumes/ThunderBolt/Development/_ob/scripts/policy-refresh-gate.ts "
+        "bun /workspace/_ob/scripts/policy-refresh-gate.ts "
         "--event refresh --agent claude"
     )
     allowed = run_policy_gate(

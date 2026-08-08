@@ -78,7 +78,7 @@ describe("validateLocalCloneMode", () => {
   it("rejects a non-loopback non-0.0.0.0 bind host", () => {
     expect(() =>
       validateLocalCloneMode(
-        validCloneEnv({ OPEN_BRAIN_BIND_HOST: "10.71.1.21" }),
+        validCloneEnv({ OPEN_BRAIN_BIND_HOST: "192.0.2.21" }),
       ),
     ).toThrow("literal loopback");
   });
@@ -92,7 +92,7 @@ describe("validateLocalCloneMode", () => {
   it.each([
     ["OPEN_BRAIN_BIND_HOST", "localhost"],
     ["OPEN_BRAIN_BIND_HOST", "[::1]"],
-    ["DB_HOST", "10.71.1.21"],
+    ["DB_HOST", "192.0.2.21"],
     ["DB_HOST", "[::1]"],
     ["EMBEDDING_BASE_URL", "http://embedding.internal:8791/v1"],
   ])("rejects non-literal-loopback %s", (key, configured) => {
@@ -223,7 +223,7 @@ describe("validateLocalCloneMode", () => {
     ).toThrow("absolute path");
   });
 
-  it.each([undefined, "/Volumes/ThunderBolt/qmd/src/qmd.ts"])(
+  it.each([undefined, "/opt/qmd/src/qmd.ts"])(
     "rejects unsafe QMD_PATH %s because absence enables the production default",
     (configured) => {
       expect(() =>
