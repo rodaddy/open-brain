@@ -782,6 +782,121 @@ class TestPostToolUseRecordsOneUsageMetric:
         assert "repo" not in sent[0]
 
 
+class TestPostToolUseCountsRecallInvocations:
+    """The #451 RECALL tier: counts into the existing telemetry lane, facts only.
+
+    Operator ruling 2026-08-08 (ledger item 24): recall is MEASURE, not enforce.
+    These tests pin the count, the kind, and -- most importantly -- that the
+    recall QUERY never travels with it.
+    """
+
+    async def test_a_recall_call_is_counted_as_canon_usage(
+        self, tmp_path: Path
+    ) -> None:
+        settings = capture_settings(tmp_path / "wm.sqlite")
+        sent: list[dict[str, object]] = []
+        payload = PostToolUseHook(
+            tool_name="mcp__open-brain__brain_answer",
+            tool_input={"question": "what did we decide about storage"},
+            session_id="sess-1",
+            cwd="/Volumes/ThunderBolt/Development/open-brain",
+        )
+
+        recorded = await run_post_tool_use(
+            payload, settings, recorder=lambda _s, _k, a: sent.append(a)
+        )
+
+        assert recorded is True
+        assert len(sent) == 1
+        assert sent[0]["skill_slug"] == "brain_answer"
+        # `canon`, not a new kind: the value is pinned by a Zod enum AND a DB
+        # CHECK constraint, and widening either would be a schema change (an
+        # explicit non-goal of #451).
+        assert sent[0]["usage_kind"] == "canon"
+        assert sent[0]["session_id"] == "sess-1"
+        assert sent[0]["repo"] == "open-brain"
+
+    async def test_a_bare_unnamespaced_recall_tool_still_counts(
+        self, tmp_path: Path
+    ) -> None:
+        """A non-MCP runtime calling the same tool must not fall out of the trend."""
+        settings = capture_settings(tmp_path / "wm.sqlite")
+        sent: list[dict[str, object]] = []
+        payload = PostToolUseHook(
+            tool_name="search_all", tool_input={"query": "x"}, session_id="sess-1"
+        )
+
+        recorded = await run_post_tool_use(
+            payload, settings, recorder=lambda _s, _k, a: sent.append(a)
+        )
+
+        assert recorded is True
+        assert sent[0]["skill_slug"] == "search_all"
+
+    async def test_the_recall_query_is_never_sent(self, tmp_path: Path) -> None:
+        """The tool NAME is the metric; the question is content and stays home.
+
+        A recall query is the most sensitive thing a session sends -- the
+        questions it asks about the operator -- so this is a privacy boundary,
+        not only a scope one. An edit that widened the payload fails here.
+        """
+        settings = capture_settings(tmp_path / "wm.sqlite")
+        sent: list[dict[str, object]] = []
+        payload = PostToolUseHook(
+            tool_name="mcp__open-brain__brain_answer",
+            tool_input={"question": "SECRET-RECALL-QUESTION"},
+            session_id="sess-1",
+        )
+
+        await run_post_tool_use(
+            payload, settings, recorder=lambda _s, _k, a: sent.append(a)
+        )
+
+        assert "SECRET-RECALL-QUESTION" not in json.dumps(sent[0])
+        assert set(sent[0]) <= {
+            "skill_slug",
+            "usage_kind",
+            "session_id",
+            "runtime",
+            "agent",
+            "repo",
+        }
+
+    async def test_a_write_tool_is_not_counted_as_a_recall(
+        self, tmp_path: Path
+    ) -> None:
+        """Capture is a separate tier; counting a write would make the trend unreadable."""
+        settings = capture_settings(tmp_path / "wm.sqlite")
+        sent: list[dict[str, object]] = []
+        payload = PostToolUseHook(
+            tool_name="mcp__open-brain__append_session_event",
+            tool_input={"content": "x"},
+            session_id="sess-1",
+        )
+
+        recorded = await run_post_tool_use(
+            payload, settings, recorder=lambda _s, _k, a: sent.append(a)
+        )
+
+        assert recorded is False
+        assert sent == []
+
+    async def test_an_unrelated_tool_is_still_a_no_op(self, tmp_path: Path) -> None:
+        """The common case stays free: neither a Skill nor a recall sends nothing."""
+        settings = capture_settings(tmp_path / "wm.sqlite")
+        sent: list[dict[str, object]] = []
+        payload = PostToolUseHook(
+            tool_name="Bash", tool_input={"command": "echo hello"}, session_id="s"
+        )
+
+        recorded = await run_post_tool_use(
+            payload, settings, recorder=lambda _s, _k, a: sent.append(a)
+        )
+
+        assert recorded is False
+        assert sent == []
+
+
 class TestPostToolUseEntrypointNeverDisruptsTheSession:
     """record_skill_usage swallows everything and exits 0 with empty stdout."""
 
