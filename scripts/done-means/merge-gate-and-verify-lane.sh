@@ -406,8 +406,23 @@ else
   # -- CLAUSE 8: unresolvable done-means fails LOUDLY, naming what is missing --
   # Driven with the stub gh so the PR body genuinely carries no Done-means line
   # and no --check flag is passed.
+  #
+  # MGVL_VERIFY_LANE_PRS IS DELIBERATELY CLEARED. When the controller runs
+  # verify-lane on the PR that CONTAINS this check, that variable is inherited
+  # by everything below it, and verify-lane's re-entry guard then refuses this
+  # clause's nested call BEFORE reaching done-means resolution. The clause would
+  # then be measuring the recursion guard rather than the error path it names —
+  # a false RED that says "never names the Done-means line" when the code that
+  # prints that line was never reached. Observed 2026-08-08 in exactly that
+  # position: green standalone, red under controller verification.
+  #
+  # Clearing it is correct rather than a workaround: this clause spawns a
+  # SYNTHETIC verify-lane against a stubbed PR #999 that runs no check and
+  # cannot recurse, so the guard has nothing to protect here. Clause 9 is where
+  # nesting actually matters, and it still honours MGVL_IN_VERIFY_LANE.
   V_OUT="$(
     PATH="$STUB_DIR:$PATH" MG_FIXTURE_DIR="$FIXTURES/no-receipt" MG_GH_BROKEN=0 \
+      MGVL_VERIFY_LANE_PRS="" MGVL_IN_VERIFY_LANE="" \
       bun "$VERIFY" 999 2>&1
   )"
   V_EXIT=$?
