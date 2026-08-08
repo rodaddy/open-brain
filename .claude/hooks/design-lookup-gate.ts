@@ -66,6 +66,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 
+import { classifyIntent } from "./lib/reduction-intent.ts";
+
 /**
  * Tools that write to the repo. These are what the gate protects.
  *
@@ -775,6 +777,16 @@ function proposesACap(tool: string, input: Record<string, unknown>): boolean {
   if (!text) return false;
   if (CAP_PROPOSAL_EXEMPT.test(text)) return false;
   if (!CAP_PROPOSAL.test(text)) return false;
+
+  // #637: judge the OPERATION, not the vocabulary. The old test stopped here
+  // and refused on any match, which taxed `git worktree prune`, operator
+  // quotations, defect reports, and SQL identifiers -- the #618 defect class,
+  // committed by this wall. classifyIntent resolves command syntax and
+  // identifiers structurally, then attribution and grammar, and FAILS CLOSED to
+  // "proposal" on anything it cannot decide. The rule's teeth are unchanged:
+  // an agent proposing a reduction in its own voice still lands here.
+  if (classifyIntent(text, tool === "Bash") !== "proposal") return false;
+
   if (tool === "Edit") {
     // Net-new ceiling text only. Deleting or rewording an existing one passes.
     return capWeight(text) > capWeight(String(input.old_string ?? ""));
