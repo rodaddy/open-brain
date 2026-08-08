@@ -1,0 +1,30 @@
+# Neutrality line exceptions (#636).
+#
+# Format: <repo-relative-path>:<literal substring that must appear in the line>
+#
+# An entry here means the matching token is NOT a leaked deployment value: it
+# is a real in-repo filename or a fixed handshake string, and neutralising it
+# would break a link, a call site, or an operator procedure. Exceptions are
+# anchored to one exact file AND one exact substring, so they cannot widen to
+# cover a genuine leak that appears later in the same file.
+#
+# Do not add an entry to silence an inconvenient hit. If the value identifies
+# OUR environment, scrub it; an exception is only for a token that happens to
+# match the pattern while naming something inside this repo.
+
+# `scripts/core01-deploy-local.sh` is a tracked file in this repo (the deploy
+# entrypoint the gate is called from). Renaming the references without renaming
+# the file produced six citations to a path that does not exist.
+scripts/deploy-ref-gate.ts:core01-deploy-local.sh
+docs/README.md:core01-deploy-local.sh
+docs/downstream-rollout.md:core01-deploy-local.sh
+python/README.md:core01-deploy-local.sh
+
+# `docs/core01-nats-worker-runbook.md` is a tracked file; this is its link.
+docs/README.md:core01-nats-worker-runbook.md
+
+# A fixed handshake token the operator exports verbatim. The value is compared
+# for equality against what `docs/collab-retirement-preflight.md` instructs
+# them to type, so it is an opaque string, not a hostname reference. Changing
+# one side alone silently disables the release gate.
+scripts/retire-collab-migration.ts:core01-live-db-after-backup
