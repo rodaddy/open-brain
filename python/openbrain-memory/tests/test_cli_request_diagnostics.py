@@ -133,6 +133,44 @@ def test_operator_capture_rejects_unproven_start_scope(
     assert client.appended is None
 
 
+@pytest.mark.parametrize("client", [SparseStartClient(), NullScopeStartClient()])
+def test_scope_proof_error_names_only_request_vocabulary(
+    client: SparseStartClient,
+) -> None:
+    """The scope-proof error must never name a key a request may not carry.
+
+    Regression for #646. The server stores `platform` under the lane column
+    `source`, and the validator compares using that response spelling -- but it
+    also REPORTED it, so an operator was told to add `source` to their scope
+    while `_SCOPE_KEYS` rejected exactly that key ("scope contains unsupported
+    keys: source"). The provider demanded a key it refused, so a head session
+    could not capture by any spelling. The contract vocabulary is `platform`
+    (docs/agent-context-pack-contract.md:99-105).
+    """
+    output = execute_json(
+        {
+            "config": _CONFIG,
+            "operation": "capture",
+            "content": "Scope proof error vocabulary",
+            "distilled": True,
+            "event_type": "fact",
+            "scope": _FULL_SCOPE,
+        },
+        client=client,
+    )
+
+    error = str(output["receipt"]["error"])
+    named = error.split("did not prove exact Open Brain scope:", 1)[1]
+    reported = {part.strip() for part in named.split(",") if part.strip()}
+
+    assert reported, f"no scope keys were named: {error}"
+    # Every named key must be one a caller may actually send.
+    assert reported <= set(_FULL_SCOPE) | {"namespace"}, error
+    # The specific false instruction that made #646 unfixable from the outside.
+    assert "source" not in reported, error
+    assert "platform" in reported, error
+
+
 def test_operator_capture_rejects_sparse_lane_before_v2_dispatch() -> None:
     """A server below session_start v2 cannot supply handshake scope proof."""
     client = UnderVersionedSparseStartClient()
