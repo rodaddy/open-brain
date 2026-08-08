@@ -1,7 +1,7 @@
 # Client install runbook — putting the Open Brain direct stack on a new box
 
 **Status: WRITTEN, and the bundle mechanism has been RUN once** (2026-08-04, the
-first bundle staged at `/Volumes/ThunderBolt/open-brain-local/air-bundle/`). The
+first bundle staged at `/opt/open-brain-local/air-bundle/`). The
 client-side half — a full `setup-client.sh` run on the Air — is **not yet
 proven**; see [Proof ladder](#proof-ladder) for what "done" actually requires.
 
@@ -66,12 +66,12 @@ from a local directory, never from an index.
 ### Build the bundle (on the Mini)
 
 ```bash
-cd /Volumes/ThunderBolt/Development/open-brain
+cd /workspace/open-brain
 scripts/client-bundle.sh
 ```
 
 It stages into a fresh timestamped directory under
-`/Volumes/ThunderBolt/open-brain-local/air-bundle/` and flips a `current`
+`/opt/open-brain-local/air-bundle/` and flips a `current`
 symlink at it.
 
 **The bundle home is deliberate.** It is a sibling of the running `app/` on the
@@ -107,8 +107,8 @@ requirements.
 
 | URL | Opt-in needed | Notes |
 |---|---|---|
-| `https://ob.rodaddy.live` | **none** | **Preferred.** TLS, so the client's transport check passes with no extra variable. |
-| `http://10.71.1.20:3100` | `OPENBRAIN_ALLOW_INSECURE_HTTP=1` | LAN plain-http. Requires the opt-in declared by #525 / PR #544. |
+| `https://ob.example.com` | **none** | **Preferred.** TLS, so the client's transport check passes with no extra variable. |
+| `http://192.0.2.20:3100` | `OPENBRAIN_ALLOW_INSECURE_HTTP=1` | LAN plain-http. Requires the opt-in declared by #525 / PR #544. |
 
 `openbrain_memory.client._validate_base_url` permits plain `http` only for
 loopback. A LAN address over plain `http` is refused outright unless the client
@@ -141,7 +141,7 @@ tool call** and points the operator's escape hatch at a directory that does not
 exist on the box.
 
 `openbrain-provider` resolves the Development lane by asking the filesystem, and
-the shipped `DEFAULT_DEVELOPMENT_ROOT` is `/Volumes/ThunderBolt/Development` —
+the shipped `DEFAULT_DEVELOPMENT_ROOT` is `/workspace` —
 the Mini's volume. On a client whose tree is elsewhere (the Air:
 `/Users/rico/Development`), that path is absent, `resolve_development_scope()`
 returns `None` for every cwd, and `context_budget_gate._development_cwd()`
@@ -161,7 +161,7 @@ list is for non-string values, where `""` and absent differ (see §4).
 
 `setup-client.sh` does both automatically: it resolves the root from
 `OPENBRAIN_DEVELOPMENT_ROOT`, then `DEV_ROOT`, then by probing
-`/Volumes/ThunderBolt/Development` and `$HOME/Development`, writes the resolved
+`/workspace` and `$HOME/Development`, writes the resolved
 value into the installed env file, and adds the pass-through. It **refuses to
 install** when it cannot resolve one, for the same reason as the loopback guard:
 a warning scrolls away and the install then succeeds into a box that blocks
@@ -273,7 +273,7 @@ In order, because each check makes the next one meaningful:
 
 1. **Are `OPENBRAIN_BASE_URL` and `OPENBRAIN_TOKEN` both present?** A present
    URL with a missing token produces the *same* message as an unreachable host.
-   Two sessions once diagnosed a missing token as a core01 outage. Name the
+   Two sessions once diagnosed a missing token as a production-host outage. Name the
    variable in your report, never the value.
 2. **Does the wrapper's `ENV_FILE` path exist on this box?** It is an absolute
    path baked in at build time. `setup-client.sh` rewrites it, but a hand-copied
