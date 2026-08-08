@@ -1,0 +1,120 @@
+# The Lane Contract
+
+Status: WRITTEN 2026-08-08, adopted by operator directive the same day —
+"every time we tighten it, we make better every time, and we document how we
+did it." This file is the single briefing source for RLVR worker lanes in this
+repo. The controller's dispatch prompt states the task, the deliverable, and
+the done-means design; for everything else it POINTS HERE instead of restating.
+
+The ratchet rule (ledger item 19, `docs/issue-graph.md`): after every lane
+run, the controller harvests the lane's refusals, workarounds, self-caught
+defects, and surprises into the Tightenings changelog below — with provenance —
+before the next dispatch. **A lesson that appears in a lane report and not
+here is a defect in the merge pass that accepted the report.** SME entries
+(`docs/sme/entries/`) capture review knowledge for reviewers; this file
+captures operating knowledge for lanes. Same lesson may land in both.
+
+## Standing contract
+
+Every lane, no exceptions:
+
+1. **RLVR shape.** The executable done-means check is written FIRST and run
+   RED before the change exists — a check that has never failed proves
+   nothing. The checker declares done; the lane never self-certifies. RED and
+   GREEN transcripts go in the PR body. The controller re-runs the check
+   independently before merge; worker output is PROPOSED until then.
+2. **Environment.** `bun scripts/lane-bootstrap.ts --branch <name> --reason
+   "<why the worktree>"` (add `--fresh-db` when tests touch Postgres). Work in
+   the worktree it prints. Never switch the primary checkout's branch.
+3. **PR bodies.** Compose from `.github/pull_request_template.md`; validate
+   locally BEFORE `gh pr create`:
+   `PR_BODY="$(cat body.md)" PR_TITLE="<title>" bun scripts/validate-pr-body.ts`.
+   The repo hook (`.claude/hooks/pr-body-gate.ts`, ledger item 17) refuses
+   invalid bodies at `gh pr create`/`edit`; CI is the backstop, not the
+   discovery mechanism.
+4. **Truth labels.** Every claim carries RUNNING / MERGED / WRITTEN /
+   PROPOSED. "Merged to my branch" is not merged.
+5. **Nothing silent** (AGENTS.md Coding Standards, 2026-08-08). Every
+   adjustment, N/A step, and workaround is announced in the report.
+6. **Never conclude "pre-existing" from a single-file run.** The proof is the
+   full suite on clean `origin/main` vs the branch, in separate worktrees with
+   separate fresh databases (the #609 standard).
+7. **Teardown.** You created it, you remove it: `git worktree remove`,
+   `dropdb` by exact name. Scratch worth keeping moves to
+   `{temp_workspace}/open-brain/_archive/<lane>/` — never deleted. Report
+   anything you could not remove. No `rm -rf`, ever, anywhere.
+8. **Report shape.** Caveman-compressed. First line: `self-reported model:`
+   (weak evidence, kept for the A/B record). Then: branch, PR, RED/GREEN
+   evidence, root cause with file:line, refusals/workarounds/violations —
+   self-reported violations are harvested, never punished; burying one is the
+   offense.
+9. **Refusals are rules working.** A hook denial means adjust, not retry a
+   spelling variant. If the denial looks like a false positive, work around it
+   the sanctioned way, and REPORT it — gate defects get fixed by the operator
+   loop, not fought by lanes.
+10. **Fast tools.** `rg`/`fd`/`mdfind`; `grep`/`find` are denied at the tool
+    layer and the refusal names the replacement.
+
+## Tightenings
+
+Newest first. Every entry: what changed, and the observation that forced it.
+
+### 2026-08-08 — harvest of the tooling + fixture lanes (PRs #615, #616, #617, #619, #620, #621)
+
+- **`validate-pr-body.ts` reads `PR_BODY`/`PR_TITLE` from ENV, not argv or
+  stdin.** Run with no env and it validates the empty string — and in one
+  observed path printed failures while exiting 0. Always confirm the literal
+  "PR body validation passed" line, not just the exit code. (Found
+  independently by the controller and the #613 lane; validator exit-code
+  defect tracked in its own issue.)
+- **No `###` subheadings inside validator-required PR-body sections.** The
+  section parser terminates on `startsWith("## ")`, which `### x` satisfies —
+  an h3 silently truncates the section. Use bold text instead. (#613 lane.)
+- **Bun names tests only on failure.** A gate that greps the suite log for a
+  test name to prove execution false-negatives on a fully-passing run. Prove
+  execution by asserting a non-zero pass count. (#613 lane, self-caught.)
+- **ripgrep `-E` is `--encoding`, not extended-regex.** `rg -qiE <pattern>`
+  errors and can read as the thing-under-test failing. Use `rg -e`. (#621
+  lane, self-caught in its own check.)
+- **`sed -i` is not portable between this shell's GNU sed and BSD examples;
+  in-place sed has burned two lanes.** Prefer the Edit tool, `awk` to a new
+  file, or `> file && cp`. (#615 near-false-green; #613 workaround.)
+- **Git guard (#618, open): commit MESSAGES and heredoc text containing
+  protected-branch names get blocked on feature branches.** Sanctioned
+  workaround until fixed: write the message to a scratch file and
+  `git commit -F <file>`; for merges, `git merge FETCH_HEAD` after an explicit
+  fetch. Report each firing on #618. (Three lanes + controller, five shapes.)
+- **Design-lookup gate cap-matcher fires on SQL identifiers containing
+  "constraint" (e.g. `information_schema.constraint_column_usage`).** Not a
+  cap question. Workaround: query `pg_constraint` directly, or reword.
+  Report, don't fight. (#613 lane.)
+- **A suite that exits 0 can still leak rows — gates read the database, not
+  the exit code.** The parity harness passed green for its whole life while
+  seeding 9 tables. (#620.)
+- **Clean up by the dimension the PRODUCER uses, not the dimension the test
+  seeds** — and prefer the owning shared helper over per-suite patches when
+  one line serves every fixture. (#609 → generalized by #620.)
+- **`.gitignore` can silently drop lane-created files from fresh checkouts**
+  (`.claude/*` nearly ate the pr-scribe agent). The clean-clone (or fresh
+  worktree) run of the done-means check is the only thing that catches this
+  class — always finish with one. (#615 lane.)
+- **Mutation-test the gate itself when the PR's claim IS the gate.**
+  Reintroduce each real failure mode and watch the gate fail; a gate observed
+  only green is decoration. (#615, #620 practice; SME
+  `sme.duplicated_selection_lists_diverge` corollary.)
+
+### 2026-08-07 — founding round (PRs #609, #610, #611 and the decisions pass)
+
+- Red-first done-means checks with controller re-verification became the
+  operating mode (ledger item 12) after killing a false "pre-existing" claim
+  pre-merge (#609), exposing a stale issue-half (#598), and correcting the
+  controller's own briefing (#610 rollout).
+- PR-body format lessons (fenced templates invisible; bolded labels break
+  `^-\s*Label:`; `## Review Gate` required) — superseded by the template +
+  local-validation rule above, then enforced by the hook (item 17).
+- Lane environments are bootstrapped, not hand-built (item 15), after ~5
+  hand-builds hit missing `.env`/`bun-types`/swallowed exit codes in one
+  night.
+- SME capture moved to one-file-per-entry (item 13) after three same-file
+  union merges in one night; additions raise the pinned count in the same
+  commit, on purpose.
