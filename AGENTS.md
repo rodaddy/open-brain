@@ -150,8 +150,36 @@ Repo-specific rules below this line override the copies when stricter.
 bun install --frozen-lockfile   # install deps
 bunx tsc --noEmit               # typecheck
 bun run migrate                 # run migrations
-bun test                        # run tests
+bun run test:isolated           # run tests — the trustworthy default (#614)
+bun test                        # quick single-file iteration only; see below
 ```
+
+### `bun run test:isolated` — the default way to run the suite
+
+`bun run test:isolated` (`scripts/test-isolated.ts`) creates a uniquely-named
+database, migrates it, points `OPENBRAIN_TEST_DATABASE_URL` at it, runs
+`bun test` with whatever arguments you pass, prints the database name, and drops
+the database on the way out — including on SIGINT/SIGTERM. If the drop itself
+fails it prints the orphan's name and the exact `dropdb` line rather than
+leaking quietly.
+
+```bash
+bun run test:isolated                              # whole suite
+bun run test:isolated src/maintenance-queue.pg.test.ts   # one file
+```
+
+It invents no new mechanism: creation is CI's `createdb -E UTF8 -T template0`
+(`.github/workflows/ci.yml:68`, by way of `scripts/lane-bootstrap.ts
+--fresh-db`), migrations run through the existing `bun run migrate` path, and
+`bun test` itself is unchanged.
+
+**A full `bun test` run against the dogfood database is NOT evidence.** It
+returns a different failure count each time on unmodified code — 49 → 43 → 40
+across consecutive runs (#614, 2026-08-06; same class as #498) — while the same
+tree against a fresh database is clean. Shared mutable state is the contaminant,
+not the tests (#613 documents one concrete leakage mechanism). Bare `bun test`
+remains fine for quick single-file iteration; do not cite its full-suite counts
+in a PR, an issue, or a review verdict.
 
 ### Querying the dogfood database
 
@@ -171,7 +199,8 @@ repeatedly, until the libpq vars were added on 2026-07-29.
 The dogfood database is `open_brain_local_20260724` on `127.0.0.1` — the real one
 for this machine while in dev/dogfood mode. Note that `bun test` Postgres tests
 SKIP SILENTLY without `OPENBRAIN_TEST_DATABASE_URL`, so a green run may have
-tested nothing.
+tested nothing. `bun run test:isolated` sets that variable for you, which is the
+other reason to prefer it.
 
 ## Codex Durable Memory
 
