@@ -32,13 +32,57 @@ as #77-#82.
 
 ## Capture Rules
 
+**Write a new file in `entries/`, then run the build. Never edit a lane file.**
+
+The six lane files (`correctness.md`, `adversarial.md`, `quality.md`,
+`security.md`, `domain-backend.md`, `gotcha-agent.md`) are GENERATED. Each
+carries a banner saying so. A hand edit survives exactly until the next build
+and is then silently destroyed.
+
+```bash
+# 1. one file per finding; the name is the date and a slug of the title
+$EDITOR docs/sme/entries/2026-08-07-my-finding-title.md
+
+# 2. regenerate the lane indexes
+bun scripts/build-sme-indexes.ts
+```
+
+An entry file is frontmatter plus the finding body, verbatim:
+
+```markdown
+---
+lane: correctness
+order: 66
+---
+## [2026-08-07] Short imperative title
+
+**Severity:** HIGH
+**Source:** PR #123
+**Scope:** `src/tools/*.ts`
+**Status:** active
+
+### Pattern
+...
+```
+
+`lane` picks the destination file. `order` places the entry within that lane —
+append to the end by using one past the current highest, since the corpus is
+NOT sorted by date and sorting it would rewrite every lane file. Optional
+`section: harvest-522` places an entry under that lane's harvest divider, and
+optional `gap: N` controls the blank lines emitted after the entry (default 1).
+
+**Why one file per finding.** Every swarm lane used to append to the same six
+files, and git cannot union-merge prose — on 2026-08-06 that meant three manual
+union merges of `correctness.md` in one night. Two lanes writing two findings
+now write two different files, and git merges them without a human.
+
 - Capture MEDIUM+ review misses, accepted fixes, and new issue feedback.
 - Keep entries specific to Open Brain behavior, not generic coding advice.
 - Include provenance: issue or PR number, severity, source reviewer lane when
   known, and status.
 - If a finding is fixed, keep the pattern if it could recur.
 - If later work invalidates a pattern, mark it `Status: superseded` instead of
-  deleting it.
+  deleting it. Superseded entries stay in `entries/` — the history matters.
 
 ## PR Comment Requirements
 

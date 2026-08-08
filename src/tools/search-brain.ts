@@ -15,7 +15,7 @@ import {
   sourceScopeSchema,
   type SourceScope,
 } from "../source-refs.ts";
-import type { AuthInfo, LinkRelation, Table, Tier } from "../types.ts";
+import type { AuthInfo, LinkRelation, Role, Table, Tier } from "../types.ts";
 import type { ToolDeps } from "./index.ts";
 import { logger } from "../logger.ts";
 import { describeError } from "../observability/index.ts";
@@ -54,7 +54,77 @@ const LABEL_TO_TABLE: Record<string, Table> = Object.fromEntries(
 
 export type SearchMode = "hybrid" | "vector" | "keyword";
 type NamespaceFilter = string | string[];
-type SearchTable = Table | "entities";
+/**
+ * Tables the retrieval arms can read.
+ *
+ * `Table` is the PHYSICAL-table type: it drives `PERMISSIONS`, the REST table
+ * enum, and every write path, so widening it would demand a permission row and
+ * a write contract for corpora that have neither. `entities` and
+ * `session_events` are read-only retrieval sources instead — searchable, never
+ * writable through this surface — and each carries its own CTE branch below
+ * because its columns do not match the shared shape.
+ */
+export type SearchTable = Table | "entities" | "session_events";
+
+/**
+ * Session events are namespaced INDIRECTLY. `ob_session_events` has no
+ * `namespace` column at all (verified against information_schema on the
+ * dogfood DB, 2026-08-07); scope lives on `ob_session_lanes` and is reached
+ * only through `ob_session_events.lane_id`. Every CTE below therefore joins
+ * the lane table and applies the auth-derived namespace predicate to
+ * `lane.namespace` — omitting that join does not merely widen results, it
+ * exposes every agent's session history to every other namespace.
+ *
+ * The corpus also lacks `archived_at`, `tier`, `tags`, `usefulness_score`,
+ * `access_count`, `search_vector`, and `source_refs`. Those slots are filled
+ * with typed literals so the UNION arms stay type-compatible, and the
+ * consequences are deliberate:
+ *   - no stored `search_vector` -> the lexical arm matches with ILIKE on
+ *     `content` rather than `to_tsvector`, so it is substring-based, not
+ *     stemmed. That is the honest capability of a column that does not exist.
+ *   - no `tier` -> `importance` carries the same hot/warm/cold vocabulary and
+ *     the same CHECK constraint, so it is used as the tier for filtering and
+ *     for TIER_BOOST.
+ *   - no `source_refs` -> a source-scope filter cannot be satisfied, so the
+ *     corpus is excluded when one is requested rather than silently ignoring
+ *     the scope (which would leak out-of-scope rows into a scoped query).
+ */
+const SESSION_EVENTS_SOURCE_LABEL = "session_event";
+
+/**
+ * The recall sources a role may read, in one place.
+ *
+ * This exists because the selection was previously OPEN-CODED at each call
+ * site, and that is exactly how #433 defect 1 happened: `search_brain` added
+ * `entities` to its list, `brain_answer` did not, and nothing added
+ * `session_events` anywhere -- so a corpus of 11,136 rows was unreachable from
+ * the tool agents actually ask. Three copies of a list is three chances to
+ * forget one. Callers that need the default set MUST use this function so a
+ * new source is added once and appears everywhere at once.
+ *
+ * `entities` and `session_events` have no PERMISSIONS row: they are read-only
+ * retrieval sources, never written through this surface, and both ride the
+ * `sessions` read permission.
+ */
+export function readableSearchTables(
+  role: Role,
+  options: { includeEntities?: boolean } = {},
+): SearchTable[] {
+  const tables: SearchTable[] = ALL_TABLES.filter((table) =>
+    canRead(role, table),
+  );
+  if (canRead(role, "sessions")) {
+    // `entities` is opt-in because the two recall surfaces legitimately differ:
+    // search_brain returns rows for a caller to read, while brain_answer cites
+    // extractive evidence, and an entity row's preview is a name label rather
+    // than a statement. Silently adding it to brain_answer would be a behavior
+    // change #433 never asked for. `session_events` is unconditional: it is
+    // real recorded content and its absence IS the defect.
+    if (options.includeEntities) tables.push("entities");
+    tables.push("session_events");
+  }
+  return tables;
+}
 export type { SourceScope };
 
 type ExecuteSearchOptions = {
@@ -652,6 +722,39 @@ function buildTableCTE(
   LIMIT ${perTableLimit}
 )`;
   }
+  if (table === "session_events") {
+    // A source scope cannot be evaluated against a corpus with no source_refs;
+    // the caller drops this table from the list in that case (see
+    // executeSearchInternal), rather than ignoring the scope and leaking
+    // out-of-scope rows into a scoped query.
+    const tierFilter = tier ? ` AND se.importance = '${tier}'` : "";
+    const nsFilter = namespaceParamIndex
+      ? namespaceIsArray
+        ? ` AND sl.namespace = ANY(${paramRef(namespaceParamIndex)}::text[])`
+        : ` AND sl.namespace = ${paramRef(namespaceParamIndex)}`
+      : "";
+    return `session_events_results AS (
+  SELECT
+    '${SESSION_EVENTS_SOURCE_LABEL}' AS source_type,
+    se.id,
+    sl.namespace,
+    se.content AS content_preview,
+    NULL::text[] AS tags,
+    se.created_by,
+    se.created_at,
+    se.created_at AS updated_at,
+    se.importance AS tier,
+    se.embedding <=> (SELECT emb FROM query_embedding) AS distance,
+    0.5 AS usefulness,
+    0 AS access_count,
+    se.metadata AS extracted_metadata
+  FROM ob_session_events se
+  JOIN ob_session_lanes sl ON sl.id = se.lane_id
+  WHERE se.embedding IS NOT NULL${tierFilter}${nsFilter}
+  ORDER BY se.embedding <=> (SELECT emb FROM query_embedding) ASC
+  LIMIT ${perTableLimit}
+)`;
+  }
   const alias = TABLE_ALIAS[table];
   const label = SOURCE_LABELS[table];
   const preview = CONTENT_PREVIEW[table];
@@ -763,6 +866,43 @@ function buildFtsCTE(
   LIMIT ${perTableLimit}
 )`;
   }
+  if (table === "session_events") {
+    // ob_session_events has no stored `search_vector` generated column, so
+    // there is no tsvector to match against and no GIN index to ride. The
+    // lexical arm matches `content` with ILIKE, exactly as the entities arm
+    // above does for its own unindexed text. This is substring matching, not
+    // stemming: it is the honest capability of a column that does not exist,
+    // and it is stated here so a reader does not assume FTS parity. The
+    // `ftsConfig` argument is deliberately unused for this table -- a text
+    // search configuration has nothing to configure without a tsvector.
+    const tierFilter = tier ? ` AND se.importance = '${tier}'` : "";
+    const nsFilter = namespaceParamIndex
+      ? namespaceIsArray
+        ? ` AND sl.namespace = ANY(${paramRef(namespaceParamIndex)}::text[])`
+        : ` AND sl.namespace = ${paramRef(namespaceParamIndex)}`
+      : "";
+    return `session_events_fts AS (
+  SELECT
+    '${SESSION_EVENTS_SOURCE_LABEL}' AS source_type,
+    se.id,
+    sl.namespace,
+    se.content AS content_preview,
+    NULL::text[] AS tags,
+    se.created_by,
+    se.created_at,
+    se.created_at AS updated_at,
+    se.importance AS tier,
+    1.0 AS fts_rank,
+    0.5 AS usefulness,
+    0 AS access_count,
+    se.metadata AS extracted_metadata
+  FROM ob_session_events se
+  JOIN ob_session_lanes sl ON sl.id = se.lane_id
+  WHERE se.content ILIKE '%' || (SELECT q FROM fts_query) || '%'${tierFilter}${nsFilter}
+  ORDER BY se.created_at DESC
+  LIMIT ${perTableLimit}
+)`;
+  }
   const alias = TABLE_ALIAS[table];
   const label = SOURCE_LABELS[table];
   const preview = CONTENT_PREVIEW[table];
@@ -867,8 +1007,12 @@ async function relationalGraphSearch(
 ): Promise<SearchRow[]> {
   const parsed = parseRelationalQuery(query);
   if (!parsed) return [];
+  // Relational hydration walks `ob_links` from a seed entity into the physical
+  // content tables. `entities` is the seed side, and `session_events` has no
+  // rows in the link graph, so neither is a hydration target.
   const targetTables = accessibleTables.filter(
-    (table): table is Table => table !== "entities",
+    (table): table is Table =>
+      table !== "entities" && table !== "session_events",
   );
   if (targetTables.length === 0) return [];
 
@@ -1292,7 +1436,12 @@ async function executeSearchInternal(
   const enableGraph = options.enableGraph === true;
   const ftsConfig = options.ftsConfig ?? DEFAULT_FTS_CONFIG;
   if (sourceScope) {
-    accessibleTables = accessibleTables.filter((table) => table !== "entities");
+    // Neither corpus carries `source_refs`, so a source-scope predicate cannot
+    // be evaluated against them. Dropping them is the safe reading: keeping
+    // them would return rows the scope never authorized.
+    accessibleTables = accessibleTables.filter(
+      (table) => table !== "entities" && table !== "session_events",
+    );
     if (accessibleTables.length === 0) return [];
   }
   let rows: SearchRow[];
@@ -1673,9 +1822,10 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
             "projects",
             "sessions",
             "entities",
+            "session_events",
           ])
           .optional()
-          .describe("Optional: limit search to a specific table"),
+          .describe("Optional: restrict search to a single named source"),
         namespace: z
           .string()
           .trim()
@@ -1769,6 +1919,23 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
             };
           }
           accessibleTables = ["entities"];
+        } else if (tableFilter === "session_events") {
+          // Session events are session-scoped content, so they ride the
+          // `sessions` read permission -- the same indirection `entities` uses
+          // above. There is no `session_events` row in PERMISSIONS because the
+          // corpus is read-only through this surface and never written here.
+          if (!canRead(auth.role, "sessions")) {
+            return {
+              content: [
+                {
+                  type: "text" as const,
+                  text: "Permission denied: cannot read session_events",
+                },
+              ],
+              isError: true,
+            };
+          }
+          accessibleTables = ["session_events"];
         } else if (!canRead(auth.role, tableFilter)) {
           return {
             content: [
@@ -1783,10 +1950,9 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
           accessibleTables = [tableFilter];
         }
       } else {
-        accessibleTables = ALL_TABLES.filter((t) => canRead(auth.role, t));
-        if (canRead(auth.role, "sessions")) {
-          accessibleTables.push("entities");
-        }
+        accessibleTables = readableSearchTables(auth.role, {
+          includeEntities: true,
+        });
       }
 
       if (accessibleTables.length === 0) {
@@ -1844,8 +2010,11 @@ export function registerSearchBrain(server: McpServer, deps: ToolDeps): void {
         };
       }
       if (sourceScope) {
+        // Same reason as executeSearchInternal: no source_refs column means a
+        // source scope cannot be honored, so the corpus is excluded rather
+        // than silently ignoring the scope.
         accessibleTables = accessibleTables.filter(
-          (table) => table !== "entities",
+          (table) => table !== "entities" && table !== "session_events",
         );
       }
       if (accessibleTables.length === 0) {
