@@ -33,7 +33,7 @@
 #   OPENBRAIN_PLAY_DB      default target  (default open_brain_play)
 set -euo pipefail
 
-REPO_DIR="${OPENBRAIN_REPO_DIR:-/Volumes/ThunderBolt/Development/open-brain}"
+REPO_DIR="${OPENBRAIN_REPO_DIR:-$HOME/Development/open-brain}"
 LIVE_DB="${OPENBRAIN_LIVE_DB:-open_brain_local_20260724}"
 # The open_brain_local_ prefix is REQUIRED, not stylistic: the runtime's
 # fail-closed guard (src/local-clone-mode.ts:154) refuses to start local clone
@@ -131,7 +131,7 @@ fi
 # This works without --no-owner because both roles already exist locally. On a
 # host where they do not, the restore would need them created first -- which is
 # the correct failure, not a reason to strip ownership.
-DUMP_DIR="${TMPDIR_OVERRIDE:-/Volumes/ThunderBolt/open-brain-local/_scratch}"
+DUMP_DIR="${TMPDIR_OVERRIDE:-$HOME/.local/state/open-brain/_scratch}"
 mkdir -p "$DUMP_DIR"
 DUMP_FILE="${DUMP_DIR}/${TARGET}-$(date -u +%Y%m%dT%H%M%SZ).dump"
 

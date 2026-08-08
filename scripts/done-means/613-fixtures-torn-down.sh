@@ -41,7 +41,7 @@
 # generated, via `dropdb`. It contains no `rm` of any kind and touches no
 # worktree, no repo file, and no database it did not create.
 #
-# The dogfood database and core01 are NOT touched. This check never reads
+# The dogfood database and deployment_host are NOT touched. This check never reads
 # OPENBRAIN_TEST_DATABASE_URL from the environment; it sets its own.
 set -uo pipefail
 

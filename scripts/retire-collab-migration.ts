@@ -52,7 +52,7 @@ const SHARED_NAMESPACE = "shared-kb";
 const REPO_FACT_ENTITY_TYPE = "repo_fact";
 export const COLLAB_RETIRE_APPROVAL_ENV =
   "OPENBRAIN_COLLAB_RETIRE_RELEASE_APPROVED";
-export const COLLAB_RETIRE_APPROVAL_VALUE = "core01-live-db-after-backup";
+export const COLLAB_RETIRE_APPROVAL_VALUE = "deployment_host-live-db-after-backup";
 const LOCAL_DB_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 
 /** Content tables affected by the legacy fallback removal (allowlist). */

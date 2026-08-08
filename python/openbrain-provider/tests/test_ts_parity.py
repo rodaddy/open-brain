@@ -19,6 +19,7 @@ rendered differently is a command the gate then refuses.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import NamedTuple
 
@@ -50,9 +51,14 @@ def replays(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Replay]:
     """
     scratch = tmp_path_factory.mktemp("ts-parity")
     results: dict[str, Replay] = {}
-    for case in CASES:
-        produced, code = run_case(case, scratch)
-        results[case.name] = Replay(case, produced, code, scratch)
+    inherited_proxy = os.environ.pop("ANTHROPIC_BASE_URL", None)
+    try:
+        for case in CASES:
+            produced, code = run_case(case, scratch)
+            results[case.name] = Replay(case, produced, code, scratch)
+    finally:
+        if inherited_proxy is not None:
+            os.environ["ANTHROPIC_BASE_URL"] = inherited_proxy
     return results
 
 

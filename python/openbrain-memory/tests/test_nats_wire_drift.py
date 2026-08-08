@@ -42,7 +42,7 @@ from openbrain_memory.nats_wire import (
 
 # The fleet-bus monorepo clone. Known, fixed path on fleet dev machines; the
 # tests skip when it is not there rather than guessing at alternatives.
-FLEET_BUS_CLONE = Path("/Volumes/ThunderBolt/Development/fleet-bus")
+FLEET_BUS_CLONE = Path("/path/to/open-brain/Development/fleet-bus")
 _SUBJECTS_SRC = FLEET_BUS_CLONE / "packages/fleet-nats/src/fleet_nats/subjects.py"
 _SPEC_SRC = FLEET_BUS_CLONE / "packages/fleet-core/src/fleet_core/spec.py"
 

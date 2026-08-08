@@ -633,7 +633,7 @@ done
 
 # Scratch fixtures are this script's own; retire them into the temp workspace
 # archive rather than deleting (AGENTS.md: the agent's cleanup verb is mv).
-ARCHIVE_DIR="/Volumes/ThunderBolt/_tmp/open-brain/_archive"
+ARCHIVE_DIR="/path/to/open-brain/_tmp/open-brain/_archive"
 if mkdir -p "$ARCHIVE_DIR" 2>/dev/null; then
   mv "$SCRATCH" "$ARCHIVE_DIR/$(basename "$SCRATCH").$(date +%s)" 2>/dev/null
 fi

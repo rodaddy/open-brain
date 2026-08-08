@@ -130,7 +130,7 @@ PositiveMs = Annotated[int, Field(gt=0)]
 #: matching no declared field is rejected by :func:`unknown_prefixed_variables`
 #: as a typo, and the hook entrypoints swallow that rejection into a SILENT ZERO
 #: CAPTURE / ZERO INJECTION with a clean exit 0. Measured 2026-08-02 and recorded
-#: in the issue: a hook process on a LAN box pointing at ``http://10.71.1.20:3100``
+#: in the issue: a hook process on a LAN box pointing at ``http://192.0.2.20:3100``
 #: declined canon AND capture with no error anywhere, because the deployed
 #: ``openbrain-hook-env`` wrapper strips this variable precisely to avoid that
 #: rejection. This is the same trap ``CaptureSettings.spool_path`` and

@@ -137,7 +137,7 @@ SEEDED="$(psql -At -c "select count(*) from ob_session_events e join ob_session_
 # checkout, so it never dirties `git status` and needs no delete to clean up
 # (agents do not run forced/recursive deletes — Development AGENTS.md). It is
 # imported by absolute path, so bun still resolves this checkout's modules.
-PROBE_DIR="${OPENBRAIN_SCRATCH:-/Volumes/ThunderBolt/_tmp/open-brain/_scratch}/done-means-433"
+PROBE_DIR="${OPENBRAIN_SCRATCH:-$HOME/.cache/open-brain/open-brain/_scratch}/done-means-433"
 mkdir -p "$PROBE_DIR" || fail_hard "cannot create scratch dir $PROBE_DIR"
 PROBE="$PROBE_DIR/probe.$RUN_ID.ts"
 
@@ -181,7 +181,7 @@ function countMarker(rows: any[]): number {
 }
 
 // BOTH SERVING TREES ARE PROBED, because both are live. `server/main.ts` is the
-// local-clone serving entrypoint and `src/index.ts` still serves core01 via
+// local-clone serving entrypoint and `src/index.ts` still serves deployment_host via
 // deploy/open-brain.service and scripts/run-two-worker.ts -- the repo states
 // this itself at src/index.ts:52-60 and src/tools/agent-context-pack.ts:215.
 // Fixing one tree and reporting the defect closed would leave a live path

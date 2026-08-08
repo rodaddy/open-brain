@@ -1,6 +1,6 @@
 """Decide whether a working directory is inside the Development lane.
 
-The gate enforces nothing outside `/Volumes/ThunderBolt/Development` and the
+The gate enforces nothing outside `/path/to/open-brain/Development` and the
 approved temp worktree roots. A cwd that resolves to neither yields no project,
 and a gate with no project emits nothing — that is what keeps the hook silent in
 somebody else's repository.
@@ -50,7 +50,7 @@ DEVELOPMENT_ROOT_ENV_VAR: Final[str] = "OPENBRAIN_DEVELOPMENT_ROOT"
 
 #: ob-memory-provider.ts:143. The one lane root, as shipped. Public because the
 #: parity fixtures were recorded against it and have to recognise it by name.
-DEFAULT_DEVELOPMENT_ROOT: Final[Path] = Path("/Volumes/ThunderBolt/Development")
+DEFAULT_DEVELOPMENT_ROOT: Final[Path] = Path.home() / "Development"
 
 
 def development_root() -> Path:
@@ -168,7 +168,7 @@ def render_scope_diagnosis(diagnosis: ScopeDiagnosis) -> str:
 #: Development work, but only when git agrees it is the same repository — see
 #: :func:`resolve_development_scope`.
 APPROVED_TEMP_WORKTREE_ROOTS: Final[tuple[Path, ...]] = (
-    Path("/Volumes/ThunderBolt/_tmp"),
+    Path(os.environ.get("OPENBRAIN_TEMP_WORKSPACE", Path.home() / ".cache/open-brain")),
     Path("/mnt/collab/tmp_space"),
 )
 

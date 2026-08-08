@@ -208,8 +208,8 @@ describe("restore approval gates", () => {
     expect(targetHostRequiresRemoteApproval("localhost")).toBe(false);
     expect(targetHostRequiresRemoteApproval("LOCALHOST")).toBe(false);
     expect(targetHostRequiresRemoteApproval("::1")).toBe(false);
-    expect(targetHostRequiresRemoteApproval("10.71.1.21")).toBe(true);
-    expect(targetHostRequiresRemoteApproval("core01.local")).toBe(true);
+    expect(targetHostRequiresRemoteApproval("192.0.2.21")).toBe(true);
+    expect(targetHostRequiresRemoteApproval("deployment_host.local")).toBe(true);
   });
 });
 

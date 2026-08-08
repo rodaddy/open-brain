@@ -132,7 +132,7 @@ The ideas were taken; the dependencies were not.
 
 ## Local clones
 
-Working copies live at `/Volumes/ThunderBolt/open-brain-local/research/`, outside
+Working copies live at `/path/to/open-brain/open-brain-local/research/`, outside
 this repo so vendor source never enters our git history. They are read-only
 reference material. Prior art is read **from source, not marketing** — that is
 what made the existing findings usable.

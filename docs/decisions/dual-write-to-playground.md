@@ -30,7 +30,7 @@ database, load balanced behind a public port. That is capacity, not duplication.
 
 A "worker pointed at the playground DB" would receive **half** the incoming
 traffic and write it only to the playground — splitting real memory in two
-rather than copying it. core01 runs two workers and works fine precisely because
+rather than copying it. deployment_host runs two workers and works fine precisely because
 both write to the same place.
 
 ---

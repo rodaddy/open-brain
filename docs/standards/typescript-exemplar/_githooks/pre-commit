@@ -72,7 +72,7 @@ repo_root="$(git rev-parse --show-toplevel)"
 # So the checkout goes into the temp workspace instead. HOOK_SCRATCH_ROOT lets
 # CI override it. /tmp is deliberately not the default -- it is sandbox-local,
 # so a failed run's evidence would be invisible to whoever is debugging it.
-scratch_root="${HOOK_SCRATCH_ROOT:-/Volumes/ThunderBolt/_tmp/typescript-exemplar/_scratch}"
+scratch_root="${HOOK_SCRATCH_ROOT:-/path/to/open-brain/_tmp/typescript-exemplar/_scratch}"
 scratch="$scratch_root/pre-commit-staged-$$"
 
 # A FRESH scratch each run: the staged checkout must not inherit files from a

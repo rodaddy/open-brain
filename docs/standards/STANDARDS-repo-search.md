@@ -92,7 +92,7 @@ index owns it.
 ### Prior art: `aqmd research`
 
 Six upstream clones (mem0, graphiti, cognee, cognee-integrations, gbrain,
-honcho) are checked out at `/Volumes/ThunderBolt/open-brain-local/research` as
+honcho) are checked out at `/path/to/open-brain/open-brain-local/research` as
 reference material. They are **read-only** and share one index, so nothing is
 ever written into them — no `.qmd/` per clone, no dirtied `git pull`.
 
@@ -118,7 +118,7 @@ is both faster and current.
 `aqmd` will tell you, and print the command. Build one:
 
 ```bash
-DEV=<parent-of-the-repo> /Volumes/ThunderBolt/Development/_ob/bin/qmd-backfill
+DEV=<parent-of-the-repo> /path/to/open-brain/Development/_ob/bin/qmd-backfill
 ```
 
 Resumable, skips repos that already have a valid index, and repairs a repo whose
@@ -247,7 +247,7 @@ patterns describe. The patterns were the problem.
 
     # Fix: rebuild the allowlist. REGEN is required because backfill SKIPS any
     # repo that already has a valid index.yml (resumable-by-design).
-    REGEN=1 DEV=/Volumes/ThunderBolt/Development ONLY_REPO=<repo> \
+    REGEN=1 DEV=/path/to/open-brain/Development ONLY_REPO=<repo> \
       _ob/bin/qmd-backfill
     aqmd up
 

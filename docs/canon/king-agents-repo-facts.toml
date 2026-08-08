@@ -45,7 +45,7 @@ lane = "repo_facts"
 subject = "Deployment target"
 fact_type = "workflow"
 text = """
-Production runs on CT 302 (10.71.20.62) on port 3400, restarted with `systemctl restart king-agents`. Agents are long-running, so callers must not set aggressive HTTP timeouts.\
+Production runs on CT 302 (192.0.2.62) on port 3400, restarted with `systemctl restart king-agents`. Agents are long-running, so callers must not set aggressive HTTP timeouts.\
 """
 source = "README.md; https://github.com/King-Capital/king-agents/blob/420a22e22498cad7574a5f9e7893e7d08cdb80ee/README.md#L137; verified_at=2026-08-03T16:17:42Z; source_commit=420a22e22498cad7574a5f9e7893e7d08cdb80ee"
 

@@ -125,7 +125,7 @@ network.
 - **Source** arrives by git. Kevin's work reaches this machine by `git pull`
   (D8) — it is the same repo, not a foreign corpus.
 - **Indexes** are rebuilt locally after a pull (D8, D9), manually.
-- **core01** gets both because the Development drive clones there daily. It is a
+- **deployment_host** gets both because the Development drive clones there daily. It is a
   *consumer* of the same mechanism, not an authority anyone queries remotely.
 
 This is why there is no sync design in this document. There is nothing to sync.
@@ -262,7 +262,7 @@ document fills that gap as design; it does not claim any of it is verified.
 
 - No code has been written or changed.
 - The two `src/qmd-path.ts` defects are **reported, not fixed**.
-- Nothing here is measured against core01 — all observations are this machine
+- Nothing here is measured against deployment_host — all observations are this machine
   and the local dogfood clone.
 - The multi-machine case is settled by D8 (same repos, git-distributed), **not**
   by anything tested.

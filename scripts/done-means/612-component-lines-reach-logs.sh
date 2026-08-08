@@ -7,7 +7,7 @@
 #   An executable check that greps the clone log file for a child-logger line
 #   with a `component` field emitted during the run, red on current behavior.
 #
-# This drives the LIVE local dogfood service. core01/hosted is NOT touched
+# This drives the LIVE local dogfood service. deployment_host/hosted is NOT touched
 # (two-host rule); this lane is the local half.
 #
 # ---------------------------------------------------------------------------
@@ -15,7 +15,7 @@
 # ---------------------------------------------------------------------------
 # The issue frames this as child-logger lines being dropped. Measured against
 # the live clone, the defect is BROADER: not one pino line of any kind reaches
-# the clone's log file. In /Volumes/ThunderBolt/open-brain-local/log/open-brain.log:
+# the clone's log file. In /path/to/open-brain/open-brain-local/log/open-brain.log:
 #
 #   - `"component"` lines:                            0
 #   - pino server lines (mcp_tracing_configured,
@@ -83,7 +83,7 @@ cd "${REPO_ROOT}"
 MARKER="done-means-612-$(date +%s)-$$"
 NS="done-means-612"
 HEALTH_URL="${OPEN_BRAIN_HEALTH_URL:-http://127.0.0.1:3100/health}"
-CLONE_LOG_DIR="${OPENBRAIN_CLONE_LOG_DIR:-/Volumes/ThunderBolt/open-brain-local/log}"
+CLONE_LOG_DIR="${OPENBRAIN_CLONE_LOG_DIR:-$HOME/.local/state/open-brain/log}"
 # The sweep ticks on OPEN_BRAIN_MAINTENANCE_POLL_MS (default 5000). Allow
 # several ticks plus handler and file-flush time.
 WAIT_SECONDS="${DONE_MEANS_612_WAIT_SECONDS:-90}"
@@ -110,7 +110,7 @@ abort_not_running() {
 # not of which worktree you happen to be standing in.
 ENV_FILE=".env"
 if [[ ! -f "${ENV_FILE}" ]]; then
-  ENV_FILE="${DONE_MEANS_612_ENV_FILE:-/Volumes/ThunderBolt/Development/open-brain/.env}"
+  ENV_FILE="${DONE_MEANS_612_ENV_FILE:-$HOME/Development/open-brain/.env}"
 fi
 if [[ ! -f "${ENV_FILE}" ]]; then
   abort_not_running "no .env found (looked in ${REPO_ROOT} and ${ENV_FILE}); cannot reach the dogfood database"
@@ -172,7 +172,7 @@ info "watching ${LOG_FILE_COUNT} log file(s) under ${CLONE_LOG_DIR}"
 # Deliberately NOT mktemp/$TMPDIR: those are sandbox-local, so a runner, a
 # sandbox, and the host each see a different one (Development AGENTS.md, hard
 # rule). The scratch bucket is a real shared path.
-SCRATCH_DIR="${DONE_MEANS_612_SCRATCH_DIR:-/Volumes/ThunderBolt/_tmp/open-brain/_scratch}"
+SCRATCH_DIR="${DONE_MEANS_612_SCRATCH_DIR:-$HOME/.cache/open-brain/open-brain/_scratch}"
 mkdir -p "${SCRATCH_DIR}" 2>/dev/null
 SIZES_FILE="${SCRATCH_DIR}/done-means-612-sizes.$$"
 : > "${SIZES_FILE}"

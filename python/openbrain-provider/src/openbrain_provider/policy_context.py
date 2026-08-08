@@ -84,7 +84,7 @@ def _runtime_fast_path_block(command_cwd: str, runtime: str) -> str:
                 "retired and blocked for Claude.",
                 "- Treat the visible `OB ✓ gate passed` line as the direct-recall "
                 "proof.",
-                "- Use `/Volumes/ThunderBolt/Development/_ob/repo-context/"
+                "- Use `/path/to/open-brain/Development/_ob/repo-context/"
                 "development.md` only when direct recall is missing, stale, or "
                 "reports `OB ✗ gate unavailable`.",
             ]
@@ -218,7 +218,7 @@ def post_compact_requirements() -> str:
             "- The pre-merge review gauntlet is MANDATORY at every PR boundary for "
             "non-trivial behavior/logic changes. Do not mark a PR ready, merge, or "
             "declare a slice complete without it.",
-            "- Canonical procedure: `/Volumes/ThunderBolt/Development/_ob/skills/"
+            "- Canonical procedure: `/path/to/open-brain/Development/_ob/skills/"
             "pre-merge-gauntlet/SKILL.md` (registry: `_ob/skills/registry.json`). "
             "Reread it before the next PR-boundary action -- do not run the "
             "gauntlet from memory of the pre-compact context.",

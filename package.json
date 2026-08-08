@@ -29,8 +29,8 @@
     "dream:rem": "bun run scripts/dream-rem-run.ts",
     "dream:deep": "bun run scripts/dream-deep-run.ts",
     "grade": "bun run scripts/grading-server-run.ts",
-    "deploy:core01": "/opt/homebrew/bin/bash scripts/core01-deploy-local.sh",
-    "qmd:core01:bootstrap": "/opt/homebrew/bin/bash scripts/core01-qmd-bootstrap.sh",
+    "deploy:deployment_host": "/opt/homebrew/bin/bash scripts/deployment_host-deploy-local.sh",
+    "qmd:deployment_host:bootstrap": "/opt/homebrew/bin/bash scripts/deployment_host-qmd-bootstrap.sh",
     "sample:grade": "bun run --env-file=.env scripts/grading-sample.ts"
   },
   "devDependencies": {

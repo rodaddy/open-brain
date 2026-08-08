@@ -9,15 +9,15 @@ review swarms, and the SME knowledge base. Do not duplicate its rules here; if
 this file and `AGENTS.md` ever disagree, `AGENTS.md` wins unless a rule here is
 stricter.
 
-Development-wide policy lives in `/Volumes/ThunderBolt/Development/AGENTS.md`
-and `/Volumes/ThunderBolt/Development/CLAUDE.md`. Repo-local files override
+Development-wide policy lives in `/path/to/open-brain/Development/AGENTS.md`
+and `/path/to/open-brain/Development/CLAUDE.md`. Repo-local files override
 those when stricter or more specific.
 
 ## Claude-Specific Deltas
 
 - **Open Brain is Claude's durable memory here, and this repo IS Open Brain.**
   The local dogfood service is the real one for this machine while in dev mode;
-  `mcp2cli`/core01 is not. Endpoint and token come from
+  `mcp2cli`/deployment_host is not. Endpoint and token come from
   `$OPENBRAIN_BASE_URL` / `$OPENBRAIN_TOKEN`
   (`~/.local/share/openbrain-memory/env/claudex-observation.env`).
 - **The retired operator CLI bridge is hook-blocked for Claude.** Durable writes

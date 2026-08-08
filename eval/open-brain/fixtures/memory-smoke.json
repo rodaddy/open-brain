@@ -29,7 +29,7 @@
       "namespace": "skippy",
       "type": "thought",
       "title": "ThunderBolt temp root",
-      "content": "Codex temporary worktrees, review checkouts, generated patches, downloads, and one-off test artifacts belong under /Volumes/ThunderBolt/_tmp.",
+      "content": "Codex temporary worktrees, review checkouts, generated patches, downloads, and one-off test artifacts belong under /path/to/open-brain/_tmp.",
       "tags": ["codex", "temp", "workflow"],
       "aliases": ["tmp root", "temporary worktree path"],
       "created_at": "2026-06-11T08:00:00.000Z",
@@ -39,7 +39,7 @@
         "id": "thought-temp-root",
         "namespace": "skippy",
         "label": "ThunderBolt temp root",
-        "preview": "Codex temporary work belongs under /Volumes/ThunderBolt/_tmp.",
+        "preview": "Codex temporary work belongs under /path/to/open-brain/_tmp.",
         "created_at": "2026-06-11T08:00:00.000Z"
       }
     },

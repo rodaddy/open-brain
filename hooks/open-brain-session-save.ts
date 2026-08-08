@@ -95,7 +95,7 @@ try {
       "Reread active AGENTS/CLAUDE router and triggered SOPs before risky action.",
       "Restate Pony style, critical mode, source-of-truth order, and next concrete action.",
       "Inspect cwd, branch, and dirty state before editing; do not mix unrelated dirty files into the next phase.",
-      "Run /Volumes/ThunderBolt/Development/_ob/scripts/policy-refresh-gate.ts --event refresh --agent claude after refresh.",
+      "Run /path/to/open-brain/Development/_ob/scripts/policy-refresh-gate.ts --event refresh --agent claude after refresh.",
     ],
     key_decisions: [
       "Compaction requires forced relearn before risky action.",

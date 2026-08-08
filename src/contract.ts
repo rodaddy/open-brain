@@ -33,10 +33,10 @@ export interface OpenBrainContract {
       parent_issue: 223;
       contract_doc: "docs/nats-jetstream-foundation.md";
       server: {
-        planned_host: "core01";
+        planned_host: "deployment_host";
         client_listen: "127.0.0.1:4222";
         monitoring_listen: "127.0.0.1:8222";
-        jetstream_store_dir: "/Volumes/ThunderBolt/open-brain/nats/jetstream";
+        jetstream_store_dir: "/path/to/open-brain/open-brain/nats/jetstream";
       };
       // Subjects are env-prefixed via the fleet-bus builder convention
       // (src/nats-subjects.ts obContextPackSubject). The `{env}.` template below
@@ -595,11 +595,11 @@ export function buildContract(
         parent_issue: 223 as const,
         contract_doc: "docs/nats-jetstream-foundation.md" as const,
         server: {
-          planned_host: "core01" as const,
+          planned_host: "deployment_host" as const,
           client_listen: "127.0.0.1:4222" as const,
           monitoring_listen: "127.0.0.1:8222" as const,
           jetstream_store_dir:
-            "/Volumes/ThunderBolt/open-brain/nats/jetstream" as const,
+            "/path/to/open-brain/open-brain/nats/jetstream" as const,
         },
         // Env-prefixed subjects (fleet-bus convention). The advertised strings
         // carry a `{env}.` template placeholder; the runtime substitutes the

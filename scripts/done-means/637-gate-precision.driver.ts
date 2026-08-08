@@ -127,7 +127,7 @@ async function fire(
     stdin: new TextEncoder().encode(
       JSON.stringify({
         session_id: session,
-        cwd: "/Volumes/ThunderBolt/Development/open-brain",
+        cwd: "/path/to/open-brain/Development/open-brain",
         hook_event_name: event === "pre-tool-use" ? "PreToolUse" : "PostToolUse",
         tool_name: tool,
         tool_input: input,

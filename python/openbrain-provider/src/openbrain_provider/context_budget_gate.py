@@ -409,7 +409,7 @@ class _Gate:
         The fallback composes `<root>/<project>`, EXCEPT when the project is the
         root's own name. A hook fired from the Development repository itself
         reports project `Development`, and the naive composition then yields
-        `/Volumes/ThunderBolt/Development/Development`, which does not exist --
+        `/path/to/open-brain/Development/Development`, which does not exist --
         so the recovery command the banner tells the operator to paste fails,
         and the block never clears. That is the #419 deadlock arriving through
         the escape hatch meant to resolve it.

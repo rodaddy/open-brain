@@ -8,7 +8,7 @@
       "namespace": "skippy",
       "type": "session",
       "title": "Open Brain issue 110 handoff",
-      "content": "Repo /Volumes/ThunderBolt/Development/open-brain is working issue #110 on branch codex/codex-memory-eval-scenarios. Next action: add a Codex workflow eval fixture, runner fixture loading, and targeted tests before opening the PR.",
+      "content": "Repo /path/to/open-brain/Development/open-brain is working issue #110 on branch codex/codex-memory-eval-scenarios. Next action: add a Codex workflow eval fixture, runner fixture loading, and targeted tests before opening the PR.",
       "tags": ["codex", "resume", "open-brain", "issue-110", "next-action"],
       "aliases": ["issue 110 resume", "codex workflow eval next action"],
       "created_at": "2026-06-15T14:00:00.000Z",
@@ -65,7 +65,7 @@
       "namespace": "skippy",
       "type": "decision",
       "title": "Durable Codex temp preference",
-      "content": "Durable preference: Codex temporary worktrees, scratch reports, review checkouts, and generated artifacts should use /Volumes/ThunderBolt/_tmp when available.",
+      "content": "Durable preference: Codex temporary worktrees, scratch reports, review checkouts, and generated artifacts should use /path/to/open-brain/_tmp when available.",
       "tags": ["durable", "preference", "temp", "codex"],
       "aliases": ["ThunderBolt temp preference", "temporary worktree root"],
       "created_at": "2026-06-11T08:00:00.000Z",
@@ -75,7 +75,7 @@
         "id": "preference-thunderbolt-temp",
         "namespace": "skippy",
         "label": "Durable Codex temp preference",
-        "preview": "Codex temporary work should use /Volumes/ThunderBolt/_tmp when available.",
+        "preview": "Codex temporary work should use /path/to/open-brain/_tmp when available.",
         "created_at": "2026-06-11T08:00:00.000Z"
       }
     },

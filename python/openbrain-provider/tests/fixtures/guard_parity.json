@@ -376,7 +376,7 @@
   },
   {
     "name": "extra-allow-075",
-    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"ls -la /Volumes/ThunderBolt\"}}",
+    "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"ls -la /path/to/open-brain\"}}",
     "stdout": ""
   },
   {

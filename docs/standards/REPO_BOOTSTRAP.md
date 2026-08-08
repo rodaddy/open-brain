@@ -17,7 +17,7 @@ the wrong control plane, no board map — the exact failures this SOP prevents).
 ## 2. Create + clone
 
 - `gh repo create <owner>/<name> --private|--public -d "<one-line purpose>"`
-- Clone to the canonical local home: `/Volumes/ThunderBolt/Development/<name>`
+- Clone to the canonical local home: `/path/to/open-brain/Development/<name>`
   (never under another repo, never in temp).
 - Create the matching temp area `{temp_workspace}/<name>/` with `_archive/`.
 
@@ -114,7 +114,7 @@ the wrong control plane, no board map — the exact failures this SOP prevents).
 
   ```bash
   cd /path/to/repo
-  bun /Volumes/ThunderBolt/Development/_ob/bin/qmd-backfill
+  bun /path/to/open-brain/Development/_ob/bin/qmd-backfill
   ```
 
   The backfill is resumable and skips any repo that already has `.qmd/`, so

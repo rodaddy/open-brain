@@ -3,24 +3,24 @@
 #
 # Why this exists: until 2026-07-30 the local dogfood service ran `bun run
 # src/index.ts` with cwd set to the DEV CHECKOUT (verified live: pid 79427,
-# cwd=/Volumes/ThunderBolt/Development/open-brain). Every uncommitted edit was
+# cwd=/path/to/open-brain/Development/open-brain). Every uncommitted edit was
 # one restart away from being the running memory service. This script puts a
 # commit boundary between editing and running.
 #
-# Differences from scripts/core01-deploy-local.sh, which this mirrors:
+# Differences from scripts/deployment_host-deploy-local.sh, which this mirrors:
 #
-#   1. NO ORIGIN GATE. core01 requires HEAD to be an ancestor of origin/main
+#   1. NO ORIGIN GATE. deployment_host requires HEAD to be an ancestor of origin/main
 #      because it is production. This is a local dogfood clone, so any local
 #      commit is deployable and nothing touches the network.
 #
-#   2. `git archive`, NOT `tar` of the working tree. core01 tars $REPO_DIR
+#   2. `git archive`, NOT `tar` of the working tree. deployment_host tars $REPO_DIR
 #      directly, which copies uncommitted edits along with everything else.
 #      `git archive` reads git object storage, so the working tree is
 #      structurally invisible. Proven 2026-07-30: appending a line to
 #      src/index.ts and re-exporting HEAD produced an archive with zero
 #      occurrences of it.
 #
-#   3. A REVISION PROOF, which core01's script does not have. The deploy only
+#   3. A REVISION PROOF, which deployment_host's script does not have. The deploy only
 #      succeeds if the process LISTENING on the clone port changed pid, is
 #      running out of the runtime directory, and that directory is stamped with
 #      the revision this run shipped. Added 2026-08-02 after a deploy reported
@@ -28,7 +28,7 @@
 #      previous revision; see `check_new_process_serving` for the receipt.
 #
 # Everything else -- staging dir, atomic swap, .previous rollback, health
-# check -- is the core01 shape, deliberately.
+# check -- is the deployment_host shape, deliberately.
 #
 # Usage:
 #   scripts/local-clone-deploy.sh                 # deploy HEAD
@@ -36,7 +36,7 @@
 #   scripts/local-clone-deploy.sh --rollback      # restore the previous runtime
 #
 # Environment:
-#   OPENBRAIN_LOCAL_CLONE_ROOT  clone root (default /Volumes/ThunderBolt/open-brain-local)
+#   OPENBRAIN_LOCAL_CLONE_ROOT  clone root (default /path/to/open-brain/open-brain-local)
 #   OPENBRAIN_RUNTIME_NAME      runtime dir name under the root (default "app")
 #   OPENBRAIN_CLONE_ENV_FILE    env file to migrate against (default <root>/local-clone.env)
 #   OPENBRAIN_SERVICE_LABEL     launchd label to restart, if any
@@ -45,19 +45,19 @@
 #                               Unset = no worker installed; nothing happens.
 set -euo pipefail
 
-REPO_DIR="${OPENBRAIN_REPO_DIR:-/Volumes/ThunderBolt/Development/open-brain}"
-CLONE_ROOT="${OPENBRAIN_LOCAL_CLONE_ROOT:-/Volumes/ThunderBolt/open-brain-local}"
+REPO_DIR="${OPENBRAIN_REPO_DIR:-$HOME/Development/open-brain}"
+CLONE_ROOT="${OPENBRAIN_LOCAL_CLONE_ROOT:-$HOME/.local/share/open-brain-local}"
 RUNTIME_NAME="${OPENBRAIN_RUNTIME_NAME:-app}"
 RUNTIME_DIR="${CLONE_ROOT}/${RUNTIME_NAME}"
 STAGING_DIR="${RUNTIME_DIR}.next"
 PREVIOUS_DIR="${RUNTIME_DIR}.previous"
 ENV_FILE="${OPENBRAIN_CLONE_ENV_FILE:-${CLONE_ROOT}/local-clone.env}"
 SERVICE_LABEL="${OPENBRAIN_SERVICE_LABEL:-}"
-# The NATS worker is a SEPARATE launchd service (docs/core01-nats-worker-runbook.md
+# The NATS worker is a SEPARATE launchd service (docs/deployment_host-nats-worker-runbook.md
 # "Boundary"), so swapping the runtime directory under it leaves it executing the
 # PREVIOUS revision's scripts/run-nats-worker.ts until something restarts it.
-# core01's deploy has always kickstarted its worker
-# (scripts/core01-deploy-local.sh NATS_WORKER_LABEL); this script did not, which
+# deployment_host's deploy has always kickstarted its worker
+# (scripts/deployment_host-deploy-local.sh NATS_WORKER_LABEL); this script did not, which
 # meant a local deploy silently left the two ingresses on different revisions.
 # Empty by default so a clone with no worker installed is unaffected.
 NATS_WORKER_LABEL="${OPENBRAIN_NATS_WORKER_LABEL:-}"
@@ -77,7 +77,7 @@ restart_service() {
 
 # Restart the NATS worker onto the newly-swapped runtime.
 #
-# NON-FATAL by design, matching core01's WARN (scripts/core01-deploy-local.sh).
+# NON-FATAL by design, matching deployment_host's WARN (scripts/deployment_host-deploy-local.sh).
 # The HTTP service is the deploy's success criterion and has a revision proof
 # behind it; the NATS worker is a second, optional ingress. A clone that has
 # never installed the worker is the COMMON case, and failing the deploy for a
@@ -250,7 +250,7 @@ fi
 
 REF="${1:-HEAD}"
 
-[[ -d "/Volumes/ThunderBolt" ]] || fatal "/Volumes/ThunderBolt is not mounted"
+[[ -d "$(dirname "$CLONE_ROOT")" ]] || fatal "clone parent is not available: $(dirname "$CLONE_ROOT")"
 [[ -d "$REPO_DIR/.git" ]] || fatal "not a git repository: ${REPO_DIR}"
 [[ -r "$ENV_FILE" ]] || fatal "env file missing or unreadable: ${ENV_FILE}"
 [[ -x "$BUN_BIN" ]] || fatal "bun not found at ${BUN_BIN}"

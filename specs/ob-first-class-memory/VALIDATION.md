@@ -2,7 +2,7 @@
 
 ## Policy
 
-Fast regression coverage uses local fake boundaries. Final Open Brain acceptance additionally uses a disposable loopback server, an isolated PostgreSQL 18 database restored from a read-only core01 logical dump, fixture-only auth/embedding, and an isolated mcp2cli HOME. Inactive provider invocation is validated on the separate Development branch and may be cited here only as cross-repository evidence. Never print copied content or credential values or mutate production. Hosted deployment and active runtime registration remain separate gates.
+Fast regression coverage uses local fake boundaries. Final Open Brain acceptance additionally uses a disposable loopback server, an isolated PostgreSQL 18 database restored from a read-only deployment_host logical dump, fixture-only auth/embedding, and an isolated mcp2cli HOME. Inactive provider invocation is validated on the separate Development branch and may be cited here only as cross-repository evidence. Never print copied content or credential values or mutate production. Hosted deployment and active runtime registration remain separate gates.
 
 ## Command ladder
 

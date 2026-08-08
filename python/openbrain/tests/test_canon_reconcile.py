@@ -52,7 +52,7 @@ text = "Discussion is the default. Editing, committing, and pushing each need ex
 key = "repo.two_hosts"
 lane = "repo_facts"
 subject = "hosts"
-text = "There are exactly two hosts: this machine while developing, and core01."
+text = "There are exactly two hosts: this machine while developing, and deployment_host."
 fact_type = "gotcha"
 """
 

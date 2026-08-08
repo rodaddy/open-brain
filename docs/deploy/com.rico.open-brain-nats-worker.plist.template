@@ -10,11 +10,11 @@
   <array>
     <string>/opt/homebrew/bin/bash</string>
     <string>-lc</string>
-    <string>set -euo pipefail; ENV_FILE=/Users/rico/.config/open-brain/env.nats-worker; test -r "$ENV_FILE"; set -a; source "$ENV_FILE"; set +a; cd /Volumes/ThunderBolt/open-brain/app; exec "${BUN_BIN:-bun}" run scripts/run-nats-worker.ts</string>
+    <string>set -euo pipefail; ENV_FILE=/Users/rico/.config/open-brain/env.nats-worker; test -r "$ENV_FILE"; set -a; source "$ENV_FILE"; set +a; cd /path/to/open-brain/open-brain/app; exec "${BUN_BIN:-bun}" run scripts/run-nats-worker.ts</string>
   </array>
 
   <key>WorkingDirectory</key>
-  <string>/Volumes/ThunderBolt/open-brain/app</string>
+  <string>/path/to/open-brain/open-brain/app</string>
 
   <key>EnvironmentVariables</key>
   <dict>
@@ -38,7 +38,7 @@
     <key>OPENBRAIN_NATS_FALLBACK_HTTP</key>
     <string>true</string>
     <key>QMD_PATH</key>
-    <string>/Volumes/ThunderBolt/qmd/open-brain-qmd.ts</string>
+    <string>/path/to/open-brain/qmd/open-brain-qmd.ts</string>
   </dict>
 
   <key>KeepAlive</key>
@@ -51,9 +51,9 @@
   <true/>
 
   <key>StandardOutPath</key>
-  <string>/Volumes/ThunderBolt/open-brain/logs/nats-worker.out.log</string>
+  <string>/path/to/open-brain/open-brain/logs/nats-worker.out.log</string>
   <key>StandardErrorPath</key>
-  <string>/Volumes/ThunderBolt/open-brain/logs/nats-worker.err.log</string>
+  <string>/path/to/open-brain/open-brain/logs/nats-worker.err.log</string>
 
   <key>SoftResourceLimits</key>
   <dict>

@@ -20,7 +20,7 @@ jobs:
         contains(github.event.comment.body, '/codex-review') ||
         contains(github.event.comment.body, '/codex-deep')
       )
-    runs-on: [self-hosted, macOS, core01]
+    runs-on: [self-hosted, macOS, open-brain-deploy]
     # A hung codex exec (stdin auth prompt, model/network stall) must not pin
     # this production-host runner slot for GitHub's 6h default job timeout.
     timeout-minutes: 15

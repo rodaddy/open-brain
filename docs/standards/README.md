@@ -1,6 +1,6 @@
 # Development standards — local copies
 
-**Copied 2026-07-31 from `/Volumes/ThunderBolt/Development/_DOCS/`.**
+**Copied 2026-07-31 from `/path/to/open-brain/Development/_DOCS/`.**
 
 These are here so they are in **this repo's qmd index**. Searching for a rule
 should not require knowing that the shared tree exists, or that it is outside

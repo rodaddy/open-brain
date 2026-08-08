@@ -1,6 +1,6 @@
 collections:
   open-brain:
-    path: /Volumes/ThunderBolt/Development/open-brain
+    path: /path/to/open-brain/Development/open-brain
     pattern:
       - "*.{ts,tsx,js,jsx,py,md,yaml,yml,json,toml,sh,zsh}"
       - _DOCS/*.{ts,tsx,js,jsx,py,md,yaml,yml,json,toml,sh,zsh}

@@ -83,7 +83,7 @@ command -v psql >/dev/null 2>&1 || fail_hard "psql not on PATH"
 # AGENTS.md "Querying the dogfood database"). A bare worktree may lack .env;
 # fall back to the canonical checkout's copy so this runs from either.
 ENV_FILE="$REPO_ROOT/.env"
-[ -r "$ENV_FILE" ] || ENV_FILE="/Volumes/ThunderBolt/Development/open-brain/.env"
+[ -r "$ENV_FILE" ] || ENV_FILE="/path/to/open-brain/Development/open-brain/.env"
 [ -r "$ENV_FILE" ] || fail_hard "no readable .env for Postgres credentials"
 set -a
 # shellcheck disable=SC1090
@@ -102,7 +102,7 @@ psql -At -c 'select 1' >/dev/null 2>&1 ||
 RUN_ID="$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
 NS="dm563_${RUN_ID}"
 MARKER="dm563probe${RUN_ID}"
-SCRATCH="${TEMP_WORKSPACE:-/Volumes/ThunderBolt/_tmp}/open-brain/_scratch"
+SCRATCH="${TEMP_WORKSPACE:-/path/to/open-brain/_tmp}/open-brain/_scratch"
 mkdir -p "$SCRATCH" 2>/dev/null || fail_hard "cannot create scratch dir $SCRATCH"
 OUT_JSON="$SCRATCH/done-means-563-${RUN_ID}.json"
 OUT_LOG="$SCRATCH/done-means-563-${RUN_ID}.log"

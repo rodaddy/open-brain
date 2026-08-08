@@ -158,7 +158,7 @@ epic → issue → PR/commit → session
 
 Forge-neutral: model issue / hierarchy / state / link, with GitHub as one
 adapter behind `source_kind` + `external_id`. Never GitHub-shaped columns.
-`git.rodaddy.live` (forg) is already live.
+`git.example.com` (forg) is already live.
 
 ### R4 — File citation in answers (closed-brain only)
 
@@ -335,7 +335,7 @@ the tiers exist.
 
 ## 6. Prior art
 
-Clones: `/Volumes/ThunderBolt/_tmp/open-brain/research/` — gbrain, honcho,
+Clones: `/path/to/open-brain/_tmp/open-brain/research/` — gbrain, honcho,
 cognee, cognee-integrations, mem0, graphiti. cognee / mem0 / graphiti are
 Apache-2.0. **All credit given where taken.**
 

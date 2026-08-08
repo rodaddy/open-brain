@@ -9,11 +9,11 @@
 
 ## The decision
 
-Production deploy to core01 is decoupled from merging: pushes to `main` run CI validation only. Deploy runs only from an explicit manual workflow dispatch whose HEAD equals the current `origin/main` tip with `deploy_core01=true`, or from a `v*` version tag whose commit is reachable from `origin/main`. Merging a PR is never a deploy; cut a versioned release candidate and deploy it deliberately via the release gate.
+Production deploy to deployment_host is decoupled from merging: pushes to `main` run CI validation only. Deploy runs only from an explicit manual workflow dispatch whose HEAD equals the current `origin/main` tip with `deploy_deployment_host=true`, or from a `v*` version tag whose commit is reachable from `origin/main`. Merging a PR is never a deploy; cut a versioned release candidate and deploy it deliberately via the release gate.
 
 ## Verbatim, from the source
 
-> stop deploying Open Brain automatically on every push to `main` ... allow production deploy only from an explicit manual workflow dispatch from the current `origin/main` tip with `deploy_core01=true`, or from a version tag matching `v*` whose commit is reachable from `origin/main`
+> stop deploying Open Brain automatically on every push to `main` ... allow production deploy only from an explicit manual workflow dispatch from the current `origin/main` tip with `deploy_deployment_host=true`, or from a version tag matching `v*` whose commit is reachable from `origin/main`
 
 ## Provenance
 

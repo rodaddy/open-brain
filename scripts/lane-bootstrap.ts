@@ -37,10 +37,15 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, copyFileSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
+import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const WORKTREE_BASE = "/Volumes/ThunderBolt/_tmp/open-brain/_worktrees";
+const WORKTREE_BASE = join(
+  process.env.OPENBRAIN_TEMP_WORKSPACE ?? join(homedir(), ".cache", "open-brain"),
+  "open-brain",
+  "_worktrees",
+);
 
 /** Placeholder reasons that are technically non-empty but state nothing. */
 const PLACEHOLDER_REASONS = new Set([

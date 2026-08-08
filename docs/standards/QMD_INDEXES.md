@@ -78,7 +78,7 @@ vendors Buzz. Neither has any use for the other's, so a repo declares its own in
 `.qmd/references.yml` beside the tracked `.qmd/index.yml`:
 
 ```yaml
-root: /Volumes/ThunderBolt/open-brain-local/research   # optional; default: repo root
+root: /path/to/open-brain/open-brain-local/research   # optional; default: repo root
 clones:
   - cognee
   - graphiti
@@ -112,7 +112,7 @@ searching from inside the repo needs no flag and no collection name.
 
 ```bash
 cd /path/to/repo
-bun /Volumes/ThunderBolt/Development/_ob/bin/qmd-backfill
+bun /path/to/open-brain/Development/_ob/bin/qmd-backfill
 ```
 
 Resumable: it skips any repo that already has `.qmd/`, so rerunning it after
@@ -151,7 +151,7 @@ per-repo indexes cannot answer the comparative question those clones exist for
 ("how does each of these handle X?") without N searches and a manual merge.
 
 ```bash
-/Volumes/ThunderBolt/Development/_ob/bin/qmd-reference-index
+/path/to/open-brain/Development/_ob/bin/qmd-reference-index
 # ROOT=/some/tree INDEX=othername qmd-reference-index
 ```
 
@@ -159,7 +159,7 @@ One index, many collections, **zero writes into the sources**. The index lives
 in `~/.cache/qmd/<name>.sqlite` because it is rebuildable from the clones.
 
 Live example — open-brain's seven prior-art clones in
-`/Volumes/ThunderBolt/open-brain-local/research/` (cognee, cognee-integrations,
+`/path/to/open-brain/open-brain-local/research/` (cognee, cognee-integrations,
 gbrain, graphiti, honcho, mem0, openhuman), declared in
 `open-brain/.qmd/references.yml` and built into `ref-open-brain`:
 

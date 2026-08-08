@@ -1,6 +1,6 @@
 # Local Release And Core01 Deploy SOP
 
-This SOP is the release gate between "PRs are green" and "core01 is updated".
+This SOP is the release gate between "PRs are green" and "deployment_host is updated".
 It exists so PRs can be merged without automatically restarting production, then
 a versioned release candidate can be tested locally on this box and deployed
 deliberately.
@@ -10,7 +10,7 @@ deliberately.
 - Merging to `main` is not a deploy signal.
 - Production deploy is allowed only from:
   - a manual CI workflow dispatch from the current `origin/main` tip with
-    `deploy_core01=true`; or
+    `deploy_deployment_host=true`; or
   - a pushed version tag matching `v*` whose target commit is reachable from
     `origin/main`.
 - This allow/refuse policy is enforced provider-neutrally by
@@ -19,9 +19,9 @@ deliberately.
 - Never use production secrets in command logs, PR bodies, issues, or reports.
   Evidence may name env vars and commands only.
 - Use a clean release-candidate worktree under
-  `/Volumes/ThunderBolt/_tmp/open-brain/...`; do not test from a dirty
+  `/path/to/open-brain/_tmp/open-brain/...`; do not test from a dirty
   development checkout.
-- A release is not ready for core01 until the local runtime smoke, full test
+- A release is not ready for deployment_host until the local runtime smoke, full test
   suite, Python package checks, and downstream-rollout classification are
   recorded in the release PR or release notes.
 
@@ -61,10 +61,10 @@ Do not commit this file or paste its values anywhere.
 Use a clean temp worktree:
 
 ```zsh
-mkdir -p /Volumes/ThunderBolt/_tmp/open-brain/_archive
+mkdir -p /path/to/open-brain/_tmp/open-brain/_archive
 git fetch origin main --tags
-git worktree add /Volumes/ThunderBolt/_tmp/open-brain/release-v0.1.1-rc.1 origin/main
-cd /Volumes/ThunderBolt/_tmp/open-brain/release-v0.1.1-rc.1
+git worktree add /path/to/open-brain/_tmp/open-brain/release-v0.1.1-rc.1 origin/main
+cd /path/to/open-brain/_tmp/open-brain/release-v0.1.1-rc.1
 git status --short --branch
 ```
 
@@ -95,7 +95,7 @@ uv build
 ```
 
 For package changes, install the built wheel into a temp venv under
-`/Volumes/ThunderBolt/_tmp/open-brain/...` and run an import/API smoke. Record
+`/path/to/open-brain/_tmp/open-brain/...` and run an import/API smoke. Record
 the venv path and command output summary, not secrets.
 
 ## Local Runtime Smoke
@@ -103,7 +103,7 @@ the venv path and command output summary, not secrets.
 Start a local test instance on the non-production port:
 
 ```zsh
-cd /Volumes/ThunderBolt/_tmp/open-brain/release-v0.1.1-rc.1
+cd /path/to/open-brain/_tmp/open-brain/release-v0.1.1-rc.1
 set -a
 source /Users/rico/.config/open-brain/env.release-test
 set +a
@@ -178,13 +178,13 @@ git push origin v0.1.1-rc.1
 ```
 
 Pushing a `v*` tag runs CI and, once CI passes, the deploy job is eligible to
-run on core01 only if the tagged commit is reachable from `origin/main`. Watch
+run on deployment_host only if the tagged commit is reachable from `origin/main`. Watch
 the workflow. Do not leave a tag deploy unattended. Do not move or reuse a
 published `v*` tag after the local gate; cut a new version tag if the release
 candidate changes.
 
 For a manual deploy instead of a tag deploy, run the CI workflow from GitHub
-Actions on `main` with `deploy_core01=true` after the exact current `origin/main`
+Actions on `main` with `deploy_deployment_host=true` after the exact current `origin/main`
 tip passed the local gate. The deploy script refuses stale manual-dispatch
 commits that are only ancestors of `origin/main`.
 
@@ -203,7 +203,7 @@ After the deploy workflow finishes:
 curl -fsS http://127.0.0.1:3100/health
 curl -fsS http://127.0.0.1:3101/health
 curl -fsS http://127.0.0.1:3102/health
-curl -fsS https://open-brain.rodaddy.live/health
+curl -fsS https://open-brain.example.com/health
 ```
 
 Also verify from the normal client path:
@@ -216,7 +216,7 @@ For contract-changing releases, complete the downstream steps in
 `docs/downstream-rollout.md` before closing linked issues.
 
 For releases that enable the dedicated NATS worker from issue #282, also follow
-`docs/core01-nats-worker-runbook.md`. The release is not complete until HTTP
+`docs/deployment_host-nats-worker-runbook.md`. The release is not complete until HTTP
 health is recorded before and after `com.rico.open-brain-nats-worker` restart,
 and a hosted NATS request/reply smoke returns a fleet `context_pack_response`
 envelope (`kind="context_pack_response"`, `from="open-brain"`, `correlation_id`
@@ -227,7 +227,7 @@ uninstalled and record the worker rollout as deferred.
 
 ## Forgejo Deploy Path (Prepared, Deferred)
 
-GitHub Actions is the active CI and core01 deploy path today. Nothing in this
+GitHub Actions is the active CI and deployment_host deploy path today. Nothing in this
 section changes that. A parallel Forgejo Actions path exists in source only, so
 a future migration to a self-hosted Forgejo repository is a config-and-runner
 task rather than a re-authoring task.
@@ -239,11 +239,11 @@ Prepared source:
   runner pool `[self-hosted, Linux, X64, rodaddy, forgejo-ci-small]`.
 - `.forgejo/workflows/deploy.yml` is a separate workflow scoped to the
   repository's production deploy runner
-  `[self-hosted, macOS, core01, open-brain-deploy]`, with non-canceling
-  `deploy-core01-production` concurrency. It runs the same validation jobs as
+  `[self-hosted, macOS, deployment_host, open-brain-deploy]`, with non-canceling
+  `deploy-deployment_host-production` concurrency. It runs the same validation jobs as
   in-workflow `needs` gates and deploys only after all pass. Merging to `main`
   is not a deploy signal on this path either.
-- `scripts/core01-deploy-local.sh` and `scripts/deploy-ref-gate.ts` implement a
+- `scripts/deployment_host-deploy-local.sh` and `scripts/deploy-ref-gate.ts` implement a
   provider-neutral pre-mutation ref gate. The gate accepts explicit
   `DEPLOY_PROVIDER` / `DEPLOY_EVENT_NAME` / `DEPLOY_REF` inputs and falls back
   to the GitHub Actions environment for backward compatibility, so the exact
@@ -253,7 +253,7 @@ Prepared source:
 
 Repository-scoped deploy label: the Forgejo deploy runner is scoped by the
 `open-brain-deploy` label so only this repository's production runner is
-eligible to mutate core01. The Docker/Linux `forgejo-ci-small` CI runners
+eligible to mutate deployment_host. The Docker/Linux `forgejo-ci-small` CI runners
 cannot deploy, and the macOS deploy runner does not run CI.
 
 Host-local secret boundary is unchanged. The deploy runner reads
@@ -278,12 +278,12 @@ GitHub deploy path above.
 The deploy script keeps the prior runtime at:
 
 ```text
-/Volumes/ThunderBolt/open-brain/app.previous
+/path/to/open-brain/open-brain/app.previous
 ```
 
 If post-deploy health fails, the script restores the prior runtime, restarts
 launchd, and runs the same local health loop against the restored runtime. If
-rollback health also fails, treat core01 as degraded and stop issue closure until
+rollback health also fails, treat deployment_host as degraded and stop issue closure until
 the service is manually recovered. If a later manual rollback is needed, use the
 same runtime directories and restart `com.rico.open-brain`; record the rollback
 in the release notes and do not continue closing issues until the release is

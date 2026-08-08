@@ -407,7 +407,7 @@ advertised floor, breaks the contract downstream consumers pin against.
 
 **Severity:** MEDIUM
 **Source:** PR #283 initial swarm for Issue #282
-**Scope:** launchd service templates and core01 deploy/runbook instructions
+**Scope:** launchd service templates and deployment_host deploy/runbook instructions
 **Status:** fixed in PR #283
 
 ### Pattern

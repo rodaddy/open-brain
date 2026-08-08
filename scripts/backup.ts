@@ -224,7 +224,7 @@ async function main(): Promise<void> {
       },
       embedding: {
         // Defaults match src/embedding.ts: gemini-embedding-001 / 768.
-        // Production (core01 launchd) overrides EMBEDDING_MODEL to the local
+        // Production (deployment_host launchd) overrides EMBEDDING_MODEL to the local
         // MLX deployment (embeddinggemma-300m-8bit); the manifest records
         // whatever the runtime that owns this database was configured with.
         model: EMBEDDING_MODEL,

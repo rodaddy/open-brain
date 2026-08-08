@@ -25,7 +25,7 @@ lane = "repo_facts"
 subject = "Development session-start runtime context"
 fact_type = "workflow"
 text = """
-Session start reads the repo-fact UUID from AGENTS.md, fetches this entity directly with get_entity, validates the source commit and SHA-256, then proceeds. Fallback is only the named source doc; normal discovery is OB/qmd then mdfind then rg. Known vetted tools run directly. Claude and Codex are rollout gates; Pi is best-effort and must not block them. Fleet host access: SSH to an agent host as that agent user (skippy@10.71.20.111, bilby@10.71.20.71) — the agent user owns ~/.hermes, its systemd user units, and its process view; resolve named hosts via rtech-infra/HOSTMAP.md, never recall IPs.\
+Session start reads the repo-fact UUID from AGENTS.md, fetches this entity directly with get_entity, validates the source commit and SHA-256, then proceeds. Fallback is only the named source doc; normal discovery is OB/qmd then mdfind then rg. Known vetted tools run directly. Claude and Codex are rollout gates; Pi is best-effort and must not block them. Fleet host access: SSH to an agent host as that agent user (skippy@192.0.2.111, bilby@192.0.2.71) — the agent user owns ~/.hermes, its systemd user units, and its process view; resolve named hosts via rtech-infra/HOSTMAP.md, never recall IPs.\
 """
 source = "_ob/repo-context/development.md; https://github.com/rodaddy/development/blob/3c2bdc36f27407e64f44d9a69a15ee296ea26510/_ob/repo-context/development.md; verified_at=2026-07-13T16:37:58Z; source_commit=3c2bdc36f27407e64f44d9a69a15ee296ea26510"
 
@@ -65,7 +65,7 @@ lane = "repo_facts"
 subject = "Repo shape: umbrella workspace that ignores everything by default"
 fact_type = "workflow"
 text = """
-/Volumes/ThunderBolt/Development is an umbrella control-plane workspace, not an ordinary project: .gitignore line 3 is a bare `*` so everything is ignored by default, and only explicit un-ignores are tracked (AGENTS.md, CLAUDE.md, GEMINI.md, _AGENTS.md, GLOSSARY.md, justfile, specs/, .claude/settings.json, and the _DOCS/ and _ob/ trees). Every child directory (open-brain, rtech-infra, king-capital, etc.) is a standalone repo with its own git history -- commit work in the repo that owns the files, never here.\
+/path/to/open-brain/Development is an umbrella control-plane workspace, not an ordinary project: .gitignore line 3 is a bare `*` so everything is ignored by default, and only explicit un-ignores are tracked (AGENTS.md, CLAUDE.md, GEMINI.md, _AGENTS.md, GLOSSARY.md, justfile, specs/, .claude/settings.json, and the _DOCS/ and _ob/ trees). Every child directory (open-brain, rtech-infra, king-capital, etc.) is a standalone repo with its own git history -- commit work in the repo that owns the files, never here.\
 """
 source = ".gitignore; https://github.com/rodaddy/development/blob/73f29e7aec6f7fd892642865ad33f8a40feab817/.gitignore#L3; verified_at=2026-08-03T16:17:42Z; source_commit=73f29e7aec6f7fd892642865ad33f8a40feab817"
 

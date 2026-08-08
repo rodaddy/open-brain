@@ -35,7 +35,7 @@ lane = "repo_facts"
 subject = "Deploy target and release trigger"
 fact_type = "workflow"
 text = """
-The app deploys to Proxmox LXC container CT 302 at 10.71.20.62, running as user `king` out of `/home/king/app/`, served on port 3100 behind Caddy and restarted with `systemctl restart king-dashboard`. Deployment is triggered by pushing a `v[0-9]*` version tag (or manual `gh workflow run deploy.yml`). Note: README says the build job runs on ubuntu-latest, but .github/workflows/deploy.yml is stricter and correct -- all three jobs (version, build, deploy-prod) run on `[self-hosted, king-runner]`; there is no GitHub-hosted runner in the deploy path.\
+The app deploys to Proxmox LXC container CT 302 at 192.0.2.62, running as user `king` out of `/home/king/app/`, served on port 3100 behind Caddy and restarted with `systemctl restart king-dashboard`. Deployment is triggered by pushing a `v[0-9]*` version tag (or manual `gh workflow run deploy.yml`). Note: README says the build job runs on ubuntu-latest, but .github/workflows/deploy.yml is stricter and correct -- all three jobs (version, build, deploy-prod) run on `[self-hosted, king-runner]`; there is no GitHub-hosted runner in the deploy path.\
 """
 source = ".github/workflows/deploy.yml; https://github.com/King-Capital/king-dashboard/blob/4c39989a2729539710ba5961dc84fadd93e82cac/.github/workflows/deploy.yml#L34; verified_at=2026-08-03T16:17:42Z; source_commit=4c39989a2729539710ba5961dc84fadd93e82cac"
 

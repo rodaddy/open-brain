@@ -102,7 +102,7 @@ dbDescribe("session-event recall visibility (#433 defect 1)", () => {
   it("brain_answer's source list reaches the session-event corpus", () => {
     // The regression that started #433 was a table list, so pin the list. Both
     // serving trees are asserted because both are live: server/main.ts is the
-    // local-clone entrypoint and src/index.ts still serves core01.
+    // local-clone entrypoint and src/index.ts still serves deployment_host.
     expect(readableSearchTables("admin")).toContain("session_events");
     expect(readableSearchSources("admin")).toContain("session_events");
   });

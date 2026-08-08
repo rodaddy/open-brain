@@ -3,17 +3,17 @@
  * swapped in.
  *
  * WHY THIS TEST EXISTS. The NATS worker is a SEPARATE launchd service from the
- * HTTP service (docs/core01-nats-worker-runbook.md "Boundary"), and both execute
+ * HTTP service (docs/deployment_host-nats-worker-runbook.md "Boundary"), and both execute
  * out of the SAME runtime directory. `local-clone-deploy.sh` replaces that
  * directory wholesale, so a worker that is not restarted keeps running the
  * PREVIOUS revision's `scripts/run-nats-worker.ts` while the HTTP service serves
- * the new one -- two ingresses, one deploy, silently different code. core01's
- * deploy has always kickstarted its worker (`scripts/core01-deploy-local.sh`
+ * the new one -- two ingresses, one deploy, silently different code. deployment_host's
+ * deploy has always kickstarted its worker (`scripts/deployment_host-deploy-local.sh`
  * NATS_WORKER_LABEL); the local clone script did not.
  *
  * The kickstart is deliberately NON-FATAL, so the assertions here are about the
  * ATTEMPT being made and reported, not about launchctl succeeding: these run on
- * a machine where the test label does not exist, exactly like the core01
+ * a machine where the test label does not exist, exactly like the deployment_host
  * integration test's `invalid.test.open-brain-nats-worker`.
  */
 import { describe, expect, it } from "bun:test";

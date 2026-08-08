@@ -17,7 +17,7 @@ install
 > fleet-wide. This entry keeps only the Open Brain specifics.
 
 Session-start recall failed with `OB ✗ gate unavailable` while BOTH Open Brain
-servers were healthy (127.0.0.1:3100 and 10.71.1.21:3100 each returned 200),
+servers were healthy (127.0.0.1:3100 and 192.0.2.21:3100 each returned 200),
 Postgres was reachable, the token authenticated, the env config was correct, and
 the `openbrain-memory` CLI at 0.1.18 returned a full valid context pack
 (`status: "direct"`, 14,663 chars) when invoked directly with the same payload.

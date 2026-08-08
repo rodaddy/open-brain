@@ -72,7 +72,7 @@ command -v python3 >/dev/null 2>&1 || fail_hard "python3 not on PATH (JSON reade
 # the dogfood database". A worktree has no .env of its own; fall back to the
 # canonical checkout's copy so this runs from either.
 ENV_FILE="$REPO_ROOT/.env"
-[ -r "$ENV_FILE" ] || ENV_FILE="/Volumes/ThunderBolt/Development/open-brain/.env"
+[ -r "$ENV_FILE" ] || ENV_FILE="$HOME/Development/open-brain/.env"
 [ -r "$ENV_FILE" ] || fail_hard "no readable .env for dogfood DB credentials"
 set -a
 # shellcheck disable=SC1090
@@ -92,7 +92,7 @@ MARKER="rlvr605-${RUN_ID}"
 # `entry_chunk_write_*` lines the fix itself emits -- so reading stdout made the
 # harness parse a log line as the result and report "no parent id" for paths
 # that had succeeded: a false FAIL manufactured by the check, not by the code.
-SCRATCH="${TEMP_WORKSPACE:-/Volumes/ThunderBolt/_tmp}/open-brain/_scratch"
+SCRATCH="${TEMP_WORKSPACE:-$HOME/.cache/open-brain}/open-brain/_scratch"
 mkdir -p "$SCRATCH" 2>/dev/null || fail_hard "cannot create scratch dir $SCRATCH"
 OUT_FILE="$SCRATCH/done-means-605-${RUN_ID}.json"
 

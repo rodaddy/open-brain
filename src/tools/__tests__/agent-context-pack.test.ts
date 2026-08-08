@@ -16,7 +16,7 @@ describe("agent_context_pack and working_set_append", () => {
         arguments: {
           ...SCOPE,
           kind: "current_intent",
-          content: "Finish #222 without deploying core01.",
+          content: "Finish #222 without deploying deployment_host.",
           trace_id: "trace-222",
         },
       });
@@ -53,7 +53,7 @@ describe("agent_context_pack and working_set_append", () => {
         item_count: 1,
       });
       expect(payload.sections.working_set.items[0]).toMatchObject({
-        content: "Finish #222 without deploying core01.",
+        content: "Finish #222 without deploying deployment_host.",
         label: "working_context",
         trace_id: "trace-222",
       });

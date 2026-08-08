@@ -2,11 +2,11 @@
 set -euo pipefail
 
 REPO_DIR="${REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-RUNTIME_DIR="${RUNTIME_DIR:-/Volumes/ThunderBolt/open-brain/app}"
+: "${RUNTIME_DIR:?set RUNTIME_DIR to the deployment runtime directory}"
 ENV_FILE="${ENV_FILE:-/Users/rico/.config/open-brain/env}"
 SERVICE_LABEL="${SERVICE_LABEL:-gui/$(id -u)/com.rico.open-brain}"
 NATS_WORKER_LABEL="${NATS_WORKER_LABEL:-gui/$(id -u)/com.rico.open-brain-nats-worker}"
-QMD_PATH_VALUE="${QMD_PATH_VALUE:-/Volumes/ThunderBolt/qmd/open-brain-qmd.ts}"
+: "${QMD_PATH_VALUE:?set QMD_PATH_VALUE to the qmd entrypoint}"
 BUN_BIN="${BUN_BIN:-}"
 STAGING_DIR="${STAGING_DIR:-${RUNTIME_DIR}.next}"
 PREVIOUS_DIR="${PREVIOUS_DIR:-${RUNTIME_DIR}.previous}"
@@ -98,8 +98,8 @@ fi
 # resolution but precedes every side effect below.
 verify_deploy_ref "$BUN_BIN"
 
-if [[ ! -d "/Volumes/ThunderBolt" ]]; then
-  echo "FATAL: /Volumes/ThunderBolt is not mounted" >&2
+if [[ ! -d "$RUNTIME_DIR" && ! -d "$(dirname "$RUNTIME_DIR")" ]]; then
+  echo "FATAL: runtime parent is not mounted: $(dirname "$RUNTIME_DIR")" >&2
   exit 1
 fi
 
@@ -117,12 +117,12 @@ rm -rf "$STAGING_DIR"
 cleanup_previous_dir pre-deploy
 mkdir -p "$STAGING_DIR"
 
-"$REPO_DIR/scripts/core01-package-runtime.sh" "$REPO_DIR" "$STAGING_DIR"
+"$REPO_DIR/scripts/deployment_host-package-runtime.sh" "$REPO_DIR" "$STAGING_DIR"
 
 "$BUN_BIN" install --cwd "$STAGING_DIR" --frozen-lockfile
 
-if [[ -x "$STAGING_DIR/scripts/core01-qmd-bootstrap.sh" ]]; then
-  "$STAGING_DIR/scripts/core01-qmd-bootstrap.sh"
+if [[ -x "$STAGING_DIR/scripts/deployment_host-qmd-bootstrap.sh" ]]; then
+  "$STAGING_DIR/scripts/deployment_host-qmd-bootstrap.sh"
 fi
 
 if grep -q "^QMD_PATH=" "$ENV_FILE"; then

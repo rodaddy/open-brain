@@ -164,45 +164,45 @@ bun run start:two-worker
 The public `/health` endpoint aggregates both workers. MCP and REST traffic are
 round-robin proxied to the workers.
 
-### core01 Deploy And qmd Runtime
+### deployment_host Deploy And qmd Runtime
 
-The active production service runs on core01 (`10.71.1.21`) through launchd.
+The active production service runs on deployment_host (`192.0.2.21`) through launchd.
 Keep the boundaries explicit:
 
-- source checkout: `/Volumes/ThunderBolt/Development/open-brain`
-- running app: `/Volumes/ThunderBolt/open-brain/app`
-- database data/backups: `/Volumes/ThunderBolt/open-brain/pgdata18` and
-  `/Volumes/ThunderBolt/open-brain/backups`
-- qmd runtime/index/models: `/Volumes/ThunderBolt/qmd`
+- source checkout: `/path/to/open-brain/Development/open-brain`
+- running app: `/path/to/open-brain/open-brain/app`
+- database data/backups: `/path/to/open-brain/open-brain/pgdata18` and
+  `/path/to/open-brain/open-brain/backups`
+- qmd runtime/index/models: `/path/to/open-brain/qmd`
 
 Deploys should be owned by this repository, not by hand-copying files. Merging
 reviewed changes to `main` validates the repo, but production deploy is a
-separate release gate. Before installing a new Open Brain version on core01,
+separate release gate. Before installing a new Open Brain version on deployment_host,
 follow [`docs/local-release-deploy-sop.md`](local-release-deploy-sop.md):
 run the full local release-candidate test from a clean `main`, create a version
 tag whose commit is already reachable from `origin/main` or run a manual
 workflow dispatch from the current `origin/main` tip, and watch the deploy.
 
-The same repo-owned deploy command can be run on core01 only from the clean
+The same repo-owned deploy command can be run on deployment_host only from the clean
 release-candidate worktree named in the SOP, after the same recorded release
 gate has passed:
 
 ```bash
-bun run deploy:core01
+bun run deploy:deployment_host
 ```
 
 That command installs the checked-out repo version into
-`/Volumes/ThunderBolt/open-brain/app`. Do not install Open Brain into
-`/Volumes/ThunderBolt/Development`; that is the source/mirror area, not the
+`/path/to/open-brain/open-brain/app`. Do not install Open Brain into
+`/path/to/open-brain/Development`; that is the source/mirror area, not the
 runtime. Do not install qmd or Postgres data under the source checkout either.
 
-On GitHub, the `deploy` job targets a core01 macOS self-hosted runner with
-labels `[self-hosted, macOS, core01]`. It runs only for a `v*` tag push whose
+On GitHub, the `deploy` job targets a deployment_host macOS self-hosted runner with
+labels `[self-hosted, macOS, deployment_host]`. It runs only for a `v*` tag push whose
 commit is reachable from `origin/main`, or a manual workflow dispatch from
-the current `origin/main` tip with `deploy_core01=true`. The deploy script is
+the current `origin/main` tip with `deploy_deployment_host=true`. The deploy script is
 the authoritative deploy-ref guard: tag deploys must be reachable from
 `origin/main`, and manual dispatches must match the current `origin/main` tip
-before staging files or restarting core01. The job stages the checked-out repo
+before staging files or restarting deployment_host. The job stages the checked-out repo
 with `tar`, installs runtime dependencies there, bootstraps the pinned qmd
 runtime, runs migrations, swaps the staged directory into place, restarts
 `com.rico.open-brain`, and checks `/health`.
@@ -211,28 +211,28 @@ macOS shell rule: never call `/bin/bash` or rely on the old Apple bash. Use the
 Homebrew bash path explicitly in automation:
 
 ```bash
-/opt/homebrew/bin/bash scripts/core01-deploy-local.sh
+/opt/homebrew/bin/bash scripts/deployment_host-deploy-local.sh
 ```
 
 qmd is pinned and bootstrapped by:
 
 ```bash
-bun run qmd:core01:bootstrap
+bun run qmd:deployment_host:bootstrap
 ```
 
 The Open Brain runtime reads qmd through `QMD_PATH`, normally:
 
 ```bash
-QMD_PATH=/Volumes/ThunderBolt/qmd/open-brain-qmd.ts
+QMD_PATH=/path/to/open-brain/qmd/open-brain-qmd.ts
 ```
 
 Do not put qmd indexes, qmd models, Postgres data, or required production
-`node_modules` under `/Volumes/ThunderBolt/Development`.
+`node_modules` under `/path/to/open-brain/Development`.
 
 NATS transport rollout is separate from the HTTP deploy. The broker label is
 `com.rico.open-brain-nats`; the Open Brain NATS request/reply worker label is
 `com.rico.open-brain-nats-worker`. Keep HTTP workers in HTTP mode and follow
-[`docs/core01-nats-worker-runbook.md`](core01-nats-worker-runbook.md)
+[`docs/deployment_host-nats-worker-runbook.md`](deployment_host-nats-worker-runbook.md)
 before installing or restarting the dedicated NATS worker service.
 
 qmd is a repo-knowledge compiler and optional deep lookup source. It is not a
@@ -277,7 +277,7 @@ reviewed wheel, exact package version, or a full 40-character commit pin.
 Runtime configuration for package consumers:
 
 ```bash
-export OPENBRAIN_BASE_URL="https://open-brain.rodaddy.live"
+export OPENBRAIN_BASE_URL="https://open-brain.example.com"
 export OPENBRAIN_TOKEN="..."              # bearer token; never commit this
 export OPENBRAIN_NAMESPACE="nagatha"      # normal agent token namespace
 export OPENBRAIN_AGENT_ID="nagatha"
@@ -291,13 +291,13 @@ Trusted lab-only direct HTTP to the active Mac Mini endpoint requires an
 explicit opt-in because bearer tokens travel over the request:
 
 ```bash
-export OPENBRAIN_BASE_URL="http://10.71.1.21:3100"
+export OPENBRAIN_BASE_URL="http://192.0.2.21:3100"
 export OPENBRAIN_ALLOW_INSECURE_HTTP=1
 ```
 
-Use `https://open-brain.rodaddy.live` or direct `10.71.1.21:3100` for current
+Use `https://open-brain.example.com` or direct `192.0.2.21:3100` for current
 host canaries. Only two hosts belong to this project: this machine while
-developing, and core01 when the dev work is done. A retired host may still
+developing, and deployment_host when the dev work is done. A retired host may still
 answer and still hold old Open Brain data — a successful connection is not
 evidence it is in scope.
 
@@ -468,7 +468,7 @@ Hermes and Python package consumers normally use direct HTTP through
 `openbrain-memory`, not a local mcp2cli daemon. Configure them with
 `OPENBRAIN_BASE_URL`, `OPENBRAIN_TOKEN`, `OPENBRAIN_NAMESPACE`, and
 `OPENBRAIN_AGENT_ID`; use `OPENBRAIN_ALLOW_INSECURE_HTTP=1` only for trusted
-lab HTTP endpoints such as `http://10.71.1.21:3100`.
+lab HTTP endpoints such as `http://192.0.2.21:3100`.
 
 ## Documentation
 

@@ -61,7 +61,7 @@
 set -uo pipefail
 
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
-WORKTREE_BASE="/Volumes/ThunderBolt/_tmp/open-brain/_worktrees"
+WORKTREE_BASE="/path/to/open-brain/_tmp/open-brain/_worktrees"
 SCRIPT_REL="scripts/lane-bootstrap.ts"
 
 fail_hard() {

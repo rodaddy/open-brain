@@ -1,7 +1,7 @@
 # Fleet NATS Integration — Open Brain
 
 How the Hermes fleet adopts Open Brain's NATS request/reply transport, and how
-Open Brain moves from its local core01 broker to the shared fleet bus on CT274.
+Open Brain moves from its local deployment_host broker to the shared fleet bus on CT274.
 
 This is the **paved road**: everything below is config, not code. The wire
 format, subject convention, and auth model are already reconciled to
@@ -12,12 +12,12 @@ format, subject convention, and auth model are already reconciled to
 Open Brain runs a dedicated NATS worker (`com.rico.open-brain-nats-worker`,
 `scripts/run-nats-worker.ts`) separate from the HTTP service, so a broker/
 subscription failure cannot take HTTP `/health` down. In v1 it points at a
-**local broker** on core01 and the message-auth gate is **off** (trusted local
+**local broker** on deployment_host and the message-auth gate is **off** (trusted local
 bus), matching fleet-bus's own bootstrapping stance.
 
 | Setting | v1 default | Meaning |
 |---|---|---|
-| `OPENBRAIN_NATS_URL` | `nats://127.0.0.1:4222` | Local core01 broker |
+| `OPENBRAIN_NATS_URL` | `nats://127.0.0.1:4222` | Local deployment_host broker |
 | `OPENBRAIN_NATS_ENV` | `dev` | Subject env prefix — `{env}.ob.memory.context_pack` |
 | `OPENBRAIN_NATS_ENABLE_BRIDGE` | `true` | Worker runs the request/reply bridge |
 | `OPENBRAIN_NATS_REQUIRE_AUTH` | `false` | Message-auth gate OFF (local trust) |
@@ -81,14 +81,14 @@ whose access is that one namespace only; it flows through the same server-side
 
 ## Moving to the fleet bus (CT274) — the v2 flip
 
-The fleet NATS server ("honcho") runs on **CT274, `nats://10.71.20.74:4222`**
-(monitor `http://10.71.20.74:8223/connz` — note port **8223**, not 8222).
+The fleet NATS server ("honcho") runs on **CT274, `nats://192.0.2.74:4222`**
+(monitor `http://192.0.2.74:8223/connz` — note port **8223**, not 8222).
 
 To make Open Brain a real fleet participant, change **config only**:
 
 ```bash
-# in /Users/rico/.config/open-brain/env.nats-worker on core01
-OPENBRAIN_NATS_URL=nats://10.71.20.74:4222   # join the fleet bus
+# in /Users/rico/.config/open-brain/env.nats-worker on deployment_host
+OPENBRAIN_NATS_URL=nats://192.0.2.74:4222   # join the fleet bus
 OPENBRAIN_NATS_ENV=prod                       # fleet env prefix (dev|prod)
 OPENBRAIN_NATS_REQUIRE_AUTH=true              # turn the bearer gate ON
 # OPENBRAIN_NATS_ALLOW_NAMESPACE_OVERRIDE is force-disabled when REQUIRE_AUTH=true
@@ -111,7 +111,7 @@ required because namespace is an Open Brain security boundary.
 fleet-bus's own perimeter is the NATS server's ACLs plus per-service NATS
 **connection** credentials. If CT274 enforces connection ACLs, Open Brain needs
 a per-service NATS credential (creds file / nkey / user-pass in the URL) to
-connect. As of this writing core01's OB env carries the app-level `AUTH_TOKEN_*`
+connect. As of this writing deployment_host's OB env carries the app-level `AUTH_TOKEN_*`
 set but **no** NATS connection credential — provisioning that on CT274 is an
 infra step, tracked separately, and is the one piece that is not pure config.
 
@@ -129,8 +129,8 @@ infra step, tracked separately, and is the one piece that is not pure config.
   appears on the CT274 `/connz` probe and that a representative read returns
   `namespace_source: "declared"` for the expected lane.
 
-Do not use TN01 / `10.71.1.11` as a control point. Roll agents through the
-standard update path (`ssh 10.71.1.71` → `/mnt/collab/agent-backups/rtech-hermes`
+Do not use TN01 / `192.0.2.11` as a control point. Roll agents through the
+standard update path (`ssh 192.0.2.71` → `/mnt/collab/agent-backups/rtech-hermes`
 → `git pull --ff-only` → `scripts/update.sh`) once the server side is live.
 
 ## Upstream follow-up

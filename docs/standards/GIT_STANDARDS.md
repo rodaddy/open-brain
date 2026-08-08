@@ -58,9 +58,9 @@ the files, and a commit is the most reversible artifact there is.
   recreated before more work lands on it.
 - Temporary review worktrees belong under the configured temp workspace, grouped
   as `{temp_workspace}/{project-or-repo}/...`. On Rico's Mac this is
-  `/Volumes/ThunderBolt/_tmp`; on cc-* boxes this is `/mnt/collab/tmp_space`.
+  `/path/to/open-brain/_tmp`; on cc-* boxes this is `/mnt/collab/tmp_space`.
 - Do not create scratch worktrees, review checkouts, generated patches, or test
-  clones directly under `/Volumes/ThunderBolt/Development`.
+  clones directly under `/path/to/open-brain/Development`.
 - Every `{temp_workspace}/{project-or-repo}` area must have an `_archive/`
   folder. Move stale scratch artifacts there when they are no longer needed,
   unless the user asks to preserve them active.

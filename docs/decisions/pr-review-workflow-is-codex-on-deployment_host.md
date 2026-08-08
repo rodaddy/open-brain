@@ -1,6 +1,6 @@
-# PR review runs as Codex on core01
+# PR review runs as Codex on deployment_host
 
-**Scope key:** `architecture.pr_review_workflow_is_codex_on_core01`
+**Scope key:** `architecture.pr_review_workflow_is_codex_on_deployment_host`
 **Source:** https://github.com/rodaddy/open-brain/issues/231
 **Recorded:** 2026-08-03 (harvest #522, operator-routed)
 **Status:** settled. Recorded from the source issue/PR; verify against current code before relying on an implementation detail.
@@ -9,7 +9,7 @@
 
 ## The decision
 
-Automated PR review runs as a Codex workflow on the core01 macOS runner using cached ChatGPT-login auth, not the Anthropic/LiteLLM action: gpt-5.5 at low effort for normal review, gpt-5.4 at medium for deep review triggered by `/codex-deep` or a PR-scope threshold. The step must `unset OPENAI_API_KEY CODEX_API_KEY` so a stray env var cannot force API-key auth. Note the coupling: if the ChatGPT session on core01 lapses, the check fails until a human re-auths — CI cannot self-heal it.
+Automated PR review runs as a Codex workflow on the deployment_host macOS runner using cached ChatGPT-login auth, not the Anthropic/LiteLLM action: gpt-5.5 at low effort for normal review, gpt-5.4 at medium for deep review triggered by `/codex-deep` or a PR-scope threshold. The step must `unset OPENAI_API_KEY CODEX_API_KEY` so a stray env var cannot force API-key auth. Note the coupling: if the ChatGPT session on deployment_host lapses, the check fails until a human re-auths — CI cannot self-heal it.
 
 ## Verbatim, from the source
 

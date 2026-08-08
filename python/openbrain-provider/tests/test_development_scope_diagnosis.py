@@ -109,7 +109,7 @@ def test_rendered_text_prints_the_measured_cwd_not_the_default() -> None:
     in the position where the reader expects the directory they are standing in.
     """
     diagnosis = ScopeDiagnosis(
-        configured_root=Path("/Volumes/ThunderBolt/Development"),
+        configured_root=Path("/path/to/open-brain/Development"),
         source="default",
         cwd=Path("/Users/rico/somewhere-real"),
     )
@@ -118,7 +118,7 @@ def test_rendered_text_prints_the_measured_cwd_not_the_default() -> None:
 
     assert "/Users/rico/somewhere-real" in text
     assert "OPENBRAIN_DEVELOPMENT_ROOT" in text
-    assert "/Volumes/ThunderBolt/Development" in text
+    assert "/path/to/open-brain/Development" in text
     # The measured cwd is quoted after the word that introduces it, so the
     # default cannot be read as the session's directory.
     assert "cwd: /Users/rico/somewhere-real" in text

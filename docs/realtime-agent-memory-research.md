@@ -138,10 +138,10 @@ less auditable and more "confident idiot" prone.
 ## Source Pointers
 
 - gbrain clone inspected at
-  `/Volumes/ThunderBolt/_tmp/open-brain/research/gbrain`.
+  `/path/to/open-brain/_tmp/open-brain/research/gbrain`.
 - Honcho clone inspected at
-  `/Volumes/ThunderBolt/_tmp/open-brain/research/honcho`.
+  `/path/to/open-brain/_tmp/open-brain/research/honcho`.
 - Hermes source inspected at
-  `/Volumes/ThunderBolt/Development/ai-agents/platforms/rtech-hermes`.
+  `/path/to/open-brain/Development/ai-agents/platforms/rtech-hermes`.
 - Local Codex/Claude policy inspected under `/Users/rico/.codex` and
   `/Users/rico/.claude`.

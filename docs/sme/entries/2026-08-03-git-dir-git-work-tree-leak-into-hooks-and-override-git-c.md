@@ -16,4 +16,4 @@ Git exports GIT_DIR and GIT_WORK_TREE into hook environments, and GIT_WORK_TREE 
 
 Verbatim, from the source:
 
-> `git push` exports `GIT_DIR`/`GIT_WORK_TREE` to its hooks, and **`GIT_WORK_TREE` beats `git -C`** — `rev-parse --show-toplevel` answered `/Volumes/ThunderBolt/Development` for every directory asked about, so every project resolved to the slug `Development`.
+> `git push` exports `GIT_DIR`/`GIT_WORK_TREE` to its hooks, and **`GIT_WORK_TREE` beats `git -C`** — `rev-parse --show-toplevel` answered `/path/to/open-brain/Development` for every directory asked about, so every project resolved to the slug `Development`.

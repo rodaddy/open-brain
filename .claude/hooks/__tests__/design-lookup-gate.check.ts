@@ -45,7 +45,7 @@ async function fire(
     stdin: new TextEncoder().encode(
       JSON.stringify({
         session_id: session,
-        cwd: "/Volumes/ThunderBolt/Development/open-brain",
+        cwd: "/path/to/open-brain/Development/open-brain",
         tool_name: call.tool,
         tool_input: call.input,
       }),
@@ -76,7 +76,7 @@ const cases: Array<{
     name: "REGRESSION: unrelated lookup then distiller edit",
     lookups: [bash('aqmd "is there frontend precedent in the fleet"')],
     mutation: edit(
-      "/Volumes/ThunderBolt/Development/open-brain/src/distiller.ts",
+      "/path/to/open-brain/Development/open-brain/src/distiller.ts",
     ),
     blocked: true,
   },
@@ -84,7 +84,7 @@ const cases: Array<{
     name: "relevant lookup unlocks the file it was about",
     lookups: [bash('aqmd search "distiller"')],
     mutation: edit(
-      "/Volumes/ThunderBolt/Development/open-brain/src/distiller.ts",
+      "/path/to/open-brain/Development/open-brain/src/distiller.ts",
     ),
     blocked: false,
   },
@@ -92,7 +92,7 @@ const cases: Array<{
     name: "no lookup at all blocks",
     lookups: [],
     mutation: edit(
-      "/Volumes/ThunderBolt/Development/open-brain/src/distiller.ts",
+      "/path/to/open-brain/Development/open-brain/src/distiller.ts",
     ),
     blocked: true,
   },
@@ -100,7 +100,7 @@ const cases: Array<{
     name: "camelCase lookup matches kebab-case file",
     lookups: [bash('aqmd "how does distillExchange build a candidate"')],
     mutation: edit(
-      "/Volumes/ThunderBolt/Development/open-brain/src/distill-exchange.ts",
+      "/path/to/open-brain/Development/open-brain/src/distill-exchange.ts",
     ),
     blocked: false,
   },
@@ -108,7 +108,7 @@ const cases: Array<{
     name: "generic path tokens alone do not match",
     lookups: [bash('aqmd "what lives in src"')],
     mutation: edit(
-      "/Volumes/ThunderBolt/Development/open-brain/src/embedding.ts",
+      "/path/to/open-brain/Development/open-brain/src/embedding.ts",
     ),
     blocked: true,
   },
@@ -116,7 +116,7 @@ const cases: Array<{
     name: "design doc Read counts as a lookup for its subject",
     lookups: [read("docs/decisions/capture-never-drops-a-turn.md")],
     mutation: edit(
-      "/Volumes/ThunderBolt/Development/open-brain/src/capture.ts",
+      "/path/to/open-brain/Development/open-brain/src/capture.ts",
     ),
     blocked: false,
   },
@@ -124,7 +124,7 @@ const cases: Array<{
     name: "two subjects stay unlocked at once",
     lookups: [bash('aqmd search "chunking"'), bash('aqmd search "distiller"')],
     mutation: edit(
-      "/Volumes/ThunderBolt/Development/open-brain/src/chunking.ts",
+      "/path/to/open-brain/Development/open-brain/src/chunking.ts",
     ),
     blocked: false,
   },
@@ -246,7 +246,7 @@ const cases: Array<{
     mutation: {
       tool: "Write",
       input: {
-        file_path: "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/items.json",
+        file_path: "/path/to/open-brain/_tmp/open-brain/_scratch/items.json",
       },
     },
     blocked: false,
@@ -262,7 +262,7 @@ const cases: Array<{
       tool: "Edit",
       input: {
         file_path:
-          "/Volumes/ThunderBolt/Development/_ob/skills/brain/scripts/resume.py",
+          "/path/to/open-brain/Development/_ob/skills/brain/scripts/resume.py",
         new_string: 'body = (event.get("content") or "")[:200]',
       },
     },
@@ -275,7 +275,7 @@ const cases: Array<{
       tool: "Edit",
       input: {
         file_path:
-          "/Volumes/ThunderBolt/Development/_ob/scripts/ob-memory-provider.ts",
+          "/path/to/open-brain/Development/_ob/scripts/ob-memory-provider.ts",
         new_string: "return value.trim().slice(0, 500);",
       },
     },
@@ -312,7 +312,7 @@ const cases: Array<{
       tool: "Edit",
       input: {
         file_path:
-          "/Volumes/ThunderBolt/Development/_ob/skills/brain/scripts/resume.py",
+          "/path/to/open-brain/Development/_ob/skills/brain/scripts/resume.py",
         new_string: 'body = " ".join((event.get("content") or "").split())',
       },
     },

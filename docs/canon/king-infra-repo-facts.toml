@@ -45,7 +45,7 @@ lane = "repo_facts"
 subject = "Host inventory is the source of truth, not the CLAUDE.md diagram"
 fact_type = "ownership"
 text = """
-`ansible/inventory/hosts.yml` is the authoritative host list, grouped under `king_capital` as `cc_cluster`, `trading`, `king_ops`, `status`, `gh_runners`, and `ephemeral`. It includes trading hosts the CLAUDE.md architecture diagram omits — `king-trading` at 10.71.20.106 and `king-ops` at 10.71.20.108 (CT 308, port 3600) — so resolve host facts from the inventory rather than the diagram.\
+`ansible/inventory/hosts.yml` is the authoritative host list, grouped under `king_capital` as `cc_cluster`, `trading`, `king_ops`, `status`, `gh_runners`, and `ephemeral`. It includes trading hosts the CLAUDE.md architecture diagram omits — `king-trading` at 192.0.2.106 and `king-ops` at 192.0.2.108 (CT 308, port 3600) — so resolve host facts from the inventory rather than the diagram.\
 """
 source = "ansible/inventory/hosts.yml; https://github.com/King-Capital/king-infra/blob/adeb4db2151e04aabde7846962032c57a5353a6f/ansible/inventory/hosts.yml#L18; verified_at=2026-08-03T16:17:42Z; source_commit=adeb4db2151e04aabde7846962032c57a5353a6f"
 

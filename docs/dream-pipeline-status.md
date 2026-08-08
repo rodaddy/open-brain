@@ -10,7 +10,7 @@ fixture. Where something is not built, it says so.
 ## TL;DR for the operator
 
 ```bash
-set -a; . /Volumes/ThunderBolt/open-brain-local/local-clone.env; set +a
+set -a; . /path/to/open-brain/open-brain-local/local-clone.env; set +a
 bun run migrate          # 39 migrations, idempotent
 bun run dream:cycle      # distill -> light -> rem -> deep, 1.3s
 bun run grade            # grading page at http://127.0.0.1:3417/
@@ -241,8 +241,8 @@ structurally present and functionally unexercised.
 ## How the operator starts the grading server
 
 ```bash
-cd /Volumes/ThunderBolt/Development/open-brain
-set -a; . /Volumes/ThunderBolt/open-brain-local/local-clone.env; set +a
+cd /path/to/open-brain/Development/open-brain
+set -a; . /path/to/open-brain/open-brain-local/local-clone.env; set +a
 bun run grade
 ```
 

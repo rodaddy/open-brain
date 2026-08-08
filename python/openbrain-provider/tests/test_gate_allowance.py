@@ -141,7 +141,7 @@ def test_the_printed_recovery_command_is_the_one_the_gate_accepts(
 def test_the_fallback_cwd_is_a_directory_that_exists(tmp_path: Path) -> None:
     # When the hook reports no usable cwd, the banner composes one from the
     # project. For the Development repo itself the project IS `Development`, and
-    # composing `<root>/<project>` yields `/Volumes/ThunderBolt/Development/
+    # composing `<root>/<project>` yields `/path/to/open-brain/Development/
     # Development` -- a path that does not exist, so the command the operator is
     # told to paste fails and the block never clears. That is the #419 deadlock
     # reappearing through the escape hatch meant to resolve it.

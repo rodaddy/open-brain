@@ -1819,7 +1819,7 @@ Verbatim, from the source:
 
 ### Pattern
 
-This repo has TWO serving trees (`server/main.ts` for the local clone, `src/index.ts` for core01), and a cross-cutting install (tracing, audit, any registerTool wrapper) done on only one of them leaves the other tree's call sites permanently inert: `activeMcpTrace.getStore()` is always undefined, every helper takes its early-return branch, and nothing fails. PR #599 shipped ~half its added lines as exactly this — the PR body claimed "both serving trees" while the core01 tree had zero tracing references. Unit tests driving the helper directly cannot catch it; the guard is an end-to-end test that registers a REAL tool under the installed wrapper and asserts the expected span/effect, per tree. Review question for any wrapper-based feature: name the file:line where the wrapper is INSTALLED on each tree that serves production, and the test that would fail if it were not.
+This repo has TWO serving trees (`server/main.ts` for the local clone, `src/index.ts` for deployment_host), and a cross-cutting install (tracing, audit, any registerTool wrapper) done on only one of them leaves the other tree's call sites permanently inert: `activeMcpTrace.getStore()` is always undefined, every helper takes its early-return branch, and nothing fails. PR #599 shipped ~half its added lines as exactly this — the PR body claimed "both serving trees" while the deployment_host tree had zero tracing references. Unit tests driving the helper directly cannot catch it; the guard is an end-to-end test that registers a REAL tool under the installed wrapper and asserts the expected span/effect, per tree. Review question for any wrapper-based feature: name the file:line where the wrapper is INSTALLED on each tree that serves production, and the test that would fail if it were not.
 
 ### Pattern (same PR, finding M3)
 
@@ -1914,7 +1914,7 @@ Three things to check on any PR that adds a readable source:
    one, the fix is to extract one selection function that all callers use, so
    a new source appears everywhere at once instead of one place at a time.
 2. Check every SERVING TREE, not just the one you are editing. This repo has
-   two live entrypoints (`src/index.ts` serves core01 via
+   two live entrypoints (`src/index.ts` serves deployment_host via
    `deploy/open-brain.service` and `scripts/run-two-worker.ts`;
    `server/main.ts` is the local-clone serving entrypoint), each with its own
    `brain_answer`. Fixing one leaves a live path still blind.

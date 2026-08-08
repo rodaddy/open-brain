@@ -52,7 +52,7 @@ from pydantic import BaseModel, ConfigDict
 #: None. This side reads the SAME variable, deliberately: a configurable value
 #: on one side only would put the writer and the reader in different scopes,
 #: which is what the previous literal-only comment was protecting against.
-DEVELOPMENT_ROOT = Path("/Volumes/ThunderBolt/Development")
+DEVELOPMENT_ROOT = Path.home() / "Development"
 
 #: The override both sides honour. Spelled identically to the gate's.
 DEVELOPMENT_ROOT_ENV_VAR = "OPENBRAIN_DEVELOPMENT_ROOT"
@@ -102,7 +102,7 @@ def development_root_origin() -> str:
 #: ``APPROVED_TEMP_WORKTREE_ROOTS``. The first is Rico's Mac, the second the
 #: cc-* boxes.
 APPROVED_TEMP_WORKTREE_ROOTS = (
-    Path("/Volumes/ThunderBolt/_tmp"),
+    Path(os.environ.get("OPENBRAIN_TEMP_WORKSPACE", Path.home() / ".cache/open-brain")),
     Path("/mnt/collab/tmp_space"),
 )
 
@@ -123,7 +123,7 @@ _SLUG_UNSAFE = re.compile(r"[^a-zA-Z0-9._-]")
 #: This is not hypothetical tidiness -- it was measured. ``git push`` exports
 #: ``GIT_DIR`` and ``GIT_WORK_TREE`` to its hooks, and ``GIT_WORK_TREE`` beats
 #: ``-C``: inside a pre-push hook, ``git -C <any path> rev-parse --show-toplevel``
-#: answered ``/Volumes/ThunderBolt/Development`` for EVERY directory asked about.
+#: answered ``/path/to/open-brain/Development`` for EVERY directory asked about.
 #: Every receipt in every repo would then be filed under the single project slug
 #: ``Development``, and the gate -- which keys its blocks per project -- would
 #: never match one.

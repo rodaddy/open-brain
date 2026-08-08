@@ -7,7 +7,7 @@ sequentially because embedding is GPU-bound.
 The job updates:
 
 - every project-local `.qmd/index.yml` owned by the Development root or an
-  immediate child Git repository under `/Volumes/ThunderBolt/Development`;
+  immediate child Git repository under `/path/to/open-brain/Development`;
 - the separate `global_docs_instructions` named index.
 
 It does not create or regenerate index configurations. Adding, removing, or
@@ -19,7 +19,7 @@ The repository owns the source and installer. The installer copies the sync
 script to a stable machine-owned runtime and renders the LaunchAgent template:
 
 ```text
-/Volumes/ThunderBolt/open-brain-local/qmd-sync/qmd-sync.sh
+/path/to/open-brain/open-brain-local/qmd-sync/qmd-sync.sh
 ~/Library/LaunchAgents/com.rico.qmd-sync.plist
 ```
 
@@ -31,7 +31,7 @@ and bootstraps the rendered plist again.
 The sync script writes its durable primary log to:
 
 ```text
-/Volumes/ThunderBolt/open-brain-local/log/qmd-sync.log
+/path/to/open-brain/open-brain-local/log/qmd-sync.log
 ```
 
 launchd also reserves these boot-volume files for startup errors that occur
@@ -83,7 +83,7 @@ older user-local Node symlink.
 Run the installer as the logged-in macOS user, not as root:
 
 ```bash
-cd /Volumes/ThunderBolt/Development/open-brain
+cd /path/to/open-brain/Development/open-brain
 scripts/install-qmd-sync-launchagent.sh
 ```
 
@@ -104,7 +104,7 @@ Capture the index timestamp before the run:
 
 ```bash
 /usr/bin/stat -f '%m %Sm' \
-  /Volumes/ThunderBolt/Development/open-brain/.qmd/index.sqlite
+  /path/to/open-brain/Development/open-brain/.qmd/index.sqlite
 ```
 
 Force the registered job to run:
@@ -117,7 +117,7 @@ Observe state and the durable log:
 
 ```bash
 launchctl print "gui/$(id -u)/com.rico.qmd-sync"
-tail -n 200 /Volumes/ThunderBolt/open-brain-local/log/qmd-sync.log
+tail -n 200 /path/to/open-brain/open-brain-local/log/qmd-sync.log
 ```
 
 A successful primary-log line for each index includes an absolute last-run
@@ -134,8 +134,8 @@ check qmd's own status from the repository:
 
 ```bash
 /usr/bin/stat -f '%m %Sm' \
-  /Volumes/ThunderBolt/Development/open-brain/.qmd/index.sqlite
-cd /Volumes/ThunderBolt/Development/open-brain
+  /path/to/open-brain/Development/open-brain/.qmd/index.sqlite
+cd /path/to/open-brain/Development/open-brain
 qmd status
 ```
 
@@ -148,7 +148,7 @@ mtime remain the direct receipt for this repo's scheduled refresh.
 Read the primary log first:
 
 ```bash
-tail -n 200 /Volumes/ThunderBolt/open-brain-local/log/qmd-sync.log
+tail -n 200 /path/to/open-brain/open-brain-local/log/qmd-sync.log
 ```
 
 Search for `status=failed`. The line names the index, failed step (`update`,
@@ -161,7 +161,7 @@ launchd retains a visible failed exit status.
 For a project-local failure, inspect that repository directly:
 
 ```bash
-cd /Volumes/ThunderBolt/Development/<repo>
+cd /path/to/open-brain/Development/<repo>
 qmd status
 qmd update
 qmd embed
@@ -181,7 +181,7 @@ logs, then verify that the installed script exists and is executable:
 ```bash
 tail -n 200 "$HOME/Library/Logs/open-brain-local/qmd-sync.out.log"
 tail -n 200 "$HOME/Library/Logs/open-brain-local/qmd-sync.err.log"
-ls -l /Volumes/ThunderBolt/open-brain-local/qmd-sync/qmd-sync.sh
+ls -l /path/to/open-brain/open-brain-local/qmd-sync/qmd-sync.sh
 ```
 
 ## Uninstall
@@ -197,7 +197,7 @@ The files are:
 
 ```text
 ~/Library/LaunchAgents/com.rico.qmd-sync.plist
-/Volumes/ThunderBolt/open-brain-local/qmd-sync/qmd-sync.sh
+/path/to/open-brain/open-brain-local/qmd-sync/qmd-sync.sh
 ```
 
 The durable log is intentionally retained for diagnosis.
@@ -207,7 +207,7 @@ The durable log is intentionally retained for diagnosis.
 Run the sourceable parser functions and the functional hung-process test:
 
 ```bash
-BUN_TMPDIR=/Volumes/ThunderBolt/_tmp/open-brain/_scratch/bun-tmp \
+BUN_TMPDIR=/path/to/open-brain/_tmp/open-brain/_scratch/bun-tmp \
   /opt/homebrew/bin/bash scripts/qmd-sync.test.sh
 ```
 

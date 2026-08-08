@@ -22,7 +22,7 @@ Actual, measured on 2026-07-24 against the local clone:
 - The maintenance runner is fully wired (`maintenance-bootstrap.ts` ->
   `src/index.ts`) with two registered handlers (`embedding.repair`,
   `graph.derive`), but `OPEN_BRAIN_MAINTENANCE_ENABLED=0` on the local clone
-  and the variable is **unset on core01**. The server therefore runs no
+  and the variable is **unset on deployment_host**. The server therefore runs no
   derivation on either box.
 - Exactly one job has ever been enqueued, on both boxes: a canary
   `graph.derive` with an empty `{}` payload, `dead_letter` after one attempt,
@@ -71,7 +71,7 @@ Out of scope for this spec:
 - Changing namespace/scope isolation semantics. They remain a security
   boundary and apply unchanged to every new table and job.
 - Dream planning behavior. It stays dry-run-safe.
-- The core01 promotion path (tracked separately).
+- The deployment_host promotion path (tracked separately).
 
 ## 1. Raw turn table
 
@@ -253,7 +253,7 @@ prerequisite rather than a P3.
 5. Add the sweep producer. Measure proposals per session and precision.
 6. Establish the #330 EVAL-3 recall baseline, then tune thresholds against
    measured numbers.
-7. Enable on core01 only after the local loop is measured and bounded.
+7. Enable on deployment_host only after the local loop is measured and bounded.
 
 ## Open questions
 

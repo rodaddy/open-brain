@@ -66,7 +66,7 @@ command -v psql >/dev/null 2>&1 || fail_hard "psql not on PATH"
 # AGENTS.md "Querying the dogfood database"). A worktree may lack .env; fall
 # back to the canonical checkout's copy so this runs from either.
 ENV_FILE="$REPO_ROOT/.env"
-[ -r "$ENV_FILE" ] || ENV_FILE="/Volumes/ThunderBolt/Development/open-brain/.env"
+[ -r "$ENV_FILE" ] || ENV_FILE="$HOME/Development/open-brain/.env"
 [ -r "$ENV_FILE" ] || fail_hard "no readable .env for Postgres credentials"
 set -a
 # shellcheck disable=SC1090
@@ -77,7 +77,7 @@ psql -At -d postgres -c 'select 1' >/dev/null 2>&1 ||
   fail_hard "cannot reach the Postgres cluster; existence proofs are impossible, so a PASS could not be trusted"
 
 RUN_ID="$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
-SCRATCH="${TEMP_WORKSPACE:-/Volumes/ThunderBolt/_tmp}/open-brain/_scratch"
+SCRATCH="${TEMP_WORKSPACE:-$HOME/.cache/open-brain}/open-brain/_scratch"
 mkdir -p "$SCRATCH" 2>/dev/null || fail_hard "cannot create scratch dir $SCRATCH"
 OUT_CLEAN="$SCRATCH/done-means-614-clean-${RUN_ID}.log"
 OUT_INT="$SCRATCH/done-means-614-interrupt-${RUN_ID}.log"

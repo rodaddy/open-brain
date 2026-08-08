@@ -4,7 +4,7 @@
  * Same selection as scripts/grading-sample.ts -- see that file's header for why
  * each filter is there and why all six AskUserQuestion exchanges bypass them.
  * This one writes content, not just ids, because the bake-off runs outside the
- * repo (the MLX venv at /Volumes/ThunderBolt/open-brain-local) and cannot reach
+ * repo (the MLX venv at /path/to/open-brain/open-brain-local) and cannot reach
  * the pool.
  */
 

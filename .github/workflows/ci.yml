@@ -8,8 +8,8 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
-      deploy_core01:
-        description: "Deploy Open Brain to core01 after validation passes"
+      deploy_deployment_host:
+        description: "Deploy Open Brain to deployment_host after validation passes"
         required: true
         type: boolean
         default: false
@@ -105,7 +105,7 @@ jobs:
   # `if: always()` teardown.
   #
   # Pinned to the Linux self-hosted runners because this needs Docker, which
-  # the macOS/core01 production runner must not run.
+  # the macOS/deployment_host production runner must not run.
   db-integration:
     runs-on: [self-hosted, Linux, rodaddy]
     # Docker-capable self-hosted runner: never execute untrusted fork code.
@@ -515,20 +515,21 @@ jobs:
         python-capture,
         contract-parity,
       ]
-    runs-on: [self-hosted, macOS, core01]
+    runs-on: [self-hosted, macOS, open-brain-deploy]
     if: |
-      (github.event_name == 'workflow_dispatch' && inputs.deploy_core01 && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && inputs.deploy_deployment_host && github.ref == 'refs/heads/main') ||
       (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
     concurrency:
-      group: deploy-core01-production
+      group: deploy-deployment_host-production
       cancel-in-progress: false
     env:
-      RUNTIME_DIR: /Volumes/ThunderBolt/open-brain/app
+      RUNTIME_DIR: ${{ vars.OPENBRAIN_RUNTIME_DIR }}
+      QMD_PATH_VALUE: ${{ vars.OPENBRAIN_QMD_PATH }}
 
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - name: Deploy to core01 launchd runtime
-        run: /opt/homebrew/bin/bash scripts/core01-deploy-local.sh
+      - name: Deploy to deployment_host launchd runtime
+        run: /opt/homebrew/bin/bash scripts/deployment_host-deploy-local.sh

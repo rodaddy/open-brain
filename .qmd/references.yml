@@ -11,7 +11,7 @@
 #
 # Built on demand into the `ref-open-brain` index by `aqmd research`.
 
-root: /Volumes/ThunderBolt/open-brain-local/research
+root: /path/to/open-brain/open-brain-local/research
 
 clones:
   - cognee

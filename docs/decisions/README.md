@@ -66,7 +66,7 @@ its scope key as identity, the distilled rule, a verbatim quote, and its source.
 | [eval-gate-precedes-retrieval-change.md](./eval-gate-precedes-retrieval-change.md) | https://github.com/rodaddy/open-brain/issues/265 | `process.eval_gate_precedes_retrieval_change` |
 | [server-deploys-before-client-publishes.md](./server-deploys-before-client-publishes.md) | https://github.com/rodaddy/open-brain/issues/265 | `process.server_deploys_before_client_publishes` |
 | [log-rotation-is-app-config.md](./log-rotation-is-app-config.md) | https://github.com/rodaddy/open-brain/issues/193 | `architecture.log_rotation_is_app_config_not_host_tooling` |
-| [pr-review-workflow-is-codex-on-core01.md](./pr-review-workflow-is-codex-on-core01.md) | https://github.com/rodaddy/open-brain/issues/231 | `architecture.pr_review_workflow_is_codex_on_core01` |
+| [pr-review-workflow-is-codex-on-deployment_host.md](./pr-review-workflow-is-codex-on-deployment_host.md) | https://github.com/rodaddy/open-brain/issues/231 | `architecture.pr_review_workflow_is_codex_on_deployment_host` |
 | [context-pack-owns-prompt-ready-bundles.md](./context-pack-owns-prompt-ready-bundles.md) | https://github.com/rodaddy/open-brain/issues/271 | `architecture.context_pack_owns_prompt_ready_bundles` |
 | [nats-runs-as-a-dedicated-worker.md](./nats-runs-as-a-dedicated-worker.md) | issue #282 | `architecture.nats_runs_as_dedicated_worker_not_http_mode` |
 | [client-parity-is-a-build-failure.md](./client-parity-is-a-build-failure.md) | issue #311 | `process.client_parity_is_a_build_failure` |

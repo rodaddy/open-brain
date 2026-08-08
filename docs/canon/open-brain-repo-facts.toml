@@ -38,19 +38,19 @@ it reports a healthy service as down. That happened; do not repeat it.\
 source = "open-brain PR #89; approved 2026-08-03"
 
 [[entries]]
-key = "repo.core01_service_user_not_root"
+key = "repo.deployment_host_service_user_not_root"
 lane = "repo_facts"
-subject = "core01 service domain"
+subject = "deployment_host service domain"
 fact_type = "gotcha"
 text = """
 Services run as a user, NEVER root; grant the user targeted passwordless sudo \
-where genuinely needed. The core01 Open Brain service is a per-user \
+where genuinely needed. The deployment_host Open Brain service is a per-user \
 LaunchAgent (gui/<uid>/com.rico.open-brain): a deploy targeting the system \
 domain fails with exit 113 and SILENTLY leaves the old process running with \
-new code staged beside it. scripts/core01-deploy-local.sh defaults to the gui \
+new code staged beside it. scripts/deployment_host-deploy-local.sh defaults to the gui \
 domain — keep it that way.\
 """
-source = "open-brain#287, scripts/core01-deploy-local.sh; [REWORDED 2026-08-03 to Rico's user-not-root principle]"
+source = "open-brain#287, scripts/deployment_host-deploy-local.sh; [REWORDED 2026-08-03 to Rico's user-not-root principle]"
 
 [[entries]]
 key = "repo.open_brain.apple_silicon_idle_signal"

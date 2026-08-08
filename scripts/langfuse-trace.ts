@@ -77,7 +77,7 @@ Environment:
   OPENBRAIN_TRACING_PUBLIC_KEY
   OPENBRAIN_TRACING_SECRET_KEY
 
-The local values live in /Volumes/ThunderBolt/open-brain-local/local-clone.env.
+The local values live in /path/to/open-brain/open-brain-local/local-clone.env.
 Source that file before running these commands; values are never printed.
 The repeat command also uses OPENBRAIN_BASE_URL, OPENBRAIN_TOKEN, and
 OPENBRAIN_NAMESPACE from that environment and drives the existing Python

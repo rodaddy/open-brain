@@ -71,7 +71,7 @@ function testConfig(): ServerConfig {
     // A concrete LAN address, NOT loopback: `/health` exists to tell a client
     // WHICH machine it reached, so `127.0.0.1` is not a valid answer and
     // identity resolution deliberately falls through it to real detection.
-    OPEN_BRAIN_SERVER_IP: "10.71.1.99",
+    OPEN_BRAIN_SERVER_IP: "192.0.2.99",
     OPENBRAIN_MIGRATIONS_DIR: "src/db/migrations",
     // One configured token, in the role the tool assertions need. The entrypoint
     // refuses to start with none, which is a separate test below.
@@ -111,7 +111,7 @@ dbDescribe("rewrite entrypoint start-equivalence (live Postgres)", () => {
     const response = await fetch(`${base}/health`);
     // 200 healthy or 503 degraded are both valid: the embedding provider may
     // not be running beside a test database. What must NOT vary is the SHAPE,
-    // which is the charter's frozen `/health` row and what core01's aggregate
+    // which is the charter's frozen `/health` row and what deployment_host's aggregate
     // front reads out of each worker.
     expect([200, 503]).toContain(response.status);
     // Typed against the frozen shape rather than `Record<string, unknown>`, so
@@ -119,8 +119,8 @@ dbDescribe("rewrite entrypoint start-equivalence (live Postgres)", () => {
     // `undefined` that an assertion happens to notice.
     const body = (await response.json()) as SingleWorkerHealth;
     expect(["healthy", "degraded"]).toContain(body.status);
-    expect(body.server_ip).toBe("10.71.1.99");
-    expect(body.server_ips).toEqual(["10.71.1.99"]);
+    expect(body.server_ip).toBe("192.0.2.99");
+    expect(body.server_ips).toEqual(["192.0.2.99"]);
     expect(body.hostname.length).toBeGreaterThan(0);
     expect(body.database).toMatchObject({ connected: true });
     expect(body.embedding).toHaveProperty("configured");
@@ -266,7 +266,7 @@ dbDescribe("rewrite entrypoint startup and shutdown ordering (live Postgres)", (
       // A concrete LAN address, NOT loopback: `/health` exists to tell a client
     // WHICH machine it reached, so `127.0.0.1` is not a valid answer and
     // identity resolution deliberately falls through it to real detection.
-    OPEN_BRAIN_SERVER_IP: "10.71.1.99",
+    OPEN_BRAIN_SERVER_IP: "192.0.2.99",
       OPENBRAIN_MIGRATIONS_DIR: "src/db/migrations",
       AUTH_TOKEN_AGENT: TOKEN,
       // Exactly the local clone env's shape: the MLX embedding server needs no

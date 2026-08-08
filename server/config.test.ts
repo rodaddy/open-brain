@@ -50,7 +50,7 @@ describe("server configuration boundary", () => {
  * Present-but-EMPTY optional secrets.
  *
  * This is the shape that took the local dogfood service down on 2026-08-02.
- * `/Volumes/ThunderBolt/open-brain-local/local-clone.env` legitimately sets
+ * `/path/to/open-brain/open-brain-local/local-clone.env` legitimately sets
  * `EMBEDDING_API_KEY=` (empty) because the local MLX embedding server needs no
  * key, and `z.string().min(1).optional()` accepts ABSENT while REJECTING
  * present-and-empty. The entrypoint threw

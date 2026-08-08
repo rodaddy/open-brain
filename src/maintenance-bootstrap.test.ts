@@ -12,7 +12,7 @@
  *
  * The pool is a fake that emulates the exact SQL shapes the MaintenanceQueue
  * issues (claim CTE, complete UPDATE) plus the handler's SELECT, so the whole
- * queue→runner→handler path runs in-process with no core01 dependency.
+ * queue→runner→handler path runs in-process with no deployment_host dependency.
  */
 import { describe, it, expect, mock } from "bun:test";
 import {

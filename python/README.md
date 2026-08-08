@@ -59,7 +59,7 @@ over the same paths.
 
 `uv build` writes to `python/dist/`, not `python/<member>/dist/`. Anything that
 excludes or collects build artifacts needs the workspace-level path;
-`scripts/core01-deploy-local.sh` carries both.
+`scripts/deployment_host-deploy-local.sh` carries both.
 
 ## Adding a member
 

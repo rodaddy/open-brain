@@ -391,7 +391,7 @@ def _stale_block_reason(gate: _Gate) -> str:
     """Render the refusal text, including the exact command that clears it."""
     reason = gate.state.reason or "refresh marked stale"
     command = (
-        "bun /Volumes/ThunderBolt/Development/_ob/scripts/policy-refresh-gate.ts "
+        "bun /path/to/open-brain/Development/_ob/scripts/policy-refresh-gate.ts "
         f"--event refresh --agent {gate.args.agent} "
         f"--session-id {_shell_quote(gate.session_id)}"
     )

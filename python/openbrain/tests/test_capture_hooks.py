@@ -664,7 +664,7 @@ class TestPostToolUseParsesTheCapturedPayload:
                     "tool_name": "Skill",
                     "tool_input": {"skill": "brain", "args": "recall"},
                     "session_id": "sess-1",
-                    "cwd": "/Volumes/ThunderBolt/Development/open-brain",
+                    "cwd": "/path/to/open-brain/Development/open-brain",
                 }
             )
         )
@@ -692,7 +692,7 @@ class TestPostToolUseRecordsOneUsageMetric:
             tool_name="Skill",
             tool_input={"skill": "wayfinder", "args": "chart"},
             session_id="sess-1",
-            cwd="/Volumes/ThunderBolt/Development/open-brain",
+            cwd="/path/to/open-brain/Development/open-brain",
         )
 
         recorded = await run_post_tool_use(
@@ -799,7 +799,7 @@ class TestPostToolUseCountsRecallInvocations:
             tool_name="mcp__open-brain__brain_answer",
             tool_input={"question": "what did we decide about storage"},
             session_id="sess-1",
-            cwd="/Volumes/ThunderBolt/Development/open-brain",
+            cwd="/path/to/open-brain/Development/open-brain",
         )
 
         recorded = await run_post_tool_use(

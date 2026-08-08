@@ -102,7 +102,7 @@ def _run_unpinned(
     ]
     payload = {
         "session_id": SESSION,
-        "cwd": "/Volumes/ThunderBolt/Development",
+        "cwd": "/path/to/open-brain/Development",
         "transcript_path": _usage_transcript(paths.root, tokens),
     }
     stdout = io.StringIO()

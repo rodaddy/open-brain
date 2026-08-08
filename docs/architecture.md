@@ -56,7 +56,7 @@ Two boundaries carry the whole design:
 
 **State: RUNNING.** Checked 2026-07-31 against the local dogfood service:
 `/health` healthy, database connected, embedding connected. Hosted copy runs
-on core01 via launchd (`AGENTS.md`, "Stack") — the only two hosts this project
+on deployment_host via launchd (`AGENTS.md`, "Stack") — the only two hosts this project
 has.
 
 The MCP server over PostgreSQL + pgvector: contract-first tools, hybrid

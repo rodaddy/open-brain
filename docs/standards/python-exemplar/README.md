@@ -96,7 +96,7 @@ than glossed. To prove they actually block:
 ./scripts/dev/demo-hooks.sh
 ```
 
-That clones this tree into `/Volumes/ThunderBolt/_tmp/`, runs `git init` **there**,
+That clones this tree into `/path/to/open-brain/_tmp/`, runs `git init` **there**,
 installs the hooks with `_githooks/install.sh`, then injects each violation in
 turn and asserts the hook rejects it. It reports pass/fail per check and leaves
 nothing behind in Development.

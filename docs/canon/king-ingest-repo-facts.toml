@@ -35,7 +35,7 @@ lane = "repo_facts"
 subject = "Deploy target and scheduling"
 fact_type = "workflow"
 text = """
-This service deploys only to CT 304 at 10.71.20.16 (the market data DB LXC, co-located with the data) and never to CT 302 prod. Scheduling is systemd timers, not cron: `infrastructure/*.service` and `*.timer` units are copied to `/etc/systemd/system/` by the deploy workflow. The `.env` file lives at `/home/king/king-ingest/.env` on CT 304 and survives deploys.\
+This service deploys only to CT 304 at 192.0.2.16 (the market data DB LXC, co-located with the data) and never to CT 302 prod. Scheduling is systemd timers, not cron: `infrastructure/*.service` and `*.timer` units are copied to `/etc/systemd/system/` by the deploy workflow. The `.env` file lives at `/home/king/king-ingest/.env` on CT 304 and survives deploys.\
 """
 source = ".github/workflows/deploy.yml; https://github.com/King-Capital/king-ingest/blob/99c3828c883aa19b561fb64d79eb6d601bd1efd7/.github/workflows/deploy.yml#L22; verified_at=2026-08-03T16:17:42Z; source_commit=99c3828c883aa19b561fb64d79eb6d601bd1efd7"
 

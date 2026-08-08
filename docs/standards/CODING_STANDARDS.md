@@ -60,10 +60,10 @@ Concretely, before asserting:
 ## Workspace Hygiene
 
 - Put files in the repo/folder that owns the work.
-- Do not pollute `/Volumes/ThunderBolt/Development` with random test files,
+- Do not pollute `/path/to/open-brain/Development` with random test files,
   scratch scripts, downloaded artifacts, temporary reports, or generated data.
 - Use the configured temp workspace for temporary files and one-off tests. On
-  Rico's Mac this is `/Volumes/ThunderBolt/_tmp`; on cc-* boxes this is
+  Rico's Mac this is `/path/to/open-brain/_tmp`; on cc-* boxes this is
   `/mnt/collab/tmp_space`. Keep temp work under
   `{temp_workspace}/{project-or-repo}/...`.
 - **NEVER `/tmp`, `$TMPDIR`, `mktemp -d`, or any other OS temp dir — HARD RULE.**
@@ -155,7 +155,7 @@ durable home so no one is ever pointed at a disposable worktree path.
 - Repo-owned machine-readable specs (`*.RUN.md`, `*.verify.sh`, markdown plans)
   stay git-tracked in the repo; only the rendered HTML moves to `sites/`.
 - No index-generation machinery for now: this layer is intentionally simple until
-  it becomes the document root of the `10.71.20.35` web-server suite, at which
+  it becomes the document root of the `192.0.2.35` web-server suite, at which
   point these `file://` paths become real served URLs with no restructuring.
 - Still governed by collab safety: no git-write or risky writes to the collab
   share from the Mac (SMB cannot handle ZFS symlinks). Plain `mkdir`/`cp` of
@@ -165,7 +165,7 @@ durable home so no one is ever pointed at a disposable worktree path.
 
 Every repo carries the standards that apply to it, in its own `_DOCS/`. An agent
 working in a repo reads that repo's files; requiring it to walk up to
-`/Volumes/ThunderBolt/Development/_DOCS/` means the rules are followed only when
+`/path/to/open-brain/Development/_DOCS/` means the rules are followed only when
 someone remembers to look. That is not hypothetical — the temp-workspace rules
 lived only here and were violated repeatedly by agents that never opened this
 file.

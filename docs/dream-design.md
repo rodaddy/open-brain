@@ -36,7 +36,7 @@ aged out.
 
 | Epic claim (#389) | Measured 2026-07-27 | Verdict |
 |---|---|---|
-| Maintenance runner is off (`OPEN_BRAIN_MAINTENANCE_ENABLED=0` local, unset on core01) | `maintenanceQueueEnabled()` is **opt-out** (`src/maintenance-bootstrap.ts:173-180`: `return raw !== "0" && raw !== "false"`). The var is **absent from `.env`**, so the runner is **ENABLED** | ❌ **STALE — inverted** |
+| Maintenance runner is off (`OPEN_BRAIN_MAINTENANCE_ENABLED=0` local, unset on deployment_host) | `maintenanceQueueEnabled()` is **opt-out** (`src/maintenance-bootstrap.ts:173-180`: `return raw !== "0" && raw !== "false"`). The var is **absent from `.env`**, so the runner is **ENABLED** | ❌ **STALE — inverted** |
 | "0.66% capture" proof case | Capture is **live**: `ob_raw_turns` 3,303 rows, `ob_session_events` 9,462 rows | ❌ **STALE — obsolete** |
 | Dream Cycle is missing "a scheduler" | **Three scheduling primitives already exist**: leased `setInterval` in `src/maintenance-queue.ts:668-676`, the session sweeper in `src/transport.ts:99-113`, and launchd `com.rico.open-brain` | ⚠️ **PARTLY STALE** — what is missing is a *dream* scheduler, not scheduling capability. Reuse one of the three |
 | `graduateLaneEvent` has no caller | It has a caller at **`scripts/tier-lane-durable.ts:352`** (plus the internal call at `src/tiering.ts:362`) | ⚠️ **PARTLY STALE** — no *automatic* caller; a script caller exists |
@@ -81,7 +81,7 @@ Three stages, each with a different trigger, model, and budget. Rationale (#389)
 | Stage | Trigger | Where | Model | Commits? |
 |---|---|---|---|---|
 | **Light** (#390) | none — runs in the write path | in-transaction with the raw turn insert | **none, hard requirement** | tags only |
-| **REM** (#391–#393, #396, #398) | low request rate **OR** low backlog high-water mark, **and** memory headroom; 6h starvation ceiling | core01, local model | local (small) | prepares bundles; tier flips |
+| **REM** (#391–#393, #396, #398) | low request rate **OR** low backlog high-water mark, **and** memory headroom; 6h starvation ceiling | deployment_host, local model | local (small) | prepares bundles; tier flips |
 | **Deep** (#394, #396) | nightly | **off-box** (Sol/Opus) | large | **yes — not advisory** |
 
 ---
@@ -166,7 +166,7 @@ The raw-turn insert path itself. No scheduler, no queue, no worker.
 Consequences, verbatim:
 
 > - cannot fall behind ingest
-> - cannot compete for the ~3 GB budget on core01
+> - cannot compete for the ~3 GB budget on deployment_host
 > - cannot fail in an interesting way
 
 ## Budget / caps
@@ -179,7 +179,7 @@ Scaling limit, verbatim:
 
 > **On the scaling limit:** if ingest volume ever gets high enough that tagging in
 > the write path is a real cost, that is a hardware conversation, not a design
-> one. Rico framing — reaching that point means core01 has been replaced by
+> one. Rico framing — reaching that point means deployment_host has been replaced by
 > something much larger. Do not pre-optimize light into a queue for a load that
 > does not exist.
 
@@ -319,7 +319,7 @@ count on `ob_raw_turns`, not a counter light maintains.
 
 ### Where
 
-core01, local model. See #397 for the residency decision (resident vs
+deployment_host, local model. See #397 for the residency decision (resident vs
 load-on-demand) — **unresolved, decide on measurement.**
 
 ### Budget / caps: forced runs must be a sip, not a meal
@@ -350,7 +350,7 @@ load-on-demand) — **unresolved, decide on measurement.**
 ### Thresholds are unknown — a hard warning (#389 and #391, both)
 
 > The ~2 turns/min figure from earlier analysis is the **import rate of a 2-day
-> file scrape**, not core01 load. It must not be used to tune triggers. Set the
+> file scrape**, not deployment_host load. It must not be used to tune triggers. Set the
 > dials low, measure under real full-send, adjust. They are config, not design.
 
 **Dials:** forced-slice size, backlog high-water mark, rate threshold, headroom
@@ -754,11 +754,11 @@ Nightly.
 
 ## Where — and why placement is the design
 
-> The nightly heavy pass. **Runs off-box** (Sol/Opus), not on core01.
+> The nightly heavy pass. **Runs off-box** (Sol/Opus), not on deployment_host.
 >
 > That placement is the point: deep is the only stage needing a large model, and
 > moving it off-box removes the local resource-contention problem entirely rather
-> than tuning around it. core01 ~3 GB budget is then spoken for only by REM.
+> than tuning around it. deployment_host ~3 GB budget is then spoken for only by REM.
 
 ## Input: pre-packaged work, not raw candidates
 
@@ -1083,7 +1083,7 @@ them.
 | Model cold load | ~1.8 s | idle |
 | Batch outcome (20 jobs) | 20 ok, 8 resized, 8 truncated, 0 dead-letter | idle |
 
-> core01 is a base 16 GB Mac Mini with roughly 3 GB free, and that budget is
+> deployment_host is a base 16 GB Mac Mini with roughly 3 GB free, and that budget is
 > already spoken for once by the generation model. It simultaneously serves Open
 > Brain, the local MLX embedding server (`embeddinggemma-300m-8bit`, ~300 MB
 > resident), Postgres and its cache, and on-demand paperless-ngx AI processing.
@@ -1103,7 +1103,7 @@ them.
 | Light adds constant load | **#390** — no model, SQL only |
 | Backlog forces a large catch-up run | **#391** — bounded slice, low high-water mark |
 
-> The stage that needs the big model no longer runs on core01, and the stage that
+> The stage that needs the big model no longer runs on deployment_host, and the stage that
 > does only runs when there is room. What remains is proving it.
 
 ## 1. Concurrent-load test
@@ -1144,7 +1144,7 @@ them.
 ## 4. Establish real trigger thresholds
 
 > The ~2 turns/min figure used in earlier discussion is the **import rate of a
-> 2-day file scrape, not core01 load** and must not be used for tuning. This test
+> 2-day file scrape, not deployment_host load** and must not be used for tuning. This test
 > is where the real numbers come from: rate threshold, backlog high-water mark,
 > forced-slice size, headroom floor.
 

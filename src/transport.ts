@@ -19,7 +19,7 @@ import { logger } from "./logger.ts";
 // 30 seconds is sized for the CONCURRENT case, which is the one that breaks.
 // The single-client math is easy -- during bulk work the gap between calls is
 // milliseconds and the slowest measured step (read + strip a 256 MB transcript)
-// was 603 ms. The case that matters is core01 with 60-70 clients: every one of
+// was 603 ms. The case that matters is deployment_host with 60-70 clients: every one of
 // them idling inside the TTL window holds a slot simultaneously, and nothing is
 // malfunctioning when that fills the pool. At a 30 s hold, 70 clients leave real
 // headroom in 100 slots; at 60 s they do not.

@@ -22,7 +22,7 @@ Architecture:
     concurrent sessions have DIFFERENT transcripts and DIFFERENT session keys,
     so they write different rows. Read one turn's worth, write, exit.
 
-    An earlier version of this docstring justified SQLite by citing core01's two
+    An earlier version of this docstring justified SQLite by citing deployment_host's two
     workers. That was WRONG and is corrected here: those workers
     (`open-brain-worker-1`/`-2`, `src/transport.ts`) are the TypeScript HTTP
     service holding MCP sessions -- a different process on a different host from

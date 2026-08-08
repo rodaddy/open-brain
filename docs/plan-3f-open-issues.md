@@ -38,10 +38,10 @@ must not occupy worker lanes or be counted as remaining work.
 ## Operating Boundary
 
 - Mode: local implementation and validation only.
-- No core01 deploy, live DB migration, hosted NATS setup, or downstream rollout
+- No deployment_host deploy, live DB migration, hosted NATS setup, or downstream rollout
   without explicit Rico approval.
 - Use one focused branch/worktree per issue under
-  `/Volumes/ThunderBolt/_tmp/open-brain`.
+  `/path/to/open-brain/_tmp/open-brain`.
 - Keep Project 8 current before work starts, during review, and after
   validation/merge.
 - Use `pre-merge-gauntlet` for every non-trivial PR. Do not fake a review gate
@@ -57,8 +57,8 @@ splits into disjoint files or review lanes.
 
 | Issue | Branch | Temp worktree | Workers | Local target | Deploy allowed | Closure rule |
 | --- | --- | --- | ---: | --- | --- | --- |
-| #223 NATS/JetStream runtime slice | `feat/223-nats-jetstream-runtime` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-223-nats-jetstream-runtime` | 1 implementation + 1 runtime/review sidecar | Review merged local-only foundation and scope any remaining local prep; hosted runtime/deploy/canary stays release-gated | No | Do not close #223 from the merged foundation PR; closing requires real runtime/deploy tests or explicit issue narrowing |
-| #167 legacy collab retirement | `release/167-retire-collab` | `/Volumes/ThunderBolt/_tmp/open-brain/issue-167-retire-collab` | 1 release-planning worker only | Release/deploy checklist and preflight evidence, no mutation | Explicit approval required | Blocked for local-only; cannot close without live backup/migration/deploy/canary |
+| #223 NATS/JetStream runtime slice | `feat/223-nats-jetstream-runtime` | `/path/to/open-brain/_tmp/open-brain/issue-223-nats-jetstream-runtime` | 1 implementation + 1 runtime/review sidecar | Review merged local-only foundation and scope any remaining local prep; hosted runtime/deploy/canary stays release-gated | No | Do not close #223 from the merged foundation PR; closing requires real runtime/deploy tests or explicit issue narrowing |
+| #167 legacy collab retirement | `release/167-retire-collab` | `/path/to/open-brain/_tmp/open-brain/issue-167-retire-collab` | 1 release-planning worker only | Release/deploy checklist and preflight evidence, no mutation | Explicit approval required | Blocked for local-only; cannot close without live backup/migration/deploy/canary |
 
 ## Controller Execution Rules
 
@@ -80,7 +80,7 @@ splits into disjoint files or review lanes.
    swarm, cross-model review, all findings fixed or explicitly waived on the PR,
    fix-verification, then merge. No auto-merge.
 7. Deploy remains optional and separate. Local completion can merge code/docs
-   that are explicitly inactive or gated, but live core01 changes require a
+   that are explicitly inactive or gated, but live deployment_host changes require a
    release plan and Rico approval.
 
 ## Open Issue Execution Order
@@ -101,7 +101,7 @@ Local status:
 - The merged local-only slice adds `docs/nats-jetstream-foundation.md` and
   advisory planned `get_contract().realtime_transport.nats_jetstream` metadata.
   It does not make NATS runtime-available.
-- #223 remains open for the later runtime/deploy slice. No core01 NATS
+- #223 remains open for the later runtime/deploy slice. No deployment_host NATS
   install/config, live JetStream stream creation, launchd change, or Hermes
   runtime switch has been performed or authorized.
 - Downstream rollout classification: hosted deploy, mcp2cli refresh,
@@ -112,11 +112,11 @@ Future runtime/deploy work:
 
 - Implement and test an actual NATS transport when a runtime slice is approved.
 - Add live NATS parity tests and HTTP fallback tests.
-- Run the release/deploy gate before any core01 install/config, live stream
+- Run the release/deploy gate before any deployment_host install/config, live stream
   creation, launchd change, or Hermes runtime switch.
 
 Deferred:
-core01 install/config, hosted canary, and making NATS the default Hermes path.
+deployment_host install/config, hosted canary, and making NATS the default Hermes path.
 
 ### 2. #222 scoped hot working set -- closed historical
 
@@ -153,7 +153,7 @@ shared-kb nomination.
 
 Historical branch:
 `feat/224-promotion-lifecycle` in
-`/Volumes/ThunderBolt/_tmp/open-brain/issue-224-promotion-lifecycle` was the
+`/path/to/open-brain/_tmp/open-brain/issue-224-promotion-lifecycle` was the
 closed local-work branch. Do not route new workers to this branch unless Rico
 explicitly reopens the issue.
 
@@ -177,7 +177,7 @@ Local status:
   - `git diff --check`
 - Residual local risk: DB-backed/live Postgres suites are still skipped without
   `OPENBRAIN_TEST_DATABASE_URL`; CI `db-integration` must supply that gate after
-  PR. No core01 deploy is in scope.
+  PR. No deployment_host deploy is in scope.
 
 Completed local work:
 
@@ -294,7 +294,7 @@ explicit release/deploy approval.
 
 Stop only for:
 
-- Live deploy, core01 mutation, DB migration, or destructive cleanup requiring
+- Live deploy, deployment_host mutation, DB migration, or destructive cleanup requiring
   explicit approval.
 - Missing review-gauntlet capability that prevents honest PR readiness.
 - Acceptance criteria that cannot be met locally and must be split or waived.

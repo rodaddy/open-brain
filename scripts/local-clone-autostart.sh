@@ -2,8 +2,8 @@
 # Autostart wrapper for the local dogfood Open Brain clone.
 #
 # Dogfood-only. This exists because the clone must survive a reboot while we are
-# developing against it; when the work moves to core01 this goes away with the
-# clone. It is deliberately NOT the core01 deploy path (com.rico.open-brain) and
+# developing against it; when the work moves to deployment_host this goes away with the
+# clone. It is deliberately NOT the deployment_host deploy path (com.rico.open-brain) and
 # uses its own label so the two can never be confused.
 #
 # The launcher does not read an env file by design, so this wrapper loads the
@@ -12,13 +12,13 @@
 # restart a server attached to the wrong database.
 set -euo pipefail
 
-CLONE_ROOT="${OPENBRAIN_LOCAL_CLONE_ROOT:-/Volumes/ThunderBolt/open-brain-local}"
+CLONE_ROOT="${OPENBRAIN_LOCAL_CLONE_ROOT:-$HOME/.local/share/open-brain-local}"
 ENV_FILE="${CLONE_ROOT}/local-clone.env"
 BUN_BIN="${BUN_BIN:-/opt/homebrew/bin/bun}"
 
 # The DEPLOYED runtime, not the dev checkout.
 #
-# Until 2026-07-30 this was REPO_DIR=/Volumes/ThunderBolt/Development/open-brain,
+# Until 2026-07-30 this was REPO_DIR=/path/to/open-brain/Development/open-brain,
 # and `cd "${REPO_DIR}"` below meant the clone served whatever was in the working
 # tree at restart time -- verified live: pid 79427 ran `bun run src/index.ts`
 # with cwd set to the dev checkout. Every uncommitted edit was one restart away

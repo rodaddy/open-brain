@@ -54,8 +54,8 @@ Current execution update, 2026-07-08T01:15Z:
   skip without `OPENBRAIN_TEST_DATABASE_URL`, while CI `db-integration` passed.
 - Status-only plan sync commits may advance the PR head after `4c4d3e2`; verify
   live Project #8 and the PR check rollup before merge/closure. Current
-  `origin/main` and PR workflow rules deploy core01 only on a `v*` tag push or
-  explicit `workflow_dispatch` with `deploy_core01`, not from the merge commit
+  `origin/main` and PR workflow rules deploy deployment_host only on a `v*` tag push or
+  explicit `workflow_dispatch` with `deploy_deployment_host`, not from the merge commit
   itself.
 - #223 remains open and Blocked.
 
@@ -70,10 +70,10 @@ Critical correction:
 ## Operating Boundary
 
 - Mode: local implementation, validation, PRs, review, and board hygiene.
-- No core01 deploy, live DB migration, hosted NATS setup, fleet-bus rollout, or
+- No deployment_host deploy, live DB migration, hosted NATS setup, fleet-bus rollout, or
   downstream Hermes canary without explicit Rico approval.
 - Use one focused branch/worktree per issue or tightly coupled issue pair under
-  `/Volumes/ThunderBolt/_tmp/open-brain`.
+  `/path/to/open-brain/_tmp/open-brain`.
 - Keep Project 8 current before work starts, during review, and after
   validation/merge.
 - Use the repo review gate for every non-trivial PR:
@@ -367,7 +367,7 @@ Recommended lanes:
      `Validation: Not Started`;
    - blocked dependency: `Blocked`, with exact blocker in `Next Action`.
 3. Create a clean worktree from `origin/main` under
-   `/Volumes/ThunderBolt/_tmp/open-brain`.
+   `/path/to/open-brain/_tmp/open-brain`.
 4. Identify the owning boundary before editing.
 5. Implement the smallest correct owned change.
 6. Run focused validation, then broaden tests when shared behavior is touched.
@@ -411,7 +411,7 @@ For #223:
 
 Stop only for:
 
-- Live deploy, core01 mutation, DB migration, hosted NATS, or downstream Hermes
+- Live deploy, deployment_host mutation, DB migration, hosted NATS, or downstream Hermes
   canary requiring explicit approval.
 - Missing review-swarm capability that prevents honest PR readiness.
 - A graph/eval design that cannot prove non-relational no-regression.

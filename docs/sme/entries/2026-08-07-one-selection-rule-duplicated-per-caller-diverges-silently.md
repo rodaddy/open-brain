@@ -31,7 +31,7 @@ Three things to check on any PR that adds a readable source:
    one, the fix is to extract one selection function that all callers use, so
    a new source appears everywhere at once instead of one place at a time.
 2. Check every SERVING TREE, not just the one you are editing. This repo has
-   two live entrypoints (`src/index.ts` serves core01 via
+   two live entrypoints (`src/index.ts` serves deployment_host via
    `deploy/open-brain.service` and `scripts/run-two-worker.ts`;
    `server/main.ts` is the local-clone serving entrypoint), each with its own
    `brain_answer`. Fixing one leaves a live path still blind.

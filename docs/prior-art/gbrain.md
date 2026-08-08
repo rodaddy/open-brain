@@ -17,7 +17,7 @@ in the Open Brain corpus before this review.
 |---|---|
 | Upstream | `github.com/garrytan/gbrain` |
 | Clone commit | `d9eb027` (2026-07-22) |
-| Local path | `/Volumes/ThunderBolt/open-brain-local/research/gbrain` |
+| Local path | `/path/to/open-brain/open-brain-local/research/gbrain` |
 | License | **MIT** (read from `LICENSE`: "Copyright (c) 2026 Garry Tan") |
 | Code reuse | **No.** Idea only. MIT would permit code reuse with attribution; we are not exercising that. |
 

@@ -33,9 +33,9 @@ publisher can forge `payload.namespace` or the envelope `from` and read **any**
 namespace. Auth-off is ONLY safe on a **fully-trusted local loopback bus**
 (`nats://127.0.0.1:4222`, no untrusted publishers).
 
-- **Local core01 broker (v1):** auth-off is acceptable because the bus is
+- **Local deployment_host broker (v1):** auth-off is acceptable because the bus is
   loopback-only and no untrusted publisher can reach it.
-- **Fleet bus (CT274, `nats://10.71.20.74:4222`) or any shared/remote broker:**
+- **Fleet bus (CT274, `nats://192.0.2.74:4222`) or any shared/remote broker:**
   you MUST set `OPENBRAIN_NATS_REQUIRE_AUTH=true` before enabling the worker.
   With `REQUIRE_AUTH=true` the per-request bearer gate is on and the
   `payload.namespace` override is force-disabled (mutually exclusive), so a
@@ -50,14 +50,14 @@ env. namespace is an Open Brain security boundary.
 - launchd template:
   `docs/deploy/com.rico.open-brain-nats-worker.plist.template`
 - runtime app:
-  `/Volumes/ThunderBolt/open-brain/app`
+  `/path/to/open-brain/open-brain/app`
 - shared HTTP env:
   `/Users/rico/.config/open-brain/env`
 - NATS worker env:
   `/Users/rico/.config/open-brain/env.nats-worker`
 - logs:
-  `/Volumes/ThunderBolt/open-brain/logs/nats-worker.out.log`
-  and `/Volumes/ThunderBolt/open-brain/logs/nats-worker.err.log`
+  `/path/to/open-brain/open-brain/logs/nats-worker.out.log`
+  and `/path/to/open-brain/open-brain/logs/nats-worker.err.log`
 
 The worker env should source the shared production env and then set only
 worker-specific overrides. Keep secrets in the env file or approved secret
@@ -80,7 +80,7 @@ OPENBRAIN_NATS_FALLBACK_HTTP=true
 OPEN_BRAIN_NATS_WORKER_HEALTH_PORT=3110
 OPEN_BRAIN_RUN_MIGRATIONS=0
 OPEN_BRAIN_WORKER_NAME=open-brain-nats-worker
-QMD_PATH=/Volumes/ThunderBolt/qmd/open-brain-qmd.ts
+QMD_PATH=/path/to/open-brain/qmd/open-brain-qmd.ts
 ```
 
 HTTP worker env must stay in HTTP mode:
@@ -110,9 +110,9 @@ entrypoint.
 
 ## Install Or Update
 
-Run these commands on core01 after the release gate in
+Run these commands on deployment_host after the release gate in
 `docs/local-release-deploy-sop.md` has passed and the runtime app is staged at
-`/Volumes/ThunderBolt/open-brain/app`:
+`/path/to/open-brain/open-brain/app`:
 
 First create or validate the worker env file. It should be mode `0600`, source
 `/Users/rico/.config/open-brain/env`, and set the worker-specific overrides from
@@ -125,9 +125,9 @@ sudo test -r /Users/rico/.config/open-brain/env.nats-worker
 ```
 
 ```zsh
-sudo install -d -m 0755 /Volumes/ThunderBolt/open-brain/logs
+sudo install -d -m 0755 /path/to/open-brain/open-brain/logs
 sudo cp \
-  /Volumes/ThunderBolt/open-brain/app/docs/deploy/com.rico.open-brain-nats-worker.plist.template \
+  /path/to/open-brain/open-brain/app/docs/deploy/com.rico.open-brain-nats-worker.plist.template \
   /Library/LaunchDaemons/com.rico.open-brain-nats-worker.plist
 sudo chown root:wheel /Library/LaunchDaemons/com.rico.open-brain-nats-worker.plist
 sudo chmod 0644 /Library/LaunchDaemons/com.rico.open-brain-nats-worker.plist
@@ -142,7 +142,7 @@ changed:
 
 ```zsh
 sudo cp \
-  /Volumes/ThunderBolt/open-brain/app/docs/deploy/com.rico.open-brain-nats-worker.plist.template \
+  /path/to/open-brain/open-brain/app/docs/deploy/com.rico.open-brain-nats-worker.plist.template \
   /Library/LaunchDaemons/com.rico.open-brain-nats-worker.plist
 sudo chown root:wheel /Library/LaunchDaemons/com.rico.open-brain-nats-worker.plist
 sudo chmod 0644 /Library/LaunchDaemons/com.rico.open-brain-nats-worker.plist
@@ -244,8 +244,8 @@ secret path.
 
 ## Local Mac Dogfood NATS Lane (loopback only)
 
-The same two-service shape as core01, but pointed at the local dogfood clone
-(`/Volumes/ThunderBolt/open-brain-local`) instead of the core01 runtime. Stood
+The same two-service shape as deployment_host, but pointed at the local dogfood clone
+(`/path/to/open-brain/open-brain-local`) instead of the deployment_host runtime. Stood
 up and proven live on 2026-08-04.
 
 | Component | Launchd label | Notes |
@@ -281,7 +281,7 @@ Never the other way round.
 - broker config: `/opt/homebrew/etc/nats-server.conf`
 - broker plist: `~/Library/LaunchAgents/com.rico.open-brain-nats.plist`
 - worker plist: `~/Library/LaunchAgents/com.rico.open-brain-local-nats-worker.plist`
-- worker env: `/Volumes/ThunderBolt/open-brain-local/local-clone.env.nats-worker` (mode 0600)
+- worker env: `/path/to/open-brain/open-brain-local/local-clone.env.nats-worker` (mode 0600)
 - logs: `~/Library/Logs/open-brain-local/nats-worker.{out,err}.log`
 
 The worker env sources `local-clone.env` and then sets only the v1 NATS
@@ -310,7 +310,7 @@ OPENBRAIN_SERVICE_LABEL=com.rico.open-brain-local-clone \
   scripts/local-clone-deploy.sh
 ```
 
-The kickstart is non-fatal (a WARN), matching core01's behavior: a clone with no
+The kickstart is non-fatal (a WARN), matching deployment_host's behavior: a clone with no
 worker installed is unaffected.
 
 ### What `/health` on 3100 does and does NOT show

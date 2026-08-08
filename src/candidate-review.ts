@@ -393,7 +393,7 @@ const MACHINE_IDENTITY_PATTERNS: readonly RegExp[] = [
   // name-v3, name-v3.1, name_v12 -- an explicit version suffix.
   /[-_.]v\d/,
   // name-4, name-4.5, name-70b, name-8x7b -- a trailing size/version number.
-  // Requires a separator AND a digit-led tail, so "core01" and "m4" are safe.
+  // Requires a separator AND a digit-led tail, so "deployment_host" and "m4" are safe.
   /[-_.]\d+(\.\d+)?[bkm]?$/,
   // 70b / 8x7b parameter counts anywhere in the string.
   /\d+x?\d*b\b/,

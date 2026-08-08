@@ -56,7 +56,7 @@ assert_equal '2001 12345' \
   "$(printf '%s\n' "$status_fixture" | parse_status_metrics)" \
   'status metrics'
 
-watchdog_test_root="${QMD_SYNC_TEST_ROOT:-/Volumes/ThunderBolt/_tmp/open-brain/_scratch/qmd-sync-test-$$}"
+watchdog_test_root="${QMD_SYNC_TEST_ROOT:-/path/to/open-brain/_tmp/open-brain/_scratch/qmd-sync-test-$$}"
 watchdog_fake_qmd="$watchdog_test_root/fake-qmd"
 watchdog_child_pid_file="$watchdog_test_root/child.pid"
 watchdog_log="$watchdog_test_root/watchdog.log"

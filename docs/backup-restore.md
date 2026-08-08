@@ -14,7 +14,7 @@ marked **TESTED** (with the test that proves it) or **DOCUMENTED-ONLY**.
 
 | Requirement | Value | Rationale |
 |---|---|---|
-| RPO (max acceptable loss window) | **24 hours** | LAN-local, single-operator deployment on core01. Durable memory accretes at human pace (session lanes, thoughts, promotions); a day of loss is recoverable from client spools, session transcripts, and qmd-derived facts. Sub-daily backup adds operational surface without a matching risk. |
+| RPO (max acceptable loss window) | **24 hours** | LAN-local, single-operator deployment on deployment_host. Durable memory accretes at human pace (session lanes, thoughts, promotions); a day of loss is recoverable from client spools, session transcripts, and qmd-derived facts. Sub-daily backup adds operational surface without a matching risk. |
 | RTO (max acceptable restore time) | **1 hour** | createdb + verify + `pg_restore` + forward migrations on the current data volume completes in minutes; one hour budgets operator time, a re-point of the launchd service, and a smoke check. |
 | Retention | **7 daily + 4 weekly** | One week of fine-grained rollback for bad writes/migrations, one month of coarse history for slow-burn corruption. Retention pruning is operator-run (see stale-backup alerting below); the verify CLI treats every set in the backups root independently. |
 | Encryption | **REQUIRED for any off-host copy; NOT applied at rest locally.** Local at-rest encryption is intentionally not layered on, per the standing LAN-local policy: local infra is not over-secured with ceremonies that add failure modes without threat-model backing (same policy as no pre-prod key rotation). Any copy that leaves the host (cloud, portable disk, another site) MUST be encrypted first, e.g. `tar -C <backups-root> -cf - <set-dir> \| age -r <recipient> > set.tar.age` (or `openssl enc -aes-256-cbc -pbkdf2` where `age` is unavailable). |
@@ -54,7 +54,7 @@ argv, and never appear in receipts.
 
 ```bash
 DB_HOST=127.0.0.1 DB_USER=openbrain DB_NAME=open_brain \
-  bun run scripts/backup.ts --out /Volumes/ThunderBolt/open-brain/backups/$(date +%Y%m%d-%H%M%S)
+  bun run scripts/backup.ts --out /path/to/open-brain/open-brain/backups/$(date +%Y%m%d-%H%M%S)
 ```
 
 Non-mutating for the source (pg_dump reads only). Refuses to overwrite an
@@ -151,7 +151,7 @@ Fail-closed, no partial success:
 `backup-verify --dir <backups-root> --max-age-hours N` exits 3 with a `stale`
 status when the newest VALID backup is older than N hours (a corrupt set does
 not count as a valid backup — TESTED in `scripts/backup-lib.test.ts`). Wire
-it into cron/launchd on core01 and alert on nonzero exit; the actual launchd
+it into cron/launchd on deployment_host and alert on nonzero exit; the actual launchd
 plist/notification wiring is deliberately left to the operator runbook and is
 NOT shipped in this repo (scripts stay operator-run, no service wiring).
 

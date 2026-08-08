@@ -626,7 +626,7 @@ install
 > fleet-wide. This entry keeps only the Open Brain specifics.
 
 Session-start recall failed with `OB ✗ gate unavailable` while BOTH Open Brain
-servers were healthy (127.0.0.1:3100 and 10.71.1.21:3100 each returned 200),
+servers were healthy (127.0.0.1:3100 and 192.0.2.21:3100 each returned 200),
 Postgres was reachable, the token authenticated, the env config was correct, and
 the `openbrain-memory` CLI at 0.1.18 returned a full valid context pack
 (`status: "direct"`, 14,663 chars) when invoked directly with the same payload.
@@ -1134,7 +1134,7 @@ Git exports GIT_DIR and GIT_WORK_TREE into hook environments, and GIT_WORK_TREE 
 
 Verbatim, from the source:
 
-> `git push` exports `GIT_DIR`/`GIT_WORK_TREE` to its hooks, and **`GIT_WORK_TREE` beats `git -C`** — `rev-parse --show-toplevel` answered `/Volumes/ThunderBolt/Development` for every directory asked about, so every project resolved to the slug `Development`.
+> `git push` exports `GIT_DIR`/`GIT_WORK_TREE` to its hooks, and **`GIT_WORK_TREE` beats `git -C`** — `rev-parse --show-toplevel` answered `/path/to/open-brain/Development` for every directory asked about, so every project resolved to the slug `Development`.
 
 ## [2026-08-03] SessionStart additionalContext has a practical inline bound
 
@@ -1209,7 +1209,7 @@ report it separately, so a retry cannot turn prior state into an applied count.
 
 A resolver added for Langfuse release attribution used `git rev-parse`, which
 worked in development checkouts but returned nothing in deployed runtimes. The
-local-clone deploy ships `git archive` output, while the core01 packager excludes
+local-clone deploy ships `git archive` output, while the deployment_host packager excludes
 checkout metadata and any inherited stamp; both write a fresh
 `.deployed-revision` into the artifact. `/health` already read that stamp
 correctly. The new tracing resolver ignored the deployment authority and

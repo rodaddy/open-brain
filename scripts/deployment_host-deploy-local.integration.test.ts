@@ -12,12 +12,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const SOURCE_ROOT = join(import.meta.dir, "..");
-const DEPLOY_SCRIPT = join(SOURCE_ROOT, "scripts", "core01-deploy-local.sh");
+const DEPLOY_SCRIPT = join(SOURCE_ROOT, "scripts", "deployment_host-deploy-local.sh");
 const GATE_SOURCE = join(SOURCE_ROOT, "scripts", "deploy-ref-gate.ts");
 const PACKAGE_SOURCE = join(
   SOURCE_ROOT,
   "scripts",
-  "core01-package-runtime.sh",
+  "deployment_host-package-runtime.sh",
 );
 const ownedTempDirs: string[] = [];
 const GIT_ENV_KEYS = [
@@ -170,7 +170,7 @@ async function createGitFixture(
   // The deploy shell now delegates staging to this script, resolved from
   // REPO_DIR — the fixture checkout must carry it (executable) or the run
   // dies with exit 127 before the stage under test.
-  const packageScript = join(checkout, "scripts", "core01-package-runtime.sh");
+  const packageScript = join(checkout, "scripts", "deployment_host-package-runtime.sh");
   await writeFile(packageScript, await Bun.file(PACKAGE_SOURCE).text());
   await chmod(packageScript, 0o755);
 
@@ -227,7 +227,7 @@ function expectAllowedPreflight(result: DeployResult): void {
   expect(fatalLines[0]).toMatch(
     /FATAL: (\/Volumes\/ThunderBolt is not mounted|env file missing: )/,
   );
-  expect(result.output).not.toContain("refusing core01 deploy");
+  expect(result.output).not.toContain("refusing deployment_host deploy");
   expect(existsSync(result.runtimeDir)).toBe(false);
   expect(existsSync(result.stagingDir)).toBe(false);
 }
@@ -237,7 +237,7 @@ function expectGateRefusal(result: DeployResult, expectedReason: string): void {
   expect(result.output).toContain(expectedReason);
   expect(result.output).not.toContain("deploy ref gate PASSED:");
   expect(result.output).not.toContain("env file missing:");
-  expect(result.output).not.toContain("/Volumes/ThunderBolt is not mounted");
+  expect(result.output).not.toContain("/path/to/open-brain is not mounted");
   expect(existsSync(result.runtimeDir)).toBe(false);
   expect(existsSync(result.stagingDir)).toBe(false);
 }
@@ -250,7 +250,7 @@ afterEach(async () => {
   );
 });
 
-describe("core01 deploy shell ref-gate wiring", () => {
+describe("deployment_host deploy shell ref-gate wiring", () => {
   it("isolates fixture Git commands from an enclosing worktree", async () => {
     const outerRoot = await mkdtemp(join(tmpdir(), "open-brain-git-env-"));
     ownedTempDirs.push(outerRoot);

@@ -80,7 +80,7 @@ _TMP_REMEDY: Final[str] = (
     "There is no writable system temp directory on this machine. $TMPDIR is "
     "already pointed at this repo's temp workspace, so just use it, or write to "
     "{temp_workspace}/{project-or-repo}/_scratch/ directly "
-    "(/Volumes/ThunderBolt/_tmp on this Mac, /mnt/collab/tmp_space on cc-* boxes). "
+    "(/path/to/open-brain/_tmp on this Mac, /mnt/collab/tmp_space on cc-* boxes). "
     "Temp policy: _DOCS/CODING_STANDARDS.md ## Workspace Hygiene."
 )
 
@@ -334,7 +334,7 @@ def _shell_safety_block_reason(command: str, command_cwd: str) -> str | None:
     if _WRITES_INTO_GENERATED.search(command) and not _GENERATED_EGRESS.search(command):
         return (
             "Treat ~/.codex/generated_images as transient output. Move the selected "
-            "image to /Volumes/ThunderBolt/_tmp/_image-gen2/ or the user-requested "
+            "image to /path/to/open-brain/_tmp/_image-gen2/ or the user-requested "
             "destination."
         )
     return None

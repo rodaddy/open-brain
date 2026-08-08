@@ -52,10 +52,10 @@
 >   and the missing-index fix are in `_DOCS/STANDARDS-repo-search.md`.
 >
 > Refresh these copies with:
-> `bun /Volumes/ThunderBolt/Development/_ob/scripts/sync-repo-standards.ts open-brain`
+> `bun /path/to/open-brain/Development/_ob/scripts/sync-repo-standards.ts open-brain`
 >
 > **When this repo is up to standard, close this work item by running:**
-> `bun /Volumes/ThunderBolt/Development/_ob/scripts/sync-repo-standards.ts --ack open-brain`
+> `bun /path/to/open-brain/Development/_ob/scripts/sync-repo-standards.ts --ack open-brain`
 >
 > That removes this block and leaves the one-line marker below it in place. Do
 > not hand-delete it: dropping the marker makes this banner return on the next
@@ -88,7 +88,7 @@ before writing code:
 - `_DOCS/STANDARDS-typescript.md`, `_DOCS/STANDARDS-python.md` — per-stack rules.
 - `_DOCS/STANDARDS-git.md`, `_DOCS/STANDARDS-ci-security.md`.
 
-These are **generated** from `/Volumes/ThunderBolt/Development/_DOCS/` and carry
+These are **generated** from `/path/to/open-brain/Development/_DOCS/` and carry
 a `source-hash`. Never hand-edit them — a rule change goes in the source
 document, then `bun _ob/scripts/sync-repo-standards.ts open-brain` refreshes the
 copies. Run that same command when asked to bring this repo up to standards; it
@@ -102,11 +102,11 @@ Repo-specific rules below this line override the copies when stricter.
 - **Database:** PostgreSQL 18 + pgvector (halfvec 768)
 - **Embeddings:** Any OpenAI-compatible endpoint via `EMBEDDING_BASE_URL` (prod: local MLX server on 127.0.0.1:8791, `embeddinggemma-300m-8bit`). Hosted prod sets `EMBEDDING_WATCHDOG_RESTART_SCRIPT` so repeated provider failures bounce the local MLX embedding daemon.
 - **Auth:** Per-consumer Bearer tokens (admin, agent, discord, ob-admin, promoter, readonly)
-- **Deploy:** core01 Mac Mini via launchd `com.rico.open-brain` (10.71.1.21:3100). Source lives in `/Volumes/ThunderBolt/Development/open-brain`; the running app lives in `/Volumes/ThunderBolt/open-brain/app`; qmd runtime/index lives in `/Volumes/ThunderBolt/qmd`.
-- **core01 runs multiple workers; this machine runs one.** `10.71.1.21:3100` is a front over `open-brain-worker-1` (3101) and `open-brain-worker-2` (3102) — confirmed 2026-07-30 from the `workers` array in `/health`, which the single-process local service does not emit. Session caps are **per worker** (`DEFAULT_MAX_SESSIONS = 100`, `src/transport.ts`), so core01 has ~200 slots and load balancing while local has 100 and neither. **Do not size capacity or concurrency against the local service and assume it transfers.** `curl -s http://10.71.1.21:3100/health` answers this in under a second; guessing at it produced a wrong conclusion once already.
-- **Hosts — there are exactly two.** This machine while developing, and core01 when the dev work is done. No other database or service host belongs to this project. Retired LXC hosts may still answer on the network and still hold old Open Brain data; that does not make them valid. Do not point config, docs, canaries, or tooling at one, and do not treat a successful connection as evidence a host is in scope.
+- **Deploy:** deployment_host Mac Mini via launchd `com.rico.open-brain` (192.0.2.21:3100). Source lives in `/path/to/open-brain/Development/open-brain`; the running app lives in `/path/to/open-brain/open-brain/app`; qmd runtime/index lives in `/path/to/open-brain/qmd`.
+- **deployment_host runs multiple workers; this machine runs one.** `192.0.2.21:3100` is a front over `open-brain-worker-1` (3101) and `open-brain-worker-2` (3102) — confirmed 2026-07-30 from the `workers` array in `/health`, which the single-process local service does not emit. Session caps are **per worker** (`DEFAULT_MAX_SESSIONS = 100`, `src/transport.ts`), so deployment_host has ~200 slots and load balancing while local has 100 and neither. **Do not size capacity or concurrency against the local service and assume it transfers.** `curl -s http://192.0.2.21:3100/health` answers this in under a second; guessing at it produced a wrong conclusion once already.
+- **Hosts — there are exactly two.** This machine while developing, and deployment_host when the dev work is done. No other database or service host belongs to this project. Retired LXC hosts may still answer on the network and still hold old Open Brain data; that does not make them valid. Do not point config, docs, canaries, or tooling at one, and do not treat a successful connection as evidence a host is in scope.
 - **Retired hosts are out of scope, not worthless.** Earlier Open Brain attempts left databases that still hold real thinking — design specs, SOPs, and decisions that predate the current epics and were never carried forward as reasoning. Leave them alone: do not connect, query, migrate, or drop anything. They are not this repo's data, and reading them is not part of any task here. If a question genuinely needs that history, it is an explicit, operator-approved archaeology task with its own scope — never a side quest inside other work. The default is: this project does not touch them.
-- **Prior-art clones live at `/Volumes/ThunderBolt/open-brain-local/research/`** — `gbrain`, `cognee`, `cognee-integrations`, `graphiti`, `honcho`, `mem0`, as real git clones. Read prior art from **source, not marketing**; that is what made the existing borrow-list usable. Findings belong in `docs/prior-art/`, not in a scratch directory. Anything borrowed — code *or* idea — gets attribution: see `docs/prior-art/ATTRIBUTION.md`.
+- **Prior-art clones live at `/path/to/open-brain/open-brain-local/research/`** — `gbrain`, `cognee`, `cognee-integrations`, `graphiti`, `honcho`, `mem0`, as real git clones. Read prior art from **source, not marketing**; that is what made the existing borrow-list usable. Findings belong in `docs/prior-art/`, not in a scratch directory. Anything borrowed — code *or* idea — gets attribution: see `docs/prior-art/ATTRIBUTION.md`.
 - **Search that prior art with the `research` qmd index — do not grep six trees.** All six clones are indexed as one named index, so a single query crosses all of them, which is the whole point: the useful prior-art question is comparative ("how does each of these model X?"), and that is exactly what six separate searches answer badly.
 
   ```bash
@@ -138,7 +138,7 @@ Repo-specific rules below this line override the copies when stricter.
   (it is a cache, so it is expendable and rebuildable):
 
   ```bash
-  /Volumes/ThunderBolt/Development/_ob/bin/qmd-reference-index
+  /path/to/open-brain/Development/_ob/bin/qmd-reference-index
   ```
 
   Rebuilding re-embeds and is GPU-bound — minutes, not seconds. Only do it when
@@ -285,7 +285,7 @@ migration).
 - For every security/isolation bug fix, add a regression test that fails on the old behavior and proves the exact predicate, header binding, or call shape.
 - Preserve DreamEngine dry-run behavior by default. No archive, promote, demote, or tier mutation should run from dream planning unless the caller explicitly opts into a mutating wrapper.
 - Python client behavior must be covered by fake transport tests for headers, session lifecycle, error redaction, and wrapper call shapes. Live canaries stay env-gated.
-- Python package source must pass `uv run mypy src/openbrain_memory` and `uv run ruff check src tests` with zero errors, matching the quality bar used by `/Volumes/ThunderBolt/Development/king-capital/king-signals`.
+- Python package source must pass `uv run mypy src/openbrain_memory` and `uv run ruff check src tests` with zero errors, matching the quality bar used by `/path/to/open-brain/Development/king-capital/king-signals`.
 - Keep fixes scoped to the issue. Avoid broad refactors unless they are required to close the bug safely.
 - **Nothing is adjusted silently** (operator ruling, 2026-08-08). Any script, tool, or lane that transforms its input to satisfy a constraint — shortens a name to fit a bound, substitutes a default, skips a step as N/A, coerces a value — announces the adjustment in its normal output: original → adjusted, and why. Provably-safe and cosmetic adjustments are not exempt; the transcript must let the reader map what was asked for to what exists. SME entry: `docs/sme/entries/2026-08-08-nothing-is-adjusted-silently-tools-announce-every-self-made-decision.md`.
 - When a review or post-merge issue exposes a missed pattern, update `docs/sme/` so the next swarm checks for it.

@@ -75,7 +75,7 @@
 # request.
 set -uo pipefail
 
-REPO_ROOT="/Volumes/ThunderBolt/Development/open-brain"
+REPO_ROOT="$(git rev-parse --show-toplevel)"
 CLI="${OPENBRAIN_CLI:-$HOME/.local/bin/openbrain-memory}"
 ENV_FILE="${OPENBRAIN_ENV_FILE:-$HOME/.local/share/openbrain-memory/env/claudex-observation.env}"
 

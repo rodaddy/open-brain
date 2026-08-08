@@ -6,7 +6,7 @@ enabling a non-English deployment default, what each role sees, the cost
 profile of the unindexed path, monitoring, and rollback.
 
 Audience: whoever operates a hosted Open Brain deployment (launchd service on
-core01, or any environment that sets the process env).
+deployment_host, or any environment that sets the process env).
 
 ## What the knob does
 
@@ -82,7 +82,7 @@ runs inside a transaction with a transaction-scoped
    OPENBRAIN_FTS_STATEMENT_TIMEOUT_MS=5000
    ```
 
-2. Restart the service (hosted core01: `launchctl kickstart -k` the
+2. Restart the service (hosted deployment_host: `launchctl kickstart -k` the
    `com.rico.open-brain` job, or the deployment SOP's restart step).
 
 3. Verify:

@@ -12,7 +12,7 @@ The server session slot is an in-memory ``Map`` in ``src/transport.ts``
 (``sessions``, capped at ``DEFAULT_MAX_SESSIONS = 100``, freed on the closing
 ``DELETE``), NOT a database row -- the ``sessions`` TABLE is the durable
 session-memory store, unrelated. The local single-process playground exposes no
-``sessions.size`` on ``/health`` (that ``workers[]`` surface is core01-only), so
+``sessions.size`` on ``/health`` (that ``workers[]`` surface is deployment_host-only), so
 the slot count is not remotely observable here. The observable live property is
 therefore: the full lifecycle is accepted (``run_session_end`` returns ``True``)
 and no ``ob_raw_turns`` row lands for the session -- ``SessionEnd`` frees a slot,

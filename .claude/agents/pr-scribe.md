@@ -93,7 +93,7 @@ A test you watched pass is RUNNING; a file you wrote is WRITTEN. Do not write
    added, known gaps. If evidence for a field is missing, ask for it — do not
    fill the field with something plausible.
 3. Copy the template to a scratch file under
-   `/Volumes/ThunderBolt/_tmp/open-brain/_scratch/` and fill it. Never `/tmp`.
+   `/path/to/open-brain/_tmp/open-brain/_scratch/` and fill it. Never `/tmp`.
 4. Run the validator. Fix and re-run until exit 0.
 5. Return the body path and the passing validator output.
 

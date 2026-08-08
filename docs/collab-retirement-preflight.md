@@ -12,7 +12,7 @@ justify live mutation from an unapproved planning lane.
 
 - Do not run any live DB mutation, production migration, deploy, or canary from
   this planning lane.
-- Do not point scratch validation at production credentials or the core01 DB.
+- Do not point scratch validation at production credentials or the deployment_host DB.
 - `scripts/retire-collab-migration.ts` is dry-run by default. `--execute` is a
   release-only step and requires explicit approval plus a verified backup.
 - `collab` is a frozen snapshot namespace. The release objective is to
@@ -33,7 +33,7 @@ live dry-run or execute command, the release operator must set this explicit
 sentinel in the approved shell:
 
 ```zsh
-export OPENBRAIN_COLLAB_RETIRE_RELEASE_APPROVED=core01-live-db-after-backup
+export OPENBRAIN_COLLAB_RETIRE_RELEASE_APPROVED=deployment_host-live-db-after-backup
 ```
 
 All live command blocks below include a shell guard for that sentinel, and the
@@ -142,7 +142,7 @@ shell guard below is operator feedback, not the only enforcement layer.
 Use the full script first:
 
 ```zsh
-[ "$OPENBRAIN_COLLAB_RETIRE_RELEASE_APPROVED" = "core01-live-db-after-backup" ] || {
+[ "$OPENBRAIN_COLLAB_RETIRE_RELEASE_APPROVED" = "deployment_host-live-db-after-backup" ] || {
   echo "Blocked: not in the approved collab-retirement release/runtime environment" >&2
   exit 1
 }
@@ -152,7 +152,7 @@ bun run scripts/retire-collab-migration.ts
 Then capture the per-step view if the full report needs operator review:
 
 ```zsh
-[ "$OPENBRAIN_COLLAB_RETIRE_RELEASE_APPROVED" = "core01-live-db-after-backup" ] || {
+[ "$OPENBRAIN_COLLAB_RETIRE_RELEASE_APPROVED" = "deployment_host-live-db-after-backup" ] || {
   echo "Blocked: not in the approved collab-retirement release/runtime environment" >&2
   exit 1
 }
@@ -226,7 +226,7 @@ If any item above is missing, the issue stays blocked.
 Execute command after explicit release approval:
 
 ```zsh
-[ "$OPENBRAIN_COLLAB_RETIRE_RELEASE_APPROVED" = "core01-live-db-after-backup" ] || {
+[ "$OPENBRAIN_COLLAB_RETIRE_RELEASE_APPROVED" = "deployment_host-live-db-after-backup" ] || {
   echo "Blocked: not in the approved collab-retirement release/runtime environment" >&2
   exit 1
 }
@@ -237,7 +237,7 @@ If the audit still reports intentional out-of-scope rows and the release owner
 explicitly accepts them, the receipt must say why before using:
 
 ```zsh
-[ "$OPENBRAIN_COLLAB_RETIRE_RELEASE_APPROVED" = "core01-live-db-after-backup" ] || {
+[ "$OPENBRAIN_COLLAB_RETIRE_RELEASE_APPROVED" = "deployment_host-live-db-after-backup" ] || {
   echo "Blocked: not in the approved collab-retirement release/runtime environment" >&2
   exit 1
 }
@@ -255,7 +255,7 @@ After execute and before deploy:
 - rerun the dry-run report from the approved release/runtime environment:
 
 ```zsh
-[ "$OPENBRAIN_COLLAB_RETIRE_RELEASE_APPROVED" = "core01-live-db-after-backup" ] || {
+[ "$OPENBRAIN_COLLAB_RETIRE_RELEASE_APPROVED" = "deployment_host-live-db-after-backup" ] || {
   echo "Blocked: not in the approved collab-retirement release/runtime environment" >&2
   exit 1
 }

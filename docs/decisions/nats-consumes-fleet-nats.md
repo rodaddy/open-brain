@@ -9,11 +9,11 @@
 
 ## The decision
 
-NATS work in Open Brain consumes `rodaddy/fleet-bus`'s canonical `fleet-nats` package via a thin adapter rather than forking its own NATS glue. Connection config stays in env (`FLEET_NATS_URL`, `FLEET_AGENT_ID`, `FLEET_ENV`) — never hardcode CT274/core01 URLs. JetStream is infrastructure/durability/observability only; the agent-facing context-pack path stays NATS core request/reply plus HTTP fallback. The DAP orchestrator, per-agent Hermes subscribers, k-board bridge, trio deploy, and e2e proving run are fleet-bus-owned and out of scope for Open Brain.
+NATS work in Open Brain consumes `rodaddy/fleet-bus`'s canonical `fleet-nats` package via a thin adapter rather than forking its own NATS glue. Connection config stays in env (`FLEET_NATS_URL`, `FLEET_AGENT_ID`, `FLEET_ENV`) — never hardcode CT274/deployment_host URLs. JetStream is infrastructure/durability/observability only; the agent-facing context-pack path stays NATS core request/reply plus HTTP fallback. The DAP orchestrator, per-agent Hermes subscribers, k-board bridge, trio deploy, and e2e proving run are fleet-bus-owned and out of scope for Open Brain.
 
 ## Verbatim, from the source
 
-> Consume/align with `fleet-nats` primitives: `BusConfig`, `Envelope`, `FleetBus`, and `fleet_nats.subjects`. Keep connection config in env (`FLEET_NATS_URL`, `FLEET_AGENT_ID`, `FLEET_ENV`); do not bake CT274/core01 URLs into code. Treat JetStream as infrastructure/durability/observability ... Do not take over fleet-bus-owned work: DAP orchestrator, per-agent Hermes subscribers, k-board bridge, trio deploy, and e2e Discord/k-board proving run.
+> Consume/align with `fleet-nats` primitives: `BusConfig`, `Envelope`, `FleetBus`, and `fleet_nats.subjects`. Keep connection config in env (`FLEET_NATS_URL`, `FLEET_AGENT_ID`, `FLEET_ENV`); do not bake CT274/deployment_host URLs into code. Treat JetStream as infrastructure/durability/observability ... Do not take over fleet-bus-owned work: DAP orchestrator, per-agent Hermes subscribers, k-board bridge, trio deploy, and e2e Discord/k-board proving run.
 
 ## Provenance
 

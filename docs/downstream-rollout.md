@@ -30,12 +30,12 @@ If none of those apply, say so explicitly in the PR and release notes.
      operator's real local `~/.config/mcp2cli` as a test fixture.
 
 2. **Open Brain hosted verification**
-   - Merge alone does not deploy core01. After the candidate is on current
+   - Merge alone does not deploy deployment_host. After the candidate is on current
      `origin/main`, use the `CI` workflow's explicit `workflow_dispatch` on
-     `main` with `deploy_core01=true`, or push a `v*` tag whose commit is
+     `main` with `deploy_deployment_host=true`, or push a `v*` tag whose commit is
      reachable from `origin/main`. The deploy job waits for `check`,
      `db-integration`, and `python-package`, then runs
-     `scripts/core01-deploy-local.sh` on the `[self-hosted, macOS, core01]`
+     `scripts/deployment_host-deploy-local.sh` on the `[self-hosted, macOS, deployment_host]`
      runner.
    - The script refuses unsupported refs, requires a manual-dispatch checkout to
      equal the current `origin/main` tip, stages the runtime, installs locked
@@ -124,8 +124,8 @@ If none of those apply, say so explicitly in the PR and release notes.
    - Merge the `rtech-hermes` PR before claiming agent readiness.
 
 6. **Hermes live rollout**
-   - Do not use TN01 / `10.71.1.11` as the control point for this workflow.
-   - SSH to `10.71.1.71` as Rico or `bilby`.
+   - Do not use TN01 / `192.0.2.11` as the control point for this workflow.
+   - SSH to `192.0.2.71` as Rico or `bilby`.
    - From there, update the fs collab checkout and run the agent update path:
 
      ```bash
@@ -194,7 +194,7 @@ required memory mode, incompatible or unreachable contracts must fail closed.
 
 ## qmd-Derived Repo Facts
 
-qmd runs with Open Brain on core01 (`10.71.1.21`) and acts as the
+qmd runs with Open Brain on deployment_host (`192.0.2.21`) and acts as the
 repo-knowledge compiler. Open Brain is the shared runtime distribution layer
 for agents that cannot run qmd.
 Required repo knowledge is promoted into Open Brain with `upsert_repo_fact` and

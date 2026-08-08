@@ -19,7 +19,7 @@ stamp="$(date +%Y%m%d-%H%M%S)"
 # configured temp workspace on Rico's Mac; /tmp is deliberately NOT used, since
 # it is sandbox-local and the artifact would be invisible to whoever is
 # debugging a failure.
-work_root="${DEMO_WORK_ROOT:-/Volumes/ThunderBolt/_tmp/typescript-exemplar/_validation-runs}"
+work_root="${DEMO_WORK_ROOT:-/path/to/open-brain/_tmp/typescript-exemplar/_validation-runs}"
 work="$work_root/hooks-$stamp"
 
 pass=0

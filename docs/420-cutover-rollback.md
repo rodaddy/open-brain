@@ -23,8 +23,8 @@ at (`_ob/scripts/...`, a separate repo).
 | `PostCompact` | `bun … claude-hook.ts` | `sh …/openbrain-hook-env openbrain-post-compact` |
 | `SessionStart` | `bun … claude-hook.ts` | two entries: `sh …/openbrain-hook-env openbrain-session-start` and `sh …/openbrain-hook-env openbrain-session-start-remaining` |
 | `UserPromptSubmit` / `PreCompact` | `bun … claude-hook.ts` (no-op) | removed |
-| `context-budget-gate.ts` (7 events) | `sha256-…/context-budget-gate.ts` | `/Volumes/ThunderBolt/Development/_ob/scripts/context-budget-gate.ts` |
-| `guard.ts` (PreToolUse Bash) | `sha256-…/ob-memory-provider/guard.ts` | `/Volumes/ThunderBolt/Development/_ob/scripts/ob-memory-provider/guard.ts` |
+| `context-budget-gate.ts` (7 events) | `sha256-…/context-budget-gate.ts` | `/path/to/open-brain/Development/_ob/scripts/context-budget-gate.ts` |
+| `guard.ts` (PreToolUse Bash) | `sha256-…/ob-memory-provider/guard.ts` | `/path/to/open-brain/Development/_ob/scripts/ob-memory-provider/guard.ts` |
 
 The `_ob/scripts/...` copies are the surviving source-of-truth the sha256 store
 was built from; they are not part of the retirement.
@@ -34,7 +34,7 @@ was built from; they are not part of the retirement.
 The provider is installed as a `uv tool` from `python/openbrain/`:
 
 ```
-uv tool install --force /Volumes/ThunderBolt/Development/open-brain/python/openbrain
+uv tool install --force /path/to/open-brain/Development/open-brain/python/openbrain
 ```
 
 This links six hook console scripts into `~/.local/bin/` (on the settings

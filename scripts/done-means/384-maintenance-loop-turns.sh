@@ -16,7 +16,7 @@
 # the function works; it cannot distinguish that from a server that never calls
 # it. So the observation point here is the database and the service's own log.
 #
-# core01/hosted is NOT touched. Two-host rule: this lane is the local half.
+# deployment_host/hosted is NOT touched. Two-host rule: this lane is the local half.
 #
 # Output is content-free: states, kinds, counts, and a random run marker only.
 #
@@ -29,7 +29,7 @@
 # The issue text says the runner is off via OPEN_BRAIN_MAINTENANCE_ENABLED=0.
 # That is stale. Measured against the live box:
 #
-#   - /Volumes/ThunderBolt/open-brain-local/local-clone.env:12 sets
+#   - /path/to/open-brain/open-brain-local/local-clone.env:12 sets
 #     OPEN_BRAIN_MAINTENANCE_ENABLED=1, and the serving process (pid 13501,
 #     `ps eww`) carries =1 in its environment. The runner is ENABLED.
 #   - PR #577 already landed the sweep producer: src/maintenance-sweep.ts
@@ -100,7 +100,7 @@ info() { printf 'INFO  %s\n' "$*"; }
 # not of which worktree you happen to be standing in.
 ENV_FILE=".env"
 if [[ ! -f "${ENV_FILE}" ]]; then
-  ENV_FILE="${DONE_MEANS_384_ENV_FILE:-/Volumes/ThunderBolt/Development/open-brain/.env}"
+  ENV_FILE="${DONE_MEANS_384_ENV_FILE:-$HOME/Development/open-brain/.env}"
 fi
 if [[ ! -f "${ENV_FILE}" ]]; then
   printf 'FAIL  no .env found (looked in %s and %s); cannot reach the dogfood database\n' \

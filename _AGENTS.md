@@ -1,20 +1,20 @@
 # Open Brain Repo-Local Codex Flow
 
 This file is the repo-local flow adapter for Codex. Read it after
-`/Volumes/ThunderBolt/Development/AGENTS.md` and before doing repo work here.
+`/path/to/open-brain/Development/AGENTS.md` and before doing repo work here.
 
 ## Checkout And Runtime Boundaries
 
 - Do not assume one checkout represents every Open Brain state. Distinguish:
-  - operator/workstation checkout: `/Volumes/ThunderBolt/Development/open-brain`
+  - operator/workstation checkout: `/path/to/open-brain/Development/open-brain`
   - GitHub Actions runner checkout: runner-owned `_work/open-brain/open-brain`
-  - live source checkout on the Open Brain host: `/Volumes/ThunderBolt/Development/open-brain`
-  - live runtime: `/Volumes/ThunderBolt/open-brain/app`
+  - live source checkout on the Open Brain host: `/path/to/open-brain/Development/open-brain`
+  - live runtime: `/path/to/open-brain/open-brain/app`
 - Before deploy, install, or hosted-proof advice, inspect the live host state.
   Do not infer live state only from local repo docs, local tests, or CI logs.
-- Current repo docs name the hosted Open Brain target as core01
-  (`10.71.1.21:3100`), launchd service `com.rico.open-brain`, runtime
-  `/Volumes/ThunderBolt/open-brain/app`. If Rico says `base01` or another
+- Current repo docs name the hosted Open Brain target as deployment_host
+  (`192.0.2.21:3100`), launchd service `com.rico.open-brain`, runtime
+  `/path/to/open-brain/open-brain/app`. If Rico says `base01` or another
   host name, resolve that exact name from hostmap or live SSH before acting.
 - The live host may carry an operational branch or local deploy-script patch
   that is not yet in `origin/main`. Treat that as real state to reconcile, not
@@ -28,13 +28,13 @@ For non-trivial work:
 2. Read the repo Open Brain lane before planning or acting:
 
    ```bash
-   mcp2cli open-brain session_context --params '{"session_key":"repo:/Volumes/ThunderBolt/Development/open-brain","event_limit":20}'
+   mcp2cli open-brain session_context --params '{"session_key":"repo:/path/to/open-brain/Development/open-brain","event_limit":20}'
    ```
 
    If `session_context` cannot find the lane, create/resume it with:
 
    ```bash
-   mcp2cli open-brain session_start --params '{"session_key":"repo:/Volumes/ThunderBolt/Development/open-brain","project":"open-brain","agent":"codex","topic":"Open Brain repo-local workflow and deploy/runtime operating memory"}'
+   mcp2cli open-brain session_start --params '{"session_key":"repo:/path/to/open-brain/Development/open-brain","project":"open-brain","agent":"codex","topic":"Open Brain repo-local workflow and deploy/runtime operating memory"}'
    ```
 
    Treat this lane as required repo operating memory. It contains corrections
@@ -46,7 +46,7 @@ For non-trivial work:
    - deploy/host/runner work: `_DOCS/INFRASTRUCTURE_SOP.md`
 4. Check `pwd`, `git status --short --branch`, and `git log --oneline -5`.
 5. If the current checkout is dirty or on an unrelated branch, do implementation
-   from a clean worktree under `/Volumes/ThunderBolt/_tmp`.
+   from a clean worktree under `/path/to/open-brain/_tmp`.
 
 ## Implementation Flow
 
@@ -76,14 +76,14 @@ For non-trivial work:
 
 ## Deploy Flow
 
-- Standard repo command is `bun run deploy:core01`, which runs
-  `scripts/core01-deploy-local.sh`.
+- Standard repo command is `bun run deploy:deployment_host`, which runs
+  `scripts/deployment_host-deploy-local.sh`.
 - Standard runtime target from current repo docs:
-  - runtime: `/Volumes/ThunderBolt/open-brain/app`
-  - staging: `/Volumes/ThunderBolt/open-brain/app.next`
-  - previous: `/Volumes/ThunderBolt/open-brain/app.previous`
+  - runtime: `/path/to/open-brain/open-brain/app`
+  - staging: `/path/to/open-brain/open-brain/app.next`
+  - previous: `/path/to/open-brain/open-brain/app.previous`
   - env file: `/Users/rico/.config/open-brain/env`
-  - qmd path: `/Volumes/ThunderBolt/qmd/open-brain-qmd.ts`
+  - qmd path: `/path/to/open-brain/qmd/open-brain-qmd.ts`
 - Never hand-copy files into the runtime as the normal path. Use the repo-owned
   deploy script or explicitly document why the repo-owned path is unavailable.
 - Before prescribing a deploy fix, inspect what is actually on the live host:
@@ -121,6 +121,6 @@ After hosted proof, complete the applicable downstream rollout from
 - If dirty state blocks work, classify each path as user-owned, agent-owned,
   generated, merged, obsolete, or next-branch work.
 - For implementation unrelated to dirty state, create a clean temp worktree from
-  current `origin/main` under `/Volumes/ThunderBolt/_tmp`.
+  current `origin/main` under `/path/to/open-brain/_tmp`.
 - Clean only current-run temp artifacts that you created. Do not delete repo
   runtime/build artifacts or user-owned changes as cleanup.

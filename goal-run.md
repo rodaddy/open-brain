@@ -43,7 +43,7 @@ already fixed on 2026-07-06.
     PR #243 merge commit `3b8e47ac5d4b3b614fdd26f5609242b73204f928`.
   - #176 and PR #244 moved to `Done`; Review Gate `Zero Known Issues`;
     Validation `CI Passed`; `Next Action` records merge commit
-    `dcd5c6b743e8cf58395deacd17ec0a8f16184a26` and no core01 deploy.
+    `dcd5c6b743e8cf58395deacd17ec0a8f16184a26` and no deployment_host deploy.
   - #166 was added to Project 8, marked `Done`, Review Gate
     `Zero Known Issues`, Validation `Local Passed`, and `Next Action` records
     the focused generated-skill/default verification.
@@ -121,9 +121,9 @@ Deploy optionality update on 2026-07-05:
 - PR #240 changes deploy policy so `main` pushes validate but do not deploy.
   Production deploy is allowed only from a `v*` tag whose target commit is
   reachable from `origin/main`, or manual `workflow_dispatch` from the current
-  `origin/main` tip with `deploy_core01=true`.
+  `origin/main` tip with `deploy_deployment_host=true`.
 - PR #240 adds `docs/local-release-deploy-sop.md` and updates `README.md` so
-  local full testing, release-candidate creation, and core01 deploy verification
+  local full testing, release-candidate creation, and deployment_host deploy verification
   are a separate release phase after PR merges.
 - PR #240 completed the pre-merge-gauntlet on this branch: initial swarm,
   Claude cross-review, fixes, and focused fix-verification all reached zero
@@ -153,7 +153,7 @@ Active source plan:
 - Use `pre-merge-gauntlet` for every non-trivial PR.
 - Merge gauntlet-clean PRs through GitHub only; do not deploy hosted Open Brain
   without explicit Rico approval and the release SOP gate.
-- Use `/Volumes/ThunderBolt/_tmp/open-brain` for temp worktrees and build/install
+- Use `/path/to/open-brain/_tmp/open-brain` for temp worktrees and build/install
   proofs.
 - Current session is single-controller for implementation. Standard subagent
   tooling was exposed after tool discovery; use it only for required
@@ -209,11 +209,11 @@ Status: code PRs done; #167 remains live migration/release gated.
 ### Phase 4: #177 installable package, #204 resolver, #176 structured rejection
 
 Status: done locally and merged. #177 is done via merged PR #238. #204 is done
-via merged PR #243. #176 is done via merged PR #244. Downstream rollout/core01
+via merged PR #243. #176 is done via merged PR #244. Downstream rollout/deployment_host
 deploy remains deferred to the later release phase for all contract changes.
 
 Current #176 worktree:
-`/Volumes/ThunderBolt/_tmp/open-brain/issue-176-structured-rejection`
+`/path/to/open-brain/_tmp/open-brain/issue-176-structured-rejection`
 
 Current #176 branch:
 `feat/176-structured-rejection` from `origin/main` at
@@ -265,7 +265,7 @@ Current #204 state:
     GitGuardian passed; `deploy` skipped as expected for local-only PR flow.
 11. Project 8 updated for #204: Status `In Review`, Validation `CI Passed`,
     Review Gate `Fix Verification Running`, Next Action points to PR #243
-    fix-verification and no core01 deploy in this phase.
+    fix-verification and no deployment_host deploy in this phase.
 12. Opposite-runtime Claude cross-review ran on PR #243 and found three LOW
     observations:
     - Promoter role resolves cross-namespace UUIDs. This is existing
@@ -287,7 +287,7 @@ Current #204 state:
     `3b8e47ac5d4b3b614fdd26f5609242b73204f928`; issue #204 closed at
     `2026-07-06T01:54:16Z`.
 15. Deferred by current local-only instruction: downstream rollout and any
-   core01 deploy/live canary. This contract change still triggers
+   deployment_host deploy/live canary. This contract change still triggers
    `docs/downstream-rollout.md` before issue closure/release.
 
 Final #176 state:
@@ -399,7 +399,7 @@ Final #176 state:
 18. PR #244 merged as `dcd5c6b743e8cf58395deacd17ec0a8f16184a26`; issue #176
    closed at `2026-07-06T03:15:03Z`; Project 8 marks #176 and PR #244 done.
 19. Deferred by current local-only instruction: downstream rollout and any
-   core01 deploy/live canary. This contract change triggers
+   deployment_host deploy/live canary. This contract change triggers
    `docs/downstream-rollout.md`; downstream rollout waits for the later release
    phase.
 
@@ -414,7 +414,7 @@ Proceed locally with the next implementable roadmap item, starting with issue
 #192 Part A unless Rico redirects: add a compact/condensed retrieval mode or
 document a deliberate "chunk small" stance, then run the full local test ladder
 and pre-merge-gauntlet before merge. The realtime epic #223 -> #222 -> #221 ->
-#224 -> #229 remains available after #192, but #223 has a NATS/core01 component
+#224 -> #229 remains available after #192, but #223 has a NATS/deployment_host component
 that will need a local-only split or release approval before hosted work.
 
 ---
@@ -456,7 +456,7 @@ Use critical thinking by default:
 
 Use loop-engineering:
 
-- Load and follow `/Volumes/ThunderBolt/Development/_ob/skills/loop-engineering/SKILL.md`.
+- Load and follow `/path/to/open-brain/Development/_ob/skills/loop-engineering/SKILL.md`.
 - Treat loops as recurring jobs with memory, triggers, receipts, handoffs, and
   human stop conditions; do not treat ordinary implementation phases as loops.
 - Use the local Codex skill only as an adapter. The shared `_ob` skill owns the
@@ -465,8 +465,8 @@ Use loop-engineering:
 Use the project temp root:
 
 - Put all temp files, scratch artifacts, and worktrees for this run under
-  `/Volumes/ThunderBolt/_tmp/open-brain`.
-- Move no-longer-needed files to `/Volumes/ThunderBolt/_tmp/open-brain/_archive`.
+  `/path/to/open-brain/_tmp/open-brain`.
+- Move no-longer-needed files to `/path/to/open-brain/_tmp/open-brain/_archive`.
 - Do not use `rm -f` or `rm -rf` for this goal run.
 
 Use pre-PR critical review:
@@ -474,7 +474,7 @@ Use pre-PR critical review:
 - Before opening or marking a PR ready, run the critical self-review gate.
 - Do not use the CSV subagent method.
 - For review swarms, create one temporary worktree per reviewer under
-  `/Volumes/ThunderBolt/_tmp/open-brain` and give each reviewer a pinned prompt.
+  `/path/to/open-brain/_tmp/open-brain` and give each reviewer a pinned prompt.
 - For larger PRs, API contracts, REST structures, or public client behavior,
   include an alternate review with `claude -p` using an Opus 4.8-class model
   when available.
@@ -601,7 +601,7 @@ Each named loop must define:
 - State read: pinned diff, relevant tests, `docs/sme/`, PR requirements, and
   critical self-review template.
 - Allowed actions: create reviewer worktrees under
-  `/Volumes/ThunderBolt/_tmp/open-brain`, run reviewer prompts, collect findings,
+  `/path/to/open-brain/_tmp/open-brain`, run reviewer prompts, collect findings,
   and drive fixes.
 - Required receipts: reviewers used, prompts/worktrees, findings, fixes made,
   and residual risk.

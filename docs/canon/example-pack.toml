@@ -58,7 +58,7 @@ lane = "repo_facts"
 subject = "open-brain hosts"
 fact_type = "gotcha"
 text = """
-There are exactly two hosts: this machine while developing, and core01 when the \
+There are exactly two hosts: this machine while developing, and deployment_host when the \
 dev work is done. Retired LXC hosts may still answer on the network and still \
 hold old Open Brain data; a successful connection is not evidence a host is in \
 scope. Do not point config, docs, canaries, or tooling at one.\

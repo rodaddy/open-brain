@@ -3,9 +3,9 @@ set -euo pipefail
 
 umask 077
 
-DEV_ROOT="${DEV_ROOT:-/Volumes/ThunderBolt/Development}"
+DEV_ROOT="${DEV_ROOT:-$HOME/Development}"
 QMD_BIN="${QMD_BIN:-/Users/rico/.local/bin/qmd}"
-LOG_DIR="${LOG_DIR:-/Volumes/ThunderBolt/open-brain-local/log}"
+LOG_DIR="${LOG_DIR:-$HOME/.local/state/open-brain/log}"
 LOG_FILE="${LOG_FILE:-$LOG_DIR/qmd-sync.log}"
 GLOBAL_INDEX="global_docs_instructions"
 HOME="${HOME:-/Users/rico}"

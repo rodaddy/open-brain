@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SOURCE_DIR="${SOURCE_DIR:-/Volumes/ThunderBolt/Development}"
-TARGET_DIR="${TARGET_DIR:-10.71.1.21:/Volumes/ThunderBolt/Development}"
-TARGET_PATH="${TARGET_PATH:-/Volumes/ThunderBolt/Development}"
-QMD_BIN="${QMD_BIN:-/Volumes/ThunderBolt/qmd/bin/qmd}"
+: "${SOURCE_DIR:?set SOURCE_DIR to the source Development directory}"
+: "${TARGET_DIR:?set TARGET_DIR to the remote destination}"
+: "${TARGET_PATH:?set TARGET_PATH to the destination path}"
+: "${QMD_BIN:?set QMD_BIN to the qmd executable}"
 QMD_MASK="${QMD_MASK:-**/*.{ts,tsx,js,jsx,md,json,yaml,yml,sql,sh,py,toml}}"
 CLEAN_EXCLUDED="${CLEAN_EXCLUDED:-1}"
 
@@ -32,7 +32,7 @@ for name in "${EXCLUDED_DIR_NAMES[@]}"; do
 done
 
 if [[ "$SOURCE_DIR" == "$TARGET_DIR" ]]; then
-  echo "FATAL: SOURCE_DIR and TARGET_DIR are identical; set TARGET_DIR to the core01 mirror target" >&2
+  echo "FATAL: SOURCE_DIR and TARGET_DIR are identical; set TARGET_DIR to the deployment_host mirror target" >&2
   exit 1
 fi
 

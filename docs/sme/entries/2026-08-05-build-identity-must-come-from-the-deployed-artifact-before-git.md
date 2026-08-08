@@ -14,7 +14,7 @@ section: harvest-522
 
 A resolver added for Langfuse release attribution used `git rev-parse`, which
 worked in development checkouts but returned nothing in deployed runtimes. The
-local-clone deploy ships `git archive` output, while the core01 packager excludes
+local-clone deploy ships `git archive` output, while the deployment_host packager excludes
 checkout metadata and any inherited stamp; both write a fresh
 `.deployed-revision` into the artifact. `/health` already read that stamp
 correctly. The new tracing resolver ignored the deployment authority and

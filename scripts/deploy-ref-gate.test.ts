@@ -1,4 +1,4 @@
-// Tests for the provider-neutral core01 deploy ref gate
+// Tests for the provider-neutral deployment_host deploy ref gate
 // (scripts/deploy-ref-gate.ts). These exercise ONLY the pure decision function
 // and the env-input assembly. They never load an env file, run migrations,
 // touch launchctl, mkdir a runtime dir, or reach production state — the whole

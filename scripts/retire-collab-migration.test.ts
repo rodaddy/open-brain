@@ -90,7 +90,7 @@ describe("retire-collab-migration transaction", () => {
 
   it("refuses live dry-runs without explicit release approval before DB access", async () => {
     expect(
-      dbHostRequiresReleaseApproval({ DB_HOST: "10.71.1.21" }),
+      dbHostRequiresReleaseApproval({ DB_HOST: "192.0.2.21" }),
     ).toBe(true);
     expect(dbHostRequiresReleaseApproval({ DB_HOST: "127.0.0.1" })).toBe(
       false,
@@ -110,7 +110,7 @@ describe("retire-collab-migration transaction", () => {
           acknowledgeOutOfScope: false,
           steps: new Set(["lanes"]),
         } as any,
-        { DB_HOST: "core01" },
+        { DB_HOST: "deployment_host" },
       ),
     ).rejects.toThrow(COLLAB_RETIRE_APPROVAL_ENV);
   });
