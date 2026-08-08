@@ -87,6 +87,58 @@ Every lane, no exceptions:
 
 Newest first. Every entry: what changed, and the observation that forced it.
 
+### 2026-08-08 (round 17) — harvest of the #656 observer-wiring lane
+
+- **`includes("<event_name>")` on a raw log line is a substring match, and
+  every superset satisfies it.** A renamed event (`x_MUTED`) kept two
+  clauses green. Parse the line and compare the `msg` field for equality
+  (`findEvent()`), then mutation-test the rename. Round-9 negative-match
+  family, new spelling: the clause passed both when the notice existed and
+  when it had been renamed away.
+- **A "loud on absence" claim asserts BOTH halves in ONE clause** — loud in
+  the log AND quiet in the health verdict. Split into two clauses, each
+  half passes for the wrong reason: silence-on-absence is the status quo,
+  and a verdict-on-absence violates absence-is-not-staleness. Two
+  audiences, one clause.
+- **The design-lookup gate earned its cost a second time** (after round
+  10b): it fired on the exact edit where the lane was about to hand-roll
+  shutdown teardown in a catch block, and the surfaced doc showed
+  `backgroundRuntimes` already owns ordered shutdown — the delta became
+  one runtime registration instead of a new mechanism. Record gate paybacks
+  as deliberately as gate taxes, or the ledger only ever argues for
+  retirement.
+- **`aqmd search` returning EMPTY after a 120s+ timeout is worse than
+  slow** — it reads as "no results," not "did not run." Extends round 11:
+  wrap in `timeout` AND treat empty output as did-not-run; `qmd search`
+  direct is the ~1s fallback. (Second datapoint, gate defect thread.)
+- **Two CI runs of one identical SHA disagreed again** (#643 shape) — the
+  `push` and `pull_request` workflows both run `check` on the same commit,
+  so every PR gets this two-runs-same-SHA comparison for free; use it
+  before concluding branch defect.
+
+### 2026-08-08 (round 16) — harvest of the #655 eval-teardown lane
+
+- **A teardown that reports success is not evidence of removal.** The RED
+  run shows `failed=0` while 2 rows leak: the tally is the thing under
+  test, never the proof. A teardown gate asserts a row COUNT from outside
+  the run.
+- **In this schema a namespace is an emergent property of its rows** — no
+  registry table, so soft-delete (`archive_entry`) can never retire one.
+  24 archived-only eval namespaces are what that looks like after months.
+  State this once instead of rediscovering it per lane.
+- **RED by breaking the import is a false RED.** Moving the module aside
+  killed the driver at import; clause (a) measured nothing. A `SKIP_*` env
+  flag reproduces the pre-fix world with everything else intact and keeps
+  RED regenerable forever without deleting the fix.
+- **A guard needs a canary, not just an exception.** "Throws on a bad
+  name" and "refuses BEFORE mutating" are different claims; only planting
+  a row under each refused name and checking it survives distinguishes
+  them.
+- **The design-lookup gate's recent-lookup window is session-scoped, not
+  lane-scoped** — a sibling concurrent lane's lookup can occupy the window
+  and make a correct denial look spurious. Gate working as designed; know
+  the shape before reporting it as a misfire.
+
 ### 2026-08-08 (round 15) — harvest of the #654 namespace-scope lane (PR #657) and its verify run
 
 - **A live-service check reads the SERVING process's credentials, never the
