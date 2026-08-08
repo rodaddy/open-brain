@@ -514,6 +514,13 @@ never land in different scopes.
 | variable | default | notes |
 |---|---|---|
 | `OPENBRAIN_DEVELOPMENT_ROOT` | none (required) | this machine's Development lane root, written by `setup-client.sh` at install time. There is no shipped default: the installer takes an exported value, then `DEV_ROOT`, then probes `$HOME/Development`, and refuses the install if none resolves (#636 — the previous default was the build machine's own volume). Empty reads as unset |
+| `OPENBRAIN_TEMP_WORKSPACE` | `$HOME/.cache` (announced) | where `scripts/lane-bootstrap.ts` and `scripts/verify-lane.ts` place lane worktrees, as `<workspace>/open-brain/_worktrees` (#636). `DEV_TMP` is accepted as a second spelling. Both scripts PRINT an `ADJUSTED:` warning when they fall back, because a worktree created on an unexpected volume is one the teardown sweep will not find |
+| `OPENBRAIN_POLICY_REFRESH_GATE` | `_ob/scripts/policy-refresh-gate.ts` | path to the policy-refresh gate quoted in the PreCompact hook's next-steps (#636). The gate lives outside this repo, so the location is deployment-specific; the fallback is repo-relative on purpose, since a wrong absolute path reads as authoritative |
+
+Deploy CI additionally requires the repository VARIABLE
+`OPENBRAIN_DEPLOY_RUNNER_LABELS` (a JSON array such as
+`["self-hosted","macOS","<deploy-host>","open-brain-deploy"]`). It has no
+fallback by design — see `docs/README.md`.
 
 **Why it had to be declared even though nothing in `config.py` reads it.** The
 `openbrain` package had consumed this variable since #556 — but through

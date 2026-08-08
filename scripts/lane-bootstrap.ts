@@ -36,11 +36,34 @@
 
 import { spawnSync } from "node:child_process";
 import { existsSync, copyFileSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const WORKTREE_BASE = "/Volumes/ThunderBolt/_tmp/open-brain/_worktrees";
+// The temp workspace is machine-specific (#636), so it is read rather than
+// hardcoded. The fallback ANNOUNCES itself: silently relocating every lane
+// worktree to a different volume is exactly the kind of self-made decision
+// AGENTS.md "nothing is adjusted silently" forbids, and a stray worktree under
+// ~/.cache is invisible to the `git worktree list` sweep that finds the rest.
+const TEMP_WORKSPACE_SOURCE = process.env.OPENBRAIN_TEMP_WORKSPACE?.trim()
+  ? "OPENBRAIN_TEMP_WORKSPACE"
+  : process.env.DEV_TMP?.trim()
+    ? "DEV_TMP"
+    : "fallback";
+const TEMP_WORKSPACE =
+  process.env.OPENBRAIN_TEMP_WORKSPACE?.trim() ||
+  process.env.DEV_TMP?.trim() ||
+  join(homedir(), ".cache");
+const WORKTREE_BASE = join(TEMP_WORKSPACE, "open-brain", "_worktrees");
+
+if (TEMP_WORKSPACE_SOURCE === "fallback") {
+  console.warn(
+    `[lane-bootstrap] ADJUSTED: neither OPENBRAIN_TEMP_WORKSPACE nor DEV_TMP is set, ` +
+      `so worktrees go under ${WORKTREE_BASE} instead of a configured temp workspace. ` +
+      `Set OPENBRAIN_TEMP_WORKSPACE to place them where your other lane artifacts live.`,
+  );
+}
 
 /** Placeholder reasons that are technically non-empty but state nothing. */
 const PLACEHOLDER_REASONS = new Set([
