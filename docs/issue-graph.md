@@ -128,6 +128,21 @@ dependencies and sub-issues are enabled here. The wayfinder reference requires
 this be checked once per repo and recorded so later sessions do not re-probe —
 this is that record.
 
+### Lane briefing: PR bodies
+
+Validate the PR body locally BEFORE `gh pr create`, never after CI rejects it:
+`PR_BODY="$(cat body.md)" PR_TITLE="..." bun scripts/validate-pr-body.ts`
+(add `CONTRACT_PARITY_REQUIRED=true` when the diff touches
+`contracts/parity-paths.txt`). Start from `.github/pull_request_template.md`
+rather than reconstructing the sections — it is held against the validator by
+`scripts/done-means/pr-template-passes-validator.sh`, so a filled template
+cannot fail on shape. Three lanes failed the check three different ways in one
+night, all format rather than substance: a bolded `- **Label:**` breaks the
+`/^-\s*Label:/` anchor, a renamed or missing `## Review Gate` is a hard error,
+and a body composed in chat arrives wrapped in a code fence. The `pr-scribe`
+agent (`.claude/agents/pr-scribe.md`) composes a body from a lane's real
+evidence and returns one only after it has seen the validator exit 0.
+
 ## Relationship to existing skills
 
 **Existing patterns, deliberately reused — and a new paradigm built on them.**
