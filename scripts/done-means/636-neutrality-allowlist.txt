@@ -1,0 +1,21 @@
+# Repo-relative internal operations areas permitted to retain deployment-specific values.
+# A trailing slash allows that directory prefix; other entries are exact paths.
+.claude/
+.qmd/
+_DOCS/
+_plans/
+docs/canon/
+docs/core01-
+docs/decisions/
+docs/deploy/
+docs/sme/
+scripts/core01-
+scripts/done-means/
+scripts/install-qmd-sync-launchagent.sh
+scripts/local-clone-
+scripts/qmd-sync
+specs/
+AGENTS.md
+CLAUDE.md
+_AGENTS.md
+goal-run.md
